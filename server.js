@@ -1,82 +1,42 @@
 const http = require("http");
-const bcrypt = require("bcryptjs");
-const url = require("url");
+const bcrypt = require("bcrypt");
 
-const users = {}; // TEMP storage (email -> user object)
+// TEMP in-memory user store (replace with DB later)
+const users = {
+  "admin@tjhealthpro.com": {
+    passwordHash: bcrypt.hashSync("password123", 10),
+  },
+};
 
 const PORT = process.env.PORT || 8080;
 
-function send(res, status, body) {
-  res.writeHead(status, { "Content-Type": "text/html" });
+function send(res, status, body, type = "text/html") {
+  res.writeHead(status, { "Content-Type": type });
   res.end(body);
 }
 
 const server = http.createServer(async (req, res) => {
-  const parsed = url.parse(req.url, true);
-  const { pathname, query } = parsed;
+  const { url, method } = req;
+  const pathname = url.split("?")[0];
 
-  // HOME
-  if (pathname === "/") {
+  /* ---------------- LOGIN PAGE ---------------- */
+  if (pathname === "/" && method === "GET") {
     return send(
       res,
       200,
-      `<h2>TJ Healthcare Pro</h2>
-       <p>30-Day Claim Denial Review Pilot</p>
-       <a href="/signup">Create Account</a> | <a href="/login">Login</a>`
+      `
+      <h2>Login</h2>
+      <form method="POST" action="/login">
+        <input name="email" placeholder="Email" required /><br/><br/>
+        <input name="password" type="password" placeholder="Password" required /><br/><br/>
+        <button>Login</button>
+      </form>
+      `
     );
   }
 
-  // SIGNUP FORM
-  if (pathname === "/signup" && req.method === "GET") {
-    return send(
-      res,
-      200,
-      `<h3>Create Account</h3>
-       <form method="POST">
-         <input name="email" placeholder="Email" required /><br/>
-         <input name="password" type="password" placeholder="Password" required /><br/>
-         <button>Create Account</button>
-       </form>`
-    );
-  }
-
-  // SIGNUP SUBMIT
-  if (pathname === "/signup" && req.method === "POST") {
-    let body = "";
-    req.on("data", chunk => (body += chunk));
-    req.on("end", async () => {
-      const params = new URLSearchParams(body);
-      const email = params.get("email");
-      const password = params.get("password");
-
-      if (users[email]) {
-        return send(res, 400, "User already exists");
-      }
-
-      const hash = await bcrypt.hash(password, 10);
-      users[email] = { email, passwordHash: hash };
-
-      return send(res, 200, "Account created. <a href='/login'>Login</a>");
-    });
-    return;
-  }
-
-  // LOGIN FORM
-  if (pathname === "/login" && req.method === "GET") {
-    return send(
-      res,
-      200,
-      `<h3>Login</h3>
-       <form method="POST">
-         <input name="email" placeholder="Email" required /><br/>
-         <input name="password" type="password" required /><br/>
-         <button>Login</button>
-       </form>`
-    );
-  }
-
-  // LOGIN SUBMIT
-  if (pathname === "/login" && req.method === "POST") {
+  /* ---------------- LOGIN SUBMIT ---------------- */
+  if (pathname === "/login" && method === "POST") {
     let body = "";
     req.on("data", chunk => (body += chunk));
     req.on("end", async () => {
@@ -90,11 +50,80 @@ const server = http.createServer(async (req, res) => {
       const ok = await bcrypt.compare(password, user.passwordHash);
       if (!ok) return send(res, 401, "Invalid login");
 
-      return send(res, 200, "Logged in. Dashboard coming next.");
+      // Redirect to lock screen
+      res.writeHead(302, { Location: "/lock" });
+      res.end();
     });
     return;
   }
 
+  /* ---------------- LOCK SCREEN (5s) ---------------- */
+  if (pathname === "/lock") {
+    return send(
+      res,
+      200,
+      `
+      <html>
+        <head>
+          <meta http-equiv="refresh" content="5;url=/dashboard" />
+        </head>
+        <body style="font-family:system-ui;text-align:center;padding-top:80px;">
+          <h2>TJ Healthcare Pro</h2>
+          <p><strong>AI Review In Progress</strong></p>
+          <p>Your data is being analyzed.<br/>This typically takes moments.</p>
+          <p style="font-size:13px;color:#666;">
+            No EMR access · No payer portals · No automated submissions · Human review required
+          </p>
+        </body>
+      </html>
+      `
+    );
+  }
+
+  /* ---------------- DASHBOARD ---------------- */
+  if (pathname === "/dashboard") {
+    return send(
+      res,
+      200,
+      `
+      <h2>Dashboard</h2>
+
+      <h3>Upload Data</h3>
+      <ul>
+        <li>Denial letters</li>
+        <li>Payment remittances</li>
+        <li>Claim/billing reports</li>
+      </ul>
+
+      <h3>AI Draft (Editable)</h3>
+      <textarea style="width:90%;height:120px;">
+This is a draft appeal generated from your uploaded documents.
+You may edit, reorder, or rewrite before final submission.
+      </textarea>
+
+      <h3>Analytics (Preview)</h3>
+      <ul>
+        <li>Denials by payer</li>
+        <li>Paid vs unpaid claims</li>
+        <li>Underpaid amounts vs expected</li>
+        <li>Average payment timelines</li>
+      </ul>
+
+      <h3>Exports</h3>
+      <ul>
+        <li>CSV – Denials</li>
+        <li>CSV – Payments</li>
+        <li>CSV – Appeals</li>
+      </ul>
+
+      <p style="font-size:13px;color:#666;">
+        All outputs are drafts. Final review and submission is performed by your team.
+      </p>
+      `
+    );
+  }
+
+  /* ---------------- FALLBACK ---------------- */
   send(res, 404, "Not found");
 });
 
