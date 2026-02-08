@@ -230,10 +230,68 @@ textarea{min-height:220px;}
 .small{font-size:12px;}
 table{width:100%;border-collapse:collapse;font-size:13px;}
 th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;}
+`/* ===== AUTH UI PATCH ===== */
+.password-wrap {
+  position: relative;
+}
+.password-wrap input {
+  padding-right: 48px;
+}
+.toggle-password {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  color: #374151;
+  user-select: none;
+}
+
+/* Mobile spacing fix for auth screens */
+@media (max-width: 640px) {
+  .card {
+    padding: 16px !important;
+  }
+  input,
+  textarea,
+  button {
+    font-size: 16px !important;
+  }
+  .btnRow {
+    flex-direction: column;
+  }
+  .btn {
+    width: 100%;
+  }
+}
 `;
 
-function page(title, content, navHtml="") {
-  return `<!doctype html>
+<script>
+/* ===== PASSWORD VISIBILITY TOGGLE (GLOBAL) ===== */
+document.querySelectorAll('input[type="password"]').forEach(input => {
+  // Prevent double wrapping
+  if (input.parentNode.classList.contains("password-wrap")) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "password-wrap";
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+
+  const toggle = document.createElement("span");
+  toggle.className = "toggle-password";
+  toggle.textContent = "Show";
+  wrap.appendChild(toggle);
+
+  toggle.addEventListener("click", () => {
+    const hidden = input.type === "password";
+    input.type = hidden ? "text" : "password";
+    toggle.textContent = hidden ? "Hide" : "Show";
+  });
+});
+</script>
+</body></html>`;
 <html><head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -708,7 +766,6 @@ const server = http.createServer(async (req, res) => {
           <a class="btn secondary" href="/login">Back</a>
         </div>
       </form>
-      <p class="muted small">Set ADMIN_EMAIL and ADMIN_PASSWORD_PLAIN (or ADMIN_PASSWORD_HASH) in Railway.</p>
     `, navPublic());
     return send(res, 200, html);
   }
