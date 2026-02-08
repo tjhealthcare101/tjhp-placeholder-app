@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TJ Healthcare Pro – Dashboard</title>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+
+<div class="app-layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="logo">TJ Healthcare Pro</div>
+
+    <nav>
+      <a class="active">Dashboard</a>
+      <a>Upload Files</a>
+      <a>Analytics</a>
+      <a>Appeals</a>
+      <a>Settings</a>
+    </nav>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <strong>Organization:</strong> Demo Practice
+      </div>
+      <button class="logout">Log out</button>
+    </header>
+
+    <section class="content">
+      <h1>Welcome back</h1>
+      <p class="subtext">
+        Your claim review and analytics workspace.
+      </p>
+
+      <div class="cards">
+        <div class="card">
+          <h3>Upload Claims</h3>
+          <p>Upload denial, payment, or billing files.</p>
+        </div>
+
+        <div class="card">
+          <h3>AI Review</h3>
+          <p>Draft appeals and identify issues.</p>
+        </div>
+
+        <div class="card">
+          <h3>Analytics</h3>
+          <p>Track denials, payments, and trends.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+</div>
+
+</body>
+</html>
