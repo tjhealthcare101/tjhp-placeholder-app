@@ -34,33 +34,34 @@ const ADMIN_ACTIVATE_TOKEN = process.env.ADMIN_ACTIVATE_TOKEN || "CHANGE_ME_ADMI
 // ===== Timing =====
 const LOCK_SCREEN_MS = 5000;
 const SESSION_TTL_DAYS = 7;
-const AI_JOB_DELAY_MS = Number(process.env.AI_JOB_DELAY_MS || 20000);
+const AI_JOB_DELAY_MS = Number(process.env.AI_JOB_DELAY_MS || 20000); // demo default 20s
 
 // ===== Pilot / Retention =====
 const PILOT_DAYS = 30;
 const RETENTION_DAYS_AFTER_PILOT = 14;
 
-// ===== Limits =====
+// ===== Limits (LOCKED) =====
 const PILOT_LIMITS = {
   max_cases_total: 25,
   max_files_per_case: 3,
   max_file_size_mb: 10,
   max_ai_jobs_per_hour: 2,
   max_concurrent_analyzing: 2,
-  payment_records_included: 2000
+  payment_records_included: 2000, // pilot payment tracking rows
 };
 
 const MONTHLY_DEFAULTS = {
-  case_credits_per_month: 40,
-  payment_tracking_credits_per_month: 10,
+  case_credits_per_month: 40,              // Standard default
+  payment_tracking_credits_per_month: 10,  // 10k rows/mo if 1 credit=1k rows
   max_files_per_case: 3,
   max_file_size_mb: 20,
   max_ai_jobs_per_hour: 5,
   max_concurrent_analyzing: 5,
   overage_price_per_case: 50,
-  payment_records_per_credit: 1000
+  payment_records_per_credit: 1000,
 };
 
+// Payment tracking credits
 const PAYMENT_RECORDS_PER_CREDIT = 1000;
 
 // ===== Storage =====
@@ -74,14 +75,14 @@ const FILES = {
   pilots: path.join(DATA_DIR, "pilots.json"),
   subscriptions: path.join(DATA_DIR, "subscriptions.json"),
   cases: path.join(DATA_DIR, "cases.json"),
-  payments: path.join(DATA_DIR, "payments.json"),
+  payments: path.join(DATA_DIR, "payments.json"), // parsed payment rows (limited)
   expectations: path.join(DATA_DIR, "expectations.json"),
   flags: path.join(DATA_DIR, "flags.json"),
   usage: path.join(DATA_DIR, "usage.json"),
-  audit: path.join(DATA_DIR, "audit.json")
+  audit: path.join(DATA_DIR, "audit.json"),
 };
 
-// ===== Helper functions =====
+// ===== Helpers =====
 function uuid() { return crypto.randomUUID(); }
 function nowISO() { return new Date().toISOString(); }
 function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
@@ -105,7 +106,46 @@ function parseCookies(req) {
   return out;
 }
 
-// ===== Session helpers =====
+/**
+ * FIX: Railway-safe cookies.
+ * In production browsers require Secure for SameSite=None; but you use SameSite=Lax.
+ * Still, "Secure" should only be set when behind HTTPS.
+ */
+function setCookie(res, name, value, maxAgeSeconds) {
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "SameSite=Lax",
+    "HttpOnly",
+  ];
+  if (IS_PROD) parts.push("Secure");
+  if (maxAgeSeconds) parts.push(`Max-Age=${maxAgeSeconds}`);
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+function clearCookie(res, name) {
+  res.setHeader("Set-Cookie", `${name}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly${IS_PROD ? "; Secure" : ""}`);
+}
+
+function send(res, status, body, type="text/html") {
+  res.writeHead(status, { "Content-Type": type });
+  res.end(body);
+}
+
+function redirect(res, location) {
+  res.writeHead(302, { Location: location });
+  res.end();
+}
+
+function parseBody(req) {
+  return new Promise(resolve => {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => resolve(body));
+  });
+}
+
+// ===== Session =====
 function hmacSign(value, secret) {
   return crypto.createHmac("sha256", secret).update(value).digest("hex");
 }
@@ -153,7 +193,7 @@ function adminHash() {
   return "";
 }
 
-// ===== UI CSS =====
+// ===== UI =====
 const css = `
 :root{
   --bg:#f6f7fb; --card:#fff; --text:#111827; --muted:#6b7280;
@@ -238,8 +278,8 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 `;
 
 /**
- * Page template.
- * Includes password toggle, but you can add more scripts as needed in each route.
+ * FIX: all HTML + scripts must live inside returned strings.
+ * Password toggle preserved.
  */
 function page(title, content, navHtml="") {
   return `<!doctype html>
@@ -383,7 +423,7 @@ function setOrgStatus(org_id, status, reason="") {
   const orgs = readJSON(FILES.orgs, []);
   const idx = orgs.findIndex(o => o.org_id === org_id);
   if (idx < 0) return;
-  orgs[idx].account_status = status;
+  orgs[idx].account_status = status; // active|suspended|terminated
   orgs[idx].status_reason = reason || null;
   orgs[idx].status_updated_at = nowISO();
   writeJSON(FILES.orgs, orgs);
@@ -445,7 +485,7 @@ function cleanupIfExpired(org_id) {
   if (fs.existsSync(orgUploads)) fs.rmSync(orgUploads, { recursive:true, force:true });
 }
 
-// ===== Limits helpers =====
+// ===== Limits =====
 function getLimitProfile(org_id) {
   const sub = getSub(org_id);
   if (sub && sub.status === "active") {
@@ -458,7 +498,7 @@ function getLimitProfile(org_id) {
       max_ai_jobs_per_hour: MONTHLY_DEFAULTS.max_ai_jobs_per_hour,
       max_concurrent_analyzing: MONTHLY_DEFAULTS.max_concurrent_analyzing,
       overage_price_per_case: MONTHLY_DEFAULTS.overage_price_per_case,
-      payment_records_per_credit: MONTHLY_DEFAULTS.payment_records_per_credit
+      payment_records_per_credit: MONTHLY_DEFAULTS.payment_records_per_credit,
     };
   }
   return { mode:"pilot", ...PILOT_LIMITS };
@@ -713,6 +753,14 @@ function computeAnalytics(org_id) {
 }
 
 // ===== Admin Attention Helper =====
+/**
+ * Compute a set of organisation IDs requiring admin attention.
+ * Rules:
+ *  - Pilot ending within 7 days
+ *  - Case usage ≥ 80%
+ *  - No activity for 14+ days
+ *  - No payment uploads across platform
+ */
 function buildAdminAttentionSet(orgs) {
   const flagged = new Set();
   const now = Date.now();
@@ -729,6 +777,7 @@ function buildAdminAttentionSet(orgs) {
     } else {
       casePct = (usage.monthly_case_credits_used / limits.case_credits_per_month) * 100;
     }
+    // last activity (latest case or payment)
     let last = 0;
     cases.forEach(c => { if (c.org_id === org.org_id) last = Math.max(last, new Date(c.created_at).getTime()); });
     payments.forEach(p => { if (p.org_id === org.org_id) last = Math.max(last, new Date(p.created_at).getTime()); });
@@ -750,16 +799,14 @@ const server = http.createServer(async (req, res) => {
   const pathname = parsed.pathname;
   const method = req.method;
 
-  // Health check
-  if (method === "GET" && pathname === "/health") {
-    return send(res, 200, "ok", "text/plain");
-  }
+  // health
+  if (method === "GET" && pathname === "/health") return send(res, 200, "ok", "text/plain");
 
-  // Auth session
+  // auth
   const sess = getAuth(req);
   if (sess && sess.org_id) cleanupIfExpired(sess.org_id);
 
-  // Public Admin login page
+  // ---------- PUBLIC: Admin login ----------
   if (method === "GET" && pathname === "/admin/login") {
     const html = page("Owner Login", `
       <h2>Owner Login</h2>
@@ -778,7 +825,6 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // Admin login POST
   if (method === "POST" && pathname === "/admin/login") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
@@ -810,7 +856,7 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, "/admin/dashboard");
   }
 
-  // Public signup/login/reset routes
+  // ---------- PUBLIC: Signup/Login/Reset ----------
   if (method === "GET" && pathname === "/signup") {
     const html = page("Create Account", `
       <h2>Create Account</h2>
@@ -1061,7 +1107,6 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/terminated") {
-    // Corrected: Added '=' after class and fixed parentheses.
     return send(res, 200, page("Terminated", `
       <h2>Account Terminated</h2>
       <p>This account has been terminated. Access to the workspace is no longer available.</p>
@@ -1070,7 +1115,7 @@ const server = http.createServer(async (req, res) => {
     `, navPublic()));
   }
 
-  // Shopify activation
+  // Shopify activation (manual now)
   if (method === "GET" && pathname === "/shopify/activate") {
     const token = parsed.query.token || "";
     const email = (parsed.query.email || "").toLowerCase();
@@ -1098,6 +1143,7 @@ const server = http.createServer(async (req, res) => {
     writeJSON(FILES.subscriptions, subs);
 
     if (s.status === "active") {
+      // cancel deletion schedule
       const pilots = readJSON(FILES.pilots, []);
       const pidx = pilots.findIndex(p => p.org_id === user.org_id);
       if (pidx >= 0) {
@@ -1108,12 +1154,12 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, `Subscription set to ${s.status} for ${email}`, "text/plain");
   }
 
-  // ----- ADMIN ROUTES -----
+  // ---------- ADMIN ROUTES ----------
   if (pathname.startsWith("/admin/")) {
     const isAdmin = sess && sess.role === "admin";
     if (!isAdmin && pathname !== "/admin/login") return redirect(res, "/admin/login");
 
-    // Admin Dashboard
+    // Reworked admin dashboard
     if (method === "GET" && pathname === "/admin/dashboard") {
       const orgs = readJSON(FILES.orgs, []);
       const users = readJSON(FILES.users, []);
@@ -1121,14 +1167,17 @@ const server = http.createServer(async (req, res) => {
       const subs = readJSON(FILES.subscriptions, []);
       const casesData = readJSON(FILES.cases, []);
       const payments = readJSON(FILES.payments, []);
+      // counts
       const totalOrgs = orgs.length;
       const totalUsers = users.length;
       const activePilots = pilots.filter(p => p.status === "active").length;
       const activeSubs = subs.filter(s => s.status === "active").length;
+      // status counts for donut
       const statusCounts = orgs.reduce((acc, org) => {
         acc[org.account_status || "active"] = (acc[org.account_status || "active"] || 0) + 1;
         return acc;
       }, {});
+      // compute attention set and last activity
       const attentionSet = buildAdminAttentionSet(orgs);
       const orgActivities = orgs.map(org => {
         let last = 0;
@@ -1136,6 +1185,7 @@ const server = http.createServer(async (req, res) => {
         payments.forEach(p => { if (p.org_id === org.org_id) last = Math.max(last, new Date(p.created_at).getTime()); });
         return { org, last };
       });
+      // compile alerts
       const alerts = [];
       orgActivities.forEach(({ org, last }) => {
         const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
@@ -1151,11 +1201,18 @@ const server = http.createServer(async (req, res) => {
         } else {
           casePct = (usage.monthly_case_credits_used / limits.case_credits_per_month) * 100;
         }
-        if (casePct >= 80) alerts.push(`${safeStr(org.org_name)} near case limit (${casePct.toFixed(0)}%)`);
-        if (!last || Date.now() - last >= 14 * 24 * 60 * 60 * 1000) alerts.push(`${safeStr(org.org_name)} has no activity for 14+ days`);
+        if (casePct >= 80) {
+          alerts.push(`${safeStr(org.org_name)} near case limit (${casePct.toFixed(0)}%)`);
+        }
+        if (!last || Date.now() - last >= 14 * 24 * 60 * 60 * 1000) {
+          alerts.push(`${safeStr(org.org_name)} has no activity for 14+ days`);
+        }
       });
-      if (payments.length === 0) alerts.push("No payment uploads across platform");
+      if (payments.length === 0) {
+        alerts.push("No payment uploads across platform");
+      }
       let alertsHtml = alerts.length ? alerts.map(msg => `<div class="alert">${msg}</div>`).join("") : "<p class='muted'>No alerts</p>";
+      // recent activity table
       const rows = orgActivities.map(({ org, last }) => {
         const sub = getSub(org.org_id);
         const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
@@ -1192,16 +1249,19 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, html);
     }
 
-    // Admin Orgs (search/filter)
+    // Enhanced Organisations page
     if (method === "GET" && pathname === "/admin/orgs") {
       const orgs = readJSON(FILES.orgs, []);
       const pilots = readJSON(FILES.pilots, []);
       const subs = readJSON(FILES.subscriptions, []);
+      // build attention set
       const attSet = buildAdminAttentionSet(orgs);
+      // read filters from query
       const search = (parsed.query.search || "").toLowerCase();
       const statusFilter = parsed.query.status || "";
       const planFilter = parsed.query.plan || "";
       const needAtt = parsed.query.attention === "1";
+      // filter organisations
       let filtered = orgs.filter(org => {
         const nameMatch = !search || (org.org_name || "").toLowerCase().includes(search);
         const statusMatch = !statusFilter || (org.account_status || "active") === statusFilter;
@@ -1214,6 +1274,7 @@ const server = http.createServer(async (req, res) => {
         const attMatch = !needAtt || attSet.has(org.org_id);
         return nameMatch && statusMatch && planMatch && attMatch;
       });
+      // build table rows
       const rows = filtered.map(org => {
         const p = pilots.find(x => x.org_id === org.org_id);
         const s = subs.find(x => x.org_id === org.org_id);
@@ -1255,7 +1316,6 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, html);
     }
 
-    // Admin Org detail
     if (method === "GET" && pathname === "/admin/org") {
       const org_id = parsed.query.org_id || "";
       const org = getOrg(org_id);
@@ -1269,6 +1329,7 @@ const server = http.createServer(async (req, res) => {
 
       const plan = (sub && sub.status==="active") ? "Monthly (active)" : (pilot.status==="active" ? "Pilot (active)" : "Expired");
 
+      // create reset links (v1 display)
       const resetList = users.map(usr => {
         const token = uuid();
         const expiresAt = Date.now() + 20*60*1000;
@@ -1326,7 +1387,6 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, html);
     }
 
-    // Admin Actions
     if (method === "POST" && pathname === "/admin/action") {
       const body = await parseBody(req);
       const params = new URLSearchParams(body);
@@ -1340,6 +1400,7 @@ const server = http.createServer(async (req, res) => {
         auditLog({ actor:"admin", action:"suspend", org_id, reason });
       } else if (action === "terminate") {
         setOrgStatus(org_id, "terminated", reason);
+        // schedule deletion 14 days from now
         const pilots = readJSON(FILES.pilots, []);
         const idx = pilots.findIndex(p => p.org_id === org_id);
         if (idx >= 0) {
@@ -1360,7 +1421,6 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, `/admin/org?org_id=${encodeURIComponent(org_id)}`);
     }
 
-    // Admin Audit
     if (method === "GET" && pathname === "/admin/audit") {
       const audit = readJSON(FILES.audit, []);
       const rows = audit.slice(-200).reverse().map(a => `
@@ -1387,7 +1447,7 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, "/admin/dashboard");
   }
 
-  // ----- USER PROTECTED ROUTES -----
+  // ---------- USER PROTECTED ROUTES ----------
   if (!sess || sess.role !== "user") return redirect(res, "/login");
 
   const user = getUserById(sess.user_id);
@@ -1406,7 +1466,7 @@ const server = http.createServer(async (req, res) => {
 
   if (!isAccessEnabled(org.org_id)) return redirect(res, "/pilot-complete");
 
-  // Lock screen
+  // lock screen
   if (method === "GET" && pathname === "/lock") {
     const html = page("Starting", `
       <h2 class="center">Pilot Started</h2>
@@ -1418,13 +1478,14 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // Dashboard
+  // dashboard with empty-state previews and tooltips
   if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) {
     const limits = getLimitProfile(org.org_id);
     const usage = getUsage(org.org_id);
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
     const paymentAllowance = paymentRowsAllowance(org.org_id);
     const planBadge = (limits.mode==="monthly") ? `<span class="badge ok">Monthly Active</span>` : `<span class="badge warn">Pilot Active</span>`;
+    // counts for empty-state charts
     const caseCount = countOrgCases(org.org_id);
     const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
     const html = page("Dashboard", `
@@ -1463,7 +1524,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // Case Upload GET
+  // --------- CASE UPLOAD ----------
   if (method === "GET" && pathname === "/upload") {
     const html = page("Case Upload", `
       <h2>Case Upload</h2>
@@ -1510,8 +1571,8 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // Case Upload POST
   if (method === "POST" && pathname === "/upload") {
+    // limit: pilot cases
     const can = pilotCanCreateCase(org.org_id);
     if (!can.ok) {
       const html = page("Limit", `
@@ -1554,9 +1615,11 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // monthly credit consumption (case)
     if (limits.mode === "monthly") monthlyConsumeCaseCredit(org.org_id);
     else pilotConsumeCase(org.org_id);
 
+    // create case record
     const case_id = uuid();
     const caseDir = path.join(UPLOADS_DIR, org.org_id, case_id);
     ensureDir(caseDir);
@@ -1597,11 +1660,14 @@ const server = http.createServer(async (req, res) => {
     });
     writeJSON(FILES.cases, cases);
 
+    // queue AI (respect concurrency + rate)
     const okAI = canStartAI(org.org_id);
     if (!okAI.ok) {
+      // leave case in UPLOAD_RECEIVED (queued)
       return redirect(res, `/status?case_id=${encodeURIComponent(case_id)}`);
     }
 
+    // start analyzing
     const cases2 = readJSON(FILES.cases, []);
     const c = cases2.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (c) {
@@ -1614,13 +1680,14 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, `/status?case_id=${encodeURIComponent(case_id)}`);
   }
 
-  // Case status
+  // status (poll)
   if (method === "GET" && pathname === "/status") {
     const case_id = parsed.query.case_id || "";
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
 
+    // If queued, attempt to start AI now if capacity available
     if (c.status === "UPLOAD_RECEIVED") {
       const okAI = canStartAI(org.org_id);
       if (okAI.ok) {
@@ -1631,6 +1698,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // If analyzing, maybe complete based on timer
     if (c.status === "ANALYZING") {
       maybeCompleteAI(c, org.org_name);
       writeJSON(FILES.cases, cases);
@@ -1655,7 +1723,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // Draft view/edit
+  // draft view + edit
   if (method === "GET" && pathname === "/draft") {
     const case_id = parsed.query.case_id || "";
     const cases = readJSON(FILES.cases, []);
@@ -1717,7 +1785,7 @@ const server = http.createServer(async (req, res) => {
     return res.end(c.ai.draft_text || "");
   }
 
-  // Payment Tracking GET
+  // -------- PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) --------
   if (method === "GET" && pathname === "/payments") {
     const allow = paymentRowsAllowance(org.org_id);
     const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
@@ -1780,7 +1848,6 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // Payment Tracking POST
   if (method === "POST" && pathname === "/payments") {
     const contentType = req.headers["content-type"] || "";
     if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain");
@@ -1792,6 +1859,7 @@ const server = http.createServer(async (req, res) => {
     const f = files.find(x => x.fieldName === "payfile") || files[0];
     if (!f) return redirect(res, "/payments");
 
+    // validate extension
     const nameLower = (f.filename || "").toLowerCase();
     const isCSV = nameLower.endsWith(".csv");
     const isXLS = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx");
@@ -1804,22 +1872,25 @@ const server = http.createServer(async (req, res) => {
       return send(res, 400, html);
     }
 
+    // file size cap (use same as plan)
     const limits = getLimitProfile(org.org_id);
     const maxBytes = limits.max_file_size_mb * 1024 * 1024;
     if (f.buffer.length > maxBytes) {
       const html = page("Payment Tracking", `
         <h2>Payment Tracking</h2>
         <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
-        <div class="btnRow"><a class "btn secondary" href="/payments">Back</a></div>
+        <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
       `, navUser());
       return send(res, 400, html);
     }
 
+    // store raw file
     const dir = path.join(UPLOADS_DIR, org.org_id, "payments");
     ensureDir(dir);
     const stored = path.join(dir, `${Date.now()}_${(f.filename || "payments").replace(/[^a-zA-Z0-9._-]/g,"_")}`);
     fs.writeFileSync(stored, f.buffer);
 
+    // parse CSV now (rows count & limited record storage)
     let rowsAdded = 0;
     if (isCSV) {
       const text = f.buffer.toString("utf8");
@@ -1830,6 +1901,7 @@ const server = http.createServer(async (req, res) => {
       const remaining = allowance.remaining;
       const toUse = Math.min(remaining, rows.length);
 
+      // store up to 500 records per upload for demo, but count all used
       const storeLimit = Math.min(toUse, 500);
       const paymentsData = readJSON(FILES.payments, []);
 
@@ -1856,6 +1928,7 @@ const server = http.createServer(async (req, res) => {
       rowsAdded = toUse;
       consumePaymentRows(org.org_id, rowsAdded);
     } else {
+      // Excel stored but not parsed in v1 (still counts as 0 rows until CSV provided)
       rowsAdded = 0;
     }
 
@@ -1874,11 +1947,12 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // Analytics page
+  // analytics page with placeholders and bar chart preview
   if (method === "GET" && pathname === "/analytics") {
     const a = computeAnalytics(org.org_id);
     const usage = getUsage(org.org_id);
     const limits = getLimitProfile(org.org_id);
+    // Build top 4 payers by total amount
     const payList = Object.entries(a.payByPayer).map(([payer, info]) => ({ payer, total: info.total }));
     payList.sort((x, y) => y.total - x.total);
     const top4 = payList.slice(0, 4);
@@ -1921,26 +1995,36 @@ const server = http.createServer(async (req, res) => {
           <ul class="muted">
             <li>
               Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total}
-              <span class="tooltip">ⓘ<span class="tooltiptext">Maximum number of cases allowed during your pilot.</span></span>
+              <span class="tooltip">ⓘ
+                <span class="tooltiptext">Maximum number of cases allowed during your pilot.</span>
+              </span>
             </li>
             <li>
               Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included}
-              <span class="tooltip">ⓘ<span class="tooltiptext">The analytics display only 500 rows, but all uploaded rows count toward usage.</span></span>
+              <span class="tooltip">ⓘ
+                <span class="tooltiptext">The analytics display only 500 rows, but all uploaded rows count toward usage.</span>
+              </span>
             </li>
           </ul>
           ` : `
           <ul class="muted">
             <li>
               Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month}
-              <span class="tooltip">ⓘ<span class="tooltiptext">Number of cases processed out of your monthly allotment.</span></span>
+              <span class="tooltip">ⓘ
+                <span class="tooltiptext">Number of cases processed out of your monthly allotment.</span>
+              </span>
             </li>
             <li>
               Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count * limits.overage_price_per_case})
-              <span class="tooltip">ⓘ<span class="tooltiptext">Cases beyond your allotment incur an additional fee.</span></span>
+              <span class="tooltip">ⓘ
+                <span class="tooltiptext">Cases beyond your allotment incur an additional fee.</span>
+              </span>
             </li>
             <li>
               Monthly payment rows used: ${usage.monthly_payment_rows_used}
-              <span class="tooltip">ⓘ<span class="tooltiptext">The analytics display up to 500 rows; all rows still count toward usage.</span></span>
+              <span class="tooltip">ⓘ
+                <span class="tooltiptext">The analytics display up to 500 rows; all rows still count toward usage.</span>
+              </span>
             </li>
           </ul>
           `}
@@ -1950,7 +2034,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // Exports hub
+  // exports hub
   if (method === "GET" && pathname === "/exports") {
     const html = page("Exports", `
       <h2>Exports</h2>
@@ -1976,6 +2060,7 @@ const server = http.createServer(async (req, res) => {
       c.ai?.denial_reason_category || ""
     ].map(x => `"${String(x).replace(/"/g,'""')}"`).join(","));
     const csv = [header, ...rows].join("\n");
+
     res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=cases.csv" });
     return res.end(csv);
   }
@@ -1987,6 +2072,7 @@ const server = http.createServer(async (req, res) => {
       p.payment_id, p.claim_number, p.payer, p.amount_paid, p.date_paid, p.source_file, p.created_at
     ].map(x => `"${String(x||"").replace(/"/g,'""')}"`).join(","));
     const csv = [header, ...rows].join("\n");
+
     res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=payments.csv" });
     return res.end(csv);
   }
@@ -2000,6 +2086,7 @@ const server = http.createServer(async (req, res) => {
       ["avg_time_to_draft_seconds", aExport.avgDraftSeconds || ""],
     ].map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(","));
     const csv = [header, ...rows].join("\n");
+
     res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=analytics.csv" });
     return res.end(csv);
   }
@@ -2030,11 +2117,12 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // Pilot complete
+  // pilot complete page
   if (method === "GET" && pathname === "/pilot-complete") {
     const pilotEnd = getPilot(org.org_id) || ensurePilot(org.org_id);
     if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
     const p2 = getPilot(org.org_id);
+
     const html = page("Pilot Complete", `
       <h2>Pilot Complete</h2>
       <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p>
@@ -2056,7 +2144,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // Default fallback
+  // fallback
   return redirect(res, "/dashboard");
 });
 
