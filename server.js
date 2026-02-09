@@ -242,10 +242,16 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .tooltip{position:relative;display:inline-block;cursor:pointer;color:var(--muted);}
 .tooltip .tooltiptext{visibility:hidden;width:220px;background-color:#555;color:#fff;text-align:center;border-radius:6px;padding:5px;position:absolute;z-index:1;bottom:125%;left:50%;margin-left:-110px;opacity:0;transition:opacity 0.3s;font-size:12px;}
 .tooltip:hover .tooltiptext{visibility:visible;opacity:1;}
+
+/* Chart and KPI placeholders */
 .chart-placeholder{height:200px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;margin-bottom:10px;}
 .kpi-card{display:inline-block;margin:10px;padding:15px;border:1px solid var(--border);border-radius:8px;width:200px;text-align:center;background:#fff;box-shadow:var(--shadow);}
 .alert{background:#ffeded;border:1px solid #ffb0b0;padding:10px;margin:5px 0;border-radius:6px;font-size:13px;}
 .attention{background-color:#fff8e1;}
+
+/* Drop‑zone styling */
+.dropzone{display:flex;align-items:center;justify-content:center;border:2px dashed var(--border);border-radius:8px;height:150px;cursor:pointer;background:#fafafa;color:var(--muted);margin-bottom:10px;transition:background 0.2s ease;}
+.dropzone.dragover{background:#e5e7eb;}
 
 /* ===== AUTH UI PATCH ===== */
 .password-wrap { position: relative; }
@@ -1248,7 +1254,6 @@ const server = http.createServer(async (req, res) => {
       const orgs = readJSON(FILES.orgs, []);
       const pilots = readJSON(FILES.pilots, []);
       const subs = readJSON(FILES.subscriptions, []);
-      const payments = readJSON(FILES.payments, []);
       // build attention set
       const attSet = buildAdminAttentionSet(orgs);
       // read filters from query
@@ -1523,12 +1528,11 @@ const server = http.createServer(async (req, res) => {
   if (method === "GET" && pathname === "/upload") {
     const html = page("Case Upload", `
       <h2>Case Upload</h2>
-      <p class="muted">Upload any combination of up to <strong>3 documents</strong> for this case. Denial/payment notices alone are enough to begin. Additional docs can improve analytics.</p>
+      <p class="muted">Upload any combination of up to <strong>3 documents</strong> for this case. Denial/payment notices alone are enough to begin.</p>
       <form method="POST" action="/upload" enctype="multipart/form-data">
         <label>Documents (up to 3)</label>
-        <input name="file1" type="file" required />
-        <input name="file2" type="file" />
-        <input name="file3" type="file" />
+        <div id="case-dropzone" class="dropzone">Drop up to 3 documents here or click to select</div>
+        <input id="case-files" type="file" name="files" multiple required accept=".pdf,.doc,.docx,.jpg,.png" style="display:none" />
         <label>Optional notes</label>
         <textarea name="notes" placeholder="Any context to help review (optional)"></textarea>
         <div class="btnRow">
@@ -1538,6 +1542,31 @@ const server = http.createServer(async (req, res) => {
       </form>
       <div class="hr"></div>
       <p class="muted small">Limits: 3 files/case · ${getLimitProfile(org.org_id).mode==="pilot" ? "10MB/file" : "20MB/file"}</p>
+      <script>
+        const caseDrop = document.getElementById('case-dropzone');
+        const caseInput = document.getElementById('case-files');
+        caseDrop.addEventListener('click', () => caseInput.click());
+        ['dragenter','dragover'].forEach(evt => {
+          caseDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); caseDrop.classList.add('dragover'); });
+        });
+        ['dragleave','drop'].forEach(evt => {
+          caseDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); caseDrop.classList.remove('dragover'); });
+        });
+        caseDrop.addEventListener('drop', e => {
+          const files = e.dataTransfer.files;
+          if (files.length > 3) { alert('You can upload up to 3 documents.'); return; }
+          const dt = new DataTransfer();
+          for (let i=0; i<files.length && i<3; i++) { dt.items.add(files[i]); }
+          caseInput.files = dt.files;
+          caseDrop.textContent = files.length + ' file' + (files.length>1 ? 's' : '') + ' selected';
+        });
+        caseInput.addEventListener('change', () => {
+          const f = caseInput.files;
+          if (f.length) {
+            caseDrop.textContent = f.length + ' file' + (f.length>1 ? 's' : '') + ' selected';
+          }
+        });
+      </script>
     `, navUser());
     return send(res, 200, html);
   }
@@ -1783,7 +1812,8 @@ const server = http.createServer(async (req, res) => {
       <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
       <form method="POST" action="/payments" enctype="multipart/form-data">
         <label>Upload CSV/XLS/XLSX (analytics-only)</label>
-        <input name="payfile" type="file" required />
+        <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div>
+        <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx" required style="display:none" />
         <div class="btnRow">
           <button class="btn" type="submit">Upload for Analytics</button>
           <a class="btn secondary" href="/dashboard">Back</a>
@@ -1791,6 +1821,29 @@ const server = http.createServer(async (req, res) => {
       </form>
       <div class="hr"></div>
       <p class="muted small">Note: This does not create appeal drafts. It updates payer and payment timeline analytics.</p>
+      <script>
+        const payDrop = document.getElementById('pay-dropzone');
+        const payInput = document.getElementById('pay-file');
+        payDrop.addEventListener('click', () => payInput.click());
+        ['dragenter','dragover'].forEach(evt => {
+          payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover'); });
+        });
+        ['dragleave','drop'].forEach(evt => {
+          payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover'); });
+        });
+        payDrop.addEventListener('drop', e => {
+          const files = e.dataTransfer.files;
+          if (files.length > 1) { alert('Only one file at a time.'); return; }
+          const dt = new DataTransfer();
+          dt.items.add(files[0]);
+          payInput.files = dt.files;
+          payDrop.textContent = files[0].name;
+        });
+        payInput.addEventListener('change', () => {
+          const file = payInput.files[0];
+          if (file) payDrop.textContent = file.name;
+        });
+      </script>
     `, navUser());
     return send(res, 200, html);
   }
@@ -1940,14 +1993,39 @@ const server = http.createServer(async (req, res) => {
           <h3>Usage</h3>
           ${limits.mode==="pilot" ? `
           <ul class="muted">
-            <li>Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total}</li>
-            <li>Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included}</li>
+            <li>
+              Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total}
+              <span class="tooltip">ⓘ
+                <span class="tooltiptext">Maximum number of cases allowed during your pilot.</span>
+              </span>
+            </li>
+            <li>
+              Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included}
+              <span class="tooltip">ⓘ
+                <span class="tooltiptext">The analytics display only 500 rows, but all uploaded rows count toward usage.</span>
+              </span>
+            </li>
           </ul>
           ` : `
           <ul class="muted">
-            <li>Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month}</li>
-            <li>Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count * limits.overage_price_per_case})</li>
-            <li>Monthly payment rows used: ${usage.monthly_payment_rows_used}</li>
+            <li>
+              Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month}
+              <span class="tooltip">ⓘ
+                <span class="tooltiptext">Number of cases processed out of your monthly allotment.</span>
+              </span>
+            </li>
+            <li>
+              Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count * limits.overage_price_per_case})
+              <span class="tooltip">ⓘ
+                <span class="tooltiptext">Cases beyond your allotment incur an additional fee.</span>
+              </span>
+            </li>
+            <li>
+              Monthly payment rows used: ${usage.monthly_payment_rows_used}
+              <span class="tooltip">ⓘ
+                <span class="tooltiptext">The analytics display up to 500 rows; all rows still count toward usage.</span>
+              </span>
+            </li>
           </ul>
           `}
         </div>
