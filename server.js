@@ -729,7 +729,6 @@ function buildAdminAttentionSet(orgs) {
     } else {
       casePct = (usage.monthly_case_credits_used / limits.case_credits_per_month) * 100;
     }
-    // last activity (latest case or payment)
     let last = 0;
     cases.forEach(c => { if (c.org_id === org.org_id) last = Math.max(last, new Date(c.created_at).getTime()); });
     payments.forEach(p => { if (p.org_id === org.org_id) last = Math.max(last, new Date(p.created_at).getTime()); });
@@ -760,7 +759,7 @@ const server = http.createServer(async (req, res) => {
   const sess = getAuth(req);
   if (sess && sess.org_id) cleanupIfExpired(sess.org_id);
 
-  // Public routes, Admin login
+  // Public Admin login page
   if (method === "GET" && pathname === "/admin/login") {
     const html = page("Owner Login", `
       <h2>Owner Login</h2>
@@ -779,6 +778,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
+  // Admin login POST
   if (method === "POST" && pathname === "/admin/login") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
@@ -810,7 +810,7 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, "/admin/dashboard");
   }
 
-  // Public signup/login/reset routes...
+  // Public signup/login/reset routes
   if (method === "GET" && pathname === "/signup") {
     const html = page("Create Account", `
       <h2>Create Account</h2>
@@ -1065,7 +1065,7 @@ const server = http.createServer(async (req, res) => {
       <h2>Account Terminated</h2>
       <p>This account has been terminated. Access to the workspace is no longer available.</p>
       <p class="muted">If you believe this is an error, contact support.</p>
-      <div class="btnRow"><a class="btn secondary" href="/logout">Logout</a></div>
+      <div class="btnRow"><a class "btn secondary" href="/logout">Logout</a></div>
     `, navPublic()));
   }
 
@@ -1097,7 +1097,6 @@ const server = http.createServer(async (req, res) => {
     writeJSON(FILES.subscriptions, subs);
 
     if (s.status === "active") {
-      // cancel deletion schedule
       const pilots = readJSON(FILES.pilots, []);
       const pidx = pilots.findIndex(p => p.org_id === user.org_id);
       if (pidx >= 0) {
@@ -1121,17 +1120,14 @@ const server = http.createServer(async (req, res) => {
       const subs = readJSON(FILES.subscriptions, []);
       const casesData = readJSON(FILES.cases, []);
       const payments = readJSON(FILES.payments, []);
-      // KPI counts
       const totalOrgs = orgs.length;
       const totalUsers = users.length;
       const activePilots = pilots.filter(p => p.status === "active").length;
       const activeSubs = subs.filter(s => s.status === "active").length;
-      // Donut counts
       const statusCounts = orgs.reduce((acc, org) => {
         acc[org.account_status || "active"] = (acc[org.account_status || "active"] || 0) + 1;
         return acc;
       }, {});
-      // Alerts & activity
       const attentionSet = buildAdminAttentionSet(orgs);
       const orgActivities = orgs.map(org => {
         let last = 0;
@@ -1159,7 +1155,6 @@ const server = http.createServer(async (req, res) => {
       });
       if (payments.length === 0) alerts.push("No payment uploads across platform");
       let alertsHtml = alerts.length ? alerts.map(msg => `<div class="alert">${msg}</div>`).join("") : "<p class='muted'>No alerts</p>";
-      // Recent activity rows
       const rows = orgActivities.map(({ org, last }) => {
         const sub = getSub(org.org_id);
         const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
@@ -1273,7 +1268,6 @@ const server = http.createServer(async (req, res) => {
 
       const plan = (sub && sub.status==="active") ? "Monthly (active)" : (pilot.status==="active" ? "Pilot (active)" : "Expired");
 
-      // create reset links (v1 display)
       const resetList = users.map(usr => {
         const token = uuid();
         const expiresAt = Date.now() + 20*60*1000;
@@ -2061,11 +2055,9 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // Default fallback
   return redirect(res, "/dashboard");
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(\`TJHP server listening on ${HOST}:${PORT}\`);
+  console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
