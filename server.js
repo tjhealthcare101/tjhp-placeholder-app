@@ -238,6 +238,15 @@ table{width:100%;border-collapse:collapse;font-size:13px;}
 th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;}
 .center{text-align:center}
 
+/* Tooltip system */
+.tooltip{position:relative;display:inline-block;cursor:pointer;color:var(--muted);}
+.tooltip .tooltiptext{visibility:hidden;width:220px;background-color:#555;color:#fff;text-align:center;border-radius:6px;padding:5px;position:absolute;z-index:1;bottom:125%;left:50%;margin-left:-110px;opacity:0;transition:opacity 0.3s;font-size:12px;}
+.tooltip:hover .tooltiptext{visibility:visible;opacity:1;}
+.chart-placeholder{height:200px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;margin-bottom:10px;}
+.kpi-card{display:inline-block;margin:10px;padding:15px;border:1px solid var(--border);border-radius:8px;width:200px;text-align:center;background:#fff;box-shadow:var(--shadow);}
+.alert{background:#ffeded;border:1px solid #ffb0b0;padding:10px;margin:5px 0;border-radius:6px;font-size:13px;}
+.attention{background-color:#fff8e1;}
+
 /* ===== AUTH UI PATCH ===== */
 .password-wrap { position: relative; }
 .password-wrap input { padding-right: 48px; }
@@ -325,6 +334,7 @@ function navUser() {
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
+
 // ===== Models helpers =====
 function getOrg(org_id) {
   return readJSON(FILES.orgs, []).find(o => o.org_id === org_id);
@@ -736,6 +746,47 @@ function computeAnalytics(org_id) {
   return { totalCases, drafts, avgDraftSeconds, denialReasons, payByPayer };
 }
 
+// ===== Admin Attention Helper =====
+/**
+ * Compute a set of organisation IDs requiring admin attention.
+ * Rules:
+ *  - Pilot ending within 7 days
+ *  - Case usage ≥ 80%
+ *  - No activity for 14+ days
+ *  - No payment uploads across platform
+ */
+function buildAdminAttentionSet(orgs) {
+  const flagged = new Set();
+  const now = Date.now();
+  const allUsage = readJSON(FILES.usage, []);
+  const cases = readJSON(FILES.cases, []);
+  const payments = readJSON(FILES.payments, []);
+  orgs.forEach(org => {
+    const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
+    const limits = getLimitProfile(org.org_id);
+    const usage = allUsage.find(u => u.org_id === org.org_id) || getUsage(org.org_id);
+    let casePct = 0;
+    if (limits.mode === 'pilot') {
+      casePct = (usage.pilot_cases_used / PILOT_LIMITS.max_cases_total) * 100;
+    } else {
+      casePct = (usage.monthly_case_credits_used / limits.case_credits_per_month) * 100;
+    }
+    // last activity (latest case or payment)
+    let last = 0;
+    cases.forEach(c => { if (c.org_id === org.org_id) last = Math.max(last, new Date(c.created_at).getTime()); });
+    payments.forEach(p => { if (p.org_id === org.org_id) last = Math.max(last, new Date(p.created_at).getTime()); });
+    const pilotEnd = pilot ? new Date(pilot.ends_at).getTime() : 0;
+    const pilotEndingSoon = pilotEnd && pilotEnd - now <= 7 * 24 * 60 * 60 * 1000;
+    const nearLimit = casePct >= 80;
+    const noRecentActivity = !last || now - last >= 14 * 24 * 60 * 60 * 1000;
+    const noPayments = payments.filter(p => p.org_id === org.org_id).length === 0;
+    if (pilotEndingSoon || nearLimit || noRecentActivity || noPayments) {
+      flagged.add(org.org_id);
+    }
+  });
+  return flagged;
+}
+
 // ===== ROUTER =====
 const server = http.createServer(async (req, res) => {
   const parsed = url.parse(req.url, true);
@@ -1102,82 +1153,158 @@ const server = http.createServer(async (req, res) => {
     const isAdmin = sess && sess.role === "admin";
     if (!isAdmin && pathname !== "/admin/login") return redirect(res, "/admin/login");
 
+    // Reworked admin dashboard
     if (method === "GET" && pathname === "/admin/dashboard") {
       const orgs = readJSON(FILES.orgs, []);
       const users = readJSON(FILES.users, []);
       const pilots = readJSON(FILES.pilots, []);
       const subs = readJSON(FILES.subscriptions, []);
-      const cases = readJSON(FILES.cases, []);
-
+      const casesData = readJSON(FILES.cases, []);
+      const payments = readJSON(FILES.payments, []);
+      // counts
+      const totalOrgs = orgs.length;
+      const totalUsers = users.length;
       const activePilots = pilots.filter(p => p.status === "active").length;
       const activeSubs = subs.filter(s => s.status === "active").length;
-      const suspended = orgs.filter(o => o.account_status === "suspended").length;
-      const terminated = orgs.filter(o => o.account_status === "terminated").length;
-
-      const html = page("Owner Admin", `
-        <h2>Owner Admin</h2>
-        <div class="row">
-          <div class="col">
-            <div class="card" style="box-shadow:none;">
-              <table>
-                <tr><th>Organizations</th><td>${orgs.length}</td></tr>
-                <tr><th>Users</th><td>${users.length}</td></tr>
-                <tr><th>Active pilots</th><td>${activePilots}</td></tr>
-                <tr><th>Active subscriptions</th><td>${activeSubs}</td></tr>
-                <tr><th>Suspended</th><td>${suspended}</td></tr>
-                <tr><th>Terminated</th><td>${terminated}</td></tr>
-                <tr><th>Total cases</th><td>${cases.length}</td></tr>
-              </table>
-              <div class="btnRow">
-                <a class="btn" href="/admin/orgs">Organizations</a>
-                <a class="btn secondary" href="/admin/audit">Audit Log</a>
-              </div>
-            </div>
-          </div>
-          <div class="col">
-            <div class="card" style="box-shadow:none;">
-              <h3>Notes</h3>
-              <p class="muted">Admin can view org plans and analytics, suspend/terminate, extend pilot, and force reset links. Admin does not impersonate users.</p>
-            </div>
-          </div>
-        </div>
+      // status counts for donut
+      const statusCounts = orgs.reduce((acc, org) => {
+        acc[org.account_status || "active"] = (acc[org.account_status || "active"] || 0) + 1;
+        return acc;
+      }, {});
+      // compute attention set and last activity
+      const attentionSet = buildAdminAttentionSet(orgs);
+      const orgActivities = orgs.map(org => {
+        let last = 0;
+        casesData.forEach(c => { if (c.org_id === org.org_id) last = Math.max(last, new Date(c.created_at).getTime()); });
+        payments.forEach(p => { if (p.org_id === org.org_id) last = Math.max(last, new Date(p.created_at).getTime()); });
+        return { org, last };
+      });
+      // compile alerts
+      const alerts = [];
+      orgActivities.forEach(({ org, last }) => {
+        const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
+        const limits = getLimitProfile(org.org_id);
+        const usage = getUsage(org.org_id);
+        const pilotEnd = pilot ? new Date(pilot.ends_at).getTime() : 0;
+        if (pilotEnd && pilotEnd - Date.now() <= 7 * 24 * 60 * 60 * 1000) {
+          alerts.push(`Pilot for ${safeStr(org.org_name)} ends soon`);
+        }
+        let casePct = 0;
+        if (limits.mode === "pilot") {
+          casePct = (usage.pilot_cases_used / PILOT_LIMITS.max_cases_total) * 100;
+        } else {
+          casePct = (usage.monthly_case_credits_used / limits.case_credits_per_month) * 100;
+        }
+        if (casePct >= 80) {
+          alerts.push(`${safeStr(org.org_name)} near case limit (${casePct.toFixed(0)}%)`);
+        }
+        if (!last || Date.now() - last >= 14 * 24 * 60 * 60 * 1000) {
+          alerts.push(`${safeStr(org.org_name)} has no activity for 14+ days`);
+        }
+      });
+      if (payments.length === 0) {
+        alerts.push("No payment uploads across platform");
+      }
+      let alertsHtml = alerts.length ? alerts.map(msg => `<div class="alert">${msg}</div>`).join("") : "<p class='muted'>No alerts</p>";
+      // recent activity table
+      const rows = orgActivities.map(({ org, last }) => {
+        const sub = getSub(org.org_id);
+        const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
+        const plan = (sub && sub.status === "active") ? "Subscribed" : (pilot.status === "active" ? "Pilot" : "Expired");
+        const att = attentionSet.has(org.org_id) ? "⚠️" : "";
+        return `<tr class="${att ? 'attention' : ''}">
+          <td>${safeStr(org.org_name)}</td>
+          <td>${plan}</td>
+          <td>${safeStr(org.account_status || 'active')}</td>
+          <td>${last ? new Date(last).toLocaleDateString() : "—"}</td>
+          <td>${att}</td>
+        </tr>`;
+      }).join("");
+      const html = page("Admin Dashboard", `
+        <h2>Admin Dashboard</h2>
+        <section>
+          <div class="kpi-card"><h4>Total Organisations</h4><p>${totalOrgs}</p></div>
+          <div class="kpi-card"><h4>Total Users</h4><p>${totalUsers}</p></div>
+          <div class="kpi-card"><h4>Active Pilots</h4><p>${activePilots}</p></div>
+          <div class="kpi-card"><h4>Active Subscriptions</h4><p>${activeSubs}</p></div>
+        </section>
+        <h3>Organisation Status</h3>
+        <div class="chart-placeholder">Donut chart will render here: Active ${statusCounts['active']||0}, Suspended ${statusCounts['suspended']||0}, Terminated ${statusCounts['terminated']||0}</div>
+        <h3>Total Case Activity</h3>
+        <div class="chart-placeholder">Case activity charts will be displayed when data is available.</div>
+        <h3>Admin Alerts</h3>
+        ${alertsHtml}
+        <h3>Recent Organisation Activity</h3>
+        <table>
+          <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Last Activity</th><th>Attention</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
       `, navAdmin());
       return send(res, 200, html);
     }
 
+    // Enhanced Organisations page
     if (method === "GET" && pathname === "/admin/orgs") {
       const orgs = readJSON(FILES.orgs, []);
       const pilots = readJSON(FILES.pilots, []);
       const subs = readJSON(FILES.subscriptions, []);
-      const usage = readJSON(FILES.usage, []);
-
-      const rows = orgs.map(o => {
-        const p = pilots.find(x => x.org_id === o.org_id);
-        const s = subs.find(x => x.org_id === o.org_id);
-        const u = usage.find(x => x.org_id === o.org_id) || {};
-        const status = o.account_status || "active";
-        const plan = (s && s.status==="active") ? "Monthly" : (p && p.status==="active" ? "Pilot" : "Expired");
-        const badge = status==="active" ? "ok" : (status==="suspended" ? "warn" : "err");
-        return `
-          <tr>
-            <td>${safeStr(o.org_name)}</td>
-            <td><span class="badge ${badge}">${safeStr(status)}</span></td>
-            <td>${plan}</td>
-            <td class="muted small">${p ? new Date(p.ends_at).toLocaleDateString() : "—"}</td>
-            <td class="muted small">${p?.retention_delete_at ? new Date(p.retention_delete_at).toLocaleDateString() : "—"}</td>
-            <td class="muted small">${u.pilot_cases_used || 0}/${PILOT_LIMITS.max_cases_total}</td>
-            <td><a class="btn secondary" href="/admin/org?org_id=${encodeURIComponent(o.org_id)}">Open</a></td>
-          </tr>`;
+      const payments = readJSON(FILES.payments, []);
+      // build attention set
+      const attSet = buildAdminAttentionSet(orgs);
+      // read filters from query
+      const search = (parsed.query.search || "").toLowerCase();
+      const statusFilter = parsed.query.status || "";
+      const planFilter = parsed.query.plan || "";
+      const needAtt = parsed.query.attention === "1";
+      // filter organisations
+      let filtered = orgs.filter(org => {
+        const nameMatch = !search || (org.org_name || "").toLowerCase().includes(search);
+        const statusMatch = !statusFilter || (org.account_status || "active") === statusFilter;
+        const plan = (() => {
+          const p = pilots.find(x => x.org_id === org.org_id);
+          const s = subs.find(x => x.org_id === org.org_id);
+          return (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ? "Pilot" : "Expired");
+        })();
+        const planMatch = !planFilter || plan === planFilter;
+        const attMatch = !needAtt || attSet.has(org.org_id);
+        return nameMatch && statusMatch && planMatch && attMatch;
+      });
+      // build table rows
+      const rows = filtered.map(org => {
+        const p = pilots.find(x => x.org_id === org.org_id);
+        const s = subs.find(x => x.org_id === org.org_id);
+        const plan = (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ? "Pilot" : "Expired");
+        const att = attSet.has(org.org_id) ? "⚠️" : "";
+        return `<tr class="${att ? 'attention' : ''}">
+          <td>${safeStr(org.org_name)}</td>
+          <td>${plan}</td>
+          <td>${safeStr(org.account_status || 'active')}</td>
+          <td>${att}</td>
+        </tr>`;
       }).join("");
-
       const html = page("Organizations", `
         <h2>Organizations</h2>
+        <form method="GET" action="/admin/orgs">
+          <input type="text" name="search" placeholder="Search org name" value="${safeStr(parsed.query.search || '')}">
+          <select name="status">
+            <option value="">All statuses</option>
+            <option value="active"${statusFilter==="active"?" selected":""}>Active</option>
+            <option value="suspended"${statusFilter==="suspended"?" selected":""}>Suspended</option>
+            <option value="terminated"${statusFilter==="terminated"?" selected":""}>Terminated</option>
+          </select>
+          <select name="plan">
+            <option value="">All plans</option>
+            <option value="Pilot"${planFilter==="Pilot"?" selected":""}>Pilot</option>
+            <option value="Subscribed"${planFilter==="Subscribed"?" selected":""}>Subscribed</option>
+            <option value="Expired"${planFilter==="Expired"?" selected":""}>Expired</option>
+          </select>
+          <label><input type="checkbox" name="attention" value="1"${needAtt?" checked":""}> Needs Attention</label>
+          <button class="btn" type="submit">Filter</button>
+        </form>
         <div style="overflow:auto;">
           <table>
-            <thead>
-              <tr><th>Organization</th><th>Status</th><th>Plan</th><th>Pilot End</th><th>Delete At</th><th>Pilot Cases Used</th><th></th></tr>
-            </thead>
-            <tbody>${rows}</tbody>
+            <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Attention</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="4">No organisations match your filters.</td></tr>'}</tbody>
           </table>
         </div>
       `, navAdmin());
@@ -1346,53 +1473,47 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // dashboard
+  // dashboard with empty-state previews and tooltips
   if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) {
     const limits = getLimitProfile(org.org_id);
     const usage = getUsage(org.org_id);
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
-
     const paymentAllowance = paymentRowsAllowance(org.org_id);
     const planBadge = (limits.mode==="monthly") ? `<span class="badge ok">Monthly Active</span>` : `<span class="badge warn">Pilot Active</span>`;
-
+    // counts for empty-state charts
+    const caseCount = countOrgCases(org.org_id);
+    const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
     const html = page("Dashboard", `
-      <div class="row">
-        <div class="col">
-          <h2>Dashboard</h2>
-          <p class="muted">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
-          ${planBadge}
-          <div class="hr"></div>
-          <h3>Usage</h3>
-          ${limits.mode==="pilot" ? `
-            <ul class="muted">
-              <li>Cases remaining: ${PILOT_LIMITS.max_cases_total - countOrgCases(org.org_id)} / ${PILOT_LIMITS.max_cases_total}</li>
-              <li>AI jobs/hour: ${PILOT_LIMITS.max_ai_jobs_per_hour}</li>
-              <li>Concurrent processing: ${PILOT_LIMITS.max_concurrent_analyzing}</li>
-              <li>Payment rows remaining: ${paymentAllowance.remaining} (pilot includes ${PILOT_LIMITS.payment_records_included})</li>
-            </ul>
-          ` : `
-            <ul class="muted">
-              <li>Case credits used: ${usage.monthly_case_credits_used} / ${limits.case_credits_per_month}</li>
-              <li>Overage cases: ${usage.monthly_case_overage_count} (est. $${usage.monthly_case_overage_count * limits.overage_price_per_case})</li>
-              <li>Payment rows remaining: ${paymentAllowance.remaining}</li>
-            </ul>
-          `}
-          <div class="btnRow">
-            <a class="btn" href="/upload">Start Case Review</a>
-            <a class="btn secondary" href="/payments">Payment Tracking</a>
-            <a class="btn secondary" href="/analytics">Analytics</a>
-          </div>
-        </div>
-        <div class="col">
-          <h3>What this does</h3>
-          <ul class="muted">
-            <li>Denial patterns by payer & reason</li>
-            <li>Appeal preparation (editable drafts)</li>
-            <li>Claim lifecycle visibility</li>
-            <li>Payment timelines (early/late/unpaid)</li>
-            <li>Optional expected vs paid flags (future UI)</li>
-          </ul>
-        </div>
+      <h2>Dashboard</h2>
+      <p class="muted">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
+      ${planBadge}
+      <div class="hr"></div>
+      <h3>Activity</h3>
+      <div class="chart-placeholder">${caseCount === 0 ? "No cases uploaded yet." : "Case activity chart will appear here."}</div>
+      <div class="chart-placeholder">${paymentCount === 0 ? "No payments uploaded yet." : "Payment activity chart will appear here."}</div>
+      ${caseCount === 0 && paymentCount === 0 ? `
+      <section><h3>Recommended Next Step</h3><p>Get started by uploading your first case or payment data to unlock analytics.</p></section>
+      ` : ""}
+      <div class="hr"></div>
+      <h3>Usage</h3>
+      ${limits.mode==="pilot" ? `
+      <ul class="muted">
+        <li>Cases remaining: ${PILOT_LIMITS.max_cases_total - caseCount} / ${PILOT_LIMITS.max_cases_total} <span class="tooltip">ⓘ<span class="tooltiptext">Maximum number of cases you can upload during your current plan.</span></span></li>
+        <li>AI jobs/hour: ${PILOT_LIMITS.max_ai_jobs_per_hour} <span class="tooltip">ⓘ<span class="tooltiptext">Number of AI processing jobs you can run per hour.</span></span></li>
+        <li>Concurrent processing: ${PILOT_LIMITS.max_concurrent_analyzing} <span class="tooltip">ⓘ<span class="tooltiptext">Maximum number of cases or payments processed at the same time.</span></span></li>
+        <li>Payment rows remaining: ${paymentAllowance.remaining} of ${PILOT_LIMITS.payment_records_included} <span class="tooltip">ⓘ<span class="tooltiptext">Payment table displays up to 500 rows; additional rows still count toward your usage.</span></span></li>
+      </ul>
+      ` : `
+      <ul class="muted">
+        <li>Case credits used: ${usage.monthly_case_credits_used} / ${limits.case_credits_per_month} <span class="tooltip">ⓘ<span class="tooltiptext">Number of cases processed out of your monthly allotment.</span></span></li>
+        <li>Overage cases: ${usage.monthly_case_overage_count} (est. $${usage.monthly_case_overage_count * limits.overage_price_per_case}) <span class="tooltip">ⓘ<span class="tooltiptext">Cases beyond your monthly allotment are charged an overage fee.</span></span></li>
+        <li>Payment rows remaining: ${paymentAllowance.remaining} <span class="tooltip">ⓘ<span class="tooltiptext">Payment table displays up to 500 rows; additional rows still count toward your usage.</span></span></li>
+      </ul>
+      `}
+      <div class="btnRow">
+        <a class="btn" href="/upload">Start Case Review</a>
+        <a class="btn secondary" href="/payments">Payment Tracking</a>
+        <a class="btn secondary" href="/analytics">Analytics</a>
       </div>
     `, navUser());
     return send(res, 200, html);
@@ -1638,11 +1759,28 @@ const server = http.createServer(async (req, res) => {
   // -------- PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) --------
   if (method === "GET" && pathname === "/payments") {
     const allow = paymentRowsAllowance(org.org_id);
+    const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
     const html = page("Payment Tracking", `
       <h2>Payment Tracking (Analytics Only)</h2>
-      <p class="muted">Upload bulk payment files in CSV or Excel format. CSV will be parsed immediately. Excel files are stored and you may export as CSV for best results.</p>
+      <p class="muted">Upload bulk payment files in CSV or Excel format.</p>
+      <div class="chart-placeholder">${paymentCount === 0 ? "Upload payment data to see trends." : "Payment trend chart will appear here."}</div>
+      <section>
+        <h3>What This Unlocks</h3>
+        <ul class="muted">
+          <li>Identify underperforming payers</li>
+          <li>Spot delayed payments early</li>
+          <li>Compare payment trends over time</li>
+        </ul>
+      </section>
+      <section>
+        <h3>Import Notes</h3>
+        <ul class="muted">
+          <li>CSV files are parsed for analytics only <span class="tooltip">ⓘ<span class="tooltiptext">CSV files are used to compute insights but not stored permanently.</span></span></li>
+          <li>Excel files are stored but not analysed <span class="tooltip">ⓘ<span class="tooltiptext">Excel uploads are stored for record keeping but analytics operate on CSV.</span></span></li>
+          <li>500‑row display cap <span class="tooltip">ⓘ<span class="tooltiptext">The payment table shows up to 500 rows. Additional rows still count towards your usage.</span></span></li>
+        </ul>
+      </section>
       <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
-
       <form method="POST" action="/payments" enctype="multipart/form-data">
         <label>Upload CSV/XLS/XLSX (analytics-only)</label>
         <input name="payfile" type="file" required />
@@ -1712,7 +1850,7 @@ const server = http.createServer(async (req, res) => {
 
       // store up to 500 records per upload for demo, but count all used
       const storeLimit = Math.min(toUse, 500);
-      const payments = readJSON(FILES.payments, []);
+      const paymentsData = readJSON(FILES.payments, []);
 
       for (let i=0;i<storeLimit;i++){
         const r = rows[i];
@@ -1721,7 +1859,7 @@ const server = http.createServer(async (req, res) => {
         const amt = pickField(r, ["paid", "amount", "payment", "paid amount", "allowed"]);
         const datePaid = pickField(r, ["date", "paid date", "payment date", "remit date"]);
 
-        payments.push({
+        paymentsData.push({
           payment_id: uuid(),
           org_id: org.org_id,
           claim_number: claim || "",
@@ -1732,7 +1870,7 @@ const server = http.createServer(async (req, res) => {
           created_at: nowISO()
         });
       }
-      writeJSON(FILES.payments, payments);
+      writeJSON(FILES.payments, paymentsData);
 
       rowsAdded = toUse;
       consumePaymentRows(org.org_id, rowsAdded);
@@ -1756,25 +1894,39 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
-  // analytics
+  // analytics page with placeholders and bar chart preview
   if (method === "GET" && pathname === "/analytics") {
     const a = computeAnalytics(org.org_id);
     const usage = getUsage(org.org_id);
     const limits = getLimitProfile(org.org_id);
-
-    const denialRows = Object.entries(a.denialReasons).sort((x,y)=>y[1]-x[1]).map(([k,v]) => `<li>${safeStr(k)}: ${v}</li>`).join("") || "<li>—</li>";
-
-    // FIX: correct sort + safe number formatting
-    const payRows = Object.entries(a.payByPayer)
-      .sort((A,B)=> (Number(B[1].total||0) - Number(A[1].total||0)))
-      .map(([k,v]) => {
-        const total = Number(v.total || 0);
-        return `<li>${safeStr(k)}: ${v.count} payments, $${total.toFixed(2)}</li>`;
-      }).join("") || "<li>—</li>";
-
+    // Build top 4 payers by total amount
+    const payList = Object.entries(a.payByPayer).map(([payer, info]) => ({ payer, total: info.total }));
+    payList.sort((x, y) => y.total - x.total);
+    const top4 = payList.slice(0, 4);
+    let payerHtml;
+    if (top4.length === 0) {
+      payerHtml = `<div class="chart-placeholder">No payment data available</div>`;
+    } else {
+      payerHtml = `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>`;
+      top4.forEach(item => {
+        payerHtml += `<tr><td>${safeStr(item.payer)}</td><td>$${Number(item.total || 0).toFixed(2)}</td></tr>`;
+      });
+      payerHtml += `</tbody></table>`;
+    }
     const html = page("Analytics", `
-      <h2>Claim & Payment Analytics</h2>
-      <p class="muted">Derived solely from uploaded documents and user-provided context.</p>
+      <h2>Analytics</h2>
+      <p class="muted">Derived solely from uploaded documents and user‑provided context.</p>
+      <div class="row">
+        <div class="col">
+          <h3>Case Distribution</h3>
+          <div class="chart-placeholder">${a.totalCases === 0 ? "No cases uploaded" : "Donut chart will render here."}</div>
+        </div>
+        <div class="col">
+          <h3>Payments by Payer</h3>
+          ${payerHtml}
+        </div>
+      </div>
+      <div class="hr"></div>
       <div class="row">
         <div class="col">
           <h3>Pilot Snapshot</h3>
@@ -1787,29 +1939,17 @@ const server = http.createServer(async (req, res) => {
         <div class="col">
           <h3>Usage</h3>
           ${limits.mode==="pilot" ? `
-            <ul class="muted">
-              <li>Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total}</li>
-              <li>Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included}</li>
-            </ul>
+          <ul class="muted">
+            <li>Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total}</li>
+            <li>Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included}</li>
+          </ul>
           ` : `
-            <ul class="muted">
-              <li>Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month}</li>
-              <li>Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count*limits.overage_price_per_case})</li>
-              <li>Monthly payment rows used: ${usage.monthly_payment_rows_used}</li>
-            </ul>
+          <ul class="muted">
+            <li>Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month}</li>
+            <li>Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count * limits.overage_price_per_case})</li>
+            <li>Monthly payment rows used: ${usage.monthly_payment_rows_used}</li>
+          </ul>
           `}
-        </div>
-      </div>
-
-      <div class="hr"></div>
-      <div class="row">
-        <div class="col">
-          <h3>Denial Reasons (AI-categorized)</h3>
-          <ul class="muted">${denialRows}</ul>
-        </div>
-        <div class="col">
-          <h3>Payments by Payer (from uploads)</h3>
-          <ul class="muted">${payRows}</ul>
         </div>
       </div>
     `, navUser());
@@ -1832,9 +1972,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/export/cases.csv") {
-    const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+    const casesExport = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
     const header = ["case_id","status","created_at","time_to_draft_seconds","denial_reason"].join(",");
-    const rows = cases.map(c => [
+    const rows = casesExport.map(c => [
       c.case_id,
       c.status,
       c.created_at,
@@ -1848,9 +1988,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/export/payments.csv") {
-    const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+    const paymentsExport = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
     const header = ["payment_id","claim_number","payer","amount_paid","date_paid","source_file","created_at"].join(",");
-    const rows = payments.map(p => [
+    const rows = paymentsExport.map(p => [
       p.payment_id, p.claim_number, p.payer, p.amount_paid, p.date_paid, p.source_file, p.created_at
     ].map(x => `"${String(x||"").replace(/"/g,'""')}"`).join(","));
     const csv = [header, ...rows].join("\n");
@@ -1860,12 +2000,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/export/analytics.csv") {
-    const a = computeAnalytics(org.org_id);
+    const aExport = computeAnalytics(org.org_id);
     const header = ["metric","value"].join(",");
     const rows = [
-      ["cases_uploaded", a.totalCases],
-      ["drafts_generated", a.drafts],
-      ["avg_time_to_draft_seconds", a.avgDraftSeconds || ""],
+      ["cases_uploaded", aExport.totalCases],
+      ["drafts_generated", aExport.drafts],
+      ["avg_time_to_draft_seconds", aExport.avgDraftSeconds || ""],
     ].map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(","));
     const csv = [header, ...rows].join("\n");
 
@@ -1874,21 +2014,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/report") {
-    const a = computeAnalytics(org.org_id);
-    const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
+    const aReport = computeAnalytics(org.org_id);
+    const pilotRep = getPilot(org.org_id) || ensurePilot(org.org_id);
     const html = page("Pilot Summary", `
       <h2>Pilot Summary Report</h2>
       <p class="muted">Organization: ${safeStr(org.org_name)}</p>
       <div class="hr"></div>
       <ul class="muted">
-        <li>Pilot start: ${new Date(pilot.started_at).toLocaleDateString()}</li>
-        <li>Pilot end: ${new Date(pilot.ends_at).toLocaleDateString()}</li>
+        <li>Pilot start: ${new Date(pilotRep.started_at).toLocaleDateString()}</li>
+        <li>Pilot end: ${new Date(pilotRep.ends_at).toLocaleDateString()}</li>
       </ul>
       <h3>Snapshot</h3>
       <ul class="muted">
-        <li>Cases uploaded: ${a.totalCases}</li>
-        <li>Drafts generated: ${a.drafts}</li>
-        <li>Avg time to draft: ${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</li>
+        <li>Cases uploaded: ${aReport.totalCases}</li>
+        <li>Drafts generated: ${aReport.drafts}</li>
+        <li>Avg time to draft: ${aReport.avgDraftSeconds ? `${aReport.avgDraftSeconds}s` : "—"}</li>
       </ul>
       <div class="btnRow">
         <button class="btn secondary" onclick="window.print()">Print / Save as PDF</button>
@@ -1901,8 +2041,8 @@ const server = http.createServer(async (req, res) => {
 
   // pilot complete page
   if (method === "GET" && pathname === "/pilot-complete") {
-    const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
-    if (new Date(pilot.ends_at).getTime() < Date.now() && pilot.status !== "complete") markPilotComplete(org.org_id);
+    const pilotEnd = getPilot(org.org_id) || ensurePilot(org.org_id);
+    if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
     const p2 = getPilot(org.org_id);
 
     const html = page("Pilot Complete", `
