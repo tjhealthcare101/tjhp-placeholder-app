@@ -1061,11 +1061,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/terminated") {
+    // Corrected: Added '=' after class and fixed parentheses.
     return send(res, 200, page("Terminated", `
       <h2>Account Terminated</h2>
       <p>This account has been terminated. Access to the workspace is no longer available.</p>
       <p class="muted">If you believe this is an error, contact support.</p>
-      <div class="btnRow"><a class "btn secondary" href="/logout">Logout</a></div>
+      <div class="btnRow"><a class="btn secondary" href="/logout">Logout</a></div>
     `, navPublic()));
   }
 
@@ -1809,7 +1810,7 @@ const server = http.createServer(async (req, res) => {
       const html = page("Payment Tracking", `
         <h2>Payment Tracking</h2>
         <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
-        <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
+        <div class="btnRow"><a class "btn secondary" href="/payments">Back</a></div>
       `, navUser());
       return send(res, 400, html);
     }
@@ -2055,6 +2056,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
+  // Default fallback
   return redirect(res, "/dashboard");
 });
 
