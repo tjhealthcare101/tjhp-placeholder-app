@@ -21,6 +21,7 @@ const bcrypt = require("bcryptjs");
 // ===== Server =====
 const HOST = "0.0.0.0";
 const PORT = process.env.PORT || 8080;
+const IS_PROD = process.env.NODE_ENV === "production";
 
 // ===== ENV =====
 const SESSION_SECRET = process.env.SESSION_SECRET || "CHANGE_ME_SESSION_SECRET";
@@ -50,8 +51,8 @@ const PILOT_LIMITS = {
 };
 
 const MONTHLY_DEFAULTS = {
-  case_credits_per_month: 40,         // Standard default
-  payment_tracking_credits_per_month: 10, // 10k rows/mo if 1 credit=1k rows
+  case_credits_per_month: 40,              // Standard default
+  payment_tracking_credits_per_month: 10,  // 10k rows/mo if 1 credit=1k rows
   max_files_per_case: 3,
   max_file_size_mb: 20,
   max_ai_jobs_per_hour: 5,
@@ -105,20 +106,25 @@ function parseCookies(req) {
   return out;
 }
 
+/**
+ * FIX: Railway-safe cookies.
+ * In production browsers require Secure for SameSite=None; but you use SameSite=Lax.
+ * Still, "Secure" should only be set when behind HTTPS.
+ */
 function setCookie(res, name, value, maxAgeSeconds) {
   const parts = [
     `${name}=${encodeURIComponent(value)}`,
     "Path=/",
     "SameSite=Lax",
     "HttpOnly",
-    "Secure"
   ];
+  if (IS_PROD) parts.push("Secure");
   if (maxAgeSeconds) parts.push(`Max-Age=${maxAgeSeconds}`);
   res.setHeader("Set-Cookie", parts.join("; "));
 }
 
 function clearCookie(res, name) {
-  res.setHeader("Set-Cookie", `${name}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`);
+  res.setHeader("Set-Cookie", `${name}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly${IS_PROD ? "; Secure" : ""}`);
 }
 
 function send(res, status, body, type="text/html") {
@@ -230,13 +236,11 @@ textarea{min-height:220px;}
 .small{font-size:12px;}
 table{width:100%;border-collapse:collapse;font-size:13px;}
 th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;}
-`/* ===== AUTH UI PATCH ===== */
-.password-wrap {
-  position: relative;
-}
-.password-wrap input {
-  padding-right: 48px;
-}
+.center{text-align:center}
+
+/* ===== AUTH UI PATCH ===== */
+.password-wrap { position: relative; }
+.password-wrap input { padding-right: 48px; }
 .toggle-password {
   position: absolute;
   right: 12px;
@@ -251,47 +255,19 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 
 /* Mobile spacing fix for auth screens */
 @media (max-width: 640px) {
-  .card {
-    padding: 16px !important;
-  }
-  input,
-  textarea,
-  button {
-    font-size: 16px !important;
-  }
-  .btnRow {
-    flex-direction: column;
-  }
-  .btn {
-    width: 100%;
-  }
+  .card { padding: 16px !important; }
+  input, textarea, button { font-size: 16px !important; }
+  .btnRow { flex-direction: column; }
+  .btn { width: 100%; }
 }
 `;
 
-<script>
-/* ===== PASSWORD VISIBILITY TOGGLE (GLOBAL) ===== */
-document.querySelectorAll('input[type="password"]').forEach(input => {
-  // Prevent double wrapping
-  if (input.parentNode.classList.contains("password-wrap")) return;
-
-  const wrap = document.createElement("div");
-  wrap.className = "password-wrap";
-  input.parentNode.insertBefore(wrap, input);
-  wrap.appendChild(input);
-
-  const toggle = document.createElement("span");
-  toggle.className = "toggle-password";
-  toggle.textContent = "Show";
-  wrap.appendChild(toggle);
-
-  toggle.addEventListener("click", () => {
-    const hidden = input.type === "password";
-    input.type = hidden ? "text" : "password";
-    toggle.textContent = hidden ? "Hide" : "Show";
-  });
-});
-</script>
-</body></html>`;
+/**
+ * FIX: all HTML + scripts must live inside returned strings.
+ * Password toggle preserved.
+ */
+function page(title, content, navHtml="") {
+  return `<!doctype html>
 <html><head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -314,6 +290,29 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       </div>
     </div>
   </div>
+
+<script>
+/* ===== PASSWORD VISIBILITY TOGGLE (GLOBAL) ===== */
+document.querySelectorAll('input[type="password"]').forEach(input => {
+  if (input.parentNode && input.parentNode.classList && input.parentNode.classList.contains("password-wrap")) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "password-wrap";
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+
+  const toggle = document.createElement("span");
+  toggle.className = "toggle-password";
+  toggle.textContent = "Show";
+  wrap.appendChild(toggle);
+
+  toggle.addEventListener("click", () => {
+    const hidden = input.type === "password";
+    input.type = hidden ? "text" : "password";
+    toggle.textContent = hidden ? "Hide" : "Show";
+  });
+});
+</script>
 </body></html>`;
 }
 
@@ -326,7 +325,6 @@ function navUser() {
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
-
 // ===== Models helpers =====
 function getOrg(org_id) {
   return readJSON(FILES.orgs, []).find(o => o.org_id === org_id);
@@ -355,6 +353,10 @@ function ensurePilot(org_id) {
 }
 function getSub(org_id) {
   return readJSON(FILES.subscriptions, []).find(s => s.org_id === org_id);
+}
+function currentMonthKey() {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
 }
 function getUsage(org_id) {
   const usage = readJSON(FILES.usage, []);
@@ -389,10 +391,6 @@ function saveUsage(u) {
   const idx = usage.findIndex(x => x.org_id === u.org_id);
   if (idx >= 0) usage[idx] = u; else usage.push(u);
   writeJSON(FILES.usage, usage);
-}
-function currentMonthKey() {
-  const d = new Date();
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
 }
 function auditLog(entry) {
   const audit = readJSON(FILES.audit, []);
@@ -721,7 +719,6 @@ function computeAnalytics(org_id) {
     return Math.round(xs.reduce((a,b)=>a+b,0) / xs.length);
   })();
 
-  const payerDenials = {}; // best-effort from payments/notes/files names; keep simple
   const denialReasons = {};
   for (const c of cases) {
     const reason = c.ai?.denial_reason_category || "Unknown";
@@ -738,6 +735,7 @@ function computeAnalytics(org_id) {
 
   return { totalCases, drafts, avgDraftSeconds, denialReasons, payByPayer };
 }
+
 // ===== ROUTER =====
 const server = http.createServer(async (req, res) => {
   const parsed = url.parse(req.url, true);
@@ -1477,7 +1475,7 @@ const server = http.createServer(async (req, res) => {
     ensureDir(caseDir);
 
     const storedFiles = files.map((f) => {
-      const safeName = f.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const safeName = (f.filename || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
       const file_id = uuid();
       const stored_path = path.join(caseDir, `${file_id}_${safeName}`);
       fs.writeFileSync(stored_path, f.buffer);
@@ -1698,7 +1696,7 @@ const server = http.createServer(async (req, res) => {
     // store raw file
     const dir = path.join(UPLOADS_DIR, org.org_id, "payments");
     ensureDir(dir);
-    const stored = path.join(dir, `${Date.now()}_${f.filename.replace(/[^a-zA-Z0-9._-]/g,"_")}`);
+    const stored = path.join(dir, `${Date.now()}_${(f.filename || "payments").replace(/[^a-zA-Z0-9._-]/g,"_")}`);
     fs.writeFileSync(stored, f.buffer);
 
     // parse CSV now (rows count & limited record storage)
@@ -1765,7 +1763,14 @@ const server = http.createServer(async (req, res) => {
     const limits = getLimitProfile(org.org_id);
 
     const denialRows = Object.entries(a.denialReasons).sort((x,y)=>y[1]-x[1]).map(([k,v]) => `<li>${safeStr(k)}: ${v}</li>`).join("") || "<li>—</li>";
-    const payRows = Object.entries(a.payByPayer).sort((x,y)=>y[1].total-y[1].total).map(([k,v]) => `<li>${safeStr(k)}: ${v.count} payments, $${v.total.toFixed ? v.total.toFixed(2) : v.total}</li>`).join("") || "<li>—</li>";
+
+    // FIX: correct sort + safe number formatting
+    const payRows = Object.entries(a.payByPayer)
+      .sort((A,B)=> (Number(B[1].total||0) - Number(A[1].total||0)))
+      .map(([k,v]) => {
+        const total = Number(v.total || 0);
+        return `<li>${safeStr(k)}: ${v.count} payments, $${total.toFixed(2)}</li>`;
+      }).join("") || "<li>—</li>";
 
     const html = page("Analytics", `
       <h2>Claim & Payment Analytics</h2>
