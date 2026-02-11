@@ -1,4 +1,4 @@
-**
+/**
 
 TJ Healthcare Pro — V1 Pilot App (single-file)
 
@@ -113,7 +113,14 @@ function readJSON(p, fallback) { ensureFile(p, fallback); return JSON.parse(fs.r
 "utf8") || JSON.stringify(fallback)); }
 function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); }
 function safeStr(s) {
-return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"<", ">":">", "&":"&", '"':"""
+// Avoid the nullish coalescing operator (??) to remain compatible with older Node versions.
+// Instead explicitly check for undefined or null before defaulting to an empty string.
+const val = (s !== undefined && s !== null) ? s : "";
+return String(val).replace(/[<>&"]/g, (c) => ({
+"<": "<",
+">": ">",
+"&": "&",
+'"': """,
 }[c]));
 }
 function parseCookies(req) {
@@ -384,7 +391,8 @@ writeJSON(FILES.audit, audit);
 // ===== Account status =====
 function getOrgStatus(org_id) {
 const org = getOrg(org_id);
-return org?.account_status || "active";
+// Avoid optional chaining; if the org is null/undefined, default to "active".
+return (org && org.account_status) ? org.account_status : "active";
 }
 function setOrgStatus(org_id, status, reason="") {
 const orgs = readJSON(FILES.orgs, []);
@@ -661,16 +669,20 @@ function computeAnalytics(org_id) {
 const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
 const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
 const totalCases = cases.length;
-const drafts = cases.filter(c => c.status === "DRAFT_READY" || c.ai?.draft_text).length;
+// Count drafts by checking for DRAFT_READY status or the presence of ai.draft_text without optional chaining.
+const drafts = cases.filter(c => c.status === "DRAFT_READY" || (c.ai && c.ai.draft_text)).length;
+// Compute average draft seconds without using optional chaining. Extract the value and filter numeric > 0 values.
 const avgDraftSeconds = (() => {
-const xs = cases.map(c => c.ai?.time_to_draft_seconds).filter(v => typeof v === "number" &&
-v > 0);
+const xs = cases
+.map(c => (c.ai && typeof c.ai.time_to_draft_seconds === "number" ? c.ai.time_to_draft_seconds : null))
+.filter(v => typeof v === "number" && v > 0);
 if (!xs.length) return null;
-return Math.round(xs.reduce((a,b)=>a+b,0) / xs.length);
+return Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
 })();
 const denialReasons = {};
 for (const c of cases) {
-const reason = c.ai?.denial_reason_category || "Unknown";
+// Avoid optional chaining; if c.ai or denial_reason_category is missing, use "Unknown".
+const reason = (c.ai && c.ai.denial_reason_category) ? c.ai.denial_reason_category : "Unknown";
 denialReasons[reason] = (denialReasons[reason] || 0) + 1;
 }
 const payByPayer = {};
@@ -1256,7 +1268,7 @@ const html = page("Analytics", `
 <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a>
 <a class="btn secondary" href="/report">Printable Pilot Summary</a>
 
-</div> `, navUser()); return send(res, 200, html); } if (method === "GET" && pathname === "/export/cases.csv") { const casesExport = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id); const header = ["case_id","status","created_at","time_to_draft_seconds","denial_reason"].join(","); const rows = casesExport.map(c => [ c.case_id, c.status, c.created_at, c.ai?.time_to_draft_seconds || "", c.ai?.denial_reason_category || "" ].map(x => `"${String(x).replace(/"/g,'""')}"`).join(",")); const csv = [header, ...rows].join("\n"); res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=cases.csv" }); return res.end(csv); } if (method === "GET" && pathname === "/export/payments.csv") { const paymentsExport = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id); const header = ["payment_id","claim_number","payer","amount_paid","date_paid","source_file","created_at"].join(","); const rows = paymentsExport.map(p => [ p.payment_id, p.claim_number, p.payer, p.amount_paid, p.date_paid, p.source_file, p.created_at ].map(x => `"${String(x||"").replace(/"/g,'""')}"`).join(",")); const csv = [header, ...rows].join("\n"); res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=payments.csv" }); return res.end(csv); } if (method === "GET" && pathname === "/export/analytics.csv") { const aExport = computeAnalytics(org.org_id); const header = ["metric","value"].join(",");
+</div> `, navUser()); return send(res, 200, html); } if (method === "GET" && pathname === "/export/cases.csv") { const casesExport = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id); const header = ["case_id","status","created_at","time_to_draft_seconds","denial_reason"].join(","); const rows = casesExport.map(c => { const draftSeconds = (c.ai && typeof c.ai.time_to_draft_seconds !== "undefined") ? c.ai.time_to_draft_seconds : ""; const denialReason = (c.ai && c.ai.denial_reason_category) ? c.ai.denial_reason_category : ""; return [ c.case_id, c.status, c.created_at, draftSeconds, denialReason, ] .map(x => `"${String(x).replace(/"/g, '""')}"`) .join(","); }); const csv = [header, ...rows].join("\n"); res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=cases.csv" }); return res.end(csv); } if (method === "GET" && pathname === "/export/payments.csv") { const paymentsExport = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id); const header = ["payment_id","claim_number","payer","amount_paid","date_paid","source_file","created_at"].join(","); const rows = paymentsExport.map(p => [ p.payment_id, p.claim_number, p.payer, p.amount_paid, p.date_paid, p.source_file, p.created_at ].map(x => `"${String(x||"").replace(/"/g,'""')}"`).join(",")); const csv = [header, ...rows].join("\n"); res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=payments.csv" }); return res.end(csv); } if (method === "GET" && pathname === "/export/analytics.csv") { const aExport = computeAnalytics(org.org_id); const header = ["metric","value"].join(",");
 
 const rows = [
 ["cases_uploaded", aExport.totalCases],
@@ -1416,11 +1428,19 @@ function generatePayerReportCard(payer, payments, cases) {
 const payerPayments = payments.filter(p => (p.payer || 'Unknown') === payer);
 const pMetrics = computePaymentAnalytics(payerPayments, 0);
 const timeliness = computePayerTimeliness(payerPayments)[payer] || {};
-const payerCases = cases.filter(c => (c.ai?.denial_category || 'Unknown') !== 'Unknown' && c.ai?.structured_data?.payer === payer);
+const payerCases = cases.filter(c => {
+const denialCategory = (c.ai && c.ai.denial_category) ? c.ai.denial_category : 'Unknown';
+// Only include cases that have a denial category other than 'Unknown'.
+if (denialCategory === 'Unknown') return false;
+// Check structured_data and payer fields safely.
+const sd = c.ai && c.ai.structured_data;
+const casePayer = sd && sd.payer ? sd.payer : null;
+return casePayer === payer;
+});
 const denialMetrics = computeDenialAnalytics(payerCases);
 return {
 payer,
-totalPaid: pMetrics.byPayer[payer]?.total || 0,
+totalPaid: (pMetrics.byPayer[payer] ? pMetrics.byPayer[payer].total : 0),
 underpaymentCount: pMetrics.underpaymentCount || 0,
 avgDaysToPay: timeliness.avgDays || null,
 medianDaysToPay: timeliness.medianDays || null,
@@ -1438,7 +1458,11 @@ byCode[code] = byCode[code] || { payments: [], cases: [] };
 byCode[code].payments.push(p);
 });
 cases.forEach(c => {
-const codes = c.ai?.structured_data?.codes || [];
+// Safely extract the array of codes from the case's AI structured data.
+let codes = [];
+if (c.ai && c.ai.structured_data && Array.isArray(c.ai.structured_data.codes)) {
+codes = c.ai.structured_data.codes;
+}
 codes.forEach(code => {
 byCode[code] = byCode[code] || { payments: [], cases: [] };
 byCode[code].cases.push(c);
