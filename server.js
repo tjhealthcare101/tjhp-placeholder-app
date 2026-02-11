@@ -42,7 +42,6 @@ const ADMIN_ACTIVATE_TOKEN = process.env.ADMIN_ACTIVATE_TOKEN ||
 const LOCK_SCREEN_MS = 5000;
 const SESSION_TTL_DAYS = 7;
 const AI_JOB_DELAY_MS = Number(process.env.AI_JOB_DELAY_MS || 20000); // demo
-default 20s
 // ===== Pilot / Retention =====
 const PILOT_DAYS = 30;
 const RETENTION_DAYS_AFTER_PILOT = 14;
@@ -618,14 +617,11 @@ return "";
 // ===== AI stub =====
 function aiGenerate(orgName) {
 return {
-denial_summary: "Based on the uploaded documents, this case includes denial/payment
-language that benefits from structured review and consistent appeal framing.",
-appeal_considerations: "This draft is prepared from uploaded materials only. Validate
-documentation supports medical necessity and payer requirements before use.",
-draft_text:
-To Whom It May Concern, We are writing to appeal the denial associated with this claim. Based on the documentation provided, the services rendered were medically necessary and appropriately supported. Please reconsider the determination after reviewing the attached materials. Sincerely, ${orgName || "[Organization Billing Team]"} ,
-
-denial_reason_category: "Documentation missing",
+// Single-line summary strings; join the multi-line descriptions into one line
+denial_summary: "Based on the uploaded documents, this case includes denial/payment language that benefits from structured review and consistent appeal framing.",
+appeal_considerations: "This draft is prepared from uploaded materials only. Validate documentation supports medical necessity and payer requirements before use.",
+draft_text: To Whom It May Concern, We are writing to appeal the denial associated with this claim. Based on the documentation provided, the services rendered were medically necessary and appropriately supported. Please reconsider the determination after reviewing the attached materials. Sincerely, ${orgName || "[Organization Billing Team]"} ,
+denial_reason_category: "Documentation missing",
 missing_info: []
 };
 }
@@ -730,7 +726,8 @@ if (method === "GET" && pathname === "/health") return send(res, 200, "ok", "tex
 // auth
 const sess = getAuth(req);
 if (sess && sess.org_id) cleanupIfExpired(sess.org_id);
-// ---------- PUBLIC: Admin login ---------if (method === "GET" && pathname === "/admin/login") {
+// ---------- PUBLIC: Admin login ---------
+if (method === "GET" && pathname === "/admin/login") {
 const html = page("Owner Login", `
 
 <h2>Owner Login</h2> <p class="muted">This area is for the system owner only.</p> <form method="POST" action="/admin/login"> <label>Email</label> <input name="email" type="email" required /> <label>Password</label> <input name="password" type="password" required /> <div class="btnRow"> <button class="btn" type="submit">Sign In</button> <a class="btn secondary" href="/login">Back</a> </div> </form> `, navPublic()); return send(res, 200, html); } if (method === "POST" && pathname === "/admin/login") { const body = await parseBody(req); const params = new URLSearchParams(body);
@@ -741,7 +738,7 @@ const aHash = adminHash();
 if (!ADMIN_EMAIL || !aHash) {
 const html = page("Owner Login", `
 
-<h2>Owner Login</h2> <p class="error">Admin mode not configured. Set ADMIN_EMAIL and ADMIN_PASSWORD_PLAIN (or ADMIN_PASSWORD_HASH) in Railway.</p> <div class="btnRow"><a class="btn secondary" href="/admin/login">Back</a></div> `, navPublic()); return send(res, 403, html); } if (email !== ADMIN_EMAIL || !bcrypt.compareSync(pass, aHash)) { const html = page("Owner Login", ` <h2>Owner Login</h2> <p class="error">Invalid owner credentials.</p> <div class="btnRow"><a class="btn secondary" href="/admin/login">Try again</a></div> `, navPublic()); return send(res, 401, html); } const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000; const token = makeSession({ role:"admin", exp }); setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400); return redirect(res, "/admin/dashboard"); } // ---------- PUBLIC: Signup/Login/Reset ---------if (method === "GET" && pathname === "/signup") { const html = page("Create Account", ` <h2>Create Account</h2> <p class="muted">Secure, organization-based access to AI-assisted claim review and analytics.</p> <form method="POST" action="/signup"> <label>Work Email</label> <input name="email" type="email" required /> <label>Password (8+ characters)</label> <input name="password" type="password" required /> <label>Confirm Password</label> <input name="password2" type="password" required /> <label>Organization Name</label> <input name="org_name" type="text" required />
+<h2>Owner Login</h2> <p class="error">Admin mode not configured. Set ADMIN_EMAIL and ADMIN_PASSWORD_PLAIN (or ADMIN_PASSWORD_HASH) in Railway.</p> <div class="btnRow"><a class="btn secondary" href="/admin/login">Back</a></div> `, navPublic()); return send(res, 403, html); } if (email !== ADMIN_EMAIL || !bcrypt.compareSync(pass, aHash)) { const html = page("Owner Login", ` <h2>Owner Login</h2> <p class="error">Invalid owner credentials.</p> <div class="btnRow"><a class="btn secondary" href="/admin/login">Try again</a></div> `, navPublic()); return send(res, 401, html); } const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000; const token = makeSession({ role:"admin", exp }); setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400); return redirect(res, "/admin/dashboard"); } // ---------- PUBLIC: Signup/Login/Reset --------- if (method === "GET" && pathname === "/signup") { const html = page("Create Account", ` <h2>Create Account</h2> <p class="muted">Secure, organization-based access to AI-assisted claim review and analytics.</p> <form method="POST" action="/signup"> <label>Work Email</label> <input name="email" type="email" required /> <label>Password (8+ characters)</label> <input name="password" type="password" required /> <label>Confirm Password</label> <input name="password2" type="password" required /> <label>Organization Name</label> <input name="org_name" type="text" required />
 
 <label style="display:flex;gap:10px;align-items:flex-start;margin-top:12px;">
 <input type="checkbox" name="ack" required style="width:auto;margin:0;margin-top:2px;">
@@ -783,7 +780,7 @@ const html = page("Login", `
 
 </div>
 
-</form> `, navPublic()); return send(res, 200, html); } if (method === "POST" && pathname === "/forgot-password") { const body = await parseBody(req); const params = new URLSearchParams(body); const email = (params.get("email") || "").trim().toLowerCase(); const token = uuid(); const expiresAt = Date.now() + 20*60*1000; const users = readJSON(FILES.users, []); const idx = users.findIndex(u => (u.email||"").toLowerCase() === email); if (idx >= 0) { users[idx].reset_token = token; users[idx].reset_expires_at = expiresAt; writeJSON(FILES.users, users); } const resetPath = `/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(ema il)}`; const resetLink = APP_BASE_URL ? `${APP_BASE_URL}${resetPath}` : resetPath; const html = page("Reset Link", ` <h2>Reset Link Generated</h2> <p class="muted">For v1, the reset link is displayed here.</p> <div class="btnRow"> <a class="btn" href="${safeStr(resetLink)}">Reset Password Now</a> <a class="btn secondary" href="/login">Back to login</a> </div> `, navPublic()); return send(res, 200, html); } if (method === "GET" && pathname === "/reset-password") { const token = parsed.query.token || ""; const email = (parsed.query.email || "").toLowerCase(); const html = page("Set New Password", ` <h2>Set a New Password</h2> <form method="POST" action="/reset-password"> <input type="hidden" name="email" value="${safeStr(email)}"/>
+</form> `, navPublic()); return send(res, 200, html); } if (method === "POST" && pathname === "/forgot-password") { const body = await parseBody(req); const params = new URLSearchParams(body); const email = (params.get("email") || "").trim().toLowerCase(); const token = uuid(); const expiresAt = Date.now() + 20*60*1000; const users = readJSON(FILES.users, []); const idx = users.findIndex(u => (u.email||"").toLowerCase() === email); if (idx >= 0) { users[idx].reset_token = token; users[idx].reset_expires_at = expiresAt; writeJSON(FILES.users, users); } const resetPath = `/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`; const resetLink = APP_BASE_URL ? `${APP_BASE_URL}${resetPath}` : resetPath; const html = page("Reset Link", ` <h2>Reset Link Generated</h2> <p class="muted">For v1, the reset link is displayed here.</p> <div class="btnRow"> <a class="btn" href="${safeStr(resetLink)}">Reset Password Now</a> <a class="btn secondary" href="/login">Back to login</a> </div> `, navPublic()); return send(res, 200, html); } if (method === "GET" && pathname === "/reset-password") { const token = parsed.query.token || ""; const email = (parsed.query.email || "").toLowerCase(); const html = page("Set New Password", ` <h2>Set a New Password</h2> <form method="POST" action="/reset-password"> <input type="hidden" name="email" value="${safeStr(email)}"/>
 
 <input type="hidden" name="token" value="${safeStr(token)}"/>
 <label>New Password (8+ characters)</label>
@@ -826,7 +823,8 @@ writeJSON(FILES.pilots, pilots);
 }
 return send(res, 200, Subscription set to ${s.status} for ${email}, "text/plain");
 }
-// ---------- ADMIN ROUTES ---------if (pathname.startsWith("/admin/")) {
+// ---------- ADMIN ROUTES ---------
+if (pathname.startsWith("/admin/")) {
 const isAdmin = sess && sess.role === "admin";
 if (!isAdmin && pathname !== "/admin/login") return redirect(res, "/admin/login");
 // Reworked admin dashboard
@@ -901,9 +899,7 @@ const html = page("Admin Dashboard", `
 
 <h2>Admin Dashboard</h2> <section> <div class="kpi-card"><h4>Total Organisations</h4><p>${totalOrgs}</p></div> <div class="kpi-card"><h4>Total Users</h4><p>${totalUsers}</p></div> <div class="kpi-card"><h4>Active Pilots</h4><p>${activePilots}</p></div> <div class="kpi-card"><h4>Active Subscriptions</h4><p>${activeSubs}</p></div> </section> <h3>Organisation Status</h3> <div class="chart-placeholder">Donut chart will render here: Active ${statusCounts['active']||0}, Suspended ${statusCounts['suspended']||0}, Terminated ${statusCounts['terminated']||0}</div> <h3>Total Case Activity</h3> <div class="chart-placeholder">Case activity charts will be displayed when data is available.</div> <h3>Admin Alerts</h3> ${alertsHtml} <h3>Recent Organisation Activity</h3> <table> <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Last Activity</th><th>Attention</th></tr></thead> <tbody>${rows}</tbody> </table> `, navAdmin()); return send(res, 200, html);
 
-⚠️
-
-}
+}
 // Enhanced Organisations page
 if (method === "GET" && pathname === "/admin/orgs") {
 const orgs = readJSON(FILES.orgs, []);
@@ -942,15 +938,7 @@ return <tr class="${att ? 'attention' : ''}"> <td><a href="/admin/org?org_id=${e
 }).join("");
 const html = page("Organizations", `
 
-<h2>Organizations</h2>
-
-⚠️
-
-<form method="GET" action="/admin/orgs">
-<input type="text" name="search" placeholder="Search org name" value="${safeStr(parsed.query.search || '')}">
-<select name="status">
-
-<option value="">All statuses</option> <option value="active"${statusFilter==="active"?" selected":""}>Active</option> <option value="suspended"${statusFilter==="suspended"?" selected":""}>Suspended</option> <option value="terminated"${statusFilter==="terminated"?" selected":""}>Terminated</option> </select> <select name="plan"> <option value="">All plans</option> <option value="Pilot"${planFilter==="Pilot"?" selected":""}>Pilot</option> <option value="Subscribed"${planFilter==="Subscribed"?" selected":""}>Subscribed</option> <option value="Expired"${planFilter==="Expired"?" selected":""}>Expired</option> </select> <label><input type="checkbox" name="attention" value="1"${needAtt?" checked":""}> Needs Attention</label> <button class="btn" type="submit">Filter</button> </form> <div style="overflow:auto;"> <table> <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Attention</th></tr></thead> <tbody>${rows || '<tr><td colspan="4">No organisations match your filters.</td></tr>'}</tbody> </table> </div> `, navAdmin()); return send(res, 200, html); } if (method === "GET" && pathname === "/admin/org") { const org_id = parsed.query.org_id || ""; const org = getOrg(org_id); if (!org) return redirect(res, "/admin/orgs"); const users = readJSON(FILES.users, []).filter(u => u.org_id === org_id); const pilot = getPilot(org_id) || ensurePilot(org_id); const sub = getSub(org_id); const usage = getUsage(org_id); const a = computeAnalytics(org_id);
+<h2>Organizations</h2> <form method="GET" action="/admin/orgs"> <input type="text" name="search" placeholder="Search org name" value="${safeStr(parsed.query.search || '')}"> <select name="status"> <option value="">All statuses</option> <option value="active"${statusFilter==="active"?" selected":""}>Active</option> <option value="suspended"${statusFilter==="suspended"?" selected":""}>Suspended</option> <option value="terminated"${statusFilter==="terminated"?" selected":""}>Terminated</option> </select> <select name="plan"> <option value="">All plans</option> <option value="Pilot"${planFilter==="Pilot"?" selected":""}>Pilot</option> <option value="Subscribed"${planFilter==="Subscribed"?" selected":""}>Subscribed</option> <option value="Expired"${planFilter==="Expired"?" selected":""}>Expired</option> </select> <label><input type="checkbox" name="attention" value="1"${needAtt?" checked":""}> Needs Attention</label> <button class="btn" type="submit">Filter</button> </form> <div style="overflow:auto;"> <table> <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Attention</th></tr></thead> <tbody>${rows || '<tr><td colspan="4">No organisations match your filters.</td></tr>'}</tbody> </table> </div> `, navAdmin()); return send(res, 200, html); } if (method === "GET" && pathname === "/admin/org") { const org_id = parsed.query.org_id || ""; const org = getOrg(org_id); if (!org) return redirect(res, "/admin/orgs"); const users = readJSON(FILES.users, []).filter(u => u.org_id === org_id); const pilot = getPilot(org_id) || ensurePilot(org_id); const sub = getSub(org_id); const usage = getUsage(org_id); const a = computeAnalytics(org_id);
 
 const plan = (sub && sub.status==="active") ? "Monthly (active)" : (pilot.status==="active" ?
 "Pilot (active)" : "Expired");
@@ -1004,7 +992,8 @@ const rows = audit.slice(-200).reverse().map(a => `
 
 <tr> <td class="muted small">${safeStr(a.at)}</td> <td>${safeStr(a.action)}</td> <td class="muted small">${safeStr(a.org_id || "")}</td> <td class="muted small">${safeStr(a.reason || "")}</td> </tr>`).join(""); const html = page("Audit Log", ` <h2>Audit Log</h2> <p class="muted">Latest 200 admin actions.</p> <div style="overflow:auto;"> <table> <thead><tr><th>Time</th><th>Action</th><th>Org</th><th>Reason</th></tr></thead> <tbody>${rows}</tbody> </table> </div> `, navAdmin()); return send(res, 200, html); } return redirect(res, "/admin/dashboard"); }
 
-// ---------- USER PROTECTED ROUTES ---------if (!sess || sess.role !== "user") return redirect(res, "/login");
+// ---------- USER PROTECTED ROUTES ---------
+if (!sess || sess.role !== "user") return redirect(res, "/login");
 const user = getUserById(sess.user_id);
 if (!user) return redirect(res, "/login");
 const org = getOrg(user.org_id);
@@ -1030,7 +1019,7 @@ const html = page("Dashboard", `
 <li>Payment rows remaining: ${paymentAllowance.remaining} <span class="tooltip">ⓘ<span class="tooltiptext">Payment table displays up to 500 rows; additional
 rows still count toward your usage.</span></span></li>
 
-</ul> `} <div class="btnRow"> <a class="btn" href="/upload">Start Case Review</a> <a class="btn secondary" href="/payments">Payment Tracking</a> <a class="btn secondary" href="/analytics">Analytics</a> </div> `, navUser()); return send(res, 200, html); } // --------- CASE UPLOAD ---------if (method === "GET" && pathname === "/upload") { const html = page("Case Upload", ` <h2>Case Upload</h2> <p class="muted">Upload any combination of up to <strong>3 documents</strong> for this case. Denial/payment notices alone are enough to begin.</p> <form method="POST" action="/upload" enctype="multipart/form-data"> <label>Documents (up to 3)</label> <div id="case-dropzone" class="dropzone">Drop up to 3 documents here or click to select</div> <input id="case-files" type="file" name="files" multiple required accept=".pdf,.doc,.docx,.jpg,.png" style="display:none" /> <label>Optional notes</label> <textarea name="notes" placeholder="Any context to help review (optional)"></textarea> <div class="btnRow"> <button class="btn" type="submit">Submit for Review</button> <a class="btn secondary" href="/dashboard">Back</a> </div> </form> <div class="hr"></div> <p class="muted small">Limits: 3 files/case · ${getLimitProfile(org.org_id).mode==="pilot" ? "10MB/file" : "20MB/file"}</p> <script> const caseDrop = document.getElementById('case-dropzone'); const caseInput = document.getElementById('case-files'); caseDrop.addEventListener('click', () => caseInput.click()); ['dragenter','dragover'].forEach(evt => { caseDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); caseDrop.classList.add('dragover'); }); });
+</ul> `} <div class="btnRow"> <a class="btn" href="/upload">Start Case Review</a> <a class="btn secondary" href="/payments">Payment Tracking</a> <a class="btn secondary" href="/analytics">Analytics</a> </div> `, navUser()); return send(res, 200, html); } // --------- CASE UPLOAD --------- if (method === "GET" && pathname === "/upload") { const html = page("Case Upload", ` <h2>Case Upload</h2> <p class="muted">Upload any combination of up to <strong>3 documents</strong> for this case. Denial/payment notices alone are enough to begin.</p> <form method="POST" action="/upload" enctype="multipart/form-data"> <label>Documents (up to 3)</label> <div id="case-dropzone" class="dropzone">Drop up to 3 documents here or click to select</div> <input id="case-files" type="file" name="files" multiple required accept=".pdf,.doc,.docx,.jpg,.png" style="display:none" /> <label>Optional notes</label> <textarea name="notes" placeholder="Any context to help review (optional)"></textarea> <div class="btnRow"> <button class="btn" type="submit">Submit for Review</button> <a class="btn secondary" href="/dashboard">Back</a> </div> </form> <div class="hr"></div> <p class="muted small">Limits: 3 files/case · ${getLimitProfile(org.org_id).mode==="pilot" ? "10MB/file" : "20MB/file"}</p> <script> const caseDrop = document.getElementById('case-dropzone'); const caseInput = document.getElementById('case-files'); caseDrop.addEventListener('click', () => caseInput.click()); ['dragenter','dragover'].forEach(evt => { caseDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); caseDrop.classList.add('dragover'); }); });
 
 ['dragleave','drop'].forEach(evt => {
 caseDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation();
@@ -1167,7 +1156,8 @@ res.writeHead(200, {
 });
 return res.end(c.ai.draft_text || "");
 }
-// -------- PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) -------if (method === "GET" && pathname === "/payments") {
+// -------- PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) -------
+if (method === "GET" && pathname === "/payments") {
 const allow = paymentRowsAllowance(org.org_id);
 const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id ===
 org.org_id).length;
@@ -1250,7 +1240,7 @@ const html = page("Analytics", `
 <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a>
 <a class="btn secondary" href="/report">Printable Pilot Summary</a>
 
-</div> `, navUser()); return send(res, 200, html); } if (method === "GET" && pathname === "/export/cases.csv") { const casesExport = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id); const header = ["case_id","status","created_at","time_to_draft_seconds","denial_reason"].join(","); const rows = casesExport.map(c => [ c.case_id, c.status, c.created_at, c.ai?.time_to_draft_seconds || "", c.ai?.denial_reason_category || "" ].map(x => `"${String(x).replace(/"/g,'""')}"`).join(",")); const csv = [header, ...rows].join("\n"); res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=cases.csv" }); return res.end(csv); } if (method === "GET" && pathname === "/export/payments.csv") { const paymentsExport = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id); const header = ["payment_id","claim_number","payer","amount_paid","date_paid","source_file","created_at"].joi n(","); const rows = paymentsExport.map(p => [ p.payment_id, p.claim_number, p.payer, p.amount_paid, p.date_paid, p.source_file, p.created_at ].map(x => `"${String(x||"").replace(/"/g,'""')}"`).join(",")); const csv = [header, ...rows].join("\n"); res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=payments.csv" }); return res.end(csv); } if (method === "GET" && pathname === "/export/analytics.csv") { const aExport = computeAnalytics(org.org_id); const header = ["metric","value"].join(",");
+</div> `, navUser()); return send(res, 200, html); } if (method === "GET" && pathname === "/export/cases.csv") { const casesExport = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id); const header = ["case_id","status","created_at","time_to_draft_seconds","denial_reason"].join(","); const rows = casesExport.map(c => [ c.case_id, c.status, c.created_at, c.ai?.time_to_draft_seconds || "", c.ai?.denial_reason_category || "" ].map(x => `"${String(x).replace(/"/g,'""')}"`).join(",")); const csv = [header, ...rows].join("\n"); res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=cases.csv" }); return res.end(csv); } if (method === "GET" && pathname === "/export/payments.csv") { const paymentsExport = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id); const header = ["payment_id","claim_number","payer","amount_paid","date_paid","source_file","created_at"].join(","); const rows = paymentsExport.map(p => [ p.payment_id, p.claim_number, p.payer, p.amount_paid, p.date_paid, p.source_file, p.created_at ].map(x => `"${String(x||"").replace(/"/g,'""')}"`).join(",")); const csv = [header, ...rows].join("\n"); res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=payments.csv" }); return res.end(csv); } if (method === "GET" && pathname === "/export/analytics.csv") { const aExport = computeAnalytics(org.org_id); const header = ["metric","value"].join(",");
 
 const rows = [
 ["cases_uploaded", aExport.totalCases],
@@ -1258,8 +1248,7 @@ const html = page("Analytics", `
 ["avg_time_to_draft_seconds", aExport.avgDraftSeconds || ""],
 ].map(r => r.map(x => "${String(x).replace(/"/g,'""')}").join(","));
 const csv = [header, ...rows].join("\n");
-res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment;
-filename=analytics.csv" });
+res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=analytics.csv" });
 return res.end(csv);
 }
 if (method === "GET" && pathname === "/report") {
