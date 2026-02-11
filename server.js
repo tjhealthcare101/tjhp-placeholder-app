@@ -1,13 +1,5 @@
-TJ Healthcare Pro – Full Code with Enhancements
 
-This document contains the full original server code for
-TJ Healthcare Pro (version 1.2) followed by the enhanced functions and
-routes needed to implement contract tracking, payer timeliness, advanced
-denial analytics, feedback, report generation, mobile navigation, and
-other improvements. Copy the entire content into your server.js file to
-preserve the existing application while incorporating the new features.
-
-    /**
+ /**
 
           ●​ TJ Healthcare Pro — V1 Pilot App (single-file)
                  ○​ Pro UI, Signup/Login/Reset Password
