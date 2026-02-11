@@ -1,17 +1,4 @@
 
- /**
-
-          ●​ TJ Healthcare Pro — V1 Pilot App (single-file)
-                 ○​ Pro UI, Signup/Login/Reset Password
-                 ○​ Org isolation + Admin console
-                 ○​ Pilot limits + Monthly credits + Payment tracking (CSV/XLS allowed; CSV parsed)
-                 ○​ Case upload (any 1–3 files) -> AI stub (minutes) -> editable draft
-                 ○​ Analytics + Exports
-                 ○​ Post-pilot: 14-day retention delete if not subscribed
-                 ○​ Shopify activation hook (manual endpoint now; swap to webhook later)
-          ●​
-          ●​ Dependency: bcryptjs​
-             */​
              const http = require("http");​
              const url = require("url");​
              const fs = require("fs");​
@@ -597,7 +584,6 @@
     });​
     req.on("error", reject);​
     });​
-
     }​
     // ===== CSV parser =====​
     function parseCSV(text) {​
@@ -617,6 +603,7 @@
     } else {
 
     cur += ch;​
+
     }​
     }​
     out.push(cur);​
@@ -1207,7 +1194,6 @@
 
     // ---------- USER PROTECTED ROUTES ---------​
     if (!sess || sess.role !== "user") return redirect(res, "/login");​
-
     const user = getUserById(sess.user_id);​
     if (!user) return redirect(res, "/login");​
     const org = getOrg(user.org_id);​
@@ -1221,6 +1207,7 @@
     // lock screen​
     if (method === "GET" && pathname === "/lock") {​
     const html = page("Starting", `
+
 
     <h2 class="center">Pilot Started</h2> <p class="center">We’re preparing your secure
     workspace to help you track what was billed, denied, appealed, and paid — and surface
@@ -1817,7 +1804,6 @@
     const orgMetrics = Object.keys(paymentsByOrg).map(orgId => {​
     const pMetrics = computePaymentAnalytics(paymentsByOrg[orgId], 0);​
     const dMetrics = computeDenialAnalytics(casesByOrg[orgId]);​
-
     return {​
     orgId,​
     avgDays: Object.values(pMetrics.byPayer).reduce((a, info) => a + (info.avgDays || 0), 0) /
@@ -1827,6 +1813,7 @@
     };​
     });​
     const avgDays = orgMetrics.reduce((a, m) => a + (m.avgDays || 0), 0) / orgMetrics.length;​
+
     const avgUnderpaymentRate = orgMetrics.reduce((a, m) => a + m.underpaymentRate, 0) /
     orgMetrics.length;​
     const avgRisk = orgMetrics.reduce((a, m) => a + m.avgDenialRisk, 0) / orgMetrics.length;​
@@ -2427,11 +2414,11 @@ Enhanced Features Code
         return {
           payer: r.payer || r.Payer || '',
           code: r.code || r.CPT || r.HCPCS || '',
-
           rate: parseFloat(r.rate || r.allowed || r.allowable) || 0,
         };
       });
     }
+
     function expectedAmountForClaim(claim, contracts) {
       let expected = 0;
       for (const code of claim.codes || []) {
@@ -3035,4 +3022,3 @@ Enhanced Features Code
 
     server.listen(PORT, HOST, () => {
       console.log(`Enhanced TJHP server listening on ${HOST}:${PORT}`);
-    });
