@@ -110,7 +110,18 @@ audit: path.join(DATA_DIR, "audit.json"),
 };
 // ===== Helpers =====
 
-function uuid() { return crypto.randomUUID(); }
+function uuid() {
+// Use crypto.randomUUID() when available (Node 14+); otherwise generate a UUID v4 manually.
+if (typeof crypto.randomUUID === "function") {
+return crypto.randomUUID();
+}
+// Fallback: generate UUID v4 using random bytes. This ensures compatibility with older Node versions.
+const bytes = crypto.randomBytes(16);
+bytes[6] = (bytes[6] & 0x0f) | 0x40; // set version to 4
+bytes[8] = (bytes[8] & 0x3f) | 0x80; // set variant to 10
+const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0'));
+return ${hex.slice(0,4).join('')}-${hex.slice(4,6).join('')}-${hex.slice(6,8).join('')}-${hex.slice(8,10).join('')}-${hex.slice(10,16).join('')};
+}
 function nowISO() { return new Date().toISOString(); }
 function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return
 d.toISOString(); }
