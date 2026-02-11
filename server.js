@@ -7,8 +7,6 @@ denial analytics, feedback, report generation, mobile navigation, and
 other improvements. Copy the entire content into your server.js file to
 preserve the existing application while incorporating the new features.
 
-Original Server Code (version 1.2)
-
     /**
 
           ●​ TJ Healthcare Pro — V1 Pilot App (single-file)
