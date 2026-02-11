@@ -894,9 +894,12 @@ const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
 const plan = (sub && sub.status === "active") ? "Subscribed" : (pilot.status === "active" ?
 "Pilot" : "Expired");
 const att = attentionSet.has(org.org_id) ? " " : "";
-return `<tr class="${att ? 'attention' : ''}">
+// Make organisation name clickable to allow navigation to detail page from dashboard
+return <tr class="${att ? 'attention' : ''}"> <td><a href="/admin/org?org_id=${encodeURIComponent(org.org_id)}">${safeStr(org.org_name)}</a></td> <td>${plan}</td> <td>${safeStr(org.account_status || 'active')}</td> <td>${last ? new Date(last).toLocaleDateString() : "—"}</td> <td>${att}</td> </tr>;
+}).join("");
+const html = page("Admin Dashboard", `
 
-<td>${safeStr(org.org_name)}</td> <td>${plan}</td> <td>${safeStr(org.account_status || 'active')}</td> <td>${last ? new Date(last).toLocaleDateString() : "—"}</td> <td>${att}</td> </tr>`; }).join(""); const html = page("Admin Dashboard", ` <h2>Admin Dashboard</h2> <section> <div class="kpi-card"><h4>Total Organisations</h4><p>${totalOrgs}</p></div> <div class="kpi-card"><h4>Total Users</h4><p>${totalUsers}</p></div> <div class="kpi-card"><h4>Active Pilots</h4><p>${activePilots}</p></div> <div class="kpi-card"><h4>Active Subscriptions</h4><p>${activeSubs}</p></div> </section> <h3>Organisation Status</h3> <div class="chart-placeholder">Donut chart will render here: Active ${statusCounts['active']||0}, Suspended ${statusCounts['suspended']||0}, Terminated ${statusCounts['terminated']||0}</div> <h3>Total Case Activity</h3> <div class="chart-placeholder">Case activity charts will be displayed when data is available.</div> <h3>Admin Alerts</h3> ${alertsHtml} <h3>Recent Organisation Activity</h3> <table> <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Last Activity</th><th>Attention</th></tr></thead> <tbody>${rows}</tbody> </table> `, navAdmin()); return send(res, 200, html);
+<h2>Admin Dashboard</h2> <section> <div class="kpi-card"><h4>Total Organisations</h4><p>${totalOrgs}</p></div> <div class="kpi-card"><h4>Total Users</h4><p>${totalUsers}</p></div> <div class="kpi-card"><h4>Active Pilots</h4><p>${activePilots}</p></div> <div class="kpi-card"><h4>Active Subscriptions</h4><p>${activeSubs}</p></div> </section> <h3>Organisation Status</h3> <div class="chart-placeholder">Donut chart will render here: Active ${statusCounts['active']||0}, Suspended ${statusCounts['suspended']||0}, Terminated ${statusCounts['terminated']||0}</div> <h3>Total Case Activity</h3> <div class="chart-placeholder">Case activity charts will be displayed when data is available.</div> <h3>Admin Alerts</h3> ${alertsHtml} <h3>Recent Organisation Activity</h3> <table> <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Last Activity</th><th>Attention</th></tr></thead> <tbody>${rows}</tbody> </table> `, navAdmin()); return send(res, 200, html);
 
 ⚠️
 
@@ -934,9 +937,12 @@ const s = subs.find(x => x.org_id === org.org_id);
 const plan = (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ?
 "Pilot" : "Expired");
 const att = attSet.has(org.org_id) ? " " : "";
-return `<tr class="${att ? 'attention' : ''}">
+// Wrap the organisation name in a link so admins can click through to the org detail page
+return <tr class="${att ? 'attention' : ''}"> <td><a href="/admin/org?org_id=${encodeURIComponent(org.org_id)}">${safeStr(org.org_name)}</a></td> <td>${plan}</td> <td>${safeStr(org.account_status || 'active')}</td> <td>${att}</td> </tr>;
+}).join("");
+const html = page("Organizations", `
 
-<td>${safeStr(org.org_name)}</td> <td>${plan}</td> <td>${safeStr(org.account_status || 'active')}</td> <td>${att}</td> </tr>`; }).join(""); const html = page("Organizations", ` <h2>Organizations</h2>
+<h2>Organizations</h2>
 
 ⚠️
 
