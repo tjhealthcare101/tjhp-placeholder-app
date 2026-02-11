@@ -23,6 +23,14 @@ const url = require("url");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+// Set up global error handlers to prevent the process from crashing on uncaught exceptions or unhandled promise rejections.
+// Without these, any unexpected error could terminate the server. These handlers log the error and allow the server to continue running.
+process.on("uncaughtException", (err) => {
+console.error("Uncaught exception:", err);
+});
+process.on("unhandledRejection", (reason, promise) => {
+console.error("Unhandled rejection:", reason);
+});
 // Attempt to load bcryptjs. If unavailable, fallback to a simple SHA‑256 based hash.
 let bcrypt;
 try {
@@ -109,8 +117,20 @@ d.toISOString(); }
 function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
 function ensureFile(p, defaultVal) { if (!fs.existsSync(p)) fs.writeFileSync(p,
 JSON.stringify(defaultVal, null, 2)); }
-function readJSON(p, fallback) { ensureFile(p, fallback); return JSON.parse(fs.readFileSync(p,
-"utf8") || JSON.stringify(fallback)); }
+function readJSON(p, fallback) {
+// Ensure the file exists; create it with the fallback if not.
+ensureFile(p, fallback);
+try {
+// Read contents; if empty, use fallback as JSON text.
+const content = fs.readFileSync(p, "utf8") || JSON.stringify(fallback);
+return JSON.parse(content);
+} catch (err) {
+// If the JSON is malformed, log the error, reset the file to fallback, and return fallback instead of crashing.
+console.error(Error parsing JSON in ${p}:, err);
+writeJSON(p, fallback);
+return fallback;
+}
+}
 function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); }
 function safeStr(s) {
 // Avoid the nullish coalescing operator (??) to remain compatible with older Node versions.
