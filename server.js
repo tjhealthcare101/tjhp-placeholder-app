@@ -758,6 +758,13 @@ const server = http.createServer(async (req, res) => {
   const sess = getAuth(req);
   // Cleanup expired data if logged in
   if (sess && sess.org_id) cleanupIfExpired(sess.org_id);
+  // Landing page / root
+  // Return a simple HTML page for the root path to avoid a 404 on the home page.
+  if (method === 'GET' && pathname === '/') {
+    const homeHtml = `<html><body><h1>TJ Healthcare Pro</h1><p>Your API is running. Use the <code>/health</code> endpoint to check status or <code>/api</code> routes for uploading cases and payments.</p></body></html>`;
+    return send(res, 200, homeHtml);
+  }
+
   // Health check
   if (method === 'GET' && pathname === '/health') return send(res, 200, 'ok', 'text/plain');
   // Admin login
