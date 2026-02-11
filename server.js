@@ -1,1666 +1,994 @@
-/**
+**
+ * TJ Healthcare Pro — Enhanced Server
+ *
+ * This file extends the original TJ Healthcare Pro pilot app with
+ * additional analytics and administrative features while keeping
+ * external dependencies to a minimum.  All enhancements are
+ * self‑contained and rely only on built‑in Node.js modules and
+ * bcryptjs.  Excel parsing and third‑party OCR/NLP libraries are
+ * deliberately omitted: payment and contract files must be in CSV
+ * format, and document text extraction uses a basic UTF‑8 read.
+ *
+ * Key enhancements include:
+ *  - Contract & fee schedule repository and underpayment detection
+ *  - Payer timeliness metrics (average/median days to pay)
+ *  - Improved denial classification with corrective suggestions
+ *  - Simple denial risk scoring
+ *  - Extended payment parsing (variance and days‑to‑pay)
+ *  - Additional export: payer report card CSV
+ *  - Feedback API for rating AI suggestions
+ *  - Mobile‑friendly navigation (toggle menu for small screens)
+ *
+ * NOTE: This server is a reference implementation.  To integrate
+ * these enhancements into your production system, copy the
+ * relevant functions and route handlers into your existing
+ * server file at the appropriate locations (see integration
+ * instructions in the accompanying documentation).
+ */
 
-TJ Healthcare Pro — V1 Pilot App (single-file)
+const http = require('http');
+const url = require('url');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 
-Pro UI, Signup/Login/Reset Password
-
-Org isolation + Admin console
-
-Pilot limits + Monthly credits + Payment tracking (CSV/XLS allowed; CSV parsed)
-
-Case upload (any 1–3 files) -> AI stub (minutes) -> editable draft
-
-Analytics + Exports
-
-Post-pilot: 14-day retention delete if not subscribed
-
-Shopify activation hook (manual endpoint now; swap to webhook later)
-
-Dependency: bcryptjs
-*/
-const http = require("http");
-const url = require("url");
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
-// Set up global error handlers to prevent the process from crashing on uncaught exceptions or unhandled promise rejections.
-// Without these, any unexpected error could terminate the server. These handlers log the error and allow the server to continue running.
-process.on("uncaughtException", (err) => {
-console.error("Uncaught exception:", err);
-});
-process.on("unhandledRejection", (reason, promise) => {
-console.error("Unhandled rejection:", reason);
-});
-// Attempt to load bcryptjs. If unavailable, fallback to a simple SHA‑256 based hash.
-let bcrypt;
-try {
-bcrypt = require("bcryptjs");
-} catch (e) {
-// Fallback: use built‑in crypto to hash and compare passwords. This is less secure than bcrypt
-// but avoids runtime crashes when bcryptjs is not installed.
-bcrypt = {
-hashSync: (password, saltRounds) => {
-return crypto.createHash("sha256").update(String(password)).digest("hex");
-},
-compareSync: (password, hashed) => {
-const hash = crypto.createHash("sha256").update(String(password)).digest("hex");
-return hash === hashed;
-},
-};
-}
 // ===== Server =====
-const HOST = "0.0.0.0";
+const HOST = '0.0.0.0';
 const PORT = process.env.PORT || 8080;
-const IS_PROD = process.env.NODE_ENV === "production";
-// ===== ENV =====
-const SESSION_SECRET = process.env.SESSION_SECRET ||
-"CHANGE_ME_SESSION_SECRET";
-const APP_BASE_URL = process.env.APP_BASE_URL || ""; // e.g. https://app.tjhealthpro.com
+const IS_PROD = process.env.NODE_ENV === 'production';
 
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").toLowerCase();
-const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || "";
-const ADMIN_PASSWORD_PLAIN = process.env.ADMIN_PASSWORD_PLAIN || "";
-const ADMIN_ACTIVATE_TOKEN = process.env.ADMIN_ACTIVATE_TOKEN ||
-"CHANGE_ME_ADMIN_ACTIVATE_TOKEN";
+// ===== ENV =====
+const SESSION_SECRET = process.env.SESSION_SECRET || 'CHANGE_ME_SESSION_SECRET';
+const APP_BASE_URL = process.env.APP_BASE_URL || '';
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').toLowerCase();
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || '';
+const ADMIN_PASSWORD_PLAIN = process.env.ADMIN_PASSWORD_PLAIN || '';
+const ADMIN_ACTIVATE_TOKEN = process.env.ADMIN_ACTIVATE_TOKEN || 'CHANGE_ME_ADMIN_ACTIVATE_TOKEN';
+
 // ===== Timing =====
 const LOCK_SCREEN_MS = 5000;
 const SESSION_TTL_DAYS = 7;
-const AI_JOB_DELAY_MS = Number(process.env.AI_JOB_DELAY_MS || 20000); // demo
+const AI_JOB_DELAY_MS = Number(process.env.AI_JOB_DELAY_MS || 20000);
+
 // ===== Pilot / Retention =====
 const PILOT_DAYS = 30;
 const RETENTION_DAYS_AFTER_PILOT = 14;
 
-// ===== Limits (LOCKED) =====
+// ===== Limits (LOCKED) =====
 const PILOT_LIMITS = {
-max_cases_total: 25,
-max_files_per_case: 3,
-max_file_size_mb: 10,
-max_ai_jobs_per_hour: 2,
-max_concurrent_analyzing: 2,
-payment_records_included: 2000, // pilot payment tracking rows
+  max_cases_total: 25,
+  max_files_per_case: 3,
+  max_file_size_mb: 10,
+  max_ai_jobs_per_hour: 2,
+  max_concurrent_analyzing: 2,
+  payment_records_included: 2000,
 };
 const MONTHLY_DEFAULTS = {
-case_credits_per_month: 40,
-// Standard default
-payment_tracking_credits_per_month: 10, // 10k rows/mo if 1 credit=1k rows
-max_files_per_case: 3,
-max_file_size_mb: 20,
-max_ai_jobs_per_hour: 5,
-max_concurrent_analyzing: 5,
-overage_price_per_case: 50,
-payment_records_per_credit: 1000,
+  case_credits_per_month: 40,
+  payment_tracking_credits_per_month: 10,
+  max_files_per_case: 3,
+  max_file_size_mb: 20,
+  max_ai_jobs_per_hour: 5,
+  max_concurrent_analyzing: 5,
+  overage_price_per_case: 50,
+  payment_records_per_credit: 1000,
 };
-// Payment tracking credits
 const PAYMENT_RECORDS_PER_CREDIT = 1000;
+
 // ===== Storage =====
 const BASE_DIR = __dirname;
-const DATA_DIR = path.join(BASE_DIR, "data");
-const UPLOADS_DIR = path.join(BASE_DIR, "uploads");
+const DATA_DIR = path.join(BASE_DIR, 'data');
+const UPLOADS_DIR = path.join(BASE_DIR, 'uploads');
 const FILES = {
-orgs: path.join(DATA_DIR, "orgs.json"),
-users: path.join(DATA_DIR, "users.json"),
-pilots: path.join(DATA_DIR, "pilots.json"),
-subscriptions: path.join(DATA_DIR, "subscriptions.json"),
-cases: path.join(DATA_DIR, "cases.json"),
-payments: path.join(DATA_DIR, "payments.json"), // parsed payment rows (limited)
-expectations: path.join(DATA_DIR, "expectations.json"),
-flags: path.join(DATA_DIR, "flags.json"),
-usage: path.join(DATA_DIR, "usage.json"),
-audit: path.join(DATA_DIR, "audit.json"),
+  orgs: path.join(DATA_DIR, 'orgs.json'),
+  users: path.join(DATA_DIR, 'users.json'),
+  pilots: path.join(DATA_DIR, 'pilots.json'),
+  subscriptions: path.join(DATA_DIR, 'subscriptions.json'),
+  cases: path.join(DATA_DIR, 'cases.json'),
+  payments: path.join(DATA_DIR, 'payments.json'),
+  expectations: path.join(DATA_DIR, 'expectations.json'),
+  flags: path.join(DATA_DIR, 'flags.json'),
+  usage: path.join(DATA_DIR, 'usage.json'),
+  audit: path.join(DATA_DIR, 'audit.json'),
+  // New storage for contracts and feedback
+  contracts: path.join(DATA_DIR, 'contracts.json'),
+  feedback: path.join(DATA_DIR, 'feedback.json'),
 };
-// ===== Helpers =====
 
+// ===== Helpers =====
 function uuid() {
-// Use crypto.randomUUID() when available (Node 14+); otherwise generate a UUID v4 manually.
-if (typeof crypto.randomUUID === "function") {
-return crypto.randomUUID();
+  return crypto.randomUUID();
 }
-// Fallback: generate UUID v4 using random bytes. This ensures compatibility with older Node versions.
-const bytes = crypto.randomBytes(16);
-bytes[6] = (bytes[6] & 0x0f) | 0x40; // set version to 4
-bytes[8] = (bytes[8] & 0x3f) | 0x80; // set variant to 10
-const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0'));
-// Build UUID string using string concatenation instead of a template literal. This avoids issues with older
-// tooling that might strip the backtick, leading to a syntax error.
-return hex.slice(0, 4).join('') + '-' +
-hex.slice(4, 6).join('') + '-' +
-hex.slice(6, 8).join('') + '-' +
-hex.slice(8, 10).join('') + '-' +
-hex.slice(10, 16).join('');
+function nowISO() {
+  return new Date().toISOString();
 }
-function nowISO() { return new Date().toISOString(); }
-function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return
-d.toISOString(); }
-function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
-function ensureFile(p, defaultVal) { if (!fs.existsSync(p)) fs.writeFileSync(p,
-JSON.stringify(defaultVal, null, 2)); }
+function addDaysISO(iso, days) {
+  const d = new Date(iso);
+  d.setDate(d.getDate() + days);
+  return d.toISOString();
+}
+function ensureDir(p) {
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
+function ensureFile(p, defaultVal) {
+  if (!fs.existsSync(p)) fs.writeFileSync(p, JSON.stringify(defaultVal, null, 2));
+}
 function readJSON(p, fallback) {
-// Ensure the file exists; create it with the fallback if not.
-ensureFile(p, fallback);
-try {
-// Read contents; if empty, use fallback as JSON text.
-const content = fs.readFileSync(p, "utf8") || JSON.stringify(fallback);
-return JSON.parse(content);
-} catch (err) {
-// If the JSON is malformed, log the error, reset the file to fallback, and return fallback instead of crashing.
-console.error(Error parsing JSON in ${p}:, err);
-writeJSON(p, fallback);
-return fallback;
+  ensureFile(p, fallback);
+  return JSON.parse(fs.readFileSync(p, 'utf8') || JSON.stringify(fallback));
 }
+function writeJSON(p, val) {
+  fs.writeFileSync(p, JSON.stringify(val, null, 2));
 }
-function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); }
 function safeStr(s) {
-// Avoid the nullish coalescing operator (??) to remain compatible with older Node versions.
-// Instead explicitly check for undefined or null before defaulting to an empty string.
-const val = (s !== undefined && s !== null) ? s : "";
-return String(val).replace(/[<>&"]/g, (c) => ({
-"<": "<",
-">": ">",
-"&": "&",
-'"': """,
-}[c]));
+  return String(s ?? '').replace(/[<>&"]/g, (c) => ({
+    '<': '&lt;',
+    '>': '&gt;',
+    '&': '&amp;',
+    '"': '&quot;',
+  }[c]));
 }
 function parseCookies(req) {
-const header = req.headers.cookie || "";
-const out = {};
-header.split(";").map(x => x.trim()).filter(Boolean).forEach(pair => {
-const idx = pair.indexOf("=");
-if (idx > -1) out[pair.slice(0, idx)] = decodeURIComponent(pair.slice(idx+1));
-});
-return out;
+  const header = req.headers.cookie || '';
+  const out = {};
+  header
+    .split(';')
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .forEach((pair) => {
+      const idx = pair.indexOf('=');
+      if (idx > -1) out[pair.slice(0, idx)] = decodeURIComponent(pair.slice(idx + 1));
+    });
+  return out;
 }
-/**
-
-FIX: Railway-safe cookies.
-
-In production browsers require Secure for SameSite=None; but you use SameSite=Lax.
-
-Still, "Secure" should only be set when behind HTTPS.
-*/
 function setCookie(res, name, value, maxAgeSeconds) {
-const parts = [
-${name}=${encodeURIComponent(value)},
-"Path=/",
-"SameSite=Lax",
-"HttpOnly",
-];
-if (IS_PROD) parts.push("Secure");
-if (maxAgeSeconds) parts.push(Max-Age=${maxAgeSeconds});
-res.setHeader("Set-Cookie", parts.join("; "));
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    'Path=/',
+    'SameSite=Lax',
+    'HttpOnly',
+  ];
+  if (IS_PROD) parts.push('Secure');
+  if (maxAgeSeconds) parts.push(`Max-Age=${maxAgeSeconds}`);
+  res.setHeader('Set-Cookie', parts.join('; '));
 }
-
-function clearCookie(res, name) {
-res.setHeader("Set-Cookie", ${name}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly${IS_PROD ? "; Secure" : ""});
+function clearCookie(res, name) {
+  res.setHeader('Set-Cookie', `${name}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly${IS_PROD ? '; Secure' : ''}`);
 }
-function send(res, status, body, type="text/html") {
-res.writeHead(status, { "Content-Type": type });
-res.end(body);
+function send(res, status, body, type = 'text/html') {
+  res.writeHead(status, { 'Content-Type': type });
+  res.end(body);
 }
 function redirect(res, location) {
-res.writeHead(302, { Location: location });
-res.end();
+  res.writeHead(302, { Location: location });
+  res.end();
 }
 function parseBody(req) {
-return new Promise(resolve => {
-let body = "";
-req.on("data", c => body += c);
-req.on("end", () => resolve(body));
-});
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => resolve(body));
+  });
 }
+
 // ===== Session =====
 function hmacSign(value, secret) {
-return crypto.createHmac("sha256", secret).update(value).digest("hex");
+  return crypto.createHmac('sha256', secret).update(value).digest('hex');
 }
 function makeSession(payload) {
-const json = JSON.stringify(payload);
-const b64 = Buffer.from(json).toString("base64url");
-const sig = hmacSign(b64, SESSION_SECRET);
-return ${b64}.${sig};
+  const json = JSON.stringify(payload);
+  const b64 = Buffer.from(json).toString('base64url');
+  const sig = hmacSign(b64, SESSION_SECRET);
+  return `${b64}.${sig}`;
 }
 function verifySession(token) {
-if (!token || !token.includes(".")) return null;
-const [b64, sig] = token.split(".");
-const expected = hmacSign(b64, SESSION_SECRET);
-if (sig !== expected) return null;
-try {
-const json = Buffer.from(b64, "base64url").toString("utf8");
-const payload = JSON.parse(json);
-if (!payload.exp || Date.now() > payload.exp) return null;
-return payload;
-} catch { return null; }
-
-}
-function getAuth(req) {
-const cookies = parseCookies(req);
-return verifySession(cookies.tjhp_session);
+  if (!token || !token.includes('.')) return null;
+  const [b64, sig] = token.split('.');
+  const expected = hmacSign(b64, SESSION_SECRET);
+  if (sig !== expected) return null;
+  try {
+    const json = Buffer.from(b64, 'base64url').toString('utf8');
+    const payload = JSON.parse(json);
+    if (!payload.exp || Date.now() > payload.exp) return null;
+    return payload;
+  } catch {
+    return null;
+  }
 }
+function getAuth(req) {
+  const cookies = parseCookies(req);
+  return verifySession(cookies.tjhp_session);
+}
+
 // ===== Init storage =====
 ensureDir(DATA_DIR);
 ensureDir(UPLOADS_DIR);
-ensureFile(FILES.orgs, []);
-ensureFile(FILES.users, []);
-ensureFile(FILES.pilots, []);
-ensureFile(FILES.subscriptions, []);
-ensureFile(FILES.cases, []);
-ensureFile(FILES.payments, []);
-ensureFile(FILES.expectations, []);
-ensureFile(FILES.flags, []);
-ensureFile(FILES.usage, []);
-ensureFile(FILES.audit, []);
+Object.values(FILES).forEach((p) => ensureFile(p, []));
+
 // ===== Admin password =====
 function adminHash() {
-if (ADMIN_PASSWORD_HASH) return ADMIN_PASSWORD_HASH;
-if (ADMIN_PASSWORD_PLAIN) return bcrypt.hashSync(ADMIN_PASSWORD_PLAIN, 10);
-return "";
+  if (ADMIN_PASSWORD_HASH) return ADMIN_PASSWORD_HASH;
+  if (ADMIN_PASSWORD_PLAIN) return bcrypt.hashSync(ADMIN_PASSWORD_PLAIN, 10);
+  return '';
 }
-// ===== UI =====
-const css = `
-:root{
---bg:#f6f7fb; --card:#fff; --text:#111827; --muted:#6b7280;
---border:#e5e7eb; --primary:#111827; --primaryText:#fff;
---danger:#b91c1c; --warn:#92400e; --ok:#065f46;
---shadow:0 12px 30px rgba(17,24,39,.06);
+
+// ===== OCR & NLP Helpers =====
+async function performOCR(files) {
+  let text = '';
+  for (const f of files) {
+    try {
+      const str = f.buffer.toString('utf8');
+      if (str.trim()) text += '\n' + str;
+      else text += `\n[[binary file: ${f.filename}]]`;
+    } catch (err) {
+      text += `\n[[binary file: ${f.filename}]]`;
+    }
+  }
+  return text;
 }
-*{box-sizing:border-box}
-html,body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe
-UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);}
-.wrap{max-width:980px;margin:28px auto;padding:0 16px;}
-.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:1
-4px;}
-.brand{display:flex;flex-direction:column;gap:2px;}
-.brand h1{font-size:18px;margin:0;}
-.brand .sub{font-size:12px;color:var(--muted);}
-
-.nav{display:flex;gap:12px;flex-wrap:wrap;}
-.nav a{text-decoration:none;color:var(--muted);font-weight:700;font-size:13px;}
-.nav a:hover{color:var(--text);}
-.card{background:var(--card);border:1px solid
-var(--border);border-radius:14px;padding:18px;box-shadow:var(--shadow);}
-.row{display:flex;gap:14px;flex-wrap:wrap;}
-.col{flex:1;min-width:280px;}
-h2{margin:0 0 10px;font-size:22px;}
-h3{margin:16px 0 8px;font-size:15px;}
-p{margin:8px 0;line-height:1.5;}
-.muted{color:var(--muted);font-size:13px;}
-.hr{height:1px;background:var(--border);margin:14px 0;}
-.btn{display:inline-block;background:var(--primary);color:var(--primaryText);border:none;border-r
-adius:10px;padding:10px
-14px;font-weight:800;text-decoration:none;cursor:pointer;font-size:13px;}
-.btn.secondary{background:#fff;color:var(--text);border:1px solid var(--border);}
-.btn.danger{background:var(--danger);}
-.btnRow{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;}
-label{font-size:12px;color:var(--muted);font-weight:800;}
-input,textarea{width:100%;padding:10px 12px;border:1px solid
-var(--border);border-radius:10px;font-size:14px;outline:none;margin-top:6px;}
-input:focus,textarea:focus{border-color:#c7d2fe;box-shadow:0 0 0 3px rgba(99,102,241,.12);}
-textarea{min-height:220px;}
-.badge{display:inline-block;border:1px solid
-var(--border);background:#fff;border-radius:999px;padding:4px
-10px;font-size:12px;font-weight:900;}
-.badge.ok{border-color:#a7f3d0;background:#ecfdf5;color:var(--ok);}
-.badge.warn{border-color:#fde68a;background:#fffbeb;color:var(--warn);}
-.badge.err{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
-.footer{margin-top:14px;padding-top:12px;border-top:1px solid
-var(--border);font-size:12px;color:var(--muted);}
-.error{color:var(--danger);font-weight:900;}
-.small{font-size:12px;}
-table{width:100%;border-collapse:collapse;font-size:13px;}
-th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;}
-.center{text-align:center}
-/* Tooltip system */
-.tooltip{position:relative;display:inline-block;cursor:pointer;color:var(--muted);}
-.tooltip
-.tooltiptext{visibility:hidden;width:220px;background-color:#555;color:#fff;text-align:center;border
--radius:6px;padding:5px;position:absolute;z-index:1;bottom:125%;left:50%;margin-left:-110px;op
-acity:0;transition:opacity 0.3s;font-size:12px;}
-.tooltip:hover .tooltiptext{visibility:visible;opacity:1;}
-
-/* Chart and KPI placeholders /
-.chart-placeholder{height:200px;border:1px solid
-var(--border);display:flex;align-items:center;justify-content:center;margin-bottom:10px;}
-.kpi-card{display:inline-block;margin:10px;padding:15px;border:1px solid
-var(--border);border-radius:8px;width:200px;text-align:center;background:#fff;box-shadow:var(-shadow);}
-.alert{background:#ffeded;border:1px solid #ffb0b0;padding:10px;margin:5px
-0;border-radius:6px;font-size:13px;}
-.attention{background-color:#fff8e1;}
-/ Drop‑zone styling /
-.dropzone{display:flex;align-items:center;justify-content:center;border:2px dashed
-var(--border);border-radius:8px;height:150px;cursor:pointer;background:#fafafa;color:var(--mute
-d);margin-bottom:10px;transition:background 0.2s ease;}
-.dropzone.dragover{background:#e5e7eb;}
-/ ===== AUTH UI PATCH ===== /
-.password-wrap { position: relative; }
-.password-wrap input { padding-right: 48px; }
-.toggle-password {
-position: absolute;
-right: 12px;
-top: 50%;
-transform: translateY(-50%);
-font-size: 13px;
-font-weight: 700;
-cursor: pointer;
-color: #374151;
-user-select: none;
+function extractStructuredData(text) {
+  const lines = text.split(/\r?\n/);
+  let claimNumber = '';
+  let payer = '';
+  const codes = [];
+  const claimRegex = /claim\s*(?:number|#|id)[:\s]*([A-Za-z0-9\-]+)/i;
+  const payerRegex = /payer[:\s]*([A-Za-z \-]+)/i;
+  const codeRegex = /(?:CPT|HCPCS|Code)[:\s]*([A-Za-z0-9]{4,6})/i;
+  for (const line of lines) {
+    if (!claimNumber) {
+      const m = claimRegex.exec(line);
+      if (m) claimNumber = m[1];
+    }
+    if (!payer) {
+      const m2 = payerRegex.exec(line);
+      if (m2) payer = m2[1].trim();
+    }
+    const m3 = codeRegex.exec(line);
+    if (m3) codes.push(m3[1]);
+  }
+  return { claimNumber, payer, codes };
 }
-/ Mobile spacing fix for auth screens /
-@media (max-width: 640px) {
-.card { padding: 16px !important; }
-input, textarea, button { font-size: 16px !important; }
-.btnRow { flex-direction: column; }
-.btn { width: 100%; }
+function analyseDenial(text, structured) {
+  const lower = text.toLowerCase();
+  let category = 'Unknown';
+  let summary = 'Unable to determine reason for denial.';
+  let suggestions = [];
+  if (lower.includes('documentation') || lower.includes('missing')) {
+    category = 'Documentation missing';
+    summary = 'The payer indicated that required documentation is missing.';
+    suggestions = [
+      'Review the medical records and include all necessary notes.',
+      'Double-check that all attachments are uploaded.',
+    ];
+  } else if (lower.includes('coverage') || lower.includes('not covered')) {
+    category = 'Coverage issues';
+    summary = 'The service may not be covered under the patient’s plan.';
+    suggestions = [
+      'Verify the patient’s coverage and benefits.',
+      'Consider obtaining a pre-authorization or submitting an appeal if coverage applies.',
+    ];
+  } else if (lower.includes('coding') || lower.includes('code')) {
+    category = 'Coding mismatch';
+    summary = 'There appears to be a mismatch between billed codes and payer policy.';
+    suggestions = [
+      'Check CPT/HCPCS codes for accuracy.',
+      'Ensure modifiers and units are correct.',
+    ];
+  }
+  return { category, summary, suggestions };
 }
-`;
-/*
-
-FIX: all HTML + scripts must live inside returned strings.
-
-Password toggle preserved.
-
-*/
-function page(title, content, navHtml="") {
-return `<!doctype html>
-
-<html><head> <meta charset="utf-8"/> <meta name="viewport" content="width=device-width, initial-scale=1"/> <title>${safeStr(title)}</title> <style>${css}</style> </head> <body> <div class="wrap"> <div class="topbar"> <div class="brand"> <h1>TJ Healthcare Pro</h1> <div class="sub">AI-Assisted Claim Review & Analytics</div> </div> <div class="nav">${navHtml}</div> </div> <div class="card"> ${content} <div class="footer"> No EMR access · No payer portal access · No automated submissions · Human review required before use. </div> </div> </div> <script> /* ===== PASSWORD VISIBILITY TOGGLE (GLOBAL) ===== */ document.querySelectorAll('input[type="password"]').forEach(input => { if (input.parentNode && input.parentNode.classList && input.parentNode.classList.contains("password-wrap")) return; const wrap = document.createElement("div"); wrap.className = "password-wrap"; input.parentNode.insertBefore(wrap, input); wrap.appendChild(input); const toggle = document.createElement("span"); toggle.className = "toggle-password"; toggle.textContent = "Show"; wrap.appendChild(toggle); toggle.addEventListener("click", () => {
-
-const hidden = input.type === "password";
-input.type = hidden ? "text" : "password";
-toggle.textContent = hidden ? "Hide" : "Show";
-});
-});
-</script>
-
-</body></html>`; } function navPublic() { return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`; } function navUser() { return `<a href="/dashboard">Dashboard</a><a href="/upload">Case Upload</a><a href="/payments">Payment Tracking</a><a href="/analytics">Analytics</a><a href="/exports">Exports</a><a href="/logout">Logout</a>`; } function navAdmin() { return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`; } // ===== Models helpers ===== function getOrg(org_id) { return readJSON(FILES.orgs, []).find(o => o.org_id === org_id); } function getUserByEmail(email) { const e = (email || "").toLowerCase(); return readJSON(FILES.users, []).find(u => (u.email || "").toLowerCase() === e); } function getUserById(user_id) { return readJSON(FILES.users, []).find(u => u.user_id === user_id); } function getPilot(org_id) { return readJSON(FILES.pilots, []).find(p => p.org_id === org_id); } function ensurePilot(org_id) { const pilots = readJSON(FILES.pilots, []); let p = pilots.find(x => x.org_id === org_id); if (!p) { const started = nowISO(); const ends = addDaysISO(started, PILOT_DAYS);
-
-p = { pilot_id: uuid(), org_id, status:"active", started_at: started, ends_at: ends,
-retention_delete_at: null };
-pilots.push(p);
-writeJSON(FILES.pilots, pilots);
+function predictDenialRisk(structured, text) {
+  let score = 0;
+  score += Math.min(structured.codes.length / 10, 0.3);
+  if (!structured.claimNumber) score += 0.3;
+  if (!structured.payer) score += 0.2;
+  const lower = text.toLowerCase();
+  if (lower.includes('appeal')) score += 0.1;
+  if (lower.includes('denied')) score += 0.2;
+  return Math.min(score, 1.0);
 }
-return p;
+
+// ===== Payment & Contract Parsing Helpers =====
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length);
+  if (!lines.length) return { headers: [], rows: [] };
+  function splitLine(line) {
+    const out = [];
+    let cur = '';
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQ && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else inQ = !inQ;
+      } else if (ch === ',' && !inQ) {
+        out.push(cur);
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out.map((s) => s.trim());
+  }
+  const headers = splitLine(lines[0]).map((h) => h.replace(/^"|"$/g, '').trim());
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitLine(lines[i]).map((c) => c.replace(/^"|"$/g, ''));
+    const obj = {};
+    headers.forEach((h, idx) => (obj[h] = cols[idx] || ''));
+    rows.push(obj);
+  }
+  return { headers, rows };
+}
+function parsePaymentFile(buffer, filename) {
+  const lower = filename.toLowerCase();
+  let rows = [];
+  if (lower.endsWith('.csv')) {
+    const text = buffer.toString('utf8');
+    const parsed = parseCSV(text);
+    rows = parsed.rows;
+  } else {
+    // Excel parsing disabled – instruct users to upload CSV
+    return [];
+  }
+  const payments = [];
+  for (const row of rows) {
+    const getField = (keys) => {
+      for (const k of keys) {
+        const key = Object.keys(row).find((x) => x.toLowerCase().includes(k));
+        if (key) return row[key];
+      }
+      return '';
+    };
+    const claimNumber = getField(['claim', 'claim number', 'claim#', 'clm']);
+    const payer = getField(['payer', 'insurance', 'carrier', 'plan']);
+    const amt = parseFloat(getField(['paid', 'amount', 'payment', 'paid amount', 'allowed'])) || 0;
+    const expected = parseFloat(getField(['expected', 'contract', 'allowable']));
+    const claimDate = getField(['service date', 'claim date', 'dos']);
+    const datePaid = getField(['date', 'paid date', 'payment date', 'remit date']);
+    let variance = null;
+    if (!Number.isNaN(expected)) variance = expected - amt;
+    let daysToPay = null;
+    if (claimDate && datePaid) {
+      try {
+        const t1 = new Date(claimDate).getTime();
+        const t2 = new Date(datePaid).getTime();
+        daysToPay = Math.round((t2 - t1) / (24 * 60 * 60 * 1000));
+      } catch {
+        daysToPay = null;
+      }
+    }
+    payments.push({
+      claimNumber: claimNumber || '',
+      payer: payer || '',
+      amountPaid: amt,
+      expectedAmount: Number.isNaN(expected) ? null : expected,
+      variance,
+      claimDate: claimDate || '',
+      datePaid: datePaid || '',
+      daysToPay,
+    });
+  }
+  return payments;
+}
+function parseContractFile(buffer, filename) {
+  const lower = filename.toLowerCase();
+  if (!lower.endsWith('.csv')) return [];
+  const text = buffer.toString('utf8');
+  const { rows } = parseCSV(text);
+  return rows.map((r) => {
+    return {
+      payer: r.payer || r.Payer || '',
+      code: r.code || r.CPT || r.HCPCS || '',
+      rate: parseFloat(r.rate || r.allowed || r.allowable) || 0,
+    };
+  });
+}
+function expectedAmountForClaim(claim, contracts) {
+  let expected = 0;
+  for (const code of claim.codes || []) {
+    const match = contracts.find((c) => c.payer === claim.payer && c.code === code);
+    if (match) expected += match.rate;
+  }
+  return expected;
+}
+function comparePaymentsAgainstContracts(payments, contracts) {
+  return payments.map((p) => {
+    const expected = expectedAmountForClaim({ payer: p.payer, codes: [p.claimNumber] }, contracts);
+    const variance = expected ? expected - p.amountPaid : null;
+    const underpaid = variance !== null && variance > 0;
+    return { ...p, expectedAmount: expected, variance, underpaid };
+  });
+}
+
+// ===== Analytics Helpers =====
+function computePaymentAnalytics(payments, threshold = 0) {
+  const byPayer = {};
+  let totalReimbursement = 0;
+  let underpaymentCount = 0;
+  let underpaymentValue = 0;
+  for (const p of payments) {
+    const payer = (p.payer || 'Unknown').trim() || 'Unknown';
+    if (!byPayer[payer]) byPayer[payer] = { count: 0, total: 0, days: [] };
+    byPayer[payer].count++;
+    byPayer[payer].total += p.amountPaid;
+    totalReimbursement += p.amountPaid;
+    if (p.daysToPay !== null) byPayer[payer].days.push(p.daysToPay);
+    if (p.variance !== null && Math.abs(p.variance) > threshold) {
+      underpaymentCount++;
+      underpaymentValue += p.variance;
+    }
+  }
+  for (const payer in byPayer) {
+    const arr = byPayer[payer].days;
+    if (arr.length > 0) {
+      const sum = arr.reduce((a, b) => a + b, 0);
+      byPayer[payer].avgDays = sum / arr.length;
+      arr.sort((a, b) => a - b);
+      const mid = Math.floor(arr.length / 2);
+      byPayer[payer].medianDays = arr.length % 2 === 1 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+    } else {
+      byPayer[payer].avgDays = null;
+      byPayer[payer].medianDays = null;
+    }
+  }
+  return { byPayer, totalReimbursement, underpaymentCount, underpaymentValue };
+}
+function computeDenialAnalytics(cases) {
+  const byCategory = {};
+  let riskSum = 0;
+  let riskCount = 0;
+  for (const c of cases) {
+    if (!c.ai || !c.ai.denial_category) continue;
+    const cat = c.ai.denial_category || 'Unknown';
+    byCategory[cat] = (byCategory[cat] || 0) + 1;
+    if (typeof c.ai.denial_risk === 'number') {
+      riskSum += c.ai.denial_risk;
+      riskCount++;
+    }
+  }
+  return { byCategory, avgRisk: riskCount ? riskSum / riskCount : null };
+}
+function computePayerTimeliness(payments) {
+  const byPayer = {};
+  payments.forEach((p) => {
+    if (p.daysToPay === null) return;
+    const payer = (p.payer || 'Unknown').trim() || 'Unknown';
+    if (!byPayer[payer]) byPayer[payer] = [];
+    byPayer[payer].push(p.daysToPay);
+  });
+  const timeliness = {};
+  Object.keys(byPayer).forEach((payer) => {
+    const arr = byPayer[payer];
+    const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+    arr.sort((a, b) => a - b);
+    const mid = Math.floor(arr.length / 2);
+    const median = arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+    timeliness[payer] = { avgDays: avg, medianDays: median };
+  });
+  return timeliness;
+}
+function computeServiceLineAnalytics(payments, cases) {
+  const byCode = {};
+  payments.forEach((p) => {
+    const code = p.claimNumber || 'Unknown';
+    byCode[code] = byCode[code] || { payments: [], cases: [] };
+    byCode[code].payments.push(p);
+  });
+  cases.forEach((c) => {
+    const codes = c.ai && c.ai.structured_data && c.ai.structured_data.codes ? c.ai.structured_data.codes : [];
+    codes.forEach((code) => {
+      byCode[code] = byCode[code] || { payments: [], cases: [] };
+      byCode[code].cases.push(c);
+    });
+  });
+  const analytics = {};
+  Object.keys(byCode).forEach((code) => {
+    const pList = byCode[code].payments;
+    const cList = byCode[code].cases;
+    const totalPaid = pList.reduce((a, p) => a + p.amountPaid, 0);
+    const expected = pList.reduce((a, p) => a + (p.expectedAmount || 0), 0);
+    const variance = expected ? expected - totalPaid : null;
+    const denialRate = cList.length ? cList.filter((c) => c.status === 'DENIED').length / cList.length : 0;
+    analytics[code] = {
+      totalPaid,
+      expected,
+      variance,
+      denialRate,
+      countPayments: pList.length,
+      countCases: cList.length,
+    };
+  });
+  return analytics;
+}
+
+// ===== Admin Attention Helper =====
+function buildAdminAttentionSet(orgs) {
+  const flagged = new Set();
+  const now = Date.now();
+  const allUsage = readJSON(FILES.usage, []);
+  const cases = readJSON(FILES.cases, []);
+  const payments = readJSON(FILES.payments, []);
+  orgs.forEach((org) => {
+    const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
+    const limits = getLimitProfile(org.org_id);
+    const usage = allUsage.find((u) => u.org_id === org.org_id) || getUsage(org.org_id);
+    let casePct = 0;
+    if (limits.mode === 'pilot') {
+      casePct = (usage.pilot_cases_used / PILOT_LIMITS.max_cases_total) * 100;
+    } else {
+      casePct = (usage.monthly_case_credits_used / limits.case_credits_per_month) * 100;
+    }
+    let last = 0;
+    cases.forEach((c) => {
+      if (c.org_id === org.org_id) last = Math.max(last, new Date(c.created_at).getTime());
+    });
+    payments.forEach((p) => {
+      if (p.org_id === org.org_id) last = Math.max(last, new Date(p.created_at).getTime());
+    });
+    const pilotEnd = pilot ? new Date(pilot.ends_at).getTime() : 0;
+    const pilotEndingSoon = pilotEnd && pilotEnd - now <= 7 * 24 * 60 * 60 * 1000;
+    const nearLimit = casePct >= 80;
+    const noRecentActivity = !last || now - last >= 14 * 24 * 60 * 60 * 1000;
+    const noPayments = payments.filter((p) => p.org_id === org.org_id).length === 0;
+    if (pilotEndingSoon || nearLimit || noRecentActivity || noPayments) {
+      flagged.add(org.org_id);
+    }
+  });
+  return flagged;
+}
+
+// ===== Session Models helpers (getOrg, getUserByEmail etc.) =====
+function getOrg(org_id) {
+  return readJSON(FILES.orgs, []).find((o) => o.org_id === org_id);
+}
+function getUserByEmail(email) {
+  const e = (email || '').toLowerCase();
+  return readJSON(FILES.users, []).find((u) => (u.email || '').toLowerCase() === e);
+}
+function getUserById(user_id) {
+  return readJSON(FILES.users, []).find((u) => u.user_id === user_id);
+}
+function getPilot(org_id) {
+  return readJSON(FILES.pilots, []).find((p) => p.org_id === org_id);
+}
+function ensurePilot(org_id) {
+  const pilots = readJSON(FILES.pilots, []);
+  let p = pilots.find((x) => x.org_id === org_id);
+  if (!p) {
+    const started = nowISO();
+    const ends = addDaysISO(started, PILOT_DAYS);
+    p = { pilot_id: uuid(), org_id, status: 'active', started_at: started, ends_at: ends, retention_delete_at: null };
+    pilots.push(p);
+    writeJSON(FILES.pilots, pilots);
+  }
+  return p;
 }
 function getSub(org_id) {
-return readJSON(FILES.subscriptions, []).find(s => s.org_id === org_id);
+  return readJSON(FILES.subscriptions, []).find((s) => s.org_id === org_id);
 }
 function currentMonthKey() {
-const d = new Date();
-return ${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")};
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 function getUsage(org_id) {
-const usage = readJSON(FILES.usage, []);
-let u = usage.find(x => x.org_id === org_id);
-if (!u) {
-u={
-org_id,
-pilot_cases_used: 0,
-pilot_payment_rows_used: 0,
-month_key: currentMonthKey(),
-monthly_case_credits_used: 0,
-monthly_case_overage_count: 0,
-monthly_payment_rows_used: 0,
-monthly_payment_credits_used: 0,
-ai_job_timestamps: []
-};
-usage.push(u);
-writeJSON(FILES.usage, usage);
-}
-if (u.month_key !== currentMonthKey()) {
-u.month_key = currentMonthKey();
-u.monthly_case_credits_used = 0;
-u.monthly_case_overage_count = 0;
-u.monthly_payment_rows_used = 0;
-u.monthly_payment_credits_used = 0;
-writeJSON(FILES.usage, usage);
-}
-return u;
+  const usage = readJSON(FILES.usage, []);
+  let u = usage.find((x) => x.org_id === org_id);
+  if (!u) {
+    u = {
+      org_id,
+      pilot_cases_used: 0,
+      pilot_payment_rows_used: 0,
+      month_key: currentMonthKey(),
+      monthly_case_credits_used: 0,
+      monthly_case_overage_count: 0,
+      monthly_payment_rows_used: 0,
+      monthly_payment_credits_used: 0,
+      ai_job_timestamps: [],
+    };
+    usage.push(u);
+    writeJSON(FILES.usage, usage);
+  }
+  if (u.month_key !== currentMonthKey()) {
+    u.month_key = currentMonthKey();
+    u.monthly_case_credits_used = 0;
+    u.monthly_case_overage_count = 0;
+    u.monthly_payment_rows_used = 0;
+    u.monthly_payment_credits_used = 0;
+    writeJSON(FILES.usage, usage);
+  }
+  return u;
 }
 function saveUsage(u) {
-const usage = readJSON(FILES.usage, []);
-
-const idx = usage.findIndex(x => x.org_id === u.org_id);
-if (idx >= 0) usage[idx] = u; else usage.push(u);
-writeJSON(FILES.usage, usage);
+  const usage = readJSON(FILES.usage, []);
+  const idx = usage.findIndex((x) => x.org_id === u.org_id);
+  if (idx >= 0) usage[idx] = u;
+  else usage.push(u);
+  writeJSON(FILES.usage, usage);
 }
 function auditLog(entry) {
-const audit = readJSON(FILES.audit, []);
-audit.push({ ...entry, at: nowISO() });
-writeJSON(FILES.audit, audit);
+  const audit = readJSON(FILES.audit, []);
+  audit.push({ ...entry, at: nowISO() });
+  writeJSON(FILES.audit, audit);
 }
+
 // ===== Account status =====
 function getOrgStatus(org_id) {
-const org = getOrg(org_id);
-// Avoid optional chaining; if the org is null/undefined, default to "active".
-return (org && org.account_status) ? org.account_status : "active";
+  const org = getOrg(org_id);
+  return org?.account_status || 'active';
 }
-function setOrgStatus(org_id, status, reason="") {
-const orgs = readJSON(FILES.orgs, []);
-const idx = orgs.findIndex(o => o.org_id === org_id);
-if (idx < 0) return;
-orgs[idx].account_status = status; // active|suspended|terminated
-orgs[idx].status_reason = reason || null;
-orgs[idx].status_updated_at = nowISO();
-writeJSON(FILES.orgs, orgs);
+function setOrgStatus(org_id, status, reason = '') {
+  const orgs = readJSON(FILES.orgs, []);
+  const idx = orgs.findIndex((o) => o.org_id === org_id);
+  if (idx < 0) return;
+  orgs[idx].account_status = status;
+  orgs[idx].status_reason = reason || null;
+  orgs[idx].status_updated_at = nowISO();
+  writeJSON(FILES.orgs, orgs);
 }
-// ===== Pilot/sub access =====
-function markPilotComplete(org_id) {
-const pilots = readJSON(FILES.pilots, []);
-const idx = pilots.findIndex(p => p.org_id === org_id);
-if (idx < 0) return;
-pilots[idx].status = "complete";
-pilots[idx].retention_delete_at = addDaysISO(pilots[idx].ends_at,
-RETENTION_DAYS_AFTER_PILOT);
-writeJSON(FILES.pilots, pilots);
-}
-function isAccessEnabled(org_id) {
-const status = getOrgStatus(org_id);
-if (status === "terminated" || status === "suspended") return false;
-const sub = getSub(org_id);
-if (sub && sub.status === "active") return true;
-const pilot = getPilot(org_id) || ensurePilot(org_id);
 
-if (new Date(pilot.ends_at).getTime() < Date.now() && pilot.status !== "complete") {
-markPilotComplete(org_id);
-}
-const p2 = getPilot(org_id);
-return p2 && p2.status === "active";
-}
-function cleanupIfExpired(org_id) {
-const sub = getSub(org_id);
-if (sub && sub.status === "active") return;
-const pilot = getPilot(org_id);
-if (!pilot) return;
-if (pilot.status !== "complete") {
-if (new Date(pilot.ends_at).getTime() < Date.now()) markPilotComplete(org_id);
-return;
-}
-if (!pilot.retention_delete_at) return;
-const delAt = new Date(pilot.retention_delete_at).getTime();
-if (Date.now() < delAt) return;
-// Delete org-scoped files and data
-const cases = readJSON(FILES.cases, []).filter(c => c.org_id !== org_id);
-const payments = readJSON(FILES.payments, []).filter(p => p.org_id !== org_id);
-const expectations = readJSON(FILES.expectations, []).filter(e => e.org_id !== org_id);
-const flags = readJSON(FILES.flags, []).filter(f => f.org_id !== org_id);
-writeJSON(FILES.cases, cases);
-writeJSON(FILES.payments, payments);
-writeJSON(FILES.expectations, expectations);
-writeJSON(FILES.flags, flags);
-const orgUploads = path.join(UPLOADS_DIR, org_id);
-if (fs.existsSync(orgUploads)) fs.rmSync(orgUploads, { recursive:true, force:true });
-}
 // ===== Limits =====
 function getLimitProfile(org_id) {
-const sub = getSub(org_id);
-if (sub && sub.status === "active") {
-return {
-mode: "monthly",
-
-case_credits_per_month: sub.case_credits_per_month ||
-MONTHLY_DEFAULTS.case_credits_per_month,
-payment_tracking_credits_per_month: sub.payment_tracking_credits_per_month ||
-MONTHLY_DEFAULTS.payment_tracking_credits_per_month,
-max_files_per_case: MONTHLY_DEFAULTS.max_files_per_case,
-max_file_size_mb: MONTHLY_DEFAULTS.max_file_size_mb,
-max_ai_jobs_per_hour: MONTHLY_DEFAULTS.max_ai_jobs_per_hour,
-max_concurrent_analyzing: MONTHLY_DEFAULTS.max_concurrent_analyzing,
-overage_price_per_case: MONTHLY_DEFAULTS.overage_price_per_case,
-payment_records_per_credit: MONTHLY_DEFAULTS.payment_records_per_credit,
-};
-}
-return { mode:"pilot", ...PILOT_LIMITS };
+  const sub = getSub(org_id);
+  if (sub && sub.status === 'active') {
+    return {
+      mode: 'monthly',
+      case_credits_per_month: sub.case_credits_per_month || MONTHLY_DEFAULTS.case_credits_per_month,
+      payment_tracking_credits_per_month: sub.payment_tracking_credits_per_month || MONTHLY_DEFAULTS.payment_tracking_credits_per_month,
+      max_files_per_case: MONTHLY_DEFAULTS.max_files_per_case,
+      max_file_size_mb: MONTHLY_DEFAULTS.max_file_size_mb,
+      max_ai_jobs_per_hour: MONTHLY_DEFAULTS.max_ai_jobs_per_hour,
+      max_concurrent_analyzing: MONTHLY_DEFAULTS.max_concurrent_analyzing,
+      overage_price_per_case: MONTHLY_DEFAULTS.overage_price_per_case,
+      payment_records_per_credit: MONTHLY_DEFAULTS.payment_records_per_credit,
+    };
+  }
+  return { mode: 'pilot', ...PILOT_LIMITS };
 }
 function countOrgCases(org_id) {
-return readJSON(FILES.cases, []).filter(c => c.org_id === org_id).length;
+  return readJSON(FILES.cases, []).filter((c) => c.org_id === org_id).length;
 }
 function countOrgAnalyzing(org_id) {
-return readJSON(FILES.cases, []).filter(c => c.org_id === org_id && c.status ===
-"ANALYZING").length;
+  return readJSON(FILES.cases, []).filter((c) => c.org_id === org_id && c.status === 'ANALYZING').length;
 }
 function canStartAI(org_id) {
-const limits = getLimitProfile(org_id);
-const usage = getUsage(org_id);
-const analyzing = countOrgAnalyzing(org_id);
-const cap = limits.max_concurrent_analyzing;
-if (analyzing >= cap) return { ok:false, reason:Concurrent processing limit reached (${cap}). Try again shortly. };
-const perHour = limits.max_ai_jobs_per_hour;
-const cutoff = Date.now() - 60601000;
-usage.ai_job_timestamps = (usage.ai_job_timestamps || []).filter(ts => ts > cutoff);
-if (usage.ai_job_timestamps.length >= perHour) {
-saveUsage(usage);
-return { ok:false, reason:AI job rate limit reached (${perHour}/hour). Try again shortly. };
-}
-return { ok:true };
+  const limits = getLimitProfile(org_id);
+  const usage = getUsage(org_id);
+  const analyzing = countOrgAnalyzing(org_id);
+  const cap = limits.max_concurrent_analyzing;
+  if (analyzing >= cap) return { ok: false, reason: `Concurrent processing limit reached (${cap}). Try again shortly.` };
+  const perHour = limits.max_ai_jobs_per_hour;
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  usage.ai_job_timestamps = (usage.ai_job_timestamps || []).filter((ts) => ts > cutoff);
+  if (usage.ai_job_timestamps.length >= perHour) {
+    saveUsage(usage);
+    return { ok: false, reason: `AI job rate limit reached (${perHour}/hour). Try again shortly.` };
+  }
+  return { ok: true };
 }
 function recordAIJob(org_id) {
-const usage = getUsage(org_id);
-
-const cutoff = Date.now() - 60601000;
-usage.ai_job_timestamps = (usage.ai_job_timestamps || []).filter(ts => ts > cutoff);
-usage.ai_job_timestamps.push(Date.now());
-saveUsage(usage);
+  const usage = getUsage(org_id);
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  usage.ai_job_timestamps = (usage.ai_job_timestamps || []).filter((ts) => ts > cutoff);
+  usage.ai_job_timestamps.push(Date.now());
+  saveUsage(usage);
 }
 function pilotCanCreateCase(org_id) {
-const limits = getLimitProfile(org_id);
-if (limits.mode !== "pilot") return { ok:true };
-const total = countOrgCases(org_id);
-if (total >= limits.max_cases_total) return { ok:false, reason:Pilot case limit reached (${limits.max_cases_total}). Continue monthly access to review more. };
-return { ok:true };
+  const limits = getLimitProfile(org_id);
+  if (limits.mode !== 'pilot') return { ok: true };
+  const total = countOrgCases(org_id);
+  if (total >= limits.max_cases_total) return { ok: false, reason: `Pilot case limit reached (${limits.max_cases_total}). Continue monthly access to review more.` };
+  return { ok: true };
 }
 function pilotConsumeCase(org_id) {
-const usage = getUsage(org_id);
-usage.pilot_cases_used += 1;
-saveUsage(usage);
+  const usage = getUsage(org_id);
+  usage.pilot_cases_used += 1;
+  saveUsage(usage);
 }
 function monthlyConsumeCaseCredit(org_id) {
-const limits = getLimitProfile(org_id);
-if (limits.mode !== "monthly") return { ok:true, overage:false };
-const usage = getUsage(org_id);
-usage.monthly_case_credits_used += 1;
-let overage = false;
-if (usage.monthly_case_credits_used > limits.case_credits_per_month) {
-overage = true;
-usage.monthly_case_overage_count += 1;
-}
-saveUsage(usage);
-return { ok:true, overage };
+  const limits = getLimitProfile(org_id);
+  if (limits.mode !== 'monthly') return { ok: true, overage: false };
+  const usage = getUsage(org_id);
+  usage.monthly_case_credits_used += 1;
+  let overage = false;
+  if (usage.monthly_case_credits_used > limits.case_credits_per_month) {
+    overage = true;
+    usage.monthly_case_overage_count += 1;
+  }
+  saveUsage(usage);
+  return { ok: true, overage };
 }
 function paymentRowsAllowance(org_id) {
-const limits = getLimitProfile(org_id);
-const usage = getUsage(org_id);
-if (limits.mode === "pilot") {
-const remaining = Math.max(0, PILOT_LIMITS.payment_records_included (usage.pilot_payment_rows_used || 0));
-return { remaining, mode:"pilot" };
-}
-const allowedRows = (limits.payment_tracking_credits_per_month || 0) *
-PAYMENT_RECORDS_PER_CREDIT;
-
-const used = usage.monthly_payment_rows_used || 0;
-return { remaining: Math.max(0, allowedRows - used), mode:"monthly" };
+  const limits = getLimitProfile(org_id);
+  const usage = getUsage(org_id);
+  if (limits.mode === 'pilot') {
+    const remaining = Math.max(0, PILOT_LIMITS.payment_records_included - (usage.pilot_payment_rows_used || 0));
+    return { remaining, mode: 'pilot' };
+  }
+  const allowedRows = (limits.payment_tracking_credits_per_month || 0) * PAYMENT_RECORDS_PER_CREDIT;
+  const used = usage.monthly_payment_rows_used || 0;
+  return { remaining: Math.max(0, allowedRows - used), mode: 'monthly' };
 }
 function consumePaymentRows(org_id, rowCount) {
-const limits = getLimitProfile(org_id);
-const usage = getUsage(org_id);
-if (limits.mode === "pilot") {
-usage.pilot_payment_rows_used = (usage.pilot_payment_rows_used || 0) + rowCount;
-saveUsage(usage);
-return;
+  const limits = getLimitProfile(org_id);
+  const usage = getUsage(org_id);
+  if (limits.mode === 'pilot') {
+    usage.pilot_payment_rows_used = (usage.pilot_payment_rows_used || 0) + rowCount;
+    saveUsage(usage);
+    return;
+  }
+  usage.monthly_payment_rows_used = (usage.monthly_payment_rows_used || 0) + rowCount;
+  usage.monthly_payment_credits_used = (usage.monthly_payment_credits_used || 0) + Math.ceil(rowCount / PAYMENT_RECORDS_PER_CREDIT);
+  saveUsage(usage);
 }
-usage.monthly_payment_rows_used = (usage.monthly_payment_rows_used || 0) + rowCount;
-usage.monthly_payment_credits_used = (usage.monthly_payment_credits_used || 0) +
-Math.ceil(rowCount / PAYMENT_RECORDS_PER_CREDIT);
-saveUsage(usage);
-}
+
 // ===== Multipart Parser =====
 async function parseMultipart(req, boundary) {
-return new Promise((resolve, reject) => {
-const chunks = [];
-req.on("data", c => chunks.push(c));
-req.on("end", () => {
-const buffer = Buffer.concat(chunks);
-const boundaryBuf = Buffer.from(--${boundary});
-const parts = [];
-let start = buffer.indexOf(boundaryBuf);
-while (start !== -1) {
-const end = buffer.indexOf(boundaryBuf, start + boundaryBuf.length);
-if (end === -1) break;
-const part = buffer.slice(start + boundaryBuf.length, end);
-if (part.length < 4) break;
-parts.push(part);
-start = end;
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const boundaryBuf = Buffer.from(`--${boundary}`);
+      const parts = [];
+      let start = buffer.indexOf(boundaryBuf);
+      while (start !== -1) {
+        const end = buffer.indexOf(boundaryBuf, start + boundaryBuf.length);
+        if (end === -1) break;
+        const part = buffer.slice(start + boundaryBuf.length, end);
+        if (part.length < 4) break;
+        parts.push(part);
+        start = end;
+      }
+      const files = [];
+      const fields = {};
+      for (const raw of parts) {
+        const part = raw.slice(2);
+        const headerEnd = part.indexOf(Buffer.from('\r\n\r\n'));
+        if (headerEnd === -1) continue;
+        const headerText = part.slice(0, headerEnd).toString('utf8');
+        const content = part.slice(headerEnd + 4, part.length - 2);
+        const nameMatch = /name="([^\"]+)"/i.exec(headerText);
+        if (!nameMatch) continue;
+        const fieldName = nameMatch[1];
+        const fileMatch = /filename="([^\"]*)"/i.exec(headerText);
+        if (fileMatch && fileMatch[1]) {
+          const filename = fileMatch[1];
+          const mimeMatch = /Content-Type:\s*([^\r\n]+)/i.exec(headerText);
+          const mime = mimeMatch ? mimeMatch[1].trim() : 'application/octet-stream';
+          files.push({ fieldName, filename, mime, buffer: content });
+        } else {
+          fields[fieldName] = content.toString('utf8');
+        }
+      }
+      resolve({ files, fields });
+    });
+    req.on('error', reject);
+  });
 }
-const files = [];
-const fields = {};
-for (const raw of parts) {
-const part = raw.slice(2);
 
-const headerEnd = part.indexOf(Buffer.from("\r\n\r\n"));
-if (headerEnd === -1) continue;
-const headerText = part.slice(0, headerEnd).toString("utf8");
-const content = part.slice(headerEnd + 4, part.length - 2);
-const nameMatch = /name="([^"]+)"/.exec(headerText);
-if (!nameMatch) continue;
-const fieldName = nameMatch[1];
-const fileMatch = /filename="([^"])"/.exec(headerText);
-if (fileMatch && fileMatch[1]) {
-const filename = fileMatch[1];
-const mimeMatch = /Content-Type:\s([^\r\n]+)/.exec(headerText);
-const mime = mimeMatch ? mimeMatch[1].trim() : "application/octet-stream";
-files.push({ fieldName, filename, mime, buffer: content });
-} else {
-fields[fieldName] = content.toString("utf8");
-}
-}
-resolve({ files, fields });
-});
-req.on("error", reject);
-});
-}
-// ===== CSV parser =====
-function parseCSV(text) {
-const lines = text.split(/\r?\n/).filter(l => l.trim().length);
-if (!lines.length) return { headers: [], rows: [] };
-function splitLine(line) {
-const out = [];
-let cur = "";
-let inQ = false;
-for (let i=0;i<line.length;i++){
-const ch = line[i];
-if (ch === '"') {
-if (inQ && line[i+1] === '"') { cur += '"'; i++; }
-else inQ = !inQ;
-} else if (ch === "," && !inQ) {
-out.push(cur); cur="";
-} else {
+// ===== CSV Parser ===== (already defined parseCSV) =====
 
-cur += ch;
-}
-}
-out.push(cur);
-return out.map(s => s.trim());
-}
-const headers = splitLine(lines[0]).map(h => h.replace(/^"|"$/g,"").trim());
-const rows = [];
-for (let i=1;i<lines.length;i++){
-const cols = splitLine(lines[i]).map(c => c.replace(/^"|"$/g,""));
-const obj = {};
-headers.forEach((h, idx) => obj[h] = cols[idx] || "");
-rows.push(obj);
-}
-return { headers, rows };
-}
-function pickField(row, candidates) {
-const keys = Object.keys(row || {});
-for (const c of candidates) {
-const k = keys.find(x => x.toLowerCase().includes(c));
-if (k) return row[k];
-}
-return "";
-}
-// ===== AI stub =====
-function aiGenerate(orgName) {
-return {
-// Single-line summary strings; join the multi-line descriptions into one line
-denial_summary: "Based on the uploaded documents, this case includes denial/payment language that benefits from structured review and consistent appeal framing.",
-appeal_considerations: "This draft is prepared from uploaded materials only. Validate documentation supports medical necessity and payer requirements before use.",
-draft_text: To Whom It May Concern, We are writing to appeal the denial associated with this claim. Based on the documentation provided, the services rendered were medically necessary and appropriately supported. Please reconsider the determination after reviewing the attached materials. Sincerely, ${orgName || "[Organization Billing Team]"} ,
-denial_reason_category: "Documentation missing",
-missing_info: []
-};
-}
-function maybeCompleteAI(caseObj, orgName) {
-if (caseObj.status !== "ANALYZING") return caseObj;
-const started = new Date(caseObj.ai_started_at).getTime();
-if (!started) return caseObj;
-if (Date.now() - started < AI_JOB_DELAY_MS) return caseObj;
-const out = aiGenerate(orgName);
-caseObj.ai.denial_summary = out.denial_summary;
-caseObj.ai.appeal_considerations = out.appeal_considerations;
-caseObj.ai.draft_text = out.draft_text;
-caseObj.ai.denial_reason_category = out.denial_reason_category;
-caseObj.ai.missing_info = out.missing_info;
-caseObj.ai.time_to_draft_seconds = Math.max(1, Math.floor((Date.now()-started)/1000));
-caseObj.status = "DRAFT_READY";
-return caseObj;
-}
-// ===== Analytics =====
-function computeAnalytics(org_id) {
-const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
-const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
-const totalCases = cases.length;
-// Count drafts by checking for DRAFT_READY status or the presence of ai.draft_text without optional chaining.
-const drafts = cases.filter(c => c.status === "DRAFT_READY" || (c.ai && c.ai.draft_text)).length;
-// Compute average draft seconds without using optional chaining. Extract the value and filter numeric > 0 values.
-const avgDraftSeconds = (() => {
-const xs = cases
-.map(c => (c.ai && typeof c.ai.time_to_draft_seconds === "number" ? c.ai.time_to_draft_seconds : null))
-.filter(v => typeof v === "number" && v > 0);
-if (!xs.length) return null;
-return Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
-})();
-const denialReasons = {};
-for (const c of cases) {
-// Avoid optional chaining; if c.ai or denial_reason_category is missing, use "Unknown".
-const reason = (c.ai && c.ai.denial_reason_category) ? c.ai.denial_reason_category : "Unknown";
-denialReasons[reason] = (denialReasons[reason] || 0) + 1;
-}
-const payByPayer = {};
-
-for (const p of payments) {
-const payer = (p.payer || "Unknown").trim() || "Unknown";
-payByPayer[payer] = payByPayer[payer] || { count: 0, total: 0 };
-payByPayer[payer].count += 1;
-payByPayer[payer].total += Number(p.amount_paid || 0);
-}
-return { totalCases, drafts, avgDraftSeconds, denialReasons, payByPayer };
-}
-// ===== Admin Attention Helper =====
-/**
-
-Compute a set of organisation IDs requiring admin attention.
-
-Rules:
-
-Pilot ending within 7 days
-
-Case usage ≥ 80%
-
-No activity for 14+ days
-
-No payment uploads across platform
-*/
-function buildAdminAttentionSet(orgs) {
-const flagged = new Set();
-const now = Date.now();
-const allUsage = readJSON(FILES.usage, []);
-const cases = readJSON(FILES.cases, []);
-const payments = readJSON(FILES.payments, []);
-orgs.forEach(org => {
-const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
-const limits = getLimitProfile(org.org_id);
-const usage = allUsage.find(u => u.org_id === org.org_id) || getUsage(org.org_id);
-let casePct = 0;
-if (limits.mode === 'pilot') {
-casePct = (usage.pilot_cases_used / PILOT_LIMITS.max_cases_total) * 100;
-} else {
-casePct = (usage.monthly_case_credits_used / limits.case_credits_per_month) * 100;
-}
-// last activity (latest case or payment)
-let last = 0;
-cases.forEach(c => { if (c.org_id === org.org_id) last = Math.max(last, new
-Date(c.created_at).getTime()); });
-payments.forEach(p => { if (p.org_id === org.org_id) last = Math.max(last, new
-Date(p.created_at).getTime()); });
-const pilotEnd = pilot ? new Date(pilot.ends_at).getTime() : 0;
-const pilotEndingSoon = pilotEnd && pilotEnd - now <= 7 * 24 * 60 * 60 * 1000;
-const nearLimit = casePct >= 80;
-
-const noRecentActivity = !last || now - last >= 14 * 24 * 60 * 60 * 1000;
-const noPayments = payments.filter(p => p.org_id === org.org_id).length === 0;
-if (pilotEndingSoon || nearLimit || noRecentActivity || noPayments) {
-flagged.add(org.org_id);
-}
-});
-return flagged;
-}
-// ===== ROUTER =====
+// ===== Router =====
 const server = http.createServer(async (req, res) => {
-const parsed = url.parse(req.url, true);
-const pathname = parsed.pathname;
-const method = req.method;
-// health
-if (method === "GET" && pathname === "/health") return send(res, 200, "ok", "text/plain");
-// auth
-const sess = getAuth(req);
-if (sess && sess.org_id) cleanupIfExpired(sess.org_id);
-// ---------- PUBLIC: Admin login ---------
-if (method === "GET" && pathname === "/admin/login") {
-const html = page("Owner Login", `
-
-<h2>Owner Login</h2> <p class="muted">This area is for the system owner only.</p> <form method="POST" action="/admin/login"> <label>Email</label> <input name="email" type="email" required /> <label>Password</label> <input name="password" type="password" required /> <div class="btnRow"> <button class="btn" type="submit">Sign In</button> <a class="btn secondary" href="/login">Back</a> </div> </form> `, navPublic()); return send(res, 200, html); } if (method === "POST" && pathname === "/admin/login") { const body = await parseBody(req); const params = new URLSearchParams(body);
-
-const email = (params.get("email") || "").trim().toLowerCase();
-const pass = params.get("password") || "";
-const aHash = adminHash();
-if (!ADMIN_EMAIL || !aHash) {
-const html = page("Owner Login", `
-
-<h2>Owner Login</h2> <p class="error">Admin mode not configured. Set ADMIN_EMAIL and ADMIN_PASSWORD_PLAIN (or ADMIN_PASSWORD_HASH) in Railway.</p> <div class="btnRow"><a class="btn secondary" href="/admin/login">Back</a></div> `, navPublic()); return send(res, 403, html); } if (email !== ADMIN_EMAIL || !bcrypt.compareSync(pass, aHash)) { const html = page("Owner Login", ` <h2>Owner Login</h2> <p class="error">Invalid owner credentials.</p> <div class="btnRow"><a class="btn secondary" href="/admin/login">Try again</a></div> `, navPublic()); return send(res, 401, html); } const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000; const token = makeSession({ role:"admin", exp }); setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400); return redirect(res, "/admin/dashboard"); } // ---------- PUBLIC: Signup/Login/Reset --------- if (method === "GET" && pathname === "/signup") { const html = page("Create Account", ` <h2>Create Account</h2> <p class="muted">Secure, organization-based access to AI-assisted claim review and analytics.</p> <form method="POST" action="/signup"> <label>Work Email</label> <input name="email" type="email" required /> <label>Password (8+ characters)</label> <input name="password" type="password" required /> <label>Confirm Password</label> <input name="password2" type="password" required /> <label>Organization Name</label> <input name="org_name" type="text" required />
-
-<label style="display:flex;gap:10px;align-items:flex-start;margin-top:12px;">
-<input type="checkbox" name="ack" required style="width:auto;margin:0;margin-top:2px;">
-<span class="muted">I understand this system does not access EMRs or payer portals
-and does not submit appeals automatically.</span>
-</label>
-
-<div class="btnRow"> <button class="btn" type="submit">Create Account</button> <a class="btn secondary" href="/login">Sign In</a> </div> </form> `, navPublic()); return send(res, 200, html); } if (method === "POST" && pathname === "/signup") { const body = await parseBody(req); const params = new URLSearchParams(body); const email = (params.get("email") || "").trim().toLowerCase(); const p1 = params.get("password") || ""; const p2 = params.get("password2") || ""; const orgName = (params.get("org_name") || "").trim(); const ack = params.get("ack"); if (!email || p1.length < 8 || p1 !== p2 || !orgName || !ack) { const html = page("Create Account", ` <h2>Create Account</h2> <p class="error">Please complete all fields, confirm password, and accept the acknowledgement.</p> <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div> `, navPublic()); return send(res, 400, html); } const users = readJSON(FILES.users, []); if (users.find(u => (u.email || "").toLowerCase() === email)) { const html = page("Create Account", ` <h2>Create Account</h2> <p class="error">An account with this email already exists.</p> <div class="btnRow"><a class="btn" href="/login">Sign In</a></div> `, navPublic()); return send(res, 400, html); }
-
-const orgs = readJSON(FILES.orgs, []);
-const org_id = uuid();
-orgs.push({ org_id, org_name: orgName, created_at: nowISO(), account_status:"active" });
-writeJSON(FILES.orgs, orgs);
-users.push({
-user_id: uuid(),
-org_id,
-email,
-password_hash: bcrypt.hashSync(p1, 10),
-created_at: nowISO(),
-last_login_at: nowISO(),
-});
-writeJSON(FILES.users, users);
-ensurePilot(org_id);
-getUsage(org_id);
-const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000;
-const token = makeSession({ role:"user", user_id: users[users.length-1].user_id, org_id, exp
-});
-setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400);
-return redirect(res, "/lock");
-}
-if (method === "GET" && pathname === "/login") {
-const html = page("Login", `
-
-<h2>Sign In</h2> <p class="muted">Access your organization’s claim review and analytics workspace.</p> <form method="POST" action="/login"> <label>Email</label> <input name="email" type="email" required /> <label>Password</label> <input name="password" type="password" required /> <div class="btnRow"> <button class="btn" type="submit">Sign In</button> <a class="btn secondary" href="/signup">Create Account</a> </div> </form> <div class="btnRow"> <a class="btn secondary" href="/forgot-password">Forgot password?</a> </div>
-
-, navPublic()); return send(res, 200, html); } if (method === "POST" && pathname === "/login") { const body = await parseBody(req); const params = new URLSearchParams(body); const email = (params.get("email") || "").trim().toLowerCase(); const pass = params.get("password") || ""; const user = getUserByEmail(email); if (!user || !bcrypt.compareSync(pass, user.password_hash)) { const html = page("Login",
-
-<h2>Sign In</h2> <p class="error">The email or password you entered is incorrect.</p> <div class="btnRow"><a class="btn secondary" href="/login">Try again</a></div> `, navPublic()); return send(res, 401, html); } const org = getOrg(user.org_id); if (!org) return redirect(res, "/login"); if (org.account_status === "terminated") return redirect(res, "/terminated"); if (org.account_status === "suspended") return redirect(res, "/suspended"); ensurePilot(user.org_id); const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000; const token = makeSession({ role:"user", user_id:user.user_id, org_id:user.org_id, exp }); setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400); return redirect(res, "/lock"); } if (method === "GET" && pathname === "/forgot-password") { const html = page("Reset Password", ` <h2>Reset Password</h2> <p class="muted">Enter your email to generate a reset link (expires in 20 minutes). For v1, the link is shown on-screen.</p> <form method="POST" action="/forgot-password"> <label>Email</label> <input name="email" type="email" required /> <div class="btnRow"> <button class="btn" type="submit">Generate Reset Link</button> <a class="btn secondary" href="/login">Back</a>
-
-</div>
-
-</form> `, navPublic()); return send(res, 200, html); } if (method === "POST" && pathname === "/forgot-password") { const body = await parseBody(req); const params = new URLSearchParams(body); const email = (params.get("email") || "").trim().toLowerCase(); const token = uuid(); const expiresAt = Date.now() + 20*60*1000; const users = readJSON(FILES.users, []); const idx = users.findIndex(u => (u.email||"").toLowerCase() === email); if (idx >= 0) { users[idx].reset_token = token; users[idx].reset_expires_at = expiresAt; writeJSON(FILES.users, users); } const resetPath = `/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`; const resetLink = APP_BASE_URL ? `${APP_BASE_URL}${resetPath}` : resetPath; const html = page("Reset Link", ` <h2>Reset Link Generated</h2> <p class="muted">For v1, the reset link is displayed here.</p> <div class="btnRow"> <a class="btn" href="${safeStr(resetLink)}">Reset Password Now</a> <a class="btn secondary" href="/login">Back to login</a> </div> `, navPublic()); return send(res, 200, html); } if (method === "GET" && pathname === "/reset-password") { const token = parsed.query.token || ""; const email = (parsed.query.email || "").toLowerCase(); const html = page("Set New Password", ` <h2>Set a New Password</h2> <form method="POST" action="/reset-password"> <input type="hidden" name="email" value="${safeStr(email)}"/>
-
-<input type="hidden" name="token" value="${safeStr(token)}"/>
-<label>New Password (8+ characters)</label>
-<input name="password" type="password" required />
-<label>Confirm New Password</label>
-<input name="password2" type="password" required />
-
-<div class="btnRow"> <button class="btn" type="submit">Update Password</button> <a class="btn secondary" href="/login">Cancel</a> </div> </form> `, navPublic()); return send(res, 200, html); } if (method === "POST" && pathname === "/reset-password") { const body = await parseBody(req); const params = new URLSearchParams(body); const email = (params.get("email") || "").trim().toLowerCase(); const token = params.get("token") || ""; const p1 = params.get("password") || ""; const p2 = params.get("password2") || ""; if (p1.length < 8 || p1 !== p2) { const html = page("Set New Password", ` <h2>Set a New Password</h2> <p class="error">Passwords must match and be at least 8 characters.</p> <div class="btnRow"><a class="btn secondary" href="/forgot-password">Try again</a></div> `, navPublic()); return send(res, 400, html); } const users = readJSON(FILES.users, []); const idx = users.findIndex(u => (u.email||"").toLowerCase() === email); if (idx < 0) return redirect(res, "/login"); const u = users[idx]; if (!u.reset_token || u.reset_token !== token || !u.reset_expires_at || Date.now() > u.reset_expires_at) { const html = page("Reset Error", ` <h2>Reset Link Invalid</h2> <p class="error">This reset link is expired or invalid.</p> <div class="btnRow"><a class="btn secondary" href="/forgot-password">Generate new link</a></div>
-
-, navPublic()); return send(res, 400, html); } users[idx].password_hash = bcrypt.hashSync(p1, 10); delete users[idx].reset_token; delete users[idx].reset_expires_at; writeJSON(FILES.users, users); return redirect(res, "/login"); } if (method === "GET" && pathname === "/logout") { clearCookie(res, "tjhp_session"); return redirect(res, "/login"); } if (method === "GET" && pathname === "/suspended") { return send(res, 200, page("Suspended",
-
-<h2>Account Suspended</h2> <p>Your organization’s access is currently suspended.</p> <p class="muted">If you believe this is an error, contact support.</p> <div class="btnRow"><a class="btn secondary" href="/logout">Logout</a></div> `, navPublic())); } if (method === "GET" && pathname === "/terminated") { return send(res, 200, page("Terminated", ` <h2>Account Terminated</h2> <p>This account has been terminated. Access to the workspace is no longer available.</p> <p class="muted">If you believe this is an error, contact support.</p> <div class="btnRow"><a class="btn secondary" href="/logout">Logout</a></div> `, navPublic())); } // Shopify activation (manual now) if (method === "GET" && pathname === "/shopify/activate") { const token = parsed.query.token || ""; const email = (parsed.query.email || "").toLowerCase(); const status = parsed.query.status || "inactive"; if (token !== ADMIN_ACTIVATE_TOKEN) return send(res, 401, "Unauthorized", "text/plain"); const user = getUserByEmail(email); if (!user) return send(res, 404, "User not found", "text/plain");
-
-const subs = readJSON(FILES.subscriptions, []);
-let s = subs.find(x => x.org_id === user.org_id);
-if (!s) {
-s={
-sub_id: uuid(),
-org_id: user.org_id,
-status: "inactive",
-customer_email: email,
-case_credits_per_month: MONTHLY_DEFAULTS.case_credits_per_month,
-payment_tracking_credits_per_month:
-MONTHLY_DEFAULTS.payment_tracking_credits_per_month,
-updated_at: nowISO()
-};
-subs.push(s);
-}
-s.status = (status === "active") ? "active" : "inactive";
-s.updated_at = nowISO();
-writeJSON(FILES.subscriptions, subs);
-if (s.status === "active") {
-// cancel deletion schedule
-const pilots = readJSON(FILES.pilots, []);
-const pidx = pilots.findIndex(p => p.org_id === user.org_id);
-if (pidx >= 0) {
-pilots[pidx].retention_delete_at = null;
-writeJSON(FILES.pilots, pilots);
-}
-}
-return send(res, 200, Subscription set to ${s.status} for ${email}, "text/plain");
-}
-// ---------- ADMIN ROUTES ---------
-if (pathname.startsWith("/admin/")) {
-const isAdmin = sess && sess.role === "admin";
-if (!isAdmin && pathname !== "/admin/login") return redirect(res, "/admin/login");
-// Reworked admin dashboard
-if (method === "GET" && pathname === "/admin/dashboard") {
-const orgs = readJSON(FILES.orgs, []);
-const users = readJSON(FILES.users, []);
-const pilots = readJSON(FILES.pilots, []);
-const subs = readJSON(FILES.subscriptions, []);
-const casesData = readJSON(FILES.cases, []);
-const payments = readJSON(FILES.payments, []);
-
-// counts
-const totalOrgs = orgs.length;
-const totalUsers = users.length;
-const activePilots = pilots.filter(p => p.status === "active").length;
-const activeSubs = subs.filter(s => s.status === "active").length;
-// status counts for donut
-const statusCounts = orgs.reduce((acc, org) => {
-acc[org.account_status || "active"] = (acc[org.account_status || "active"] || 0) + 1;
-return acc;
-}, {});
-// compute attention set and last activity
-const attentionSet = buildAdminAttentionSet(orgs);
-const orgActivities = orgs.map(org => {
-let last = 0;
-casesData.forEach(c => { if (c.org_id === org.org_id) last = Math.max(last, new
-Date(c.created_at).getTime()); });
-payments.forEach(p => { if (p.org_id === org.org_id) last = Math.max(last, new
-Date(p.created_at).getTime()); });
-return { org, last };
-});
-// compile alerts
-const alerts = [];
-orgActivities.forEach(({ org, last }) => {
-const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
-const limits = getLimitProfile(org.org_id);
-const usage = getUsage(org.org_id);
-const pilotEnd = pilot ? new Date(pilot.ends_at).getTime() : 0;
-if (pilotEnd && pilotEnd - Date.now() <= 7 * 24 * 60 * 60 * 1000) {
-alerts.push(Pilot for ${safeStr(org.org_name)} ends soon);
-}
-let casePct = 0;
-if (limits.mode === "pilot") {
-casePct = (usage.pilot_cases_used / PILOT_LIMITS.max_cases_total) * 100;
-} else {
-casePct = (usage.monthly_case_credits_used / limits.case_credits_per_month) * 100;
-}
-if (casePct >= 80) {
-alerts.push(${safeStr(org.org_name)} near case limit (${casePct.toFixed(0)}%));
-}
-if (!last || Date.now() - last >= 14 * 24 * 60 * 60 * 1000) {
-alerts.push(${safeStr(org.org_name)} has no activity for 14+ days);
-}
-});
-if (payments.length === 0) {
-
-alerts.push("No payment uploads across platform");
-}
-let alertsHtml = alerts.length ? alerts.map(msg => <div class="alert">${msg}</div>).join("")
-: "<p class='muted'>No alerts</p>";
-// recent activity table
-const rows = orgActivities.map(({ org, last }) => {
-const sub = getSub(org.org_id);
-const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
-const plan = (sub && sub.status === "active") ? "Subscribed" : (pilot.status === "active" ?
-"Pilot" : "Expired");
-const att = attentionSet.has(org.org_id) ? " " : "";
-// Make organisation name clickable to allow navigation to detail page from dashboard
-return <tr class="${att ? 'attention' : ''}"> <td><a href="/admin/org?org_id=${encodeURIComponent(org.org_id)}">${safeStr(org.org_name)}</a></td> <td>${plan}</td> <td>${safeStr(org.account_status || 'active')}</td> <td>${last ? new Date(last).toLocaleDateString() : "—"}</td> <td>${att}</td> </tr>;
-}).join("");
-const html = page("Admin Dashboard", `
-
-<h2>Admin Dashboard</h2> <section> <div class="kpi-card"><h4>Total Organisations</h4><p>${totalOrgs}</p></div> <div class="kpi-card"><h4>Total Users</h4><p>${totalUsers}</p></div> <div class="kpi-card"><h4>Active Pilots</h4><p>${activePilots}</p></div> <div class="kpi-card"><h4>Active Subscriptions</h4><p>${activeSubs}</p></div> </section> <h3>Organisation Status</h3> <div class="chart-placeholder">Donut chart will render here: Active ${statusCounts['active']||0}, Suspended ${statusCounts['suspended']||0}, Terminated ${statusCounts['terminated']||0}</div> <h3>Total Case Activity</h3> <div class="chart-placeholder">Case activity charts will be displayed when data is available.</div> <h3>Admin Alerts</h3> ${alertsHtml} <h3>Recent Organisation Activity</h3> <table> <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Last Activity</th><th>Attention</th></tr></thead> <tbody>${rows}</tbody> </table> `, navAdmin()); return send(res, 200, html);
-
-}
-// Enhanced Organisations page
-if (method === "GET" && pathname === "/admin/orgs") {
-const orgs = readJSON(FILES.orgs, []);
-const pilots = readJSON(FILES.pilots, []);
-const subs = readJSON(FILES.subscriptions, []);
-// build attention set
-const attSet = buildAdminAttentionSet(orgs);
-// read filters from query
-const search = (parsed.query.search || "").toLowerCase();
-const statusFilter = parsed.query.status || "";
-const planFilter = parsed.query.plan || "";
-const needAtt = parsed.query.attention === "1";
-// filter organisations
-let filtered = orgs.filter(org => {
-const nameMatch = !search || (org.org_name || "").toLowerCase().includes(search);
-const statusMatch = !statusFilter || (org.account_status || "active") === statusFilter;
-const plan = (() => {
-const p = pilots.find(x => x.org_id === org.org_id);
-const s = subs.find(x => x.org_id === org.org_id);
-return (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ? "Pilot" :
-"Expired");
-})();
-const planMatch = !planFilter || plan === planFilter;
-const attMatch = !needAtt || attSet.has(org.org_id);
-return nameMatch && statusMatch && planMatch && attMatch;
-});
-// build table rows
-const rows = filtered.map(org => {
-const p = pilots.find(x => x.org_id === org.org_id);
-const s = subs.find(x => x.org_id === org.org_id);
-const plan = (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ?
-"Pilot" : "Expired");
-const att = attSet.has(org.org_id) ? " " : "";
-// Wrap the organisation name in a link so admins can click through to the org detail page
-return <tr class="${att ? 'attention' : ''}"> <td><a href="/admin/org?org_id=${encodeURIComponent(org.org_id)}">${safeStr(org.org_name)}</a></td> <td>${plan}</td> <td>${safeStr(org.account_status || 'active')}</td> <td>${att}</td> </tr>;
-}).join("");
-const html = page("Organizations", `
-
-<h2>Organizations</h2> <form method="GET" action="/admin/orgs"> <input type="text" name="search" placeholder="Search org name" value="${safeStr(parsed.query.search || '')}"> <select name="status"> <option value="">All statuses</option> <option value="active"${statusFilter==="active"?" selected":""}>Active</option> <option value="suspended"${statusFilter==="suspended"?" selected":""}>Suspended</option> <option value="terminated"${statusFilter==="terminated"?" selected":""}>Terminated</option> </select> <select name="plan"> <option value="">All plans</option> <option value="Pilot"${planFilter==="Pilot"?" selected":""}>Pilot</option> <option value="Subscribed"${planFilter==="Subscribed"?" selected":""}>Subscribed</option> <option value="Expired"${planFilter==="Expired"?" selected":""}>Expired</option> </select> <label><input type="checkbox" name="attention" value="1"${needAtt?" checked":""}> Needs Attention</label> <button class="btn" type="submit">Filter</button> </form> <div style="overflow:auto;"> <table> <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Attention</th></tr></thead> <tbody>${rows || '<tr><td colspan="4">No organisations match your filters.</td></tr>'}</tbody> </table> </div> `, navAdmin()); return send(res, 200, html); } if (method === "GET" && pathname === "/admin/org") { const org_id = parsed.query.org_id || ""; const org = getOrg(org_id); if (!org) return redirect(res, "/admin/orgs"); const users = readJSON(FILES.users, []).filter(u => u.org_id === org_id); const pilot = getPilot(org_id) || ensurePilot(org_id); const sub = getSub(org_id); const usage = getUsage(org_id); const a = computeAnalytics(org_id);
-
-const plan = (sub && sub.status==="active") ? "Monthly (active)" : (pilot.status==="active" ?
-"Pilot (active)" : "Expired");
-// create reset links (v1 display)
-const resetList = users.map(usr => {
-const token = uuid();
-const expiresAt = Date.now() + 20601000;
-const all = readJSON(FILES.users, []);
-const idx = all.findIndex(x => x.user_id === usr.user_id);
-if (idx >= 0) {
-all[idx].reset_token = token;
-all[idx].reset_expires_at = expiresAt;
-writeJSON(FILES.users, all);
-}
-const pathOnly =
-/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(usr. email)};
-const full = APP_BASE_URL ? ${APP_BASE_URL}${pathOnly} : pathOnly;
-return <li class="muted small">${safeStr(usr.email)} — <a href="${safeStr(full)}">Reset Link</a></li>;
-}).join("");
-const html = page("Org Detail", `
-
-<h2>${safeStr(org.org_name)}</h2> <div class="row"> <div class="col"> <h3>Account</h3> <table> <tr><th>Status</th><td>${safeStr(org.account_status || "active")}</td></tr> <tr><th>Plan</th><td>${plan}</td></tr> <tr><th>Pilot ends</th><td>${new Date(pilot.ends_at).toLocaleDateString()}</td></tr> <tr><th>Deletion date</th><td>${pilot.retention_delete_at ? new Date(pilot.retention_delete_at).toLocaleDateString() : "—"}</td></tr> <tr><th>Pilot cases used</th><td>${usage.pilot_cases_used || 0}/${PILOT_LIMITS.max_cases_total}</td></tr> <tr><th>Pilot payment rows</th><td>${usage.pilot_payment_rows_used || 0}/${PILOT_LIMITS.payment_records_included}</td></tr> <tr><th>Drafts generated</th><td>${a.drafts}</td></tr> <tr><th>Avg draft time</th><td>${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</td></tr> </table> <h3>Actions</h3>
-
-<form method="POST" action="/admin/action">
-<input type="hidden" name="org_id" value="${safeStr(org_id)}"/>
-<label>Reason (required)</label>
-<input name="reason" required />
-
-<div class="btnRow"> <button class="btn secondary" name="action" value="extend_pilot_7">Extend Pilot +7 days</button> <button class="btn secondary" name="action" value="suspend">Suspend</button> <button class="btn danger" name="action" value="terminate">Terminate</button> </div> </form> </div> <div class="col"> <h3>Users</h3> <ul class="muted">${users.map(x => `<li>${safeStr(x.email)}</li>`).join("") || "<li>—</li>"}</ul> <div class="hr"></div> <h3>Force Password Reset (v1 display)</h3> <ul>${resetList || "<li class='muted small'>No users</li>"}</ul> </div> </div> `, navAdmin()); return send(res, 200, html); } if (method === "POST" && pathname === "/admin/action") { const body = await parseBody(req); const params = new URLSearchParams(body); const org_id = params.get("org_id") || ""; const action = params.get("action") || ""; const reason = (params.get("reason") || "").trim(); if (!org_id || !action || !reason) return redirect(res, "/admin/orgs"); if (action === "suspend") { setOrgStatus(org_id, "suspended", reason); auditLog({ actor:"admin", action:"suspend", org_id, reason }); } else if (action === "terminate") { setOrgStatus(org_id, "terminated", reason); // schedule deletion 14 days from now const pilots = readJSON(FILES.pilots, []); const idx = pilots.findIndex(p => p.org_id === org_id); if (idx >= 0) {
-
-pilots[idx].status = "complete";
-pilots[idx].retention_delete_at = addDaysISO(nowISO(),
-RETENTION_DAYS_AFTER_PILOT);
-writeJSON(FILES.pilots, pilots);
-}
-auditLog({ actor:"admin", action:"terminate", org_id, reason });
-} else if (action === "extend_pilot_7") {
-const pilots = readJSON(FILES.pilots, []);
-const idx = pilots.findIndex(p => p.org_id === org_id);
-if (idx >= 0) {
-pilots[idx].ends_at = addDaysISO(pilots[idx].ends_at, 7);
-writeJSON(FILES.pilots, pilots);
-}
-auditLog({ actor:"admin", action:"extend_pilot_7", org_id, reason });
-}
-return redirect(res, /admin/org?org_id=${encodeURIComponent(org_id)});
-}
-if (method === "GET" && pathname === "/admin/audit") {
-const audit = readJSON(FILES.audit, []);
-const rows = audit.slice(-200).reverse().map(a => `
-
-<tr> <td class="muted small">${safeStr(a.at)}</td> <td>${safeStr(a.action)}</td> <td class="muted small">${safeStr(a.org_id || "")}</td> <td class="muted small">${safeStr(a.reason || "")}</td> </tr>`).join(""); const html = page("Audit Log", ` <h2>Audit Log</h2> <p class="muted">Latest 200 admin actions.</p> <div style="overflow:auto;"> <table> <thead><tr><th>Time</th><th>Action</th><th>Org</th><th>Reason</th></tr></thead> <tbody>${rows}</tbody> </table> </div> `, navAdmin()); return send(res, 200, html); } return redirect(res, "/admin/dashboard"); }
-
-// ---------- USER PROTECTED ROUTES ---------
-if (!sess || sess.role !== "user") return redirect(res, "/login");
-const user = getUserById(sess.user_id);
-if (!user) return redirect(res, "/login");
-const org = getOrg(user.org_id);
-if (!org) return redirect(res, "/login");
-cleanupIfExpired(org.org_id);
-if (org.account_status === "terminated") return redirect(res, "/terminated");
-if (org.account_status === "suspended") return redirect(res, "/suspended");
-ensurePilot(org.org_id);
-getUsage(org.org_id);
-if (!isAccessEnabled(org.org_id)) return redirect(res, "/pilot-complete");
-// lock screen
-if (method === "GET" && pathname === "/lock") {
-const html = page("Starting", `
-
-<h2 class="center">Pilot Started</h2> <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid — and surface patterns that are easy to miss when data lives in different places.</p> <p class="muted center">You’ll be guided to the next step automatically.</p> <div class="center"><span class="badge warn">Initializing</span></div> <script>setTimeout(()=>{window.location.href="/upload";}, ${LOCK_SCREEN_MS});</script> `, navUser()); return send(res, 200, html); } // dashboard with empty-state previews and tooltips if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) { const limits = getLimitProfile(org.org_id); const usage = getUsage(org.org_id); const pilot = getPilot(org.org_id) || ensurePilot(org.org_id); const paymentAllowance = paymentRowsAllowance(org.org_id); const planBadge = (limits.mode==="monthly") ? `<span class="badge ok">Monthly Active</span>` : `<span class="badge warn">Pilot Active</span>`; // counts for empty-state charts const caseCount = countOrgCases(org.org_id);
-
-const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id ===
-org.org_id).length;
-const html = page("Dashboard", `
-
-<h2>Dashboard</h2> <p class="muted">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p> ${planBadge} <div class="hr"></div> <h3>Activity</h3> <div class="chart-placeholder">${caseCount === 0 ? "No cases uploaded yet." : "Case activity chart will appear here."}</div> <div class="chart-placeholder">${paymentCount === 0 ? "No payments uploaded yet." : "Payment activity chart will appear here."}</div> ${caseCount === 0 && paymentCount === 0 ? ` <section><h3>Recommended Next Step</h3><p>Get started by uploading your first case or payment data to unlock analytics.</p></section> ` : ""} <div class="hr"></div> <h3>Usage</h3> ${limits.mode==="pilot" ? ` <ul class="muted"> <li>Cases remaining: ${PILOT_LIMITS.max_cases_total - caseCount} / ${PILOT_LIMITS.max_cases_total} <span class="tooltip">ⓘ<span class="tooltiptext">Maximum number of cases you can upload during your current plan.</span></span></li> <li>AI jobs/hour: ${PILOT_LIMITS.max_ai_jobs_per_hour} <span class="tooltip">ⓘ<span class="tooltiptext">Number of AI processing jobs you can run per hour.</span></span></li> <li>Concurrent processing: ${PILOT_LIMITS.max_concurrent_analyzing} <span class="tooltip">ⓘ<span class="tooltiptext">Maximum number of cases or payments processed at the same time.</span></span></li> <li>Payment rows remaining: ${paymentAllowance.remaining} of ${PILOT_LIMITS.payment_records_included} <span class="tooltip">ⓘ<span class="tooltiptext">Payment table displays up to 500 rows; additional rows still count toward your usage.</span></span></li> </ul> `:` <ul class="muted"> <li>Case credits used: ${usage.monthly_case_credits_used} / ${limits.case_credits_per_month} <span class="tooltip">ⓘ<span class="tooltiptext">Number of cases processed out of your monthly allotment.</span></span></li> <li>Overage cases: ${usage.monthly_case_overage_count} (est. $${usage.monthly_case_overage_count * limits.overage_price_per_case}) <span class="tooltip">ⓘ<span class="tooltiptext">Cases beyond your monthly allotment are charged an overage fee.</span></span></li>
-
-<li>Payment rows remaining: ${paymentAllowance.remaining} <span class="tooltip">ⓘ<span class="tooltiptext">Payment table displays up to 500 rows; additional
-rows still count toward your usage.</span></span></li>
-
-</ul> `} <div class="btnRow"> <a class="btn" href="/upload">Start Case Review</a> <a class="btn secondary" href="/payments">Payment Tracking</a> <a class="btn secondary" href="/analytics">Analytics</a> </div> `, navUser()); return send(res, 200, html); } // --------- CASE UPLOAD --------- if (method === "GET" && pathname === "/upload") { const html = page("Case Upload", ` <h2>Case Upload</h2> <p class="muted">Upload any combination of up to <strong>3 documents</strong> for this case. Denial/payment notices alone are enough to begin.</p> <form method="POST" action="/upload" enctype="multipart/form-data"> <label>Documents (up to 3)</label> <div id="case-dropzone" class="dropzone">Drop up to 3 documents here or click to select</div> <input id="case-files" type="file" name="files" multiple required accept=".pdf,.doc,.docx,.jpg,.png" style="display:none" /> <label>Optional notes</label> <textarea name="notes" placeholder="Any context to help review (optional)"></textarea> <div class="btnRow"> <button class="btn" type="submit">Submit for Review</button> <a class="btn secondary" href="/dashboard">Back</a> </div> </form> <div class="hr"></div> <p class="muted small">Limits: 3 files/case · ${getLimitProfile(org.org_id).mode==="pilot" ? "10MB/file" : "20MB/file"}</p> <script> const caseDrop = document.getElementById('case-dropzone'); const caseInput = document.getElementById('case-files'); caseDrop.addEventListener('click', () => caseInput.click()); ['dragenter','dragover'].forEach(evt => { caseDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); caseDrop.classList.add('dragover'); }); });
-
-['dragleave','drop'].forEach(evt => {
-caseDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation();
-caseDrop.classList.remove('dragover'); });
-});
-caseDrop.addEventListener('drop', e => {
-const files = e.dataTransfer.files;
-if (files.length > 3) { alert('You can upload up to 3 documents.'); return; }
-const dt = new DataTransfer();
-for (let i=0; i<files.length && i<3; i++) { dt.items.add(files[i]); }
-caseInput.files = dt.files;
-caseDrop.textContent = files.length + ' file' + (files.length>1 ? 's' : '') + ' selected';
-});
-caseInput.addEventListener('change', () => {
-const f = caseInput.files;
-if (f.length) {
-caseDrop.textContent = f.length + ' file' + (f.length>1 ? 's' : '') + ' selected';
-}
-});
-</script>
-, navUser()); return send(res, 200, html); } if (method === "POST" && pathname === "/upload") { // limit: pilot cases const can = pilotCanCreateCase(org.org_id); if (!can.ok) { const html = page("Limit",
-
-<h2>Limit Reached</h2> <p class="error">${safeStr(can.reason)}</p> <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div> `, navUser()); return send(res, 403, html); } const contentType = req.headers["content-type"] || ""; if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain"); const boundaryMatch = /boundary=([^;]+)/.exec(contentType); if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain"); const boundary = boundaryMatch[1]; const { files, fields } = await parseMultipart(req, boundary);
-
-const limits = getLimitProfile(org.org_id);
-const maxFiles = limits.max_files_per_case;
-if (!files.length) return redirect(res, "/upload");
-if (files.length > maxFiles) {
-const html = page("Upload", `
-
-<h2>Upload</h2> <p class="error">Please upload no more than ${maxFiles} files per case.</p> <div class="btnRow"><a class="btn secondary" href="/upload">Back</a></div> `, navUser()); return send(res, 400, html); } const maxBytes = limits.max_file_size_mb * 1024 * 1024; for (const f of files) { if (f.buffer.length > maxBytes) { const html = page("Upload", ` <h2>Upload</h2> <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p> <div class="btnRow"><a class="btn secondary" href="/upload">Back</a></div> `, navUser()); return send(res, 400, html); } } // monthly credit consumption (case) if (limits.mode === "monthly") monthlyConsumeCaseCredit(org.org_id); else pilotConsumeCase(org.org_id); // create case record const case_id = uuid(); const caseDir = path.join(UPLOADS_DIR, org.org_id, case_id); ensureDir(caseDir); const storedFiles = files.map((f) => { const safeName = (f.filename || "file").replace(/[^a-zA-Z0-9._-]/g, "_"); const file_id = uuid(); const stored_path = path.join(caseDir, `${file_id}_${safeName}`); fs.writeFileSync(stored_path, f.buffer); return { file_id, filename: safeName, mime: f.mime, size_bytes: f.buffer.length, stored_path,
-
-uploaded_at: nowISO()
-};
-});
-const cases = readJSON(FILES.cases, []);
-cases.push({
-case_id,
-org_id: org.org_id,
-created_by_user_id: user.user_id,
-created_at: nowISO(),
-status: "UPLOAD_RECEIVED",
-notes: fields.notes || "",
-files: storedFiles,
-ai_started_at: null,
-ai: {
-denial_summary: null,
-appeal_considerations: null,
-draft_text: null,
-denial_reason_category: null,
-missing_info: [],
-time_to_draft_seconds: 0
-}
-});
-writeJSON(FILES.cases, cases);
-// queue AI (respect concurrency + rate)
-const okAI = canStartAI(org.org_id);
-if (!okAI.ok) {
-// leave case in UPLOAD_RECEIVED (queued)
-return redirect(res, /status?case_id=${encodeURIComponent(case_id)});
-}
-// start analyzing
-const cases2 = readJSON(FILES.cases, []);
-const c = cases2.find(x => x.case_id === case_id && x.org_id === org.org_id);
-if (c) {
-c.status = "ANALYZING";
-c.ai_started_at = nowISO();
-writeJSON(FILES.cases, cases2);
-recordAIJob(org.org_id);
-}
-return redirect(res, /status?case_id=${encodeURIComponent(case_id)});
-}
-
-// status (poll)
-if (method === "GET" && pathname === "/status") {
-const case_id = parsed.query.case_id || "";
-const cases = readJSON(FILES.cases, []);
-const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
-if (!c) return redirect(res, "/dashboard");
-// If queued, attempt to start AI now if capacity available
-if (c.status === "UPLOAD_RECEIVED") {
-const okAI = canStartAI(org.org_id);
-if (okAI.ok) {
-c.status = "ANALYZING";
-c.ai_started_at = nowISO();
-writeJSON(FILES.cases, cases);
-recordAIJob(org.org_id);
-}
-}
-// If analyzing, maybe complete based on timer
-if (c.status === "ANALYZING") {
-maybeCompleteAI(c, org.org_name);
-writeJSON(FILES.cases, cases);
-}
-if (c.status === "DRAFT_READY") return redirect(res,
-/draft?case_id=${encodeURIComponent(case_id)});
-const badge = c.status === "UPLOAD_RECEIVED"
-? <span class="badge warn">Queued</span><p class="muted small">Waiting for capacity (rate/concurrency limits).</p>
-: <span class="badge warn">Analyzing</span><p class="muted small">Draft typically prepared within minutes.</p>;
-const html = page("Status", `
-
-<h2>Review in Progress</h2> <p class="muted">Our AI agent is analyzing your uploaded documents and preparing a draft. This is decision support only.</p> ${badge} <div class="hr"></div> <div class="muted small"><strong>Case ID:</strong> ${safeStr(case_id)}</div> <script>setTimeout(()=>window.location.reload(), 2500);</script> <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div> `, navUser());
-
-return send(res, 200, html);
-}
-// draft view + edit
-if (method === "GET" && pathname === "/draft") {
-const case_id = parsed.query.case_id || "";
-const cases = readJSON(FILES.cases, []);
-const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
-if (!c) return redirect(res, "/dashboard");
-const html = page("Draft Ready", `
-
-<h2>Draft Ready for Review</h2> <p class="muted">This workspace supports denial review, appeal preparation, claim tracking, and payment analytics using only the documents you provide.</p> <div class="badge warn">DRAFT — Editable · For Review Only</div> <div class="hr"></div> <h3>Denial Summary</h3> <p>${safeStr(c.ai.denial_summary || "—")}</p> <h3>Appeal Considerations</h3> <p>${safeStr(c.ai.appeal_considerations || "—")}</p> <h3>Draft Appeal Letter</h3> <form method="POST" action="/draft"> <input type="hidden" name="case_id" value="${safeStr(case_id)}"/> <textarea name="draft_text">${safeStr(c.ai.draft_text || "")}</textarea> <div class="btnRow"> <button class="btn" type="submit">Save Edits</button> <a class="btn secondary" href="/download-draft?case_id=${encodeURIComponent(case_id)}">Download TXT</a> <a class="btn secondary" href="/analytics">Analytics</a> </div> </form> <p class="muted small">Time to draft: ${c.ai.time_to_draft_seconds ? `${c.ai.time_to_draft_seconds}s` : "—"}</p> `, navUser()); return send(res, 200, html); } if (method === "POST" && pathname === "/draft") { const body = await parseBody(req);
-
-const params = new URLSearchParams(body);
-const case_id = params.get("case_id") || "";
-const draft = params.get("draft_text") || "";
-const cases = readJSON(FILES.cases, []);
-const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
-if (!c) return redirect(res, "/dashboard");
-c.ai.draft_text = draft;
-writeJSON(FILES.cases, cases);
-return redirect(res, /draft?case_id=${encodeURIComponent(case_id)});
-}
-if (method === "GET" && pathname === "/download-draft") {
-const case_id = parsed.query.case_id || "";
-const cases = readJSON(FILES.cases, []);
-const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
-if (!c) return redirect(res, "/dashboard");
-res.writeHead(200, {
-"Content-Type": "text/plain",
-"Content-Disposition": attachment; filename="draft_${case_id}.txt"
-});
-return res.end(c.ai.draft_text || "");
-}
-// -------- PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) -------
-if (method === "GET" && pathname === "/payments") {
-const allow = paymentRowsAllowance(org.org_id);
-const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id ===
-org.org_id).length;
-const html = page("Payment Tracking", `
-
-<h2>Payment Tracking (Analytics Only)</h2> <p class="muted">Upload bulk payment files in CSV or Excel format.</p> <div class="chart-placeholder">${paymentCount === 0 ? "Upload payment data to see trends." : "Payment trend chart will appear here."}</div> <section> <h3>What This Unlocks</h3> <ul class="muted"> <li>Identify underperforming payers</li> <li>Spot delayed payments early</li> <li>Compare payment trends over time</li> </ul> </section> <section>
-
-<h3>Import Notes</h3>
-
-<ul class="muted"> <li>CSV files are parsed for analytics only <span class="tooltip">ⓘ<span class="tooltiptext">CSV files are used to compute insights but not stored permanently.</span></span></li> <li>Excel files are stored but not analysed <span class="tooltip">ⓘ<span class="tooltiptext">Excel uploads are stored for record keeping but analytics operate on CSV.</span></span></li> <li>500‑row display cap <span class="tooltip">ⓘ<span class="tooltiptext">The payment table shows up to 500 rows. Additional rows still count towards your usage.</span></span></li> </ul> </section> <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p> <form method="POST" action="/payments" enctype="multipart/form-data"> <label>Upload CSV/XLS/XLSX (analytics-only)</label> <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div> <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx" required style="display:none" /> <div class="btnRow"> <button class="btn" type="submit">Upload for Analytics</button> <a class="btn secondary" href="/dashboard">Back</a> </div> </form> <div class="hr"></div> <p class="muted small">Note: This does not create appeal drafts. It updates payer and payment timeline analytics.</p> <script> const payDrop = document.getElementById('pay-dropzone'); const payInput = document.getElementById('pay-file'); payDrop.addEventListener('click', () => payInput.click()); ['dragenter','dragover'].forEach(evt => { payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover'); }); }); ['dragleave','drop'].forEach(evt => { payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover'); }); }); payDrop.addEventListener('drop', e => { const files = e.dataTransfer.files; if (files.length > 1) { alert('Only one file at a time.'); return; } const dt = new DataTransfer(); dt.items.add(files[0]);
-
-payInput.files = dt.files;
-payDrop.textContent = files[0].name;
-});
-payInput.addEventListener('change', () => {
-const file = payInput.files[0];
-if (file) payDrop.textContent = file.name;
-});
-</script>
-, navUser()); return send(res, 200, html); } if (method === "POST" && pathname === "/payments") { const contentType = req.headers["content-type"] || ""; if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain"); const boundaryMatch = /boundary=([^;]+)/.exec(contentType); if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain"); const boundary = boundaryMatch[1]; const { files } = await parseMultipart(req, boundary); const f = files.find(x => x.fieldName === "payfile") || files[0]; if (!f) return redirect(res, "/payments"); // validate extension const nameLower = (f.filename || "").toLowerCase(); const isCSV = nameLower.endsWith(".csv"); const isXLS = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx"); if (!isCSV && !isXLS) { const html = page("Payment Tracking",
-
-<h2>Payment Tracking</h2> <p class="error">Only CSV or Excel files are allowed for payment tracking.</p> <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div> `, navUser()); return send(res, 400, html); } // file size cap (use same as plan) const limits = getLimitProfile(org.org_id); const maxBytes = limits.max_file_size_mb * 1024 * 1024; if (f.buffer.length > maxBytes) { const html = page("Payment Tracking", ` <h2>Payment Tracking</h2> <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
-
-<div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
-, navUser()); return send(res, 400, html); } // store raw file const dir = path.join(UPLOADS_DIR, org.org_id, "payments"); ensureDir(dir); const stored = path.join(dir, ${Date.now()}${(f.filename ||
-"payments").replace(/[^a-zA-Z0-9.-]/g,"_")}`);
-fs.writeFileSync(stored, f.buffer);
-// parse CSV now (rows count & limited record storage)
-let rowsAdded = 0;
-if (isCSV) {
-const text = f.buffer.toString("utf8");
-const parsedCSV = parseCSV(text);
-const rows = parsedCSV.rows;
-const allowance = paymentRowsAllowance(org.org_id);
-const remaining = allowance.remaining;
-const toUse = Math.min(remaining, rows.length);
-// store up to 500 records per upload for demo, but count all used
-const storeLimit = Math.min(toUse, 500);
-const paymentsData = readJSON(FILES.payments, []);
-for (let i=0;i<storeLimit;i++){
-const r = rows[i];
-const claim = pickField(r, ["claim", "claim#", "claim number", "claimnumber", "clm"]);
-const payer = pickField(r, ["payer", "insurance", "carrier", "plan"]);
-const amt = pickField(r, ["paid", "amount", "payment", "paid amount", "allowed"]);
-const datePaid = pickField(r, ["date", "paid date", "payment date", "remit date"]);
-paymentsData.push({
-payment_id: uuid(),
-org_id: org.org_id,
-claim_number: claim || "",
-payer: payer || "",
-amount_paid: amt || "",
-date_paid: datePaid || "",
-source_file: path.basename(stored),
-created_at: nowISO()
+  const parsed = url.parse(req.url, true);
+  const pathname = parsed.pathname;
+  const method = req.method;
+  const sess = getAuth(req);
+  // Cleanup expired data if logged in
+  if (sess && sess.org_id) cleanupIfExpired(sess.org_id);
+  // Health check
+  if (method === 'GET' && pathname === '/health') return send(res, 200, 'ok', 'text/plain');
+  // Admin login
+  if (method === 'GET' && pathname === '/admin/login') {
+    const html = `<html><body><h2>Admin Login</h2><form method="POST" action="/admin/login"><input name="email" placeholder="email"/><input name="password" type="password" placeholder="password"/><button type="submit">Sign In</button></form></body></html>`;
+    return send(res, 200, html);
+  }
+  if (method === 'POST' && pathname === '/admin/login') {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const email = (params.get('email') || '').trim().toLowerCase();
+    const pass = params.get('password') || '';
+    const aHash = adminHash();
+    if (!ADMIN_EMAIL || !aHash) return send(res, 403, 'Admin mode not configured', 'text/plain');
+    if (email !== ADMIN_EMAIL || !bcrypt.compareSync(pass, aHash)) return send(res, 401, 'Invalid credentials', 'text/plain');
+    const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000;
+    const token = makeSession({ role: 'admin', exp });
+    setCookie(res, 'tjhp_session', token, SESSION_TTL_DAYS * 86400);
+    return redirect(res, '/admin/dashboard');
+  }
+  // TODO: Add UI pages (omitted for brevity)
+  // For this reference implementation we focus on API routes and data
+  // manipulations instead of HTML rendering.  In a full system,
+  // existing UI code would be merged here.
+  // --- API: Upload Contracts ---
+  if (method === 'POST' && pathname === '/api/contracts') {
+    const ct = req.headers['content-type'] || '';
+    if (!ct.includes('multipart/form-data')) return send(res, 400, JSON.stringify({ error: 'Invalid upload' }), 'application/json');
+    const boundaryMatch = /boundary=([^;]+)/.exec(ct);
+    if (!boundaryMatch) return send(res, 400, JSON.stringify({ error: 'Missing boundary' }), 'application/json');
+    const boundary = boundaryMatch[1];
+    const { files } = await parseMultipart(req, boundary);
+    const f = files[0];
+    if (!f || !f.filename.toLowerCase().endsWith('.csv')) return send(res, 400, JSON.stringify({ error: 'Only CSV contracts accepted' }), 'application/json');
+    const contracts = parseContractFile(f.buffer, f.filename);
+    const existing = readJSON(FILES.contracts, []);
+    writeJSON(FILES.contracts, existing.concat(contracts));
+    return send(res, 200, JSON.stringify({ imported: contracts.length }), 'application/json');
+  }
+  // --- API: Upload case (with documents) ---
+  if (method === 'POST' && pathname === '/api/upload-case') {
+    if (!sess || sess.role !== 'user') return send(res, 401, JSON.stringify({ error: 'Unauthorized' }), 'application/json');
+    const ct = req.headers['content-type'] || '';
+    if (!ct.includes('multipart/form-data')) return send(res, 400, JSON.stringify({ error: 'Invalid upload' }), 'application/json');
+    const boundaryMatch = /boundary=([^;]+)/.exec(ct);
+    if (!boundaryMatch) return send(res, 400, JSON.stringify({ error: 'Missing boundary' }), 'application/json');
+    const boundary = boundaryMatch[1];
+    const { files, fields } = await parseMultipart(req, boundary);
+    if (!files.length) return send(res, 400, JSON.stringify({ error: 'No files' }), 'application/json');
+    const can = pilotCanCreateCase(sess.org_id);
+    if (!can.ok) return send(res, 403, JSON.stringify({ error: can.reason }), 'application/json');
+    // Create case record
+    const case_id = uuid();
+    const caseDir = path.join(UPLOADS_DIR, sess.org_id, case_id);
+    ensureDir(caseDir);
+    const storedFiles = files.map((f) => {
+      const safeName = (f.filename || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const file_id = uuid();
+      const stored_path = path.join(caseDir, `${file_id}_${safeName}`);
+      fs.writeFileSync(stored_path, f.buffer);
+      return { file_id, filename: safeName, mime: f.mime, size_bytes: f.buffer.length, stored_path, uploaded_at: nowISO() };
+    });
+    const cases = readJSON(FILES.cases, []);
+    const caseObj = {
+      case_id,
+      org_id: sess.org_id,
+      created_by_user_id: sess.user_id,
+      created_at: nowISO(),
+      status: 'UPLOAD_RECEIVED',
+      notes: fields.notes || '',
+      files: storedFiles,
+      ai_started_at: null,
+      ai: {
+        structured_data: null,
+        denial_category: null,
+        denial_summary: null,
+        denial_suggestions: [],
+        denial_risk: null,
+        draft_text: null,
+        time_to_draft_seconds: 0,
+      },
+      // Task fields (for future workflow enhancements)
+      assigned_to: null,
+      due_date: null,
+      task_status: 'open',
+      resolution_notes: '',
+      resolved_at: null,
+    };
+    cases.push(caseObj);
+    writeJSON(FILES.cases, cases);
+    // Trigger OCR and denial analysis
+    const ocrText = await performOCR(files);
+    const structured = extractStructuredData(ocrText);
+    const denialInfo = analyseDenial(ocrText, structured);
+    const risk = predictDenialRisk(structured, ocrText);
+    caseObj.ai.structured_data = structured;
+    caseObj.ai.denial_category = denialInfo.category;
+    caseObj.ai.denial_summary = denialInfo.summary;
+    caseObj.ai.denial_suggestions = denialInfo.suggestions;
+    caseObj.ai.denial_risk = risk;
+    writeJSON(FILES.cases, cases);
+    return send(res, 201, JSON.stringify({ case_id, denial: caseObj.ai }), 'application/json');
+  }
+  // --- API: Upload payments ---
+  if (method === 'POST' && pathname === '/api/payments') {
+    if (!sess || sess.role !== 'user') return send(res, 401, JSON.stringify({ error: 'Unauthorized' }), 'application/json');
+    const ct = req.headers['content-type'] || '';
+    if (!ct.includes('multipart/form-data')) return send(res, 400, JSON.stringify({ error: 'Invalid upload' }), 'application/json');
+    const boundaryMatch = /boundary=([^;]+)/.exec(ct);
+    if (!boundaryMatch) return send(res, 400, JSON.stringify({ error: 'Missing boundary' }), 'application/json');
+    const boundary = boundaryMatch[1];
+    const { files } = await parseMultipart(req, boundary);
+    const f = files[0];
+    if (!f) return send(res, 400, JSON.stringify({ error: 'No file' }), 'application/json');
+    const limits = getLimitProfile(sess.org_id);
+    const maxBytes = limits.max_file_size_mb * 1024 * 1024;
+    if (f.buffer.length > maxBytes) return send(res, 400, JSON.stringify({ error: `File too large. Max size is ${limits.max_file_size_mb} MB.` }), 'application/json');
+    const payments = parsePaymentFile(f.buffer, f.filename);
+    // Compare against contracts
+    const contracts = readJSON(FILES.contracts, []);
+    const enhanced = comparePaymentsAgainstContracts(payments, contracts);
+    // Limit number of rows used
+    const allowance = paymentRowsAllowance(sess.org_id);
+    const remaining = allowance.remaining;
+    const toUse = Math.min(remaining, enhanced.length);
+    const storeLimit = Math.min(toUse, 500);
+    const paymentsData = readJSON(FILES.payments, []);
+    for (let i = 0; i < storeLimit; i++) {
+      const p = enhanced[i];
+      paymentsData.push({
+        payment_id: uuid(),
+        org_id: sess.org_id,
+        claim_number: p.claimNumber,
+        payer: p.payer,
+        amount_paid: p.amountPaid,
+        date_paid: p.datePaid,
+        claim_date: p.claimDate,
+        expected_amount: p.expectedAmount,
+        variance: p.variance,
+        days_to_pay: p.daysToPay,
+        underpaid: p.underpaid,
+        source_file: f.filename,
+        created_at: nowISO(),
+      });
+    }
+    writeJSON(FILES.payments, paymentsData);
+    consumePaymentRows(sess.org_id, toUse);
+    const metrics = computePaymentAnalytics(enhanced, 0);
+    return send(res, 200, JSON.stringify({ imported: enhanced.length, metrics }), 'application/json');
+  }
+  // --- API: Feedback ---
+  if (method === 'POST' && pathname === '/api/feedback') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const params = new URLSearchParams(body);
+      const feedbacks = readJSON(FILES.feedback, []);
+      feedbacks.push({ id: uuid(), caseId: params.get('caseId') || '', rating: parseInt(params.get('rating'), 10) || null, comments: params.get('comments') || '', submittedAt: nowISO() });
+      writeJSON(FILES.feedback, feedbacks);
+      send(res, 201, JSON.stringify({ success: true }), 'application/json');
+    });
+    return;
+  }
+  // --- API: Analytics ---
+  if (method === 'GET' && pathname === '/api/analytics') {
+    if (!sess || sess.role !== 'user') return send(res, 401, JSON.stringify({ error: 'Unauthorized' }), 'application/json');
+    const cases = readJSON(FILES.cases, []).filter((c) => c.org_id === sess.org_id);
+    const payments = readJSON(FILES.payments, []).filter((p) => p.org_id === sess.org_id);
+    const denialAnalytics = computeDenialAnalytics(cases);
+    const paymentAnalytics = computePaymentAnalytics(payments, 0);
+    const timeliness = computePayerTimeliness(payments);
+    const serviceLines = computeServiceLineAnalytics(payments, cases);
+    return send(res, 200, JSON.stringify({ denialAnalytics, paymentAnalytics, timeliness, serviceLines }), 'application/json');
+  }
+  // --- API: Payer report ---
+  if (method === 'GET' && pathname === '/export/payer-report.csv') {
+    if (!sess || sess.role !== 'user') return send(res, 401, 'Unauthorized', 'text/plain');
+    const payments = readJSON(FILES.payments, []).filter((p) => p.org_id === sess.org_id);
+    const cases = readJSON(FILES.cases, []).filter((c) => c.org_id === sess.org_id);
+    const payers = [...new Set(payments.map((p) => p.payer || 'Unknown'))];
+    const cards = payers.map((payer) => {
+      const payerPayments = payments.filter((p) => (p.payer || 'Unknown') === payer);
+      const metrics = computePaymentAnalytics(payerPayments, 0);
+      const time = computePayerTimeliness(payerPayments)[payer] || {};
+      const payerCases = cases.filter((c) => c.ai && c.ai.structured_data && c.ai.structured_data.payer === payer);
+      const denialMetrics = computeDenialAnalytics(payerCases);
+      const topCategory = Object.keys(denialMetrics.byCategory || {}).sort((a, b) => (denialMetrics.byCategory[b] || 0) - (denialMetrics.byCategory[a] || 0))[0] || 'N/A';
+      return {
+        payer,
+        totalPaid: metrics.byPayer[payer]?.total || 0,
+        underpaymentCount: metrics.underpaymentCount || 0,
+        avgDaysToPay: time.avgDays || null,
+        medianDaysToPay: time.medianDays || null,
+        topDenialCategory: topCategory,
+        avgDenialRisk: denialMetrics.avgRisk || 0,
+      };
+    });
+    if (!cards.length) return send(res, 200, '', 'text/csv');
+    const header = Object.keys(cards[0]).join(',');
+    const rows = cards.map((c) => Object.values(c).map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = [header, rows].join('\n');
+    res.writeHead(200, { 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename=payer_report.csv' });
+    return res.end(csv);
+  }
+  // Fallback
+  return send(res, 404, 'Not Found', 'text/plain');
 });
 
-}
-writeJSON(FILES.payments, paymentsData);
-rowsAdded = toUse;
-consumePaymentRows(org.org_id, rowsAdded);
-} else {
-// Excel stored but not parsed in v1 (still counts as 0 rows until CSV provided)
-rowsAdded = 0;
-}
-const html = page("Payment Tracking", `
-
-<h2>Payment File Received</h2> <p class="muted">Your file was uploaded successfully.</p> <ul class="muted"> <li><strong>File:</strong> ${safeStr(f.filename)}</li> <li><strong>Rows processed:</strong> ${rowsAdded} ${isXLS ? "(Excel not parsed — export to CSV for full analytics)" : ""}</li> </ul> <div class="btnRow"> <a class="btn" href="/analytics">View Analytics</a> <a class="btn secondary" href="/payments">Upload more</a> </div> `, navUser()); return send(res, 200, html); } // analytics page with placeholders and bar chart preview if (method === "GET" && pathname === "/analytics") { const a = computeAnalytics(org.org_id); const usage = getUsage(org.org_id); const limits = getLimitProfile(org.org_id); // Build top 4 payers by total amount const payList = Object.entries(a.payByPayer).map(([payer, info]) => ({ payer, total: info.total })); payList.sort((x, y) => y.total - x.total); const top4 = payList.slice(0, 4); let payerHtml; if (top4.length === 0) { payerHtml = `<div class="chart-placeholder">No payment data available</div>`; } else { payerHtml = `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>`; top4.forEach(item => { payerHtml += `<tr><td>${safeStr(item.payer)}</td><td>$${Number(item.total || 0).toFixed(2)}</td></tr>`;
-
-});
-payerHtml += </tbody></table>;
-}
-const html = page("Analytics", `
-
-<h2>Analytics</h2> <p class="muted">Derived solely from uploaded documents and user‑provided context.</p> <div class="row"> <div class="col"> <h3>Case Distribution</h3> <div class="chart-placeholder">${a.totalCases === 0 ? "No cases uploaded" : "Donut chart will render here."}</div> </div> <div class="col"> <h3>Payments by Payer</h3> ${payerHtml} </div> </div> <div class="hr"></div> <div class="row"> <div class="col"> <h3>Pilot Snapshot</h3> <ul class="muted"> <li>Cases uploaded: ${a.totalCases}</li> <li>Drafts generated: ${a.drafts}</li> <li>Avg time to draft: ${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</li> </ul> </div> <div class="col"> <h3>Usage</h3> ${limits.mode==="pilot" ? ` <ul class="muted"> <li> Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total} <span class="tooltip">ⓘ <span class="tooltiptext">Maximum number of cases allowed during your pilot.</span> </span> </li> <li> Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display only 500 rows, but all uploaded rows count toward usage.</span>
-
-</span>
-
-</li> </ul> `:` <ul class="muted"> <li> Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month} <span class="tooltip">ⓘ <span class="tooltiptext">Number of cases processed out of your monthly allotment.</span> </span> </li> <li> Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count * limits.overage_price_per_case}) <span class="tooltip">ⓘ <span class="tooltiptext">Cases beyond your allotment incur an additional fee.</span> </span> </li> <li> Monthly payment rows used: ${usage.monthly_payment_rows_used} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display up to 500 rows; all rows still count toward usage.</span> </span> </li> </ul> `} </div> </div> `, navUser()); return send(res, 200, html); } // exports hub if (method === "GET" && pathname === "/exports") { const html = page("Exports", ` <h2>Exports</h2> <p class="muted">Download pilot outputs for leadership and operations review.</p> <div class="btnRow"> <a class="btn secondary" href="/export/cases.csv">Cases CSV</a> <a class="btn secondary" href="/export/payments.csv">Payments CSV</a>
-
-<a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a>
-<a class="btn secondary" href="/report">Printable Pilot Summary</a>
-
-</div> `, navUser()); return send(res, 200, html); } if (method === "GET" && pathname === "/export/cases.csv") { const casesExport = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id); const header = ["case_id","status","created_at","time_to_draft_seconds","denial_reason"].join(","); const rows = casesExport.map(c => { const draftSeconds = (c.ai && typeof c.ai.time_to_draft_seconds !== "undefined") ? c.ai.time_to_draft_seconds : ""; const denialReason = (c.ai && c.ai.denial_reason_category) ? c.ai.denial_reason_category : ""; return [ c.case_id, c.status, c.created_at, draftSeconds, denialReason, ] .map(x => `"${String(x).replace(/"/g, '""')}"`) .join(","); }); const csv = [header, ...rows].join("\n"); res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=cases.csv" }); return res.end(csv); } if (method === "GET" && pathname === "/export/payments.csv") { const paymentsExport = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id); const header = ["payment_id","claim_number","payer","amount_paid","date_paid","source_file","created_at"].join(","); const rows = paymentsExport.map(p => [ p.payment_id, p.claim_number, p.payer, p.amount_paid, p.date_paid, p.source_file, p.created_at ].map(x => `"${String(x||"").replace(/"/g,'""')}"`).join(",")); const csv = [header, ...rows].join("\n"); res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=payments.csv" }); return res.end(csv); } if (method === "GET" && pathname === "/export/analytics.csv") { const aExport = computeAnalytics(org.org_id); const header = ["metric","value"].join(",");
-
-const rows = [
-["cases_uploaded", aExport.totalCases],
-["drafts_generated", aExport.drafts],
-["avg_time_to_draft_seconds", aExport.avgDraftSeconds || ""],
-].map(r => r.map(x => "${String(x).replace(/"/g,'""')}").join(","));
-const csv = [header, ...rows].join("\n");
-res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=analytics.csv" });
-return res.end(csv);
-}
-if (method === "GET" && pathname === "/report") {
-const aReport = computeAnalytics(org.org_id);
-const pilotRep = getPilot(org.org_id) || ensurePilot(org.org_id);
-const html = page("Pilot Summary", `
-
-<h2>Pilot Summary Report</h2> <p class="muted">Organization: ${safeStr(org.org_name)}</p> <div class="hr"></div> <ul class="muted"> <li>Pilot start: ${new Date(pilotRep.started_at).toLocaleDateString()}</li> <li>Pilot end: ${new Date(pilotRep.ends_at).toLocaleDateString()}</li> </ul> <h3>Snapshot</h3> <ul class="muted"> <li>Cases uploaded: ${aReport.totalCases}</li> <li>Drafts generated: ${aReport.drafts}</li> <li>Avg time to draft: ${aReport.avgDraftSeconds ? `${aReport.avgDraftSeconds}s` : "—"}</li> </ul> <div class="btnRow"> <button class="btn secondary" onclick="window.print()">Print / Save as PDF</button> <a class="btn secondary" href="/exports">Back</a> </div> <p class="muted small">All insights are derived from uploaded documents during the pilot period.</p> `, navUser()); return send(res, 200, html); } // pilot complete page if (method === "GET" && pathname === "/pilot-complete") { const pilotEnd = getPilot(org.org_id) || ensurePilot(org.org_id);
-
-if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete")
-markPilotComplete(org.org_id);
-const p2 = getPilot(org.org_id);
-const html = page("Pilot Complete", `
-
-<h2>Pilot Complete</h2> <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p> <div class="hr"></div> <p class="muted"> To limit unnecessary data retention, documents and analytics from this pilot will be securely deleted <strong>14 days after the pilot end date</strong> unless you continue monthly access. </p> <ul class="muted"> <li>Pilot end date: ${new Date(p2.ends_at).toLocaleDateString()}</li> <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li> </ul> <div class="btnRow"> <a class="btn" href="https://tjhealthpro.com">Continue Monthly Access (via Shopify)</a> <a class="btn secondary" href="/exports">Download Exports</a> <a class="btn secondary" href="/logout">Logout</a> </div> `, navUser()); return send(res, 200, html); } // fallback return redirect(res, "/dashboard"); }); server.listen(PORT, HOST, () => { console.log(`TJHP server listening on ${HOST}:${PORT}`); });
-
-
-/*
-===== NEW FEATURE ADDITIONS =====
-
-This section contains all code snippets and constants from the “New Features” PDF.
-Insert these helpers and route handlers into your application as needed.
-*/
-
-// Storage for Contracts
-const CONTRACTS_DIR = path.join(DATA_DIR, 'contracts');
-ensureDir(CONTRACTS_DIR);
-const CONTRACT_FILES = {
-contracts: path.join(CONTRACTS_DIR, 'contracts.json'),
-};
-ensureFile(CONTRACT_FILES.contracts, []);
-
-// Trial duration constant for two‑week trials
-const TRIAL_DAYS = 14;
-
-// Default alert thresholds
-const DEFAULT_ALERTS = {
-maxDaysToPay: 30,
-underpaymentThreshold: 100,
-denialRiskThreshold: 0.8,
-};
-
-// Parse contract CSV/XLS/XLSX into an array of contract entries.
-function parseContractFile(buffer, filename) {
-const rows = parsePaymentFile(buffer, filename);
-return rows.map(r => {
-return {
-payer: r.payer || r.Payer || '',
-code: r.code || r.CPT || r.HCPCS || '',
-rate: parseFloat(r.rate || r.allowed || r.allowable) || 0,
-};
+server.listen(PORT, HOST, () => {
+  console.log(`Enhanced TJHP server listening on ${HOST}:${PORT}`);
 });
-}
-
-// Given a claim object (with procedure codes) and a list of contracts,
-// return the expected amount by summing contracted rates.
-function expectedAmountForClaim(claim, contracts) {
-let expected = 0;
-for (const code of claim.codes || []) {
-const match = contracts.find(c => c.payer === claim.payer && c.code === code);
-if (match) expected += match.rate;
-}
-return expected;
-}
-
-// Compare actual payments against contracts and flag variances.
-function comparePaymentsAgainstContracts(payments, contracts) {
-return payments.map(p => {
-const expected = expectedAmountForClaim({ payer: p.payer, codes: [p.code || p.claimNumber] }, contracts);
-const variance = expected ? expected - p.amountPaid : null;
-const underpaid = variance !== null && variance > 0;
-return { ...p, expectedAmount: expected, variance, underpaid };
-});
-}
-
-// Compute average and median days to pay per payer.
-function computePayerTimeliness(payments) {
-const byPayer = {};
-payments.forEach(p => {
-if (p.daysToPay === null) return;
-const payer = (p.payer || 'Unknown').trim() || 'Unknown';
-if (!byPayer[payer]) byPayer[payer] = [];
-byPayer[payer].push(p.daysToPay);
-});
-const timeliness = {};
-Object.keys(byPayer).forEach(payer => {
-const arr = byPayer[payer];
-const avg = arr.reduce((a,b) => a + b, 0) / arr.length;
-arr.sort((a,b) => a - b);
-const mid = Math.floor(arr.length / 2);
-const median = arr.length % 2 ? arr[mid] : (arr[mid-1] + arr[mid]) / 2;
-timeliness[payer] = { avgDays: avg, medianDays: median };
-});
-return timeliness;
-}
-
-// Check alerts based on payment timeliness, underpayment value and denial risk.
-function checkAlerts(paymentMetrics, denialMetrics, thresholds = DEFAULT_ALERTS) {
-const alerts = [];
-Object.entries(paymentMetrics.byPayer).forEach(([payer, info]) => {
-if (info.avgDays && info.avgDays > thresholds.maxDaysToPay) {
-alerts.push(Payer ${payer} is taking an average of ${info.avgDays.toFixed(1)} days to pay.\n);
-}
-});
-if (paymentMetrics.underpaymentValue > thresholds.underpaymentThreshold) {
-alerts.push(Detected $${paymentMetrics.underpaymentValue.toFixed(2)} in underpayments.);
-}
-Object.entries(denialMetrics.byCategory).forEach(([category, count]) => {
-const riskAvg = denialMetrics.avgRisk || 0;
-if (riskAvg > thresholds.denialRiskThreshold) {
-alerts.push(Average denial risk is high (${riskAvg.toFixed(2)}). Investigate category: ${category}.);
-}
-});
-return alerts;
-}
-
-// Compute anonymised platform benchmarks for all organisations.
-function computePlatformBenchmarks() {
-const allPayments = readJSON(FILES.payments, []);
-const allCases = readJSON(FILES.cases, []);
-const paymentsByOrg = {};
-const casesByOrg = {};
-allPayments.forEach(p => {
-paymentsByOrg[p.org_id] = paymentsByOrg[p.org_id] || [];
-paymentsByOrg[p.org_id].push(p);
-});
-allCases.forEach(c => {
-casesByOrg[c.org_id] = casesByOrg[c.org_id] || [];
-casesByOrg[c.org_id].push(c);
-});
-const orgMetrics = Object.keys(paymentsByOrg).map(orgId => {
-const pMetrics = computePaymentAnalytics(paymentsByOrg[orgId], 0);
-const dMetrics = computeDenialAnalytics(casesByOrg[orgId]);
-return {
-orgId,
-avgDays: Object.values(pMetrics.byPayer).reduce((a, info) => a + (info.avgDays || 0), 0) / Object.keys(pMetrics.byPayer).length,
-underpaymentRate: pMetrics.underpaymentCount / paymentsByOrg[orgId].length,
-avgDenialRisk: dMetrics.avgRisk || 0,
-};
-});
-const avgDays = orgMetrics.reduce((a, m) => a + (m.avgDays || 0), 0) / orgMetrics.length;
-const avgUnderpaymentRate = orgMetrics.reduce((a, m) => a + m.underpaymentRate, 0) / orgMetrics.length;
-const avgRisk = orgMetrics.reduce((a, m) => a + m.avgDenialRisk, 0) / orgMetrics.length;
-return { orgMetrics, platformAverage: { avgDays, avgUnderpaymentRate, avgRisk } };
-}
-
-// Generate a report card for a single payer.
-function generatePayerReportCard(payer, payments, cases) {
-const payerPayments = payments.filter(p => (p.payer || 'Unknown') === payer);
-const pMetrics = computePaymentAnalytics(payerPayments, 0);
-const timeliness = computePayerTimeliness(payerPayments)[payer] || {};
-const payerCases = cases.filter(c => {
-const denialCategory = (c.ai && c.ai.denial_category) ? c.ai.denial_category : 'Unknown';
-// Only include cases that have a denial category other than 'Unknown'.
-if (denialCategory === 'Unknown') return false;
-// Check structured_data and payer fields safely.
-const sd = c.ai && c.ai.structured_data;
-const casePayer = sd && sd.payer ? sd.payer : null;
-return casePayer === payer;
-});
-const denialMetrics = computeDenialAnalytics(payerCases);
-return {
-payer,
-totalPaid: (pMetrics.byPayer[payer] ? pMetrics.byPayer[payer].total : 0),
-underpaymentCount: pMetrics.underpaymentCount || 0,
-avgDaysToPay: timeliness.avgDays || null,
-medianDaysToPay: timeliness.medianDays || null,
-topDenialCategory: Object.keys(denialMetrics.byCategory).sort((a,b) => denialMetrics.byCategory[b] - denialMetrics.byCategory[a])[0] || 'N/A',
-avgDenialRisk: denialMetrics.avgRisk || 0,
-};
-}
-
-// Compute service‑line analytics grouped by procedure code.
-function computeServiceLineAnalytics(payments, cases) {
-const byCode = {};
-payments.forEach(p => {
-const code = p.code || p.claim_number || 'Unknown';
-byCode[code] = byCode[code] || { payments: [], cases: [] };
-byCode[code].payments.push(p);
-});
-cases.forEach(c => {
-// Safely extract the array of codes from the case's AI structured data.
-let codes = [];
-if (c.ai && c.ai.structured_data && Array.isArray(c.ai.structured_data.codes)) {
-codes = c.ai.structured_data.codes;
-}
-codes.forEach(code => {
-byCode[code] = byCode[code] || { payments: [], cases: [] };
-byCode[code].cases.push(c);
-});
-});
-const analytics = {};
-Object.keys(byCode).forEach(code => {
-const pList = byCode[code].payments;
-const cList = byCode[code].cases;
-const totalPaid = pList.reduce((a, p) => a + p.amountPaid, 0);
-const expected = pList.reduce((a, p) => a + (p.expectedAmount || 0), 0);
-const variance = expected ? expected - totalPaid : null;
-const denialRate = cList.length ? cList.filter(c => c.status === 'DENIED').length / cList.length : 0;
-analytics[code] = {
-totalPaid,
-expected,
-variance,
-denialRate,
-countPayments: pList.length,
-countCases: cList.length,
-};
-});
-return analytics;
-}
-
-// Ensure a two‑week trial exists for the given organisation.
-function ensureTrial(org_id) {
-const pilots = readJSON(FILES.pilots, []);
-let p = pilots.find(x => x.org_id === org_id);
-if (!p) {
-const started = nowISO();
-const ends = addDaysISO(started, TRIAL_DAYS);
-p = { pilot_id: uuid(), org_id, status:'active', started_at: started, ends_at: ends, retention_delete_at: null };
-pilots.push(p);
-writeJSON(FILES.pilots, pilots);
-}
-return p;
-}
-
-// Force a password reset for a user and return a token.
-function forcePasswordReset(userId) {
-const users = readJSON(FILES.users, []);
-const idx = users.findIndex(u => u.user_id === userId);
-if (idx >= 0) {
-const token = uuid();
-const expiresAt = Date.now() + 20 * 60 * 1000; // 20 minutes
-users[idx].reset_token = token;
-users[idx].reset_expires_at = expiresAt;
-writeJSON(FILES.users, users);
-return token;
-}
-return null;
-}
-
-/*
-Suggested route handlers (to be placed within the main server request handler):
-
-// Assign a task to a user via POST /api/case/assign
-if (method === 'POST' && pathname === '/api/case/assign') {
-const { caseId, assignedTo, dueDate } = JSON.parse(await parseBody(req));
-const cases = readJSON(FILES.cases, []);
-const c = cases.find(x => x.case_id === caseId);
-if (c) {
-c.assigned_to = assignedTo;
-c.due_date = dueDate;
-c.task_status = 'open';
-writeJSON(FILES.cases, cases);
-res.writeHead(200, { 'Content-Type': 'application/json' });
-return res.end(JSON.stringify({ success: true }));
-}
-res.writeHead(404, { 'Content-Type': 'application/json' });
-return res.end(JSON.stringify({ error: 'Case not found' }));
-}
-
-// Export payer report cards to CSV
-if (method === 'GET' && pathname === '/export/payer-report.csv') {
-const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
-const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
-const payers = [...new Set(payments.map(p => p.payer || 'Unknown'))];
-const cards = payers.map(p => generatePayerReportCard(p, payments, cases));
-const header = Object.keys(cards[0] || {}).join(',');
-const rows = cards.map(c => Object.values(c).map(v => "${String(v).replace(/"/g,'""')}").join(','));
-const csv = [header, ...rows].join('\n');
-res.writeHead(200, { 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename=payer_report.csv' });
-return res.end(csv);
-}
-
-// Extend trial period in /admin/action
-if (action === 'extend_trial') {
-const days = parseInt(params.get('days'), 10) || 7;
-const pilots = readJSON(FILES.pilots, []);
-const idx = pilots.findIndex(p => p.org_id === org_id);
-if (idx >= 0) {
-pilots[idx].ends_at = addDaysISO(pilots[idx].ends_at, days);
-writeJSON(FILES.pilots, pilots);
-}
-auditLog({ actor:'admin', action:'extend_trial', org_id, days, reason });
-return redirect(res, /admin/org?org_id=${encodeURIComponent(org_id)});
-}
-
-// Extend subscription period in /admin/action
-if (action === 'extend_subscription') {
-const days = parseInt(params.get('days'), 10) || 7;
-const subs = readJSON(FILES.subscriptions, []);
-const idx = subs.findIndex(s => s.org_id === org_id);
-if (idx >= 0) {
-subs[idx].next_billing_at = addDaysISO(subs[idx].next_billing_at, days);
-writeJSON(FILES.subscriptions, subs);
-}
-auditLog({ actor:'admin', action:'extend_subscription', org_id, days, reason });
-return redirect(res, /admin/org?org_id=${encodeURIComponent(org_id)});
-}
-
-// Update credits via POST /admin/update-credits
-if (method === 'POST' && pathname === '/admin/update-credits') {
-const body = await parseBody(req);
-const params = new URLSearchParams(body);
-const orgId = params.get('org_id');
-const caseCredits = parseInt(params.get('case_credits'), 10);
-const payCredits = parseInt(params.get('payment_credits'), 10);
-const subs = readJSON(FILES.subscriptions, []);
-const idx = subs.findIndex(s => s.org_id === orgId);
-if (idx >= 0) {
-subs[idx].case_credits_per_month = caseCredits;
-subs[idx].payment_tracking_credits_per_month = payCredits;
-subs[idx].updated_at = nowISO();
-writeJSON(FILES.subscriptions, subs);
-auditLog({ actor:'admin', action:'update_credits', org_id: orgId, caseCredits, payCredits });
-}
-return redirect(res, /admin/org?org_id=${encodeURIComponent(orgId)});
-}
-
-// Per‑organisation audit log route
-if (method === 'GET' && pathname === '/admin/org/audit') {
-const orgId = parsed.query.org_id;
-const auditEntries = readJSON(FILES.audit, []).filter(a => a.org_id === orgId).slice(-200).reverse();
-const rows = auditEntries.map(a => <tr> <td class="muted small">${safeStr(a.at)}</td> <td>${safeStr(a.action)}</td> <td class="muted small">${safeStr(a.actor)}</td> <td class="muted small">${safeStr(a.reason || '')}</td> </tr> ).join('');
-const html = page('Org Audit', <h2>Audit for Organisation</h2> <table> <thead><tr><th>Time</th><th>Action</th><th>Actor</th><th>Reason</th></tr></thead> <tbody>${rows}</tbody> </table> , navAdmin());
-return send(res, 200, html);
-}
-
-// Export and delete data routes
-if (method === 'GET' && pathname === '/admin/org/export') {
-const orgId = parsed.query.org_id;
-// Reuse export functions but filter by orgId
-// Prepare downloads for cases.csv, payments.csv and analytics.csv
-// Then render a page with links to each file.
-}
-if (method === 'POST' && pathname === '/admin/org/delete') {
-const body = await parseBody(req);
-const params = new URLSearchParams(body);
-const orgId = params.get('org_id');
-const pilots = readJSON(FILES.pilots, []);
-const idx = pilots.findIndex(p => p.org_id === orgId);
-if (idx >= 0) {
-pilots[idx].status = 'complete';
-pilots[idx].retention_delete_at = addDaysISO(nowISO(), 14);
-writeJSON(FILES.pilots, pilots);
-}
-auditLog({ actor:'admin', action:'schedule_delete', org_id: orgId, reason: 'Admin deletion request' });
-return redirect(res, /admin/org?org_id=${encodeURIComponent(orgId)});
-}
-
-*/
