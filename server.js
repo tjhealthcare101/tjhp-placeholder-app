@@ -1,16 +1,3 @@
-/**
- * TJ Healthcare Pro — V1 Pilot App (single-file)
- * - Pro UI, Signup/Login/Reset Password
- * - Org isolation + Admin console
- * - Pilot limits + Monthly credits + Payment tracking (CSV/XLS allowed; CSV parsed)
- * - Case upload (any 1–3 files) -> AI stub (minutes) -> editable draft
- * - Analytics + Exports
- * - Post-pilot: 14-day retention delete if not subscribed
- * - Shopify activation hook (manual endpoint now; swap to webhook later)
- *
- * Dependency: bcryptjs
- */
-
 const http = require("http");
 const url = require("url");
 const fs = require("fs");
@@ -1424,23 +1411,10 @@ const server = http.createServer(async (req, res) => {
     if (method === "GET" && pathname === "/admin/audit") {
       const audit = readJSON(FILES.audit, []);
       const rows = audit.slice(-200).reverse().map(a => `
-        <tr>
-          <td class="muted small">${safeStr(a.at)}</td>
-          <td>${safeStr(a.action)}</td>
-          <td class="muted small">${safeStr(a.org_id || "")}</td>
-          <td class="muted small">${safeStr(a.reason || "")}</td>
-        </tr>`).join("");
-
-      const html = page("Audit Log", `
-        <h2>Audit Log</h2>
-        <p class="muted">Latest 200 admin actions.</p>
-        <div style="overflow:auto;">
-          <table>
-            <thead><tr><th>Time</th><th>Action</th><th>Org</th><th>Reason</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-      `, navAdmin());
+        <tr> <td class="muted small">${safeStr(a.at)}</td> <td>${safeStr(a.action)}</td> <td class="muted small">${safeStr(a.org_id || "")}</td> <td class="muted small">${safeStr(a.reason || "")}</td> </tr>`).join("");
+      const html = page("Audit Log", ` <h2>Audit Log</h2> <p class="muted">Latest 200 admin actions.</p> <div style="overflow:auto;"> <table>
+        <thead><tr><th>Time</th><th>Action</th><th>Org</th><th>Reason</th></tr></thead>
+        <tbody>${rows}</tbody> </table> </div> `, navAdmin());
       return send(res, 200, html);
     }
 
@@ -1777,7 +1751,6 @@ const server = http.createServer(async (req, res) => {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-
     res.writeHead(200, {
       "Content-Type": "text/plain",
       "Content-Disposition": `attachment; filename="draft_${case_id}.txt"`
@@ -1802,48 +1775,33 @@ const server = http.createServer(async (req, res) => {
         </ul>
       </section>
       <section>
-        <h3>Import Notes</h3>
-        <ul class="muted">
-          <li>CSV files are parsed for analytics only <span class="tooltip">ⓘ<span class="tooltiptext">CSV files are used to compute insights but not stored permanently.</span></span></li>
-          <li>Excel files are stored but not analysed <span class="tooltip">ⓘ<span class="tooltiptext">Excel uploads are stored for record keeping but analytics operate on CSV.</span></span></li>
-          <li>500‑row display cap <span class="tooltip">ⓘ<span class="tooltiptext">The payment table shows up to 500 rows. Additional rows still count towards your usage.</span></span></li>
-        </ul>
-      </section>
-      <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
-      <form method="POST" action="/payments" enctype="multipart/form-data">
-        <label>Upload CSV/XLS/XLSX (analytics-only)</label>
-        <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div>
-        <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx" required style="display:none" />
-        <div class="btnRow">
-          <button class="btn" type="submit">Upload for Analytics</button>
-          <a class="btn secondary" href="/dashboard">Back</a>
-        </div>
-      </form>
-      <div class="hr"></div>
-      <p class="muted small">Note: This does not create appeal drafts. It updates payer and payment timeline analytics.</p>
-      <script>
-        const payDrop = document.getElementById('pay-dropzone');
-        const payInput = document.getElementById('pay-file');
-        payDrop.addEventListener('click', () => payInput.click());
-        ['dragenter','dragover'].forEach(evt => {
-          payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover'); });
-        });
-        ['dragleave','drop'].forEach(evt => {
-          payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover'); });
-        });
-        payDrop.addEventListener('drop', e => {
-          const files = e.dataTransfer.files;
-          if (files.length > 1) { alert('Only one file at a time.'); return; }
-          const dt = new DataTransfer();
-          dt.items.add(files[0]);
-          payInput.files = dt.files;
-          payDrop.textContent = files[0].name;
-        });
-        payInput.addEventListener('change', () => {
-          const file = payInput.files[0];
-          if (file) payDrop.textContent = file.name;
-        });
-      </script>
+
+      <h3>Import Notes</h3>
+
+      <ul class="muted"> 
+        <li>CSV files are parsed for analytics only <span class="tooltip">ⓘ<span class="tooltiptext">CSV files are used to compute insights but not stored permanently.</span></span></li> 
+        <li>Excel files are stored but not analysed <span class="tooltip">ⓘ<span class="tooltiptext">Excel uploads are stored for record keeping but analytics operate on CSV.</span></span></li> 
+        <li>500‑row display cap <span class="tooltip">ⓘ<span class="tooltiptext">The payment table shows up to 500 rows. Additional rows still count towards your usage.</span></span></li> 
+      </ul> </section> <p class="muted
+      small"><strong>Rows remaining:</strong> ${allow.remaining}</p> <form method="POST"
+      action="/payments" enctype="multipart/form-data"> <label>Upload CSV/XLS/XLSX
+      (analytics-only)</label> <div id="pay-dropzone" class="dropzone">Drop a
+      CSV/XLS/XLSX file here or click to select</div> <input id="pay-file" type="file"
+      name="payfile" accept=".csv,.xls,.xlsx" required style="display:none" /> <div
+      class="btnRow"> <button class="btn" type="submit">Upload for Analytics</button> <a
+      class="btn secondary" href="/dashboard">Back</a> </div> </form> <div class="hr"></div> <p
+      class="muted small">Note: This does not create appeal drafts. It updates payer and
+      payment timeline analytics.</p> <script> const payDrop = document.getElementById('pay-dropzone');
+      const payInput = document.getElementById('pay-file'); payDrop.addEventListener('click', () =>
+      payInput.click()); ['dragenter','dragover'].forEach(evt => { payDrop.addEventListener(evt, e =>
+      { e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover'); }); });
+      ['dragleave','drop'].forEach(evt => { payDrop.addEventListener(evt, e => {
+      e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover'); }); });
+      payDrop.addEventListener('drop', e => { const files = e.dataTransfer.files; if (files.length >
+      1) { alert('Only one file at a time.'); return; } const dt = new DataTransfer();
+      dt.items.add(files[0]); payInput.files = dt.files; payDrop.textContent = files[0].name;
+      }); payInput.addEventListener('change', () => { const file = payInput.files[0]; if (file)
+      payDrop.textContent = file.name; }); </script>
     `, navUser());
     return send(res, 200, html);
   }
@@ -1854,64 +1812,55 @@ const server = http.createServer(async (req, res) => {
     const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
     if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
     const boundary = boundaryMatch[1];
-
     const { files } = await parseMultipart(req, boundary);
     const f = files.find(x => x.fieldName === "payfile") || files[0];
     if (!f) return redirect(res, "/payments");
-
     // validate extension
     const nameLower = (f.filename || "").toLowerCase();
     const isCSV = nameLower.endsWith(".csv");
     const isXLS = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx");
     if (!isCSV && !isXLS) {
       const html = page("Payment Tracking", `
-        <h2>Payment Tracking</h2>
-        <p class="error">Only CSV or Excel files are allowed for payment tracking.</p>
+        <h2>Payment Tracking</h2> 
+        <p class="error">Only CSV or Excel files are allowed for payment tracking.</p> 
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
       `, navUser());
       return send(res, 400, html);
     }
-
     // file size cap (use same as plan)
     const limits = getLimitProfile(org.org_id);
     const maxBytes = limits.max_file_size_mb * 1024 * 1024;
     if (f.buffer.length > maxBytes) {
       const html = page("Payment Tracking", `
-        <h2>Payment Tracking</h2>
-        <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
+        <h2>Payment Tracking</h2> 
+        <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p> 
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
       `, navUser());
       return send(res, 400, html);
     }
-
     // store raw file
     const dir = path.join(UPLOADS_DIR, org.org_id, "payments");
     ensureDir(dir);
-    const stored = path.join(dir, `${Date.now()}_${(f.filename || "payments").replace(/[^a-zA-Z0-9._-]/g,"_")}`);
+    const stored = path.join(dir, `${Date.now()}${(f.filename || "payments").replace(/[^a-zA-Z0-9.-]/g,"_")}`);
     fs.writeFileSync(stored, f.buffer);
-
     // parse CSV now (rows count & limited record storage)
     let rowsAdded = 0;
     if (isCSV) {
       const text = f.buffer.toString("utf8");
       const parsedCSV = parseCSV(text);
       const rows = parsedCSV.rows;
-
       const allowance = paymentRowsAllowance(org.org_id);
       const remaining = allowance.remaining;
       const toUse = Math.min(remaining, rows.length);
-
       // store up to 500 records per upload for demo, but count all used
       const storeLimit = Math.min(toUse, 500);
       const paymentsData = readJSON(FILES.payments, []);
-
       for (let i=0;i<storeLimit;i++){
         const r = rows[i];
         const claim = pickField(r, ["claim", "claim#", "claim number", "claimnumber", "clm"]);
         const payer = pickField(r, ["payer", "insurance", "carrier", "plan"]);
         const amt = pickField(r, ["paid", "amount", "payment", "paid amount", "allowed"]);
         const datePaid = pickField(r, ["date", "paid date", "payment date", "remit date"]);
-
         paymentsData.push({
           payment_id: uuid(),
           org_id: org.org_id,
@@ -1924,25 +1873,16 @@ const server = http.createServer(async (req, res) => {
         });
       }
       writeJSON(FILES.payments, paymentsData);
-
       rowsAdded = toUse;
       consumePaymentRows(org.org_id, rowsAdded);
     } else {
       // Excel stored but not parsed in v1 (still counts as 0 rows until CSV provided)
       rowsAdded = 0;
     }
-
     const html = page("Payment Tracking", `
-      <h2>Payment File Received</h2>
-      <p class="muted">Your file was uploaded successfully.</p>
-      <ul class="muted">
-        <li><strong>File:</strong> ${safeStr(f.filename)}</li>
-        <li><strong>Rows processed:</strong> ${rowsAdded} ${isXLS ? "(Excel not parsed — export to CSV for full analytics)" : ""}</li>
-      </ul>
-      <div class="btnRow">
-        <a class="btn" href="/analytics">View Analytics</a>
-        <a class="btn secondary" href="/payments">Upload more</a>
-      </div>
+      <h2>Payment File Received</h2> 
+      <p class="muted">Your file was uploaded successfully.</p> 
+      <ul class="muted"> <li><strong>File:</strong> ${safeStr(f.filename)}</li> <li><strong>Rows processed:</strong> ${rowsAdded} ${isXLS ? "(Excel not parsed — export to CSV for full analytics)" : ""}</li> </ul> <div class="btnRow"> <a class="btn" href="/analytics">View Analytics</a> <a class="btn secondary" href="/payments">Upload more</a> </div>
     `, navUser());
     return send(res, 200, html);
   }
@@ -1967,69 +1907,9 @@ const server = http.createServer(async (req, res) => {
       payerHtml += `</tbody></table>`;
     }
     const html = page("Analytics", `
-      <h2>Analytics</h2>
-      <p class="muted">Derived solely from uploaded documents and user‑provided context.</p>
-      <div class="row">
-        <div class="col">
-          <h3>Case Distribution</h3>
-          <div class="chart-placeholder">${a.totalCases === 0 ? "No cases uploaded" : "Donut chart will render here."}</div>
-        </div>
-        <div class="col">
-          <h3>Payments by Payer</h3>
-          ${payerHtml}
-        </div>
-      </div>
-      <div class="hr"></div>
-      <div class="row">
-        <div class="col">
-          <h3>Pilot Snapshot</h3>
-          <ul class="muted">
-            <li>Cases uploaded: ${a.totalCases}</li>
-            <li>Drafts generated: ${a.drafts}</li>
-            <li>Avg time to draft: ${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</li>
-          </ul>
-        </div>
-        <div class="col">
-          <h3>Usage</h3>
-          ${limits.mode==="pilot" ? `
-          <ul class="muted">
-            <li>
-              Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total}
-              <span class="tooltip">ⓘ
-                <span class="tooltiptext">Maximum number of cases allowed during your pilot.</span>
-              </span>
-            </li>
-            <li>
-              Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included}
-              <span class="tooltip">ⓘ
-                <span class="tooltiptext">The analytics display only 500 rows, but all uploaded rows count toward usage.</span>
-              </span>
-            </li>
-          </ul>
-          ` : `
-          <ul class="muted">
-            <li>
-              Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month}
-              <span class="tooltip">ⓘ
-                <span class="tooltiptext">Number of cases processed out of your monthly allotment.</span>
-              </span>
-            </li>
-            <li>
-              Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count * limits.overage_price_per_case})
-              <span class="tooltip">ⓘ
-                <span class="tooltiptext">Cases beyond your allotment incur an additional fee.</span>
-              </span>
-            </li>
-            <li>
-              Monthly payment rows used: ${usage.monthly_payment_rows_used}
-              <span class="tooltip">ⓘ
-                <span class="tooltiptext">The analytics display up to 500 rows; all rows still count toward usage.</span>
-              </span>
-            </li>
-          </ul>
-          `}
-        </div>
-      </div>
+      <h2>Analytics</h2> 
+      <p class="muted">Derived solely from uploaded documents and user‑provided context.</p> 
+      <div class="row"> <div class="col"> <h3>Case Distribution</h3> <div class="chart-placeholder">${a.totalCases === 0 ? "No cases uploaded" : "Donut chart will render here."}</div> </div> <div class="col"> <h3>Payments by Payer</h3> ${payerHtml} </div> </div> <div class="hr"></div> <div class="row"> <div class="col"> <h3>Pilot Snapshot</h3> <ul class="muted"> <li>Cases uploaded: ${a.totalCases}</li> <li>Drafts generated: ${a.drafts}</li> <li>Avg time to draft: ${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</li> </ul> </div> <div class="col"> <h3>Usage</h3> ${limits.mode==="pilot" ? ` <ul class="muted"> <li> Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total} <span class="tooltip">ⓘ <span class="tooltiptext">Maximum number of cases allowed during your pilot.</span> </span> </li> <li> Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display only 500 rows, but all uploaded rows count toward usage.</span> </span> </li> </ul> `:` <ul class="muted"> <li> Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month} <span class="tooltip">ⓘ <span class="tooltiptext">Number of cases processed out of your monthly allotment.</span> </span> </li> <li> Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count * limits.overage_price_per_case}) <span class="tooltip">ⓘ <span class="tooltiptext">Cases beyond your allotment incur an additional fee.</span> </span> </li> <li> Monthly payment rows used: ${usage.monthly_payment_rows_used} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display up to 500 rows; all rows still count toward usage.</span> </span> </li> </ul> `} </div> </div>
     `, navUser());
     return send(res, 200, html);
   }
@@ -2037,13 +1917,13 @@ const server = http.createServer(async (req, res) => {
   // exports hub
   if (method === "GET" && pathname === "/exports") {
     const html = page("Exports", `
-      <h2>Exports</h2>
-      <p class="muted">Download pilot outputs for leadership and operations review.</p>
-      <div class="btnRow">
-        <a class="btn secondary" href="/export/cases.csv">Cases CSV</a>
-        <a class="btn secondary" href="/export/payments.csv">Payments CSV</a>
-        <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a>
-        <a class="btn secondary" href="/report">Printable Pilot Summary</a>
+      <h2>Exports</h2> 
+      <p class="muted">Download pilot outputs for leadership and operations review.</p> 
+      <div class="btnRow"> 
+        <a class="btn secondary" href="/export/cases.csv">Cases CSV</a> 
+        <a class="btn secondary" href="/export/payments.csv">Payments CSV</a> 
+        <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a> 
+        <a class="btn secondary" href="/report">Printable Pilot Summary</a> 
       </div>
     `, navUser());
     return send(res, 200, html);
@@ -2070,9 +1950,9 @@ const server = http.createServer(async (req, res) => {
     const header = ["payment_id","claim_number","payer","amount_paid","date_paid","source_file","created_at"].join(",");
     const rows = paymentsExport.map(p => [
       p.payment_id, p.claim_number, p.payer, p.amount_paid, p.date_paid, p.source_file, p.created_at
-    ].map(x => `"${String(x||"").replace(/"/g,'""')}"`).join(","));
+    ].map(x =>
+    `"${String(x||"").replace(/"/g,'""')}"`).join(","));
     const csv = [header, ...rows].join("\n");
-
     res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=payments.csv" });
     return res.end(csv);
   }
@@ -2080,13 +1960,13 @@ const server = http.createServer(async (req, res) => {
   if (method === "GET" && pathname === "/export/analytics.csv") {
     const aExport = computeAnalytics(org.org_id);
     const header = ["metric","value"].join(",");
+
     const rows = [
       ["cases_uploaded", aExport.totalCases],
       ["drafts_generated", aExport.drafts],
       ["avg_time_to_draft_seconds", aExport.avgDraftSeconds || ""],
     ].map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(","));
     const csv = [header, ...rows].join("\n");
-
     res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=analytics.csv" });
     return res.end(csv);
   }
@@ -2095,24 +1975,9 @@ const server = http.createServer(async (req, res) => {
     const aReport = computeAnalytics(org.org_id);
     const pilotRep = getPilot(org.org_id) || ensurePilot(org.org_id);
     const html = page("Pilot Summary", `
-      <h2>Pilot Summary Report</h2>
-      <p class="muted">Organization: ${safeStr(org.org_name)}</p>
-      <div class="hr"></div>
-      <ul class="muted">
-        <li>Pilot start: ${new Date(pilotRep.started_at).toLocaleDateString()}</li>
-        <li>Pilot end: ${new Date(pilotRep.ends_at).toLocaleDateString()}</li>
-      </ul>
-      <h3>Snapshot</h3>
-      <ul class="muted">
-        <li>Cases uploaded: ${aReport.totalCases}</li>
-        <li>Drafts generated: ${aReport.drafts}</li>
-        <li>Avg time to draft: ${aReport.avgDraftSeconds ? `${aReport.avgDraftSeconds}s` : "—"}</li>
-      </ul>
-      <div class="btnRow">
-        <button class="btn secondary" onclick="window.print()">Print / Save as PDF</button>
-        <a class="btn secondary" href="/exports">Back</a>
-      </div>
-      <p class="muted small">All insights are derived from uploaded documents during the pilot period.</p>
+      <h2>Pilot Summary Report</h2> 
+      <p class="muted">Organization: ${safeStr(org.org_name)}</p> 
+      <div class="hr"></div> <ul class="muted"> <li>Pilot start: ${new Date(pilotRep.started_at).toLocaleDateString()}</li> <li>Pilot end: ${new Date(pilotRep.ends_at).toLocaleDateString()}</li> </ul> <h3>Snapshot</h3> <ul class="muted"> <li>Cases uploaded: ${aReport.totalCases}</li> <li>Drafts generated: ${aReport.drafts}</li> <li>Avg time to draft: ${aReport.avgDraftSeconds ? `${aReport.avgDraftSeconds}s` : "—"}</li> </ul> <div class="btnRow"> <button class="btn secondary" onclick="window.print()">Print / Save as PDF</button> <a class="btn secondary" href="/exports">Back</a> </div> <p class="muted small">All insights are derived from uploaded documents during the pilot period.</p>
     `, navUser());
     return send(res, 200, html);
   }
@@ -2122,24 +1987,10 @@ const server = http.createServer(async (req, res) => {
     const pilotEnd = getPilot(org.org_id) || ensurePilot(org.org_id);
     if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
     const p2 = getPilot(org.org_id);
-
     const html = page("Pilot Complete", `
-      <h2>Pilot Complete</h2>
-      <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p>
-      <div class="hr"></div>
-      <p class="muted">
-        To limit unnecessary data retention, documents and analytics from this pilot will be securely deleted
-        <strong>14 days after the pilot end date</strong> unless you continue monthly access.
-      </p>
-      <ul class="muted">
-        <li>Pilot end date: ${new Date(p2.ends_at).toLocaleDateString()}</li>
-        <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li>
-      </ul>
-      <div class="btnRow">
-        <a class="btn" href="https://tjhealthpro.com">Continue Monthly Access (via Shopify)</a>
-        <a class="btn secondary" href="/exports">Download Exports</a>
-        <a class="btn secondary" href="/logout">Logout</a>
-      </div>
+      <h2>Pilot Complete</h2> 
+      <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p> 
+      <div class="hr"></div> <p class="muted"> To limit unnecessary data retention, documents and analytics from this pilot will be securely deleted <strong>14 days after the pilot end date</strong> unless you continue monthly access. </p> <ul class="muted"> <li>Pilot end date: ${new Date(p2.ends_at).toLocaleDateString()}</li> <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li> </ul> <div class="btnRow"> <a class="btn" href="https://tjhealthpro.com">Continue Monthly Access (via Shopify)</a> <a class="btn secondary" href="/exports">Download Exports</a> <a class="btn secondary" href="/logout">Logout</a> </div>
     `, navUser());
     return send(res, 200, html);
   }
