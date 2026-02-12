@@ -67,7 +67,12 @@ const FILES = {
   flags: path.join(DATA_DIR, "flags.json"),
   usage: path.join(DATA_DIR, "usage.json"),
   audit: path.join(DATA_DIR, "audit.json"),
+  // New storage for user-uploaded letter templates
+  templates: path.join(DATA_DIR, "templates.json"),
 };
+
+// Directory for storing uploaded template files
+const TEMPLATES_DIR = path.join(DATA_DIR, "templates");
 
 // ===== Helpers =====
 function uuid() { return crypto.randomUUID(); }
@@ -172,6 +177,9 @@ ensureFile(FILES.expectations, []);
 ensureFile(FILES.flags, []);
 ensureFile(FILES.usage, []);
 ensureFile(FILES.audit, []);
+// Initialize templates storage
+ensureDir(TEMPLATES_DIR);
+ensureFile(FILES.templates, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -322,7 +330,7 @@ function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Dashboard</a><a href="/upload">Case Upload</a><a href="/payments">Payment Tracking</a><a href="/analytics">Analytics</a><a href="/exports">Exports</a><a href="/logout">Logout</a>`;
+  return `<a href="/dashboard">Dashboard</a><a href="/upload">Denial &amp; Appeal&nbsp;Mgmt</a><a href="/payments">Revenue&nbsp;Mgmt</a><a href="/payments/list">Payment&nbsp;Details</a><a href="/exports">Exports</a><a href="/logout">Logout</a>`;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -676,12 +684,35 @@ function pickField(row, candidates) {
 // ===== AI stub =====
 function aiGenerate(orgName) {
   return {
+    // Default appeal letter template (extended)
     denial_summary: "Based on the uploaded documents, this case includes denial/payment language that benefits from structured review and consistent appeal framing.",
     appeal_considerations: "This draft is prepared from uploaded materials only. Validate documentation supports medical necessity and payer requirements before use.",
     draft_text:
-`To Whom It May Concern,
+`(Your Name or Practice Name)
+(Street Address)
+(City, State ZIP)
 
-We are writing to appeal the denial associated with this claim. Based on the documentation provided, the services rendered were medically necessary and appropriately supported. Please reconsider the determination after reviewing the attached materials.
+(Date)
+
+(Name of Insurance Company)
+(Street Address)
+(City, State ZIP)
+
+Re: (Patient's Name)
+(Type of Coverage)
+(Group number/Policy number)
+
+Dear (Name of contact person at insurance company),
+
+Please accept this letter as (patient's name) appeal to (insurance company name) decision to deny coverage for (state the name of the specific procedure denied). It is my understanding based on your letter of denial dated (insert date) that this procedure has been denied because:
+
+(Quote the specific reason for the denial stated in denial letter)
+
+As you know, (patient's name) was diagnosed with (disease) on (date). Currently Dr. (name) believes that (patient's name) will significantly benefit from (state procedure name). Please see the enclosed letter from Dr. (name) that discusses (patient's name) medical history in more detail.
+
+(Patient's name) believes that you did not have all the necessary information at the time of your initial review. (Patient's name) has also included with this letter, a letter from Dr. (name) from (name of treating facility). Dr. (name) is a specialist in (name of specialty). (His/Her) letter discusses the procedure in more detail. Also included are medical records and several journal articles explaining the procedure and the results.
+
+Based on this information, (patient's name) is asking that you reconsider your previous decision and allow coverage for the procedure Dr. (name) outlines in his letter. The treatment is scheduled to begin on (date). Should you require additional information, please do not hesitate to contact (patient's name) at (phone number). (patient's name) will look forward to hearing from you in the near future.
 
 Sincerely,
 ${orgName || "[Organization Billing Team]"}
@@ -697,13 +728,33 @@ function maybeCompleteAI(caseObj, orgName) {
   if (!started) return caseObj;
   if (Date.now() - started < AI_JOB_DELAY_MS) return caseObj;
 
+  // Determine if a custom template should be used for the draft.  If
+  // `template_id` is set on the case object, attempt to read the
+  // corresponding template file and use its contents for the draft
+  // letter.  Otherwise, fall back to the AI stub generator.
+  let draftText = null;
+  if (caseObj.template_id) {
+    try {
+      // Load template metadata and find the matching template for this org
+      const templates = readJSON(FILES.templates, []);
+      const tpl = templates.find(t => t.template_id === caseObj.template_id && t.org_id === caseObj.org_id);
+      if (tpl && tpl.stored_path && fs.existsSync(tpl.stored_path)) {
+        draftText = fs.readFileSync(tpl.stored_path).toString('utf8');
+      }
+    } catch {
+      draftText = null;
+    }
+  }
+  // Always generate denial summary and appeal considerations using the AI
   const out = aiGenerate(orgName);
   caseObj.ai.denial_summary = out.denial_summary;
   caseObj.ai.appeal_considerations = out.appeal_considerations;
-  caseObj.ai.draft_text = out.draft_text;
   caseObj.ai.denial_reason_category = out.denial_reason_category;
   caseObj.ai.missing_info = out.missing_info;
   caseObj.ai.time_to_draft_seconds = Math.max(1, Math.floor((Date.now()-started)/1000));
+  // If a draft template was loaded, use it.  Otherwise use the AI
+  // generated draft text.
+  caseObj.ai.draft_text = draftText || out.draft_text;
   caseObj.status = "DRAFT_READY";
   return caseObj;
 }
@@ -737,6 +788,75 @@ function computeAnalytics(org_id) {
   }
 
   return { totalCases, drafts, avgDraftSeconds, denialReasons, payByPayer };
+}
+
+// ===== Payment & Denial Trends =====
+/**
+ * Compute monthly payment trends. Returns an object with:
+ * - byMonth: { YYYY-MM: { total: number, count: number } }
+ * - avgMonthlyTotal: average monthly total paid across all months.
+ * If org_id is provided, payments are filtered to that organisation; otherwise all payments are used.
+ */
+function computePaymentTrends(org_id) {
+  let payments = readJSON(FILES.payments, []);
+  if (org_id) {
+    payments = payments.filter(p => p.org_id === org_id);
+  }
+  const byMonth = {};
+  payments.forEach(p => {
+    // Use payment date if available, otherwise created_at
+    let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+    let d;
+    try {
+      d = dtStr ? new Date(dtStr) : new Date();
+    } catch {
+      d = new Date();
+    }
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
+    if (!byMonth[key]) byMonth[key] = { total: 0, count: 0 };
+    byMonth[key].total += Number(p.amount_paid || p.amountPaid || 0);
+    byMonth[key].count += 1;
+  });
+  const keys = Object.keys(byMonth);
+  let avgMonthlyTotal = null;
+  if (keys.length) {
+    const sum = keys.reduce((acc, k) => acc + byMonth[k].total, 0);
+    avgMonthlyTotal = sum / keys.length;
+  }
+  return { byMonth, avgMonthlyTotal };
+}
+
+/**
+ * Compute monthly denial and appeal trends. Returns an object keyed by month with:
+ *  - total: number of cases created in that month
+ *  - drafts: number of cases that reached DRAFT_READY status (appeal drafts generated)
+ *  - categories: a map of denial categories and counts
+ * If org_id is provided, cases are filtered to that organisation; otherwise all cases are used.
+ */
+function computeDenialTrends(org_id) {
+  let cases = readJSON(FILES.cases, []);
+  if (org_id) {
+    cases = cases.filter(c => c.org_id === org_id);
+  }
+  const byMonth = {};
+  cases.forEach(c => {
+    const dtStr = c.created_at;
+    let d;
+    try {
+      d = dtStr ? new Date(dtStr) : new Date();
+    } catch {
+      d = new Date();
+    }
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
+    if (!byMonth[key]) byMonth[key] = { total: 0, drafts: 0, categories: {} };
+    byMonth[key].total += 1;
+    if (c.status === "DRAFT_READY" || (c.ai && c.ai.draft_text)) {
+      byMonth[key].drafts += 1;
+    }
+    const cat = (c.ai && c.ai.denial_reason_category) ? c.ai.denial_reason_category : "Unknown";
+    byMonth[key].categories[cat] = (byMonth[key].categories[cat] || 0) + 1;
+  });
+  return byMonth;
 }
 
 // ===== Admin Attention Helper =====
@@ -863,7 +983,7 @@ const server = http.createServer(async (req, res) => {
         </label>
         <div class="btnRow">
           <button class="btn" type="submit">Create Account</button>
-          <a class="btn secondary" href="/login">Sign In</a>
+          <a class "btn secondary" href="/login">Sign In</a>
         </div>
       </form>
     `, navPublic());
@@ -934,7 +1054,7 @@ const server = http.createServer(async (req, res) => {
         <label>Password</label>
         <input name="password" type="password" required />
         <div class="btnRow">
-          <button class="btn" type="submit">Sign In</button>
+          <button class "btn" type="submit">Sign In</button>
           <a class="btn secondary" href="/signup">Create Account</a>
         </div>
       </form>
@@ -981,9 +1101,9 @@ const server = http.createServer(async (req, res) => {
       <form method="POST" action="/forgot-password">
         <label>Email</label>
         <input name="email" type="email" required />
-        <div class="btnRow">
-          <button class="btn" type="submit">Generate Reset Link</button>
-          <a class="btn secondary" href="/login">Back</a>
+        <div class "btnRow">
+          <button class "btn" type="submit">Generate Reset Link</button>
+          <a class "btn secondary" href="/login">Back</a>
         </div>
       </form>
     `, navPublic());
@@ -1052,7 +1172,7 @@ const server = http.createServer(async (req, res) => {
       const html = page("Set New Password", `
         <h2>Set a New Password</h2>
         <p class="error">Passwords must match and be at least 8 characters.</p>
-        <div class="btnRow"><a class="btn secondary" href="/forgot-password">Try again</a></div>
+        <div class "btnRow"><a class "btn secondary" href="/forgot-password">Try again</a></div>
       `, navPublic());
       return send(res, 400, html);
     }
@@ -1097,8 +1217,8 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, page("Terminated", `
       <h2>Account Terminated</h2>
       <p>This account has been terminated. Access to the workspace is no longer available.</p>
-      <p class="muted">If you believe this is an error, contact support.</p>
-      <div class="btnRow"><a class="btn secondary" href="/logout">Logout</a></div>
+      <p class "muted">If you believe this is an error, contact support.</p>
+      <div class "btnRow"><a class "btn secondary" href="/logout">Logout</a></div>
     `, navPublic()));
   }
 
@@ -1355,8 +1475,8 @@ const server = http.createServer(async (req, res) => {
               <input name="reason" required />
               <div class="btnRow">
                 <button class="btn secondary" name="action" value="extend_pilot_7">Extend Pilot +7 days</button>
-                <button class="btn secondary" name="action" value="suspend">Suspend</button>
-                <button class="btn danger" name="action" value="terminate">Terminate</button>
+                <button class "btn secondary" name="action" value="suspend">Suspend</button>
+                <button class "btn danger" name="action" value="terminate">Terminate</button>
               </div>
             </form>
           </div>
@@ -1462,37 +1582,117 @@ const server = http.createServer(async (req, res) => {
     // counts for empty-state charts
     const caseCount = countOrgCases(org.org_id);
     const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
+
+    // Build "My Cases" listing
+    const allCases = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+    let caseTable = "";
+    if (allCases.length === 0) {
+      caseTable = `<p class="muted">No cases yet. Upload denial documents to begin.</p>`;
+    } else {
+      // sort by created_at desc
+      allCases.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+      // Determine whether a case is paid and the date
+      const todayStr = new Date().toISOString().split('T')[0];
+      const rows = allCases.map(c => {
+        const status = c.status;
+        let link = "";
+        if (status === "DRAFT_READY") link = `<a href="/draft?case_id=${encodeURIComponent(c.case_id)}">${safeStr(c.case_id)}</a>`;
+        else link = `<a href="/status?case_id=${encodeURIComponent(c.case_id)}">${safeStr(c.case_id)}</a>`;
+        // Payment cell: if paid show date, else show form
+        let paymentCell = "";
+        if (c.paid) {
+          paymentCell = `<span class="badge ok">Paid</span><br><span class="small">${new Date(c.paid_at).toLocaleDateString()}</span>`;
+        } else {
+          paymentCell = `<form method="POST" action="/case/mark-paid" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
+            <input type="hidden" name="case_id" value="${safeStr(c.case_id)}"/>
+            <input type="date" name="paid_at" value="${todayStr}" required/>
+            <button class="btn small" type="submit">Mark Paid</button>
+          </form>`;
+        }
+        return `<tr>
+          <td>${link}</td>
+          <td>${safeStr(status)}</td>
+          <td>${new Date(c.created_at).toLocaleDateString()}</td>
+          <td>${paymentCell}</td>
+        </tr>`;
+      }).join("");
+      caseTable = `<table><thead><tr><th>Case ID</th><th>Status</th><th>Created</th><th>Payment</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
     const html = page("Dashboard", `
       <h2>Dashboard</h2>
       <p class="muted">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
       ${planBadge}
       <div class="hr"></div>
+
+      <h3>My Cases</h3>
+      ${caseTable}
+
+      <div class="hr"></div>
+      <h3>Summary</h3>
+      <div class="row">
+        <div class="col">
+          <h4>Payer Summary</h4>
+          ${
+            (() => {
+              const a = computeAnalytics(org.org_id);
+              const payers = Object.entries(a.payByPayer);
+              if (payers.length === 0) return "<p class='muted small'>No payment data yet.</p>";
+              const list = payers.sort((x,y) => y[1].total - x[1].total).slice(0,4).map(([payer, info]) => `<div><strong>${safeStr(payer)}</strong>: $${Number(info.total).toFixed(2)} (${info.count} payments)</div>`).join("");
+              return list;
+            })()
+          }
+        </div>
+        <div class="col">
+          <h4>Usage</h4>
+          ${
+            limits.mode === "pilot" ? `
+            <ul class="muted small">
+              <li>Cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total}</li>
+              <li>Payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included}</li>
+            </ul>
+            ` : `
+            <ul class="muted small">
+              <li>Cases used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month}</li>
+              <li>Overage cases: ${usage.monthly_case_overage_count}</li>
+              <li>Payment rows used: ${usage.monthly_payment_rows_used}</li>
+            </ul>
+            `
+          }
+        </div>
+      </div>
+
+      <div class="hr"></div>
       <h3>Activity</h3>
       <div class="chart-placeholder">${caseCount === 0 ? "No cases uploaded yet." : "Case activity chart will appear here."}</div>
       <div class="chart-placeholder">${paymentCount === 0 ? "No payments uploaded yet." : "Payment activity chart will appear here."}</div>
       ${caseCount === 0 && paymentCount === 0 ? `
-      <section><h3>Recommended Next Step</h3><p>Get started by uploading your first case or payment data to unlock analytics.</p></section>
+      <section><h3>Recommended Next Step</h3><p>Get started by uploading your first denial document or payment data to unlock analytics.</p></section>
       ` : ""}
       <div class="hr"></div>
-      <h3>Usage</h3>
-      ${limits.mode==="pilot" ? `
-      <ul class="muted">
-        <li>Cases remaining: ${PILOT_LIMITS.max_cases_total - caseCount} / ${PILOT_LIMITS.max_cases_total} <span class="tooltip">ⓘ<span class="tooltiptext">Maximum number of cases you can upload during your current plan.</span></span></li>
-        <li>AI jobs/hour: ${PILOT_LIMITS.max_ai_jobs_per_hour} <span class="tooltip">ⓘ<span class="tooltiptext">Number of AI processing jobs you can run per hour.</span></span></li>
-        <li>Concurrent processing: ${PILOT_LIMITS.max_concurrent_analyzing} <span class="tooltip">ⓘ<span class="tooltiptext">Maximum number of cases or payments processed at the same time.</span></span></li>
-        <li>Payment rows remaining: ${paymentAllowance.remaining} of ${PILOT_LIMITS.payment_records_included} <span class="tooltip">ⓘ<span class="tooltiptext">Payment table displays up to 500 rows; additional rows still count toward your usage.</span></span></li>
-      </ul>
-      ` : `
-      <ul class="muted">
-        <li>Case credits used: ${usage.monthly_case_credits_used} / ${limits.case_credits_per_month} <span class="tooltip">ⓘ<span class="tooltiptext">Number of cases processed out of your monthly allotment.</span></span></li>
-        <li>Overage cases: ${usage.monthly_case_overage_count} (est. $${usage.monthly_case_overage_count * limits.overage_price_per_case}) <span class="tooltip">ⓘ<span class="tooltiptext">Cases beyond your monthly allotment are charged an overage fee.</span></span></li>
-        <li>Payment rows remaining: ${paymentAllowance.remaining} <span class="tooltip">ⓘ<span class="tooltiptext">Payment table displays up to 500 rows; additional rows still count toward your usage.</span></span></li>
-      </ul>
-      `}
+      <h3>Usage Limits</h3>
+      ${
+        limits.mode==="pilot" ? `
+        <ul class="muted">
+          <li>Cases remaining: ${PILOT_LIMITS.max_cases_total - caseCount} / ${PILOT_LIMITS.max_cases_total} <span class="tooltip">ⓘ<span class="tooltiptext">Maximum number of cases you can upload during your current plan.</span></span></li>
+          <li>AI jobs/hour: ${PILOT_LIMITS.max_ai_jobs_per_hour} <span class="tooltip">ⓘ<span class="tooltiptext">Number of AI processing jobs you can run per hour.</span></span></li>
+          <li>Concurrent processing: ${PILOT_LIMITS.max_concurrent_analyzing} <span class="tooltip">ⓘ<span class="tooltiptext">Maximum number of cases or payments processed at the same time.</span></span></li>
+          <li>Payment rows remaining: ${paymentRowsAllowance(org.org_id).remaining} of ${PILOT_LIMITS.payment_records_included}</li>
+        </ul>
+        ` : `
+        <ul class="muted">
+          <li>Case credits used: ${usage.monthly_case_credits_used} / ${limits.case_credits_per_month} <span class="tooltip">ⓘ<span class="tooltiptext">Number of cases processed out of your monthly allotment.</span></span></li>
+          <li>Overage cases: ${usage.monthly_case_overage_count} (est. $${usage.monthly_case_overage_count * limits.overage_price_per_case})</li>
+          <li>Payment rows remaining: ${paymentRowsAllowance(org.org_id).remaining}</li>
+        </ul>
+        `
+      }
+
       <div class="btnRow">
-        <a class="btn" href="/upload">Start Case Review</a>
-        <a class="btn secondary" href="/payments">Payment Tracking</a>
-        <a class="btn secondary" href="/analytics">Analytics</a>
+        <a class="btn" href="/upload">Start Denial & Appeal Mgmt</a>
+        <a class="btn secondary" href="/payments">Revenue Mgmt</a>
+        <a class="btn secondary" href="/payments/list">Payment Details</a>
+        <a class="btn secondary" href="/exports">Exports</a>
       </div>
     `, navUser());
     return send(res, 200, html);
@@ -1500,8 +1700,11 @@ const server = http.createServer(async (req, res) => {
 
   // --------- CASE UPLOAD ----------
   if (method === "GET" && pathname === "/upload") {
-    const html = page("Case Upload", `
-      <h2>Case Upload</h2>
+    // Retrieve available templates for the organisation
+    const allTemplates = readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id);
+    const templateOptions = allTemplates.map(t => `<option value="${safeStr(t.template_id)}">${safeStr(t.filename)}</option>`).join("");
+    const html = page("Denial & Appeal Mgmt", `
+      <h2>Denial & Appeal Management</h2>
       <p class="muted">Upload any combination of up to <strong>3 documents</strong> for this case. Denial/payment notices alone are enough to begin.</p>
       <form method="POST" action="/upload" enctype="multipart/form-data">
         <label>Documents (up to 3)</label>
@@ -1509,7 +1712,20 @@ const server = http.createServer(async (req, res) => {
         <input id="case-files" type="file" name="files" multiple required accept=".pdf,.doc,.docx,.jpg,.png" style="display:none" />
         <label>Optional notes</label>
         <textarea name="notes" placeholder="Any context to help review (optional)"></textarea>
-        <div class="btnRow">
+
+        <div class="hr"></div>
+        <h3>Appeal Letter Template</h3>
+        <p class="small muted">Choose an uploaded template or select AI Draft (default) to let the system generate a letter.</p>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <select name="template_id">
+            <option value="">AI Draft (no template)</option>
+            ${templateOptions}
+          </select>
+          <label>Upload new template (optional)</label>
+          <input type="file" name="templateFile" accept=".txt,.doc,.docx,.pdf" />
+        </div>
+
+        <div class="btnRow" style="margin-top:16px;">
           <button class="btn" type="submit">Submit for Review</button>
           <a class="btn secondary" href="/dashboard">Back</a>
         </div>
@@ -1529,12 +1745,18 @@ const server = http.createServer(async (req, res) => {
         caseDrop.addEventListener('drop', e => {
           const files = e.dataTransfer.files;
           if (files.length > 3) { alert('You can upload up to 3 documents.'); return; }
-          const dt = new DataTransfer();
-          for (let i=0; i<files.length && i<3; i++) { dt.items.add(files[i]); }
-          caseInput.files = dt.files;
+          const dt2 = new DataTransfer();
+          for (let i=0; i<files.length && i<3; i++) { dt2.items.add(files[i]); }
+          caseInput.files = dt2.files;
           caseDrop.textContent = files.length + ' file' + (files.length>1 ? 's' : '') + ' selected';
         });
         caseInput.addEventListener('change', () => {
+          if (caseInput.files.length > 3) {
+            alert('You can upload up to 3 documents. Only the first 3 will be used.');
+            const dt2 = new DataTransfer();
+            for (let i=0; i<3; i++) { dt2.items.add(caseInput.files[i]); }
+            caseInput.files = dt2.files;
+          }
           const f = caseInput.files;
           if (f.length) {
             caseDrop.textContent = f.length + ' file' + (f.length>1 ? 's' : '') + ' selected';
@@ -1589,69 +1811,114 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // monthly credit consumption (case)
-    if (limits.mode === "monthly") monthlyConsumeCaseCredit(org.org_id);
-    else pilotConsumeCase(org.org_id);
-
-    // create case record
-    const case_id = uuid();
-    const caseDir = path.join(UPLOADS_DIR, org.org_id, case_id);
-    ensureDir(caseDir);
-
-    const storedFiles = files.map((f) => {
-      const safeName = (f.filename || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
+    // Handle template file upload and multiple document cases
+    // Separate document files (named "files") and optional template upload
+    const docFiles = files.filter(f => f.fieldName === "files");
+    const templateUpload = files.find(f => f.fieldName === "templateFile");
+    // Ensure at least one document file
+    if (!docFiles.length) return redirect(res, "/upload");
+    // Determine selected template from dropdown
+    let selectedTemplateId = (fields.template_id || "").trim();
+    // If a new template file is provided, store it and override selection
+    if (templateUpload && templateUpload.filename) {
+      const safeNameT = (templateUpload.filename || "template").replace(/[^a-zA-Z0-9._-]/g, "_");
+      const newTemplateId = uuid();
+      const templatePath = path.join(TEMPLATES_DIR, `${newTemplateId}_${safeNameT}`);
+      fs.writeFileSync(templatePath, templateUpload.buffer);
+      const allTemplates = readJSON(FILES.templates, []);
+      allTemplates.push({
+        template_id: newTemplateId,
+        org_id: org.org_id,
+        filename: safeNameT,
+        stored_path: templatePath,
+        uploaded_at: nowISO()
+      });
+      writeJSON(FILES.templates, allTemplates);
+      selectedTemplateId = newTemplateId;
+    }
+    // Create a new case per uploaded document
+    const cases = readJSON(FILES.cases, []);
+    const createdCaseIds = [];
+    let limitReason = null;
+    for (const doc of docFiles) {
+      // Check pilot/credit limits before creating each case
+      const canCase = pilotCanCreateCase(org.org_id);
+      if (!canCase.ok) {
+        limitReason = canCase.reason;
+        break;
+      }
+      // Consume a case credit per document
+      if (limits.mode === "monthly") {
+        monthlyConsumeCaseCredit(org.org_id);
+      } else {
+        pilotConsumeCase(org.org_id);
+      }
+      // Create unique case ID and directory
+      const cid = uuid();
+      const caseDir = path.join(UPLOADS_DIR, org.org_id, cid);
+      ensureDir(caseDir);
+      const safeName = (doc.filename || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
       const file_id = uuid();
       const stored_path = path.join(caseDir, `${file_id}_${safeName}`);
-      fs.writeFileSync(stored_path, f.buffer);
-      return {
+      fs.writeFileSync(stored_path, doc.buffer);
+      const storedFiles = [{
         file_id,
         filename: safeName,
-        mime: f.mime,
-        size_bytes: f.buffer.length,
+        mime: doc.mime,
+        size_bytes: doc.buffer.length,
         stored_path,
         uploaded_at: nowISO()
-      };
-    });
-
-    const cases = readJSON(FILES.cases, []);
-    cases.push({
-      case_id,
-      org_id: org.org_id,
-      created_by_user_id: user.user_id,
-      created_at: nowISO(),
-      status: "UPLOAD_RECEIVED",
-      notes: fields.notes || "",
-      files: storedFiles,
-      ai_started_at: null,
-      ai: {
-        denial_summary: null,
-        appeal_considerations: null,
-        draft_text: null,
-        denial_reason_category: null,
-        missing_info: [],
-        time_to_draft_seconds: 0
-      }
-    });
+      }];
+      cases.push({
+        case_id: cid,
+        org_id: org.org_id,
+        created_by_user_id: user.user_id,
+        created_at: nowISO(),
+        status: "UPLOAD_RECEIVED",
+        notes: fields.notes || "",
+        files: storedFiles,
+        template_id: selectedTemplateId || "",
+        // Track payment status for each case. A case is marked paid when appeals have resulted in payment.
+        paid: false,
+        paid_at: null,
+        ai_started_at: null,
+        ai: {
+          denial_summary: null,
+          appeal_considerations: null,
+          draft_text: null,
+          denial_reason_category: null,
+          missing_info: [],
+          time_to_draft_seconds: 0
+        }
+      });
+      createdCaseIds.push(cid);
+    }
     writeJSON(FILES.cases, cases);
-
-    // queue AI (respect concurrency + rate)
-    const okAI = canStartAI(org.org_id);
-    if (!okAI.ok) {
-      // leave case in UPLOAD_RECEIVED (queued)
-      return redirect(res, `/status?case_id=${encodeURIComponent(case_id)}`);
-    }
-
-    // start analyzing
+    // For each created case, attempt to start AI if capacity allows
     const cases2 = readJSON(FILES.cases, []);
-    const c = cases2.find(x => x.case_id === case_id && x.org_id === org.org_id);
-    if (c) {
-      c.status = "ANALYZING";
-      c.ai_started_at = nowISO();
-      writeJSON(FILES.cases, cases2);
-      recordAIJob(org.org_id);
+    for (const cid of createdCaseIds) {
+      const cObj = cases2.find(x => x.case_id === cid && x.org_id === org.org_id);
+      if (cObj && cObj.status === "UPLOAD_RECEIVED") {
+        const okAI = canStartAI(org.org_id);
+        if (okAI.ok) {
+          cObj.status = "ANALYZING";
+          cObj.ai_started_at = nowISO();
+          writeJSON(FILES.cases, cases2);
+          recordAIJob(org.org_id);
+        }
+      }
     }
-
-    return redirect(res, `/status?case_id=${encodeURIComponent(case_id)}`);
+    // Redirect to status page for first created case
+    if (createdCaseIds.length > 0) {
+      return redirect(res, `/status?case_id=${encodeURIComponent(createdCaseIds[0])}`);
+    }
+    // If no cases were created (limit reached), show limit message
+    const html = page("Limit", `
+      <h2>Limit Reached</h2>
+      <p class="error">${safeStr(limitReason || "Case limit reached")}</p>
+      <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
+    `, navUser());
+    return send(res, 403, html);
   }
 
   // status (poll)
@@ -1723,6 +1990,8 @@ const server = http.createServer(async (req, res) => {
         <div class="btnRow">
           <button class="btn" type="submit">Save Edits</button>
           <a class="btn secondary" href="/download-draft?case_id=${encodeURIComponent(case_id)}">Download TXT</a>
+          <a class="btn secondary" href="/download-draft?case_id=${encodeURIComponent(case_id)}&fmt=doc">Download Word</a>
+          <a class="btn secondary" href="/download-draft?case_id=${encodeURIComponent(case_id)}&fmt=pdf">Download PDF</a>
           <a class="btn secondary" href="/analytics">Analytics</a>
         </div>
       </form>
@@ -1746,24 +2015,174 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
   }
 
-  if (method === "GET" && pathname === "/download-draft") {
-    const case_id = parsed.query.case_id || "";
+  // New route: handle marking a case as paid
+  if (method === "POST" && pathname === "/case/mark-paid") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const case_id = params.get("case_id") || "";
+    const paid_at = params.get("paid_at") || "";
+
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
-    if (!c) return redirect(res, "/dashboard");
-    res.writeHead(200, {
-      "Content-Type": "text/plain",
-      "Content-Disposition": `attachment; filename="draft_${case_id}.txt"`
+    if (c) {
+      c.paid = true;
+      c.paid_at = paid_at;
+      writeJSON(FILES.cases, cases);
+      auditLog({ actor: 'user', action: 'mark_paid', case_id, org_id: org.org_id, paid_at });
+    }
+    return redirect(res, "/dashboard");
+  }
+
+  // -------- PAYMENT DETAILS LIST --------
+  // Display a detailed list of payments for the organisation with filtering options.
+  if (method === "GET" && pathname === "/payments/list") {
+    // Load all payments for this organisation
+    let payments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+    // Build sets for year, month, quarter and payer filters from all payments (not filtered yet)
+    const yearsSet = new Set();
+    const payersSet = new Set();
+    const monthsSet = new Set();
+    payments.forEach(p => {
+      let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+      let d;
+      try {
+        d = dtStr ? new Date(dtStr) : new Date();
+      } catch {
+        d = new Date();
+      }
+      yearsSet.add(d.getFullYear());
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      monthsSet.add(monthKey);
+      const payerName = (p.payer || "Unknown").trim() || "Unknown";
+      payersSet.add(payerName);
     });
-    return res.end(c.ai.draft_text || "");
+    // Read filter parameters
+    const yearFilter = parsed.query.year || "";
+    const quarterFilter = parsed.query.quarter || "";
+    const monthFilter = parsed.query.month || "";
+    const payerFilter = parsed.query.payer || "";
+    // Apply year filter
+    if (yearFilter) {
+      payments = payments.filter(p => {
+        let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+        let d;
+        try { d = dtStr ? new Date(dtStr) : new Date(); } catch { d = new Date(); }
+        return d.getFullYear() === Number(yearFilter);
+      });
+    }
+    // Apply quarter filter (Q1..Q4)
+    if (quarterFilter) {
+      payments = payments.filter(p => {
+        let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+        let d;
+        try { d = dtStr ? new Date(dtStr) : new Date(); } catch { d = new Date(); }
+        const month = d.getMonth() + 1;
+        const q = Math.floor((month - 1) / 3) + 1;
+        return `Q${q}` === quarterFilter;
+      });
+    }
+    // Apply month filter (YYYY-MM)
+    if (monthFilter) {
+      payments = payments.filter(p => {
+        let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+        let d;
+        try { d = dtStr ? new Date(dtStr) : new Date(); } catch { d = new Date(); }
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+        return key === monthFilter;
+      });
+    }
+    // Apply payer filter
+    if (payerFilter) {
+      payments = payments.filter(p => {
+        const name = (p.payer || "Unknown").trim() || "Unknown";
+        return name === payerFilter;
+      });
+    }
+    // Compute aggregated stats by payer
+    const stats = {};
+    payments.forEach(p => {
+      const payerName = (p.payer || "Unknown").trim() || "Unknown";
+      const amt = Number(p.amount_paid || p.amountPaid || 0);
+      if (!stats[payerName]) stats[payerName] = { total: 0, count: 0 };
+      stats[payerName].total += amt;
+      stats[payerName].count += 1;
+    });
+    // Build options for filters
+    const yearOptions = Array.from(yearsSet).sort().map(y => `<option value="${y}"${yearFilter == y ? ' selected' : ''}>${y}</option>`).join('');
+    const quarterOptions = ["Q1","Q2","Q3","Q4"].map(q => `<option value="${q}"${quarterFilter === q ? ' selected' : ''}>${q}</option>`).join('');
+    const monthOptions = Array.from(monthsSet).sort().map(m => `<option value="${m}"${monthFilter === m ? ' selected' : ''}>${m}</option>`).join('');
+    const payerOptions = Array.from(payersSet).sort().map(p => `<option value="${safeStr(p)}"${payerFilter === p ? ' selected' : ''}>${safeStr(p)}</option>`).join('');
+    // Build summary table rows
+    let summaryRows = '';
+    Object.keys(stats).sort((a,b) => stats[b].total - stats[a].total).forEach(p => {
+      const s = stats[p];
+      summaryRows += `<tr><td>${safeStr(p)}</td><td>${s.count}</td><td>$${s.total.toFixed(2)}</td></tr>`;
+    });
+    const summaryTable = summaryRows ? `<table><thead><tr><th>Payer</th><th># Payments</th><th>Total Paid</th></tr></thead><tbody>${summaryRows}</tbody></table>` : `<p class='muted'>No payments found.</p>`;
+    // Build detailed table (limit to 500 rows)
+    let detailRows = '';
+    payments.slice(0, 500).forEach(p => {
+      let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+      let d;
+      try { d = dtStr ? new Date(dtStr) : new Date(); } catch { d = new Date(); }
+      const dateStr = d.toLocaleDateString();
+      detailRows += `<tr><td>${safeStr(p.claim_number || p.claimNumber || '')}</td><td>${safeStr((p.payer || 'Unknown').trim() || 'Unknown')}</td><td>$${Number(p.amount_paid || p.amountPaid || 0).toFixed(2)}</td><td>${dateStr}</td></tr>`;
+    });
+    const detailTable = detailRows ? `<table><thead><tr><th>Claim Number</th><th>Payer</th><th>Amount Paid</th><th>Payment Date</th></tr></thead><tbody>${detailRows}</tbody></table>` : `<p class='muted'>No payments found.</p>`;
+    const html = page("Payment Details", `
+      <h2>Payment Details</h2>
+      <form method="GET" action="/payments/list" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+        <div style="display:flex;flex-direction:column;">
+          <label>Year</label>
+          <select name="year">
+            <option value="">All</option>
+            ${yearOptions}
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Quarter</label>
+          <select name="quarter">
+            <option value="">All</option>
+            ${quarterOptions}
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Month</label>
+          <select name="month">
+            <option value="">All</option>
+            ${monthOptions}
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Payer</label>
+          <select name="payer">
+            <option value="">All</option>
+            ${payerOptions}
+          </select>
+        </div>
+        <div>
+          <button class="btn" type="submit" style="margin-top:1.6em;">Filter</button>
+          <a class="btn secondary" href="/payments/list" style="margin-top:1.6em;">Reset</a>
+        </div>
+      </form>
+      <div class="hr"></div>
+      <h3>Summary by Payer</h3>
+      ${summaryTable}
+      <div class="hr"></div>
+      <h3>Payments (${payments.length} rows${payments.length > 500 ? ', showing first 500' : ''})</h3>
+      ${detailTable}
+      <div class="hr"></div>
+      <div class="btnRow"><a class="btn secondary" href="/dashboard">Back to Dashboard</a></div>
+    `, navUser());
+    return send(res, 200, html);
   }
 
   // -------- PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) --------
   if (method === "GET" && pathname === "/payments") {
     const allow = paymentRowsAllowance(org.org_id);
     const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
-    const html = page("Payment Tracking", `
-      <h2>Payment Tracking (Analytics Only)</h2>
+    const html = page("Revenue Management", `
+      <h2>Revenue Management</h2>
       <p class="muted">Upload bulk payment files in CSV or Excel format.</p>
       <div class="chart-placeholder">${paymentCount === 0 ? "Upload payment data to see trends." : "Payment trend chart will appear here."}</div>
       <section>
@@ -1775,33 +2194,52 @@ const server = http.createServer(async (req, res) => {
         </ul>
       </section>
       <section>
-
-      <h3>Import Notes</h3>
-
-      <ul class="muted"> 
-        <li>CSV files are parsed for analytics only <span class="tooltip">ⓘ<span class="tooltiptext">CSV files are used to compute insights but not stored permanently.</span></span></li> 
-        <li>Excel files are stored but not analysed <span class="tooltip">ⓘ<span class="tooltiptext">Excel uploads are stored for record keeping but analytics operate on CSV.</span></span></li> 
-        <li>500‑row display cap <span class="tooltip">ⓘ<span class="tooltiptext">The payment table shows up to 500 rows. Additional rows still count towards your usage.</span></span></li> 
-      </ul> </section> <p class="muted
-      small"><strong>Rows remaining:</strong> ${allow.remaining}</p> <form method="POST"
-      action="/payments" enctype="multipart/form-data"> <label>Upload CSV/XLS/XLSX
-      (analytics-only)</label> <div id="pay-dropzone" class="dropzone">Drop a
-      CSV/XLS/XLSX file here or click to select</div> <input id="pay-file" type="file"
-      name="payfile" accept=".csv,.xls,.xlsx" required style="display:none" /> <div
-      class="btnRow"> <button class="btn" type="submit">Upload for Analytics</button> <a
-      class="btn secondary" href="/dashboard">Back</a> </div> </form> <div class="hr"></div> <p
-      class="muted small">Note: This does not create appeal drafts. It updates payer and
-      payment timeline analytics.</p> <script> const payDrop = document.getElementById('pay-dropzone');
-      const payInput = document.getElementById('pay-file'); payDrop.addEventListener('click', () =>
-      payInput.click()); ['dragenter','dragover'].forEach(evt => { payDrop.addEventListener(evt, e =>
-      { e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover'); }); });
-      ['dragleave','drop'].forEach(evt => { payDrop.addEventListener(evt, e => {
-      e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover'); }); });
-      payDrop.addEventListener('drop', e => { const files = e.dataTransfer.files; if (files.length >
-      1) { alert('Only one file at a time.'); return; } const dt = new DataTransfer();
-      dt.items.add(files[0]); payInput.files = dt.files; payDrop.textContent = files[0].name;
-      }); payInput.addEventListener('change', () => { const file = payInput.files[0]; if (file)
-      payDrop.textContent = file.name; }); </script>
+        <h3>Import Notes</h3>
+        <ul class="muted">
+          <li>CSV files are parsed for analytics only <span class="tooltip">ⓘ<span class="tooltiptext">CSV files are used to compute insights but not stored permanently.</span></span></li>
+          <li>Excel files are stored but not analysed <span class="tooltip">ⓘ<span class="tooltiptext">Excel uploads are stored for record keeping but analytics operate on CSV.</span></span></li>
+          <li>500‑row display cap <span class="tooltip">ⓘ<span class="tooltiptext">The payment table shows up to 500 rows. Additional rows still count towards your usage.</span></span></li>
+        </ul>
+      </section>
+      <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
+      <form method="POST" action="/payments" enctype="multipart/form-data">
+        <label>Upload CSV/XLS/XLSX (analytics-only)</label>
+        <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div>
+        <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx" required style="display:none" />
+        <div class="btnRow">
+          <button class="btn" type="submit">Upload for Analytics</button>
+          <a class="btn secondary" href="/dashboard">Back</a>
+        </div>
+      </form>
+      <div class="hr"></div>
+      <p class="muted small">Note: This does not create appeal drafts. It updates payer and payment timeline analytics.</p>
+      <script>
+        const payDrop = document.getElementById('pay-dropzone');
+        const payInput = document.getElementById('pay-file');
+        payDrop.addEventListener('click', () => payInput.click());
+        ['dragenter','dragover'].forEach(evt => {
+          payDrop.addEventListener(evt, e => {
+            e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover');
+          });
+        });
+        ['dragleave','drop'].forEach(evt => {
+          payDrop.addEventListener(evt, e => {
+            e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover');
+          });
+        });
+        payDrop.addEventListener('drop', e => {
+          const files = e.dataTransfer.files;
+          if (files.length > 1) { alert('Only one file at a time.'); return; }
+          const dt = new DataTransfer();
+          dt.items.add(files[0]);
+          payInput.files = dt.files;
+          payDrop.textContent = files[0].name;
+        });
+        payInput.addEventListener('change', () => {
+          const file = payInput.files[0];
+          if (file) payDrop.textContent = file.name;
+        });
+      </script>
     `, navUser());
     return send(res, 200, html);
   }
@@ -1812,55 +2250,64 @@ const server = http.createServer(async (req, res) => {
     const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
     if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
     const boundary = boundaryMatch[1];
+
     const { files } = await parseMultipart(req, boundary);
     const f = files.find(x => x.fieldName === "payfile") || files[0];
     if (!f) return redirect(res, "/payments");
+
     // validate extension
     const nameLower = (f.filename || "").toLowerCase();
     const isCSV = nameLower.endsWith(".csv");
     const isXLS = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx");
     if (!isCSV && !isXLS) {
-      const html = page("Payment Tracking", `
-        <h2>Payment Tracking</h2> 
-        <p class="error">Only CSV or Excel files are allowed for payment tracking.</p> 
+      const html = page("Revenue Management", `
+        <h2>Revenue Management</h2>
+        <p class="error">Only CSV or Excel files are allowed for payment tracking.</p>
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
       `, navUser());
       return send(res, 400, html);
     }
+
     // file size cap (use same as plan)
     const limits = getLimitProfile(org.org_id);
     const maxBytes = limits.max_file_size_mb * 1024 * 1024;
     if (f.buffer.length > maxBytes) {
-      const html = page("Payment Tracking", `
-        <h2>Payment Tracking</h2> 
-        <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p> 
-        <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
+      const html = page("Revenue Management", `
+        <h2>Revenue Management</h2>
+        <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
+        <div class "btnRow"><a class "btn secondary" href="/payments">Back</a></div>
       `, navUser());
       return send(res, 400, html);
     }
+
     // store raw file
     const dir = path.join(UPLOADS_DIR, org.org_id, "payments");
     ensureDir(dir);
-    const stored = path.join(dir, `${Date.now()}${(f.filename || "payments").replace(/[^a-zA-Z0-9.-]/g,"_")}`);
+    const stored = path.join(dir, `${Date.now()}_${(f.filename || "payments").replace(/[^a-zA-Z0-9._-]/g,"_")}`);
     fs.writeFileSync(stored, f.buffer);
+
     // parse CSV now (rows count & limited record storage)
     let rowsAdded = 0;
     if (isCSV) {
       const text = f.buffer.toString("utf8");
       const parsedCSV = parseCSV(text);
       const rows = parsedCSV.rows;
+
       const allowance = paymentRowsAllowance(org.org_id);
       const remaining = allowance.remaining;
       const toUse = Math.min(remaining, rows.length);
+
       // store up to 500 records per upload for demo, but count all used
       const storeLimit = Math.min(toUse, 500);
       const paymentsData = readJSON(FILES.payments, []);
+
       for (let i=0;i<storeLimit;i++){
         const r = rows[i];
         const claim = pickField(r, ["claim", "claim#", "claim number", "claimnumber", "clm"]);
         const payer = pickField(r, ["payer", "insurance", "carrier", "plan"]);
         const amt = pickField(r, ["paid", "amount", "payment", "paid amount", "allowed"]);
         const datePaid = pickField(r, ["date", "paid date", "payment date", "remit date"]);
+
         paymentsData.push({
           payment_id: uuid(),
           org_id: org.org_id,
@@ -1873,16 +2320,25 @@ const server = http.createServer(async (req, res) => {
         });
       }
       writeJSON(FILES.payments, paymentsData);
+
       rowsAdded = toUse;
       consumePaymentRows(org.org_id, rowsAdded);
     } else {
       // Excel stored but not parsed in v1 (still counts as 0 rows until CSV provided)
       rowsAdded = 0;
     }
-    const html = page("Payment Tracking", `
-      <h2>Payment File Received</h2> 
-      <p class="muted">Your file was uploaded successfully.</p> 
-      <ul class="muted"> <li><strong>File:</strong> ${safeStr(f.filename)}</li> <li><strong>Rows processed:</strong> ${rowsAdded} ${isXLS ? "(Excel not parsed — export to CSV for full analytics)" : ""}</li> </ul> <div class="btnRow"> <a class="btn" href="/analytics">View Analytics</a> <a class="btn secondary" href="/payments">Upload more</a> </div>
+
+    const html = page("Revenue Management", `
+      <h2>Payment File Received</h2>
+      <p class="muted">Your file was uploaded successfully.</p>
+      <ul class="muted">
+        <li><strong>File:</strong> ${safeStr(f.filename)}</li>
+        <li><strong>Rows processed:</strong> ${rowsAdded} ${isXLS ? "(Excel not parsed — export to CSV for full analytics)" : ""}</li>
+      </ul>
+      <div class="btnRow">
+        <a class="btn" href="/analytics">View Analytics</a>
+        <a class="btn secondary" href="/payments">Upload more</a>
+      </div>
     `, navUser());
     return send(res, 200, html);
   }
@@ -1907,9 +2363,44 @@ const server = http.createServer(async (req, res) => {
       payerHtml += `</tbody></table>`;
     }
     const html = page("Analytics", `
-      <h2>Analytics</h2> 
-      <p class="muted">Derived solely from uploaded documents and user‑provided context.</p> 
-      <div class="row"> <div class="col"> <h3>Case Distribution</h3> <div class="chart-placeholder">${a.totalCases === 0 ? "No cases uploaded" : "Donut chart will render here."}</div> </div> <div class="col"> <h3>Payments by Payer</h3> ${payerHtml} </div> </div> <div class="hr"></div> <div class="row"> <div class="col"> <h3>Pilot Snapshot</h3> <ul class="muted"> <li>Cases uploaded: ${a.totalCases}</li> <li>Drafts generated: ${a.drafts}</li> <li>Avg time to draft: ${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</li> </ul> </div> <div class="col"> <h3>Usage</h3> ${limits.mode==="pilot" ? ` <ul class="muted"> <li> Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total} <span class="tooltip">ⓘ <span class="tooltiptext">Maximum number of cases allowed during your pilot.</span> </span> </li> <li> Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display only 500 rows, but all uploaded rows count toward usage.</span> </span> </li> </ul> `:` <ul class="muted"> <li> Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month} <span class="tooltip">ⓘ <span class="tooltiptext">Number of cases processed out of your monthly allotment.</span> </span> </li> <li> Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count * limits.overage_price_per_case}) <span class="tooltip">ⓘ <span class="tooltiptext">Cases beyond your allotment incur an additional fee.</span> </span> </li> <li> Monthly payment rows used: ${usage.monthly_payment_rows_used} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display up to 500 rows; all rows still count toward usage.</span> </span> </li> </ul> `} </div> </div>
+      <h2>Analytics</h2>
+      <p class="muted">Derived solely from uploaded documents and user‑provided context.</p>
+      <div class="row">
+        <div class="col">
+          <h3>Case Distribution</h3>
+          <div class="chart-placeholder">${a.totalCases === 0 ? "No cases uploaded" : "Donut chart will render here."}</div>
+        </div>
+        <div class="col">
+          <h3>Payments by Payer</h3>
+          ${payerHtml}
+        </div>
+      </div>
+      <div class="hr"></div>
+      <div class="row">
+        <div class="col">
+          <h3>Pilot Snapshot</h3>
+          <ul class="muted">
+            <li>Cases uploaded: ${a.totalCases}</li>
+            <li>Drafts generated: ${a.drafts}</li>
+            <li>Avg time to draft: ${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</li>
+          </ul>
+        </div>
+        <div class="col">
+          <h3>Usage</h3>
+          ${limits.mode==="pilot" ? `
+          <ul class="muted">
+            <li> Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total} <span class="tooltip">ⓘ <span class="tooltiptext">Maximum number of cases allowed during your pilot.</span> </span> </li>
+            <li> Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display only 500 rows, but all uploaded rows count toward usage.</span> </span> </li>
+          </ul>
+          `:`
+          <ul class="muted">
+            <li> Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month} <span class="tooltip">ⓘ <span class="tooltiptext">Number of cases processed out of your monthly allotment.</span> </span> </li>
+            <li> Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count * limits.overage_price_per_case}) <span class="tooltip">ⓘ <span class="tooltiptext">Cases beyond your allotment incur an additional fee.</span> </span> </li>
+            <li> Monthly payment rows used: ${usage.monthly_payment_rows_used} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display up to 500 rows; all rows still count toward usage.</span> </span> </li>
+          </ul>
+          `}
+        </div>
+      </div>
     `, navUser());
     return send(res, 200, html);
   }
@@ -1917,13 +2408,13 @@ const server = http.createServer(async (req, res) => {
   // exports hub
   if (method === "GET" && pathname === "/exports") {
     const html = page("Exports", `
-      <h2>Exports</h2> 
-      <p class="muted">Download pilot outputs for leadership and operations review.</p> 
-      <div class="btnRow"> 
-        <a class="btn secondary" href="/export/cases.csv">Cases CSV</a> 
-        <a class="btn secondary" href="/export/payments.csv">Payments CSV</a> 
-        <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a> 
-        <a class="btn secondary" href="/report">Printable Pilot Summary</a> 
+      <h2>Exports</h2>
+      <p class="muted">Download pilot outputs for leadership and operations review.</p>
+      <div class="btnRow">
+        <a class="btn secondary" href="/export/cases.csv">Cases CSV</a>
+        <a class="btn secondary" href="/export/payments.csv">Payments CSV</a>
+        <a class "btn secondary" href="/export/analytics.csv">Analytics CSV</a>
+        <a class "btn secondary" href="/report">Printable Pilot Summary</a>
       </div>
     `, navUser());
     return send(res, 200, html);
@@ -1940,7 +2431,6 @@ const server = http.createServer(async (req, res) => {
       c.ai?.denial_reason_category || ""
     ].map(x => `"${String(x).replace(/"/g,'""')}"`).join(","));
     const csv = [header, ...rows].join("\n");
-
     res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=cases.csv" });
     return res.end(csv);
   }
@@ -1960,7 +2450,6 @@ const server = http.createServer(async (req, res) => {
   if (method === "GET" && pathname === "/export/analytics.csv") {
     const aExport = computeAnalytics(org.org_id);
     const header = ["metric","value"].join(",");
-
     const rows = [
       ["cases_uploaded", aExport.totalCases],
       ["drafts_generated", aExport.drafts],
@@ -1975,9 +2464,24 @@ const server = http.createServer(async (req, res) => {
     const aReport = computeAnalytics(org.org_id);
     const pilotRep = getPilot(org.org_id) || ensurePilot(org.org_id);
     const html = page("Pilot Summary", `
-      <h2>Pilot Summary Report</h2> 
-      <p class="muted">Organization: ${safeStr(org.org_name)}</p> 
-      <div class="hr"></div> <ul class="muted"> <li>Pilot start: ${new Date(pilotRep.started_at).toLocaleDateString()}</li> <li>Pilot end: ${new Date(pilotRep.ends_at).toLocaleDateString()}</li> </ul> <h3>Snapshot</h3> <ul class="muted"> <li>Cases uploaded: ${aReport.totalCases}</li> <li>Drafts generated: ${aReport.drafts}</li> <li>Avg time to draft: ${aReport.avgDraftSeconds ? `${aReport.avgDraftSeconds}s` : "—"}</li> </ul> <div class="btnRow"> <button class="btn secondary" onclick="window.print()">Print / Save as PDF</button> <a class="btn secondary" href="/exports">Back</a> </div> <p class="muted small">All insights are derived from uploaded documents during the pilot period.</p>
+      <h2>Pilot Summary Report</h2>
+      <p class="muted">Organization: ${safeStr(org.org_name)}</p>
+      <div class="hr"></div>
+      <ul class="muted">
+        <li>Pilot start: ${new Date(pilotRep.started_at).toLocaleDateString()}</li>
+        <li>Pilot end: ${new Date(pilotRep.ends_at).toLocaleDateString()}</li>
+      </ul>
+      <h3>Snapshot</h3>
+      <ul class="muted">
+        <li>Cases uploaded: ${aReport.totalCases}</li>
+        <li>Drafts generated: ${aReport.drafts}</li>
+        <li>Avg time to draft: ${aReport.avgDraftSeconds ? `${aReport.avgDraftSeconds}s` : "—"}</li>
+      </ul>
+      <div class="btnRow">
+        <button class="btn secondary" onclick="window.print()">Print / Save as PDF</button>
+        <a class="btn secondary" href="/exports">Back</a>
+      </div>
+      <p class="muted small">All insights are derived from uploaded documents during the pilot period.</p>
     `, navUser());
     return send(res, 200, html);
   }
@@ -1988,9 +2492,22 @@ const server = http.createServer(async (req, res) => {
     if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
     const p2 = getPilot(org.org_id);
     const html = page("Pilot Complete", `
-      <h2>Pilot Complete</h2> 
-      <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p> 
-      <div class="hr"></div> <p class="muted"> To limit unnecessary data retention, documents and analytics from this pilot will be securely deleted <strong>14 days after the pilot end date</strong> unless you continue monthly access. </p> <ul class="muted"> <li>Pilot end date: ${new Date(p2.ends_at).toLocaleDateString()}</li> <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li> </ul> <div class="btnRow"> <a class="btn" href="https://tjhealthpro.com">Continue Monthly Access (via Shopify)</a> <a class="btn secondary" href="/exports">Download Exports</a> <a class="btn secondary" href="/logout">Logout</a> </div>
+      <h2>Pilot Complete</h2>
+      <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p>
+      <div class="hr"></div>
+      <p class="muted">
+        To limit unnecessary data retention, documents and analytics from this pilot will be securely deleted
+        <strong>14 days after the pilot end date</strong> unless you continue monthly access.
+      </p>
+      <ul class="muted">
+        <li>Pilot end date: ${new Date(p2.ends_at).toLocaleDateString()}</li>
+        <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li>
+      </ul>
+      <div class="btnRow">
+        <a class="btn" href="https://tjhealthpro.com">Continue Monthly Access (via Shopify)</a>
+        <a class="btn secondary" href="/exports">Download Exports</a>
+        <a class="btn secondary" href="/logout">Logout</a>
+      </div>
     `, navUser());
     return send(res, 200, html);
   }
