@@ -90,6 +90,18 @@ function uuid() {
   );
 }
 
+function nowISO() { return new Date().toISOString(); }
+function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
+
+function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
+function ensureFile(p, defaultVal) { if (!fs.existsSync(p)) fs.writeFileSync(p, JSON.stringify(defaultVal, null, 2)); }
+function readJSON(p, fallback) { ensureFile(p, fallback); return JSON.parse(fs.readFileSync(p, "utf8") || JSON.stringify(fallback)); }
+function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); }
+
+function safeStr(s) {
+  return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]));
+}
+
 function parseCookies(req) {
   const header = req.headers.cookie || "";
   const out = {};
@@ -2860,4 +2872,3 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
