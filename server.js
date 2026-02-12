@@ -292,6 +292,8 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   body { background:white !important; }
   .card { box-shadow:none !important; border:none !important; }
 }
+`;
+
 /**
  * FIX: all HTML + scripts must live inside returned strings.
  * Password toggle preserved.
@@ -336,35 +338,7 @@ function page(title, content, navHtml="") {
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
-
-      <div class="hr"></div>
-      <h3>Processing Status</h3>
-      ${
-        recentCases.length === 0
-          ? `<p class="muted">No recent uploads.</p>`
-          : `<table>
-              <thead><tr><th>Case ID</th><th>Status</th><th>Countdown</th><th>Open</th></tr></thead>
-              <tbody>${
-                recentCases.map(c => {
-                  const started = c.ai_started_at ? new Date(c.ai_started_at).getTime() : 0;
-                  const remaining = (c.status === "ANALYZING" && started)
-                    ? Math.max(0, Math.ceil((${AI_JOB_DELAY_MS} - (Date.now() - started)) / 1000))
-                    : 0;
-                  const openLink = (c.status === "DRAFT_READY")
-                    ? `/draft?case_id=${encodeURIComponent(c.case_id)}`
-                    : `/status?case_id=${encodeURIComponent(c.case_id)}`;
-                  return `<tr>
-                    <td>${safeStr(c.case_id)}</td>
-                    <td>${safeStr(c.status)}</td>
-                    <td>${c.status === "ANALYZING" ? `<span class="badge warn countdown" data-seconds="${remaining}">${remaining}s</span>` : (c.status === "DRAFT_READY" ? `<span class="badge ok">Ready</span>` : `<span class="badge warn">Queued</span>`)}</td>
-                    <td><a href="${openLink}">Open</a></td>
-                  </tr>`;
-                }).join("")
-              }</tbody>
-            </table>`
-      }
-
-      <script>
+<script>
 /* ===== PASSWORD VISIBILITY TOGGLE (GLOBAL) ===== */
 document.querySelectorAll('input[type="password"]').forEach(input => {
   if (input.parentNode && input.parentNode.classList && input.parentNode.classList.contains("password-wrap")) return;
@@ -1016,6 +990,27 @@ function computeWeeklySummary(org_id) {
   const top3 = Object.entries(topPayers).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([payer,total])=>({ payer, total }));
 
   return { newCasesCount: newCases.length, paymentsCount: paidThisWeek.length, recoveredDollarsThisWeek, deniedWinsCount: deniedRecoveredThisWeek.length, top3 };
+}
+
+
+function projectNextMonthDenials(org_id) {
+  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
+  if (!cases.length) return null;
+
+  const byMonth = {};
+  cases.forEach(c => {
+    const d = new Date(c.created_at);
+    if (Number.isNaN(d.getTime())) return;
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
+    byMonth[key] = (byMonth[key] || 0) + 1;
+  });
+
+  const months = Object.keys(byMonth).sort();
+  if (months.length < 2) return null;
+
+  const last3 = months.slice(-3);
+  const avg = last3.reduce((s,k)=>s + byMonth[k], 0) / last3.length;
+  return Math.round(avg);
 }
 
 
@@ -2334,6 +2329,50 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <a class="btn secondary" href="/payments/list">View Payment Details</a>
         </div>
       </form>
+      <div class="hr"></div>
+      <h3>Processing Status</h3>
+      ${
+        recentCases.length === 0
+          ? `<p class="muted">No recent uploads.</p>`
+          : `<table>
+              <thead><tr><th>Case ID</th><th>Status</th><th>Countdown</th><th>Open</th></tr></thead>
+              <tbody>${
+                recentCases.map(c => {
+                  const started = c.ai_started_at ? new Date(c.ai_started_at).getTime() : 0;
+                  const remaining = (c.status === "ANALYZING" && started)
+                    ? Math.max(0, Math.ceil((AI_JOB_DELAY_MS - (Date.now() - started)) / 1000))
+                    : 0;
+                  const openLink = (c.status === "DRAFT_READY")
+                    ? `/draft?case_id=${encodeURIComponent(c.case_id)}`
+                    : `/status?case_id=${encodeURIComponent(c.case_id)}`;
+                  return `<tr>
+                    <td>${safeStr(c.case_id)}</td>
+                    <td>${safeStr(c.status)}</td>
+                    <td>${c.status === "ANALYZING" ? `<span class="badge warn countdown" data-seconds="${remaining}">${remaining}s</span>` : (c.status === "DRAFT_READY" ? `<span class="badge ok">Ready</span>` : `<span class="badge warn">Queued</span>`)}</td>
+                    <td><a href="${openLink}">Open</a></td>
+                  </tr>`;
+                }).join("")
+              }</tbody>
+            </table>
+            <script>
+              // Countdown timers for analyzing cases
+              document.querySelectorAll(".countdown").forEach(el => {
+                let s = parseInt(el.getAttribute("data-seconds") || "0", 10);
+                if (!s || s <= 0) return;
+                const t = setInterval(() => {
+                  s--;
+                  if (s <= 0) {
+                    el.textContent = "Ready";
+                    clearInterval(t);
+                    window.location.reload();
+                  } else {
+                    el.textContent = s + "s";
+                  }
+                }, 1000);
+              });
+            </script>`
+      }
+
 
       <div class="hr"></div>
       <p class="muted small">Payment records on file: ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p>
