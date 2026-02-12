@@ -165,48 +165,6 @@ function getAuth(req) {
   const cookies = parseCookies(req);
   return verifySession(cookies.tjhp_session);
 }
-// ===== Helpers =====
-function uuid() {
-  if (crypto.randomUUID) return crypto.randomUUID();
-  const b = crypto.randomBytes(16);
-  b[6] = (b[6] & 0x0f) | 0x40;
-  b[8] = (b[8] & 0x3f) | 0x80;
-  const hex = Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
-  return (
-    hex.slice(0, 8) + "-" +
-    hex.slice(8, 12) + "-" +
-    hex.slice(12, 16) + "-" +
-    hex.slice(16, 20) + "-" +
-    hex.slice(20)
-  );
-}
-
-function nowISO() { return new Date().toISOString(); }
-
-function addDaysISO(iso, days) {
-  const d = new Date(iso);
-  d.setDate(d.getDate() + days);
-  return d.toISOString();
-}
-
-function ensureDir(p) {
-  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-}
-
-function ensureFile(p, defaultVal) {
-  if (!fs.existsSync(p)) {
-    fs.writeFileSync(p, JSON.stringify(defaultVal, null, 2));
-  }
-}
-
-function readJSON(p, fallback) {
-  ensureFile(p, fallback);
-  return JSON.parse(fs.readFileSync(p, "utf8") || JSON.stringify(fallback));
-}
-
-function writeJSON(p, val) {
-  fs.writeFileSync(p, JSON.stringify(val, null, 2));
-}
 
 // ===== Init storage =====
 ensureDir(DATA_DIR);
