@@ -24,7 +24,7 @@ const SESSION_TTL_DAYS = 7;
 const AI_JOB_DELAY_MS = Number(process.env.AI_JOB_DELAY_MS || 20000); // demo default 20s
 
 // ===== Pilot / Retention =====
-const PILOT_DAYS = 30;
+const PILOT_DAYS = 14;
 const RETENTION_DAYS_AFTER_PILOT = 14;
 
 // ===== Limits (LOCKED) =====
@@ -204,6 +204,7 @@ function adminHash() {
 
 // ===== UI =====
 const css = `
+
 :root{
   --bg:#f6f7fb; --card:#fff; --text:#111827; --muted:#6b7280;
   --border:#e5e7eb; --primary:#111827; --primaryText:#fff;
@@ -284,14 +285,15 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   .btnRow { flex-direction: column; }
   .btn { width: 100%; }
 }
-`
+
+
+/* Print styling */
 @media print {
-  .nav, .btnRow, form { display: none !important; }
-  body { background: white !important; }
-  .card { box-shadow: none !important; border: none !important; }
+  .nav, .btn, .btnRow, form { display:none !important; }
+  body { background:white !important; }
+  .card { box-shadow:none !important; border:none !important; }
 }
 `;
-
 /**
  * FIX: all HTML + scripts must live inside returned strings.
  * Password toggle preserved.
@@ -321,9 +323,50 @@ function page(title, content, navHtml="") {
     </div>
   </div>
 
+<div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
+  <button class="btn" type="button" onclick="window.__tjhpToggleChat()">AI Assistant</button>
+  <div id="aiChatBox" style="display:none;width:320px;height:420px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;margin-top:8px;box-shadow:0 12px 30px rgba(17,24,39,.10);">
+    <div class="muted small" style="margin-bottom:6px;">Ask questions about your denials, payments, trends, and what pages do.</div>
+    <div id="aiChatMsgs" style="height:300px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px;"></div>
+    <input id="aiChatInput" placeholder="Ask about your data..." style="margin-top:8px;" />
+    <div class="btnRow" style="margin-top:8px;">
+      <button class="btn secondary" type="button" onclick="window.__tjhpSendChat()">Send</button>
+      <button class="btn secondary" type="button" onclick="window.__tjhpToggleChat()">Close</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
-<script>
+
+      <div class="hr"></div>
+      <h3>Processing Status</h3>
+      ${
+        recentCases.length === 0
+          ? `<p class="muted">No recent uploads.</p>`
+          : `<table>
+              <thead><tr><th>Case ID</th><th>Status</th><th>Countdown</th><th>Open</th></tr></thead>
+              <tbody>${
+                recentCases.map(c => {
+                  const started = c.ai_started_at ? new Date(c.ai_started_at).getTime() : 0;
+                  const remaining = (c.status === "ANALYZING" && started)
+                    ? Math.max(0, Math.ceil((${AI_JOB_DELAY_MS} - (Date.now() - started)) / 1000))
+                    : 0;
+                  const openLink = (c.status === "DRAFT_READY")
+                    ? `/draft?case_id=${encodeURIComponent(c.case_id)}`
+                    : `/status?case_id=${encodeURIComponent(c.case_id)}`;
+                  return `<tr>
+                    <td>${safeStr(c.case_id)}</td>
+                    <td>${safeStr(c.status)}</td>
+                    <td>${c.status === "ANALYZING" ? `<span class="badge warn countdown" data-seconds="${remaining}">${remaining}s</span>` : (c.status === "DRAFT_READY" ? `<span class="badge ok">Ready</span>` : `<span class="badge warn">Queued</span>`)}</td>
+                    <td><a href="${openLink}">Open</a></td>
+                  </tr>`;
+                }).join("")
+              }</tbody>
+            </table>`
+      }
+
+      <script>
 /* ===== PASSWORD VISIBILITY TOGGLE (GLOBAL) ===== */
 document.querySelectorAll('input[type="password"]').forEach(input => {
   if (input.parentNode && input.parentNode.classList && input.parentNode.classList.contains("password-wrap")) return;
@@ -352,11 +395,7 @@ function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Dashboard & Analytics</a>
-  <a href="/upload">Upload</a>
-  <a href="/report">Report</a>
-  <a href="/account">Account</a>
-  <a href="/logout">Logout</a>`;
+  return `<a href="/dashboard">Dashboard &amp; Analytics</a><a href="/upload">Upload</a><a href="/report">Report</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -408,7 +447,8 @@ function getUsage(org_id) {
       monthly_case_overage_count: 0,
       monthly_payment_rows_used: 0,
       monthly_payment_credits_used: 0,
-      ai_job_timestamps: []
+      ai_job_timestamps: [],
+      ai_chat_used: 0
     };
     usage.push(u);
     writeJSON(FILES.usage, usage);
@@ -419,6 +459,7 @@ function getUsage(org_id) {
     u.monthly_case_overage_count = 0;
     u.monthly_payment_rows_used = 0;
     u.monthly_payment_credits_used = 0;
+    u.ai_chat_used = 0;
     writeJSON(FILES.usage, usage);
   }
   return u;
@@ -433,6 +474,65 @@ function auditLog(entry) {
   const audit = readJSON(FILES.audit, []);
   audit.push({ ...entry, at: nowISO() });
   writeJSON(FILES.audit, audit);
+}
+
+
+// ===== Plans (Pricing + Limits) =====
+// Pricing (for partner summary / UI display): Starter $249, Growth $599, Pro $1200, Enterprise $2000
+const PLAN_CONFIG = {
+  starter:   { price_monthly: 249, ai_chat_limit: 50,  case_credits_per_month: 50,  payment_tracking_credits_per_month: 10 },
+  growth:    { price_monthly: 599, ai_chat_limit: 150, case_credits_per_month: 150, payment_tracking_credits_per_month: 50 },
+  pro:       { price_monthly: 1200, ai_chat_limit: 400, case_credits_per_month: 400, payment_tracking_credits_per_month: 150 },
+  enterprise:{ price_monthly: 2000, ai_chat_limit: 999999, case_credits_per_month: 999999, payment_tracking_credits_per_month: 999999 },
+};
+
+function getActivePlanName(org_id) {
+  const sub = getSub(org_id);
+  if (sub && sub.status === "active" && sub.plan) return String(sub.plan);
+  return "pilot";
+}
+
+function getAIChatLimit(org_id) {
+  const sub = getSub(org_id);
+  if (sub && sub.status === "active") {
+    const plan = (sub.plan || "starter").toLowerCase();
+    return (PLAN_CONFIG[plan]?.ai_chat_limit) ?? 50;
+  }
+  // Pilot = 10 total questions for the 14-day trial
+  const pilot = getPilot(org_id) || ensurePilot(org_id);
+  if (pilot && pilot.status === "active") return 10;
+  return 0;
+}
+
+function ensureSubscriptionForOrg(org_id) {
+  const subs = readJSON(FILES.subscriptions, []);
+  let s = subs.find(x => x.org_id === org_id);
+  if (!s) {
+    s = {
+      sub_id: uuid(),
+      org_id,
+      status: "inactive",
+      plan: "",
+      customer_email: "",
+      case_credits_per_month: MONTHLY_DEFAULTS.case_credits_per_month,
+      payment_tracking_credits_per_month: MONTHLY_DEFAULTS.payment_tracking_credits_per_month,
+      updated_at: nowISO()
+    };
+    subs.push(s);
+    writeJSON(FILES.subscriptions, subs);
+  }
+  return s;
+}
+
+function applyPlanToSubscription(sub, planName) {
+  const key = (planName || "").toLowerCase();
+  const cfg = PLAN_CONFIG[key] || PLAN_CONFIG.starter;
+  sub.plan = key;
+  sub.case_credits_per_month = cfg.case_credits_per_month;
+  sub.payment_tracking_credits_per_month = cfg.payment_tracking_credits_per_month;
+  sub.ai_chat_limit = cfg.ai_chat_limit;
+  sub.status = "active";
+  sub.updated_at = nowISO();
 }
 
 // ===== Account status =====
@@ -1114,7 +1214,7 @@ const server = http.createServer(async (req, res) => {
         </label>
         <div class="btnRow">
           <button class="btn" type="submit">Create Account</button>
-          <a class "btn secondary" href="/login">Sign In</a>
+          <a class="btn secondary" href="/login">Sign In</a>
         </div>
       </form>
     `, navPublic());
@@ -1185,7 +1285,7 @@ const server = http.createServer(async (req, res) => {
         <label>Password</label>
         <input name="password" type="password" required />
         <div class="btnRow">
-          <button class "btn" type="submit">Sign In</button>
+          <button class="btn" type="submit">Sign In</button>
           <a class="btn secondary" href="/signup">Create Account</a>
         </div>
       </form>
@@ -1232,9 +1332,9 @@ const server = http.createServer(async (req, res) => {
       <form method="POST" action="/forgot-password">
         <label>Email</label>
         <input name="email" type="email" required />
-        <div class "btnRow">
-          <button class "btn" type="submit">Generate Reset Link</button>
-          <a class "btn secondary" href="/login">Back</a>
+        <div class="btnRow">
+          <button class="btn" type="submit">Generate Reset Link</button>
+          <a class="btn secondary" href="/login">Back</a>
         </div>
       </form>
     `, navPublic());
@@ -1303,7 +1403,7 @@ const server = http.createServer(async (req, res) => {
       const html = page("Set New Password", `
         <h2>Set a New Password</h2>
         <p class="error">Passwords must match and be at least 8 characters.</p>
-        <div class "btnRow"><a class "btn secondary" href="/forgot-password">Try again</a></div>
+        <div class="btnRow"><a class="btn secondary" href="/forgot-password">Try again</a></div>
       `, navPublic());
       return send(res, 400, html);
     }
@@ -1348,8 +1448,8 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, page("Terminated", `
       <h2>Account Terminated</h2>
       <p>This account has been terminated. Access to the workspace is no longer available.</p>
-      <p class "muted">If you believe this is an error, contact support.</p>
-      <div class "btnRow"><a class "btn secondary" href="/logout">Logout</a></div>
+      <p class="muted">If you believe this is an error, contact support.</p>
+      <div class="btnRow"><a class="btn secondary" href="/logout">Logout</a></div>
     `, navPublic()));
   }
 
@@ -1391,6 +1491,65 @@ const server = http.createServer(async (req, res) => {
     }
     return send(res, 200, `Subscription set to ${s.status} for ${email}`, "text/plain");
   }
+
+  
+  // Shopify webhook (automatic plan sync)
+  if (method === "POST" && pathname === "/shopify/webhook") {
+    const rawBody = await parseBody(req);
+
+    // Optional: Verify webhook signature if SHOPIFY_WEBHOOK_SECRET is set
+    const secret = process.env.SHOPIFY_WEBHOOK_SECRET || "";
+    if (secret) {
+      try {
+        const hmacHeader = req.headers["x-shopify-hmac-sha256"] || "";
+        const digest = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("base64");
+        if (digest !== hmacHeader) {
+          return send(res, 401, "Invalid HMAC", "text/plain");
+        }
+      } catch {
+        return send(res, 401, "Invalid HMAC", "text/plain");
+      }
+    }
+
+    let data = {};
+    try { data = JSON.parse(rawBody); } catch { data = {}; }
+
+    // Try to resolve customer email and plan name from webhook payload
+    const email = (data.customer_email || data.customer?.email || "").toLowerCase();
+    const planTitle = (data.plan || data.plan_name || data.line_items?.[0]?.title || data.title || "").toLowerCase();
+    const status = (data.status || data.subscription_status || "active").toLowerCase();
+
+    if (!email) return send(res, 200, "No email in webhook", "text/plain");
+
+    const u = getUserByEmail(email);
+    if (!u) return send(res, 200, "User not found", "text/plain");
+
+    const subs = readJSON(FILES.subscriptions, []);
+    let sub = subs.find(x => x.org_id === u.org_id);
+    if (!sub) {
+      sub = { sub_id: uuid(), org_id: u.org_id, status: "inactive", plan: "", customer_email: email, updated_at: nowISO() };
+      subs.push(sub);
+    }
+    sub.customer_email = email;
+
+    // Determine plan key
+    let planKey = "starter";
+    if (planTitle.includes("growth")) planKey = "growth";
+    else if (planTitle.includes("pro")) planKey = "pro";
+    else if (planTitle.includes("enterprise")) planKey = "enterprise";
+    else if (planTitle.includes("starter")) planKey = "starter";
+
+    if (status === "cancelled" || status === "canceled" || status === "inactive" || status === "paused") {
+      sub.status = "inactive";
+      sub.updated_at = nowISO();
+    } else {
+      applyPlanToSubscription(sub, planKey);
+    }
+
+    writeJSON(FILES.subscriptions, subs);
+    return send(res, 200, "OK", "text/plain");
+  }
+
 
   // ---------- ADMIN ROUTES ----------
   if (pathname.startsWith("/admin/")) {
@@ -1613,6 +1772,20 @@ const server = http.createServer(async (req, res) => {
   </div>
 
   <div class="hr"></div>
+  <h3>Plan Override</h3>
+  <label>Set Plan</label>
+  <select name="plan_override">
+    <option value="">Select plan</option>
+    <option value="starter">Starter ($249)</option>
+    <option value="growth">Growth ($599)</option>
+    <option value="pro">Pro ($1200)</option>
+    <option value="enterprise">Enterprise ($2000)</option>
+  </select>
+  <div class="btnRow">
+    <button class="btn secondary" name="action" value="override_plan">Apply Plan</button>
+  </div>
+
+  <div class="hr"></div>
   <h3>Free Trial</h3>
   <label>Trial Days</label>
   <select name="trial_days">
@@ -1662,6 +1835,19 @@ const server = http.createServer(async (req, res) => {
           writeJSON(FILES.pilots, pilots);
         }
         auditLog({ actor:"admin", action:"terminate", org_id, reason });
+      } else if (action === "override_plan") {
+        const planKey = (params.get("plan_override") || "").toLowerCase();
+        if (!planKey) return redirect(res, `/admin/org?org_id=${encodeURIComponent(org_id)}`);
+        const subs = readJSON(FILES.subscriptions, []);
+        let sub = subs.find(x => x.org_id === org_id);
+        if (!sub) {
+          sub = { sub_id: uuid(), org_id, status: "inactive", plan: "", customer_email: "", updated_at: nowISO() };
+          subs.push(sub);
+        }
+        applyPlanToSubscription(sub, planKey);
+        writeJSON(FILES.subscriptions, subs);
+        setOrgStatus(org_id, "active", reason);
+        auditLog({ actor:"admin", action:"override_plan", org_id, reason, plan: planKey });
       } else if (action === "extend_pilot_7") {
         const pilots = readJSON(FILES.pilots, []);
         const idx = pilots.findIndex(p => p.org_id === org_id);
@@ -1740,6 +1926,75 @@ const server = http.createServer(async (req, res) => {
   getUsage(org.org_id);
 
   if (!isAccessEnabled(org.org_id)) return redirect(res, "/pilot-complete");
+  // ---------- AI Chat (Org-scoped assistant) ----------
+  if (method === "POST" && pathname === "/ai/chat") {
+    const usage = getUsage(org.org_id);
+    const limit = getAIChatLimit(org.org_id);
+
+    if ((usage.ai_chat_used || 0) >= limit) {
+      return send(res, 200, JSON.stringify({ answer: "You have reached your AI question limit for your current plan. Please upgrade to continue." }), "application/json");
+    }
+
+    // Count usage (pilot total; monthly resets via month_key rollover)
+    usage.ai_chat_used = (usage.ai_chat_used || 0) + 1;
+    saveUsage(usage);
+
+    const body = await parseBody(req);
+    let msg = "";
+    try {
+      msg = (JSON.parse(body).message || "").trim();
+    } catch {
+      msg = "";
+    }
+
+    const analytics = computeAnalytics(org.org_id);
+    const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id).slice(-20);
+    const paymentsAll = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).slice(-50);
+
+    const context = {
+      organization: org.org_name,
+      plan: getActivePlanName(org.org_id),
+      analytics,
+      recent_cases: casesAll,
+      recent_payments: paymentsAll
+    };
+
+    // If OPENAI_API_KEY not set, return helpful fallback
+    if (!process.env.OPENAI_API_KEY) {
+      return send(res, 200, JSON.stringify({
+        answer: "AI Assistant is not configured (missing OPENAI_API_KEY). I can only answer once the key is set. Your current recovery rate is " + analytics.recoveryRate + "% with total recovered $" + Number(analytics.totalRecoveredFromDenials||0).toFixed(2) + "."
+      }), "application/json");
+    }
+
+    const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+
+    const systemMsg = "You are TJ Healthcare Pro's internal AI assistant. Only answer using the organization's uploaded denial and payment data and computed analytics provided. If asked about unrelated topics, explain you can only answer questions about their uploaded data and what the app does. Do not provide medical advice. Be concise and actionable.";
+    const userMsg = "ORG DATA (JSON):\n" + JSON.stringify(context, null, 2) + "\n\nUSER QUESTION:\n" + msg;
+
+    try {
+      const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: systemMsg },
+            { role: "user", content: userMsg }
+          ],
+          temperature: 0.2
+        })
+      });
+      const data = await resp.json();
+      const answer = data?.choices?.[0]?.message?.content || "I couldn't generate an answer right now.";
+      return send(res, 200, JSON.stringify({ answer }), "application/json");
+    } catch (e) {
+      return send(res, 200, JSON.stringify({ answer: "AI Assistant error. Please try again." }), "application/json");
+    }
+  }
+
 
   // lock screen
   if (method === "GET" && pathname === "/lock") {
@@ -1748,7 +2003,24 @@ const server = http.createServer(async (req, res) => {
       <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid — and surface patterns that are easy to miss when data lives in different places.</p>
       <p class="muted center">You’ll be guided to the next step automatically.</p>
       <div class="center"><span class="badge warn">Initializing</span></div>
-      <script>setTimeout(()=>{window.location.href="/upload";}, ${LOCK_SCREEN_MS});</script>
+      <script>setTimeout(()=>{window.location.href="/upload";}, ${LOCK_SCREEN_MS});
+        // Countdown timers for analyzing cases
+        document.querySelectorAll(".countdown").forEach(el => {
+          let s = parseInt(el.getAttribute("data-seconds") || "0", 10);
+          if (!s || s <= 0) return;
+          const t = setInterval(() => {
+            s--;
+            if (s <= 0) {
+              el.textContent = "Ready";
+              clearInterval(t);
+              window.location.reload();
+            } else {
+              el.textContent = s + "s";
+            }
+          }, 1000);
+        });
+
+      </script>
     `, navUser());
     return send(res, 200, html);
   }
@@ -1900,7 +2172,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       const rows = allCases.map(c => {
         const displayStatus = c.paid ? "Complete" : c.status;
         let link = "";
-        if (status === "DRAFT_READY") link = `<a href="/draft?case_id=${encodeURIComponent(c.case_id)}">${safeStr(c.case_id)}</a>`;
+        if (c.status === "DRAFT_READY") link = `<a href="/draft?case_id=${encodeURIComponent(c.case_id)}">${safeStr(c.case_id)}</a>`;
         else link = `<a href="/status?case_id=${encodeURIComponent(c.case_id)}">${safeStr(c.case_id)}</a>`;
         // Payment cell: if paid show date, else show form
         let paymentCell = "";
@@ -1925,8 +2197,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     }
 
     const html = page("Dashboard", `
-      <h2>Dashboard & Analytics</h2>
-      <div class="btnRow"><button class="btn secondary" onclick="window.print()">Print Dashboard</button></div>
+      <h2>Dashboard</h2>
       <p class="muted">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
       ${planBadge}
       <div class="hr"></div>
@@ -1998,7 +2269,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <a class="btn" href="/upload">Start Denial & Appeal Mgmt</a>
         <a class="btn secondary" href="/payments">Revenue Mgmt</a>
         <a class="btn secondary" href="/payments/list">Payment Details</a>
-        <a class="btn secondary" href="/exports">Exports</a>
+        
       </div>
     `, navUser());
     return send(res, 200, html);
@@ -2008,6 +2279,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
   if (method === "GET" && pathname === "/upload") {
     const allTemplates = readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id);
     const templateOptions = allTemplates.map(t => `<option value="${safeStr(t.template_id)}">${safeStr(t.filename)}</option>`).join("");
+
+    // Recent case status for inline processing display
+    const allCasesForStatus = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+    allCasesForStatus.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+    const recentCases = allCasesForStatus.slice(0, 8);
 
     const allow = paymentRowsAllowance(org.org_id);
     const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
@@ -2266,8 +2542,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
     }
     // Redirect to status page for first created case
     if (createdCaseIds.length > 0) {
-      return redirect(res, `/status?case_id=${encodeURIComponent(createdCaseIds[0])}`);
-    }
+      return redirect(res, "/upload?submitted=1");
+}
     // If no cases were created (limit reached), show limit message
     const html = page("Limit", `
       <h2>Limit Reached</h2>
@@ -2606,7 +2882,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       const html = page("Revenue Management", `
         <h2>Revenue Management</h2>
         <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
-        <div class "btnRow"><a class "btn secondary" href="/payments">Back</a></div>
+        <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
       `, navUser());
       return send(res, 400, html);
     }
@@ -2676,9 +2952,11 @@ if (method === "POST" && pathname === "/case/mark-paid") {
   }
 
   // analytics page with placeholders and bar chart preview
-  if (method === "GET" && pathname === "/analytics") { return redirect(res, "/dashboard"); }
+  if (method === "GET" && pathname === "/analytics") {
+    return redirect(res, "/dashboard");
+  }
 
-// -------- ACCOUNT --------
+  // -------- ACCOUNT --------
   if (method === "GET" && pathname === "/account") {
     const sub = getSub(org.org_id);
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
@@ -2698,6 +2976,9 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
         <tr><th>Pilot End Date</th><td>${safeStr(planEnds)}</td></tr>
         <tr><th>Access Mode</th><td>${safeStr(limits.mode)}</td></tr>
+        <tr><th>AI Questions Used</th><td>${safeStr(String(getUsage(org.org_id).ai_chat_used || 0))}</td></tr>
+        <tr><th>AI Questions Limit</th><td>${safeStr(String(getAIChatLimit(org.org_id)))}</td></tr>
+        <tr><th>AI Questions Remaining</th><td>${safeStr(String(Math.max(0, getAIChatLimit(org.org_id) - (getUsage(org.org_id).ai_chat_used || 0))))}</td></tr>
       </table>
 
       <div class="hr"></div>
@@ -2719,7 +3000,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       <h3>Upgrade Plan</h3>
       <p class="muted">To upgrade plans or manage billing, use the link below.</p>
       <div class="btnRow">
-        <a class="btn secondary" href="https://tjhealthpro.com">Upgrade / Manage Plan</a>
+        <a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Plan</a>
       </div>
     `, navUser());
     return send(res, 200, html);
@@ -2775,8 +3056,8 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       <div class="btnRow">
         <a class="btn secondary" href="/export/cases.csv">Cases CSV</a>
         <a class="btn secondary" href="/export/payments.csv">Payments CSV</a>
-        <a class "btn secondary" href="/export/analytics.csv">Analytics CSV</a>
-        <a class "btn secondary" href="/report">Printable Pilot Summary</a>
+        <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a>
+        <a class="btn secondary" href="/report">Printable Pilot Summary</a>
       </div>
     `, navUser());
     return send(res, 200, html);
@@ -2823,147 +3104,32 @@ if (method === "POST" && pathname === "/case/mark-paid") {
   }
 
   if (method === "GET" && pathname === "/report") {
-    const startDate = parsed.query.start || "";
-    const endDate = parsed.query.end || "";
-
-    let casesF = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
-    let paymentsF = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
-
-    if (startDate) {
-      const start = new Date(startDate).getTime();
-      casesF = casesF.filter(c => new Date(c.created_at).getTime() >= start);
-      paymentsF = paymentsF.filter(p => new Date(p.date_paid || p.created_at).getTime() >= start);
-    }
-    if (endDate) {
-      const end = new Date(endDate).getTime();
-      casesF = casesF.filter(c => new Date(c.created_at).getTime() <= end);
-      paymentsF = paymentsF.filter(p => new Date(p.date_paid || p.created_at).getTime() <= end);
-    }
-
-    const totalCases = casesF.length;
-    const paidCases = casesF.filter(c => c.paid).length;
-    const recoveryRate = totalCases > 0 ? ((paidCases / totalCases) * 100).toFixed(1) : "0.0";
-
-    const totalRecovered = paymentsF.filter(p => p.denied_approved).reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
-
-    // Denial reasons distribution (best-effort from AI category)
-    const reasonCounts = {};
-    casesF.forEach(c => {
-      const r = (c.ai && c.ai.denial_reason_category) ? c.ai.denial_reason_category : "Unknown";
-      reasonCounts[r] = (reasonCounts[r] || 0) + 1;
-    });
-
-    // Payer totals
-    const payerTotals = {};
-    paymentsF.forEach(p => {
-      const payer = (p.payer || "Unknown").trim() || "Unknown";
-      payerTotals[payer] = (payerTotals[payer] || 0) + Number(p.amount_paid || 0);
-    });
-
-    const html = page("Report", `
-      <h2>Report</h2>
-      <p class="muted">Filter by date range to generate an updated report. Use Print to save PDF.</p>
-
-      <form method="GET" action="/report" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
-        <div style="min-width:180px;">
-          <label>Start Date</label>
-          <input type="date" name="start" value="${safeStr(startDate)}"/>
-        </div>
-        <div style="min-width:180px;">
-          <label>End Date</label>
-          <input type="date" name="end" value="${safeStr(endDate)}"/>
-        </div>
-        <div class="btnRow" style="margin-top:0;">
-          <button class="btn" type="submit">Generate</button>
-          <a class="btn secondary" href="/report">Reset</a>
-          <button class="btn secondary" type="button" onclick="window.print()">Print / Save as PDF</button>
-          <a class="btn secondary" href="/report/export?start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}">Export CSV</a>
-        </div>
-      </form>
-
+    const aReport = computeAnalytics(org.org_id);
+    const pilotRep = getPilot(org.org_id) || ensurePilot(org.org_id);
+    const html = page("Pilot Summary", `
+      <h2>Pilot Summary Report</h2>
+      <p class="muted">Organization: ${safeStr(org.org_name)}</p>
       <div class="hr"></div>
-
-      <h3>Summary</h3>
       <ul class="muted">
-        <li><strong>Total denied cases:</strong> ${totalCases}</li>
-        <li><strong>Recovery rate:</strong> ${recoveryRate}%</li>
-        <li><strong>Total recovered (Denied → Approved):</strong> $${Number(totalRecovered).toFixed(2)}</li>
+        <li>Pilot start: ${new Date(pilotRep.started_at).toLocaleDateString()}</li>
+        <li>Pilot end: ${new Date(pilotRep.ends_at).toLocaleDateString()}</li>
       </ul>
-
-      <div class="hr"></div>
-      <h3>Denials by Reason</h3>
-      ${
-        Object.keys(reasonCounts).length
-          ? `<table><thead><tr><th>Reason</th><th>Count</th></tr></thead><tbody>${
-              Object.entries(reasonCounts).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${safeStr(k)}</td><td>${v}</td></tr>`).join("")
-            }</tbody></table>`
-          : `<p class="muted">No denial cases in selected timeframe.</p>`
-      }
-
-      <div class="hr"></div>
-      <h3>Payments by Payer</h3>
-      ${
-        Object.keys(payerTotals).length
-          ? `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>${
-              Object.entries(payerTotals).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${safeStr(k)}</td><td>$${Number(v).toFixed(2)}</td></tr>`).join("")
-            }</tbody></table>`
-          : `<p class="muted">No payments in selected timeframe.</p>`
-      }
-
-      <div class="hr"></div>
-      <h3>Payment Line Items (Top 200)</h3>
-      ${
-        paymentsF.length
-          ? `<table><thead><tr><th>Claim</th><th>Payer</th><th>Amount</th><th>Date</th><th>Denied?</th></tr></thead><tbody>${
-              paymentsF.slice(0,200).map(p=>{
-                const dt = new Date(p.date_paid || p.created_at);
-                const denied = p.denied_approved ? "Yes" : "";
-                return `<tr><td>${safeStr(p.claim_number||"")}</td><td>${safeStr(p.payer||"")}</td><td>$${Number(p.amount_paid||0).toFixed(2)}</td><td>${dt.toLocaleDateString()}</td><td>${denied}</td></tr>`;
-              }).join("")
-            }</tbody></table>`
-          : `<p class="muted">No payments found for timeframe.</p>`
-      }
-
-      <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
+      <h3>Snapshot</h3>
+      <ul class="muted">
+        <li>Cases uploaded: ${aReport.totalCases}</li>
+        <li>Drafts generated: ${aReport.drafts}</li>
+        <li>Avg time to draft: ${aReport.avgDraftSeconds ? `${aReport.avgDraftSeconds}s` : "—"}</li>
+      </ul>
+      <div class="btnRow">
+        <button class="btn secondary" onclick="window.print()">Print / Save as PDF</button>
+        <a class="btn secondary" href="/exports">Back</a>
+      </div>
+      <p class="muted small">All insights are derived from uploaded documents during the pilot period.</p>
     `, navUser());
     return send(res, 200, html);
   }
 
-  if (method === "GET" && pathname === "/report/export") {
-    const startDate = parsed.query.start || "";
-    const endDate = parsed.query.end || "";
-
-    let casesF = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
-    let paymentsF = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
-
-    if (startDate) {
-      const start = new Date(startDate).getTime();
-      casesF = casesF.filter(c => new Date(c.created_at).getTime() >= start);
-      paymentsF = paymentsF.filter(p => new Date(p.date_paid || p.created_at).getTime() >= start);
-    }
-    if (endDate) {
-      const end = new Date(endDate).getTime();
-      casesF = casesF.filter(c => new Date(c.created_at).getTime() <= end);
-      paymentsF = paymentsF.filter(p => new Date(p.date_paid || p.created_at).getTime() <= end);
-    }
-
-    const header = ["Type","ID","Payer","Amount","Date","DeniedApproved"].join(",");
-    const rows = [];
-
-    casesF.forEach(c => {
-      rows.push(["Denial", c.case_id, "", "", c.created_at, c.paid ? "Paid" : "Unpaid"]);
-    });
-
-    paymentsF.forEach(p => {
-      rows.push(["Payment", p.claim_number || "", p.payer || "", p.amount_paid || "", p.date_paid || p.created_at || "", p.denied_approved ? "Yes" : ""]);
-    });
-
-    const csv = [header, ...rows.map(r => r.map(x => `"${String(x||"").replace(/"/g,'""')}"`).join(","))].join("
-");
-    res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=report_export.csv" });
-    return res.end(csv);
-  }
-// pilot complete page
+  // pilot complete page
   if (method === "GET" && pathname === "/pilot-complete") {
     const pilotEnd = getPilot(org.org_id) || ensurePilot(org.org_id);
     if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
@@ -2981,7 +3147,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li>
       </ul>
       <div class="btnRow">
-        <a class="btn" href="https://tjhealthpro.com">Continue Monthly Access (via Shopify)</a>
+        <a class="btn" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Continue Monthly Access (via Shopify)</a>
         <a class="btn secondary" href="/exports">Download Exports</a>
         <a class="btn secondary" href="/logout">Logout</a>
       </div>
