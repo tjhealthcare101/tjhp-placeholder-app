@@ -75,17 +75,19 @@ const FILES = {
 const TEMPLATES_DIR = path.join(DATA_DIR, "templates");
 
 // ===== Helpers =====
-function uuid() { return crypto.randomUUID(); }
-function nowISO() { return new Date().toISOString(); }
-function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
-
-function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
-function ensureFile(p, defaultVal) { if (!fs.existsSync(p)) fs.writeFileSync(p, JSON.stringify(defaultVal, null, 2)); }
-function readJSON(p, fallback) { ensureFile(p, fallback); return JSON.parse(fs.readFileSync(p, "utf8") || JSON.stringify(fallback)); }
-function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); }
-
-function safeStr(s) {
-  return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]));
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.randomBytes(16);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const hex = Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+  return (
+    hex.slice(0, 8) + "-" +
+    hex.slice(8, 12) + "-" +
+    hex.slice(12, 16) + "-" +
+    hex.slice(16, 20) + "-" +
+    hex.slice(20)
+  );
 }
 
 function parseCookies(req) {
@@ -332,7 +334,7 @@ function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Dashboard</a><a href="/upload">Denial &amp; Appeal&nbsp;Mgmt</a><a href="/payments">Revenue&nbsp;Mgmt</a><a href="/payments/list">Payment&nbsp;Details</a><a href="/executive">Executive</a><a href="/weekly-summary">Weekly&nbsp;Summary</a><a href="/exports">Exports</a><a href="/logout">Logout</a>`;
+  return `<a href="/dashboard">Dashboard</a><a href="/upload">Upload</a><a href="/exports">Exports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -1981,22 +1983,31 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
   // --------- CASE UPLOAD ----------
   if (method === "GET" && pathname === "/upload") {
-    // Retrieve available templates for the organisation
     const allTemplates = readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id);
     const templateOptions = allTemplates.map(t => `<option value="${safeStr(t.template_id)}">${safeStr(t.filename)}</option>`).join("");
-    const html = page("Denial & Appeal Mgmt", `
-      <h2>Denial & Appeal Management</h2>
-      <p class="muted">Upload any combination of up to <strong>3 documents</strong> for this case. Denial/payment notices alone are enough to begin.</p>
+
+    const allow = paymentRowsAllowance(org.org_id);
+    const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
+
+    const html = page("Uploads", `
+      <h2>Uploads</h2>
+      <p class="muted">Upload denial documents to generate appeal drafts, and upload payment files to power revenue analytics. All results appear on your Dashboard.</p>
+
+      <div class="hr"></div>
+      <h3>Denial &amp; Appeal Upload</h3>
+      <p class="muted">Upload up to <strong>3 denial documents</strong>. Each document becomes its own case using the selected template.</p>
+
       <form method="POST" action="/upload" enctype="multipart/form-data">
-        <label>Documents (up to 3)</label>
+        <label>Denial Documents (up to 3)</label>
         <div id="case-dropzone" class="dropzone">Drop up to 3 documents here or click to select</div>
         <input id="case-files" type="file" name="files" multiple required accept=".pdf,.doc,.docx,.jpg,.png" style="display:none" />
+
         <label>Optional notes</label>
         <textarea name="notes" placeholder="Any context to help review (optional)"></textarea>
 
         <div class="hr"></div>
         <h3>Appeal Letter Template</h3>
-        <p class="small muted">Choose an uploaded template or select AI Draft (default) to let the system generate a letter.</p>
+        <p class="small muted">Choose an uploaded template or select AI Draft (default).</p>
         <div style="display:flex;flex-direction:column;gap:8px;">
           <select name="template_id">
             <option value="">AI Draft (no template)</option>
@@ -2007,13 +2018,31 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
 
         <div class="btnRow" style="margin-top:16px;">
-          <button class="btn" type="submit">Submit for Review</button>
+          <button class="btn" type="submit">Submit Denials</button>
           <a class="btn secondary" href="/dashboard">Back</a>
         </div>
       </form>
+
       <div class="hr"></div>
-      <p class="muted small">Limits: 3 files/case · ${getLimitProfile(org.org_id).mode==="pilot" ? "10MB/file" : "20MB/file"}</p>
+      <h3 id="payments">Payment Upload</h3>
+      <p class="muted">Upload bulk payment files in CSV or Excel format. CSV drives analytics.</p>
+      <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
+
+      <form method="POST" action="/payments" enctype="multipart/form-data">
+        <label>Upload CSV/XLS/XLSX</label>
+        <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div>
+        <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx" required style="display:none" />
+        <div class="btnRow">
+          <button class="btn" type="submit">Upload Payments</button>
+          <a class="btn secondary" href="/payments/list">View Payment Details</a>
+        </div>
+      </form>
+
+      <div class="hr"></div>
+      <p class="muted small">Payment records on file: ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p>
+
       <script>
+        // Denial dropzone
         const caseDrop = document.getElementById('case-dropzone');
         const caseInput = document.getElementById('case-files');
         caseDrop.addEventListener('click', () => caseInput.click());
@@ -2027,7 +2056,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           const files = e.dataTransfer.files;
           if (files.length > 3) { alert('You can upload up to 3 documents.'); return; }
           const dt2 = new DataTransfer();
-          for (let i=0; i<files.length && i<3; i++) { dt2.items.add(files[i]); }
+          for (let i=0; i<files.length && i<3; i++) dt2.items.add(files[i]);
           caseInput.files = dt2.files;
           caseDrop.textContent = files.length + ' file' + (files.length>1 ? 's' : '') + ' selected';
         });
@@ -2035,13 +2064,35 @@ if (method === "GET" && pathname === "/weekly-summary") {
           if (caseInput.files.length > 3) {
             alert('You can upload up to 3 documents. Only the first 3 will be used.');
             const dt2 = new DataTransfer();
-            for (let i=0; i<3; i++) { dt2.items.add(caseInput.files[i]); }
+            for (let i=0; i<3; i++) dt2.items.add(caseInput.files[i]);
             caseInput.files = dt2.files;
           }
-          const f = caseInput.files;
-          if (f.length) {
-            caseDrop.textContent = f.length + ' file' + (f.length>1 ? 's' : '') + ' selected';
+          if (caseInput.files.length) {
+            caseDrop.textContent = caseInput.files.length + ' file' + (caseInput.files.length>1 ? 's' : '') + ' selected';
           }
+        });
+
+        // Payment dropzone
+        const payDrop = document.getElementById('pay-dropzone');
+        const payInput = document.getElementById('pay-file');
+        payDrop.addEventListener('click', () => payInput.click());
+        ['dragenter','dragover'].forEach(evt => {
+          payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover'); });
+        });
+        ['dragleave','drop'].forEach(evt => {
+          payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover'); });
+        });
+        payDrop.addEventListener('drop', e => {
+          const files = e.dataTransfer.files;
+          if (files.length > 1) { alert('Only one file at a time.'); return; }
+          const dt = new DataTransfer();
+          dt.items.add(files[0]);
+          payInput.files = dt.files;
+          payDrop.textContent = files[0].name;
+        });
+        payInput.addEventListener('change', () => {
+          const file = payInput.files[0];
+          if (file) payDrop.textContent = file.name;
         });
       </script>
     `, navUser());
@@ -2498,69 +2549,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 
   // -------- PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) --------
   if (method === "GET" && pathname === "/payments") {
-    const allow = paymentRowsAllowance(org.org_id);
-    const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
-    const html = page("Revenue Management", `
-      <h2>Revenue Management</h2>
-      <p class="muted">Upload bulk payment files in CSV or Excel format.</p>
-      <div class="chart-placeholder">${paymentCount === 0 ? "Upload payment data to see trends." : "Payment trend chart will appear here."}</div>
-      <section>
-        <h3>What This Unlocks</h3>
-        <ul class="muted">
-          <li>Identify underperforming payers</li>
-          <li>Spot delayed payments early</li>
-          <li>Compare payment trends over time</li>
-        </ul>
-      </section>
-      <section>
-        <h3>Import Notes</h3>
-        <ul class="muted">
-          <li>CSV files are parsed for analytics only <span class="tooltip">ⓘ<span class="tooltiptext">CSV files are used to compute insights but not stored permanently.</span></span></li>
-          <li>Excel files are stored but not analysed <span class="tooltip">ⓘ<span class="tooltiptext">Excel uploads are stored for record keeping but analytics operate on CSV.</span></span></li>
-          <li>500‑row display cap <span class="tooltip">ⓘ<span class="tooltiptext">The payment table shows up to 500 rows. Additional rows still count towards your usage.</span></span></li>
-        </ul>
-      </section>
-      <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
-      <form method="POST" action="/payments" enctype="multipart/form-data">
-        <label>Upload CSV/XLS/XLSX (analytics-only)</label>
-        <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div>
-        <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx" required style="display:none" />
-        <div class="btnRow">
-          <button class="btn" type="submit">Upload for Analytics</button>
-          <a class="btn secondary" href="/dashboard">Back</a>
-        </div>
-      </form>
-      <div class="hr"></div>
-      <p class="muted small">Note: This does not create appeal drafts. It updates payer and payment timeline analytics.</p>
-      <script>
-        const payDrop = document.getElementById('pay-dropzone');
-        const payInput = document.getElementById('pay-file');
-        payDrop.addEventListener('click', () => payInput.click());
-        ['dragenter','dragover'].forEach(evt => {
-          payDrop.addEventListener(evt, e => {
-            e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover');
-          });
-        });
-        ['dragleave','drop'].forEach(evt => {
-          payDrop.addEventListener(evt, e => {
-            e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover');
-          });
-        });
-        payDrop.addEventListener('drop', e => {
-          const files = e.dataTransfer.files;
-          if (files.length > 1) { alert('Only one file at a time.'); return; }
-          const dt = new DataTransfer();
-          dt.items.add(files[0]);
-          payInput.files = dt.files;
-          payDrop.textContent = files[0].name;
-        });
-        payInput.addEventListener('change', () => {
-          const file = payInput.files[0];
-          if (file) payDrop.textContent = file.name;
-        });
-      </script>
-    `, navUser());
-    return send(res, 200, html);
+    return redirect(res, "/upload#payments");
   }
 
   if (method === "POST" && pathname === "/payments") {
@@ -2665,65 +2654,97 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 
   // analytics page with placeholders and bar chart preview
   if (method === "GET" && pathname === "/analytics") {
-    const a = computeAnalytics(org.org_id);
-    const usage = getUsage(org.org_id);
+    return redirect(res, "/dashboard");
+  }
+
+  // -------- ACCOUNT --------
+  if (method === "GET" && pathname === "/account") {
+    const sub = getSub(org.org_id);
+    const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
     const limits = getLimitProfile(org.org_id);
-    // Build top 4 payers by total amount
-    const payList = Object.entries(a.payByPayer).map(([payer, info]) => ({ payer, total: info.total }));
-    payList.sort((x, y) => y.total - x.total);
-    const top4 = payList.slice(0, 4);
-    let payerHtml;
-    if (top4.length === 0) {
-      payerHtml = `<div class="chart-placeholder">No payment data available</div>`;
-    } else {
-      payerHtml = `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>`;
-      top4.forEach(item => {
-        payerHtml += `<tr><td>${safeStr(item.payer)}</td><td>$${Number(item.total || 0).toFixed(2)}</td></tr>`;
-      });
-      payerHtml += `</tbody></table>`;
-    }
-    const html = page("Analytics", `
-      <h2>Analytics</h2>
-      <p class="muted">Derived solely from uploaded documents and user‑provided context.</p>
-      <div class="row">
-        <div class="col">
-          <h3>Case Distribution</h3>
-          <div class="chart-placeholder">${a.totalCases === 0 ? "No cases uploaded" : "Donut chart will render here."}</div>
-        </div>
-        <div class="col">
-          <h3>Payments by Payer</h3>
-          ${payerHtml}
-        </div>
-      </div>
+
+    const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Pilot" : "Expired");
+    const planEnds = (sub && sub.status === "active") ? "—" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "—");
+
+    const html = page("Account", `
+      <h2>Account</h2>
+      <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
+      <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
+
       <div class="hr"></div>
-      <div class="row">
-        <div class="col">
-          <h3>Pilot Snapshot</h3>
-          <ul class="muted">
-            <li>Cases uploaded: ${a.totalCases}</li>
-            <li>Drafts generated: ${a.drafts}</li>
-            <li>Avg time to draft: ${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</li>
-          </ul>
+      <h3>Plan</h3>
+      <table>
+        <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
+        <tr><th>Pilot End Date</th><td>${safeStr(planEnds)}</td></tr>
+        <tr><th>Access Mode</th><td>${safeStr(limits.mode)}</td></tr>
+      </table>
+
+      <div class="hr"></div>
+      <h3>Change Password</h3>
+      <form method="POST" action="/account/password">
+        <label>Current Password</label>
+        <input name="current_password" type="password" required />
+        <label>New Password (8+ characters)</label>
+        <input name="new_password" type="password" required />
+        <label>Confirm New Password</label>
+        <input name="new_password2" type="password" required />
+        <div class="btnRow">
+          <button class="btn" type="submit">Update Password</button>
+          <a class="btn secondary" href="/dashboard">Back</a>
         </div>
-        <div class="col">
-          <h3>Usage</h3>
-          ${limits.mode==="pilot" ? `
-          <ul class="muted">
-            <li> Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total} <span class="tooltip">ⓘ <span class="tooltiptext">Maximum number of cases allowed during your pilot.</span> </span> </li>
-            <li> Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display only 500 rows, but all uploaded rows count toward usage.</span> </span> </li>
-          </ul>
-          `:`
-          <ul class="muted">
-            <li> Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month} <span class="tooltip">ⓘ <span class="tooltiptext">Number of cases processed out of your monthly allotment.</span> </span> </li>
-            <li> Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count * limits.overage_price_per_case}) <span class="tooltip">ⓘ <span class="tooltiptext">Cases beyond your allotment incur an additional fee.</span> </span> </li>
-            <li> Monthly payment rows used: ${usage.monthly_payment_rows_used} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display up to 500 rows; all rows still count toward usage.</span> </span> </li>
-          </ul>
-          `}
-        </div>
+      </form>
+
+      <div class="hr"></div>
+      <h3>Upgrade Plan</h3>
+      <p class="muted">To upgrade plans or manage billing, use the link below.</p>
+      <div class="btnRow">
+        <a class="btn secondary" href="https://tjhealthpro.com">Upgrade / Manage Plan</a>
       </div>
     `, navUser());
     return send(res, 200, html);
   }
+
+  if (method === "POST" && pathname === "/account/password") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const current = params.get("current_password") || "";
+    const p1 = params.get("new_password") || "";
+    const p2 = params.get("new_password2") || "";
+
+    if (p1.length < 8 || p1 !== p2) {
+      const html = page("Account", `
+        <h2>Account</h2>
+        <p class="error">New passwords must match and be at least 8 characters.</p>
+        <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
+      `, navUser());
+      return send(res, 400, html);
+    }
+
+    const users = readJSON(FILES.users, []);
+    const uidx = users.findIndex(u => u.user_id === user.user_id);
+    if (uidx < 0) return redirect(res, "/logout");
+
+    if (!bcrypt.compareSync(current, users[uidx].password_hash)) {
+      const html = page("Account", `
+        <h2>Account</h2>
+        <p class="error">Current password is incorrect.</p>
+        <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
+      `, navUser());
+      return send(res, 401, html);
+    }
+
+    users[uidx].password_hash = bcrypt.hashSync(p1, 10);
+    writeJSON(FILES.users, users);
+    auditLog({ actor:"user", action:"change_password", org_id: org.org_id, user_id: user.user_id });
+
+    const html = page("Account", `
+      <h2>Account</h2>
+      <p class="muted">Password updated successfully.</p>
+      <div class="btnRow"><a class="btn" href="/dashboard">Back to Dashboard</a></div>
+    `, navUser());
+    return send(res, 200, html);
+  }
+
 
   // exports hub
   if (method === "GET" && pathname === "/exports") {
@@ -2839,4 +2860,3 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
