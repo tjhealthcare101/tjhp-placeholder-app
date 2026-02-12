@@ -284,6 +284,12 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   .btnRow { flex-direction: column; }
   .btn { width: 100%; }
 }
+`
+@media print {
+  .nav, .btnRow, form { display: none !important; }
+  body { background: white !important; }
+  .card { box-shadow: none !important; border: none !important; }
+}
 `;
 
 /**
@@ -346,7 +352,11 @@ function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Dashboard</a><a href="/upload">Upload</a><a href="/exports">Exports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
+  return `<a href="/dashboard">Dashboard & Analytics</a>
+  <a href="/upload">Upload</a>
+  <a href="/report">Report</a>
+  <a href="/account">Account</a>
+  <a href="/logout">Logout</a>`;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -1915,7 +1925,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
     }
 
     const html = page("Dashboard", `
-      <h2>Dashboard</h2>
+      <h2>Dashboard & Analytics</h2>
+      <div class="btnRow"><button class="btn secondary" onclick="window.print()">Print Dashboard</button></div>
       <p class="muted">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
       ${planBadge}
       <div class="hr"></div>
@@ -2665,11 +2676,9 @@ if (method === "POST" && pathname === "/case/mark-paid") {
   }
 
   // analytics page with placeholders and bar chart preview
-  if (method === "GET" && pathname === "/analytics") {
-    return redirect(res, "/dashboard");
-  }
+  if (method === "GET" && pathname === "/analytics") { return redirect(res, "/dashboard"); }
 
-  // -------- ACCOUNT --------
+// -------- ACCOUNT --------
   if (method === "GET" && pathname === "/account") {
     const sub = getSub(org.org_id);
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
@@ -2814,32 +2823,147 @@ if (method === "POST" && pathname === "/case/mark-paid") {
   }
 
   if (method === "GET" && pathname === "/report") {
-    const aReport = computeAnalytics(org.org_id);
-    const pilotRep = getPilot(org.org_id) || ensurePilot(org.org_id);
-    const html = page("Pilot Summary", `
-      <h2>Pilot Summary Report</h2>
-      <p class="muted">Organization: ${safeStr(org.org_name)}</p>
+    const startDate = parsed.query.start || "";
+    const endDate = parsed.query.end || "";
+
+    let casesF = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+    let paymentsF = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+
+    if (startDate) {
+      const start = new Date(startDate).getTime();
+      casesF = casesF.filter(c => new Date(c.created_at).getTime() >= start);
+      paymentsF = paymentsF.filter(p => new Date(p.date_paid || p.created_at).getTime() >= start);
+    }
+    if (endDate) {
+      const end = new Date(endDate).getTime();
+      casesF = casesF.filter(c => new Date(c.created_at).getTime() <= end);
+      paymentsF = paymentsF.filter(p => new Date(p.date_paid || p.created_at).getTime() <= end);
+    }
+
+    const totalCases = casesF.length;
+    const paidCases = casesF.filter(c => c.paid).length;
+    const recoveryRate = totalCases > 0 ? ((paidCases / totalCases) * 100).toFixed(1) : "0.0";
+
+    const totalRecovered = paymentsF.filter(p => p.denied_approved).reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
+
+    // Denial reasons distribution (best-effort from AI category)
+    const reasonCounts = {};
+    casesF.forEach(c => {
+      const r = (c.ai && c.ai.denial_reason_category) ? c.ai.denial_reason_category : "Unknown";
+      reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+    });
+
+    // Payer totals
+    const payerTotals = {};
+    paymentsF.forEach(p => {
+      const payer = (p.payer || "Unknown").trim() || "Unknown";
+      payerTotals[payer] = (payerTotals[payer] || 0) + Number(p.amount_paid || 0);
+    });
+
+    const html = page("Report", `
+      <h2>Report</h2>
+      <p class="muted">Filter by date range to generate an updated report. Use Print to save PDF.</p>
+
+      <form method="GET" action="/report" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+        <div style="min-width:180px;">
+          <label>Start Date</label>
+          <input type="date" name="start" value="${safeStr(startDate)}"/>
+        </div>
+        <div style="min-width:180px;">
+          <label>End Date</label>
+          <input type="date" name="end" value="${safeStr(endDate)}"/>
+        </div>
+        <div class="btnRow" style="margin-top:0;">
+          <button class="btn" type="submit">Generate</button>
+          <a class="btn secondary" href="/report">Reset</a>
+          <button class="btn secondary" type="button" onclick="window.print()">Print / Save as PDF</button>
+          <a class="btn secondary" href="/report/export?start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}">Export CSV</a>
+        </div>
+      </form>
+
       <div class="hr"></div>
+
+      <h3>Summary</h3>
       <ul class="muted">
-        <li>Pilot start: ${new Date(pilotRep.started_at).toLocaleDateString()}</li>
-        <li>Pilot end: ${new Date(pilotRep.ends_at).toLocaleDateString()}</li>
+        <li><strong>Total denied cases:</strong> ${totalCases}</li>
+        <li><strong>Recovery rate:</strong> ${recoveryRate}%</li>
+        <li><strong>Total recovered (Denied → Approved):</strong> $${Number(totalRecovered).toFixed(2)}</li>
       </ul>
-      <h3>Snapshot</h3>
-      <ul class="muted">
-        <li>Cases uploaded: ${aReport.totalCases}</li>
-        <li>Drafts generated: ${aReport.drafts}</li>
-        <li>Avg time to draft: ${aReport.avgDraftSeconds ? `${aReport.avgDraftSeconds}s` : "—"}</li>
-      </ul>
-      <div class="btnRow">
-        <button class="btn secondary" onclick="window.print()">Print / Save as PDF</button>
-        <a class="btn secondary" href="/exports">Back</a>
-      </div>
-      <p class="muted small">All insights are derived from uploaded documents during the pilot period.</p>
+
+      <div class="hr"></div>
+      <h3>Denials by Reason</h3>
+      ${
+        Object.keys(reasonCounts).length
+          ? `<table><thead><tr><th>Reason</th><th>Count</th></tr></thead><tbody>${
+              Object.entries(reasonCounts).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${safeStr(k)}</td><td>${v}</td></tr>`).join("")
+            }</tbody></table>`
+          : `<p class="muted">No denial cases in selected timeframe.</p>`
+      }
+
+      <div class="hr"></div>
+      <h3>Payments by Payer</h3>
+      ${
+        Object.keys(payerTotals).length
+          ? `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>${
+              Object.entries(payerTotals).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${safeStr(k)}</td><td>$${Number(v).toFixed(2)}</td></tr>`).join("")
+            }</tbody></table>`
+          : `<p class="muted">No payments in selected timeframe.</p>`
+      }
+
+      <div class="hr"></div>
+      <h3>Payment Line Items (Top 200)</h3>
+      ${
+        paymentsF.length
+          ? `<table><thead><tr><th>Claim</th><th>Payer</th><th>Amount</th><th>Date</th><th>Denied?</th></tr></thead><tbody>${
+              paymentsF.slice(0,200).map(p=>{
+                const dt = new Date(p.date_paid || p.created_at);
+                const denied = p.denied_approved ? "Yes" : "";
+                return `<tr><td>${safeStr(p.claim_number||"")}</td><td>${safeStr(p.payer||"")}</td><td>$${Number(p.amount_paid||0).toFixed(2)}</td><td>${dt.toLocaleDateString()}</td><td>${denied}</td></tr>`;
+              }).join("")
+            }</tbody></table>`
+          : `<p class="muted">No payments found for timeframe.</p>`
+      }
+
+      <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
     `, navUser());
     return send(res, 200, html);
   }
 
-  // pilot complete page
+  if (method === "GET" && pathname === "/report/export") {
+    const startDate = parsed.query.start || "";
+    const endDate = parsed.query.end || "";
+
+    let casesF = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+    let paymentsF = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+
+    if (startDate) {
+      const start = new Date(startDate).getTime();
+      casesF = casesF.filter(c => new Date(c.created_at).getTime() >= start);
+      paymentsF = paymentsF.filter(p => new Date(p.date_paid || p.created_at).getTime() >= start);
+    }
+    if (endDate) {
+      const end = new Date(endDate).getTime();
+      casesF = casesF.filter(c => new Date(c.created_at).getTime() <= end);
+      paymentsF = paymentsF.filter(p => new Date(p.date_paid || p.created_at).getTime() <= end);
+    }
+
+    const header = ["Type","ID","Payer","Amount","Date","DeniedApproved"].join(",");
+    const rows = [];
+
+    casesF.forEach(c => {
+      rows.push(["Denial", c.case_id, "", "", c.created_at, c.paid ? "Paid" : "Unpaid"]);
+    });
+
+    paymentsF.forEach(p => {
+      rows.push(["Payment", p.claim_number || "", p.payer || "", p.amount_paid || "", p.date_paid || p.created_at || "", p.denied_approved ? "Yes" : ""]);
+    });
+
+    const csv = [header, ...rows.map(r => r.map(x => `"${String(x||"").replace(/"/g,'""')}"`).join(","))].join("
+");
+    res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=report_export.csv" });
+    return res.end(csv);
+  }
+// pilot complete page
   if (method === "GET" && pathname === "/pilot-complete") {
     const pilotEnd = getPilot(org.org_id) || ensurePilot(org.org_id);
     if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
