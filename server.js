@@ -286,14 +286,12 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   .btn { width: 100%; }
 }
 
-
 /* Print styling */
 @media print {
   .nav, .btn, .btnRow, form { display:none !important; }
   body { background:white !important; }
   .card { box-shadow:none !important; border:none !important; }
 }
-`;
 /**
  * FIX: all HTML + scripts must live inside returned strings.
  * Password toggle preserved.
