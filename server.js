@@ -75,17 +75,19 @@ const FILES = {
 const TEMPLATES_DIR = path.join(DATA_DIR, "templates");
 
 // ===== Helpers =====
-function uuid() { return crypto.randomUUID(); }
-function nowISO() { return new Date().toISOString(); }
-function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
-
-function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
-function ensureFile(p, defaultVal) { if (!fs.existsSync(p)) fs.writeFileSync(p, JSON.stringify(defaultVal, null, 2)); }
-function readJSON(p, fallback) { ensureFile(p, fallback); return JSON.parse(fs.readFileSync(p, "utf8") || JSON.stringify(fallback)); }
-function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); }
-
-function safeStr(s) {
-  return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]));
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.randomBytes(16);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const hex = Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+  return (
+    hex.slice(0, 8) + "-" +
+    hex.slice(8, 12) + "-" +
+    hex.slice(12, 16) + "-" +
+    hex.slice(16, 20) + "-" +
+    hex.slice(20)
+  );
 }
 
 function parseCookies(req) {
@@ -301,6 +303,8 @@ function page(title, content, navHtml="") {
     </div>
   </div>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
 <script>
 /* ===== PASSWORD VISIBILITY TOGGLE (GLOBAL) ===== */
 document.querySelectorAll('input[type="password"]').forEach(input => {
@@ -330,7 +334,7 @@ function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Dashboard</a><a href="/upload">Denial &amp; Appeal&nbsp;Mgmt</a><a href="/payments">Revenue&nbsp;Mgmt</a><a href="/payments/list">Payment&nbsp;Details</a><a href="/exports">Exports</a><a href="/logout">Logout</a>`;
+  return `<a href="/dashboard">Dashboard</a><a href="/upload">Upload</a><a href="/exports">Exports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -782,13 +786,118 @@ function computeAnalytics(org_id) {
   const payByPayer = {};
   for (const p of payments) {
     const payer = (p.payer || "Unknown").trim() || "Unknown";
-    payByPayer[payer] = payByPayer[payer] || { count: 0, total: 0 };
+    payByPayer[payer] = payByPayer[payer] || { count: 0, total: 0, deniedWins: 0 };
     payByPayer[payer].count += 1;
     payByPayer[payer].total += Number(p.amount_paid || 0);
+    if (p.denied_approved) payByPayer[payer].deniedWins += 1;
   }
 
-  return { totalCases, drafts, avgDraftSeconds, denialReasons, payByPayer };
+  const deniedPayments = payments.filter(p => p.denied_approved);
+  const totalRecoveredFromDenials = deniedPayments.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
+
+  const totalRecoveredCases = cases.filter(c => c.paid).length;
+  const recoveryRate = totalCases > 0 ? ((totalRecoveredCases / totalCases) * 100).toFixed(1) : "0.0";
+
+  // Denial Aging (unpaid)
+  const now = Date.now();
+  const aging = { over30: 0, over60: 0, over90: 0 };
+  cases.filter(c => !c.paid).forEach(c => {
+    const days = (now - new Date(c.created_at).getTime()) / (1000*60*60*24);
+    if (days > 90) aging.over90++;
+    else if (days > 60) aging.over60++;
+    else if (days > 30) aging.over30++;
+  });
+
+  // Projected Lost Revenue (unpaid * avg recovered)
+  const unpaidCases = cases.filter(c => !c.paid);
+  const avgRecovered = deniedPayments.length > 0 ? (totalRecoveredFromDenials / deniedPayments.length) : 0;
+  const projectedLostRevenue = unpaidCases.length * avgRecovered;
+
+  return { totalCases, drafts, avgDraftSeconds, denialReasons, payByPayer, totalRecoveredFromDenials, recoveryRate, aging, projectedLostRevenue };
 }
+
+// ===== Risk scoring + strategy suggestions + weekly summary helpers =====
+function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
+
+function computeRiskScore(a) {
+  const recovery = Number(a.recoveryRate || 0);
+  const aging60 = (a.aging?.over60 || 0);
+  const aging90 = (a.aging?.over90 || 0);
+  const lost = Number(a.projectedLostRevenue || 0);
+
+  const recoveryRisk = clamp(100 - recovery, 0, 100);
+  const agingRisk = clamp((aging60 * 6) + (aging90 * 10), 0, 100);
+  const lostRisk = clamp(lost > 0 ? Math.log10(lost + 1) * 20 : 0, 0, 100);
+
+  const score = (0.45 * recoveryRisk) + (0.35 * agingRisk) + (0.20 * lostRisk);
+  return Math.round(clamp(score, 0, 100));
+}
+
+function riskLabel(score){
+  if (score >= 75) return { label:"High", cls:"err" };
+  if (score >= 45) return { label:"Medium", cls:"warn" };
+  return { label:"Low", cls:"ok" };
+}
+
+function buildRecoveryStrategies(a) {
+  const tips = [];
+  const recovery = Number(a.recoveryRate || 0);
+  const aging60 = a.aging?.over60 || 0;
+  const aging90 = a.aging?.over90 || 0;
+
+  if (recovery < 40 && a.totalCases > 5) {
+    tips.push("Run a denial category review: focus on the top 1–2 denial reasons and standardize your supporting documentation bundle.");
+  }
+  if (aging90 > 0) {
+    tips.push("Prioritize >90 day denials: assign same-week follow-ups, confirm appeal deadlines, and escalate payer contact paths.");
+  } else if (aging60 > 0) {
+    tips.push("Work the 60+ day queue: verify appeal status, resubmit missing documentation, and document payer call reference numbers.");
+  }
+
+  const payers = Object.entries(a.payByPayer || {}).map(([payer, info]) => ({
+    payer,
+    total: Number(info.total || 0),
+    wins: Number(info.deniedWins || 0),
+    count: Number(info.count || 0)
+  })).sort((x,y)=>y.count-x.count);
+
+  const topPayer = payers[0];
+  if (topPayer && topPayer.count >= 5 && topPayer.wins === 0) {
+    tips.push(`Target payer friction: ${topPayer.payer} shows volume but no denial wins recorded—validate required forms, medical necessity language, and appeal routing.`);
+  }
+
+  if (!tips.length) tips.push("Keep consistency: continue documenting denial reasons, standardizing appeal templates, and tracking paid amounts to strengthen payer trend analytics.");
+  return tips;
+}
+
+function computeWeeklySummary(org_id) {
+  const now = Date.now();
+  const weekAgo = now - 7*24*60*60*1000;
+
+  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
+  const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
+
+  const newCases = cases.filter(c => new Date(c.created_at).getTime() >= weekAgo);
+
+  const paidThisWeek = payments.filter(p => {
+    const dt = p.date_paid || p.created_at;
+    return new Date(dt).getTime() >= weekAgo;
+  });
+
+  const deniedRecoveredThisWeek = paidThisWeek.filter(p => p.denied_approved);
+  const recoveredDollarsThisWeek = deniedRecoveredThisWeek.reduce((s,p)=>s + Number(p.amount_paid || 0), 0);
+
+  const topPayers = {};
+  paidThisWeek.forEach(p => {
+    const payer = (p.payer || "Unknown").trim() || "Unknown";
+    topPayers[payer] = (topPayers[payer] || 0) + Number(p.amount_paid || 0);
+  });
+
+  const top3 = Object.entries(topPayers).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([payer,total])=>({ payer, total }));
+
+  return { newCasesCount: newCases.length, paymentsCount: paidThisWeek.length, recoveredDollarsThisWeek, deniedWinsCount: deniedRecoveredThisWeek.length, top3 };
+}
+
 
 // ===== Payment & Denial Trends =====
 /**
@@ -1326,7 +1435,7 @@ const server = http.createServer(async (req, res) => {
         const plan = (sub && sub.status === "active") ? "Subscribed" : (pilot.status === "active" ? "Pilot" : "Expired");
         const att = attentionSet.has(org.org_id) ? "⚠️" : "";
         return `<tr class="${att ? 'attention' : ''}">
-          <td>${safeStr(org.org_name)}</td>
+          <td><a href="/admin/org?org_id=${encodeURIComponent(org.org_id)}">${safeStr(org.org_name)}</a></td>
           <td>${plan}</td>
           <td>${safeStr(org.account_status || 'active')}</td>
           <td>${last ? new Date(last).toLocaleDateString() : "—"}</td>
@@ -1388,7 +1497,7 @@ const server = http.createServer(async (req, res) => {
         const plan = (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ? "Pilot" : "Expired");
         const att = attSet.has(org.org_id) ? "⚠️" : "";
         return `<tr class="${att ? 'attention' : ''}">
-          <td>${safeStr(org.org_name)}</td>
+          <td><a href="/admin/org?org_id=${encodeURIComponent(org.org_id)}">${safeStr(org.org_name)}</a></td>
           <td>${plan}</td>
           <td>${safeStr(org.account_status || 'active')}</td>
           <td>${att}</td>
@@ -1469,16 +1578,31 @@ const server = http.createServer(async (req, res) => {
             </table>
 
             <h3>Actions</h3>
-            <form method="POST" action="/admin/action">
-              <input type="hidden" name="org_id" value="${safeStr(org_id)}"/>
-              <label>Reason (required)</label>
-              <input name="reason" required />
-              <div class="btnRow">
-                <button class="btn secondary" name="action" value="extend_pilot_7">Extend Pilot +7 days</button>
-                <button class "btn secondary" name="action" value="suspend">Suspend</button>
-                <button class "btn danger" name="action" value="terminate">Terminate</button>
-              </div>
-            </form>
+<form method="POST" action="/admin/action">
+  <input type="hidden" name="org_id" value="${safeStr(org_id)}"/>
+  <label>Reason (required)</label>
+  <input name="reason" required />
+
+  <div class="btnRow">
+    <button class="btn secondary" name="action" value="extend_pilot_7">Extend Pilot +7 days</button>
+    <button class="btn secondary" name="action" value="suspend">Pause Plan</button>
+    <button class="btn secondary" name="action" value="reactivate">Reactivate</button>
+    <button class="btn danger" name="action" value="terminate">Terminate</button>
+  </div>
+
+  <div class="hr"></div>
+  <h3>Free Trial</h3>
+  <label>Trial Days</label>
+  <select name="trial_days">
+    <option value="7">7 Days</option>
+    <option value="14" selected>14 Days</option>
+    <option value="30">30 Days</option>
+  </select>
+  <div class="btnRow">
+    <button class="btn secondary" name="action" value="grant_trial">Grant Trial</button>
+    <button class="btn secondary" name="action" value="extend_trial">Extend Trial</button>
+  </div>
+</form>
           </div>
 
           <div class="col">
@@ -1524,6 +1648,41 @@ const server = http.createServer(async (req, res) => {
           writeJSON(FILES.pilots, pilots);
         }
         auditLog({ actor:"admin", action:"extend_pilot_7", org_id, reason });
+} else if (action === "reactivate") {
+  setOrgStatus(org_id, "active", reason);
+  auditLog({ actor:"admin", action:"reactivate", org_id, reason });
+} else if (action === "grant_trial") {
+  // Restart/Grant trial from today for N days (defaults handled by form)
+  const days = Number(params.get("trial_days") || 14);
+  const pilots = readJSON(FILES.pilots, []);
+  let p = pilots.find(x => x.org_id === org_id);
+  if (!p) {
+    p = { pilot_id: uuid(), org_id, status:"active", started_at: nowISO(), ends_at: addDaysISO(nowISO(), days), retention_delete_at: null };
+    pilots.push(p);
+  } else {
+    p.status = "active";
+    p.started_at = nowISO();
+    p.ends_at = addDaysISO(nowISO(), days);
+    p.retention_delete_at = null;
+  }
+  writeJSON(FILES.pilots, pilots);
+  setOrgStatus(org_id, "active", reason);
+  auditLog({ actor:"admin", action:"grant_trial", org_id, reason, trial_days: days });
+} else if (action === "extend_trial") {
+  const days = Number(params.get("trial_days") || 7);
+  const pilots = readJSON(FILES.pilots, []);
+  let p = pilots.find(x => x.org_id === org_id);
+  if (!p) {
+    p = { pilot_id: uuid(), org_id, status:"active", started_at: nowISO(), ends_at: addDaysISO(nowISO(), days), retention_delete_at: null };
+    pilots.push(p);
+  } else {
+    p.status = "active";
+    p.ends_at = addDaysISO(p.ends_at || nowISO(), days);
+    p.retention_delete_at = null;
+  }
+  writeJSON(FILES.pilots, pilots);
+  auditLog({ actor:"admin", action:"extend_trial", org_id, reason, trial_days: days });
+
       }
       return redirect(res, `/admin/org?org_id=${encodeURIComponent(org_id)}`);
     }
@@ -1572,6 +1731,129 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, html);
   }
 
+
+
+// executive dashboard
+if (method === "GET" && pathname === "/executive") {
+  const a = computeAnalytics(org.org_id);
+  const score = computeRiskScore(a);
+  const r = riskLabel(score);
+  const tips = buildRecoveryStrategies(a);
+
+  const agingData = [a.aging.over30, a.aging.over60, a.aging.over90];
+
+  const payerEntries = Object.entries(a.payByPayer || {})
+    .map(([payer, info]) => ({ payer, total: Number(info.total || 0) }))
+    .sort((x,y)=>y.total-x.total)
+    .slice(0,5);
+
+  const payerLabels = payerEntries.map(x => x.payer);
+  const payerTotals = payerEntries.map(x => x.total);
+
+  const html = page("Executive Dashboard", `
+    <h2>Executive Dashboard</h2>
+    <p class="muted">High-level denial → revenue performance for leadership review.</p>
+
+    <div class="row">
+      <div class="col">
+        <div class="kpi-card"><h4>Recovered from Denials</h4><p>$${Number(a.totalRecoveredFromDenials||0).toFixed(2)}</p></div>
+        <div class="kpi-card"><h4>Recovery Rate</h4><p>${a.recoveryRate}%</p></div>
+        <div class="kpi-card"><h4>Projected Lost Revenue</h4><p>$${Number(a.projectedLostRevenue||0).toFixed(2)}</p></div>
+      </div>
+
+      <div class="col">
+        <h3>Risk Score</h3>
+        <p class="muted small">Heuristic score (0–100) based on recovery %, aging, and revenue leakage signals.</p>
+        <div class="badge ${r.cls}">Risk: ${r.label} — ${score}/100</div>
+
+        <div class="hr"></div>
+        <h3>Recommended Actions</h3>
+        <ul class="muted">
+          ${tips.map(t => `<li>${safeStr(t)}</li>`).join("")}
+        </ul>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+    <h3>Denial Aging (Unpaid)</h3>
+    <canvas id="agingChart" height="120"></canvas>
+
+    <div class="hr"></div>
+    <h3>Top Payers by Total Paid</h3>
+    <canvas id="payerChart" height="140"></canvas>
+
+    <script>
+      (function(){
+        if (!window.Chart) return;
+
+        new Chart(document.getElementById('agingChart'), {
+          type: 'bar',
+          data: { labels: ['30+ days','60+ days','90+ days'], datasets: [{ label: 'Unpaid Denials', data: ${JSON.stringify(agingData)} }] },
+          options: { responsive: true }
+        });
+
+        new Chart(document.getElementById('payerChart'), {
+          type: 'bar',
+          data: { labels: ${JSON.stringify(payerLabels)}, datasets: [{ label: 'Total Paid', data: ${JSON.stringify(payerTotals)} }] },
+          options: { responsive: true }
+        });
+      })();
+    </script>
+
+    <div class="btnRow">
+      <a class="btn secondary" href="/weekly-summary">Weekly Summary</a>
+      <a class="btn secondary" href="/analytics">Analytics</a>
+      <a class="btn secondary" href="/dashboard">Back</a>
+    </div>
+  `, navUser());
+  return send(res, 200, html);
+}
+
+// weekly summary
+if (method === "GET" && pathname === "/weekly-summary") {
+  const a = computeAnalytics(org.org_id);
+  const w = computeWeeklySummary(org.org_id);
+  const proj = projectNextMonthDenials(org.org_id);
+
+  const html = page("Weekly Summary", `
+    <h2>Weekly Denial Performance Summary</h2>
+    <p class="muted">Last 7 days. Use this for quick leadership updates.</p>
+
+    <div class="row">
+      <div class="col">
+        <div class="kpi-card"><h4>New Denial Cases</h4><p>${w.newCasesCount}</p></div>
+        <div class="kpi-card"><h4>Payments Logged</h4><p>${w.paymentsCount}</p></div>
+      </div>
+      <div class="col">
+        <div class="kpi-card"><h4>Denied → Approved Wins</h4><p>${w.deniedWinsCount}</p></div>
+        <div class="kpi-card"><h4>Recovered Dollars</h4><p>$${Number(w.recoveredDollarsThisWeek||0).toFixed(2)}</p></div>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+    <h3>Top Payers This Week</h3>
+    ${
+      w.top3.length
+        ? `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>${w.top3.map(x => `<tr><td>${safeStr(x.payer)}</td><td>$${Number(x.total).toFixed(2)}</td></tr>`).join("")}</tbody></table>`
+        : `<p class="muted">No payments recorded in the last 7 days.</p>`
+    }
+
+    <div class="hr"></div>
+    <h3>Current Operating Snapshot</h3>
+    <ul class="muted">
+      <li><strong>Recovery rate:</strong> ${a.recoveryRate}%</li>
+      <li><strong>Unpaid aging:</strong> 30+ ${a.aging.over30}, 60+ ${a.aging.over60}, 90+ ${a.aging.over90}</li>
+      <li><strong>Projected lost revenue:</strong> $${Number(a.projectedLostRevenue||0).toFixed(2)}</li>
+      <li><strong>Next month denial projection:</strong> ${proj === null ? "Insufficient data" : proj}</li>
+    </ul>
+
+    <div class="btnRow">
+      <a class="btn" href="/executive">Executive Dashboard</a>
+      <a class="btn secondary" href="/dashboard">Back</a>
+    </div>
+  `, navUser());
+  return send(res, 200, html);
+}
   // dashboard with empty-state previews and tooltips
   if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) {
     const limits = getLimitProfile(org.org_id);
@@ -1584,7 +1866,7 @@ const server = http.createServer(async (req, res) => {
     const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
 
     // Build "My Cases" listing
-    const allCases = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+    const allCases = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id && !c.paid);
     let caseTable = "";
     if (allCases.length === 0) {
       caseTable = `<p class="muted">No cases yet. Upload denial documents to begin.</p>`;
@@ -1594,7 +1876,7 @@ const server = http.createServer(async (req, res) => {
       // Determine whether a case is paid and the date
       const todayStr = new Date().toISOString().split('T')[0];
       const rows = allCases.map(c => {
-        const status = c.status;
+        const displayStatus = c.paid ? "Complete" : c.status;
         let link = "";
         if (status === "DRAFT_READY") link = `<a href="/draft?case_id=${encodeURIComponent(c.case_id)}">${safeStr(c.case_id)}</a>`;
         else link = `<a href="/status?case_id=${encodeURIComponent(c.case_id)}">${safeStr(c.case_id)}</a>`;
@@ -1606,12 +1888,13 @@ const server = http.createServer(async (req, res) => {
           paymentCell = `<form method="POST" action="/case/mark-paid" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
             <input type="hidden" name="case_id" value="${safeStr(c.case_id)}"/>
             <input type="date" name="paid_at" value="${todayStr}" required/>
+            <input type="text" name="paid_amount" placeholder="Paid amount" required style="width:100px"/>
             <button class="btn small" type="submit">Mark Paid</button>
           </form>`;
         }
         return `<tr>
           <td>${link}</td>
-          <td>${safeStr(status)}</td>
+          <td>${safeStr(displayStatus)}</td>
           <td>${new Date(c.created_at).toLocaleDateString()}</td>
           <td>${paymentCell}</td>
         </tr>`;
@@ -1625,7 +1908,7 @@ const server = http.createServer(async (req, res) => {
       ${planBadge}
       <div class="hr"></div>
 
-      <h3>My Cases</h3>
+      <h3>Denial Cases</h3>
       ${caseTable}
 
       <div class="hr"></div>
@@ -1700,22 +1983,31 @@ const server = http.createServer(async (req, res) => {
 
   // --------- CASE UPLOAD ----------
   if (method === "GET" && pathname === "/upload") {
-    // Retrieve available templates for the organisation
     const allTemplates = readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id);
     const templateOptions = allTemplates.map(t => `<option value="${safeStr(t.template_id)}">${safeStr(t.filename)}</option>`).join("");
-    const html = page("Denial & Appeal Mgmt", `
-      <h2>Denial & Appeal Management</h2>
-      <p class="muted">Upload any combination of up to <strong>3 documents</strong> for this case. Denial/payment notices alone are enough to begin.</p>
+
+    const allow = paymentRowsAllowance(org.org_id);
+    const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
+
+    const html = page("Uploads", `
+      <h2>Uploads</h2>
+      <p class="muted">Upload denial documents to generate appeal drafts, and upload payment files to power revenue analytics. All results appear on your Dashboard.</p>
+
+      <div class="hr"></div>
+      <h3>Denial &amp; Appeal Upload</h3>
+      <p class="muted">Upload up to <strong>3 denial documents</strong>. Each document becomes its own case using the selected template.</p>
+
       <form method="POST" action="/upload" enctype="multipart/form-data">
-        <label>Documents (up to 3)</label>
+        <label>Denial Documents (up to 3)</label>
         <div id="case-dropzone" class="dropzone">Drop up to 3 documents here or click to select</div>
         <input id="case-files" type="file" name="files" multiple required accept=".pdf,.doc,.docx,.jpg,.png" style="display:none" />
+
         <label>Optional notes</label>
         <textarea name="notes" placeholder="Any context to help review (optional)"></textarea>
 
         <div class="hr"></div>
         <h3>Appeal Letter Template</h3>
-        <p class="small muted">Choose an uploaded template or select AI Draft (default) to let the system generate a letter.</p>
+        <p class="small muted">Choose an uploaded template or select AI Draft (default).</p>
         <div style="display:flex;flex-direction:column;gap:8px;">
           <select name="template_id">
             <option value="">AI Draft (no template)</option>
@@ -1726,13 +2018,31 @@ const server = http.createServer(async (req, res) => {
         </div>
 
         <div class="btnRow" style="margin-top:16px;">
-          <button class="btn" type="submit">Submit for Review</button>
+          <button class="btn" type="submit">Submit Denials</button>
           <a class="btn secondary" href="/dashboard">Back</a>
         </div>
       </form>
+
       <div class="hr"></div>
-      <p class="muted small">Limits: 3 files/case · ${getLimitProfile(org.org_id).mode==="pilot" ? "10MB/file" : "20MB/file"}</p>
+      <h3 id="payments">Payment Upload</h3>
+      <p class="muted">Upload bulk payment files in CSV or Excel format. CSV drives analytics.</p>
+      <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
+
+      <form method="POST" action="/payments" enctype="multipart/form-data">
+        <label>Upload CSV/XLS/XLSX</label>
+        <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div>
+        <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx" required style="display:none" />
+        <div class="btnRow">
+          <button class="btn" type="submit">Upload Payments</button>
+          <a class="btn secondary" href="/payments/list">View Payment Details</a>
+        </div>
+      </form>
+
+      <div class="hr"></div>
+      <p class="muted small">Payment records on file: ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p>
+
       <script>
+        // Denial dropzone
         const caseDrop = document.getElementById('case-dropzone');
         const caseInput = document.getElementById('case-files');
         caseDrop.addEventListener('click', () => caseInput.click());
@@ -1746,7 +2056,7 @@ const server = http.createServer(async (req, res) => {
           const files = e.dataTransfer.files;
           if (files.length > 3) { alert('You can upload up to 3 documents.'); return; }
           const dt2 = new DataTransfer();
-          for (let i=0; i<files.length && i<3; i++) { dt2.items.add(files[i]); }
+          for (let i=0; i<files.length && i<3; i++) dt2.items.add(files[i]);
           caseInput.files = dt2.files;
           caseDrop.textContent = files.length + ' file' + (files.length>1 ? 's' : '') + ' selected';
         });
@@ -1754,13 +2064,35 @@ const server = http.createServer(async (req, res) => {
           if (caseInput.files.length > 3) {
             alert('You can upload up to 3 documents. Only the first 3 will be used.');
             const dt2 = new DataTransfer();
-            for (let i=0; i<3; i++) { dt2.items.add(caseInput.files[i]); }
+            for (let i=0; i<3; i++) dt2.items.add(caseInput.files[i]);
             caseInput.files = dt2.files;
           }
-          const f = caseInput.files;
-          if (f.length) {
-            caseDrop.textContent = f.length + ' file' + (f.length>1 ? 's' : '') + ' selected';
+          if (caseInput.files.length) {
+            caseDrop.textContent = caseInput.files.length + ' file' + (caseInput.files.length>1 ? 's' : '') + ' selected';
           }
+        });
+
+        // Payment dropzone
+        const payDrop = document.getElementById('pay-dropzone');
+        const payInput = document.getElementById('pay-file');
+        payDrop.addEventListener('click', () => payInput.click());
+        ['dragenter','dragover'].forEach(evt => {
+          payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover'); });
+        });
+        ['dragleave','drop'].forEach(evt => {
+          payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover'); });
+        });
+        payDrop.addEventListener('drop', e => {
+          const files = e.dataTransfer.files;
+          if (files.length > 1) { alert('Only one file at a time.'); return; }
+          const dt = new DataTransfer();
+          dt.items.add(files[0]);
+          payInput.files = dt.files;
+          payDrop.textContent = files[0].name;
+        });
+        payInput.addEventListener('change', () => {
+          const file = payInput.files[0];
+          if (file) payDrop.textContent = file.name;
         });
       </script>
     `, navUser());
@@ -1881,6 +2213,7 @@ const server = http.createServer(async (req, res) => {
         // Track payment status for each case. A case is marked paid when appeals have resulted in payment.
         paid: false,
         paid_at: null,
+        paid_amount: null,
         ai_started_at: null,
         ai: {
           denial_summary: null,
@@ -2015,23 +2348,47 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
   }
 
-  // New route: handle marking a case as paid
-  if (method === "POST" && pathname === "/case/mark-paid") {
-    const body = await parseBody(req);
-    const params = new URLSearchParams(body);
-    const case_id = params.get("case_id") || "";
-    const paid_at = params.get("paid_at") || "";
+  // New route: handle marking a case as paid (captures paid amount + logs denied->approved payment)
+if (method === "POST" && pathname === "/case/mark-paid") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const case_id = params.get("case_id") || "";
+  const paid_at = params.get("paid_at") || "";
+  const paid_amount = (params.get("paid_amount") || "").trim();
 
-    const cases = readJSON(FILES.cases, []);
-    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
-    if (c) {
-      c.paid = true;
-      c.paid_at = paid_at;
-      writeJSON(FILES.cases, cases);
-      auditLog({ actor: 'user', action: 'mark_paid', case_id, org_id: org.org_id, paid_at });
+  const cases = readJSON(FILES.cases, []);
+  const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+
+  if (c) {
+    const wasAlreadyPaid = !!c.paid;
+
+    c.paid = true;
+    c.paid_at = paid_at;
+    c.paid_amount = paid_amount;
+
+    writeJSON(FILES.cases, cases);
+
+    // Append payment row (only once)
+    if (!wasAlreadyPaid) {
+      const paymentsData = readJSON(FILES.payments, []);
+      paymentsData.push({
+        payment_id: uuid(),
+        org_id: c.org_id,
+        claim_number: c.case_id,
+        payer: "Denied Appeal",
+        amount_paid: paid_amount,
+        date_paid: paid_at,
+        source_file: "denial",
+        created_at: nowISO(),
+        denied_approved: true
+      });
+      writeJSON(FILES.payments, paymentsData);
     }
-    return redirect(res, "/dashboard");
+
+    auditLog({ actor: "user", action: "mark_paid", case_id, org_id: org.org_id, paid_at, paid_amount });
   }
+  return redirect(res, "/dashboard");
+}
 
   // -------- PAYMENT DETAILS LIST --------
   // Display a detailed list of payments for the organisation with filtering options.
@@ -2061,6 +2418,7 @@ const server = http.createServer(async (req, res) => {
     const quarterFilter = parsed.query.quarter || "";
     const monthFilter = parsed.query.month || "";
     const payerFilter = parsed.query.payer || "";
+    const deniedFilter = parsed.query.denied || "";
     // Apply year filter
     if (yearFilter) {
       payments = payments.filter(p => {
@@ -2098,6 +2456,10 @@ const server = http.createServer(async (req, res) => {
         return name === payerFilter;
       });
     }
+    // Apply denied-only filter
+    if (deniedFilter === "1") {
+      payments = payments.filter(p => p.denied_approved);
+    }
     // Compute aggregated stats by payer
     const stats = {};
     payments.forEach(p => {
@@ -2126,9 +2488,10 @@ const server = http.createServer(async (req, res) => {
       let d;
       try { d = dtStr ? new Date(dtStr) : new Date(); } catch { d = new Date(); }
       const dateStr = d.toLocaleDateString();
-      detailRows += `<tr><td>${safeStr(p.claim_number || p.claimNumber || '')}</td><td>${safeStr((p.payer || 'Unknown').trim() || 'Unknown')}</td><td>$${Number(p.amount_paid || p.amountPaid || 0).toFixed(2)}</td><td>${dateStr}</td></tr>`;
+      const deniedFlag = p.denied_approved ? "Yes" : "";
+      detailRows += `<tr><td>${safeStr(p.claim_number || p.claimNumber || '')}</td><td>${safeStr((p.payer || 'Unknown').trim() || 'Unknown')}</td><td>$${Number(p.amount_paid || p.amountPaid || 0).toFixed(2)}</td><td>${dateStr}</td><td>${deniedFlag}</td></tr>`;
     });
-    const detailTable = detailRows ? `<table><thead><tr><th>Claim Number</th><th>Payer</th><th>Amount Paid</th><th>Payment Date</th></tr></thead><tbody>${detailRows}</tbody></table>` : `<p class='muted'>No payments found.</p>`;
+    const detailTable = detailRows ? `<table><thead><tr><th>Claim Number</th><th>Payer</th><th>Amount Paid</th><th>Payment Date</th><th>Denied?</th></tr></thead><tbody>${detailRows}</tbody></table>` : `<p class='muted'>No payments found.</p>`;
     const html = page("Payment Details", `
       <h2>Payment Details</h2>
       <form method="GET" action="/payments/list" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
@@ -2160,6 +2523,13 @@ const server = http.createServer(async (req, res) => {
             ${payerOptions}
           </select>
         </div>
+<div style="display:flex;flex-direction:column;">
+  <label>Denied Recovery</label>
+  <select name="denied">
+    <option value="">All</option>
+    <option value="1"${deniedFilter==="1"?" selected":""}>Denied → Approved Only</option>
+  </select>
+</div>
         <div>
           <button class="btn" type="submit" style="margin-top:1.6em;">Filter</button>
           <a class="btn secondary" href="/payments/list" style="margin-top:1.6em;">Reset</a>
@@ -2179,69 +2549,7 @@ const server = http.createServer(async (req, res) => {
 
   // -------- PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) --------
   if (method === "GET" && pathname === "/payments") {
-    const allow = paymentRowsAllowance(org.org_id);
-    const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
-    const html = page("Revenue Management", `
-      <h2>Revenue Management</h2>
-      <p class="muted">Upload bulk payment files in CSV or Excel format.</p>
-      <div class="chart-placeholder">${paymentCount === 0 ? "Upload payment data to see trends." : "Payment trend chart will appear here."}</div>
-      <section>
-        <h3>What This Unlocks</h3>
-        <ul class="muted">
-          <li>Identify underperforming payers</li>
-          <li>Spot delayed payments early</li>
-          <li>Compare payment trends over time</li>
-        </ul>
-      </section>
-      <section>
-        <h3>Import Notes</h3>
-        <ul class="muted">
-          <li>CSV files are parsed for analytics only <span class="tooltip">ⓘ<span class="tooltiptext">CSV files are used to compute insights but not stored permanently.</span></span></li>
-          <li>Excel files are stored but not analysed <span class="tooltip">ⓘ<span class="tooltiptext">Excel uploads are stored for record keeping but analytics operate on CSV.</span></span></li>
-          <li>500‑row display cap <span class="tooltip">ⓘ<span class="tooltiptext">The payment table shows up to 500 rows. Additional rows still count towards your usage.</span></span></li>
-        </ul>
-      </section>
-      <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
-      <form method="POST" action="/payments" enctype="multipart/form-data">
-        <label>Upload CSV/XLS/XLSX (analytics-only)</label>
-        <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div>
-        <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx" required style="display:none" />
-        <div class="btnRow">
-          <button class="btn" type="submit">Upload for Analytics</button>
-          <a class="btn secondary" href="/dashboard">Back</a>
-        </div>
-      </form>
-      <div class="hr"></div>
-      <p class="muted small">Note: This does not create appeal drafts. It updates payer and payment timeline analytics.</p>
-      <script>
-        const payDrop = document.getElementById('pay-dropzone');
-        const payInput = document.getElementById('pay-file');
-        payDrop.addEventListener('click', () => payInput.click());
-        ['dragenter','dragover'].forEach(evt => {
-          payDrop.addEventListener(evt, e => {
-            e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover');
-          });
-        });
-        ['dragleave','drop'].forEach(evt => {
-          payDrop.addEventListener(evt, e => {
-            e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover');
-          });
-        });
-        payDrop.addEventListener('drop', e => {
-          const files = e.dataTransfer.files;
-          if (files.length > 1) { alert('Only one file at a time.'); return; }
-          const dt = new DataTransfer();
-          dt.items.add(files[0]);
-          payInput.files = dt.files;
-          payDrop.textContent = files[0].name;
-        });
-        payInput.addEventListener('change', () => {
-          const file = payInput.files[0];
-          if (file) payDrop.textContent = file.name;
-        });
-      </script>
-    `, navUser());
-    return send(res, 200, html);
+    return redirect(res, "/upload#payments");
   }
 
   if (method === "POST" && pathname === "/payments") {
@@ -2316,7 +2624,8 @@ const server = http.createServer(async (req, res) => {
           amount_paid: amt || "",
           date_paid: datePaid || "",
           source_file: path.basename(stored),
-          created_at: nowISO()
+          created_at: nowISO(),
+          denied_approved: false
         });
       }
       writeJSON(FILES.payments, paymentsData);
@@ -2345,65 +2654,97 @@ const server = http.createServer(async (req, res) => {
 
   // analytics page with placeholders and bar chart preview
   if (method === "GET" && pathname === "/analytics") {
-    const a = computeAnalytics(org.org_id);
-    const usage = getUsage(org.org_id);
+    return redirect(res, "/dashboard");
+  }
+
+  // -------- ACCOUNT --------
+  if (method === "GET" && pathname === "/account") {
+    const sub = getSub(org.org_id);
+    const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
     const limits = getLimitProfile(org.org_id);
-    // Build top 4 payers by total amount
-    const payList = Object.entries(a.payByPayer).map(([payer, info]) => ({ payer, total: info.total }));
-    payList.sort((x, y) => y.total - x.total);
-    const top4 = payList.slice(0, 4);
-    let payerHtml;
-    if (top4.length === 0) {
-      payerHtml = `<div class="chart-placeholder">No payment data available</div>`;
-    } else {
-      payerHtml = `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>`;
-      top4.forEach(item => {
-        payerHtml += `<tr><td>${safeStr(item.payer)}</td><td>$${Number(item.total || 0).toFixed(2)}</td></tr>`;
-      });
-      payerHtml += `</tbody></table>`;
-    }
-    const html = page("Analytics", `
-      <h2>Analytics</h2>
-      <p class="muted">Derived solely from uploaded documents and user‑provided context.</p>
-      <div class="row">
-        <div class="col">
-          <h3>Case Distribution</h3>
-          <div class="chart-placeholder">${a.totalCases === 0 ? "No cases uploaded" : "Donut chart will render here."}</div>
-        </div>
-        <div class="col">
-          <h3>Payments by Payer</h3>
-          ${payerHtml}
-        </div>
-      </div>
+
+    const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Pilot" : "Expired");
+    const planEnds = (sub && sub.status === "active") ? "—" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "—");
+
+    const html = page("Account", `
+      <h2>Account</h2>
+      <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
+      <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
+
       <div class="hr"></div>
-      <div class="row">
-        <div class="col">
-          <h3>Pilot Snapshot</h3>
-          <ul class="muted">
-            <li>Cases uploaded: ${a.totalCases}</li>
-            <li>Drafts generated: ${a.drafts}</li>
-            <li>Avg time to draft: ${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</li>
-          </ul>
+      <h3>Plan</h3>
+      <table>
+        <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
+        <tr><th>Pilot End Date</th><td>${safeStr(planEnds)}</td></tr>
+        <tr><th>Access Mode</th><td>${safeStr(limits.mode)}</td></tr>
+      </table>
+
+      <div class="hr"></div>
+      <h3>Change Password</h3>
+      <form method="POST" action="/account/password">
+        <label>Current Password</label>
+        <input name="current_password" type="password" required />
+        <label>New Password (8+ characters)</label>
+        <input name="new_password" type="password" required />
+        <label>Confirm New Password</label>
+        <input name="new_password2" type="password" required />
+        <div class="btnRow">
+          <button class="btn" type="submit">Update Password</button>
+          <a class="btn secondary" href="/dashboard">Back</a>
         </div>
-        <div class="col">
-          <h3>Usage</h3>
-          ${limits.mode==="pilot" ? `
-          <ul class="muted">
-            <li> Pilot cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total} <span class="tooltip">ⓘ <span class="tooltiptext">Maximum number of cases allowed during your pilot.</span> </span> </li>
-            <li> Pilot payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display only 500 rows, but all uploaded rows count toward usage.</span> </span> </li>
-          </ul>
-          `:`
-          <ul class="muted">
-            <li> Monthly case credits used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month} <span class="tooltip">ⓘ <span class="tooltiptext">Number of cases processed out of your monthly allotment.</span> </span> </li>
-            <li> Overage cases: ${usage.monthly_case_overage_count} (est $${usage.monthly_case_overage_count * limits.overage_price_per_case}) <span class="tooltip">ⓘ <span class="tooltiptext">Cases beyond your allotment incur an additional fee.</span> </span> </li>
-            <li> Monthly payment rows used: ${usage.monthly_payment_rows_used} <span class="tooltip">ⓘ <span class="tooltiptext">The analytics display up to 500 rows; all rows still count toward usage.</span> </span> </li>
-          </ul>
-          `}
-        </div>
+      </form>
+
+      <div class="hr"></div>
+      <h3>Upgrade Plan</h3>
+      <p class="muted">To upgrade plans or manage billing, use the link below.</p>
+      <div class="btnRow">
+        <a class="btn secondary" href="https://tjhealthpro.com">Upgrade / Manage Plan</a>
       </div>
     `, navUser());
     return send(res, 200, html);
   }
+
+  if (method === "POST" && pathname === "/account/password") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const current = params.get("current_password") || "";
+    const p1 = params.get("new_password") || "";
+    const p2 = params.get("new_password2") || "";
+
+    if (p1.length < 8 || p1 !== p2) {
+      const html = page("Account", `
+        <h2>Account</h2>
+        <p class="error">New passwords must match and be at least 8 characters.</p>
+        <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
+      `, navUser());
+      return send(res, 400, html);
+    }
+
+    const users = readJSON(FILES.users, []);
+    const uidx = users.findIndex(u => u.user_id === user.user_id);
+    if (uidx < 0) return redirect(res, "/logout");
+
+    if (!bcrypt.compareSync(current, users[uidx].password_hash)) {
+      const html = page("Account", `
+        <h2>Account</h2>
+        <p class="error">Current password is incorrect.</p>
+        <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
+      `, navUser());
+      return send(res, 401, html);
+    }
+
+    users[uidx].password_hash = bcrypt.hashSync(p1, 10);
+    writeJSON(FILES.users, users);
+    auditLog({ actor:"user", action:"change_password", org_id: org.org_id, user_id: user.user_id });
+
+    const html = page("Account", `
+      <h2>Account</h2>
+      <p class="muted">Password updated successfully.</p>
+      <div class="btnRow"><a class="btn" href="/dashboard">Back to Dashboard</a></div>
+    `, navUser());
+    return send(res, 200, html);
+  }
+
 
   // exports hub
   if (method === "GET" && pathname === "/exports") {
@@ -2437,9 +2778,9 @@ const server = http.createServer(async (req, res) => {
 
   if (method === "GET" && pathname === "/export/payments.csv") {
     const paymentsExport = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
-    const header = ["payment_id","claim_number","payer","amount_paid","date_paid","source_file","created_at"].join(",");
+    const header = ["payment_id","claim_number","payer","amount_paid","date_paid","source_file","denied_approved","created_at"].join(",");
     const rows = paymentsExport.map(p => [
-      p.payment_id, p.claim_number, p.payer, p.amount_paid, p.date_paid, p.source_file, p.created_at
+      p.payment_id, p.claim_number, p.payer, p.amount_paid, p.date_paid, p.source_file, (p.denied_approved ? "Yes" : ""), p.created_at
     ].map(x =>
     `"${String(x||"").replace(/"/g,'""')}"`).join(","));
     const csv = [header, ...rows].join("\n");
@@ -2519,5 +2860,4 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
 
