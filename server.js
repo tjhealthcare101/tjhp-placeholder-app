@@ -2750,15 +2750,7 @@ const limits = getLimitProfile(org.org_id);
       <div class="row">
         <div class="col">
           <h4>Payer Summary</h4>
-          ${
-            (() => {
-              const a = computeAnalytics(org.org_id);
-              const payers = Object.entries(a.payByPayer);
-              if (payers.length === 0) return "<p class='muted small'>No payment data yet.</p>";
-              const list = payers.sort((x,y) => y[1].total - x[1].total).slice(0,4).map(([payer, info]) => `<div><strong>${safeStr(payer)}</strong>: $${Number(info.total).toFixed(2)} (${info.count} payments)</div>`).join("");
-              return list;
-            })()
-          }
+          
         </div>
         <div class="col">
           <h4>Usage</h4>
@@ -3114,50 +3106,7 @@ return `<tr>
         <div class="hr"></div>
         <h3>Payment Exceptions</h3>
         <p class="muted small">Auto-calculated based on Billed − Contractual − Patient Responsibility vs Paid.</p>
-        ${
-          (() => {
-            const xs = claimsAll
-              .map(x => { calculateBilledFinancials(x); return x; })
-              .filter(x => {
-                const s = (x.payment_status || x.payment_status_computed || "").trim();
-                return s === "Partial Payment" || s === "Underpaid" || s === "Patient Responsibility Due";
-              })
-              .slice(0, 500);
-
-            if (!xs.length) return `<p class="muted">No exceptions detected.</p>`;
-
-            const rows2 = xs.map(x => `
-              <tr>
-                <td>${safeStr(x.claim_number || "")}</td>
-                <td>$${Number(x.amount_billed || 0).toFixed(2)}</td>
-                <td>$${Number(x.contractual_allowance || 0).toFixed(2)}</td>
-                <td>$${Number(x.patient_responsibility || 0).toFixed(2)}</td>
-                <td>$${Number(x.paid_amount || 0).toFixed(2)}</td>
-                <td>$${Number(x.allowed_amount || 0).toFixed(2)}</td>
-                <td>$${Number(x.insurance_balance || 0).toFixed(2)}</td>
-                <td>${safeStr(x.payment_status || x.payment_status_computed || "")}</td>
-              </tr>
-            `).join("");
-
-            return `
-              <div style="overflow:auto;">
-                <table>
-                  <thead><tr>
-                    <th>Claim #</th>
-                    <th>Billed</th>
-                    <th>Contractual</th>
-                    <th>Patient Resp</th>
-                    <th>Paid</th>
-                    <th>Allowed</th>
-                    <th>Ins Balance</th>
-                    <th>Status</th>
-                  </tr></thead>
-                  <tbody>${rows2}</tbody>
-                </table>
-              </div>
-            `;
-          })()
-        }
+        
 
       </div>
     `, navUser(), {showChat:true});
