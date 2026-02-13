@@ -965,8 +965,55 @@ function computeAnalytics(org_id) {
   const billed_payment_conversion = billed_total > 0 ? ((billed_paid / billed_total) * 100).toFixed(1) : "0.0";
 
 
-  return { totalCases, drafts, avgDraftSeconds, denialReasons, payByPayer, totalRecoveredFromDenials, recoveryRate, aging, projectedLostRevenue, billed_total, billed_paid, billed_denied, billed_pending, billed_denial_rate, billed_payment_conversion };
+  
+  // ===== Lifecycle KPIs (Billed → Denied → Paid) =====
+  const paymentDurations = billed
+    .filter(b => (b.status || "Pending") === "Paid" && b.paid_at)
+    .map(b => {
+      const start = b.denied_at ? new Date(b.denied_at) : new Date(b.created_at);
+      const end = new Date(b.paid_at);
+      return (end - start) / (1000*60*60*24);
+    })
+    .filter(d => typeof d === "number" && d >= 0 && isFinite(d));
+
+  const avgDaysToPayment = paymentDurations.length
+    ? Math.round(paymentDurations.reduce((a,b)=>a+b,0) / paymentDurations.length)
+    : null;
+
+  const denialTurnarounds = billed
+    .filter(b => (b.status || "Pending") === "Denied" && b.denied_at && b.denial_case_id)
+    .map(b => {
+      const c = cases.find(x => x.case_id === b.denial_case_id && x.org_id === org_id);
+      if (!c || !c.created_at) return null;
+      return (new Date(c.created_at) - new Date(b.denied_at)) / (1000*60*60*24);
+    })
+    .filter(d => typeof d === "number" && d >= 0 && isFinite(d));
+
+  const avgDenialTurnaround = denialTurnarounds.length
+    ? Math.round(denialTurnarounds.reduce((a,b)=>a+b,0) / denialTurnarounds.length)
+    : null;
+
+  const agingFromDenial = { over30: 0, over60: 0, over90: 0 };
+  billed
+    .filter(b => (b.status || "Pending") !== "Paid" && b.denied_at)
+    .forEach(b => {
+      const days = (Date.now() - new Date(b.denied_at).getTime()) / (1000*60*60*24);
+      if (days > 90) agingFromDenial.over90++;
+      else if (days > 60) agingFromDenial.over60++;
+      else if (days > 30) agingFromDenial.over30++;
+    });
+
+  const resolutionDurations = billed
+    .filter(b => (b.status || "Pending") === "Paid" && b.created_at && b.paid_at)
+    .map(b => (new Date(b.paid_at) - new Date(b.created_at)) / (1000*60*60*24))
+    .filter(d => typeof d === "number" && d >= 0 && isFinite(d));
+
+  const avgTimeToResolution = resolutionDurations.length
+    ? Math.round(resolutionDurations.reduce((a,b)=>a+b,0) / resolutionDurations.length)
+    : null;
+return {totalCases, drafts, avgDraftSeconds, denialReasons, payByPayer, totalRecoveredFromDenials, recoveryRate, aging, projectedLostRevenue, billed_total, billed_paid, billed_denied, billed_pending, billed_denial_rate, billed_payment_conversion, avgDaysToPayment, avgDenialTurnaround, agingFromDenial, avgTimeToResolution};
 }
+
 
 // ===== Risk scoring + strategy suggestions + weekly summary helpers =====
 function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
@@ -1282,7 +1329,7 @@ const server = http.createServer(async (req, res) => {
 
     const orgs = readJSON(FILES.orgs, []);
     const org_id = uuid();
-    orgs.push({ org_id, org_name: orgName, created_at: nowISO(), account_status:"active" });
+    orgs.push({ org_id, org_name: orgName, created_at: denied_at, account_status:"active" });
     writeJSON(FILES.orgs, orgs);
 
     users.push({
@@ -2180,7 +2227,9 @@ if (method === "GET" && pathname === "/weekly-summary") {
 }
   // dashboard with empty-state previews and tooltips
   if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) {
-    const limits = getLimitProfile(org.org_id);
+    const a = computeAnalytics(org.org_id);
+    const payTrend = computePaymentTrends(org.org_id);
+const limits = getLimitProfile(org.org_id);
     const usage = getUsage(org.org_id);
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
     const paymentAllowance = paymentRowsAllowance(org.org_id);
@@ -2363,10 +2412,20 @@ if (method === "GET" && pathname === "/weekly-summary") {
       const st = (b.status || "Pending");
       const action = (() => {
         if (st === "Pending") {
-          return `<form method="POST" action="/billed/mark-denied" style="display:flex;gap:6px;flex-wrap:wrap;">
-            <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
-            <button class="btn secondary" type="submit">Mark Denied</button>
-          </form>`;
+          const today = new Date().toISOString().split("T")[0];
+          return `
+            <form method="POST" action="/billed/mark-paid" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+              <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+              <input type="date" name="paid_at" value="${today}" required style="width:160px;"/>
+              <input type="text" name="paid_amount" placeholder="Paid amount" style="width:120px;"/>
+              <button class="btn small" type="submit">Mark Paid</button>
+            </form>
+            <form method="POST" action="/billed/mark-denied" style="display:flex;gap:6px;flex-wrap:wrap;">
+              <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+              <input type="date" name="denied_at" value="${today}" required style="width:160px;"/>
+              <button class="btn danger small" type="submit">Mark Denied</button>
+            </form>
+          `;
         }
         if (st === "Denied") {
           const link = b.denial_case_id ? `/status?case_id=${encodeURIComponent(b.denial_case_id)}` : "";
@@ -2528,6 +2587,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           status: "Pending",
           paid_amount: null,
           paid_at: null,
+          denied_at: null,
           denial_case_id: null,
           source_file: path.basename(stored),
           created_at: nowISO()
@@ -2553,7 +2613,44 @@ if (method === "GET" && pathname === "/weekly-summary") {
     return send(res, 200, html);
 }
 
-  if (method === "POST" && pathname === "/billed/mark-denied") {
+  
+  if (method === "POST" && pathname === "/billed/mark-paid") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const billed_id = params.get("billed_id") || "";
+    const denied_at = params.get("denied_at") || nowISO();
+    const paid_at = params.get("paid_at") || nowISO();
+    const paid_amount_in = (params.get("paid_amount") || "").trim();
+
+    const billed = readJSON(FILES.billed, []);
+    const b = billed.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+    if (!b) return redirect(res, "/billed");
+
+    b.status = "Paid";
+    b.paid_at = paid_at;
+    b.paid_amount = paid_amount_in ? Number(paid_amount_in) : (b.amount_billed || 0);
+
+    writeJSON(FILES.billed, billed);
+
+    const paymentsData = readJSON(FILES.payments, []);
+    paymentsData.push({
+      payment_id: uuid(),
+      org_id: org.org_id,
+      claim_number: b.claim_number || "",
+      payer: b.payer || "",
+      amount_paid: b.paid_amount || 0,
+      date_paid: paid_at,
+      source_file: "manual-billed",
+      created_at: nowISO(),
+      denied_approved: false
+    });
+    writeJSON(FILES.payments, paymentsData);
+
+    auditLog({ actor:"user", action:"billed_mark_paid", org_id: org.org_id, billed_id, paid_at, paid_amount: b.paid_amount });
+    return redirect(res, "/billed");
+  }
+
+if (method === "POST" && pathname === "/billed/mark-denied") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const billed_id = params.get("billed_id") || "";
@@ -2592,6 +2689,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     writeJSON(FILES.cases, cases);
 
     b.status = "Denied";
+    b.denied_at = denied_at;
     b.denial_case_id = cid;
     writeJSON(FILES.billed, billed);
 
@@ -2699,7 +2797,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
                     <td>${safeStr(x.source_file)}</td>
                     <td>${x.count}</td>
                     <td>${new Date(x.latest).toLocaleDateString()}</td>
-                    <td><a href="/payments/list">Open</a></td>
+                    <td><a href="/report?type=payment_detail">Open</a></td>
                   </tr>`;
                 }).join("")
               }</tbody>
@@ -2707,7 +2805,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       }
 
       <div class="hr"></div>
-      <p class="muted small"><p class="muted small">Payment records on file: ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p>
+      <p class="muted small">Payment records on file: ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p>
 
       <script>
         // Denial dropzone
@@ -3648,6 +3746,10 @@ if (method === "POST" && pathname === "/case/mark-paid") {
             <option value="recovery">Recovery Analysis</option>
             <option value="payers">Payer Breakdown</option>
             <option value="payment_detail">Payment Detail Report</option>
+            <option value="kpi_payment_speed">Average Days to Payment</option>
+            <option value="kpi_denial_turnaround">Denial Turnaround Time</option>
+            <option value="kpi_resolution_time">Time to Resolution</option>
+            <option value="kpi_denial_aging">Denial Aging (From Denial Date)</option>
           </select>
 
           <label>Optional Payer Filter</label>
@@ -3721,7 +3823,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 
     if (type === "executive") {
       body += `
-        <h3>Executive Summary</h3>
+        <h3>Executive Summary <span class="tooltip">ⓘ<span class="tooltiptext">High-level summary for the selected date range.</span></span></h3>
         <ul class="muted">
           <li><strong>Denied cases in range:</strong> ${cases.length}</li>
           <li><strong>Payments logged in range:</strong> ${paymentsFiltered.length}</li>
@@ -3862,5 +3964,6 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
+
 
 
