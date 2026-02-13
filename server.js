@@ -871,72 +871,55 @@ ${orgName || "[Organization Billing Team]"}
 }
 
 
-// ===== Appeal Packet Builder (De‑Identified / Non‑PHI mode) =====
-// NOTE: Do NOT store patient identifiers (name, DOB, member ID). Use placeholders.
-// Attachments should be de‑identified only. Files are stored temporarily and auto-deleted.
-const APPEAL_ATTACHMENT_TTL_MS = 60 * 60 * 1000; // 60 minutes
+// ===== Appeal Packet Builder (Template Autofill — Placeholders Only) =====
+// This module does NOT read/parse uploaded documents. It only fills templates using user-entered fields + AI-generated sections.
+// Template placeholders use {{PLACEHOLDER_NAME}} (double curly braces). Example: {{CLAIM_NUMBER}}, {{CPT_CODES}}, {{ICD10_CODES}}.
+
+const APPEAL_ATTACHMENT_TTL_MS = 60 * 60 * 1000; // 60 minutes (dev-safe default)
 
 function appealPacketDefaults(orgName) {
   return {
-    deid_confirmed: false,
     claim_number: "",
     payer: "",
     dos: "",
     cpt_hcpcs_codes: "",
     icd10_codes: "",
     authorization_number: "",
+
     provider_npi: "",
     provider_tax_id: "",
     provider_address: "",
+
+    denial_reason: "",
     contact_log: "",
-    lmn_text:
-`LETTER OF MEDICAL NECESSITY (TEMPLATE — DE‑IDENTIFIED)
-Patient Name: ____________________
-DOB: ____/____/______
-Member ID: ____________________
 
-To Whom It May Concern,
+    appeal_template_id: "",
+    lmn_template_id: "",
+    checklist_template_id: "",
 
-I am writing to support the medical necessity of the requested service for the patient listed above.
-
-Clinical Summary (de‑identified):
-- Diagnosis / ICD‑10: ____________________
-- Requested Service / CPT/HCPCS: ____________________
-- Date(s) of Service: ____________________
-- Prior treatments attempted and outcomes: ____________________
-
-Medical Necessity Rationale:
-1) The requested service is medically necessary because ____________________.
-2) Alternative treatments have been attempted and were ineffective / contraindicated because ____________________.
-3) The requested service aligns with accepted standards of care and clinical guidelines.
-
-Supporting References (attach as needed):
-- Peer‑reviewed literature and/or clinical guidelines supporting standard of care.
-
-Sincerely,
-${orgName || "[Provider / Practice]"}
-`,
+    appeal_letter_body: "",
+    lmn_body: "",
     checklist_notes:
-`APPEAL PACKET CHECKLIST (DE‑IDENTIFIED)
+`APPEAL PACKET CHECKLIST
 Essential Documentation:
-[ ] Denial letter / EOB copy (de‑identified)
+[ ] Denial letter / EOB copy
 [ ] Appeal letter (formal)
 [ ] Letter of Medical Necessity (LMN)
-[ ] Relevant medical records (de‑identified: chart notes, imaging, labs, op reports)
+[ ] Relevant medical records (chart notes, imaging, labs, op reports)
 [ ] Authorization number proof (if applicable)
-[ ] Patient identifiers (to be filled AFTER export, outside this system)
 
 Administrative Items:
 [ ] Claim number, DOS, payer
-[ ] CPT/HCPCS codes + ICD‑10 codes
+[ ] CPT/HCPCS codes + ICD-10 codes
 [ ] Provider NPI, Tax ID, address
 [ ] Appeal / reconsideration form (payer-specific, if required)
-[ ] Interaction log (dates/times/rep names — no patient identifiers)
+[ ] Interaction log (dates/times/rep names)
 
 Supporting Documents:
-[ ] Clinical guidelines or peer‑reviewed literature
+[ ] Clinical guidelines or peer-reviewed literature
 [ ] Coding crosswalk / code validation notes (if needed)
 `,
+
     compiled_packet_text: "",
     compiled_at: null
   };
@@ -944,13 +927,121 @@ Supporting Documents:
 
 function normalizeAppealPacket(c, orgName) {
   if (!c.appeal_packet) c.appeal_packet = appealPacketDefaults(orgName);
-  // Ensure all keys exist (forward compatible)
   const d = appealPacketDefaults(orgName);
   for (const k of Object.keys(d)) {
     if (typeof c.appeal_packet[k] === "undefined") c.appeal_packet[k] = d[k];
   }
-  if (!Array.isArray(c.appeal_attachments)) c.appeal_attachments = []; // {file_id, filename, stored_path, uploaded_at, expires_at}
+  if (!Array.isArray(c.appeal_attachments)) c.appeal_attachments = [];
   return c;
+}
+
+function fillPlaceholders(templateText, data) {
+  const src = String(templateText || "");
+  return src.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (m, key) => {
+    const v = data && Object.prototype.hasOwnProperty.call(data, key) ? data[key] : "";
+    return (v === null || typeof v === "undefined") ? "" : String(v);
+  });
+}
+
+function getTemplateTextById(template_id, org_id) {
+  if (!template_id) return "";
+  try {
+    const templates = readJSON(FILES.templates, []);
+    const t = templates.find(x => x.template_id === template_id && x.org_id === org_id);
+    if (t && t.stored_path && fs.existsSync(t.stored_path)) {
+      return fs.readFileSync(t.stored_path, "utf8");
+    }
+  } catch {}
+  return "";
+}
+
+async function aiDraftSections(orgName, ap) {
+  if (!process.env.OPENAI_API_KEY) {
+    return {
+      appeal_letter_body:
+`Re: Claim ${ap.claim_number || "(claim #)"} — Appeal of Denial
+
+To Whom It May Concern,
+
+We are appealing the denial for the service billed under CPT/HCPCS ${ap.cpt_hcpcs_codes || "(codes)"} with ICD-10 ${ap.icd10_codes || "(codes)"} on DOS ${ap.dos || "(DOS)"}.
+Denial reason: ${ap.denial_reason || "(reason)"}.
+
+Please reconsider coverage based on medical necessity and documentation attached. If additional information is required, please contact our office.
+
+Sincerely,
+${orgName || "[Provider/Practice]"}
+`,
+      lmn_body:
+`LETTER OF MEDICAL NECESSITY
+
+Patient: ____________________
+DOB: ____________________
+Member ID: ____________________
+
+Diagnosis (ICD-10): ${ap.icd10_codes || "(codes)"}
+Requested Service (CPT/HCPCS): ${ap.cpt_hcpcs_codes || "(codes)"}
+DOS: ${ap.dos || "(DOS)"}
+
+Medical Necessity Summary:
+- Clinical rationale supporting necessity: ____________________
+- Prior treatments attempted and outcomes: ____________________
+- Why alternatives are not appropriate: ____________________
+
+This service is consistent with accepted standards of care and supported by documentation and references attached.
+
+Sincerely,
+${orgName || "[Provider/Practice]"}
+`
+    };
+  }
+
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const systemMsg = "You draft concise, payer-ready denial appeal writing. Use ONLY the provided structured fields. Do not invent patient identifiers. Do not claim to have read attachments.";
+  const userMsg =
+`DRAFT TWO SECTIONS USING ONLY THESE FIELDS (NO DOCUMENT PARSING):
+Organization: ${orgName || ""}
+Claim Number: ${ap.claim_number || ""}
+Payer: ${ap.payer || ""}
+Date of Service: ${ap.dos || ""}
+CPT/HCPCS Codes: ${ap.cpt_hcpcs_codes || ""}
+ICD-10 Codes: ${ap.icd10_codes || ""}
+Authorization Number: ${ap.authorization_number || ""}
+Denial Reason: ${ap.denial_reason || ""}
+
+OUTPUT FORMAT (exact):
+===APPEAL_LETTER_BODY===
+(text)
+===LMN_BODY===
+(text)
+`;
+
+  try {
+    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemMsg },
+          { role: "user", content: userMsg }
+        ],
+        temperature: 0.2
+      })
+    });
+    const data = await resp.json();
+    const out = data?.choices?.[0]?.message?.content || "";
+    const a = /===APPEAL_LETTER_BODY===\s*([\s\S]*?)\s*===LMN_BODY===/m.exec(out);
+    const l = /===LMN_BODY===\s*([\s\S]*)$/m.exec(out);
+    return {
+      appeal_letter_body: (a && a[1]) ? a[1].trim() : "",
+      lmn_body: (l && l[1]) ? l[1].trim() : ""
+    };
+  } catch {
+    return { appeal_letter_body: "", lmn_body: "" };
+  }
 }
 
 function cleanupExpiredAppealAttachments(org_id) {
@@ -975,7 +1066,6 @@ function cleanupExpiredAppealAttachments(org_id) {
 
   if (changed) {
     const all = readJSON(FILES.cases, []);
-    // replace org cases with updated ones
     const out = all.map(x => {
       if (x.org_id !== org_id) return x;
       const updated = cases.find(y => y.case_id === x.case_id);
@@ -991,66 +1081,100 @@ function compileAppealPacketText(c, orgName) {
 
   const attachmentsIndex = (c.appeal_attachments || []).map(a => `- ${a.filename || "attachment"}`).join("\n") || "- (none uploaded)";
 
-  const header =
-`APPEAL PACKET (DE‑IDENTIFIED)
-Organization: ${orgName || ""}
-Case ID: ${c.case_id}
-Generated: ${new Date().toLocaleString()}
+  const appealTemplate = getTemplateTextById(ap.appeal_template_id, c.org_id) || 
+`APPEAL LETTER
+Organization: {{ORG_NAME}}
+Claim #: {{CLAIM_NUMBER}}
+Payer: {{PAYER}}
+DOS: {{DOS}}
 
-IMPORTANT: This packet is DE‑IDENTIFIED. Do not include patient name, DOB, or member ID in this system.
-Fill patient identifiers AFTER export, outside this platform.
+{{APPEAL_LETTER_BODY}}
 `;
 
-  const admin =
-`ADMIN + CODING SUMMARY (DE‑IDENTIFIED)
-Claim #: ${ap.claim_number || "(enter claim #)"}
-Payer: ${ap.payer || "(enter payer)"}
-DOS: ${ap.dos || "(enter DOS)"}
-CPT/HCPCS: ${ap.cpt_hcpcs_codes || "(enter codes)"}
-ICD‑10: ${ap.icd10_codes || "(enter codes)"}
-Authorization #: ${ap.authorization_number || "(enter auth #)"}
+  const lmnTemplate = getTemplateTextById(ap.lmn_template_id, c.org_id) ||
+`LETTER OF MEDICAL NECESSITY
+Organization: {{ORG_NAME}}
+Claim #: {{CLAIM_NUMBER}}
 
-Provider NPI: ${ap.provider_npi || "(enter NPI)"}
-Provider Tax ID: ${ap.provider_tax_id || "(enter Tax ID)"}
-Provider Address: ${ap.provider_address || "(enter address)"}
+{{LMN_BODY}}
 `;
 
-  const log =
-`INTERACTION LOG (NO PATIENT IDENTIFIERS)
-${ap.contact_log || "(no log entered)"}
+  const checklistTemplate = getTemplateTextById(ap.checklist_template_id, c.org_id) ||
+`CHECKLIST
+{{CHECKLIST_NOTES}}
 `;
+
+  const data = {
+    ORG_NAME: orgName || "",
+    CASE_ID: c.case_id || "",
+    GENERATED_AT: new Date().toLocaleString(),
+    CLAIM_NUMBER: ap.claim_number || "",
+    PAYER: ap.payer || "",
+    DOS: ap.dos || "",
+    CPT_CODES: ap.cpt_hcpcs_codes || "",
+    ICD10_CODES: ap.icd10_codes || "",
+    AUTH_NUMBER: ap.authorization_number || "",
+    PROVIDER_NPI: ap.provider_npi || "",
+    PROVIDER_TAX_ID: ap.provider_tax_id || "",
+    PROVIDER_ADDRESS: ap.provider_address || "",
+    DENIAL_REASON: ap.denial_reason || "",
+    CONTACT_LOG: ap.contact_log || "",
+    APPEAL_LETTER_BODY: ap.appeal_letter_body || "",
+    LMN_BODY: ap.lmn_body || "",
+    CHECKLIST_NOTES: ap.checklist_notes || "",
+    ATTACHMENTS_INDEX: attachmentsIndex
+  };
+
+  const filledAppeal = fillPlaceholders(appealTemplate, data);
+  const filledLMN = fillPlaceholders(lmnTemplate, data);
+  const filledChecklist = fillPlaceholders(checklistTemplate, data);
 
   const compiled =
-`${header}
-==============================
-1) APPEAL LETTER
-------------------------------
-${(c.ai && c.ai.draft_text) ? c.ai.draft_text : "(appeal letter not available)"}
+`APPEAL PACKET
+Organization: ${data.ORG_NAME}
+Case ID: ${data.CASE_ID}
+Generated: ${data.GENERATED_AT}
 
 ==============================
-2) LETTER OF MEDICAL NECESSITY
+1) COVER / ADMIN SUMMARY
 ------------------------------
-${ap.lmn_text || "(LMN not available)"}
+Claim #: ${data.CLAIM_NUMBER}
+Payer: ${data.PAYER}
+DOS: ${data.DOS}
+CPT/HCPCS: ${data.CPT_CODES}
+ICD-10: ${data.ICD10_CODES}
+Authorization #: ${data.AUTH_NUMBER}
+
+Provider NPI: ${data.PROVIDER_NPI}
+Provider Tax ID: ${data.PROVIDER_TAX_ID}
+Provider Address: ${data.PROVIDER_ADDRESS}
+
+Denial Reason: ${data.DENIAL_REASON}
 
 ==============================
-3) CHECKLIST
+2) APPEAL LETTER
 ------------------------------
-${ap.checklist_notes || ""}
+${filledAppeal}
 
 ==============================
-4) ADMIN + CODING SUMMARY
+3) LETTER OF MEDICAL NECESSITY
 ------------------------------
-${admin}
+${filledLMN}
 
 ==============================
-5) ATTACHMENTS INDEX (DE‑IDENTIFIED)
+4) CHECKLIST
+------------------------------
+${filledChecklist}
+
+==============================
+5) ATTACHMENTS INDEX
 ------------------------------
 ${attachmentsIndex}
 
 ==============================
-6) NOTES / LOG
+6) INTERACTION LOG
 ------------------------------
-${log}
+${data.CONTACT_LOG || "(no log entered)"}
 `;
 
   ap.compiled_packet_text = compiled;
@@ -1058,7 +1182,7 @@ ${log}
   return c;
 }
 
-
+// Keep existing AI completion flow
 function maybeCompleteAI(caseObj, orgName) {
   if (caseObj.status !== "ANALYZING") return caseObj;
   const started = new Date(caseObj.ai_started_at).getTime();
@@ -1098,6 +1222,41 @@ function maybeCompleteAI(caseObj, orgName) {
   caseObj.status = "DRAFT_READY";
   return caseObj;
 }
+
+
+// ===== Billed Claim Financials (Contractual + Patient Responsibility) =====
+function num0(x){ const n = Number(x); return isFinite(n) ? n : 0; }
+
+function calculateBilledFinancials(b) {
+  const billed = num0(b.amount_billed || b.billed_amount || 0);
+  const contractual = num0(b.contractual_allowance || 0);
+  const paid = num0(b.paid_amount || 0);
+  const patient = num0(b.patient_responsibility || 0);
+
+  const allowed = Math.max(0, billed - contractual);
+  const insuranceExpected = Math.max(0, allowed - patient);
+  const insuranceBalance = Math.max(0, insuranceExpected - paid);
+  const patientBalance = Math.max(0, patient);
+
+  b.allowed_amount = allowed;
+  b.insurance_balance = insuranceBalance;
+  b.patient_balance = patientBalance;
+
+  let st = "Pending";
+  if (allowed > 0 && (paid + patient) >= allowed) st = "Paid in Full";
+  else if (paid > 0 && paid < insuranceExpected) st = "Underpaid";
+  else if (paid === 0 && contractual > 0) st = "Adjusted";
+  else if (paid > 0 && paid < allowed) st = "Partial Payment";
+  else if (patient > 0 && paid >= insuranceExpected) st = "Patient Responsibility Due";
+
+  b.payment_status_computed = st;
+
+  const ov = (b.payment_status_override || "").trim();
+  b.payment_status = ov ? ov : st;
+
+  return b;
+}
+
 
 // ===== Analytics =====
 function computeAnalytics(org_id) {
@@ -2952,6 +3111,54 @@ return `<tr>
           <tbody>${rows || `<tr><td colspan="6" class="muted">No claims found for this filter.</td></tr>`}</tbody>
         </table>
         <p class="muted small">Showing ${Math.min(500, billed.length)} of ${billed.length} filtered results in this submission.</p>
+        <div class="hr"></div>
+        <h3>Payment Exceptions</h3>
+        <p class="muted small">Auto-calculated based on Billed − Contractual − Patient Responsibility vs Paid.</p>
+        ${
+          (() => {
+            const xs = claimsAll
+              .map(x => { calculateBilledFinancials(x); return x; })
+              .filter(x => {
+                const s = (x.payment_status || x.payment_status_computed || "").trim();
+                return s === "Partial Payment" || s === "Underpaid" || s === "Patient Responsibility Due";
+              })
+              .slice(0, 500);
+
+            if (!xs.length) return `<p class="muted">No exceptions detected.</p>`;
+
+            const rows2 = xs.map(x => `
+              <tr>
+                <td>${safeStr(x.claim_number || "")}</td>
+                <td>$${Number(x.amount_billed || 0).toFixed(2)}</td>
+                <td>$${Number(x.contractual_allowance || 0).toFixed(2)}</td>
+                <td>$${Number(x.patient_responsibility || 0).toFixed(2)}</td>
+                <td>$${Number(x.paid_amount || 0).toFixed(2)}</td>
+                <td>$${Number(x.allowed_amount || 0).toFixed(2)}</td>
+                <td>$${Number(x.insurance_balance || 0).toFixed(2)}</td>
+                <td>${safeStr(x.payment_status || x.payment_status_computed || "")}</td>
+              </tr>
+            `).join("");
+
+            return `
+              <div style="overflow:auto;">
+                <table>
+                  <thead><tr>
+                    <th>Claim #</th>
+                    <th>Billed</th>
+                    <th>Contractual</th>
+                    <th>Patient Resp</th>
+                    <th>Paid</th>
+                    <th>Allowed</th>
+                    <th>Ins Balance</th>
+                    <th>Status</th>
+                  </tr></thead>
+                  <tbody>${rows2}</tbody>
+                </table>
+              </div>
+            `;
+          })()
+        }
+
       </div>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
@@ -3034,6 +3241,14 @@ return `<tr>
           status: "Pending",
           paid_amount: null,
           paid_at: null,
+          contractual_allowance: 0,
+          patient_responsibility: 0,
+          allowed_amount: 0,
+          insurance_balance: 0,
+          patient_balance: 0,
+          payment_status_override: "",
+          payment_status_computed: "Pending",
+          payment_status: "Pending",
           denied_at: null,
           denial_case_id: null,
           source_file: path.basename(stored),
@@ -3075,28 +3290,44 @@ return `<tr>
     const billed_id = params.get("billed_id") || "";
     const submission_id = (params.get("submission_id") || "").trim();
     const paid_at = params.get("paid_at") || nowISO();
+
     const paid_amount_in = (params.get("paid_amount") || "").trim();
+    const contractual_in = (params.get("contractual_allowance") || "").trim();
+    const patient_in = (params.get("patient_responsibility") || "").trim();
+    const status_override = (params.get("payment_status_override") || "").trim();
 
     const billed = readJSON(FILES.billed, []);
     const b = billed.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
     if (!b) return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
 
-    b.status = "Paid";
     b.paid_at = paid_at;
-    b.paid_amount = paid_amount_in ? Number(paid_amount_in) : (b.amount_billed || 0);
+    b.paid_amount = paid_amount_in ? Number(paid_amount_in) : (Number(b.paid_amount||0) || 0);
+    b.contractual_allowance = contractual_in ? Number(contractual_in) : (Number(b.contractual_allowance||0) || 0);
+    b.patient_responsibility = patient_in ? Number(patient_in) : (Number(b.patient_responsibility||0) || 0);
+    b.payment_status_override = status_override || "";
+
+    calculateBilledFinancials(b);
+
+    const anyMoney = (Number(b.paid_amount||0) > 0) || (Number(b.contractual_allowance||0) > 0) || (Number(b.patient_responsibility||0) > 0);
+    b.status = anyMoney ? "Paid" : (b.status || "Pending");
 
     writeJSON(FILES.billed, billed);
 
-    // Create payment row for analytics (avoid duplicate manual-billed for same claim+date)
     const paymentsData = readJSON(FILES.payments, []);
-    const existsPay = paymentsData.find(p => p.org_id === org.org_id && p.source_file === "manual-billed" && String(p.claim_number||"")===String(b.claim_number||"") && String(p.date_paid||"")===String(paid_at||""));
-    if (!existsPay) {
+    const existsPay = paymentsData.find(p =>
+      p.org_id === org.org_id &&
+      p.source_file === "manual-billed" &&
+      String(p.claim_number||"") === String(b.claim_number||"") &&
+      String(p.date_paid||"") === String(paid_at||"")
+    );
+
+    if (!existsPay && Number(b.paid_amount||0) > 0) {
       paymentsData.push({
         payment_id: uuid(),
         org_id: org.org_id,
         claim_number: b.claim_number || "",
         payer: b.payer || "",
-        amount_paid: b.paid_amount || 0,
+        amount_paid: Number(b.paid_amount || 0),
         date_paid: paid_at,
         source_file: "manual-billed",
         created_at: nowISO(),
@@ -3105,7 +3336,18 @@ return `<tr>
       writeJSON(FILES.payments, paymentsData);
     }
 
-    auditLog({ actor:"user", action:"billed_mark_paid", org_id: org.org_id, billed_id, paid_at, paid_amount: b.paid_amount });
+    auditLog({
+      actor:"user",
+      action:"billed_mark_paid",
+      org_id: org.org_id,
+      billed_id,
+      paid_at,
+      paid_amount: b.paid_amount,
+      contractual_allowance: b.contractual_allowance,
+      patient_responsibility: b.patient_responsibility,
+      payment_status: b.payment_status
+    });
+
     return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
   }
 
@@ -3712,73 +3954,113 @@ const html = page("Denial & Payment Upload", `
     if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
     const html = page("Appeal Packet Builder", `
-      <h2>Appeal Packet Builder (De‑Identified)</h2>
-      <p class="muted">Build a complete appeal packet without storing patient identifiers. Do not upload or enter patient name, DOB, or member ID.</p>
-      <div class="badge warn">DE‑IDENTIFIED MODE · No PHI · Human review required</div>
+      <h2>Appeal Packet Builder</h2>
+      <p class="muted">Upload templates (TXT recommended), enter key fields, then generate a complete appeal packet. Attachments are stored for reference only and are not parsed.</p>
+      <div class="badge warn">Template Autofill · Placeholders Only · Human review required</div>
       <div class="hr"></div>
+
+      <h3>Template Placeholders</h3>
+      <p class="muted small">Use placeholders like: <strong>{{CLAIM_NUMBER}}</strong>, <strong>{{PAYER}}</strong>, <strong>{{DOS}}</strong>, <strong>{{CPT_CODES}}</strong>, <strong>{{ICD10_CODES}}</strong>, <strong>{{AUTH_NUMBER}}</strong>, <strong>{{APPEAL_LETTER_BODY}}</strong>, <strong>{{LMN_BODY}}</strong>, <strong>{{CHECKLIST_NOTES}}</strong>.</p>
+
+      <div class="hr"></div>
+      <h3>Templates</h3>
+      <form method="POST" action="/appeal/template-upload" enctype="multipart/form-data">
+        <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+        <label>Template Type</label>
+        <select name="template_type" required>
+          <option value="appeal">Appeal Letter Template</option>
+          <option value="lmn">LMN Template</option>
+          <option value="checklist">Checklist Template</option>
+        </select>
+        <label>Upload Template (TXT recommended)</label>
+        <input type="file" name="templateFile" accept=".txt" required />
+        <div class="btnRow">
+          <button class="btn secondary" type="submit">Upload Template</button>
+        </div>
+      </form>
 
       <form method="POST" action="/appeal/save">
         <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
 
-        <h3>De‑Identified Confirmation</h3>
-        <label style="display:flex;gap:10px;align-items:flex-start;margin-top:8px;">
-          <input type="checkbox" name="deid_confirmed" value="1" ${c.appeal_packet && c.appeal_packet.deid_confirmed ? "checked" : ""} style="width:auto;margin:0;margin-top:2px;">
-          <span class="muted">I confirm this case is de‑identified (no patient identifiers in text or uploads).</span>
-        </label>
+        <div class="row">
+          <div class="col">
+            <label>Select Appeal Template</label>
+            <select name="appeal_template_id">
+              <option value="">Use built-in template</option>
+              ${readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id && t.template_type === "appeal").map(t => `<option value="${safeStr(t.template_id)}"${(c.appeal_packet?.appeal_template_id||"")===t.template_id?" selected":""}>${safeStr(t.filename)}</option>`).join("")}
+            </select>
+
+            <label>Select LMN Template</label>
+            <select name="lmn_template_id">
+              <option value="">Use built-in template</option>
+              ${readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id && t.template_type === "lmn").map(t => `<option value="${safeStr(t.template_id)}"${(c.appeal_packet?.lmn_template_id||"")===t.template_id?" selected":""}>${safeStr(t.filename)}</option>`).join("")}
+            </select>
+
+            <label>Select Checklist Template</label>
+            <select name="checklist_template_id">
+              <option value="">Use built-in template</option>
+              ${readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id && t.template_type === "checklist").map(t => `<option value="${safeStr(t.template_id)}"${(c.appeal_packet?.checklist_template_id||"")===t.template_id?" selected":""}>${safeStr(t.filename)}</option>`).join("")}
+            </select>
+          </div>
+
+          <div class="col">
+            <label>Denial Reason (short)</label>
+            <input name="denial_reason" value="${safeStr(c.appeal_packet?.denial_reason || "")}" placeholder="e.g., Medical necessity, Authorization missing, Coding" />
+            <label>Interaction Log (optional)</label>
+            <textarea name="contact_log" style="min-height:140px;">${safeStr(c.appeal_packet?.contact_log || "")}</textarea>
+          </div>
+        </div>
 
         <div class="hr"></div>
-        <h3>1) Appeal Letter</h3>
-        <textarea name="draft_text">${safeStr((c.ai && c.ai.draft_text) || "")}</textarea>
-
-        <div class="hr"></div>
-        <h3>2) Letter of Medical Necessity (LMN)</h3>
-        <textarea name="lmn_text">${safeStr((c.appeal_packet && c.appeal_packet.lmn_text) || "")}</textarea>
-
-        <div class="hr"></div>
-        <h3>3) Admin + Coding Summary (No PHI)</h3>
+        <h3>Claim + Coding</h3>
         <div class="row">
           <div class="col">
             <label>Claim #</label>
-            <input name="claim_number" value="${safeStr(c.appeal_packet?.claim_number || "")}" placeholder="Claim number (no patient identifiers)" />
+            <input name="claim_number" value="${safeStr(c.appeal_packet?.claim_number || "")}" />
             <label>Payer</label>
-            <input name="payer" value="${safeStr(c.appeal_packet?.payer || "")}" placeholder="Payer name" />
+            <input name="payer" value="${safeStr(c.appeal_packet?.payer || "")}" />
             <label>Date of Service (DOS)</label>
-            <input name="dos" value="${safeStr(c.appeal_packet?.dos || "")}" placeholder="YYYY-MM-DD or payer format" />
+            <input name="dos" value="${safeStr(c.appeal_packet?.dos || "")}" />
             <label>Authorization #</label>
-            <input name="authorization_number" value="${safeStr(c.appeal_packet?.authorization_number || "")}" placeholder="Authorization number (if applicable)" />
+            <input name="authorization_number" value="${safeStr(c.appeal_packet?.authorization_number || "")}" />
           </div>
           <div class="col">
             <label>CPT/HCPCS codes</label>
-            <input name="cpt_hcpcs_codes" value="${safeStr(c.appeal_packet?.cpt_hcpcs_codes || "")}" placeholder="e.g., 99214, 27447" />
-            <label>ICD‑10 codes</label>
-            <input name="icd10_codes" value="${safeStr(c.appeal_packet?.icd10_codes || "")}" placeholder="e.g., M17.11" />
+            <input name="cpt_hcpcs_codes" value="${safeStr(c.appeal_packet?.cpt_hcpcs_codes || "")}" />
+            <label>ICD-10 codes</label>
+            <input name="icd10_codes" value="${safeStr(c.appeal_packet?.icd10_codes || "")}" />
             <label>Provider NPI</label>
-            <input name="provider_npi" value="${safeStr(c.appeal_packet?.provider_npi || "")}" placeholder="NPI" />
+            <input name="provider_npi" value="${safeStr(c.appeal_packet?.provider_npi || "")}" />
             <label>Provider Tax ID</label>
-            <input name="provider_tax_id" value="${safeStr(c.appeal_packet?.provider_tax_id || "")}" placeholder="Tax ID" />
+            <input name="provider_tax_id" value="${safeStr(c.appeal_packet?.provider_tax_id || "")}" />
             <label>Provider Address</label>
-            <input name="provider_address" value="${safeStr(c.appeal_packet?.provider_address || "")}" placeholder="Practice address" />
+            <input name="provider_address" value="${safeStr(c.appeal_packet?.provider_address || "")}" />
           </div>
         </div>
 
         <div class="hr"></div>
-        <h3>4) Interaction Log (No PHI)</h3>
-        <textarea name="contact_log" style="min-height:140px;">${safeStr(c.appeal_packet?.contact_log || "")}</textarea>
-
-        <div class="hr"></div>
-        <h3>5) Checklist (editable)</h3>
-        <textarea name="checklist_notes" style="min-height:180px;">${safeStr(c.appeal_packet?.checklist_notes || "")}</textarea>
-
+        <h3>AI Draft Sections</h3>
+        <p class="muted small">This drafts the appeal letter body + LMN body using ONLY the fields above (no document parsing).</p>
         <div class="btnRow">
-          <button class="btn" type="submit">Save Packet Inputs</button>
-          <a class="btn secondary" href="/status?case_id=${encodeURIComponent(case_id)}">Back to Status</a>
+          <button class="btn secondary" formaction="/appeal/ai-draft" formmethod="POST" type="submit">Generate AI Draft Text</button>
+          <button class="btn" type="submit">Save Inputs</button>
           <a class="btn secondary" href="/dashboard">Dashboard</a>
         </div>
+
+        <div class="hr"></div>
+        <h3>Editable Outputs</h3>
+        <label>Appeal Letter Body (inserted into template via {{APPEAL_LETTER_BODY}})</label>
+        <textarea name="appeal_letter_body" style="min-height:180px;">${safeStr(c.appeal_packet?.appeal_letter_body || "")}</textarea>
+
+        <label>LMN Body (inserted into template via {{LMN_BODY}})</label>
+        <textarea name="lmn_body" style="min-height:180px;">${safeStr(c.appeal_packet?.lmn_body || "")}</textarea>
+
+        <label>Checklist Notes (inserted via {{CHECKLIST_NOTES}})</label>
+        <textarea name="checklist_notes" style="min-height:180px;">${safeStr(c.appeal_packet?.checklist_notes || "")}</textarea>
       </form>
 
       <div class="hr"></div>
-      <h3>6) Attachments (De‑Identified Only · Auto‑Delete in 60 minutes)</h3>
-      <p class="muted small">Upload de‑identified documents only. Files are stored temporarily and automatically deleted.</p>
+      <h3>Attachments (Not Parsed)</h3>
       <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
         <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
         <label>Upload attachments (multiple)</label>
@@ -3789,20 +4071,7 @@ const html = page("Denial & Payment Upload", `
       </form>
 
       <div class="hr"></div>
-      <h3>Current Attachments</h3>
-      ${
-        (c.appeal_attachments && c.appeal_attachments.length)
-          ? `<ul class="muted small">${
-              c.appeal_attachments.map(a => {
-                const exp = a.expires_at ? new Date(a.expires_at).toLocaleString() : "—";
-                return `<li>${safeStr(a.filename)} <span class="muted">(expires: ${safeStr(exp)})</span></li>`;
-              }).join("")
-            }</ul>`
-          : `<p class="muted small">No attachments uploaded.</p>`
-      }
-
-      <div class="hr"></div>
-      <h3>7) Compile + Export</h3>
+      <h3>Compile + Export</h3>
       <form method="POST" action="/appeal/compile">
         <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
         <div class="btnRow">
@@ -3893,43 +4162,103 @@ if (method === "POST" && pathname === "/draft-template") {
 
 
 
-  // ===== Appeal Packet Builder Routes (De‑Identified / Non‑PHI) =====
+  // ===== Appeal Packet Builder Routes (Template Autofill — Placeholders Only) =====
+  if (method === "POST" && pathname === "/appeal/template-upload") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/dashboard");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return redirect(res, "/dashboard");
+    const boundary = boundaryMatch[1];
+
+    const { files, fields } = await parseMultipart(req, boundary);
+    const case_id = (fields.case_id || "").trim();
+    const template_type = (fields.template_type || "").trim(); // appeal|lmn|checklist
+    const f = files.find(x => x.fieldName === "templateFile") || files[0];
+    if (!case_id || !template_type || !f) return redirect(res, "/dashboard");
+
+    const safeName = (f.filename || "template.txt").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const newId = uuid();
+    const storedPath = path.join(TEMPLATES_DIR, `${newId}_${safeName}`);
+    fs.writeFileSync(storedPath, f.buffer);
+
+    const templates = readJSON(FILES.templates, []);
+    templates.push({
+      template_id: newId,
+      org_id: org.org_id,
+      filename: safeName,
+      template_type,
+      stored_path: storedPath,
+      uploaded_at: nowISO()
+    });
+    writeJSON(FILES.templates, templates);
+
+    auditLog({ actor:"user", action:"appeal_template_upload", org_id: org.org_id, case_id, template_type, template_id: newId });
+    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+  }
+
   if (method === "POST" && pathname === "/appeal/save") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const case_id = (params.get("case_id") || "").trim();
+
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-    normalizeAppealPacket(c, org.org_name);
-    // If LMN empty, seed template
-    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
     normalizeAppealPacket(c, org.org_name);
 
-    // Save non‑PHI fields
-    c.appeal_packet.deid_confirmed = params.get("deid_confirmed") === "1";
     c.appeal_packet.claim_number = (params.get("claim_number") || "").trim();
     c.appeal_packet.payer = (params.get("payer") || "").trim();
     c.appeal_packet.dos = (params.get("dos") || "").trim();
     c.appeal_packet.cpt_hcpcs_codes = (params.get("cpt_hcpcs_codes") || "").trim();
     c.appeal_packet.icd10_codes = (params.get("icd10_codes") || "").trim();
     c.appeal_packet.authorization_number = (params.get("authorization_number") || "").trim();
+
     c.appeal_packet.provider_npi = (params.get("provider_npi") || "").trim();
     c.appeal_packet.provider_tax_id = (params.get("provider_tax_id") || "").trim();
     c.appeal_packet.provider_address = (params.get("provider_address") || "").trim();
-    c.appeal_packet.contact_log = (params.get("contact_log") || "").trim();
-    c.appeal_packet.checklist_notes = (params.get("checklist_notes") || "").trim();
 
-    // Save AI texts (editable)
-    const draft_text = params.get("draft_text") || "";
-    const lmn_text = params.get("lmn_text") || "";
-    if (!c.ai) c.ai = {};
-    c.ai.draft_text = draft_text;
-    c.appeal_packet.lmn_text = lmn_text;
+    c.appeal_packet.denial_reason = (params.get("denial_reason") || "").trim();
+    c.appeal_packet.contact_log = (params.get("contact_log") || "").trim();
+
+    c.appeal_packet.appeal_template_id = (params.get("appeal_template_id") || "").trim();
+    c.appeal_packet.lmn_template_id = (params.get("lmn_template_id") || "").trim();
+    c.appeal_packet.checklist_template_id = (params.get("checklist_template_id") || "").trim();
+
+    c.appeal_packet.appeal_letter_body = (params.get("appeal_letter_body") || "");
+    c.appeal_packet.lmn_body = (params.get("lmn_body") || "");
+    c.appeal_packet.checklist_notes = (params.get("checklist_notes") || "");
 
     writeJSON(FILES.cases, cases);
     auditLog({ actor:"user", action:"appeal_save", org_id: org.org_id, case_id });
+    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+  }
+
+  if (method === "POST" && pathname === "/appeal/ai-draft") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const case_id = (params.get("case_id") || "").trim();
+
+    const cases = readJSON(FILES.cases, []);
+    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+    if (!c) return redirect(res, "/dashboard");
+
+    normalizeAppealPacket(c, org.org_name);
+
+    c.appeal_packet.claim_number = (params.get("claim_number") || "").trim();
+    c.appeal_packet.payer = (params.get("payer") || "").trim();
+    c.appeal_packet.dos = (params.get("dos") || "").trim();
+    c.appeal_packet.cpt_hcpcs_codes = (params.get("cpt_hcpcs_codes") || "").trim();
+    c.appeal_packet.icd10_codes = (params.get("icd10_codes") || "").trim();
+    c.appeal_packet.authorization_number = (params.get("authorization_number") || "").trim();
+    c.appeal_packet.denial_reason = (params.get("denial_reason") || "").trim();
+
+    const out = await aiDraftSections(org.org_name, c.appeal_packet);
+    if (out.appeal_letter_body) c.appeal_packet.appeal_letter_body = out.appeal_letter_body;
+    if (out.lmn_body) c.appeal_packet.lmn_body = out.lmn_body;
+
+    writeJSON(FILES.cases, cases);
+    auditLog({ actor:"user", action:"appeal_ai_draft", org_id: org.org_id, case_id });
     return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
   }
 
@@ -3947,9 +4276,6 @@ if (method === "POST" && pathname === "/draft-template") {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-    normalizeAppealPacket(c, org.org_name);
-    // If LMN empty, seed template
-    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
     normalizeAppealPacket(c, org.org_name);
 
@@ -3987,20 +4313,8 @@ if (method === "POST" && pathname === "/draft-template") {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-    normalizeAppealPacket(c, org.org_name);
-    // If LMN empty, seed template
-    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
     normalizeAppealPacket(c, org.org_name);
-
-    if (!c.appeal_packet.deid_confirmed) {
-      const html = page("Appeal Packet", `
-        <h2>De‑Identified Confirmation Required</h2>
-        <p class="error">Please confirm this case is de‑identified before compiling the packet.</p>
-        <div class="btnRow"><a class="btn" href="/draft?case_id=${encodeURIComponent(case_id)}">Back</a></div>
-      `, navUser(), {showChat:true});
-      return send(res, 400, html);
-    }
 
     compileAppealPacketText(c, org.org_name);
     writeJSON(FILES.cases, cases);
@@ -4016,16 +4330,13 @@ if (method === "POST" && pathname === "/draft-template") {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-    normalizeAppealPacket(c, org.org_name);
-    // If LMN empty, seed template
-    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
     normalizeAppealPacket(c, org.org_name);
+
     const text = (c.appeal_packet && c.appeal_packet.compiled_packet_text) ? c.appeal_packet.compiled_packet_text : "";
     const packet = text || "(Packet not compiled yet. Click 'Generate Full Appeal Packet' first.)";
 
     if (fmt === "doc") {
-      // Serve a simple Word-compatible HTML document
       const htmlDoc = `<!doctype html><html><head><meta charset="utf-8"/><title>Appeal Packet</title></head>
         <body><pre style="white-space:pre-wrap;font-family:Arial, sans-serif;">${safeStr(packet)}</pre></body></html>`;
       res.writeHead(200, {
@@ -4034,6 +4345,24 @@ if (method === "POST" && pathname === "/draft-template") {
       });
       return res.end(htmlDoc);
     }
+
+    if (fmt === "pdf") {
+      const htmlPrint = page("Appeal Packet (Printable)", `
+        <h2>Appeal Packet (Printable)</h2>
+        <p class="muted">Use your browser to Print → Save as PDF.</p>
+        <div class="btnRow"><button class="btn secondary" onclick="window.print()">Print / Save as PDF</button></div>
+        <div class="hr"></div>
+        <pre style="white-space:pre-wrap;">${safeStr(packet)}</pre>
+      `, navUser(), {showChat:false});
+      return send(res, 200, htmlPrint);
+    }
+
+    res.writeHead(200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Disposition": `attachment; filename=appeal_packet_${case_id}.txt`
+    });
+    return res.end(packet);
+  }
 
     if (fmt === "pdf") {
       // Printable HTML (user can Save as PDF in browser)
@@ -4875,7 +5204,4 @@ else if (type === "payers") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
-
-
 
