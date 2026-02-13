@@ -244,6 +244,8 @@ textarea{min-height:220px;}
 .badge.ok{border-color:#a7f3d0;background:#ecfdf5;color:var(--ok);}
 .badge.warn{border-color:#fde68a;background:#fffbeb;color:var(--warn);}
 .badge.err{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
+.badge.info{border-color:#bfdbfe;background:#eff6ff;color:#1d4ed8;}
+
 .footer{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);}
 .error{color:var(--danger);font-weight:900;}
 .small{font-size:12px;}
@@ -733,6 +735,73 @@ function consumePaymentRows(org_id, rowCount) {
   saveUsage(usage);
 }
 
+
+function money(n){
+  const x = Number(n || 0);
+  return "$" + x.toFixed(2);
+}
+
+/**
+ * Recalculate billed claim financials and status.
+ * Underpaid takes priority (A).
+ */
+function recalcBilledClaim(b){
+  const billed = Number(b.amount_billed || 0);
+  const insurancePaid = Number((b.insurance_paid ?? b.paid_amount) || 0);
+  const patientResp = Number(b.patient_responsibility || 0);
+  const patientCollected = Number(b.patient_collected || 0);
+  const writeOff = Number(b.write_off_amount || 0);
+  const isOON = !!b.is_out_of_network;
+
+  // Compatibility
+  b.insurance_paid = insurancePaid;
+  b.paid_amount = insurancePaid;
+
+  if (!isOON){
+    const allowed = insurancePaid + patientResp;
+    b.allowed_amount = allowed;
+    b.contractual_adjustment = billed - allowed;
+
+    const expectedInsurance = Math.max(0, allowed - patientResp);
+    const eps = 0.01;
+    if (insurancePaid + eps < expectedInsurance){
+      b.status = "Underpaid";
+      return b;
+    }
+  } else {
+    b.allowed_amount = null;
+    b.contractual_adjustment = null;
+  }
+
+  const remainingPatient = Math.max(0, patientResp - patientCollected - writeOff);
+  b.remaining_patient_balance = remainingPatient;
+
+  if (writeOff > 0 && remainingPatient <= 0 && patientResp > patientCollected){
+    b.status = "Written Off";
+    return b;
+  }
+
+  if (isOON){
+    const remainingTotal = Math.max(0, billed - insurancePaid - patientCollected - writeOff);
+    b.remaining_total_balance = remainingTotal;
+    if (remainingTotal > 0){
+      b.status = "OON Balance";
+      return b;
+    }
+    b.status = "Paid";
+    return b;
+  }
+
+  if (remainingPatient > 0){
+    b.status = "Patient Balance";
+    return b;
+  }
+
+  b.status = "Paid";
+  return b;
+}
+
+
 // ===== Multipart Parser =====
 async function parseMultipart(req, boundary) {
   return new Promise((resolve, reject) => {
@@ -1154,7 +1223,7 @@ function computeAnalytics(org_id) {
   const billed_total = billed.length;
   const billed_paid = billed.filter(b => (b.status || "Pending") === "Paid").length;
   const billed_denied = billed.filter(b => (b.status || "Pending") === "Denied").length;
-  const billed_pending = billed.filter(b => (b.status || "Pending") === "Pending").length;
+  const billed_pending = billed.filter(b => !["Paid","Denied"].includes((b.status || "Pending"))).length;
   const billed_denial_rate = billed_total > 0 ? ((billed_denied / billed_total) * 100).toFixed(1) : "0.0";
   const billed_payment_conversion = billed_total > 0 ? ((billed_paid / billed_total) * 100).toFixed(1) : "0.0";
 
@@ -2790,12 +2859,27 @@ const limits = getLimitProfile(org.org_id);
       const action = (() => {
         if (st === "Pending") {
           return `
-            <form method="POST" action="/billed/mark-paid" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+            <form method="POST" action="/billed/mark-paid" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:flex-end;">
               <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
               <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
               <input type="date" name="paid_at" value="${today}" required style="width:160px;"/>
-              <input type="text" name="paid_amount" placeholder="Paid amount" style="width:120px;"/>
-              <button class="btn small" type="submit">Mark Paid</button>
+              <input type="text" name="paid_amount" placeholder="Insurance Paid" style="width:130px;" required />
+              <input type="text" name="patient_responsibility" placeholder="Patient Resp" style="width:120px;" />
+              <select name="patient_collection_status" style="width:170px;">
+                <option value="none">Patient Not Paid</option>
+                <option value="full">Patient Paid in Full</option>
+                <option value="partial">Patient Partially Paid</option>
+              </select>
+              <input type="text" name="patient_paid_amount" placeholder="Patient Paid (if partial)" style="width:170px;" />
+              <label class="small muted" style="display:flex;align-items:center;gap:6px;">
+                <input type="checkbox" name="write_off_remaining" value="1" style="width:auto;margin:0;">
+                Write off remaining
+              </label>
+              <label class="small muted" style="display:flex;align-items:center;gap:6px;">
+                <input type="checkbox" name="is_out_of_network" value="1" style="width:auto;margin:0;">
+                Out-of-network
+              </label>
+              <button class="btn small" type="submit">Save</button>
             </form>
             <form method="POST" action="/billed/mark-denied" style="display:flex;gap:6px;flex-wrap:wrap;">
               <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
@@ -2818,6 +2902,14 @@ const limits = getLimitProfile(org.org_id);
       
 const statusCell = (() => {
 
+  const st = (b.status || "Pending");
+  const billedAmt = Number(b.amount_billed || 0);
+  const insurancePaid = Number((b.insurance_paid ?? b.paid_amount) || 0);
+  const patientResp = Number(b.patient_responsibility || 0);
+  const patientCollected = Number(b.patient_collected || 0);
+  const writeOff = Number(b.write_off_amount || 0);
+  const remainingPatient = Math.max(0, patientResp - patientCollected - writeOff);
+
   if (st === "Denied" && b.denial_case_id) {
     return `
       <span class="badge err">Denied</span>
@@ -2825,26 +2917,64 @@ const statusCell = (() => {
         ${b.denied_at ? new Date(b.denied_at).toLocaleDateString() : ""}
       </div>
       <div class="small">
-        Case: <a href="/status?case_id=${encodeURIComponent(b.denial_case_id)}">
+        Appeal: <a href="/status?case_id=${encodeURIComponent(b.denial_case_id)}">
           ${safeStr(b.denial_case_id)}
         </a>
       </div>
     `;
   }
 
+  if (st === "Underpaid") {
+    return `
+      <span class="badge err">Underpaid</span>
+      <div class="small">Insurance: $${insurancePaid.toFixed(2)}</div>
+      <div class="small">Patient Resp: $${patientResp.toFixed(2)}</div>
+      <div class="small muted">${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}</div>
+    `;
+  }
+
+  if (st === "OON Balance") {
+    const remainingTotal = Math.max(0, billedAmt - insurancePaid - patientCollected - writeOff);
+    return `
+      <span class="badge warn">OON Balance</span>
+      <div class="small">Insurance: $${insurancePaid.toFixed(2)}</div>
+      <div class="small">Patient Paid: $${patientCollected.toFixed(2)}</div>
+      <div class="small">Remaining: $${remainingTotal.toFixed(2)}</div>
+      <div class="small muted">${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}</div>
+    `;
+  }
+
+  if (st === "Written Off") {
+    return `
+      <span class="badge info">Written Off</span>
+      <div class="small">Insurance: $${insurancePaid.toFixed(2)}</div>
+      <div class="small">Patient Resp: $${patientResp.toFixed(2)}</div>
+      <div class="small">Write-off: $${writeOff.toFixed(2)}</div>
+      <div class="small muted">${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}</div>
+    `;
+  }
+
+  if (st === "Patient Balance") {
+    return `
+      <span class="badge warn">Patient Balance</span>
+      <div class="small">Insurance: $${insurancePaid.toFixed(2)}</div>
+      <div class="small">Patient Owes: $${patientResp.toFixed(2)}</div>
+      <div class="small">Collected: $${patientCollected.toFixed(2)}</div>
+      <div class="small">Remaining: $${remainingPatient.toFixed(2)}</div>
+      <div class="small muted">${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}</div>
+    `;
+  }
+
   if (st === "Paid") {
     return `
       <span class="badge ok">Paid</span>
-      <div class="small muted">
-        ${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}
-      </div>
+      <div class="small">Insurance: $${insurancePaid.toFixed(2)}</div>
+      ${patientResp > 0 ? `<div class="small">Patient: $${patientCollected.toFixed(2)} / $${patientResp.toFixed(2)}</div>` : ``}
+      ${writeOff > 0 ? `<div class="small">Write-off: $${writeOff.toFixed(2)}</div>` : ``}
+      <div class="small muted">${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}</div>
       ${
         b.denial_case_id
-          ? `<div class="small">
-               Case: <a href="/draft?case_id=${encodeURIComponent(b.denial_case_id)}">
-                 ${safeStr(b.denial_case_id)}
-               </a>
-             </div>`
+          ? `<div class="small">Appeal: <a href="/draft?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></div>`
           : ""
       }
     `;
@@ -3081,10 +3211,43 @@ return `<tr>
     const b = billed.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
     if (!b) return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
 
-    b.status = "Paid";
-    b.paid_at = paid_at;
-    b.paid_amount = paid_amount_in ? Number(paid_amount_in) : (b.amount_billed || 0);
+    
+    // ===== NEW: Insurance + Patient responsibility + collection + write-offs + OON =====
+    const insurancePaid = paid_amount_in ? Number(paid_amount_in) : 0;
 
+    const patientRespIn = (params.get("patient_responsibility") || "").trim();
+    const patientResp = patientRespIn ? Number(patientRespIn) : (Number(b.patient_responsibility || 0) || 0);
+
+    const patientCollectionStatus = (params.get("patient_collection_status") || "none").trim();
+    const patientPaidIn = (params.get("patient_paid_amount") || "").trim();
+    let patientCollected = Number(b.patient_collected || 0) || 0;
+
+    if (patientCollectionStatus === "full") {
+      patientCollected = patientResp;
+    } else if (patientCollectionStatus === "partial") {
+      patientCollected = patientPaidIn ? Number(patientPaidIn) : patientCollected;
+    } else {
+      patientCollected = 0;
+    }
+
+    const writeOffRemaining = params.get("write_off_remaining") === "1";
+    const isOutOfNetwork = params.get("is_out_of_network") === "1";
+
+    b.paid_at = paid_at;
+    b.insurance_paid = insurancePaid;
+    b.paid_amount = insurancePaid; // compatibility
+    b.patient_responsibility = isFinite(patientResp) ? patientResp : 0;
+    b.patient_collected = isFinite(patientCollected) ? patientCollected : 0;
+    b.is_out_of_network = !!isOutOfNetwork;
+
+    if (writeOffRemaining) {
+      const remaining = Math.max(0, Number(b.patient_responsibility || 0) - Number(b.patient_collected || 0));
+      b.write_off_amount = remaining;
+    } else {
+      b.write_off_amount = Number(b.write_off_amount || 0) || 0;
+    }
+
+    recalcBilledClaim(b);
     writeJSON(FILES.billed, billed);
 
     // Create payment row for analytics (avoid duplicate manual-billed for same claim+date)
@@ -3096,7 +3259,7 @@ return `<tr>
         org_id: org.org_id,
         claim_number: b.claim_number || "",
         payer: b.payer || "",
-        amount_paid: b.paid_amount || 0,
+        amount_paid: Number(b.insurance_paid || b.paid_amount || 0),
         date_paid: paid_at,
         source_file: "manual-billed",
         created_at: nowISO(),
@@ -3207,6 +3370,15 @@ return `<tr>
     b.paid_amount = null;
     b.denied_at = null;
     b.denial_case_id = null;
+    b.insurance_paid = 0;
+    b.allowed_amount = null;
+    b.contractual_adjustment = null;
+    b.patient_responsibility = 0;
+    b.patient_collected = 0;
+    b.write_off_amount = 0;
+    b.remaining_patient_balance = 0;
+    b.is_out_of_network = false;
+
     writeJSON(FILES.billed, billed);
 
     auditLog({ actor:"user", action:"billed_reset_pending", org_id: org.org_id, billed_id });
@@ -3324,6 +3496,14 @@ return `<tr>
         b.status = "Pending";
         b.paid_at = null;
         b.paid_amount = null;
+        b.insurance_paid = 0;
+        b.allowed_amount = null;
+        b.contractual_adjustment = null;
+        b.patient_responsibility = 0;
+        b.patient_collected = 0;
+        b.write_off_amount = 0;
+        b.remaining_patient_balance = 0;
+        b.is_out_of_network = false;
         b.denied_at = null;
         b.denial_case_id = null;
         changed++;
@@ -4347,6 +4527,9 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         const amt = pickField(r, ["paid", "amount", "payment", "paid amount", "allowed"]);
         const datePaid = pickField(r, ["date", "paid date", "payment date", "remit date"]);
 
+        const allowedAmt = pickField(r, ["allowed", "allow", "allowed amount", "allowed_amt"]);
+        const patientResp = pickField(r, ["patient responsibility", "patient resp", "patient_resp", "pr", "copay", "coinsurance", "deductible"]);
+
         paymentsData.push({
           payment_id: uuid(),
           org_id: org.org_id,
@@ -4356,7 +4539,9 @@ if (method === "POST" && pathname === "/case/mark-paid") {
           date_paid: datePaid || "",
           source_file: path.basename(stored),
           created_at: nowISO(),
-          denied_approved: false
+          denied_approved: false,
+          allowed_amount: allowedAmt || "",
+          patient_responsibility: patientResp || ""
         });
         addedPayments.push(paymentsData[paymentsData.length-1]);
       }
@@ -4371,10 +4556,31 @@ if (method === "POST" && pathname === "/case/mark-paid") {
           if (!claimNo) continue;
           const b = billedAll.find(x => x.org_id === org.org_id && String(x.claim_number || '').trim() === claimNo);
           if (!b) continue;
-          if ((b.status || 'Pending') !== 'Paid') {
-            b.status = 'Paid';
-            b.paid_amount = ap.amount_paid || b.paid_amount || null;
+          {
             b.paid_at = ap.date_paid || b.paid_at || nowISO();
+            b.insurance_paid = Number(ap.amount_paid || 0) || 0;
+            b.paid_amount = b.insurance_paid;
+
+            const pr = String(ap.patient_responsibility || "").trim();
+            if (pr) {
+              const prNum = Number(pr);
+              if (isFinite(prNum)) b.patient_responsibility = prNum;
+            }
+
+            const al = String(ap.allowed_amount || "").trim();
+            if (al) {
+              const alNum = Number(al);
+              if (isFinite(alNum)) {
+                b.allowed_amount = alNum;
+                if (!b.is_out_of_network) b.contractual_adjustment = Number(b.amount_billed || 0) - alNum;
+              }
+            }
+
+            b.patient_collected = Number(b.patient_collected || 0) || 0;
+            b.write_off_amount = Number(b.write_off_amount || 0) || 0;
+            b.is_out_of_network = !!b.is_out_of_network;
+
+            recalcBilledClaim(b);
             changed = true;
           }
         }
