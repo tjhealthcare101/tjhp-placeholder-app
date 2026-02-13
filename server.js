@@ -67,7 +67,7 @@ const FILES = {
   flags: path.join(DATA_DIR, "flags.json"),
   usage: path.join(DATA_DIR, "usage.json"),
   audit: path.join(DATA_DIR, "audit.json"),
-  // New storage for user-uploaded letter templates  templates: path.join(DATA_DIR, "templates.json"),
+  templates: path.join(DATA_DIR, "templates.json"),
   billed: path.join(DATA_DIR, "billed.json"),
 };
 
@@ -2312,7 +2312,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div class="btnRow">
         <a class="btn" href="/upload">Start Denial & Appeal Mgmt</a>
         <a class="btn secondary" href="/payments">Revenue Mgmt</a>
-        <a class="btn secondary" href="/payments/list">Payment Details</a>
+        <a class="btn secondary" href="/report?type=payment_detail">Payment Details</a>
         
       </div>
     `, navUser(), {showChat:true});
@@ -2463,8 +2463,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <p class="muted small">Showing ${Math.min(300, billed.length)} of ${billed.length} filtered results.</p>
       </div>
     `, navUser());
-    return send(res, 200, injectAIChat(html));
-  }
+    return send(res, 200, html);
+}
 
   if (method === "POST" && pathname === "/billed/upload") {
     const contentType = req.headers["content-type"] || "";
@@ -2486,7 +2486,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <p class="error">Only CSV or Excel files are allowed.</p>
         <div class="btnRow"><a class="btn secondary" href="/billed">Back</a></div>
       `, navUser());
-      return send(res, 400, injectAIChat(html));
+      return send(res, 400, html);
     }
 
     // store raw file
@@ -2550,8 +2550,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <a class="btn secondary" href="/dashboard">Back to Dashboard</a>
       </div>
     `, navUser());
-    return send(res, 200, injectAIChat(html));
-  }
+    return send(res, 200, html);
+}
 
   if (method === "POST" && pathname === "/billed/mark-denied") {
     const body = await parseBody(req);
@@ -2672,7 +2672,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       }
 
       <div class="hr"></div>
-      <h3 id="payments">Payment Upload</h3>Payment Upload</h3>
+      <h3 id="payments">Payment Upload</h3>
       <p class="muted">Upload bulk payment files in CSV or Excel format. CSV drives analytics.</p>
       <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
 
@@ -2682,7 +2682,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx,.pdf,.doc,.docx" required style="display:none" />
         <div class="btnRow">
           <button class="btn" type="submit">Upload Payments</button>
-          <a class="btn secondary" href="/payments/list">View Payment Details</a>
+          <a class="btn secondary" href="/report?type=payment_detail">View Payment Details</a>
         </div>
       </form>
 
@@ -2707,7 +2707,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       }
 
       <div class="hr"></div>
-      <p class="muted small">Payment records on file: ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p> ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p>
+      <p class="muted small"><p class="muted small">Payment records on file: ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p>
 
       <script>
         // Denial dropzone
@@ -3119,26 +3119,19 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       });
       writeJSON(FILES.payments, paymentsData);
 
-      // Auto-match: mark billed claims as Paid when a payment claim_number matches
+      // Auto-match: mark billed claim as Paid when claim number matches this case_id
       try {
         const billedAll = readJSON(FILES.billed, []);
-        let changed = false;
-        for (const ap of (addedPayments || [])) {
-          const claimNo = String(ap.claim_number || "").trim();
-          if (!claimNo) continue;
-          const b = billedAll.find(x => x.org_id === org.org_id && String(x.claim_number || "").trim() === claimNo);
-          if (!b) continue;
-          if ((b.status || "Pending") !== "Paid") {
-            b.status = "Paid";
-            b.paid_amount = ap.amount_paid || b.paid_amount || null;
-            b.paid_at = ap.date_paid || b.paid_at || nowISO();
-            changed = true;
-          }
+        const claimNo = String(c.case_id || "").trim();
+        const b = billedAll.find(x => x.org_id === org.org_id && String(x.claim_number || "").trim() === claimNo);
+        if (b && (b.status || "Pending") !== "Paid") {
+          b.status = "Paid";
+          b.paid_amount = paid_amount || b.paid_amount || null;
+          b.paid_at = paid_at || b.paid_at || nowISO();
+          writeJSON(FILES.billed, billedAll);
         }
-        if (changed) writeJSON(FILES.billed, billedAll);
       } catch {}
-
-    }
+}
 
     auditLog({ actor: "user", action: "mark_paid", case_id, org_id: org.org_id, paid_at, paid_amount });
   }
@@ -3394,6 +3387,25 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         addedPayments.push(paymentsData[paymentsData.length-1]);
       }
       writeJSON(FILES.payments, paymentsData);
+
+      // Auto-match billed claims from payment upload (claim_number)
+      try {
+        const billedAll = readJSON(FILES.billed, []);
+        let changed = false;
+        for (const ap of addedPayments) {
+          const claimNo = String(ap.claim_number || '').trim();
+          if (!claimNo) continue;
+          const b = billedAll.find(x => x.org_id === org.org_id && String(x.claim_number || '').trim() === claimNo);
+          if (!b) continue;
+          if ((b.status || 'Pending') !== 'Paid') {
+            b.status = 'Paid';
+            b.paid_amount = ap.amount_paid || b.paid_amount || null;
+            b.paid_at = ap.date_paid || b.paid_at || nowISO();
+            changed = true;
+          }
+        }
+        if (changed) writeJSON(FILES.billed, billedAll);
+      } catch {}
 
       rowsAdded = toUse;
       consumePaymentRows(org.org_id, rowsAdded);
