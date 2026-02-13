@@ -870,6 +870,195 @@ ${orgName || "[Organization Billing Team]"}
   };
 }
 
+
+// ===== Appeal Packet Builder (De‑Identified / Non‑PHI mode) =====
+// NOTE: Do NOT store patient identifiers (name, DOB, member ID). Use placeholders.
+// Attachments should be de‑identified only. Files are stored temporarily and auto-deleted.
+const APPEAL_ATTACHMENT_TTL_MS = 60 * 60 * 1000; // 60 minutes
+
+function appealPacketDefaults(orgName) {
+  return {
+    deid_confirmed: false,
+    claim_number: "",
+    payer: "",
+    dos: "",
+    cpt_hcpcs_codes: "",
+    icd10_codes: "",
+    authorization_number: "",
+    provider_npi: "",
+    provider_tax_id: "",
+    provider_address: "",
+    contact_log: "",
+    lmn_text:
+`LETTER OF MEDICAL NECESSITY (TEMPLATE — DE‑IDENTIFIED)
+Patient Name: ____________________
+DOB: ____/____/______
+Member ID: ____________________
+
+To Whom It May Concern,
+
+I am writing to support the medical necessity of the requested service for the patient listed above.
+
+Clinical Summary (de‑identified):
+- Diagnosis / ICD‑10: ____________________
+- Requested Service / CPT/HCPCS: ____________________
+- Date(s) of Service: ____________________
+- Prior treatments attempted and outcomes: ____________________
+
+Medical Necessity Rationale:
+1) The requested service is medically necessary because ____________________.
+2) Alternative treatments have been attempted and were ineffective / contraindicated because ____________________.
+3) The requested service aligns with accepted standards of care and clinical guidelines.
+
+Supporting References (attach as needed):
+- Peer‑reviewed literature and/or clinical guidelines supporting standard of care.
+
+Sincerely,
+${orgName || "[Provider / Practice]"}
+`,
+    checklist_notes:
+`APPEAL PACKET CHECKLIST (DE‑IDENTIFIED)
+Essential Documentation:
+[ ] Denial letter / EOB copy (de‑identified)
+[ ] Appeal letter (formal)
+[ ] Letter of Medical Necessity (LMN)
+[ ] Relevant medical records (de‑identified: chart notes, imaging, labs, op reports)
+[ ] Authorization number proof (if applicable)
+[ ] Patient identifiers (to be filled AFTER export, outside this system)
+
+Administrative Items:
+[ ] Claim number, DOS, payer
+[ ] CPT/HCPCS codes + ICD‑10 codes
+[ ] Provider NPI, Tax ID, address
+[ ] Appeal / reconsideration form (payer-specific, if required)
+[ ] Interaction log (dates/times/rep names — no patient identifiers)
+
+Supporting Documents:
+[ ] Clinical guidelines or peer‑reviewed literature
+[ ] Coding crosswalk / code validation notes (if needed)
+`,
+    compiled_packet_text: "",
+    compiled_at: null
+  };
+}
+
+function normalizeAppealPacket(c, orgName) {
+  if (!c.appeal_packet) c.appeal_packet = appealPacketDefaults(orgName);
+  // Ensure all keys exist (forward compatible)
+  const d = appealPacketDefaults(orgName);
+  for (const k of Object.keys(d)) {
+    if (typeof c.appeal_packet[k] === "undefined") c.appeal_packet[k] = d[k];
+  }
+  if (!Array.isArray(c.appeal_attachments)) c.appeal_attachments = []; // {file_id, filename, stored_path, uploaded_at, expires_at}
+  return c;
+}
+
+function cleanupExpiredAppealAttachments(org_id) {
+  const now = Date.now();
+  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
+  let changed = false;
+
+  for (const c of cases) {
+    if (!Array.isArray(c.appeal_attachments) || c.appeal_attachments.length === 0) continue;
+    const keep = [];
+    for (const a of c.appeal_attachments) {
+      const exp = a && a.expires_at ? new Date(a.expires_at).getTime() : 0;
+      if (exp && exp <= now) {
+        try { if (a.stored_path && fs.existsSync(a.stored_path)) fs.rmSync(a.stored_path, { force:true }); } catch {}
+        changed = true;
+      } else {
+        keep.push(a);
+      }
+    }
+    if (keep.length !== c.appeal_attachments.length) c.appeal_attachments = keep;
+  }
+
+  if (changed) {
+    const all = readJSON(FILES.cases, []);
+    // replace org cases with updated ones
+    const out = all.map(x => {
+      if (x.org_id !== org_id) return x;
+      const updated = cases.find(y => y.case_id === x.case_id);
+      return updated || x;
+    });
+    writeJSON(FILES.cases, out);
+  }
+}
+
+function compileAppealPacketText(c, orgName) {
+  normalizeAppealPacket(c, orgName);
+  const ap = c.appeal_packet;
+
+  const attachmentsIndex = (c.appeal_attachments || []).map(a => `- ${a.filename || "attachment"}`).join("\n") || "- (none uploaded)";
+
+  const header =
+`APPEAL PACKET (DE‑IDENTIFIED)
+Organization: ${orgName || ""}
+Case ID: ${c.case_id}
+Generated: ${new Date().toLocaleString()}
+
+IMPORTANT: This packet is DE‑IDENTIFIED. Do not include patient name, DOB, or member ID in this system.
+Fill patient identifiers AFTER export, outside this platform.
+`;
+
+  const admin =
+`ADMIN + CODING SUMMARY (DE‑IDENTIFIED)
+Claim #: ${ap.claim_number || "(enter claim #)"}
+Payer: ${ap.payer || "(enter payer)"}
+DOS: ${ap.dos || "(enter DOS)"}
+CPT/HCPCS: ${ap.cpt_hcpcs_codes || "(enter codes)"}
+ICD‑10: ${ap.icd10_codes || "(enter codes)"}
+Authorization #: ${ap.authorization_number || "(enter auth #)"}
+
+Provider NPI: ${ap.provider_npi || "(enter NPI)"}
+Provider Tax ID: ${ap.provider_tax_id || "(enter Tax ID)"}
+Provider Address: ${ap.provider_address || "(enter address)"}
+`;
+
+  const log =
+`INTERACTION LOG (NO PATIENT IDENTIFIERS)
+${ap.contact_log || "(no log entered)"}
+`;
+
+  const compiled =
+`${header}
+==============================
+1) APPEAL LETTER
+------------------------------
+${(c.ai && c.ai.draft_text) ? c.ai.draft_text : "(appeal letter not available)"}
+
+==============================
+2) LETTER OF MEDICAL NECESSITY
+------------------------------
+${ap.lmn_text || "(LMN not available)"}
+
+==============================
+3) CHECKLIST
+------------------------------
+${ap.checklist_notes || ""}
+
+==============================
+4) ADMIN + CODING SUMMARY
+------------------------------
+${admin}
+
+==============================
+5) ATTACHMENTS INDEX (DE‑IDENTIFIED)
+------------------------------
+${attachmentsIndex}
+
+==============================
+6) NOTES / LOG
+------------------------------
+${log}
+`;
+
+  ap.compiled_packet_text = compiled;
+  ap.compiled_at = nowISO();
+  return c;
+}
+
+
 function maybeCompleteAI(caseObj, orgName) {
   if (caseObj.status !== "ANALYZING") return caseObj;
   const started = new Date(caseObj.ai_started_at).getTime();
@@ -903,6 +1092,9 @@ function maybeCompleteAI(caseObj, orgName) {
   // If a draft template was loaded, use it.  Otherwise use the AI
   // generated draft text.
   caseObj.ai.draft_text = draftText || out.draft_text;
+  // Seed de‑identified appeal packet scaffolding
+  normalizeAppealPacket(caseObj, orgName);
+  if (!caseObj.appeal_packet.lmn_text) caseObj.appeal_packet.lmn_text = appealPacketDefaults(orgName).lmn_text;
   caseObj.status = "DRAFT_READY";
   return caseObj;
 }
@@ -2003,6 +2195,8 @@ const server = http.createServer(async (req, res) => {
 
   ensurePilot(org.org_id);
   getUsage(org.org_id);
+  // Clean up expired de‑identified appeal attachments (non‑PHI mode)
+  cleanupExpiredAppealAttachments(org.org_id);
 
   if (!isAccessEnabled(org.org_id)) return redirect(res, "/pilot-complete");
   // ---------- AI Chat (Org-scoped assistant) ----------
@@ -2945,6 +3139,8 @@ return `<tr>
         paid_at: null,
         paid_amount: null,
         ai_started_at: null,
+        appeal_packet: appealPacketDefaults(org.org_name),
+        appeal_attachments: [],
         ai: {
           denial_summary: null,
           appeal_considerations: null,
@@ -3418,6 +3614,8 @@ const html = page("Denial & Payment Upload", `
         paid_at: null,
         paid_amount: null,
         ai_started_at: null,
+        appeal_packet: appealPacketDefaults(org.org_name),
+        appeal_attachments: [],
         ai: {
           denial_summary: null,
           appeal_considerations: null,
@@ -3463,6 +3661,9 @@ const html = page("Denial & Payment Upload", `
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
+    normalizeAppealPacket(c, org.org_name);
+    // If LMN empty, seed template
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
     // If queued, attempt to start AI now if capacity available
     if (c.status === "UPLOAD_RECEIVED") {
@@ -3506,61 +3707,112 @@ const html = page("Denial & Payment Upload", `
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
+    normalizeAppealPacket(c, org.org_name);
+    // If LMN empty, seed template
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
-    const html = page("Draft Ready", `
-      <h2>Draft Ready for Review</h2>
-      <p class="muted">This workspace supports denial review, appeal preparation, claim tracking, and payment analytics using only the documents you provide.</p>
-      <div class="badge warn">DRAFT — Editable · For Review Only</div>
+    const html = page("Appeal Packet Builder", `
+      <h2>Appeal Packet Builder (De‑Identified)</h2>
+      <p class="muted">Build a complete appeal packet without storing patient identifiers. Do not upload or enter patient name, DOB, or member ID.</p>
+      <div class="badge warn">DE‑IDENTIFIED MODE · No PHI · Human review required</div>
       <div class="hr"></div>
 
-      <h3>Denial Summary</h3>
-      <p>${safeStr(c.ai.denial_summary || "—")}</p>
-
-      <h3>Appeal Considerations</h3>
-      <p>${safeStr(c.ai.appeal_considerations || "—")}</p>
-
-      <h3>Appeal Letter Template</h3>
-      <p class="small muted">Select a saved template, upload a new one, or revert to the AI draft.</p>
-
-      <form method="POST" action="/draft-template" enctype="multipart/form-data">
+      <form method="POST" action="/appeal/save">
         <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
 
-        <label>Choose Existing Template</label>
-        <select name="template_id">
-          <option value="">Use AI Draft</option>
-          ${
-            readJSON(FILES.templates, [])
-              .filter(t => t.org_id === org.org_id)
-              .map(t => `<option value="${safeStr(t.template_id)}">${safeStr(t.filename)}</option>`)
-              .join("")
-          }
-        </select>
+        <h3>De‑Identified Confirmation</h3>
+        <label style="display:flex;gap:10px;align-items:flex-start;margin-top:8px;">
+          <input type="checkbox" name="deid_confirmed" value="1" ${c.appeal_packet && c.appeal_packet.deid_confirmed ? "checked" : ""} style="width:auto;margin:0;margin-top:2px;">
+          <span class="muted">I confirm this case is de‑identified (no patient identifiers in text or uploads).</span>
+        </label>
 
-        <label>Or Upload New Template</label>
-        <input type="file" name="templateFile" accept=".txt,.doc,.docx,.pdf" />
+        <div class="hr"></div>
+        <h3>1) Appeal Letter</h3>
+        <textarea name="draft_text">${safeStr((c.ai && c.ai.draft_text) || "")}</textarea>
+
+        <div class="hr"></div>
+        <h3>2) Letter of Medical Necessity (LMN)</h3>
+        <textarea name="lmn_text">${safeStr((c.appeal_packet && c.appeal_packet.lmn_text) || "")}</textarea>
+
+        <div class="hr"></div>
+        <h3>3) Admin + Coding Summary (No PHI)</h3>
+        <div class="row">
+          <div class="col">
+            <label>Claim #</label>
+            <input name="claim_number" value="${safeStr(c.appeal_packet?.claim_number || "")}" placeholder="Claim number (no patient identifiers)" />
+            <label>Payer</label>
+            <input name="payer" value="${safeStr(c.appeal_packet?.payer || "")}" placeholder="Payer name" />
+            <label>Date of Service (DOS)</label>
+            <input name="dos" value="${safeStr(c.appeal_packet?.dos || "")}" placeholder="YYYY-MM-DD or payer format" />
+            <label>Authorization #</label>
+            <input name="authorization_number" value="${safeStr(c.appeal_packet?.authorization_number || "")}" placeholder="Authorization number (if applicable)" />
+          </div>
+          <div class="col">
+            <label>CPT/HCPCS codes</label>
+            <input name="cpt_hcpcs_codes" value="${safeStr(c.appeal_packet?.cpt_hcpcs_codes || "")}" placeholder="e.g., 99214, 27447" />
+            <label>ICD‑10 codes</label>
+            <input name="icd10_codes" value="${safeStr(c.appeal_packet?.icd10_codes || "")}" placeholder="e.g., M17.11" />
+            <label>Provider NPI</label>
+            <input name="provider_npi" value="${safeStr(c.appeal_packet?.provider_npi || "")}" placeholder="NPI" />
+            <label>Provider Tax ID</label>
+            <input name="provider_tax_id" value="${safeStr(c.appeal_packet?.provider_tax_id || "")}" placeholder="Tax ID" />
+            <label>Provider Address</label>
+            <input name="provider_address" value="${safeStr(c.appeal_packet?.provider_address || "")}" placeholder="Practice address" />
+          </div>
+        </div>
+
+        <div class="hr"></div>
+        <h3>4) Interaction Log (No PHI)</h3>
+        <textarea name="contact_log" style="min-height:140px;">${safeStr(c.appeal_packet?.contact_log || "")}</textarea>
+
+        <div class="hr"></div>
+        <h3>5) Checklist (editable)</h3>
+        <textarea name="checklist_notes" style="min-height:180px;">${safeStr(c.appeal_packet?.checklist_notes || "")}</textarea>
 
         <div class="btnRow">
-          <button class="btn secondary" type="submit">Apply Template</button>
+          <button class="btn" type="submit">Save Packet Inputs</button>
+          <a class="btn secondary" href="/status?case_id=${encodeURIComponent(case_id)}">Back to Status</a>
+          <a class="btn secondary" href="/dashboard">Dashboard</a>
         </div>
       </form>
 
       <div class="hr"></div>
-
-      <h3>Draft Appeal Letter</h3>
-      <form method="POST" action="/draft">
+      <h3>6) Attachments (De‑Identified Only · Auto‑Delete in 60 minutes)</h3>
+      <p class="muted small">Upload de‑identified documents only. Files are stored temporarily and automatically deleted.</p>
+      <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
         <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-        <textarea name="draft_text">${safeStr(c.ai.draft_text || "")}</textarea>
+        <label>Upload attachments (multiple)</label>
+        <input type="file" name="appeal_docs" multiple />
         <div class="btnRow">
-          <button class="btn" type="submit">Save Edits</button>
-          <a class="btn secondary" href="/download-draft?case_id=${encodeURIComponent(case_id)}">Download TXT</a>
-          <a class="btn secondary" href="/download-draft?case_id=${encodeURIComponent(case_id)}&fmt=doc">Download Word</a>
-          <a class="btn secondary" href="/download-draft?case_id=${encodeURIComponent(case_id)}&fmt=pdf">Download PDF</a>
-          <a class="btn secondary" href="/analytics">Analytics</a>
+          <button class="btn secondary" type="submit">Upload Attachments</button>
         </div>
       </form>
 
-      <p class="muted small">Time to draft: ${c.ai.time_to_draft_seconds ? `${c.ai.time_to_draft_seconds}s` : "—"}</p>
-    `, navUser(), {showChat:true});
+      <div class="hr"></div>
+      <h3>Current Attachments</h3>
+      ${
+        (c.appeal_attachments && c.appeal_attachments.length)
+          ? `<ul class="muted small">${
+              c.appeal_attachments.map(a => {
+                const exp = a.expires_at ? new Date(a.expires_at).toLocaleString() : "—";
+                return `<li>${safeStr(a.filename)} <span class="muted">(expires: ${safeStr(exp)})</span></li>`;
+              }).join("")
+            }</ul>`
+          : `<p class="muted small">No attachments uploaded.</p>`
+      }
+
+      <div class="hr"></div>
+      <h3>7) Compile + Export</h3>
+      <form method="POST" action="/appeal/compile">
+        <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+        <div class="btnRow">
+          <button class="btn" type="submit">Generate Full Appeal Packet</button>
+          <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=txt">Download TXT</a>
+          <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=doc">Download Word</a>
+          <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=pdf">Open Printable (Save as PDF)</a>
+        </div>
+      </form>
+`, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -3573,6 +3825,9 @@ const html = page("Denial & Payment Upload", `
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
+    normalizeAppealPacket(c, org.org_name);
+    // If LMN empty, seed template
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
     c.ai.draft_text = draft;
     writeJSON(FILES.cases, cases);
     return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
@@ -3635,6 +3890,171 @@ if (method === "POST" && pathname === "/draft-template") {
   writeJSON(FILES.cases, cases);
   return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
 }
+
+
+
+  // ===== Appeal Packet Builder Routes (De‑Identified / Non‑PHI) =====
+  if (method === "POST" && pathname === "/appeal/save") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const case_id = (params.get("case_id") || "").trim();
+    const cases = readJSON(FILES.cases, []);
+    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+    if (!c) return redirect(res, "/dashboard");
+    normalizeAppealPacket(c, org.org_name);
+    // If LMN empty, seed template
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+
+    normalizeAppealPacket(c, org.org_name);
+
+    // Save non‑PHI fields
+    c.appeal_packet.deid_confirmed = params.get("deid_confirmed") === "1";
+    c.appeal_packet.claim_number = (params.get("claim_number") || "").trim();
+    c.appeal_packet.payer = (params.get("payer") || "").trim();
+    c.appeal_packet.dos = (params.get("dos") || "").trim();
+    c.appeal_packet.cpt_hcpcs_codes = (params.get("cpt_hcpcs_codes") || "").trim();
+    c.appeal_packet.icd10_codes = (params.get("icd10_codes") || "").trim();
+    c.appeal_packet.authorization_number = (params.get("authorization_number") || "").trim();
+    c.appeal_packet.provider_npi = (params.get("provider_npi") || "").trim();
+    c.appeal_packet.provider_tax_id = (params.get("provider_tax_id") || "").trim();
+    c.appeal_packet.provider_address = (params.get("provider_address") || "").trim();
+    c.appeal_packet.contact_log = (params.get("contact_log") || "").trim();
+    c.appeal_packet.checklist_notes = (params.get("checklist_notes") || "").trim();
+
+    // Save AI texts (editable)
+    const draft_text = params.get("draft_text") || "";
+    const lmn_text = params.get("lmn_text") || "";
+    if (!c.ai) c.ai = {};
+    c.ai.draft_text = draft_text;
+    c.appeal_packet.lmn_text = lmn_text;
+
+    writeJSON(FILES.cases, cases);
+    auditLog({ actor:"user", action:"appeal_save", org_id: org.org_id, case_id });
+    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+  }
+
+  if (method === "POST" && pathname === "/appeal/upload") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/dashboard");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return redirect(res, "/dashboard");
+    const boundary = boundaryMatch[1];
+
+    const { files, fields } = await parseMultipart(req, boundary);
+    const case_id = (fields.case_id || "").trim();
+    if (!case_id) return redirect(res, "/dashboard");
+
+    const cases = readJSON(FILES.cases, []);
+    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+    if (!c) return redirect(res, "/dashboard");
+    normalizeAppealPacket(c, org.org_name);
+    // If LMN empty, seed template
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+
+    normalizeAppealPacket(c, org.org_name);
+
+    const uploadFiles = files.filter(f => f.fieldName === "appeal_docs");
+    if (!uploadFiles.length) return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+
+    const caseDir = path.join(UPLOADS_DIR, org.org_id, case_id, "appeal_docs");
+    ensureDir(caseDir);
+
+    for (const f of uploadFiles) {
+      const safeName = (f.filename || "attachment").replace(/[^a-zA-Z0-9._-]/g, "_");
+      const file_id = uuid();
+      const stored_path = path.join(caseDir, `${file_id}_${safeName}`);
+      fs.writeFileSync(stored_path, f.buffer);
+
+      c.appeal_attachments.push({
+        file_id,
+        filename: safeName,
+        stored_path,
+        uploaded_at: nowISO(),
+        expires_at: new Date(Date.now() + APPEAL_ATTACHMENT_TTL_MS).toISOString()
+      });
+    }
+
+    writeJSON(FILES.cases, cases);
+    auditLog({ actor:"user", action:"appeal_upload", org_id: org.org_id, case_id, count: uploadFiles.length });
+    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+  }
+
+  if (method === "POST" && pathname === "/appeal/compile") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const case_id = (params.get("case_id") || "").trim();
+
+    const cases = readJSON(FILES.cases, []);
+    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+    if (!c) return redirect(res, "/dashboard");
+    normalizeAppealPacket(c, org.org_name);
+    // If LMN empty, seed template
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+
+    normalizeAppealPacket(c, org.org_name);
+
+    if (!c.appeal_packet.deid_confirmed) {
+      const html = page("Appeal Packet", `
+        <h2>De‑Identified Confirmation Required</h2>
+        <p class="error">Please confirm this case is de‑identified before compiling the packet.</p>
+        <div class="btnRow"><a class="btn" href="/draft?case_id=${encodeURIComponent(case_id)}">Back</a></div>
+      `, navUser(), {showChat:true});
+      return send(res, 400, html);
+    }
+
+    compileAppealPacketText(c, org.org_name);
+    writeJSON(FILES.cases, cases);
+
+    auditLog({ actor:"user", action:"appeal_compile", org_id: org.org_id, case_id });
+    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+  }
+
+  if (method === "GET" && pathname === "/appeal/export") {
+    const case_id = (parsed.query.case_id || "").trim();
+    const fmt = (parsed.query.fmt || "txt").toLowerCase();
+
+    const cases = readJSON(FILES.cases, []);
+    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+    if (!c) return redirect(res, "/dashboard");
+    normalizeAppealPacket(c, org.org_name);
+    // If LMN empty, seed template
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+
+    normalizeAppealPacket(c, org.org_name);
+    const text = (c.appeal_packet && c.appeal_packet.compiled_packet_text) ? c.appeal_packet.compiled_packet_text : "";
+    const packet = text || "(Packet not compiled yet. Click 'Generate Full Appeal Packet' first.)";
+
+    if (fmt === "doc") {
+      // Serve a simple Word-compatible HTML document
+      const htmlDoc = `<!doctype html><html><head><meta charset="utf-8"/><title>Appeal Packet</title></head>
+        <body><pre style="white-space:pre-wrap;font-family:Arial, sans-serif;">${safeStr(packet)}</pre></body></html>`;
+      res.writeHead(200, {
+        "Content-Type": "application/msword",
+        "Content-Disposition": `attachment; filename=appeal_packet_${case_id}.doc`
+      });
+      return res.end(htmlDoc);
+    }
+
+    if (fmt === "pdf") {
+      // Printable HTML (user can Save as PDF in browser)
+      const htmlPrint = page("Appeal Packet (Printable)", `
+        <h2>Appeal Packet (Printable)</h2>
+        <p class="muted">Use your browser to Print → Save as PDF.</p>
+        <div class="btnRow"><button class="btn secondary" onclick="window.print()">Print / Save as PDF</button></div>
+        <div class="hr"></div>
+        <pre style="white-space:pre-wrap;">${safeStr(packet)}</pre>
+      `, navUser(), {showChat:false});
+      return send(res, 200, htmlPrint);
+    }
+
+    // default txt
+    res.writeHead(200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Disposition": `attachment; filename=appeal_packet_${case_id}.txt`
+    });
+    return res.end(packet);
+  }
+
 
 
   // New route: handle marking a case as paid (captures paid amount + logs denied->approved payment)
