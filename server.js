@@ -2621,13 +2621,46 @@ const limits = getLimitProfile(org.org_id);
         `;
       })();
 
-      const statusCell = `${safeStr(st)}${
-        st==="Paid" && b.paid_at ? `<div class="small muted">Paid: ${new Date(b.paid_at).toLocaleDateString()}</div>` : ""
-      }${
-        st==="Denied" && b.denied_at ? `<div class="small muted">Denied: ${new Date(b.denied_at).toLocaleDateString()}</div>` : ""
-      }`;
+      
+const statusCell = (() => {
 
-      return `<tr>
+  if (st === "Denied" && b.denial_case_id) {
+    return `
+      <span class="badge err">Denied</span>
+      <div class="small muted">
+        ${b.denied_at ? new Date(b.denied_at).toLocaleDateString() : ""}
+      </div>
+      <div class="small">
+        Case: <a href="/status?case_id=${encodeURIComponent(b.denial_case_id)}">
+          ${safeStr(b.denial_case_id)}
+        </a>
+      </div>
+    `;
+  }
+
+  if (st === "Paid") {
+    return `
+      <span class="badge ok">Paid</span>
+      <div class="small muted">
+        ${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}
+      </div>
+      ${
+        b.denial_case_id
+          ? `<div class="small">
+               Case: <a href="/draft?case_id=${encodeURIComponent(b.denial_case_id)}">
+                 ${safeStr(b.denial_case_id)}
+               </a>
+             </div>`
+          : ""
+      }
+    `;
+  }
+
+  return `<span class="badge">${safeStr(st)}</span>`;
+})();
+
+
+return `<tr>
         <td>${safeStr(b.claim_number || "")}</td>
         <td>${safeStr(b.dos || "")}</td>
         <td>${safeStr(b.payer || "")}</td>
@@ -3115,10 +3148,38 @@ const limits = getLimitProfile(org.org_id);
     allCasesForStatus.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
     const recentCases = allCasesForStatus.slice(0, 8);
 
-    const allow = paymentRowsAllowance(org.org_id);
-    const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
+    
+const allow = paymentRowsAllowance(org.org_id);
+const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
 
-    const html = page("Denial & Payment Upload", `
+// Build payment upload queue (grouped by source_file)
+const allPay = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+const paymentFilesMap = {};
+allPay.forEach(p => {
+  const sf = (p.source_file || "").trim();
+  if (!sf) return;
+  if (!paymentFilesMap[sf]) {
+    paymentFilesMap[sf] = {
+      source_file: sf,
+      count: 0,
+      latest: p.created_at || p.date_paid || nowISO()
+    };
+  }
+  paymentFilesMap[sf].count += 1;
+
+  const dt = new Date(p.created_at || p.date_paid || Date.now()).getTime();
+  const cur = new Date(paymentFilesMap[sf].latest || 0).getTime();
+  if (dt > cur) {
+    paymentFilesMap[sf].latest = p.created_at || p.date_paid || nowISO();
+  }
+});
+
+const paymentQueue = Object.values(paymentFilesMap)
+  .sort((a,b) => new Date(b.latest).getTime() - new Date(a.latest).getTime())
+  .slice(0, 8);
+
+
+const html = page("Denial & Payment Upload", `
       <h2>Uploads</h2>
       <p class="muted">Upload denial documents to generate appeal drafts, and upload payment files to power revenue analytics. All results appear on your Dashboard.</p>
 
@@ -4394,6 +4455,7 @@ else if (type === "payers") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
+
 
 
 
