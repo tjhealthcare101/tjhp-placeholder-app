@@ -1,226 +1,311 @@
-const http = require(“http”); const url = require(“url”); const fs =
-require(“fs”); const path = require(“path”); const crypto =
-require(“crypto”); const bcrypt = require(“bcryptjs”);
+const http = require("http");
+const url = require("url");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
 
-// ===== Server ===== const HOST = “0.0.0.0”; const PORT =
-process.env.PORT || 8080; const IS_PROD = process.env.NODE_ENV ===
-“production”;
+// ===== Server =====
+const HOST = "0.0.0.0";
+const PORT = process.env.PORT || 8080;
+const IS_PROD = process.env.NODE_ENV === "production";
 
-// ===== ENV ===== const SESSION_SECRET = process.env.SESSION_SECRET ||
-“CHANGE_ME_SESSION_SECRET”; const APP_BASE_URL =
-process.env.APP_BASE_URL || ““; // e.g. https://app.tjhealthpro.com
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL ||”“).toLowerCase(); const
-ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH ||”“; const
-ADMIN_PASSWORD_PLAIN = process.env.ADMIN_PASSWORD_PLAIN ||”“; const
-ADMIN_ACTIVATE_TOKEN = process.env.ADMIN_ACTIVATE_TOKEN
-||”CHANGE_ME_ADMIN_ACTIVATE_TOKEN”;
+// ===== ENV =====
+const SESSION_SECRET = process.env.SESSION_SECRET || "CHANGE_ME_SESSION_SECRET";
+const APP_BASE_URL = process.env.APP_BASE_URL || ""; // e.g. https://app.tjhealthpro.com
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").toLowerCase();
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || "";
+const ADMIN_PASSWORD_PLAIN = process.env.ADMIN_PASSWORD_PLAIN || "";
+const ADMIN_ACTIVATE_TOKEN = process.env.ADMIN_ACTIVATE_TOKEN || "CHANGE_ME_ADMIN_ACTIVATE_TOKEN";
 
-// ===== Timing ===== const LOCK_SCREEN_MS = 5000; const
-SESSION_TTL_DAYS = 7; const AI_JOB_DELAY_MS =
-Number(process.env.AI_JOB_DELAY_MS || 20000); // demo default 20s
+// ===== Timing =====
+const LOCK_SCREEN_MS = 5000;
+const SESSION_TTL_DAYS = 7;
+const AI_JOB_DELAY_MS = Number(process.env.AI_JOB_DELAY_MS || 20000); // demo default 20s
 
-// ===== Pilot / Retention ===== const PILOT_DAYS = 14; const
-RETENTION_DAYS_AFTER_PILOT = 14;
+// ===== Pilot / Retention =====
+const PILOT_DAYS = 14;
+const RETENTION_DAYS_AFTER_PILOT = 14;
 
-// ===== Limits (LOCKED) ===== const PILOT_LIMITS = { max_cases_total:
-25, max_files_per_case: 3, max_file_size_mb: 10, max_ai_jobs_per_hour:
-2, max_concurrent_analyzing: 2, payment_records_included: 2000, // pilot
-payment tracking rows };
+// ===== Limits (LOCKED) =====
+const PILOT_LIMITS = {
+  max_cases_total: 25,
+  max_files_per_case: 3,
+  max_file_size_mb: 10,
+  max_ai_jobs_per_hour: 2,
+  max_concurrent_analyzing: 2,
+  payment_records_included: 2000, // pilot payment tracking rows
+};
 
-const MONTHLY_DEFAULTS = { case_credits_per_month: 40, // Standard
-default payment_tracking_credits_per_month: 10, // 10k rows/mo if 1
-credit=1k rows max_files_per_case: 3, max_file_size_mb: 20,
-max_ai_jobs_per_hour: 5, max_concurrent_analyzing: 5,
-overage_price_per_case: 50, payment_records_per_credit: 1000, };
+const MONTHLY_DEFAULTS = {
+  case_credits_per_month: 40,              // Standard default
+  payment_tracking_credits_per_month: 10,  // 10k rows/mo if 1 credit=1k rows
+  max_files_per_case: 3,
+  max_file_size_mb: 20,
+  max_ai_jobs_per_hour: 5,
+  max_concurrent_analyzing: 5,
+  overage_price_per_case: 50,
+  payment_records_per_credit: 1000,
+};
 
-// Payment tracking credits const PAYMENT_RECORDS_PER_CREDIT = 1000;
+// Payment tracking credits
+const PAYMENT_RECORDS_PER_CREDIT = 1000;
 
-// ===== Storage ===== const BASE_DIR = __dirname; const DATA_DIR =
-path.join(BASE_DIR, “data”); const UPLOADS_DIR = path.join(BASE_DIR,
-“uploads”);
+// ===== Storage =====
+const BASE_DIR = __dirname;
+const DATA_DIR = path.join(BASE_DIR, "data");
+const UPLOADS_DIR = path.join(BASE_DIR, "uploads");
 
-const FILES = { orgs: path.join(DATA_DIR, “orgs.json”), users:
-path.join(DATA_DIR, “users.json”), pilots: path.join(DATA_DIR,
-“pilots.json”), subscriptions: path.join(DATA_DIR,
-“subscriptions.json”), cases: path.join(DATA_DIR, “cases.json”),
-payments: path.join(DATA_DIR, “payments.json”), // parsed payment rows
-(limited) expectations: path.join(DATA_DIR, “expectations.json”), flags:
-path.join(DATA_DIR, “flags.json”), usage: path.join(DATA_DIR,
-“usage.json”), audit: path.join(DATA_DIR, “audit.json”), templates:
-path.join(DATA_DIR, “templates.json”), billed: path.join(DATA_DIR,
-“billed.json”), billed_submissions: path.join(DATA_DIR,
-“billed_submissions.json”), };
+const FILES = {
+  orgs: path.join(DATA_DIR, "orgs.json"),
+  users: path.join(DATA_DIR, "users.json"),
+  pilots: path.join(DATA_DIR, "pilots.json"),
+  subscriptions: path.join(DATA_DIR, "subscriptions.json"),
+  cases: path.join(DATA_DIR, "cases.json"),
+  payments: path.join(DATA_DIR, "payments.json"), // parsed payment rows (limited)
+  expectations: path.join(DATA_DIR, "expectations.json"),
+  flags: path.join(DATA_DIR, "flags.json"),
+  usage: path.join(DATA_DIR, "usage.json"),
+  audit: path.join(DATA_DIR, "audit.json"),
+  templates: path.join(DATA_DIR, "templates.json"),
+  billed: path.join(DATA_DIR, "billed.json"),
+  billed_submissions: path.join(DATA_DIR, "billed_submissions.json"),
+};
 
-// Directory for storing uploaded template files const TEMPLATES_DIR =
-path.join(DATA_DIR, “templates”);
+// Directory for storing uploaded template files
+const TEMPLATES_DIR = path.join(DATA_DIR, "templates");
 
-// ===== Helpers ===== function uuid() { if (crypto.randomUUID) return
-crypto.randomUUID(); const b = crypto.randomBytes(16); b[6] = (b[6] &
-0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80; const hex = Array.from(b, x
-=> x.toString(16).padStart(2, “0”)).join(““); return ( hex.slice(0, 8)
-+”-” + hex.slice(8, 12) + “-” + hex.slice(12, 16) + “-” + hex.slice(16,
-20) + “-” + hex.slice(20) ); }
-
-function nowISO() { return new Date().toISOString(); } function
-addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() +
-days); return d.toISOString(); }
-
-function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, {
-recursive: true }); } function ensureFile(p, defaultVal) { if
-(!fs.existsSync(p)) fs.writeFileSync(p, JSON.stringify(defaultVal, null,
-2)); } function readJSON(p, fallback) { ensureFile(p, fallback); return
-JSON.parse(fs.readFileSync(p, “utf8”) || JSON.stringify(fallback)); }
-function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val,
-null, 2)); }
-
-function safeStr(s) { return String(s ?? ““).replace(/[<>&”]/g, (c) =>
-({”<“:”<“,”>“:”>“,”&“:”&“, ’”’:“"” }[c])); }
-
-function parseCookies(req) { const header = req.headers.cookie || ““;
-const out = {}; header.split(”;“).map(x =>
-x.trim()).filter(Boolean).forEach(pair => { const idx =
-pair.indexOf(”=“); if (idx > -1) out[pair.slice(0, idx)] =
-decodeURIComponent(pair.slice(idx+1)); }); return out; }
-
-/** * FIX: Railway-safe cookies. * In production browsers require Secure
-for SameSite=None; but you use SameSite=Lax. * Still, “Secure” should
-only be set when behind HTTPS. */ function setCookie(res, name, value,
-maxAgeSeconds) { const parts = [ ${name}=${encodeURIComponent(value)},
-“Path=/”, “SameSite=Lax”, “HttpOnly”, ]; if (IS_PROD)
-parts.push(“Secure”); if (maxAgeSeconds)
-parts.push(Max-Age=${maxAgeSeconds}); res.setHeader(“Set-Cookie”,
-parts.join(“;”)); }
-
-function clearCookie(res, name) { res.setHeader(“Set-Cookie”,
-${name}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly${IS_PROD ? "; Secure" : ""});
+// ===== Helpers =====
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.randomBytes(16);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const hex = Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+  return (
+    hex.slice(0, 8) + "-" +
+    hex.slice(8, 12) + "-" +
+    hex.slice(12, 16) + "-" +
+    hex.slice(16, 20) + "-" +
+    hex.slice(20)
+  );
 }
 
-function send(res, status, body, type=“text/html”) {
-res.writeHead(status, { “Content-Type”: type }); res.end(body); }
+function nowISO() { return new Date().toISOString(); }
+function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
 
-function redirect(res, location) { res.writeHead(302, { Location:
-location }); res.end(); }
+function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
+function ensureFile(p, defaultVal) { if (!fs.existsSync(p)) fs.writeFileSync(p, JSON.stringify(defaultVal, null, 2)); }
+function readJSON(p, fallback) { ensureFile(p, fallback); return JSON.parse(fs.readFileSync(p, "utf8") || JSON.stringify(fallback)); }
+function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); }
 
-function parseBody(req) { return new Promise(resolve => { let body = ““;
-req.on(”data”, c => body += c); req.on(“end”, () => resolve(body)); });
+function safeStr(s) {
+  return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]));
 }
 
-// ===== Session ===== function hmacSign(value, secret) { return
-crypto.createHmac(“sha256”, secret).update(value).digest(“hex”); }
-function makeSession(payload) { const json = JSON.stringify(payload);
-const b64 = Buffer.from(json).toString(“base64url”); const sig =
-hmacSign(b64, SESSION_SECRET); return ${b64}.${sig}; } function
-verifySession(token) { if (!token || !token.includes(“.”)) return null;
-const [b64, sig] = token.split(“.”); const expected = hmacSign(b64,
-SESSION_SECRET); if (sig !== expected) return null; try { const json =
-Buffer.from(b64, “base64url”).toString(“utf8”); const payload =
-JSON.parse(json); if (!payload.exp || Date.now() > payload.exp) return
-null; return payload; } catch { return null; } } function getAuth(req) {
-const cookies = parseCookies(req); return
-verifySession(cookies.tjhp_session); }
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  const out = {};
+  header.split(";").map(x => x.trim()).filter(Boolean).forEach(pair => {
+    const idx = pair.indexOf("=");
+    if (idx > -1) out[pair.slice(0, idx)] = decodeURIComponent(pair.slice(idx+1));
+  });
+  return out;
+}
 
-// ===== Init storage ===== ensureDir(DATA_DIR); ensureDir(UPLOADS_DIR);
-ensureFile(FILES.orgs, []); ensureFile(FILES.users, []);
-ensureFile(FILES.pilots, []); ensureFile(FILES.subscriptions, []);
-ensureFile(FILES.cases, []); ensureFile(FILES.payments, []);
-ensureFile(FILES.expectations, []); ensureFile(FILES.flags, []);
-ensureFile(FILES.usage, []); ensureFile(FILES.audit, []); // Initialize
-templates storage ensureDir(TEMPLATES_DIR); ensureFile(FILES.templates,
-[]); ensureFile(FILES.billed, []); ensureFile(FILES.billed_submissions,
-[]);
+/**
+ * FIX: Railway-safe cookies.
+ * In production browsers require Secure for SameSite=None; but you use SameSite=Lax.
+ * Still, "Secure" should only be set when behind HTTPS.
+ */
+function setCookie(res, name, value, maxAgeSeconds) {
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "SameSite=Lax",
+    "HttpOnly",
+  ];
+  if (IS_PROD) parts.push("Secure");
+  if (maxAgeSeconds) parts.push(`Max-Age=${maxAgeSeconds}`);
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
 
-// ===== Admin password ===== function adminHash() { if
-(ADMIN_PASSWORD_HASH) return ADMIN_PASSWORD_HASH; if
-(ADMIN_PASSWORD_PLAIN) return bcrypt.hashSync(ADMIN_PASSWORD_PLAIN, 10);
-return ““; }
+function clearCookie(res, name) {
+  res.setHeader("Set-Cookie", `${name}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly${IS_PROD ? "; Secure" : ""}`);
+}
 
-// ===== UI ===== const css = `
+function send(res, status, body, type="text/html") {
+  res.writeHead(status, { "Content-Type": type });
+  res.end(body);
+}
 
-:root{ –bg:#f6f7fb; –card:#fff; –text:#111827; –muted:#6b7280;
-–border:#e5e7eb; –primary:#111827; –primaryText:#fff; –danger:#b91c1c;
-–warn:#92400e; –ok:#065f46; –shadow:0 12px 30px rgba(17,24,39,.06); }
+function redirect(res, location) {
+  res.writeHead(302, { Location: location });
+  res.end();
+}
+
+function parseBody(req) {
+  return new Promise(resolve => {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => resolve(body));
+  });
+}
+
+// ===== Session =====
+function hmacSign(value, secret) {
+  return crypto.createHmac("sha256", secret).update(value).digest("hex");
+}
+function makeSession(payload) {
+  const json = JSON.stringify(payload);
+  const b64 = Buffer.from(json).toString("base64url");
+  const sig = hmacSign(b64, SESSION_SECRET);
+  return `${b64}.${sig}`;
+}
+function verifySession(token) {
+  if (!token || !token.includes(".")) return null;
+  const [b64, sig] = token.split(".");
+  const expected = hmacSign(b64, SESSION_SECRET);
+  if (sig !== expected) return null;
+  try {
+    const json = Buffer.from(b64, "base64url").toString("utf8");
+    const payload = JSON.parse(json);
+    if (!payload.exp || Date.now() > payload.exp) return null;
+    return payload;
+  } catch { return null; }
+}
+function getAuth(req) {
+  const cookies = parseCookies(req);
+  return verifySession(cookies.tjhp_session);
+}
+
+// ===== Init storage =====
+ensureDir(DATA_DIR);
+ensureDir(UPLOADS_DIR);
+ensureFile(FILES.orgs, []);
+ensureFile(FILES.users, []);
+ensureFile(FILES.pilots, []);
+ensureFile(FILES.subscriptions, []);
+ensureFile(FILES.cases, []);
+ensureFile(FILES.payments, []);
+ensureFile(FILES.expectations, []);
+ensureFile(FILES.flags, []);
+ensureFile(FILES.usage, []);
+ensureFile(FILES.audit, []);
+// Initialize templates storage
+ensureDir(TEMPLATES_DIR);
+ensureFile(FILES.templates, []);
+ensureFile(FILES.billed, []);
+ensureFile(FILES.billed_submissions, []);
+
+// ===== Admin password =====
+function adminHash() {
+  if (ADMIN_PASSWORD_HASH) return ADMIN_PASSWORD_HASH;
+  if (ADMIN_PASSWORD_PLAIN) return bcrypt.hashSync(ADMIN_PASSWORD_PLAIN, 10);
+  return "";
+}
+
+// ===== UI =====
+const css = `
+
+:root{
+  --bg:#f6f7fb; --card:#fff; --text:#111827; --muted:#6b7280;
+  --border:#e5e7eb; --primary:#111827; --primaryText:#fff;
+  --danger:#b91c1c; --warn:#92400e; --ok:#065f46;
+  --shadow:0 12px 30px rgba(17,24,39,.06);
+}
 *{box-sizing:border-box}
-html,body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe
-UI,Roboto,Helvetica,Arial,sans-serif;background:var(–bg);color:var(–text);}
+html,body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);}
 .wrap{max-width:980px;margin:28px auto;padding:0 16px;}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;}
-.brand{display:flex;flex-direction:column;gap:2px;} .brand
-h1{font-size:18px;margin:0;} .brand
-.sub{font-size:12px;color:var(–muted);}
-.nav{display:flex;gap:12px;flex-wrap:wrap;} .nav
-a{text-decoration:none;color:var(–muted);font-weight:700;font-size:13px;}
-.nav a:hover{color:var(–text);} .card{background:var(–card);border:1px
-solid
-var(–border);border-radius:14px;padding:18px;box-shadow:var(–shadow);}
+.brand{display:flex;flex-direction:column;gap:2px;}
+.brand h1{font-size:18px;margin:0;}
+.brand .sub{font-size:12px;color:var(--muted);}
+.nav{display:flex;gap:12px;flex-wrap:wrap;}
+.nav a{text-decoration:none;color:var(--muted);font-weight:700;font-size:13px;}
+.nav a:hover{color:var(--text);}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;box-shadow:var(--shadow);}
 .row{display:flex;gap:14px;flex-wrap:wrap;}
-.col{flex:1;min-width:280px;} h2{margin:0 0 10px;font-size:22px;}
-h3{margin:16px 0 8px;font-size:15px;} p{margin:8px 0;line-height:1.5;}
-.muted{color:var(–muted);font-size:13px;}
-.hr{height:1px;background:var(–border);margin:14px 0;}
-.btn{display:inline-block;background:var(–primary);color:var(–primaryText);border:none;border-radius:10px;padding:10px
-14px;font-weight:800;text-decoration:none;cursor:pointer;font-size:13px;}
-.btn.secondary{background:#fff;color:var(–text);border:1px solid
-var(–border);} .btn.danger{background:var(–danger);}
+.col{flex:1;min-width:280px;}
+h2{margin:0 0 10px;font-size:22px;}
+h3{margin:16px 0 8px;font-size:15px;}
+p{margin:8px 0;line-height:1.5;}
+.muted{color:var(--muted);font-size:13px;}
+.hr{height:1px;background:var(--border);margin:14px 0;}
+.btn{display:inline-block;background:var(--primary);color:var(--primaryText);border:none;border-radius:10px;padding:10px 14px;font-weight:800;text-decoration:none;cursor:pointer;font-size:13px;}
+.btn.secondary{background:#fff;color:var(--text);border:1px solid var(--border);}
+.btn.danger{background:var(--danger);}
 .btnRow{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;}
-label{font-size:12px;color:var(–muted);font-weight:800;}
-input,textarea{width:100%;padding:10px 12px;border:1px solid
-var(–border);border-radius:10px;font-size:14px;outline:none;margin-top:6px;}
-input:focus,textarea:focus{border-color:#c7d2fe;box-shadow:0 0 0 3px
-rgba(99,102,241,.12);} textarea{min-height:220px;}
-.badge{display:inline-block;border:1px solid
-var(–border);background:#fff;border-radius:999px;padding:4px
-10px;font-size:12px;font-weight:900;}
-.badge.ok{border-color:#a7f3d0;background:#ecfdf5;color:var(–ok);}
-.badge.warn{border-color:#fde68a;background:#fffbeb;color:var(–warn);}
-.badge.err{border-color:#fecaca;background:#fef2f2;color:var(–danger);}
-.footer{margin-top:14px;padding-top:12px;border-top:1px solid
-var(–border);font-size:12px;color:var(–muted);}
-.error{color:var(–danger);font-weight:900;} .small{font-size:12px;}
+label{font-size:12px;color:var(--muted);font-weight:800;}
+input,textarea{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px;outline:none;margin-top:6px;}
+input:focus,textarea:focus{border-color:#c7d2fe;box-shadow:0 0 0 3px rgba(99,102,241,.12);}
+textarea{min-height:220px;}
+.badge{display:inline-block;border:1px solid var(--border);background:#fff;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:900;}
+.badge.ok{border-color:#a7f3d0;background:#ecfdf5;color:var(--ok);}
+.badge.warn{border-color:#fde68a;background:#fffbeb;color:var(--warn);}
+.badge.err{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
+.footer{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);}
+.error{color:var(--danger);font-weight:900;}
+.small{font-size:12px;}
 table{width:100%;border-collapse:collapse;font-size:13px;}
-th,td{padding:8px;border-bottom:1px solid
-var(–border);text-align:left;vertical-align:top;}
+th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;}
 .center{text-align:center}
 
 /* Tooltip system */
-.tooltip{position:relative;display:inline-block;cursor:pointer;color:var(–muted);}
-.tooltip
-.tooltiptext{visibility:hidden;width:220px;background-color:#555;color:#fff;text-align:center;border-radius:6px;padding:5px;position:absolute;z-index:1;bottom:125%;left:50%;margin-left:-110px;opacity:0;transition:opacity
-0.3s;font-size:12px;} .tooltip:hover
-.tooltiptext{visibility:visible;opacity:1;}
+.tooltip{position:relative;display:inline-block;cursor:pointer;color:var(--muted);}
+.tooltip .tooltiptext{visibility:hidden;width:220px;background-color:#555;color:#fff;text-align:center;border-radius:6px;padding:5px;position:absolute;z-index:1;bottom:125%;left:50%;margin-left:-110px;opacity:0;transition:opacity 0.3s;font-size:12px;}
+.tooltip:hover .tooltiptext{visibility:visible;opacity:1;}
 
 /* Chart and KPI placeholders */
-.chart-placeholder{height:200px;border:1px solid
-var(–border);display:flex;align-items:center;justify-content:center;margin-bottom:10px;}
-.kpi-card{display:inline-block;margin:10px;padding:15px;border:1px solid
-var(–border);border-radius:8px;width:200px;text-align:center;background:#fff;box-shadow:var(–shadow);}
-.alert{background:#ffeded;border:1px solid
-#ffb0b0;padding:10px;margin:5px 0;border-radius:6px;font-size:13px;}
+.chart-placeholder{height:200px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;margin-bottom:10px;}
+.kpi-card{display:inline-block;margin:10px;padding:15px;border:1px solid var(--border);border-radius:8px;width:200px;text-align:center;background:#fff;box-shadow:var(--shadow);}
+.alert{background:#ffeded;border:1px solid #ffb0b0;padding:10px;margin:5px 0;border-radius:6px;font-size:13px;}
 .attention{background-color:#fff8e1;}
 
 /* Drop‑zone styling */
-.dropzone{display:flex;align-items:center;justify-content:center;border:2px
-dashed
-var(–border);border-radius:8px;height:150px;cursor:pointer;background:#fafafa;color:var(–muted);margin-bottom:10px;transition:background
-0.2s ease;} .dropzone.dragover{background:#e5e7eb;}
+.dropzone{display:flex;align-items:center;justify-content:center;border:2px dashed var(--border);border-radius:8px;height:150px;cursor:pointer;background:#fafafa;color:var(--muted);margin-bottom:10px;transition:background 0.2s ease;}
+.dropzone.dragover{background:#e5e7eb;}
 
-/* ===== AUTH UI PATCH ===== */ .password-wrap { position: relative; }
-.password-wrap input { padding-right: 48px; } .toggle-password {
-position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
-font-size: 13px; font-weight: 700; cursor: pointer; color: #374151;
-user-select: none; }
+/* ===== AUTH UI PATCH ===== */
+.password-wrap { position: relative; }
+.password-wrap input { padding-right: 48px; }
+.toggle-password {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  color: #374151;
+  user-select: none;
+}
 
-/* Mobile spacing fix for auth screens */ @media (max-width: 640px) {
-.card { padding: 16px !important; } input, textarea, button { font-size:
-16px !important; } .btnRow { flex-direction: column; } .btn { width:
-100%; } }
+/* Mobile spacing fix for auth screens */
+@media (max-width: 640px) {
+  .card { padding: 16px !important; }
+  input, textarea, button { font-size: 16px !important; }
+  .btnRow { flex-direction: column; }
+  .btn { width: 100%; }
+}
 
-/* Print styling */ @media print { .nav, .btn, .btnRow, form {
-display:none !important; } body { background:white !important; } .card {
-box-shadow:none !important; border:none !important; } }
-; /**  * FIX: all HTML + scripts must live inside returned strings.  * Password toggle preserved.  */ function page(title, content, navHtml="", opts={}) {   const showChat = !!(opts && opts.showChat);   const chatHtml = showChat ?
-
-AI Assistant
-
+/* Print styling */
+@media print {
+  .nav, .btn, .btnRow, form { display:none !important; }
+  body { background:white !important; }
+  .card { box-shadow:none !important; border:none !important; }
+}
+`;
+/**
+ * FIX: all HTML + scripts must live inside returned strings.
+ * Password toggle preserved.
+ */
+function page(title, content, navHtml="", opts={}) {
+  const showChat = !!(opts && opts.showChat);
+  const chatHtml = showChat ? `
+<div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
+  <button class="btn" type="button" onclick="window.__tjhpToggleChat()">AI Assistant</button>
+  <div id="aiChatBox" style="display:none;width:320px;height:420px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;margin-top:8px;box-shadow:0 12px 30px rgba(17,24,39,.10);">
     <div class="muted small" style="margin-bottom:6px;">Ask questions about your denials, payments, trends, and what pages do.</div>
     <div id="aiChatMsgs" style="height:300px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px;"></div>
     <input id="aiChatInput" placeholder="Ask about your data..." style="margin-top:8px;" />
@@ -228,14 +313,59 @@ AI Assistant
       <button class="btn secondary" type="button" onclick="window.__tjhpSendChat()">Send</button>
       <button class="btn secondary" type="button" onclick="window.__tjhpToggleChat()">Close</button>
     </div>
+  </div>
+</div>` : "";
 
-` : ““;
+  const chatScript = showChat ? `
+<script>
+window.__tjhpToggleChat = function(){
+  const box = document.getElementById("aiChatBox");
+  if (!box) return;
+  box.style.display = (box.style.display === "none" || !box.style.display) ? "block" : "none";
+};
 
-const chatScript = showChat ? `
-` : ““;
+window.__tjhpSendChat = async function(){
+  const input = document.getElementById("aiChatInput");
+  const msgs = document.getElementById("aiChatMsgs");
+  if (!input || !msgs) return;
+  const text = (input.value || "").trim();
+  if (!text) return;
 
-return `<!doctype html>
-safeStr(title) < /title >  < style>{css}
+  const esc = (s)=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+  const addMsg = (who, t) => {
+    const div = document.createElement("div");
+    div.style.margin = "6px 0";
+    div.innerHTML = "<strong>" + who + ":</strong> " + esc(t);
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+  };
+
+  addMsg("You", text);
+  input.value = "";
+
+  try{
+    const r = await fetch("/ai/chat", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ message: text })
+    });
+    const data = await r.json();
+    addMsg("AI", (data && data.answer) ? data.answer : "No response.");
+  }catch(e){
+    addMsg("AI", "Error contacting assistant. Try again.");
+  }
+};
+</script>` : "";
+
+  return `<!doctype html>
+<html><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>${safeStr(title)}</title>
+<style>${css}</style>
+</head>
+<body>
+  <div class="wrap">
     <div class="topbar">
       <div class="brand">
         <h1>TJ Healthcare Pro</h1>
@@ -249,229 +379,369 @@ safeStr(title) < /title >  < style>{css}
         No EMR access · No payer portal access · No automated submissions · Human review required before use.
       </div>
     </div>
+  </div>
 
 ${chatHtml}
 
-${chatScript}
-`; }
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
-function navPublic() { return
-<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>;
-} function navUser() { return
-<a href="/dashboard">Dashboard &amp; Analytics</a><a href="/billed">Billed Claims Upload</a><a href="/upload">Denial &amp; Payment Upload</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>;
-} function navAdmin() { return
-<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>;
+<script>
+/* ===== PASSWORD VISIBILITY TOGGLE (GLOBAL) ===== */
+document.querySelectorAll('input[type="password"]').forEach(input => {
+  if (input.parentNode && input.parentNode.classList && input.parentNode.classList.contains("password-wrap")) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "password-wrap";
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+
+  const toggle = document.createElement("span");
+  toggle.className = "toggle-password";
+  toggle.textContent = "Show";
+  wrap.appendChild(toggle);
+
+  toggle.addEventListener("click", () => {
+    const hidden = input.type === "password";
+    input.type = hidden ? "text" : "password";
+    toggle.textContent = hidden ? "Hide" : "Show";
+  });
+});
+</script>
+
+${chatScript}
+</body></html>`;
 }
 
-// ===== Models helpers ===== function getOrg(org_id) { return
-readJSON(FILES.orgs, []).find(o => o.org_id === org_id); } function
-getUserByEmail(email) { const e = (email || ““).toLowerCase(); return
-readJSON(FILES.users, []).find(u => (u.email ||”“).toLowerCase() === e);
-} function getUserById(user_id) { return readJSON(FILES.users,
-[]).find(u => u.user_id === user_id); } function getPilot(org_id) {
-return readJSON(FILES.pilots, []).find(p => p.org_id === org_id); }
-function ensurePilot(org_id) { const pilots = readJSON(FILES.pilots,
-[]); let p = pilots.find(x => x.org_id === org_id); if (!p) { const
-started = nowISO(); const ends = addDaysISO(started, PILOT_DAYS); p = {
-pilot_id: uuid(), org_id, status:”active”, started_at: started, ends_at:
-ends, retention_delete_at: null }; pilots.push(p);
-writeJSON(FILES.pilots, pilots); } return p; } function getSub(org_id) {
-return readJSON(FILES.subscriptions, []).find(s => s.org_id === org_id);
-} function currentMonthKey() { const d = new Date(); return
-${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}; }
-function getUsage(org_id) { const usage = readJSON(FILES.usage, []); let
-u = usage.find(x => x.org_id === org_id); if (!u) { u = { org_id,
-pilot_cases_used: 0, pilot_payment_rows_used: 0, month_key:
-currentMonthKey(), monthly_case_credits_used: 0,
-monthly_case_overage_count: 0, monthly_payment_rows_used: 0,
-monthly_payment_credits_used: 0, ai_job_timestamps: [], ai_chat_used: 0
-}; usage.push(u); writeJSON(FILES.usage, usage); } if (u.month_key !==
-currentMonthKey()) { u.month_key = currentMonthKey();
-u.monthly_case_credits_used = 0; u.monthly_case_overage_count = 0;
-u.monthly_payment_rows_used = 0; u.monthly_payment_credits_used = 0;
-u.ai_chat_used = 0; writeJSON(FILES.usage, usage); } return u; }
-function saveUsage(u) { const usage = readJSON(FILES.usage, []); const
-idx = usage.findIndex(x => x.org_id === u.org_id); if (idx >= 0)
-usage[idx] = u; else usage.push(u); writeJSON(FILES.usage, usage); }
-function auditLog(entry) { const audit = readJSON(FILES.audit, []);
-audit.push({ …entry, at: nowISO() }); writeJSON(FILES.audit, audit); }
 
-// ===== Plans (Pricing + Limits) ===== // Pricing (for partner summary
-/ UI display): Starter $249, Growth $599, Pro $1200, Enterprise $2000
-const PLAN_CONFIG = { starter: { price_monthly: 249, ai_chat_limit: 50,
-case_credits_per_month: 50, payment_tracking_credits_per_month: 10 },
-growth: { price_monthly: 599, ai_chat_limit: 150,
-case_credits_per_month: 150, payment_tracking_credits_per_month: 50 },
-pro: { price_monthly: 1200, ai_chat_limit: 400, case_credits_per_month:
-400, payment_tracking_credits_per_month: 150 }, enterprise:{
-price_monthly: 2000, ai_chat_limit: 999999, case_credits_per_month:
-999999, payment_tracking_credits_per_month: 999999 }, };
+function navPublic() {
+  return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
+}
+function navUser() {
+  return `<a href="/dashboard">Dashboard &amp; Analytics</a><a href="/billed">Billed Claims Upload</a><a href="/upload">Denial &amp; Payment Upload</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
+}
+function navAdmin() {
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+}
 
-function getActivePlanName(org_id) { const sub = getSub(org_id); if (sub
-&& sub.status === “active” && sub.plan) return String(sub.plan); return
-“pilot”; }
+// ===== Models helpers =====
+function getOrg(org_id) {
+  return readJSON(FILES.orgs, []).find(o => o.org_id === org_id);
+}
+function getUserByEmail(email) {
+  const e = (email || "").toLowerCase();
+  return readJSON(FILES.users, []).find(u => (u.email || "").toLowerCase() === e);
+}
+function getUserById(user_id) {
+  return readJSON(FILES.users, []).find(u => u.user_id === user_id);
+}
+function getPilot(org_id) {
+  return readJSON(FILES.pilots, []).find(p => p.org_id === org_id);
+}
+function ensurePilot(org_id) {
+  const pilots = readJSON(FILES.pilots, []);
+  let p = pilots.find(x => x.org_id === org_id);
+  if (!p) {
+    const started = nowISO();
+    const ends = addDaysISO(started, PILOT_DAYS);
+    p = { pilot_id: uuid(), org_id, status:"active", started_at: started, ends_at: ends, retention_delete_at: null };
+    pilots.push(p);
+    writeJSON(FILES.pilots, pilots);
+  }
+  return p;
+}
+function getSub(org_id) {
+  return readJSON(FILES.subscriptions, []).find(s => s.org_id === org_id);
+}
+function currentMonthKey() {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
+}
+function getUsage(org_id) {
+  const usage = readJSON(FILES.usage, []);
+  let u = usage.find(x => x.org_id === org_id);
+  if (!u) {
+    u = {
+      org_id,
+      pilot_cases_used: 0,
+      pilot_payment_rows_used: 0,
+      month_key: currentMonthKey(),
+      monthly_case_credits_used: 0,
+      monthly_case_overage_count: 0,
+      monthly_payment_rows_used: 0,
+      monthly_payment_credits_used: 0,
+      ai_job_timestamps: [],
+      ai_chat_used: 0
+    };
+    usage.push(u);
+    writeJSON(FILES.usage, usage);
+  }
+  if (u.month_key !== currentMonthKey()) {
+    u.month_key = currentMonthKey();
+    u.monthly_case_credits_used = 0;
+    u.monthly_case_overage_count = 0;
+    u.monthly_payment_rows_used = 0;
+    u.monthly_payment_credits_used = 0;
+    u.ai_chat_used = 0;
+    writeJSON(FILES.usage, usage);
+  }
+  return u;
+}
+function saveUsage(u) {
+  const usage = readJSON(FILES.usage, []);
+  const idx = usage.findIndex(x => x.org_id === u.org_id);
+  if (idx >= 0) usage[idx] = u; else usage.push(u);
+  writeJSON(FILES.usage, usage);
+}
+function auditLog(entry) {
+  const audit = readJSON(FILES.audit, []);
+  audit.push({ ...entry, at: nowISO() });
+  writeJSON(FILES.audit, audit);
+}
 
-function getAIChatLimit(org_id) { const sub = getSub(org_id); if (sub &&
-sub.status === “active”) { const plan = (sub.plan ||
-“starter”).toLowerCase(); return (PLAN_CONFIG[plan]?.ai_chat_limit) ??
-50; } // Pilot = 10 total questions for the 14-day trial const pilot =
-getPilot(org_id) || ensurePilot(org_id); if (pilot && pilot.status ===
-“active”) return 10; return 0; }
 
-function ensureSubscriptionForOrg(org_id) { const subs =
-readJSON(FILES.subscriptions, []); let s = subs.find(x => x.org_id ===
-org_id); if (!s) { s = { sub_id: uuid(), org_id, status: “inactive”,
-plan: ““, customer_email:”“, case_credits_per_month:
-MONTHLY_DEFAULTS.case_credits_per_month,
-payment_tracking_credits_per_month:
-MONTHLY_DEFAULTS.payment_tracking_credits_per_month, updated_at:
-nowISO() }; subs.push(s); writeJSON(FILES.subscriptions, subs); } return
-s; }
-
-function applyPlanToSubscription(sub, planName) { const key = (planName
-|| ““).toLowerCase(); const cfg = PLAN_CONFIG[key] ||
-PLAN_CONFIG.starter; sub.plan = key; sub.case_credits_per_month =
-cfg.case_credits_per_month; sub.payment_tracking_credits_per_month =
-cfg.payment_tracking_credits_per_month; sub.ai_chat_limit =
-cfg.ai_chat_limit; sub.status =”active”; sub.updated_at = nowISO(); }
-
-// ===== Account status ===== function getOrgStatus(org_id) { const org
-= getOrg(org_id); return org?.account_status || “active”; } function
-setOrgStatus(org_id, status, reason=““) { const orgs =
-readJSON(FILES.orgs, []); const idx = orgs.findIndex(o => o.org_id ===
-org_id); if (idx < 0) return; orgs[idx].account_status = status; //
-active|suspended|terminated orgs[idx].status_reason = reason || null;
-orgs[idx].status_updated_at = nowISO(); writeJSON(FILES.orgs, orgs); }
-
-// ===== Pilot/sub access ===== function markPilotComplete(org_id) {
-const pilots = readJSON(FILES.pilots, []); const idx =
-pilots.findIndex(p => p.org_id === org_id); if (idx < 0) return;
-pilots[idx].status = “complete”; pilots[idx].retention_delete_at =
-addDaysISO(pilots[idx].ends_at, RETENTION_DAYS_AFTER_PILOT);
-writeJSON(FILES.pilots, pilots); }
-
-function isAccessEnabled(org_id) { const status = getOrgStatus(org_id);
-if (status === “terminated” || status === “suspended”) return false;
-
-const sub = getSub(org_id); if (sub && sub.status === “active”) return
-true;
-
-const pilot = getPilot(org_id) || ensurePilot(org_id); if (new
-Date(pilot.ends_at).getTime() < Date.now() && pilot.status !==
-“complete”) { markPilotComplete(org_id); } const p2 = getPilot(org_id);
-return p2 && p2.status === “active”; }
-
-function cleanupIfExpired(org_id) { const sub = getSub(org_id); if (sub
-&& sub.status === “active”) return;
-
-const pilot = getPilot(org_id); if (!pilot) return;
-
-if (pilot.status !== “complete”) { if (new Date(pilot.ends_at).getTime()
-< Date.now()) markPilotComplete(org_id); return; } if
-(!pilot.retention_delete_at) return;
-
-const delAt = new Date(pilot.retention_delete_at).getTime(); if
-(Date.now() < delAt) return;
-
-// Delete org-scoped files and data const cases = readJSON(FILES.cases,
-[]).filter(c => c.org_id !== org_id); const payments =
-readJSON(FILES.payments, []).filter(p => p.org_id !== org_id); const
-expectations = readJSON(FILES.expectations, []).filter(e => e.org_id !==
-org_id); const flags = readJSON(FILES.flags, []).filter(f => f.org_id
-!== org_id);
-
-writeJSON(FILES.cases, cases); writeJSON(FILES.payments, payments);
-writeJSON(FILES.expectations, expectations); writeJSON(FILES.flags,
-flags);
-
-const orgUploads = path.join(UPLOADS_DIR, org_id); if
-(fs.existsSync(orgUploads)) fs.rmSync(orgUploads, { recursive:true,
-force:true }); }
-
-// ===== Limits ===== function getLimitProfile(org_id) { const sub =
-getSub(org_id); if (sub && sub.status === “active”) { return { mode:
-“monthly”, case_credits_per_month: sub.case_credits_per_month ||
-MONTHLY_DEFAULTS.case_credits_per_month,
-payment_tracking_credits_per_month:
-sub.payment_tracking_credits_per_month ||
-MONTHLY_DEFAULTS.payment_tracking_credits_per_month, max_files_per_case:
-MONTHLY_DEFAULTS.max_files_per_case, max_file_size_mb:
-MONTHLY_DEFAULTS.max_file_size_mb, max_ai_jobs_per_hour:
-MONTHLY_DEFAULTS.max_ai_jobs_per_hour, max_concurrent_analyzing:
-MONTHLY_DEFAULTS.max_concurrent_analyzing, overage_price_per_case:
-MONTHLY_DEFAULTS.overage_price_per_case, payment_records_per_credit:
-MONTHLY_DEFAULTS.payment_records_per_credit, }; } return { mode:“pilot”,
-…PILOT_LIMITS }; }
-
-function countOrgCases(org_id) { return readJSON(FILES.cases,
-[]).filter(c => c.org_id === org_id).length; } function
-countOrgAnalyzing(org_id) { return readJSON(FILES.cases, []).filter(c =>
-c.org_id === org_id && c.status === “ANALYZING”).length; }
-
-function canStartAI(org_id) { const limits = getLimitProfile(org_id);
-const usage = getUsage(org_id);
-
-const analyzing = countOrgAnalyzing(org_id); const cap =
-limits.max_concurrent_analyzing; if (analyzing >= cap) return {
-ok:false,
-reason:Concurrent processing limit reached (${cap}). Try again shortly.
+// ===== Plans (Pricing + Limits) =====
+// Pricing (for partner summary / UI display): Starter $249, Growth $599, Pro $1200, Enterprise $2000
+const PLAN_CONFIG = {
+  starter:   { price_monthly: 249, ai_chat_limit: 50,  case_credits_per_month: 50,  payment_tracking_credits_per_month: 10 },
+  growth:    { price_monthly: 599, ai_chat_limit: 150, case_credits_per_month: 150, payment_tracking_credits_per_month: 50 },
+  pro:       { price_monthly: 1200, ai_chat_limit: 400, case_credits_per_month: 400, payment_tracking_credits_per_month: 150 },
+  enterprise:{ price_monthly: 2000, ai_chat_limit: 999999, case_credits_per_month: 999999, payment_tracking_credits_per_month: 999999 },
 };
 
-const perHour = limits.max_ai_jobs_per_hour; const cutoff = Date.now() -
-60601000; usage.ai_job_timestamps = (usage.ai_job_timestamps ||
-[]).filter(ts => ts > cutoff);
+function getActivePlanName(org_id) {
+  const sub = getSub(org_id);
+  if (sub && sub.status === "active" && sub.plan) return String(sub.plan);
+  return "pilot";
+}
 
-if (usage.ai_job_timestamps.length >= perHour) { saveUsage(usage);
-return { ok:false,
-reason:AI job rate limit reached (${perHour}/hour). Try again shortly.
-}; } return { ok:true }; } function recordAIJob(org_id) { const usage =
-getUsage(org_id); const cutoff = Date.now() - 60601000;
-usage.ai_job_timestamps = (usage.ai_job_timestamps || []).filter(ts =>
-ts > cutoff); usage.ai_job_timestamps.push(Date.now());
-saveUsage(usage); }
+function getAIChatLimit(org_id) {
+  const sub = getSub(org_id);
+  if (sub && sub.status === "active") {
+    const plan = (sub.plan || "starter").toLowerCase();
+    return (PLAN_CONFIG[plan]?.ai_chat_limit) ?? 50;
+  }
+  // Pilot = 10 total questions for the 14-day trial
+  const pilot = getPilot(org_id) || ensurePilot(org_id);
+  if (pilot && pilot.status === "active") return 10;
+  return 0;
+}
 
-function pilotCanCreateCase(org_id) { const limits =
-getLimitProfile(org_id); if (limits.mode !== “pilot”) return { ok:true
-}; const total = countOrgCases(org_id); if (total >=
-limits.max_cases_total) return { ok:false,
-reason:Pilot case limit reached (${limits.max_cases_total}). Continue monthly access to review more.
-}; return { ok:true }; } function pilotConsumeCase(org_id) { const usage
-= getUsage(org_id); usage.pilot_cases_used += 1; saveUsage(usage); }
-function monthlyConsumeCaseCredit(org_id) { const limits =
-getLimitProfile(org_id); if (limits.mode !== “monthly”) return {
-ok:true, overage:false }; const usage = getUsage(org_id);
-usage.monthly_case_credits_used += 1; let overage = false; if
-(usage.monthly_case_credits_used > limits.case_credits_per_month) {
-overage = true; usage.monthly_case_overage_count += 1; }
-saveUsage(usage); return { ok:true, overage }; }
+function ensureSubscriptionForOrg(org_id) {
+  const subs = readJSON(FILES.subscriptions, []);
+  let s = subs.find(x => x.org_id === org_id);
+  if (!s) {
+    s = {
+      sub_id: uuid(),
+      org_id,
+      status: "inactive",
+      plan: "",
+      customer_email: "",
+      case_credits_per_month: MONTHLY_DEFAULTS.case_credits_per_month,
+      payment_tracking_credits_per_month: MONTHLY_DEFAULTS.payment_tracking_credits_per_month,
+      updated_at: nowISO()
+    };
+    subs.push(s);
+    writeJSON(FILES.subscriptions, subs);
+  }
+  return s;
+}
 
-function paymentRowsAllowance(org_id) { const limits =
-getLimitProfile(org_id); const usage = getUsage(org_id);
+function applyPlanToSubscription(sub, planName) {
+  const key = (planName || "").toLowerCase();
+  const cfg = PLAN_CONFIG[key] || PLAN_CONFIG.starter;
+  sub.plan = key;
+  sub.case_credits_per_month = cfg.case_credits_per_month;
+  sub.payment_tracking_credits_per_month = cfg.payment_tracking_credits_per_month;
+  sub.ai_chat_limit = cfg.ai_chat_limit;
+  sub.status = "active";
+  sub.updated_at = nowISO();
+}
 
-if (limits.mode === “pilot”) { const remaining = Math.max(0,
-PILOT_LIMITS.payment_records_included - (usage.pilot_payment_rows_used
-|| 0)); return { remaining, mode:“pilot” }; } const allowedRows =
-(limits.payment_tracking_credits_per_month || 0) *
-PAYMENT_RECORDS_PER_CREDIT; const used = usage.monthly_payment_rows_used
-|| 0; return { remaining: Math.max(0, allowedRows - used),
-mode:“monthly” }; }
+// ===== Account status =====
+function getOrgStatus(org_id) {
+  const org = getOrg(org_id);
+  return org?.account_status || "active";
+}
+function setOrgStatus(org_id, status, reason="") {
+  const orgs = readJSON(FILES.orgs, []);
+  const idx = orgs.findIndex(o => o.org_id === org_id);
+  if (idx < 0) return;
+  orgs[idx].account_status = status; // active|suspended|terminated
+  orgs[idx].status_reason = reason || null;
+  orgs[idx].status_updated_at = nowISO();
+  writeJSON(FILES.orgs, orgs);
+}
 
-function consumePaymentRows(org_id, rowCount) { const limits =
-getLimitProfile(org_id); const usage = getUsage(org_id);
+// ===== Pilot/sub access =====
+function markPilotComplete(org_id) {
+  const pilots = readJSON(FILES.pilots, []);
+  const idx = pilots.findIndex(p => p.org_id === org_id);
+  if (idx < 0) return;
+  pilots[idx].status = "complete";
+  pilots[idx].retention_delete_at = addDaysISO(pilots[idx].ends_at, RETENTION_DAYS_AFTER_PILOT);
+  writeJSON(FILES.pilots, pilots);
+}
 
-if (limits.mode === “pilot”) { usage.pilot_payment_rows_used =
-(usage.pilot_payment_rows_used || 0) + rowCount; saveUsage(usage);
-return; } usage.monthly_payment_rows_used =
-(usage.monthly_payment_rows_used || 0) + rowCount;
-usage.monthly_payment_credits_used = (usage.monthly_payment_credits_used
-|| 0) + Math.ceil(rowCount / PAYMENT_RECORDS_PER_CREDIT);
-saveUsage(usage); }
+function isAccessEnabled(org_id) {
+  const status = getOrgStatus(org_id);
+  if (status === "terminated" || status === "suspended") return false;
 
-// ===== Multipart Parser ===== async function parseMultipart(req,
-boundary) { return new Promise((resolve, reject) => { const chunks = [];
-req.on(“data”, c => chunks.push(c)); req.on(“end”, () => { const buffer
-= Buffer.concat(chunks); const boundaryBuf = Buffer.from(--${boundary});
-const parts = [];
+  const sub = getSub(org_id);
+  if (sub && sub.status === "active") return true;
+
+  const pilot = getPilot(org_id) || ensurePilot(org_id);
+  if (new Date(pilot.ends_at).getTime() < Date.now() && pilot.status !== "complete") {
+    markPilotComplete(org_id);
+  }
+  const p2 = getPilot(org_id);
+  return p2 && p2.status === "active";
+}
+
+function cleanupIfExpired(org_id) {
+  const sub = getSub(org_id);
+  if (sub && sub.status === "active") return;
+
+  const pilot = getPilot(org_id);
+  if (!pilot) return;
+
+  if (pilot.status !== "complete") {
+    if (new Date(pilot.ends_at).getTime() < Date.now()) markPilotComplete(org_id);
+    return;
+  }
+  if (!pilot.retention_delete_at) return;
+
+  const delAt = new Date(pilot.retention_delete_at).getTime();
+  if (Date.now() < delAt) return;
+
+  // Delete org-scoped files and data
+  const cases = readJSON(FILES.cases, []).filter(c => c.org_id !== org_id);
+  const payments = readJSON(FILES.payments, []).filter(p => p.org_id !== org_id);
+  const expectations = readJSON(FILES.expectations, []).filter(e => e.org_id !== org_id);
+  const flags = readJSON(FILES.flags, []).filter(f => f.org_id !== org_id);
+
+  writeJSON(FILES.cases, cases);
+  writeJSON(FILES.payments, payments);
+  writeJSON(FILES.expectations, expectations);
+  writeJSON(FILES.flags, flags);
+
+  const orgUploads = path.join(UPLOADS_DIR, org_id);
+  if (fs.existsSync(orgUploads)) fs.rmSync(orgUploads, { recursive:true, force:true });
+}
+
+// ===== Limits =====
+function getLimitProfile(org_id) {
+  const sub = getSub(org_id);
+  if (sub && sub.status === "active") {
+    return {
+      mode: "monthly",
+      case_credits_per_month: sub.case_credits_per_month || MONTHLY_DEFAULTS.case_credits_per_month,
+      payment_tracking_credits_per_month: sub.payment_tracking_credits_per_month || MONTHLY_DEFAULTS.payment_tracking_credits_per_month,
+      max_files_per_case: MONTHLY_DEFAULTS.max_files_per_case,
+      max_file_size_mb: MONTHLY_DEFAULTS.max_file_size_mb,
+      max_ai_jobs_per_hour: MONTHLY_DEFAULTS.max_ai_jobs_per_hour,
+      max_concurrent_analyzing: MONTHLY_DEFAULTS.max_concurrent_analyzing,
+      overage_price_per_case: MONTHLY_DEFAULTS.overage_price_per_case,
+      payment_records_per_credit: MONTHLY_DEFAULTS.payment_records_per_credit,
+    };
+  }
+  return { mode:"pilot", ...PILOT_LIMITS };
+}
+
+function countOrgCases(org_id) {
+  return readJSON(FILES.cases, []).filter(c => c.org_id === org_id).length;
+}
+function countOrgAnalyzing(org_id) {
+  return readJSON(FILES.cases, []).filter(c => c.org_id === org_id && c.status === "ANALYZING").length;
+}
+
+function canStartAI(org_id) {
+  const limits = getLimitProfile(org_id);
+  const usage = getUsage(org_id);
+
+  const analyzing = countOrgAnalyzing(org_id);
+  const cap = limits.max_concurrent_analyzing;
+  if (analyzing >= cap) return { ok:false, reason:`Concurrent processing limit reached (${cap}). Try again shortly.` };
+
+  const perHour = limits.max_ai_jobs_per_hour;
+  const cutoff = Date.now() - 60*60*1000;
+  usage.ai_job_timestamps = (usage.ai_job_timestamps || []).filter(ts => ts > cutoff);
+
+  if (usage.ai_job_timestamps.length >= perHour) {
+    saveUsage(usage);
+    return { ok:false, reason:`AI job rate limit reached (${perHour}/hour). Try again shortly.` };
+  }
+  return { ok:true };
+}
+function recordAIJob(org_id) {
+  const usage = getUsage(org_id);
+  const cutoff = Date.now() - 60*60*1000;
+  usage.ai_job_timestamps = (usage.ai_job_timestamps || []).filter(ts => ts > cutoff);
+  usage.ai_job_timestamps.push(Date.now());
+  saveUsage(usage);
+}
+
+function pilotCanCreateCase(org_id) {
+  const limits = getLimitProfile(org_id);
+  if (limits.mode !== "pilot") return { ok:true };
+  const total = countOrgCases(org_id);
+  if (total >= limits.max_cases_total) return { ok:false, reason:`Pilot case limit reached (${limits.max_cases_total}). Continue monthly access to review more.` };
+  return { ok:true };
+}
+function pilotConsumeCase(org_id) {
+  const usage = getUsage(org_id);
+  usage.pilot_cases_used += 1;
+  saveUsage(usage);
+}
+function monthlyConsumeCaseCredit(org_id) {
+  const limits = getLimitProfile(org_id);
+  if (limits.mode !== "monthly") return { ok:true, overage:false };
+  const usage = getUsage(org_id);
+  usage.monthly_case_credits_used += 1;
+  let overage = false;
+  if (usage.monthly_case_credits_used > limits.case_credits_per_month) {
+    overage = true;
+    usage.monthly_case_overage_count += 1;
+  }
+  saveUsage(usage);
+  return { ok:true, overage };
+}
+
+function paymentRowsAllowance(org_id) {
+  const limits = getLimitProfile(org_id);
+  const usage = getUsage(org_id);
+
+  if (limits.mode === "pilot") {
+    const remaining = Math.max(0, PILOT_LIMITS.payment_records_included - (usage.pilot_payment_rows_used || 0));
+    return { remaining, mode:"pilot" };
+  }
+  const allowedRows = (limits.payment_tracking_credits_per_month || 0) * PAYMENT_RECORDS_PER_CREDIT;
+  const used = usage.monthly_payment_rows_used || 0;
+  return { remaining: Math.max(0, allowedRows - used), mode:"monthly" };
+}
+
+function consumePaymentRows(org_id, rowCount) {
+  const limits = getLimitProfile(org_id);
+  const usage = getUsage(org_id);
+
+  if (limits.mode === "pilot") {
+    usage.pilot_payment_rows_used = (usage.pilot_payment_rows_used || 0) + rowCount;
+    saveUsage(usage);
+    return;
+  }
+  usage.monthly_payment_rows_used = (usage.monthly_payment_rows_used || 0) + rowCount;
+  usage.monthly_payment_credits_used = (usage.monthly_payment_credits_used || 0) + Math.ceil(rowCount / PAYMENT_RECORDS_PER_CREDIT);
+  saveUsage(usage);
+}
+
+// ===== Multipart Parser =====
+async function parseMultipart(req, boundary) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", c => chunks.push(c));
+    req.on("end", () => {
+      const buffer = Buffer.concat(chunks);
+      const boundaryBuf = Buffer.from(`--${boundary}`);
+      const parts = [];
 
       let start = buffer.indexOf(boundaryBuf);
       while (start !== -1) {
@@ -512,512 +782,663 @@ const parts = [];
       resolve({ files, fields });
     });
     req.on("error", reject);
+  });
+}
 
-}); }
+// ===== CSV parser =====
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim().length);
+  if (!lines.length) return { headers: [], rows: [] };
 
-// ===== CSV parser ===== function parseCSV(text) { const lines =
-text.split(//).filter(l => l.trim().length); if (!lines.length) return {
-headers: [], rows: [] };
+  function splitLine(line) {
+    const out = [];
+    let cur = "";
+    let inQ = false;
+    for (let i=0;i<line.length;i++){
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQ && line[i+1] === '"') { cur += '"'; i++; }
+        else inQ = !inQ;
+      } else if (ch === "," && !inQ) {
+        out.push(cur); cur="";
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out.map(s => s.trim());
+  }
 
-function splitLine(line) { const out = []; let cur = ““; let inQ =
-false; for (let i=0;i<line.length;i++){ const ch = line[i]; if (ch ===
-‘“‘) { if (inQ && line[i+1] ===’”’) { cur += ’”’; i++; } else inQ =
-!inQ; } else if (ch === “,” && !inQ) { out.push(cur); cur=““; } else {
-cur += ch; } } out.push(cur); return out.map(s => s.trim()); }
+  const headers = splitLine(lines[0]).map(h => h.replace(/^"|"$/g,"").trim());
+  const rows = [];
+  for (let i=1;i<lines.length;i++){
+    const cols = splitLine(lines[i]).map(c => c.replace(/^"|"$/g,""));
+    const obj = {};
+    headers.forEach((h, idx) => obj[h] = cols[idx] || "");
+    rows.push(obj);
+  }
+  return { headers, rows };
+}
 
-const headers = splitLine(lines[0]).map(h =>
-h.replace(/^“|”$/g,"").trim());  const rows = [];  for (let i=1;i<lines.length;i++){  const cols = splitLine(lines[i]).map(c => c.replace(/^"|"$/g,““));
-const obj = {}; headers.forEach((h, idx) => obj[h] = cols[idx] ||”“);
-rows.push(obj); } return { headers, rows }; }
+function pickField(row, candidates) {
+  const keys = Object.keys(row || {});
+  for (const c of candidates) {
+    const k = keys.find(x => x.toLowerCase().includes(c));
+    if (k) return row[k];
+  }
+  return "";
+}
 
-function pickField(row, candidates) { const keys = Object.keys(row ||
-{}); for (const c of candidates) { const k = keys.find(x =>
-x.toLowerCase().includes(c)); if (k) return row[k]; } return ““; }
-
-// ===== AI stub ===== function aiGenerate(orgName) { return { //
-Default appeal letter template (extended) denial_summary: “Based on the
-uploaded documents, this case includes denial/payment language that
-benefits from structured review and consistent appeal framing.”,
-appeal_considerations: “This draft is prepared from uploaded materials
-only. Validate documentation supports medical necessity and payer
-requirements before use.”, draft_text: `(Your Name or Practice Name)
-(Street Address) (City, State ZIP)
+// ===== AI stub =====
+function aiGenerate(orgName) {
+  return {
+    // Default appeal letter template (extended)
+    denial_summary: "Based on the uploaded documents, this case includes denial/payment language that benefits from structured review and consistent appeal framing.",
+    appeal_considerations: "This draft is prepared from uploaded materials only. Validate documentation supports medical necessity and payer requirements before use.",
+    draft_text:
+`(Your Name or Practice Name)
+(Street Address)
+(City, State ZIP)
 
 (Date)
 
-(Name of Insurance Company) (Street Address) (City, State ZIP)
+(Name of Insurance Company)
+(Street Address)
+(City, State ZIP)
 
-Re: (Patient’s Name) (Type of Coverage) (Group number/Policy number)
+Re: (Patient's Name)
+(Type of Coverage)
+(Group number/Policy number)
 
 Dear (Name of contact person at insurance company),
 
-Please accept this letter as (patient’s name) appeal to (insurance
-company name) decision to deny coverage for (state the name of the
-specific procedure denied). It is my understanding based on your letter
-of denial dated (insert date) that this procedure has been denied
-because:
+Please accept this letter as (patient's name) appeal to (insurance company name) decision to deny coverage for (state the name of the specific procedure denied). It is my understanding based on your letter of denial dated (insert date) that this procedure has been denied because:
 
 (Quote the specific reason for the denial stated in denial letter)
 
-As you know, (patient’s name) was diagnosed with (disease) on (date).
-Currently Dr. (name) believes that (patient’s name) will significantly
-benefit from (state procedure name). Please see the enclosed letter from
-Dr. (name) that discusses (patient’s name) medical history in more
-detail.
+As you know, (patient's name) was diagnosed with (disease) on (date). Currently Dr. (name) believes that (patient's name) will significantly benefit from (state procedure name). Please see the enclosed letter from Dr. (name) that discusses (patient's name) medical history in more detail.
 
-(Patient’s name) believes that you did not have all the necessary
-information at the time of your initial review. (Patient’s name) has
-also included with this letter, a letter from Dr. (name) from (name of
-treating facility). Dr. (name) is a specialist in (name of specialty).
-(His/Her) letter discusses the procedure in more detail. Also included
-are medical records and several journal articles explaining the
-procedure and the results.
+(Patient's name) believes that you did not have all the necessary information at the time of your initial review. (Patient's name) has also included with this letter, a letter from Dr. (name) from (name of treating facility). Dr. (name) is a specialist in (name of specialty). (His/Her) letter discusses the procedure in more detail. Also included are medical records and several journal articles explaining the procedure and the results.
 
-Based on this information, (patient’s name) is asking that you
-reconsider your previous decision and allow coverage for the procedure
-Dr. (name) outlines in his letter. The treatment is scheduled to begin
-on (date). Should you require additional information, please do not
-hesitate to contact (patient’s name) at (phone number). (patient’s name)
-will look forward to hearing from you in the near future.
+Based on this information, (patient's name) is asking that you reconsider your previous decision and allow coverage for the procedure Dr. (name) outlines in his letter. The treatment is scheduled to begin on (date). Should you require additional information, please do not hesitate to contact (patient's name) at (phone number). (patient's name) will look forward to hearing from you in the near future.
 
-Sincerely, ${orgName || “[Organization Billing Team]”} `,
-denial_reason_category: “Documentation missing”, missing_info: [] }; }
+Sincerely,
+${orgName || "[Organization Billing Team]"}
+`,
+    denial_reason_category: "Documentation missing",
+    missing_info: []
+  };
+}
 
-// ===== Appeal Packet Builder (De‑Identified / Non‑PHI mode) ===== //
-NOTE: Do NOT store patient identifiers (name, DOB, member ID). Use
-placeholders. // Attachments should be de‑identified only. Files are
-stored temporarily and auto-deleted. const APPEAL_ATTACHMENT_TTL_MS =
-60 * 60 * 1000; // 60 minutes
 
-function appealPacketDefaults(orgName) { return { deid_confirmed: false,
-claim_number: ““, payer:”“, dos:”“, cpt_hcpcs_codes:”“, icd10_codes:”“,
-authorization_number:”“, provider_npi:”“, provider_tax_id:”“,
-provider_address:”“, contact_log:”“, lmn_text: `LETTER OF MEDICAL
-NECESSITY (TEMPLATE — DE‑IDENTIFIED) Patient Name: ____________________
-DOB: ____/____/______ Member ID: ____________________
+// ===== Appeal Packet Builder (De‑Identified / Non‑PHI mode) =====
+// NOTE: Do NOT store patient identifiers (name, DOB, member ID). Use placeholders.
+// Attachments should be de‑identified only. Files are stored temporarily and auto-deleted.
+const APPEAL_ATTACHMENT_TTL_MS = 60 * 60 * 1000; // 60 minutes
+
+function appealPacketDefaults(orgName) {
+  return {
+    deid_confirmed: false,
+    claim_number: "",
+    payer: "",
+    dos: "",
+    cpt_hcpcs_codes: "",
+    icd10_codes: "",
+    authorization_number: "",
+    provider_npi: "",
+    provider_tax_id: "",
+    provider_address: "",
+    contact_log: "",
+    lmn_text:
+`LETTER OF MEDICAL NECESSITY (TEMPLATE — DE‑IDENTIFIED)
+Patient Name: ____________________
+DOB: ____/____/______
+Member ID: ____________________
 
 To Whom It May Concern,
 
-I am writing to support the medical necessity of the requested service
-for the patient listed above.
+I am writing to support the medical necessity of the requested service for the patient listed above.
 
-Clinical Summary (de‑identified): - Diagnosis / ICD‑10:
-____________________ - Requested Service / CPT/HCPCS:
-____________________ - Date(s) of Service: ____________________ - Prior
-treatments attempted and outcomes: ____________________
+Clinical Summary (de‑identified):
+- Diagnosis / ICD‑10: ____________________
+- Requested Service / CPT/HCPCS: ____________________
+- Date(s) of Service: ____________________
+- Prior treatments attempted and outcomes: ____________________
 
-Medical Necessity Rationale: 1) The requested service is medically
-necessary because ____________________. 2) Alternative treatments have
-been attempted and were ineffective / contraindicated because
-____________________. 3) The requested service aligns with accepted
-standards of care and clinical guidelines.
+Medical Necessity Rationale:
+1) The requested service is medically necessary because ____________________.
+2) Alternative treatments have been attempted and were ineffective / contraindicated because ____________________.
+3) The requested service aligns with accepted standards of care and clinical guidelines.
 
-Supporting References (attach as needed): - Peer‑reviewed literature
-and/or clinical guidelines supporting standard of care.
+Supporting References (attach as needed):
+- Peer‑reviewed literature and/or clinical guidelines supporting standard of care.
 
-Sincerely, ${orgName || “[Provider / Practice]”}
-,     checklist_notes:APPEAL PACKET CHECKLIST (DE‑IDENTIFIED) Essential
-Documentation: [ ] Denial letter / EOB copy (de‑identified) [ ] Appeal
-letter (formal) [ ] Letter of Medical Necessity (LMN) [ ] Relevant
-medical records (de‑identified: chart notes, imaging, labs, op reports)
-[ ] Authorization number proof (if applicable) [ ] Patient identifiers
-(to be filled AFTER export, outside this system)
+Sincerely,
+${orgName || "[Provider / Practice]"}
+`,
+    checklist_notes:
+`APPEAL PACKET CHECKLIST (DE‑IDENTIFIED)
+Essential Documentation:
+[ ] Denial letter / EOB copy (de‑identified)
+[ ] Appeal letter (formal)
+[ ] Letter of Medical Necessity (LMN)
+[ ] Relevant medical records (de‑identified: chart notes, imaging, labs, op reports)
+[ ] Authorization number proof (if applicable)
+[ ] Patient identifiers (to be filled AFTER export, outside this system)
 
-Administrative Items: [ ] Claim number, DOS, payer [ ] CPT/HCPCS codes +
-ICD‑10 codes [ ] Provider NPI, Tax ID, address [ ] Appeal /
-reconsideration form (payer-specific, if required) [ ] Interaction log
-(dates/times/rep names — no patient identifiers)
+Administrative Items:
+[ ] Claim number, DOS, payer
+[ ] CPT/HCPCS codes + ICD‑10 codes
+[ ] Provider NPI, Tax ID, address
+[ ] Appeal / reconsideration form (payer-specific, if required)
+[ ] Interaction log (dates/times/rep names — no patient identifiers)
 
-Supporting Documents: [ ] Clinical guidelines or peer‑reviewed
-literature [ ] Coding crosswalk / code validation notes (if needed) `,
-compiled_packet_text: ““, compiled_at: null }; }
+Supporting Documents:
+[ ] Clinical guidelines or peer‑reviewed literature
+[ ] Coding crosswalk / code validation notes (if needed)
+`,
+    compiled_packet_text: "",
+    compiled_at: null
+  };
+}
 
-function normalizeAppealPacket(c, orgName) { if (!c.appeal_packet)
-c.appeal_packet = appealPacketDefaults(orgName); // Ensure all keys
-exist (forward compatible) const d = appealPacketDefaults(orgName); for
-(const k of Object.keys(d)) { if (typeof c.appeal_packet[k] ===
-“undefined”) c.appeal_packet[k] = d[k]; } if
-(!Array.isArray(c.appeal_attachments)) c.appeal_attachments = []; //
-{file_id, filename, stored_path, uploaded_at, expires_at} return c; }
+function normalizeAppealPacket(c, orgName) {
+  if (!c.appeal_packet) c.appeal_packet = appealPacketDefaults(orgName);
+  // Ensure all keys exist (forward compatible)
+  const d = appealPacketDefaults(orgName);
+  for (const k of Object.keys(d)) {
+    if (typeof c.appeal_packet[k] === "undefined") c.appeal_packet[k] = d[k];
+  }
+  if (!Array.isArray(c.appeal_attachments)) c.appeal_attachments = []; // {file_id, filename, stored_path, uploaded_at, expires_at}
+  return c;
+}
 
-function cleanupExpiredAppealAttachments(org_id) { const now =
-Date.now(); const cases = readJSON(FILES.cases, []).filter(c => c.org_id
-=== org_id); let changed = false;
+function cleanupExpiredAppealAttachments(org_id) {
+  const now = Date.now();
+  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
+  let changed = false;
 
-for (const c of cases) { if (!Array.isArray(c.appeal_attachments) ||
-c.appeal_attachments.length === 0) continue; const keep = []; for (const
-a of c.appeal_attachments) { const exp = a && a.expires_at ? new
-Date(a.expires_at).getTime() : 0; if (exp && exp <= now) { try { if
-(a.stored_path && fs.existsSync(a.stored_path)) fs.rmSync(a.stored_path,
-{ force:true }); } catch {} changed = true; } else { keep.push(a); } }
-if (keep.length !== c.appeal_attachments.length) c.appeal_attachments =
-keep; }
+  for (const c of cases) {
+    if (!Array.isArray(c.appeal_attachments) || c.appeal_attachments.length === 0) continue;
+    const keep = [];
+    for (const a of c.appeal_attachments) {
+      const exp = a && a.expires_at ? new Date(a.expires_at).getTime() : 0;
+      if (exp && exp <= now) {
+        try { if (a.stored_path && fs.existsSync(a.stored_path)) fs.rmSync(a.stored_path, { force:true }); } catch {}
+        changed = true;
+      } else {
+        keep.push(a);
+      }
+    }
+    if (keep.length !== c.appeal_attachments.length) c.appeal_attachments = keep;
+  }
 
-if (changed) { const all = readJSON(FILES.cases, []); // replace org
-cases with updated ones const out = all.map(x => { if (x.org_id !==
-org_id) return x; const updated = cases.find(y => y.case_id ===
-x.case_id); return updated || x; }); writeJSON(FILES.cases, out); } }
+  if (changed) {
+    const all = readJSON(FILES.cases, []);
+    // replace org cases with updated ones
+    const out = all.map(x => {
+      if (x.org_id !== org_id) return x;
+      const updated = cases.find(y => y.case_id === x.case_id);
+      return updated || x;
+    });
+    writeJSON(FILES.cases, out);
+  }
+}
 
-function compileAppealPacketText(c, orgName) { normalizeAppealPacket(c,
-orgName); const ap = c.appeal_packet;
+function compileAppealPacketText(c, orgName) {
+  normalizeAppealPacket(c, orgName);
+  const ap = c.appeal_packet;
 
-const attachmentsIndex = (c.appeal_attachments || []).map(a =>
-- ${a.filename || "attachment"}).join(“”) || “- (none uploaded)”;
+  const attachmentsIndex = (c.appeal_attachments || []).map(a => `- ${a.filename || "attachment"}`).join("\n") || "- (none uploaded)";
 
-const header = `APPEAL PACKET (DE‑IDENTIFIED) Organization: ${orgName ||
-““} Case ID: ${c.case_id} Generated: ${new Date().toLocaleString()}
+  const header =
+`APPEAL PACKET (DE‑IDENTIFIED)
+Organization: ${orgName || ""}
+Case ID: ${c.case_id}
+Generated: ${new Date().toLocaleString()}
 
-IMPORTANT: This packet is DE‑IDENTIFIED. Do not include patient name,
-DOB, or member ID in this system. Fill patient identifiers AFTER export,
-outside this platform. `;
+IMPORTANT: This packet is DE‑IDENTIFIED. Do not include patient name, DOB, or member ID in this system.
+Fill patient identifiers AFTER export, outside this platform.
+`;
 
-const admin = `ADMIN + CODING SUMMARY (DE‑IDENTIFIED) Claim #:
-${ap.claim_number || “(enter claim #)”} Payer: ${ap.payer || “(enter
-payer)”} DOS: ${ap.dos || “(enter DOS)”} CPT/HCPCS: ${ap.cpt_hcpcs_codes
-|| “(enter codes)”} ICD‑10: ${ap.icd10_codes || “(enter codes)”}
-Authorization #: ${ap.authorization_number || “(enter auth #)”}
+  const admin =
+`ADMIN + CODING SUMMARY (DE‑IDENTIFIED)
+Claim #: ${ap.claim_number || "(enter claim #)"}
+Payer: ${ap.payer || "(enter payer)"}
+DOS: ${ap.dos || "(enter DOS)"}
+CPT/HCPCS: ${ap.cpt_hcpcs_codes || "(enter codes)"}
+ICD‑10: ${ap.icd10_codes || "(enter codes)"}
+Authorization #: ${ap.authorization_number || "(enter auth #)"}
 
-Provider NPI: ${ap.provider_npi || “(enter NPI)”} Provider Tax ID:
-${ap.provider_tax_id || “(enter Tax ID)”} Provider Address:
-${ap.provider_address || “(enter address)”} `;
+Provider NPI: ${ap.provider_npi || "(enter NPI)"}
+Provider Tax ID: ${ap.provider_tax_id || "(enter Tax ID)"}
+Provider Address: ${ap.provider_address || "(enter address)"}
+`;
 
-const log =
-INTERACTION LOG (NO PATIENT IDENTIFIERS) ${ap.contact_log || "(no log entered)"};
+  const log =
+`INTERACTION LOG (NO PATIENT IDENTIFIERS)
+${ap.contact_log || "(no log entered)"}
+`;
 
-const compiled = `${header} ============================== 1) APPEAL
-LETTER —————————— ${(c.ai && c.ai.draft_text) ? c.ai.draft_text :
-“(appeal letter not available)”}
+  const compiled =
+`${header}
+==============================
+1) APPEAL LETTER
+------------------------------
+${(c.ai && c.ai.draft_text) ? c.ai.draft_text : "(appeal letter not available)"}
 
-============================== 2) LETTER OF MEDICAL NECESSITY ——————————
-${ap.lmn_text || “(LMN not available)”}
+==============================
+2) LETTER OF MEDICAL NECESSITY
+------------------------------
+${ap.lmn_text || "(LMN not available)"}
 
-============================== 3) CHECKLIST ——————————
-${ap.checklist_notes || ““}
+==============================
+3) CHECKLIST
+------------------------------
+${ap.checklist_notes || ""}
 
-============================== 4) ADMIN + CODING SUMMARY ——————————
+==============================
+4) ADMIN + CODING SUMMARY
+------------------------------
 ${admin}
 
-============================== 5) ATTACHMENTS INDEX (DE‑IDENTIFIED)
-—————————— ${attachmentsIndex}
+==============================
+5) ATTACHMENTS INDEX (DE‑IDENTIFIED)
+------------------------------
+${attachmentsIndex}
 
-============================== 6) NOTES / LOG —————————— ${log} `;
+==============================
+6) NOTES / LOG
+------------------------------
+${log}
+`;
 
-ap.compiled_packet_text = compiled; ap.compiled_at = nowISO(); return c;
+  ap.compiled_packet_text = compiled;
+  ap.compiled_at = nowISO();
+  return c;
 }
 
-function maybeCompleteAI(caseObj, orgName) { if (caseObj.status !==
-“ANALYZING”) return caseObj; const started = new
-Date(caseObj.ai_started_at).getTime(); if (!started) return caseObj; if
-(Date.now() - started < AI_JOB_DELAY_MS) return caseObj;
 
-// Determine if a custom template should be used for the draft. If //
-template_id is set on the case object, attempt to read the //
-corresponding template file and use its contents for the draft //
-letter. Otherwise, fall back to the AI stub generator. let draftText =
-null; if (caseObj.template_id) { try { // Load template metadata and
-find the matching template for this org const templates =
-readJSON(FILES.templates, []); const tpl = templates.find(t =>
-t.template_id === caseObj.template_id && t.org_id === caseObj.org_id);
-if (tpl && tpl.stored_path && fs.existsSync(tpl.stored_path)) {
-draftText = fs.readFileSync(tpl.stored_path).toString(‘utf8’); } } catch
-{ draftText = null; } } // Always generate denial summary and appeal
-considerations using the AI const out = aiGenerate(orgName);
-caseObj.ai.denial_summary = out.denial_summary;
-caseObj.ai.appeal_considerations = out.appeal_considerations;
-caseObj.ai.denial_reason_category = out.denial_reason_category;
-caseObj.ai.missing_info = out.missing_info;
-caseObj.ai.time_to_draft_seconds = Math.max(1,
-Math.floor((Date.now()-started)/1000)); // If a draft template was
-loaded, use it. Otherwise use the AI // generated draft text.
-caseObj.ai.draft_text = draftText || out.draft_text; // Seed
-de‑identified appeal packet scaffolding normalizeAppealPacket(caseObj,
-orgName); if (!caseObj.appeal_packet.lmn_text)
-caseObj.appeal_packet.lmn_text = appealPacketDefaults(orgName).lmn_text;
-caseObj.status = “DRAFT_READY”; return caseObj; }
+function maybeCompleteAI(caseObj, orgName) {
+  if (caseObj.status !== "ANALYZING") return caseObj;
+  const started = new Date(caseObj.ai_started_at).getTime();
+  if (!started) return caseObj;
+  if (Date.now() - started < AI_JOB_DELAY_MS) return caseObj;
 
-// ===== Billed Claim Financials (Contractual + Patient Responsibility)
-===== function num0(x){ const n = Number(x); return isFinite(n) ? n : 0;
-} function calculateBilledFinancials(b) { const billed =
-num0(b.amount_billed || b.billed_amount || 0); const contractual =
-num0(b.contractual_allowance || 0); const paid = num0(b.paid_amount ||
-0); const patient = num0(b.patient_responsibility || 0);
-
-const allowed = Math.max(0, billed - contractual); const
-insuranceExpected = Math.max(0, allowed - patient); const
-insuranceBalance = Math.max(0, insuranceExpected - paid); const
-patientBalance = Math.max(0, patient);
-
-b.allowed_amount = allowed; b.insurance_balance = insuranceBalance;
-b.patient_balance = patientBalance;
-
-let st = “Pending”; if (allowed > 0 && (paid + patient) >= allowed) st =
-“Paid in Full”; else if (paid > 0 && paid < insuranceExpected) st =
-“Underpaid”; else if (paid === 0 && contractual > 0) st = “Adjusted”;
-else if (paid > 0 && paid < allowed) st = “Partial Payment”; else if
-(patient > 0 && paid >= insuranceExpected) st = “Patient Responsibility
-Due”;
-
-b.payment_status_computed = st;
-
-const ov = (b.payment_status_override || ““).trim(); b.payment_status =
-ov ? ov : st;
-
-return b; }
-
-// ===== Analytics ===== function computeAnalytics(org_id) { const cases
-= readJSON(FILES.cases, []).filter(c => c.org_id === org_id); const
-payments = readJSON(FILES.payments, []).filter(p => p.org_id ===
-org_id);
-
-const totalCases = cases.length; const drafts = cases.filter(c =>
-c.status === “DRAFT_READY” || c.ai?.draft_text).length;
-
-const avgDraftSeconds = (() => { const xs = cases.map(c =>
-c.ai?.time_to_draft_seconds).filter(v => typeof v === “number” && v >
-0); if (!xs.length) return null; return
-Math.round(xs.reduce((a,b)=>a+b,0) / xs.length); })();
-
-const denialReasons = {}; for (const c of cases) { const reason =
-c.ai?.denial_reason_category || “Unknown”; denialReasons[reason] =
-(denialReasons[reason] || 0) + 1; }
-
-const payByPayer = {}; for (const p of payments) { const payer =
-(p.payer || “Unknown”).trim() || “Unknown”; payByPayer[payer] =
-payByPayer[payer] || { count: 0, total: 0, deniedWins: 0 };
-payByPayer[payer].count += 1; payByPayer[payer].total +=
-Number(p.amount_paid || 0); if (p.denied_approved)
-payByPayer[payer].deniedWins += 1; }
-
-const deniedPayments = payments.filter(p => p.denied_approved); const
-totalRecoveredFromDenials = deniedPayments.reduce((sum, p) => sum +
-Number(p.amount_paid || 0), 0);
-
-const totalRecoveredCases = cases.filter(c => c.paid).length; const
-recoveryRate = totalCases > 0 ? ((totalRecoveredCases / totalCases) *
-100).toFixed(1) : “0.0”;
-
-// Denial Aging (unpaid) const now = Date.now(); const aging = { over30:
-0, over60: 0, over90: 0 }; cases.filter(c => !c.paid).forEach(c => {
-const days = (now - new Date(c.created_at).getTime()) / (10006060*24);
-if (days > 90) aging.over90++; else if (days > 60) aging.over60++; else
-if (days > 30) aging.over30++; });
-
-// Projected Lost Revenue (unpaid * avg recovered) const unpaidCases =
-cases.filter(c => !c.paid); const avgRecovered = deniedPayments.length >
-0 ? (totalRecoveredFromDenials / deniedPayments.length) : 0; const
-projectedLostRevenue = unpaidCases.length * avgRecovered;
-
-const billed = readJSON(FILES.billed, []).filter(b => b.org_id ===
-org_id); const billed_total = billed.length; const billed_paid =
-billed.filter(b => (b.status || “Pending”) === “Paid”).length; const
-billed_denied = billed.filter(b => (b.status || “Pending”) ===
-“Denied”).length; const billed_pending = billed.filter(b => (b.status ||
-“Pending”) === “Pending”).length; const billed_denial_rate =
-billed_total > 0 ? ((billed_denied / billed_total) * 100).toFixed(1) :
-“0.0”; const billed_payment_conversion = billed_total > 0 ?
-((billed_paid / billed_total) * 100).toFixed(1) : “0.0”;
-
-// ===== Lifecycle KPIs (Billed → Denied → Paid) ===== const
-paymentDurations = billed .filter(b => (b.status || “Pending”) ===
-“Paid” && b.paid_at) .map(b => { const start = b.denied_at ? new
-Date(b.denied_at) : new Date(b.created_at); const end = new
-Date(b.paid_at); return (end - start) / (10006060*24); }) .filter(d =>
-typeof d === “number” && d >= 0 && isFinite(d));
-
-const avgDaysToPayment = paymentDurations.length ?
-Math.round(paymentDurations.reduce((a,b)=>a+b,0) /
-paymentDurations.length) : null;
-
-const denialTurnarounds = billed .filter(b => (b.status || “Pending”)
-=== “Denied” && b.denied_at && b.denial_case_id) .map(b => { const c =
-cases.find(x => x.case_id === b.denial_case_id && x.org_id === org_id);
-if (!c || !c.created_at) return null; return (new Date(c.created_at) -
-new Date(b.denied_at)) / (10006060*24); }) .filter(d => typeof d ===
-“number” && d >= 0 && isFinite(d));
-
-const avgDenialTurnaround = denialTurnarounds.length ?
-Math.round(denialTurnarounds.reduce((a,b)=>a+b,0) /
-denialTurnarounds.length) : null;
-
-const agingFromDenial = { over30: 0, over60: 0, over90: 0 }; billed
-.filter(b => (b.status || “Pending”) !== “Paid” && b.denied_at)
-.forEach(b => { const days = (Date.now() - new
-Date(b.denied_at).getTime()) / (10006060*24); if (days > 90)
-agingFromDenial.over90++; else if (days > 60) agingFromDenial.over60++;
-else if (days > 30) agingFromDenial.over30++; });
-
-const resolutionDurations = billed .filter(b => (b.status || “Pending”)
-=== “Paid” && b.created_at && b.paid_at) .map(b => (new
-Date(b.paid_at) - new Date(b.created_at)) / (10006060*24)) .filter(d =>
-typeof d === “number” && d >= 0 && isFinite(d));
-
-const avgTimeToResolution = resolutionDurations.length ?
-Math.round(resolutionDurations.reduce((a,b)=>a+b,0) /
-resolutionDurations.length) : null; return {totalCases, drafts,
-avgDraftSeconds, denialReasons, payByPayer, totalRecoveredFromDenials,
-recoveryRate, aging, projectedLostRevenue, billed_total, billed_paid,
-billed_denied, billed_pending, billed_denial_rate,
-billed_payment_conversion, avgDaysToPayment, avgDenialTurnaround,
-agingFromDenial, avgTimeToResolution}; }
-
-// ===== Risk scoring + strategy suggestions + weekly summary helpers
-===== function clamp(n, min, max){ return Math.max(min, Math.min(max,
-n)); }
-
-function computeRiskScore(a) { const recovery = Number(a.recoveryRate ||
-0); const aging60 = (a.aging?.over60 || 0); const aging90 =
-(a.aging?.over90 || 0); const lost = Number(a.projectedLostRevenue ||
-0);
-
-const recoveryRisk = clamp(100 - recovery, 0, 100); const agingRisk =
-clamp((aging60 * 6) + (aging90 * 10), 0, 100); const lostRisk =
-clamp(lost > 0 ? Math.log10(lost + 1) * 20 : 0, 0, 100);
-
-const score = (0.45 * recoveryRisk) + (0.35 * agingRisk) + (0.20 *
-lostRisk); return Math.round(clamp(score, 0, 100)); }
-
-function riskLabel(score){ if (score >= 75) return { label:“High”,
-cls:“err” }; if (score >= 45) return { label:“Medium”, cls:“warn” };
-return { label:“Low”, cls:“ok” }; }
-
-function buildRecoveryStrategies(a) { const tips = []; const recovery =
-Number(a.recoveryRate || 0); const aging60 = a.aging?.over60 || 0; const
-aging90 = a.aging?.over90 || 0;
-
-if (recovery < 40 && a.totalCases > 5) { tips.push(“Run a denial
-category review: focus on the top 1–2 denial reasons and standardize
-your supporting documentation bundle.”); } if (aging90 > 0) {
-tips.push(“Prioritize >90 day denials: assign same-week follow-ups,
-confirm appeal deadlines, and escalate payer contact paths.”); } else if
-(aging60 > 0) { tips.push(“Work the 60+ day queue: verify appeal status,
-resubmit missing documentation, and document payer call reference
-numbers.”); }
-
-const payers = Object.entries(a.payByPayer || {}).map(([payer, info]) =>
-({ payer, total: Number(info.total || 0), wins: Number(info.deniedWins
-|| 0), count: Number(info.count || 0) })).sort((x,y)=>y.count-x.count);
-
-const topPayer = payers[0]; if (topPayer && topPayer.count >= 5 &&
-topPayer.wins === 0) {
-tips.push(Target payer friction: ${topPayer.payer} shows volume but no denial wins recorded—validate required forms, medical necessity language, and appeal routing.);
+  // Determine if a custom template should be used for the draft.  If
+  // `template_id` is set on the case object, attempt to read the
+  // corresponding template file and use its contents for the draft
+  // letter.  Otherwise, fall back to the AI stub generator.
+  let draftText = null;
+  if (caseObj.template_id) {
+    try {
+      // Load template metadata and find the matching template for this org
+      const templates = readJSON(FILES.templates, []);
+      const tpl = templates.find(t => t.template_id === caseObj.template_id && t.org_id === caseObj.org_id);
+      if (tpl && tpl.stored_path && fs.existsSync(tpl.stored_path)) {
+        draftText = fs.readFileSync(tpl.stored_path).toString('utf8');
+      }
+    } catch {
+      draftText = null;
+    }
+  }
+  // Always generate denial summary and appeal considerations using the AI
+  const out = aiGenerate(orgName);
+  caseObj.ai.denial_summary = out.denial_summary;
+  caseObj.ai.appeal_considerations = out.appeal_considerations;
+  caseObj.ai.denial_reason_category = out.denial_reason_category;
+  caseObj.ai.missing_info = out.missing_info;
+  caseObj.ai.time_to_draft_seconds = Math.max(1, Math.floor((Date.now()-started)/1000));
+  // If a draft template was loaded, use it.  Otherwise use the AI
+  // generated draft text.
+  caseObj.ai.draft_text = draftText || out.draft_text;
+  // Seed de‑identified appeal packet scaffolding
+  normalizeAppealPacket(caseObj, orgName);
+  if (!caseObj.appeal_packet.lmn_text) caseObj.appeal_packet.lmn_text = appealPacketDefaults(orgName).lmn_text;
+  caseObj.status = "DRAFT_READY";
+  return caseObj;
 }
 
-if (!tips.length) tips.push(“Keep consistency: continue documenting
-denial reasons, standardizing appeal templates, and tracking paid
-amounts to strengthen payer trend analytics.”); return tips; }
+// ===== Analytics =====
+function computeAnalytics(org_id) {
+  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
+  const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
 
-function computeWeeklySummary(org_id) { const now = Date.now(); const
-weekAgo = now - 72460601000;
+  const totalCases = cases.length;
+  const drafts = cases.filter(c => c.status === "DRAFT_READY" || c.ai?.draft_text).length;
 
-const cases = readJSON(FILES.cases, []).filter(c => c.org_id ===
-org_id); const payments = readJSON(FILES.payments, []).filter(p =>
-p.org_id === org_id);
+  const avgDraftSeconds = (() => {
+    const xs = cases.map(c => c.ai?.time_to_draft_seconds).filter(v => typeof v === "number" && v > 0);
+    if (!xs.length) return null;
+    return Math.round(xs.reduce((a,b)=>a+b,0) / xs.length);
+  })();
 
-const newCases = cases.filter(c => new Date(c.created_at).getTime() >=
-weekAgo);
+  const denialReasons = {};
+  for (const c of cases) {
+    const reason = c.ai?.denial_reason_category || "Unknown";
+    denialReasons[reason] = (denialReasons[reason] || 0) + 1;
+  }
 
-const paidThisWeek = payments.filter(p => { const dt = p.date_paid ||
-p.created_at; return new Date(dt).getTime() >= weekAgo; });
+  const payByPayer = {};
+  for (const p of payments) {
+    const payer = (p.payer || "Unknown").trim() || "Unknown";
+    payByPayer[payer] = payByPayer[payer] || { count: 0, total: 0, deniedWins: 0 };
+    payByPayer[payer].count += 1;
+    payByPayer[payer].total += Number(p.amount_paid || 0);
+    if (p.denied_approved) payByPayer[payer].deniedWins += 1;
+  }
 
-const deniedRecoveredThisWeek = paidThisWeek.filter(p =>
-p.denied_approved); const recoveredDollarsThisWeek =
-deniedRecoveredThisWeek.reduce((s,p)=>s + Number(p.amount_paid || 0),
-0);
+  const deniedPayments = payments.filter(p => p.denied_approved);
+  const totalRecoveredFromDenials = deniedPayments.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
 
-const topPayers = {}; paidThisWeek.forEach(p => { const payer = (p.payer
-|| “Unknown”).trim() || “Unknown”; topPayers[payer] = (topPayers[payer]
-|| 0) + Number(p.amount_paid || 0); });
+  const totalRecoveredCases = cases.filter(c => c.paid).length;
+  const recoveryRate = totalCases > 0 ? ((totalRecoveredCases / totalCases) * 100).toFixed(1) : "0.0";
 
-const top3 =
-Object.entries(topPayers).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([payer,total])=>({
-payer, total }));
+  // Denial Aging (unpaid)
+  const now = Date.now();
+  const aging = { over30: 0, over60: 0, over90: 0 };
+  cases.filter(c => !c.paid).forEach(c => {
+    const days = (now - new Date(c.created_at).getTime()) / (1000*60*60*24);
+    if (days > 90) aging.over90++;
+    else if (days > 60) aging.over60++;
+    else if (days > 30) aging.over30++;
+  });
 
-return { newCasesCount: newCases.length, paymentsCount:
-paidThisWeek.length, recoveredDollarsThisWeek, deniedWinsCount:
-deniedRecoveredThisWeek.length, top3 }; }
+  // Projected Lost Revenue (unpaid * avg recovered)
+  const unpaidCases = cases.filter(c => !c.paid);
+  const avgRecovered = deniedPayments.length > 0 ? (totalRecoveredFromDenials / deniedPayments.length) : 0;
+  const projectedLostRevenue = unpaidCases.length * avgRecovered;
 
-// ===== Payment & Denial Trends ===== /** * Compute monthly payment
-trends. Returns an object with: * - byMonth: { YYYY-MM: { total: number,
-count: number } } * - avgMonthlyTotal: average monthly total paid across
-all months. * If org_id is provided, payments are filtered to that
-organisation; otherwise all payments are used. */ function
-computePaymentTrends(org_id) { let payments = readJSON(FILES.payments,
-[]); if (org_id) { payments = payments.filter(p => p.org_id === org_id);
-} const byMonth = {}; payments.forEach(p => { // Use payment date if
-available, otherwise created_at let dtStr = p.date_paid || p.datePaid ||
-p.created_at || p.created_at; let d; try { d = dtStr ? new Date(dtStr) :
-new Date(); } catch { d = new Date(); } const key =
-${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}; if
-(!byMonth[key]) byMonth[key] = { total: 0, count: 0 };
-byMonth[key].total += Number(p.amount_paid || p.amountPaid || 0);
-byMonth[key].count += 1; }); const keys = Object.keys(byMonth); let
-avgMonthlyTotal = null; if (keys.length) { const sum = keys.reduce((acc,
-k) => acc + byMonth[k].total, 0); avgMonthlyTotal = sum / keys.length; }
-return { byMonth, avgMonthlyTotal }; }
 
-/** * Compute monthly denial and appeal trends. Returns an object keyed
-by month with: * - total: number of cases created in that month * -
-drafts: number of cases that reached DRAFT_READY status (appeal drafts
-generated) * - categories: a map of denial categories and counts * If
-org_id is provided, cases are filtered to that organisation; otherwise
-all cases are used. */ function computeDenialTrends(org_id) { let cases
-= readJSON(FILES.cases, []); if (org_id) { cases = cases.filter(c =>
-c.org_id === org_id); } const byMonth = {}; cases.forEach(c => { const
-dtStr = c.created_at; let d; try { d = dtStr ? new Date(dtStr) : new
-Date(); } catch { d = new Date(); } const key =
-${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}; if
-(!byMonth[key]) byMonth[key] = { total: 0, drafts: 0, categories: {} };
-byMonth[key].total += 1; if (c.status === “DRAFT_READY” || (c.ai &&
-c.ai.draft_text)) { byMonth[key].drafts += 1; } const cat = (c.ai &&
-c.ai.denial_reason_category) ? c.ai.denial_reason_category : “Unknown”;
-byMonth[key].categories[cat] = (byMonth[key].categories[cat] || 0) + 1;
-}); return byMonth; }
+  const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  const billed_total = billed.length;
+  const billed_paid = billed.filter(b => (b.status || "Pending") === "Paid").length;
+  const billed_denied = billed.filter(b => (b.status || "Pending") === "Denied").length;
+  const billed_pending = billed.filter(b => (b.status || "Pending") === "Pending").length;
+  const billed_denial_rate = billed_total > 0 ? ((billed_denied / billed_total) * 100).toFixed(1) : "0.0";
+  const billed_payment_conversion = billed_total > 0 ? ((billed_paid / billed_total) * 100).toFixed(1) : "0.0";
 
-// ===== Admin Attention Helper ===== /** * Compute a set of
-organisation IDs requiring admin attention. * Rules: * - Pilot ending
-within 7 days * - Case usage ≥ 80% * - No activity for 14+ days * - No
-payment uploads across platform / function buildAdminAttentionSet(orgs)
-{ const flagged = new Set(); const now = Date.now(); const allUsage =
-readJSON(FILES.usage, []); const cases = readJSON(FILES.cases, []);
-const payments = readJSON(FILES.payments, []); orgs.forEach(org => {
-const pilot = getPilot(org.org_id) || ensurePilot(org.org_id); const
-limits = getLimitProfile(org.org_id); const usage = allUsage.find(u =>
-u.org_id === org.org_id) || getUsage(org.org_id); let casePct = 0; if
-(limits.mode === ‘pilot’) { casePct = (usage.pilot_cases_used /
-PILOT_LIMITS.max_cases_total) 100; } else { casePct =
-(usage.monthly_case_credits_used / limits.case_credits_per_month) * 100;
-} // last activity (latest case or payment) let last = 0;
-cases.forEach(c => { if (c.org_id === org.org_id) last = Math.max(last,
-new Date(c.created_at).getTime()); }); payments.forEach(p => { if
-(p.org_id === org.org_id) last = Math.max(last, new
-Date(p.created_at).getTime()); }); const pilotEnd = pilot ? new
-Date(pilot.ends_at).getTime() : 0; const pilotEndingSoon = pilotEnd &&
-pilotEnd - now <= 7 * 24 * 60 * 60 * 1000; const nearLimit = casePct >=
-80; const noRecentActivity = !last || now - last >= 14 * 24 * 60 * 60 *
-1000; const noPayments = payments.filter(p => p.org_id ===
-org.org_id).length === 0; if (pilotEndingSoon || nearLimit ||
-noRecentActivity || noPayments) { flagged.add(org.org_id); } }); return
-flagged; }
 
-// ===== ROUTER ===== const server = http.createServer(async (req, res)
-=> { const parsed = url.parse(req.url, true); const pathname =
-parsed.pathname; const method = req.method;
+  
+  // ===== Lifecycle KPIs (Billed → Denied → Paid) =====
+  const paymentDurations = billed
+    .filter(b => (b.status || "Pending") === "Paid" && b.paid_at)
+    .map(b => {
+      const start = b.denied_at ? new Date(b.denied_at) : new Date(b.created_at);
+      const end = new Date(b.paid_at);
+      return (end - start) / (1000*60*60*24);
+    })
+    .filter(d => typeof d === "number" && d >= 0 && isFinite(d));
 
-// health if (method === “GET” && pathname === “/health”) return
-send(res, 200, “ok”, “text/plain”);
+  const avgDaysToPayment = paymentDurations.length
+    ? Math.round(paymentDurations.reduce((a,b)=>a+b,0) / paymentDurations.length)
+    : null;
 
-// auth const sess = getAuth(req); if (sess && sess.org_id)
-cleanupIfExpired(sess.org_id);
+  const denialTurnarounds = billed
+    .filter(b => (b.status || "Pending") === "Denied" && b.denied_at && b.denial_case_id)
+    .map(b => {
+      const c = cases.find(x => x.case_id === b.denial_case_id && x.org_id === org_id);
+      if (!c || !c.created_at) return null;
+      return (new Date(c.created_at) - new Date(b.denied_at)) / (1000*60*60*24);
+    })
+    .filter(d => typeof d === "number" && d >= 0 && isFinite(d));
 
-// ———- PUBLIC: Admin login ———- if (method === “GET” && pathname ===
-“/admin/login”) { const html = page(“Owner Login”,
-<h2>Owner Login</h2>       <p class="muted">This area is for the system owner only.</p>       <form method="POST" action="/admin/login">         <label>Email</label>         <input name="email" type="email" required />         <label>Password</label>         <input name="password" type="password" required />         <div class="btnRow">           <button class="btn" type="submit">Sign In</button>           <a class="btn secondary" href="/login">Back</a>         </div>       </form>,
-navPublic()); return send(res, 200, html); }
+  const avgDenialTurnaround = denialTurnarounds.length
+    ? Math.round(denialTurnarounds.reduce((a,b)=>a+b,0) / denialTurnarounds.length)
+    : null;
 
-if (method === “POST” && pathname === “/admin/login”) { const body =
-await parseBody(req); const params = new URLSearchParams(body); const
-email = (params.get(“email”) || ““).trim().toLowerCase(); const pass =
-params.get(”password”) || ““;
+  const agingFromDenial = { over30: 0, over60: 0, over90: 0 };
+  billed
+    .filter(b => (b.status || "Pending") !== "Paid" && b.denied_at)
+    .forEach(b => {
+      const days = (Date.now() - new Date(b.denied_at).getTime()) / (1000*60*60*24);
+      if (days > 90) agingFromDenial.over90++;
+      else if (days > 60) agingFromDenial.over60++;
+      else if (days > 30) agingFromDenial.over30++;
+    });
+
+  const resolutionDurations = billed
+    .filter(b => (b.status || "Pending") === "Paid" && b.created_at && b.paid_at)
+    .map(b => (new Date(b.paid_at) - new Date(b.created_at)) / (1000*60*60*24))
+    .filter(d => typeof d === "number" && d >= 0 && isFinite(d));
+
+  const avgTimeToResolution = resolutionDurations.length
+    ? Math.round(resolutionDurations.reduce((a,b)=>a+b,0) / resolutionDurations.length)
+    : null;
+return {totalCases, drafts, avgDraftSeconds, denialReasons, payByPayer, totalRecoveredFromDenials, recoveryRate, aging, projectedLostRevenue, billed_total, billed_paid, billed_denied, billed_pending, billed_denial_rate, billed_payment_conversion, avgDaysToPayment, avgDenialTurnaround, agingFromDenial, avgTimeToResolution};
+}
+
+
+// ===== Risk scoring + strategy suggestions + weekly summary helpers =====
+function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
+
+function computeRiskScore(a) {
+  const recovery = Number(a.recoveryRate || 0);
+  const aging60 = (a.aging?.over60 || 0);
+  const aging90 = (a.aging?.over90 || 0);
+  const lost = Number(a.projectedLostRevenue || 0);
+
+  const recoveryRisk = clamp(100 - recovery, 0, 100);
+  const agingRisk = clamp((aging60 * 6) + (aging90 * 10), 0, 100);
+  const lostRisk = clamp(lost > 0 ? Math.log10(lost + 1) * 20 : 0, 0, 100);
+
+  const score = (0.45 * recoveryRisk) + (0.35 * agingRisk) + (0.20 * lostRisk);
+  return Math.round(clamp(score, 0, 100));
+}
+
+function riskLabel(score){
+  if (score >= 75) return { label:"High", cls:"err" };
+  if (score >= 45) return { label:"Medium", cls:"warn" };
+  return { label:"Low", cls:"ok" };
+}
+
+function buildRecoveryStrategies(a) {
+  const tips = [];
+  const recovery = Number(a.recoveryRate || 0);
+  const aging60 = a.aging?.over60 || 0;
+  const aging90 = a.aging?.over90 || 0;
+
+  if (recovery < 40 && a.totalCases > 5) {
+    tips.push("Run a denial category review: focus on the top 1–2 denial reasons and standardize your supporting documentation bundle.");
+  }
+  if (aging90 > 0) {
+    tips.push("Prioritize >90 day denials: assign same-week follow-ups, confirm appeal deadlines, and escalate payer contact paths.");
+  } else if (aging60 > 0) {
+    tips.push("Work the 60+ day queue: verify appeal status, resubmit missing documentation, and document payer call reference numbers.");
+  }
+
+  const payers = Object.entries(a.payByPayer || {}).map(([payer, info]) => ({
+    payer,
+    total: Number(info.total || 0),
+    wins: Number(info.deniedWins || 0),
+    count: Number(info.count || 0)
+  })).sort((x,y)=>y.count-x.count);
+
+  const topPayer = payers[0];
+  if (topPayer && topPayer.count >= 5 && topPayer.wins === 0) {
+    tips.push(`Target payer friction: ${topPayer.payer} shows volume but no denial wins recorded—validate required forms, medical necessity language, and appeal routing.`);
+  }
+
+  if (!tips.length) tips.push("Keep consistency: continue documenting denial reasons, standardizing appeal templates, and tracking paid amounts to strengthen payer trend analytics.");
+  return tips;
+}
+
+function computeWeeklySummary(org_id) {
+  const now = Date.now();
+  const weekAgo = now - 7*24*60*60*1000;
+
+  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
+  const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
+
+  const newCases = cases.filter(c => new Date(c.created_at).getTime() >= weekAgo);
+
+  const paidThisWeek = payments.filter(p => {
+    const dt = p.date_paid || p.created_at;
+    return new Date(dt).getTime() >= weekAgo;
+  });
+
+  const deniedRecoveredThisWeek = paidThisWeek.filter(p => p.denied_approved);
+  const recoveredDollarsThisWeek = deniedRecoveredThisWeek.reduce((s,p)=>s + Number(p.amount_paid || 0), 0);
+
+  const topPayers = {};
+  paidThisWeek.forEach(p => {
+    const payer = (p.payer || "Unknown").trim() || "Unknown";
+    topPayers[payer] = (topPayers[payer] || 0) + Number(p.amount_paid || 0);
+  });
+
+  const top3 = Object.entries(topPayers).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([payer,total])=>({ payer, total }));
+
+  return { newCasesCount: newCases.length, paymentsCount: paidThisWeek.length, recoveredDollarsThisWeek, deniedWinsCount: deniedRecoveredThisWeek.length, top3 };
+}
+
+
+// ===== Payment & Denial Trends =====
+/**
+ * Compute monthly payment trends. Returns an object with:
+ * - byMonth: { YYYY-MM: { total: number, count: number } }
+ * - avgMonthlyTotal: average monthly total paid across all months.
+ * If org_id is provided, payments are filtered to that organisation; otherwise all payments are used.
+ */
+function computePaymentTrends(org_id) {
+  let payments = readJSON(FILES.payments, []);
+  if (org_id) {
+    payments = payments.filter(p => p.org_id === org_id);
+  }
+  const byMonth = {};
+  payments.forEach(p => {
+    // Use payment date if available, otherwise created_at
+    let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+    let d;
+    try {
+      d = dtStr ? new Date(dtStr) : new Date();
+    } catch {
+      d = new Date();
+    }
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
+    if (!byMonth[key]) byMonth[key] = { total: 0, count: 0 };
+    byMonth[key].total += Number(p.amount_paid || p.amountPaid || 0);
+    byMonth[key].count += 1;
+  });
+  const keys = Object.keys(byMonth);
+  let avgMonthlyTotal = null;
+  if (keys.length) {
+    const sum = keys.reduce((acc, k) => acc + byMonth[k].total, 0);
+    avgMonthlyTotal = sum / keys.length;
+  }
+  return { byMonth, avgMonthlyTotal };
+}
+
+/**
+ * Compute monthly denial and appeal trends. Returns an object keyed by month with:
+ *  - total: number of cases created in that month
+ *  - drafts: number of cases that reached DRAFT_READY status (appeal drafts generated)
+ *  - categories: a map of denial categories and counts
+ * If org_id is provided, cases are filtered to that organisation; otherwise all cases are used.
+ */
+function computeDenialTrends(org_id) {
+  let cases = readJSON(FILES.cases, []);
+  if (org_id) {
+    cases = cases.filter(c => c.org_id === org_id);
+  }
+  const byMonth = {};
+  cases.forEach(c => {
+    const dtStr = c.created_at;
+    let d;
+    try {
+      d = dtStr ? new Date(dtStr) : new Date();
+    } catch {
+      d = new Date();
+    }
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
+    if (!byMonth[key]) byMonth[key] = { total: 0, drafts: 0, categories: {} };
+    byMonth[key].total += 1;
+    if (c.status === "DRAFT_READY" || (c.ai && c.ai.draft_text)) {
+      byMonth[key].drafts += 1;
+    }
+    const cat = (c.ai && c.ai.denial_reason_category) ? c.ai.denial_reason_category : "Unknown";
+    byMonth[key].categories[cat] = (byMonth[key].categories[cat] || 0) + 1;
+  });
+  return byMonth;
+}
+
+// ===== Admin Attention Helper =====
+/**
+ * Compute a set of organisation IDs requiring admin attention.
+ * Rules:
+ *  - Pilot ending within 7 days
+ *  - Case usage ≥ 80%
+ *  - No activity for 14+ days
+ *  - No payment uploads across platform
+ */
+function buildAdminAttentionSet(orgs) {
+  const flagged = new Set();
+  const now = Date.now();
+  const allUsage = readJSON(FILES.usage, []);
+  const cases = readJSON(FILES.cases, []);
+  const payments = readJSON(FILES.payments, []);
+  orgs.forEach(org => {
+    const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
+    const limits = getLimitProfile(org.org_id);
+    const usage = allUsage.find(u => u.org_id === org.org_id) || getUsage(org.org_id);
+    let casePct = 0;
+    if (limits.mode === 'pilot') {
+      casePct = (usage.pilot_cases_used / PILOT_LIMITS.max_cases_total) * 100;
+    } else {
+      casePct = (usage.monthly_case_credits_used / limits.case_credits_per_month) * 100;
+    }
+    // last activity (latest case or payment)
+    let last = 0;
+    cases.forEach(c => { if (c.org_id === org.org_id) last = Math.max(last, new Date(c.created_at).getTime()); });
+    payments.forEach(p => { if (p.org_id === org.org_id) last = Math.max(last, new Date(p.created_at).getTime()); });
+    const pilotEnd = pilot ? new Date(pilot.ends_at).getTime() : 0;
+    const pilotEndingSoon = pilotEnd && pilotEnd - now <= 7 * 24 * 60 * 60 * 1000;
+    const nearLimit = casePct >= 80;
+    const noRecentActivity = !last || now - last >= 14 * 24 * 60 * 60 * 1000;
+    const noPayments = payments.filter(p => p.org_id === org.org_id).length === 0;
+    if (pilotEndingSoon || nearLimit || noRecentActivity || noPayments) {
+      flagged.add(org.org_id);
+    }
+  });
+  return flagged;
+}
+
+// ===== ROUTER =====
+const server = http.createServer(async (req, res) => {
+  const parsed = url.parse(req.url, true);
+  const pathname = parsed.pathname;
+  const method = req.method;
+
+  // health
+  if (method === "GET" && pathname === "/health") return send(res, 200, "ok", "text/plain");
+
+  // auth
+  const sess = getAuth(req);
+  if (sess && sess.org_id) cleanupIfExpired(sess.org_id);
+
+  // ---------- PUBLIC: Admin login ----------
+  if (method === "GET" && pathname === "/admin/login") {
+    const html = page("Owner Login", `
+      <h2>Owner Login</h2>
+      <p class="muted">This area is for the system owner only.</p>
+      <form method="POST" action="/admin/login">
+        <label>Email</label>
+        <input name="email" type="email" required />
+        <label>Password</label>
+        <input name="password" type="password" required />
+        <div class="btnRow">
+          <button class="btn" type="submit">Sign In</button>
+          <a class="btn secondary" href="/login">Back</a>
+        </div>
+      </form>
+    `, navPublic());
+    return send(res, 200, html);
+  }
+
+  if (method === "POST" && pathname === "/admin/login") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const email = (params.get("email") || "").trim().toLowerCase();
+    const pass = params.get("password") || "";
 
     const aHash = adminHash();
     if (!ADMIN_EMAIL || !aHash) {
@@ -1042,16 +1463,38 @@ params.get(”password”) || ““;
     const token = makeSession({ role:"admin", exp });
     setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400);
     return redirect(res, "/admin/dashboard");
+  }
 
-}
+  // ---------- PUBLIC: Signup/Login/Reset ----------
+  if (method === "GET" && pathname === "/signup") {
+    const html = page("Create Account", `
+      <h2>Create Account</h2>
+      <p class="muted">Secure, organization-based access to AI-assisted claim review and analytics.</p>
+      <form method="POST" action="/signup">
+        <label>Work Email</label>
+        <input name="email" type="email" required />
+        <label>Password (8+ characters)</label>
+        <input name="password" type="password" required />
+        <label>Confirm Password</label>
+        <input name="password2" type="password" required />
+        <label>Organization Name</label>
+        <input name="org_name" type="text" required />
+        <label style="display:flex;gap:10px;align-items:flex-start;margin-top:12px;">
+          <input type="checkbox" name="ack" required style="width:auto;margin:0;margin-top:2px;">
+          <span class="muted">I understand this system does not access EMRs or payer portals and does not submit appeals automatically.</span>
+        </label>
+        <div class="btnRow">
+          <button class="btn" type="submit">Create Account</button>
+          <a class="btn secondary" href="/login">Sign In</a>
+        </div>
+      </form>
+    `, navPublic());
+    return send(res, 200, html);
+  }
 
-// ———- PUBLIC: Signup/Login/Reset ———- if (method === “GET” && pathname
-=== “/signup”) { const html = page(“Create Account”,
-<h2>Create Account</h2>       <p class="muted">Secure, organization-based access to AI-assisted claim review and analytics.</p>       <form method="POST" action="/signup">         <label>Work Email</label>         <input name="email" type="email" required />         <label>Password (8+ characters)</label>         <input name="password" type="password" required />         <label>Confirm Password</label>         <input name="password2" type="password" required />         <label>Organization Name</label>         <input name="org_name" type="text" required />         <label style="display:flex;gap:10px;align-items:flex-start;margin-top:12px;">           <input type="checkbox" name="ack" required style="width:auto;margin:0;margin-top:2px;">           <span class="muted">I understand this system does not access EMRs or payer portals and does not submit appeals automatically.</span>         </label>         <div class="btnRow">           <button class="btn" type="submit">Create Account</button>           <a class="btn secondary" href="/login">Sign In</a>         </div>       </form>,
-navPublic()); return send(res, 200, html); }
-
-if (method === “POST” && pathname === “/signup”) { const body = await
-parseBody(req); const params = new URLSearchParams(body);
+  if (method === "POST" && pathname === "/signup") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
 
     const email = (params.get("email") || "").trim().toLowerCase();
     const p1 = params.get("password") || "";
@@ -1101,18 +1544,34 @@ parseBody(req); const params = new URLSearchParams(body);
     setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400);
 
     return redirect(res, "/lock");
+  }
 
-}
+  if (method === "GET" && pathname === "/login") {
+    const html = page("Login", `
+      <h2>Sign In</h2>
+      <p class="muted">Access your organization’s claim review and analytics workspace.</p>
+      <form method="POST" action="/login">
+        <label>Email</label>
+        <input name="email" type="email" required />
+        <label>Password</label>
+        <input name="password" type="password" required />
+        <div class="btnRow">
+          <button class="btn" type="submit">Sign In</button>
+          <a class="btn secondary" href="/signup">Create Account</a>
+        </div>
+      </form>
+      <div class="btnRow">
+        <a class="btn secondary" href="/forgot-password">Forgot password?</a>
+      </div>
+    `, navPublic());
+    return send(res, 200, html);
+  }
 
-if (method === “GET” && pathname === “/login”) { const html =
-page(“Login”,
-<h2>Sign In</h2>       <p class="muted">Access your organization’s claim review and analytics workspace.</p>       <form method="POST" action="/login">         <label>Email</label>         <input name="email" type="email" required />         <label>Password</label>         <input name="password" type="password" required />         <div class="btnRow">           <button class="btn" type="submit">Sign In</button>           <a class="btn secondary" href="/signup">Create Account</a>         </div>       </form>       <div class="btnRow">         <a class="btn secondary" href="/forgot-password">Forgot password?</a>       </div>,
-navPublic()); return send(res, 200, html); }
-
-if (method === “POST” && pathname === “/login”) { const body = await
-parseBody(req); const params = new URLSearchParams(body); const email =
-(params.get(“email”) || ““).trim().toLowerCase(); const pass =
-params.get(”password”) || ““;
+  if (method === "POST" && pathname === "/login") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const email = (params.get("email") || "").trim().toLowerCase();
+    const pass = params.get("password") || "";
 
     const user = getUserByEmail(email);
     if (!user || !bcrypt.compareSync(pass, user.password_hash)) {
@@ -1135,17 +1594,28 @@ params.get(”password”) || ““;
     setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400);
 
     return redirect(res, "/lock");
+  }
 
-}
+  if (method === "GET" && pathname === "/forgot-password") {
+    const html = page("Reset Password", `
+      <h2>Reset Password</h2>
+      <p class="muted">Enter your email to generate a reset link (expires in 20 minutes). For v1, the link is shown on-screen.</p>
+      <form method="POST" action="/forgot-password">
+        <label>Email</label>
+        <input name="email" type="email" required />
+        <div class="btnRow">
+          <button class="btn" type="submit">Generate Reset Link</button>
+          <a class="btn secondary" href="/login">Back</a>
+        </div>
+      </form>
+    `, navPublic());
+    return send(res, 200, html);
+  }
 
-if (method === “GET” && pathname === “/forgot-password”) { const html =
-page(“Reset Password”,
-<h2>Reset Password</h2>       <p class="muted">Enter your email to generate a reset link (expires in 20 minutes). For v1, the link is shown on-screen.</p>       <form method="POST" action="/forgot-password">         <label>Email</label>         <input name="email" type="email" required />         <div class="btnRow">           <button class="btn" type="submit">Generate Reset Link</button>           <a class="btn secondary" href="/login">Back</a>         </div>       </form>,
-navPublic()); return send(res, 200, html); }
-
-if (method === “POST” && pathname === “/forgot-password”) { const body =
-await parseBody(req); const params = new URLSearchParams(body); const
-email = (params.get(“email”) || ““).trim().toLowerCase();
+  if (method === "POST" && pathname === "/forgot-password") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const email = (params.get("email") || "").trim().toLowerCase();
 
     const token = uuid();
     const expiresAt = Date.now() + 20*60*1000;
@@ -1169,20 +1639,36 @@ email = (params.get(“email”) || ““).trim().toLowerCase();
       </div>
     `, navPublic());
     return send(res, 200, html);
+  }
 
-}
+  if (method === "GET" && pathname === "/reset-password") {
+    const token = parsed.query.token || "";
+    const email = (parsed.query.email || "").toLowerCase();
+    const html = page("Set New Password", `
+      <h2>Set a New Password</h2>
+      <form method="POST" action="/reset-password">
+        <input type="hidden" name="email" value="${safeStr(email)}"/>
+        <input type="hidden" name="token" value="${safeStr(token)}"/>
+        <label>New Password (8+ characters)</label>
+        <input name="password" type="password" required />
+        <label>Confirm New Password</label>
+        <input name="password2" type="password" required />
+        <div class="btnRow">
+          <button class="btn" type="submit">Update Password</button>
+          <a class="btn secondary" href="/login">Cancel</a>
+        </div>
+      </form>
+    `, navPublic());
+    return send(res, 200, html);
+  }
 
-if (method === “GET” && pathname === “/reset-password”) { const token =
-parsed.query.token || ““; const email = (parsed.query.email
-||”“).toLowerCase(); const html = page(”Set New Password”,
-<h2>Set a New Password</h2>       <form method="POST" action="/reset-password">         <input type="hidden" name="email" value="${safeStr(email)}"/>         <input type="hidden" name="token" value="${safeStr(token)}"/>         <label>New Password (8+ characters)</label>         <input name="password" type="password" required />         <label>Confirm New Password</label>         <input name="password2" type="password" required />         <div class="btnRow">           <button class="btn" type="submit">Update Password</button>           <a class="btn secondary" href="/login">Cancel</a>         </div>       </form>,
-navPublic()); return send(res, 200, html); }
-
-if (method === “POST” && pathname === “/reset-password”) { const body =
-await parseBody(req); const params = new URLSearchParams(body); const
-email = (params.get(“email”) || ““).trim().toLowerCase(); const token =
-params.get(”token”) || ““; const p1 = params.get(”password”) || ““;
-const p2 = params.get(”password2”) || ““;
+  if (method === "POST" && pathname === "/reset-password") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const email = (params.get("email") || "").trim().toLowerCase();
+    const token = params.get("token") || "";
+    const p1 = params.get("password") || "";
+    const p2 = params.get("password2") || "";
 
     if (p1.length < 8 || p1 !== p2) {
       const html = page("Set New Password", `
@@ -1213,29 +1699,39 @@ const p2 = params.get(”password2”) || ““;
     writeJSON(FILES.users, users);
 
     return redirect(res, "/login");
+  }
 
-}
+  if (method === "GET" && pathname === "/logout") {
+    clearCookie(res, "tjhp_session");
+    return redirect(res, "/login");
+  }
 
-if (method === “GET” && pathname === “/logout”) { clearCookie(res,
-“tjhp_session”); return redirect(res, “/login”); }
+  if (method === "GET" && pathname === "/suspended") {
+    return send(res, 200, page("Suspended", `
+      <h2>Account Suspended</h2>
+      <p>Your organization’s access is currently suspended.</p>
+      <p class="muted">If you believe this is an error, contact support.</p>
+      <div class="btnRow"><a class="btn secondary" href="/logout">Logout</a></div>
+    `, navPublic()));
+  }
 
-if (method === “GET” && pathname === “/suspended”) { return send(res,
-200, page(“Suspended”,
-<h2>Account Suspended</h2>       <p>Your organization’s access is currently suspended.</p>       <p class="muted">If you believe this is an error, contact support.</p>       <div class="btnRow"><a class="btn secondary" href="/logout">Logout</a></div>,
-navPublic())); }
+  if (method === "GET" && pathname === "/terminated") {
+    return send(res, 200, page("Terminated", `
+      <h2>Account Terminated</h2>
+      <p>This account has been terminated. Access to the workspace is no longer available.</p>
+      <p class="muted">If you believe this is an error, contact support.</p>
+      <div class="btnRow"><a class="btn secondary" href="/logout">Logout</a></div>
+    `, navPublic()));
+  }
 
-if (method === “GET” && pathname === “/terminated”) { return send(res,
-200, page(“Terminated”,
-<h2>Account Terminated</h2>       <p>This account has been terminated. Access to the workspace is no longer available.</p>       <p class="muted">If you believe this is an error, contact support.</p>       <div class="btnRow"><a class="btn secondary" href="/logout">Logout</a></div>,
-navPublic())); }
-
-// Shopify activation (manual now) if (method === “GET” && pathname ===
-“/shopify/activate”) { const token = parsed.query.token || ““; const
-email = (parsed.query.email ||”“).toLowerCase(); const status =
-parsed.query.status ||”inactive”; if (token !== ADMIN_ACTIVATE_TOKEN)
-return send(res, 401, “Unauthorized”, “text/plain”); const user =
-getUserByEmail(email); if (!user) return send(res, 404, “User not
-found”, “text/plain”);
+  // Shopify activation (manual now)
+  if (method === "GET" && pathname === "/shopify/activate") {
+    const token = parsed.query.token || "";
+    const email = (parsed.query.email || "").toLowerCase();
+    const status = parsed.query.status || "inactive";
+    if (token !== ADMIN_ACTIVATE_TOKEN) return send(res, 401, "Unauthorized", "text/plain");
+    const user = getUserByEmail(email);
+    if (!user) return send(res, 404, "User not found", "text/plain");
 
     const subs = readJSON(FILES.subscriptions, []);
     let s = subs.find(x => x.org_id === user.org_id);
@@ -1265,11 +1761,12 @@ found”, “text/plain”);
       }
     }
     return send(res, 200, `Subscription set to ${s.status} for ${email}`, "text/plain");
+  }
 
-}
-
-// Shopify webhook (automatic plan sync) if (method === “POST” &&
-pathname === “/shopify/webhook”) { const rawBody = await parseBody(req);
+  
+  // Shopify webhook (automatic plan sync)
+  if (method === "POST" && pathname === "/shopify/webhook") {
+    const rawBody = await parseBody(req);
 
     // Optional: Verify webhook signature if SHOPIFY_WEBHOOK_SECRET is set
     const secret = process.env.SHOPIFY_WEBHOOK_SECRET || "";
@@ -1322,12 +1819,13 @@ pathname === “/shopify/webhook”) { const rawBody = await parseBody(req);
 
     writeJSON(FILES.subscriptions, subs);
     return send(res, 200, "OK", "text/plain");
+  }
 
-}
 
-// ———- ADMIN ROUTES ———- if (pathname.startsWith(“/admin/”)) { const
-isAdmin = sess && sess.role === “admin”; if (!isAdmin && pathname !==
-“/admin/login”) return redirect(res, “/admin/login”);
+  // ---------- ADMIN ROUTES ----------
+  if (pathname.startsWith("/admin/")) {
+    const isAdmin = sess && sess.role === "admin";
+    if (!isAdmin && pathname !== "/admin/login") return redirect(res, "/admin/login");
 
     // Reworked admin dashboard
     if (method === "GET" && pathname === "/admin/dashboard") {
@@ -1532,26 +2030,45 @@ isAdmin = sess && sess.role === “admin”; if (!isAdmin && pathname !==
             </table>
 
             <h3>Actions</h3>
+<form method="POST" action="/admin/action">
+  <input type="hidden" name="org_id" value="${safeStr(org_id)}"/>
+  <label>Reason (required)</label>
+  <input name="reason" required />
 
-Reason (required)
-
+  <div class="btnRow">
     <button class="btn secondary" name="action" value="extend_pilot_7">Extend Pilot +7 days</button>
     <button class="btn secondary" name="action" value="suspend">Pause Plan</button>
     <button class="btn secondary" name="action" value="reactivate">Reactivate</button>
     <button class="btn danger" name="action" value="terminate">Terminate</button>
+  </div>
 
-Plan Override
-Set Plan Select plan Starter ($249) Growth ($599) Pro ($1200) Enterprise
-($2000)
-
+  <div class="hr"></div>
+  <h3>Plan Override</h3>
+  <label>Set Plan</label>
+  <select name="plan_override">
+    <option value="">Select plan</option>
+    <option value="starter">Starter ($249)</option>
+    <option value="growth">Growth ($599)</option>
+    <option value="pro">Pro ($1200)</option>
+    <option value="enterprise">Enterprise ($2000)</option>
+  </select>
+  <div class="btnRow">
     <button class="btn secondary" name="action" value="override_plan">Apply Plan</button>
+  </div>
 
-Free Trial
-Trial Days 7 Days 14 Days 30 Days
-
+  <div class="hr"></div>
+  <h3>Free Trial</h3>
+  <label>Trial Days</label>
+  <select name="trial_days">
+    <option value="7">7 Days</option>
+    <option value="14" selected>14 Days</option>
+    <option value="30">30 Days</option>
+  </select>
+  <div class="btnRow">
     <button class="btn secondary" name="action" value="grant_trial">Grant Trial</button>
     <button class="btn secondary" name="action" value="extend_trial">Extend Trial</button>
-
+  </div>
+</form>
           </div>
 
           <div class="col">
@@ -1610,30 +2127,40 @@ Trial Days 7 Days 14 Days 30 Days
           writeJSON(FILES.pilots, pilots);
         }
         auditLog({ actor:"admin", action:"extend_pilot_7", org_id, reason });
-
-} else if (action === “reactivate”) { setOrgStatus(org_id, “active”,
-reason); auditLog({ actor:“admin”, action:“reactivate”, org_id, reason
-}); } else if (action === “grant_trial”) { // Restart/Grant trial from
-today for N days (defaults handled by form) const days =
-Number(params.get(“trial_days”) || 14); const pilots =
-readJSON(FILES.pilots, []); let p = pilots.find(x => x.org_id ===
-org_id); if (!p) { p = { pilot_id: uuid(), org_id, status:“active”,
-started_at: nowISO(), ends_at: addDaysISO(nowISO(), days),
-retention_delete_at: null }; pilots.push(p); } else { p.status =
-“active”; p.started_at = nowISO(); p.ends_at = addDaysISO(nowISO(),
-days); p.retention_delete_at = null; } writeJSON(FILES.pilots, pilots);
-setOrgStatus(org_id, “active”, reason); auditLog({ actor:“admin”,
-action:“grant_trial”, org_id, reason, trial_days: days }); } else if
-(action === “extend_trial”) { const days =
-Number(params.get(“trial_days”) || 7); const pilots =
-readJSON(FILES.pilots, []); let p = pilots.find(x => x.org_id ===
-org_id); if (!p) { p = { pilot_id: uuid(), org_id, status:“active”,
-started_at: nowISO(), ends_at: addDaysISO(nowISO(), days),
-retention_delete_at: null }; pilots.push(p); } else { p.status =
-“active”; p.ends_at = addDaysISO(p.ends_at || nowISO(), days);
-p.retention_delete_at = null; } writeJSON(FILES.pilots, pilots);
-auditLog({ actor:“admin”, action:“extend_trial”, org_id, reason,
-trial_days: days });
+} else if (action === "reactivate") {
+  setOrgStatus(org_id, "active", reason);
+  auditLog({ actor:"admin", action:"reactivate", org_id, reason });
+} else if (action === "grant_trial") {
+  // Restart/Grant trial from today for N days (defaults handled by form)
+  const days = Number(params.get("trial_days") || 14);
+  const pilots = readJSON(FILES.pilots, []);
+  let p = pilots.find(x => x.org_id === org_id);
+  if (!p) {
+    p = { pilot_id: uuid(), org_id, status:"active", started_at: nowISO(), ends_at: addDaysISO(nowISO(), days), retention_delete_at: null };
+    pilots.push(p);
+  } else {
+    p.status = "active";
+    p.started_at = nowISO();
+    p.ends_at = addDaysISO(nowISO(), days);
+    p.retention_delete_at = null;
+  }
+  writeJSON(FILES.pilots, pilots);
+  setOrgStatus(org_id, "active", reason);
+  auditLog({ actor:"admin", action:"grant_trial", org_id, reason, trial_days: days });
+} else if (action === "extend_trial") {
+  const days = Number(params.get("trial_days") || 7);
+  const pilots = readJSON(FILES.pilots, []);
+  let p = pilots.find(x => x.org_id === org_id);
+  if (!p) {
+    p = { pilot_id: uuid(), org_id, status:"active", started_at: nowISO(), ends_at: addDaysISO(nowISO(), days), retention_delete_at: null };
+    pilots.push(p);
+  } else {
+    p.status = "active";
+    p.ends_at = addDaysISO(p.ends_at || nowISO(), days);
+    p.retention_delete_at = null;
+  }
+  writeJSON(FILES.pilots, pilots);
+  auditLog({ actor:"admin", action:"extend_trial", org_id, reason, trial_days: days });
 
       }
       return redirect(res, `/admin/org?org_id=${encodeURIComponent(org_id)}`);
@@ -1650,32 +2177,32 @@ trial_days: days });
     }
 
     return redirect(res, "/admin/dashboard");
+  }
 
-}
+  // ---------- USER PROTECTED ROUTES ----------
+  if (!sess || sess.role !== "user") return redirect(res, "/login");
 
-// ———- USER PROTECTED ROUTES ———- if (!sess || sess.role !== “user”)
-return redirect(res, “/login”);
+  const user = getUserById(sess.user_id);
+  if (!user) return redirect(res, "/login");
 
-const user = getUserById(sess.user_id); if (!user) return redirect(res,
-“/login”);
+  const org = getOrg(user.org_id);
+  if (!org) return redirect(res, "/login");
 
-const org = getOrg(user.org_id); if (!org) return redirect(res,
-“/login”);
+  cleanupIfExpired(org.org_id);
 
-cleanupIfExpired(org.org_id);
+  if (org.account_status === "terminated") return redirect(res, "/terminated");
+  if (org.account_status === "suspended") return redirect(res, "/suspended");
 
-if (org.account_status === “terminated”) return redirect(res,
-“/terminated”); if (org.account_status === “suspended”) return
-redirect(res, “/suspended”);
+  ensurePilot(org.org_id);
+  getUsage(org.org_id);
+  // Clean up expired de‑identified appeal attachments (non‑PHI mode)
+  cleanupExpiredAppealAttachments(org.org_id);
 
-ensurePilot(org.org_id); getUsage(org.org_id); // Clean up expired
-de‑identified appeal attachments (non‑PHI mode)
-cleanupExpiredAppealAttachments(org.org_id);
-
-if (!isAccessEnabled(org.org_id)) return redirect(res,
-“/pilot-complete”); // ———- AI Chat (Org-scoped assistant) ———- if
-(method === “POST” && pathname === “/ai/chat”) { const usage =
-getUsage(org.org_id); const limit = getAIChatLimit(org.org_id);
+  if (!isAccessEnabled(org.org_id)) return redirect(res, "/pilot-complete");
+  // ---------- AI Chat (Org-scoped assistant) ----------
+  if (method === "POST" && pathname === "/ai/chat") {
+    const usage = getUsage(org.org_id);
+    const limit = getAIChatLimit(org.org_id);
 
     if ((usage.ai_chat_used || 0) >= limit) {
       return send(res, 200, JSON.stringify({ answer: "You have reached your AI question limit for your current plan. Please upgrade to continue." }), "application/json");
@@ -1739,12 +2266,13 @@ getUsage(org.org_id); const limit = getAIChatLimit(org.org_id);
     } catch (e) {
       return send(res, 200, JSON.stringify({ answer: "AI Assistant error. Please try again." }), "application/json");
     }
+  }
 
-}
 
-// lock screen if (method === “GET” && pathname === “/lock”) { const
-html = page(“Starting”, `
-Pilot Started
+  // lock screen
+  if (method === "GET" && pathname === "/lock") {
+    const html = page("Starting", `
+      <h2 class="center">Pilot Started</h2>
       <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid — and surface patterns that are easy to miss when data lives in different places.</p>
       <p class="muted center">You’ll be guided to the next step automatically.</p>
       <div class="center"><span class="badge warn">Initializing</span></div>
@@ -1768,25 +2296,29 @@ Pilot Started
       </script>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
+  }
 
-}
 
-// executive dashboard if (method === “GET” && pathname ===
-“/executive”) { const a = computeAnalytics(org.org_id); const score =
-computeRiskScore(a); const r = riskLabel(score); const tips =
-buildRecoveryStrategies(a);
 
-const agingData = [a.aging.over30, a.aging.over60, a.aging.over90];
+// executive dashboard
+if (method === "GET" && pathname === "/executive") {
+  const a = computeAnalytics(org.org_id);
+  const score = computeRiskScore(a);
+  const r = riskLabel(score);
+  const tips = buildRecoveryStrategies(a);
 
-const payerEntries = Object.entries(a.payByPayer || {}) .map(([payer,
-info]) => ({ payer, total: Number(info.total || 0) }))
-.sort((x,y)=>y.total-x.total) .slice(0,5);
+  const agingData = [a.aging.over30, a.aging.over60, a.aging.over90];
 
-const payerLabels = payerEntries.map(x => x.payer); const payerTotals =
-payerEntries.map(x => x.total);
+  const payerEntries = Object.entries(a.payByPayer || {})
+    .map(([payer, info]) => ({ payer, total: Number(info.total || 0) }))
+    .sort((x,y)=>y.total-x.total)
+    .slice(0,5);
 
-const html = page(“Executive Dashboard”, `
-Executive Dashboard
+  const payerLabels = payerEntries.map(x => x.payer);
+  const payerTotals = payerEntries.map(x => x.total);
+
+  const html = page("Executive Dashboard", `
+    <h2>Executive Dashboard</h2>
     <p class="muted">High-level denial → revenue performance for leadership review.</p>
 
     <div class="row">
@@ -1840,16 +2372,18 @@ Executive Dashboard
       <a class="btn secondary" href="/analytics">Analytics</a>
       <a class="btn secondary" href="/dashboard">Back</a>
     </div>
+  `, navUser(), {showChat:true});
+  return send(res, 200, html);
+}
 
-`, navUser(), {showChat:true}); return send(res, 200, html); }
+// weekly summary
+if (method === "GET" && pathname === "/weekly-summary") {
+  const a = computeAnalytics(org.org_id);
+  const w = computeWeeklySummary(org.org_id);
+  const proj = projectNextMonthDenials(org.org_id);
 
-// weekly summary if (method === “GET” && pathname ===
-“/weekly-summary”) { const a = computeAnalytics(org.org_id); const w =
-computeWeeklySummary(org.org_id); const proj =
-projectNextMonthDenials(org.org_id);
-
-const html = page(“Weekly Summary”, `
-Weekly Denial Performance Summary
+  const html = page("Weekly Summary", `
+    <h2>Weekly Denial Performance Summary</h2>
     <p class="muted">Last 7 days. Use this for quick leadership updates.</p>
 
     <div class="row">
@@ -1884,11 +2418,21 @@ Weekly Denial Performance Summary
       <a class="btn" href="/executive">Executive Dashboard</a>
       <a class="btn secondary" href="/dashboard">Back</a>
     </div>
-
-, navUser(), {showChat:true});   return send(res, 200, html); }   // dashboard with empty-state previews and tooltips   if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) {     const a = computeAnalytics(org.org_id);     const payTrend = computePaymentTrends(org.org_id); const limits = getLimitProfile(org.org_id);     const usage = getUsage(org.org_id);     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);     const paymentAllowance = paymentRowsAllowance(org.org_id);     const planBadge = (limits.mode==="monthly") ?Monthly
-Active:Pilot Active`; // counts for empty-state charts const caseCount =
-countOrgCases(org.org_id); const paymentCount = readJSON(FILES.payments,
-[]).filter(p => p.org_id === org.org_id).length;
+  `, navUser(), {showChat:true});
+  return send(res, 200, html);
+}
+  // dashboard with empty-state previews and tooltips
+  if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) {
+    const a = computeAnalytics(org.org_id);
+    const payTrend = computePaymentTrends(org.org_id);
+const limits = getLimitProfile(org.org_id);
+    const usage = getUsage(org.org_id);
+    const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
+    const paymentAllowance = paymentRowsAllowance(org.org_id);
+    const planBadge = (limits.mode==="monthly") ? `<span class="badge ok">Monthly Active</span>` : `<span class="badge warn">Pilot Active</span>`;
+    // counts for empty-state charts
+    const caseCount = countOrgCases(org.org_id);
+    const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
 
     // Payment upload queue grouped by source_file
     const allPay = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
@@ -2103,14 +2647,14 @@ countOrgCases(org.org_id); const paymentCount = readJSON(FILES.payments,
       </div>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
+  }
 
-}
-
-// ——— BILLED CLAIMS UPLOAD (EMR/EHR EXPORT INTAKE) ———- //
-Submission-based view: each upload creates a submission batch. Click
-into a batch to manage individual claims. if (method === “GET” &&
-pathname === “/billed”) { const submission_id =
-(parsed.query.submission_id || ““).trim();
+  
+  
+  // --------- BILLED CLAIMS UPLOAD (EMR/EHR EXPORT INTAKE) ----------
+  // Submission-based view: each upload creates a submission batch. Click into a batch to manage individual claims.
+  if (method === "GET" && pathname === "/billed") {
+    const submission_id = (parsed.query.submission_id || "").trim();
 
     const q = (parsed.query.q || "").trim().toLowerCase();
     const statusF = (parsed.query.status || "").trim();
@@ -2239,51 +2783,6 @@ pathname === “/billed”) { const submission_id =
 
     const barColor = collectionRate >= 80 ? "#065f46" : (collectionRate >= 60 ? "#f59e0b" : "#b91c1c");
 
-    // ----- Payment Exceptions (computed safely) -----
-    const exceptions = claimsAll
-      .map(x => { calculateBilledFinancials(x); return x; })
-      .filter(x => {
-        const s = (x.payment_status || x.payment_status_computed || "").trim();
-        return s === "Partial Payment" || s === "Underpaid" || s === "Patient Responsibility Due";
-      })
-      .slice(0, 500);
-
-    let paymentExceptionsHtml = "";
-    if (!exceptions.length) {
-      paymentExceptionsHtml = `<p class="muted">No exceptions detected.</p>`;
-    } else {
-      const rows2 = exceptions.map(x => `
-        <tr>
-          <td>${safeStr(x.claim_number || "")}</td>
-          <td>$${Number(x.amount_billed || 0).toFixed(2)}</td>
-          <td>$${Number(x.contractual_allowance || 0).toFixed(2)}</td>
-          <td>$${Number(x.patient_responsibility || 0).toFixed(2)}</td>
-          <td>$${Number(x.paid_amount || 0).toFixed(2)}</td>
-          <td>$${Number(x.allowed_amount || 0).toFixed(2)}</td>
-          <td>$${Number(x.insurance_balance || 0).toFixed(2)}</td>
-          <td>${safeStr(x.payment_status || x.payment_status_computed || "")}</td>
-        </tr>
-      `).join("");
-
-      paymentExceptionsHtml = `
-        <div style="overflow:auto;">
-          <table>
-            <thead><tr>
-              <th>Claim #</th>
-              <th>Billed</th>
-              <th>Contractual</th>
-              <th>Patient Resp</th>
-              <th>Paid</th>
-              <th>Allowed</th>
-              <th>Ins Balance</th>
-              <th>Status</th>
-            </tr></thead>
-            <tbody>${rows2}</tbody>
-          </table>
-        </div>
-      `;
-    }
-
     const rows = billed.slice(0, 500).map(b => {
       const st = (b.status || "Pending");
       const today = new Date().toISOString().split("T")[0];
@@ -2291,38 +2790,12 @@ pathname === “/billed”) { const submission_id =
       const action = (() => {
         if (st === "Pending") {
           return `
-            <form method="POST" action="/billed/mark-paid" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:flex-end;">
+            <form method="POST" action="/billed/mark-paid" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
               <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
               <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
-              <div style="display:flex;flex-direction:column;">
-                <label class="small muted">Paid Date</label>
-                <input type="date" name="paid_at" value="${today}" required style="width:160px;"/>
-              </div>
-              <div style="display:flex;flex-direction:column;">
-                <label class="small muted">Paid Amount</label>
-                <input type="text" name="paid_amount" placeholder="Paid" style="width:110px;"/>
-              </div>
-              <div style="display:flex;flex-direction:column;">
-                <label class="small muted">Contractual</label>
-                <input type="text" name="contractual_allowance" placeholder="Contractual" style="width:120px;"/>
-              </div>
-              <div style="display:flex;flex-direction:column;">
-                <label class="small muted">Patient Resp</label>
-                <input type="text" name="patient_responsibility" placeholder="Patient" style="width:120px;"/>
-              </div>
-              <div style="display:flex;flex-direction:column;">
-                <label class="small muted">Status Override</label>
-                <select name="payment_status_override" style="width:170px;">
-                  <option value="">Auto</option>
-                  <option value="Paid in Full">Paid in Full</option>
-                  <option value="Partial Payment">Partial Payment</option>
-                  <option value="Underpaid">Underpaid</option>
-                  <option value="Patient Responsibility Due">Patient Responsibility Due</option>
-                  <option value="Adjusted">Adjusted</option>
-                  <option value="Pending">Pending</option>
-                </select>
-              </div>
-              <button class="btn small" type="submit">Update Payment</button>
+              <input type="date" name="paid_at" value="${today}" required style="width:160px;"/>
+              <input type="text" name="paid_amount" placeholder="Paid amount" style="width:120px;"/>
+              <button class="btn small" type="submit">Mark Paid</button>
             </form>
             <form method="POST" action="/billed/mark-denied" style="display:flex;gap:6px;flex-wrap:wrap;">
               <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
@@ -2342,32 +2815,54 @@ pathname === “/billed”) { const submission_id =
         `;
       })();
 
-// Compute financials for display (does not affect stored values unless
-/billed/mark-paid updates) calculateBilledFinancials(b); const
-dispStatus = (b.payment_status || st || “Pending”); const statusBadge =
-(() => { if (dispStatus === “Paid in Full”) return
-<span class="badge ok">Paid in Full</span>; if (dispStatus === “Partial
-Payment”) return <span class="badge warn">Partial</span>; if (dispStatus
-=== “Underpaid”) return <span class="badge err">Underpaid</span>; if
-(dispStatus === “Patient Responsibility Due”) return
-<span class="badge warn">Patient Due</span>; if (dispStatus ===
-“Adjusted”) return <span class="badge">Adjusted</span>; if (dispStatus
-=== “Paid”) return <span class="badge ok">Paid</span>; if (dispStatus
-=== “Denied”) return <span class="badge err">Denied</span>; return
-<span class="badge">${safeStr(dispStatus)}</span>; })();
+      
+const statusCell = (() => {
 
-      const statusCell = `
-        ${statusBadge}
-        ${b.paid_at ? `<div class="small muted">Paid: ${new Date(b.paid_at).toLocaleDateString()}</div>` : ""}
-        ${(st==="Denied" && b.denied_at) ? `<div class="small muted">Denied: ${new Date(b.denied_at).toLocaleDateString()}</div>` : ""}
-        <div class="small muted">Paid: $${Number(b.paid_amount||0).toFixed(2)} · Contractual: $${Number(b.contractual_allowance||0).toFixed(2)} · Patient: $${Number(b.patient_responsibility||0).toFixed(2)}</div>
-        <div class="small muted">Allowed: $${Number(b.allowed_amount||0).toFixed(2)} · Ins Bal: $${Number(b.insurance_balance||0).toFixed(2)}</div>
-        ${(b.denial_case_id) ? `<div class="small">Case: <a href="/status?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></div>` : ""}
-      `;
+  if (st === "Denied" && b.denial_case_id) {
+    return `
+      <span class="badge err">Denied</span>
+      <div class="small muted">
+        ${b.denied_at ? new Date(b.denied_at).toLocaleDateString() : ""}
+      </div>
+      <div class="small">
+        Case: <a href="/status?case_id=${encodeURIComponent(b.denial_case_id)}">
+          ${safeStr(b.denial_case_id)}
+        </a>
+      </div>
+    `;
+  }
 
-return
-<tr>         <td>${safeStr(b.claim_number || "")}</td>         <td>${safeStr(b.dos || "")}</td>         <td>${safeStr(b.payer || "")}</td>         <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>         <td>${statusCell}</td>         <td>${action}</td>       </tr>;
-}).join(““);
+  if (st === "Paid") {
+    return `
+      <span class="badge ok">Paid</span>
+      <div class="small muted">
+        ${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}
+      </div>
+      ${
+        b.denial_case_id
+          ? `<div class="small">
+               Case: <a href="/draft?case_id=${encodeURIComponent(b.denial_case_id)}">
+                 ${safeStr(b.denial_case_id)}
+               </a>
+             </div>`
+          : ""
+      }
+    `;
+  }
+
+  return `<span class="badge">${safeStr(st)}</span>`;
+})();
+
+
+return `<tr>
+        <td>${safeStr(b.claim_number || "")}</td>
+        <td>${safeStr(b.dos || "")}</td>
+        <td>${safeStr(b.payer || "")}</td>
+        <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
+        <td>${statusCell}</td>
+        <td>${action}</td>
+      </tr>`;
+    }).join("");
 
     const html = page("Billed Submission", `
       <h2>Billed Claims Submission</h2>
@@ -2460,16 +2955,14 @@ return
       </div>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
+  }
 
-}
-
-if (method === “POST” && pathname === “/billed/upload”) { const
-contentType = req.headers[“content-type”] || ““; if
-(!contentType.includes(”multipart/form-data”)) return send(res, 400,
-“Invalid upload”, “text/plain”); const boundaryMatch =
-/boundary=([^;]+)/.exec(contentType); if (!boundaryMatch) return
-send(res, 400, “Missing boundary”, “text/plain”); const boundary =
-boundaryMatch[1];
+  if (method === "POST" && pathname === "/billed/upload") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
+    const boundary = boundaryMatch[1];
 
     const { files } = await parseMultipart(req, boundary);
     const f = files.find(x => x.fieldName === "billedfile") || files[0];
@@ -2541,14 +3034,6 @@ boundaryMatch[1];
           status: "Pending",
           paid_amount: null,
           paid_at: null,
-          contractual_allowance: 0,
-          patient_responsibility: 0,
-          allowed_amount: 0,
-          insurance_balance: 0,
-          patient_balance: 0,
-          payment_status_override: "",
-          payment_status_computed: "Pending",
-          payment_status: "Pending",
           denied_at: null,
           denial_case_id: null,
           source_file: path.basename(stored),
@@ -2582,52 +3067,36 @@ boundaryMatch[1];
       </div>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
+  }
 
-}
-
-if (method === “POST” && pathname === “/billed/mark-paid”) { const body
-= await parseBody(req); const params = new URLSearchParams(body); const
-billed_id = params.get(“billed_id”) || ““; const submission_id =
-(params.get(”submission_id”) || ““).trim(); const paid_at =
-params.get(”paid_at”) || nowISO();
-
+  if (method === "POST" && pathname === "/billed/mark-paid") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const billed_id = params.get("billed_id") || "";
+    const submission_id = (params.get("submission_id") || "").trim();
+    const paid_at = params.get("paid_at") || nowISO();
     const paid_amount_in = (params.get("paid_amount") || "").trim();
-    const contractual_in = (params.get("contractual_allowance") || "").trim();
-    const patient_in = (params.get("patient_responsibility") || "").trim();
-    const status_override = (params.get("payment_status_override") || "").trim();
 
     const billed = readJSON(FILES.billed, []);
     const b = billed.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
     if (!b) return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
 
+    b.status = "Paid";
     b.paid_at = paid_at;
-    b.paid_amount = paid_amount_in ? Number(paid_amount_in) : (Number(b.paid_amount||0) || 0);
-    b.contractual_allowance = contractual_in ? Number(contractual_in) : (Number(b.contractual_allowance||0) || 0);
-    b.patient_responsibility = patient_in ? Number(patient_in) : (Number(b.patient_responsibility||0) || 0);
-    b.payment_status_override = status_override || "";
-
-    calculateBilledFinancials(b);
-
-    const anyMoney = (Number(b.paid_amount||0) > 0) || (Number(b.contractual_allowance||0) > 0) || (Number(b.patient_responsibility||0) > 0);
-    b.status = anyMoney ? "Paid" : (b.status || "Pending");
+    b.paid_amount = paid_amount_in ? Number(paid_amount_in) : (b.amount_billed || 0);
 
     writeJSON(FILES.billed, billed);
 
+    // Create payment row for analytics (avoid duplicate manual-billed for same claim+date)
     const paymentsData = readJSON(FILES.payments, []);
-    const existsPay = paymentsData.find(p =>
-      p.org_id === org.org_id &&
-      p.source_file === "manual-billed" &&
-      String(p.claim_number||"") === String(b.claim_number||"") &&
-      String(p.date_paid||"") === String(paid_at||"")
-    );
-
-    if (!existsPay && Number(b.paid_amount||0) > 0) {
+    const existsPay = paymentsData.find(p => p.org_id === org.org_id && p.source_file === "manual-billed" && String(p.claim_number||"")===String(b.claim_number||"") && String(p.date_paid||"")===String(paid_at||""));
+    if (!existsPay) {
       paymentsData.push({
         payment_id: uuid(),
         org_id: org.org_id,
         claim_number: b.claim_number || "",
         payer: b.payer || "",
-        amount_paid: Number(b.paid_amount || 0),
+        amount_paid: b.paid_amount || 0,
         date_paid: paid_at,
         source_file: "manual-billed",
         created_at: nowISO(),
@@ -2636,27 +3105,16 @@ params.get(”paid_at”) || nowISO();
       writeJSON(FILES.payments, paymentsData);
     }
 
-    auditLog({
-      actor:"user",
-      action:"billed_mark_paid",
-      org_id: org.org_id,
-      billed_id,
-      paid_at,
-      paid_amount: b.paid_amount,
-      contractual_allowance: b.contractual_allowance,
-      patient_responsibility: b.patient_responsibility,
-      payment_status: b.payment_status
-    });
-
+    auditLog({ actor:"user", action:"billed_mark_paid", org_id: org.org_id, billed_id, paid_at, paid_amount: b.paid_amount });
     return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
+  }
 
-}
-
-if (method === “POST” && pathname === “/billed/mark-denied”) { const
-body = await parseBody(req); const params = new URLSearchParams(body);
-const billed_id = params.get(“billed_id”) || ““; const submission_id =
-(params.get(”submission_id”) || ““).trim(); const denied_at =
-params.get(”denied_at”) || nowISO();
+  if (method === "POST" && pathname === "/billed/mark-denied") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const billed_id = params.get("billed_id") || "";
+    const submission_id = (params.get("submission_id") || "").trim();
+    const denied_at = params.get("denied_at") || nowISO();
 
     const billed = readJSON(FILES.billed, []);
     const b = billed.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
@@ -2718,13 +3176,13 @@ params.get(”denied_at”) || nowISO();
 
     auditLog({ actor:"user", action:"billed_mark_denied", org_id: org.org_id, billed_id, case_id: cid, denied_at });
     return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : `/status?case_id=${encodeURIComponent(cid)}`);
+  }
 
-}
-
-if (method === “POST” && pathname === “/billed/reset”) { const body =
-await parseBody(req); const params = new URLSearchParams(body); const
-billed_id = params.get(“billed_id”) || ““; const submission_id =
-(params.get(”submission_id”) || ““).trim();
+  if (method === "POST" && pathname === "/billed/reset") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const billed_id = params.get("billed_id") || "";
+    const submission_id = (params.get("submission_id") || "").trim();
 
     const billed = readJSON(FILES.billed, []);
     const b = billed.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
@@ -2753,14 +3211,14 @@ billed_id = params.get(“billed_id”) || ““; const submission_id =
 
     auditLog({ actor:"user", action:"billed_reset_pending", org_id: org.org_id, billed_id });
     return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
+  }
 
-}
-
-if (method === “POST” && pathname === “/billed/bulk-update”) { const
-body = await parseBody(req); const params = new URLSearchParams(body);
-const submission_id = (params.get(“submission_id”) || ““).trim(); const
-action = (params.get(”action”) || ““).trim(); // paid|denied|reset const
-date = (params.get(”date”) || ““).trim();
+  if (method === "POST" && pathname === "/billed/bulk-update") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const submission_id = (params.get("submission_id") || "").trim();
+    const action = (params.get("action") || "").trim(); // paid|denied|reset
+    const date = (params.get("date") || "").trim();
 
     if (!submission_id || !action) return redirect(res, "/billed");
 
@@ -2875,39 +3333,50 @@ date = (params.get(”date”) || ““).trim();
 
     auditLog({ actor:"user", action:"billed_bulk_update", org_id: org.org_id, submission_id, bulk_action: action, date });
     return redirect(res, `/billed?submission_id=${encodeURIComponent(submission_id)}`);
-
-} // ——— CASE UPLOAD ———- if (method === “GET” && pathname ===
-“/upload”) { const allTemplates = readJSON(FILES.templates, []).filter(t
-=> t.org_id === org.org_id); const templateOptions = allTemplates.map(t
-=>
-<option value="${safeStr(t.template_id)}">${safeStr(t.filename)}</option>).join(““);
+  }
+// --------- CASE UPLOAD ----------
+  if (method === "GET" && pathname === "/upload") {
+    const allTemplates = readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id);
+    const templateOptions = allTemplates.map(t => `<option value="${safeStr(t.template_id)}">${safeStr(t.filename)}</option>`).join("");
 
     // Recent case status for inline processing display
     const allCasesForStatus = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
     allCasesForStatus.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
     const recentCases = allCasesForStatus.slice(0, 8);
 
-const allow = paymentRowsAllowance(org.org_id); const paymentCount =
-readJSON(FILES.payments, []).filter(p => p.org_id ===
-org.org_id).length;
+    
+const allow = paymentRowsAllowance(org.org_id);
+const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
 
-// Build payment upload queue (grouped by source_file) const allPay =
-readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id); const
-paymentFilesMap = {}; allPay.forEach(p => { const sf = (p.source_file ||
-““).trim(); if (!sf) return; if (!paymentFilesMap[sf]) {
-paymentFilesMap[sf] = { source_file: sf, count: 0, latest: p.created_at
-|| p.date_paid || nowISO() }; } paymentFilesMap[sf].count += 1;
+// Build payment upload queue (grouped by source_file)
+const allPay = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+const paymentFilesMap = {};
+allPay.forEach(p => {
+  const sf = (p.source_file || "").trim();
+  if (!sf) return;
+  if (!paymentFilesMap[sf]) {
+    paymentFilesMap[sf] = {
+      source_file: sf,
+      count: 0,
+      latest: p.created_at || p.date_paid || nowISO()
+    };
+  }
+  paymentFilesMap[sf].count += 1;
 
-const dt = new Date(p.created_at || p.date_paid ||
-Date.now()).getTime(); const cur = new Date(paymentFilesMap[sf].latest
-|| 0).getTime(); if (dt > cur) { paymentFilesMap[sf].latest =
-p.created_at || p.date_paid || nowISO(); } });
+  const dt = new Date(p.created_at || p.date_paid || Date.now()).getTime();
+  const cur = new Date(paymentFilesMap[sf].latest || 0).getTime();
+  if (dt > cur) {
+    paymentFilesMap[sf].latest = p.created_at || p.date_paid || nowISO();
+  }
+});
 
-const paymentQueue = Object.values(paymentFilesMap) .sort((a,b) => new
-Date(b.latest).getTime() - new Date(a.latest).getTime()) .slice(0, 8);
+const paymentQueue = Object.values(paymentFilesMap)
+  .sort((a,b) => new Date(b.latest).getTime() - new Date(a.latest).getTime())
+  .slice(0, 8);
 
-const html = page(“Denial & Payment Upload”, `
-Uploads
+
+const html = page("Denial & Payment Upload", `
+      <h2>Uploads</h2>
       <p class="muted">Upload denial documents to generate appeal drafts, and upload payment files to power revenue analytics. All results appear on your Dashboard.</p>
 
       <div class="hr"></div>
@@ -2922,7 +3391,7 @@ Uploads
         <label>Optional notes</label>
         <textarea name="notes" placeholder="Any context to help review (optional)"></textarea>
 
-
+        
 
         <div class="btnRow" style="margin-top:16px;">
           <button class="btn" type="submit">Submit Denials</button>
@@ -3046,14 +3515,19 @@ Uploads
       </script>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
+  }
 
-}
-
-if (method === “POST” && pathname === “/upload”) { // limit: pilot cases
-const can = pilotCanCreateCase(org.org_id); if (!can.ok) { const html =
-page(“Limit”,
-<h2>Limit Reached</h2>         <p class="error">${safeStr(can.reason)}</p>         <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>,
-navUser(), {showChat:true}); return send(res, 403, html); }
+  if (method === "POST" && pathname === "/upload") {
+    // limit: pilot cases
+    const can = pilotCanCreateCase(org.org_id);
+    if (!can.ok) {
+      const html = page("Limit", `
+        <h2>Limit Reached</h2>
+        <p class="error">${safeStr(can.reason)}</p>
+        <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
+      `, navUser(), {showChat:true});
+      return send(res, 403, html);
+    }
 
     const contentType = req.headers["content-type"] || "";
     if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain");
@@ -3171,19 +3645,25 @@ navUser(), {showChat:true}); return send(res, 403, html); }
     // Redirect to status page for first created case
     if (createdCaseIds.length > 0) {
       return redirect(res, "/upload?submitted=1");
+}
+    // If no cases were created (limit reached), show limit message
+    const html = page("Limit", `
+      <h2>Limit Reached</h2>
+      <p class="error">${safeStr(limitReason || "Case limit reached")}</p>
+      <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
+    `, navUser(), {showChat:true});
+    return send(res, 403, html);
+  }
 
-} // If no cases were created (limit reached), show limit message const
-html = page(“Limit”,
-<h2>Limit Reached</h2>       <p class="error">${safeStr(limitReason || "Case limit reached")}</p>       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>,
-navUser(), {showChat:true}); return send(res, 403, html); }
-
-// status (poll) if (method === “GET” && pathname === “/status”) { const
-case_id = parsed.query.case_id || ““; const cases =
-readJSON(FILES.cases, []); const c = cases.find(x => x.case_id ===
-case_id && x.org_id === org.org_id); if (!c) return
-redirect(res,”/dashboard”); normalizeAppealPacket(c, org.org_name); //
-If LMN empty, seed template if (!c.appeal_packet.lmn_text)
-c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+  // status (poll)
+  if (method === "GET" && pathname === "/status") {
+    const case_id = parsed.query.case_id || "";
+    const cases = readJSON(FILES.cases, []);
+    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+    if (!c) return redirect(res, "/dashboard");
+    normalizeAppealPacket(c, org.org_name);
+    // If LMN empty, seed template
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
     // If queued, attempt to start AI now if capacity available
     if (c.status === "UPLOAD_RECEIVED") {
@@ -3219,16 +3699,17 @@ c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
     `, navUser(), {showChat:true});
 
     return send(res, 200, html);
+  }
 
-}
-
-// draft view + edit if (method === “GET” && pathname === “/draft”) {
-const case_id = parsed.query.case_id || ““; const cases =
-readJSON(FILES.cases, []); const c = cases.find(x => x.case_id ===
-case_id && x.org_id === org.org_id); if (!c) return
-redirect(res,”/dashboard”); normalizeAppealPacket(c, org.org_name); //
-If LMN empty, seed template if (!c.appeal_packet.lmn_text)
-c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+  // draft view + edit
+  if (method === "GET" && pathname === "/draft") {
+    const case_id = parsed.query.case_id || "";
+    const cases = readJSON(FILES.cases, []);
+    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+    if (!c) return redirect(res, "/dashboard");
+    normalizeAppealPacket(c, org.org_name);
+    // If LMN empty, seed template
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
     const html = page("Appeal Packet Builder", `
       <h2>Appeal Packet Builder (De‑Identified)</h2>
@@ -3331,13 +3812,15 @@ c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
           <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=pdf">Open Printable (Save as PDF)</a>
         </div>
       </form>
+`, navUser(), {showChat:true});
+    return send(res, 200, html);
+  }
 
-`, navUser(), {showChat:true}); return send(res, 200, html); }
-
-if (method === “POST” && pathname === “/draft”) { const body = await
-parseBody(req); const params = new URLSearchParams(body); const case_id
-= params.get(“case_id”) || ““; const draft = params.get(”draft_text”) ||
-““;
+  if (method === "POST" && pathname === "/draft") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const case_id = params.get("case_id") || "";
+    const draft = params.get("draft_text") || "";
 
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
@@ -3348,34 +3831,34 @@ parseBody(req); const params = new URLSearchParams(body); const case_id
     c.ai.draft_text = draft;
     writeJSON(FILES.cases, cases);
     return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+  }
 
-}
+// Apply/revert templates from within the draft review page
+if (method === "POST" && pathname === "/draft-template") {
+  const contentType = req.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) return redirect(res, "/dashboard");
+  const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+  if (!boundaryMatch) return redirect(res, "/dashboard");
+  const boundary = boundaryMatch[1];
 
-// Apply/revert templates from within the draft review page if (method
-=== “POST” && pathname === “/draft-template”) { const contentType =
-req.headers[“content-type”] || ““; if
-(!contentType.includes(”multipart/form-data”)) return redirect(res,
-“/dashboard”); const boundaryMatch =
-/boundary=([^;]+)/.exec(contentType); if (!boundaryMatch) return
-redirect(res, “/dashboard”); const boundary = boundaryMatch[1];
+  const { files, fields } = await parseMultipart(req, boundary);
 
-const { files, fields } = await parseMultipart(req, boundary);
+  const case_id = (fields.case_id || "").trim();
+  if (!case_id) return redirect(res, "/dashboard");
 
-const case_id = (fields.case_id || ““).trim(); if (!case_id) return
-redirect(res,”/dashboard”);
+  const cases = readJSON(FILES.cases, []);
+  const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+  if (!c) return redirect(res, "/dashboard");
 
-const cases = readJSON(FILES.cases, []); const c = cases.find(x =>
-x.case_id === case_id && x.org_id === org.org_id); if (!c) return
-redirect(res, “/dashboard”);
+  let selectedTemplateId = (fields.template_id || "").trim();
 
-let selectedTemplateId = (fields.template_id || ““).trim();
-
-// Upload new template (optional) const templateUpload = files.find(f =>
-f.fieldName === “templateFile”); if (templateUpload &&
-templateUpload.filename) { const safeName = (templateUpload.filename ||
-“template”).replace(/[^a-zA-Z0-9._-]/g, “_“); const newId = uuid();
-const storedPath = path.join(TEMPLATES_DIR, ${newId}_${safeName});
-fs.writeFileSync(storedPath, templateUpload.buffer);
+  // Upload new template (optional)
+  const templateUpload = files.find(f => f.fieldName === "templateFile");
+  if (templateUpload && templateUpload.filename) {
+    const safeName = (templateUpload.filename || "template").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const newId = uuid();
+    const storedPath = path.join(TEMPLATES_DIR, `${newId}_${safeName}`);
+    fs.writeFileSync(storedPath, templateUpload.buffer);
 
     const templates = readJSON(FILES.templates, []);
     templates.push({
@@ -3388,30 +3871,39 @@ fs.writeFileSync(storedPath, templateUpload.buffer);
     writeJSON(FILES.templates, templates);
 
     selectedTemplateId = newId;
+  }
 
+  if (selectedTemplateId) {
+    const templates = readJSON(FILES.templates, []);
+    const tpl = templates.find(t => t.template_id === selectedTemplateId && t.org_id === org.org_id);
+    if (tpl && tpl.stored_path && fs.existsSync(tpl.stored_path)) {
+      c.ai.draft_text = fs.readFileSync(tpl.stored_path, "utf8");
+      c.template_id = selectedTemplateId;
+    }
+  } else {
+    // revert to AI draft
+    const out = aiGenerate(org.org_name);
+    c.ai.draft_text = out.draft_text;
+    c.template_id = "";
+  }
+
+  writeJSON(FILES.cases, cases);
+  return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
 }
 
-if (selectedTemplateId) { const templates = readJSON(FILES.templates,
-[]); const tpl = templates.find(t => t.template_id ===
-selectedTemplateId && t.org_id === org.org_id); if (tpl &&
-tpl.stored_path && fs.existsSync(tpl.stored_path)) { c.ai.draft_text =
-fs.readFileSync(tpl.stored_path, “utf8”); c.template_id =
-selectedTemplateId; } } else { // revert to AI draft const out =
-aiGenerate(org.org_name); c.ai.draft_text = out.draft_text;
-c.template_id = ““; }
 
-writeJSON(FILES.cases, cases); return redirect(res,
-/draft?case_id=${encodeURIComponent(case_id)}); }
 
-// ===== Appeal Packet Builder Routes (De‑Identified / Non‑PHI) ===== if
-(method === “POST” && pathname === “/appeal/save”) { const body = await
-parseBody(req); const params = new URLSearchParams(body); const case_id
-= (params.get(“case_id”) || ““).trim(); const cases =
-readJSON(FILES.cases, []); const c = cases.find(x => x.case_id ===
-case_id && x.org_id === org.org_id); if (!c) return
-redirect(res,”/dashboard”); normalizeAppealPacket(c, org.org_name); //
-If LMN empty, seed template if (!c.appeal_packet.lmn_text)
-c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+  // ===== Appeal Packet Builder Routes (De‑Identified / Non‑PHI) =====
+  if (method === "POST" && pathname === "/appeal/save") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const case_id = (params.get("case_id") || "").trim();
+    const cases = readJSON(FILES.cases, []);
+    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+    if (!c) return redirect(res, "/dashboard");
+    normalizeAppealPacket(c, org.org_name);
+    // If LMN empty, seed template
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
     normalizeAppealPacket(c, org.org_name);
 
@@ -3439,15 +3931,14 @@ c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
     writeJSON(FILES.cases, cases);
     auditLog({ actor:"user", action:"appeal_save", org_id: org.org_id, case_id });
     return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+  }
 
-}
-
-if (method === “POST” && pathname === “/appeal/upload”) { const
-contentType = req.headers[“content-type”] || ““; if
-(!contentType.includes(”multipart/form-data”)) return redirect(res,
-“/dashboard”); const boundaryMatch =
-/boundary=([^;]+)/.exec(contentType); if (!boundaryMatch) return
-redirect(res, “/dashboard”); const boundary = boundaryMatch[1];
+  if (method === "POST" && pathname === "/appeal/upload") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/dashboard");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return redirect(res, "/dashboard");
+    const boundary = boundaryMatch[1];
 
     const { files, fields } = await parseMultipart(req, boundary);
     const case_id = (fields.case_id || "").trim();
@@ -3486,12 +3977,12 @@ redirect(res, “/dashboard”); const boundary = boundaryMatch[1];
     writeJSON(FILES.cases, cases);
     auditLog({ actor:"user", action:"appeal_upload", org_id: org.org_id, case_id, count: uploadFiles.length });
     return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+  }
 
-}
-
-if (method === “POST” && pathname === “/appeal/compile”) { const body =
-await parseBody(req); const params = new URLSearchParams(body); const
-case_id = (params.get(“case_id”) || ““).trim();
+  if (method === "POST" && pathname === "/appeal/compile") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const case_id = (params.get("case_id") || "").trim();
 
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
@@ -3516,12 +4007,11 @@ case_id = (params.get(“case_id”) || ““).trim();
 
     auditLog({ actor:"user", action:"appeal_compile", org_id: org.org_id, case_id });
     return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+  }
 
-}
-
-if (method === “GET” && pathname === “/appeal/export”) { const case_id =
-(parsed.query.case_id || ““).trim(); const fmt = (parsed.query.fmt
-||”txt”).toLowerCase();
+  if (method === "GET" && pathname === "/appeal/export") {
+    const case_id = (parsed.query.case_id || "").trim();
+    const fmt = (parsed.query.fmt || "txt").toLowerCase();
 
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
@@ -3563,20 +4053,23 @@ if (method === “GET” && pathname === “/appeal/export”) { const case_id =
       "Content-Disposition": `attachment; filename=appeal_packet_${case_id}.txt`
     });
     return res.end(packet);
+  }
 
-}
 
-// New route: handle marking a case as paid (captures paid amount + logs
-denied->approved payment) if (method === “POST” && pathname ===
-“/case/mark-paid”) { const body = await parseBody(req); const params =
-new URLSearchParams(body); const case_id = params.get(“case_id”) || ““;
-const paid_at = params.get(”paid_at”) || ““; const paid_amount =
-(params.get(”paid_amount”) || ““).trim();
 
-const cases = readJSON(FILES.cases, []); const c = cases.find(x =>
-x.case_id === case_id && x.org_id === org.org_id);
+  // New route: handle marking a case as paid (captures paid amount + logs denied->approved payment)
+if (method === "POST" && pathname === "/case/mark-paid") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const case_id = params.get("case_id") || "";
+  const paid_at = params.get("paid_at") || "";
+  const paid_amount = (params.get("paid_amount") || "").trim();
 
-if (c) { const wasAlreadyPaid = !!c.paid;
+  const cases = readJSON(FILES.cases, []);
+  const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+
+  if (c) {
+    const wasAlreadyPaid = !!c.paid;
 
     c.paid = true;
     c.paid_at = paid_at;
@@ -3612,97 +4105,185 @@ if (c) { const wasAlreadyPaid = !!c.paid;
           writeJSON(FILES.billed, billedAll);
         }
       } catch {}
-
 }
 
     auditLog({ actor: "user", action: "mark_paid", case_id, org_id: org.org_id, paid_at, paid_amount });
+  }
+  return redirect(res, "/dashboard");
+}
 
-} return redirect(res, “/dashboard”); }
+  // -------- PAYMENT DETAILS LIST (moved into Reports) --------
+  if (method === "GET" && pathname === "/payments/list") {
+    return redirect(res, "/report?type=payment_detail");
+  }
 
-// ——– PAYMENT DETAILS LIST (moved into Reports) ——– if (method ===
-“GET” && pathname === “/payments/list”) { return redirect(res,
-“/report?type=payment_detail”); }
+  // (legacy payment details page retained but disabled)
+  if (false && method === "GET" && pathname === "/payments/list") {
+    // Load all payments for this organisation
+    let payments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+    // Build sets for year, month, quarter and payer filters from all payments (not filtered yet)
+    const yearsSet = new Set();
+    const payersSet = new Set();
+    const monthsSet = new Set();
+    payments.forEach(p => {
+      let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+      let d;
+      try {
+        d = dtStr ? new Date(dtStr) : new Date();
+      } catch {
+        d = new Date();
+      }
+      yearsSet.add(d.getFullYear());
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      monthsSet.add(monthKey);
+      const payerName = (p.payer || "Unknown").trim() || "Unknown";
+      payersSet.add(payerName);
+    });
+    // Read filter parameters
+    const yearFilter = parsed.query.year || "";
+    const quarterFilter = parsed.query.quarter || "";
+    const monthFilter = parsed.query.month || "";
+    const payerFilter = parsed.query.payer || "";
+    const deniedFilter = parsed.query.denied || "";
+    // Apply year filter
+    if (yearFilter) {
+      payments = payments.filter(p => {
+        let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+        let d;
+        try { d = dtStr ? new Date(dtStr) : new Date(); } catch { d = new Date(); }
+        return d.getFullYear() === Number(yearFilter);
+      });
+    }
+    // Apply quarter filter (Q1..Q4)
+    if (quarterFilter) {
+      payments = payments.filter(p => {
+        let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+        let d;
+        try { d = dtStr ? new Date(dtStr) : new Date(); } catch { d = new Date(); }
+        const month = d.getMonth() + 1;
+        const q = Math.floor((month - 1) / 3) + 1;
+        return `Q${q}` === quarterFilter;
+      });
+    }
+    // Apply month filter (YYYY-MM)
+    if (monthFilter) {
+      payments = payments.filter(p => {
+        let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+        let d;
+        try { d = dtStr ? new Date(dtStr) : new Date(); } catch { d = new Date(); }
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+        return key === monthFilter;
+      });
+    }
+    // Apply payer filter
+    if (payerFilter) {
+      payments = payments.filter(p => {
+        const name = (p.payer || "Unknown").trim() || "Unknown";
+        return name === payerFilter;
+      });
+    }
+    // Apply denied-only filter
+    if (deniedFilter === "1") {
+      payments = payments.filter(p => p.denied_approved);
+    }
+    // Compute aggregated stats by payer
+    const stats = {};
+    payments.forEach(p => {
+      const payerName = (p.payer || "Unknown").trim() || "Unknown";
+      const amt = Number(p.amount_paid || p.amountPaid || 0);
+      if (!stats[payerName]) stats[payerName] = { total: 0, count: 0 };
+      stats[payerName].total += amt;
+      stats[payerName].count += 1;
+    });
+    // Build options for filters
+    const yearOptions = Array.from(yearsSet).sort().map(y => `<option value="${y}"${yearFilter == y ? ' selected' : ''}>${y}</option>`).join('');
+    const quarterOptions = ["Q1","Q2","Q3","Q4"].map(q => `<option value="${q}"${quarterFilter === q ? ' selected' : ''}>${q}</option>`).join('');
+    const monthOptions = Array.from(monthsSet).sort().map(m => `<option value="${m}"${monthFilter === m ? ' selected' : ''}>${m}</option>`).join('');
+    const payerOptions = Array.from(payersSet).sort().map(p => `<option value="${safeStr(p)}"${payerFilter === p ? ' selected' : ''}>${safeStr(p)}</option>`).join('');
+    // Build summary table rows
+    let summaryRows = '';
+    Object.keys(stats).sort((a,b) => stats[b].total - stats[a].total).forEach(p => {
+      const s = stats[p];
+      summaryRows += `<tr><td>${safeStr(p)}</td><td>${s.count}</td><td>$${s.total.toFixed(2)}</td></tr>`;
+    });
+    const summaryTable = summaryRows ? `<table><thead><tr><th>Payer</th><th># Payments</th><th>Total Paid</th></tr></thead><tbody>${summaryRows}</tbody></table>` : `<p class='muted'>No payments found.</p>`;
+    // Build detailed table (limit to 500 rows)
+    let detailRows = '';
+    payments.slice(0, 500).forEach(p => {
+      let dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at;
+      let d;
+      try { d = dtStr ? new Date(dtStr) : new Date(); } catch { d = new Date(); }
+      const dateStr = d.toLocaleDateString();
+      const deniedFlag = p.denied_approved ? "Yes" : "";
+      detailRows += `<tr><td>${safeStr(p.claim_number || p.claimNumber || '')}</td><td>${safeStr((p.payer || 'Unknown').trim() || 'Unknown')}</td><td>$${Number(p.amount_paid || p.amountPaid || 0).toFixed(2)}</td><td>${dateStr}</td><td>${deniedFlag}</td></tr>`;
+    });
+    const detailTable = detailRows ? `<table><thead><tr><th>Claim Number</th><th>Payer</th><th>Amount Paid</th><th>Payment Date</th><th>Denied?</th></tr></thead><tbody>${detailRows}</tbody></table>` : `<p class='muted'>No payments found.</p>`;
+    const html = page("Payment Details", `
+      <h2>Payment Details</h2>
+      <form method="GET" action="/payments/list" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+        <div style="display:flex;flex-direction:column;">
+          <label>Year</label>
+          <select name="year">
+            <option value="">All</option>
+            ${yearOptions}
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Quarter</label>
+          <select name="quarter">
+            <option value="">All</option>
+            ${quarterOptions}
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Month</label>
+          <select name="month">
+            <option value="">All</option>
+            ${monthOptions}
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Payer</label>
+          <select name="payer">
+            <option value="">All</option>
+            ${payerOptions}
+          </select>
+        </div>
+<div style="display:flex;flex-direction:column;">
+  <label>Denied Recovery</label>
+  <select name="denied">
+    <option value="">All</option>
+    <option value="1"${deniedFilter==="1"?" selected":""}>Denied → Approved Only</option>
+  </select>
+</div>
+        <div>
+          <button class="btn" type="submit" style="margin-top:1.6em;">Filter</button>
+          <a class="btn secondary" href="/payments/list" style="margin-top:1.6em;">Reset</a>
+        </div>
+      </form>
+      <div class="hr"></div>
+      <h3>Summary by Payer</h3>
+      ${summaryTable}
+      <div class="hr"></div>
+      <h3>Payments (${paymentsFiltered.length} rows${payments.length > 500 ? ', showing first 500' : ''})</h3>
+      ${detailTable}
+      <div class="hr"></div>
+      <div class="btnRow"><a class="btn secondary" href="/dashboard">Back to Dashboard</a></div>
+    `, navUser(), {showChat:true});
+    return send(res, 200, html);
+  }
 
-// (legacy payment details page retained but disabled) if (false &&
-method === “GET” && pathname === “/payments/list”) { // Load all
-payments for this organisation let payments = readJSON(FILES.payments,
-[]).filter(p => p.org_id === org.org_id); // Build sets for year, month,
-quarter and payer filters from all payments (not filtered yet) const
-yearsSet = new Set(); const payersSet = new Set(); const monthsSet = new
-Set(); payments.forEach(p => { let dtStr = p.date_paid || p.datePaid ||
-p.created_at || p.created_at; let d; try { d = dtStr ? new Date(dtStr) :
-new Date(); } catch { d = new Date(); } yearsSet.add(d.getFullYear());
-const monthKey =
-${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')};
-monthsSet.add(monthKey); const payerName = (p.payer || “Unknown”).trim()
-|| “Unknown”; payersSet.add(payerName); }); // Read filter parameters
-const yearFilter = parsed.query.year || ““; const quarterFilter =
-parsed.query.quarter ||”“; const monthFilter = parsed.query.month ||”“;
-const payerFilter = parsed.query.payer ||”“; const deniedFilter =
-parsed.query.denied ||”“; // Apply year filter if (yearFilter) {
-payments = payments.filter(p => { let dtStr = p.date_paid || p.datePaid
-|| p.created_at || p.created_at; let d; try { d = dtStr ? new
-Date(dtStr) : new Date(); } catch { d = new Date(); } return
-d.getFullYear() === Number(yearFilter); }); } // Apply quarter filter
-(Q1..Q4) if (quarterFilter) { payments = payments.filter(p => { let
-dtStr = p.date_paid || p.datePaid || p.created_at || p.created_at; let
-d; try { d = dtStr ? new Date(dtStr) : new Date(); } catch { d = new
-Date(); } const month = d.getMonth() + 1; const q =
-Math.floor((month - 1) / 3) + 1; return Q${q} === quarterFilter; }); }
-// Apply month filter (YYYY-MM) if (monthFilter) { payments =
-payments.filter(p => { let dtStr = p.date_paid || p.datePaid ||
-p.created_at || p.created_at; let d; try { d = dtStr ? new Date(dtStr) :
-new Date(); } catch { d = new Date(); } const key =
-${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}; return key
-=== monthFilter; }); } // Apply payer filter if (payerFilter) { payments
-= payments.filter(p => { const name = (p.payer ||”Unknown”).trim() ||
-“Unknown”; return name === payerFilter; }); } // Apply denied-only
-filter if (deniedFilter === “1”) { payments = payments.filter(p =>
-p.denied_approved); } // Compute aggregated stats by payer const stats =
-{}; payments.forEach(p => { const payerName = (p.payer ||
-“Unknown”).trim() || “Unknown”; const amt = Number(p.amount_paid ||
-p.amountPaid || 0); if (!stats[payerName]) stats[payerName] = { total:
-0, count: 0 }; stats[payerName].total += amt; stats[payerName].count +=
-1; }); // Build options for filters const yearOptions =
-Array.from(yearsSet).sort().map(y =>
-<option value="${y}"${yearFilter == y ? ' selected' : ''}>${y}</option>).join(’‘);
-const quarterOptions = [“Q1”,“Q2”,“Q3”,“Q4”].map(q =>
-<option value="${q}"${quarterFilter === q ? ' selected' : ''}>${q}</option>).join(’‘);
-const monthOptions = Array.from(monthsSet).sort().map(m =>
-<option value="${m}"${monthFilter === m ? ' selected' : ''}>${m}</option>).join(’‘);
-const payerOptions = Array.from(payersSet).sort().map(p =>
-<option value="${safeStr(p)}"${payerFilter === p ? ' selected' : ''}>${safeStr(p)}</option>).join(’‘);
-// Build summary table rows let summaryRows =’‘;
-Object.keys(stats).sort((a,b) => stats[b].total -
-stats[a].total).forEach(p => { const s = stats[p]; summaryRows +=
-<tr><td>${safeStr(p)}</td><td>${s.count}</td><td>$${s.total.toFixed(2)}</td></tr>;
-}); const summaryTable = summaryRows ?
-<table><thead><tr><th>Payer</th><th># Payments</th><th>Total Paid</th></tr></thead><tbody>${summaryRows}</tbody></table>
-: <p class='muted'>No payments found.</p>; // Build detailed table
-(limit to 500 rows) let detailRows =’’; payments.slice(0, 500).forEach(p
-=> { let dtStr = p.date_paid || p.datePaid || p.created_at ||
-p.created_at; let d; try { d = dtStr ? new Date(dtStr) : new Date(); }
-catch { d = new Date(); } const dateStr = d.toLocaleDateString(); const
-deniedFlag = p.denied_approved ? “Yes” : ““; detailRows +=
-<tr><td>${safeStr(p.claim_number || p.claimNumber || '')}</td><td>${safeStr((p.payer || 'Unknown').trim() || 'Unknown')}</td><td>$${Number(p.amount_paid || p.amountPaid || 0).toFixed(2)}</td><td>${dateStr}</td><td>${deniedFlag}</td></tr>;
-}); const detailTable = detailRows ?
-<table><thead><tr><th>Claim Number</th><th>Payer</th><th>Amount Paid</th><th>Payment Date</th><th>Denied?</th></tr></thead><tbody>${detailRows}</tbody></table>
-: <p class='muted'>No payments found.</p>; const html = page(”Payment
-Details”,
-<h2>Payment Details</h2>       <form method="GET" action="/payments/list" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">         <div style="display:flex;flex-direction:column;">           <label>Year</label>           <select name="year">             <option value="">All</option>             ${yearOptions}           </select>         </div>         <div style="display:flex;flex-direction:column;">           <label>Quarter</label>           <select name="quarter">             <option value="">All</option>             ${quarterOptions}           </select>         </div>         <div style="display:flex;flex-direction:column;">           <label>Month</label>           <select name="month">             <option value="">All</option>             ${monthOptions}           </select>         </div>         <div style="display:flex;flex-direction:column;">           <label>Payer</label>           <select name="payer">             <option value="">All</option>             ${payerOptions}           </select>         </div> <div style="display:flex;flex-direction:column;">   <label>Denied Recovery</label>   <select name="denied">     <option value="">All</option>     <option value="1"${deniedFilter==="1"?" selected":""}>Denied → Approved Only</option>   </select> </div>         <div>           <button class="btn" type="submit" style="margin-top:1.6em;">Filter</button>           <a class="btn secondary" href="/payments/list" style="margin-top:1.6em;">Reset</a>         </div>       </form>       <div class="hr"></div>       <h3>Summary by Payer</h3>       ${summaryTable}       <div class="hr"></div>       <h3>Payments (${paymentsFiltered.length} rows${payments.length > 500 ? ', showing first 500' : ''})</h3>       ${detailTable}       <div class="hr"></div>       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back to Dashboard</a></div>,
-navUser(), {showChat:true}); return send(res, 200, html); }
+  // -------- PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) --------
+  if (method === "GET" && pathname === "/payments") {
+    return redirect(res, "/upload#payments");
+  }
 
-// ——– PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) ——– if (method ===
-“GET” && pathname === “/payments”) { return redirect(res,
-“/upload#payments”); }
-
-if (method === “POST” && pathname === “/payments”) { const contentType =
-req.headers[“content-type”] || ““; if
-(!contentType.includes(”multipart/form-data”)) return send(res, 400,
-“Invalid upload”, “text/plain”); const boundaryMatch =
-/boundary=([^;]+)/.exec(contentType); if (!boundaryMatch) return
-send(res, 400, “Missing boundary”, “text/plain”); const boundary =
-boundaryMatch[1];
+  if (method === "POST" && pathname === "/payments") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
+    const boundary = boundaryMatch[1];
 
     const { files } = await parseMultipart(req, boundary);
     const f = files.find(x => x.fieldName === "payfile") || files[0];
@@ -3820,16 +4401,18 @@ boundaryMatch[1];
       </div>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
+  }
 
-}
+  // analytics page with placeholders and bar chart preview
+  if (method === "GET" && pathname === "/analytics") {
+    return redirect(res, "/dashboard");
+  }
 
-// analytics page with placeholders and bar chart preview if (method ===
-“GET” && pathname === “/analytics”) { return redirect(res,
-“/dashboard”); }
-
-// ——– ACCOUNT ——– if (method === “GET” && pathname === “/account”) {
-const sub = getSub(org.org_id); const pilot = getPilot(org.org_id) ||
-ensurePilot(org.org_id); const limits = getLimitProfile(org.org_id);
+  // -------- ACCOUNT --------
+  if (method === "GET" && pathname === "/account") {
+    const sub = getSub(org.org_id);
+    const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
+    const limits = getLimitProfile(org.org_id);
 
     const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Pilot" : "Expired");
     const planEnds = (sub && sub.status === "active") ? "—" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "—");
@@ -3873,14 +4456,14 @@ ensurePilot(org.org_id); const limits = getLimitProfile(org.org_id);
       </div>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
+  }
 
-}
-
-if (method === “POST” && pathname === “/account/password”) { const body
-= await parseBody(req); const params = new URLSearchParams(body); const
-current = params.get(“current_password”) || ““; const p1 =
-params.get(”new_password”) || ““; const p2 = params.get(”new_password2”)
-|| ““;
+  if (method === "POST" && pathname === "/account/password") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const current = params.get("current_password") || "";
+    const p1 = params.get("new_password") || "";
+    const p2 = params.get("new_password2") || "";
 
     if (p1.length < 8 || p1 !== p2) {
       const html = page("Account", `
@@ -3914,15 +4497,17 @@ params.get(”new_password”) || ““; const p2 = params.get(”new_password2
       <div class="btnRow"><a class="btn" href="/dashboard">Back to Dashboard</a></div>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
+  }
 
-}
 
-// Report export (CSV) — used by Payment Detail Report if (method ===
-“GET” && pathname === “/report/export”) { const start =
-parsed.query.start || ““; const end = parsed.query.end ||”“; const type
-= (parsed.query.type ||”“).trim(); const payerFilter =
-(parsed.query.payer ||”“).trim(); const deniedFilter =
-(parsed.query.denied ||”“).trim();
+  
+  // Report export (CSV) — used by Payment Detail Report
+  if (method === "GET" && pathname === "/report/export") {
+    const start = parsed.query.start || "";
+    const end = parsed.query.end || "";
+    const type = (parsed.query.type || "").trim();
+    const payerFilter = (parsed.query.payer || "").trim();
+    const deniedFilter = (parsed.query.denied || "").trim();
 
     if (!start || !end || type !== "payment_detail") return redirect(res, "/report");
 
@@ -3952,52 +4537,69 @@ parsed.query.start || ““; const end = parsed.query.end ||”“; const type
     const csv = [header, ...rows].join("\n");
     res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=payment_detail_report.csv" });
     return res.end(csv);
+  }
 
-}
+// exports hub
+  if (method === "GET" && pathname === "/exports") {
+    const html = page("Exports", `
+      <h2>Exports</h2>
+      <p class="muted">Download pilot outputs for leadership and operations review.</p>
+      <div class="btnRow">
+        <a class="btn secondary" href="/export/cases.csv">Cases CSV</a>
+        <a class="btn secondary" href="/export/payments.csv">Payments CSV</a>
+        <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a>
+        <a class="btn secondary" href="/report">Printable Pilot Summary</a>
+      </div>
+    `, navUser(), {showChat:true});
+    return send(res, 200, html);
+  }
 
-// exports hub if (method === “GET” && pathname === “/exports”) { const
-html = page(“Exports”,
-<h2>Exports</h2>       <p class="muted">Download pilot outputs for leadership and operations review.</p>       <div class="btnRow">         <a class="btn secondary" href="/export/cases.csv">Cases CSV</a>         <a class="btn secondary" href="/export/payments.csv">Payments CSV</a>         <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a>         <a class="btn secondary" href="/report">Printable Pilot Summary</a>       </div>,
-navUser(), {showChat:true}); return send(res, 200, html); }
+  if (method === "GET" && pathname === "/export/cases.csv") {
+    const casesExport = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+    const header = ["case_id","status","created_at","time_to_draft_seconds","denial_reason"].join(",");
+    const rows = casesExport.map(c => [
+      c.case_id,
+      c.status,
+      c.created_at,
+      c.ai?.time_to_draft_seconds || "",
+      c.ai?.denial_reason_category || ""
+    ].map(x => `"${String(x).replace(/"/g,'""')}"`).join(","));
+    const csv = [header, ...rows].join("\n");
+    res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=cases.csv" });
+    return res.end(csv);
+  }
 
-if (method === “GET” && pathname === “/export/cases.csv”) { const
-casesExport = readJSON(FILES.cases, []).filter(c => c.org_id ===
-org.org_id); const header =
-[“case_id”,“status”,“created_at”,“time_to_draft_seconds”,“denial_reason”].join(“,”);
-const rows = casesExport.map(c => [ c.case_id, c.status, c.created_at,
-c.ai?.time_to_draft_seconds || ““, c.ai?.denial_reason_category ||””
-].map(x => "${String(x).replace(/"/g,'""')}").join(“,”)); const csv =
-[header, …rows].join(“”); res.writeHead(200, {
-“Content-Type”:“text/csv”, “Content-Disposition”:“attachment;
-filename=cases.csv” }); return res.end(csv); }
+  if (method === "GET" && pathname === "/export/payments.csv") {
+    const paymentsExport = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+    const header = ["payment_id","claim_number","payer","amount_paid","date_paid","source_file","denied_approved","created_at"].join(",");
+    const rows = paymentsExport.map(p => [
+      p.payment_id, p.claim_number, p.payer, p.amount_paid, p.date_paid, p.source_file, (p.denied_approved ? "Yes" : ""), p.created_at
+    ].map(x =>
+    `"${String(x||"").replace(/"/g,'""')}"`).join(","));
+    const csv = [header, ...rows].join("\n");
+    res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=payments.csv" });
+    return res.end(csv);
+  }
 
-if (method === “GET” && pathname === “/export/payments.csv”) { const
-paymentsExport = readJSON(FILES.payments, []).filter(p => p.org_id ===
-org.org_id); const header =
-[“payment_id”,“claim_number”,“payer”,“amount_paid”,“date_paid”,“source_file”,“denied_approved”,“created_at”].join(“,”);
-const rows = paymentsExport.map(p => [ p.payment_id, p.claim_number,
-p.payer, p.amount_paid, p.date_paid, p.source_file, (p.denied_approved ?
-“Yes” : ““), p.created_at ].map(x =>
-"${String(x||"").replace(/"/g,'""')}").join(“,”)); const csv = [header,
-…rows].join(“”); res.writeHead(200, { “Content-Type”:“text/csv”,
-“Content-Disposition”:“attachment; filename=payments.csv” }); return
-res.end(csv); }
+  if (method === "GET" && pathname === "/export/analytics.csv") {
+    const aExport = computeAnalytics(org.org_id);
+    const header = ["metric","value"].join(",");
+    const rows = [
+      ["cases_uploaded", aExport.totalCases],
+      ["drafts_generated", aExport.drafts],
+      ["avg_time_to_draft_seconds", aExport.avgDraftSeconds || ""],
+    ].map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(","));
+    const csv = [header, ...rows].join("\n");
+    res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=analytics.csv" });
+    return res.end(csv);
+  }
 
-if (method === “GET” && pathname === “/export/analytics.csv”) { const
-aExport = computeAnalytics(org.org_id); const header =
-[“metric”,“value”].join(“,”); const rows = [ [“cases_uploaded”,
-aExport.totalCases], [“drafts_generated”, aExport.drafts],
-[“avg_time_to_draft_seconds”, aExport.avgDraftSeconds || “”], ].map(r =>
-r.map(x => "${String(x).replace(/"/g,'""')}").join(“,”)); const csv =
-[header, …rows].join(“”); res.writeHead(200, {
-“Content-Type”:“text/csv”, “Content-Disposition”:“attachment;
-filename=analytics.csv” }); return res.end(csv); }
-
-if (method === “GET” && pathname === “/report”) { const start =
-parsed.query.start || ““; const end = parsed.query.end ||”“; const type
-= (parsed.query.type ||”“).trim() ||”executive”; const payerFilter =
-(parsed.query.payer || ““).trim(); const deniedFilter =
-(parsed.query.denied ||”“).trim();
+  if (method === "GET" && pathname === "/report") {
+    const start = parsed.query.start || "";
+    const end = parsed.query.end || "";
+    const type = (parsed.query.type || "").trim() || "executive";
+    const payerFilter = (parsed.query.payer || "").trim();
+    const deniedFilter = (parsed.query.denied || "").trim();
 
     // If no date range chosen yet, show generator form
     if (!start || !end) {
@@ -4179,7 +4781,7 @@ parsed.query.start || ““; const end = parsed.query.end ||”“; const type
       `;
     }
 
-
+    
     else if (type === "kpi_payment_speed") {
       const a2 = computeAnalytics(org.org_id);
       body += `
@@ -4214,16 +4816,18 @@ parsed.query.start || ““; const end = parsed.query.end ||”“; const type
       `;
     }
 
-else if (type === “payers”) { body +=
-<h3>Payer Breakdown</h3>         ${           topPayers.length             ?
-Payer
-# Payments
-Total Paid
-Denied Wins
-${  topPayers.map(x => `<tr><td>${safeStr(x.payer)}
-x.count < /td >  < td>Number(x.total).toFixed(2) < /td >  < td>{x.deniedWins}
-).join("")               }</tbody></table> :
-<p class="muted">No payer data available in this date range.</p> } `; }
+else if (type === "payers") {
+      body += `
+        <h3>Payer Breakdown</h3>
+        ${
+          topPayers.length
+            ? `<table><thead><tr><th>Payer</th><th># Payments</th><th>Total Paid</th><th>Denied Wins</th></tr></thead><tbody>${
+                topPayers.map(x => `<tr><td>${safeStr(x.payer)}</td><td>${x.count}</td><td>$${Number(x.total).toFixed(2)}</td><td>${x.deniedWins}</td></tr>`).join("")
+              }</tbody></table>`
+            : `<p class="muted">No payer data available in this date range.</p>`
+        }
+      `;
+    }
 
     body += `
       <div class="hr"></div>
@@ -4236,19 +4840,39 @@ x.count < /td >  < td>Number(x.total).toFixed(2) < /td >  
 
     const html = page("Report", body, navUser(), {showChat:true});
     return send(res, 200, html);
+  }
 
-}
+  // pilot complete page
+  if (method === "GET" && pathname === "/pilot-complete") {
+    const pilotEnd = getPilot(org.org_id) || ensurePilot(org.org_id);
+    if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
+    const p2 = getPilot(org.org_id);
+    const html = page("Pilot Complete", `
+      <h2>Pilot Complete</h2>
+      <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p>
+      <div class="hr"></div>
+      <p class="muted">
+        To limit unnecessary data retention, documents and analytics from this pilot will be securely deleted
+        <strong>14 days after the pilot end date</strong> unless you continue monthly access.
+      </p>
+      <ul class="muted">
+        <li>Pilot end date: ${new Date(p2.ends_at).toLocaleDateString()}</li>
+        <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li>
+      </ul>
+      <div class="btnRow">
+        <a class="btn" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Continue Monthly Access (via Shopify)</a>
+        <a class="btn secondary" href="/exports">Download Exports</a>
+        <a class="btn secondary" href="/logout">Logout</a>
+      </div>
+    `, navUser(), {showChat:true});
+    return send(res, 200, html);
+  }
 
-// pilot complete page if (method === “GET” && pathname ===
-“/pilot-complete”) { const pilotEnd = getPilot(org.org_id) ||
-ensurePilot(org.org_id); if (new Date(pilotEnd.ends_at).getTime() <
-Date.now() && pilotEnd.status !== “complete”)
-markPilotComplete(org.org_id); const p2 = getPilot(org.org_id); const
-html = page(“Pilot Complete”,
-<h2>Pilot Complete</h2>       <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p>       <div class="hr"></div>       <p class="muted">         To limit unnecessary data retention, documents and analytics from this pilot will be securely deleted         <strong>14 days after the pilot end date</strong> unless you continue monthly access.       </p>       <ul class="muted">         <li>Pilot end date: ${new Date(p2.ends_at).toLocaleDateString()}</li>         <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li>       </ul>       <div class="btnRow">         <a class="btn" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Continue Monthly Access (via Shopify)</a>         <a class="btn secondary" href="/exports">Download Exports</a>         <a class="btn secondary" href="/logout">Logout</a>       </div>,
-navUser(), {showChat:true}); return send(res, 200, html); }
-
-// fallback return redirect(res, “/dashboard”); });
+  // fallback
+  return redirect(res, "/dashboard");
+});
 
 server.listen(PORT, HOST, () => {
-console.log(TJHP server listening on ${HOST}:${PORT}); });
+  console.log(`TJHP server listening on ${HOST}:${PORT}`);
+});
+
