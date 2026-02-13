@@ -244,8 +244,6 @@ textarea{min-height:220px;}
 .badge.ok{border-color:#a7f3d0;background:#ecfdf5;color:var(--ok);}
 .badge.warn{border-color:#fde68a;background:#fffbeb;color:var(--warn);}
 .badge.err{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
-.badge.info{border-color:#bfdbfe;background:#eff6ff;color:#1d4ed8;}
-
 .footer{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);}
 .error{color:var(--danger);font-weight:900;}
 .small{font-size:12px;}
@@ -741,66 +739,22 @@ function money(n){
   return "$" + x.toFixed(2);
 }
 
-/**
- * Recalculate billed claim financials and status.
- * Underpaid takes priority (A).
- */
-function recalcBilledClaim(b){
-  const billed = Number(b.amount_billed || 0);
-  const insurancePaid = Number((b.insurance_paid ?? b.paid_amount) || 0);
-  const patientResp = Number(b.patient_responsibility || 0);
-  const patientCollected = Number(b.patient_collected || 0);
-  const writeOff = Number(b.write_off_amount || 0);
-  const isOON = !!b.is_out_of_network;
-
-  // Compatibility
-  b.insurance_paid = insurancePaid;
-  b.paid_amount = insurancePaid;
-
-  if (!isOON){
-    const allowed = insurancePaid + patientResp;
-    b.allowed_amount = allowed;
-    b.contractual_adjustment = billed - allowed;
-
-    const expectedInsurance = Math.max(0, allowed - patientResp);
-    const eps = 0.01;
-    if (insurancePaid + eps < expectedInsurance){
-      b.status = "Underpaid";
-      return b;
-    }
-  } else {
-    b.allowed_amount = null;
-    b.contractual_adjustment = null;
-  }
-
-  const remainingPatient = Math.max(0, patientResp - patientCollected - writeOff);
-  b.remaining_patient_balance = remainingPatient;
-
-  if (writeOff > 0 && remainingPatient <= 0 && patientResp > patientCollected){
-    b.status = "Written Off";
-    return b;
-  }
-
-  if (isOON){
-    const remainingTotal = Math.max(0, billed - insurancePaid - patientCollected - writeOff);
-    b.remaining_total_balance = remainingTotal;
-    if (remainingTotal > 0){
-      b.status = "OON Balance";
-      return b;
-    }
-    b.status = "Paid";
-    return b;
-  }
-
-  if (remainingPatient > 0){
-    b.status = "Patient Balance";
-    return b;
-  }
-
-  b.status = "Paid";
-  return b;
+function num(v){
+  const n = Number(String(v||"").replace(/[^0-9.\-]/g,""));
+  return isFinite(n) ? n : 0;
 }
 
+function computeExpectedInsurance(allowedAmount, patientResp){
+  const allowed = num(allowedAmount);
+  const pr = Math.max(0, num(patientResp));
+  return Math.max(0, allowed - pr);
+}
+
+function computeUnderpaidAmount(expectedInsurance, actualInsurancePaid){
+  const exp = num(expectedInsurance);
+  const act = num(actualInsurancePaid);
+  return Math.max(0, exp - act);
+}
 
 // ===== Multipart Parser =====
 async function parseMultipart(req, boundary) {
@@ -939,6 +893,64 @@ ${orgName || "[Organization Billing Team]"}
   };
 }
 
+
+function aiGenerateUnderpayment(orgName, meta) {
+  const claim = meta?.claim_number || "(claim #)";
+  const dos = meta?.dos || "(DOS)";
+  const payer = meta?.payer || "(payer)";
+  const allowed = meta?.allowed_amount != null ? money(meta.allowed_amount) : "(allowed)";
+  const expected = meta?.expected_insurance != null ? money(meta.expected_insurance) : "(expected)";
+  const paid = meta?.actual_paid != null ? money(meta.actual_paid) : "(paid)";
+  const diff = meta?.underpaid_amount != null ? money(meta.underpaid_amount) : "(difference)";
+
+  return {
+    denial_summary: "This case reflects an insurance underpayment relative to expected contracted/allowed reimbursement.",
+    appeal_considerations: "Validate contract/fee schedule language and attach EOB/ERA evidence before submission. Confirm timely filing and payer dispute window.",
+    draft_text:
+`(Your Name or Practice Name)
+(Street Address)
+(City, State ZIP)
+
+(Date)
+
+${payer}
+(Street Address)
+(City, State ZIP)
+
+RE: Underpayment Dispute / Reconsideration
+Claim #: ${claim}
+Date(s) of Service: ${dos}
+
+To Whom It May Concern,
+
+We are submitting this letter to dispute an underpayment on the above-referenced claim. Based on the Explanation of Benefits (EOB/ERA), the expected payment for covered services is ${expected}, however the payment issued was ${paid}, resulting in an underpayment of ${diff}.
+
+Summary:
+- Allowed Amount: ${allowed}
+- Expected Insurance Payment: ${expected}
+- Actual Insurance Payment: ${paid}
+- Underpaid Difference: ${diff}
+
+Request:
+Please reprocess and remit the underpaid amount in accordance with the applicable contract/fee schedule and any referenced reimbursement provisions.
+
+Enclosures (as applicable):
+1) Original claim submission (CMS-1500/UB-04) and itemized charges
+2) EOB/ERA showing payment issued and any adjustment codes
+3) Evidence of contracted rates / fee schedule excerpts (attach)
+4) Supporting medical documentation (as applicable)
+5) Proof of timely filing
+6) Log of previous correspondence/calls with reference numbers
+
+If additional information is required, please contact our office.
+
+Sincerely,
+${orgName || "[Organization Billing Team]"}
+`,
+    denial_reason_category: "Underpayment",
+    missing_info: []
+  };
+}
 
 // ===== Appeal Packet Builder (De‑Identified / Non‑PHI mode) =====
 // NOTE: Do NOT store patient identifiers (name, DOB, member ID). Use placeholders.
@@ -1151,8 +1163,9 @@ function maybeCompleteAI(caseObj, orgName) {
       draftText = null;
     }
   }
-  // Always generate denial summary and appeal considerations using the AI
-  const out = aiGenerate(orgName);
+  // Choose generator based on case_type
+  const isUnderpay = (caseObj.case_type || "").toLowerCase() === "underpayment";
+  const out = isUnderpay ? aiGenerateUnderpayment(orgName, caseObj.underpayment_meta || {}) : aiGenerate(orgName);
   caseObj.ai.denial_summary = out.denial_summary;
   caseObj.ai.appeal_considerations = out.appeal_considerations;
   caseObj.ai.denial_reason_category = out.denial_reason_category;
@@ -2857,45 +2870,156 @@ const limits = getLimitProfile(org.org_id);
       const today = new Date().toISOString().split("T")[0];
 
       const action = (() => {
-        if (st === "Pending") {
-          return `
-            <form method="POST" action="/billed/mark-paid" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:flex-end;">
-              <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
-              <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
-              <input type="date" name="paid_at" value="${today}" required style="width:160px;"/>
-              <input type="text" name="paid_amount" placeholder="Insurance Paid" style="width:130px;" required />
-              <input type="text" name="patient_responsibility" placeholder="Patient Resp" style="width:120px;" />
-              <select name="patient_collection_status" style="width:170px;">
-                <option value="none">Patient Not Paid</option>
-                <option value="full">Patient Paid in Full</option>
-                <option value="partial">Patient Partially Paid</option>
-              </select>
-              <input type="text" name="patient_paid_amount" placeholder="Patient Paid (if partial)" style="width:170px;" />
-              <label class="small muted" style="display:flex;align-items:center;gap:6px;">
-                <input type="checkbox" name="write_off_remaining" value="1" style="width:auto;margin:0;">
-                Write off remaining
-              </label>
-              <label class="small muted" style="display:flex;align-items:center;gap:6px;">
-                <input type="checkbox" name="is_out_of_network" value="1" style="width:auto;margin:0;">
-                Out-of-network
-              </label>
-              <button class="btn small" type="submit">Save</button>
-            </form>
-            <form method="POST" action="/billed/mark-denied" style="display:flex;gap:6px;flex-wrap:wrap;">
-              <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
-              <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
-              <input type="date" name="denied_at" value="${today}" required style="width:160px;"/>
-              <button class="btn danger small" type="submit">Mark Denied</button>
-            </form>
-          `;
-        }
-        // Paid or Denied → allow reset to Pending
-        return `
-          <form method="POST" action="/billed/reset" style="display:flex;gap:6px;flex-wrap:wrap;">
+        const st = (b.status || "Pending");
+        const today = new Date().toISOString().split("T")[0];
+
+        const paidFullForm = `
+          <form method="POST" action="/billed/resolve" style="display:inline-block;margin-right:6px;">
             <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
             <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
-            <button class="btn secondary small" type="submit">Reset to Pending</button>
-          </form>
+            <input type="hidden" name="action" value="paid_full"/>
+            <input type="date" name="date" value="${today}" required style="width:155px;margin-bottom:6px;"/>
+            <button class="btn small" type="submit">Paid in Full</button>
+          </form>`;
+
+        const deniedForm = `
+          <form method="POST" action="/billed/resolve" style="display:inline-block;">
+            <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+            <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
+            <input type="hidden" name="action" value="denied"/>
+            <input type="date" name="date" value="${today}" required style="width:155px;margin-bottom:6px;"/>
+            <button class="btn danger small" type="submit">Mark Denied</button>
+          </form>`;
+
+        const negotiateBtn = (st === "Underpaid")
+          ? `<form method="POST" action="/billed/negotiate" style="margin-top:6px;">
+               <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+               <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
+               <button class="btn secondary small" type="submit">Negotiate Underpayment</button>
+             </form>`
+          : "";
+
+        // Progressive insurance dropdown
+        const dd = `
+          <div style="margin-top:8px;">
+            <label class="small muted">Insurance Status</label>
+            <select name="insurance_mode" id="mode_${safeStr(b.billed_id)}" onchange="window.__tjhpModeChange('${safeStr(b.billed_id)}')" style="width:260px;">
+              <option value="">Select</option>
+              <option value="insurance_partial">Insurance Partially Paid</option>
+              <option value="insurance_underpaid">Insurance Underpaid</option>
+            </select>
+          </div>
+
+          <div id="fields_${safeStr(b.billed_id)}" style="display:none;margin-top:8px;border:1px solid #e5e7eb;border-radius:10px;padding:10px;">
+            <form method="POST" action="/billed/resolve" id="form_${safeStr(b.billed_id)}" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+              <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+              <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
+              <input type="hidden" name="action" id="action_${safeStr(b.billed_id)}" value=""/>
+
+              <div>
+                <label>Date</label>
+                <input type="date" name="date" value="${today}" required style="width:155px;"/>
+              </div>
+
+              <div>
+                <label>Insurance Paid</label>
+                <input type="text" name="insurance_paid" id="ip_${safeStr(b.billed_id)}" placeholder="0.00" style="width:140px;" oninput="window.__tjhpCalc('${safeStr(b.billed_id)}')"/>
+              </div>
+
+              <div>
+                <label>Allowed Amount</label>
+                <input type="text" name="allowed_amount" id="al_${safeStr(b.billed_id)}" placeholder="0.00" style="width:140px;" oninput="window.__tjhpCalc('${safeStr(b.billed_id)}')"/>
+              </div>
+
+              <div id="prwrap_${safeStr(b.billed_id)}" style="display:none;">
+                <label>Patient Resp</label>
+                <input type="text" name="patient_responsibility" id="pr_${safeStr(b.billed_id)}" placeholder="auto" style="width:140px;" oninput="window.__tjhpCalc('${safeStr(b.billed_id)}')"/>
+              </div>
+
+              <div id="pstatuswrap_${safeStr(b.billed_id)}" style="display:none;">
+                <label>Patient Status</label>
+                <select name="patient_status" id="ps_${safeStr(b.billed_id)}" style="width:170px;" onchange="window.__tjhpPatientChange('${safeStr(b.billed_id)}')">
+                  <option value="not_paid">Patient Not Paid</option>
+                  <option value="full">Patient Paid in Full</option>
+                  <option value="partial">Patient Paid Partial</option>
+                </select>
+              </div>
+
+              <div id="ppaidwrap_${safeStr(b.billed_id)}" style="display:none;">
+                <label>Patient Paid</label>
+                <input type="text" name="patient_paid" id="pp_${safeStr(b.billed_id)}" placeholder="0.00" style="width:140px;"/>
+              </div>
+
+              <button class="btn small" type="submit">Save</button>
+            </form>
+
+            <div class="small muted" id="calc_${safeStr(b.billed_id)}" style="margin-top:8px;"></div>
+          </div>
+
+          <script>
+            window.__tjhpModeChange = window.__tjhpModeChange || function(id){
+              const mode = document.getElementById("mode_"+id).value;
+              const box = document.getElementById("fields_"+id);
+              const action = document.getElementById("action_"+id);
+              const prw = document.getElementById("prwrap_"+id);
+              const psw = document.getElementById("pstatuswrap_"+id);
+              const ppw = document.getElementById("ppaidwrap_"+id);
+
+              if (!mode){ box.style.display="none"; return; }
+              box.style.display="block";
+              action.value = mode;
+
+              // For both partial and underpaid show Patient Resp (auto, but editable)
+              prw.style.display = "block";
+
+              // Patient status shown only for insurance_partial
+              if (mode === "insurance_partial"){
+                psw.style.display = "block";
+              } else {
+                psw.style.display = "none";
+                ppw.style.display = "none";
+              }
+              window.__tjhpCalc(id);
+            };
+
+            window.__tjhpPatientChange = window.__tjhpPatientChange || function(id){
+              const v = document.getElementById("ps_"+id).value;
+              const ppw = document.getElementById("ppaidwrap_"+id);
+              ppw.style.display = (v === "partial") ? "block" : "none";
+            };
+
+            window.__tjhpCalc = window.__tjhpCalc || function(id){
+              const ip = document.getElementById("ip_"+id);
+              const al = document.getElementById("al_"+id);
+              const pr = document.getElementById("pr_"+id);
+              const out = document.getElementById("calc_"+id);
+              if (!ip || !al || !pr || !out) return;
+
+              const ipn = Number(String(ip.value||"").replace(/[^0-9.\-]/g,"")) || 0;
+              const aln = Number(String(al.value||"").replace(/[^0-9.\-]/g,"")) || 0;
+              const computed = Math.max(0, aln - ipn);
+
+              // If patient resp is empty, auto-fill with computed
+              if (!String(pr.value||"").trim()){
+                pr.value = computed ? computed.toFixed(2) : "";
+              }
+
+              const prn = Number(String(pr.value||"").replace(/[^0-9.\-]/g,"")) || computed;
+              const expectedInsurance = Math.max(0, aln - prn);
+              const underpaid = Math.max(0, expectedInsurance - ipn);
+
+              out.textContent = "Computed → Expected Insurance: $" + expectedInsurance.toFixed(2) + " | Underpaid: $" + underpaid.toFixed(2);
+            };
+          </script>
+        `;
+
+        return `
+          <div>
+            ${paidFullForm}
+            ${deniedForm}
+            ${dd}
+            ${negotiateBtn}
+          </div>
         `;
       })();
 
@@ -2903,80 +3027,46 @@ const limits = getLimitProfile(org.org_id);
 const statusCell = (() => {
 
   const st = (b.status || "Pending");
-  const billedAmt = Number(b.amount_billed || 0);
-  const insurancePaid = Number((b.insurance_paid ?? b.paid_amount) || 0);
-  const patientResp = Number(b.patient_responsibility || 0);
-  const patientCollected = Number(b.patient_collected || 0);
-  const writeOff = Number(b.write_off_amount || 0);
-  const remainingPatient = Math.max(0, patientResp - patientCollected - writeOff);
+  const ip = Number(b.insurance_paid || b.paid_amount || 0);
+  const allowed = Number(b.allowed_amount || 0);
+  const pr = Number(b.patient_responsibility || 0);
+  const pc = Number(b.patient_collected || 0);
+  const expectedInsurance = (b.expected_insurance != null) ? Number(b.expected_insurance) : Math.max(0, allowed - pr);
+  const underpaid = Math.max(0, expectedInsurance - ip);
+  const remainingPatient = Math.max(0, pr - pc);
 
   if (st === "Denied" && b.denial_case_id) {
     return `
       <span class="badge err">Denied</span>
-      <div class="small muted">
-        ${b.denied_at ? new Date(b.denied_at).toLocaleDateString() : ""}
-      </div>
-      <div class="small">
-        Appeal: <a href="/status?case_id=${encodeURIComponent(b.denial_case_id)}">
-          ${safeStr(b.denial_case_id)}
-        </a>
-      </div>
+      <div class="small muted">${b.denied_at ? new Date(b.denied_at).toLocaleDateString() : ""}</div>
+      <div class="small">Appeal: <a href="/status?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></div>
     `;
   }
 
   if (st === "Underpaid") {
     return `
       <span class="badge err">Underpaid</span>
-      <div class="small">Insurance: $${insurancePaid.toFixed(2)}</div>
-      <div class="small">Patient Resp: $${patientResp.toFixed(2)}</div>
-      <div class="small muted">${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}</div>
-    `;
-  }
-
-  if (st === "OON Balance") {
-    const remainingTotal = Math.max(0, billedAmt - insurancePaid - patientCollected - writeOff);
-    return `
-      <span class="badge warn">OON Balance</span>
-      <div class="small">Insurance: $${insurancePaid.toFixed(2)}</div>
-      <div class="small">Patient Paid: $${patientCollected.toFixed(2)}</div>
-      <div class="small">Remaining: $${remainingTotal.toFixed(2)}</div>
-      <div class="small muted">${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}</div>
-    `;
-  }
-
-  if (st === "Written Off") {
-    return `
-      <span class="badge info">Written Off</span>
-      <div class="small">Insurance: $${insurancePaid.toFixed(2)}</div>
-      <div class="small">Patient Resp: $${patientResp.toFixed(2)}</div>
-      <div class="small">Write-off: $${writeOff.toFixed(2)}</div>
-      <div class="small muted">${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}</div>
+      <div class="small">Paid: $${ip.toFixed(2)}</div>
+      <div class="small">Expected: $${expectedInsurance.toFixed(2)}</div>
+      <div class="small">Underpaid: $${underpaid.toFixed(2)}</div>
     `;
   }
 
   if (st === "Patient Balance") {
     return `
-      <span class="badge warn">Patient Balance</span>
-      <div class="small">Insurance: $${insurancePaid.toFixed(2)}</div>
-      <div class="small">Patient Owes: $${patientResp.toFixed(2)}</div>
-      <div class="small">Collected: $${patientCollected.toFixed(2)}</div>
+      <span class="badge warn">Patient Owes</span>
+      <div class="small">Insurance: $${ip.toFixed(2)}</div>
+      <div class="small">Patient Resp: $${pr.toFixed(2)}</div>
+      <div class="small">Collected: $${pc.toFixed(2)}</div>
       <div class="small">Remaining: $${remainingPatient.toFixed(2)}</div>
-      <div class="small muted">${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}</div>
     `;
   }
 
   if (st === "Paid") {
     return `
       <span class="badge ok">Paid</span>
-      <div class="small">Insurance: $${insurancePaid.toFixed(2)}</div>
-      ${patientResp > 0 ? `<div class="small">Patient: $${patientCollected.toFixed(2)} / $${patientResp.toFixed(2)}</div>` : ``}
-      ${writeOff > 0 ? `<div class="small">Write-off: $${writeOff.toFixed(2)}</div>` : ``}
-      <div class="small muted">${b.paid_at ? new Date(b.paid_at).toLocaleDateString() : ""}</div>
-      ${
-        b.denial_case_id
-          ? `<div class="small">Appeal: <a href="/draft?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></div>`
-          : ""
-      }
+      <div class="small">Insurance: $${ip.toFixed(2)}</div>
+      ${pr > 0 ? `<div class="small">Patient: $${pc.toFixed(2)} / $${pr.toFixed(2)}</div>` : ``}
     `;
   }
 
@@ -3199,7 +3289,255 @@ return `<tr>
     return send(res, 200, html);
   }
 
-  if (method === "POST" && pathname === "/billed/mark-paid") {
+  
+  // --------- BILLED CLAIMS: SIMPLE RESOLUTION (progressive UI) ----------
+  if (method === "POST" && pathname === "/billed/resolve") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const billed_id = (params.get("billed_id") || "").trim();
+    const submission_id = (params.get("submission_id") || "").trim();
+    const action = (params.get("action") || "").trim(); // paid_full | denied | insurance_partial | insurance_underpaid
+    const date = (params.get("date") || "").trim();
+
+    const billedAll = readJSON(FILES.billed, []);
+    const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+    if (!b) return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
+
+    const today = new Date().toISOString().split("T")[0];
+    const when = date || today;
+
+    // Always store these financial fields (kept simple)
+    b.insurance_paid = b.insurance_paid || 0;
+    b.allowed_amount = b.allowed_amount || null;
+    b.patient_responsibility = b.patient_responsibility || 0;
+    b.patient_collected = b.patient_collected || 0;
+    b.expected_insurance = b.expected_insurance || null;
+    b.underpaid_amount = b.underpaid_amount || null;
+
+    if (action === "paid_full") {
+      // Minimal-click: treat billed as fully reimbursed by insurance (can be edited later by selecting partial/underpaid)
+      const billedAmt = Number(b.amount_billed || 0);
+      b.status = "Paid";
+      b.paid_at = when;
+      b.paid_amount = billedAmt;
+      b.insurance_paid = billedAmt;
+      b.allowed_amount = billedAmt;
+      b.patient_responsibility = 0;
+      b.patient_collected = 0;
+      b.expected_insurance = billedAmt;
+      b.underpaid_amount = 0;
+
+      // Create payment row for analytics (manual-billed)
+      const paymentsData = readJSON(FILES.payments, []);
+      const existsPay = paymentsData.find(p => p.org_id === org.org_id && p.source_file === "manual-billed" && String(p.claim_number||"")===String(b.claim_number||"") && String(p.date_paid||"")===String(when||""));
+      if (!existsPay) {
+        paymentsData.push({
+          payment_id: uuid(),
+          org_id: org.org_id,
+          claim_number: b.claim_number || "",
+          payer: b.payer || "",
+          amount_paid: Number(b.insurance_paid || 0),
+          date_paid: when,
+          source_file: "manual-billed",
+          created_at: nowISO(),
+          denied_approved: false
+        });
+        writeJSON(FILES.payments, paymentsData);
+      }
+
+      writeJSON(FILES.billed, billedAll);
+      auditLog({ actor:"user", action:"billed_paid_full", org_id: org.org_id, billed_id, paid_at: when });
+      return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
+    }
+
+    if (action === "denied") {
+      // Reuse existing denied behavior by redirecting to /billed/mark-denied (keeps full denial workflow)
+      // We implement inline here to preserve the clean UI buttons.
+      const denied_at = when;
+
+      let cid = b.denial_case_id || "";
+      const cases = readJSON(FILES.cases, []);
+      if (!cid) {
+        cid = uuid();
+        cases.push({
+          case_id: cid,
+          org_id: org.org_id,
+          created_by_user_id: user.user_id,
+          created_at: denied_at,
+          status: "UPLOAD_RECEIVED",
+          notes: `Auto-created from billed claims. Claim #: ${b.claim_number} | Payer: ${b.payer} | DOS: ${b.dos}`,
+          case_type: "denial",
+          files: [],
+          template_id: "",
+          paid: false,
+          paid_at: null,
+          paid_amount: null,
+          ai_started_at: null,
+          appeal_packet: appealPacketDefaults(org.org_name),
+          appeal_attachments: [],
+          ai: {
+            denial_summary: null,
+            appeal_considerations: null,
+            draft_text: null,
+            denial_reason_category: null,
+            missing_info: [],
+            time_to_draft_seconds: 0
+          }
+        });
+        writeJSON(FILES.cases, cases);
+
+        // Start AI if capacity
+        const cases2 = readJSON(FILES.cases, []);
+        const cObj = cases2.find(x => x.case_id === cid && x.org_id === org.org_id);
+        if (cObj) {
+          const okAI = canStartAI(org.org_id);
+          if (okAI.ok) {
+            cObj.status = "ANALYZING";
+            cObj.ai_started_at = nowISO();
+            writeJSON(FILES.cases, cases2);
+            recordAIJob(org.org_id);
+          }
+        }
+      } else {
+        writeJSON(FILES.cases, cases);
+      }
+
+      b.status = "Denied";
+      b.denied_at = denied_at;
+      b.denial_case_id = cid;
+      writeJSON(FILES.billed, billedAll);
+
+      auditLog({ actor:"user", action:"billed_mark_denied", org_id: org.org_id, billed_id, case_id: cid, denied_at });
+      return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : `/status?case_id=${encodeURIComponent(cid)}`);
+    }
+
+    // Partial/Underpaid require amounts
+    const insurancePaid = num(params.get("insurance_paid"));
+    const allowedAmt = num(params.get("allowed_amount"));
+    const patientResp = num(params.get("patient_responsibility")); // editable override
+    const patientStatus = (params.get("patient_status") || "not_paid").trim(); // full | partial | not_paid
+    const patientPaid = num(params.get("patient_paid"));
+
+    b.paid_at = when;
+    b.paid_amount = insurancePaid;
+    b.insurance_paid = insurancePaid;
+    b.allowed_amount = allowedAmt;
+
+    // patient responsibility defaults to allowed - insurance, but user can override
+    const computedPR = Math.max(0, allowedAmt - insurancePaid);
+    b.patient_responsibility = patientResp > 0 ? patientResp : computedPR;
+
+    // patient collected based on patient status
+    if (patientStatus === "full") b.patient_collected = b.patient_responsibility;
+    else if (patientStatus === "partial") b.patient_collected = Math.min(b.patient_responsibility, patientPaid);
+    else b.patient_collected = 0;
+
+    // expected insurance is allowed - patient responsibility (editable later in negotiate packet)
+    b.expected_insurance = computeExpectedInsurance(b.allowed_amount, b.patient_responsibility);
+    b.underpaid_amount = computeUnderpaidAmount(b.expected_insurance, b.insurance_paid);
+
+    if (action === "insurance_underpaid") {
+      b.status = "Underpaid";
+    } else {
+      // insurance_partial
+      // if patient still owes, keep Patient Balance; otherwise Paid
+      const remainingPatient = Math.max(0, b.patient_responsibility - b.patient_collected);
+      b.status = (remainingPatient > 0) ? "Patient Balance" : "Paid";
+      // If it looks like underpaid, prioritize Underpaid (A)
+      if (b.underpaid_amount > 0.01) b.status = "Underpaid";
+    }
+
+    writeJSON(FILES.billed, billedAll);
+    auditLog({ actor:"user", action:"billed_resolve", org_id: org.org_id, billed_id, action_type: action });
+
+    return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
+  }
+
+  // --------- BILLED CLAIMS: NEGOTIATE UNDERPAYMENT (auto-create case) ----------
+  if (method === "POST" && pathname === "/billed/negotiate") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const billed_id = (params.get("billed_id") || "").trim();
+    const submission_id = (params.get("submission_id") || "").trim();
+
+    const billedAll = readJSON(FILES.billed, []);
+    const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+    if (!b) return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
+
+    // Create underpayment case and link it
+    const cases = readJSON(FILES.cases, []);
+    const cid = uuid();
+
+    const expected = (b.expected_insurance != null) ? Number(b.expected_insurance) : computeExpectedInsurance(b.allowed_amount || 0, b.patient_responsibility || 0);
+    const actual = Number(b.insurance_paid || 0);
+    const underpaid = Math.max(0, expected - actual);
+
+    const meta = {
+      claim_number: b.claim_number || "",
+      dos: b.dos || "",
+      payer: b.payer || "",
+      billed_amount: Number(b.amount_billed || 0),
+      allowed_amount: Number(b.allowed_amount || 0),
+      patient_responsibility: Number(b.patient_responsibility || 0),
+      expected_insurance: expected,
+      actual_paid: actual,
+      underpaid_amount: underpaid
+    };
+
+    cases.push({
+      case_id: cid,
+      org_id: org.org_id,
+      created_by_user_id: user.user_id,
+      created_at: nowISO(),
+      status: "UPLOAD_RECEIVED",
+      notes: `Auto-created underpayment negotiation. Claim #: ${b.claim_number} | Payer: ${b.payer} | DOS: ${b.dos}`,
+      case_type: "underpayment",
+      underpayment_meta: meta,
+      files: [],
+      template_id: "",
+      paid: false,
+      paid_at: null,
+      paid_amount: null,
+      ai_started_at: null,
+      appeal_packet: appealPacketDefaults(org.org_name),
+      appeal_attachments: [],
+      ai: {
+        denial_summary: null,
+        appeal_considerations: null,
+        draft_text: null,
+        denial_reason_category: null,
+        missing_info: [],
+        time_to_draft_seconds: 0
+      }
+    });
+
+    writeJSON(FILES.cases, cases);
+
+    // Start AI if capacity
+    const cases2 = readJSON(FILES.cases, []);
+    const cObj = cases2.find(x => x.case_id === cid && x.org_id === org.org_id);
+    if (cObj) {
+      const okAI = canStartAI(org.org_id);
+      if (okAI.ok) {
+        cObj.status = "ANALYZING";
+        cObj.ai_started_at = nowISO();
+        writeJSON(FILES.cases, cases2);
+        recordAIJob(org.org_id);
+      }
+    }
+
+    // Link from billed claim
+    b.negotiation_case_id = cid;
+    writeJSON(FILES.billed, billedAll);
+
+    auditLog({ actor:"user", action:"billed_negotiate_create_case", org_id: org.org_id, billed_id, case_id: cid });
+
+    return redirect(res, `/status?case_id=${encodeURIComponent(cid)}`);
+  }
+
+if (method === "POST" && pathname === "/billed/mark-paid") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const billed_id = params.get("billed_id") || "";
@@ -3211,43 +3549,10 @@ return `<tr>
     const b = billed.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
     if (!b) return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
 
-    
-    // ===== NEW: Insurance + Patient responsibility + collection + write-offs + OON =====
-    const insurancePaid = paid_amount_in ? Number(paid_amount_in) : 0;
-
-    const patientRespIn = (params.get("patient_responsibility") || "").trim();
-    const patientResp = patientRespIn ? Number(patientRespIn) : (Number(b.patient_responsibility || 0) || 0);
-
-    const patientCollectionStatus = (params.get("patient_collection_status") || "none").trim();
-    const patientPaidIn = (params.get("patient_paid_amount") || "").trim();
-    let patientCollected = Number(b.patient_collected || 0) || 0;
-
-    if (patientCollectionStatus === "full") {
-      patientCollected = patientResp;
-    } else if (patientCollectionStatus === "partial") {
-      patientCollected = patientPaidIn ? Number(patientPaidIn) : patientCollected;
-    } else {
-      patientCollected = 0;
-    }
-
-    const writeOffRemaining = params.get("write_off_remaining") === "1";
-    const isOutOfNetwork = params.get("is_out_of_network") === "1";
-
+    b.status = "Paid";
     b.paid_at = paid_at;
-    b.insurance_paid = insurancePaid;
-    b.paid_amount = insurancePaid; // compatibility
-    b.patient_responsibility = isFinite(patientResp) ? patientResp : 0;
-    b.patient_collected = isFinite(patientCollected) ? patientCollected : 0;
-    b.is_out_of_network = !!isOutOfNetwork;
+    b.paid_amount = paid_amount_in ? Number(paid_amount_in) : (b.amount_billed || 0);
 
-    if (writeOffRemaining) {
-      const remaining = Math.max(0, Number(b.patient_responsibility || 0) - Number(b.patient_collected || 0));
-      b.write_off_amount = remaining;
-    } else {
-      b.write_off_amount = Number(b.write_off_amount || 0) || 0;
-    }
-
-    recalcBilledClaim(b);
     writeJSON(FILES.billed, billed);
 
     // Create payment row for analytics (avoid duplicate manual-billed for same claim+date)
@@ -3259,7 +3564,7 @@ return `<tr>
         org_id: org.org_id,
         claim_number: b.claim_number || "",
         payer: b.payer || "",
-        amount_paid: Number(b.insurance_paid || b.paid_amount || 0),
+        amount_paid: b.paid_amount || 0,
         date_paid: paid_at,
         source_file: "manual-billed",
         created_at: nowISO(),
@@ -3296,6 +3601,7 @@ return `<tr>
         created_at: denied_at,
         status: "UPLOAD_RECEIVED",
         notes: `Auto-created from billed claims. Claim #: ${b.claim_number} | Payer: ${b.payer} | DOS: ${b.dos}`,
+        case_type: "denial",
         files: [],
         template_id: "",
         paid: false,
@@ -3370,15 +3676,6 @@ return `<tr>
     b.paid_amount = null;
     b.denied_at = null;
     b.denial_case_id = null;
-    b.insurance_paid = 0;
-    b.allowed_amount = null;
-    b.contractual_adjustment = null;
-    b.patient_responsibility = 0;
-    b.patient_collected = 0;
-    b.write_off_amount = 0;
-    b.remaining_patient_balance = 0;
-    b.is_out_of_network = false;
-
     writeJSON(FILES.billed, billed);
 
     auditLog({ actor:"user", action:"billed_reset_pending", org_id: org.org_id, billed_id });
@@ -3450,6 +3747,7 @@ return `<tr>
             created_at: denied_at,
             status: "UPLOAD_RECEIVED",
             notes: `Auto-created from billed claims (bulk). Claim #: ${b.claim_number} | Payer: ${b.payer} | DOS: ${b.dos}`,
+            case_type: "denial",
             files: [],
             template_id: "",
             paid: false,
@@ -3496,14 +3794,6 @@ return `<tr>
         b.status = "Pending";
         b.paid_at = null;
         b.paid_amount = null;
-        b.insurance_paid = 0;
-        b.allowed_amount = null;
-        b.contractual_adjustment = null;
-        b.patient_responsibility = 0;
-        b.patient_collected = 0;
-        b.write_off_amount = 0;
-        b.remaining_patient_balance = 0;
-        b.is_out_of_network = false;
         b.denied_at = null;
         b.denial_case_id = null;
         changed++;
@@ -3892,7 +4182,7 @@ const html = page("Denial & Payment Upload", `
     if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
     const html = page("Appeal Packet Builder", `
-      <h2>Appeal Packet Builder (De‑Identified)</h2>
+      <h2>${safeStr(((c.case_type||"").toLowerCase()==="underpayment") ? "Underpayment Negotiation Packet (De‑Identified)" : "Appeal Packet Builder (De‑Identified)")}</h2>
       <p class="muted">Build a complete appeal packet without storing patient identifiers. Do not upload or enter patient name, DOB, or member ID.</p>
       <div class="badge warn">DE‑IDENTIFIED MODE · No PHI · Human review required</div>
       <div class="hr"></div>
@@ -4527,9 +4817,6 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         const amt = pickField(r, ["paid", "amount", "payment", "paid amount", "allowed"]);
         const datePaid = pickField(r, ["date", "paid date", "payment date", "remit date"]);
 
-        const allowedAmt = pickField(r, ["allowed", "allow", "allowed amount", "allowed_amt"]);
-        const patientResp = pickField(r, ["patient responsibility", "patient resp", "patient_resp", "pr", "copay", "coinsurance", "deductible"]);
-
         paymentsData.push({
           payment_id: uuid(),
           org_id: org.org_id,
@@ -4539,9 +4826,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
           date_paid: datePaid || "",
           source_file: path.basename(stored),
           created_at: nowISO(),
-          denied_approved: false,
-          allowed_amount: allowedAmt || "",
-          patient_responsibility: patientResp || ""
+          denied_approved: false
         });
         addedPayments.push(paymentsData[paymentsData.length-1]);
       }
@@ -4556,31 +4841,10 @@ if (method === "POST" && pathname === "/case/mark-paid") {
           if (!claimNo) continue;
           const b = billedAll.find(x => x.org_id === org.org_id && String(x.claim_number || '').trim() === claimNo);
           if (!b) continue;
-          {
+          if ((b.status || 'Pending') !== 'Paid') {
+            /* status will be recalculated by simple rules below */
+            b.paid_amount = ap.amount_paid || b.paid_amount || null;
             b.paid_at = ap.date_paid || b.paid_at || nowISO();
-            b.insurance_paid = Number(ap.amount_paid || 0) || 0;
-            b.paid_amount = b.insurance_paid;
-
-            const pr = String(ap.patient_responsibility || "").trim();
-            if (pr) {
-              const prNum = Number(pr);
-              if (isFinite(prNum)) b.patient_responsibility = prNum;
-            }
-
-            const al = String(ap.allowed_amount || "").trim();
-            if (al) {
-              const alNum = Number(al);
-              if (isFinite(alNum)) {
-                b.allowed_amount = alNum;
-                if (!b.is_out_of_network) b.contractual_adjustment = Number(b.amount_billed || 0) - alNum;
-              }
-            }
-
-            b.patient_collected = Number(b.patient_collected || 0) || 0;
-            b.write_off_amount = Number(b.write_off_amount || 0) || 0;
-            b.is_out_of_network = !!b.is_out_of_network;
-
-            recalcBilledClaim(b);
             changed = true;
           }
         }
