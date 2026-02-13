@@ -67,8 +67,8 @@ const FILES = {
   flags: path.join(DATA_DIR, "flags.json"),
   usage: path.join(DATA_DIR, "usage.json"),
   audit: path.join(DATA_DIR, "audit.json"),
-  // New storage for user-uploaded letter templates
-  templates: path.join(DATA_DIR, "templates.json"),
+  // New storage for user-uploaded letter templates  templates: path.join(DATA_DIR, "templates.json"),
+  billed: path.join(DATA_DIR, "billed.json"),
 };
 
 // Directory for storing uploaded template files
@@ -194,6 +194,7 @@ ensureFile(FILES.audit, []);
 // Initialize templates storage
 ensureDir(TEMPLATES_DIR);
 ensureFile(FILES.templates, []);
+ensureFile(FILES.billed, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -293,12 +294,67 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   .card { box-shadow:none !important; border:none !important; }
 }
 `;
-
 /**
  * FIX: all HTML + scripts must live inside returned strings.
  * Password toggle preserved.
  */
-function page(title, content, navHtml="") {
+function page(title, content, navHtml="", opts={}) {
+  const showChat = !!(opts && opts.showChat);
+  const chatHtml = showChat ? `
+<div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
+  <button class="btn" type="button" onclick="window.__tjhpToggleChat()">AI Assistant</button>
+  <div id="aiChatBox" style="display:none;width:320px;height:420px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;margin-top:8px;box-shadow:0 12px 30px rgba(17,24,39,.10);">
+    <div class="muted small" style="margin-bottom:6px;">Ask questions about your denials, payments, trends, and what pages do.</div>
+    <div id="aiChatMsgs" style="height:300px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px;"></div>
+    <input id="aiChatInput" placeholder="Ask about your data..." style="margin-top:8px;" />
+    <div class="btnRow" style="margin-top:8px;">
+      <button class="btn secondary" type="button" onclick="window.__tjhpSendChat()">Send</button>
+      <button class="btn secondary" type="button" onclick="window.__tjhpToggleChat()">Close</button>
+    </div>
+  </div>
+</div>` : "";
+
+  const chatScript = showChat ? `
+<script>
+window.__tjhpToggleChat = function(){
+  const box = document.getElementById("aiChatBox");
+  if (!box) return;
+  box.style.display = (box.style.display === "none" || !box.style.display) ? "block" : "none";
+};
+
+window.__tjhpSendChat = async function(){
+  const input = document.getElementById("aiChatInput");
+  const msgs = document.getElementById("aiChatMsgs");
+  if (!input || !msgs) return;
+  const text = (input.value || "").trim();
+  if (!text) return;
+
+  const esc = (s)=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+  const addMsg = (who, t) => {
+    const div = document.createElement("div");
+    div.style.margin = "6px 0";
+    div.innerHTML = "<strong>" + who + ":</strong> " + esc(t);
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+  };
+
+  addMsg("You", text);
+  input.value = "";
+
+  try{
+    const r = await fetch("/ai/chat", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ message: text })
+    });
+    const data = await r.json();
+    addMsg("AI", (data && data.answer) ? data.answer : "No response.");
+  }catch(e){
+    addMsg("AI", "Error contacting assistant. Try again.");
+  }
+};
+</script>` : "";
+
   return `<!doctype html>
 <html><head>
 <meta charset="utf-8"/>
@@ -323,18 +379,7 @@ function page(title, content, navHtml="") {
     </div>
   </div>
 
-<div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
-  <button class="btn" type="button" onclick="window.__tjhpToggleChat()">AI Assistant</button>
-  <div id="aiChatBox" style="display:none;width:320px;height:420px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;margin-top:8px;box-shadow:0 12px 30px rgba(17,24,39,.10);">
-    <div class="muted small" style="margin-bottom:6px;">Ask questions about your denials, payments, trends, and what pages do.</div>
-    <div id="aiChatMsgs" style="height:300px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px;"></div>
-    <input id="aiChatInput" placeholder="Ask about your data..." style="margin-top:8px;" />
-    <div class="btnRow" style="margin-top:8px;">
-      <button class="btn secondary" type="button" onclick="window.__tjhpSendChat()">Send</button>
-      <button class="btn secondary" type="button" onclick="window.__tjhpToggleChat()">Close</button>
-    </div>
-  </div>
-</div>
+${chatHtml}
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
@@ -360,14 +405,17 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   });
 });
 </script>
+
+${chatScript}
 </body></html>`;
 }
+
 
 function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Dashboard &amp; Analytics</a><a href="/upload">Upload</a><a href="/report">Report</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
+  return `<a href="/dashboard">Dashboard &amp; Analytics</a><a href="/billed">Billed Claims Upload</a><a href="/upload">Denial &amp; Payment Upload</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -907,7 +955,17 @@ function computeAnalytics(org_id) {
   const avgRecovered = deniedPayments.length > 0 ? (totalRecoveredFromDenials / deniedPayments.length) : 0;
   const projectedLostRevenue = unpaidCases.length * avgRecovered;
 
-  return { totalCases, drafts, avgDraftSeconds, denialReasons, payByPayer, totalRecoveredFromDenials, recoveryRate, aging, projectedLostRevenue };
+
+  const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  const billed_total = billed.length;
+  const billed_paid = billed.filter(b => (b.status || "Pending") === "Paid").length;
+  const billed_denied = billed.filter(b => (b.status || "Pending") === "Denied").length;
+  const billed_pending = billed.filter(b => (b.status || "Pending") === "Pending").length;
+  const billed_denial_rate = billed_total > 0 ? ((billed_denied / billed_total) * 100).toFixed(1) : "0.0";
+  const billed_payment_conversion = billed_total > 0 ? ((billed_paid / billed_total) * 100).toFixed(1) : "0.0";
+
+
+  return { totalCases, drafts, avgDraftSeconds, denialReasons, payByPayer, totalRecoveredFromDenials, recoveryRate, aging, projectedLostRevenue, billed_total, billed_paid, billed_denied, billed_pending, billed_denial_rate, billed_payment_conversion };
 }
 
 // ===== Risk scoring + strategy suggestions + weekly summary helpers =====
@@ -990,27 +1048,6 @@ function computeWeeklySummary(org_id) {
   const top3 = Object.entries(topPayers).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([payer,total])=>({ payer, total }));
 
   return { newCasesCount: newCases.length, paymentsCount: paidThisWeek.length, recoveredDollarsThisWeek, deniedWinsCount: deniedRecoveredThisWeek.length, top3 };
-}
-
-
-function projectNextMonthDenials(org_id) {
-  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
-  if (!cases.length) return null;
-
-  const byMonth = {};
-  cases.forEach(c => {
-    const d = new Date(c.created_at);
-    if (Number.isNaN(d.getTime())) return;
-    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
-    byMonth[key] = (byMonth[key] || 0) + 1;
-  });
-
-  const months = Object.keys(byMonth).sort();
-  if (months.length < 2) return null;
-
-  const last3 = months.slice(-3);
-  const avg = last3.reduce((s,k)=>s + byMonth[k], 0) / last3.length;
-  return Math.round(avg);
 }
 
 
@@ -1996,7 +2033,7 @@ const server = http.createServer(async (req, res) => {
       <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid — and surface patterns that are easy to miss when data lives in different places.</p>
       <p class="muted center">You’ll be guided to the next step automatically.</p>
       <div class="center"><span class="badge warn">Initializing</span></div>
-      <script>setTimeout(()=>{window.location.href="/upload";}, ${LOCK_SCREEN_MS});
+      <script>setTimeout(()=>{window.location.href="/dashboard";}, ${LOCK_SCREEN_MS});
         // Countdown timers for analyzing cases
         document.querySelectorAll(".countdown").forEach(el => {
           let s = parseInt(el.getAttribute("data-seconds") || "0", 10);
@@ -2014,7 +2051,7 @@ const server = http.createServer(async (req, res) => {
         });
 
       </script>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -2092,7 +2129,7 @@ if (method === "GET" && pathname === "/executive") {
       <a class="btn secondary" href="/analytics">Analytics</a>
       <a class="btn secondary" href="/dashboard">Back</a>
     </div>
-  `, navUser());
+  `, navUser(), {showChat:true});
   return send(res, 200, html);
 }
 
@@ -2138,7 +2175,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <a class="btn" href="/executive">Executive Dashboard</a>
       <a class="btn secondary" href="/dashboard">Back</a>
     </div>
-  `, navUser());
+  `, navUser(), {showChat:true});
   return send(res, 200, html);
 }
   // dashboard with empty-state previews and tooltips
@@ -2151,6 +2188,22 @@ if (method === "GET" && pathname === "/weekly-summary") {
     // counts for empty-state charts
     const caseCount = countOrgCases(org.org_id);
     const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
+
+    // Payment upload queue grouped by source_file
+    const allPay = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+    const paymentFilesMap = {};
+    allPay.forEach(p => {
+      const sf = (p.source_file || "").trim();
+      if (!sf) return;
+      if (!paymentFilesMap[sf]) paymentFilesMap[sf] = { source_file: sf, count: 0, latest: p.created_at || p.date_paid || nowISO() };
+      paymentFilesMap[sf].count += 1;
+      const dt = new Date(p.created_at || p.date_paid || Date.now()).getTime();
+      const cur = new Date(paymentFilesMap[sf].latest || 0).getTime();
+      if (dt > cur) paymentFilesMap[sf].latest = (p.created_at || p.date_paid || nowISO());
+    });
+    const paymentQueue = Object.values(paymentFilesMap)
+      .sort((a,b) => new Date(b.latest).getTime() - new Date(a.latest).getTime())
+      .slice(0, 8);
 
     // Build "My Cases" listing
     const allCases = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id && !c.paid);
@@ -2189,12 +2242,17 @@ if (method === "GET" && pathname === "/weekly-summary") {
       caseTable = `<table><thead><tr><th>Case ID</th><th>Status</th><th>Created</th><th>Payment</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
 
-    const html = page("Dashboard", `
+    const html = page("Dashboard & Analytics", `
       <h2>Dashboard</h2>
       <p class="muted">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
       ${planBadge}
       <div class="hr"></div>
 
+      <h3>Analytics & Trends</h3>
+      <div class="chart-placeholder">Denial trends chart will appear here when data is available.</div>
+      <div class="chart-placeholder">Payment trends chart will appear here when data is available.</div>
+
+      <div class="hr"></div>
       <h3>Denial Cases</h3>
       ${caseTable}
 
@@ -2233,13 +2291,6 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </div>
 
       <div class="hr"></div>
-      <h3>Activity</h3>
-      <div class="chart-placeholder">${caseCount === 0 ? "No cases uploaded yet." : "Case activity chart will appear here."}</div>
-      <div class="chart-placeholder">${paymentCount === 0 ? "No payments uploaded yet." : "Payment activity chart will appear here."}</div>
-      ${caseCount === 0 && paymentCount === 0 ? `
-      <section><h3>Recommended Next Step</h3><p>Get started by uploading your first denial document or payment data to unlock analytics.</p></section>
-      ` : ""}
-      <div class="hr"></div>
       <h3>Usage Limits</h3>
       ${
         limits.mode==="pilot" ? `
@@ -2264,11 +2315,304 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <a class="btn secondary" href="/payments/list">Payment Details</a>
         
       </div>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
-  // --------- CASE UPLOAD ----------
+  
+  // --------- BILLED CLAIMS UPLOAD (EMR/EHR EXPORT INTAKE) ----------
+  // Stores billed claims. Payments uploaded later will auto-match by claim number and mark these as Paid.
+  if (method === "GET" && pathname === "/billed") {
+    // Filters
+    const q = (parsed.query.q || "").trim().toLowerCase();
+    const statusF = (parsed.query.status || "").trim();
+    const payerF = (parsed.query.payer || "").trim();
+    const start = (parsed.query.start || "").trim();
+    const end = (parsed.query.end || "").trim();
+
+    const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+
+    const startDt = start ? new Date(start + "T00:00:00.000Z") : null;
+    const endDt = end ? new Date(end + "T23:59:59.999Z") : null;
+
+    let billed = billedAll.filter(b => {
+      const created = b.created_at ? new Date(b.created_at) : new Date(0);
+      if (startDt && created < startDt) return false;
+      if (endDt && created > endDt) return false;
+
+      if (statusF && (b.status || "Pending") !== statusF) return false;
+      if (payerF && String(b.payer || "").trim() !== payerF) return false;
+
+      if (q) {
+        const hay = `${b.claim_number || ""} ${b.patient_name || ""} ${b.payer || ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+
+    // Build payer options
+    const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
+
+    // Stats
+    const total = billedAll.length;
+    const pending = billedAll.filter(b => (b.status || "Pending") === "Pending").length;
+    const paid = billedAll.filter(b => (b.status || "Pending") === "Paid").length;
+    const denied = billedAll.filter(b => (b.status || "Pending") === "Denied").length;
+
+    const rows = billed.slice(0, 300).map(b => {
+      const st = (b.status || "Pending");
+      const action = (() => {
+        if (st === "Pending") {
+          return `<form method="POST" action="/billed/mark-denied" style="display:flex;gap:6px;flex-wrap:wrap;">
+            <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+            <button class="btn secondary" type="submit">Mark Denied</button>
+          </form>`;
+        }
+        if (st === "Denied") {
+          const link = b.denial_case_id ? `/status?case_id=${encodeURIComponent(b.denial_case_id)}` : "";
+          return link ? `<a href="${link}">Open Denial Case</a>` : `<span class="muted small">Case pending</span>`;
+        }
+        if (st === "Paid") {
+          return `<a href="/report?type=payment_detail">View Payments</a>`;
+        }
+        return "";
+      })();
+
+      return `<tr>
+        <td>${safeStr(b.claim_number || "")}</td>
+        <td>${safeStr(b.dos || "")}</td>
+        <td>${safeStr(b.payer || "")}</td>
+        <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
+        <td>${safeStr(st)}</td>
+        <td>${action}</td>
+      </tr>`;
+    }).join("");
+
+    const html = page("Billed Claims Upload", `
+      <h2>Billed Claims Upload</h2>
+      <p class="muted">
+        Upload billed claims exported from your EMR/EHR. These are stored as your master billed list.
+        When you upload payments later under <strong>Denial &amp; Payment Upload</strong>, matching claim numbers will automatically mark billed claims as <strong>Paid</strong>.
+        If a claim is denied, click <strong>Mark Denied</strong> to send it into the denial workflow to draft an appeal letter.
+      </p>
+
+      <div class="row">
+        <div class="col">
+          <div class="kpi-card"><h4>Total Billed</h4><p>${total}</p></div>
+          <div class="kpi-card"><h4>Pending</h4><p>${pending}</p></div>
+          <div class="kpi-card"><h4>Paid</h4><p>${paid}</p></div>
+          <div class="kpi-card"><h4>Denied</h4><p>${denied}</p></div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+      <h3>Upload Billed Claims</h3>
+      <p class="muted small">Upload CSV (recommended). Excel files are stored but not parsed in v1.</p>
+      <form method="POST" action="/billed/upload" enctype="multipart/form-data">
+        <label>Upload CSV/XLS/XLSX</label>
+        <input type="file" name="billedfile" accept=".csv,.xls,.xlsx" required />
+        <div class="btnRow">
+          <button class="btn" type="submit">Upload Billed Claims</button>
+          <a class="btn secondary" href="/dashboard">Back</a>
+        </div>
+      </form>
+
+      <div class="hr"></div>
+      <h3>Billed Claims</h3>
+      <form method="GET" action="/billed" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+        <div style="display:flex;flex-direction:column;min-width:220px;">
+          <label>Search (Claim/Payer/Patient)</label>
+          <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Search..." />
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Status</label>
+          <select name="status">
+            <option value="">All</option>
+            <option value="Pending"${statusF==="Pending"?" selected":""}>Pending</option>
+            <option value="Paid"${statusF==="Paid"?" selected":""}>Paid</option>
+            <option value="Denied"${statusF==="Denied"?" selected":""}>Denied</option>
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Payer</label>
+          <select name="payer">
+            <option value="">All</option>
+            ${payerOpts.map(p => `<option value="${safeStr(p)}"${payerF===p?" selected":""}>${safeStr(p)}</option>`).join("")}
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Start</label>
+          <input type="date" name="start" value="${safeStr(start)}" />
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>End</label>
+          <input type="date" name="end" value="${safeStr(end)}" />
+        </div>
+        <div>
+          <button class="btn" type="submit" style="margin-top:1.6em;">Filter</button>
+          <a class="btn secondary" href="/billed" style="margin-top:1.6em;">Reset</a>
+        </div>
+      </form>
+
+      <div class="hr"></div>
+      <div style="overflow:auto;">
+        <table>
+          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="6" class="muted">No billed claims found.</td></tr>`}</tbody>
+        </table>
+        <p class="muted small">Showing ${Math.min(300, billed.length)} of ${billed.length} filtered results.</p>
+      </div>
+    `, navUser());
+    return send(res, 200, injectAIChat(html));
+  }
+
+  if (method === "POST" && pathname === "/billed/upload") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
+    const boundary = boundaryMatch[1];
+
+    const { files } = await parseMultipart(req, boundary);
+    const f = files.find(x => x.fieldName === "billedfile") || files[0];
+    if (!f) return redirect(res, "/billed");
+
+    const nameLower = (f.filename || "").toLowerCase();
+    const isCSV = nameLower.endsWith(".csv");
+    const isXLS = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx");
+    if (!isCSV && !isXLS) {
+      const html = page("Billed Claims Upload", `
+        <h2>Billed Claims Upload</h2>
+        <p class="error">Only CSV or Excel files are allowed.</p>
+        <div class="btnRow"><a class="btn secondary" href="/billed">Back</a></div>
+      `, navUser());
+      return send(res, 400, injectAIChat(html));
+    }
+
+    // store raw file
+    const dir = path.join(UPLOADS_DIR, org.org_id, "billed");
+    ensureDir(dir);
+    const stored = path.join(dir, `${Date.now()}_${(f.filename || "billed").replace(/[^a-zA-Z0-9._-]/g,"_")}`);
+    fs.writeFileSync(stored, f.buffer);
+
+    let rowsAdded = 0;
+
+    if (isCSV) {
+      const text = f.buffer.toString("utf8");
+      const parsedCSV = parseCSV(text);
+      const rows = parsedCSV.rows;
+
+      const billed = readJSON(FILES.billed, []);
+
+      for (const r of rows) {
+        const claim = pickField(r, ["claim", "claim#", "claim number", "claimnumber", "clm"]).trim();
+        if (!claim) continue;
+
+        // Avoid duplicates per org by claim number
+        const exists = billed.find(b => b.org_id === org.org_id && String(b.claim_number || "") === claim);
+        if (exists) continue;
+
+        const payer = pickField(r, ["payer", "insurance", "carrier", "plan"]).trim();
+        const amt = pickField(r, ["billed", "charge", "amount billed", "total charge", "charges"]).trim();
+        const dos = pickField(r, ["dos", "date of service", "service date"]).trim();
+        const patient = pickField(r, ["patient", "member", "name"]).trim();
+
+        billed.push({
+          billed_id: uuid(),
+          org_id: org.org_id,
+          claim_number: claim,
+          patient_name: patient || "",
+          dos: dos || "",
+          payer: payer || "",
+          amount_billed: Number(amt || 0) || 0,
+          status: "Pending",
+          paid_amount: null,
+          paid_at: null,
+          denial_case_id: null,
+          source_file: path.basename(stored),
+          created_at: nowISO()
+        });
+        rowsAdded += 1;
+      }
+
+      writeJSON(FILES.billed, billed);
+    }
+
+    const html = page("Billed Claims Upload", `
+      <h2>Billed Claims File Received</h2>
+      <p class="muted">Your billed claims file was uploaded successfully.</p>
+      <ul class="muted">
+        <li><strong>File:</strong> ${safeStr(f.filename)}</li>
+        <li><strong>Claims added:</strong> ${isCSV ? rowsAdded : "File stored (Excel not parsed — export to CSV for import)"}</li>
+      </ul>
+      <div class="btnRow">
+        <a class="btn" href="/billed">View Billed Claims</a>
+        <a class="btn secondary" href="/dashboard">Back to Dashboard</a>
+      </div>
+    `, navUser());
+    return send(res, 200, injectAIChat(html));
+  }
+
+  if (method === "POST" && pathname === "/billed/mark-denied") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const billed_id = params.get("billed_id") || "";
+
+    const billed = readJSON(FILES.billed, []);
+    const b = billed.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+    if (!b) return redirect(res, "/billed");
+
+    // Create a denial case (no document yet, but it enters denial workflow)
+    const cases = readJSON(FILES.cases, []);
+    const cid = uuid();
+
+    cases.push({
+      case_id: cid,
+      org_id: org.org_id,
+      created_by_user_id: user.user_id,
+      created_at: nowISO(),
+      status: "UPLOAD_RECEIVED",
+      notes: `Auto-created from billed claims. Claim #: ${b.claim_number} | Payer: ${b.payer} | DOS: ${b.dos}`,
+      files: [],
+      template_id: "",
+      paid: false,
+      paid_at: null,
+      paid_amount: null,
+      ai_started_at: null,
+      ai: {
+        denial_summary: null,
+        appeal_considerations: null,
+        draft_text: null,
+        denial_reason_category: null,
+        missing_info: [],
+        time_to_draft_seconds: 0
+      }
+    });
+
+    writeJSON(FILES.cases, cases);
+
+    b.status = "Denied";
+    b.denial_case_id = cid;
+    writeJSON(FILES.billed, billed);
+
+    // Start AI if capacity
+    const cases2 = readJSON(FILES.cases, []);
+    const cObj = cases2.find(x => x.case_id === cid && x.org_id === org.org_id);
+    if (cObj) {
+      const okAI = canStartAI(org.org_id);
+      if (okAI.ok) {
+        cObj.status = "ANALYZING";
+        cObj.ai_started_at = nowISO();
+        writeJSON(FILES.cases, cases2);
+        recordAIJob(org.org_id);
+      }
+    }
+
+    auditLog({ actor:"user", action:"billed_mark_denied", org_id: org.org_id, billed_id, case_id: cid });
+    return redirect(res, `/status?case_id=${encodeURIComponent(cid)}`);
+  }
+
+// --------- CASE UPLOAD ----------
   if (method === "GET" && pathname === "/upload") {
     const allTemplates = readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id);
     const templateOptions = allTemplates.map(t => `<option value="${safeStr(t.template_id)}">${safeStr(t.filename)}</option>`).join("");
@@ -2281,13 +2625,13 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const allow = paymentRowsAllowance(org.org_id);
     const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
 
-    const html = page("Uploads", `
+    const html = page("Denial & Payment Upload", `
       <h2>Uploads</h2>
       <p class="muted">Upload denial documents to generate appeal drafts, and upload payment files to power revenue analytics. All results appear on your Dashboard.</p>
 
       <div class="hr"></div>
       <h3>Denial &amp; Appeal Upload</h3>
-      <p class="muted">Upload up to <strong>3 denial documents</strong>. Each document becomes its own case using the selected template.</p>
+      <p class="muted">Upload up to <strong>3 denial documents</strong>. Each document becomes its own case. Apply templates when reviewing the draft.</p>
 
       <form method="POST" action="/upload" enctype="multipart/form-data">
         <label>Denial Documents (up to 3)</label>
@@ -2297,17 +2641,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <label>Optional notes</label>
         <textarea name="notes" placeholder="Any context to help review (optional)"></textarea>
 
-        <div class="hr"></div>
-        <h3>Appeal Letter Template</h3>
-        <p class="small muted">Choose an uploaded template or select AI Draft (default).</p>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          <select name="template_id">
-            <option value="">AI Draft (no template)</option>
-            ${templateOptions}
-          </select>
-          <label>Upload new template (optional)</label>
-          <input type="file" name="templateFile" accept=".txt,.doc,.docx,.pdf" />
-        </div>
+        
 
         <div class="btnRow" style="margin-top:16px;">
           <button class="btn" type="submit">Submit Denials</button>
@@ -2316,66 +2650,64 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </form>
 
       <div class="hr"></div>
-      <h3 id="payments">Payment Upload</h3>
-      <p class="muted">Upload bulk payment files in CSV or Excel format. CSV drives analytics.</p>
-      <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
-
-      <form method="POST" action="/payments" enctype="multipart/form-data">
-        <label>Upload CSV/XLS/XLSX</label>
-        <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div>
-        <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx" required style="display:none" />
-        <div class="btnRow">
-          <button class="btn" type="submit">Upload Payments</button>
-          <a class="btn secondary" href="/payments/list">View Payment Details</a>
-        </div>
-      </form>
-      <div class="hr"></div>
-      <h3>Processing Status</h3>
+      <h3>Denial Case Queue</h3>
       ${
         recentCases.length === 0
-          ? `<p class="muted">No recent uploads.</p>`
+          ? `<p class="muted">No denial cases yet.</p>`
           : `<table>
-              <thead><tr><th>Case ID</th><th>Status</th><th>Countdown</th><th>Open</th></tr></thead>
+              <thead><tr><th>Case ID</th><th>Status</th><th>Open</th></tr></thead>
               <tbody>${
                 recentCases.map(c => {
-                  const started = c.ai_started_at ? new Date(c.ai_started_at).getTime() : 0;
-                  const remaining = (c.status === "ANALYZING" && started)
-                    ? Math.max(0, Math.ceil((AI_JOB_DELAY_MS - (Date.now() - started)) / 1000))
-                    : 0;
                   const openLink = (c.status === "DRAFT_READY")
                     ? `/draft?case_id=${encodeURIComponent(c.case_id)}`
                     : `/status?case_id=${encodeURIComponent(c.case_id)}`;
                   return `<tr>
                     <td>${safeStr(c.case_id)}</td>
                     <td>${safeStr(c.status)}</td>
-                    <td>${c.status === "ANALYZING" ? `<span class="badge warn countdown" data-seconds="${remaining}">${remaining}s</span>` : (c.status === "DRAFT_READY" ? `<span class="badge ok">Ready</span>` : `<span class="badge warn">Queued</span>`)}</td>
                     <td><a href="${openLink}">Open</a></td>
                   </tr>`;
                 }).join("")
               }</tbody>
-            </table>
-            <script>
-              // Countdown timers for analyzing cases
-              document.querySelectorAll(".countdown").forEach(el => {
-                let s = parseInt(el.getAttribute("data-seconds") || "0", 10);
-                if (!s || s <= 0) return;
-                const t = setInterval(() => {
-                  s--;
-                  if (s <= 0) {
-                    el.textContent = "Ready";
-                    clearInterval(t);
-                    window.location.reload();
-                  } else {
-                    el.textContent = s + "s";
-                  }
-                }, 1000);
-              });
-            </script>`
+            </table>`
       }
 
+      <div class="hr"></div>
+      <h3 id="payments">Payment Upload</h3>Payment Upload</h3>
+      <p class="muted">Upload bulk payment files in CSV or Excel format. CSV drives analytics.</p>
+      <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
+
+      <form method="POST" action="/payments" enctype="multipart/form-data">
+        <label>Upload CSV/XLS/XLSX</label>
+        <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div>
+        <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx,.pdf,.doc,.docx" required style="display:none" />
+        <div class="btnRow">
+          <button class="btn" type="submit">Upload Payments</button>
+          <a class="btn secondary" href="/payments/list">View Payment Details</a>
+        </div>
+      </form>
 
       <div class="hr"></div>
-      <p class="muted small">Payment records on file: ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p>
+      <h3>Payment Queue</h3>
+      ${
+        paymentQueue.length === 0
+          ? `<p class="muted">No payment uploads yet.</p>`
+          : `<table>
+              <thead><tr><th>Source File</th><th>Records</th><th>Last Upload</th><th>Open</th></tr></thead>
+              <tbody>${
+                paymentQueue.map(x => {
+                  return `<tr>
+                    <td>${safeStr(x.source_file)}</td>
+                    <td>${x.count}</td>
+                    <td>${new Date(x.latest).toLocaleDateString()}</td>
+                    <td><a href="/payments/list">Open</a></td>
+                  </tr>`;
+                }).join("")
+              }</tbody>
+            </table>`
+      }
+
+      <div class="hr"></div>
+      <p class="muted small">Payment records on file: ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p> ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p>
 
       <script>
         // Denial dropzone
@@ -2431,7 +2763,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           if (file) payDrop.textContent = file.name;
         });
       </script>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -2443,7 +2775,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <h2>Limit Reached</h2>
         <p class="error">${safeStr(can.reason)}</p>
         <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
-      `, navUser());
+      `, navUser(), {showChat:true});
       return send(res, 403, html);
     }
 
@@ -2463,7 +2795,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <h2>Upload</h2>
         <p class="error">Please upload no more than ${maxFiles} files per case.</p>
         <div class="btnRow"><a class="btn secondary" href="/upload">Back</a></div>
-      `, navUser());
+      `, navUser(), {showChat:true});
       return send(res, 400, html);
     }
 
@@ -2474,7 +2806,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <h2>Upload</h2>
           <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
           <div class="btnRow"><a class="btn secondary" href="/upload">Back</a></div>
-        `, navUser());
+        `, navUser(), {showChat:true});
         return send(res, 400, html);
       }
     }
@@ -2482,28 +2814,9 @@ if (method === "GET" && pathname === "/weekly-summary") {
     // Handle template file upload and multiple document cases
     // Separate document files (named "files") and optional template upload
     const docFiles = files.filter(f => f.fieldName === "files");
-    const templateUpload = files.find(f => f.fieldName === "templateFile");
     // Ensure at least one document file
     if (!docFiles.length) return redirect(res, "/upload");
     // Determine selected template from dropdown
-    let selectedTemplateId = (fields.template_id || "").trim();
-    // If a new template file is provided, store it and override selection
-    if (templateUpload && templateUpload.filename) {
-      const safeNameT = (templateUpload.filename || "template").replace(/[^a-zA-Z0-9._-]/g, "_");
-      const newTemplateId = uuid();
-      const templatePath = path.join(TEMPLATES_DIR, `${newTemplateId}_${safeNameT}`);
-      fs.writeFileSync(templatePath, templateUpload.buffer);
-      const allTemplates = readJSON(FILES.templates, []);
-      allTemplates.push({
-        template_id: newTemplateId,
-        org_id: org.org_id,
-        filename: safeNameT,
-        stored_path: templatePath,
-        uploaded_at: nowISO()
-      });
-      writeJSON(FILES.templates, allTemplates);
-      selectedTemplateId = newTemplateId;
-    }
     // Create a new case per uploaded document
     const cases = readJSON(FILES.cases, []);
     const createdCaseIds = [];
@@ -2545,7 +2858,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         status: "UPLOAD_RECEIVED",
         notes: fields.notes || "",
         files: storedFiles,
-        template_id: selectedTemplateId || "",
+        template_id: "",
         // Track payment status for each case. A case is marked paid when appeals have resulted in payment.
         paid: false,
         paid_at: null,
@@ -2586,7 +2899,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <h2>Limit Reached</h2>
       <p class="error">${safeStr(limitReason || "Case limit reached")}</p>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 403, html);
   }
 
@@ -2628,7 +2941,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div class="muted small"><strong>Case ID:</strong> ${safeStr(case_id)}</div>
       <script>setTimeout(()=>window.location.reload(), 2500);</script>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
-    `, navUser());
+    `, navUser(), {showChat:true});
 
     return send(res, 200, html);
   }
@@ -2652,6 +2965,33 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <h3>Appeal Considerations</h3>
       <p>${safeStr(c.ai.appeal_considerations || "—")}</p>
 
+      <h3>Appeal Letter Template</h3>
+      <p class="small muted">Select a saved template, upload a new one, or revert to the AI draft.</p>
+
+      <form method="POST" action="/draft-template" enctype="multipart/form-data">
+        <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+
+        <label>Choose Existing Template</label>
+        <select name="template_id">
+          <option value="">Use AI Draft</option>
+          ${
+            readJSON(FILES.templates, [])
+              .filter(t => t.org_id === org.org_id)
+              .map(t => `<option value="${safeStr(t.template_id)}">${safeStr(t.filename)}</option>`)
+              .join("")
+          }
+        </select>
+
+        <label>Or Upload New Template</label>
+        <input type="file" name="templateFile" accept=".txt,.doc,.docx,.pdf" />
+
+        <div class="btnRow">
+          <button class="btn secondary" type="submit">Apply Template</button>
+        </div>
+      </form>
+
+      <div class="hr"></div>
+
       <h3>Draft Appeal Letter</h3>
       <form method="POST" action="/draft">
         <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
@@ -2666,7 +3006,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </form>
 
       <p class="muted small">Time to draft: ${c.ai.time_to_draft_seconds ? `${c.ai.time_to_draft_seconds}s` : "—"}</p>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -2683,6 +3023,65 @@ if (method === "GET" && pathname === "/weekly-summary") {
     writeJSON(FILES.cases, cases);
     return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
   }
+
+// Apply/revert templates from within the draft review page
+if (method === "POST" && pathname === "/draft-template") {
+  const contentType = req.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) return redirect(res, "/dashboard");
+  const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+  if (!boundaryMatch) return redirect(res, "/dashboard");
+  const boundary = boundaryMatch[1];
+
+  const { files, fields } = await parseMultipart(req, boundary);
+
+  const case_id = (fields.case_id || "").trim();
+  if (!case_id) return redirect(res, "/dashboard");
+
+  const cases = readJSON(FILES.cases, []);
+  const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+  if (!c) return redirect(res, "/dashboard");
+
+  let selectedTemplateId = (fields.template_id || "").trim();
+
+  // Upload new template (optional)
+  const templateUpload = files.find(f => f.fieldName === "templateFile");
+  if (templateUpload && templateUpload.filename) {
+    const safeName = (templateUpload.filename || "template").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const newId = uuid();
+    const storedPath = path.join(TEMPLATES_DIR, `${newId}_${safeName}`);
+    fs.writeFileSync(storedPath, templateUpload.buffer);
+
+    const templates = readJSON(FILES.templates, []);
+    templates.push({
+      template_id: newId,
+      org_id: org.org_id,
+      filename: safeName,
+      stored_path: storedPath,
+      uploaded_at: nowISO()
+    });
+    writeJSON(FILES.templates, templates);
+
+    selectedTemplateId = newId;
+  }
+
+  if (selectedTemplateId) {
+    const templates = readJSON(FILES.templates, []);
+    const tpl = templates.find(t => t.template_id === selectedTemplateId && t.org_id === org.org_id);
+    if (tpl && tpl.stored_path && fs.existsSync(tpl.stored_path)) {
+      c.ai.draft_text = fs.readFileSync(tpl.stored_path, "utf8");
+      c.template_id = selectedTemplateId;
+    }
+  } else {
+    // revert to AI draft
+    const out = aiGenerate(org.org_name);
+    c.ai.draft_text = out.draft_text;
+    c.template_id = "";
+  }
+
+  writeJSON(FILES.cases, cases);
+  return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+}
+
 
   // New route: handle marking a case as paid (captures paid amount + logs denied->approved payment)
 if (method === "POST" && pathname === "/case/mark-paid") {
@@ -2719,6 +3118,26 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         denied_approved: true
       });
       writeJSON(FILES.payments, paymentsData);
+
+      // Auto-match: mark billed claims as Paid when a payment claim_number matches
+      try {
+        const billedAll = readJSON(FILES.billed, []);
+        let changed = false;
+        for (const ap of (addedPayments || [])) {
+          const claimNo = String(ap.claim_number || "").trim();
+          if (!claimNo) continue;
+          const b = billedAll.find(x => x.org_id === org.org_id && String(x.claim_number || "").trim() === claimNo);
+          if (!b) continue;
+          if ((b.status || "Pending") !== "Paid") {
+            b.status = "Paid";
+            b.paid_amount = ap.amount_paid || b.paid_amount || null;
+            b.paid_at = ap.date_paid || b.paid_at || nowISO();
+            changed = true;
+          }
+        }
+        if (changed) writeJSON(FILES.billed, billedAll);
+      } catch {}
+
     }
 
     auditLog({ actor: "user", action: "mark_paid", case_id, org_id: org.org_id, paid_at, paid_amount });
@@ -2726,9 +3145,13 @@ if (method === "POST" && pathname === "/case/mark-paid") {
   return redirect(res, "/dashboard");
 }
 
-  // -------- PAYMENT DETAILS LIST --------
-  // Display a detailed list of payments for the organisation with filtering options.
+  // -------- PAYMENT DETAILS LIST (moved into Reports) --------
   if (method === "GET" && pathname === "/payments/list") {
+    return redirect(res, "/report?type=payment_detail");
+  }
+
+  // (legacy payment details page retained but disabled)
+  if (false && method === "GET" && pathname === "/payments/list") {
     // Load all payments for this organisation
     let payments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
     // Build sets for year, month, quarter and payer filters from all payments (not filtered yet)
@@ -2875,11 +3298,11 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       <h3>Summary by Payer</h3>
       ${summaryTable}
       <div class="hr"></div>
-      <h3>Payments (${payments.length} rows${payments.length > 500 ? ', showing first 500' : ''})</h3>
+      <h3>Payments (${paymentsFiltered.length} rows${payments.length > 500 ? ', showing first 500' : ''})</h3>
       ${detailTable}
       <div class="hr"></div>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back to Dashboard</a></div>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -2903,12 +3326,15 @@ if (method === "POST" && pathname === "/case/mark-paid") {
     const nameLower = (f.filename || "").toLowerCase();
     const isCSV = nameLower.endsWith(".csv");
     const isXLS = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx");
-    if (!isCSV && !isXLS) {
+    const isPDF = nameLower.endsWith(".pdf");
+    const isDOC = nameLower.endsWith(".doc") || nameLower.endsWith(".docx");
+
+    if (!isCSV && !isXLS && !isPDF && !isDOC) {
       const html = page("Revenue Management", `
         <h2>Revenue Management</h2>
-        <p class="error">Only CSV or Excel files are allowed for payment tracking.</p>
+        <p class="error">Allowed file types: CSV, Excel (.xls/.xlsx), PDF, Word (.doc/.docx).</p>
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
-      `, navUser());
+      `, navUser(), {showChat:true});
       return send(res, 400, html);
     }
 
@@ -2920,7 +3346,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         <h2>Revenue Management</h2>
         <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
-      `, navUser());
+      `, navUser(), {showChat:true});
       return send(res, 400, html);
     }
 
@@ -2945,6 +3371,8 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       const storeLimit = Math.min(toUse, 500);
       const paymentsData = readJSON(FILES.payments, []);
 
+      const addedPayments = [];
+
       for (let i=0;i<storeLimit;i++){
         const r = rows[i];
         const claim = pickField(r, ["claim", "claim#", "claim number", "claimnumber", "clm"]);
@@ -2963,6 +3391,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
           created_at: nowISO(),
           denied_approved: false
         });
+        addedPayments.push(paymentsData[paymentsData.length-1]);
       }
       writeJSON(FILES.payments, paymentsData);
 
@@ -2978,13 +3407,13 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       <p class="muted">Your file was uploaded successfully.</p>
       <ul class="muted">
         <li><strong>File:</strong> ${safeStr(f.filename)}</li>
-        <li><strong>Rows processed:</strong> ${rowsAdded} ${isXLS ? "(Excel not parsed — export to CSV for full analytics)" : ""}</li>
+        <li><strong>Rows processed:</strong> ${isCSV ? rowsAdded : "File stored (not parsed — upload CSV for analytics extraction)"}</li>
       </ul>
       <div class="btnRow">
         <a class="btn" href="/analytics">View Analytics</a>
         <a class="btn secondary" href="/payments">Upload more</a>
       </div>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -3039,7 +3468,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       <div class="btnRow">
         <a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Plan</a>
       </div>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -3055,7 +3484,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         <h2>Account</h2>
         <p class="error">New passwords must match and be at least 8 characters.</p>
         <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
-      `, navUser());
+      `, navUser(), {showChat:true});
       return send(res, 400, html);
     }
 
@@ -3068,7 +3497,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         <h2>Account</h2>
         <p class="error">Current password is incorrect.</p>
         <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
-      `, navUser());
+      `, navUser(), {showChat:true});
       return send(res, 401, html);
     }
 
@@ -3080,12 +3509,51 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       <h2>Account</h2>
       <p class="muted">Password updated successfully.</p>
       <div class="btnRow"><a class="btn" href="/dashboard">Back to Dashboard</a></div>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
 
-  // exports hub
+  
+  // Report export (CSV) — used by Payment Detail Report
+  if (method === "GET" && pathname === "/report/export") {
+    const start = parsed.query.start || "";
+    const end = parsed.query.end || "";
+    const type = (parsed.query.type || "").trim();
+    const payerFilter = (parsed.query.payer || "").trim();
+    const deniedFilter = (parsed.query.denied || "").trim();
+
+    if (!start || !end || type !== "payment_detail") return redirect(res, "/report");
+
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    endDate.setHours(23,59,59,999);
+
+    let payments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+    payments = payments.filter(p => {
+      const d = new Date(p.date_paid || p.created_at);
+      return d >= startDate && d <= endDate;
+    });
+    if (payerFilter) payments = payments.filter(p => String((p.payer || "Unknown").trim() || "Unknown") === payerFilter);
+    if (deniedFilter === "1") payments = payments.filter(p => p.denied_approved);
+
+    const header = ["claim_number","payer","amount_paid","date_paid","denied_approved","source_file","created_at"].join(",");
+    const rows = payments.map(p => [
+      p.claim_number || "",
+      (p.payer || "").trim(),
+      p.amount_paid || "",
+      p.date_paid || "",
+      p.denied_approved ? "Yes" : "",
+      p.source_file || "",
+      p.created_at || ""
+    ].map(x => `"${String(x).replace(/"/g,'""')}"`).join(","));
+
+    const csv = [header, ...rows].join("\n");
+    res.writeHead(200, { "Content-Type":"text/csv", "Content-Disposition":"attachment; filename=payment_detail_report.csv" });
+    return res.end(csv);
+  }
+
+// exports hub
   if (method === "GET" && pathname === "/exports") {
     const html = page("Exports", `
       <h2>Exports</h2>
@@ -3096,7 +3564,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a>
         <a class="btn secondary" href="/report">Printable Pilot Summary</a>
       </div>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -3141,28 +3609,211 @@ if (method === "POST" && pathname === "/case/mark-paid") {
   }
 
   if (method === "GET" && pathname === "/report") {
-    const aReport = computeAnalytics(org.org_id);
-    const pilotRep = getPilot(org.org_id) || ensurePilot(org.org_id);
-    const html = page("Pilot Summary", `
-      <h2>Pilot Summary Report</h2>
-      <p class="muted">Organization: ${safeStr(org.org_name)}</p>
+    const start = parsed.query.start || "";
+    const end = parsed.query.end || "";
+    const type = (parsed.query.type || "").trim() || "executive";
+    const payerFilter = (parsed.query.payer || "").trim();
+    const deniedFilter = (parsed.query.denied || "").trim();
+
+    // If no date range chosen yet, show generator form
+    if (!start || !end) {
+      const html = page("Reports", `
+        <h2>Generate Report</h2>
+        <p class="muted">Choose a date range and report type. Reports are based only on data uploaded into the app.</p>
+
+        <form method="GET" action="/report">
+          <label>Start Date</label>
+          <input type="date" name="start" required />
+
+          <label>End Date</label>
+          <input type="date" name="end" required />
+
+          <label>Report Type</label>
+          <select name="type">
+            <option value="executive">Executive Summary</option>
+            <option value="denials">Denial Summary</option>
+            <option value="payments">Payment Summary</option>
+            <option value="recovery">Recovery Analysis</option>
+            <option value="payers">Payer Breakdown</option>
+            <option value="payment_detail">Payment Detail Report</option>
+          </select>
+
+          <label>Optional Payer Filter</label>
+          <input name="payer" placeholder="Exact payer name (optional)" />
+
+          <label>Denied Recovery Only</label>
+          <select name="denied">
+            <option value="">All</option>
+            <option value="1">Denied → Approved Only</option>
+          </select>
+
+          <div class="btnRow">
+            <button class="btn" type="submit">Generate</button>
+            <a class="btn secondary" href="/dashboard">Back</a>
+          </div>
+        </form>
+      `, navUser(), {showChat:true});
+      return send(res, 200, html);
+    }
+
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    endDate.setHours(23,59,59,999);
+
+    const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+    const payAll = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+
+    const cases = casesAll.filter(c => {
+      const d = new Date(c.created_at);
+      return d >= startDate && d <= endDate;
+    });
+
+    const payments = payAll.filter(p => {
+      const d = new Date(p.date_paid || p.created_at);
+      return d >= startDate && d <= endDate;
+    });
+    // Apply optional report filters (payer / denied-only)
+    let paymentsFiltered = payments.slice();
+    if (payerFilter) {
+      paymentsFiltered = paymentsFiltered.filter(p => String((p.payer || "Unknown").trim() || "Unknown") === payerFilter);
+    }
+    if (deniedFilter === "1") {
+      paymentsFiltered = paymentsFiltered.filter(p => p.denied_approved);
+    }
+
+
+    const deniedRecovered = paymentsFiltered.filter(p => p.denied_approved);
+    const recoveredDollars = deniedRecovered.reduce((s,p)=>s + Number(p.amount_paid || 0), 0);
+
+    const paidCases = cases.filter(c => c.paid).length;
+    const recoveryRate = cases.length ? ((paidCases / cases.length) * 100).toFixed(1) : "0.0";
+
+    const payByPayer = {};
+    paymentsFiltered.forEach(p => {
+      const payer = (p.payer || "Unknown").trim() || "Unknown";
+      if (!payByPayer[payer]) payByPayer[payer] = { total: 0, count: 0, deniedWins: 0 };
+      payByPayer[payer].total += Number(p.amount_paid || 0);
+      payByPayer[payer].count += 1;
+      if (p.denied_approved) payByPayer[payer].deniedWins += 1;
+    });
+
+    const topPayers = Object.entries(payByPayer)
+      .sort((a,b)=>b[1].total - a[1].total)
+      .slice(0, 8)
+      .map(([payer, info]) => ({ payer, ...info }));
+
+    let body = `<h2>Report</h2>
+      <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
+      <p class="muted"><strong>Date range:</strong> ${safeStr(start)} to ${safeStr(end)}</p>
+      <div class="hr"></div>`;
+
+    if (type === "executive") {
+      body += `
+        <h3>Executive Summary</h3>
+        <ul class="muted">
+          <li><strong>Denied cases in range:</strong> ${cases.length}</li>
+          <li><strong>Payments logged in range:</strong> ${paymentsFiltered.length}</li>
+          <li><strong>Denied → Approved wins:</strong> ${deniedRecovered.length}</li>
+          <li><strong>Recovered dollars (denials):</strong> $${Number(recoveredDollars).toFixed(2)}</li>
+          <li><strong>Recovery rate (cases paid):</strong> ${recoveryRate}%</li>
+        </ul>
+      `;
+    } else if (type === "denials") {
+      const cats = {};
+      cases.forEach(c => {
+        const cat = (c.ai && c.ai.denial_reason_category) ? c.ai.denial_reason_category : "Unknown";
+        cats[cat] = (cats[cat] || 0) + 1;
+      });
+      body += `
+        <h3>Denial Summary</h3>
+        <ul class="muted">
+          <li><strong>Total denial cases:</strong> ${cases.length}</li>
+          <li><strong>Drafts generated:</strong> ${cases.filter(c => c.status === "DRAFT_READY" || (c.ai && c.ai.draft_text)).length}</li>
+          <li><strong>Paid (marked):</strong> ${paidCases}</li>
+        </ul>
+        <div class="hr"></div>
+        <h3>Denial Categories</h3>
+        ${
+          Object.keys(cats).length
+            ? `<table><thead><tr><th>Category</th><th>Count</th></tr></thead><tbody>${
+                Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `<tr><td>${safeStr(k)}</td><td>${v}</td></tr>`).join("")
+              }</tbody></table>`
+            : `<p class="muted">No denial category data available in this date range.</p>`
+        }
+      `;
+    } else if (type === "payments") {
+      body += `
+        <h3>Payment Summary</h3>
+        <ul class="muted">
+          <li><strong>Total payments:</strong> ${paymentsFiltered.length}</li>
+          <li><strong>Total dollars paid:</strong> $${Number(payments.reduce((s,p)=>s+Number(p.amount_paid||0),0)).toFixed(2)}</li>
+          <li><strong>Denied → Approved dollars:</strong> $${Number(recoveredDollars).toFixed(2)}</li>
+        </ul>
+      `;
+    } else if (type === "recovery") {
+      body += `
+        <h3>Recovery Analysis</h3>
+        <ul class="muted">
+          <li><strong>Denied cases:</strong> ${cases.length}</li>
+          <li><strong>Paid (marked):</strong> ${paidCases}</li>
+          <li><strong>Recovery rate:</strong> ${recoveryRate}%</li>
+          <li><strong>Denied → Approved wins (payments):</strong> ${deniedRecovered.length}</li>
+          <li><strong>Denied → Approved dollars:</strong> $${Number(recoveredDollars).toFixed(2)}</li>
+        </ul>
+      `;
+    } else if (type === "payment_detail") {
+      body += `
+        <h3>Payment Detail Report</h3>
+        <p class="muted">Showing payments in date range${payerFilter ? ` for payer <strong>${safeStr(payerFilter)}</strong>` : ""}${deniedFilter==="1" ? " (Denied → Approved only)" : ""}.</p>
+
+        <div class="btnRow">
+          <a class="btn secondary" href="/report/export?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&type=payment_detail&payer=${encodeURIComponent(payerFilter||"")}&denied=${encodeURIComponent(deniedFilter||"")}">Export CSV</a>
+        </div>
+
+        <div class="hr"></div>
+        ${
+          paymentsFiltered.length
+            ? `<table><thead><tr><th>Claim #</th><th>Payer</th><th>Amount</th><th>Date</th><th>Denied?</th></tr></thead><tbody>${
+                paymentsFiltered.slice(0, 500).map(p => {
+                  const dt = new Date(p.date_paid || p.created_at);
+                  return `<tr>
+                    <td>${safeStr(p.claim_number || "")}</td>
+                    <td>${safeStr((p.payer || "Unknown").trim() || "Unknown")}</td>
+                    <td>$${Number(p.amount_paid || 0).toFixed(2)}</td>
+                    <td>${dt.toLocaleDateString()}</td>
+                    <td>${p.denied_approved ? "Yes" : ""}</td>
+                  </tr>`;
+                }).join("")
+              }</tbody></table>`
+            : `<p class="muted">No payments found for this filter.</p>`
+        }
+        <p class="muted small">${paymentsFiltered.length > 500 ? "Showing first 500 rows." : ""}</p>
+      `;
+    }
+
+    else if (type === "payers") {
+      body += `
+        <h3>Payer Breakdown</h3>
+        ${
+          topPayers.length
+            ? `<table><thead><tr><th>Payer</th><th># Payments</th><th>Total Paid</th><th>Denied Wins</th></tr></thead><tbody>${
+                topPayers.map(x => `<tr><td>${safeStr(x.payer)}</td><td>${x.count}</td><td>$${Number(x.total).toFixed(2)}</td><td>${x.deniedWins}</td></tr>`).join("")
+              }</tbody></table>`
+            : `<p class="muted">No payer data available in this date range.</p>`
+        }
+      `;
+    }
+
+    body += `
       <div class="hr"></div>
-      <ul class="muted">
-        <li>Pilot start: ${new Date(pilotRep.started_at).toLocaleDateString()}</li>
-        <li>Pilot end: ${new Date(pilotRep.ends_at).toLocaleDateString()}</li>
-      </ul>
-      <h3>Snapshot</h3>
-      <ul class="muted">
-        <li>Cases uploaded: ${aReport.totalCases}</li>
-        <li>Drafts generated: ${aReport.drafts}</li>
-        <li>Avg time to draft: ${aReport.avgDraftSeconds ? `${aReport.avgDraftSeconds}s` : "—"}</li>
-      </ul>
       <div class="btnRow">
         <button class="btn secondary" onclick="window.print()">Print / Save as PDF</button>
-        <a class="btn secondary" href="/exports">Back</a>
+        <a class="btn secondary" href="/report">New Report</a>
+        <a class="btn secondary" href="/dashboard">Back</a>
       </div>
-      <p class="muted small">All insights are derived from uploaded documents during the pilot period.</p>
-    `, navUser());
+    `;
+
+    const html = page("Report", body, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -3188,7 +3839,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         <a class="btn secondary" href="/exports">Download Exports</a>
         <a class="btn secondary" href="/logout">Logout</a>
       </div>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -3199,3 +3850,5 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
+
+
