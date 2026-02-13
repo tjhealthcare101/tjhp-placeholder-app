@@ -1484,6 +1484,139 @@ function buildAdminAttentionSet(orgs) {
   return flagged;
 }
 
+
+function parseDateOnly(s){
+  if (!s) return null;
+  const d = new Date(String(s).trim() + "T00:00:00.000Z");
+  return isNaN(d.getTime()) ? null : d;
+}
+function rangeFromPreset(preset){
+  const now = new Date();
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23,59,59,999));
+  let start = new Date(end);
+  const p = String(preset || "last30").toLowerCase();
+  if (p === "today") start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0,0,0,0));
+  else if (p === "last7") start = new Date(end.getTime() - 7*24*60*60*1000);
+  else if (p === "last30") start = new Date(end.getTime() - 30*24*60*60*1000);
+  else if (p === "thismonth") start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0,0,0,0));
+  else if (p === "thisyear") start = new Date(Date.UTC(now.getUTCFullYear(), 0, 1, 0,0,0,0));
+  else start = new Date(end.getTime() - 30*24*60*60*1000);
+  return { start, end, preset: p };
+}
+function fmtMoney(n){ const x = Number(n||0); return "$" + x.toFixed(2); }
+function safeNum(n){ const x = Number(n||0); return isFinite(x) ? x : 0; }
+function groupKeyForDate(d, gran){
+  const dt = new Date(d);
+  if (gran === "day") return dt.toISOString().slice(0,10);
+  if (gran === "week"){
+    const day = (dt.getUTCDay()+6)%7;
+    const monday = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()-day));
+    return monday.toISOString().slice(0,10);
+  }
+  return dt.getUTCFullYear() + "-" + String(dt.getUTCMonth()+1).padStart(2,"0");
+}
+function chooseGranularity(preset){
+  const p = String(preset||"last30");
+  if (p === "today" || p === "last7") return "day";
+  if (p === "thisyear") return "month";
+  return "week";
+}
+function computeDashboardMetrics(org_id, start, end, preset){
+  const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  const paymentsAll = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
+  const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
+
+  const inRange = (dtStr) => {
+    const d = dtStr ? new Date(dtStr) : null;
+    if (!d || isNaN(d.getTime())) return false;
+    return d >= start && d <= end;
+  };
+
+  const billed = billedAll.filter(b => inRange(b.created_at || b.paid_at || b.denied_at));
+  const payments = paymentsAll.filter(p => inRange(p.date_paid || p.created_at));
+  const underpayCases = casesAll.filter(c => (c.case_type||"").toLowerCase()==="underpayment" && inRange(c.created_at));
+
+  const totalBilled = billed.reduce((s,b)=>s + safeNum(b.amount_billed), 0);
+  const insuranceCollected = billed.reduce((s,b)=>s + safeNum(b.insurance_paid || b.paid_amount), 0);
+  const patientRespTotal = billed.reduce((s,b)=>s + safeNum(b.patient_responsibility), 0);
+  const patientCollected = billed.reduce((s,b)=>s + safeNum(b.patient_collected), 0);
+  const patientOutstanding = Math.max(0, patientRespTotal - patientCollected);
+
+  const allowedTotal = billed.reduce((s,b)=>s + safeNum(b.allowed_amount), 0);
+  const contractualTotal = billed.reduce((s,b)=>s + Math.max(0, safeNum(b.amount_billed) - safeNum(b.allowed_amount)), 0);
+
+  const underpaidAmt = billed.reduce((s,b)=>s + safeNum(b.underpaid_amount), 0);
+  const underpaidCount = billed.filter(b => (b.status||"").toLowerCase()==="underpaid").length;
+
+  const collectedTotal = insuranceCollected + patientCollected;
+  const grossCollectionRate = totalBilled > 0 ? (collectedTotal/totalBilled)*100 : 0;
+  const netCollectionRate = allowedTotal > 0 ? (collectedTotal/allowedTotal)*100 : 0;
+
+  const revenueAtRisk = Math.max(0, totalBilled - collectedTotal);
+
+  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, Pending:0 };
+  billed.forEach(b=>{
+    const st = (b.status || "Pending");
+    if (st === "Paid") statusCounts.Paid++;
+    else if (st === "Denied") statusCounts.Denied++;
+    else if (st === "Underpaid") statusCounts.Underpaid++;
+    else if (st === "Patient Balance") statusCounts["Patient Balance"]++;
+    else statusCounts.Pending++;
+  });
+
+  const gran = chooseGranularity(preset);
+  const billedSeries = {};
+  const collectedSeries = {};
+  const atRiskSeries = {};
+
+  billed.forEach(b=>{
+    const d = new Date(b.created_at || b.paid_at || b.denied_at || Date.now());
+    const k = groupKeyForDate(d, gran);
+    billedSeries[k] = (billedSeries[k]||0) + safeNum(b.amount_billed);
+  });
+  payments.forEach(p=>{
+    const d = new Date(p.date_paid || p.created_at || Date.now());
+    const k = groupKeyForDate(d, gran);
+    collectedSeries[k] = (collectedSeries[k]||0) + safeNum(p.amount_paid);
+  });
+
+  const keys = Array.from(new Set([...Object.keys(billedSeries), ...Object.keys(collectedSeries)])).sort();
+  keys.forEach(k=>{
+    const bsum = safeNum(billedSeries[k]);
+    const csum = safeNum(collectedSeries[k]);
+    atRiskSeries[k] = Math.max(0, bsum - csum);
+  });
+
+  const payerAgg = {};
+  billed.forEach(b=>{
+    const payer = (b.payer || "Unknown").trim() || "Unknown";
+    payerAgg[payer] = payerAgg[payer] || { underpaid:0, expected:0, paid:0, count:0 };
+    payerAgg[payer].underpaid += safeNum(b.underpaid_amount);
+    payerAgg[payer].expected += safeNum(b.expected_insurance);
+    payerAgg[payer].paid += safeNum(b.insurance_paid || b.paid_amount);
+    payerAgg[payer].count += 1;
+  });
+  const payerTop = Object.entries(payerAgg)
+    .sort((a,b)=>b[1].underpaid - a[1].underpaid)
+    .slice(0,8)
+    .map(([payer,v])=>({ payer, ...v }));
+
+  return {
+    kpis: {
+      totalBilled, collectedTotal, revenueAtRisk,
+      grossCollectionRate, netCollectionRate,
+      underpaidAmt, underpaidCount,
+      patientRespTotal, patientCollected, patientOutstanding,
+      allowedTotal, contractualTotal,
+      negotiationCases: underpayCases.length
+    },
+    statusCounts,
+    series: { gran, keys, billed: keys.map(k=>safeNum(billedSeries[k])), collected: keys.map(k=>safeNum(collectedSeries[k])), atRisk: keys.map(k=>safeNum(atRiskSeries[k])) },
+    payerTop
+  };
+}
+
+
 // ===== ROUTER =====
 const server = http.createServer(async (req, res) => {
   const parsed = url.parse(req.url, true);
@@ -2505,234 +2638,230 @@ if (method === "GET" && pathname === "/weekly-summary") {
 }
   // dashboard with empty-state previews and tooltips
   if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) {
-    const a = computeAnalytics(org.org_id);
-    const payTrend = computePaymentTrends(org.org_id);
-const limits = getLimitProfile(org.org_id);
+
+    const limits = getLimitProfile(org.org_id);
     const usage = getUsage(org.org_id);
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
-    const paymentAllowance = paymentRowsAllowance(org.org_id);
-    const planBadge = (limits.mode==="monthly") ? `<span class="badge ok">Monthly Active</span>` : `<span class="badge warn">Pilot Active</span>`;
-    // counts for empty-state charts
-    const caseCount = countOrgCases(org.org_id);
-    const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
 
-    // Payment upload queue grouped by source_file
-    const allPay = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
-    const paymentFilesMap = {};
-    allPay.forEach(p => {
-      const sf = (p.source_file || "").trim();
-      if (!sf) return;
-      if (!paymentFilesMap[sf]) paymentFilesMap[sf] = { source_file: sf, count: 0, latest: p.created_at || p.date_paid || nowISO() };
-      paymentFilesMap[sf].count += 1;
-      const dt = new Date(p.created_at || p.date_paid || Date.now()).getTime();
-      const cur = new Date(paymentFilesMap[sf].latest || 0).getTime();
-      if (dt > cur) paymentFilesMap[sf].latest = (p.created_at || p.date_paid || nowISO());
-    });
-    const paymentQueue = Object.values(paymentFilesMap)
-      .sort((a,b) => new Date(b.latest).getTime() - new Date(a.latest).getTime())
-      .slice(0, 8);
+    const preset = (parsed.query.range || "last30").toLowerCase();
+    const customStart = parseDateOnly(parsed.query.start || "");
+    const customEnd = parseDateOnly(parsed.query.end || "");
 
-    // Build "My Cases" listing
-    const allCases = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id && !c.paid);
-    let caseTable = "";
-    if (allCases.length === 0) {
-      caseTable = `<p class="muted">No cases yet. Upload denial documents to begin.</p>`;
-    } else {
-      // sort by created_at desc
-      allCases.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
-      // Determine whether a case is paid and the date
-      const todayStr = new Date().toISOString().split('T')[0];
-      const rows = allCases.map(c => {
-        const displayStatus = c.paid ? "Complete" : c.status;
-        let link = "";
-        if (c.status === "DRAFT_READY") link = `<a href="/draft?case_id=${encodeURIComponent(c.case_id)}">${safeStr(c.case_id)}</a>`;
-        else link = `<a href="/status?case_id=${encodeURIComponent(c.case_id)}">${safeStr(c.case_id)}</a>`;
-        // Payment cell: if paid show date, else show form
-        let paymentCell = "";
-        if (c.paid) {
-          paymentCell = `<span class="badge ok">Paid</span><br><span class="small">${new Date(c.paid_at).toLocaleDateString()}</span>`;
-        } else {
-          paymentCell = `<form method="POST" action="/case/mark-paid" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
-            <input type="hidden" name="case_id" value="${safeStr(c.case_id)}"/>
-            <input type="date" name="paid_at" value="${todayStr}" required/>
-            <input type="text" name="paid_amount" placeholder="Paid amount" required style="width:100px"/>
-            <button class="btn small" type="submit">Mark Paid</button>
-          </form>`;
-        }
-        return `<tr>
-          <td>${link}</td>
-          <td>${safeStr(displayStatus)}</td>
-          <td>${new Date(c.created_at).toLocaleDateString()}</td>
-          <td>${paymentCell}</td>
-        </tr>`;
-      }).join("");
-      caseTable = `<table><thead><tr><th>Case ID</th><th>Status</th><th>Created</th><th>Payment</th></tr></thead><tbody>${rows}</tbody></table>`;
+    let r = rangeFromPreset(preset);
+    let startDate = r.start;
+    let endDate = r.end;
+
+    if (preset === "custom" && customStart && customEnd) {
+      startDate = customStart;
+      endDate = new Date(customEnd.getTime());
+      endDate.setUTCHours(23,59,59,999);
     }
 
-    const html = page("Dashboard & Analytics", `
-      <h2>Dashboard</h2>
-      <p class="muted">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
-      ${planBadge}
-      <div class="hr"></div>
+    const m = computeDashboardMetrics(org.org_id, startDate, endDate, preset);
 
-      <h3>Analytics & Trends</h3>
-      <div class="row">
-        <div class="col">
-          <div class="kpi-card"><h4>Total Billed <span class="tooltip">ⓘ<span class="tooltiptext">Total number of billed claims uploaded from EMR/EHR files.</span></span></h4><p>${a.billed_total}</p></div>
-          <div class="kpi-card"><h4>Pending <span class="tooltip">ⓘ<span class="tooltiptext">Billed claims not yet marked Paid or Denied.</span></span></h4><p>${a.billed_pending}</p></div>
-          <div class="kpi-card"><h4>Denied <span class="tooltip">ⓘ<span class="tooltiptext">Billed claims marked Denied.</span></span></h4><p>${a.billed_denied}</p></div>
-          <div class="kpi-card"><h4>Paid <span class="tooltip">ⓘ<span class="tooltiptext">Billed claims marked Paid (auto-matched or manual).</span></span></h4><p>${a.billed_paid}</p></div>
+    const planBadge = (limits.mode==="monthly")
+      ? `<span class="badge ok">Monthly Active</span>`
+      : `<span class="badge warn">Pilot Active</span>`;
+
+    const percentCollected = m.kpis.totalBilled > 0 ? Math.round((m.kpis.collectedTotal / m.kpis.totalBilled) * 100) : 0;
+    const barColor = percentCollected >= 70 ? "#16a34a" : (percentCollected >= 30 ? "#f59e0b" : "#dc2626");
+
+    const rangeLabel = (() => {
+      if (preset === "today") return "Today";
+      if (preset === "last7") return "Last 7 days";
+      if (preset === "last30") return "Last 30 days";
+      if (preset === "thismonth") return "This month";
+      if (preset === "thisyear") return "This year";
+      if (preset === "custom") return "Custom range";
+      return "Last 30 days";
+    })();
+
+    const payerRows = (m.payerTop || []).map(x => `
+      <tr>
+        <td>${safeStr(x.payer)}</td>
+        <td>$${Number(x.paid||0).toFixed(2)}</td>
+        <td>$${Number(x.expected||0).toFixed(2)}</td>
+        <td>$${Number(x.underpaid||0).toFixed(2)}</td>
+      </tr>
+    `).join("");
+
+    const html = page("Dashboard", `
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+        <div>
+          <h2 style="margin-bottom:4px;">Dashboard</h2>
+          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
+          ${planBadge}
         </div>
-        <div class="col">
-          <div class="kpi-card"><h4>Denial Rate <span class="tooltip">ⓘ<span class="tooltiptext">Denied claims divided by total billed claims (percent).</span></span></h4><p>${a.billed_denial_rate}%</p></div>
-          <div class="kpi-card"><h4>Payment Conversion <span class="tooltip">ⓘ<span class="tooltiptext">Paid claims divided by total billed claims (percent).</span></span></h4><p>${a.billed_payment_conversion}%</p></div>
-          <div class="kpi-card"><h4>Avg Days to Payment <span class="tooltip">ⓘ<span class="tooltiptext">Average days from denial date (or billed date) to payment date.</span></span></h4><p>${a.avgDaysToPayment !== null ? a.avgDaysToPayment + " days" : "—"}</p></div>
-          <div class="kpi-card"><h4>Avg Time to Resolution <span class="tooltip">ⓘ<span class="tooltiptext">Average days from billed date to payment date.</span></span></h4><p>${a.avgTimeToResolution !== null ? a.avgTimeToResolution + " days" : "—"}</p></div>
-        </div>
+
+        <form method="GET" action="/dashboard" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+          <div style="display:flex;flex-direction:column;min-width:220px;">
+            <label>Date Range</label>
+            <select name="range" onchange="this.form.submit()">
+              <option value="today"${preset==="today"?" selected":""}>Today</option>
+              <option value="last7"${preset==="last7"?" selected":""}>Last 7 Days</option>
+              <option value="last30"${preset==="last30"?" selected":""}>Last 30 Days</option>
+              <option value="thismonth"${preset==="thismonth"?" selected":""}>This Month</option>
+              <option value="thisyear"${preset==="thisyear"?" selected":""}>This Year</option>
+              <option value="custom"${preset==="custom"?" selected":""}>Custom</option>
+            </select>
+          </div>
+
+          <div style="display:flex;flex-direction:column;min-width:150px;">
+            <label>Start</label>
+            <input type="date" name="start" value="${safeStr((parsed.query.start||""))}" ${preset==="custom"?"":"disabled"} />
+          </div>
+
+          <div style="display:flex;flex-direction:column;min-width:150px;">
+            <label>End</label>
+            <input type="date" name="end" value="${safeStr((parsed.query.end||""))}" ${preset==="custom"?"":"disabled"} />
+          </div>
+
+          <div style="padding-bottom:2px;">
+            <button class="btn secondary" type="submit" ${preset==="custom"?"":"disabled"}>Apply</button>
+          </div>
+        </form>
       </div>
 
       <div class="hr"></div>
 
+      <h3>Revenue Health <span class="tooltip">ⓘ<span class="tooltiptext">High-level revenue performance for the selected date range.</span></span></h3>
+
+      <div style="margin-top:8px;">
+        <div style="height:14px;background:#e5e7eb;border-radius:999px;overflow:hidden;">
+          <div style="width:${percentCollected}%;height:100%;background:${barColor};transition:width .4s ease;"></div>
+        </div>
+        <div class="small muted" style="margin-top:6px;">${percentCollected}% of billed revenue collected · Range: ${safeStr(rangeLabel)}</div>
+      </div>
+
+      <div class="row" style="margin-top:14px;">
+        <div class="col">
+          <div class="kpi-card"><h4>Total Billed <span class="tooltip">ⓘ<span class="tooltiptext">Sum of billed charges in the selected date range.</span></span></h4><p>${fmtMoney(m.kpis.totalBilled)}</p></div>
+          <div class="kpi-card"><h4>Total Collected <span class="tooltip">ⓘ<span class="tooltiptext">Insurance collected + patient collected (based on uploaded data).</span></span></h4><p>${fmtMoney(m.kpis.collectedTotal)}</p></div>
+          <div class="kpi-card"><h4>Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Billed minus collected.</span></span></h4><p>${fmtMoney(m.kpis.revenueAtRisk)}</p></div>
+        </div>
+
+        <div class="col">
+          <div class="kpi-card"><h4>Gross Collection Rate <span class="tooltip">ⓘ<span class="tooltiptext">Collected / Billed.</span></span></h4><p>${Number(m.kpis.grossCollectionRate||0).toFixed(1)}%</p></div>
+          <div class="kpi-card"><h4>Net Collection Rate <span class="tooltip">ⓘ<span class="tooltiptext">Collected / Allowed (when allowed is provided).</span></span></h4><p>${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p></div>
+          <div class="kpi-card"><h4>Negotiation Cases <span class="tooltip">ⓘ<span class="tooltiptext">Auto-created underpayment negotiation cases in this date range.</span></span></h4><p>${m.kpis.negotiationCases}</p></div>
+        </div>
+
+        <div class="col">
+          <div class="kpi-card"><h4>Underpaid Amount <span class="tooltip">ⓘ<span class="tooltiptext">Total underpaid dollars based on expected insurance vs paid.</span></span></h4><p>${fmtMoney(m.kpis.underpaidAmt)}</p></div>
+          <div class="kpi-card"><h4>Underpaid Claims <span class="tooltip">ⓘ<span class="tooltiptext">Count of billed claims marked Underpaid.</span></span></h4><p>${m.kpis.underpaidCount}</p></div>
+          <div class="kpi-card"><h4>Patient Outstanding <span class="tooltip">ⓘ<span class="tooltiptext">Patient responsibility minus patient collected.</span></span></h4><p>${fmtMoney(m.kpis.patientOutstanding)}</p></div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
       <div class="row">
         <div class="col">
-          <h3>Claim Status Distribution <span class="tooltip">ⓘ<span class="tooltiptext">Donut chart showing Pending vs Denied vs Paid billed claims.</span></span></h3>
-          <canvas id="billedStatusDonut" height="140"></canvas>
+          <h3>Revenue Trend <span class="tooltip">ⓘ<span class="tooltiptext">Billed vs collected over time (bucketed by ${safeStr(m.series.gran)}).</span></span></h3>
+          <canvas id="revTrend" height="140"></canvas>
         </div>
         <div class="col">
-          <h3>Denial Aging (From Denial Date) <span class="tooltip">ⓘ<span class="tooltiptext">Counts of denied/unpaid claims by days since denial date (30/60/90+).</span></span></h3>
-          <canvas id="denialAgingChart" height="140"></canvas>
+          <h3>Claim Status Mix <span class="tooltip">ⓘ<span class="tooltiptext">Distribution of claim statuses for the selected range.</span></span></h3>
+          <canvas id="statusMix" height="140"></canvas>
         </div>
       </div>
 
       <div class="row">
         <div class="col">
-          <h3>Top Payers by Total Paid <span class="tooltip">ⓘ<span class="tooltiptext">Bar chart of payers with highest total paid dollars.</span></span></h3>
-          <canvas id="topPayersChart" height="160"></canvas>
+          <h3>Underpayment by Payer <span class="tooltip">ⓘ<span class="tooltiptext">Top payers by total underpaid dollars.</span></span></h3>
+          <canvas id="underpayPayer" height="160"></canvas>
+          <div style="overflow:auto;margin-top:10px;">
+            <table>
+              <thead><tr><th>Payer</th><th>Paid</th><th>Expected</th><th>Underpaid</th></tr></thead>
+              <tbody>${payerRows || `<tr><td colspan="4" class="muted">No payer data in this range.</td></tr>`}</tbody>
+            </table>
+          </div>
         </div>
         <div class="col">
-          <h3>Monthly Payment Trend <span class="tooltip">ⓘ<span class="tooltiptext">Line chart of total paid dollars by month.</span></span></h3>
-          <canvas id="paymentTrendChart" height="160"></canvas>
+          <h3>Patient Revenue <span class="tooltip">ⓘ<span class="tooltiptext">Patient responsibility vs collected and outstanding.</span></span></h3>
+          <canvas id="patientRev" height="160"></canvas>
+
+          <div class="btnRow" style="margin-top:10px;">
+            <a class="btn" href="/billed">Billed Claims</a>
+            <a class="btn secondary" href="/upload">Denial &amp; Payment Upload</a>
+            <a class="btn secondary" href="/report">Reports</a>
+          </div>
         </div>
       </div>
+
+      <div class="hr"></div>
+
+      <h3>Usage <span class="tooltip">ⓘ<span class="tooltiptext">Pilot or plan usage for your organization.</span></span></h3>
+      ${
+        limits.mode === "pilot" ? `
+        <ul class="muted">
+          <li>Cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total}</li>
+          <li>Payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included}</li>
+        </ul>` : `
+        <ul class="muted">
+          <li>Cases used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month}</li>
+          <li>Overage cases: ${usage.monthly_case_overage_count}</li>
+          <li>Payment rows used: ${usage.monthly_payment_rows_used}</li>
+        </ul>`
+      }
 
       <script>
         (function(){
           if (!window.Chart) return;
 
-          const pending = Number(${a.billed_pending || 0});
-          const denied = Number(${a.billed_denied || 0});
-          const paid = Number(${a.billed_paid || 0});
-
-          const aging = ${JSON.stringify(a.agingFromDenial || {over30:0, over60:0, over90:0})};
-
-          const payByPayer = ${JSON.stringify(a.payByPayer || {})};
-          const payerEntries = Object.entries(payByPayer)
-            .map(([payer, info]) => ({ payer, total: Number(info.total || 0) }))
-            .sort((x,y)=>y.total-x.total)
-            .slice(0, 8);
-
-          const payerLabels = payerEntries.map(x=>x.payer);
-          const payerTotals = payerEntries.map(x=>x.total);
-
-          const trend = ${JSON.stringify(payTrend.byMonth || {})};
-          const months = Object.keys(trend).sort();
-          const monthTotals = months.map(k => Number(trend[k].total || 0));
-
-          new Chart(document.getElementById("billedStatusDonut"), {
-            type: "doughnut",
-            data: { labels: ["Pending","Denied","Paid"], datasets: [{ data: [pending, denied, paid] }] },
-            options: { responsive: true }
-          });
-
-          new Chart(document.getElementById("denialAgingChart"), {
-            type: "bar",
-            data: { labels: ["30+ days","60+ days","90+ days"], datasets: [{ label: "Denied/Unpaid", data: [aging.over30, aging.over60, aging.over90] }] },
-            options: { responsive: true }
-          });
-
-          new Chart(document.getElementById("topPayersChart"), {
-            type: "bar",
-            data: { labels: payerLabels, datasets: [{ label: "Total Paid", data: payerTotals }] },
-            options: { responsive: true }
-          });
-
-          new Chart(document.getElementById("paymentTrendChart"), {
+          const series = JSON.parse(${JSON.stringify("${safeStr(JSON.stringify(m.series))}")}.replace(/^"|"$/g,""));
+          new Chart(document.getElementById("revTrend"), {
             type: "line",
-            data: { labels: months, datasets: [{ label: "Total Paid", data: monthTotals }] },
+            data: {
+              labels: series.keys,
+              datasets: [
+                { label: "Billed", data: series.billed },
+                { label: "Collected", data: series.collected },
+                { label: "At Risk", data: series.atRisk }
+              ]
+            },
+            options: { responsive: true }
+          });
+
+          const st = JSON.parse(${JSON.stringify("${safeStr(JSON.stringify(m.statusCounts))}")}.replace(/^"|"$/g,""));
+          new Chart(document.getElementById("statusMix"), {
+            type: "doughnut",
+            data: {
+              labels: ["Paid","Patient Balance","Underpaid","Denied","Pending"],
+              datasets: [{ data: [st["Paid"]||0, st["Patient Balance"]||0, st["Underpaid"]||0, st["Denied"]||0, st["Pending"]||0] }]
+            },
+            options: { responsive: true }
+          });
+
+          const pt = JSON.parse(${JSON.stringify("${safeStr(JSON.stringify(m.payerTop))}")}.replace(/^"|"$/g,""));
+          new Chart(document.getElementById("underpayPayer"), {
+            type: "bar",
+            data: {
+              labels: pt.map(x=>x.payer),
+              datasets: [{ label: "Underpaid ($)", data: pt.map(x=>Number(x.underpaid||0)) }]
+            },
+            options: { responsive: true }
+          });
+
+          new Chart(document.getElementById("patientRev"), {
+            type: "bar",
+            data: {
+              labels: ["Patient Responsibility","Collected","Outstanding"],
+              datasets: [{
+                label: "Patient $",
+                data: [${Number(m.kpis.patientRespTotal||0)}, ${Number(m.kpis.patientCollected||0)}, ${Number(m.kpis.patientOutstanding||0)}]
+              }]
+            },
             options: { responsive: true }
           });
         })();
       </script>
 
-      <div class="hr"></div>
-      <h3>Denial Cases</h3>
-      ${caseTable}
-
-      <div class="hr"></div>
-      <h3>Summary</h3>
-      <div class="row">
-        <div class="col">
-          <h4>Payer Summary</h4>
-          ${
-            (() => {
-              const a = computeAnalytics(org.org_id);
-              const payers = Object.entries(a.payByPayer);
-              if (payers.length === 0) return "<p class='muted small'>No payment data yet.</p>";
-              const list = payers.sort((x,y) => y[1].total - x[1].total).slice(0,4).map(([payer, info]) => `<div><strong>${safeStr(payer)}</strong>: $${Number(info.total).toFixed(2)} (${info.count} payments)</div>`).join("");
-              return list;
-            })()
-          }
-        </div>
-        <div class="col">
-          <h4>Usage</h4>
-          ${
-            limits.mode === "pilot" ? `
-            <ul class="muted small">
-              <li>Cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total}</li>
-              <li>Payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included}</li>
-            </ul>
-            ` : `
-            <ul class="muted small">
-              <li>Cases used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month}</li>
-              <li>Overage cases: ${usage.monthly_case_overage_count}</li>
-              <li>Payment rows used: ${usage.monthly_payment_rows_used}</li>
-            </ul>
-            `
-          }
-        </div>
-      </div>
-
-      <div class="hr"></div>
-      <h3>Usage Limits</h3>
-      ${
-        limits.mode==="pilot" ? `
-        <ul class="muted">
-          <li>Cases remaining: ${PILOT_LIMITS.max_cases_total - caseCount} / ${PILOT_LIMITS.max_cases_total} <span class="tooltip">ⓘ<span class="tooltiptext">Maximum number of cases you can upload during your current plan.</span></span></li>
-          <li>AI jobs/hour: ${PILOT_LIMITS.max_ai_jobs_per_hour} <span class="tooltip">ⓘ<span class="tooltiptext">Number of AI processing jobs you can run per hour.</span></span></li>
-          <li>Concurrent processing: ${PILOT_LIMITS.max_concurrent_analyzing} <span class="tooltip">ⓘ<span class="tooltiptext">Maximum number of cases or payments processed at the same time.</span></span></li>
-          <li>Payment rows remaining: ${paymentRowsAllowance(org.org_id).remaining} of ${PILOT_LIMITS.payment_records_included}</li>
-        </ul>
-        ` : `
-        <ul class="muted">
-          <li>Case credits used: ${usage.monthly_case_credits_used} / ${limits.case_credits_per_month} <span class="tooltip">ⓘ<span class="tooltiptext">Number of cases processed out of your monthly allotment.</span></span></li>
-          <li>Overage cases: ${usage.monthly_case_overage_count} (est. $${usage.monthly_case_overage_count * limits.overage_price_per_case})</li>
-          <li>Payment rows remaining: ${paymentRowsAllowance(org.org_id).remaining}</li>
-        </ul>
-        `
-      }
-
-      <div class="btnRow">
-        <a class="btn" href="/upload">Start Denial & Appeal Mgmt</a>
-        <a class="btn secondary" href="/payments">Revenue Mgmt</a>
-        <a class="btn secondary" href="/report?type=payment_detail">Payment Details</a>
-        
-      </div>
     `, navUser(), {showChat:true});
+
     return send(res, 200, html);
   }
 
-  
-  
   // --------- BILLED CLAIMS UPLOAD (EMR/EHR EXPORT INTAKE) ----------
   // Submission-based view: each upload creates a submission batch. Click into a batch to manage individual claims.
   if (method === "GET" && pathname === "/billed") {
