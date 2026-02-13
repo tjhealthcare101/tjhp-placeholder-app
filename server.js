@@ -2515,7 +2515,7 @@ const limits = getLimitProfile(org.org_id);
         </p>
 
         <div class="hr"></div>
-        <h3>${Upload Billed Claims <span class="tooltip">ⓘ<span class="tooltiptext">Upload a billed claims CSV from your EMR/EHR. This creates a submission batch you can manage.</span></span>}</h3>
+        <h3>Upload Billed Claims <span class="tooltip">ⓘ<span class="tooltiptext">Upload a billed claims CSV from your EMR/EHR. This creates a submission batch you can manage.</span></span></h3>
         <p class="muted small">Upload CSV (recommended). Excel files are stored but not parsed in v1.</p>
         <form method="POST" action="/billed/upload" enctype="multipart/form-data">
           <label>Upload CSV/XLS/XLSX</label>
@@ -2527,7 +2527,7 @@ const limits = getLimitProfile(org.org_id);
         </form>
 
         <div class="hr"></div>
-        <h3>${Submission Batches <span class="tooltip">ⓘ<span class="tooltiptext">Each billed claims upload is stored as a batch. Use this table to track progress by batch and open the batch to manage individual claims.</span></span>}</h3>
+        <h3>Submission Batches <span class="tooltip">ⓘ<span class="tooltiptext">Each billed claims upload is stored as a batch. Use this table to track progress by batch and open the batch to manage individual claims.</span></span></h3>
         <div style="overflow:auto;">
           <table>
             <thead>
@@ -2642,15 +2642,15 @@ const limits = getLimitProfile(org.org_id);
       <p class="muted"><strong>File:</strong> ${safeStr(sub.original_filename || "billed_upload")} · <strong>Uploaded:</strong> ${sub.uploaded_at ? new Date(sub.uploaded_at).toLocaleString() : "—"} · <strong>Total claims:</strong> ${totalClaims}</p>
 
       <div class="hr"></div>
-      <h3>${Submission Financial Summary <span class="tooltip">ⓘ<span class="tooltiptext">Snapshot of billed revenue, collected revenue, and revenue at risk for this submission batch.</span></span>}</h3>
+      <h3>Submission Financial Summary <span class="tooltip">ⓘ<span class="tooltiptext">Snapshot of billed revenue, collected revenue, and revenue at risk for this submission batch.</span></span></h3>
       <div class="row">
         <div class="col">
-          <div class="kpi-card"><h4>${Total Billed <span class="tooltip">ⓘ<span class="tooltiptext">Sum of billed amounts for all claims in this submission.</span></span>}</h4><p>$${totalBilledAmount.toFixed(2)}</p></div>
-          <div class="kpi-card"><h4>${Revenue Collected <span class="tooltip">ⓘ<span class="tooltiptext">Sum of paid amounts for claims marked Paid in this submission.</span></span>}</h4><p>$${revenueCollected.toFixed(2)}</p></div>
-          <div class="kpi-card"><h4>${Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Total billed minus collected. Includes Pending + Denied amounts.</span></span>}</h4><p>$${revenueAtRisk.toFixed(2)}</p></div>
+          <div class="kpi-card"><h4>Total Billed <span class="tooltip">ⓘ<span class="tooltiptext">Sum of billed amounts for all claims in this submission.</span></span></h4><p>$${totalBilledAmount.toFixed(2)}</p></div>
+          <div class="kpi-card"><h4>Revenue Collected <span class="tooltip">ⓘ<span class="tooltiptext">Sum of paid amounts for claims marked Paid in this submission.</span></span></h4><p>$${revenueCollected.toFixed(2)}</p></div>
+          <div class="kpi-card"><h4>Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Total billed minus collected. Includes Pending + Denied amounts.</span></span></h4><p>$${revenueAtRisk.toFixed(2)}</p></div>
         </div>
         <div class="col">
-          <div class="kpi-card"><h4>${Collection Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percent of billed dollars collected in this submission.</span></span>}</h4><p>${collectionRate}%</p></div>
+          <div class="kpi-card"><h4>Collection Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percent of billed dollars collected in this submission.</span></span></h4><p>${collectionRate}%</p></div>
           <div style="margin-top:20px;">
             <div style="height:22px;background:#e5e7eb;border-radius:12px;overflow:hidden;">
               <div style="width:${collectionRate}%;height:100%;background:${barColor};transition:width 0.4s ease;"></div>
@@ -2661,7 +2661,7 @@ const limits = getLimitProfile(org.org_id);
       </div>
 
       <div class="hr"></div>
-      <h3>${Bulk Actions <span class="tooltip">ⓘ<span class="tooltiptext">Apply a status to all claims in this submission batch. Use Reset to fix mistakes.</span></span>}</h3>
+      <h3>Bulk Actions <span class="tooltip">ⓘ<span class="tooltiptext">Apply a status to all claims in this submission batch. Use Reset to fix mistakes.</span></span></h3>
       <form method="POST" action="/billed/bulk-update" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
         <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
         <div style="display:flex;flex-direction:column;">
@@ -2681,7 +2681,7 @@ const limits = getLimitProfile(org.org_id);
       </form>
 
       <div class="hr"></div>
-      <h3>${Claims in this Submission <span class="tooltip">ⓘ<span class="tooltiptext">Filter and manage individual claims. Mark Paid/Denied or Reset to Pending.</span></span>}</h3>
+      <h3>Claims in this Submission <span class="tooltip">ⓘ<span class="tooltiptext">Filter and manage individual claims. Mark Paid/Denied or Reset to Pending.</span></span></h3>
       <form method="GET" action="/billed" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
         <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
         <div style="display:flex;flex-direction:column;min-width:220px;">
