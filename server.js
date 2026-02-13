@@ -69,6 +69,7 @@ const FILES = {
   audit: path.join(DATA_DIR, "audit.json"),
   templates: path.join(DATA_DIR, "templates.json"),
   billed: path.join(DATA_DIR, "billed.json"),
+  billed_submissions: path.join(DATA_DIR, "billed_submissions.json"),
 };
 
 // Directory for storing uploaded template files
@@ -195,6 +196,7 @@ ensureFile(FILES.audit, []);
 ensureDir(TEMPLATES_DIR);
 ensureFile(FILES.templates, []);
 ensureFile(FILES.billed, []);
+ensureFile(FILES.billed_submissions, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -1329,7 +1331,7 @@ const server = http.createServer(async (req, res) => {
 
     const orgs = readJSON(FILES.orgs, []);
     const org_id = uuid();
-    orgs.push({ org_id, org_name: orgName, created_at: denied_at, account_status:"active" });
+    orgs.push({ org_id, org_name: orgName, created_at: nowISO(), account_status:"active" });
     writeJSON(FILES.orgs, orgs);
 
     users.push({
@@ -2298,8 +2300,93 @@ const limits = getLimitProfile(org.org_id);
       <div class="hr"></div>
 
       <h3>Analytics & Trends</h3>
-      <div class="chart-placeholder">Denial trends chart will appear here when data is available.</div>
-      <div class="chart-placeholder">Payment trends chart will appear here when data is available.</div>
+      <div class="row">
+        <div class="col">
+          <div class="kpi-card"><h4>Total Billed <span class="tooltip">ⓘ<span class="tooltiptext">Total number of billed claims uploaded from EMR/EHR files.</span></span></h4><p>${a.billed_total}</p></div>
+          <div class="kpi-card"><h4>Pending <span class="tooltip">ⓘ<span class="tooltiptext">Billed claims not yet marked Paid or Denied.</span></span></h4><p>${a.billed_pending}</p></div>
+          <div class="kpi-card"><h4>Denied <span class="tooltip">ⓘ<span class="tooltiptext">Billed claims marked Denied.</span></span></h4><p>${a.billed_denied}</p></div>
+          <div class="kpi-card"><h4>Paid <span class="tooltip">ⓘ<span class="tooltiptext">Billed claims marked Paid (auto-matched or manual).</span></span></h4><p>${a.billed_paid}</p></div>
+        </div>
+        <div class="col">
+          <div class="kpi-card"><h4>Denial Rate <span class="tooltip">ⓘ<span class="tooltiptext">Denied claims divided by total billed claims (percent).</span></span></h4><p>${a.billed_denial_rate}%</p></div>
+          <div class="kpi-card"><h4>Payment Conversion <span class="tooltip">ⓘ<span class="tooltiptext">Paid claims divided by total billed claims (percent).</span></span></h4><p>${a.billed_payment_conversion}%</p></div>
+          <div class="kpi-card"><h4>Avg Days to Payment <span class="tooltip">ⓘ<span class="tooltiptext">Average days from denial date (or billed date) to payment date.</span></span></h4><p>${a.avgDaysToPayment !== null ? a.avgDaysToPayment + " days" : "—"}</p></div>
+          <div class="kpi-card"><h4>Avg Time to Resolution <span class="tooltip">ⓘ<span class="tooltiptext">Average days from billed date to payment date.</span></span></h4><p>${a.avgTimeToResolution !== null ? a.avgTimeToResolution + " days" : "—"}</p></div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="row">
+        <div class="col">
+          <h3>Claim Status Distribution <span class="tooltip">ⓘ<span class="tooltiptext">Donut chart showing Pending vs Denied vs Paid billed claims.</span></span></h3>
+          <canvas id="billedStatusDonut" height="140"></canvas>
+        </div>
+        <div class="col">
+          <h3>Denial Aging (From Denial Date) <span class="tooltip">ⓘ<span class="tooltiptext">Counts of denied/unpaid claims by days since denial date (30/60/90+).</span></span></h3>
+          <canvas id="denialAgingChart" height="140"></canvas>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <h3>Top Payers by Total Paid <span class="tooltip">ⓘ<span class="tooltiptext">Bar chart of payers with highest total paid dollars.</span></span></h3>
+          <canvas id="topPayersChart" height="160"></canvas>
+        </div>
+        <div class="col">
+          <h3>Monthly Payment Trend <span class="tooltip">ⓘ<span class="tooltiptext">Line chart of total paid dollars by month.</span></span></h3>
+          <canvas id="paymentTrendChart" height="160"></canvas>
+        </div>
+      </div>
+
+      <script>
+        (function(){
+          if (!window.Chart) return;
+
+          const pending = Number(${a.billed_pending || 0});
+          const denied = Number(${a.billed_denied || 0});
+          const paid = Number(${a.billed_paid || 0});
+
+          const aging = ${JSON.stringify(a.agingFromDenial || {over30:0, over60:0, over90:0})};
+
+          const payByPayer = ${JSON.stringify(a.payByPayer || {})};
+          const payerEntries = Object.entries(payByPayer)
+            .map(([payer, info]) => ({ payer, total: Number(info.total || 0) }))
+            .sort((x,y)=>y.total-x.total)
+            .slice(0, 8);
+
+          const payerLabels = payerEntries.map(x=>x.payer);
+          const payerTotals = payerEntries.map(x=>x.total);
+
+          const trend = ${JSON.stringify(payTrend.byMonth || {})};
+          const months = Object.keys(trend).sort();
+          const monthTotals = months.map(k => Number(trend[k].total || 0));
+
+          new Chart(document.getElementById("billedStatusDonut"), {
+            type: "doughnut",
+            data: { labels: ["Pending","Denied","Paid"], datasets: [{ data: [pending, denied, paid] }] },
+            options: { responsive: true }
+          });
+
+          new Chart(document.getElementById("denialAgingChart"), {
+            type: "bar",
+            data: { labels: ["30+ days","60+ days","90+ days"], datasets: [{ label: "Denied/Unpaid", data: [aging.over30, aging.over60, aging.over90] }] },
+            options: { responsive: true }
+          });
+
+          new Chart(document.getElementById("topPayersChart"), {
+            type: "bar",
+            data: { labels: payerLabels, datasets: [{ label: "Total Paid", data: payerTotals }] },
+            options: { responsive: true }
+          });
+
+          new Chart(document.getElementById("paymentTrendChart"), {
+            type: "line",
+            data: { labels: months, datasets: [{ label: "Total Paid", data: monthTotals }] },
+            options: { responsive: true }
+          });
+        })();
+      </script>
 
       <div class="hr"></div>
       <h3>Denial Cases</h3>
@@ -2369,10 +2456,12 @@ const limits = getLimitProfile(org.org_id);
   }
 
   
+  
   // --------- BILLED CLAIMS UPLOAD (EMR/EHR EXPORT INTAKE) ----------
-  // Stores billed claims. Payments uploaded later will auto-match by claim number and mark these as Paid.
+  // Submission-based view: each upload creates a submission batch. Click into a batch to manage individual claims.
   if (method === "GET" && pathname === "/billed") {
-    // Filters
+    const submission_id = (parsed.query.submission_id || "").trim();
+
     const q = (parsed.query.q || "").trim().toLowerCase();
     const statusF = (parsed.query.status || "").trim();
     const payerF = (parsed.query.payer || "").trim();
@@ -2380,18 +2469,103 @@ const limits = getLimitProfile(org.org_id);
     const end = (parsed.query.end || "").trim();
 
     const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+    const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
+
+    // Submission overview (default)
+    if (!submission_id) {
+      // Build submission summary rows
+      const subsRows = subsAll
+        .sort((a,b)=> new Date(b.uploaded_at||0).getTime() - new Date(a.uploaded_at||0).getTime())
+        .map(s => {
+          const claims = billedAll.filter(b => b.submission_id === s.submission_id);
+          const totalClaims = claims.length;
+          const paidCount = claims.filter(b => (b.status||"Pending")==="Paid").length;
+          const deniedCount = claims.filter(b => (b.status||"Pending")==="Denied").length;
+          const pendingCount = claims.filter(b => (b.status||"Pending")==="Pending").length;
+
+          const totalBilledAmt = claims.reduce((sum,b)=> sum + Number(b.amount_billed||0), 0);
+          const collectedAmt = claims
+            .filter(b => (b.status||"Pending")==="Paid")
+            .reduce((sum,b)=> sum + Number(b.paid_amount || b.amount_billed || 0), 0);
+          const atRiskAmt = Math.max(0, totalBilledAmt - collectedAmt);
+
+          const dt = s.uploaded_at ? new Date(s.uploaded_at) : null;
+          const dtStr = dt ? dt.toLocaleString() : "—";
+
+          return `<tr>
+            <td>${safeStr(dtStr)}</td>
+            <td>${safeStr(s.original_filename || "billed_upload")}</td>
+            <td>${totalClaims}</td>
+            <td>$${totalBilledAmt.toFixed(2)}</td>
+            <td>${paidCount}</td>
+            <td>${deniedCount}</td>
+            <td>${pendingCount}</td>
+            <td>$${collectedAmt.toFixed(2)}</td>
+            <td>$${atRiskAmt.toFixed(2)}</td>
+            <td><a href="/billed?submission_id=${encodeURIComponent(s.submission_id)}">View</a></td>
+          </tr>`;
+        }).join("");
+
+      const html = page("Billed Claims Upload", `
+        <h2>Billed Claims Upload</h2>
+        <p class="muted">
+          Upload billed claims exported from your EMR/EHR. Each upload is stored as a <strong>submission batch</strong>.
+          Click <strong>View</strong> to manage individual claims in that batch. Uploading payments later under
+          <strong>Denial &amp; Payment Upload</strong> will auto-match by claim number and mark billed claims as <strong>Paid</strong>.
+        </p>
+
+        <div class="hr"></div>
+        <h3>${Upload Billed Claims <span class="tooltip">ⓘ<span class="tooltiptext">Upload a billed claims CSV from your EMR/EHR. This creates a submission batch you can manage.</span></span>}</h3>
+        <p class="muted small">Upload CSV (recommended). Excel files are stored but not parsed in v1.</p>
+        <form method="POST" action="/billed/upload" enctype="multipart/form-data">
+          <label>Upload CSV/XLS/XLSX</label>
+          <input type="file" name="billedfile" accept=".csv,.xls,.xlsx" required />
+          <div class="btnRow">
+            <button class="btn" type="submit">Upload Billed Claims</button>
+            <a class="btn secondary" href="/dashboard">Back</a>
+          </div>
+        </form>
+
+        <div class="hr"></div>
+        <h3>${Submission Batches <span class="tooltip">ⓘ<span class="tooltiptext">Each billed claims upload is stored as a batch. Use this table to track progress by batch and open the batch to manage individual claims.</span></span>}</h3>
+        <div style="overflow:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Submission Date/Time</th>
+                <th>File Name</th>
+                <th>Total Claims</th>
+                <th>Total Billed Amount</th>
+                <th>Paid</th>
+                <th>Denied</th>
+                <th>Pending</th>
+                <th>Revenue Collected</th>
+                <th>Revenue At Risk</th>
+                <th>View</th>
+              </tr>
+            </thead>
+            <tbody>${subsRows || `<tr><td colspan="10" class="muted">No submissions yet. Upload a billed claims file above.</td></tr>`}</tbody>
+          </table>
+        </div>
+      `, navUser(), {showChat:true});
+      return send(res, 200, html);
+    }
+
+    // Submission detail view
+    const sub = subsAll.find(s => s.submission_id === submission_id);
+    if (!sub) return redirect(res, "/billed");
 
     const startDt = start ? new Date(start + "T00:00:00.000Z") : null;
     const endDt = end ? new Date(end + "T23:59:59.999Z") : null;
 
-    let billed = billedAll.filter(b => {
+    let billed = billedAll.filter(b => b.submission_id === submission_id);
+
+    billed = billed.filter(b => {
       const created = b.created_at ? new Date(b.created_at) : new Date(0);
       if (startDt && created < startDt) return false;
       if (endDt && created > endDt) return false;
-
       if (statusF && (b.status || "Pending") !== statusF) return false;
       if (payerF && String(b.payer || "").trim() !== payerF) return false;
-
       if (q) {
         const hay = `${b.claim_number || ""} ${b.patient_name || ""} ${b.payer || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
@@ -2399,89 +2573,120 @@ const limits = getLimitProfile(org.org_id);
       return true;
     });
 
-    // Build payer options
-    const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
+    const payerOpts = Array.from(new Set(billedAll.filter(b=>b.submission_id===submission_id).map(b => (b.payer || "").trim()).filter(Boolean))).sort();
 
-    // Stats
-    const total = billedAll.length;
-    const pending = billedAll.filter(b => (b.status || "Pending") === "Pending").length;
-    const paid = billedAll.filter(b => (b.status || "Pending") === "Paid").length;
-    const denied = billedAll.filter(b => (b.status || "Pending") === "Denied").length;
+    // Summary metrics for this submission
+    const claimsAll = billedAll.filter(b => b.submission_id === submission_id);
+    const totalClaims = claimsAll.length;
+    const paidClaims = claimsAll.filter(b => (b.status||"Pending")==="Paid");
+    const deniedClaims = claimsAll.filter(b => (b.status||"Pending")==="Denied");
+    const pendingClaims = claimsAll.filter(b => (b.status||"Pending")==="Pending");
 
-    const rows = billed.slice(0, 300).map(b => {
+    const totalBilledAmount = claimsAll.reduce((sum, b) => sum + Number(b.amount_billed || 0), 0);
+    const revenueCollected = paidClaims.reduce((sum, b) => sum + Number(b.paid_amount || b.amount_billed || 0), 0);
+    const revenueAtRisk = Math.max(0, totalBilledAmount - revenueCollected);
+    const collectionRate = totalBilledAmount > 0 ? Math.round((revenueCollected / totalBilledAmount) * 100) : 0;
+
+    const barColor = collectionRate >= 80 ? "#065f46" : (collectionRate >= 60 ? "#f59e0b" : "#b91c1c");
+
+    const rows = billed.slice(0, 500).map(b => {
       const st = (b.status || "Pending");
+      const today = new Date().toISOString().split("T")[0];
+
       const action = (() => {
         if (st === "Pending") {
-          const today = new Date().toISOString().split("T")[0];
           return `
             <form method="POST" action="/billed/mark-paid" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
               <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+              <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
               <input type="date" name="paid_at" value="${today}" required style="width:160px;"/>
               <input type="text" name="paid_amount" placeholder="Paid amount" style="width:120px;"/>
               <button class="btn small" type="submit">Mark Paid</button>
             </form>
             <form method="POST" action="/billed/mark-denied" style="display:flex;gap:6px;flex-wrap:wrap;">
               <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+              <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
               <input type="date" name="denied_at" value="${today}" required style="width:160px;"/>
               <button class="btn danger small" type="submit">Mark Denied</button>
             </form>
           `;
         }
-        if (st === "Denied") {
-          const link = b.denial_case_id ? `/status?case_id=${encodeURIComponent(b.denial_case_id)}` : "";
-          return link ? `<a href="${link}">Open Denial Case</a>` : `<span class="muted small">Case pending</span>`;
-        }
-        if (st === "Paid") {
-          return `<a href="/report?type=payment_detail">View Payments</a>`;
-        }
-        return "";
+        // Paid or Denied → allow reset to Pending
+        return `
+          <form method="POST" action="/billed/reset" style="display:flex;gap:6px;flex-wrap:wrap;">
+            <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+            <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
+            <button class="btn secondary small" type="submit">Reset to Pending</button>
+          </form>
+        `;
       })();
+
+      const statusCell = `${safeStr(st)}${
+        st==="Paid" && b.paid_at ? `<div class="small muted">Paid: ${new Date(b.paid_at).toLocaleDateString()}</div>` : ""
+      }${
+        st==="Denied" && b.denied_at ? `<div class="small muted">Denied: ${new Date(b.denied_at).toLocaleDateString()}</div>` : ""
+      }`;
 
       return `<tr>
         <td>${safeStr(b.claim_number || "")}</td>
         <td>${safeStr(b.dos || "")}</td>
         <td>${safeStr(b.payer || "")}</td>
         <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
-        <td>${safeStr(st)}</td>
+        <td>${statusCell}</td>
         <td>${action}</td>
       </tr>`;
     }).join("");
 
-    const html = page("Billed Claims Upload", `
-      <h2>Billed Claims Upload</h2>
-      <p class="muted">
-        Upload billed claims exported from your EMR/EHR. These are stored as your master billed list.
-        When you upload payments later under <strong>Denial &amp; Payment Upload</strong>, matching claim numbers will automatically mark billed claims as <strong>Paid</strong>.
-        If a claim is denied, click <strong>Mark Denied</strong> to send it into the denial workflow to draft an appeal letter.
-      </p>
+    const html = page("Billed Submission", `
+      <h2>Billed Claims Submission</h2>
+      <p class="muted"><strong>File:</strong> ${safeStr(sub.original_filename || "billed_upload")} · <strong>Uploaded:</strong> ${sub.uploaded_at ? new Date(sub.uploaded_at).toLocaleString() : "—"} · <strong>Total claims:</strong> ${totalClaims}</p>
 
+      <div class="hr"></div>
+      <h3>${Submission Financial Summary <span class="tooltip">ⓘ<span class="tooltiptext">Snapshot of billed revenue, collected revenue, and revenue at risk for this submission batch.</span></span>}</h3>
       <div class="row">
         <div class="col">
-          <div class="kpi-card"><h4>Total Billed</h4><p>${total}</p></div>
-          <div class="kpi-card"><h4>Pending</h4><p>${pending}</p></div>
-          <div class="kpi-card"><h4>Paid</h4><p>${paid}</p></div>
-          <div class="kpi-card"><h4>Denied</h4><p>${denied}</p></div>
+          <div class="kpi-card"><h4>${Total Billed <span class="tooltip">ⓘ<span class="tooltiptext">Sum of billed amounts for all claims in this submission.</span></span>}</h4><p>$${totalBilledAmount.toFixed(2)}</p></div>
+          <div class="kpi-card"><h4>${Revenue Collected <span class="tooltip">ⓘ<span class="tooltiptext">Sum of paid amounts for claims marked Paid in this submission.</span></span>}</h4><p>$${revenueCollected.toFixed(2)}</p></div>
+          <div class="kpi-card"><h4>${Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Total billed minus collected. Includes Pending + Denied amounts.</span></span>}</h4><p>$${revenueAtRisk.toFixed(2)}</p></div>
+        </div>
+        <div class="col">
+          <div class="kpi-card"><h4>${Collection Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percent of billed dollars collected in this submission.</span></span>}</h4><p>${collectionRate}%</p></div>
+          <div style="margin-top:20px;">
+            <div style="height:22px;background:#e5e7eb;border-radius:12px;overflow:hidden;">
+              <div style="width:${collectionRate}%;height:100%;background:${barColor};transition:width 0.4s ease;"></div>
+            </div>
+            <div class="small muted" style="margin-top:6px;">${collectionRate}% of billed revenue has been collected</div>
+          </div>
         </div>
       </div>
 
       <div class="hr"></div>
-      <h3>Upload Billed Claims</h3>
-      <p class="muted small">Upload CSV (recommended). Excel files are stored but not parsed in v1.</p>
-      <form method="POST" action="/billed/upload" enctype="multipart/form-data">
-        <label>Upload CSV/XLS/XLSX</label>
-        <input type="file" name="billedfile" accept=".csv,.xls,.xlsx" required />
-        <div class="btnRow">
-          <button class="btn" type="submit">Upload Billed Claims</button>
-          <a class="btn secondary" href="/dashboard">Back</a>
+      <h3>${Bulk Actions <span class="tooltip">ⓘ<span class="tooltiptext">Apply a status to all claims in this submission batch. Use Reset to fix mistakes.</span></span>}</h3>
+      <form method="POST" action="/billed/bulk-update" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+        <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
+        <div style="display:flex;flex-direction:column;">
+          <label>Action</label>
+          <select name="action" required>
+            <option value="paid">Mark All Paid</option>
+            <option value="denied">Mark All Denied</option>
+            <option value="reset">Reset All to Pending</option>
+          </select>
         </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Date (paid/denied)</label>
+          <input type="date" name="date" />
+        </div>
+        <button class="btn" type="submit">Apply</button>
+        <a class="btn secondary" href="/billed">Back to Submissions</a>
       </form>
 
       <div class="hr"></div>
-      <h3>Billed Claims</h3>
+      <h3>${Claims in this Submission <span class="tooltip">ⓘ<span class="tooltiptext">Filter and manage individual claims. Mark Paid/Denied or Reset to Pending.</span></span>}</h3>
       <form method="GET" action="/billed" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+        <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
         <div style="display:flex;flex-direction:column;min-width:220px;">
-          <label>Search (Claim/Payer/Patient)</label>
-          <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Search..." />
+          <label>Search</label>
+          <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim/Payer/Patient..." />
         </div>
         <div style="display:flex;flex-direction:column;">
           <label>Status</label>
@@ -2509,7 +2714,7 @@ const limits = getLimitProfile(org.org_id);
         </div>
         <div>
           <button class="btn" type="submit" style="margin-top:1.6em;">Filter</button>
-          <a class="btn secondary" href="/billed" style="margin-top:1.6em;">Reset</a>
+          <a class="btn secondary" href="/billed?submission_id=${encodeURIComponent(submission_id)}" style="margin-top:1.6em;">Reset</a>
         </div>
       </form>
 
@@ -2517,13 +2722,13 @@ const limits = getLimitProfile(org.org_id);
       <div style="overflow:auto;">
         <table>
           <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Status</th><th>Action</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="6" class="muted">No billed claims found.</td></tr>`}</tbody>
+          <tbody>${rows || `<tr><td colspan="6" class="muted">No claims found for this filter.</td></tr>`}</tbody>
         </table>
-        <p class="muted small">Showing ${Math.min(300, billed.length)} of ${billed.length} filtered results.</p>
+        <p class="muted small">Showing ${Math.min(500, billed.length)} of ${billed.length} filtered results in this submission.</p>
       </div>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
-}
+  }
 
   if (method === "POST" && pathname === "/billed/upload") {
     const contentType = req.headers["content-type"] || "";
@@ -2544,7 +2749,7 @@ const limits = getLimitProfile(org.org_id);
         <h2>Billed Claims Upload</h2>
         <p class="error">Only CSV or Excel files are allowed.</p>
         <div class="btnRow"><a class="btn secondary" href="/billed">Back</a></div>
-      `, navUser());
+      `, navUser(), {showChat:true});
       return send(res, 400, html);
     }
 
@@ -2554,8 +2759,22 @@ const limits = getLimitProfile(org.org_id);
     const stored = path.join(dir, `${Date.now()}_${(f.filename || "billed").replace(/[^a-zA-Z0-9._-]/g,"_")}`);
     fs.writeFileSync(stored, f.buffer);
 
-    let rowsAdded = 0;
+    const submission_id = uuid();
+    const uploaded_at = nowISO();
+    const original_filename = f.filename || "billed_upload";
 
+    // Create submission metadata now; update claim_count after parsing CSV
+    const subs = readJSON(FILES.billed_submissions, []);
+    subs.push({
+      submission_id,
+      org_id: org.org_id,
+      uploaded_at,
+      original_filename,
+      claim_count: 0
+    });
+    writeJSON(FILES.billed_submissions, subs);
+
+    let rowsAdded = 0;
     if (isCSV) {
       const text = f.buffer.toString("utf8");
       const parsedCSV = parseCSV(text);
@@ -2564,21 +2783,22 @@ const limits = getLimitProfile(org.org_id);
       const billed = readJSON(FILES.billed, []);
 
       for (const r of rows) {
-        const claim = pickField(r, ["claim", "claim#", "claim number", "claimnumber", "clm"]).trim();
+        const claim = (pickField(r, ["claim", "claim#", "claim number", "claimnumber", "clm"]) || "").trim();
         if (!claim) continue;
 
         // Avoid duplicates per org by claim number
         const exists = billed.find(b => b.org_id === org.org_id && String(b.claim_number || "") === claim);
         if (exists) continue;
 
-        const payer = pickField(r, ["payer", "insurance", "carrier", "plan"]).trim();
-        const amt = pickField(r, ["billed", "charge", "amount billed", "total charge", "charges"]).trim();
-        const dos = pickField(r, ["dos", "date of service", "service date"]).trim();
-        const patient = pickField(r, ["patient", "member", "name"]).trim();
+        const payer = (pickField(r, ["payer", "insurance", "carrier", "plan"]) || "").trim();
+        const amt = (pickField(r, ["billed", "charge", "amount billed", "total charge", "charges"]) || "").trim();
+        const dos = (pickField(r, ["dos", "date of service", "service date"]) || "").trim();
+        const patient = (pickField(r, ["patient", "member", "name"]) || "").trim();
 
         billed.push({
           billed_id: uuid(),
           org_id: org.org_id,
+          submission_id,
           claim_number: claim,
           patient_name: patient || "",
           dos: dos || "",
@@ -2590,12 +2810,20 @@ const limits = getLimitProfile(org.org_id);
           denied_at: null,
           denial_case_id: null,
           source_file: path.basename(stored),
-          created_at: nowISO()
+          created_at: uploaded_at
         });
         rowsAdded += 1;
       }
 
       writeJSON(FILES.billed, billed);
+
+      // update submission claim_count
+      const subs2 = readJSON(FILES.billed_submissions, []);
+      const s = subs2.find(x => x.submission_id === submission_id && x.org_id === org.org_id);
+      if (s) {
+        s.claim_count = rowsAdded;
+        writeJSON(FILES.billed_submissions, subs2);
+      }
     }
 
     const html = page("Billed Claims Upload", `
@@ -2603,28 +2831,28 @@ const limits = getLimitProfile(org.org_id);
       <p class="muted">Your billed claims file was uploaded successfully.</p>
       <ul class="muted">
         <li><strong>File:</strong> ${safeStr(f.filename)}</li>
+        <li><strong>Submission created:</strong> ${safeStr(new Date(uploaded_at).toLocaleString())}</li>
         <li><strong>Claims added:</strong> ${isCSV ? rowsAdded : "File stored (Excel not parsed — export to CSV for import)"}</li>
       </ul>
       <div class="btnRow">
-        <a class="btn" href="/billed">View Billed Claims</a>
-        <a class="btn secondary" href="/dashboard">Back to Dashboard</a>
+        <a class="btn" href="/billed?submission_id=${encodeURIComponent(submission_id)}">View This Submission</a>
+        <a class="btn secondary" href="/billed">Back to Submissions</a>
       </div>
-    `, navUser());
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
-}
+  }
 
-  
   if (method === "POST" && pathname === "/billed/mark-paid") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const billed_id = params.get("billed_id") || "";
-    const denied_at = params.get("denied_at") || nowISO();
+    const submission_id = (params.get("submission_id") || "").trim();
     const paid_at = params.get("paid_at") || nowISO();
     const paid_amount_in = (params.get("paid_amount") || "").trim();
 
     const billed = readJSON(FILES.billed, []);
     const b = billed.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
-    if (!b) return redirect(res, "/billed");
+    if (!b) return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
 
     b.status = "Paid";
     b.paid_at = paid_at;
@@ -2632,84 +2860,251 @@ const limits = getLimitProfile(org.org_id);
 
     writeJSON(FILES.billed, billed);
 
+    // Create payment row for analytics (avoid duplicate manual-billed for same claim+date)
     const paymentsData = readJSON(FILES.payments, []);
-    paymentsData.push({
-      payment_id: uuid(),
-      org_id: org.org_id,
-      claim_number: b.claim_number || "",
-      payer: b.payer || "",
-      amount_paid: b.paid_amount || 0,
-      date_paid: paid_at,
-      source_file: "manual-billed",
-      created_at: nowISO(),
-      denied_approved: false
-    });
-    writeJSON(FILES.payments, paymentsData);
+    const existsPay = paymentsData.find(p => p.org_id === org.org_id && p.source_file === "manual-billed" && String(p.claim_number||"")===String(b.claim_number||"") && String(p.date_paid||"")===String(paid_at||""));
+    if (!existsPay) {
+      paymentsData.push({
+        payment_id: uuid(),
+        org_id: org.org_id,
+        claim_number: b.claim_number || "",
+        payer: b.payer || "",
+        amount_paid: b.paid_amount || 0,
+        date_paid: paid_at,
+        source_file: "manual-billed",
+        created_at: nowISO(),
+        denied_approved: false
+      });
+      writeJSON(FILES.payments, paymentsData);
+    }
 
     auditLog({ actor:"user", action:"billed_mark_paid", org_id: org.org_id, billed_id, paid_at, paid_amount: b.paid_amount });
-    return redirect(res, "/billed");
+    return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
   }
 
-if (method === "POST" && pathname === "/billed/mark-denied") {
+  if (method === "POST" && pathname === "/billed/mark-denied") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const billed_id = params.get("billed_id") || "";
+    const submission_id = (params.get("submission_id") || "").trim();
+    const denied_at = params.get("denied_at") || nowISO();
 
     const billed = readJSON(FILES.billed, []);
     const b = billed.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
-    if (!b) return redirect(res, "/billed");
+    if (!b) return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
 
-    // Create a denial case (no document yet, but it enters denial workflow)
+    // Create a denial case (no document yet, but it enters denial workflow) if not already created
+    let cid = b.denial_case_id || "";
     const cases = readJSON(FILES.cases, []);
-    const cid = uuid();
 
-    cases.push({
-      case_id: cid,
-      org_id: org.org_id,
-      created_by_user_id: user.user_id,
-      created_at: nowISO(),
-      status: "UPLOAD_RECEIVED",
-      notes: `Auto-created from billed claims. Claim #: ${b.claim_number} | Payer: ${b.payer} | DOS: ${b.dos}`,
-      files: [],
-      template_id: "",
-      paid: false,
-      paid_at: null,
-      paid_amount: null,
-      ai_started_at: null,
-      ai: {
-        denial_summary: null,
-        appeal_considerations: null,
-        draft_text: null,
-        denial_reason_category: null,
-        missing_info: [],
-        time_to_draft_seconds: 0
+    if (!cid) {
+      cid = uuid();
+      cases.push({
+        case_id: cid,
+        org_id: org.org_id,
+        created_by_user_id: user.user_id,
+        created_at: denied_at,
+        status: "UPLOAD_RECEIVED",
+        notes: `Auto-created from billed claims. Claim #: ${b.claim_number} | Payer: ${b.payer} | DOS: ${b.dos}`,
+        files: [],
+        template_id: "",
+        paid: false,
+        paid_at: null,
+        paid_amount: null,
+        ai_started_at: null,
+        ai: {
+          denial_summary: null,
+          appeal_considerations: null,
+          draft_text: null,
+          denial_reason_category: null,
+          missing_info: [],
+          time_to_draft_seconds: 0
+        }
+      });
+      writeJSON(FILES.cases, cases);
+
+      // Start AI if capacity
+      const cases2 = readJSON(FILES.cases, []);
+      const cObj = cases2.find(x => x.case_id === cid && x.org_id === org.org_id);
+      if (cObj) {
+        const okAI = canStartAI(org.org_id);
+        if (okAI.ok) {
+          cObj.status = "ANALYZING";
+          cObj.ai_started_at = nowISO();
+          writeJSON(FILES.cases, cases2);
+          recordAIJob(org.org_id);
+        }
       }
-    });
-
-    writeJSON(FILES.cases, cases);
+    } else {
+      // ensure persisted cases
+      writeJSON(FILES.cases, cases);
+    }
 
     b.status = "Denied";
     b.denied_at = denied_at;
     b.denial_case_id = cid;
     writeJSON(FILES.billed, billed);
 
-    // Start AI if capacity
-    const cases2 = readJSON(FILES.cases, []);
-    const cObj = cases2.find(x => x.case_id === cid && x.org_id === org.org_id);
-    if (cObj) {
-      const okAI = canStartAI(org.org_id);
-      if (okAI.ok) {
-        cObj.status = "ANALYZING";
-        cObj.ai_started_at = nowISO();
-        writeJSON(FILES.cases, cases2);
-        recordAIJob(org.org_id);
-      }
-    }
-
-    auditLog({ actor:"user", action:"billed_mark_denied", org_id: org.org_id, billed_id, case_id: cid });
-    return redirect(res, `/status?case_id=${encodeURIComponent(cid)}`);
+    auditLog({ actor:"user", action:"billed_mark_denied", org_id: org.org_id, billed_id, case_id: cid, denied_at });
+    return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : `/status?case_id=${encodeURIComponent(cid)}`);
   }
 
+  if (method === "POST" && pathname === "/billed/reset") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const billed_id = params.get("billed_id") || "";
+    const submission_id = (params.get("submission_id") || "").trim();
+
+    const billed = readJSON(FILES.billed, []);
+    const b = billed.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+    if (!b) return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
+
+    // If previously paid, remove manual-billed payment rows for this claim (do not remove payment uploads from source files)
+    if ((b.status || "Pending") === "Paid") {
+      const paymentsData = readJSON(FILES.payments, []);
+      const filtered = paymentsData.filter(p => !(p.org_id === org.org_id && p.source_file === "manual-billed" && String(p.claim_number||"") === String(b.claim_number||"")));
+      writeJSON(FILES.payments, filtered);
+    }
+
+    // If previously denied, remove the auto-created denial case (only if it has no files to avoid deleting uploaded docs)
+    if ((b.status || "Pending") === "Denied" && b.denial_case_id) {
+      const cases = readJSON(FILES.cases, []);
+      const filteredCases = cases.filter(c => !(c.org_id === org.org_id && c.case_id === b.denial_case_id && (!c.files || c.files.length === 0)));
+      writeJSON(FILES.cases, filteredCases);
+    }
+
+    b.status = "Pending";
+    b.paid_at = null;
+    b.paid_amount = null;
+    b.denied_at = null;
+    b.denial_case_id = null;
+    writeJSON(FILES.billed, billed);
+
+    auditLog({ actor:"user", action:"billed_reset_pending", org_id: org.org_id, billed_id });
+    return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
+  }
+
+  if (method === "POST" && pathname === "/billed/bulk-update") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const submission_id = (params.get("submission_id") || "").trim();
+    const action = (params.get("action") || "").trim(); // paid|denied|reset
+    const date = (params.get("date") || "").trim();
+
+    if (!submission_id || !action) return redirect(res, "/billed");
+
+    const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+    const targetIds = billed.filter(b => b.submission_id === submission_id).map(b => b.billed_id);
+    if (!targetIds.length) return redirect(res, `/billed?submission_id=${encodeURIComponent(submission_id)}`);
+
+    const billedAll = readJSON(FILES.billed, []);
+    let changed = 0;
+
+    if (action === "paid") {
+      const paid_at = date || nowISO();
+      const paymentsData = readJSON(FILES.payments, []);
+      for (const b of billedAll) {
+        if (b.org_id !== org.org_id) continue;
+        if (b.submission_id !== submission_id) continue;
+        if ((b.status || "Pending") === "Paid") continue;
+
+        b.status = "Paid";
+        b.paid_at = paid_at;
+        b.paid_amount = Number(b.amount_billed || 0);
+        b.denied_at = b.denied_at || null;
+
+        const existsPay = paymentsData.find(p => p.org_id === org.org_id && p.source_file === "manual-billed" && String(p.claim_number||"")===String(b.claim_number||"") && String(p.date_paid||"")===String(paid_at||""));
+        if (!existsPay) {
+          paymentsData.push({
+            payment_id: uuid(),
+            org_id: org.org_id,
+            claim_number: b.claim_number || "",
+            payer: b.payer || "",
+            amount_paid: b.paid_amount || 0,
+            date_paid: paid_at,
+            source_file: "manual-billed",
+            created_at: nowISO(),
+            denied_approved: false
+          });
+        }
+        changed++;
+      }
+      writeJSON(FILES.payments, paymentsData);
+      writeJSON(FILES.billed, billedAll);
+    } else if (action === "denied") {
+      const denied_at = date || nowISO();
+      const cases = readJSON(FILES.cases, []);
+      for (const b of billedAll) {
+        if (b.org_id !== org.org_id) continue;
+        if (b.submission_id !== submission_id) continue;
+        if ((b.status || "Pending") === "Denied") continue;
+
+        // Create denial case if missing
+        if (!b.denial_case_id) {
+          const cid = uuid();
+          cases.push({
+            case_id: cid,
+            org_id: org.org_id,
+            created_by_user_id: user.user_id,
+            created_at: denied_at,
+            status: "UPLOAD_RECEIVED",
+            notes: `Auto-created from billed claims (bulk). Claim #: ${b.claim_number} | Payer: ${b.payer} | DOS: ${b.dos}`,
+            files: [],
+            template_id: "",
+            paid: false,
+            paid_at: null,
+            paid_amount: null,
+            ai_started_at: null,
+            ai: {
+              denial_summary: null,
+              appeal_considerations: null,
+              draft_text: null,
+              denial_reason_category: null,
+              missing_info: [],
+              time_to_draft_seconds: 0
+            }
+          });
+          b.denial_case_id = cid;
+        }
+
+        b.status = "Denied";
+        b.denied_at = denied_at;
+        b.paid_at = null;
+        b.paid_amount = null;
+        changed++;
+      }
+      writeJSON(FILES.cases, cases);
+      writeJSON(FILES.billed, billedAll);
+    } else if (action === "reset") {
+      // Remove manual-billed payments and empty-file denial cases for this submission
+      const paymentsData = readJSON(FILES.payments, []);
+      const cases = readJSON(FILES.cases, []);
+
+      const claimNos = new Set(billedAll.filter(b => b.org_id === org.org_id && b.submission_id === submission_id).map(b => String(b.claim_number||"")));
+      const denialCaseIds = new Set(billedAll.filter(b => b.org_id === org.org_id && b.submission_id === submission_id && b.denial_case_id).map(b => b.denial_case_id));
+
+      const paymentsFiltered = paymentsData.filter(p => !(p.org_id === org.org_id && p.source_file === "manual-billed" && claimNos.has(String(p.claim_number||""))));
+      writeJSON(FILES.payments, paymentsFiltered);
+
+      const casesFiltered = cases.filter(c => !(c.org_id === org.org_id && denialCaseIds.has(c.case_id) && (!c.files || c.files.length === 0)));
+      writeJSON(FILES.cases, casesFiltered);
+
+      for (const b of billedAll) {
+        if (b.org_id !== org.org_id) continue;
+        if (b.submission_id !== submission_id) continue;
+        b.status = "Pending";
+        b.paid_at = null;
+        b.paid_amount = null;
+        b.denied_at = null;
+        b.denial_case_id = null;
+        changed++;
+      }
+      writeJSON(FILES.billed, billedAll);
+    }
+
+    auditLog({ actor:"user", action:"billed_bulk_update", org_id: org.org_id, submission_id, bulk_action: action, date });
+    return redirect(res, `/billed?submission_id=${encodeURIComponent(submission_id)}`);
+  }
 // --------- CASE UPLOAD ----------
   if (method === "GET" && pathname === "/upload") {
     const allTemplates = readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id);
@@ -3905,7 +4300,42 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       `;
     }
 
-    else if (type === "payers") {
+    
+    else if (type === "kpi_payment_speed") {
+      const a2 = computeAnalytics(org.org_id);
+      body += `
+        <h3>Average Days to Payment <span class="tooltip">ⓘ<span class="tooltiptext">Average days from denial date (or billed date) to payment date for paid billed claims.</span></span></h3>
+        <div class="kpi-card"><h4>Avg Days to Payment <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Indicates faster revenue recovery.</span></span></h4><p>${a2.avgDaysToPayment !== null ? a2.avgDaysToPayment + " days" : "—"}</p></div>
+      `;
+    }
+    else if (type === "kpi_denial_turnaround") {
+      const a2 = computeAnalytics(org.org_id);
+      body += `
+        <h3>Denial Turnaround Time <span class="tooltip">ⓘ<span class="tooltiptext">Average days between denial date and denial case creation (work start).</span></span></h3>
+        <div class="kpi-card"><h4>Avg Denial Turnaround <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Measures how quickly denials enter the appeal workflow.</span></span></h4><p>${a2.avgDenialTurnaround !== null ? a2.avgDenialTurnaround + " days" : "—"}</p></div>
+      `;
+    }
+    else if (type === "kpi_resolution_time") {
+      const a2 = computeAnalytics(org.org_id);
+      body += `
+        <h3>Time to Resolution <span class="tooltip">ⓘ<span class="tooltiptext">Average days between billed date and payment date for paid billed claims.</span></span></h3>
+        <div class="kpi-card"><h4>Avg Time to Resolution <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Measures billing-to-cash cycle time.</span></span></h4><p>${a2.avgTimeToResolution !== null ? a2.avgTimeToResolution + " days" : "—"}</p></div>
+      `;
+    }
+    else if (type === "kpi_denial_aging") {
+      const a2 = computeAnalytics(org.org_id);
+      const ag = a2.agingFromDenial || { over30: 0, over60: 0, over90: 0 };
+      body += `
+        <h3>Denial Aging (From Denial Date) <span class="tooltip">ⓘ<span class="tooltiptext">Counts of denied/unpaid claims grouped by how long since denial date.</span></span></h3>
+        <ul class="muted">
+          <li>30+ Days <span class="tooltip">ⓘ<span class="tooltiptext">Denied/unpaid claims older than 30 days since denial date.</span></span>: ${ag.over30}</li>
+          <li>60+ Days <span class="tooltip">ⓘ<span class="tooltiptext">Denied/unpaid claims older than 60 days since denial date.</span></span>: ${ag.over60}</li>
+          <li>90+ Days <span class="tooltip">ⓘ<span class="tooltiptext">Denied/unpaid claims older than 90 days since denial date.</span></span>: ${ag.over90}</li>
+        </ul>
+      `;
+    }
+
+else if (type === "payers") {
       body += `
         <h3>Payer Breakdown</h3>
         ${
