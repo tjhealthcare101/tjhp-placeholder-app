@@ -1241,7 +1241,7 @@ function computeAnalytics(org_id) {
   const billed_payment_conversion = billed_total > 0 ? ((billed_paid / billed_total) * 100).toFixed(1) : "0.0";
 
 
- 
+  
   // ===== Lifecycle KPIs (Billed → Denied → Paid) =====
   const paymentDurations = billed
     .filter(b => (b.status || "Pending") === "Paid" && b.paid_at)
@@ -1978,7 +1978,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, `Subscription set to ${s.status} for ${email}`, "text/plain");
   }
 
- 
+  
   // Shopify webhook (automatic plan sync)
   if (method === "POST" && pathname === "/shopify/webhook") {
     const rawBody = await parseBody(req);
@@ -3152,7 +3152,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         `;
       })();
 
-     
+      
 const statusCell = (() => {
 
   const st = (b.status || "Pending");
@@ -3418,7 +3418,7 @@ return `<tr>
     return send(res, 200, html);
   }
 
- 
+  
   // --------- BILLED CLAIMS: SIMPLE RESOLUTION (progressive UI) ----------
   if (method === "POST" && pathname === "/billed/resolve") {
     const body = await parseBody(req);
@@ -3943,7 +3943,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     allCasesForStatus.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
     const recentCases = allCasesForStatus.slice(0, 8);
 
-   
+    
 const allow = paymentRowsAllowance(org.org_id);
 const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
 
@@ -3990,7 +3990,7 @@ const html = page("Denial & Payment Upload", `
         <label>Optional notes</label>
         <textarea name="notes" placeholder="Any context to help review (optional)"></textarea>
 
-       
+        
 
         <div class="btnRow" style="margin-top:16px;">
           <button class="btn" type="submit">Submit Denials</button>
@@ -5099,7 +5099,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
   }
 
 
- 
+  
   // Report export (CSV) — used by Payment Detail Report
   if (method === "GET" && pathname === "/report/export") {
     const start = parsed.query.start || "";
@@ -5380,7 +5380,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       `;
     }
 
-   
+    
     else if (type === "kpi_payment_speed") {
       const a2 = computeAnalytics(org.org_id);
       body += `
@@ -5474,3 +5474,4 @@ else if (type === "payers") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
+
