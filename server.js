@@ -4,7 +4,6 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
-const PDFDocument = require("pdfkit");
 
 // ===== Server =====
 const HOST = "0.0.0.0";
@@ -2826,15 +2825,6 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
           const st = JSON.parse(${JSON.stringify("${safeStr(JSON.stringify(m.statusCounts))}")}.replace(/^"|"$/g,""));
           new Chart(document.getElementById("statusMix"), {
-            options: {
-              onClick: function(evt, elements){
-                if(elements.length > 0){
-                  const index = elements[0].index;
-                  const label = this.data.labels[index];
-                  window.location.href = "/billed?status=" + encodeURIComponent(label);
-                }
-              }
-            },
             type: "doughnut",
             data: {
               labels: ["Paid","Patient Balance","Underpaid","Denied","Pending"],
@@ -2872,45 +2862,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     return send(res, 200, html);
   }
 
- 
-  // --------- DASHBOARD PDF EXPORT ----------
-  if (method === "GET" && pathname === "/report/export-dashboard") {
-
-    const preset = (parsed.query.range || "last30").toLowerCase();
-    const r = rangeFromPreset(preset);
-    const m = computeDashboardMetrics(org.org_id, r.start, r.end, preset);
-
-    const doc = new PDFDocument({ margin: 50 });
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "attachment; filename=dashboard-report.pdf");
-    doc.pipe(res);
-
-    doc.fontSize(20).text("TJ Healthcare Pro - Revenue Report", { align: "center" });
-    doc.moveDown();
-    doc.fontSize(12).text("Organization: " + org.org_name);
-    doc.text("Date Range: " + preset);
-    doc.moveDown();
-
-    doc.fontSize(14).text("Executive Summary");
-    doc.moveDown(0.5);
-
-    doc.fontSize(12);
-    doc.text("Total Billed: $" + Number(m.kpis.totalBilled||0).toLocaleString());
-    doc.text("Total Collected: $" + Number(m.kpis.collectedTotal||0).toLocaleString());
-    doc.text("Revenue At Risk: $" + Number(m.kpis.revenueAtRisk||0).toLocaleString());
-    doc.text("Gross Collection Rate: " + Number(m.kpis.grossCollectionRate||0).toFixed(1) + "%");
-    doc.text("Net Collection Rate: " + Number(m.kpis.netCollectionRate||0).toFixed(1) + "%");
-    doc.text("Underpaid Amount: $" + Number(m.kpis.underpaidAmt||0).toLocaleString());
-    doc.text("Patient Outstanding: $" + Number(m.kpis.patientOutstanding||0).toLocaleString());
-
-    doc.moveDown();
-    doc.text("Generated: " + new Date().toLocaleString());
-
-    doc.end();
-    return;
-  }
-
-// --------- BILLED CLAIMS UPLOAD (EMR/EHR EXPORT INTAKE) ----------
+  // --------- BILLED CLAIMS UPLOAD (EMR/EHR EXPORT INTAKE) ----------
   // Submission-based view: each upload creates a submission batch. Click into a batch to manage individual claims.
   if (method === "GET" && pathname === "/billed") {
     const submission_id = (parsed.query.submission_id || "").trim();
