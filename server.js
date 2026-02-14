@@ -2616,7 +2616,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     <h3>Top Payers This Week</h3>
     ${
       w.top3.length
-        ? `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>${w.top3.map(x => `<tr><td>${safeStr(x.payer)}</td><td>$${Number(x.total).toFixed(2)}</td></tr>`).join("")}</tbody></table>`
+        ? `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>${w.top3.map(x => `<tr><td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td><td>$${Number(x.total).toFixed(2)}</td></tr>`).join("")}</tbody></table>`
         : `<p class="muted">No payments recorded in the last 7 days.</p>`
     }
 
@@ -2678,7 +2678,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
     const payerRows = (m.payerTop || []).map(x => `
       <tr>
-        <td>${safeStr(x.payer)}</td>
+        <td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td>
         <td>$${Number(x.paid||0).toFixed(2)}</td>
         <td>$${Number(x.expected||0).toFixed(2)}</td>
         <td>$${Number(x.underpaid||0).toFixed(2)}</td>
@@ -2907,7 +2907,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <td>${pendingCount}</td>
             <td>$${collectedAmt.toFixed(2)}</td>
             <td>$${atRiskAmt.toFixed(2)}</td>
-            <td><a href="/billed?submission_id=${encodeURIComponent(s.submission_id)}">View</a></td>
+            <td><a href="/billed?submission_id=${encodeURIComponent(s.submission_id)}">View</a><form method="POST" action="/delete-batch" style="display:inline" onsubmit="return confirm('Delete this batch and all associated claims?')">  <input type="hidden" name="submission_id" value="${safeStr(s.submission_id)}"/>  <button type="submit" style="border:none;background:none;color:#b91c1c;cursor:pointer;margin-left:6px;">Delete</button></form></td>
           </tr>`;
         }).join("");
 
@@ -5421,7 +5421,7 @@ else if (type === "payers") {
         ${
           topPayers.length
             ? `<table><thead><tr><th>Payer</th><th># Payments</th><th>Total Paid</th><th>Denied Wins</th></tr></thead><tbody>${
-                topPayers.map(x => `<tr><td>${safeStr(x.payer)}</td><td>${x.count}</td><td>$${Number(x.total).toFixed(2)}</td><td>${x.deniedWins}</td></tr>`).join("")
+                topPayers.map(x => `<tr><td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td><td>${x.count}</td><td>$${Number(x.total).toFixed(2)}</td><td>${x.deniedWins}</td></tr>`).join("")
               }</tbody></table>`
             : `<p class="muted">No payer data available in this date range.</p>`
         }
@@ -5467,7 +5467,201 @@ else if (type === "payers") {
     return send(res, 200, html);
   }
 
-  // fallback
+  
+  // Delete claim batch route
+  if (method === "POST" && pathname === "/delete-batch") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const submissionId = (params.get("submission_id") || "").trim();
+      let billedAll = readJSON(FILES.billed, []);
+      let subsAll = readJSON(FILES.billed_submissions, []);
+      // Remove claims for this submission
+      billedAll = billedAll.filter(b => !(b.org_id === org.org_id && b.submission_id === submissionId));
+      subsAll = subsAll.filter(s => !(s.org_id === org.org_id && s.submission_id === submissionId));
+      writeJSON(FILES.billed, billedAll);
+      writeJSON(FILES.billed_submissions, subsAll);
+      return redirect(res, "/billed");
+    });
+    return;
+  }
+
+  // Payer Claims drill-down route
+  if (method === "GET" && pathname === "/payer-claims") {
+    const payer = (parsed.query.payer || "").trim();
+    const from = (parsed.query.from || "").trim();
+    const to = (parsed.query.to || "").trim();
+    const status = (parsed.query.status || "").trim();
+    let claims = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+    if (payer) {
+      const lp = payer.toLowerCase();
+      claims = claims.filter(b => ((b.payer || "").trim().toLowerCase() === lp));
+    }
+    if (from) {
+      const d = new Date(from);
+      claims = claims.filter(b => {
+        const dt = new Date(b.date_of_service || b.created_at || b.paid_at || b.denied_at || 0);
+        return dt.getTime() >= d.getTime();
+      });
+    }
+    if (to) {
+      const d2 = new Date(to);
+      claims = claims.filter(b => {
+        const dt = new Date(b.date_of_service || b.created_at || b.paid_at || b.denied_at || 0);
+        return dt.getTime() <= d2.getTime();
+      });
+    }
+    if (status === "paid") {
+      claims = claims.filter(b => (b.status || "").toLowerCase() === "paid");
+    } else if (status === "unpaid") {
+      claims = claims.filter(b => (b.status || "").toLowerCase() !== "paid");
+    } else if (status === "underpaid") {
+      claims = claims.filter(b => Number(b.paid_amount || 0) < Number(b.expected_amount || b.amount_billed || 0));
+    }
+    const rows = claims.slice(0, 500).map(c => {
+      const exp = Number(c.expected_amount || c.amount_billed || 0);
+      const paidAmt = Number(c.paid_amount || 0);
+      return `<tr>
+        <td>${safeStr(c.claim_number || "")}</td>
+        <td>${safeStr(c.patient_name || "")}</td>
+        <td>${safeStr(c.date_of_service || "")}</td>
+        <td>${safeStr(c.status || "Pending")}</td>
+        <td>$${exp.toFixed(2)}</td>
+        <td>$${paidAmt.toFixed(2)}</td>
+        <td><a href="/billed?submission_id=${encodeURIComponent(c.submission_id || "")}">${safeStr(c.submission_id || "View Batch")}</a></td>
+      </tr>`;
+    }).join("");
+    const html = page(`${safeStr(payer)} Claims`, `
+      <h2>${safeStr(payer)} Claims</h2>
+      <form method="GET" action="/payer-claims">
+        <input type="hidden" name="payer" value="${safeStr(payer)}"/>
+        <label>From:</label><input type="date" name="from" value="${safeStr(from)}"/>
+        <label>To:</label><input type="date" name="to" value="${safeStr(to)}"/>
+        <label>Status:</label>
+        <select name="status">
+          <option value="" ${!status ? "selected" : ""}>All</option>
+          <option value="paid" ${status==="paid" ? "selected" : ""}>Paid</option>
+          <option value="unpaid" ${status==="unpaid" ? "selected" : ""}>Unpaid</option>
+          <option value="underpaid" ${status==="underpaid" ? "selected" : ""}>Underpaid</option>
+        </select>
+        <button class="btn secondary" type="submit">Filter</button>
+      </form>
+      <table>
+        <thead><tr><th>Claim #</th><th>Patient</th><th>Date of Service</th><th>Status</th><th>Expected</th><th>Paid</th><th>Submission</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="7" class="muted">No claims found.</td></tr>`}</tbody>
+      </table>
+      <p class="muted small">${claims.length > 500 ? "Showing first 500 results." : ""}</p>
+      <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
+      <br><form method="GET" action="/analyze-payer" style="margin-top:10px;"><input type="hidden" name="payer" value="${safeStr(payer)}"/><button class="btn" type="submit">AI Analyze This Payer</button></form>
+    `, navUser(), {showChat:true});
+    return send(res, 200, html);
+  }
+
+  // AI Analyze Payer route
+  if (method === "GET" && pathname === "/analyze-payer") {
+    const payer = (parsed.query.payer || "").trim();
+    let claims = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id && ((b.payer || "").trim().toLowerCase() === payer.toLowerCase()));
+    const totalExpected = claims.reduce((sum, c) => sum + Number(c.expected_amount || c.amount_billed || 0), 0);
+    const totalPaid = claims.reduce((sum, c) => sum + Number(c.paid_amount || 0), 0);
+    const underpaidClaims = claims.filter(c => Number(c.paid_amount || 0) < Number(c.expected_amount || c.amount_billed || 0));
+    const deniedClaims = claims.filter(c => (c.status || "").toLowerCase() === "denied");
+    const appealedClaims = claims.filter(c => c.appealed === true);
+    const recoveredClaims = appealedClaims.filter(c => Number(c.paid_amount || 0) > 0);
+    const recoveryRate = appealedClaims.length ? (recoveredClaims.length / appealedClaims.length) * 100 : 0;
+    const denialRate = claims.length ? (deniedClaims.length / claims.length) * 100 : 0;
+    const denialReasons = {};
+    deniedClaims.forEach(c => {
+      const reason = c.denial_reason || (c.ai && c.ai.denial_reason_category) || "Unknown";
+      denialReasons[reason] = (denialReasons[reason] || 0) + 1;
+    });
+    const topDenials = Object.entries(denialReasons).sort((a,b) => b[1] - a[1]).slice(0,5);
+    const cptUnderpaid = {};
+    underpaidClaims.forEach(c => {
+      const code = c.cpt_code || c.cpt || "Unknown";
+      const diff = Number(c.expected_amount || c.amount_billed || 0) - Number(c.paid_amount || 0);
+      cptUnderpaid[code] = (cptUnderpaid[code] || 0) + diff;
+    });
+    const topUnderpaidCPT = Object.entries(cptUnderpaid).sort((a,b) => b[1] - a[1]).slice(0,5);
+    const paidClaims = claims.filter(c => c.paid_date || c.paid_at);
+    const avgDaysToPay = paidClaims.length ? (paidClaims.reduce((sum, c) => {
+      const dos = new Date(c.date_of_service || c.denied_at || c.created_at || 0);
+      const pd = new Date(c.paid_date || c.paid_at || 0);
+      return sum + ((pd - dos) / (1000 * 60 * 60 * 24));
+    }, 0) / paidClaims.length).toFixed(1) : 0;
+    let suggestions = [];
+    if (denialRate > 15) suggestions.push("High denial rate. Audit front-end eligibility & coding.");
+    if (recoveryRate < 50 && appealedClaims.length > 0) suggestions.push("Low appeal recovery rate. Review appeal templates.");
+    if (avgDaysToPay > 45) suggestions.push("Slow payment turnaround. Consider follow-up at 30 days.");
+    if (underpaidClaims.length > 0) suggestions.push("Underpayments detected. Audit contract reimbursement rates.");
+    if (!suggestions.length) suggestions.push("Payer performance within expected range.");
+    let grade = "A";
+    if (denialRate > 20 || recoveryRate < 40) grade = "D";
+    else if (denialRate > 15 || recoveryRate < 50) grade = "C";
+    else if (denialRate > 10 || recoveryRate < 60) grade = "B";
+    const underpayPercent = totalExpected > 0 ? ((totalExpected - totalPaid) / totalExpected * 100) : 0;
+    const html = page(`AI Payer Intelligence: ${safeStr(payer)}`, `
+      <h2>AI Payer Intelligence: ${safeStr(payer)}</h2>
+      <p><strong>Total Claims:</strong> ${claims.length}</p>
+      <p><strong>Denial Rate:</strong> ${denialRate.toFixed(1)}%</p>
+      <p><strong>Recovery Rate on Appeals:</strong> ${recoveryRate.toFixed(1)}%</p>
+      <p><strong>Average Days to Pay:</strong> ${avgDaysToPay}</p>
+      <p><strong>Total Underpaid:</strong> $${(totalExpected - totalPaid).toFixed(2)}</p>
+      <style>
+        .bar-container{background:#eee;border-radius:6px;margin-bottom:12px;}
+        .bar{height:20px;border-radius:6px;color:white;text-align:right;padding-right:5px;font-size:12px;}
+        .denial-bar{background:#d9534f;}
+        .recovery-bar{background:#5cb85c;}
+        .underpay-bar{background:#f0ad4e;}
+      </style>
+      <h3>Payer Performance Visual</h3>
+      <div class="bar-container"><div class="bar denial-bar" style="width:${Math.min(denialRate,100)}%">Denial ${denialRate.toFixed(1)}%</div></div>
+      <div class="bar-container"><div class="bar recovery-bar" style="width:${Math.min(recoveryRate,100)}%">Recovery ${recoveryRate.toFixed(1)}%</div></div>
+      <div class="bar-container"><div class="bar underpay-bar" style="width:${Math.min(underpayPercent,100)}%">Underpayment %</div></div>
+      <h3>Payer Scorecard</h3>
+      <p style="font-size:24px;">Grade: <strong>${grade}</strong></p>
+      <h3>Top Denial Reasons</h3>
+      <ul>
+        ${topDenials.map(d => `<li>${safeStr(d[0])} (${d[1]})</li>`).join("")}
+      </ul>
+      <h3>Most Underpaid CPT Codes</h3>
+      <ul>
+        ${topUnderpaidCPT.map(c => `<li>${safeStr(c[0])} — $${c[1].toFixed(2)}</li>`).join("")}
+      </ul>
+      <h3>AI Suggested Actions</h3>
+      <ul>
+        ${suggestions.map(s => `<li>${safeStr(s)}</li>`).join("")}
+      </ul>
+      <form method="POST" action="/bulk-appeal" style="margin-top:10px;">
+        <input type="hidden" name="payer" value="${safeStr(payer)}"/>
+        <button class="btn" type="submit">Send All Underpaid Claims to Appeals</button>
+      </form>
+      <div class="btnRow" style="margin-top:12px;"><a class="btn secondary" href="/dashboard">Back</a> <a class="btn secondary" href="/payer-claims?payer=${encodeURIComponent(payer)}">Back to Claims</a></div>
+    `, navUser(), {showChat:true});
+    return send(res, 200, html);
+  }
+
+  // Bulk appeal route
+  if (method === "POST" && pathname === "/bulk-appeal") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const payer = (params.get("payer") || "").trim();
+      let billedAll = readJSON(FILES.billed, []);
+      billedAll.forEach(c => {
+        if (c.org_id === org.org_id && ((c.payer || "").trim().toLowerCase() === payer.toLowerCase()) && Number(c.paid_amount || 0) < Number(c.expected_amount || c.amount_billed || 0)) {
+          c.appealed = true;
+          c.appeal_date = new Date().toISOString();
+        }
+      });
+      writeJSON(FILES.billed, billedAll);
+      return redirect(res, `/analyze-payer?payer=${encodeURIComponent(payer)}`);
+    });
+    return;
+  }
+
+// fallback
   return redirect(res, "/dashboard");
 });
 
