@@ -3019,7 +3019,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         const today = new Date().toISOString().split("T")[0];
 
         const paidFullForm = `
-          <form method="POST" action="/billed/resolve" style="display:inline-block;margin-right:6px;">
+          <form method="POST" action="/billed/resolve" style="display:inline-block;margin-right:6px;" onsubmit="return confirm('Mark this claim Paid in Full?')">
             <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
             <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
             <input type="hidden" name="action" value="paid_full"/>
@@ -3028,7 +3028,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           </form>`;
 
         const deniedForm = `
-          <form method="POST" action="/billed/resolve" style="display:inline-block;">
+          <form method="POST" action="/billed/resolve" style="display:inline-block;" onsubmit="return confirm('Mark this claim Denied and create an appeal case?')">
             <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
             <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
             <input type="hidden" name="action" value="denied"/>
@@ -3254,7 +3254,7 @@ return `<tr>
 
       <div class="hr"></div>
       <h3>Bulk Actions <span class="tooltip">ⓘ<span class="tooltiptext">Apply a status to all claims in this submission batch. Use Reset to fix mistakes.</span></span></h3>
-      <form method="POST" action="/billed/bulk-update" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <form method="POST" action="/billed/bulk-update" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;" onsubmit="return confirm('Apply this bulk action to ALL claims in this submission?')">
         <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
         <div style="display:flex;flex-direction:column;">
           <label>Action</label>
@@ -4047,7 +4047,7 @@ const html = page("Denial & Payment Upload", `
         <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx,.pdf,.doc,.docx" required style="display:none" />
         <div class="btnRow">
           <button class="btn" type="submit">Upload Payments</button>
-          <a class="btn secondary" href="/report?type=payment_detail">View Payment Details</a>
+          <a class="btn secondary" href="/payments/list">View Payment Details</a>
         </div>
       </form>
 
@@ -4064,7 +4064,7 @@ const html = page("Denial & Payment Upload", `
                     <td>${safeStr(x.source_file)}</td>
                     <td>${x.count}</td>
                     <td>${new Date(x.latest).toLocaleDateString()}</td>
-                    <td><a href="/report?type=payment_detail">Open</a></td>
+                    <td><a href="/payments/list">Open</a></td>
                   </tr>`;
                 }).join("")
               }</tbody>
@@ -5578,9 +5578,9 @@ else if (type === "payers") {
   if (method === "GET" && pathname === "/analyze-payer") {
     const payer = (parsed.query.payer || "").trim();
     let claims = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id && ((b.payer || "").trim().toLowerCase() === payer.toLowerCase()));
-    const totalExpected = claims.reduce((sum, c) => sum + Number(c.expected_amount || c.amount_billed || 0), 0);
+    const totalExpected = claims.reduce((sum, c) => sum + Number(c.expected_insurance || c.expected_amount || c.amount_billed || 0), 0);
     const totalPaid = claims.reduce((sum, c) => sum + Number(c.paid_amount || 0), 0);
-    const underpaidClaims = claims.filter(c => Number(c.paid_amount || 0) < Number(c.expected_amount || c.amount_billed || 0));
+    const underpaidClaims = claims.filter(c => Number(c.paid_amount || 0) < Number(c.expected_insurance || c.expected_amount || c.amount_billed || 0));
     const deniedClaims = claims.filter(c => (c.status || "").toLowerCase() === "denied");
     const appealedClaims = claims.filter(c => c.appealed === true);
     const recoveredClaims = appealedClaims.filter(c => Number(c.paid_amount || 0) > 0);
@@ -5595,15 +5595,15 @@ else if (type === "payers") {
     const cptUnderpaid = {};
     underpaidClaims.forEach(c => {
       const code = c.cpt_code || c.cpt || "Unknown";
-      const diff = Number(c.expected_amount || c.amount_billed || 0) - Number(c.paid_amount || 0);
+      const diff = Number(c.expected_insurance || c.expected_amount || c.amount_billed || 0) - Number(c.paid_amount || 0);
       cptUnderpaid[code] = (cptUnderpaid[code] || 0) + diff;
     });
     const topUnderpaidCPT = Object.entries(cptUnderpaid).sort((a,b) => b[1] - a[1]).slice(0,5);
     const paidClaims = claims.filter(c => c.paid_date || c.paid_at);
     const avgDaysToPay = paidClaims.length ? (paidClaims.reduce((sum, c) => {
-      const dos = new Date(c.date_of_service || c.denied_at || c.created_at || 0);
+      const dos = new Date(c.dos || c.date_of_service || c.denied_at || c.created_at || 0);
       const pd = new Date(c.paid_date || c.paid_at || 0);
-      return sum + ((pd - dos) / (1000 * 60 * 60 * 24));
+      return sum + Math.max(0, ((pd - dos) / (1000 * 60 * 60 * 24)));
     }, 0) / paidClaims.length).toFixed(1) : 0;
     let suggestions = [];
     if (denialRate > 15) suggestions.push("High denial rate. Audit front-end eligibility & coding.");
@@ -5648,7 +5648,7 @@ else if (type === "payers") {
       <ul>
         ${suggestions.map(s => `<li>${safeStr(s)}</li>`).join("")}
       </ul>
-      <form method="POST" action="/bulk-appeal" style="margin-top:10px;">
+      <form method="POST" action="/bulk-appeal" style="margin-top:10px;" onsubmit="return confirm('Send ALL underpaid claims for this payer to Appeals?')">
         <input type="hidden" name="payer" value="${safeStr(payer)}"/>
         <button class="btn" type="submit">Send All Underpaid Claims to Appeals</button>
       </form>
@@ -5684,5 +5684,4 @@ else if (type === "payers") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
 
