@@ -371,7 +371,7 @@ window.__tjhpSendChat = async function(){
     <div class="topbar">
       <div class="brand">
         <h1>TJ Healthcare Pro</h1>
-        <div class="sub">AI-Assisted Claim Review & Analytics</div>
+        <div class="sub">AI Revenue Analytics Platform</div>
       </div>
       <div class="nav">${navHtml}</div>
     </div>
@@ -513,7 +513,7 @@ const PLAN_CONFIG = {
 function getActivePlanName(org_id) {
   const sub = getSub(org_id);
   if (sub && sub.status === "active" && sub.plan) return String(sub.plan);
-  return "pilot";
+  return "free_trial";
 }
 
 function getAIChatLimit(org_id) {
@@ -1609,10 +1609,10 @@ function computeDashboardMetrics(org_id, start, end, preset){
   const payerAgg = {};
   billed.forEach(b=>{
     const payer = (b.payer || "Unknown").trim() || "Unknown";
-    payerAgg[payer] = payerAgg[payer] || { underpaid:0, expected:0, paid:0, count:0 };
-    payerAgg[payer].underpaid += safeNum(b.underpaid_amount);
-    payerAgg[payer].expected += safeNum(b.expected_insurance);
+    payerAgg[payer] = payerAgg[payer] || { billed:0, paid:0, underpaid:0, count:0 };
+    payerAgg[payer].billed += safeNum(b.amount_billed);
     payerAgg[payer].paid += safeNum(b.insurance_paid || b.paid_amount);
+    payerAgg[payer].underpaid += safeNum(b.underpaid_amount);
     payerAgg[payer].count += 1;
   });
   const payerTop = Object.entries(payerAgg)
@@ -2562,7 +2562,7 @@ if (method === "GET" && pathname === "/file") {
   // lock screen
   if (method === "GET" && pathname === "/lock") {
     const html = page("Starting", `
-      <h2 class="center">Pilot Started</h2>
+      <h2 class="center">Free Trial Started</h2>
       <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid — and surface patterns that are easy to miss when data lives in different places.</p>
       <p class="muted center">You’ll be guided to the next step automatically.</p>
       <div class="center"><span class="badge warn">Initializing</span></div>
@@ -2724,7 +2724,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
     const planBadge = (limits.mode==="monthly")
       ? `<span class="badge ok">Monthly Active</span>`
-      : `<span class="badge warn">Pilot Active</span>`;
+      : `<span class="badge warn">Free Trial</span>`;
 
     const percentCollected = m.kpis.totalBilled > 0 ? Math.round((m.kpis.collectedTotal / m.kpis.totalBilled) * 100) : 0;
     const barColor = percentCollected >= 70 ? "#16a34a" : (percentCollected >= 30 ? "#f59e0b" : "#dc2626");
@@ -2742,7 +2742,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const payerRows = (m.payerTop || []).map(x => `
       <tr>
         <td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td>
-        <td>$${Number(x.expected||0).toFixed(2)}</td>
+        <td>$${Number(x.billed||0).toFixed(2)}</td>
         <td>$${Number(x.paid||0).toFixed(2)}</td>
         <td>$${Number(x.underpaid||0).toFixed(2)}</td>
       </tr>
@@ -2752,7 +2752,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
           <h2 style="margin-bottom:4px;">Dashboard</h2>
-          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
+          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Trial ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
           ${planBadge}
         </div>
 
@@ -2821,31 +2821,38 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div class="row">
         <div class="col">
           <h3>Revenue Trend <span class="tooltip">ⓘ<span class="tooltiptext">Billed vs collected over time (bucketed by ${safeStr(m.series.gran)}).</span></span></h3>
-          <canvas id="revTrend" height="140"></canvas>
+          <div style="height:260px;"><canvas id="revTrend" style="width:100%;height:100%;"></canvas></div>
         </div>
         <div class="col">
           <h3>Claim Status Mix <span class="tooltip">ⓘ<span class="tooltiptext">Distribution of claim statuses for the selected range.</span></span></h3>
-          <canvas id="statusMix" height="140"></canvas>
+          <div style="height:260px;"><canvas id="statusMix" style="width:100%;height:100%;"></canvas></div>
         </div>
       </div>
 
       <div class="row">
         <div class="col">
+          <h3>Top Insurance Payers (Billed vs Paid vs Underpaid)</h3>
+          <div style="height:300px;">
+            <canvas id="payerBarChart" style="width:100%;height:100%;"></canvas>
+          </div>
+
+          <div class="hr"></div>
+
           <h3>Underpayment by Payer <span class="tooltip">ⓘ<span class="tooltiptext">Top payers by total underpaid dollars.</span></span></h3>
-          <canvas id="underpayPayer" height="160"></canvas>
+          <div style="height:260px;">
+            <canvas id="underpayPayer" style="width:100%;height:100%;"></canvas>
+          </div>
+
           <div style="overflow:auto;margin-top:10px;">
             <table>
               <thead><tr><th>Payer</th><th>Billed</th><th>Paid</th><th>Underpaid</th></tr></thead>
               <tbody>${payerRows || `<tr><td colspan="4" class="muted">No payer data in this range.</td></tr>`}</tbody>
             </table>
           </div>
-          <div class="hr"></div>
-          <h3>Top Insurance Payers (Billed vs Paid vs Underpaid)</h3>
-          <canvas id="payerBarChart" height="140"></canvas>
         </div>
         <div class="col">
           <h3>Patient Revenue <span class="tooltip">ⓘ<span class="tooltiptext">Patient responsibility vs collected and outstanding.</span></span></h3>
-          <canvas id="patientRev" height="160"></canvas>
+          <div style="height:260px;"><canvas id="patientRev" style="width:100%;height:100%;"></canvas></div>
 
           <div class="btnRow" style="margin-top:10px;">
             <a class="btn" href="/billed">Billed Claims</a>
@@ -2857,7 +2864,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
       <div class="hr"></div>
 
-      <h3>Usage <span class="tooltip">ⓘ<span class="tooltiptext">Pilot or plan usage for your organization.</span></span></h3>
+      <h3>Usage <span class="tooltip">ⓘ<span class="tooltiptext">Trial or plan usage for your organization.</span></span></h3>
       ${
         limits.mode === "pilot" ? `
         <ul class="muted">
@@ -2904,7 +2911,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           { label: "At Risk", data: series.atRisk }
         ]
       },
-      options: { responsive: true }
+      options: { responsive: true, maintainAspectRatio: false }
     });
   } else {
     revEl.outerHTML = "<p class='muted'>No revenue trend data.</p>";
@@ -2934,7 +2941,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           ]
         }]
       },
-      options: { responsive: true }
+      options: { responsive: true, maintainAspectRatio: false }
     });
   } else {
     statusEl.outerHTML = "<p class='muted'>No claim status data.</p>";
@@ -2956,7 +2963,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           data: pt.map(x => Number(x.underpaid||0))
         }]
       },
-      options: { responsive: true }
+      options: { responsive: true, maintainAspectRatio: false }
     });
   } else {
     underpayEl.outerHTML = "<p class='muted'>No underpayment by payer data.</p>";
@@ -2968,7 +2975,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 const payerBarEl = document.getElementById("payerBarChart");
 const hasPayerBar =
   Array.isArray(pt) &&
-  pt.some(x => Number(x.expected || 0) > 0 || Number(x.paid || 0) > 0 || Number(x.underpaid || 0) > 0) &&
+  pt.some(x => Number(x.billed || 0) > 0 || Number(x.paid || 0) > 0 || Number(x.underpaid || 0) > 0) &&
   payerBarEl;
 
 if (hasPayerBar) {
@@ -2977,12 +2984,12 @@ if (hasPayerBar) {
     data: {
       labels: pt.map(x => x.payer),
       datasets: [
-        { label: "Billed", data: pt.map(x => Number(x.expected || 0)), backgroundColor: "#3b82f6" },
+        { label: "Billed", data: pt.map(x => Number(x.billed || 0)), backgroundColor: "#3b82f6" },
         { label: "Paid", data: pt.map(x => Number(x.paid || 0)), backgroundColor: "#16a34a" },
         { label: "Underpaid", data: pt.map(x => Number(x.underpaid || 0)), backgroundColor: "#f59e0b" }
       ]
     },
-    options: { responsive: true }
+    options: { responsive: true, maintainAspectRatio: false }
   });
 } else if (payerBarEl) {
   payerBarEl.outerHTML = "<p class='muted'>No payer comparison data.</p>";
@@ -3007,7 +3014,7 @@ if (hasPayerBar) {
           data: patientData
         }]
       },
-      options: { responsive: true }
+      options: { responsive: true, maintainAspectRatio: false }
     });
   } else {
     patientEl.outerHTML = "<p class='muted'>No patient revenue data.</p>";
@@ -5337,7 +5344,7 @@ rowsAdded = toUse;
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
     const limits = getLimitProfile(org.org_id);
 
-    const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Pilot" : "Expired");
+    const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Free Trial" : "Expired");
     const planEnds = (sub && sub.status === "active") ? "—" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "—");
 
     const html = page("Account", `
@@ -5349,7 +5356,7 @@ rowsAdded = toUse;
       <h3>Plan</h3>
       <table>
         <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
-        <tr><th>Pilot End Date</th><td>${safeStr(planEnds)}</td></tr>
+        <tr><th>Trial End Date</th><td>${safeStr(planEnds)}</td></tr>
         <tr><th>Access Mode</th><td>${safeStr(limits.mode)}</td></tr>
         <tr><th>AI Questions Used</th><td>${safeStr(String(getUsage(org.org_id).ai_chat_used || 0))}</td></tr>
         <tr><th>AI Questions Limit</th><td>${safeStr(String(getAIChatLimit(org.org_id)))}</td></tr>
@@ -5466,7 +5473,7 @@ rowsAdded = toUse;
   if (method === "GET" && pathname === "/exports") {
     const html = page("Exports", `
       <h2>Exports</h2>
-      <p class="muted">Download pilot outputs for leadership and operations review.</p>
+      <p class="muted">Download trial outputs for leadership and operations review.</p>
       <div class="btnRow">
         <a class="btn secondary" href="/export/cases.csv">Cases CSV</a>
         <a class="btn secondary" href="/export/payments.csv">Payments CSV</a>
@@ -5771,8 +5778,8 @@ else if (type === "payers") {
     if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
     const p2 = getPilot(org.org_id);
     const html = page("Pilot Complete", `
-      <h2>Pilot Complete</h2>
-      <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p>
+      <h2>Free Trial Complete</h2>
+      <p>Your free trial has ended. Existing work remains available during the retention period.</p>
       <div class="hr"></div>
       <p class="muted">
         To limit unnecessary data retention, documents and analytics from this pilot will be securely deleted
