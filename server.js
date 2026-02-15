@@ -2128,32 +2128,6 @@ const server = http.createServer(async (req, res) => {
           <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Last Activity</th><th>Attention</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-
       `, navAdmin());
       return send(res, 200, html);
     }
@@ -2220,32 +2194,6 @@ const server = http.createServer(async (req, res) => {
             <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Attention</th></tr></thead>
             <tbody>${rows || '<tr><td colspan="4">No organisations match your filters.</td></tr>'}</tbody>
           </table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-
         </div>
       `, navAdmin());
       return send(res, 200, html);
@@ -2295,32 +2243,6 @@ const server = http.createServer(async (req, res) => {
               <tr><th>Drafts generated</th><td>${a.drafts}</td></tr>
               <tr><th>Avg draft time</th><td>${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</td></tr>
             </table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-
 
             <h3>Actions</h3>
 <form method="POST" action="/admin/action">
@@ -2465,33 +2387,7 @@ const server = http.createServer(async (req, res) => {
         <tr> <td class="muted small">${safeStr(a.at)}</td> <td>${safeStr(a.action)}</td> <td class="muted small">${safeStr(a.org_id || "")}</td> <td class="muted small">${safeStr(a.reason || "")}</td> </tr>`).join("");
       const html = page("Audit Log", ` <h2>Audit Log</h2> <p class="muted">Latest 200 admin actions.</p> <div style="overflow:auto;"> <table>
         <thead><tr><th>Time</th><th>Action</th><th>Org</th><th>Reason</th></tr></thead>
-        <tbody>${rows}</tbody> </table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
- </div> `, navAdmin());
+        <tbody>${rows}</tbody> </table> </div> `, navAdmin());
       return send(res, 200, html);
     }
 
@@ -2823,33 +2719,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     <h3>Top Payers This Week</h3>
     ${
       w.top3.length
-        ? `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>${w.top3.map(x => `<tr><td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td><td>$${Number(x.total).toFixed(2)}</td></tr>`).join("")}</tbody></table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-`
+        ? `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>${w.top3.map(x => `<tr><td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td><td>$${Number(x.total).toFixed(2)}</td></tr>`).join("")}</tbody></table>`
         : `<p class="muted">No payments recorded in the last 7 days.</p>`
     }
 
@@ -3014,32 +2884,6 @@ if (method === "GET" && pathname === "/weekly-summary") {
               <thead><tr><th>Payer</th><th>Paid</th><th>Expected</th><th>Underpaid</th></tr></thead>
               <tbody>${payerRows || `<tr><td colspan="4" class="muted">No payer data in this range.</td></tr>`}</tbody>
             </table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-
           </div>
         </div>
         <div class="col">
@@ -3216,26 +3060,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       const subsRows = subsAll
         .sort((a,b)=> new Date(b.uploaded_at||0).getTime() - new Date(a.uploaded_at||0).getTime())
         .map(s => {
-          
-
-// ===============================
-// CLAIM PAGINATION
-// ===============================
-
-const pageParam = Number(parsed.query.page || 1);
-const perPageParam = Number(parsed.query.per_page || 50);
-
-const PER_PAGE_OPTIONS = [30, 50, 100];
-const perPage = PER_PAGE_OPTIONS.includes(perPageParam) ? perPageParam : 50;
-
-const startIndex = (pageParam - 1) * perPage;
-const endIndex = startIndex + perPage;
-
-const paginatedClaims = claims.slice(startIndex, endIndex);
-const totalPages = Math.ceil(claims.length / perPage);
-
-
-const claims = billedAll.filter(b => b.submission_id === s.submission_id);
+          const claims = billedAll.filter(b => b.submission_id === s.submission_id);
           const totalClaims = claims.length;
           const paidCount = claims.filter(b => (b.status||"Pending")==="Paid").length;
           const deniedCount = claims.filter(b => (b.status||"Pending")==="Denied").length;
@@ -3304,32 +3129,6 @@ const claims = billedAll.filter(b => b.submission_id === s.submission_id);
             </thead>
             <tbody>${subsRows || `<tr><td colspan="10" class="muted">No submissions yet. Upload a billed claims file above.</td></tr>`}</tbody>
           </table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-
         </div>
       `, navUser(), {showChat:true});
       return send(res, 200, html);
@@ -3679,32 +3478,6 @@ return `<tr>
           <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Status</th><th>Action</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="6" class="muted">No claims found for this filter.</td></tr>`}</tbody>
         </table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-
         <p class="muted small">Showing ${Math.min(500, billed.length)} of ${billed.length} filtered results in this submission.</p>
       </div>
     `, navUser(), {showChat:true});
@@ -4422,33 +4195,7 @@ const html = page("Denial & Payment Upload", `
                   </tr>`;
                 }).join("")
               }</tbody>
-            </table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-`
+            </table>`
       }
 
       <div class="hr"></div>
@@ -4483,33 +4230,7 @@ const html = page("Denial & Payment Upload", `
                   </tr>`;
                 }).join("")
               }</tbody>
-            </table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-`
+            </table>`
       }
 
       <div class="hr"></div>
@@ -5262,33 +4983,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       const s = stats[p];
       summaryRows += `<tr><td>${safeStr(p)}</td><td>${s.count}</td><td>$${s.total.toFixed(2)}</td></tr>`;
     });
-    const summaryTable = summaryRows ? `<table><thead><tr><th>Payer</th><th># Payments</th><th>Total Paid</th></tr></thead><tbody>${summaryRows}</tbody></table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-` : `<p class='muted'>No payments found.</p>`;
+    const summaryTable = summaryRows ? `<table><thead><tr><th>Payer</th><th># Payments</th><th>Total Paid</th></tr></thead><tbody>${summaryRows}</tbody></table>` : `<p class='muted'>No payments found.</p>`;
     // Build detailed table (limit to 500 rows)
     let detailRows = '';
     payments.slice(0, 500).forEach(p => {
@@ -5299,33 +4994,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       const deniedFlag = p.denied_approved ? "Yes" : "";
       detailRows += `<tr><td>${safeStr(p.claim_number || p.claimNumber || '')}</td><td>${safeStr((p.payer || 'Unknown').trim() || 'Unknown')}</td><td>$${Number(p.amount_paid || p.amountPaid || 0).toFixed(2)}</td><td>${dateStr}</td><td>${deniedFlag}</td></tr>`;
     });
-    const detailTable = detailRows ? `<table><thead><tr><th>Claim Number</th><th>Payer</th><th>Amount Paid</th><th>Payment Date</th><th>Denied?</th></tr></thead><tbody>${detailRows}</tbody></table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-` : `<p class='muted'>No payments found.</p>`;
+    const detailTable = detailRows ? `<table><thead><tr><th>Claim Number</th><th>Payer</th><th>Amount Paid</th><th>Payment Date</th><th>Denied?</th></tr></thead><tbody>${detailRows}</tbody></table>` : `<p class='muted'>No payments found.</p>`;
     const html = page("Payment Details", `
       <h2>Payment Details</h2>
       <form method="GET" action="/payments/list" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
@@ -5470,89 +5139,23 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       }
       writeJSON(FILES.payments, paymentsData);
 
-      // ===============================
-// ROBUST PAYMENT → BILLED SYNC
-// ===============================
-
-try {
-
-  let billedAll = readJSON(FILES.billed, []);
-  let subsAll = readJSON(FILES.billed_submissions, []);
-  let changed = false;
-
-  function normalizeClaim(x) {
-    return String(x || "").replace(/[^0-9]/g, "");
-  }
-
-  for (const ap of addedPayments) {
-
-    const claimNo = normalizeClaim(ap.claim_number);
-    if (!claimNo) continue;
-
-    const b = billedAll.find(x =>
-      x.org_id === org.org_id &&
-      normalizeClaim(x.claim_number) === claimNo
-    );
-
-    if (!b) continue;
-
-    b.status = "Paid";
-    b.paid_amount = Number(ap.amount_paid || 0);
-    b.paid_at = ap.date_paid || nowISO();
-
-    changed = true;
-  }
-
-  if (changed) {
-
-    writeJSON(FILES.billed, billedAll);
-
-    subsAll.forEach(s => {
-
-      if (s.org_id !== org.org_id) return;
-
-      
-
-// ===============================
-// CLAIM PAGINATION
-// ===============================
-
-const pageParam = Number(parsed.query.page || 1);
-const perPageParam = Number(parsed.query.per_page || 50);
-
-const PER_PAGE_OPTIONS = [30, 50, 100];
-const perPage = PER_PAGE_OPTIONS.includes(perPageParam) ? perPageParam : 50;
-
-const startIndex = (pageParam - 1) * perPage;
-const endIndex = startIndex + perPage;
-
-const paginatedClaims = claims.slice(startIndex, endIndex);
-const totalPages = Math.ceil(claims.length / perPage);
-
-
-const claims = billedAll.filter(b => b.submission_id === s.submission_id);
-
-      s.paid = claims.filter(c => (c.status || "Pending") === "Paid").length;
-      s.denied = claims.filter(c => (c.status || "Pending") === "Denied").length;
-      s.pending = claims.filter(c => (c.status || "Pending") === "Pending").length;
-
-      s.revenue_collected = claims
-        .filter(c => (c.status || "Pending") === "Paid")
-        .reduce((sum, c) => sum + Number(c.paid_amount || 0), 0);
-
-      s.revenue_at_risk = claims
-        .reduce((sum, c) =>
-          sum + (Number(c.amount_billed || 0) - Number(c.paid_amount || 0)), 0);
-
-    });
-
-    writeJSON(FILES.billed_submissions, subsAll);
-  }
-
-} catch (e) {
-  console.error("Payment sync error:", e);
-}
-
+      // Auto-match billed claims from payment upload (claim_number)
+      try {
+        const billedAll = readJSON(FILES.billed, []);
+        let changed = false;
+        for (const ap of addedPayments) {
+          const claimNo = String(ap.claim_number || '').trim();
+          if (!claimNo) continue;
+          const b = billedAll.find(x => x.org_id === org.org_id && String(x.claim_number || '').trim() === claimNo);
+          if (!b) continue;
+          if ((b.status || 'Pending') !== 'Paid') {
+            /* status will be recalculated by simple rules below */
+            b.paid_amount = ap.amount_paid || b.paid_amount || null;
+            b.paid_at = ap.date_paid || b.paid_at || nowISO();
+            changed = true;
+          }
+        }
+        if (changed) writeJSON(FILES.billed, billedAll);
       } catch {}
 
       rowsAdded = toUse;
@@ -5606,32 +5209,6 @@ const claims = billedAll.filter(b => b.submission_id === s.submission_id);
         <tr><th>AI Questions Limit</th><td>${safeStr(String(getAIChatLimit(org.org_id)))}</td></tr>
         <tr><th>AI Questions Remaining</th><td>${safeStr(String(Math.max(0, getAIChatLimit(org.org_id) - (getUsage(org.org_id).ai_chat_used || 0))))}</td></tr>
       </table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-
 
       <div class="hr"></div>
       <h3>Change Password</h3>
@@ -5927,33 +5504,7 @@ const claims = billedAll.filter(b => b.submission_id === s.submission_id);
           Object.keys(cats).length
             ? `<table><thead><tr><th>Category</th><th>Count</th></tr></thead><tbody>${
                 Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `<tr><td>${safeStr(k)}</td><td>${v}</td></tr>`).join("")
-              }</tbody></table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-`
+              }</tbody></table>`
             : `<p class="muted">No denial category data available in this date range.</p>`
         }
       `;
@@ -6000,33 +5551,7 @@ const claims = billedAll.filter(b => b.submission_id === s.submission_id);
                     <td>${p.denied_approved ? "Yes" : ""}</td>
                   </tr>`;
                 }).join("")
-              }</tbody></table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-`
+              }</tbody></table>`
             : `<p class="muted">No payments found for this filter.</p>`
         }
         <p class="muted small">${paymentsFiltered.length > 500 ? "Showing first 500 rows." : ""}</p>
@@ -6075,33 +5600,7 @@ else if (type === "payers") {
           topPayers.length
             ? `<table><thead><tr><th>Payer</th><th># Payments</th><th>Total Paid</th><th>Denied Wins</th></tr></thead><tbody>${
                 topPayers.map(x => `<tr><td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td><td>${x.count}</td><td>$${Number(x.total).toFixed(2)}</td><td>${x.deniedWins}</td></tr>`).join("")
-              }</tbody></table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-`
+              }</tbody></table>`
             : `<p class="muted">No payer data available in this date range.</p>`
         }
       `;
@@ -6230,32 +5729,6 @@ else if (type === "payers") {
         <thead><tr><th>Claim #</th><th>Patient</th><th>Date of Service</th><th>Status</th><th>Expected</th><th>Paid</th><th>Submission</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="7" class="muted">No claims found.</td></tr>`}</tbody>
       </table>
-
-
-<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;">
-
-  <div>
-    <label>Claims per page:</label>
-    <select onchange="window.location='?submission_id=${encodeURIComponent(submissionId)}&page=1&per_page='+this.value">
-      ${PER_PAGE_OPTIONS.map(n =>
-        `<option value="${n}" ${n===perPage?"selected":""}>${n}</option>`
-      ).join("")}
-    </select>
-  </div>
-
-  <div>
-    ${Array.from({length: totalPages}, (_,i)=>{
-      const pageNum = i+1;
-      return `<a href="?submission_id=${encodeURIComponent(submissionId)}&page=${pageNum}&per_page=${perPage}"
-        style="margin:0 4px; ${pageNum===pageParam?"font-weight:bold;":""}">
-        ${pageNum}
-      </a>`;
-    }).join("")}
-  </div>
-
-</div>
-
-
       <p class="muted small">${claims.length > 500 ? "Showing first 500 results." : ""}</p>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
       <br><form method="GET" action="/analyze-payer" style="margin-top:10px;"><input type="hidden" name="payer" value="${safeStr(payer)}"/><button class="btn" type="submit">AI Analyze This Payer</button></form>
@@ -6373,4 +5846,182 @@ else if (type === "payers") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
+
+
+
+// ============================================================
+// ============================================================
+// 🔥 ENTERPRISE UPGRADE SECTION (REPLACE EXISTING ROUTES)
+// ============================================================
+// ============================================================
+
+// ===============================
+// HELPER: Normalize Claim Number
+// ===============================
+function normalizeClaim(x) {
+  return String(x || "").replace(/[^0-9]/g, "");
+}
+
+// ============================================================
+// UPDATED /payments POST ROUTE (FULL REPLACEMENT)
+// ============================================================
+
+if (method === "POST" && pathname === "/payments") {
+
+  parseMultipart(req, async ({ fields, files }) => {
+
+    const file = files?.paymentfile;
+    if (!file) return redirect(res, "/upload");
+
+    const rows = parseCSV(file.path);
+
+    let paymentsAll = readJSON(FILES.payments, []);
+    let billedAll = readJSON(FILES.billed, []);
+    let subsAll = readJSON(FILES.billed_submissions, []);
+
+    const addedPayments = [];
+
+    for (const raw of rows) {
+
+      const claimNumber = String(raw.claim_number || raw["Claim #"] || "").trim();
+      const amountPaid = Number(raw.amount_paid || raw["Amount Paid"] || 0);
+      const datePaid = raw.date_paid || raw["Payment Date"] || nowISO();
+      const payer = raw.payer || raw["Payer"] || "Unknown";
+
+      const paymentRecord = {
+        payment_id: uuid(),
+        org_id: org.org_id,
+        claim_number: claimNumber,
+        amount_paid: amountPaid,
+        date_paid: datePaid,
+        payer: payer,
+        created_at: nowISO(),
+        source_file: file.originalname
+      };
+
+      paymentsAll.push(paymentRecord);
+      addedPayments.push(paymentRecord);
+    }
+
+    writeJSON(FILES.payments, paymentsAll);
+
+    // ===== Robust Sync =====
+    let changed = false;
+
+    for (const ap of addedPayments) {
+
+      const normalized = normalizeClaim(ap.claim_number);
+      if (!normalized) continue;
+
+      const billedClaim = billedAll.find(b =>
+        b.org_id === org.org_id &&
+        normalizeClaim(b.claim_number) === normalized
+      );
+
+      if (!billedClaim) continue;
+
+      billedClaim.status = "Paid";
+      billedClaim.paid_amount = ap.amount_paid;
+      billedClaim.paid_at = ap.date_paid;
+
+      changed = true;
+    }
+
+    if (changed) {
+
+      writeJSON(FILES.billed, billedAll);
+
+      subsAll.forEach(s => {
+
+        if (s.org_id !== org.org_id) return;
+
+        const claims = billedAll.filter(b => b.submission_id === s.submission_id);
+
+        s.paid = claims.filter(c => c.status === "Paid").length;
+        s.denied = claims.filter(c => c.status === "Denied").length;
+        s.pending = claims.filter(c => c.status === "Pending").length;
+
+        s.revenue_collected = claims
+          .filter(c => c.status === "Paid")
+          .reduce((sum, c) => sum + Number(c.paid_amount || 0), 0);
+
+        s.revenue_at_risk = claims
+          .reduce((sum, c) =>
+            sum + (Number(c.amount_billed || 0) - Number(c.paid_amount || 0)), 0);
+
+      });
+
+      writeJSON(FILES.billed_submissions, subsAll);
+    }
+
+    return redirect(res, "/upload#payments");
+  });
+
+  return;
+}
+
+// ============================================================
+// PAGINATION + SORTING + EXPORT + BULK SELECT FOR SUBMISSION
+// ============================================================
+
+// Add inside submission detail route after claims filtering:
+
+// ===== Sorting =====
+const sortField = parsed.query.sort || "created_at";
+const sortDir = parsed.query.dir === "asc" ? 1 : -1;
+
+claims.sort((a,b) => {
+  const av = a[sortField] || "";
+  const bv = b[sortField] || "";
+  if (av < bv) return -1 * sortDir;
+  if (av > bv) return 1 * sortDir;
+  return 0;
+});
+
+// ===== Pagination =====
+const pageParam = Number(parsed.query.page || 1);
+const perPageParam = Number(parsed.query.per_page || 50);
+
+const PER_PAGE_OPTIONS = [30, 50, 100];
+const perPage = PER_PAGE_OPTIONS.includes(perPageParam) ? perPageParam : 50;
+
+const totalClaims = claims.length;
+const totalPages = Math.max(1, Math.ceil(totalClaims / perPage));
+const currentPage = Math.min(Math.max(pageParam, 1), totalPages);
+
+const startIndex = (currentPage - 1) * perPage;
+const endIndex = startIndex + perPage;
+
+const paginatedClaims = claims.slice(startIndex, endIndex);
+
+// ===== Export Current Page CSV =====
+if (parsed.query.export === "1") {
+  const header = "claim_number,patient_name,status,amount_billed,paid_amount\n";
+  const rows = paginatedClaims.map(c =>
+    `${c.claim_number},${c.patient_name},${c.status},${c.amount_billed},${c.paid_amount || 0}`
+  ).join("\n");
+
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", "attachment; filename=submission_export.csv");
+  return res.end(header + rows);
+}
+
+// ===== Bulk Select UI =====
+// Add checkbox column in table header:
+// <th><input type="checkbox" onclick="toggleAll(this)"></th>
+//
+// Add checkbox in row:
+// <td><input type="checkbox" name="selected_claims" value="${b.billed_id}"></td>
+//
+// Add script:
+// function toggleAll(source) {
+//   document.querySelectorAll('input[name="selected_claims"]').forEach(cb => cb.checked = source.checked);
+// }
+
+
+
+// ============================================================
+// END ENTERPRISE UPGRADE SECTION
+// ============================================================
+
 
