@@ -235,6 +235,8 @@ p{margin:8px 0;line-height:1.5;}
 .btn{display:inline-block;background:var(--primary);color:var(--primaryText);border:none;border-radius:10px;padding:10px 14px;font-weight:800;text-decoration:none;cursor:pointer;font-size:13px;}
 .btn.secondary{background:#fff;color:var(--text);border:1px solid var(--border);}
 .btn.danger{background:var(--danger);}
+.btn.success{background:#16a34a;color:#fff;}
+.btn.success:hover{background:#15803d;}
 .btnRow{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;}
 label{font-size:12px;color:var(--muted);font-weight:800;}
 input,textarea{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px;outline:none;margin-top:6px;}
@@ -2431,6 +2433,62 @@ const server = http.createServer(async (req, res) => {
   cleanupExpiredAppealAttachments(org.org_id);
 
   if (!isAccessEnabled(org.org_id)) return redirect(res, "/pilot-complete");
+
+
+// ---------- FILE VIEWER (org-scoped) ----------
+// Allows viewing uploaded source files (CSV/PDF/Excel/Word) linked from claim detail pages.
+if (method === "GET" && pathname === "/file") {
+  const name = String(parsed.query.name || "").trim();
+  if (!name) return redirect(res, "/dashboard");
+
+  // Only allow base filenames (no path traversal)
+  const safeName = path.basename(name);
+  if (safeName !== name) return send(res, 400, "Invalid filename", "text/plain");
+
+  const orgRoot = path.join(UPLOADS_DIR, org.org_id);
+
+  let found = null;
+  const maxFilesToScan = 5000;
+  let scanned = 0;
+
+  function scanDir(dir) {
+    if (found || scanned > maxFilesToScan) return;
+    let items = [];
+    try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      if (found || scanned > maxFilesToScan) break;
+      const full = path.join(dir, it.name);
+      if (it.isDirectory()) {
+        scanDir(full);
+      } else {
+        scanned++;
+        if (it.name === safeName) { found = full; break; }
+      }
+    }
+  }
+
+  scanDir(orgRoot);
+
+  if (!found || !fs.existsSync(found)) return send(res, 404, "File not found", "text/plain");
+
+  const ext = path.extname(found).toLowerCase();
+  const mimeMap = {
+    ".csv": "text/csv",
+    ".pdf": "application/pdf",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  };
+  const contentType = mimeMap[ext] || "application/octet-stream";
+
+  res.writeHead(200, {
+    "Content-Type": contentType,
+    "Content-Disposition": `inline; filename="${safeName}"`
+  });
+  return fs.createReadStream(found).pipe(res);
+}
+
   // ---------- AI Chat (Org-scoped assistant) ----------
   if (method === "POST" && pathname === "/ai/chat") {
     const usage = getUsage(org.org_id);
@@ -2684,8 +2742,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const payerRows = (m.payerTop || []).map(x => `
       <tr>
         <td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td>
-        <td>$${Number(x.paid||0).toFixed(2)}</td>
         <td>$${Number(x.expected||0).toFixed(2)}</td>
+        <td>$${Number(x.paid||0).toFixed(2)}</td>
         <td>$${Number(x.underpaid||0).toFixed(2)}</td>
       </tr>
     `).join("");
@@ -2777,10 +2835,13 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <canvas id="underpayPayer" height="160"></canvas>
           <div style="overflow:auto;margin-top:10px;">
             <table>
-              <thead><tr><th>Payer</th><th>Paid</th><th>Billed</th><th>Underpaid</th></tr></thead>
+              <thead><tr><th>Payer</th><th>Billed</th><th>Paid</th><th>Underpaid</th></tr></thead>
               <tbody>${payerRows || `<tr><td colspan="4" class="muted">No payer data in this range.</td></tr>`}</tbody>
             </table>
           </div>
+          <div class="hr"></div>
+          <h3>Top Insurance Payers (Billed vs Paid vs Underpaid)</h3>
+          <canvas id="payerBarChart" height="140"></canvas>
         </div>
         <div class="col">
           <h3>Patient Revenue <span class="tooltip">ⓘ<span class="tooltiptext">Patient responsibility vs collected and outstanding.</span></span></h3>
@@ -2901,6 +2962,31 @@ if (method === "GET" && pathname === "/weekly-summary") {
     underpayEl.outerHTML = "<p class='muted'>No underpayment by payer data.</p>";
   }
 
+
+
+// Top Payers (Billed vs Paid vs Underpaid)
+const payerBarEl = document.getElementById("payerBarChart");
+const hasPayerBar =
+  Array.isArray(pt) &&
+  pt.some(x => Number(x.expected || 0) > 0 || Number(x.paid || 0) > 0 || Number(x.underpaid || 0) > 0) &&
+  payerBarEl;
+
+if (hasPayerBar) {
+  new Chart(payerBarEl, {
+    type: "bar",
+    data: {
+      labels: pt.map(x => x.payer),
+      datasets: [
+        { label: "Billed", data: pt.map(x => Number(x.expected || 0)), backgroundColor: "#3b82f6" },
+        { label: "Paid", data: pt.map(x => Number(x.paid || 0)), backgroundColor: "#16a34a" },
+        { label: "Underpaid", data: pt.map(x => Number(x.underpaid || 0)), backgroundColor: "#f59e0b" }
+      ]
+    },
+    options: { responsive: true }
+  });
+} else if (payerBarEl) {
+  payerBarEl.outerHTML = "<p class='muted'>No payer comparison data.</p>";
+}
   // Patient Revenue
   const patientEl = document.getElementById("patientRev");
   const patientData = [
@@ -3092,7 +3178,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
             <input type="hidden" name="action" value="paid_full"/>
             <input type="date" name="date" value="${today}" required style="width:155px;margin-bottom:6px;"/>
-            <button class="btn small" type="submit">Paid in Full</button>
+            <button class="btn success small" type="submit">Paid in Full</button>
           </form>`;
 
         const deniedForm = `
@@ -3214,54 +3300,83 @@ if (method === "GET" && pathname === "/weekly-summary") {
         `;
       })();
 
-      const statusCell = (() => {
-        const ip = Number(b.insurance_paid || b.paid_amount || 0);
-        const allowed = Number(b.allowed_amount || 0);
-        const pr = Number(b.patient_responsibility || 0);
-        const pc = Number(b.patient_collected || 0);
-        const expectedInsurance = (b.expected_insurance != null) ? Number(b.expected_insurance) : Math.max(0, allowed - pr);
-        const underpaid = Math.max(0, expectedInsurance - ip);
-        const remainingPatient = Math.max(0, pr - pc);
+const statusCell = (() => {
 
-        if (st === "Denied" && b.denial_case_id) {
-          return `
-            <span class="badge err">Denied</span>
-            <div class="small">Paid: $0.00</div>
-            <div class="small muted">${b.denied_at ? new Date(b.denied_at).toLocaleDateString() : ""}</div>
-            <div class="small">Appeal: <a href="/status?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></div>
-          `;
-        }
+  const st2 = (b.status || "Pending");
 
-        if (st === "Underpaid") {
-          return `
-            <span class="badge warn">Underpaid</span>
-            <div class="small">Paid: $${ip.toFixed(2)}</div>
-            <div class="small">Expected: $${expectedInsurance.toFixed(2)}</div>
-            <div class="small">Underpaid: $${underpaid.toFixed(2)}</div>
-            ${b.suggested_action ? `<div class="small muted">Suggested: ${safeStr(b.suggested_action)}</div>` : ``}
-          `;
-        }
+  const billedAmt = Number(b.amount_billed || 0);
+  const paidAmt = Number(b.insurance_paid || b.paid_amount || 0);
+  const allowed = Number(b.allowed_amount || 0);
+  const patientResp = Number(b.patient_responsibility || 0);
+  const patientCollected = Number(b.patient_collected || 0);
 
-        if (st === "Patient Balance") {
-          return `
-            <span class="badge warn">Patient Owes</span>
-            <div class="small">Insurance: $${ip.toFixed(2)}</div>
-            <div class="small">Patient Resp: $${pr.toFixed(2)}</div>
-            <div class="small">Collected: $${pc.toFixed(2)}</div>
-            <div class="small">Remaining: $${remainingPatient.toFixed(2)}</div>
-          `;
-        }
+  const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+    ? Number(b.expected_insurance)
+    : Math.max(0, allowed - patientResp);
 
-        if (st === "Paid") {
-          return `
-            <span class="badge ok">Paid</span>
-            <div class="small">Insurance: $${ip.toFixed(2)}</div>
-            ${pr > 0 ? `<div class="small">Patient: $${pc.toFixed(2)} / $${pr.toFixed(2)}</div>` : ``}
-          `;
-        }
+  const underpaid = Math.max(0, expectedInsurance - paidAmt);
+  const contractualWriteOff = Math.max(0, billedAmt - (allowed || 0));
 
-        return `<span class="badge">${safeStr(st)}</span>`;
-      })();
+  if (st2 === "Denied") {
+    return `
+      <span class="badge err">Denied</span>
+      <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
+      <div class="small">Expected: $${expectedInsurance.toFixed(2)}</div>
+      ${b.denial_case_id ? `<div class="small">Appeal: <a href="/status?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></div>` : ``}
+    `;
+  }
+
+  if (st2 === "Contractual") {
+    return `
+      <span class="badge warn">Contractual</span>
+      <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
+      <div class="small">Write-Off: $${contractualWriteOff.toFixed(2)}</div>
+    `;
+  }
+
+  if (st2 === "Underpaid") {
+    return `
+      <span class="badge warn">Underpaid</span>
+      <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
+      <div class="small">Expected: $${expectedInsurance.toFixed(2)}</div>
+      <div class="small">Underpaid: $${underpaid.toFixed(2)}</div>
+      ${b.suggested_action ? `<div class="small muted">Suggested: ${safeStr(b.suggested_action)}</div>` : ``}
+    `;
+  }
+
+  if (st2 === "Patient Balance") {
+    const remaining = Math.max(0, patientResp - patientCollected);
+    return `
+      <span class="badge warn">Patient Owes</span>
+      <div class="small">Insurance Paid: $${paidAmt.toFixed(2)}</div>
+      <div class="small">Patient Resp: $${patientResp.toFixed(2)}</div>
+      <div class="small">Collected: $${patientCollected.toFixed(2)}</div>
+      <div class="small">Remaining: $${remaining.toFixed(2)}</div>
+    `;
+  }
+
+  if (st2 === "Paid") {
+    return `
+      <span class="badge ok">Paid</span>
+      <div class="small">Insurance Paid: $${paidAmt.toFixed(2)}</div>
+      ${patientResp > 0 ? `<div class="small">Patient: $${patientCollected.toFixed(2)} / $${patientResp.toFixed(2)}</div>` : ``}
+    `;
+  }
+
+  if (st2 === "Appeal") {
+    return `
+      <span class="badge warn">Appeal</span>
+      <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
+      <div class="small">Expected: $${expectedInsurance.toFixed(2)}</div>
+    `;
+  }
+
+  return `
+    <span class="badge">${safeStr(st2)}</span>
+    <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
+  `;
+
+})();
 
       return `<tr>
         <td><a href="/claim-detail?billed_id=${encodeURIComponent(safeStr(b.billed_id))}">${safeStr(b.claim_number || "")}</a></td>
@@ -5915,7 +6030,7 @@ if (method === "GET" && pathname === "/claim-detail") {
               <td>${safeStr(p.date_paid || "")}</td>
               <td>$${num(p.amount_paid).toFixed(2)}</td>
               <td>${safeStr(p.payer || "")}</td>
-              <td>$${num(b.allowed_amount || 0).toFixed(2)}</td><td>$${num(b.patient_responsibility || 0).toFixed(2)}</td><td>$${num(b.expected_insurance || 0).toFixed(2)}</td><td>$${num(b.underpaid_amount || 0).toFixed(2)}</td><td class="muted small">${safeStr(p.source_file || "")}</td><td class="muted small">${safeStr(p.notes || "")}</td>
+              <td>$${num(b.allowed_amount || 0).toFixed(2)}</td><td>$${num(b.patient_responsibility || 0).toFixed(2)}</td><td>$${num(b.expected_insurance || 0).toFixed(2)}</td><td>$${num(b.underpaid_amount || 0).toFixed(2)}</td><td class="muted small">${p.source_file ? '<a href="/file?name=' + encodeURIComponent(p.source_file) + '" target="_blank">' + safeStr(p.source_file) + '</a>' : ""}</td><td class="muted small">${safeStr(p.notes || "")}</td>
             </tr>
           `).join("")}
         </tbody>
