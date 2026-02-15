@@ -2564,126 +2564,23 @@ if (method === "GET" && pathname === "/executive") {
     <h3>Top Payers by Total Paid</h3>
     <canvas id="payerChart" height="140"></canvas>
 
-    
-<script>
-(function(){
+    <script>
+      (function(){
+        if (!window.Chart) return;
 
-  if (!window.Chart) return;
+        new Chart(document.getElementById('agingChart'), {
+          type: 'bar',
+          data: { labels: ['30+ days','60+ days','90+ days'], datasets: [{ label: 'Unpaid Denials', data: ${JSON.stringify(agingData)} }] },
+          options: { responsive: true }
+        });
 
-  const series = JSON.parse(atob("${seriesB64}"));
-  const st = JSON.parse(atob("${statusB64}"));
-  const pt = JSON.parse(atob("${payerB64}"));
-
-  // Revenue Trend
-  const revEl = document.getElementById("revTrend");
-  const hasRevData =
-    series &&
-    series.keys &&
-    series.keys.length > 0 &&
-    (
-      (series.billed || []).some(v => Number(v) > 0) ||
-      (series.collected || []).some(v => Number(v) > 0) ||
-      (series.atRisk || []).some(v => Number(v) > 0)
-    );
-
-  if (hasRevData) {
-    new Chart(revEl, {
-      type: "line",
-      data: {
-        labels: series.keys,
-        datasets: [
-          { label: "Billed", data: series.billed },
-          { label: "Collected", data: series.collected },
-          { label: "At Risk", data: series.atRisk }
-        ]
-      },
-      options: { responsive: true }
-    });
-  } else {
-    revEl.outerHTML = "<p class='muted'>No revenue trend data.</p>";
-  }
-
-  // Claim Status Mix
-  const statusEl = document.getElementById("statusMix");
-  const sumStatus =
-    (st["Paid"]||0) +
-    (st["Patient Balance"]||0) +
-    (st["Underpaid"]||0) +
-    (st["Denied"]||0) +
-    (st["Pending"]||0);
-
-  if (sumStatus > 0) {
-    new Chart(statusEl, {
-      type: "doughnut",
-      data: {
-        labels: ["Paid","Patient Balance","Underpaid","Denied","Pending"],
-        datasets: [{
-          data: [
-            st["Paid"]||0,
-            st["Patient Balance"]||0,
-            st["Underpaid"]||0,
-            st["Denied"]||0,
-            st["Pending"]||0
-          ]
-        }]
-      },
-      options: { responsive: true }
-    });
-  } else {
-    statusEl.outerHTML = "<p class='muted'>No claim status data.</p>";
-  }
-
-  // Underpayment by Payer
-  const underpayEl = document.getElementById("underpayPayer");
-  const hasUnderpay =
-    Array.isArray(pt) &&
-    pt.some(x => Number(x.underpaid || 0) > 0);
-
-  if (hasUnderpay) {
-    new Chart(underpayEl, {
-      type: "bar",
-      data: {
-        labels: pt.map(x => x.payer),
-        datasets: [{
-          label: "Underpaid ($)",
-          data: pt.map(x => Number(x.underpaid||0))
-        }]
-      },
-      options: { responsive: true }
-    });
-  } else {
-    underpayEl.outerHTML = "<p class='muted'>No underpayment by payer data.</p>";
-  }
-
-  // Patient Revenue
-  const patientEl = document.getElementById("patientRev");
-  const patientData = [
-    ${Number(m.kpis.patientRespTotal||0)},
-    ${Number(m.kpis.patientCollected||0)},
-    ${Number(m.kpis.patientOutstanding||0)}
-  ];
-
-  const hasPatientData = patientData.some(v => Number(v) > 0);
-
-  if (hasPatientData) {
-    new Chart(patientEl, {
-      type: "bar",
-      data: {
-        labels: ["Patient Responsibility","Collected","Outstanding"],
-        datasets: [{
-          label: "Patient $",
-          data: patientData
-        }]
-      },
-      options: { responsive: true }
-    });
-  } else {
-    patientEl.outerHTML = "<p class='muted'>No patient revenue data.</p>";
-  }
-
-})();
-</script>
-
+        new Chart(document.getElementById('payerChart'), {
+          type: 'bar',
+          data: { labels: ${JSON.stringify(payerLabels)}, datasets: [{ label: 'Total Paid', data: ${JSON.stringify(payerTotals)} }] },
+          options: { responsive: true }
+        });
+      })();
+    </script>
 
     <div class="btnRow">
       <a class="btn secondary" href="/weekly-summary">Weekly Summary</a>
@@ -2914,126 +2811,67 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </ul>`
       }
 
-      
-<script>
-(function(){
+      <script>
+        (function(){
+          if (!window.Chart) return;
 
-  if (!window.Chart) return;
+          const series = JSON.parse(atob("${seriesB64}"));
 
-  const series = JSON.parse(atob("${seriesB64}"));
-  const st = JSON.parse(atob("${statusB64}"));
-  const pt = JSON.parse(atob("${payerB64}"));
+          // --- Revenue Trend fallback ---
+          const revEl = document.getElementById("revTrend");
+          const hasRevData = series && series.keys && series.keys.length > 0 && ((series.billed||[]).some(v=>Number(v)>0) || (series.collected||[]).some(v=>Number(v)>0) || (series.atRisk||[]).some(v=>Number(v)>0));
+          if (hasRevData) new Chart(revEl, {
+            type: "line",
+            data: {
+              labels: series.keys,
+              datasets: [
+                { label: "Billed", data: series.billed },
+                { label: "Collected", data: series.collected },
+                { label: "At Risk", data: series.atRisk }
+              ]
+            },
+            options: { responsive: true }
+          });
 
-  // Revenue Trend
-  const revEl = document.getElementById("revTrend");
-  const hasRevData =
-    series &&
-    series.keys &&
-    series.keys.length > 0 &&
-    (
-      (series.billed || []).some(v => Number(v) > 0) ||
-      (series.collected || []).some(v => Number(v) > 0) ||
-      (series.atRisk || []).some(v => Number(v) > 0)
-    );
+          const st = JSON.parse(atob("${statusB64}"));
 
-  if (hasRevData) {
-    new Chart(revEl, {
-      type: "line",
-      data: {
-        labels: series.keys,
-        datasets: [
-          { label: "Billed", data: series.billed },
-          { label: "Collected", data: series.collected },
-          { label: "At Risk", data: series.atRisk }
-        ]
-      },
-      options: { responsive: true }
-    });
-  } else {
-    revEl.outerHTML = "<p class='muted'>No revenue trend data.</p>";
-  }
+          const statusEl = document.getElementById("statusMix");
+          const sumStatus = (st["Paid"]||0)+(st["Patient Balance"]||0)+(st["Underpaid"]||0)+(st["Denied"]||0)+(st["Pending"]||0);
+          if (sumStatus>0) new Chart(statusEl, {
+            type: "doughnut",
+            data: {
+              labels: ["Paid","Patient Balance","Underpaid","Denied","Pending"],
+              datasets: [{ data: [st["Paid"]||0, st["Patient Balance"]||0, st["Underpaid"]||0, st["Denied"]||0, st["Pending"]||0] }]
+            },
+            options: { responsive: true }
+          });
 
-  // Claim Status Mix
-  const statusEl = document.getElementById("statusMix");
-  const sumStatus =
-    (st["Paid"]||0) +
-    (st["Patient Balance"]||0) +
-    (st["Underpaid"]||0) +
-    (st["Denied"]||0) +
-    (st["Pending"]||0);
+          const pt = JSON.parse(atob("${payerB64}"));
 
-  if (sumStatus > 0) {
-    new Chart(statusEl, {
-      type: "doughnut",
-      data: {
-        labels: ["Paid","Patient Balance","Underpaid","Denied","Pending"],
-        datasets: [{
-          data: [
-            st["Paid"]||0,
-            st["Patient Balance"]||0,
-            st["Underpaid"]||0,
-            st["Denied"]||0,
-            st["Pending"]||0
-          ]
-        }]
-      },
-      options: { responsive: true }
-    });
-  } else {
-    statusEl.outerHTML = "<p class='muted'>No claim status data.</p>";
-  }
+          const underpayEl = document.getElementById("underpayPayer");
+          const hasUnderpay = Array.isArray(pt) && pt.some(x=>Number(x.underpaid||0)>0);
+          if (hasUnderpay) new Chart(underpayEl, {
+            type: "bar",
+            data: {
+              labels: pt.map(x=>x.payer),
+              datasets: [{ label: "Underpaid ($)", data: pt.map(x=>Number(x.underpaid||0)) }]
+            },
+            options: { responsive: true }
+          });
 
-  // Underpayment by Payer
-  const underpayEl = document.getElementById("underpayPayer");
-  const hasUnderpay =
-    Array.isArray(pt) &&
-    pt.some(x => Number(x.underpaid || 0) > 0);
-
-  if (hasUnderpay) {
-    new Chart(underpayEl, {
-      type: "bar",
-      data: {
-        labels: pt.map(x => x.payer),
-        datasets: [{
-          label: "Underpaid ($)",
-          data: pt.map(x => Number(x.underpaid||0))
-        }]
-      },
-      options: { responsive: true }
-    });
-  } else {
-    underpayEl.outerHTML = "<p class='muted'>No underpayment by payer data.</p>";
-  }
-
-  // Patient Revenue
-  const patientEl = document.getElementById("patientRev");
-  const patientData = [
-    ${Number(m.kpis.patientRespTotal||0)},
-    ${Number(m.kpis.patientCollected||0)},
-    ${Number(m.kpis.patientOutstanding||0)}
-  ];
-
-  const hasPatientData = patientData.some(v => Number(v) > 0);
-
-  if (hasPatientData) {
-    new Chart(patientEl, {
-      type: "bar",
-      data: {
-        labels: ["Patient Responsibility","Collected","Outstanding"],
-        datasets: [{
-          label: "Patient $",
-          data: patientData
-        }]
-      },
-      options: { responsive: true }
-    });
-  } else {
-    patientEl.outerHTML = "<p class='muted'>No patient revenue data.</p>";
-  }
-
-})();
-</script>
-
+          new Chart(document.getElementById("patientRev"), {
+            type: "bar",
+            data: {
+              labels: ["Patient Responsibility","Collected","Outstanding"],
+              datasets: [{
+                label: "Patient $",
+                data: [${Number(m.kpis.patientRespTotal||0)}, ${Number(m.kpis.patientCollected||0)}, ${Number(m.kpis.patientOutstanding||0)}]
+              }]
+            },
+            options: { responsive: true }
+          });
+        })();
+      </script>
 
     `, navUser(), {showChat:true});
 
@@ -5838,6 +5676,56 @@ else if (type === "payers") {
     });
     return;
   }
+
+
+
+// ===============================
+// PAYMENT HEADER NORMALIZATION
+// ===============================
+
+function normalizeHeader(h) {
+  return String(h || "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+const PAYMENT_FIELD_MAP = {
+  claimnumber: "claim_number",
+  claim: "claim_number",
+  claimid: "claim_number",
+  clm: "claim_number",
+
+  amountpaid: "amount_paid",
+  paidamount: "amount_paid",
+  paymentamount: "amount_paid",
+  checkamt: "amount_paid",
+
+  paymentdate: "date_paid",
+  paiddate: "date_paid",
+  postdate: "date_paid",
+  checkdate: "date_paid",
+
+  payer: "payer",
+  insurance: "payer",
+  carrier: "payer"
+};
+
+function normalizePaymentRow(rawRow) {
+  const normalized = {};
+  Object.keys(rawRow).forEach(key => {
+    const cleanKey = normalizeHeader(key);
+    const mappedKey = PAYMENT_FIELD_MAP[cleanKey];
+    if (mappedKey) {
+      normalized[mappedKey] = rawRow[key];
+    }
+  });
+  return normalized;
+}
+
+function normalizeClaimNumber(c) {
+  return String(c || "").replace(/[^0-9]/g, "");
+}
 
 // fallback
   return redirect(res, "/dashboard");
