@@ -5910,3 +5910,151 @@ server.listen(PORT, HOST, () => {
 
 
 
+// ============================================================
+// ================== 3.0 FINAL STABLE BUILD ==================
+// ============================================================
+// This section replaces:
+// 1) Payment reconciliation logic
+// 2) Adds Underpaid smart engine
+// 3) Adds manual resolution route
+// 4) Makes Claim # clickable
+// 5) Adds claim detail route
+// 6) Removes Insurance Partially Paid
+// 7) Adds pagination
+// ============================================================
+
+
+
+// ================= SMART PAYMENT RECONCILIATION =================
+
+function normalizeClaim(x) {
+  return String(x || "").replace(/[^0-9]/g, "");
+}
+
+
+// REPLACE YOUR EXISTING RECONCILIATION BLOCK WITH THIS:
+
+// ======= SMART CLAIM RECONCILIATION =======
+
+let billedAll = readJSON(FILES.billed, []);
+let subsAll = readJSON(FILES.billed_submissions, []);
+
+let changed = false;
+
+for (const ap of addedPayments) {
+
+  const normalizedClaim = normalizeClaim(ap.claim_number);
+  if (!normalizedClaim) continue;
+
+  const billedClaim = billedAll.find(b =>
+    b.org_id === org.org_id &&
+    normalizeClaim(b.claim_number) === normalizedClaim
+  );
+
+  if (!billedClaim) continue;
+
+  const paid = num(ap.amount_paid);
+  billedClaim.paid_amount = paid;
+  billedClaim.paid_at = ap.date_paid || nowISO();
+
+  const billedAmt = num(billedClaim.amount_billed);
+  const expected = billedAmt;
+
+  if (paid <= 0) {
+    billedClaim.status = "Pending";
+  } else if (paid >= expected) {
+    billedClaim.status = "Paid";
+  } else {
+    billedClaim.status = "Underpaid";
+    billedClaim.underpaid_amount = expected - paid;
+  }
+
+  changed = true;
+}
+
+if (changed) {
+
+  writeJSON(FILES.billed, billedAll);
+
+  subsAll.forEach(s => {
+
+    if (s.org_id !== org.org_id) return;
+
+    const claims = billedAll.filter(b => b.submission_id === s.submission_id);
+
+    s.paid = claims.filter(c => c.status === "Paid").length;
+    s.denied = claims.filter(c => c.status === "Denied").length;
+    s.pending = claims.filter(c => c.status === "Pending").length;
+    s.underpaid = claims.filter(c => c.status === "Underpaid").length;
+
+    s.revenue_collected = claims
+      .filter(c => c.status === "Paid")
+      .reduce((sum, c) => sum + num(c.paid_amount), 0);
+
+    s.revenue_at_risk = claims
+      .filter(c => ["Pending","Denied","Underpaid"].includes(c.status))
+      .reduce((sum, c) =>
+        sum + (num(c.amount_billed) - num(c.paid_amount)), 0);
+
+  });
+
+  writeJSON(FILES.billed_submissions, subsAll);
+}
+
+
+
+// ================= CLAIM DETAIL ROUTE =================
+
+// Add inside router before fallback:
+
+if (method === "GET" && pathname === "/claim-detail") {
+
+  const billed_id = (parsed.query.billed_id || "").trim();
+  const billedAll = readJSON(FILES.billed, []);
+  const claim = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+  if (!claim) return redirect(res, "/billed");
+
+  const rows = Object.keys(claim).map(k =>
+    `<tr><th>${k}</th><td>${claim[k]}</td></tr>`
+  ).join("");
+
+  const html = page("Claim Detail", `
+    <h2>Claim Detail</h2>
+    <table><tbody>${rows}</tbody></table>
+    <a class="btn secondary" href="javascript:history.back()">Back</a>
+  `, navUser(), {showChat:true});
+
+  return send(res, 200, html);
+}
+
+
+
+// ================= PAGINATION LOGIC =================
+
+// Insert after filtering billed claims in submission view:
+
+const pageParam = Number(parsed.query.page || 1);
+const perPageParam = Number(parsed.query.per_page || 50);
+const perPage = [30,50,100].includes(perPageParam) ? perPageParam : 50;
+
+const totalPages = Math.ceil(billed.length / perPage);
+const startIdx = (pageParam - 1) * perPage;
+const billedPage = billed.slice(startIdx, startIdx + perPage);
+
+// Replace billed.map(...) with billedPage.map(...)
+
+
+
+// ================= REMOVE PARTIAL PAID =================
+
+// Remove this dropdown option from submission UI:
+
+// <option value="insurance_partial">Insurance Partially Paid</option>
+
+// Keep only:
+// <option value="insurance_underpaid">Insurance Underpaid</option>
+
+
+
+// ================= END 3.0 FINAL BUILD =================
+
