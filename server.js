@@ -5274,7 +5274,7 @@ for (const ap of addedPayments) {
     : billedAmt;
 
   if (paid <= 0) {
-    billedClaim.status = "Pending";
+    billedClaim.status = "Denied";
     billedClaim.suggested_action = "";
     billedClaim.underpaid_amount = null;
   } else if (paid + 0.01 >= expected) {
@@ -6019,30 +6019,79 @@ else if (type === "payers") {
 
 
   // --------- CLAIM DETAIL VIEW ----------
-  if (method === "GET" && pathname === "/claim-detail") {
-    const billed_id = (parsed.query.billed_id || "").trim();
-    const billedAll = readJSON(FILES.billed, []);
-    const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
-    if (!b) return redirect(res, "/billed");
+  
+if (method === "GET" && pathname === "/claim-detail") {
 
-    const rows = Object.keys(b).sort().map(k => {
-      const v = (typeof b[k] === "object") ? JSON.stringify(b[k]) : String(b[k] ?? "");
-      return `<tr><th style="width:240px;">${safeStr(k)}</th><td>${safeStr(v)}</td></tr>`;
-    }).join("");
+  const billed_id = (parsed.query.billed_id || "").trim();
+  const billedAll = readJSON(FILES.billed, []);
+  const paymentsAll = readJSON(FILES.payments, []);
 
-    const html = page("Claim Detail", `
-      <h2>Claim Detail</h2>
-      <p class="muted">Full claim record captured from your upload and workflow updates.</p>
-      <div class="hr"></div>
-      <table><tbody>${rows}</tbody></table>
-      <div class="btnRow">
-        <a class="btn secondary" href="javascript:history.back()">Back</a>
-        <a class="btn secondary" href="/billed">Billed Submissions</a>
-      </div>
-    `, navUser(), {showChat:true});
-
-    return send(res, 200, html);
+  function normalizeClaimNum(x) {
+    return String(x || "").replace(/[^0-9]/g, "");
   }
+
+  const b = billedAll.find(x =>
+    x.billed_id === billed_id &&
+    x.org_id === org.org_id
+  );
+
+  if (!b) return redirect(res, "/billed");
+
+  const relatedPayments = paymentsAll.filter(p =>
+    p.org_id === org.org_id &&
+    normalizeClaimNum(p.claim_number) === normalizeClaimNum(b.claim_number)
+  );
+
+  const claimRows = Object.keys(b).sort().map(k => {
+    const v = (typeof b[k] === "object") ? JSON.stringify(b[k]) : String(b[k] ?? "");
+    return `<tr><th style="width:240px;">${safeStr(k)}</th><td>${safeStr(v)}</td></tr>`;
+  }).join("");
+
+  const paymentTable = relatedPayments.length === 0
+    ? `<p class="muted">No payment records found for this claim.</p>`
+    : `
+      <table>
+        <thead>
+          <tr>
+            <th>Date Paid</th>
+            <th>Amount</th>
+            <th>Payer</th>
+            <th>Source File</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${relatedPayments.map(p => `
+            <tr>
+              <td>${safeStr(p.date_paid || "")}</td>
+              <td>$${num(p.amount_paid).toFixed(2)}</td>
+              <td>${safeStr(p.payer || "")}</td>
+              <td class="muted small">${safeStr(p.source_file || "")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+
+  const html = page("Claim Detail", `
+    <h2>Claim Detail</h2>
+    <div class="hr"></div>
+    <table>
+      <tbody>${claimRows}</tbody>
+    </table>
+
+    <div class="hr"></div>
+    <h3>Payment History</h3>
+    ${paymentTable}
+
+    <div class="btnRow">
+      <a class="btn secondary" href="javascript:history.back()">Back</a>
+      <a class="btn secondary" href="/billed">Billed Submissions</a>
+    </div>
+  `, navUser(), {showChat:true});
+
+  return send(res, 200, html);
+}
+
 
 // fallback
   return redirect(res, "/dashboard");
