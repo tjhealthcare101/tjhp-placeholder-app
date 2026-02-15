@@ -3156,6 +3156,20 @@ if (method === "GET" && pathname === "/weekly-summary") {
       return true;
     });
 
+
+    // ===== Pagination (Claims in Submission) =====
+    const pageParam = Math.max(1, Number(parsed.query.page || 1));
+    const perPageParam = Number(parsed.query.per_page || 50);
+    const PER_PAGE_OPTIONS = [30, 50, 100];
+    const perPage = PER_PAGE_OPTIONS.includes(perPageParam) ? perPageParam : 50;
+
+    const totalFiltered = billed.length;
+    const totalPages = Math.max(1, Math.ceil(totalFiltered / perPage));
+    const pageNum = Math.min(pageParam, totalPages);
+    const startIdx = (pageNum - 1) * perPage;
+    const endIdx = startIdx + perPage;
+    const billedPage = billed.slice(startIdx, endIdx);
+
     const payerOpts = Array.from(new Set(billedAll.filter(b=>b.submission_id===submission_id).map(b => (b.payer || "").trim()).filter(Boolean))).sort();
 
     // Summary metrics for this submission
@@ -3172,7 +3186,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
     const barColor = collectionRate >= 80 ? "#065f46" : (collectionRate >= 60 ? "#f59e0b" : "#b91c1c");
 
-    const rows = billed.slice(0, 500).map(b => {
+    const rows = billedPage.map(b => {
       const st = (b.status || "Pending");
       const today = new Date().toISOString().split("T")[0];
 
@@ -3212,8 +3226,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <label class="small muted">Insurance Status</label>
             <select name="insurance_mode" id="mode_${safeStr(b.billed_id)}" onchange="window.__tjhpModeChange('${safeStr(b.billed_id)}')" style="width:260px;">
               <option value="">Select</option>
-              <option value="insurance_partial">Insurance Partially Paid</option>
-              <option value="insurance_underpaid">Insurance Underpaid</option>
+                            <option value="insurance_underpaid">Insurance Underpaid</option>
             </select>
           </div>
 
@@ -3326,6 +3339,22 @@ if (method === "GET" && pathname === "/weekly-summary") {
             ${deniedForm}
             ${dd}
             ${negotiateBtn}
+${(st === "Underpaid") ? `
+<form method="POST" action="/claim/resolve" style="margin-top:8px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+  <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+  <input type="hidden" name="submission_id" value="${safeStr(submission_id)}"/>
+  <div style="display:flex;flex-direction:column;min-width:260px;">
+    <label class="small muted">Resolve Underpaid</label>
+    <select name="resolution" required style="width:260px;">
+      <option value="">Select</option>
+      <option value="Contractual">Contractual Agreement (Write-off)</option>
+      <option value="Patient Balance">Patient Responsibility Needed</option>
+      <option value="Appeal">Send to Appeal</option>
+    </select>
+  </div>
+  <button class="btn secondary small" type="submit">Apply</button>
+</form>
+` : ``}
           </div>
         `;
       })();
@@ -3356,6 +3385,7 @@ const statusCell = (() => {
       <div class="small">Paid: $${ip.toFixed(2)}</div>
       <div class="small">Expected: $${expectedInsurance.toFixed(2)}</div>
       <div class="small">Underpaid: $${underpaid.toFixed(2)}</div>
+      ${b.suggested_action ? `<div class="small muted">Suggested: ${safeStr(b.suggested_action)}</div>` : ``}
     `;
   }
 
@@ -3382,7 +3412,7 @@ const statusCell = (() => {
 
 
 return `<tr>
-        <td>${safeStr(b.claim_number || "")}</td>
+        <td><a href="/claim-detail?billed_id=${encodeURIComponent(safeStr(b.billed_id))}">${safeStr(b.claim_number || "")}</a></td>
         <td>${safeStr(b.dos || "")}</td>
         <td>${safeStr(b.payer || "")}</td>
         <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
@@ -3449,6 +3479,10 @@ return `<tr>
             <option value="Pending"${statusF==="Pending"?" selected":""}>Pending</option>
             <option value="Paid"${statusF==="Paid"?" selected":""}>Paid</option>
             <option value="Denied"${statusF==="Denied"?" selected":""}>Denied</option>
+            <option value="Underpaid"${statusF==="Underpaid"?" selected":""}>Underpaid</option>
+            <option value="Contractual"${statusF==="Contractual"?" selected":""}>Contractual</option>
+            <option value="Appeal"${statusF==="Appeal"?" selected":""}>Appeal</option>
+            <option value="Patient Balance"${statusF==="Patient Balance"?" selected":""}>Patient Balance</option>
           </select>
         </div>
         <div style="display:flex;flex-direction:column;">
@@ -3478,7 +3512,45 @@ return `<tr>
           <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Status</th><th>Action</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="6" class="muted">No claims found for this filter.</td></tr>`}</tbody>
         </table>
-        <p class="muted small">Showing ${Math.min(500, billed.length)} of ${billed.length} filtered results in this submission.</p>
+        
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:10px;">
+          <div class="muted small">Showing ${Math.min(perPage, billedPage.length)} of ${totalFiltered} filtered results (Page ${pageNum}/${totalPages}).</div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <label class="small muted">Claims per page</label>
+            <select onchange="window.location=this.value">
+              ${PER_PAGE_OPTIONS.map(n => {
+                const qs = new URLSearchParams({
+                  submission_id: submission_id,
+                  q: q || "",
+                  status: statusF || "",
+                  payer: payerF || "",
+                  start: start || "",
+                  end: end || "",
+                  page: "1",
+                  per_page: String(n)
+                }).toString();
+                return `<option value="/billed?${qs}" ${n===perPage ? "selected":""}>${n}</option>`;
+              }).join("")}
+            </select>
+            <div>
+              ${Array.from({length: totalPages}, (_,i)=> {
+                const pn = i+1;
+                const qs = new URLSearchParams({
+                  submission_id: submission_id,
+                  q: q || "",
+                  status: statusF || "",
+                  payer: payerF || "",
+                  start: start || "",
+                  end: end || "",
+                  page: String(pn),
+                  per_page: String(perPage)
+                }).toString();
+                return `<a href="/billed?${qs}" style="margin:0 4px;${pn===pageNum ? "font-weight:900;":""}">${pn}</a>`;
+              }).join("")}
+            </div>
+          </div>
+        </div>
+
       </div>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
@@ -3604,7 +3676,7 @@ return `<tr>
 
     const billed_id = (params.get("billed_id") || "").trim();
     const submission_id = (params.get("submission_id") || "").trim();
-    const action = (params.get("action") || "").trim(); // paid_full | denied | insurance_partial | insurance_underpaid
+    const action = (params.get("action") || "").trim(); // paid_full | denied | insurance_underpaid
     const date = (params.get("date") || "").trim();
 
     const billedAll = readJSON(FILES.billed, []);
@@ -4111,6 +4183,37 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     auditLog({ actor:"user", action:"billed_bulk_update", org_id: org.org_id, submission_id, bulk_action: action, date });
     return redirect(res, `/billed?submission_id=${encodeURIComponent(submission_id)}`);
   }
+
+  // --------- UNDERPAID RESOLUTION (Contractual / Appeal / Patient Balance) ----------
+  if (method === "POST" && pathname === "/claim/resolve") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const billed_id = (params.get("billed_id") || "").trim();
+    const submission_id = (params.get("submission_id") || "").trim();
+    const resolution = (params.get("resolution") || "").trim(); // Contractual | Appeal | Patient Balance
+
+    const billedAll = readJSON(FILES.billed, []);
+    const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+    if (!b) return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
+
+    if (resolution === "Contractual") {
+      b.status = "Contractual";
+      b.contractual_adjustment = Math.max(0, num(b.amount_billed) - num(b.allowed_amount || b.amount_billed));
+    } else if (resolution === "Appeal") {
+      b.status = "Appeal";
+      b.appeal_flag = true;
+    } else if (resolution === "Patient Balance") {
+      b.status = "Patient Balance";
+      b.patient_balance = Math.max(0, num(b.patient_responsibility) - num(b.patient_collected));
+    }
+
+    writeJSON(FILES.billed, billedAll);
+    auditLog({ actor:"user", action:"claim_resolve", org_id: org.org_id, billed_id, resolution });
+
+    return redirect(res, submission_id ? `/billed?submission_id=${encodeURIComponent(submission_id)}` : "/billed");
+  }
+
 // --------- CASE UPLOAD ----------
   if (method === "GET" && pathname === "/upload") {
     const allTemplates = readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id);
@@ -5137,89 +5240,103 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         });
         addedPayments.push(paymentsData[paymentsData.length-1]);
       }
-      writeJSON(FILES.payments, paymentsData);// ======= CLAIM RECONCILIATION =======
+      writeJSON(FILES.payments, paymentsData);
 
-let billedAll = readJSON(FILES.billed, []);
-let subsAll = readJSON(FILES.billed_submissions, []);
+// ======= SMART CLAIM RECONCILIATION (Paid / Underpaid / Pending) =======
 
-function normalizeClaim(x) {
-  return String(x || "").replace(/[^0-9]/g, "");
-}
+let billedAll_sync = readJSON(FILES.billed, []);
+let subsAll_sync = readJSON(FILES.billed_submissions, []);
 
-let changed = false;
+function normalizeClaimNum(x) { return String(x || "").replace(/[^0-9]/g, ""); }
+
+let changed_sync = false;
 
 for (const ap of addedPayments) {
 
-  const normalizedClaim = normalizeClaim(ap.claim_number);
+  const normalizedClaim = normalizeClaimNum(ap.claim_number);
   if (!normalizedClaim) continue;
 
-  const billedClaim = billedAll.find(b =>
+  const billedClaim = billedAll_sync.find(b =>
     b.org_id === org.org_id &&
-    normalizeClaim(b.claim_number) === normalizedClaim
+    normalizeClaimNum(b.claim_number) === normalizedClaim
   );
 
   if (!billedClaim) continue;
 
-  // THIS LINE WAS MISSING BEFORE:
-  billedClaim.status = "Paid";
+  const paid = num(ap.amount_paid);
+  billedClaim.paid_amount = paid;
+  billedClaim.paid_at = (ap.date_paid || "").trim() || nowISO();
+  billedClaim.insurance_paid = paid;
 
-  billedClaim.paid_amount = ap.amount_paid;
-  billedClaim.paid_at = ap.date_paid || nowISO();
+  const billedAmt = num(billedClaim.amount_billed);
+  const expected = (billedClaim.expected_insurance != null && String(billedClaim.expected_insurance).trim() !== "")
+    ? num(billedClaim.expected_insurance)
+    : billedAmt;
 
-  changed = true;
+  if (paid <= 0) {
+    billedClaim.status = "Pending";
+    billedClaim.suggested_action = "";
+    billedClaim.underpaid_amount = null;
+  } else if (paid + 0.01 >= expected) {
+    billedClaim.status = "Paid";
+    billedClaim.suggested_action = "";
+    billedClaim.underpaid_amount = 0;
+  } else {
+    billedClaim.status = "Underpaid";
+    billedClaim.underpaid_amount = Math.max(0, expected - paid);
+
+    const diffPct = expected > 0 ? ((expected - paid) / expected) * 100 : 100;
+    if (diffPct <= 5) billedClaim.suggested_action = "Contractual";
+    else if (diffPct <= 20) billedClaim.suggested_action = "Patient Balance";
+    else billedClaim.suggested_action = "Appeal";
+  }
+
+  changed_sync = true;
 }
 
-if (changed) {
+if (changed_sync) {
 
-  writeJSON(FILES.billed, billedAll);
+  writeJSON(FILES.billed, billedAll_sync);
 
-  // ===== Recalculate submission summaries =====
-
-  subsAll.forEach(s => {
+  subsAll_sync.forEach(s => {
 
     if (s.org_id !== org.org_id) return;
 
-    const claims = billedAll.filter(b =>
-      b.submission_id === s.submission_id
-    );
+    const claims = billedAll_sync.filter(b => b.submission_id === s.submission_id);
 
-    s.paid = claims.filter(c => c.status === "Paid").length;
-    s.denied = claims.filter(c => c.status === "Denied").length;
-    s.pending = claims.filter(c => c.status === "Pending").length;
+    s.paid = claims.filter(c => (c.status || "Pending") === "Paid").length;
+    s.denied = claims.filter(c => (c.status || "Pending") === "Denied").length;
+    s.pending = claims.filter(c => (c.status || "Pending") === "Pending").length;
+
+    s.underpaid = claims.filter(c => (c.status || "Pending") === "Underpaid").length;
+    s.contractual = claims.filter(c => (c.status || "Pending") === "Contractual").length;
+    s.appeal = claims.filter(c => (c.status || "Pending") === "Appeal").length;
+    s.patient_balance = claims.filter(c => (c.status || "Pending") === "Patient Balance").length;
 
     s.revenue_collected = claims
-      .filter(c => c.status === "Paid")
-      .reduce((sum, c) => sum + Number(c.paid_amount || 0), 0);
+      .filter(c => (c.status || "Pending") === "Paid")
+      .reduce((sum, c) => sum + num(c.paid_amount), 0);
 
+    // Revenue at risk counts: Pending + Denied + Underpaid + Appeal (NOT Contractual, NOT Patient Balance)
     s.revenue_at_risk = claims
-      .reduce((sum, c) =>
-        sum + (Number(c.amount_billed || 0) - Number(c.paid_amount || 0)), 0);
+      .filter(c => ["Pending","Denied","Underpaid","Appeal"].includes((c.status || "Pending")))
+      .reduce((sum, c) => {
+        const billedAmt = num(c.amount_billed);
+        const paidAmt = num(c.paid_amount);
+        const exp = (c.expected_insurance != null && String(c.expected_insurance).trim() !== "") ? num(c.expected_insurance) : billedAmt;
+
+        if ((c.status || "Pending") === "Underpaid" || (c.status || "Pending") === "Appeal") {
+          return sum + Math.max(0, exp - paidAmt);
+        }
+        return sum + Math.max(0, billedAmt - paidAmt);
+      }, 0);
 
   });
 
-  writeJSON(FILES.billed_submissions, subsAll);
+  writeJSON(FILES.billed_submissions, subsAll_sync);
 }
 
-      // Auto-match billed claims from payment upload (claim_number)
-      try {
-        const billedAll = readJSON(FILES.billed, []);
-        let changed = false;
-        for (const ap of addedPayments) {
-          const claimNo = String(ap.claim_number || '').trim();
-          if (!claimNo) continue;
-          const b = billedAll.find(x => x.org_id === org.org_id && String(x.claim_number || '').trim() === claimNo);
-          if (!b) continue;
-          if ((b.status || 'Pending') !== 'Paid') {
-            /* status will be recalculated by simple rules below */
-            b.paid_amount = ap.amount_paid || b.paid_amount || null;
-            b.paid_at = ap.date_paid || b.paid_at || nowISO();
-            changed = true;
-          }
-        }
-        if (changed) writeJSON(FILES.billed, billedAll);
-      } catch {}
-
-      rowsAdded = toUse;
+rowsAdded = toUse;
       consumePaymentRows(org.org_id, rowsAdded);
     } else {
       // Excel stored but not parsed in v1 (still counts as 0 rows until CSV provided)
@@ -5900,6 +6017,33 @@ else if (type === "payers") {
     return;
   }
 
+
+  // --------- CLAIM DETAIL VIEW ----------
+  if (method === "GET" && pathname === "/claim-detail") {
+    const billed_id = (parsed.query.billed_id || "").trim();
+    const billedAll = readJSON(FILES.billed, []);
+    const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+    if (!b) return redirect(res, "/billed");
+
+    const rows = Object.keys(b).sort().map(k => {
+      const v = (typeof b[k] === "object") ? JSON.stringify(b[k]) : String(b[k] ?? "");
+      return `<tr><th style="width:240px;">${safeStr(k)}</th><td>${safeStr(v)}</td></tr>`;
+    }).join("");
+
+    const html = page("Claim Detail", `
+      <h2>Claim Detail</h2>
+      <p class="muted">Full claim record captured from your upload and workflow updates.</p>
+      <div class="hr"></div>
+      <table><tbody>${rows}</tbody></table>
+      <div class="btnRow">
+        <a class="btn secondary" href="javascript:history.back()">Back</a>
+        <a class="btn secondary" href="/billed">Billed Submissions</a>
+      </div>
+    `, navUser(), {showChat:true});
+
+    return send(res, 200, html);
+  }
+
 // fallback
   return redirect(res, "/dashboard");
 });
@@ -5907,154 +6051,4 @@ else if (type === "payers") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
-
-
-// ============================================================
-// ================== 3.0 FINAL STABLE BUILD ==================
-// ============================================================
-// This section replaces:
-// 1) Payment reconciliation logic
-// 2) Adds Underpaid smart engine
-// 3) Adds manual resolution route
-// 4) Makes Claim # clickable
-// 5) Adds claim detail route
-// 6) Removes Insurance Partially Paid
-// 7) Adds pagination
-// ============================================================
-
-
-
-// ================= SMART PAYMENT RECONCILIATION =================
-
-function normalizeClaim(x) {
-  return String(x || "").replace(/[^0-9]/g, "");
-}
-
-
-// REPLACE YOUR EXISTING RECONCILIATION BLOCK WITH THIS:
-
-// ======= SMART CLAIM RECONCILIATION =======
-
-let billedAll = readJSON(FILES.billed, []);
-let subsAll = readJSON(FILES.billed_submissions, []);
-
-let changed = false;
-
-for (const ap of addedPayments) {
-
-  const normalizedClaim = normalizeClaim(ap.claim_number);
-  if (!normalizedClaim) continue;
-
-  const billedClaim = billedAll.find(b =>
-    b.org_id === org.org_id &&
-    normalizeClaim(b.claim_number) === normalizedClaim
-  );
-
-  if (!billedClaim) continue;
-
-  const paid = num(ap.amount_paid);
-  billedClaim.paid_amount = paid;
-  billedClaim.paid_at = ap.date_paid || nowISO();
-
-  const billedAmt = num(billedClaim.amount_billed);
-  const expected = billedAmt;
-
-  if (paid <= 0) {
-    billedClaim.status = "Pending";
-  } else if (paid >= expected) {
-    billedClaim.status = "Paid";
-  } else {
-    billedClaim.status = "Underpaid";
-    billedClaim.underpaid_amount = expected - paid;
-  }
-
-  changed = true;
-}
-
-if (changed) {
-
-  writeJSON(FILES.billed, billedAll);
-
-  subsAll.forEach(s => {
-
-    if (s.org_id !== org.org_id) return;
-
-    const claims = billedAll.filter(b => b.submission_id === s.submission_id);
-
-    s.paid = claims.filter(c => c.status === "Paid").length;
-    s.denied = claims.filter(c => c.status === "Denied").length;
-    s.pending = claims.filter(c => c.status === "Pending").length;
-    s.underpaid = claims.filter(c => c.status === "Underpaid").length;
-
-    s.revenue_collected = claims
-      .filter(c => c.status === "Paid")
-      .reduce((sum, c) => sum + num(c.paid_amount), 0);
-
-    s.revenue_at_risk = claims
-      .filter(c => ["Pending","Denied","Underpaid"].includes(c.status))
-      .reduce((sum, c) =>
-        sum + (num(c.amount_billed) - num(c.paid_amount)), 0);
-
-  });
-
-  writeJSON(FILES.billed_submissions, subsAll);
-}
-
-
-
-// ================= CLAIM DETAIL ROUTE =================
-
-// Add inside router before fallback:
-
-if (method === "GET" && pathname === "/claim-detail") {
-
-  const billed_id = (parsed.query.billed_id || "").trim();
-  const billedAll = readJSON(FILES.billed, []);
-  const claim = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
-  if (!claim) return redirect(res, "/billed");
-
-  const rows = Object.keys(claim).map(k =>
-    `<tr><th>${k}</th><td>${claim[k]}</td></tr>`
-  ).join("");
-
-  const html = page("Claim Detail", `
-    <h2>Claim Detail</h2>
-    <table><tbody>${rows}</tbody></table>
-    <a class="btn secondary" href="javascript:history.back()">Back</a>
-  `, navUser(), {showChat:true});
-
-  return send(res, 200, html);
-}
-
-
-
-// ================= PAGINATION LOGIC =================
-
-// Insert after filtering billed claims in submission view:
-
-const pageParam = Number(parsed.query.page || 1);
-const perPageParam = Number(parsed.query.per_page || 50);
-const perPage = [30,50,100].includes(perPageParam) ? perPageParam : 50;
-
-const totalPages = Math.ceil(billed.length / perPage);
-const startIdx = (pageParam - 1) * perPage;
-const billedPage = billed.slice(startIdx, startIdx + perPage);
-
-// Replace billed.map(...) with billedPage.map(...)
-
-
-
-// ================= REMOVE PARTIAL PAID =================
-
-// Remove this dropdown option from submission UI:
-
-// <option value="insurance_partial">Insurance Partially Paid</option>
-
-// Keep only:
-// <option value="insurance_underpaid">Insurance Underpaid</option>
-
-
-
-// ================= END 3.0 FINAL BUILD =================
 
