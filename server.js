@@ -5137,7 +5137,68 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         });
         addedPayments.push(paymentsData[paymentsData.length-1]);
       }
-      writeJSON(FILES.payments, paymentsData);
+      writeJSON(FILES.payments, paymentsData);// ======= CLAIM RECONCILIATION =======
+
+let billedAll = readJSON(FILES.billed, []);
+let subsAll = readJSON(FILES.billed_submissions, []);
+
+function normalizeClaim(x) {
+  return String(x || "").replace(/[^0-9]/g, "");
+}
+
+let changed = false;
+
+for (const ap of addedPayments) {
+
+  const normalizedClaim = normalizeClaim(ap.claim_number);
+  if (!normalizedClaim) continue;
+
+  const billedClaim = billedAll.find(b =>
+    b.org_id === org.org_id &&
+    normalizeClaim(b.claim_number) === normalizedClaim
+  );
+
+  if (!billedClaim) continue;
+
+  // THIS LINE WAS MISSING BEFORE:
+  billedClaim.status = "Paid";
+
+  billedClaim.paid_amount = ap.amount_paid;
+  billedClaim.paid_at = ap.date_paid || nowISO();
+
+  changed = true;
+}
+
+if (changed) {
+
+  writeJSON(FILES.billed, billedAll);
+
+  // ===== Recalculate submission summaries =====
+
+  subsAll.forEach(s => {
+
+    if (s.org_id !== org.org_id) return;
+
+    const claims = billedAll.filter(b =>
+      b.submission_id === s.submission_id
+    );
+
+    s.paid = claims.filter(c => c.status === "Paid").length;
+    s.denied = claims.filter(c => c.status === "Denied").length;
+    s.pending = claims.filter(c => c.status === "Pending").length;
+
+    s.revenue_collected = claims
+      .filter(c => c.status === "Paid")
+      .reduce((sum, c) => sum + Number(c.paid_amount || 0), 0);
+
+    s.revenue_at_risk = claims
+      .reduce((sum, c) =>
+        sum + (Number(c.amount_billed || 0) - Number(c.paid_amount || 0)), 0);
+
+  });
+
+  writeJSON(FILES.billed_submissions, subsAll);
+}
 
       // Auto-match billed claims from payment upload (claim_number)
       try {
