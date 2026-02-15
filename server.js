@@ -2658,6 +2658,12 @@ if (method === "GET" && pathname === "/weekly-summary") {
     }
 
     const m = computeDashboardMetrics(org.org_id, startDate, endDate, preset);
+        
+        // --- SAFE DASHBOARD DATA ENCODING FOR CHARTS ---
+        const seriesB64 = Buffer.from(JSON.stringify(m.series || {})).toString("base64");
+        const statusB64 = Buffer.from(JSON.stringify(m.statusCounts || {})).toString("base64");
+        const payerB64 = Buffer.from(JSON.stringify(m.payerTop || [])).toString("base64");
+
 
     const planBadge = (limits.mode==="monthly")
       ? `<span class="badge ok">Monthly Active</span>`
@@ -2809,7 +2815,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         (function(){
           if (!window.Chart) return;
 
-          const series = JSON.parse(${JSON.stringify("${safeStr(JSON.stringify(m.series))}")}.replace(/^"|"$/g,""));
+          const series = JSON.parse(atob("${seriesB64}"));
           new Chart(document.getElementById("revTrend"), {
             type: "line",
             data: {
@@ -2823,7 +2829,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
             options: { responsive: true }
           });
 
-          const st = JSON.parse(${JSON.stringify("${safeStr(JSON.stringify(m.statusCounts))}")}.replace(/^"|"$/g,""));
+          const st = JSON.parse(atob("${statusB64}"));
           new Chart(document.getElementById("statusMix"), {
             type: "doughnut",
             data: {
@@ -2833,7 +2839,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
             options: { responsive: true }
           });
 
-          const pt = JSON.parse(${JSON.stringify("${safeStr(JSON.stringify(m.payerTop))}")}.replace(/^"|"$/g,""));
+          const pt = JSON.parse(atob("${payerB64}"));
           new Chart(document.getElementById("underpayPayer"), {
             type: "bar",
             data: {
@@ -5668,4 +5674,5 @@ else if (type === "payers") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
+
 
