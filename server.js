@@ -2516,39 +2516,46 @@ const server = http.createServer(async (req, res) => {
 
 
 // executive dashboard
+// Executive Dashboard (CLEAN SAFE VERSION)
+
 if (method === "GET" && pathname === "/executive") {
+
   const a = computeAnalytics(org.org_id);
   const score = computeRiskScore(a);
   const r = riskLabel(score);
   const tips = buildRecoveryStrategies(a);
 
-  const agingData = [a.aging.over30, a.aging.over60, a.aging.over90];
-
-  const payerEntries = Object.entries(a.payByPayer || {})
-    .map(([payer, info]) => ({ payer, total: Number(info.total || 0) }))
-    .sort((x,y)=>y.total-x.total)
-    .slice(0,5);
-
-  const payerLabels = payerEntries.map(x => x.payer);
-  const payerTotals = payerEntries.map(x => x.total);
-
   const html = page("Executive Dashboard", `
+
     <h2>Executive Dashboard</h2>
     <p class="muted">High-level denial → revenue performance for leadership review.</p>
 
     <div class="row">
       <div class="col">
-        <div class="kpi-card"><h4>Recovered from Denials</h4><p>$${Number(a.totalRecoveredFromDenials||0).toFixed(2)}</p></div>
-        <div class="kpi-card"><h4>Recovery Rate</h4><p>${a.recoveryRate}%</p></div>
-        <div class="kpi-card"><h4>Projected Lost Revenue</h4><p>$${Number(a.projectedLostRevenue||0).toFixed(2)}</p></div>
+        <div class="kpi-card">
+          <h4>Recovered from Denials</h4>
+          <p>$${Number(a.totalRecoveredFromDenials || 0).toFixed(2)}</p>
+        </div>
+
+        <div class="kpi-card">
+          <h4>Recovery Rate</h4>
+          <p>${a.recoveryRate}%</p>
+        </div>
+
+        <div class="kpi-card">
+          <h4>Projected Lost Revenue</h4>
+          <p>$${Number(a.projectedLostRevenue || 0).toFixed(2)}</p>
+        </div>
       </div>
 
       <div class="col">
         <h3>Risk Score</h3>
-        <p class="muted small">Heuristic score (0–100) based on recovery %, aging, and revenue leakage signals.</p>
-        <div class="badge ${r.cls}">Risk: ${r.label} — ${score}/100</div>
+        <div class="badge ${r.cls}">
+          Risk: ${r.label} — ${score}/100
+        </div>
 
         <div class="hr"></div>
+
         <h3>Recommended Actions</h3>
         <ul class="muted">
           ${tips.map(t => `<li>${safeStr(t)}</li>`).join("")}
@@ -2556,21 +2563,13 @@ if (method === "GET" && pathname === "/executive") {
       </div>
     </div>
 
-    <div class="hr"></div>
-    <h3>Denial Aging (Unpaid)</h3>
-    <canvas id="agingChart" height="120"></canvas>
-
-    <div class="hr"></div>
-    <h3>Top Payers by Total Paid</h3>
-    <canvas id="payerChart" height="140"></canvas>
-
-
     <div class="btnRow">
       <a class="btn secondary" href="/weekly-summary">Weekly Summary</a>
-      <a class="btn secondary" href="/analytics">Analytics</a>
       <a class="btn secondary" href="/dashboard">Back</a>
     </div>
-  `, navUser(), {showChat:true});
+
+  `, navUser(), { showChat: true });
+
   return send(res, 200, html);
 }
 
