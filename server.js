@@ -2152,6 +2152,9 @@ const server = http.createServer(async (req, res) => {
           const p = pilots.find(x => x.org_id === org.org_id);
           const s = subs.find(x => x.org_id === org.org_id);
           return (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ? "Pilot" : "Expired");
+          });
+          else { const p=document.createElement("p"); p.className="muted"; p.textContent="No patient revenue data."; patientEl.replaceWith(p); }
+
         })();
         const planMatch = !planFilter || plan === planFilter;
         const attMatch = !needAtt || attSet.has(org.org_id);
@@ -2833,6 +2836,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
             options: { responsive: true }
           });
 
+          else { const p=document.createElement("p"); p.className="muted"; p.textContent="No revenue trend data."; revEl.replaceWith(p); }
+
           const st = JSON.parse(atob("${statusB64}"));
 
           const statusEl = document.getElementById("statusMix");
@@ -2845,6 +2850,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
             },
             options: { responsive: true }
           });
+
+          else { const p=document.createElement("p"); p.className="muted"; p.textContent="No claim status data."; statusEl.replaceWith(p); }
 
           const pt = JSON.parse(atob("${payerB64}"));
 
@@ -2859,17 +2866,25 @@ if (method === "GET" && pathname === "/weekly-summary") {
             options: { responsive: true }
           });
 
-          new Chart(document.getElementById("patientRev"), {
+          else { const p=document.createElement("p"); p.className="muted"; p.textContent="No underpayment by payer data."; underpayEl.replaceWith(p); }
+
+          const patientEl = document.getElementById("patientRev");
+          const patientData = [${Number(m.kpis.patientRespTotal||0)}, ${Number(m.kpis.patientCollected||0)}, ${Number(m.kpis.patientOutstanding||0)}];
+          const hasPatientData = patientData.some(v=>Number(v)>0);
+          if (hasPatientData) new Chart(patientEl, {
             type: "bar",
             data: {
               labels: ["Patient Responsibility","Collected","Outstanding"],
               datasets: [{
                 label: "Patient $",
-                data: [${Number(m.kpis.patientRespTotal||0)}, ${Number(m.kpis.patientCollected||0)}, ${Number(m.kpis.patientOutstanding||0)}]
+                data: patientData
               }]
             },
             options: { responsive: true }
           });
+          });
+          else { const p=document.createElement("p"); p.className="muted"; p.textContent="No patient revenue data."; patientEl.replaceWith(p); }
+
         })();
       </script>
 
