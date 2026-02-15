@@ -217,7 +217,7 @@ const css = `
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);}
 .wrap{max-width:980px;margin:28px auto;padding:0 16px;}
-.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;position:sticky;top:0;z-index:999;background:var(--card);padding:12px 16px;box-shadow:0 2px 4px rgba(0,0,0,.05);}
 .brand{display:flex;flex-direction:column;gap:2px;}
 .brand h1{font-size:18px;margin:0;}
 .brand .sub{font-size:12px;color:var(--muted);}
@@ -2658,11 +2658,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
     }
 
     const m = computeDashboardMetrics(org.org_id, startDate, endDate, preset);
-        
-        // --- SAFE DASHBOARD DATA ENCODING FOR CHARTS ---
-        const seriesB64 = Buffer.from(JSON.stringify(m.series || {})).toString("base64");
-        const statusB64 = Buffer.from(JSON.stringify(m.statusCounts || {})).toString("base64");
-        const payerB64 = Buffer.from(JSON.stringify(m.payerTop || [])).toString("base64");
+
+    // --- SAFE DASHBOARD DATA ENCODING FOR CHARTS ---
+    const seriesB64 = Buffer.from(JSON.stringify(m.series || {})).toString("base64");
+    const statusB64 = Buffer.from(JSON.stringify(m.statusCounts || {})).toString("base64");
+    const payerB64 = Buffer.from(JSON.stringify(m.payerTop || [])).toString("base64");
 
 
     const planBadge = (limits.mode==="monthly")
@@ -2816,7 +2816,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
           if (!window.Chart) return;
 
           const series = JSON.parse(atob("${seriesB64}"));
-          new Chart(document.getElementById("revTrend"), {
+
+          // --- Revenue Trend fallback ---
+          const revEl = document.getElementById("revTrend");
+          const hasRevData = series && series.keys && series.keys.length > 0 && ((series.billed||[]).some(v=>Number(v)>0) || (series.collected||[]).some(v=>Number(v)>0) || (series.atRisk||[]).some(v=>Number(v)>0));
+          if (hasRevData) new Chart(revEl, {
             type: "line",
             data: {
               labels: series.keys,
@@ -2830,7 +2834,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
           });
 
           const st = JSON.parse(atob("${statusB64}"));
-          new Chart(document.getElementById("statusMix"), {
+
+          const statusEl = document.getElementById("statusMix");
+          const sumStatus = (st["Paid"]||0)+(st["Patient Balance"]||0)+(st["Underpaid"]||0)+(st["Denied"]||0)+(st["Pending"]||0);
+          if (sumStatus>0) new Chart(statusEl, {
             type: "doughnut",
             data: {
               labels: ["Paid","Patient Balance","Underpaid","Denied","Pending"],
@@ -2840,7 +2847,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
           });
 
           const pt = JSON.parse(atob("${payerB64}"));
-          new Chart(document.getElementById("underpayPayer"), {
+
+          const underpayEl = document.getElementById("underpayPayer");
+          const hasUnderpay = Array.isArray(pt) && pt.some(x=>Number(x.underpaid||0)>0);
+          if (hasUnderpay) new Chart(underpayEl, {
             type: "bar",
             data: {
               labels: pt.map(x=>x.payer),
