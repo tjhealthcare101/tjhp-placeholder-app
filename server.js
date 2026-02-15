@@ -6052,3 +6052,119 @@ server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
 
+
+// ============================================================
+// ================== 3.2 FINAL CONSOLIDATED ==================
+// ============================================================
+// This section REPLACES your zero-pay logic and enhances
+// claim-detail + resolve + dashboard write-off tracking.
+// ============================================================
+
+
+
+// ===== REPLACE ZERO-PAY LOGIC =====
+
+if (paid <= 0) {
+
+  billedClaim.status = "Denied";
+
+  const billedAmt = num(billedClaim.amount_billed);
+  const allowedAmt = num(billedClaim.allowed_amount || billedAmt);
+  const patientResp = num(billedClaim.patient_responsibility || 0);
+
+  const expectedInsurance = Math.max(0, allowedAmt - patientResp);
+
+  billedClaim.expected_insurance = expectedInsurance;
+  billedClaim.contractual_adjustment = Math.max(0, billedAmt - allowedAmt);
+  billedClaim.underpaid_amount = expectedInsurance;
+
+  billedClaim.suggested_action = "Appeal";
+}
+
+
+
+// ===== ADD WRITE-OFF RESOLUTION =====
+
+else if (resolution === "Write-Off") {
+
+  if (!write_off_reason) {
+    return redirect(res, submission_id
+      ? `/billed?submission_id=${encodeURIComponent(submission_id)}&msg=${encodeURIComponent("Write-Off reason required")}`
+      : "/billed"
+    );
+  }
+
+  b.status = "Write-Off";
+
+  const billedAmt = num(b.amount_billed);
+  const allowedAmt = num(b.allowed_amount || billedAmt);
+  const patientResp = num(b.patient_responsibility || 0);
+  const expectedInsurance = Math.max(0, allowedAmt - patientResp);
+  const paidAmt = num(b.paid_amount);
+
+  b.write_off_amount = Math.max(0, expectedInsurance - paidAmt);
+  b.write_off_reason = write_off_reason;
+
+  auditLog({
+    actor: "user",
+    action: "claim_write_off",
+    org_id: org.org_id,
+    billed_id,
+    amount: b.write_off_amount,
+    reason: write_off_reason
+  });
+}
+
+
+
+// ===== ADD PAYMENT HISTORY TO CLAIM DETAIL =====
+
+const paymentsAll = readJSON(FILES.payments, []);
+
+const relatedPayments = paymentsAll.filter(p =>
+  p.org_id === org.org_id &&
+  normalizeClaimNum(p.claim_number) === normalizeClaimNum(b.claim_number)
+);
+
+// Add below claim detail table rendering:
+
+<h3>Payment History</h3>
+
+${
+  relatedPayments.length === 0
+    ? `<p class="muted">No payment records found for this claim.</p>`
+    : `
+      <table>
+        <thead>
+          <tr>
+            <th>Date Paid</th>
+            <th>Amount</th>
+            <th>Payer</th>
+            <th>Source File</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${relatedPayments.map(p => `
+            <tr>
+              <td>${safeStr(p.date_paid || "")}</td>
+              <td>$${num(p.amount_paid).toFixed(2)}</td>
+              <td>${safeStr(p.payer || "")}</td>
+              <td class="muted small">${safeStr(p.source_file || "")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `
+}
+
+
+
+// ===== DASHBOARD WRITE-OFF METRICS =====
+
+const writeOffTotal = billed.reduce((s,b) => s + safeNum(b.write_off_amount), 0);
+const writeOffCount = billed.filter(b => (b.status||"").toLowerCase() === "write-off").length;
+
+
+
+// ===== END 3.2 FINAL CONSOLIDATED =====
+
