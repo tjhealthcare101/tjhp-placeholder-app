@@ -2881,7 +2881,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <canvas id="underpayPayer" height="160"></canvas>
           <div style="overflow:auto;margin-top:10px;">
             <table>
-              <thead><tr><th>Payer</th><th>Paid</th><th>Expected</th><th>Underpaid</th></tr></thead>
+              <thead><tr><th>Payer</th><th>Paid</th><th>Billed</th><th>Underpaid</th></tr></thead>
               <tbody>${payerRows || `<tr><td colspan="4" class="muted">No payer data in this range.</td></tr>`}</tbody>
             </table>
           </div>
@@ -3064,125 +3064,56 @@ if (method === "GET" && pathname === "/weekly-summary") {
           const totalClaims = claims.length;
           const paidCount = claims.filter(b => (b.status||"Pending")==="Paid").length;
           const deniedCount = claims.filter(b => (b.status||"Pending")==="Denied").length;
+          const underpaidCount = claims.filter(b => (b.status||"Pending")==="Underpaid").length;
           const pendingCount = claims.filter(b => (b.status||"Pending")==="Pending").length;
 
-          const totalBilledAmt = claims.reduce((sum,b)=> sum + Number(b.amount_billed||0), 0);
-          const collectedAmt = claims
-            .filter(b => (b.status||"Pending")==="Paid")
-            .reduce((sum,b)=> sum + Number(b.paid_amount || b.amount_billed || 0), 0);
-          const atRiskAmt = Math.max(0, totalBilledAmt - collectedAmt);
+          
+const totalBilledAmt = claims.reduce((sum,b)=> sum + Number(b.amount_billed || 0), 0);
 
-          const dt = s.uploaded_at ? new Date(s.uploaded_at) : null;
-          const dtStr = dt ? dt.toLocaleString() : "—";
+// Revenue Collected should include ALL insurance payments (partial + full)
+const collectedAmt = claims.reduce((sum, b) => {
+  return sum + Number(b.insurance_paid || b.paid_amount || 0);
+}, 0);
 
-          return `<tr>
-            <td>${safeStr(dtStr)}</td>
-            <td>${safeStr(s.original_filename || "billed_upload")}</td>
-            <td>${totalClaims}</td>
-            <td>$${totalBilledAmt.toFixed(2)}</td>
-            <td>${paidCount}</td>
-            <td>${deniedCount}</td>
-            <td>${pendingCount}</td>
-            <td>$${collectedAmt.toFixed(2)}</td>
-            <td>$${atRiskAmt.toFixed(2)}</td>
-            <td><a href="/billed?submission_id=${encodeURIComponent(s.submission_id)}">View</a><form method="POST" action="/delete-batch" style="display:inline" onsubmit="return confirm('Delete this batch and all associated claims?')">  <input type="hidden" name="submission_id" value="${safeStr(s.submission_id)}"/>  <button type="submit" style="border:none;background:none;color:#b91c1c;cursor:pointer;margin-left:6px;">Delete</button></form></td>
-          </tr>`;
-        }).join("");
+// Underpaid total (expected insurance shortfall)
+const underpaidAmt = claims.reduce((sum, b) => {
+  return sum + Number(b.underpaid_amount || 0);
+}, 0);
 
-      const html = page("Billed Claims Upload", `
-        <h2>Billed Claims Upload</h2>
-        <p class="muted">
-          Upload billed claims exported from your EMR/EHR. Each upload is stored as a <strong>submission batch</strong>.
-          Click <strong>View</strong> to manage individual claims in that batch. Uploading payments later under
-          <strong>Denial &amp; Payment Upload</strong> will auto-match by claim number and mark billed claims as <strong>Paid</strong>.
-        </p>
+// Denied total (expected insurance on denied claims)
+const deniedAmt = claims.reduce((sum, b) => {
+  if ((b.status || "Pending") === "Denied") {
+    const billedAmt = Number(b.amount_billed || 0);
+    const allowedAmt = Number(b.allowed_amount || billedAmt);
+    const pr = Number(b.patient_responsibility || 0);
+    const expectedIns = Math.max(0, allowedAmt - pr);
+    return sum + expectedIns;
+  }
+  return sum;
+}, 0);
 
-        <div class="hr"></div>
-        <h3>Upload Billed Claims <span class="tooltip">ⓘ<span class="tooltiptext">Upload a billed claims CSV from your EMR/EHR. This creates a submission batch you can manage.</span></span></h3>
-        <p class="muted small">Upload CSV (recommended). Excel files are stored but not parsed in v1.</p>
-        <form method="POST" action="/billed/upload" enctype="multipart/form-data">
-          <label>Upload CSV/XLS/XLSX</label>
-          <input type="file" name="billedfile" accept=".csv,.xls,.xlsx" required />
-          <div class="btnRow">
-            <button class="btn" type="submit">Upload Billed Claims</button>
-            <a class="btn secondary" href="/dashboard">Back</a>
-          </div>
-        </form>
+// Write-Off total
+const writeOffAmt = claims.reduce((sum, b) => {
+  return sum + Number(b.write_off_amount || 0);
+}, 0);
 
-        <div class="hr"></div>
-        <h3>Submission Batches <span class="tooltip">ⓘ<span class="tooltiptext">Each billed claims upload is stored as a batch. Use this table to track progress by batch and open the batch to manage individual claims.</span></span></h3>
-        <div style="overflow:auto;">
-          <table>
-            <thead>
-              <tr>
-                <th>Submission Date/Time</th>
-                <th>File Name</th>
-                <th>Total Claims</th>
-                <th>Total Billed Amount</th>
-                <th>Paid</th>
-                <th>Denied</th>
-                <th>Pending</th>
-                <th>Revenue Collected</th>
-                <th>Revenue At Risk</th>
-                <th>View</th>
-              </tr>
-            </thead>
-            <tbody>${subsRows || `<tr><td colspan="10" class="muted">No submissions yet. Upload a billed claims file above.</td></tr>`}</tbody>
-          </table>
-        </div>
-      `, navUser(), {showChat:true});
-      return send(res, 200, html);
-    }
+// Revenue At Risk should include Pending + Underpaid + Denied + Appeal
+const atRiskAmt = claims.reduce((sum, b) => {
+  const status = (b.status || "Pending");
+  if (["Pending","Underpaid","Denied","Appeal"].includes(status)) {
+    const billedAmt = Number(b.amount_billed || 0);
+    const allowedAmt = Number(b.allowed_amount || billedAmt);
+    const pr = Number(b.patient_responsibility || 0);
+    const expectedIns = Math.max(0, allowedAmt - pr);
+    const paidAmt = Number(b.insurance_paid || b.paid_amount || 0);
+    return sum + Math.max(0, expectedIns - paidAmt);
+  }
+  return sum;
+}, 0);
 
-    // Submission detail view
-    const sub = subsAll.find(s => s.submission_id === submission_id);
-    if (!sub) return redirect(res, "/billed");
+// Collection Rate based on actual collected amount vs total billed (simple v1)
+const collectionRate = totalBilledAmt > 0 ? (collectedAmt / totalBilledAmt) * 100 : 0;
 
-    const startDt = start ? new Date(start + "T00:00:00.000Z") : null;
-    const endDt = end ? new Date(end + "T23:59:59.999Z") : null;
-
-    let billed = billedAll.filter(b => b.submission_id === submission_id);
-
-    billed = billed.filter(b => {
-      const created = b.created_at ? new Date(b.created_at) : new Date(0);
-      if (startDt && created < startDt) return false;
-      if (endDt && created > endDt) return false;
-      if (statusF && (b.status || "Pending") !== statusF) return false;
-      if (payerF && String(b.payer || "").trim() !== payerF) return false;
-      if (q) {
-        const hay = `${b.claim_number || ""} ${b.patient_name || ""} ${b.payer || ""}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
-
-
-    // ===== Pagination (Claims in Submission) =====
-    const pageParam = Math.max(1, Number(parsed.query.page || 1));
-    const perPageParam = Number(parsed.query.per_page || 50);
-    const PER_PAGE_OPTIONS = [30, 50, 100];
-    const perPage = PER_PAGE_OPTIONS.includes(perPageParam) ? perPageParam : 50;
-
-    const totalFiltered = billed.length;
-    const totalPages = Math.max(1, Math.ceil(totalFiltered / perPage));
-    const pageNum = Math.min(pageParam, totalPages);
-    const startIdx = (pageNum - 1) * perPage;
-    const endIdx = startIdx + perPage;
-    const billedPage = billed.slice(startIdx, endIdx);
-
-    const payerOpts = Array.from(new Set(billedAll.filter(b=>b.submission_id===submission_id).map(b => (b.payer || "").trim()).filter(Boolean))).sort();
-
-    // Summary metrics for this submission
-    const claimsAll = billedAll.filter(b => b.submission_id === submission_id);
-    const totalClaims = claimsAll.length;
-    const paidClaims = claimsAll.filter(b => (b.status||"Pending")==="Paid");
-    const deniedClaims = claimsAll.filter(b => (b.status||"Pending")==="Denied");
-    const pendingClaims = claimsAll.filter(b => (b.status||"Pending")==="Pending");
-
-    const totalBilledAmount = claimsAll.reduce((sum, b) => sum + Number(b.amount_billed || 0), 0);
-    const revenueCollected = paidClaims.reduce((sum, b) => sum + Number(b.paid_amount || b.amount_billed || 0), 0);
-    const revenueAtRisk = Math.max(0, totalBilledAmount - revenueCollected);
-    const collectionRate = totalBilledAmount > 0 ? Math.round((revenueCollected / totalBilledAmount) * 100) : 0;
 
     const barColor = collectionRate >= 80 ? "#065f46" : (collectionRate >= 60 ? "#f59e0b" : "#b91c1c");
 
@@ -3374,6 +3305,7 @@ const statusCell = (() => {
   if (st === "Denied" && b.denial_case_id) {
     return `
       <span class="badge err">Denied</span>
+      <div class="small">Paid: $0.00</div>
       <div class="small muted">${b.denied_at ? new Date(b.denied_at).toLocaleDateString() : ""}</div>
       <div class="small">Appeal: <a href="/status?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></div>
     `;
@@ -3381,7 +3313,7 @@ const statusCell = (() => {
 
   if (st === "Underpaid") {
     return `
-      <span class="badge err">Underpaid</span>
+      <span class="badge warn">Underpaid</span>
       <div class="small">Paid: $${ip.toFixed(2)}</div>
       <div class="small">Expected: $${expectedInsurance.toFixed(2)}</div>
       <div class="small">Underpaid: $${underpaid.toFixed(2)}</div>
@@ -5876,12 +5808,12 @@ else if (type === "payers") {
       claims = claims.filter(b => Number(b.paid_amount || 0) < Number(b.expected_amount || b.amount_billed || 0));
     }
     const rows = claims.slice(0, 500).map(c => {
-      const exp = Number(c.expected_amount || c.amount_billed || 0);
+      const exp = Number(c.amount_billed || 0);
       const paidAmt = Number(c.paid_amount || 0);
       return `<tr>
-        <td>${safeStr(c.claim_number || "")}</td>
+        <td><a href="/claim-detail?billed_id=${encodeURIComponent(safeStr(c.billed_id||""))}">${safeStr(c.claim_number || "")}</a></td>
         <td>${safeStr(c.patient_name || "")}</td>
-        <td>${safeStr(c.date_of_service || "")}</td>
+        <td>${safeStr(c.dos || c.date_of_service || "")}</td>
         <td>${safeStr(c.status || "Pending")}</td>
         <td>$${exp.toFixed(2)}</td>
         <td>$${paidAmt.toFixed(2)}</td>
@@ -5904,7 +5836,7 @@ else if (type === "payers") {
         <button class="btn secondary" type="submit">Filter</button>
       </form>
       <table>
-        <thead><tr><th>Claim #</th><th>Patient</th><th>Date of Service</th><th>Status</th><th>Expected</th><th>Paid</th><th>Submission</th></tr></thead>
+        <thead><tr><th>Claim #</th><th>Patient</th><th>Date of Service</th><th>Status</th><th>Billed</th><th>Paid</th><th>Submission</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="7" class="muted">No claims found.</td></tr>`}</tbody>
       </table>
       <p class="muted small">${claims.length > 500 ? "Showing first 500 results." : ""}</p>
@@ -6053,10 +5985,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       <table>
         <thead>
           <tr>
-            <th>Date Paid</th>
-            <th>Amount</th>
-            <th>Payer</th>
-            <th>Source File</th>
+            <th>Date Paid</th><th>Amount</th><th>Payer</th><th>Allowed</th><th>Patient Resp</th><th>Expected Ins</th><th>Underpaid</th><th>Source File</th><th>Notes</th>
           </tr>
         </thead>
         <tbody>
@@ -6065,7 +5994,7 @@ if (method === "GET" && pathname === "/claim-detail") {
               <td>${safeStr(p.date_paid || "")}</td>
               <td>$${num(p.amount_paid).toFixed(2)}</td>
               <td>${safeStr(p.payer || "")}</td>
-              <td class="muted small">${safeStr(p.source_file || "")}</td>
+              <td>$${num(b.allowed_amount || 0).toFixed(2)}</td><td>$${num(b.patient_responsibility || 0).toFixed(2)}</td><td>$${num(b.expected_insurance || 0).toFixed(2)}</td><td>$${num(b.underpaid_amount || 0).toFixed(2)}</td><td class="muted small">${safeStr(p.source_file || "")}</td><td class="muted small">${safeStr(p.notes || "")}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -6099,4 +6028,6 @@ if (method === "GET" && pathname === "/claim-detail") {
 
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
-});
+
+
+
