@@ -1564,22 +1564,27 @@ function computeDashboardMetrics(org_id, start, end, preset){
   const allowedTotal = billed.reduce((s,b)=>s + safeNum(b.allowed_amount), 0);
   const contractualTotal = billed.reduce((s,b)=>s + Math.max(0, safeNum(b.amount_billed) - safeNum(b.allowed_amount)), 0);
 
-  const underpaidAmt = billed.reduce((s,b)=>s + safeNum(b.underpaid_amount), 0);
-  const underpaidCount = billed.filter(b => (b.status||"").toLowerCase()==="underpaid").length;
+  
+  const underpaidAmt = billed.reduce((sum, b) => {
+    const expected = safeNum(b.expected_insurance || b.amount_billed);
+    const paid = safeNum(b.insurance_paid || b.paid_amount);
+    return sum + Math.max(0, expected - paid);
+  }, 0);
 
-  const collectedTotal = insuranceCollected + patientCollected;
-  const grossCollectionRate = totalBilled > 0 ? (collectedTotal/totalBilled)*100 : 0;
-  const netCollectionRate = allowedTotal > 0 ? (collectedTotal/allowedTotal)*100 : 0;
+  const underpaidCount = billed.filter(b => {
+    const expected = safeNum(b.expected_insurance || b.amount_billed);
+    const paid = safeNum(b.insurance_paid || b.paid_amount);
+    return expected - paid > 0;
+  }).length;
 
-  const revenueAtRisk = Math.max(0, totalBilled - collectedTotal);
-
-  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, Pending:0 };
+  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, Pending:0, "Write Off":0 };
   billed.forEach(b=>{
     const st = (b.status || "Pending");
     if (st === "Paid") statusCounts.Paid++;
     else if (st === "Denied") statusCounts.Denied++;
     else if (st === "Underpaid") statusCounts.Underpaid++;
     else if (st === "Patient Balance") statusCounts["Patient Balance"]++;
+    else if (st === "Contractual") statusCounts["Write Off"]++;
     else statusCounts.Pending++;
   });
 
@@ -1606,15 +1611,46 @@ function computeDashboardMetrics(org_id, start, end, preset){
     atRiskSeries[k] = Math.max(0, bsum - csum);
   });
 
+  
   const payerAgg = {};
+
   billed.forEach(b=>{
     const payer = (b.payer || "Unknown").trim() || "Unknown";
-    payerAgg[payer] = payerAgg[payer] || { underpaid:0, expected:0, paid:0, count:0 };
-    payerAgg[payer].underpaid += safeNum(b.underpaid_amount);
-    payerAgg[payer].expected += safeNum(b.expected_insurance);
-    payerAgg[payer].paid += safeNum(b.insurance_paid || b.paid_amount);
+
+    if (!payerAgg[payer]) {
+      payerAgg[payer] = {
+        billed: 0,
+        allowed: 0,
+        paid: 0,
+        denied: 0,
+        writeOff: 0,
+        underpaid: 0,
+        count: 0
+      };
+    }
+
+    const billedAmt = safeNum(b.amount_billed);
+    const allowedAmt = safeNum(b.allowed_amount);
+    const paidAmt = safeNum(b.insurance_paid || b.paid_amount);
+    const expected = safeNum(b.expected_insurance || billedAmt);
+
+    payerAgg[payer].billed += billedAmt;
+    payerAgg[payer].allowed += allowedAmt;
+    payerAgg[payer].paid += paidAmt;
+
+    if ((b.status || "").toLowerCase() === "denied") {
+      payerAgg[payer].denied += billedAmt;
+    }
+
+    const writeOff = Math.max(0, billedAmt - allowedAmt);
+    payerAgg[payer].writeOff += writeOff;
+
+    const underpaid = Math.max(0, expected - paidAmt);
+    payerAgg[payer].underpaid += underpaid;
+
     payerAgg[payer].count += 1;
   });
+
   const payerTop = Object.entries(payerAgg)
     .sort((a,b)=>b[1].underpaid - a[1].underpaid)
     .slice(0,8)
@@ -6065,4 +6101,3 @@ if (method === "GET" && pathname === "/claim-detail") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
