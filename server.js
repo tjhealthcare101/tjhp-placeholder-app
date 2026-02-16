@@ -311,6 +311,7 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
  * Password toggle preserved.
  */
 function renderPage(title, content, navHtml="", opts={}) {
+  const orgName = (opts && opts.orgName) ? safeStr(opts.orgName) : "";
   const showChat = !!(opts && opts.showChat);
   const chatHtml = showChat ? `
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
@@ -380,6 +381,7 @@ window.__tjhpSendChat = async function(){
       <div class="brand">
         <h1>TJ Healthcare Pro</h1>
         <div class="sub">AI Revenue Intelligence Platform</div>
+        ${orgName ? `<div class="sub">Organization: ${orgName}</div>` : ``}
       </div>
       <div class="nav">${navHtml}</div>
     </div>
@@ -2988,7 +2990,7 @@ Next steps:
         });
 
       </script>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -3047,7 +3049,7 @@ if (method === "GET" && pathname === "/executive") {
       <a class="btn secondary" href="/dashboard">Back</a>
     </div>
 
-  `, navUser(), { showChat: true });
+  `, navUser(), { showChat: true, orgName: (typeof org!=="undefined" && org ? org.org_name : "") });
 
   return send(res, 200, html);
 }
@@ -3094,7 +3096,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <a class="btn" href="/executive">Executive Dashboard</a>
       <a class="btn secondary" href="/dashboard">Back</a>
     </div>
-  `, navUser(), {showChat:true});
+  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
   return send(res, 200, html);
 }
   // dashboard with empty-state previews and tooltips
@@ -3437,7 +3439,7 @@ if (hasPayerBar) {
 </script>
 
 
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
     return send(res, 200, html);
   }
@@ -3681,7 +3683,7 @@ if (method === "GET" && pathname === "/claims") {
         ${nav}
       `
     }
-  `, navUser(), {showChat:true});
+  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
   return send(res, 200, html);
 }
@@ -3840,11 +3842,11 @@ if (method === "GET" && pathname === "/intelligence") {
       };
 
       window.__tjhpRunBriefing = function(){
-        window.__tjhpRunPrompt(${json.dumps(defaultPrompt)}, "exec", []);
+        window.__tjhpRunPrompt(${JSON.stringify(defaultPrompt)}, "exec", []);
       };
 
       window.__tjhpRunSaved = function(savedId){
-        const saved = ${json.dumps(saved)};
+        const saved = ${JSON.stringify(saved)};
         const s = saved.find(x => x.saved_id === savedId);
         if (!s) return;
         window.__tjhpRunPrompt(s.prompt, s.style || "exec", s.charts || []);
@@ -3969,11 +3971,11 @@ if (method === "GET" && pathname === "/intelligence") {
         }
       };
 
-      if (${str(runBrief).lower()}) {
+      if (${runBrief ? "true" : "false"}) {
         setTimeout(()=>window.__tjhpRunBriefing(), 350);
       }
     </script>
-  `, navUser(), {showChat:true});
+  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
   return send(res, 200, html);
 }
@@ -4160,7 +4162,7 @@ if (method === "GET" && pathname === "/actions") {
     </div>
 
     ${nav}
-  `, navUser(), {showChat:true});
+  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
   return send(res, 200, html);
 }
@@ -4260,7 +4262,7 @@ if (method === "GET" && pathname === "/upload-payments") {
         if (file) payDrop.textContent = file.name;
       });
     </script>
-  `, navUser(), {showChat:true});
+  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
   return send(res, 200, html);
 }
 
@@ -4340,7 +4342,7 @@ if (method === "GET" && pathname === "/upload-denials") {
         }
       });
     </script>
-  `, navUser(), {showChat:true});
+  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
   return send(res, 200, html);
 }
 
@@ -4422,7 +4424,7 @@ if (method === "GET" && pathname === "/upload-negotiations") {
         <tbody>${rows || `<tr><td colspan="7" class="muted">No negotiations yet.</td></tr>`}</tbody>
       </table>
     </div>
-  `, navUser(), {showChat:true});
+  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
   return send(res, 200, html);
 }
@@ -4566,7 +4568,7 @@ if (method === "GET" && pathname === "/negotiation-detail") {
 
     <h3>Documents</h3>
     ${docList ? `<ul class="muted small">${docList}</ul>` : `<p class="muted small">No documents uploaded.</p>`}
-  `, navUser(), {showChat:true});
+  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
   return send(res, 200, html);
 }
 
@@ -4760,7 +4762,7 @@ if (method === "POST" && pathname === "/negotiations/upload") {
             <tbody>${rows || `<tr><td colspan="12" class="muted">No submissions yet.</td></tr>`}</tbody>
           </table>
         </div>
-      `, navUser(), {showChat:true});
+      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 200, html);
     }
 
@@ -5169,7 +5171,7 @@ const statusCell = (() => {
           </div>
         </div>
       </div>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -5192,7 +5194,7 @@ const statusCell = (() => {
         <h2>Billed Claims Upload</h2>
         <p class="error">Only CSV or Excel files are allowed.</p>
         <div class="btnRow"><a class="btn secondary" href="/billed">Back</a></div>
-      `, navUser(), {showChat:true});
+      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 400, html);
     }
 
@@ -5281,7 +5283,7 @@ const statusCell = (() => {
         <a class="btn" href="/billed?submission_id=${encodeURIComponent(submission_id)}">View This Submission</a>
         <a class="btn secondary" href="/billed">Back to Submissions</a>
       </div>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -5846,7 +5848,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
         <h2>Limit Reached</h2>
         <p class="error">${safeStr(can.reason)}</p>
         <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
-      `, navUser(), {showChat:true});
+      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 403, html);
     }
 
@@ -5866,7 +5868,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
         <h2>Upload</h2>
         <p class="error">Please upload no more than ${maxFiles} files per case.</p>
         <div class="btnRow"><a class="btn secondary" href="/upload">Back</a></div>
-      `, navUser(), {showChat:true});
+      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 400, html);
     }
 
@@ -5877,7 +5879,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
           <h2>Upload</h2>
           <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
           <div class="btnRow"><a class="btn secondary" href="/upload">Back</a></div>
-        `, navUser(), {showChat:true});
+        `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
         return send(res, 400, html);
       }
     }
@@ -5972,7 +5974,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
       <h2>Limit Reached</h2>
       <p class="error">${safeStr(limitReason || "Case limit reached")}</p>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 403, html);
   }
 
@@ -6017,7 +6019,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
       <div class="muted small"><strong>Case ID:</strong> ${safeStr(case_id)}</div>
       <script>setTimeout(()=>window.location.reload(), 2500);</script>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
     return send(res, 200, html);
   }
@@ -6133,7 +6135,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
           <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=pdf">Open Printable (Save as PDF)</a>
         </div>
       </form>
-`, navUser(), {showChat:true});
+`, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -6319,7 +6321,7 @@ if (method === "POST" && pathname === "/draft-template") {
         <h2>De‑Identified Confirmation Required</h2>
         <p class="error">Please confirm this case is de‑identified before compiling the packet.</p>
         <div class="btnRow"><a class="btn" href="/draft?case_id=${encodeURIComponent(case_id)}">Back</a></div>
-      `, navUser(), {showChat:true});
+      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 400, html);
     }
 
@@ -6590,7 +6592,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       ${detailTable}
       <div class="hr"></div>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back to Dashboard</a></div>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -6622,7 +6624,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         <h2>Revenue Management</h2>
         <p class="error">Allowed file types: CSV, Excel (.xls/.xlsx), PDF, Word (.doc/.docx).</p>
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
-      `, navUser(), {showChat:true});
+      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 400, html);
     }
 
@@ -6634,7 +6636,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         <h2>Revenue Management</h2>
         <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
-      `, navUser(), {showChat:true});
+      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 400, html);
     }
 
@@ -6796,7 +6798,7 @@ rowsAdded = toUse;
         <a class="btn" href="/intelligence">View Revenue Intelligence (AI)</a>
         <a class="btn secondary" href="/upload-payments">Upload more</a>
       </div>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -6818,6 +6820,13 @@ rowsAdded = toUse;
       <h2>Account</h2>
       <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
       <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
+      <form method="POST" action="/account/org-name" style="margin-top:8px;">
+        <label>Update Organization Name</label>
+        <input name="org_name" value="${safeStr(org.org_name)}" required />
+        <div class="btnRow">
+          <button class="btn secondary" type="submit">Save Organization Name</button>
+        </div>
+      </form>
 
       <div class="hr"></div>
       <h3>Plan</h3>
@@ -6851,11 +6860,30 @@ rowsAdded = toUse;
       <div class="btnRow">
         <a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Plan</a>
       </div>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
-  if (method === "POST" && pathname === "/account/password") {
+  
+  // Update organization name
+  if (method === "POST" && pathname === "/account/org-name") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const newName = (params.get("org_name") || "").trim();
+    if (!newName) return redirect(res, "/account");
+
+    const orgs = readJSON(FILES.orgs, []);
+    const oidx = orgs.findIndex(o => o.org_id === org.org_id);
+    if (oidx >= 0) {
+      orgs[oidx].org_name = newName;
+      orgs[oidx].updated_at = nowISO();
+      writeJSON(FILES.orgs, orgs);
+      auditLog({ actor:"user", action:"update_org_name", org_id: org.org_id, user_id: user.user_id });
+    }
+    return redirect(res, "/account");
+  }
+
+if (method === "POST" && pathname === "/account/password") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const current = params.get("current_password") || "";
@@ -6867,7 +6895,7 @@ rowsAdded = toUse;
         <h2>Account</h2>
         <p class="error">New passwords must match and be at least 8 characters.</p>
         <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
-      `, navUser(), {showChat:true});
+      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 400, html);
     }
 
@@ -6880,7 +6908,7 @@ rowsAdded = toUse;
         <h2>Account</h2>
         <p class="error">Current password is incorrect.</p>
         <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
-      `, navUser(), {showChat:true});
+      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 401, html);
     }
 
@@ -6892,7 +6920,7 @@ rowsAdded = toUse;
       <h2>Account</h2>
       <p class="muted">Password updated successfully.</p>
       <div class="btnRow"><a class="btn" href="/dashboard">Back to Dashboard</a></div>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -6947,7 +6975,7 @@ rowsAdded = toUse;
         <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a>
         <a class="btn secondary" href="/report">Printable Summary</a>
       </div>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -7039,7 +7067,7 @@ rowsAdded = toUse;
             <a class="btn secondary" href="/dashboard">Back</a>
           </div>
         </form>
-      `, navUser(), {showChat:true});
+      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 200, html);
     }
 
@@ -7235,7 +7263,7 @@ else if (type === "payers") {
       </div>
     `;
 
-    const html = renderPage("Report", body, navUser(), {showChat:true});
+    const html = renderPage("Report", body, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -7261,7 +7289,7 @@ else if (type === "payers") {
         <a class="btn secondary" href="/exports">Download Exports</a>
         <a class="btn secondary" href="/logout">Logout</a>
       </div>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -7352,7 +7380,7 @@ else if (type === "payers") {
       <p class="muted small">${claims.length > 500 ? "Showing first 500 results." : ""}</p>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
       <br><form method="GET" action="/analyze-payer" style="margin-top:10px;"><input type="hidden" name="payer" value="${safeStr(payer)}"/><button class="btn" type="submit">AI Analyze This Payer</button></form>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -7435,7 +7463,7 @@ else if (type === "payers") {
         <button class="btn" type="submit">Send All Underpaid Claims to Appeals</button>
       </form>
       <div class="btnRow" style="margin-top:12px;"><a class="btn secondary" href="/dashboard">Back</a> <a class="btn secondary" href="/payer-claims?payer=${encodeURIComponent(payer)}">Back to Claims</a></div>
-    `, navUser(), {showChat:true});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -7594,7 +7622,7 @@ ${negHistoryHtml}
       <a class="btn secondary" href="javascript:history.back()">Back</a>
       <a class="btn secondary" href="/billed">Billed Submissions</a>
     </div>
-  `, navUser(), {showChat:true});
+  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
   return send(res, 200, html);
 }
