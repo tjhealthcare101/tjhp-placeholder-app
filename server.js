@@ -371,7 +371,7 @@ window.__tjhpSendChat = async function(){
     <div class="topbar">
       <div class="brand">
         <h1>TJ Healthcare Pro</h1>
-        <div class="sub">AI Revenue Analytics Platform</div>
+        <div class="sub">AI-Assisted Claim Review & Analytics</div>
       </div>
       <div class="nav">${navHtml}</div>
     </div>
@@ -646,7 +646,7 @@ function getLimitProfile(org_id) {
       payment_records_per_credit: MONTHLY_DEFAULTS.payment_records_per_credit,
     };
   }
-  return { mode:"free_trial", ...PILOT_LIMITS };
+  return { mode:"pilot", ...PILOT_LIMITS };
 }
 
 function countOrgCases(org_id) {
@@ -1541,7 +1541,6 @@ function chooseGranularity(preset){
   return "week";
 }
 function computeDashboardMetrics(org_id, start, end, preset){
-
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
   const paymentsAll = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
@@ -1554,106 +1553,35 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
   const billed = billedAll.filter(b => inRange(b.created_at || b.paid_at || b.denied_at));
   const payments = paymentsAll.filter(p => inRange(p.date_paid || p.created_at));
-  const underpayCases = casesAll.filter(c =>
-    (c.case_type||"").toLowerCase()==="underpayment" &&
-    inRange(c.created_at)
-  );
-
-  // ========================
-  // CORE REVENUE
-  // ========================
+  const underpayCases = casesAll.filter(c => (c.case_type||"").toLowerCase()==="underpayment" && inRange(c.created_at));
 
   const totalBilled = billed.reduce((s,b)=>s + safeNum(b.amount_billed), 0);
+  const insuranceCollected = billed.reduce((s,b)=>s + safeNum(b.insurance_paid || b.paid_amount), 0);
+  const patientRespTotal = billed.reduce((s,b)=>s + safeNum(b.patient_responsibility), 0);
+  const patientCollected = billed.reduce((s,b)=>s + safeNum(b.patient_collected), 0);
+  const patientOutstanding = Math.max(0, patientRespTotal - patientCollected);
 
-  const insuranceCollected = billed.reduce(
-    (s,b)=>s + safeNum(b.insurance_paid || b.paid_amount), 0
-  );
+  const allowedTotal = billed.reduce((s,b)=>s + safeNum(b.allowed_amount), 0);
+  const contractualTotal = billed.reduce((s,b)=>s + Math.max(0, safeNum(b.amount_billed) - safeNum(b.allowed_amount)), 0);
 
-  const patientRespTotal = billed.reduce(
-    (s,b)=>s + safeNum(b.patient_responsibility), 0
-  );
-
-  const patientCollected = billed.reduce(
-    (s,b)=>s + safeNum(b.patient_collected), 0
-  );
-
-  const patientOutstanding = Math.max(
-    0,
-    patientRespTotal - patientCollected
-  );
-
-  const allowedTotal = billed.reduce(
-    (s,b)=>s + safeNum(b.allowed_amount), 0
-  );
-
-  const contractualTotal = billed.reduce(
-    (s,b)=>s + Math.max(
-      0,
-      safeNum(b.amount_billed) - safeNum(b.allowed_amount)
-    ), 0
-  );
-
-  // ========================
-  // FIXED MISSING KPI VARIABLES
-  // ========================
+  const underpaidAmt = billed.reduce((s,b)=>s + safeNum(b.underpaid_amount), 0);
+  const underpaidCount = billed.filter(b => (b.status||"").toLowerCase()==="underpaid").length;
 
   const collectedTotal = insuranceCollected + patientCollected;
+  const grossCollectionRate = totalBilled > 0 ? (collectedTotal/totalBilled)*100 : 0;
+  const netCollectionRate = allowedTotal > 0 ? (collectedTotal/allowedTotal)*100 : 0;
 
-  const revenueAtRisk = Math.max(
-    0,
-    totalBilled - collectedTotal
-  );
+  const revenueAtRisk = Math.max(0, totalBilled - collectedTotal);
 
-  const grossCollectionRate = totalBilled > 0
-    ? (collectedTotal / totalBilled) * 100
-    : 0;
-
-  const netCollectionRate = allowedTotal > 0
-    ? (collectedTotal / allowedTotal) * 100
-    : 0;
-
-  // ========================
-  // UNDERPAYMENTS
-  // ========================
-
-  const underpaidAmt = billed.reduce((sum, b) => {
-    const expected = safeNum(b.expected_insurance || b.amount_billed);
-    const paid = safeNum(b.insurance_paid || b.paid_amount);
-    return sum + Math.max(0, expected - paid);
-  }, 0);
-
-  const underpaidCount = billed.filter(b => {
-    const expected = safeNum(b.expected_insurance || b.amount_billed);
-    const paid = safeNum(b.insurance_paid || b.paid_amount);
-    return expected - paid > 0;
-  }).length;
-
-  // ========================
-  // STATUS COUNTS
-  // ========================
-
-  const statusCounts = {
-    Paid:0,
-    "Patient Balance":0,
-    Underpaid:0,
-    Denied:0,
-    Pending:0,
-    "Write Off":0
-  };
-
+  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, Pending:0 };
   billed.forEach(b=>{
     const st = (b.status || "Pending");
     if (st === "Paid") statusCounts.Paid++;
     else if (st === "Denied") statusCounts.Denied++;
     else if (st === "Underpaid") statusCounts.Underpaid++;
     else if (st === "Patient Balance") statusCounts["Patient Balance"]++;
-    else if (st === "Contractual") statusCounts["Write Off"]++;
     else statusCounts.Pending++;
   });
-
-  // ========================
-  // TREND SERIES
-  // ========================
 
   const gran = chooseGranularity(preset);
   const billedSeries = {};
@@ -1665,77 +1593,28 @@ function computeDashboardMetrics(org_id, start, end, preset){
     const k = groupKeyForDate(d, gran);
     billedSeries[k] = (billedSeries[k]||0) + safeNum(b.amount_billed);
   });
-
   payments.forEach(p=>{
     const d = new Date(p.date_paid || p.created_at || Date.now());
     const k = groupKeyForDate(d, gran);
     collectedSeries[k] = (collectedSeries[k]||0) + safeNum(p.amount_paid);
   });
 
-  const keys = Array.from(
-    new Set([...Object.keys(billedSeries), ...Object.keys(collectedSeries)])
-  ).sort();
-
+  const keys = Array.from(new Set([...Object.keys(billedSeries), ...Object.keys(collectedSeries)])).sort();
   keys.forEach(k=>{
     const bsum = safeNum(billedSeries[k]);
     const csum = safeNum(collectedSeries[k]);
     atRiskSeries[k] = Math.max(0, bsum - csum);
   });
 
-  // ========================
-  // RETURN
-  // ========================
-
-  return {
-    kpis: {
-      totalBilled,
-      collectedTotal,
-      revenueAtRisk,
-      grossCollectionRate,
-      netCollectionRate,
-      underpaidAmt,
-      underpaidCount,
-      patientRespTotal,
-      patientCollected,
-      patientOutstanding,
-      allowedTotal,
-      contractualTotal,
-      negotiationCases: underpayCases.length
-    },
-    statusCounts,
-    series: {
-      gran,
-      keys,
-      billed: keys.map(k=>safeNum(billedSeries[k])),
-      collected: keys.map(k=>safeNum(collectedSeries[k])),
-      atRisk: keys.map(k=>safeNum(atRiskSeries[k]))
-    }
-  };
-}
-
-
-    const billedAmt = safeNum(b.amount_billed);
-    const allowedAmt = safeNum(b.allowed_amount);
-    const paidAmt = safeNum(b.insurance_paid || b.paid_amount);
-    const expected = safeNum(b.expected_insurance || billedAmt);
-
-    payerAgg[payer].billed += billedAmt;
-    payerAgg[payer].allowed += allowedAmt;
-    payerAgg[payer].paid += paidAmt;
-
-    if ((b.status || "").toLowerCase() === "denied") {
-      payerAgg[payer].denied += billedAmt;
-    }
-
-    const writeOff = Math.max(0, billedAmt - allowedAmt);
-    payerAgg[payer].writeOff += writeOff;
-
-    const underpaid = Math.max(0, expected - paidAmt);
-    payerAgg[payer].underpaid += underpaid;
-
+  const payerAgg = {};
+  billed.forEach(b=>{
+    const payer = (b.payer || "Unknown").trim() || "Unknown";
+    payerAgg[payer] = payerAgg[payer] || { underpaid:0, expected:0, paid:0, count:0 };
+    payerAgg[payer].underpaid += safeNum(b.underpaid_amount);
+    payerAgg[payer].expected += safeNum(b.expected_insurance);
+    payerAgg[payer].paid += safeNum(b.insurance_paid || b.paid_amount);
     payerAgg[payer].count += 1;
   });
-
   const payerTop = Object.entries(payerAgg)
     .sort((a,b)=>b[1].underpaid - a[1].underpaid)
     .slice(0,8)
@@ -2683,7 +2562,7 @@ if (method === "GET" && pathname === "/file") {
   // lock screen
   if (method === "GET" && pathname === "/lock") {
     const html = page("Starting", `
-      <h2 class="center">Free Trial Started</h2>
+      <h2 class="center">Pilot Started</h2>
       <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid — and surface patterns that are easy to miss when data lives in different places.</p>
       <p class="muted center">You’ll be guided to the next step automatically.</p>
       <div class="center"><span class="badge warn">Initializing</span></div>
@@ -2845,7 +2724,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
     const planBadge = (limits.mode==="monthly")
       ? `<span class="badge ok">Monthly Active</span>`
-      : `<span class="badge warn">Free Trial</span>`;
+      : `<span class="badge warn">Pilot Active</span>`;
 
     const percentCollected = m.kpis.totalBilled > 0 ? Math.round((m.kpis.collectedTotal / m.kpis.totalBilled) * 100) : 0;
     const barColor = percentCollected >= 70 ? "#16a34a" : (percentCollected >= 30 ? "#f59e0b" : "#dc2626");
@@ -2873,7 +2752,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
           <h2 style="margin-bottom:4px;">Dashboard</h2>
-          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Trial ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
+          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
           ${planBadge}
         </div>
 
@@ -5891,8 +5770,8 @@ else if (type === "payers") {
     const pilotEnd = getPilot(org.org_id) || ensurePilot(org.org_id);
     if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
     const p2 = getPilot(org.org_id);
-    const html = page("Free Trial Complete", `
-      <h2>Free Trial Complete</h2>
+    const html = page("Pilot Complete", `
+      <h2>Pilot Complete</h2>
       <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p>
       <div class="hr"></div>
       <p class="muted">
@@ -6186,3 +6065,4 @@ if (method === "GET" && pathname === "/claim-detail") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
+
