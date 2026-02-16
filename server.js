@@ -373,7 +373,7 @@ window.__tjhpSendChat = async function(){
     <div class="topbar">
       <div class="brand">
         <h1>TJ Healthcare Pro</h1>
-        <div class="sub">AI Revenue Analytics Platform</div>
+        <div class="sub">AI Revenue Intelligence Platform</div>
       </div>
       <div class="nav">${navHtml}</div>
     </div>
@@ -421,7 +421,7 @@ function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Dashboard &amp; Analytics</a><a href="/billed">Billed Claims Upload</a><a href="/upload">Denial &amp; Payment Upload</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
+  return `<a href="/dashboard">Revenue Overview</a><a href="/claims">Claims Lifecycle</a><a href="/intelligence">Revenue Intelligence</a><a href="/actions">Action Center</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -2809,10 +2809,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </tr>
     `).join("");
 
-    const html = page("Dashboard", `
+    const html = page("Revenue Overview", `
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
-          <h2 style="margin-bottom:4px;">Dashboard</h2>
+          <h2 style="margin-bottom:4px;">Revenue Overview</h2>
           <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Trial Ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
           ${planBadge}
         </div>
@@ -2910,7 +2910,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <canvas id="patientRev" height="160"></canvas>
 
           <div class="btnRow" style="margin-top:10px;">
-            <a class="btn" href="/billed">Billed Claims</a>
+            <a class="btn" href="/claims">Open Claims Lifecycle</a>
             <a class="btn secondary" href="/upload">Denial &amp; Payment Upload</a>
             <a class="btn secondary" href="/report">Reports</a>
           </div>
@@ -3096,7 +3096,347 @@ if (hasPayerBar) {
     return send(res, 200, html);
   }
 
-  // --------- BILLED CLAIMS UPLOAD (EMR/EHR EXPORT INTAKE) ----------
+  
+  // ==============================
+  // CLAIMS LIFECYCLE (NEW)
+  // ==============================
+  if (method === "GET" && pathname === "/claims") {
+    const q = String(parsed.query.q || "").trim().toLowerCase();
+    const statusF = String(parsed.query.status || "").trim();
+    const payerF = String(parsed.query.payer || "").trim();
+
+    const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+
+    // Filter
+    let billed = billedAll.filter(b => {
+      if (q) {
+        const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
+        if (!blob.includes(q)) return false;
+      }
+      if (statusF && String(b.status || "Pending") !== statusF) return false;
+      if (payerF && String(b.payer || "") !== payerF) return false;
+      return true;
+    });
+
+    // Payer/status options
+    const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
+    const statusOpts = ["Pending","Paid","Denied","Underpaid","Appeal","Contractual","Patient Balance"];
+
+    // Summary
+    const counts = billedAll.reduce((acc,b)=>{
+      const s = String(b.status||"Pending");
+      acc.total++;
+      acc[s] = (acc[s]||0)+1;
+      return acc;
+    }, {total:0});
+
+    // Rows (limit for UI)
+    const rows = billed.slice(0, 300).map(b => {
+      const st = String(b.status || "Pending");
+      const badgeCls =
+        st === "Paid" ? "ok" :
+        st === "Denied" ? "err" :
+        st === "Underpaid" ? "underpaid" :
+        st === "Contractual" ? "writeoff" :
+        st === "Patient Balance" ? "warn" :
+        st === "Appeal" ? "warn" : "";
+
+      const paidAmt = Number(b.insurance_paid || b.paid_amount || 0);
+
+      return `<tr>
+        <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
+        <td>${safeStr(b.dos || "")}</td>
+        <td>${safeStr(b.payer || "")}</td>
+        <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
+        <td>$${paidAmt.toFixed(2)}</td>
+        <td><span class="badge ${badgeCls}">${safeStr(st)}</span></td>
+        <td class="muted small">${b.submission_id ? `<a href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">Batch</a>` : "—"}</td>
+      </tr>`;
+    }).join("");
+
+    const html = page("Claims Lifecycle", `
+      <h2>Claims Lifecycle</h2>
+      <p class="muted">A single place to upload billed claims, upload payments, and manage claim statuses.</p>
+
+      <div class="btnRow">
+        <a class="btn" href="/billed">Upload Billed Claims</a>
+        <a class="btn secondary" href="/upload#payments">Upload Payments</a>
+        <a class="btn secondary" href="/upload">Upload Denials</a>
+      </div>
+
+      <div class="hr"></div>
+
+      <h3>Quick Snapshot</h3>
+      <div class="row">
+        <div class="col">
+          <div class="kpi-card"><h4>Total Claims</h4><p>${counts.total || 0}</p></div>
+          <div class="kpi-card"><h4>Denied</h4><p>${counts["Denied"] || 0}</p></div>
+        </div>
+        <div class="col">
+          <div class="kpi-card"><h4>Underpaid</h4><p>${counts["Underpaid"] || 0}</p></div>
+          <div class="kpi-card"><h4>Appeal</h4><p>${counts["Appeal"] || 0}</p></div>
+        </div>
+        <div class="col">
+          <div class="kpi-card"><h4>Paid</h4><p>${counts["Paid"] || 0}</p></div>
+          <div class="kpi-card"><h4>Patient Balance</h4><p>${counts["Patient Balance"] || 0}</p></div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <h3>Filter</h3>
+      <form method="GET" action="/claims" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+        <div style="display:flex;flex-direction:column;min-width:240px;">
+          <label>Search</label>
+          <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, DOS..." />
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Status</label>
+          <select name="status">
+            <option value="">All</option>
+            ${statusOpts.map(s => `<option value="${safeStr(s)}"${statusF===s ? " selected":""}>${safeStr(s)}</option>`).join("")}
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+          <label>Payer</label>
+          <select name="payer">
+            <option value="">All</option>
+            ${payerOpts.map(p => `<option value="${safeStr(p)}"${payerF===p ? " selected":""}>${safeStr(p)}</option>`).join("")}
+          </select>
+        </div>
+        <div>
+          <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
+          <a class="btn secondary" href="/claims" style="margin-top:1.6em;">Reset</a>
+        </div>
+      </form>
+
+      <div class="hr"></div>
+
+      <h3>Claims (showing up to 300)</h3>
+      <div style="overflow:auto;">
+        <table>
+          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>Status</th><th>Source</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="7" class="muted">No claims found.</td></tr>`}</tbody>
+        </table>
+      </div>
+    `, navUser(), {showChat:true});
+
+    return send(res, 200, html);
+  }
+
+  // ==============================
+  // REVENUE INTELLIGENCE (NEW)
+  // ==============================
+  if (method === "GET" && pathname === "/intelligence") {
+    const a = computeAnalytics(org.org_id);
+    const denialByMonth = computeDenialTrends(org.org_id);
+    const payTrend = computePaymentTrends(org.org_id);
+
+    // Build chart-friendly arrays
+    const denialMonths = Object.keys(denialByMonth || {}).sort();
+    const denialTotals = denialMonths.map(k => Number(denialByMonth[k]?.total || 0));
+    const draftTotals = denialMonths.map(k => Number(denialByMonth[k]?.drafts || 0));
+
+    const payMonths = Object.keys(payTrend.byMonth || {}).sort();
+    const payTotals = payMonths.map(k => Number(payTrend.byMonth[k]?.total || 0));
+
+    // Use last 30d payerTop from dashboard metrics for quick underpay visualization
+    const r = rangeFromPreset("last30");
+    const m = computeDashboardMetrics(org.org_id, r.start, r.end, "last30");
+    const payerTop = (m.payerTop || []).slice(0, 8);
+
+    const payload = {
+      denialMonths, denialTotals, draftTotals,
+      payMonths, payTotals,
+      payerLabels: payerTop.map(x=>x.payer),
+      payerUnderpaid: payerTop.map(x=>Number(x.underpaid||0))
+    };
+    const b64 = Buffer.from(JSON.stringify(payload)).toString("base64");
+
+    const html = page("Revenue Intelligence", `
+      <h2>Revenue Intelligence</h2>
+      <p class="muted">Trends and insights based on uploaded claims, denials, and payment data.</p>
+
+      <div class="row">
+        <div class="col">
+          <div class="kpi-card"><h4>Recovered from Denials</h4><p>$${Number(a.totalRecoveredFromDenials||0).toFixed(2)}</p></div>
+          <div class="kpi-card"><h4>Recovery Rate</h4><p>${safeStr(a.recoveryRate)}%</p></div>
+        </div>
+        <div class="col">
+          <div class="kpi-card"><h4>Projected Lost Revenue</h4><p>$${Number(a.projectedLostRevenue||0).toFixed(2)}</p></div>
+          <div class="kpi-card"><h4>Unpaid Aging (60+ / 90+)</h4><p>${Number(a.aging?.over60||0)} / ${Number(a.aging?.over90||0)}</p></div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="row">
+        <div class="col">
+          <h3>Denial Volume Trend</h3>
+          <canvas id="denialTrend" height="140"></canvas>
+        </div>
+        <div class="col">
+          <h3>Payment Trend</h3>
+          <canvas id="paymentTrend" height="140"></canvas>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <h3>Underpayment by Payer (Last 30 Days)</h3>
+      <canvas id="underpayChart" height="160"></canvas>
+
+      <div class="hr"></div>
+
+      <h3>Top Denial Categories</h3>
+      <ul class="muted">
+        ${
+          Object.entries(a.denialReasons || {})
+            .sort((x,y)=>y[1]-x[1])
+            .slice(0,6)
+            .map(([k,v])=>`<li>${safeStr(k)} (${v})</li>`)
+            .join("") || "<li>No denial category data available yet.</li>"
+        }
+      </ul>
+
+      <script>
+      (function(){
+        if (!window.Chart) return;
+        const data = JSON.parse(atob("${b64}"));
+
+        // Denials
+        const denEl = document.getElementById("denialTrend");
+        if (data.denialMonths && data.denialMonths.length){
+          new Chart(denEl, {
+            type:"line",
+            data:{ labels:data.denialMonths, datasets:[
+              { label:"Denials", data:data.denialTotals },
+              { label:"Drafts Generated", data:data.draftTotals }
+            ]},
+            options:{ responsive:true }
+          });
+        } else {
+          denEl.outerHTML = "<p class='muted'>No denial trend data.</p>";
+        }
+
+        // Payments
+        const payEl = document.getElementById("paymentTrend");
+        if (data.payMonths && data.payMonths.length){
+          new Chart(payEl, {
+            type:"bar",
+            data:{ labels:data.payMonths, datasets:[
+              { label:"Payments ($)", data:data.payTotals }
+            ]},
+            options:{ responsive:true }
+          });
+        } else {
+          payEl.outerHTML = "<p class='muted'>No payment trend data.</p>";
+        }
+
+        // Underpay
+        const upEl = document.getElementById("underpayChart");
+        if (data.payerLabels && data.payerLabels.length && (data.payerUnderpaid||[]).some(v=>Number(v)>0)){
+          new Chart(upEl, {
+            type:"bar",
+            data:{ labels:data.payerLabels, datasets:[
+              { label:"Underpaid ($)", data:data.payerUnderpaid }
+            ]},
+            options:{ responsive:true }
+          });
+        } else {
+          upEl.outerHTML = "<p class='muted'>No underpayment data yet (upload payments and allowed/expected fields).</p>";
+        }
+      })();
+      </script>
+    `, navUser(), {showChat:true});
+
+    return send(res, 200, html);
+  }
+
+  // ==============================
+  // ACTION CENTER (NEW)
+  // ==============================
+  if (method === "GET" && pathname === "/actions") {
+    const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+
+    // Build actionable queue (exclude Paid + Contractual)
+    const actionable = billedAll
+      .filter(b => !["Paid","Contractual"].includes(String(b.status || "Pending")))
+      .map(b => {
+        const billedAmt = num(b.amount_billed);
+        const insurancePaid = num(b.insurance_paid || b.paid_amount);
+        const patientCollected = num(b.patient_collected);
+        const allowed = num(b.allowed_amount);
+        const patientResp = num(b.patient_responsibility);
+        const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+          ? num(b.expected_insurance)
+          : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+
+        // Risk dollars
+        let atRisk = 0;
+        const st = String(b.status || "Pending");
+        if (st === "Underpaid" || st === "Appeal") atRisk = Math.max(0, expectedInsurance - insurancePaid);
+        else if (st === "Patient Balance") atRisk = Math.max(0, patientResp - patientCollected);
+        else atRisk = Math.max(0, billedAmt - insurancePaid);
+
+        const suggested =
+          b.suggested_action ||
+          (st === "Denied" ? "Upload denial + generate appeal" :
+           st === "Underpaid" ? "Negotiate or appeal underpayment" :
+           st === "Appeal" ? "Follow up on appeal status" :
+           st === "Patient Balance" ? "Collect patient balance" :
+           "Review and update status");
+
+        return { b, atRisk, suggested };
+      })
+      .sort((x,y)=> y.atRisk - x.atRisk);
+
+    const rows = actionable.slice(0, 250).map(x => {
+      const b = x.b;
+      const st = String(b.status || "Pending");
+      const badgeCls =
+        st === "Denied" ? "err" :
+        st === "Underpaid" ? "underpaid" :
+        st === "Appeal" ? "warn" :
+        st === "Patient Balance" ? "warn" :
+        "warn";
+
+      return `<tr>
+        <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
+        <td>${safeStr(b.payer || "")}</td>
+        <td><span class="badge ${badgeCls}">${safeStr(st)}</span></td>
+        <td>$${Number(x.atRisk || 0).toFixed(2)}</td>
+        <td class="muted small">${safeStr(x.suggested)}</td>
+        <td>
+          <a class="btn secondary small" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">Open</a>
+        </td>
+      </tr>`;
+    }).join("");
+
+    const html = page("Action Center", `
+      <h2>Action Center</h2>
+      <p class="muted">Prioritized queue of claims that need attention (sorted by revenue at risk).</p>
+
+      <div class="btnRow">
+        <a class="btn secondary" href="/claims">Go to Claims Lifecycle</a>
+      </div>
+
+      <div class="hr"></div>
+
+      <div style="overflow:auto;">
+        <table>
+          <thead><tr><th>Claim #</th><th>Payer</th><th>Status</th><th>At-Risk $</th><th>Suggested Action</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="6" class="muted">No action items yet.</td></tr>`}</tbody>
+        </table>
+      </div>
+      <p class="muted small">${actionable.length > 250 ? "Showing first 250 items." : ""}</p>
+    `, navUser(), {showChat:true});
+
+    return send(res, 200, html);
+  }
+
+
+// --------- BILLED CLAIMS UPLOAD (EMR/EHR EXPORT INTAKE) ----------
   // Submission-based view: each upload creates a submission batch. Click into a batch to manage individual claims.
     // --------- BILLED CLAIMS UPLOAD (EMR/EHR EXPORT INTAKE) ----------
   // Submission-based view: each upload creates a submission batch. Click into a batch to manage individual claims.
