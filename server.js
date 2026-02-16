@@ -371,7 +371,7 @@ window.__tjhpSendChat = async function(){
     <div class="topbar">
       <div class="brand">
         <h1>TJ Healthcare Pro</h1>
-        <div class="sub">AI-Assisted Claim Review & Analytics</div>
+        <div class="sub">AI Revenue Analytics Platform</div>
       </div>
       <div class="nav">${navHtml}</div>
     </div>
@@ -646,7 +646,7 @@ function getLimitProfile(org_id) {
       payment_records_per_credit: MONTHLY_DEFAULTS.payment_records_per_credit,
     };
   }
-  return { mode:"pilot", ...PILOT_LIMITS };
+  return { mode:"free_trial", ...PILOT_LIMITS };
 }
 
 function countOrgCases(org_id) {
@@ -2598,7 +2598,7 @@ if (method === "GET" && pathname === "/file") {
   // lock screen
   if (method === "GET" && pathname === "/lock") {
     const html = page("Starting", `
-      <h2 class="center">Pilot Started</h2>
+      <h2 class="center">Free Trial Started</h2>
       <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid — and surface patterns that are easy to miss when data lives in different places.</p>
       <p class="muted center">You’ll be guided to the next step automatically.</p>
       <div class="center"><span class="badge warn">Initializing</span></div>
@@ -2760,7 +2760,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
     const planBadge = (limits.mode==="monthly")
       ? `<span class="badge ok">Monthly Active</span>`
-      : `<span class="badge warn">Pilot Active</span>`;
+      : `<span class="badge warn">Free Trial</span>`;
 
     const percentCollected = m.kpis.totalBilled > 0 ? Math.round((m.kpis.collectedTotal / m.kpis.totalBilled) * 100) : 0;
     const barColor = percentCollected >= 70 ? "#16a34a" : (percentCollected >= 30 ? "#f59e0b" : "#dc2626");
@@ -2788,7 +2788,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
           <h2 style="margin-bottom:4px;">Dashboard</h2>
-          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
+          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Trial ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
           ${planBadge}
         </div>
 
@@ -5806,8 +5806,8 @@ else if (type === "payers") {
     const pilotEnd = getPilot(org.org_id) || ensurePilot(org.org_id);
     if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
     const p2 = getPilot(org.org_id);
-    const html = page("Pilot Complete", `
-      <h2>Pilot Complete</h2>
+    const html = page("Free Trial Complete", `
+      <h2>Free Trial Complete</h2>
       <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p>
       <div class="hr"></div>
       <p class="muted">
