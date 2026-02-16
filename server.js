@@ -70,6 +70,7 @@ const FILES = {
   templates: path.join(DATA_DIR, "templates.json"),
   billed: path.join(DATA_DIR, "billed.json"),
   billed_submissions: path.join(DATA_DIR, "billed_submissions.json"),
+  negotiations: path.join(DATA_DIR, "negotiations.json"),
 };
 
 // Directory for storing uploaded template files
@@ -197,6 +198,7 @@ ensureDir(TEMPLATES_DIR);
 ensureFile(FILES.templates, []);
 ensureFile(FILES.billed, []);
 ensureFile(FILES.billed_submissions, []);
+ensureFile(FILES.negotiations, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -421,7 +423,7 @@ function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Revenue Overview</a><a href="/claims">Claims Lifecycle</a><a href="/intelligence">Revenue Intelligence</a><a href="/actions">Action Center</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
+  return `<a href="/dashboard">Revenue Overview</a><a href="/claims">Claims Lifecycle</a><a href="/intelligence">Revenue Intelligence (AI)</a><a href="/actions">Action Center</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -1694,6 +1696,30 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
 
 
+// ===== Negotiations (NEW) =====
+function getNegotiations(org_id){
+  return readJSON(FILES.negotiations, []).filter(n => n.org_id === org_id);
+}
+function getNegotiationById(org_id, negotiation_id){
+  return readJSON(FILES.negotiations, []).find(n => n.org_id === org_id && n.negotiation_id === negotiation_id);
+}
+function saveNegotiation(rec){
+  const all = readJSON(FILES.negotiations, []);
+  const idx = all.findIndex(n => n.negotiation_id === rec.negotiation_id);
+  if (idx >= 0) all[idx] = rec; else all.push(rec);
+  writeJSON(FILES.negotiations, all);
+}
+function updateBilledClaim(billed_id, updater){
+  const billedAll = readJSON(FILES.billed, []);
+  const idx = billedAll.findIndex(b => b.billed_id === billed_id);
+  if (idx < 0) return null;
+  const b = billedAll[idx];
+  updater(b);
+  billedAll[idx] = b;
+  writeJSON(FILES.billed, billedAll);
+  return b;
+}
+
 // ===== ROUTER =====
 const server = http.createServer(async (req, res) => {
   const parsed = url.parse(req.url, true);
@@ -2911,7 +2937,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
           <div class="btnRow" style="margin-top:10px;">
             <a class="btn" href="/claims">Open Claims Lifecycle</a>
-            <a class="btn secondary" href="/upload">Denial &amp; Payment Upload</a>
+            <a class="btn secondary" href="/upload-denials">Upload Denials</a><a class="btn secondary" href="/upload-negotiations">Upload Negotiations</a>
             <a class="btn secondary" href="/report">Reports</a>
           </div>
         </div>
@@ -3160,8 +3186,8 @@ if (hasPayerBar) {
 
       <div class="btnRow">
         <a class="btn" href="/billed">Upload Billed Claims</a>
-        <a class="btn secondary" href="/upload#payments">Upload Payments</a>
-        <a class="btn secondary" href="/upload">Upload Denials</a>
+        <a class="btn secondary" href="/upload-payments">Upload Payments</a>
+        <a class="btn secondary" href="/upload-denials">Upload Denials</a>
       </div>
 
       <div class="hr"></div>
@@ -3254,7 +3280,7 @@ if (hasPayerBar) {
     const b64 = Buffer.from(JSON.stringify(payload)).toString("base64");
 
     const html = page("Revenue Intelligence", `
-      <h2>Revenue Intelligence</h2>
+      <h2>Revenue Intelligence (AI)</h2>
       <p class="muted">Trends and insights based on uploaded claims, denials, and payment data.</p>
 
       <div class="row">
@@ -4597,187 +4623,11 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
   }
 
 // --------- CASE UPLOAD ----------
+  // Legacy combined uploads page: redirect to the new Denials uploader.
   if (method === "GET" && pathname === "/upload") {
-    const allTemplates = readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id);
-    const templateOptions = allTemplates.map(t => `<option value="${safeStr(t.template_id)}">${safeStr(t.filename)}</option>`).join("");
-
-    // Recent case status for inline processing display
-    const allCasesForStatus = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
-    allCasesForStatus.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
-    const recentCases = allCasesForStatus.slice(0, 8);
-
-   
-const allow = paymentRowsAllowance(org.org_id);
-const paymentCount = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).length;
-
-// Build payment upload queue (grouped by source_file)
-const allPay = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
-const paymentFilesMap = {};
-allPay.forEach(p => {
-  const sf = (p.source_file || "").trim();
-  if (!sf) return;
-  if (!paymentFilesMap[sf]) {
-    paymentFilesMap[sf] = {
-      source_file: sf,
-      count: 0,
-      latest: p.created_at || p.date_paid || nowISO()
-    };
+    return redirect(res, "/upload-denials");
   }
-  paymentFilesMap[sf].count += 1;
 
-  const dt = new Date(p.created_at || p.date_paid || Date.now()).getTime();
-  const cur = new Date(paymentFilesMap[sf].latest || 0).getTime();
-  if (dt > cur) {
-    paymentFilesMap[sf].latest = p.created_at || p.date_paid || nowISO();
-  }
-});
-
-const paymentQueue = Object.values(paymentFilesMap)
-  .sort((a,b) => new Date(b.latest).getTime() - new Date(a.latest).getTime())
-  .slice(0, 8);
-
-
-const html = page("Denial & Payment Upload", `
-      <h2>Uploads</h2>
-      <p class="muted">Upload denial documents to generate appeal drafts, and upload payment files to power revenue analytics. All results appear on your Dashboard.</p>
-
-      <div class="hr"></div>
-      <h3>Denial &amp; Appeal Upload</h3>
-      <p class="muted">Upload up to <strong>3 denial documents</strong>. Each document becomes its own case. Apply templates when reviewing the draft.</p>
-
-      <form method="POST" action="/upload" enctype="multipart/form-data">
-        <label>Denial Documents (up to 3)</label>
-        <div id="case-dropzone" class="dropzone">Drop up to 3 documents here or click to select</div>
-        <input id="case-files" type="file" name="files" multiple required accept=".pdf,.doc,.docx,.jpg,.png" style="display:none" />
-
-        <label>Optional notes</label>
-        <textarea name="notes" placeholder="Any context to help review (optional)"></textarea>
-
-       
-
-        <div class="btnRow" style="margin-top:16px;">
-          <button class="btn" type="submit">Submit Denials</button>
-          <a class="btn secondary" href="/dashboard">Back</a>
-        </div>
-      </form>
-
-      <div class="hr"></div>
-      <h3>Denial Case Queue</h3>
-      ${
-        recentCases.length === 0
-          ? `<p class="muted">No denial cases yet.</p>`
-          : `<table>
-              <thead><tr><th>Case ID</th><th>Status</th><th>Open</th></tr></thead>
-              <tbody>${
-                recentCases.map(c => {
-                  const openLink = (c.status === "DRAFT_READY")
-                    ? `/draft?case_id=${encodeURIComponent(c.case_id)}`
-                    : `/status?case_id=${encodeURIComponent(c.case_id)}`;
-                  return `<tr>
-                    <td>${safeStr(c.case_id)}</td>
-                    <td>${safeStr(c.status)}</td>
-                    <td><a href="${openLink}">Open</a></td>
-                  </tr>`;
-                }).join("")
-              }</tbody>
-            </table>`
-      }
-
-      <div class="hr"></div>
-      <h3 id="payments">Payment Upload</h3>
-      <p class="muted">Upload bulk payment files in CSV or Excel format. CSV drives analytics.</p>
-      <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
-
-      <form method="POST" action="/payments" enctype="multipart/form-data">
-        <label>Upload CSV/XLS/XLSX</label>
-        <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div>
-        <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx,.pdf,.doc,.docx" required style="display:none" />
-        <div class="btnRow">
-          <button class="btn" type="submit">Upload Payments</button>
-          <a class="btn secondary" href="/report?type=payment_detail">View Payment Details</a>
-        </div>
-      </form>
-
-      <div class="hr"></div>
-      <h3>Payment Queue</h3>
-      ${
-        paymentQueue.length === 0
-          ? `<p class="muted">No payment uploads yet.</p>`
-          : `<table>
-              <thead><tr><th>Source File</th><th>Records</th><th>Last Upload</th><th>Open</th></tr></thead>
-              <tbody>${
-                paymentQueue.map(x => {
-                  return `<tr>
-                    <td>${safeStr(x.source_file)}</td>
-                    <td>${x.count}</td>
-                    <td>${new Date(x.latest).toLocaleDateString()}</td>
-                    <td><a href="/report?type=payment_detail">Open</a></td>
-                  </tr>`;
-                }).join("")
-              }</tbody>
-            </table>`
-      }
-
-      <div class="hr"></div>
-      <p class="muted small">Payment records on file: ${paymentCount}. Uploading payments improves payer insights and denial recovery tracking.</p>
-
-      <script>
-        // Denial dropzone
-        const caseDrop = document.getElementById('case-dropzone');
-        const caseInput = document.getElementById('case-files');
-        caseDrop.addEventListener('click', () => caseInput.click());
-        ['dragenter','dragover'].forEach(evt => {
-          caseDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); caseDrop.classList.add('dragover'); });
-        });
-        ['dragleave','drop'].forEach(evt => {
-          caseDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); caseDrop.classList.remove('dragover'); });
-        });
-        caseDrop.addEventListener('drop', e => {
-          const files = e.dataTransfer.files;
-          if (files.length > 3) { alert('You can upload up to 3 documents.'); return; }
-          const dt2 = new DataTransfer();
-          for (let i=0; i<files.length && i<3; i++) dt2.items.add(files[i]);
-          caseInput.files = dt2.files;
-          caseDrop.textContent = files.length + ' file' + (files.length>1 ? 's' : '') + ' selected';
-        });
-        caseInput.addEventListener('change', () => {
-          if (caseInput.files.length > 3) {
-            alert('You can upload up to 3 documents. Only the first 3 will be used.');
-            const dt2 = new DataTransfer();
-            for (let i=0; i<3; i++) dt2.items.add(caseInput.files[i]);
-            caseInput.files = dt2.files;
-          }
-          if (caseInput.files.length) {
-            caseDrop.textContent = caseInput.files.length + ' file' + (caseInput.files.length>1 ? 's' : '') + ' selected';
-          }
-        });
-
-        // Payment dropzone
-        const payDrop = document.getElementById('pay-dropzone');
-        const payInput = document.getElementById('pay-file');
-        payDrop.addEventListener('click', () => payInput.click());
-        ['dragenter','dragover'].forEach(evt => {
-          payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover'); });
-        });
-        ['dragleave','drop'].forEach(evt => {
-          payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover'); });
-        });
-        payDrop.addEventListener('drop', e => {
-          const files = e.dataTransfer.files;
-          if (files.length > 1) { alert('Only one file at a time.'); return; }
-          const dt = new DataTransfer();
-          dt.items.add(files[0]);
-          payInput.files = dt.files;
-          payDrop.textContent = files[0].name;
-        });
-        payInput.addEventListener('change', () => {
-          const file = payInput.files[0];
-          if (file) payDrop.textContent = file.name;
-        });
-      </script>
-    `, navUser(), {showChat:true});
-    return send(res, 200, html);
-  }
 
   if (method === "POST" && pathname === "/upload") {
     // limit: pilot cases
@@ -5537,7 +5387,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 
   // -------- PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) --------
   if (method === "GET" && pathname === "/payments") {
-    return redirect(res, "/upload#payments");
+    return redirect(res, "/upload-payments");
   }
 
   if (method === "POST" && pathname === "/payments") {
@@ -6462,6 +6312,42 @@ if (method === "GET" && pathname === "/claim-detail") {
     <div class="hr"></div>
     <h3>Payment History</h3>
     ${paymentTable}
+
+    <div class="hr"></div>
+<h3>Actions</h3>
+<div class="btnRow">
+  <a class="btn secondary" href="/upload-denials">Generate Appeal (Upload Denial)</a>
+  <a class="btn secondary" href="/upload-negotiations">Start / View Negotiation</a>
+</div>
+
+<div class="hr"></div>
+<h3>Quick Status Updates</h3>
+<div class="row">
+  <div class="col">
+    <form method="POST" action="/claim/resolve">
+      <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+      <input type="hidden" name="submission_id" value="${safeStr(b.submission_id || "")}"/>
+      <input type="hidden" name="resolution" value="Contractual"/>
+      <button class="btn secondary" type="submit">Write Off (Contractual)</button>
+    </form>
+  </div>
+  <div class="col">
+    <form method="POST" action="/claim/resolve">
+      <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+      <input type="hidden" name="submission_id" value="${safeStr(b.submission_id || "")}"/>
+      <input type="hidden" name="resolution" value="Patient Balance"/>
+      <button class="btn secondary" type="submit">Add Patient Responsibility</button>
+    </form>
+  </div>
+  <div class="col">
+    <form method="POST" action="/billed/mark-paid">
+      <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+      <input type="hidden" name="submission_id" value="${safeStr(b.submission_id || "")}"/>
+      <input type="hidden" name="paid_at" value="${new Date().toISOString().split("T")[0]}"/>
+      <button class="btn success" type="submit">Mark Paid</button>
+    </form>
+  </div>
+</div>
 
     <div class="btnRow">
       <a class="btn secondary" href="javascript:history.back()">Back</a>
