@@ -246,6 +246,8 @@ textarea{min-height:220px;}
 .badge.ok{border-color:#a7f3d0;background:#ecfdf5;color:var(--ok);}
 .badge.warn{border-color:#fde68a;background:#fffbeb;color:var(--warn);}
 .badge.err{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
+.badge.underpaid{border-color:#fdba74;background:#fff7ed;color:#9a3412;}
+.badge.writeoff{border-color:#d1d5db;background:#f3f4f6;color:#374151;}
 .footer{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);}
 .error{color:var(--danger);font-weight:900;}
 .small{font-size:12px;}
@@ -371,7 +373,7 @@ window.__tjhpSendChat = async function(){
     <div class="topbar">
       <div class="brand">
         <h1>TJ Healthcare Pro</h1>
-        <div class="sub">AI-Assisted Claim Review & Analytics</div>
+        <div class="sub">AI Revenue Analytics Platform</div>
       </div>
       <div class="nav">${navHtml}</div>
     </div>
@@ -1540,6 +1542,7 @@ function chooseGranularity(preset){
   if (p === "thisyear") return "month";
   return "week";
 }
+
 function computeDashboardMetrics(org_id, start, end, preset){
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
   const paymentsAll = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
@@ -1555,34 +1558,71 @@ function computeDashboardMetrics(org_id, start, end, preset){
   const payments = paymentsAll.filter(p => inRange(p.date_paid || p.created_at));
   const underpayCases = casesAll.filter(c => (c.case_type||"").toLowerCase()==="underpayment" && inRange(c.created_at));
 
-  const totalBilled = billed.reduce((s,b)=>s + safeNum(b.amount_billed), 0);
-  const insuranceCollected = billed.reduce((s,b)=>s + safeNum(b.insurance_paid || b.paid_amount), 0);
-  const patientRespTotal = billed.reduce((s,b)=>s + safeNum(b.patient_responsibility), 0);
-  const patientCollected = billed.reduce((s,b)=>s + safeNum(b.patient_collected), 0);
-  const patientOutstanding = Math.max(0, patientRespTotal - patientCollected);
+  // --- Per-claim reconciliation helpers (Option 2: full transparency) ---
+  const rec = (b) => {
+    const billedAmt = safeNum(b.amount_billed);
+    const insurancePaid = safeNum(b.insurance_paid || b.paid_amount);
+    const patientCollected = safeNum(b.patient_collected);
 
-  const allowedTotal = billed.reduce((s,b)=>s + safeNum(b.allowed_amount), 0);
-  const contractualTotal = billed.reduce((s,b)=>s + Math.max(0, safeNum(b.amount_billed) - safeNum(b.allowed_amount)), 0);
+    // Write-off: explicit write_off_amount wins; otherwise billed - allowed when allowed present; otherwise contractual_adjustment if present
+    const allowedRaw = safeNum(b.allowed_amount);
+    const explicitWO = (b.write_off_amount != null && String(b.write_off_amount).trim() !== "") ? safeNum(b.write_off_amount) : null;
+    const contractualAdj = safeNum(b.contractual_adjustment);
 
-  const underpaidAmt = billed.reduce((s,b)=>s + safeNum(b.underpaid_amount), 0);
-  const underpaidCount = billed.filter(b => (b.status||"").toLowerCase()==="underpaid").length;
+    let writeOff = 0;
+    if (explicitWO != null) writeOff = Math.max(0, explicitWO);
+    else if (allowedRaw > 0) writeOff = Math.max(0, billedAmt - allowedRaw);
+    else if (contractualAdj > 0) writeOff = Math.max(0, contractualAdj);
 
-  const collectedTotal = insuranceCollected + patientCollected;
-  const grossCollectionRate = totalBilled > 0 ? (collectedTotal/totalBilled)*100 : 0;
-  const netCollectionRate = allowedTotal > 0 ? (collectedTotal/allowedTotal)*100 : 0;
+    const allowed = (allowedRaw > 0) ? allowedRaw : Math.max(0, billedAmt - writeOff);
 
-  const revenueAtRisk = Math.max(0, totalBilled - collectedTotal);
+    // Underpaid (dynamic): per requirement (prevents stale stored values)
+    const underpaidDyn = Math.max(0, billedAmt - insurancePaid - patientCollected);
 
-  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, Pending:0 };
+    // Denied dollars: if claim is marked Denied, treat denied dollars as allowed (or billed if allowed missing)
+    const st = String(b.status || "Pending");
+    const deniedDollars = (st === "Denied") ? Math.max(0, (allowed > 0 ? allowed : billedAmt)) : 0;
+
+    return { billedAmt, allowed, insurancePaid, patientCollected, writeOff, underpaidDyn, deniedDollars, status: st };
+  };
+
+  const totals = billed.reduce((acc, b) => {
+    const r = rec(b);
+    acc.totalBilled += r.billedAmt;
+    acc.allowedTotal += r.allowed;
+    acc.insuranceCollected += r.insurancePaid;
+    acc.patientCollected += r.patientCollected;
+    acc.patientRespTotal += safeNum(b.patient_responsibility);
+    acc.writeOffTotal += r.writeOff;
+
+    // KPI underpaid: sum of dynamic underpaid dollars for Underpaid + Appeal (money still at-risk from payer)
+    if (r.status === "Underpaid" || r.status === "Appeal") acc.underpaidAmt += r.underpaidDyn;
+    return acc;
+  }, { totalBilled:0, allowedTotal:0, insuranceCollected:0, patientCollected:0, patientRespTotal:0, writeOffTotal:0, underpaidAmt:0 });
+
+  const patientOutstanding = Math.max(0, totals.patientRespTotal - totals.patientCollected);
+
+  const collectedTotal = totals.insuranceCollected + totals.patientCollected;
+
+  // Revenue at risk should exclude write-offs (non-collectible)
+  const revenueAtRisk = Math.max(0, totals.totalBilled - totals.writeOffTotal - collectedTotal);
+
+  const grossCollectionRate = totals.totalBilled > 0 ? (collectedTotal / totals.totalBilled) * 100 : 0;
+  const netCollectionRate = totals.allowedTotal > 0 ? (collectedTotal / totals.allowedTotal) * 100 : 0;
+
+  // Status counts (align labels with charts)
+  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, "Write-Off":0, Pending:0 };
   billed.forEach(b=>{
-    const st = (b.status || "Pending");
+    const st = String(b.status || "Pending");
     if (st === "Paid") statusCounts.Paid++;
     else if (st === "Denied") statusCounts.Denied++;
     else if (st === "Underpaid") statusCounts.Underpaid++;
     else if (st === "Patient Balance") statusCounts["Patient Balance"]++;
+    else if (st === "Contractual") statusCounts["Write-Off"]++;
     else statusCounts.Pending++;
   });
 
+  // Time series (billed vs collected vs at-risk)
   const gran = chooseGranularity(preset);
   const billedSeries = {};
   const collectedSeries = {};
@@ -1603,30 +1643,47 @@ function computeDashboardMetrics(org_id, start, end, preset){
   keys.forEach(k=>{
     const bsum = safeNum(billedSeries[k]);
     const csum = safeNum(collectedSeries[k]);
+    // at-risk excludes write-offs at the claim level, but we only have series totals here -> conservative view
     atRiskSeries[k] = Math.max(0, bsum - csum);
   });
 
+  // Payer reconciliation aggregation (Option 2)
   const payerAgg = {};
   billed.forEach(b=>{
     const payer = (b.payer || "Unknown").trim() || "Unknown";
-    payerAgg[payer] = payerAgg[payer] || { underpaid:0, expected:0, paid:0, count:0 };
-    payerAgg[payer].underpaid += safeNum(b.underpaid_amount);
-    payerAgg[payer].expected += safeNum(b.expected_insurance);
-    payerAgg[payer].paid += safeNum(b.insurance_paid || b.paid_amount);
+    const r = rec(b);
+    if (!payerAgg[payer]) payerAgg[payer] = { billed:0, allowed:0, paid:0, denied:0, writeOff:0, underpaid:0, count:0 };
+    payerAgg[payer].billed += r.billedAmt;
+    payerAgg[payer].allowed += r.allowed;
+    payerAgg[payer].paid += r.insurancePaid;
+    payerAgg[payer].denied += r.deniedDollars;
+    payerAgg[payer].writeOff += r.writeOff;
+
+    // Underpaid dollars attributed to Underpaid + Appeal statuses (payer-side at-risk)
+    if (r.status === "Underpaid" || r.status === "Appeal") payerAgg[payer].underpaid += r.underpaidDyn;
+
     payerAgg[payer].count += 1;
   });
+
   const payerTop = Object.entries(payerAgg)
-    .sort((a,b)=>b[1].underpaid - a[1].underpaid)
+    .sort((a,b)=> (b[1].underpaid - a[1].underpaid) || (b[1].billed - a[1].billed))
     .slice(0,8)
     .map(([payer,v])=>({ payer, ...v }));
 
   return {
     kpis: {
-      totalBilled, collectedTotal, revenueAtRisk,
-      grossCollectionRate, netCollectionRate,
-      underpaidAmt, underpaidCount,
-      patientRespTotal, patientCollected, patientOutstanding,
-      allowedTotal, contractualTotal,
+      totalBilled: totals.totalBilled,
+      allowedTotal: totals.allowedTotal,
+      writeOffTotal: totals.writeOffTotal,
+      collectedTotal,
+      revenueAtRisk,
+      grossCollectionRate,
+      netCollectionRate,
+      underpaidAmt: totals.underpaidAmt,
+      underpaidCount: billed.filter(b => ["Underpaid","Appeal"].includes(String(b.status||""))).length,
+      patientRespTotal: totals.patientRespTotal,
+      patientCollected: totals.patientCollected,
+      patientOutstanding,
       negotiationCases: underpayCases.length
     },
     statusCounts,
@@ -1634,6 +1691,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
     payerTop
   };
 }
+
 
 
 // ===== ROUTER =====
@@ -1703,7 +1761,7 @@ const server = http.createServer(async (req, res) => {
   if (method === "GET" && pathname === "/signup") {
     const html = page("Create Account", `
       <h2>Create Account</h2>
-      <p class="muted">Secure, organization-based access to AI-assisted claim review and analytics.</p>
+      <p class="muted">Secure, organization-based access to an AI revenue analytics workspace.</p>
       <form method="POST" action="/signup">
         <label>Work Email</label>
         <input name="email" type="email" required />
@@ -2095,7 +2153,7 @@ const server = http.createServer(async (req, res) => {
         const usage = getUsage(org.org_id);
         const pilotEnd = pilot ? new Date(pilot.ends_at).getTime() : 0;
         if (pilotEnd && pilotEnd - Date.now() <= 7 * 24 * 60 * 60 * 1000) {
-          alerts.push(`Pilot for ${safeStr(org.org_name)} ends soon`);
+          alerts.push(`Trial for ${safeStr(org.org_name)} ends soon`);
         }
         let casePct = 0;
         if (limits.mode === "pilot") {
@@ -2118,7 +2176,7 @@ const server = http.createServer(async (req, res) => {
       const rows = orgActivities.map(({ org, last }) => {
         const sub = getSub(org.org_id);
         const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
-        const plan = (sub && sub.status === "active") ? "Subscribed" : (pilot.status === "active" ? "Pilot" : "Expired");
+        const plan = (sub && sub.status === "active") ? "Subscribed" : (pilot.status === "active" ? "Free Trial" : "Expired");
         const att = attentionSet.has(org.org_id) ? "⚠️" : "";
         return `<tr class="${att ? 'attention' : ''}">
           <td><a href="/admin/org?org_id=${encodeURIComponent(org.org_id)}">${safeStr(org.org_name)}</a></td>
@@ -2133,7 +2191,7 @@ const server = http.createServer(async (req, res) => {
         <section>
           <div class="kpi-card"><h4>Total Organisations</h4><p>${totalOrgs}</p></div>
           <div class="kpi-card"><h4>Total Users</h4><p>${totalUsers}</p></div>
-          <div class="kpi-card"><h4>Active Pilots</h4><p>${activePilots}</p></div>
+          <div class="kpi-card"><h4>Active Trials</h4><p>${activePilots}</p></div>
           <div class="kpi-card"><h4>Active Subscriptions</h4><p>${activeSubs}</p></div>
         </section>
         <h3>Organisation Status</h3>
@@ -2170,7 +2228,7 @@ const server = http.createServer(async (req, res) => {
         const plan = (() => {
           const p = pilots.find(x => x.org_id === org.org_id);
           const s = subs.find(x => x.org_id === org.org_id);
-          return (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ? "Pilot" : "Expired");
+          return (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ? "Free Trial" : "Expired");
         })();
         const planMatch = !planFilter || plan === planFilter;
         const attMatch = !needAtt || attSet.has(org.org_id);
@@ -2180,7 +2238,7 @@ const server = http.createServer(async (req, res) => {
       const rows = filtered.map(org => {
         const p = pilots.find(x => x.org_id === org.org_id);
         const s = subs.find(x => x.org_id === org.org_id);
-        const plan = (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ? "Pilot" : "Expired");
+        const plan = (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ? "Free Trial" : "Expired");
         const att = attSet.has(org.org_id) ? "⚠️" : "";
         return `<tr class="${att ? 'attention' : ''}">
           <td><a href="/admin/org?org_id=${encodeURIComponent(org.org_id)}">${safeStr(org.org_name)}</a></td>
@@ -2201,7 +2259,7 @@ const server = http.createServer(async (req, res) => {
           </select>
           <select name="plan">
             <option value="">All plans</option>
-            <option value="Pilot"${planFilter==="Pilot"?" selected":""}>Pilot</option>
+            <option value="Free Trial"${planFilter==="Free Trial"?" selected":""}>Free Trial</option>
             <option value="Subscribed"${planFilter==="Subscribed"?" selected":""}>Subscribed</option>
             <option value="Expired"${planFilter==="Expired"?" selected":""}>Expired</option>
           </select>
@@ -2270,7 +2328,7 @@ const server = http.createServer(async (req, res) => {
   <input name="reason" required />
 
   <div class="btnRow">
-    <button class="btn secondary" name="action" value="extend_pilot_7">Extend Pilot +7 days</button>
+    <button class="btn secondary" name="action" value="extend_trial_7">Extend Trial +7 days</button>
     <button class="btn secondary" name="action" value="suspend">Pause Plan</button>
     <button class="btn secondary" name="action" value="reactivate">Reactivate</button>
     <button class="btn danger" name="action" value="terminate">Terminate</button>
@@ -2353,14 +2411,14 @@ const server = http.createServer(async (req, res) => {
         writeJSON(FILES.subscriptions, subs);
         setOrgStatus(org_id, "active", reason);
         auditLog({ actor:"admin", action:"override_plan", org_id, reason, plan: planKey });
-      } else if (action === "extend_pilot_7") {
+      } else if (action === "extend_trial_7") {
         const pilots = readJSON(FILES.pilots, []);
         const idx = pilots.findIndex(p => p.org_id === org_id);
         if (idx >= 0) {
           pilots[idx].ends_at = addDaysISO(pilots[idx].ends_at, 7);
           writeJSON(FILES.pilots, pilots);
         }
-        auditLog({ actor:"admin", action:"extend_pilot_7", org_id, reason });
+        auditLog({ actor:"admin", action:"extend_trial_7", org_id, reason });
 } else if (action === "reactivate") {
   setOrgStatus(org_id, "active", reason);
   auditLog({ actor:"admin", action:"reactivate", org_id, reason });
@@ -2562,7 +2620,7 @@ if (method === "GET" && pathname === "/file") {
   // lock screen
   if (method === "GET" && pathname === "/lock") {
     const html = page("Starting", `
-      <h2 class="center">Pilot Started</h2>
+      <h2 class="center">Free Trial Started</h2>
       <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid — and surface patterns that are easy to miss when data lives in different places.</p>
       <p class="muted center">You’ll be guided to the next step automatically.</p>
       <div class="center"><span class="badge warn">Initializing</span></div>
@@ -2724,7 +2782,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
     const planBadge = (limits.mode==="monthly")
       ? `<span class="badge ok">Monthly Active</span>`
-      : `<span class="badge warn">Pilot Active</span>`;
+      : `<span class="badge warn">Free Trial</span>`;
 
     const percentCollected = m.kpis.totalBilled > 0 ? Math.round((m.kpis.collectedTotal / m.kpis.totalBilled) * 100) : 0;
     const barColor = percentCollected >= 70 ? "#16a34a" : (percentCollected >= 30 ? "#f59e0b" : "#dc2626");
@@ -2742,9 +2800,12 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const payerRows = (m.payerTop || []).map(x => `
       <tr>
         <td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td>
-        <td>$${Number(x.expected||0).toFixed(2)}</td>
-        <td>$${Number(x.paid||0).toFixed(2)}</td>
-        <td>$${Number(x.underpaid||0).toFixed(2)}</td>
+        <td>${fmtMoney(x.billed)}</td>
+        <td>${fmtMoney(x.allowed)}</td>
+        <td>${fmtMoney(x.paid)}</td>
+        <td>${fmtMoney(x.denied)}</td>
+        <td>${fmtMoney(x.writeOff)}</td>
+        <td>${fmtMoney(x.underpaid)}</td>
       </tr>
     `).join("");
 
@@ -2752,7 +2813,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
           <h2 style="margin-bottom:4px;">Dashboard</h2>
-          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
+          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Trial Ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
           ${planBadge}
         </div>
 
@@ -2799,6 +2860,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div class="row" style="margin-top:14px;">
         <div class="col">
           <div class="kpi-card"><h4>Total Billed <span class="tooltip">ⓘ<span class="tooltiptext">Sum of billed charges in the selected date range.</span></span></h4><p>${fmtMoney(m.kpis.totalBilled)}</p></div>
+          <div class="kpi-card"><h4>Write-Off <span class="tooltip">ⓘ<span class="tooltiptext">Billed minus allowed (or explicit write-off amount), when provided.</span></span></h4><p>${fmtMoney(m.kpis.writeOffTotal)}</p></div>
           <div class="kpi-card"><h4>Total Collected <span class="tooltip">ⓘ<span class="tooltiptext">Insurance collected + patient collected (based on uploaded data).</span></span></h4><p>${fmtMoney(m.kpis.collectedTotal)}</p></div>
           <div class="kpi-card"><h4>Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Billed minus collected.</span></span></h4><p>${fmtMoney(m.kpis.revenueAtRisk)}</p></div>
         </div>
@@ -2835,12 +2897,12 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <canvas id="underpayPayer" height="160"></canvas>
           <div style="overflow:auto;margin-top:10px;">
             <table>
-              <thead><tr><th>Payer</th><th>Billed</th><th>Paid</th><th>Underpaid</th></tr></thead>
+              <thead><tr><th>Payer</th><th>Billed</th><th>Allowed</th><th>Paid</th><th>Denied</th><th>Write-Off</th><th>Underpaid</th></tr></thead>
               <tbody>${payerRows || `<tr><td colspan="4" class="muted">No payer data in this range.</td></tr>`}</tbody>
             </table>
           </div>
           <div class="hr"></div>
-          <h3>Top Insurance Payers (Billed vs Paid vs Underpaid)</h3>
+          <h3>Top Insurance Payers (Reconciliation)</h3>
           <canvas id="payerBarChart" height="140"></canvas>
         </div>
         <div class="col">
@@ -2917,19 +2979,21 @@ if (method === "GET" && pathname === "/weekly-summary") {
     (st["Patient Balance"]||0) +
     (st["Underpaid"]||0) +
     (st["Denied"]||0) +
+    (st["Write-Off"]||0) +
     (st["Pending"]||0);
 
   if (sumStatus > 0) {
     new Chart(statusEl, {
       type: "doughnut",
       data: {
-        labels: ["Paid","Patient Balance","Underpaid","Denied","Pending"],
+        labels: ["Paid","Patient Balance","Underpaid","Denied","Write-Off","Pending"],
         datasets: [{
           data: [
             st["Paid"]||0,
             st["Patient Balance"]||0,
             st["Underpaid"]||0,
             st["Denied"]||0,
+            st["Write-Off"]||0,
             st["Pending"]||0
           ]
         }]
@@ -2964,11 +3028,18 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
 
 
-// Top Payers (Billed vs Paid vs Underpaid)
+// Top Payers (Reconciliation)
 const payerBarEl = document.getElementById("payerBarChart");
 const hasPayerBar =
   Array.isArray(pt) &&
-  pt.some(x => Number(x.expected || 0) > 0 || Number(x.paid || 0) > 0 || Number(x.underpaid || 0) > 0) &&
+  pt.some(x =>
+    Number(x.billed || 0) > 0 ||
+    Number(x.allowed || 0) > 0 ||
+    Number(x.paid || 0) > 0 ||
+    Number(x.denied || 0) > 0 ||
+    Number(x.writeOff || 0) > 0 ||
+    Number(x.underpaid || 0) > 0
+  ) &&
   payerBarEl;
 
 if (hasPayerBar) {
@@ -2977,15 +3048,18 @@ if (hasPayerBar) {
     data: {
       labels: pt.map(x => x.payer),
       datasets: [
-        { label: "Billed", data: pt.map(x => Number(x.expected || 0)), backgroundColor: "#3b82f6" },
-        { label: "Paid", data: pt.map(x => Number(x.paid || 0)), backgroundColor: "#16a34a" },
-        { label: "Underpaid", data: pt.map(x => Number(x.underpaid || 0)), backgroundColor: "#f59e0b" }
+        { label: "Billed", data: pt.map(x => Number(x.billed || 0)) },
+        { label: "Allowed", data: pt.map(x => Number(x.allowed || 0)) },
+        { label: "Paid", data: pt.map(x => Number(x.paid || 0)) },
+        { label: "Denied", data: pt.map(x => Number(x.denied || 0)) },
+        { label: "Write-Off", data: pt.map(x => Number(x.writeOff || 0)) },
+        { label: "Underpaid", data: pt.map(x => Number(x.underpaid || 0)) }
       ]
     },
     options: { responsive: true }
   });
 } else if (payerBarEl) {
-  payerBarEl.outerHTML = "<p class='muted'>No payer comparison data.</p>";
+  payerBarEl.outerHTML = "<p class='muted'>No payer reconciliation data.</p>";
 }
   // Patient Revenue
   const patientEl = document.getElementById("patientRev");
@@ -3311,8 +3385,8 @@ const statusCell = (() => {
   const patientCollected = Number(b.patient_collected || 0);
 
   const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
-    ? Number(b.expected_insurance)
-    : Math.max(0, allowed - patientResp);
+  ? Number(b.expected_insurance)
+  : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
 
   const underpaid = Math.max(0, expectedInsurance - paidAmt);
   const contractualWriteOff = Math.max(0, billedAmt - (allowed || 0));
@@ -3328,7 +3402,7 @@ const statusCell = (() => {
 
   if (st2 === "Contractual") {
     return `
-      <span class="badge warn">Contractual</span>
+      <span class="badge writeoff">Write-Off</span>
       <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
       <div class="small">Write-Off: $${contractualWriteOff.toFixed(2)}</div>
     `;
@@ -3336,7 +3410,7 @@ const statusCell = (() => {
 
   if (st2 === "Underpaid") {
     return `
-      <span class="badge warn">Underpaid</span>
+      <span class="badge underpaid">Underpaid</span>
       <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
       <div class="small">Expected: $${expectedInsurance.toFixed(2)}</div>
       <div class="small">Underpaid: $${underpaid.toFixed(2)}</div>
@@ -5251,9 +5325,10 @@ for (const ap of addedPayments) {
     billedClaim.underpaid_amount = 0;
   } else {
     billedClaim.status = "Underpaid";
-    billedClaim.underpaid_amount = Math.max(0, expected - paid);
+    billedClaim.underpaid_amount = Math.max(0, num(billedClaim.amount_billed) - paid - num(billedClaim.patient_collected));
 
-    const diffPct = expected > 0 ? ((expected - paid) / expected) * 100 : 100;
+    const gap = Math.max(0, num(billedClaim.amount_billed) - paid - num(billedClaim.patient_collected));
+    const diffPct = num(billedClaim.amount_billed) > 0 ? (gap / num(billedClaim.amount_billed)) * 100 : 100;
     if (diffPct <= 5) billedClaim.suggested_action = "Contractual";
     else if (diffPct <= 20) billedClaim.suggested_action = "Patient Balance";
     else billedClaim.suggested_action = "Appeal";
@@ -5337,7 +5412,7 @@ rowsAdded = toUse;
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
     const limits = getLimitProfile(org.org_id);
 
-    const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Pilot" : "Expired");
+    const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Free Trial" : "Expired");
     const planEnds = (sub && sub.status === "active") ? "—" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "—");
 
     const html = page("Account", `
@@ -5349,8 +5424,8 @@ rowsAdded = toUse;
       <h3>Plan</h3>
       <table>
         <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
-        <tr><th>Pilot End Date</th><td>${safeStr(planEnds)}</td></tr>
-        <tr><th>Access Mode</th><td>${safeStr(limits.mode)}</td></tr>
+        <tr><th>Trial Ends</th><td>${safeStr(planEnds)}</td></tr>
+        <tr><th>Access Mode</th><td>${safeStr(limits.mode==="pilot" ? "trial" : limits.mode)}</td></tr>
         <tr><th>AI Questions Used</th><td>${safeStr(String(getUsage(org.org_id).ai_chat_used || 0))}</td></tr>
         <tr><th>AI Questions Limit</th><td>${safeStr(String(getAIChatLimit(org.org_id)))}</td></tr>
         <tr><th>AI Questions Remaining</th><td>${safeStr(String(Math.max(0, getAIChatLimit(org.org_id) - (getUsage(org.org_id).ai_chat_used || 0))))}</td></tr>
@@ -5466,12 +5541,12 @@ rowsAdded = toUse;
   if (method === "GET" && pathname === "/exports") {
     const html = page("Exports", `
       <h2>Exports</h2>
-      <p class="muted">Download pilot outputs for leadership and operations review.</p>
+      <p class="muted">Download exports for leadership and operations review.</p>
       <div class="btnRow">
         <a class="btn secondary" href="/export/cases.csv">Cases CSV</a>
         <a class="btn secondary" href="/export/payments.csv">Payments CSV</a>
         <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a>
-        <a class="btn secondary" href="/report">Printable Pilot Summary</a>
+        <a class="btn secondary" href="/report">Printable Summary</a>
       </div>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
@@ -5770,16 +5845,16 @@ else if (type === "payers") {
     const pilotEnd = getPilot(org.org_id) || ensurePilot(org.org_id);
     if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
     const p2 = getPilot(org.org_id);
-    const html = page("Pilot Complete", `
-      <h2>Pilot Complete</h2>
-      <p>Your 30-day pilot has ended. Existing work remains available during the retention period.</p>
+    const html = page("Free Trial Complete", `
+      <h2>Free Trial Complete</h2>
+      <p>Your free trial has ended. Existing work remains available during the retention period.</p>
       <div class="hr"></div>
       <p class="muted">
-        To limit unnecessary data retention, documents and analytics from this pilot will be securely deleted
-        <strong>14 days after the pilot end date</strong> unless you continue monthly access.
+        To limit unnecessary data retention, documents and analytics from this trial will be securely deleted
+        <strong>14 days after the trial end date</strong> unless you continue monthly access.
       </p>
       <ul class="muted">
-        <li>Pilot end date: ${new Date(p2.ends_at).toLocaleDateString()}</li>
+        <li>Trial end date: ${new Date(p2.ends_at).toLocaleDateString()}</li>
         <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li>
       </ul>
       <div class="btnRow">
@@ -6030,7 +6105,7 @@ if (method === "GET" && pathname === "/claim-detail") {
               <td>${safeStr(p.date_paid || "")}</td>
               <td>$${num(p.amount_paid).toFixed(2)}</td>
               <td>${safeStr(p.payer || "")}</td>
-              <td>$${num(b.allowed_amount || 0).toFixed(2)}</td><td>$${num(b.patient_responsibility || 0).toFixed(2)}</td><td>$${num(b.expected_insurance || 0).toFixed(2)}</td><td>$${num(b.underpaid_amount || 0).toFixed(2)}</td><td class="muted small">${p.source_file ? '<a href="/file?name=' + encodeURIComponent(p.source_file) + '" target="_blank">' + safeStr(p.source_file) + '</a>' : ""}</td><td class="muted small">${safeStr(p.notes || "")}</td>
+              <td>$${num(b.allowed_amount || 0).toFixed(2)}</td><td>$${num(b.patient_responsibility || 0).toFixed(2)}</td><td>$${num(b.expected_insurance || 0).toFixed(2)}</td><td>$${Math.max(0, num(b.amount_billed||0) - num(b.insurance_paid||b.paid_amount||0) - num(b.patient_collected||0)).toFixed(2)}</td><td class="muted small">${p.source_file ? '<a href="/file?name=' + encodeURIComponent(p.source_file) + '" target="_blank">' + safeStr(p.source_file) + '</a>' : ""}</td><td class="muted small">${safeStr(p.notes || "")}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -6065,4 +6140,3 @@ if (method === "GET" && pathname === "/claim-detail") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
