@@ -1541,6 +1541,7 @@ function chooseGranularity(preset){
   return "week";
 }
 function computeDashboardMetrics(org_id, start, end, preset){
+
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
   const paymentsAll = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
@@ -1553,18 +1554,68 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
   const billed = billedAll.filter(b => inRange(b.created_at || b.paid_at || b.denied_at));
   const payments = paymentsAll.filter(p => inRange(p.date_paid || p.created_at));
-  const underpayCases = casesAll.filter(c => (c.case_type||"").toLowerCase()==="underpayment" && inRange(c.created_at));
+  const underpayCases = casesAll.filter(c =>
+    (c.case_type||"").toLowerCase()==="underpayment" &&
+    inRange(c.created_at)
+  );
+
+  // ========================
+  // CORE REVENUE
+  // ========================
 
   const totalBilled = billed.reduce((s,b)=>s + safeNum(b.amount_billed), 0);
-  const insuranceCollected = billed.reduce((s,b)=>s + safeNum(b.insurance_paid || b.paid_amount), 0);
-  const patientRespTotal = billed.reduce((s,b)=>s + safeNum(b.patient_responsibility), 0);
-  const patientCollected = billed.reduce((s,b)=>s + safeNum(b.patient_collected), 0);
-  const patientOutstanding = Math.max(0, patientRespTotal - patientCollected);
 
-  const allowedTotal = billed.reduce((s,b)=>s + safeNum(b.allowed_amount), 0);
-  const contractualTotal = billed.reduce((s,b)=>s + Math.max(0, safeNum(b.amount_billed) - safeNum(b.allowed_amount)), 0);
+  const insuranceCollected = billed.reduce(
+    (s,b)=>s + safeNum(b.insurance_paid || b.paid_amount), 0
+  );
 
-  
+  const patientRespTotal = billed.reduce(
+    (s,b)=>s + safeNum(b.patient_responsibility), 0
+  );
+
+  const patientCollected = billed.reduce(
+    (s,b)=>s + safeNum(b.patient_collected), 0
+  );
+
+  const patientOutstanding = Math.max(
+    0,
+    patientRespTotal - patientCollected
+  );
+
+  const allowedTotal = billed.reduce(
+    (s,b)=>s + safeNum(b.allowed_amount), 0
+  );
+
+  const contractualTotal = billed.reduce(
+    (s,b)=>s + Math.max(
+      0,
+      safeNum(b.amount_billed) - safeNum(b.allowed_amount)
+    ), 0
+  );
+
+  // ========================
+  // FIXED MISSING KPI VARIABLES
+  // ========================
+
+  const collectedTotal = insuranceCollected + patientCollected;
+
+  const revenueAtRisk = Math.max(
+    0,
+    totalBilled - collectedTotal
+  );
+
+  const grossCollectionRate = totalBilled > 0
+    ? (collectedTotal / totalBilled) * 100
+    : 0;
+
+  const netCollectionRate = allowedTotal > 0
+    ? (collectedTotal / allowedTotal) * 100
+    : 0;
+
+  // ========================
+  // UNDERPAYMENTS
+  // ========================
+
   const underpaidAmt = billed.reduce((sum, b) => {
     const expected = safeNum(b.expected_insurance || b.amount_billed);
     const paid = safeNum(b.insurance_paid || b.paid_amount);
@@ -1577,7 +1628,19 @@ function computeDashboardMetrics(org_id, start, end, preset){
     return expected - paid > 0;
   }).length;
 
-  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, Pending:0, "Write Off":0 };
+  // ========================
+  // STATUS COUNTS
+  // ========================
+
+  const statusCounts = {
+    Paid:0,
+    "Patient Balance":0,
+    Underpaid:0,
+    Denied:0,
+    Pending:0,
+    "Write Off":0
+  };
+
   billed.forEach(b=>{
     const st = (b.status || "Pending");
     if (st === "Paid") statusCounts.Paid++;
@@ -1587,6 +1650,10 @@ function computeDashboardMetrics(org_id, start, end, preset){
     else if (st === "Contractual") statusCounts["Write Off"]++;
     else statusCounts.Pending++;
   });
+
+  // ========================
+  // TREND SERIES
+  // ========================
 
   const gran = chooseGranularity(preset);
   const billedSeries = {};
@@ -1598,36 +1665,54 @@ function computeDashboardMetrics(org_id, start, end, preset){
     const k = groupKeyForDate(d, gran);
     billedSeries[k] = (billedSeries[k]||0) + safeNum(b.amount_billed);
   });
+
   payments.forEach(p=>{
     const d = new Date(p.date_paid || p.created_at || Date.now());
     const k = groupKeyForDate(d, gran);
     collectedSeries[k] = (collectedSeries[k]||0) + safeNum(p.amount_paid);
   });
 
-  const keys = Array.from(new Set([...Object.keys(billedSeries), ...Object.keys(collectedSeries)])).sort();
+  const keys = Array.from(
+    new Set([...Object.keys(billedSeries), ...Object.keys(collectedSeries)])
+  ).sort();
+
   keys.forEach(k=>{
     const bsum = safeNum(billedSeries[k]);
     const csum = safeNum(collectedSeries[k]);
     atRiskSeries[k] = Math.max(0, bsum - csum);
   });
 
-  
-  const payerAgg = {};
+  // ========================
+  // RETURN
+  // ========================
 
-  billed.forEach(b=>{
-    const payer = (b.payer || "Unknown").trim() || "Unknown";
-
-    if (!payerAgg[payer]) {
-      payerAgg[payer] = {
-        billed: 0,
-        allowed: 0,
-        paid: 0,
-        denied: 0,
-        writeOff: 0,
-        underpaid: 0,
-        count: 0
-      };
+  return {
+    kpis: {
+      totalBilled,
+      collectedTotal,
+      revenueAtRisk,
+      grossCollectionRate,
+      netCollectionRate,
+      underpaidAmt,
+      underpaidCount,
+      patientRespTotal,
+      patientCollected,
+      patientOutstanding,
+      allowedTotal,
+      contractualTotal,
+      negotiationCases: underpayCases.length
+    },
+    statusCounts,
+    series: {
+      gran,
+      keys,
+      billed: keys.map(k=>safeNum(billedSeries[k])),
+      collected: keys.map(k=>safeNum(collectedSeries[k])),
+      atRisk: keys.map(k=>safeNum(atRiskSeries[k]))
     }
+  };
+}
+
 
     const billedAmt = safeNum(b.amount_billed);
     const allowedAmt = safeNum(b.allowed_amount);
