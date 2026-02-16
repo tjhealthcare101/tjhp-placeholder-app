@@ -71,6 +71,8 @@ const FILES = {
   billed: path.join(DATA_DIR, "billed.json"),
   billed_submissions: path.join(DATA_DIR, "billed_submissions.json"),
   negotiations: path.join(DATA_DIR, "negotiations.json"),
+  ai_queries: path.join(DATA_DIR, "ai_queries.json"),
+  saved_queries: path.join(DATA_DIR, "saved_queries.json"),
 };
 
 // Directory for storing uploaded template files
@@ -199,6 +201,8 @@ ensureFile(FILES.templates, []);
 ensureFile(FILES.billed, []);
 ensureFile(FILES.billed_submissions, []);
 ensureFile(FILES.negotiations, []);
+ensureFile(FILES.ai_queries, []);
+ensureFile(FILES.saved_queries, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -306,7 +310,7 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
  * FIX: all HTML + scripts must live inside returned strings.
  * Password toggle preserved.
  */
-function page(title, content, navHtml="", opts={}) {
+function renderPage(title, content, navHtml="", opts={}) {
   const showChat = !!(opts && opts.showChat);
   const chatHtml = showChat ? `
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
@@ -1836,6 +1840,56 @@ function badgeClassForStatus(st){
 }
 
 
+
+// ===== Revenue Intelligence AI: Saved Queries + Query History =====
+function getAIQueries(org_id){
+  return readJSON(FILES.ai_queries, []).filter(q => q.org_id === org_id);
+}
+function saveAIQuery(rec){
+  const all = readJSON(FILES.ai_queries, []);
+  all.push(rec);
+  const perOrg = all.filter(x => x.org_id === rec.org_id);
+  if (perOrg.length > 500){
+    const sorted = perOrg.sort((a,b)=> new Date(a.created_at||0).getTime() - new Date(b.created_at||0).getTime());
+    const toRemove = sorted.slice(0, perOrg.length - 500).map(x=>x.query_id);
+    const filtered = all.filter(x => !(x.org_id === rec.org_id && toRemove.includes(x.query_id)));
+    writeJSON(FILES.ai_queries, filtered);
+  } else {
+    writeJSON(FILES.ai_queries, all);
+  }
+}
+function getSavedQueries(org_id){
+  return readJSON(FILES.saved_queries, []).filter(q => q.org_id === org_id);
+}
+function saveSavedQuery(rec){
+  const all = readJSON(FILES.saved_queries, []);
+  const idx = all.findIndex(x => x.org_id === rec.org_id && x.saved_id === rec.saved_id);
+  if (idx >= 0) all[idx] = rec; else all.push(rec);
+  writeJSON(FILES.saved_queries, all);
+}
+function deleteSavedQuery(org_id, saved_id){
+  const all = readJSON(FILES.saved_queries, []);
+  writeJSON(FILES.saved_queries, all.filter(x => !(x.org_id === org_id && x.saved_id === saved_id)));
+}
+const AI_RESPONSE_STYLES = [
+  { key:"exec", label:"Executive Summary + Action Plan" },
+  { key:"narrative", label:"Narrative Analysis" },
+  { key:"bullets", label:"Bullet Insights" },
+  { key:"technical", label:"Technical Breakdown" },
+];
+
+function pickChartsForPrompt(prompt){
+  const p = String(prompt||"").toLowerCase();
+  const charts = new Set();
+  charts.add("denial_trend");
+  charts.add("payment_trend");
+  charts.add("underpay_by_payer");
+  if (p.includes("aging") || p.includes("60") || p.includes("90") || p.includes("overdue") || p.includes("at risk")) charts.add("aging_buckets");
+  if (p.includes("negotiat")) charts.add("negotiation_success");
+  if (p.includes("patient")) charts.add("patient_balance");
+  return Array.from(charts);
+}
+
 // ===== ROUTER =====
 const server = http.createServer(async (req, res) => {
   const parsed = url.parse(req.url, true);
@@ -1851,7 +1905,7 @@ const server = http.createServer(async (req, res) => {
 
   // ---------- PUBLIC: Admin login ----------
   if (method === "GET" && pathname === "/admin/login") {
-    const html = page("Owner Login", `
+    const html = renderPage("Owner Login", `
       <h2>Owner Login</h2>
       <p class="muted">This area is for the system owner only.</p>
       <form method="POST" action="/admin/login">
@@ -1876,7 +1930,7 @@ const server = http.createServer(async (req, res) => {
 
     const aHash = adminHash();
     if (!ADMIN_EMAIL || !aHash) {
-      const html = page("Owner Login", `
+      const html = renderPage("Owner Login", `
         <h2>Owner Login</h2>
         <p class="error">Admin mode not configured. Set ADMIN_EMAIL and ADMIN_PASSWORD_PLAIN (or ADMIN_PASSWORD_HASH) in Railway.</p>
         <div class="btnRow"><a class="btn secondary" href="/admin/login">Back</a></div>
@@ -1885,7 +1939,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (email !== ADMIN_EMAIL || !bcrypt.compareSync(pass, aHash)) {
-      const html = page("Owner Login", `
+      const html = renderPage("Owner Login", `
         <h2>Owner Login</h2>
         <p class="error">Invalid owner credentials.</p>
         <div class="btnRow"><a class="btn secondary" href="/admin/login">Try again</a></div>
@@ -1901,7 +1955,7 @@ const server = http.createServer(async (req, res) => {
 
   // ---------- PUBLIC: Signup/Login/Reset ----------
   if (method === "GET" && pathname === "/signup") {
-    const html = page("Create Account", `
+    const html = renderPage("Create Account", `
       <h2>Create Account</h2>
       <p class="muted">Secure, organization-based access to an AI revenue analytics workspace.</p>
       <form method="POST" action="/signup">
@@ -1937,7 +1991,7 @@ const server = http.createServer(async (req, res) => {
     const ack = params.get("ack");
 
     if (!email || p1.length < 8 || p1 !== p2 || !orgName || !ack) {
-      const html = page("Create Account", `
+      const html = renderPage("Create Account", `
         <h2>Create Account</h2>
         <p class="error">Please complete all fields, confirm password, and accept the acknowledgement.</p>
         <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
@@ -1947,7 +2001,7 @@ const server = http.createServer(async (req, res) => {
 
     const users = readJSON(FILES.users, []);
     if (users.find(u => (u.email || "").toLowerCase() === email)) {
-      const html = page("Create Account", `
+      const html = renderPage("Create Account", `
         <h2>Create Account</h2>
         <p class="error">An account with this email already exists.</p>
         <div class="btnRow"><a class="btn" href="/login">Sign In</a></div>
@@ -1981,7 +2035,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/login") {
-    const html = page("Login", `
+    const html = renderPage("Login", `
       <h2>Sign In</h2>
       <p class="muted">Access your organization’s claim review and analytics workspace.</p>
       <form method="POST" action="/login">
@@ -2009,7 +2063,7 @@ const server = http.createServer(async (req, res) => {
 
     const user = getUserByEmail(email);
     if (!user || !bcrypt.compareSync(pass, user.password_hash)) {
-      const html = page("Login", `
+      const html = renderPage("Login", `
         <h2>Sign In</h2>
         <p class="error">The email or password you entered is incorrect.</p>
         <div class="btnRow"><a class="btn secondary" href="/login">Try again</a></div>
@@ -2031,7 +2085,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/forgot-password") {
-    const html = page("Reset Password", `
+    const html = renderPage("Reset Password", `
       <h2>Reset Password</h2>
       <p class="muted">Enter your email to generate a reset link (expires in 20 minutes). For v1, the link is shown on-screen.</p>
       <form method="POST" action="/forgot-password">
@@ -2064,7 +2118,7 @@ const server = http.createServer(async (req, res) => {
     const resetPath = `/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
     const resetLink = APP_BASE_URL ? `${APP_BASE_URL}${resetPath}` : resetPath;
 
-    const html = page("Reset Link", `
+    const html = renderPage("Reset Link", `
       <h2>Reset Link Generated</h2>
       <p class="muted">For v1, the reset link is displayed here.</p>
       <div class="btnRow">
@@ -2078,7 +2132,7 @@ const server = http.createServer(async (req, res) => {
   if (method === "GET" && pathname === "/reset-password") {
     const token = parsed.query.token || "";
     const email = (parsed.query.email || "").toLowerCase();
-    const html = page("Set New Password", `
+    const html = renderPage("Set New Password", `
       <h2>Set a New Password</h2>
       <form method="POST" action="/reset-password">
         <input type="hidden" name="email" value="${safeStr(email)}"/>
@@ -2105,7 +2159,7 @@ const server = http.createServer(async (req, res) => {
     const p2 = params.get("password2") || "";
 
     if (p1.length < 8 || p1 !== p2) {
-      const html = page("Set New Password", `
+      const html = renderPage("Set New Password", `
         <h2>Set a New Password</h2>
         <p class="error">Passwords must match and be at least 8 characters.</p>
         <div class="btnRow"><a class="btn secondary" href="/forgot-password">Try again</a></div>
@@ -2119,7 +2173,7 @@ const server = http.createServer(async (req, res) => {
 
     const u = users[idx];
     if (!u.reset_token || u.reset_token !== token || !u.reset_expires_at || Date.now() > u.reset_expires_at) {
-      const html = page("Reset Error", `
+      const html = renderPage("Reset Error", `
         <h2>Reset Link Invalid</h2>
         <p class="error">This reset link is expired or invalid.</p>
         <div class="btnRow"><a class="btn secondary" href="/forgot-password">Generate new link</a></div>
@@ -2141,7 +2195,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/suspended") {
-    return send(res, 200, page("Suspended", `
+    return send(res, 200, renderPage("Suspended", `
       <h2>Account Suspended</h2>
       <p>Your organization’s access is currently suspended.</p>
       <p class="muted">If you believe this is an error, contact support.</p>
@@ -2150,7 +2204,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/terminated") {
-    return send(res, 200, page("Terminated", `
+    return send(res, 200, renderPage("Terminated", `
       <h2>Account Terminated</h2>
       <p>This account has been terminated. Access to the workspace is no longer available.</p>
       <p class="muted">If you believe this is an error, contact support.</p>
@@ -2328,7 +2382,7 @@ const server = http.createServer(async (req, res) => {
           <td>${att}</td>
         </tr>`;
       }).join("");
-      const html = page("Admin Dashboard", `
+      const html = renderPage("Admin Dashboard", `
         <h2>Admin Dashboard</h2>
         <section>
           <div class="kpi-card"><h4>Total Organisations</h4><p>${totalOrgs}</p></div>
@@ -2389,7 +2443,7 @@ const server = http.createServer(async (req, res) => {
           <td>${att}</td>
         </tr>`;
       }).join("");
-      const html = page("Organizations", `
+      const html = renderPage("Organizations", `
         <h2>Organizations</h2>
         <form method="GET" action="/admin/orgs">
           <input type="text" name="search" placeholder="Search org name" value="${safeStr(parsed.query.search || '')}">
@@ -2447,7 +2501,7 @@ const server = http.createServer(async (req, res) => {
         return `<li class="muted small">${safeStr(usr.email)} — <a href="${safeStr(full)}">Reset Link</a></li>`;
       }).join("");
 
-      const html = page("Org Detail", `
+      const html = renderPage("Org Detail", `
         <h2>${safeStr(org.org_name)}</h2>
         <div class="row">
           <div class="col">
@@ -2604,7 +2658,7 @@ const server = http.createServer(async (req, res) => {
       const audit = readJSON(FILES.audit, []);
       const rows = audit.slice(-200).reverse().map(a => `
         <tr> <td class="muted small">${safeStr(a.at)}</td> <td>${safeStr(a.action)}</td> <td class="muted small">${safeStr(a.org_id || "")}</td> <td class="muted small">${safeStr(a.reason || "")}</td> </tr>`).join("");
-      const html = page("Audit Log", ` <h2>Audit Log</h2> <p class="muted">Latest 200 admin actions.</p> <div style="overflow:auto;"> <table>
+      const html = renderPage("Audit Log", ` <h2>Audit Log</h2> <p class="muted">Latest 200 admin actions.</p> <div style="overflow:auto;"> <table>
         <thead><tr><th>Time</th><th>Action</th><th>Org</th><th>Reason</th></tr></thead>
         <tbody>${rows}</tbody> </table> </div> `, navAdmin());
       return send(res, 200, html);
@@ -2759,9 +2813,159 @@ if (method === "GET" && pathname === "/file") {
   }
 
 
+
+  // ---------- Revenue Intelligence (AI) Query Endpoint ----------
+  if (method === "POST" && pathname === "/intelligence/query") {
+    const body = await parseBody(req);
+    let payload = {};
+    try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+
+    const prompt = String(payload.prompt || "").trim();
+    const style = String(payload.style || "exec").trim();
+    const save = String(payload.save || "") === "1";
+    const saveName = String(payload.save_name || "").trim();
+
+    if (!prompt) {
+      return send(res, 200, JSON.stringify({ ok:false, error:"Missing prompt" }), "application/json");
+    }
+
+    const denialByMonth = computeDenialTrends(org.org_id);
+    const payTrend = computePaymentTrends(org.org_id);
+
+    const denialMonths = Object.keys(denialByMonth || {}).sort();
+    const denialTotals = denialMonths.map(k => Number(denialByMonth[k]?.total || 0));
+    const draftTotals = denialMonths.map(k => Number(denialByMonth[k]?.drafts || 0));
+
+    const payMonths = Object.keys(payTrend.byMonth || {}).sort();
+    const payTotals = payMonths.map(k => Number(payTrend.byMonth[k]?.total || 0));
+
+    const r30 = rangeFromPreset("last30");
+    const dash30 = computeDashboardMetrics(org.org_id, r30.start, r30.end, "last30");
+    const payerTop = (dash30.payerTop || []).slice(0, 10);
+    const payerLabels = payerTop.map(x=>x.payer);
+    const payerUnderpaid = payerTop.map(x=>Number(x.underpaid||0));
+
+    const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+    const now = Date.now();
+    const aging = { "0-30":0, "31-60":0, "61-90":0, "90+":0 };
+    billedAll.filter(b => String(b.status||"Pending") !== "Paid").forEach(b=>{
+      const dt = new Date(b.denied_at || b.created_at || b.dos || nowISO()).getTime();
+      const days = Math.max(0, (now - dt) / (1000*60*60*24));
+      if (days > 90) aging["90+"]++;
+      else if (days > 60) aging["61-90"]++;
+      else if (days > 30) aging["31-60"]++;
+      else aging["0-30"]++;
+    });
+
+    const negs = getNegotiations(org.org_id);
+    const negApproved = negs.filter(n => n.status === "Approved (Pending Payment)" || n.status === "Payment Received");
+    const negPaid = negs.filter(n => n.status === "Payment Received");
+    const negApprovedTotal = negApproved.reduce((s,n)=> s + num(n.approved_amount), 0);
+    const negCollectedTotal = negPaid.reduce((s,n)=> s + num(n.collected_amount), 0);
+    const negSuccessRate = negApproved.length ? ((negPaid.length / negApproved.length) * 100) : 0;
+
+    const charts = (Array.isArray(payload.charts) && payload.charts.length) ? payload.charts : pickChartsForPrompt(prompt);
+
+    const analytics = computeAnalytics(org.org_id);
+
+    const styleMap = {
+      exec: "Write an executive summary and a short action plan (3-5 bullets).",
+      narrative: "Write a concise narrative analysis (2-4 short paragraphs) with practical recommendations.",
+      bullets: "Write bullet insights (8-12 bullets) with clear takeaways.",
+      technical: "Write a technical breakdown (structured sections) focusing on metrics, definitions, and what to check next."
+    };
+    const styleInstr = styleMap[style] || styleMap.exec;
+
+    let answer = "";
+    if (!process.env.OPENAI_API_KEY) {
+      answer =
+`(AI not configured: missing OPENAI_API_KEY)
+
+Snapshot:
+- Recovery rate: ${analytics.recoveryRate}%
+- Projected lost revenue: $${Number(analytics.projectedLostRevenue||0).toFixed(2)}
+- Underpaid (last 30 days): $${Number(dash30.kpis.underpaidAmt||0).toFixed(2)}
+- Aging 60+: ${Number(analytics.aging?.over60||0)}
+- Negotiation success: ${negSuccessRate.toFixed(1)}%
+
+Question:
+${prompt}
+
+Next steps:
+- Upload payments if missing and re-run this insight.
+- Review top underpaid payer and highest at-risk claims in Action Center.`;
+    } else {
+      const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+      const systemMsg = "You are TJ Healthcare Pro's Revenue Intelligence assistant. Only use the provided organization analytics and uploaded data. Be accurate, concise, and operational. Do not invent numbers. Do not provide medical advice.";
+      const context = {
+        organization: org.org_name,
+        plan: getActivePlanName(org.org_id),
+        response_style: style,
+        question: prompt,
+        analytics,
+        dashboard_last30: dash30,
+        trends: { denialMonths, denialTotals, draftTotals, payMonths, payTotals, payerLabels, payerUnderpaid, aging },
+        negotiations: { total: negs.length, approved_total: negApprovedTotal, collected_total: negCollectedTotal, success_rate: Number(negSuccessRate.toFixed(1)) }
+      };
+      const userMsg = styleInstr + "\n\nORG DATA (JSON):\n" + JSON.stringify(context, null, 2);
+
+      try {
+        const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { "Authorization": "Bearer " + process.env.OPENAI_API_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ model, messages: [ { role: "system", content: systemMsg }, { role: "user", content: userMsg } ], temperature: 0.2 })
+        });
+        const data = await resp.json();
+        answer = data?.choices?.[0]?.message?.content || "I couldn't generate an answer right now.";
+      } catch {
+        answer = "AI Assistant error. Please try again.";
+      }
+    }
+
+    const queryRec = { query_id: uuid(), org_id: org.org_id, prompt, style, charts, answer, created_at: nowISO() };
+    saveAIQuery(queryRec);
+
+    if (save) {
+      const savedRec = {
+        saved_id: uuid(),
+        org_id: org.org_id,
+        name: saveName || prompt.slice(0, 48),
+        prompt,
+        style,
+        charts,
+        created_by: user.user_id,
+        created_at: nowISO(),
+        updated_at: nowISO()
+      };
+      saveSavedQuery(savedRec);
+    }
+
+    const dataOut = {
+      denialMonths, denialTotals, draftTotals,
+      payMonths, payTotals,
+      payerLabels, payerUnderpaid,
+      agingLabels: Object.keys(aging),
+      agingCounts: Object.values(aging),
+      negotiationApprovedTotal: negApprovedTotal,
+      negotiationCollectedTotal: negCollectedTotal,
+      negotiationSuccessRate: Number(negSuccessRate.toFixed(1))
+    };
+
+    return send(res, 200, JSON.stringify({ ok:true, answer, charts, data: dataOut }), "application/json");
+  }
+
+  if (method === "POST" && pathname === "/intelligence/saved/delete") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const saved_id = (params.get("saved_id") || "").trim();
+    if (saved_id) deleteSavedQuery(org.org_id, saved_id);
+    return redirect(res, "/intelligence");
+  }
+
+
   // lock screen
   if (method === "GET" && pathname === "/lock") {
-    const html = page("Starting", `
+    const html = renderPage("Starting", `
       <h2 class="center">Free Trial Started</h2>
       <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid — and surface patterns that are easy to miss when data lives in different places.</p>
       <p class="muted center">You’ll be guided to the next step automatically.</p>
@@ -2800,7 +3004,7 @@ if (method === "GET" && pathname === "/executive") {
   const r = riskLabel(score);
   const tips = buildRecoveryStrategies(a);
 
-  const html = page("Executive Dashboard", `
+  const html = renderPage("Executive Dashboard", `
 
     <h2>Executive Dashboard</h2>
     <p class="muted">High-level denial → revenue performance for leadership review.</p>
@@ -2854,7 +3058,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
   const w = computeWeeklySummary(org.org_id);
   const proj = projectNextMonthDenials(org.org_id);
 
-  const html = page("Weekly Summary", `
+  const html = renderPage("Weekly Summary", `
     <h2>Weekly Denial Performance Summary</h2>
     <p class="muted">Last 7 days. Use this for quick leadership updates.</p>
 
@@ -2951,7 +3155,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </tr>
     `).join("");
 
-    const html = page("Revenue Overview", `
+    const html = renderPage("Revenue Overview", `
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
           <h2 style="margin-bottom:4px;">Revenue Overview</h2>
@@ -3369,7 +3573,7 @@ if (method === "GET" && pathname === "/claims") {
     </div>
   `;
 
-  const html = page("Claims Lifecycle", `
+  const html = renderPage("Claims Lifecycle", `
     <h2>Claims Lifecycle</h2>
     <p class="muted">Upload billed claims, payments, denials, and negotiations — then manage claim status and follow-up in one flow.</p>
 
@@ -3485,208 +3689,295 @@ if (method === "GET" && pathname === "/claims") {
 // REVENUE INTELLIGENCE (AI)
 // ==============================
 if (method === "GET" && pathname === "/intelligence") {
-  const a = computeAnalytics(org.org_id);
-  const denialByMonth = computeDenialTrends(org.org_id);
-  const payTrend = computePaymentTrends(org.org_id);
 
-  // negotiation metrics
-  const negs = getNegotiations(org.org_id);
-  const negApproved = negs.filter(n => n.status === "Approved (Pending Payment)" || n.status === "Payment Received");
-  const negPaid = negs.filter(n => n.status === "Payment Received");
-  const negApprovedTotal = negApproved.reduce((s,n)=> s + num(n.approved_amount), 0);
-  const negCollectedTotal = negPaid.reduce((s,n)=> s + num(n.collected_amount), 0);
-  const negSuccessRate = negApproved.length ? ((negPaid.length / negApproved.length) * 100).toFixed(1) : "0.0";
+  const saved = getSavedQueries(org.org_id)
+    .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime())
+    .slice(0, 12);
 
-  // Build chart-friendly arrays
-  const denialMonths = Object.keys(denialByMonth || {}).sort();
-  const denialTotals = denialMonths.map(k => Number(denialByMonth[k]?.total || 0));
-  const draftTotals = denialMonths.map(k => Number(denialByMonth[k]?.drafts || 0));
+  const recent = getAIQueries(org.org_id)
+    .sort((a,b)=> new Date(b.created_at||0).getTime() - new Date(a.created_at||0).getTime())
+    .slice(0, 12);
 
-  const payMonths = Object.keys(payTrend.byMonth || {}).sort();
-  const payTotals = payMonths.map(k => Number(payTrend.byMonth[k]?.total || 0));
+  const styleDefault = String(parsed.query.style || "exec").trim();
+  const runBrief = (String(parsed.query.brief || "1") === "1");
+  const defaultPrompt = "Monthly Revenue Briefing: summarize denials, underpayments, aging, and negotiation performance. Provide next best actions.";
 
-  // Use last 30d payerTop from dashboard metrics for quick underpay visualization
-  const r = rangeFromPreset("last30");
-  const m = computeDashboardMetrics(org.org_id, r.start, r.end, "last30");
-  const payerTop = (m.payerTop || []).slice(0, 8);
+  const starterPrompts = [
+    "Why did my denial rate change last month?",
+    "Show underpayments by payer for the last 90 days and what to do next.",
+    "Which claims are highest at risk and should be worked first?",
+    "How is negotiation performance trending and which payers respond best?"
+  ];
 
-  const payload = {
-    denialMonths, denialTotals, draftTotals,
-    payMonths, payTotals,
-    payerLabels: payerTop.map(x=>x.payer),
-    payerUnderpaid: payerTop.map(x=>Number(x.underpaid||0))
-  };
-  const b64 = Buffer.from(JSON.stringify(payload)).toString("base64");
+  const styleOptions = AI_RESPONSE_STYLES.map(s=>`<option value="${safeStr(s.key)}"${styleDefault===s.key?" selected":""}>${safeStr(s.label)}</option>`).join("");
 
-  // ===== AI Insights Panel (rule-based v1; replaces with model later) =====
-  const insights = [];
-  try {
-    const last2 = denialMonths.slice(-2);
-    if (last2.length === 2) {
-      const prev = Number(denialByMonth[last2[0]]?.total||0);
-      const cur = Number(denialByMonth[last2[1]]?.total||0);
-      if (prev > 0) {
-        const pct = ((cur - prev) / prev) * 100;
-        if (Math.abs(pct) >= 10) insights.push(`Denials changed by ${pct.toFixed(0)}% vs last month (${cur} vs ${prev}).`);
-      }
-    }
-    if (Number(a.aging?.over60||0) > 0) insights.push(`${a.aging.over60} items are 60+ days old. Prioritize follow-up this week.`);
-    if (Number(m.kpis.underpaidAmt||0) > 0) {
-      const top = payerTop.sort((x,y)=>Number(y.underpaid||0)-Number(x.underpaid||0))[0];
-      if (top && Number(top.underpaid||0) > 0) insights.push(`Top underpayment payer in last 30 days: ${top.payer} ($${Number(top.underpaid).toFixed(0)}).`);
-    }
-    if (negs.length) {
-      insights.push(`Negotiations: ${negs.length} total · ${negPaid.length} paid · Success ${negSuccessRate}%.`);
-    } else {
-      insights.push("No negotiation cases yet. Underpaid items can be routed to negotiation for tracking.");
-    }
-  } catch {
-    // ignore
-  }
-  if (!insights.length) insights.push("Upload claims and payments to generate AI insights.");
+  const infoBox = `
+    <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#fff;">
+      <strong>What this page does</strong>
+      <div class="muted" style="margin-top:6px;">
+        Ask questions about denials, underpayments, aging, negotiations, and payer performance. The AI generates an answer in the style you select,
+        and the platform automatically renders charts using your live uploaded data.
+      </div>
+      <div class="muted small" style="margin-top:8px;">
+        <span class="tooltip">ⓘ<span class="tooltiptext">Charts are always system-generated from your uploaded claims/payments. AI does not invent numbers.</span></span>
+        <span style="margin-left:10px;" class="tooltip">ⓘ<span class="tooltiptext">Saved Insights are shared across your organization.</span></span>
+      </div>
+    </div>
+  `;
 
-  const html = page("Revenue Intelligence (AI)", `
+  const savedHtml = saved.length ? `
+    <div style="overflow:auto;">
+      <table>
+        <thead><tr><th>Saved Insight</th><th>Style</th><th>Run</th><th></th></tr></thead>
+        <tbody>
+          ${saved.map(s=>`
+            <tr>
+              <td>${safeStr(s.name || s.prompt || "")}</td>
+              <td class="muted small">${safeStr((AI_RESPONSE_STYLES.find(x=>x.key===s.style)||{}).label || s.style)}</td>
+              <td><button class="btn secondary small" type="button" onclick="window.__tjhpRunSaved('${safeStr(s.saved_id)}')">Run</button></td>
+              <td>
+                <form method="POST" action="/intelligence/saved/delete" onsubmit="return confirm('Delete this saved insight?');" style="display:inline;">
+                  <input type="hidden" name="saved_id" value="${safeStr(s.saved_id)}"/>
+                  <button class="btn danger small" type="submit">Delete</button>
+                </form>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  ` : `<p class="muted">No saved insights yet.</p>`;
+
+  const recentHtml = recent.length ? `
+    <ul class="muted">
+      ${recent.map(r=>`<li><a href="javascript:void(0)" onclick="window.__tjhpRunPrompt(${JSON.stringify(r.prompt)}, ${JSON.stringify(r.style||"exec")}, ${JSON.stringify(r.charts||[])} )">${safeStr(r.prompt)}</a> <span class="muted small">(${new Date(r.created_at).toLocaleDateString()})</span></li>`).join("")}
+    </ul>
+  ` : `<p class="muted">No recent questions yet.</p>`;
+
+  const html = renderPage("Revenue Intelligence (AI)", `
     <h2>Revenue Intelligence (AI)</h2>
-    <p class="muted">Deeper analytics and decision support. This differs from Revenue Overview by focusing on trends and recommended next steps.</p>
+    ${infoBox}
 
     <div class="hr"></div>
 
-    <h3>AI Insights</h3>
-    <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#fff;">
-      <ul class="muted" style="margin:0;padding-left:18px;">
-        ${insights.map(x=>`<li>${safeStr(x)}</li>`).join("")}
-      </ul>
+    <div class="row">
+      <div class="col">
+        <h3>Saved Insights</h3>
+        ${savedHtml}
+      </div>
+      <div class="col">
+        <h3>Starter Prompts</h3>
+        <div class="muted small">Click a prompt to auto-fill.</div>
+        <ul class="muted">
+          ${starterPrompts.map(p=>`<li><a href="javascript:void(0)" onclick="window.__tjhpFillPrompt(${JSON.stringify(p)})">${safeStr(p)}</a></li>`).join("")}
+        </ul>
+
+        <div class="hr"></div>
+
+        <h3>Recent Questions</h3>
+        ${recentHtml}
+      </div>
+    </div>
+
+    <div class="hr"></div>
+
+    <h3>Ask AI about your revenue data</h3>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <div style="flex:1;min-width:260px;">
+        <label>Prompt</label>
+        <textarea id="riPrompt" placeholder="Ask a question about denials, underpayments, aging, negotiations..." style="min-height:90px;"></textarea>
+      </div>
+
+      <div style="min-width:260px;">
+        <label>Response Style</label>
+        <select id="riStyle">${styleOptions}</select>
+        <div class="muted small" style="margin-top:6px;">Charts always render below regardless of style.</div>
+      </div>
+    </div>
+
+    <div class="btnRow">
+      <button class="btn secondary" type="button" onclick="window.__tjhpRunPrompt()">Generate Insight</button>
+      <button class="btn secondary" type="button" onclick="window.__tjhpRunBriefing()">Run Monthly Briefing</button>
+    </div>
+
+    <div class="hr"></div>
+
+    <div id="riResultBox" style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#fff;display:none;">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;">
+        <strong>AI Result</strong>
+        <div class="muted small" id="riRefreshed"></div>
+      </div>
+      <div class="hr"></div>
+      <div id="riAnswer" style="white-space:pre-wrap;"></div>
 
       <div class="hr"></div>
 
-      <div>
-        <label>Ask AI about your revenue data</label>
-        <textarea id="aiMainQ" placeholder="Example: Which payer has the most underpayments? What should we prioritize this week?" style="min-height:90px;"></textarea>
-        <div class="btnRow">
-          <button class="btn secondary" type="button" onclick="window.__tjhpSendMainAI()">Ask AI</button>
-          <a class="btn secondary" href="/account">View AI Limits</a>
+      <h3 style="margin-top:0;">Charts</h3>
+      <div id="riCharts"></div>
+
+      <div class="hr"></div>
+
+      <h3>Save this insight</h3>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+        <div style="min-width:260px;flex:1;">
+          <label>Name (optional)</label>
+          <input id="riSaveName" placeholder="e.g., Monthly denial review" />
         </div>
-        <div id="aiMainA" class="muted" style="margin-top:10px;white-space:pre-wrap;"></div>
+        <button class="btn" type="button" onclick="window.__tjhpSaveCurrent()">Save</button>
       </div>
+
+      <div class="muted small" id="riSaveMsg" style="margin-top:8px;"></div>
     </div>
 
     <script>
-    window.__tjhpSendMainAI = async function(){
-      const q = document.getElementById("aiMainQ");
-      const out = document.getElementById("aiMainA");
-      if (!q || !out) return;
-      const text = (q.value||"").trim();
-      if (!text) return;
-      out.textContent = "Thinking...";
-      try{
-        const r = await fetch("/ai/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message:text }) });
-        const data = await r.json();
-        out.textContent = (data && data.answer) ? data.answer : "No response.";
-      }catch(e){
-        out.textContent = "Error contacting assistant. Try again.";
+      window.__tjhpLastRI = { prompt:"", style:"exec", charts:[], answer:"", data:null };
+
+      window.__tjhpFillPrompt = function(p){
+        const el = document.getElementById("riPrompt");
+        if (el) el.value = p;
+        el && el.focus();
+      };
+
+      window.__tjhpRunBriefing = function(){
+        window.__tjhpRunPrompt(${json.dumps(defaultPrompt)}, "exec", []);
+      };
+
+      window.__tjhpRunSaved = function(savedId){
+        const saved = ${json.dumps(saved)};
+        const s = saved.find(x => x.saved_id === savedId);
+        if (!s) return;
+        window.__tjhpRunPrompt(s.prompt, s.style || "exec", s.charts || []);
+      };
+
+      function __riMakeCanvas(id, title){
+        const wrap = document.createElement("div");
+        wrap.style.margin = "14px 0";
+        const h = document.createElement("div");
+        h.style.fontWeight = "800";
+        h.style.marginBottom = "6px";
+        h.textContent = title;
+        const c = document.createElement("canvas");
+        c.id = id;
+        c.height = 140;
+        wrap.appendChild(h);
+        wrap.appendChild(c);
+        return { wrap, canvas: c };
       }
-    };
-    </script>
 
-    <div class="hr"></div>
+      function __riRenderCharts(charts, data){
+        const box = document.getElementById("riCharts");
+        box.innerHTML = "";
+        if (!window.Chart || !data) {
+          box.innerHTML = "<p class='muted'>Charts unavailable.</p>";
+          return;
+        }
 
-    <div class="row">
-      <div class="col">
-        <div class="kpi-card"><h4>Recovered from Denials</h4><p>$${Number(a.totalRecoveredFromDenials||0).toFixed(2)}</p></div>
-        <div class="kpi-card"><h4>Recovery Rate</h4><p>${safeStr(a.recoveryRate)}%</p></div>
-      </div>
-      <div class="col">
-        <div class="kpi-card"><h4>Projected Lost Revenue</h4><p>$${Number(a.projectedLostRevenue||0).toFixed(2)}</p></div>
-        <div class="kpi-card"><h4>Aging (60+ / 90+)</h4><p>${Number(a.aging?.over60||0)} / ${Number(a.aging?.over90||0)}</p></div>
-      </div>
-      <div class="col">
-        <div class="kpi-card"><h4>Negotiation Approved</h4><p>$${Number(negApprovedTotal||0).toFixed(2)}</p></div>
-        <div class="kpi-card"><h4>Negotiation Collected</h4><p>$${Number(negCollectedTotal||0).toFixed(2)}</p></div>
-        <div class="kpi-card"><h4>Negotiation Success</h4><p>${negSuccessRate}%</p></div>
-      </div>
-    </div>
-
-    <div class="hr"></div>
-
-    <div class="row">
-      <div class="col">
-        <h3>Denial Trend</h3>
-        <canvas id="denialTrend" height="140"></canvas>
-      </div>
-      <div class="col">
-        <h3>Payment Trend</h3>
-        <canvas id="paymentTrend" height="140"></canvas>
-      </div>
-    </div>
-
-    <div class="hr"></div>
-
-    <h3>Underpayment by Payer (Last 30 Days)</h3>
-    <canvas id="underpayChart" height="160"></canvas>
-
-    <div class="hr"></div>
-
-    <h3>Top Denial Categories</h3>
-    <ul class="muted">
-      ${
-        Object.entries(a.denialReasons || {})
-          .sort((x,y)=>y[1]-x[1])
-          .slice(0,6)
-          .map(([k,v])=>`<li>${safeStr(k)} (${v})</li>`)
-          .join("") || "<li>No denial category data available yet.</li>"
-      }
-    </ul>
-
-    <script>
-    (function(){
-      if (!window.Chart) return;
-      const data = JSON.parse(atob("${b64}"));
-
-      const denEl = document.getElementById("denialTrend");
-      if (data.denialMonths && data.denialMonths.length){
-        new Chart(denEl, {
-          type:"line",
-          data:{ labels:data.denialMonths, datasets:[
-            { label:"Denials", data:data.denialTotals },
-            { label:"Drafts Generated", data:data.draftTotals }
-          ]},
-          options:{ responsive:true }
+        charts.forEach((ch, idx) => {
+          if (ch === "denial_trend") {
+            const {wrap, canvas} = __riMakeCanvas("riDenial"+idx, "Denial Trend");
+            box.appendChild(wrap);
+            new Chart(canvas, { type:"line", data:{ labels:data.denialMonths, datasets:[
+              { label:"Denials", data:data.denialTotals },
+              { label:"Drafts", data:data.draftTotals }
+            ]}, options:{ responsive:true } });
+          }
+          if (ch === "payment_trend") {
+            const {wrap, canvas} = __riMakeCanvas("riPay"+idx, "Payment Trend");
+            box.appendChild(wrap);
+            new Chart(canvas, { type:"bar", data:{ labels:data.payMonths, datasets:[
+              { label:"Payments ($)", data:data.payTotals }
+            ]}, options:{ responsive:true } });
+          }
+          if (ch === "underpay_by_payer") {
+            const {wrap, canvas} = __riMakeCanvas("riUnderpay"+idx, "Underpayment by Payer (Last 30 Days)");
+            box.appendChild(wrap);
+            new Chart(canvas, { type:"bar", data:{ labels:data.payerLabels, datasets:[
+              { label:"Underpaid ($)", data:data.payerUnderpaid }
+            ]}, options:{ responsive:true } });
+          }
+          if (ch === "aging_buckets") {
+            const {wrap, canvas} = __riMakeCanvas("riAging"+idx, "Aging Buckets (Unpaid)");
+            box.appendChild(wrap);
+            new Chart(canvas, { type:"bar", data:{ labels:data.agingLabels, datasets:[
+              { label:"Claims", data:data.agingCounts }
+            ]}, options:{ responsive:true } });
+          }
+          if (ch === "negotiation_success") {
+            const {wrap, canvas} = __riMakeCanvas("riNeg"+idx, "Negotiation Performance");
+            box.appendChild(wrap);
+            new Chart(canvas, { type:"bar", data:{ labels:["Approved","Collected"], datasets:[
+              { label:"$", data:[data.negotiationApprovedTotal, data.negotiationCollectedTotal] }
+            ]}, options:{ responsive:true } });
+            const p = document.createElement("div");
+            p.className = "muted small";
+            p.style.marginTop = "6px";
+            p.textContent = "Success rate: " + (data.negotiationSuccessRate || 0) + "%";
+            wrap.appendChild(p);
+          }
         });
-      } else {
-        denEl.outerHTML = "<p class='muted'>No denial trend data.</p>";
+
+        if (!charts.length) box.innerHTML = "<p class='muted'>No charts selected.</p>";
       }
 
-      const payEl = document.getElementById("paymentTrend");
-      if (data.payMonths && data.payMonths.length){
-        new Chart(payEl, {
-          type:"bar",
-          data:{ labels:data.payMonths, datasets:[
-            { label:"Payments ($)", data:data.payTotals }
-          ]},
-          options:{ responsive:true }
-        });
-      } else {
-        payEl.outerHTML = "<p class='muted'>No payment trend data.</p>";
-      }
+      window.__tjhpRunPrompt = async function(p, s, charts){
+        const promptEl = document.getElementById("riPrompt");
+        const styleEl = document.getElementById("riStyle");
+        const resultBox = document.getElementById("riResultBox");
+        const ansEl = document.getElementById("riAnswer");
+        const refEl = document.getElementById("riRefreshed");
+        const saveMsg = document.getElementById("riSaveMsg");
 
-      const upEl = document.getElementById("underpayChart");
-      if (data.payerLabels && data.payerLabels.length && (data.payerUnderpaid||[]).some(v=>Number(v)>0)){
-        new Chart(upEl, {
-          type:"bar",
-          data:{ labels:data.payerLabels, datasets:[
-            { label:"Underpaid ($)", data:data.payerUnderpaid }
-          ]},
-          options:{ responsive:true }
-        });
-      } else {
-        upEl.outerHTML = "<p class='muted'>No underpayment data yet (upload payments and allowed/expected fields).</p>";
+        const prompt = (typeof p === "string" && p.length) ? p : (promptEl ? (promptEl.value||"").trim() : "");
+        const style = (typeof s === "string" && s.length) ? s : (styleEl ? styleEl.value : "exec");
+
+        if (!prompt) return;
+
+        saveMsg.textContent = "";
+        ansEl.textContent = "Thinking...";
+        resultBox.style.display = "block";
+        refEl.textContent = "";
+
+        try{
+          const r = await fetch("/intelligence/query", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ prompt, style, charts: charts || [] }) });
+          const data = await r.json();
+          if (!data || !data.ok) { ansEl.textContent = (data && data.error) ? data.error : "No response."; return; }
+
+          window.__tjhpLastRI = { prompt, style, charts: data.charts || [], answer: data.answer || "", data: data.data || null };
+
+          ansEl.textContent = data.answer || "";
+          refEl.textContent = "Refreshed: " + new Date().toLocaleString();
+          __riRenderCharts(data.charts || [], data.data || null);
+        }catch(e){
+          ansEl.textContent = "Error contacting assistant. Try again.";
+        }
+      };
+
+      window.__tjhpSaveCurrent = async function(){
+        const nameEl = document.getElementById("riSaveName");
+        const saveMsg = document.getElementById("riSaveMsg");
+        const cur = window.__tjhpLastRI;
+        if (!cur || !cur.prompt) return;
+        saveMsg.textContent = "Saving...";
+
+        try{
+          const r = await fetch("/intelligence/query", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ prompt: cur.prompt, style: cur.style, charts: cur.charts, save:"1", save_name: (nameEl ? nameEl.value : "") }) });
+          const data = await r.json();
+          saveMsg.textContent = (data && data.ok) ? "Saved. Refresh to see it under Saved Insights." : "Could not save.";
+        }catch(e){
+          saveMsg.textContent = "Could not save.";
+        }
+      };
+
+      if (${str(runBrief).lower()}) {
+        setTimeout(()=>window.__tjhpRunBriefing(), 350);
       }
-    })();
     </script>
   `, navUser(), {showChat:true});
 
   return send(res, 200, html);
 }
+
 // ==============================
 // ACTION CENTER (NEW)
 // ==============================
@@ -3798,7 +4089,7 @@ if (method === "GET" && pathname === "/actions") {
 
   const nav = buildPageNav("/actions", { ...parsed.query, pageSize: String(pageSize) }, page, totalPages);
 
-  const html = page("Action Center", `
+  const html = renderPage("Action Center", `
     <h2>Action Center</h2>
     <p class="muted">Filtered, sortable queue of open items — designed for daily follow-up.</p>
 
@@ -3908,7 +4199,7 @@ if (method === "GET" && pathname === "/upload-payments") {
     .sort((a,b) => new Date(b.latest).getTime() - new Date(a.latest).getTime())
     .slice(0, 12);
 
-  const html = page("Upload Payments", `
+  const html = renderPage("Upload Payments", `
     <h2>Upload Payments</h2>
     <p class="muted">Upload bulk payment files (CSV preferred). This powers analytics and claim reconciliation.</p>
     <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
@@ -3979,7 +4270,7 @@ if (method === "GET" && pathname === "/upload-denials") {
   allCasesForStatus.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
   const recentCases = allCasesForStatus.slice(0, 10);
 
-  const html = page("Upload Denials", `
+  const html = renderPage("Upload Denials", `
     <h2>Upload Denials</h2>
     <p class="muted">Upload denial documents to generate appeal drafts. Each document becomes its own case.</p>
 
@@ -4085,7 +4376,7 @@ if (method === "GET" && pathname === "/upload-negotiations") {
 
   const options = underpaidClaims.map(b => `<option value="${safeStr(b.billed_id)}">${safeStr(b.claim_number)} — ${safeStr(b.payer||"")}</option>`).join("");
 
-  const html = page("Upload Negotiations", `
+  const html = renderPage("Upload Negotiations", `
     <h2>Negotiations</h2>
     <p class="muted">Create and manage negotiation cases. All negotiation links route to the negotiation detail page.</p>
 
@@ -4206,7 +4497,7 @@ if (method === "GET" && pathname === "/negotiation-detail") {
 
   const applyHelp = `When a negotiation is approved, you can track approved vs collected. You may apply collected funds to the claim (manual control) even if approval differs from payment timing.`;
 
-  const html = page("Negotiation Detail", `
+  const html = renderPage("Negotiation Detail", `
     <h2>Negotiation Detail</h2>
     <p class="muted">${safeStr(applyHelp)}</p>
 
@@ -4443,7 +4734,7 @@ if (method === "POST" && pathname === "/negotiations/upload") {
           `;
         }).join("");
 
-      const html = page("Billed Claims Upload", `
+      const html = renderPage("Billed Claims Upload", `
         <h2>Billed Claims Upload</h2>
         <p class="muted">Upload a billed claims CSV from your EMR/EHR. Each upload becomes a submission batch you can manage.</p>
 
@@ -4746,7 +5037,7 @@ const statusCell = (() => {
       </tr>`;
     }).join("");
 
-    const html = page("Billed Submission", `
+    const html = renderPage("Billed Submission", `
       <h2>Billed Claims Submission</h2>
       <p class="muted"><strong>File:</strong> ${safeStr(sub.original_filename || "billed_upload")} · <strong>Uploaded:</strong> ${sub.uploaded_at ? new Date(sub.uploaded_at).toLocaleString() : "—"} · <strong>Total claims:</strong> ${allInSub.length}</p>
 
@@ -4897,7 +5188,7 @@ const statusCell = (() => {
     const isCSV = nameLower.endsWith(".csv");
     const isXLS = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx");
     if (!isCSV && !isXLS) {
-      const html = page("Billed Claims Upload", `
+      const html = renderPage("Billed Claims Upload", `
         <h2>Billed Claims Upload</h2>
         <p class="error">Only CSV or Excel files are allowed.</p>
         <div class="btnRow"><a class="btn secondary" href="/billed">Back</a></div>
@@ -4978,7 +5269,7 @@ const statusCell = (() => {
       }
     }
 
-    const html = page("Billed Claims Upload", `
+    const html = renderPage("Billed Claims Upload", `
       <h2>Billed Claims File Received</h2>
       <p class="muted">Your billed claims file was uploaded successfully.</p>
       <ul class="muted">
@@ -5551,7 +5842,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     // limit: pilot cases
     const can = pilotCanCreateCase(org.org_id);
     if (!can.ok) {
-      const html = page("Limit", `
+      const html = renderPage("Limit", `
         <h2>Limit Reached</h2>
         <p class="error">${safeStr(can.reason)}</p>
         <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
@@ -5571,7 +5862,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     const maxFiles = limits.max_files_per_case;
     if (!files.length) return redirect(res, "/upload-denials");
     if (files.length > maxFiles) {
-      const html = page("Upload", `
+      const html = renderPage("Upload", `
         <h2>Upload</h2>
         <p class="error">Please upload no more than ${maxFiles} files per case.</p>
         <div class="btnRow"><a class="btn secondary" href="/upload">Back</a></div>
@@ -5582,7 +5873,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     const maxBytes = limits.max_file_size_mb * 1024 * 1024;
     for (const f of files) {
       if (f.buffer.length > maxBytes) {
-        const html = page("Upload", `
+        const html = renderPage("Upload", `
           <h2>Upload</h2>
           <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
           <div class="btnRow"><a class="btn secondary" href="/upload">Back</a></div>
@@ -5677,7 +5968,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
       return redirect(res, "/upload-denials?submitted=1");
 }
     // If no cases were created (limit reached), show limit message
-    const html = page("Limit", `
+    const html = renderPage("Limit", `
       <h2>Limit Reached</h2>
       <p class="error">${safeStr(limitReason || "Case limit reached")}</p>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
@@ -5718,7 +6009,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
       ? `<span class="badge warn">Queued</span><p class="muted small">Waiting for capacity (rate/concurrency limits).</p>`
       : `<span class="badge warn">Analyzing</span><p class="muted small">Draft typically prepared within minutes.</p>`;
 
-    const html = page("Status", `
+    const html = renderPage("Status", `
       <h2>Review in Progress</h2>
       <p class="muted">Our AI agent is analyzing your uploaded documents and preparing a draft. This is decision support only.</p>
       ${badge}
@@ -5741,7 +6032,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     // If LMN empty, seed template
     if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
-    const html = page("Appeal Packet Builder", `
+    const html = renderPage("Appeal Packet Builder", `
       <h2>${safeStr(((c.case_type||"").toLowerCase()==="underpayment") ? "Underpayment Negotiation Packet (De‑Identified)" : "Appeal Packet Builder (De‑Identified)")}</h2>
       <p class="muted">Build a complete appeal packet without storing patient identifiers. Do not upload or enter patient name, DOB, or member ID.</p>
       <div class="badge warn">DE‑IDENTIFIED MODE · No PHI · Human review required</div>
@@ -6024,7 +6315,7 @@ if (method === "POST" && pathname === "/draft-template") {
     normalizeAppealPacket(c, org.org_name);
 
     if (!c.appeal_packet.deid_confirmed) {
-      const html = page("Appeal Packet", `
+      const html = renderPage("Appeal Packet", `
         <h2>De‑Identified Confirmation Required</h2>
         <p class="error">Please confirm this case is de‑identified before compiling the packet.</p>
         <div class="btnRow"><a class="btn" href="/draft?case_id=${encodeURIComponent(case_id)}">Back</a></div>
@@ -6067,7 +6358,7 @@ if (method === "POST" && pathname === "/draft-template") {
 
     if (fmt === "pdf") {
       // Printable HTML (user can Save as PDF in browser)
-      const htmlPrint = page("Appeal Packet (Printable)", `
+      const htmlPrint = renderPage("Appeal Packet (Printable)", `
         <h2>Appeal Packet (Printable)</h2>
         <p class="muted">Use your browser to Print → Save as PDF.</p>
         <div class="btnRow"><button class="btn secondary" onclick="window.print()">Print / Save as PDF</button></div>
@@ -6248,7 +6539,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       detailRows += `<tr><td>${safeStr(p.claim_number || p.claimNumber || '')}</td><td>${safeStr((p.payer || 'Unknown').trim() || 'Unknown')}</td><td>$${Number(p.amount_paid || p.amountPaid || 0).toFixed(2)}</td><td>${dateStr}</td><td>${deniedFlag}</td></tr>`;
     });
     const detailTable = detailRows ? `<table><thead><tr><th>Claim Number</th><th>Payer</th><th>Amount Paid</th><th>Payment Date</th><th>Denied?</th></tr></thead><tbody>${detailRows}</tbody></table>` : `<p class='muted'>No payments found.</p>`;
-    const html = page("Payment Details", `
+    const html = renderPage("Payment Details", `
       <h2>Payment Details</h2>
       <form method="GET" action="/payments/list" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
         <div style="display:flex;flex-direction:column;">
@@ -6327,7 +6618,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
     const isDOC = nameLower.endsWith(".doc") || nameLower.endsWith(".docx");
 
     if (!isCSV && !isXLS && !isPDF && !isDOC) {
-      const html = page("Revenue Management", `
+      const html = renderPage("Revenue Management", `
         <h2>Revenue Management</h2>
         <p class="error">Allowed file types: CSV, Excel (.xls/.xlsx), PDF, Word (.doc/.docx).</p>
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
@@ -6339,7 +6630,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
     const limits = getLimitProfile(org.org_id);
     const maxBytes = limits.max_file_size_mb * 1024 * 1024;
     if (f.buffer.length > maxBytes) {
-      const html = page("Revenue Management", `
+      const html = renderPage("Revenue Management", `
         <h2>Revenue Management</h2>
         <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
@@ -6494,7 +6785,7 @@ rowsAdded = toUse;
       rowsAdded = 0;
     }
 
-    const html = page("Revenue Management", `
+    const html = renderPage("Revenue Management", `
       <h2>Payment File Received</h2>
       <p class="muted">Your file was uploaded successfully.</p>
       <ul class="muted">
@@ -6523,7 +6814,7 @@ rowsAdded = toUse;
     const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Free Trial" : "Expired");
     const planEnds = (sub && sub.status === "active") ? "—" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "—");
 
-    const html = page("Account", `
+    const html = renderPage("Account", `
       <h2>Account</h2>
       <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
       <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
@@ -6572,7 +6863,7 @@ rowsAdded = toUse;
     const p2 = params.get("new_password2") || "";
 
     if (p1.length < 8 || p1 !== p2) {
-      const html = page("Account", `
+      const html = renderPage("Account", `
         <h2>Account</h2>
         <p class="error">New passwords must match and be at least 8 characters.</p>
         <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
@@ -6585,7 +6876,7 @@ rowsAdded = toUse;
     if (uidx < 0) return redirect(res, "/logout");
 
     if (!bcrypt.compareSync(current, users[uidx].password_hash)) {
-      const html = page("Account", `
+      const html = renderPage("Account", `
         <h2>Account</h2>
         <p class="error">Current password is incorrect.</p>
         <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
@@ -6597,7 +6888,7 @@ rowsAdded = toUse;
     writeJSON(FILES.users, users);
     auditLog({ actor:"user", action:"change_password", org_id: org.org_id, user_id: user.user_id });
 
-    const html = page("Account", `
+    const html = renderPage("Account", `
       <h2>Account</h2>
       <p class="muted">Password updated successfully.</p>
       <div class="btnRow"><a class="btn" href="/dashboard">Back to Dashboard</a></div>
@@ -6647,7 +6938,7 @@ rowsAdded = toUse;
 
 // exports hub
   if (method === "GET" && pathname === "/exports") {
-    const html = page("Exports", `
+    const html = renderPage("Exports", `
       <h2>Exports</h2>
       <p class="muted">Download exports for leadership and operations review.</p>
       <div class="btnRow">
@@ -6709,7 +7000,7 @@ rowsAdded = toUse;
 
     // If no date range chosen yet, show generator form
     if (!start || !end) {
-      const html = page("Reports", `
+      const html = renderPage("Reports", `
         <h2>Generate Report</h2>
         <p class="muted">Choose a date range and report type. Reports are based only on data uploaded into the app.</p>
 
@@ -6944,7 +7235,7 @@ else if (type === "payers") {
       </div>
     `;
 
-    const html = page("Report", body, navUser(), {showChat:true});
+    const html = renderPage("Report", body, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -6953,7 +7244,7 @@ else if (type === "payers") {
     const pilotEnd = getPilot(org.org_id) || ensurePilot(org.org_id);
     if (new Date(pilotEnd.ends_at).getTime() < Date.now() && pilotEnd.status !== "complete") markPilotComplete(org.org_id);
     const p2 = getPilot(org.org_id);
-    const html = page("Free Trial Complete", `
+    const html = renderPage("Free Trial Complete", `
       <h2>Free Trial Complete</h2>
       <p>Your free trial has ended. Existing work remains available during the retention period.</p>
       <div class="hr"></div>
@@ -7039,7 +7330,7 @@ else if (type === "payers") {
         <td><a href="/billed?submission_id=${encodeURIComponent(c.submission_id || "")}">${safeStr(c.submission_id || "View Batch")}</a></td>
       </tr>`;
     }).join("");
-    const html = page(`${safeStr(payer)} Claims`, `
+    const html = renderPage(`${safeStr(payer)} Claims`, `
       <h2>${safeStr(payer)} Claims</h2>
       <form method="GET" action="/payer-claims">
         <input type="hidden" name="payer" value="${safeStr(payer)}"/>
@@ -7107,7 +7398,7 @@ else if (type === "payers") {
     else if (denialRate > 15 || recoveryRate < 50) grade = "C";
     else if (denialRate > 10 || recoveryRate < 60) grade = "B";
     const underpayPercent = totalExpected > 0 ? ((totalExpected - totalPaid) / totalExpected * 100) : 0;
-    const html = page(`AI Payer Intelligence: ${safeStr(payer)}`, `
+    const html = renderPage(`AI Payer Intelligence: ${safeStr(payer)}`, `
       <h2>AI Payer Intelligence: ${safeStr(payer)}</h2>
       <p><strong>Total Claims:</strong> ${claims.length}</p>
       <p><strong>Denial Rate:</strong> ${denialRate.toFixed(1)}%</p>
@@ -7243,7 +7534,7 @@ const negHistoryHtml = negHistory.length
       </table>
     `;
 
-  const html = page("Claim Detail", `
+  const html = renderPage("Claim Detail", `
     <h2>Claim Detail</h2>
     <div class="hr"></div>
     <table>
