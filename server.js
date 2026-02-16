@@ -264,7 +264,7 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .alert{background:#ffeded;border:1px solid #ffb0b0;padding:10px;margin:5px 0;border-radius:6px;font-size:13px;}
 .attention{background-color:#fff8e1;}
 
-/* Dropâ€‘zone styling */
+/* Drop‑zone styling */
 .dropzone{display:flex;align-items:center;justify-content:center;border:2px dashed var(--border);border-radius:8px;height:150px;cursor:pointer;background:#fafafa;color:var(--muted);margin-bottom:10px;transition:background 0.2s ease;}
 .dropzone.dragover{background:#e5e7eb;}
 
@@ -378,7 +378,7 @@ window.__tjhpSendChat = async function(){
     <div class="card">
       ${content}
       <div class="footer">
-        No EMR access Â· No payer portal access Â· No automated submissions Â· Human review required before use.
+        No EMR access · No payer portal access · No automated submissions · Human review required before use.
       </div>
     </div>
   </div>
@@ -954,9 +954,9 @@ ${orgName || "[Organization Billing Team]"}
   };
 }
 
-// ===== Appeal Packet Builder (Deâ€‘Identified / Nonâ€‘PHI mode) =====
+// ===== Appeal Packet Builder (De‑Identified / Non‑PHI mode) =====
 // NOTE: Do NOT store patient identifiers (name, DOB, member ID). Use placeholders.
-// Attachments should be deâ€‘identified only. Files are stored temporarily and auto-deleted.
+// Attachments should be de‑identified only. Files are stored temporarily and auto-deleted.
 const APPEAL_ATTACHMENT_TTL_MS = 60 * 60 * 1000; // 60 minutes
 
 function appealPacketDefaults(orgName) {
@@ -973,7 +973,7 @@ function appealPacketDefaults(orgName) {
     provider_address: "",
     contact_log: "",
     lmn_text:
-`LETTER OF MEDICAL NECESSITY (TEMPLATE â€” DEâ€‘IDENTIFIED)
+`LETTER OF MEDICAL NECESSITY (TEMPLATE — DE‑IDENTIFIED)
 Patient Name: ____________________
 DOB: ____/____/______
 Member ID: ____________________
@@ -982,8 +982,8 @@ To Whom It May Concern,
 
 I am writing to support the medical necessity of the requested service for the patient listed above.
 
-Clinical Summary (deâ€‘identified):
-- Diagnosis / ICDâ€‘10: ____________________
+Clinical Summary (de‑identified):
+- Diagnosis / ICD‑10: ____________________
 - Requested Service / CPT/HCPCS: ____________________
 - Date(s) of Service: ____________________
 - Prior treatments attempted and outcomes: ____________________
@@ -994,30 +994,30 @@ Medical Necessity Rationale:
 3) The requested service aligns with accepted standards of care and clinical guidelines.
 
 Supporting References (attach as needed):
-- Peerâ€‘reviewed literature and/or clinical guidelines supporting standard of care.
+- Peer‑reviewed literature and/or clinical guidelines supporting standard of care.
 
 Sincerely,
 ${orgName || "[Provider / Practice]"}
 `,
     checklist_notes:
-`APPEAL PACKET CHECKLIST (DEâ€‘IDENTIFIED)
+`APPEAL PACKET CHECKLIST (DE‑IDENTIFIED)
 Essential Documentation:
-[ ] Denial letter / EOB copy (deâ€‘identified)
+[ ] Denial letter / EOB copy (de‑identified)
 [ ] Appeal letter (formal)
 [ ] Letter of Medical Necessity (LMN)
-[ ] Relevant medical records (deâ€‘identified: chart notes, imaging, labs, op reports)
+[ ] Relevant medical records (de‑identified: chart notes, imaging, labs, op reports)
 [ ] Authorization number proof (if applicable)
 [ ] Patient identifiers (to be filled AFTER export, outside this system)
 
 Administrative Items:
 [ ] Claim number, DOS, payer
-[ ] CPT/HCPCS codes + ICDâ€‘10 codes
+[ ] CPT/HCPCS codes + ICD‑10 codes
 [ ] Provider NPI, Tax ID, address
 [ ] Appeal / reconsideration form (payer-specific, if required)
-[ ] Interaction log (dates/times/rep names â€” no patient identifiers)
+[ ] Interaction log (dates/times/rep names — no patient identifiers)
 
 Supporting Documents:
-[ ] Clinical guidelines or peerâ€‘reviewed literature
+[ ] Clinical guidelines or peer‑reviewed literature
 [ ] Coding crosswalk / code validation notes (if needed)
 `,
     compiled_packet_text: "",
@@ -1075,22 +1075,22 @@ function compileAppealPacketText(c, orgName) {
   const attachmentsIndex = (c.appeal_attachments || []).map(a => `- ${a.filename || "attachment"}`).join("\n") || "- (none uploaded)";
 
   const header =
-`APPEAL PACKET (DEâ€‘IDENTIFIED)
+`APPEAL PACKET (DE‑IDENTIFIED)
 Organization: ${orgName || ""}
 Case ID: ${c.case_id}
 Generated: ${new Date().toLocaleString()}
 
-IMPORTANT: This packet is DEâ€‘IDENTIFIED. Do not include patient name, DOB, or member ID in this system.
+IMPORTANT: This packet is DE‑IDENTIFIED. Do not include patient name, DOB, or member ID in this system.
 Fill patient identifiers AFTER export, outside this platform.
 `;
 
   const admin =
-`ADMIN + CODING SUMMARY (DEâ€‘IDENTIFIED)
+`ADMIN + CODING SUMMARY (DE‑IDENTIFIED)
 Claim #: ${ap.claim_number || "(enter claim #)"}
 Payer: ${ap.payer || "(enter payer)"}
 DOS: ${ap.dos || "(enter DOS)"}
 CPT/HCPCS: ${ap.cpt_hcpcs_codes || "(enter codes)"}
-ICDâ€‘10: ${ap.icd10_codes || "(enter codes)"}
+ICD‑10: ${ap.icd10_codes || "(enter codes)"}
 Authorization #: ${ap.authorization_number || "(enter auth #)"}
 
 Provider NPI: ${ap.provider_npi || "(enter NPI)"}
@@ -1126,7 +1126,7 @@ ${ap.checklist_notes || ""}
 ${admin}
 
 ==============================
-5) ATTACHMENTS INDEX (DEâ€‘IDENTIFIED)
+5) ATTACHMENTS INDEX (DE‑IDENTIFIED)
 ------------------------------
 ${attachmentsIndex}
 
@@ -1176,7 +1176,7 @@ function maybeCompleteAI(caseObj, orgName) {
   // If a draft template was loaded, use it.  Otherwise use the AI
   // generated draft text.
   caseObj.ai.draft_text = draftText || out.draft_text;
-  // Seed deâ€‘identified appeal packet scaffolding
+  // Seed de‑identified appeal packet scaffolding
   normalizeAppealPacket(caseObj, orgName);
   if (!caseObj.appeal_packet.lmn_text) caseObj.appeal_packet.lmn_text = appealPacketDefaults(orgName).lmn_text;
   caseObj.status = "DRAFT_READY";
@@ -1244,7 +1244,7 @@ function computeAnalytics(org_id) {
 
 
  
-  // ===== Lifecycle KPIs (Billed â†’ Denied â†’ Paid) =====
+  // ===== Lifecycle KPIs (Billed → Denied → Paid) =====
   const paymentDurations = billed
     .filter(b => (b.status || "Pending") === "Paid" && b.paid_at)
     .map(b => {
@@ -1323,7 +1323,7 @@ function buildRecoveryStrategies(a) {
   const aging90 = a.aging?.over90 || 0;
 
   if (recovery < 40 && a.totalCases > 5) {
-    tips.push("Run a denial category review: focus on the top 1â€“2 denial reasons and standardize your supporting documentation bundle.");
+    tips.push("Run a denial category review: focus on the top 1–2 denial reasons and standardize your supporting documentation bundle.");
   }
   if (aging90 > 0) {
     tips.push("Prioritize >90 day denials: assign same-week follow-ups, confirm appeal deadlines, and escalate payer contact paths.");
@@ -1340,7 +1340,7 @@ function buildRecoveryStrategies(a) {
 
   const topPayer = payers[0];
   if (topPayer && topPayer.count >= 5 && topPayer.wins === 0) {
-    tips.push(`Target payer friction: ${topPayer.payer} shows volume but no denial wins recordedâ€”validate required forms, medical necessity language, and appeal routing.`);
+    tips.push(`Target payer friction: ${topPayer.payer} shows volume but no denial wins recorded—validate required forms, medical necessity language, and appeal routing.`);
   }
 
   if (!tips.length) tips.push("Keep consistency: continue documenting denial reasons, standardizing appeal templates, and tracking paid amounts to strengthen payer trend analytics.");
@@ -1467,7 +1467,7 @@ function computeDenialTrends(org_id) {
  * Compute a set of organisation IDs requiring admin attention.
  * Rules:
  *  - Pilot ending within 7 days
- *  - Case usage â‰¥ 80%
+ *  - Case usage ≥ 80%
  *  - No activity for 14+ days
  *  - No payment uploads across platform
  */
@@ -1564,23 +1564,8 @@ function computeDashboardMetrics(org_id, start, end, preset){
   const allowedTotal = billed.reduce((s,b)=>s + safeNum(b.allowed_amount), 0);
   const contractualTotal = billed.reduce((s,b)=>s + Math.max(0, safeNum(b.amount_billed) - safeNum(b.allowed_amount)), 0);
 
-  // Compute the total underpaid amount as the difference between what was billed and what has been paid (insurance + patient) to avoid relying on a preâ€‘populated field.
-  const underpaidAmt = billed.reduce((sum, b) => {
-    // Insurance payments may be stored on either insurance_paid or paid_amount depending on the data
-    const insurancePaid = safeNum(b.insurance_paid || b.paid_amount);
-    const patientPaid = safeNum(b.patient_collected);
-    const billedAmt = safeNum(b.amount_billed);
-    // Underpayment is only counted when the billed amount exceeds the total paid amount
-    const diff = Math.max(0, billedAmt - insurancePaid - patientPaid);
-    return sum + diff;
-  }, 0);
-  // Count underpaid cases based on computed underpayment rather than relying on a status field which might be inconsistent
-  const underpaidCount = billed.filter(b => {
-    const insurancePaid = safeNum(b.insurance_paid || b.paid_amount);
-    const patientPaid = safeNum(b.patient_collected);
-    const billedAmt = safeNum(b.amount_billed);
-    return (billedAmt - insurancePaid - patientPaid) > 0;
-  }).length;
+  const underpaidAmt = billed.reduce((s,b)=>s + safeNum(b.underpaid_amount), 0);
+  const underpaidCount = billed.filter(b => (b.status||"").toLowerCase()==="underpaid").length;
 
   const collectedTotal = insuranceCollected + patientCollected;
   const grossCollectionRate = totalBilled > 0 ? (collectedTotal/totalBilled)*100 : 0;
@@ -1588,8 +1573,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
   const revenueAtRisk = Math.max(0, totalBilled - collectedTotal);
 
-  // Include Write Off in status counts. This will be updated after write off values are calculated.
-  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, Pending:0, "Write Off":0 };
+  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, Pending:0 };
   billed.forEach(b=>{
     const st = (b.status || "Pending");
     if (st === "Paid") statusCounts.Paid++;
@@ -1622,56 +1606,13 @@ function computeDashboardMetrics(org_id, start, end, preset){
     atRiskSeries[k] = Math.max(0, bsum - csum);
   });
 
-  // Compute writeâ€‘off values. A writeâ€‘off is the difference between the amount billed and the allowed amount (or a dedicated write_off_amount field if present).
-  const writeOffSeries = {};
-  let writeOffTotal = 0;
-  const writeOffCases = [];
-  billed.forEach(b => {
-    // Prefer an explicit write_off_amount if one exists
-    let wo = safeNum(b.write_off_amount);
-    if (!wo) {
-      const billedAmt = safeNum(b.amount_billed);
-      // The allowed amount represents what the payer agreed to pay; the difference is a contractual adjustment/writeâ€‘off
-      const allowedAmt = safeNum(b.allowed_amount);
-      if (allowedAmt > 0 && billedAmt > allowedAmt) {
-        wo = billedAmt - allowedAmt;
-      }
-    }
-    if (wo > 0) {
-      // Group by the same granularity as other series
-      const d = new Date(b.created_at || b.paid_at || b.denied_at || Date.now());
-      const k = groupKeyForDate(d, gran);
-      writeOffSeries[k] = (writeOffSeries[k] || 0) + wo;
-      writeOffTotal += wo;
-      writeOffCases.push(b);
-    }
-  });
-  // Update the Write Off count in statusCounts based on actual writeâ€‘off cases
-  statusCounts["Write Off"] = writeOffCases.length;
-
   const payerAgg = {};
   billed.forEach(b=>{
     const payer = (b.payer || "Unknown").trim() || "Unknown";
-    payerAgg[payer] = payerAgg[payer] || { underpaid:0, expected:0, paid:0, writeOff:0, count:0 };
-    // Underpaid per payer is recalculated similarly to the global underpaid amount
-    const insurancePaid = safeNum(b.insurance_paid || b.paid_amount);
-    const patientPaid = safeNum(b.patient_collected);
-    const billedAmt = safeNum(b.amount_billed);
-    const underpaidVal = Math.max(0, billedAmt - insurancePaid - patientPaid);
-    payerAgg[payer].underpaid += underpaidVal;
+    payerAgg[payer] = payerAgg[payer] || { underpaid:0, expected:0, paid:0, count:0 };
+    payerAgg[payer].underpaid += safeNum(b.underpaid_amount);
     payerAgg[payer].expected += safeNum(b.expected_insurance);
     payerAgg[payer].paid += safeNum(b.insurance_paid || b.paid_amount);
-    // Write off per payer
-    let wo = safeNum(b.write_off_amount);
-    if (!wo) {
-      const allowedAmt = safeNum(b.allowed_amount);
-      if (allowedAmt > 0 && billedAmt > allowedAmt) {
-        wo = billedAmt - allowedAmt;
-      }
-    }
-    if (wo > 0) {
-      payerAgg[payer].writeOff += wo;
-    }
     payerAgg[payer].count += 1;
   });
   const payerTop = Object.entries(payerAgg)
@@ -1681,33 +1622,15 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
   return {
     kpis: {
-      totalBilled,
-      collectedTotal,
-      revenueAtRisk,
-      grossCollectionRate,
-      netCollectionRate,
-      underpaidAmt,
-      underpaidCount,
-      patientRespTotal,
-      patientCollected,
-      patientOutstanding,
-      allowedTotal,
-      contractualTotal,
-      negotiationCases: underpayCases.length,
-      // expose write off totals for analytics
-      writeOffTotal,
-      writeOffCount: writeOffCases.length
+      totalBilled, collectedTotal, revenueAtRisk,
+      grossCollectionRate, netCollectionRate,
+      underpaidAmt, underpaidCount,
+      patientRespTotal, patientCollected, patientOutstanding,
+      allowedTotal, contractualTotal,
+      negotiationCases: underpayCases.length
     },
     statusCounts,
-    series: {
-      gran,
-      keys,
-      billed: keys.map(k => safeNum(billedSeries[k])),
-      collected: keys.map(k => safeNum(collectedSeries[k])),
-      atRisk: keys.map(k => safeNum(atRiskSeries[k])),
-      // provide write off per time interval; missing keys default to 0
-      writeOff: keys.map(k => safeNum(writeOffSeries[k] || 0))
-    },
+    series: { gran, keys, billed: keys.map(k=>safeNum(billedSeries[k])), collected: keys.map(k=>safeNum(collectedSeries[k])), atRisk: keys.map(k=>safeNum(atRiskSeries[k])) },
     payerTop
   };
 }
@@ -1860,7 +1783,7 @@ const server = http.createServer(async (req, res) => {
   if (method === "GET" && pathname === "/login") {
     const html = page("Login", `
       <h2>Sign In</h2>
-      <p class="muted">Access your organizationâ€™s claim review and analytics workspace.</p>
+      <p class="muted">Access your organization’s claim review and analytics workspace.</p>
       <form method="POST" action="/login">
         <label>Email</label>
         <input name="email" type="email" required />
@@ -2020,7 +1943,7 @@ const server = http.createServer(async (req, res) => {
   if (method === "GET" && pathname === "/suspended") {
     return send(res, 200, page("Suspended", `
       <h2>Account Suspended</h2>
-      <p>Your organizationâ€™s access is currently suspended.</p>
+      <p>Your organization’s access is currently suspended.</p>
       <p class="muted">If you believe this is an error, contact support.</p>
       <div class="btnRow"><a class="btn secondary" href="/logout">Logout</a></div>
     `, navPublic()));
@@ -2196,12 +2119,12 @@ const server = http.createServer(async (req, res) => {
         const sub = getSub(org.org_id);
         const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
         const plan = (sub && sub.status === "active") ? "Subscribed" : (pilot.status === "active" ? "Pilot" : "Expired");
-        const att = attentionSet.has(org.org_id) ? "âš ï¸" : "";
+        const att = attentionSet.has(org.org_id) ? "⚠️" : "";
         return `<tr class="${att ? 'attention' : ''}">
           <td><a href="/admin/org?org_id=${encodeURIComponent(org.org_id)}">${safeStr(org.org_name)}</a></td>
           <td>${plan}</td>
           <td>${safeStr(org.account_status || 'active')}</td>
-          <td>${last ? new Date(last).toLocaleDateString() : "â€”"}</td>
+          <td>${last ? new Date(last).toLocaleDateString() : "—"}</td>
           <td>${att}</td>
         </tr>`;
       }).join("");
@@ -2258,7 +2181,7 @@ const server = http.createServer(async (req, res) => {
         const p = pilots.find(x => x.org_id === org.org_id);
         const s = subs.find(x => x.org_id === org.org_id);
         const plan = (s && s.status === "active") ? "Subscribed" : (p && p.status === "active" ? "Pilot" : "Expired");
-        const att = attSet.has(org.org_id) ? "âš ï¸" : "";
+        const att = attSet.has(org.org_id) ? "⚠️" : "";
         return `<tr class="${att ? 'attention' : ''}">
           <td><a href="/admin/org?org_id=${encodeURIComponent(org.org_id)}">${safeStr(org.org_name)}</a></td>
           <td>${plan}</td>
@@ -2321,7 +2244,7 @@ const server = http.createServer(async (req, res) => {
         }
         const pathOnly = `/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(usr.email)}`;
         const full = APP_BASE_URL ? `${APP_BASE_URL}${pathOnly}` : pathOnly;
-        return `<li class="muted small">${safeStr(usr.email)} â€” <a href="${safeStr(full)}">Reset Link</a></li>`;
+        return `<li class="muted small">${safeStr(usr.email)} — <a href="${safeStr(full)}">Reset Link</a></li>`;
       }).join("");
 
       const html = page("Org Detail", `
@@ -2333,11 +2256,11 @@ const server = http.createServer(async (req, res) => {
               <tr><th>Status</th><td>${safeStr(org.account_status || "active")}</td></tr>
               <tr><th>Plan</th><td>${plan}</td></tr>
               <tr><th>Pilot ends</th><td>${new Date(pilot.ends_at).toLocaleDateString()}</td></tr>
-              <tr><th>Deletion date</th><td>${pilot.retention_delete_at ? new Date(pilot.retention_delete_at).toLocaleDateString() : "â€”"}</td></tr>
+              <tr><th>Deletion date</th><td>${pilot.retention_delete_at ? new Date(pilot.retention_delete_at).toLocaleDateString() : "—"}</td></tr>
               <tr><th>Pilot cases used</th><td>${usage.pilot_cases_used || 0}/${PILOT_LIMITS.max_cases_total}</td></tr>
               <tr><th>Pilot payment rows</th><td>${usage.pilot_payment_rows_used || 0}/${PILOT_LIMITS.payment_records_included}</td></tr>
               <tr><th>Drafts generated</th><td>${a.drafts}</td></tr>
-              <tr><th>Avg draft time</th><td>${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "â€”"}</td></tr>
+              <tr><th>Avg draft time</th><td>${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</td></tr>
             </table>
 
             <h3>Actions</h3>
@@ -2384,7 +2307,7 @@ const server = http.createServer(async (req, res) => {
 
           <div class="col">
             <h3>Users</h3>
-            <ul class="muted">${users.map(x => `<li>${safeStr(x.email)}</li>`).join("") || "<li>â€”</li>"}</ul>
+            <ul class="muted">${users.map(x => `<li>${safeStr(x.email)}</li>`).join("") || "<li>—</li>"}</ul>
 
             <div class="hr"></div>
             <h3>Force Password Reset (v1 display)</h3>
@@ -2506,7 +2429,7 @@ const server = http.createServer(async (req, res) => {
 
   ensurePilot(org.org_id);
   getUsage(org.org_id);
-  // Clean up expired deâ€‘identified appeal attachments (nonâ€‘PHI mode)
+  // Clean up expired de‑identified appeal attachments (non‑PHI mode)
   cleanupExpiredAppealAttachments(org.org_id);
 
   if (!isAccessEnabled(org.org_id)) return redirect(res, "/pilot-complete");
@@ -2640,8 +2563,8 @@ if (method === "GET" && pathname === "/file") {
   if (method === "GET" && pathname === "/lock") {
     const html = page("Starting", `
       <h2 class="center">Pilot Started</h2>
-      <p class="center">Weâ€™re preparing your secure workspace to help you track what was billed, denied, appealed, and paid â€” and surface patterns that are easy to miss when data lives in different places.</p>
-      <p class="muted center">Youâ€™ll be guided to the next step automatically.</p>
+      <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid — and surface patterns that are easy to miss when data lives in different places.</p>
+      <p class="muted center">You’ll be guided to the next step automatically.</p>
       <div class="center"><span class="badge warn">Initializing</span></div>
       <script>setTimeout(()=>{window.location.href="/dashboard";}, ${LOCK_SCREEN_MS});
         // Countdown timers for analyzing cases
@@ -2680,7 +2603,7 @@ if (method === "GET" && pathname === "/executive") {
   const html = page("Executive Dashboard", `
 
     <h2>Executive Dashboard</h2>
-    <p class="muted">High-level denial â†’ revenue performance for leadership review.</p>
+    <p class="muted">High-level denial → revenue performance for leadership review.</p>
 
     <div class="row">
       <div class="col">
@@ -2703,7 +2626,7 @@ if (method === "GET" && pathname === "/executive") {
       <div class="col">
         <h3>Risk Score</h3>
         <div class="badge ${r.cls}">
-          Risk: ${r.label} â€” ${score}/100
+          Risk: ${r.label} — ${score}/100
         </div>
 
         <div class="hr"></div>
@@ -2741,7 +2664,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="kpi-card"><h4>Payments Logged</h4><p>${w.paymentsCount}</p></div>
       </div>
       <div class="col">
-        <div class="kpi-card"><h4>Denied â†’ Approved Wins</h4><p>${w.deniedWinsCount}</p></div>
+        <div class="kpi-card"><h4>Denied → Approved Wins</h4><p>${w.deniedWinsCount}</p></div>
         <div class="kpi-card"><h4>Recovered Dollars</h4><p>$${Number(w.recoveredDollarsThisWeek||0).toFixed(2)}</p></div>
       </div>
     </div>
@@ -2829,7 +2752,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
           <h2 style="margin-bottom:4px;">Dashboard</h2>
-          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} Â· Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
+          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Pilot ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
           ${planBadge}
         </div>
 
@@ -2864,32 +2787,32 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
       <div class="hr"></div>
 
-      <h3>Revenue Health <span class="tooltip">â“˜<span class="tooltiptext">High-level revenue performance for the selected date range.</span></span></h3>
+      <h3>Revenue Health <span class="tooltip">ⓘ<span class="tooltiptext">High-level revenue performance for the selected date range.</span></span></h3>
 
       <div style="margin-top:8px;">
         <div style="height:14px;background:#e5e7eb;border-radius:999px;overflow:hidden;">
           <div style="width:${percentCollected}%;height:100%;background:${barColor};transition:width .4s ease;"></div>
         </div>
-        <div class="small muted" style="margin-top:6px;">${percentCollected}% of billed revenue collected Â· Range: ${safeStr(rangeLabel)}</div>
+        <div class="small muted" style="margin-top:6px;">${percentCollected}% of billed revenue collected · Range: ${safeStr(rangeLabel)}</div>
       </div>
 
       <div class="row" style="margin-top:14px;">
         <div class="col">
-          <div class="kpi-card"><h4>Total Billed <span class="tooltip">â“˜<span class="tooltiptext">Sum of billed charges in the selected date range.</span></span></h4><p>${fmtMoney(m.kpis.totalBilled)}</p></div>
-          <div class="kpi-card"><h4>Total Collected <span class="tooltip">â“˜<span class="tooltiptext">Insurance collected + patient collected (based on uploaded data).</span></span></h4><p>${fmtMoney(m.kpis.collectedTotal)}</p></div>
-          <div class="kpi-card"><h4>Revenue At Risk <span class="tooltip">â“˜<span class="tooltiptext">Billed minus collected.</span></span></h4><p>${fmtMoney(m.kpis.revenueAtRisk)}</p></div>
+          <div class="kpi-card"><h4>Total Billed <span class="tooltip">ⓘ<span class="tooltiptext">Sum of billed charges in the selected date range.</span></span></h4><p>${fmtMoney(m.kpis.totalBilled)}</p></div>
+          <div class="kpi-card"><h4>Total Collected <span class="tooltip">ⓘ<span class="tooltiptext">Insurance collected + patient collected (based on uploaded data).</span></span></h4><p>${fmtMoney(m.kpis.collectedTotal)}</p></div>
+          <div class="kpi-card"><h4>Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Billed minus collected.</span></span></h4><p>${fmtMoney(m.kpis.revenueAtRisk)}</p></div>
         </div>
 
         <div class="col">
-          <div class="kpi-card"><h4>Gross Collection Rate <span class="tooltip">â“˜<span class="tooltiptext">Collected / Billed.</span></span></h4><p>${Number(m.kpis.grossCollectionRate||0).toFixed(1)}%</p></div>
-          <div class="kpi-card"><h4>Net Collection Rate <span class="tooltip">â“˜<span class="tooltiptext">Collected / Allowed (when allowed is provided).</span></span></h4><p>${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p></div>
-          <div class="kpi-card"><h4>Negotiation Cases <span class="tooltip">â“˜<span class="tooltiptext">Auto-created underpayment negotiation cases in this date range.</span></span></h4><p>${m.kpis.negotiationCases}</p></div>
+          <div class="kpi-card"><h4>Gross Collection Rate <span class="tooltip">ⓘ<span class="tooltiptext">Collected / Billed.</span></span></h4><p>${Number(m.kpis.grossCollectionRate||0).toFixed(1)}%</p></div>
+          <div class="kpi-card"><h4>Net Collection Rate <span class="tooltip">ⓘ<span class="tooltiptext">Collected / Allowed (when allowed is provided).</span></span></h4><p>${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p></div>
+          <div class="kpi-card"><h4>Negotiation Cases <span class="tooltip">ⓘ<span class="tooltiptext">Auto-created underpayment negotiation cases in this date range.</span></span></h4><p>${m.kpis.negotiationCases}</p></div>
         </div>
 
         <div class="col">
-          <div class="kpi-card"><h4>Underpaid Amount <span class="tooltip">â“˜<span class="tooltiptext">Total underpaid dollars based on expected insurance vs paid.</span></span></h4><p>${fmtMoney(m.kpis.underpaidAmt)}</p></div>
-          <div class="kpi-card"><h4>Underpaid Claims <span class="tooltip">â“˜<span class="tooltiptext">Count of billed claims marked Underpaid.</span></span></h4><p>${m.kpis.underpaidCount}</p></div>
-          <div class="kpi-card"><h4>Patient Outstanding <span class="tooltip">â“˜<span class="tooltiptext">Patient responsibility minus patient collected.</span></span></h4><p>${fmtMoney(m.kpis.patientOutstanding)}</p></div>
+          <div class="kpi-card"><h4>Underpaid Amount <span class="tooltip">ⓘ<span class="tooltiptext">Total underpaid dollars based on expected insurance vs paid.</span></span></h4><p>${fmtMoney(m.kpis.underpaidAmt)}</p></div>
+          <div class="kpi-card"><h4>Underpaid Claims <span class="tooltip">ⓘ<span class="tooltiptext">Count of billed claims marked Underpaid.</span></span></h4><p>${m.kpis.underpaidCount}</p></div>
+          <div class="kpi-card"><h4>Patient Outstanding <span class="tooltip">ⓘ<span class="tooltiptext">Patient responsibility minus patient collected.</span></span></h4><p>${fmtMoney(m.kpis.patientOutstanding)}</p></div>
         </div>
       </div>
 
@@ -2897,18 +2820,18 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
       <div class="row">
         <div class="col">
-          <h3>Revenue Trend <span class="tooltip">â“˜<span class="tooltiptext">Billed vs collected over time (bucketed by ${safeStr(m.series.gran)}).</span></span></h3>
+          <h3>Revenue Trend <span class="tooltip">ⓘ<span class="tooltiptext">Billed vs collected over time (bucketed by ${safeStr(m.series.gran)}).</span></span></h3>
           <canvas id="revTrend" height="140"></canvas>
         </div>
         <div class="col">
-          <h3>Claim Status Mix <span class="tooltip">â“˜<span class="tooltiptext">Distribution of claim statuses for the selected range.</span></span></h3>
+          <h3>Claim Status Mix <span class="tooltip">ⓘ<span class="tooltiptext">Distribution of claim statuses for the selected range.</span></span></h3>
           <canvas id="statusMix" height="140"></canvas>
         </div>
       </div>
 
       <div class="row">
         <div class="col">
-          <h3>Underpayment by Payer <span class="tooltip">â“˜<span class="tooltiptext">Top payers by total underpaid dollars.</span></span></h3>
+          <h3>Underpayment by Payer <span class="tooltip">ⓘ<span class="tooltiptext">Top payers by total underpaid dollars.</span></span></h3>
           <canvas id="underpayPayer" height="160"></canvas>
           <div style="overflow:auto;margin-top:10px;">
             <table>
@@ -2921,7 +2844,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <canvas id="payerBarChart" height="140"></canvas>
         </div>
         <div class="col">
-          <h3>Patient Revenue <span class="tooltip">â“˜<span class="tooltiptext">Patient responsibility vs collected and outstanding.</span></span></h3>
+          <h3>Patient Revenue <span class="tooltip">ⓘ<span class="tooltiptext">Patient responsibility vs collected and outstanding.</span></span></h3>
           <canvas id="patientRev" height="160"></canvas>
 
           <div class="btnRow" style="margin-top:10px;">
@@ -2934,7 +2857,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
       <div class="hr"></div>
 
-      <h3>Usage <span class="tooltip">â“˜<span class="tooltiptext">Pilot or plan usage for your organization.</span></span></h3>
+      <h3>Usage <span class="tooltip">ⓘ<span class="tooltiptext">Pilot or plan usage for your organization.</span></span></h3>
       ${
         limits.mode === "pilot" ? `
         <ul class="muted">
@@ -3137,7 +3060,7 @@ if (hasPayerBar) {
           return `
             <tr>
               <td><a href="/billed?submission_id=${encodeURIComponent(s.submission_id)}">${safeStr(s.original_filename || "billed_upload")}</a></td>
-              <td class="muted small">${s.uploaded_at ? new Date(s.uploaded_at).toLocaleDateString() : "â€”"}</td>
+              <td class="muted small">${s.uploaded_at ? new Date(s.uploaded_at).toLocaleDateString() : "—"}</td>
               <td>${totalClaims}</td>
               <td>${paidCount}</td>
               <td>${deniedCount}</td>
@@ -3346,7 +3269,7 @@ if (hasPayerBar) {
               const expectedInsurance = Math.max(0, aln - prn);
               const underpaid = Math.max(0, expectedInsurance - ipn);
 
-              out.textContent = "Computed â†’ Expected Insurance: $" + expectedInsurance.toFixed(2) + " | Underpaid: $" + underpaid.toFixed(2);
+              out.textContent = "Computed → Expected Insurance: $" + expectedInsurance.toFixed(2) + " | Underpaid: $" + underpaid.toFixed(2);
             };
           </script>
         `;
@@ -3467,10 +3390,10 @@ const statusCell = (() => {
 
     const html = page("Billed Submission", `
       <h2>Billed Claims Submission</h2>
-      <p class="muted"><strong>File:</strong> ${safeStr(sub.original_filename || "billed_upload")} Â· <strong>Uploaded:</strong> ${sub.uploaded_at ? new Date(sub.uploaded_at).toLocaleString() : "â€”"} Â· <strong>Total claims:</strong> ${allInSub.length}</p>
+      <p class="muted"><strong>File:</strong> ${safeStr(sub.original_filename || "billed_upload")} · <strong>Uploaded:</strong> ${sub.uploaded_at ? new Date(sub.uploaded_at).toLocaleString() : "—"} · <strong>Total claims:</strong> ${allInSub.length}</p>
 
       <div class="hr"></div>
-      <h3>Submission Financial Summary <span class="tooltip">â“˜<span class="tooltiptext">Snapshot of billed revenue, collected revenue, and revenue at risk for this submission batch.</span></span></h3>
+      <h3>Submission Financial Summary <span class="tooltip">ⓘ<span class="tooltiptext">Snapshot of billed revenue, collected revenue, and revenue at risk for this submission batch.</span></span></h3>
       <div class="row">
         <div class="col">
           <div class="kpi-card"><h4>Total Billed</h4><p>$${totalBilledAmt.toFixed(2)}</p></div>
@@ -3703,7 +3626,7 @@ const statusCell = (() => {
       <ul class="muted">
         <li><strong>File:</strong> ${safeStr(f.filename)}</li>
         <li><strong>Submission created:</strong> ${safeStr(new Date(uploaded_at).toLocaleString())}</li>
-        <li><strong>Claims added:</strong> ${isCSV ? rowsAdded : "File stored (Excel not parsed â€” export to CSV for import)"}</li>
+        <li><strong>Claims added:</strong> ${isCSV ? rowsAdded : "File stored (Excel not parsed — export to CSV for import)"}</li>
       </ul>
       <div class="btnRow">
         <a class="btn" href="/billed?submission_id=${encodeURIComponent(submission_id)}">View This Submission</a>
@@ -4637,18 +4560,18 @@ const html = page("Denial & Payment Upload", `
     if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
     const html = page("Appeal Packet Builder", `
-      <h2>${safeStr(((c.case_type||"").toLowerCase()==="underpayment") ? "Underpayment Negotiation Packet (Deâ€‘Identified)" : "Appeal Packet Builder (Deâ€‘Identified)")}</h2>
+      <h2>${safeStr(((c.case_type||"").toLowerCase()==="underpayment") ? "Underpayment Negotiation Packet (De‑Identified)" : "Appeal Packet Builder (De‑Identified)")}</h2>
       <p class="muted">Build a complete appeal packet without storing patient identifiers. Do not upload or enter patient name, DOB, or member ID.</p>
-      <div class="badge warn">DEâ€‘IDENTIFIED MODE Â· No PHI Â· Human review required</div>
+      <div class="badge warn">DE‑IDENTIFIED MODE · No PHI · Human review required</div>
       <div class="hr"></div>
 
       <form method="POST" action="/appeal/save">
         <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
 
-        <h3>Deâ€‘Identified Confirmation</h3>
+        <h3>De‑Identified Confirmation</h3>
         <label style="display:flex;gap:10px;align-items:flex-start;margin-top:8px;">
           <input type="checkbox" name="deid_confirmed" value="1" ${c.appeal_packet && c.appeal_packet.deid_confirmed ? "checked" : ""} style="width:auto;margin:0;margin-top:2px;">
-          <span class="muted">I confirm this case is deâ€‘identified (no patient identifiers in text or uploads).</span>
+          <span class="muted">I confirm this case is de‑identified (no patient identifiers in text or uploads).</span>
         </label>
 
         <div class="hr"></div>
@@ -4675,7 +4598,7 @@ const html = page("Denial & Payment Upload", `
           <div class="col">
             <label>CPT/HCPCS codes</label>
             <input name="cpt_hcpcs_codes" value="${safeStr(c.appeal_packet?.cpt_hcpcs_codes || "")}" placeholder="e.g., 99214, 27447" />
-            <label>ICDâ€‘10 codes</label>
+            <label>ICD‑10 codes</label>
             <input name="icd10_codes" value="${safeStr(c.appeal_packet?.icd10_codes || "")}" placeholder="e.g., M17.11" />
             <label>Provider NPI</label>
             <input name="provider_npi" value="${safeStr(c.appeal_packet?.provider_npi || "")}" placeholder="NPI" />
@@ -4702,8 +4625,8 @@ const html = page("Denial & Payment Upload", `
       </form>
 
       <div class="hr"></div>
-      <h3>6) Attachments (Deâ€‘Identified Only Â· Autoâ€‘Delete in 60 minutes)</h3>
-      <p class="muted small">Upload deâ€‘identified documents only. Files are stored temporarily and automatically deleted.</p>
+      <h3>6) Attachments (De‑Identified Only · Auto‑Delete in 60 minutes)</h3>
+      <p class="muted small">Upload de‑identified documents only. Files are stored temporarily and automatically deleted.</p>
       <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
         <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
         <label>Upload attachments (multiple)</label>
@@ -4719,7 +4642,7 @@ const html = page("Denial & Payment Upload", `
         (c.appeal_attachments && c.appeal_attachments.length)
           ? `<ul class="muted small">${
               c.appeal_attachments.map(a => {
-                const exp = a.expires_at ? new Date(a.expires_at).toLocaleString() : "â€”";
+                const exp = a.expires_at ? new Date(a.expires_at).toLocaleString() : "—";
                 return `<li>${safeStr(a.filename)} <span class="muted">(expires: ${safeStr(exp)})</span></li>`;
               }).join("")
             }</ul>`
@@ -4818,7 +4741,7 @@ if (method === "POST" && pathname === "/draft-template") {
 
 
 
-  // ===== Appeal Packet Builder Routes (Deâ€‘Identified / Nonâ€‘PHI) =====
+  // ===== Appeal Packet Builder Routes (De‑Identified / Non‑PHI) =====
   if (method === "POST" && pathname === "/appeal/save") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
@@ -4832,7 +4755,7 @@ if (method === "POST" && pathname === "/draft-template") {
 
     normalizeAppealPacket(c, org.org_name);
 
-    // Save nonâ€‘PHI fields
+    // Save non‑PHI fields
     c.appeal_packet.deid_confirmed = params.get("deid_confirmed") === "1";
     c.appeal_packet.claim_number = (params.get("claim_number") || "").trim();
     c.appeal_packet.payer = (params.get("payer") || "").trim();
@@ -4920,8 +4843,8 @@ if (method === "POST" && pathname === "/draft-template") {
 
     if (!c.appeal_packet.deid_confirmed) {
       const html = page("Appeal Packet", `
-        <h2>Deâ€‘Identified Confirmation Required</h2>
-        <p class="error">Please confirm this case is deâ€‘identified before compiling the packet.</p>
+        <h2>De‑Identified Confirmation Required</h2>
+        <p class="error">Please confirm this case is de‑identified before compiling the packet.</p>
         <div class="btnRow"><a class="btn" href="/draft?case_id=${encodeURIComponent(case_id)}">Back</a></div>
       `, navUser(), {showChat:true});
       return send(res, 400, html);
@@ -4964,7 +4887,7 @@ if (method === "POST" && pathname === "/draft-template") {
       // Printable HTML (user can Save as PDF in browser)
       const htmlPrint = page("Appeal Packet (Printable)", `
         <h2>Appeal Packet (Printable)</h2>
-        <p class="muted">Use your browser to Print â†’ Save as PDF.</p>
+        <p class="muted">Use your browser to Print → Save as PDF.</p>
         <div class="btnRow"><button class="btn secondary" onclick="window.print()">Print / Save as PDF</button></div>
         <div class="hr"></div>
         <pre style="white-space:pre-wrap;">${safeStr(packet)}</pre>
@@ -5178,7 +5101,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
   <label>Denied Recovery</label>
   <select name="denied">
     <option value="">All</option>
-    <option value="1"${deniedFilter==="1"?" selected":""}>Denied â†’ Approved Only</option>
+    <option value="1"${deniedFilter==="1"?" selected":""}>Denied → Approved Only</option>
   </select>
 </div>
         <div>
@@ -5393,7 +5316,7 @@ rowsAdded = toUse;
       <p class="muted">Your file was uploaded successfully.</p>
       <ul class="muted">
         <li><strong>File:</strong> ${safeStr(f.filename)}</li>
-        <li><strong>Rows processed:</strong> ${isCSV ? rowsAdded : "File stored (not parsed â€” upload CSV for analytics extraction)"}</li>
+        <li><strong>Rows processed:</strong> ${isCSV ? rowsAdded : "File stored (not parsed — upload CSV for analytics extraction)"}</li>
       </ul>
       <div class="btnRow">
         <a class="btn" href="/analytics">View Analytics</a>
@@ -5415,7 +5338,7 @@ rowsAdded = toUse;
     const limits = getLimitProfile(org.org_id);
 
     const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Pilot" : "Expired");
-    const planEnds = (sub && sub.status === "active") ? "â€”" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "â€”");
+    const planEnds = (sub && sub.status === "active") ? "—" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "—");
 
     const html = page("Account", `
       <h2>Account</h2>
@@ -5501,7 +5424,7 @@ rowsAdded = toUse;
 
 
  
-  // Report export (CSV) â€” used by Payment Detail Report
+  // Report export (CSV) — used by Payment Detail Report
   if (method === "GET" && pathname === "/report/export") {
     const start = parsed.query.start || "";
     const end = parsed.query.end || "";
@@ -5634,7 +5557,7 @@ rowsAdded = toUse;
           <label>Denied Recovery Only</label>
           <select name="denied">
             <option value="">All</option>
-            <option value="1">Denied â†’ Approved Only</option>
+            <option value="1">Denied → Approved Only</option>
           </select>
 
           <div class="btnRow">
@@ -5699,11 +5622,11 @@ rowsAdded = toUse;
 
     if (type === "executive") {
       body += `
-        <h3>Executive Summary <span class="tooltip">â“˜<span class="tooltiptext">High-level summary for the selected date range.</span></span></h3>
+        <h3>Executive Summary <span class="tooltip">ⓘ<span class="tooltiptext">High-level summary for the selected date range.</span></span></h3>
         <ul class="muted">
           <li><strong>Denied cases in range:</strong> ${cases.length}</li>
           <li><strong>Payments logged in range:</strong> ${paymentsFiltered.length}</li>
-          <li><strong>Denied â†’ Approved wins:</strong> ${deniedRecovered.length}</li>
+          <li><strong>Denied → Approved wins:</strong> ${deniedRecovered.length}</li>
           <li><strong>Recovered dollars (denials):</strong> $${Number(recoveredDollars).toFixed(2)}</li>
           <li><strong>Recovery rate (cases paid):</strong> ${recoveryRate}%</li>
         </ul>
@@ -5737,7 +5660,7 @@ rowsAdded = toUse;
         <ul class="muted">
           <li><strong>Total payments:</strong> ${paymentsFiltered.length}</li>
           <li><strong>Total dollars paid:</strong> $${Number(payments.reduce((s,p)=>s+Number(p.amount_paid||0),0)).toFixed(2)}</li>
-          <li><strong>Denied â†’ Approved dollars:</strong> $${Number(recoveredDollars).toFixed(2)}</li>
+          <li><strong>Denied → Approved dollars:</strong> $${Number(recoveredDollars).toFixed(2)}</li>
         </ul>
       `;
     } else if (type === "recovery") {
@@ -5747,14 +5670,14 @@ rowsAdded = toUse;
           <li><strong>Denied cases:</strong> ${cases.length}</li>
           <li><strong>Paid (marked):</strong> ${paidCases}</li>
           <li><strong>Recovery rate:</strong> ${recoveryRate}%</li>
-          <li><strong>Denied â†’ Approved wins (payments):</strong> ${deniedRecovered.length}</li>
-          <li><strong>Denied â†’ Approved dollars:</strong> $${Number(recoveredDollars).toFixed(2)}</li>
+          <li><strong>Denied → Approved wins (payments):</strong> ${deniedRecovered.length}</li>
+          <li><strong>Denied → Approved dollars:</strong> $${Number(recoveredDollars).toFixed(2)}</li>
         </ul>
       `;
     } else if (type === "payment_detail") {
       body += `
         <h3>Payment Detail Report</h3>
-        <p class="muted">Showing payments in date range${payerFilter ? ` for payer <strong>${safeStr(payerFilter)}</strong>` : ""}${deniedFilter==="1" ? " (Denied â†’ Approved only)" : ""}.</p>
+        <p class="muted">Showing payments in date range${payerFilter ? ` for payer <strong>${safeStr(payerFilter)}</strong>` : ""}${deniedFilter==="1" ? " (Denied → Approved only)" : ""}.</p>
 
         <div class="btnRow">
           <a class="btn secondary" href="/report/export?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&type=payment_detail&payer=${encodeURIComponent(payerFilter||"")}&denied=${encodeURIComponent(deniedFilter||"")}">Export CSV</a>
@@ -5785,33 +5708,33 @@ rowsAdded = toUse;
     else if (type === "kpi_payment_speed") {
       const a2 = computeAnalytics(org.org_id);
       body += `
-        <h3>Average Days to Payment <span class="tooltip">â“˜<span class="tooltiptext">Average days from denial date (or billed date) to payment date for paid billed claims.</span></span></h3>
-        <div class="kpi-card"><h4>Avg Days to Payment <span class="tooltip">â“˜<span class="tooltiptext">Lower is better. Indicates faster revenue recovery.</span></span></h4><p>${a2.avgDaysToPayment !== null ? a2.avgDaysToPayment + " days" : "â€”"}</p></div>
+        <h3>Average Days to Payment <span class="tooltip">ⓘ<span class="tooltiptext">Average days from denial date (or billed date) to payment date for paid billed claims.</span></span></h3>
+        <div class="kpi-card"><h4>Avg Days to Payment <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Indicates faster revenue recovery.</span></span></h4><p>${a2.avgDaysToPayment !== null ? a2.avgDaysToPayment + " days" : "—"}</p></div>
       `;
     }
     else if (type === "kpi_denial_turnaround") {
       const a2 = computeAnalytics(org.org_id);
       body += `
-        <h3>Denial Turnaround Time <span class="tooltip">â“˜<span class="tooltiptext">Average days between denial date and denial case creation (work start).</span></span></h3>
-        <div class="kpi-card"><h4>Avg Denial Turnaround <span class="tooltip">â“˜<span class="tooltiptext">Lower is better. Measures how quickly denials enter the appeal workflow.</span></span></h4><p>${a2.avgDenialTurnaround !== null ? a2.avgDenialTurnaround + " days" : "â€”"}</p></div>
+        <h3>Denial Turnaround Time <span class="tooltip">ⓘ<span class="tooltiptext">Average days between denial date and denial case creation (work start).</span></span></h3>
+        <div class="kpi-card"><h4>Avg Denial Turnaround <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Measures how quickly denials enter the appeal workflow.</span></span></h4><p>${a2.avgDenialTurnaround !== null ? a2.avgDenialTurnaround + " days" : "—"}</p></div>
       `;
     }
     else if (type === "kpi_resolution_time") {
       const a2 = computeAnalytics(org.org_id);
       body += `
-        <h3>Time to Resolution <span class="tooltip">â“˜<span class="tooltiptext">Average days between billed date and payment date for paid billed claims.</span></span></h3>
-        <div class="kpi-card"><h4>Avg Time to Resolution <span class="tooltip">â“˜<span class="tooltiptext">Lower is better. Measures billing-to-cash cycle time.</span></span></h4><p>${a2.avgTimeToResolution !== null ? a2.avgTimeToResolution + " days" : "â€”"}</p></div>
+        <h3>Time to Resolution <span class="tooltip">ⓘ<span class="tooltiptext">Average days between billed date and payment date for paid billed claims.</span></span></h3>
+        <div class="kpi-card"><h4>Avg Time to Resolution <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Measures billing-to-cash cycle time.</span></span></h4><p>${a2.avgTimeToResolution !== null ? a2.avgTimeToResolution + " days" : "—"}</p></div>
       `;
     }
     else if (type === "kpi_denial_aging") {
       const a2 = computeAnalytics(org.org_id);
       const ag = a2.agingFromDenial || { over30: 0, over60: 0, over90: 0 };
       body += `
-        <h3>Denial Aging (From Denial Date) <span class="tooltip">â“˜<span class="tooltiptext">Counts of denied/unpaid claims grouped by how long since denial date.</span></span></h3>
+        <h3>Denial Aging (From Denial Date) <span class="tooltip">ⓘ<span class="tooltiptext">Counts of denied/unpaid claims grouped by how long since denial date.</span></span></h3>
         <ul class="muted">
-          <li>30+ Days <span class="tooltip">â“˜<span class="tooltiptext">Denied/unpaid claims older than 30 days since denial date.</span></span>: ${ag.over30}</li>
-          <li>60+ Days <span class="tooltip">â“˜<span class="tooltiptext">Denied/unpaid claims older than 60 days since denial date.</span></span>: ${ag.over60}</li>
-          <li>90+ Days <span class="tooltip">â“˜<span class="tooltiptext">Denied/unpaid claims older than 90 days since denial date.</span></span>: ${ag.over90}</li>
+          <li>30+ Days <span class="tooltip">ⓘ<span class="tooltiptext">Denied/unpaid claims older than 30 days since denial date.</span></span>: ${ag.over30}</li>
+          <li>60+ Days <span class="tooltip">ⓘ<span class="tooltiptext">Denied/unpaid claims older than 60 days since denial date.</span></span>: ${ag.over60}</li>
+          <li>90+ Days <span class="tooltip">ⓘ<span class="tooltiptext">Denied/unpaid claims older than 90 days since denial date.</span></span>: ${ag.over90}</li>
         </ul>
       `;
     }
@@ -5857,7 +5780,7 @@ else if (type === "payers") {
       </p>
       <ul class="muted">
         <li>Pilot end date: ${new Date(p2.ends_at).toLocaleDateString()}</li>
-        <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "â€”"}</li>
+        <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li>
       </ul>
       <div class="btnRow">
         <a class="btn" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Continue Monthly Access (via Shopify)</a>
@@ -6027,7 +5950,7 @@ else if (type === "payers") {
       </ul>
       <h3>Most Underpaid CPT Codes</h3>
       <ul>
-        ${topUnderpaidCPT.map(c => `<li>${safeStr(c[0])} â€” $${c[1].toFixed(2)}</li>`).join("")}
+        ${topUnderpaidCPT.map(c => `<li>${safeStr(c[0])} — $${c[1].toFixed(2)}</li>`).join("")}
       </ul>
       <h3>AI Suggested Actions</h3>
       <ul>
@@ -6142,3 +6065,4 @@ if (method === "GET" && pathname === "/claim-detail") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
+
