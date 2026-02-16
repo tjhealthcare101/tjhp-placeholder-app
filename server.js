@@ -1720,6 +1720,122 @@ function updateBilledClaim(billed_id, updater){
   return b;
 }
 
+// ===== Pagination + Filtering Helpers =====
+const PAGE_SIZE_OPTIONS = [30, 50, 100];
+
+function clampInt(v, minV, maxV, fallback){
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(minV, Math.min(maxV, Math.floor(n)));
+}
+
+function parsePageParams(qs){
+  const pageSize = clampInt(qs.pageSize || qs.per_page || 50, 30, 100, 50);
+  const page = clampInt(qs.page || 1, 1, 999999, 1);
+  const startIdx = (page - 1) * pageSize;
+  return { page, pageSize, startIdx };
+}
+
+function buildPageNav(basePath, qsObj, page, totalPages){
+  if (totalPages <= 1) return "";
+  const qsBase = { ...qsObj };
+  delete qsBase.page;
+  const links = [];
+
+  const prev = Math.max(1, page - 1);
+  const next = Math.min(totalPages, page + 1);
+
+  const qsPrev = new URLSearchParams({ ...qsBase, page: String(prev) }).toString();
+  const qsNext = new URLSearchParams({ ...qsBase, page: String(next) }).toString();
+
+  links.push(`<a class="btn secondary small" href="${basePath}?${qsPrev}">Prev</a>`);
+
+  const windowSize = 7;
+  let start = Math.max(1, page - Math.floor(windowSize/2));
+  let end = Math.min(totalPages, start + windowSize - 1);
+  start = Math.max(1, end - windowSize + 1);
+
+  for (let p = start; p <= end; p++){
+    const qsP = new URLSearchParams({ ...qsBase, page: String(p) }).toString();
+    links.push(`<a href="${basePath}?${qsP}" style="margin:0 6px;${p===page?'font-weight:900;text-decoration:underline;':''}">${p}</a>`);
+  }
+
+  links.push(`<a class="btn secondary small" href="${basePath}?${qsNext}">Next</a>`);
+  return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">${links.join("")}</div>`;
+}
+
+// ===== Negotiation Status =====
+const NEGOTIATION_STATUSES = [
+  "Open",
+  "Packet Generated",
+  "Submitted",
+  "In Review",
+  "Counter Offered",
+  "Approved (Pending Payment)",
+  "Payment Received",
+  "Denied",
+  "Closed"
+];
+
+function normalizeNegotiation(rec){
+  if (!rec) return rec;
+  if (!rec.status) rec.status = "Open";
+  if (!NEGOTIATION_STATUSES.includes(rec.status)) rec.status = "Open";
+  if (!Array.isArray(rec.documents)) rec.documents = [];
+  if (!rec.created_at) rec.created_at = nowISO();
+  rec.updated_at = nowISO();
+  rec.approved_amount = num(rec.approved_amount);
+  rec.collected_amount = num(rec.collected_amount);
+  rec.requested_amount = num(rec.requested_amount);
+  return rec;
+}
+
+function getNegotiationsByBilled(org_id, billed_id){
+  return getNegotiations(org_id).filter(n => n.billed_id === billed_id);
+}
+
+function computeClaimAtRisk(b){
+  const billedAmt = num(b.amount_billed);
+  const insurancePaid = num(b.insurance_paid || b.paid_amount);
+  const patientCollected = num(b.patient_collected);
+  const allowed = num(b.allowed_amount);
+  const patientResp = num(b.patient_responsibility);
+  const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+    ? num(b.expected_insurance)
+    : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+
+  const st = String(b.status || "Pending");
+  if (st === "Underpaid" || st === "Appeal") return Math.max(0, expectedInsurance - insurancePaid);
+  if (st === "Patient Balance") return Math.max(0, patientResp - patientCollected);
+  if (st === "Contractual") return 0;
+  if (st === "Paid") return 0;
+  return Math.max(0, billedAmt - insurancePaid);
+}
+
+function computeUrgency(b){
+  // heuristic: older claims + higher at-risk + certain statuses bubble up
+  const st = String(b.status || "Pending");
+  const atRisk = computeClaimAtRisk(b);
+  const base = (st === "Denied") ? 45 : (st === "Underpaid" ? 35 : (st === "Appeal" ? 30 : (st === "Patient Balance" ? 20 : 10)));
+  const dt = new Date(b.dos || b.denied_at || b.created_at || Date.now()).getTime();
+  const days = Math.max(0, (Date.now() - dt) / (1000*60*60*24));
+  const ageScore = Math.min(35, days * 0.5);
+  const moneyScore = Math.min(35, Math.log10(atRisk + 1) * 12);
+  return Math.round(base + ageScore + moneyScore);
+}
+
+function badgeClassForStatus(st){
+  const s = String(st||"Pending");
+  if (s === "Paid") return "ok";
+  if (s === "Denied") return "err";
+  if (s === "Underpaid") return "underpaid";
+  if (s === "Appeal") return "warn";
+  if (s === "Patient Balance") return "warn";
+  if (s === "Contractual") return "writeoff";
+  return "";
+}
+
+
 // ===== ROUTER =====
 const server = http.createServer(async (req, res) => {
   const parsed = url.parse(req.url, true);
@@ -3121,345 +3237,1147 @@ if (hasPayerBar) {
 
     return send(res, 200, html);
   }
+// ==============================
+// CLAIMS LIFECYCLE (NEW)
+// ==============================
+if (method === "GET" && pathname === "/claims") {
+  const view = String(parsed.query.view || "batch").toLowerCase(); // batch | all
+  const q = String(parsed.query.q || "").trim().toLowerCase();
+  const statusF = String(parsed.query.status || "").trim();
+  const payerF = String(parsed.query.payer || "").trim();
+  const start = String(parsed.query.start || "").trim();
+  const end = String(parsed.query.end || "").trim();
+  const minAmt = String(parsed.query.min || "").trim();
+  const submissionF = String(parsed.query.submission_id || "").trim();
 
-  
-  // ==============================
-  // CLAIMS LIFECYCLE (NEW)
-  // ==============================
-  if (method === "GET" && pathname === "/claims") {
-    const q = String(parsed.query.q || "").trim().toLowerCase();
-    const statusF = String(parsed.query.status || "").trim();
-    const payerF = String(parsed.query.payer || "").trim();
+  const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+  const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
 
-    const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+  // Snapshot counts across all claims
+  const counts = billedAll.reduce((acc,b)=>{
+    const s = String(b.status||"Pending");
+    acc.total++;
+    acc[s] = (acc[s]||0)+1;
+    return acc;
+  }, {total:0});
 
-    // Filter
-    let billed = billedAll.filter(b => {
+  // ===== Batch View =====
+  const batchRows = subsAll
+    .sort((a,b)=> new Date(b.uploaded_at||0).getTime() - new Date(a.uploaded_at||0).getTime())
+    .map(s=>{
+      const claims = billedAll.filter(b => b.submission_id === s.submission_id);
+      const totalClaims = claims.length;
+      const paidCount = claims.filter(b => (b.status||"Pending")==="Paid").length;
+      const deniedCount = claims.filter(b => (b.status||"Pending")==="Denied").length;
+      const underpaidCount = claims.filter(b => (b.status||"Pending")==="Underpaid").length;
+      const appealCount = claims.filter(b => (b.status||"Pending")==="Appeal").length;
+      const pendingCount = claims.filter(b => (b.status||"Pending")==="Pending").length;
+
+      const totalBilledAmt = claims.reduce((sum,b)=> sum + Number(b.amount_billed || 0), 0);
+      const collectedAmt = claims.reduce((sum, b) => sum + Number(b.insurance_paid || b.paid_amount || 0), 0);
+      const atRiskAmt = Math.max(0, totalBilledAmt - collectedAmt);
+
+      const qs = new URLSearchParams({ view: "all", submission_id: s.submission_id }).toString();
+      return `<tr>
+        <td><a href="/billed?submission_id=${encodeURIComponent(s.submission_id)}">${safeStr(s.original_filename || "batch")}</a></td>
+        <td class="muted small">${s.uploaded_at ? new Date(s.uploaded_at).toLocaleDateString() : "—"}</td>
+        <td>${totalClaims}</td>
+        <td>${paidCount}</td>
+        <td>${deniedCount}</td>
+        <td>${underpaidCount}</td>
+        <td>${appealCount}</td>
+        <td>${pendingCount}</td>
+        <td>$${Number(totalBilledAmt||0).toFixed(2)}</td>
+        <td>$${Number(collectedAmt||0).toFixed(2)}</td>
+        <td>$${Number(atRiskAmt||0).toFixed(2)}</td>
+        <td><a href="/claims?${qs}">View Claims</a></td>
+      </tr>`;
+    }).join("");
+
+  // ===== All Claims View (filters + pagination) =====
+  let billed = billedAll.slice();
+  if (submissionF) billed = billed.filter(b => String(b.submission_id||"") === submissionF);
+
+  // date filters use DOS; fallback created_at
+  const fromDate = start ? new Date(start + "T00:00:00.000Z") : null;
+  const toDate = end ? new Date(end + "T23:59:59.999Z") : null;
+  const minAmount = minAmt ? num(minAmt) : null;
+
+  billed = billed.filter(b=>{
+    if (q) {
+      const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
+      if (!blob.includes(q)) return false;
+    }
+    if (statusF && String(b.status||"Pending") !== statusF) return false;
+    if (payerF && String(b.payer||"") !== payerF) return false;
+    if (fromDate || toDate) {
+      const dt = new Date((b.dos || b.created_at || b.paid_at || b.denied_at || nowISO()));
+      if (fromDate && dt < fromDate) return false;
+      if (toDate && dt > toDate) return false;
+    }
+    if (minAmount != null) {
+      const atRisk = computeClaimAtRisk(b);
+      if (atRisk < minAmount) return false;
+    }
+    return true;
+  });
+
+  // payer/status options
+  const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
+  const statusOpts = ["Pending","Paid","Denied","Underpaid","Appeal","Contractual","Patient Balance"];
+
+  // pagination
+  const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
+  const totalFiltered = billed.length;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+  const pageItems = billed.slice(startIdx, startIdx + pageSize);
+
+  const rows = pageItems.map(b=>{
+    const st = String(b.status || "Pending");
+    const paidAmt = Number(b.insurance_paid || b.paid_amount || 0);
+    const atRisk = computeClaimAtRisk(b);
+
+    return `<tr>
+      <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
+      <td>${safeStr(b.dos || "")}</td>
+      <td>${safeStr(b.payer || "")}</td>
+      <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
+      <td>$${paidAmt.toFixed(2)}</td>
+      <td>$${Number(atRisk||0).toFixed(2)}</td>
+      <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
+      <td class="muted small">${b.submission_id ? `<a href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">Batch</a>` : "—"}</td>
+    </tr>`;
+  }).join("");
+
+  // page size selector
+  const sizeSelect = `
+    <label class="small muted" style="margin-right:8px;">Per page</label>
+    <select onchange="window.location=this.value">
+      ${PAGE_SIZE_OPTIONS.map(n=>{
+        const qs = new URLSearchParams({ ...parsed.query, view: "all", page: "1", pageSize: String(n) }).toString();
+        return `<option value="/claims?${qs}" ${n===pageSize?"selected":""}>${n}</option>`;
+      }).join("")}
+    </select>
+  `;
+
+  const nav = buildPageNav("/claims", { ...parsed.query, view: "all", pageSize: String(pageSize) }, page, totalPages);
+
+  const toggle = `
+    <div class="btnRow">
+      <a class="btn secondary" href="/claims?view=batch">By Batch</a>
+      <a class="btn secondary" href="/claims?view=all">All Claims</a>
+    </div>
+  `;
+
+  const html = page("Claims Lifecycle", `
+    <h2>Claims Lifecycle</h2>
+    <p class="muted">Upload billed claims, payments, denials, and negotiations — then manage claim status and follow-up in one flow.</p>
+
+    <div class="btnRow">
+      <a class="btn" href="/upload-billed">Upload Billed Claims</a>
+      <a class="btn secondary" href="/upload-payments">Upload Payments</a>
+      <a class="btn secondary" href="/upload-denials">Upload Denials</a>
+      <a class="btn secondary" href="/upload-negotiations">Upload Negotiations</a>
+    </div>
+
+    <div class="hr"></div>
+
+    <h3>Quick Snapshot</h3>
+    <div class="row">
+      <div class="col">
+        <div class="kpi-card"><h4>Total Claims</h4><p>${counts.total || 0}</p></div>
+        <div class="kpi-card"><h4>Denied</h4><p>${counts["Denied"] || 0}</p></div>
+      </div>
+      <div class="col">
+        <div class="kpi-card"><h4>Underpaid</h4><p>${counts["Underpaid"] || 0}</p></div>
+        <div class="kpi-card"><h4>Appeal</h4><p>${counts["Appeal"] || 0}</p></div>
+      </div>
+      <div class="col">
+        <div class="kpi-card"><h4>Paid</h4><p>${counts["Paid"] || 0}</p></div>
+        <div class="kpi-card"><h4>Patient Balance</h4><p>${counts["Patient Balance"] || 0}</p></div>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+    ${toggle}
+
+    ${
+      view !== "all" ? `
+        <h3>Claim Batches</h3>
+        <div style="overflow:auto;">
+          <table>
+            <thead>
+              <tr><th>Batch</th><th>Uploaded</th><th>Claims</th><th>Paid</th><th>Denied</th><th>Underpaid</th><th>Appeal</th><th>Pending</th><th>Total Billed</th><th>Collected</th><th>At Risk</th><th></th></tr>
+            </thead>
+            <tbody>${batchRows || `<tr><td colspan="12" class="muted">No batches yet.</td></tr>`}</tbody>
+          </table>
+        </div>
+      ` : `
+        <h3>All Claims</h3>
+        <form method="GET" action="/claims" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+          <input type="hidden" name="view" value="all"/>
+          ${submissionF ? `<input type="hidden" name="submission_id" value="${safeStr(submissionF)}"/>` : ``}
+
+          <div style="display:flex;flex-direction:column;min-width:220px;">
+            <label>Search</label>
+            <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, DOS..." />
+          </div>
+
+          <div style="display:flex;flex-direction:column;">
+            <label>Status</label>
+            <select name="status">
+              <option value="">All</option>
+              ${statusOpts.map(s => `<option value="${safeStr(s)}"${statusF===s ? " selected":""}>${safeStr(s)}</option>`).join("")}
+            </select>
+          </div>
+
+          <div style="display:flex;flex-direction:column;">
+            <label>Payer</label>
+            <select name="payer">
+              <option value="">All</option>
+              ${payerOpts.map(p => `<option value="${safeStr(p)}"${payerF===p ? " selected":""}>${safeStr(p)}</option>`).join("")}
+            </select>
+          </div>
+
+          <div style="display:flex;flex-direction:column;">
+            <label>Start</label>
+            <input type="date" name="start" value="${safeStr(start)}" />
+          </div>
+
+          <div style="display:flex;flex-direction:column;">
+            <label>End</label>
+            <input type="date" name="end" value="${safeStr(end)}" />
+          </div>
+
+          <div style="display:flex;flex-direction:column;">
+            <label>Min At-Risk $</label>
+            <input name="min" value="${safeStr(minAmt)}" placeholder="e.g. 500" />
+          </div>
+
+          <div>
+            <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
+            <a class="btn secondary" href="/claims?view=all" style="margin-top:1.6em;">Reset</a>
+          </div>
+        </form>
+
+        <div class="hr"></div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+          <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${totalFiltered} results (Page ${page}/${totalPages}).</div>
+          <div>${sizeSelect}</div>
+        </div>
+
+        <div style="overflow:auto;">
+          <table>
+            <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Status</th><th>Source</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="8" class="muted">No claims found.</td></tr>`}</tbody>
+          </table>
+        </div>
+
+        ${nav}
+      `
+    }
+  `, navUser(), {showChat:true});
+
+  return send(res, 200, html);
+}
+// ==============================
+// REVENUE INTELLIGENCE (AI)
+// ==============================
+if (method === "GET" && pathname === "/intelligence") {
+  const a = computeAnalytics(org.org_id);
+  const denialByMonth = computeDenialTrends(org.org_id);
+  const payTrend = computePaymentTrends(org.org_id);
+
+  // negotiation metrics
+  const negs = getNegotiations(org.org_id);
+  const negApproved = negs.filter(n => n.status === "Approved (Pending Payment)" || n.status === "Payment Received");
+  const negPaid = negs.filter(n => n.status === "Payment Received");
+  const negApprovedTotal = negApproved.reduce((s,n)=> s + num(n.approved_amount), 0);
+  const negCollectedTotal = negPaid.reduce((s,n)=> s + num(n.collected_amount), 0);
+  const negSuccessRate = negApproved.length ? ((negPaid.length / negApproved.length) * 100).toFixed(1) : "0.0";
+
+  // Build chart-friendly arrays
+  const denialMonths = Object.keys(denialByMonth || {}).sort();
+  const denialTotals = denialMonths.map(k => Number(denialByMonth[k]?.total || 0));
+  const draftTotals = denialMonths.map(k => Number(denialByMonth[k]?.drafts || 0));
+
+  const payMonths = Object.keys(payTrend.byMonth || {}).sort();
+  const payTotals = payMonths.map(k => Number(payTrend.byMonth[k]?.total || 0));
+
+  // Use last 30d payerTop from dashboard metrics for quick underpay visualization
+  const r = rangeFromPreset("last30");
+  const m = computeDashboardMetrics(org.org_id, r.start, r.end, "last30");
+  const payerTop = (m.payerTop || []).slice(0, 8);
+
+  const payload = {
+    denialMonths, denialTotals, draftTotals,
+    payMonths, payTotals,
+    payerLabels: payerTop.map(x=>x.payer),
+    payerUnderpaid: payerTop.map(x=>Number(x.underpaid||0))
+  };
+  const b64 = Buffer.from(JSON.stringify(payload)).toString("base64");
+
+  // ===== AI Insights Panel (rule-based v1; replaces with model later) =====
+  const insights = [];
+  try {
+    const last2 = denialMonths.slice(-2);
+    if (last2.length === 2) {
+      const prev = Number(denialByMonth[last2[0]]?.total||0);
+      const cur = Number(denialByMonth[last2[1]]?.total||0);
+      if (prev > 0) {
+        const pct = ((cur - prev) / prev) * 100;
+        if (Math.abs(pct) >= 10) insights.push(`Denials changed by ${pct.toFixed(0)}% vs last month (${cur} vs ${prev}).`);
+      }
+    }
+    if (Number(a.aging?.over60||0) > 0) insights.push(`${a.aging.over60} items are 60+ days old. Prioritize follow-up this week.`);
+    if (Number(m.kpis.underpaidAmt||0) > 0) {
+      const top = payerTop.sort((x,y)=>Number(y.underpaid||0)-Number(x.underpaid||0))[0];
+      if (top && Number(top.underpaid||0) > 0) insights.push(`Top underpayment payer in last 30 days: ${top.payer} ($${Number(top.underpaid).toFixed(0)}).`);
+    }
+    if (negs.length) {
+      insights.push(`Negotiations: ${negs.length} total · ${negPaid.length} paid · Success ${negSuccessRate}%.`);
+    } else {
+      insights.push("No negotiation cases yet. Underpaid items can be routed to negotiation for tracking.");
+    }
+  } catch {
+    // ignore
+  }
+  if (!insights.length) insights.push("Upload claims and payments to generate AI insights.");
+
+  const html = page("Revenue Intelligence (AI)", `
+    <h2>Revenue Intelligence (AI)</h2>
+    <p class="muted">Deeper analytics and decision support. This differs from Revenue Overview by focusing on trends and recommended next steps.</p>
+
+    <div class="hr"></div>
+
+    <h3>AI Insights</h3>
+    <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#fff;">
+      <ul class="muted" style="margin:0;padding-left:18px;">
+        ${insights.map(x=>`<li>${safeStr(x)}</li>`).join("")}
+      </ul>
+
+      <div class="hr"></div>
+
+      <div>
+        <label>Ask AI about your revenue data</label>
+        <textarea id="aiMainQ" placeholder="Example: Which payer has the most underpayments? What should we prioritize this week?" style="min-height:90px;"></textarea>
+        <div class="btnRow">
+          <button class="btn secondary" type="button" onclick="window.__tjhpSendMainAI()">Ask AI</button>
+          <a class="btn secondary" href="/account">View AI Limits</a>
+        </div>
+        <div id="aiMainA" class="muted" style="margin-top:10px;white-space:pre-wrap;"></div>
+      </div>
+    </div>
+
+    <script>
+    window.__tjhpSendMainAI = async function(){
+      const q = document.getElementById("aiMainQ");
+      const out = document.getElementById("aiMainA");
+      if (!q || !out) return;
+      const text = (q.value||"").trim();
+      if (!text) return;
+      out.textContent = "Thinking...";
+      try{
+        const r = await fetch("/ai/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message:text }) });
+        const data = await r.json();
+        out.textContent = (data && data.answer) ? data.answer : "No response.";
+      }catch(e){
+        out.textContent = "Error contacting assistant. Try again.";
+      }
+    };
+    </script>
+
+    <div class="hr"></div>
+
+    <div class="row">
+      <div class="col">
+        <div class="kpi-card"><h4>Recovered from Denials</h4><p>$${Number(a.totalRecoveredFromDenials||0).toFixed(2)}</p></div>
+        <div class="kpi-card"><h4>Recovery Rate</h4><p>${safeStr(a.recoveryRate)}%</p></div>
+      </div>
+      <div class="col">
+        <div class="kpi-card"><h4>Projected Lost Revenue</h4><p>$${Number(a.projectedLostRevenue||0).toFixed(2)}</p></div>
+        <div class="kpi-card"><h4>Aging (60+ / 90+)</h4><p>${Number(a.aging?.over60||0)} / ${Number(a.aging?.over90||0)}</p></div>
+      </div>
+      <div class="col">
+        <div class="kpi-card"><h4>Negotiation Approved</h4><p>$${Number(negApprovedTotal||0).toFixed(2)}</p></div>
+        <div class="kpi-card"><h4>Negotiation Collected</h4><p>$${Number(negCollectedTotal||0).toFixed(2)}</p></div>
+        <div class="kpi-card"><h4>Negotiation Success</h4><p>${negSuccessRate}%</p></div>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+
+    <div class="row">
+      <div class="col">
+        <h3>Denial Trend</h3>
+        <canvas id="denialTrend" height="140"></canvas>
+      </div>
+      <div class="col">
+        <h3>Payment Trend</h3>
+        <canvas id="paymentTrend" height="140"></canvas>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+
+    <h3>Underpayment by Payer (Last 30 Days)</h3>
+    <canvas id="underpayChart" height="160"></canvas>
+
+    <div class="hr"></div>
+
+    <h3>Top Denial Categories</h3>
+    <ul class="muted">
+      ${
+        Object.entries(a.denialReasons || {})
+          .sort((x,y)=>y[1]-x[1])
+          .slice(0,6)
+          .map(([k,v])=>`<li>${safeStr(k)} (${v})</li>`)
+          .join("") || "<li>No denial category data available yet.</li>"
+      }
+    </ul>
+
+    <script>
+    (function(){
+      if (!window.Chart) return;
+      const data = JSON.parse(atob("${b64}"));
+
+      const denEl = document.getElementById("denialTrend");
+      if (data.denialMonths && data.denialMonths.length){
+        new Chart(denEl, {
+          type:"line",
+          data:{ labels:data.denialMonths, datasets:[
+            { label:"Denials", data:data.denialTotals },
+            { label:"Drafts Generated", data:data.draftTotals }
+          ]},
+          options:{ responsive:true }
+        });
+      } else {
+        denEl.outerHTML = "<p class='muted'>No denial trend data.</p>";
+      }
+
+      const payEl = document.getElementById("paymentTrend");
+      if (data.payMonths && data.payMonths.length){
+        new Chart(payEl, {
+          type:"bar",
+          data:{ labels:data.payMonths, datasets:[
+            { label:"Payments ($)", data:data.payTotals }
+          ]},
+          options:{ responsive:true }
+        });
+      } else {
+        payEl.outerHTML = "<p class='muted'>No payment trend data.</p>";
+      }
+
+      const upEl = document.getElementById("underpayChart");
+      if (data.payerLabels && data.payerLabels.length && (data.payerUnderpaid||[]).some(v=>Number(v)>0)){
+        new Chart(upEl, {
+          type:"bar",
+          data:{ labels:data.payerLabels, datasets:[
+            { label:"Underpaid ($)", data:data.payerUnderpaid }
+          ]},
+          options:{ responsive:true }
+        });
+      } else {
+        upEl.outerHTML = "<p class='muted'>No underpayment data yet (upload payments and allowed/expected fields).</p>";
+      }
+    })();
+    </script>
+  `, navUser(), {showChat:true});
+
+  return send(res, 200, html);
+}
+// ==============================
+// ACTION CENTER (NEW)
+// ==============================
+if (method === "GET" && pathname === "/actions") {
+  const q = String(parsed.query.q || "").trim().toLowerCase();
+  const statusF = String(parsed.query.status || "").trim();
+  const payerF = String(parsed.query.payer || "").trim();
+  const sort = String(parsed.query.sort || "urgency").trim(); // urgency | atrisk | payer
+  const start = String(parsed.query.start || "").trim();
+  const end = String(parsed.query.end || "").trim();
+  const minAmt = String(parsed.query.min || "").trim();
+
+  const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+  const negAll = getNegotiations(org.org_id);
+
+  const fromDate = start ? new Date(start + "T00:00:00.000Z") : null;
+  const toDate = end ? new Date(end + "T23:59:59.999Z") : null;
+  const minAmount = minAmt ? num(minAmt) : null;
+
+  // actionable statuses only
+  const actionableStatuses = new Set(["Pending","Denied","Underpaid","Appeal","Patient Balance"]);
+  let items = billedAll
+    .filter(b => actionableStatuses.has(String(b.status || "Pending")))
+    .filter(b => {
       if (q) {
         const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
         if (!blob.includes(q)) return false;
       }
-      if (statusF && String(b.status || "Pending") !== statusF) return false;
-      if (payerF && String(b.payer || "") !== payerF) return false;
+      if (statusF && String(b.status||"Pending") !== statusF) return false;
+      if (payerF && String(b.payer||"") !== payerF) return false;
+      if (fromDate || toDate) {
+        const dt = new Date((b.dos || b.denied_at || b.created_at || nowISO()));
+        if (fromDate && dt < fromDate) return false;
+        if (toDate && dt > toDate) return false;
+      }
+      if (minAmount != null) {
+        const atRisk = computeClaimAtRisk(b);
+        if (atRisk < minAmount) return false;
+      }
       return true;
+    })
+    .map(b => {
+      const st = String(b.status || "Pending");
+      const atRisk = computeClaimAtRisk(b);
+      const urgency = computeUrgency(b);
+
+      const existingNeg = negAll.filter(n => n.billed_id === b.billed_id)
+        .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime())[0];
+
+      let suggested = "Review and update";
+      if (st === "Denied") suggested = "Generate appeal";
+      else if (st === "Underpaid") suggested = existingNeg ? "Follow negotiation" : "Start negotiation";
+      else if (st === "Appeal") suggested = "Follow up on appeal";
+      else if (st === "Patient Balance") suggested = "Collect patient balance";
+      else if (st === "Pending") suggested = "Confirm payer status";
+
+      const link = existingNeg ? `/negotiation-detail?negotiation_id=${encodeURIComponent(existingNeg.negotiation_id)}` : `/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}`;
+      const linkLabel = existingNeg ? "Negotiation" : "Claim";
+
+      return { b, st, atRisk, urgency, suggested, existingNeg, link, linkLabel };
     });
 
-    // Payer/status options
-    const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
-    const statusOpts = ["Pending","Paid","Denied","Underpaid","Appeal","Contractual","Patient Balance"];
+  // sorting
+  if (sort === "atrisk") items.sort((a,b)=> b.atRisk - a.atRisk);
+  else if (sort === "payer") items.sort((a,b)=> String(a.b.payer||"").localeCompare(String(b.b.payer||"")));
+  else items.sort((a,b)=> (b.urgency - a.urgency) || (b.atRisk - a.atRisk));
 
-    // Summary
-    const counts = billedAll.reduce((acc,b)=>{
-      const s = String(b.status||"Pending");
-      acc.total++;
-      acc[s] = (acc[s]||0)+1;
-      return acc;
-    }, {total:0});
+  // pagination
+  const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
+  const totalFiltered = items.length;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+  const pageItems = items.slice(startIdx, startIdx + pageSize);
 
-    // Rows (limit for UI)
-    const rows = billed.slice(0, 300).map(b => {
-      const st = String(b.status || "Pending");
-      const badgeCls =
-        st === "Paid" ? "ok" :
-        st === "Denied" ? "err" :
-        st === "Underpaid" ? "underpaid" :
-        st === "Contractual" ? "writeoff" :
-        st === "Patient Balance" ? "warn" :
-        st === "Appeal" ? "warn" : "";
+  const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
+  const statusOpts = ["Pending","Denied","Underpaid","Appeal","Patient Balance"];
 
-      const paidAmt = Number(b.insurance_paid || b.paid_amount || 0);
+  const rows = pageItems.map(x=>{
+    const badgeCls = badgeClassForStatus(x.st);
+    const openBtn = `<a class="btn secondary small" href="${x.link}">Open ${safeStr(x.linkLabel)}</a>`;
+    const quick = (x.st === "Denied")
+      ? `<a class="btn secondary small" href="/upload-denials">Upload Denial</a>`
+      : (x.st === "Underpaid")
+        ? `<form method="POST" action="/negotiations/create" style="display:inline;">
+             <input type="hidden" name="billed_id" value="${safeStr(x.b.billed_id)}"/>
+             <button class="btn secondary small" type="submit">${x.existingNeg ? "View Negotiation" : "Start Negotiation"}</button>
+           </form>`
+        : "";
 
-      return `<tr>
-        <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
-        <td>${safeStr(b.dos || "")}</td>
-        <td>${safeStr(b.payer || "")}</td>
-        <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
-        <td>$${paidAmt.toFixed(2)}</td>
-        <td><span class="badge ${badgeCls}">${safeStr(st)}</span></td>
-        <td class="muted small">${b.submission_id ? `<a href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">Batch</a>` : "—"}</td>
-      </tr>`;
-    }).join("");
+    return `<tr>
+      <td><a href="/claim-detail?billed_id=${encodeURIComponent(x.b.billed_id)}">${safeStr(x.b.claim_number || "")}</a></td>
+      <td>${safeStr(x.b.payer || "")}</td>
+      <td><span class="badge ${badgeCls}">${safeStr(x.st)}</span></td>
+      <td>$${Number(x.atRisk||0).toFixed(2)}</td>
+      <td>${x.urgency}</td>
+      <td class="muted small">${safeStr(x.suggested)}</td>
+      <td style="white-space:nowrap;">${openBtn} ${quick}</td>
+    </tr>`;
+  }).join("");
 
-    const html = page("Claims Lifecycle", `
-      <h2>Claims Lifecycle</h2>
-      <p class="muted">A single place to upload billed claims, upload payments, and manage claim statuses.</p>
+  const sizeSelect = `
+    <label class="small muted" style="margin-right:8px;">Per page</label>
+    <select onchange="window.location=this.value">
+      ${PAGE_SIZE_OPTIONS.map(n=>{
+        const qs = new URLSearchParams({ ...parsed.query, page: "1", pageSize: String(n) }).toString();
+        return `<option value="/actions?${qs}" ${n===pageSize?"selected":""}>${n}</option>`;
+      }).join("")}
+    </select>
+  `;
+
+  const nav = buildPageNav("/actions", { ...parsed.query, pageSize: String(pageSize) }, page, totalPages);
+
+  const html = page("Action Center", `
+    <h2>Action Center</h2>
+    <p class="muted">Filtered, sortable queue of open items — designed for daily follow-up.</p>
+
+    <form method="GET" action="/actions" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+      <div style="display:flex;flex-direction:column;min-width:220px;">
+        <label>Search</label>
+        <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, DOS..." />
+      </div>
+
+      <div style="display:flex;flex-direction:column;">
+        <label>Status</label>
+        <select name="status">
+          <option value="">All</option>
+          ${statusOpts.map(s => `<option value="${safeStr(s)}"${statusF===s ? " selected":""}>${safeStr(s)}</option>`).join("")}
+        </select>
+      </div>
+
+      <div style="display:flex;flex-direction:column;">
+        <label>Payer</label>
+        <select name="payer">
+          <option value="">All</option>
+          ${payerOpts.map(p => `<option value="${safeStr(p)}"${payerF===p ? " selected":""}>${safeStr(p)}</option>`).join("")}
+        </select>
+      </div>
+
+      <div style="display:flex;flex-direction:column;">
+        <label>Start</label>
+        <input type="date" name="start" value="${safeStr(start)}" />
+      </div>
+
+      <div style="display:flex;flex-direction:column;">
+        <label>End</label>
+        <input type="date" name="end" value="${safeStr(end)}" />
+      </div>
+
+      <div style="display:flex;flex-direction:column;">
+        <label>Min At-Risk $</label>
+        <input name="min" value="${safeStr(minAmt)}" placeholder="e.g. 500" />
+      </div>
+
+      <div style="display:flex;flex-direction:column;">
+        <label>Sort</label>
+        <select name="sort">
+          <option value="urgency"${sort==="urgency"?" selected":""}>Urgency</option>
+          <option value="atrisk"${sort==="atrisk"?" selected":""}>At-Risk $</option>
+          <option value="payer"${sort==="payer"?" selected":""}>Payer</option>
+        </select>
+      </div>
+
+      <div>
+        <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
+        <a class="btn secondary" href="/actions" style="margin-top:1.6em;">Reset</a>
+      </div>
+    </form>
+
+    <div class="hr"></div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${totalFiltered} results (Page ${page}/${totalPages}).</div>
+      <div>${sizeSelect}</div>
+    </div>
+
+    <div style="overflow:auto;">
+      <table>
+        <thead><tr><th>Claim #</th><th>Payer</th><th>Status</th><th>At-Risk $</th><th>Urgency</th><th>Suggested Action</th><th>Actions</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="7" class="muted">No open action items.</td></tr>`}</tbody>
+      </table>
+    </div>
+
+    ${nav}
+  `, navUser(), {showChat:true});
+
+  return send(res, 200, html);
+}
+
+
+
+// ==============================
+// UPLOAD PAGES (SEPARATED)
+// ==============================
+
+// /upload-billed (separate page, no mixed uploads) -> reuse existing billed submissions UI
+if (method === "GET" && pathname === "/upload-billed") {
+  return redirect(res, "/billed");
+}
+
+// Payments-only upload page (UI only; POST stays /payments)
+if (method === "GET" && pathname === "/upload-payments") {
+  const allow = paymentRowsAllowance(org.org_id);
+
+  // Build payment upload queue (grouped by source_file)
+  const allPay = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+  const paymentFilesMap = {};
+  allPay.forEach(p => {
+    const sf = (p.source_file || "").trim();
+    if (!sf) return;
+    if (!paymentFilesMap[sf]) {
+      paymentFilesMap[sf] = { source_file: sf, count: 0, latest: p.created_at || p.date_paid || nowISO() };
+    }
+    paymentFilesMap[sf].count += 1;
+    const dt = new Date(p.created_at || p.date_paid || Date.now()).getTime();
+    const cur = new Date(paymentFilesMap[sf].latest || 0).getTime();
+    if (dt > cur) paymentFilesMap[sf].latest = p.created_at || p.date_paid || nowISO();
+  });
+
+  const paymentQueue = Object.values(paymentFilesMap)
+    .sort((a,b) => new Date(b.latest).getTime() - new Date(a.latest).getTime())
+    .slice(0, 12);
+
+  const html = page("Upload Payments", `
+    <h2>Upload Payments</h2>
+    <p class="muted">Upload bulk payment files (CSV preferred). This powers analytics and claim reconciliation.</p>
+    <p class="muted small"><strong>Rows remaining:</strong> ${allow.remaining}</p>
+
+    <form method="POST" action="/payments" enctype="multipart/form-data">
+      <label>Upload CSV/XLS/XLSX</label>
+      <div id="pay-dropzone" class="dropzone">Drop a CSV/XLS/XLSX file here or click to select</div>
+      <input id="pay-file" type="file" name="payfile" accept=".csv,.xls,.xlsx,.pdf,.doc,.docx" required style="display:none" />
+      <div class="btnRow">
+        <button class="btn" type="submit">Upload Payments</button>
+        <a class="btn secondary" href="/report?type=payment_detail">View Payment Details</a>
+        <a class="btn secondary" href="/claims">Back to Claims Lifecycle</a>
+      </div>
+    </form>
+
+    <div class="hr"></div>
+    <h3>Payment Queue</h3>
+    ${
+      paymentQueue.length === 0
+        ? `<p class="muted">No payment uploads yet.</p>`
+        : `<div style="overflow:auto;">
+            <table>
+              <thead><tr><th>Source File</th><th>Records</th><th>Last Upload</th><th>Open</th></tr></thead>
+              <tbody>${
+                paymentQueue.map(x => `
+                  <tr>
+                    <td>${safeStr(x.source_file)}</td>
+                    <td>${x.count}</td>
+                    <td>${new Date(x.latest).toLocaleDateString()}</td>
+                    <td><a href="/report?type=payment_detail">Open</a></td>
+                  </tr>
+                `).join("")
+              }</tbody>
+            </table>
+          </div>`
+    }
+
+    <script>
+      const payDrop = document.getElementById('pay-dropzone');
+      const payInput = document.getElementById('pay-file');
+      payDrop.addEventListener('click', () => payInput.click());
+      ['dragenter','dragover'].forEach(evt => {
+        payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.add('dragover'); });
+      });
+      ['dragleave','drop'].forEach(evt => {
+        payDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); payDrop.classList.remove('dragover'); });
+      });
+      payDrop.addEventListener('drop', e => {
+        const files = e.dataTransfer.files;
+        if (files.length > 1) { alert('Only one file at a time.'); return; }
+        const dt = new DataTransfer();
+        dt.items.add(files[0]);
+        payInput.files = dt.files;
+        payDrop.textContent = files[0].name;
+      });
+      payInput.addEventListener('change', () => {
+        const file = payInput.files[0];
+        if (file) payDrop.textContent = file.name;
+      });
+    </script>
+  `, navUser(), {showChat:true});
+  return send(res, 200, html);
+}
+
+// Denials-only upload page (POST handled by /upload-denials)
+if (method === "GET" && pathname === "/upload-denials") {
+  const allCasesForStatus = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+  allCasesForStatus.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+  const recentCases = allCasesForStatus.slice(0, 10);
+
+  const html = page("Upload Denials", `
+    <h2>Upload Denials</h2>
+    <p class="muted">Upload denial documents to generate appeal drafts. Each document becomes its own case.</p>
+
+    <form method="POST" action="/upload-denials" enctype="multipart/form-data">
+      <label>Denial Documents (up to 3)</label>
+      <div id="case-dropzone" class="dropzone">Drop up to 3 documents here or click to select</div>
+      <input id="case-files" type="file" name="files" multiple required accept=".pdf,.doc,.docx,.jpg,.png" style="display:none" />
+
+      <label>Optional notes</label>
+      <textarea name="notes" placeholder="Any context to help review (optional)" style="min-height:140px;"></textarea>
+
+      <div class="btnRow" style="margin-top:16px;">
+        <button class="btn" type="submit">Submit Denials</button>
+        <a class="btn secondary" href="/claims">Back to Claims Lifecycle</a>
+      </div>
+    </form>
+
+    <div class="hr"></div>
+    <h3>Denial Case Queue</h3>
+    ${
+      recentCases.length === 0
+        ? `<p class="muted">No denial cases yet.</p>`
+        : `<table>
+            <thead><tr><th>Case ID</th><th>Status</th><th>Open</th></tr></thead>
+            <tbody>${
+              recentCases.map(c => {
+                const openLink = (c.status === "DRAFT_READY")
+                  ? `/draft?case_id=${encodeURIComponent(c.case_id)}`
+                  : `/status?case_id=${encodeURIComponent(c.case_id)}`;
+                return `<tr>
+                  <td>${safeStr(c.case_id)}</td>
+                  <td>${safeStr(c.status)}</td>
+                  <td><a href="${openLink}">Open</a></td>
+                </tr>`;
+              }).join("")
+            }</tbody>
+          </table>`
+    }
+
+    <script>
+      const caseDrop = document.getElementById('case-dropzone');
+      const caseInput = document.getElementById('case-files');
+      caseDrop.addEventListener('click', () => caseInput.click());
+      ['dragenter','dragover'].forEach(evt => {
+        caseDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); caseDrop.classList.add('dragover'); });
+      });
+      ['dragleave','drop'].forEach(evt => {
+        caseDrop.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); caseDrop.classList.remove('dragover'); });
+      });
+      caseDrop.addEventListener('drop', e => {
+        const files = e.dataTransfer.files;
+        if (files.length > 3) { alert('You can upload up to 3 documents.'); return; }
+        const dt2 = new DataTransfer();
+        for (let i=0; i<files.length && i<3; i++) dt2.items.add(files[i]);
+        caseInput.files = dt2.files;
+        caseDrop.textContent = files.length + ' file' + (files.length>1 ? 's' : '') + ' selected';
+      });
+      caseInput.addEventListener('change', () => {
+        if (caseInput.files.length > 3) {
+          alert('You can upload up to 3 documents. Only the first 3 will be used.');
+          const dt2 = new DataTransfer();
+          for (let i=0; i<3; i++) dt2.items.add(caseInput.files[i]);
+          caseInput.files = dt2.files;
+        }
+        if (caseInput.files.length) {
+          caseDrop.textContent = caseInput.files.length + ' file' + (caseInput.files.length>1 ? 's' : '') + ' selected';
+        }
+      });
+    </script>
+  `, navUser(), {showChat:true});
+  return send(res, 200, html);
+}
+
+// Negotiations upload / hub
+if (method === "GET" && pathname === "/upload-negotiations") {
+  const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+  const negs = getNegotiations(org.org_id).map(n => normalizeNegotiation(n));
+  const q = String(parsed.query.q || "").trim().toLowerCase();
+
+  const filt = q ? negs.filter(n => {
+    const blob = `${n.claim_number||""} ${n.payer||""} ${n.status||""}`.toLowerCase();
+    return blob.includes(q);
+  }) : negs;
+
+  const rows = filt
+    .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime())
+    .slice(0, 200)
+    .map(n => `
+      <tr>
+        <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">${safeStr(n.claim_number||"")}</a></td>
+        <td>${safeStr(n.payer||"")}</td>
+        <td>${safeStr(n.status||"Open")}</td>
+        <td>$${Number(n.requested_amount||0).toFixed(2)}</td>
+        <td>$${Number(n.approved_amount||0).toFixed(2)}</td>
+        <td>$${Number(n.collected_amount||0).toFixed(2)}</td>
+        <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
+      </tr>
+    `).join("");
+
+  const underpaidClaims = billedAll
+    .filter(b => String(b.status||"") === "Underpaid")
+    .slice(0, 150);
+
+  const options = underpaidClaims.map(b => `<option value="${safeStr(b.billed_id)}">${safeStr(b.claim_number)} — ${safeStr(b.payer||"")}</option>`).join("");
+
+  const html = page("Upload Negotiations", `
+    <h2>Negotiations</h2>
+    <p class="muted">Create and manage negotiation cases. All negotiation links route to the negotiation detail page.</p>
+
+    <div class="hr"></div>
+
+    <h3>Start a Negotiation</h3>
+    <form method="POST" action="/negotiations/create">
+      <label>Select Underpaid Claim</label>
+      <select name="billed_id" required>
+        <option value="">Select a claim</option>
+        ${options || ""}
+      </select>
+
+      <label>Requested Amount (optional)</label>
+      <input name="requested_amount" placeholder="e.g. 250.00" />
 
       <div class="btnRow">
-        <a class="btn" href="/billed">Upload Billed Claims</a>
-        <a class="btn secondary" href="/upload-payments">Upload Payments</a>
-        <a class="btn secondary" href="/upload-denials">Upload Denials</a>
+        <button class="btn" type="submit">Create Negotiation</button>
+        <a class="btn secondary" href="/claims">Back to Claims Lifecycle</a>
       </div>
+    </form>
 
-      <div class="hr"></div>
+    <div class="hr"></div>
 
-      <h3>Quick Snapshot</h3>
-      <div class="row">
-        <div class="col">
-          <div class="kpi-card"><h4>Total Claims</h4><p>${counts.total || 0}</p></div>
-          <div class="kpi-card"><h4>Denied</h4><p>${counts["Denied"] || 0}</p></div>
-        </div>
-        <div class="col">
-          <div class="kpi-card"><h4>Underpaid</h4><p>${counts["Underpaid"] || 0}</p></div>
-          <div class="kpi-card"><h4>Appeal</h4><p>${counts["Appeal"] || 0}</p></div>
-        </div>
-        <div class="col">
-          <div class="kpi-card"><h4>Paid</h4><p>${counts["Paid"] || 0}</p></div>
-          <div class="kpi-card"><h4>Patient Balance</h4><p>${counts["Patient Balance"] || 0}</p></div>
-        </div>
+    <h3>Search Negotiations</h3>
+    <form method="GET" action="/upload-negotiations" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+      <div style="display:flex;flex-direction:column;min-width:260px;">
+        <label>Search</label>
+        <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, status..." />
       </div>
-
-      <div class="hr"></div>
-
-      <h3>Filter</h3>
-      <form method="GET" action="/claims" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
-        <div style="display:flex;flex-direction:column;min-width:240px;">
-          <label>Search</label>
-          <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, DOS..." />
-        </div>
-        <div style="display:flex;flex-direction:column;">
-          <label>Status</label>
-          <select name="status">
-            <option value="">All</option>
-            ${statusOpts.map(s => `<option value="${safeStr(s)}"${statusF===s ? " selected":""}>${safeStr(s)}</option>`).join("")}
-          </select>
-        </div>
-        <div style="display:flex;flex-direction:column;">
-          <label>Payer</label>
-          <select name="payer">
-            <option value="">All</option>
-            ${payerOpts.map(p => `<option value="${safeStr(p)}"${payerF===p ? " selected":""}>${safeStr(p)}</option>`).join("")}
-          </select>
-        </div>
-        <div>
-          <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
-          <a class="btn secondary" href="/claims" style="margin-top:1.6em;">Reset</a>
-        </div>
-      </form>
-
-      <div class="hr"></div>
-
-      <h3>Claims (showing up to 300)</h3>
-      <div style="overflow:auto;">
-        <table>
-          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>Status</th><th>Source</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="7" class="muted">No claims found.</td></tr>`}</tbody>
-        </table>
+      <div>
+        <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
+        <a class="btn secondary" href="/upload-negotiations" style="margin-top:1.6em;">Reset</a>
       </div>
-    `, navUser(), {showChat:true});
+    </form>
 
-    return send(res, 200, html);
-  }
+    <div class="hr"></div>
 
-  // ==============================
-  // REVENUE INTELLIGENCE (NEW)
-  // ==============================
-  if (method === "GET" && pathname === "/intelligence") {
-    const a = computeAnalytics(org.org_id);
-    const denialByMonth = computeDenialTrends(org.org_id);
-    const payTrend = computePaymentTrends(org.org_id);
+    <h3>Negotiation Queue (showing up to 200)</h3>
+    <div style="overflow:auto;">
+      <table>
+        <thead><tr><th>Claim #</th><th>Payer</th><th>Status</th><th>Requested</th><th>Approved</th><th>Collected</th><th>Updated</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="7" class="muted">No negotiations yet.</td></tr>`}</tbody>
+      </table>
+    </div>
+  `, navUser(), {showChat:true});
 
-    // Build chart-friendly arrays
-    const denialMonths = Object.keys(denialByMonth || {}).sort();
-    const denialTotals = denialMonths.map(k => Number(denialByMonth[k]?.total || 0));
-    const draftTotals = denialMonths.map(k => Number(denialByMonth[k]?.drafts || 0));
+  return send(res, 200, html);
+}
 
-    const payMonths = Object.keys(payTrend.byMonth || {}).sort();
-    const payTotals = payMonths.map(k => Number(payTrend.byMonth[k]?.total || 0));
 
-    // Use last 30d payerTop from dashboard metrics for quick underpay visualization
-    const r = rangeFromPreset("last30");
-    const m = computeDashboardMetrics(org.org_id, r.start, r.end, "last30");
-    const payerTop = (m.payerTop || []).slice(0, 8);
+// Create negotiation from billed_id (always routes to negotiation-detail)
+if (method === "POST" && pathname === "/negotiations/create") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const billed_id = (params.get("billed_id") || "").trim();
+  const requested_amount = params.get("requested_amount") || "";
 
-    const payload = {
-      denialMonths, denialTotals, draftTotals,
-      payMonths, payTotals,
-      payerLabels: payerTop.map(x=>x.payer),
-      payerUnderpaid: payerTop.map(x=>Number(x.underpaid||0))
-    };
-    const b64 = Buffer.from(JSON.stringify(payload)).toString("base64");
+  const billedAll = readJSON(FILES.billed, []);
+  const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+  if (!b) return redirect(res, "/upload-negotiations");
 
-    const html = page("Revenue Intelligence", `
-      <h2>Revenue Intelligence (AI)</h2>
-      <p class="muted">Trends and insights based on uploaded claims, denials, and payment data.</p>
+  // If an open negotiation exists for this claim, go there
+  const existing = getNegotiations(org.org_id)
+    .filter(n => n.billed_id === billed_id)
+    .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime())[0];
 
-      <div class="row">
-        <div class="col">
-          <div class="kpi-card"><h4>Recovered from Denials</h4><p>$${Number(a.totalRecoveredFromDenials||0).toFixed(2)}</p></div>
-          <div class="kpi-card"><h4>Recovery Rate</h4><p>${safeStr(a.recoveryRate)}%</p></div>
-        </div>
-        <div class="col">
-          <div class="kpi-card"><h4>Projected Lost Revenue</h4><p>$${Number(a.projectedLostRevenue||0).toFixed(2)}</p></div>
-          <div class="kpi-card"><h4>Unpaid Aging (60+ / 90+)</h4><p>${Number(a.aging?.over60||0)} / ${Number(a.aging?.over90||0)}</p></div>
-        </div>
+  if (existing) return redirect(res, `/negotiation-detail?negotiation_id=${encodeURIComponent(existing.negotiation_id)}`);
+
+  const negotiation_id = uuid();
+  const rec = normalizeNegotiation({
+    negotiation_id,
+    org_id: org.org_id,
+    billed_id: b.billed_id,
+    claim_number: b.claim_number || "",
+    payer: b.payer || "",
+    dos: b.dos || "",
+    amount_billed: num(b.amount_billed),
+    amount_paid: num(b.insurance_paid || b.paid_amount),
+    amount_underpaid: computeClaimAtRisk({ ...b, status: "Underpaid" }),
+    requested_amount: requested_amount ? num(requested_amount) : 0,
+    approved_amount: 0,
+    collected_amount: 0,
+    status: "Open",
+    notes: "",
+    documents: []
+  });
+
+  saveNegotiation(rec);
+
+  // Link on billed record for quick access (non-breaking if field doesn't exist)
+  try {
+    updateBilledClaim(b.billed_id, (x)=>{
+      x.negotiation_id = negotiation_id; // latest
+    });
+  } catch {}
+
+  auditLog({ actor:"user", action:"negotiation_create", org_id: org.org_id, negotiation_id, billed_id });
+  return redirect(res, `/negotiation-detail?negotiation_id=${encodeURIComponent(negotiation_id)}`);
+}
+
+// Negotiation detail (single source of truth)
+if (method === "GET" && pathname === "/negotiation-detail") {
+  const negotiation_id = String(parsed.query.negotiation_id || "").trim();
+  if (!negotiation_id) return redirect(res, "/upload-negotiations");
+
+  const n0 = getNegotiationById(org.org_id, negotiation_id);
+  if (!n0) return redirect(res, "/upload-negotiations");
+  const n = normalizeNegotiation({ ...n0 });
+
+  const billedAll = readJSON(FILES.billed, []);
+  const b = billedAll.find(x => x.billed_id === n.billed_id && x.org_id === org.org_id);
+
+  const docList = (n.documents || []).map(d => {
+    const link = d && d.filename ? `<a href="/file?name=${encodeURIComponent(d.filename)}" target="_blank">${safeStr(d.filename)}</a>` : "";
+    return `<li>${link} <span class="muted small">${d.uploaded_at ? new Date(d.uploaded_at).toLocaleString() : ""}</span></li>`;
+  }).join("");
+
+  const applyHelp = `When a negotiation is approved, you can track approved vs collected. You may apply collected funds to the claim (manual control) even if approval differs from payment timing.`;
+
+  const html = page("Negotiation Detail", `
+    <h2>Negotiation Detail</h2>
+    <p class="muted">${safeStr(applyHelp)}</p>
+
+    <div class="hr"></div>
+
+    <h3>Claim</h3>
+    <table>
+      <tr><th>Claim #</th><td>${safeStr(n.claim_number)}</td></tr>
+      <tr><th>Payer</th><td>${safeStr(n.payer)}</td></tr>
+      <tr><th>DOS</th><td>${safeStr(n.dos)}</td></tr>
+      <tr><th>Status</th><td>${safeStr(n.status)}</td></tr>
+      <tr><th>Requested</th><td>$${Number(n.requested_amount||0).toFixed(2)}</td></tr>
+      <tr><th>Approved</th><td>$${Number(n.approved_amount||0).toFixed(2)}</td></tr>
+      <tr><th>Collected</th><td>$${Number(n.collected_amount||0).toFixed(2)}</td></tr>
+      <tr><th>Updated</th><td>${n.updated_at ? new Date(n.updated_at).toLocaleString() : "—"}</td></tr>
+    </table>
+
+    <div class="hr"></div>
+
+    <h3>Update Negotiation</h3>
+    <form method="POST" action="/negotiations/update" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+      <input type="hidden" name="negotiation_id" value="${safeStr(n.negotiation_id)}"/>
+      <div style="min-width:260px;">
+        <label>Status</label>
+        <select name="status">
+          ${NEGOTIATION_STATUSES.map(s => `<option value="${safeStr(s)}"${n.status===s?" selected":""}>${safeStr(s)}</option>`).join("")}
+        </select>
       </div>
-
-      <div class="hr"></div>
-
-      <div class="row">
-        <div class="col">
-          <h3>Denial Volume Trend</h3>
-          <canvas id="denialTrend" height="140"></canvas>
-        </div>
-        <div class="col">
-          <h3>Payment Trend</h3>
-          <canvas id="paymentTrend" height="140"></canvas>
-        </div>
+      <div style="min-width:200px;">
+        <label>Requested Amount</label>
+        <input name="requested_amount" value="${safeStr(String(n.requested_amount||""))}" />
       </div>
+      <div style="min-width:200px;">
+        <label>Approved Amount</label>
+        <input name="approved_amount" value="${safeStr(String(n.approved_amount||""))}" />
+      </div>
+      <div style="min-width:200px;">
+        <label>Collected Amount</label>
+        <input name="collected_amount" value="${safeStr(String(n.collected_amount||""))}" />
+      </div>
+      <div style="min-width:260px;">
+        <label>Notes</label>
+        <input name="notes" value="${safeStr(n.notes||"")}" placeholder="Optional notes..." />
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <label style="display:flex;gap:8px;align-items:center;margin:0;">
+          <input type="checkbox" name="apply_to_claim" value="1" style="width:auto;margin:0;">
+          <span class="muted small">Apply collected to claim</span>
+        </label>
+        <button class="btn" type="submit">Save</button>
+        ${b ? `<a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">Back to Claim</a>` : `<a class="btn secondary" href="/claims?view=all">Back to Claims</a>`}
+        <a class="btn secondary" href="/upload-negotiations">Negotiations Queue</a>
+      </div>
+    </form>
 
-      <div class="hr"></div>
+    <div class="hr"></div>
 
-      <h3>Underpayment by Payer (Last 30 Days)</h3>
-      <canvas id="underpayChart" height="160"></canvas>
+    <h3>Upload Negotiation Documents</h3>
+    <form method="POST" action="/negotiations/upload" enctype="multipart/form-data">
+      <input type="hidden" name="negotiation_id" value="${safeStr(n.negotiation_id)}"/>
+      <input type="file" name="neg_docs" multiple />
+      <div class="btnRow">
+        <button class="btn secondary" type="submit">Upload</button>
+      </div>
+    </form>
 
-      <div class="hr"></div>
+    <h3>Documents</h3>
+    ${docList ? `<ul class="muted small">${docList}</ul>` : `<p class="muted small">No documents uploaded.</p>`}
+  `, navUser(), {showChat:true});
+  return send(res, 200, html);
+}
 
-      <h3>Top Denial Categories</h3>
-      <ul class="muted">
-        ${
-          Object.entries(a.denialReasons || {})
-            .sort((x,y)=>y[1]-x[1])
-            .slice(0,6)
-            .map(([k,v])=>`<li>${safeStr(k)} (${v})</li>`)
-            .join("") || "<li>No denial category data available yet.</li>"
-        }
-      </ul>
+// Update negotiation; optional apply to claim (manual control)
+if (method === "POST" && pathname === "/negotiations/update") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const negotiation_id = (params.get("negotiation_id") || "").trim();
+  if (!negotiation_id) return redirect(res, "/upload-negotiations");
 
-      <script>
-      (function(){
-        if (!window.Chart) return;
-        const data = JSON.parse(atob("${b64}"));
+  const rec0 = getNegotiationById(org.org_id, negotiation_id);
+  if (!rec0) return redirect(res, "/upload-negotiations");
 
-        // Denials
-        const denEl = document.getElementById("denialTrend");
-        if (data.denialMonths && data.denialMonths.length){
-          new Chart(denEl, {
-            type:"line",
-            data:{ labels:data.denialMonths, datasets:[
-              { label:"Denials", data:data.denialTotals },
-              { label:"Drafts Generated", data:data.draftTotals }
-            ]},
-            options:{ responsive:true }
-          });
-        } else {
-          denEl.outerHTML = "<p class='muted'>No denial trend data.</p>";
-        }
+  const rec = normalizeNegotiation({ ...rec0 });
+  rec.status = String(params.get("status") || rec.status || "Open");
+  if (!NEGOTIATION_STATUSES.includes(rec.status)) rec.status = "Open";
 
-        // Payments
-        const payEl = document.getElementById("paymentTrend");
-        if (data.payMonths && data.payMonths.length){
-          new Chart(payEl, {
-            type:"bar",
-            data:{ labels:data.payMonths, datasets:[
-              { label:"Payments ($)", data:data.payTotals }
-            ]},
-            options:{ responsive:true }
-          });
-        } else {
-          payEl.outerHTML = "<p class='muted'>No payment trend data.</p>";
-        }
+  rec.requested_amount = num(params.get("requested_amount"));
+  rec.approved_amount = num(params.get("approved_amount"));
+  rec.collected_amount = num(params.get("collected_amount"));
+  rec.notes = (params.get("notes") || "").trim();
 
-        // Underpay
-        const upEl = document.getElementById("underpayChart");
-        if (data.payerLabels && data.payerLabels.length && (data.payerUnderpaid||[]).some(v=>Number(v)>0)){
-          new Chart(upEl, {
-            type:"bar",
-            data:{ labels:data.payerLabels, datasets:[
-              { label:"Underpaid ($)", data:data.payerUnderpaid }
-            ]},
-            options:{ responsive:true }
-          });
-        } else {
-          upEl.outerHTML = "<p class='muted'>No underpayment data yet (upload payments and allowed/expected fields).</p>";
-        }
-      })();
-      </script>
-    `, navUser(), {showChat:true});
+  saveNegotiation(rec);
 
-    return send(res, 200, html);
-  }
+  // If user chooses to apply collected to claim, do it now.
+    // Apply to claim rules:
+// - If status is "Payment Received": apply collected automatically (unless collected is 0).
+// - Otherwise: apply only when user explicitly checks "Apply collected to claim".
+const explicitApply = params.get("apply_to_claim") === "1";
+const autoApply = (rec.status === "Payment Received");
+const apply = (explicitApply || autoApply);
 
-  // ==============================
-  // ACTION CENTER (NEW)
-  // ==============================
-  if (method === "GET" && pathname === "/actions") {
-    const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
-
-    // Build actionable queue (exclude Paid + Contractual)
-    const actionable = billedAll
-      .filter(b => !["Paid","Contractual"].includes(String(b.status || "Pending")))
-      .map(b => {
+if (apply && rec.billed_id) {
+    const collected = num(rec.collected_amount);
+    if (collected > 0) {
+      updateBilledClaim(rec.billed_id, (b)=>{
+        // apply as insurance paid increment and recalc status (keep manual override possible later)
+        const priorPaid = num(b.insurance_paid || b.paid_amount);
         const billedAmt = num(b.amount_billed);
-        const insurancePaid = num(b.insurance_paid || b.paid_amount);
-        const patientCollected = num(b.patient_collected);
+        const newPaid = priorPaid + collected;
+        b.insurance_paid = newPaid;
+        b.paid_amount = newPaid;
+        b.paid_at = b.paid_at || new Date().toISOString().split("T")[0];
+
+        // recompute expected
         const allowed = num(b.allowed_amount);
         const patientResp = num(b.patient_responsibility);
         const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
           ? num(b.expected_insurance)
           : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
 
-        // Risk dollars
-        let atRisk = 0;
-        const st = String(b.status || "Pending");
-        if (st === "Underpaid" || st === "Appeal") atRisk = Math.max(0, expectedInsurance - insurancePaid);
-        else if (st === "Patient Balance") atRisk = Math.max(0, patientResp - patientCollected);
-        else atRisk = Math.max(0, billedAmt - insurancePaid);
+        const underpaid = Math.max(0, expectedInsurance - newPaid);
+        b.underpaid_amount = underpaid;
+        if (underpaid <= 0.01) b.status = "Paid";
+        else b.status = "Underpaid";
+      });
 
-        const suggested =
-          b.suggested_action ||
-          (st === "Denied" ? "Upload denial + generate appeal" :
-           st === "Underpaid" ? "Negotiate or appeal underpayment" :
-           st === "Appeal" ? "Follow up on appeal status" :
-           st === "Patient Balance" ? "Collect patient balance" :
-           "Review and update status");
-
-        return { b, atRisk, suggested };
-      })
-      .sort((x,y)=> y.atRisk - x.atRisk);
-
-    const rows = actionable.slice(0, 250).map(x => {
-      const b = x.b;
-      const st = String(b.status || "Pending");
-      const badgeCls =
-        st === "Denied" ? "err" :
-        st === "Underpaid" ? "underpaid" :
-        st === "Appeal" ? "warn" :
-        st === "Patient Balance" ? "warn" :
-        "warn";
-
-      return `<tr>
-        <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
-        <td>${safeStr(b.payer || "")}</td>
-        <td><span class="badge ${badgeCls}">${safeStr(st)}</span></td>
-        <td>$${Number(x.atRisk || 0).toFixed(2)}</td>
-        <td class="muted small">${safeStr(x.suggested)}</td>
-        <td>
-          <a class="btn secondary small" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">Open</a>
-        </td>
-      </tr>`;
-    }).join("");
-
-    const html = page("Action Center", `
-      <h2>Action Center</h2>
-      <p class="muted">Prioritized queue of claims that need attention (sorted by revenue at risk).</p>
-
-      <div class="btnRow">
-        <a class="btn secondary" href="/claims">Go to Claims Lifecycle</a>
-      </div>
-
-      <div class="hr"></div>
-
-      <div style="overflow:auto;">
-        <table>
-          <thead><tr><th>Claim #</th><th>Payer</th><th>Status</th><th>At-Risk $</th><th>Suggested Action</th><th></th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="6" class="muted">No action items yet.</td></tr>`}</tbody>
-        </table>
-      </div>
-      <p class="muted small">${actionable.length > 250 ? "Showing first 250 items." : ""}</p>
-    `, navUser(), {showChat:true});
-
-    return send(res, 200, html);
+      auditLog({ actor:"user", action:"negotiation_apply_to_claim", org_id: org.org_id, negotiation_id, collected_applied: collected });
+    }
   }
+
+  auditLog({ actor:"user", action:"negotiation_update", org_id: org.org_id, negotiation_id, status: rec.status });
+  return redirect(res, `/negotiation-detail?negotiation_id=${encodeURIComponent(negotiation_id)}`);
+}
+
+// Upload negotiation documents
+if (method === "POST" && pathname === "/negotiations/upload") {
+  const contentType = req.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) return redirect(res, "/upload-negotiations");
+  const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+  if (!boundaryMatch) return redirect(res, "/upload-negotiations");
+  const boundary = boundaryMatch[1];
+
+  const { files, fields } = await parseMultipart(req, boundary);
+  const negotiation_id = (fields.negotiation_id || "").trim();
+  if (!negotiation_id) return redirect(res, "/upload-negotiations");
+
+  const rec0 = getNegotiationById(org.org_id, negotiation_id);
+  if (!rec0) return redirect(res, "/upload-negotiations");
+
+  const rec = normalizeNegotiation({ ...rec0 });
+
+  const uploadFiles = files.filter(f => f.fieldName === "neg_docs");
+  if (!uploadFiles.length) return redirect(res, `/negotiation-detail?negotiation_id=${encodeURIComponent(negotiation_id)}`);
+
+  const dir = path.join(UPLOADS_DIR, org.org_id, "negotiations", negotiation_id);
+  ensureDir(dir);
+
+  for (const f of uploadFiles) {
+    const safeName = (f.filename || "neg_doc").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const storedName = `${Date.now()}_${safeName}`;
+    const storedPath = path.join(dir, storedName);
+    fs.writeFileSync(storedPath, f.buffer);
+
+    // Store by filename only; /file route searches org tree by basename
+    rec.documents.push({ filename: storedName, uploaded_at: nowISO() });
+  }
+
+  saveNegotiation(rec);
+  auditLog({ actor:"user", action:"negotiation_upload_docs", org_id: org.org_id, negotiation_id, count: uploadFiles.length });
+  return redirect(res, `/negotiation-detail?negotiation_id=${encodeURIComponent(negotiation_id)}`);
+}
 
 
 // --------- BILLED CLAIMS UPLOAD (EMR/EHR EXPORT INTAKE) ----------
@@ -4629,7 +5547,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
   }
 
 
-  if (method === "POST" && pathname === "/upload") {
+  if (method === "POST" && (pathname === "/upload" || pathname === "/upload-denials")) {
     // limit: pilot cases
     const can = pilotCanCreateCase(org.org_id);
     if (!can.ok) {
@@ -4651,7 +5569,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
 
     const limits = getLimitProfile(org.org_id);
     const maxFiles = limits.max_files_per_case;
-    if (!files.length) return redirect(res, "/upload");
+    if (!files.length) return redirect(res, "/upload-denials");
     if (files.length > maxFiles) {
       const html = page("Upload", `
         <h2>Upload</h2>
@@ -4677,7 +5595,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     // Separate document files (named "files") and optional template upload
     const docFiles = files.filter(f => f.fieldName === "files");
     // Ensure at least one document file
-    if (!docFiles.length) return redirect(res, "/upload");
+    if (!docFiles.length) return redirect(res, "/upload-denials");
     // Determine selected template from dropdown
     // Create a new case per uploaded document
     const cases = readJSON(FILES.cases, []);
@@ -4756,7 +5674,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     }
     // Redirect to status page for first created case
     if (createdCaseIds.length > 0) {
-      return redirect(res, "/upload?submitted=1");
+      return redirect(res, "/upload-denials?submitted=1");
 }
     // If no cases were created (limit reached), show limit message
     const html = page("Limit", `
@@ -5584,8 +6502,8 @@ rowsAdded = toUse;
         <li><strong>Rows processed:</strong> ${isCSV ? rowsAdded : "File stored (not parsed — upload CSV for analytics extraction)"}</li>
       </ul>
       <div class="btnRow">
-        <a class="btn" href="/analytics">View Analytics</a>
-        <a class="btn secondary" href="/payments">Upload more</a>
+        <a class="btn" href="/intelligence">View Revenue Intelligence (AI)</a>
+        <a class="btn secondary" href="/upload-payments">Upload more</a>
       </div>
     `, navUser(), {showChat:true});
     return send(res, 200, html);
@@ -6271,9 +7189,32 @@ if (method === "GET" && pathname === "/claim-detail") {
   if (!b) return redirect(res, "/billed");
 
   const relatedPayments = paymentsAll.filter(p =>
-    p.org_id === org.org_id &&
-    normalizeClaimNum(p.claim_number) === normalizeClaimNum(b.claim_number)
-  );
+  p.org_id === org.org_id &&
+  normalizeClaimNum(p.claim_number) === normalizeClaimNum(b.claim_number)
+);
+
+const negHistory = getNegotiationsByBilled(org.org_id, b.billed_id)
+  .map(n => normalizeNegotiation(n))
+  .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime());
+
+const negHistoryHtml = negHistory.length
+  ? `<table>
+       <thead><tr><th>Negotiation</th><th>Status</th><th>Requested</th><th>Approved</th><th>Collected</th><th>Updated</th></tr></thead>
+       <tbody>${
+         negHistory.map(n => `
+           <tr>
+             <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">${safeStr(n.negotiation_id)}</a></td>
+             <td>${safeStr(n.status)}</td>
+             <td>$${Number(n.requested_amount||0).toFixed(2)}</td>
+             <td>$${Number(n.approved_amount||0).toFixed(2)}</td>
+             <td>$${Number(n.collected_amount||0).toFixed(2)}</td>
+             <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
+           </tr>
+         `).join("")
+       }</tbody>
+     </table>`
+  : `<p class="muted">No negotiation cases for this claim yet.</p>`;
+
 
   const claimRows = Object.keys(b).sort().map(k => {
     const v = (typeof b[k] === "object") ? JSON.stringify(b[k]) : String(b[k] ?? "");
@@ -6314,10 +7255,18 @@ if (method === "GET" && pathname === "/claim-detail") {
     ${paymentTable}
 
     <div class="hr"></div>
+<h3>Negotiation History</h3>
+${negHistoryHtml}
+
+<div class="hr"></div>
 <h3>Actions</h3>
 <div class="btnRow">
   <a class="btn secondary" href="/upload-denials">Generate Appeal (Upload Denial)</a>
-  <a class="btn secondary" href="/upload-negotiations">Start / View Negotiation</a>
+  <form method="POST" action="/negotiations/create" style="display:inline;">
+    <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+    <button class="btn secondary" type="submit">Start Negotiation</button>
+  </form>
+  <a class="btn secondary" href="/upload-negotiations">Negotiations Queue</a>
 </div>
 
 <div class="hr"></div>
@@ -6328,7 +7277,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
       <input type="hidden" name="submission_id" value="${safeStr(b.submission_id || "")}"/>
       <input type="hidden" name="resolution" value="Contractual"/>
-      <button class="btn secondary" type="submit">Write Off (Contractual)</button>
+      <button class="btn secondary" type="submit">Write Off</button>
     </form>
   </div>
   <div class="col">
@@ -6349,7 +7298,8 @@ if (method === "GET" && pathname === "/claim-detail") {
   </div>
 </div>
 
-    <div class="btnRow">
+<div class="hr"></div>
+<div class="btnRow">
       <a class="btn secondary" href="javascript:history.back()">Back</a>
       <a class="btn secondary" href="/billed">Billed Submissions</a>
     </div>
