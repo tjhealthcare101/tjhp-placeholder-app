@@ -3462,22 +3462,17 @@ if (hasPayerBar) {
     return send(res, 200, html);
   }
 // ==============================
-// CLAIMS LIFECYCLE (NEW)
+// CLAIMS LIFECYCLE (HUB + SUBTABS)
 // ==============================
 if (method === "GET" && pathname === "/claims") {
-  const view = String(parsed.query.view || "batch").toLowerCase(); // batch | all
-  const q = String(parsed.query.q || "").trim().toLowerCase();
-  const statusF = String(parsed.query.status || "").trim();
-  const payerF = String(parsed.query.payer || "").trim();
-  const start = String(parsed.query.start || "").trim();
-  const end = String(parsed.query.end || "").trim();
-  const minAmt = String(parsed.query.min || "").trim();
-  const submissionF = String(parsed.query.submission_id || "").trim();
+
+  // Sub-tabs: billed | payments | denials | negotiations | all
+  const view = String(parsed.query.view || "billed").toLowerCase();
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
 
-  // Snapshot counts across all claims
+  // Snapshot counts across all claims (simple, fast)
   const counts = billedAll.reduce((acc,b)=>{
     const s = String(b.status||"Pending");
     acc.total++;
@@ -3485,128 +3480,46 @@ if (method === "GET" && pathname === "/claims") {
     return acc;
   }, {total:0});
 
-  // ===== Batch View =====
-  const batchRows = subsAll
-    .sort((a,b)=> new Date(b.uploaded_at||0).getTime() - new Date(a.uploaded_at||0).getTime())
-    .map(s=>{
-      const claims = billedAll.filter(b => b.submission_id === s.submission_id);
-      const totalClaims = claims.length;
-      const paidCount = claims.filter(b => (b.status||"Pending")==="Paid").length;
-      const deniedCount = claims.filter(b => (b.status||"Pending")==="Denied").length;
-      const underpaidCount = claims.filter(b => (b.status||"Pending")==="Underpaid").length;
-      const appealCount = claims.filter(b => (b.status||"Pending")==="Appeal").length;
-      const pendingCount = claims.filter(b => (b.status||"Pending")==="Pending").length;
+  const tab = (key, label, tip) => {
+    const active = (view === key);
+    return `
+      <a href="/claims?view=${encodeURIComponent(key)}"
+         style="text-decoration:none;display:inline-flex;gap:6px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:${active ? "#111827" : "#fff"};color:${active ? "#fff" : "#111827"};font-weight:900;font-size:12px;">
+        ${label}
+        <span class="tooltip">ⓘ<span class="tooltiptext">${safeStr(tip)}</span></span>
+      </a>
+    `;
+  };
 
-      const totalBilledAmt = claims.reduce((sum,b)=> sum + Number(b.amount_billed || 0), 0);
-      const collectedAmt = claims.reduce((sum, b) => sum + Number(b.insurance_paid || b.paid_amount || 0), 0);
-      const atRiskAmt = Math.max(0, totalBilledAmt - collectedAmt);
-
-      const qs = new URLSearchParams({ view: "all", submission_id: s.submission_id }).toString();
-      return `<tr>
-        <td><a href="/billed?submission_id=${encodeURIComponent(s.submission_id)}">${safeStr(s.original_filename || "batch")}</a></td>
-        <td class="muted small">${s.uploaded_at ? new Date(s.uploaded_at).toLocaleDateString() : "—"}</td>
-        <td>${totalClaims}</td>
-        <td>${paidCount}</td>
-        <td>${deniedCount}</td>
-        <td>${underpaidCount}</td>
-        <td>${appealCount}</td>
-        <td>${pendingCount}</td>
-        <td>$${Number(totalBilledAmt||0).toFixed(2)}</td>
-        <td>$${Number(collectedAmt||0).toFixed(2)}</td>
-        <td>$${Number(atRiskAmt||0).toFixed(2)}</td>
-        <td><a href="/claims?${qs}">View Claims</a></td>
-      </tr>`;
-    }).join("");
-
-  // ===== All Claims View (filters + pagination) =====
-  let billed = billedAll.slice();
-  if (submissionF) billed = billed.filter(b => String(b.submission_id||"") === submissionF);
-
-  // date filters use DOS; fallback created_at
-  const fromDate = start ? new Date(start + "T00:00:00.000Z") : null;
-  const toDate = end ? new Date(end + "T23:59:59.999Z") : null;
-  const minAmount = minAmt ? num(minAmt) : null;
-
-  billed = billed.filter(b=>{
-    if (q) {
-      const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
-      if (!blob.includes(q)) return false;
-    }
-    if (statusF && String(b.status||"Pending") !== statusF) return false;
-    if (payerF && String(b.payer||"") !== payerF) return false;
-    if (fromDate || toDate) {
-      const dt = new Date((b.dos || b.created_at || b.paid_at || b.denied_at || nowISO()));
-      if (fromDate && dt < fromDate) return false;
-      if (toDate && dt > toDate) return false;
-    }
-    if (minAmount != null) {
-      const atRisk = computeClaimAtRisk(b);
-      if (atRisk < minAmount) return false;
-    }
-    return true;
-  });
-
-  // payer/status options
-  const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
-  const statusOpts = ["Pending","Paid","Denied","Underpaid","Appeal","Contractual","Patient Balance"];
-
-  // pagination
-  const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
-  const totalFiltered = billed.length;
-  const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
-  const pageItems = billed.slice(startIdx, startIdx + pageSize);
-
-  const rows = pageItems.map(b=>{
-    const st = String(b.status || "Pending");
-    const paidAmt = Number(b.insurance_paid || b.paid_amount || 0);
-    const atRisk = computeClaimAtRisk(b);
-
-    return `<tr>
-      <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
-      <td>${safeStr(b.dos || "")}</td>
-      <td>${safeStr(b.payer || "")}</td>
-      <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
-      <td>$${paidAmt.toFixed(2)}</td>
-      <td>$${Number(atRisk||0).toFixed(2)}</td>
-      <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
-      <td class="muted small">${b.submission_id ? `<a href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">Batch</a>` : "—"}</td>
-    </tr>`;
-  }).join("");
-
-  // page size selector
-  const sizeSelect = `
-    <label class="small muted" style="margin-right:8px;">Per page</label>
-    <select onchange="window.location=this.value">
-      ${PAGE_SIZE_OPTIONS.map(n=>{
-        const qs = new URLSearchParams({ ...parsed.query, view: "all", page: "1", pageSize: String(n) }).toString();
-        return `<option value="/claims?${qs}" ${n===pageSize?"selected":""}>${n}</option>`;
-      }).join("")}
-    </select>
-  `;
-
-  const nav = buildPageNav("/claims", { ...parsed.query, view: "all", pageSize: String(pageSize) }, page, totalPages);
-
-  const toggle = `
-    <div class="btnRow">
-      <a class="btn secondary" href="/claims?view=batch">By Batch</a>
-      <a class="btn secondary" href="/claims?view=all">All Claims</a>
+  const subTabs = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+      ${tab("billed","Billed Batches","Submission batches uploaded from your EMR/EHR. Click a batch to drill into claims.")}
+      ${tab("payments","Payment Batches","Uploaded payment files. Open a batch to see payment rows + affected claims.")}
+      ${tab("denials","Denial Queue","Denied claims and appeal cases. Open to edit appeal drafts and track status.")}
+      ${tab("negotiations","Negotiation Queue","Underpaid claims tracked as negotiation cases. Open to update requested/approved/collected.")}
+      ${tab("all","All Claims","All claims across all stages with filters, pagination, and clickable rows.")}
     </div>
   `;
 
-  const html = renderPage("Claims Lifecycle", `
-    <h2>Claims Lifecycle</h2>
-    <p class="muted">Upload billed claims, payments, denials, and negotiations — then manage claim status and follow-up in one flow.</p>
-
+  const uploadRow = `
     <div class="btnRow">
       <a class="btn" href="/upload-billed">Upload Billed Claims</a>
       <a class="btn secondary" href="/upload-payments">Upload Payments</a>
       <a class="btn secondary" href="/upload-denials">Upload Denials</a>
       <a class="btn secondary" href="/upload-negotiations">Upload Negotiations</a>
+      <span class="tooltip">ⓘ<span class="tooltiptext">Uploads create batches/queues below. Use the sub-tabs to review and manage each stage.</span></span>
     </div>
+  `;
+
+  // ===== Shared header (always) =====
+  let body = `
+    <h2>Claims Lifecycle <span class="tooltip">ⓘ<span class="tooltiptext">This is your operational hub for billed batches, payment batches, denial appeals, negotiations, and all claims.</span></span></h2>
+    <p class="muted">Everything that happens to claims — billed, denied, appealed, paid, and negotiated — in one place.</p>
+    ${uploadRow}
 
     <div class="hr"></div>
 
-    <h3>Quick Snapshot</h3>
+    <h3>Quick Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Counts across your full claim population (not just the selected sub-tab).</span></span></h3>
     <div class="row">
       <div class="col">
         <div class="kpi-card"><h4>Total Claims</h4><p>${counts.total || 0}</p></div>
@@ -3618,91 +3531,394 @@ if (method === "GET" && pathname === "/claims") {
       </div>
       <div class="col">
         <div class="kpi-card"><h4>Paid</h4><p>${counts["Paid"] || 0}</p></div>
-        <div class="kpi-card"><h4>Patient Balance</h4><p>${counts["Patient Balance"] || 0}</p></div>
+        <div class="kpi-card"><h4>Negotiations</h4><p>${getNegotiations(org.org_id).length}</p></div>
       </div>
     </div>
 
     <div class="hr"></div>
-    ${toggle}
 
-    ${
-      view !== "all" ? `
-        <h3>Claim Batches</h3>
-        <div style="overflow:auto;">
-          <table>
-            <thead>
-              <tr><th>Batch</th><th>Uploaded</th><th>Claims</th><th>Paid</th><th>Denied</th><th>Underpaid</th><th>Appeal</th><th>Pending</th><th>Total Billed</th><th>Collected</th><th>At Risk</th><th></th></tr>
-            </thead>
-            <tbody>${batchRows || `<tr><td colspan="12" class="muted">No batches yet.</td></tr>`}</tbody>
-          </table>
-        </div>
-      ` : `
-        <h3>All Claims</h3>
-        <form method="GET" action="/claims" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
-          <input type="hidden" name="view" value="all"/>
-          ${submissionF ? `<input type="hidden" name="submission_id" value="${safeStr(submissionF)}"/>` : ``}
+    ${subTabs}
 
-          <div style="display:flex;flex-direction:column;min-width:220px;">
-            <label>Search</label>
-            <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, DOS..." />
-          </div>
+    <div class="hr"></div>
+  `;
 
-          <div style="display:flex;flex-direction:column;">
-            <label>Status</label>
-            <select name="status">
-              <option value="">All</option>
-              ${statusOpts.map(s => `<option value="${safeStr(s)}"${statusF===s ? " selected":""}>${safeStr(s)}</option>`).join("")}
-            </select>
-          </div>
+  // ===== Subtab content =====
 
-          <div style="display:flex;flex-direction:column;">
-            <label>Payer</label>
-            <select name="payer">
-              <option value="">All</option>
-              ${payerOpts.map(p => `<option value="${safeStr(p)}"${payerF===p ? " selected":""}>${safeStr(p)}</option>`).join("")}
-            </select>
-          </div>
+  // (1) Billed Batches
+  if (view === "billed") {
+    const batchRows = subsAll
+      .sort((a,b)=> new Date(b.uploaded_at||0).getTime() - new Date(a.uploaded_at||0).getTime())
+      .map(s=>{
+        const claims = billedAll.filter(b => b.submission_id === s.submission_id);
+        const totalClaims = claims.length;
+        const paidCount = claims.filter(b => (b.status||"Pending")==="Paid").length;
+        const deniedCount = claims.filter(b => (b.status||"Pending")==="Denied").length;
+        const underpaidCount = claims.filter(b => (b.status||"Pending")==="Underpaid").length;
+        const appealCount = claims.filter(b => (b.status||"Pending")==="Appeal").length;
+        const pendingCount = claims.filter(b => (b.status||"Pending")==="Pending").length;
 
-          <div style="display:flex;flex-direction:column;">
-            <label>Start</label>
-            <input type="date" name="start" value="${safeStr(start)}" />
-          </div>
+        const totalBilledAmt = claims.reduce((sum,b)=> sum + Number(b.amount_billed || 0), 0);
+        const collectedAmt = claims.reduce((sum, b) => sum + Number(b.insurance_paid || b.paid_amount || 0), 0);
+        const atRiskAmt = Math.max(0, totalBilledAmt - collectedAmt);
 
-          <div style="display:flex;flex-direction:column;">
-            <label>End</label>
-            <input type="date" name="end" value="${safeStr(end)}" />
-          </div>
+        return `<tr>
+          <td><a href="/billed?submission_id=${encodeURIComponent(s.submission_id)}">${safeStr(s.original_filename || "batch")}</a></td>
+          <td class="muted small">${s.uploaded_at ? new Date(s.uploaded_at).toLocaleDateString() : "—"}</td>
+          <td>${totalClaims}</td>
+          <td>${paidCount}</td>
+          <td>${deniedCount}</td>
+          <td>${underpaidCount}</td>
+          <td>${appealCount}</td>
+          <td>${pendingCount}</td>
+          <td>$${Number(totalBilledAmt||0).toFixed(2)}</td>
+          <td>$${Number(collectedAmt||0).toFixed(2)}</td>
+          <td>$${Number(atRiskAmt||0).toFixed(2)}</td>
+          <td><a href="/claims?view=all&submission_id=${encodeURIComponent(s.submission_id)}">View Claims</a></td>
+        </tr>`;
+      }).join("");
 
-          <div style="display:flex;flex-direction:column;">
-            <label>Min At-Risk $</label>
-            <input name="min" value="${safeStr(minAmt)}" placeholder="e.g. 500" />
-          </div>
+    body += `
+      <h3>Billed Batches <span class="tooltip">ⓘ<span class="tooltiptext">These are your billed claim submissions. Use them to manage claims by batch.</span></span></h3>
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr><th>Batch</th><th>Uploaded</th><th>Claims</th><th>Paid</th><th>Denied</th><th>Underpaid</th><th>Appeal</th><th>Pending</th><th>Total Billed</th><th>Collected</th><th>At Risk</th><th></th></tr>
+          </thead>
+          <tbody>${batchRows || `<tr><td colspan="12" class="muted">No billed batches yet. Upload a billed claims file to begin.</td></tr>`}</tbody>
+        </table>
+      </div>
+    `;
+  }
 
-          <div>
-            <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
-            <a class="btn secondary" href="/claims?view=all" style="margin-top:1.6em;">Reset</a>
-          </div>
-        </form>
+  // (2) Payment Batches
+  if (view === "payments") {
+    const allPay = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+    const paymentFilesMap = {};
+    allPay.forEach(p => {
+      const sf = (p.source_file || "").trim();
+      if (!sf) return;
+      if (!paymentFilesMap[sf]) paymentFilesMap[sf] = { source_file: sf, count: 0, latest: p.created_at || p.date_paid || nowISO(), totalPaid: 0 };
+      paymentFilesMap[sf].count += 1;
+      paymentFilesMap[sf].totalPaid += num(p.amount_paid);
+      const dt = new Date(p.created_at || p.date_paid || Date.now()).getTime();
+      const cur = new Date(paymentFilesMap[sf].latest || 0).getTime();
+      if (dt > cur) paymentFilesMap[sf].latest = p.created_at || p.date_paid || nowISO();
+    });
 
-        <div class="hr"></div>
+    const files = Object.values(paymentFilesMap).sort((a,b)=> new Date(b.latest).getTime() - new Date(a.latest).getTime());
 
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
-          <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${totalFiltered} results (Page ${page}/${totalPages}).</div>
-          <div>${sizeSelect}</div>
-        </div>
+    const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
+    const total = files.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const pageItems = files.slice(startIdx, startIdx + pageSize);
 
-        <div style="overflow:auto;">
-          <table>
-            <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Status</th><th>Source</th></tr></thead>
-            <tbody>${rows || `<tr><td colspan="8" class="muted">No claims found.</td></tr>`}</tbody>
-          </table>
-        </div>
+    const rows = pageItems.map(x => `
+      <tr>
+        <td>${safeStr(x.source_file)}</td>
+        <td>${x.count}</td>
+        <td>$${Number(x.totalPaid||0).toFixed(2)}</td>
+        <td>${x.latest ? new Date(x.latest).toLocaleDateString() : "—"}</td>
+        <td><a href="/payment-batch-detail?file=${encodeURIComponent(x.source_file)}">Open</a></td>
+      </tr>
+    `).join("");
 
-        ${nav}
-      `
+    const sizeSelect = `
+      <label class="small muted" style="margin-right:8px;">Per page</label>
+      <select onchange="window.location=this.value">
+        ${PAGE_SIZE_OPTIONS.map(n=>{
+          const qs = new URLSearchParams({ ...parsed.query, view:"payments", page: "1", pageSize: String(n) }).toString();
+          return `<option value="/claims?${qs}" ${n===pageSize?"selected":""}>${n}</option>`;
+        }).join("")}
+      </select>
+    `;
+    const nav = buildPageNav("/claims", { ...parsed.query, view:"payments", pageSize: String(pageSize) }, page, totalPages);
+
+    body += `
+      <h3>Payment Batches <span class="tooltip">ⓘ<span class="tooltiptext">These are your uploaded payment files. Open a batch to see payment rows and affected claims.</span></span></h3>
+      <div class="muted small" style="margin-bottom:8px;">Use this to audit what changed after each payment upload.</div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${total} (Page ${page}/${totalPages}).</div>
+        <div>${sizeSelect}</div>
+      </div>
+
+      <div style="overflow:auto;">
+        <table>
+          <thead><tr><th>Source File</th><th>Records</th><th>Total Paid</th><th>Last Upload</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="5" class="muted">No payment uploads yet.</td></tr>`}</tbody>
+        </table>
+      </div>
+      ${nav}
+    `;
+  }
+
+  // (3) Denial Queue
+  if (view === "denials") {
+    const billedOrg = billedAll;
+    const allDenialCases = readJSON(FILES.cases, [])
+      .filter(c => c.org_id === org.org_id && String(c.case_type||"denial").toLowerCase() !== "underpayment")
+      .sort((a,b)=> new Date(b.created_at||0).getTime() - new Date(a.created_at||0).getTime());
+
+    const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
+    const total = allDenialCases.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const pageItems = allDenialCases.slice(startIdx, startIdx + pageSize);
+
+    const rows = pageItems.map(c=>{
+      const linked = billedOrg.find(b => b.denial_case_id === c.case_id) || null;
+      const claimLink = linked ? `<a href="/claim-detail?billed_id=${encodeURIComponent(linked.billed_id)}">${safeStr(linked.claim_number||"")}</a>` : `<span class="muted small">—</span>`;
+      const payer = linked ? (linked.payer || "") : "";
+      const dos = linked ? (linked.dos || "") : "";
+      const billedAmt = linked ? num(linked.amount_billed) : 0;
+      return `<tr>
+        <td>${claimLink}</td>
+        <td>${safeStr(payer)}</td>
+        <td>${safeStr(dos)}</td>
+        <td>$${Number(billedAmt).toFixed(2)}</td>
+        <td class="muted small">${safeStr(c.case_id)}</td>
+        <td>${safeStr(c.status||"")}</td>
+        <td><a href="/appeal-detail?case_id=${encodeURIComponent(c.case_id)}">Open Appeal</a></td>
+      </tr>`;
+    }).join("");
+
+    const sizeSelect = `
+      <label class="small muted" style="margin-right:8px;">Per page</label>
+      <select onchange="window.location=this.value">
+        ${PAGE_SIZE_OPTIONS.map(n=>{
+          const qs = new URLSearchParams({ ...parsed.query, view:"denials", page: "1", pageSize: String(n) }).toString();
+          return `<option value="/claims?${qs}" ${n===pageSize?"selected":""}>${n}</option>`;
+        }).join("")}
+      </select>
+    `;
+    const nav = buildPageNav("/claims", { ...parsed.query, view:"denials", pageSize: String(pageSize) }, page, totalPages);
+
+    body += `
+      <h3>Denial Queue <span class="tooltip">ⓘ<span class="tooltiptext">Denied claims and denial cases. Open to edit appeal drafts and track outcomes.</span></span></h3>
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${total} (Page ${page}/${totalPages}).</div>
+        <div>${sizeSelect}</div>
+      </div>
+      <div style="overflow:auto;">
+        <table>
+          <thead><tr><th>Claim #</th><th>Payer</th><th>DOS</th><th>Billed</th><th>Case ID</th><th>Status</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="7" class="muted">No denial cases yet.</td></tr>`}</tbody>
+        </table>
+      </div>
+      ${nav}
+    `;
+  }
+
+  // (4) Negotiation Queue
+  if (view === "negotiations") {
+    const negs = getNegotiations(org.org_id).map(n => normalizeNegotiation(n));
+    const q = String(parsed.query.q || "").trim().toLowerCase();
+    let filt = negs;
+    if (q) {
+      filt = negs.filter(n => (`${n.claim_number||""} ${n.payer||""} ${n.status||""}`).toLowerCase().includes(q));
     }
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    filt.sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime());
 
+    const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
+    const total = filt.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const pageItems = filt.slice(startIdx, startIdx + pageSize);
+
+    const rows = pageItems.map(n=>`
+      <tr>
+        <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">${safeStr(n.claim_number||"")}</a></td>
+        <td>${safeStr(n.payer||"")}</td>
+        <td>${safeStr(n.status||"Open")}</td>
+        <td>$${Number(n.requested_amount||0).toFixed(2)}</td>
+        <td>$${Number(n.approved_amount||0).toFixed(2)}</td>
+        <td>$${Number(n.collected_amount||0).toFixed(2)}</td>
+        <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
+        <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">Open</a></td>
+      </tr>
+    `).join("");
+
+    const sizeSelect = `
+      <label class="small muted" style="margin-right:8px;">Per page</label>
+      <select onchange="window.location=this.value">
+        ${PAGE_SIZE_OPTIONS.map(n=>{
+          const qs = new URLSearchParams({ ...parsed.query, view:"negotiations", page: "1", pageSize: String(n) }).toString();
+          return `<option value="/claims?${qs}" ${n===pageSize?"selected":""}>${n}</option>`;
+        }).join("")}
+      </select>
+    `;
+    const nav = buildPageNav("/claims", { ...parsed.query, view:"negotiations", pageSize: String(pageSize) }, page, totalPages);
+
+    body += `
+      <h3>Negotiation Queue <span class="tooltip">ⓘ<span class="tooltiptext">Track underpayment negotiations and outcomes (approved vs collected).</span></span></h3>
+
+      <form method="GET" action="/claims" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+        <input type="hidden" name="view" value="negotiations"/>
+        <div style="display:flex;flex-direction:column;min-width:260px;">
+          <label>Search</label>
+          <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, status..." />
+        </div>
+        <div>
+          <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
+          <a class="btn secondary" href="/claims?view=negotiations" style="margin-top:1.6em;">Reset</a>
+        </div>
+      </form>
+
+      <div class="hr"></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${total} (Page ${page}/${totalPages}).</div>
+        <div>${sizeSelect}</div>
+      </div>
+
+      <div style="overflow:auto;">
+        <table>
+          <thead><tr><th>Claim #</th><th>Payer</th><th>Status</th><th>Requested</th><th>Approved</th><th>Collected</th><th>Updated</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="8" class="muted">No negotiations yet.</td></tr>`}</tbody>
+        </table>
+      </div>
+      ${nav}
+    `;
+  }
+
+  // (5) All Claims
+  if (view === "all") {
+    const q = String(parsed.query.q || "").trim().toLowerCase();
+    const statusF = String(parsed.query.status || "").trim();
+    const payerF = String(parsed.query.payer || "").trim();
+    const start = String(parsed.query.start || "").trim();
+    const end = String(parsed.query.end || "").trim();
+    const minAmt = String(parsed.query.min || "").trim();
+    const submissionF = String(parsed.query.submission_id || "").trim();
+
+    let billed = billedAll.slice();
+    if (submissionF) billed = billed.filter(b => String(b.submission_id||"") === submissionF);
+
+    const fromDate = start ? new Date(start + "T00:00:00.000Z") : null;
+    const toDate = end ? new Date(end + "T23:59:59.999Z") : null;
+    const minAmount = minAmt ? num(minAmt) : null;
+
+    billed = billed.filter(b=>{
+      if (q) {
+        const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
+        if (!blob.includes(q)) return false;
+      }
+      if (statusF && String(b.status||"Pending") !== statusF) return false;
+      if (payerF && String(b.payer||"") !== payerF) return false;
+      if (fromDate || toDate) {
+        const dt = new Date((b.dos || b.created_at || b.paid_at || b.denied_at || nowISO()));
+        if (fromDate && dt < fromDate) return false;
+        if (toDate && dt > toDate) return false;
+      }
+      if (minAmount != null) {
+        const atRisk = computeClaimAtRisk(b);
+        if (atRisk < minAmount) return false;
+      }
+      return true;
+    });
+
+    const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
+    const statusOpts = ["Pending","Paid","Denied","Underpaid","Appeal","Contractual","Patient Balance"];
+
+    const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
+    const totalFiltered = billed.length;
+    const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+    const pageItems = billed.slice(startIdx, startIdx + pageSize);
+
+    const rows = pageItems.map(b=>{
+      const st = String(b.status || "Pending");
+      const paidAmt = Number(b.insurance_paid || b.paid_amount || 0);
+      const atRisk = computeClaimAtRisk(b);
+
+      return `<tr>
+        <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
+        <td>${safeStr(b.dos || "")}</td>
+        <td>${safeStr(b.payer || "")}</td>
+        <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
+        <td>$${paidAmt.toFixed(2)}</td>
+        <td>$${Number(atRisk||0).toFixed(2)}</td>
+        <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
+        <td class="muted small">${b.submission_id ? `<a href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">Batch</a>` : "—"}</td>
+      </tr>`;
+    }).join("");
+
+    const sizeSelect = `
+      <label class="small muted" style="margin-right:8px;">Per page</label>
+      <select onchange="window.location=this.value">
+        ${PAGE_SIZE_OPTIONS.map(n=>{
+          const qs = new URLSearchParams({ ...parsed.query, view:"all", page: "1", pageSize: String(n) }).toString();
+          return `<option value="/claims?${qs}" ${n===pageSize?"selected":""}>${n}</option>`;
+        }).join("")}
+      </select>
+    `;
+    const nav = buildPageNav("/claims", { ...parsed.query, view:"all", pageSize: String(pageSize) }, page, totalPages);
+
+    body += `
+      <h3>All Claims <span class="tooltip">ⓘ<span class="tooltiptext">Filter and review all claims across your organization.</span></span></h3>
+
+      <form method="GET" action="/claims" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+        <input type="hidden" name="view" value="all"/>
+        ${submissionF ? `<input type="hidden" name="submission_id" value="${safeStr(submissionF)}"/>` : ``}
+
+        <div style="display:flex;flex-direction:column;min-width:220px;">
+          <label>Search</label>
+          <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, DOS..." />
+        </div>
+
+        <div style="display:flex;flex-direction:column;">
+          <label>Status</label>
+          <select name="status">
+            <option value="">All</option>
+            ${statusOpts.map(s => `<option value="${safeStr(s)}"${statusF===s ? " selected":""}>${safeStr(s)}</option>`).join("")}
+          </select>
+        </div>
+
+        <div style="display:flex;flex-direction:column;">
+          <label>Payer</label>
+          <select name="payer">
+            <option value="">All</option>
+            ${payerOpts.map(p => `<option value="${safeStr(p)}"${payerF===p ? " selected":""}>${safeStr(p)}</option>`).join("")}
+          </select>
+        </div>
+
+        <div style="display:flex;flex-direction:column;">
+          <label>Start</label>
+          <input type="date" name="start" value="${safeStr(start)}" />
+        </div>
+
+        <div style="display:flex;flex-direction:column;">
+          <label>End</label>
+          <input type="date" name="end" value="${safeStr(end)}" />
+        </div>
+
+        <div style="display:flex;flex-direction:column;">
+          <label>Min At-Risk $</label>
+          <input name="min" value="${safeStr(minAmt)}" placeholder="e.g. 500" />
+        </div>
+
+        <div>
+          <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
+          <a class="btn secondary" href="/claims?view=all" style="margin-top:1.6em;">Reset</a>
+        </div>
+      </form>
+
+      <div class="hr"></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${totalFiltered} results (Page ${page}/${totalPages}).</div>
+        <div>${sizeSelect}</div>
+      </div>
+
+      <div style="overflow:auto;">
+        <table>
+          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Status</th><th>Source</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="8" class="muted">No claims found.</td></tr>`}</tbody>
+        </table>
+      </div>
+
+      ${nav}
+    `;
+  }
+
+  const html = renderPage("Claims Lifecycle", body, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
   return send(res, 200, html);
 }
 // ==============================
