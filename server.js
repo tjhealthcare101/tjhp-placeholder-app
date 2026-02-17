@@ -71,6 +71,7 @@ const FILES = {
   billed: path.join(DATA_DIR, "billed.json"),
   billed_submissions: path.join(DATA_DIR, "billed_submissions.json"),
   negotiations: path.join(DATA_DIR, "negotiations.json"),
+  deleted_payment_batches: path.join(DATA_DIR, "deleted_payment_batches.json"),
   ai_queries: path.join(DATA_DIR, "ai_queries.json"),
   saved_queries: path.join(DATA_DIR, "saved_queries.json"),
 };
@@ -201,6 +202,7 @@ ensureFile(FILES.templates, []);
 ensureFile(FILES.billed, []);
 ensureFile(FILES.billed_submissions, []);
 ensureFile(FILES.negotiations, []);
+ensureFile(FILES.deleted_payment_batches, []);
 ensureFile(FILES.ai_queries, []);
 ensureFile(FILES.saved_queries, []);
 
@@ -311,7 +313,6 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
  * Password toggle preserved.
  */
 function renderPage(title, content, navHtml="", opts={}) {
-  const orgName = (opts && opts.orgName) ? safeStr(opts.orgName) : "";
   const showChat = !!(opts && opts.showChat);
   const chatHtml = showChat ? `
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
@@ -381,7 +382,6 @@ window.__tjhpSendChat = async function(){
       <div class="brand">
         <h1>TJ Healthcare Pro</h1>
         <div class="sub">AI Revenue Intelligence Platform</div>
-        ${orgName ? `<div class="sub">Organization: ${orgName}</div>` : ``}
       </div>
       <div class="nav">${navHtml}</div>
     </div>
@@ -2990,7 +2990,7 @@ Next steps:
         });
 
       </script>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -3049,7 +3049,7 @@ if (method === "GET" && pathname === "/executive") {
       <a class="btn secondary" href="/dashboard">Back</a>
     </div>
 
-  `, navUser(), { showChat: true, orgName: (typeof org!=="undefined" && org ? org.org_name : "") });
+  `, navUser(), { showChat: true });
 
   return send(res, 200, html);
 }
@@ -3096,7 +3096,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <a class="btn" href="/executive">Executive Dashboard</a>
       <a class="btn secondary" href="/dashboard">Back</a>
     </div>
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  `, navUser(), {showChat:true});
   return send(res, 200, html);
 }
   // dashboard with empty-state previews and tooltips
@@ -3439,7 +3439,7 @@ if (hasPayerBar) {
 </script>
 
 
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
 
     return send(res, 200, html);
   }
@@ -3683,7 +3683,7 @@ if (method === "GET" && pathname === "/claims") {
         ${nav}
       `
     }
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  `, navUser(), {showChat:true});
 
   return send(res, 200, html);
 }
@@ -3842,11 +3842,11 @@ if (method === "GET" && pathname === "/intelligence") {
       };
 
       window.__tjhpRunBriefing = function(){
-        window.__tjhpRunPrompt(${JSON.stringify(defaultPrompt)}, "exec", []);
+        window.__tjhpRunPrompt(${json.dumps(defaultPrompt)}, "exec", []);
       };
 
       window.__tjhpRunSaved = function(savedId){
-        const saved = ${JSON.stringify(saved)};
+        const saved = ${json.dumps(saved)};
         const s = saved.find(x => x.saved_id === savedId);
         if (!s) return;
         window.__tjhpRunPrompt(s.prompt, s.style || "exec", s.charts || []);
@@ -3971,11 +3971,11 @@ if (method === "GET" && pathname === "/intelligence") {
         }
       };
 
-      if (${runBrief ? "true" : "false"}) {
+      if (${str(runBrief).lower()}) {
         setTimeout(()=>window.__tjhpRunBriefing(), 350);
       }
     </script>
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  `, navUser(), {showChat:true});
 
   return send(res, 200, html);
 }
@@ -4162,7 +4162,7 @@ if (method === "GET" && pathname === "/actions") {
     </div>
 
     ${nav}
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  `, navUser(), {showChat:true});
 
   return send(res, 200, html);
 }
@@ -4231,7 +4231,7 @@ if (method === "GET" && pathname === "/upload-payments") {
                     <td>${safeStr(x.source_file)}</td>
                     <td>${x.count}</td>
                     <td>${new Date(x.latest).toLocaleDateString()}</td>
-                    <td><a href="/report?type=payment_detail">Open</a></td>
+                    <td><a href="/payment-batch-detail?file=${encodeURIComponent(x.source_file)}">Open</a></td>
                   </tr>
                 `).join("")
               }</tbody>
@@ -4262,15 +4262,222 @@ if (method === "GET" && pathname === "/upload-payments") {
         if (file) payDrop.textContent = file.name;
       });
     </script>
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  `, navUser(), {showChat:true});
   return send(res, 200, html);
 }
+
+
+// ==============================
+// PAYMENT BATCH DETAIL (NEW)
+// ==============================
+if (method === "GET" && pathname === "/payment-batch-detail") {
+  const file = String(parsed.query.file || "").trim();
+  if (!file) return redirect(res, "/upload-payments");
+  const safeFile = path.basename(file);
+
+  // pull payments for this org + file
+  const paymentsAll = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+  const batchPayments = paymentsAll.filter(p => String(p.source_file || "") === safeFile);
+
+  // Build claim match helper
+  function normalizeClaimNumLocal(x) { return String(x || "").replace(/[^0-9]/g, ""); }
+
+  const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+
+  // Summary
+  const totalPaid = batchPayments.reduce((s,p)=> s + num(p.amount_paid), 0);
+  const uniqueClaims = Array.from(new Set(batchPayments.map(p => normalizeClaimNumLocal(p.claim_number)).filter(Boolean)));
+
+  // find affected billed claims by claim number match
+  const affectedClaims = billedAll.filter(b => {
+    const cn = normalizeClaimNumLocal(b.claim_number);
+    return cn && uniqueClaims.includes(cn);
+  });
+
+  const totalBilled = affectedClaims.reduce((s,b)=> s + num(b.amount_billed), 0);
+  const totalAtRisk = affectedClaims.reduce((s,b)=> s + computeClaimAtRisk(b), 0);
+
+  // pagination for payments
+  const pPage = clampInt(parsed.query.p_page || 1, 1, 999999, 1);
+  const pPageSize = clampInt(parsed.query.p_pageSize || 50, 30, 100, 50);
+  const pTotalPages = Math.max(1, Math.ceil(batchPayments.length / pPageSize));
+  const pStart = (pPage-1)*pPageSize;
+  const payPageItems = batchPayments.slice(pStart, pStart+pPageSize);
+
+  // pagination for claims
+  const cPage = clampInt(parsed.query.c_page || 1, 1, 999999, 1);
+  const cPageSize = clampInt(parsed.query.c_pageSize || 50, 30, 100, 50);
+  const cTotalPages = Math.max(1, Math.ceil(affectedClaims.length / cPageSize));
+  const cStart = (cPage-1)*cPageSize;
+  const claimPageItems = affectedClaims.slice(cStart, cStart+cPageSize);
+
+  const pNav = buildPageNav("/payment-batch-detail", { file:safeFile, p_pageSize:String(pPageSize), c_page:String(cPage), c_pageSize:String(cPageSize), p_page:String(pPage) }, pPage, pTotalPages);
+  const cNav = buildPageNav("/payment-batch-detail", { file:safeFile, c_pageSize:String(cPageSize), p_page:String(pPage), p_pageSize:String(pPageSize), c_page:String(cPage) }, cPage, cTotalPages);
+
+  const payRows = payPageItems.map(p => {
+    const cn = safeStr(p.claim_number || "");
+    const payer = safeStr(p.payer || "");
+    const amt = num(p.amount_paid).toFixed(2);
+    const dt = safeStr(p.date_paid || "");
+    return `<tr><td>${cn}</td><td>${dt}</td><td>${payer}</td><td>$${amt}</td><td class="muted small">${safeStr(p.notes||"")}</td></tr>`;
+  }).join("");
+
+  const claimRows = claimPageItems.map(b => {
+    const st = String(b.status || "Pending");
+    const badgeCls = badgeClassForStatus(st);
+    const paidAmt = num(b.insurance_paid || b.paid_amount).toFixed(2);
+    const billedAmt = num(b.amount_billed).toFixed(2);
+    const atRisk = computeClaimAtRisk(b).toFixed(2);
+    return `<tr>
+      <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number||"")}</a></td>
+      <td>${safeStr(b.dos||"")}</td>
+      <td>${safeStr(b.payer||"")}</td>
+      <td>$${billedAmt}</td>
+      <td>$${paidAmt}</td>
+      <td>$${atRisk}</td>
+      <td><span class="badge ${badgeCls}">${safeStr(st)}</span></td>
+    </tr>`;
+  }).join("");
+
+  const html = page("Payment Batch Detail", `
+    <h2>Payment Batch Detail</h2>
+    <p class="muted"><strong>File:</strong> ${safeStr(safeFile)}</p>
+
+    <div class="row">
+      <div class="col">
+        <div class="kpi-card"><h4>Records</h4><p>${batchPayments.length}</p></div>
+        <div class="kpi-card"><h4>Total Paid</h4><p>$${totalPaid.toFixed(2)}</p></div>
+      </div>
+      <div class="col">
+        <div class="kpi-card"><h4>Claims Affected</h4><p>${affectedClaims.length}</p></div>
+        <div class="kpi-card"><h4>Total At Risk</h4><p>$${Number(totalAtRisk||0).toFixed(2)}</p></div>
+      </div>
+      <div class="col">
+        <div class="kpi-card"><h4>Total Billed</h4><p>$${Number(totalBilled||0).toFixed(2)}</p></div>
+      </div>
+    </div>
+
+    <div class="btnRow">
+      <a class="btn secondary" href="/upload-payments">Back to Upload Payments</a>
+      <a class="btn secondary" href="/claims?view=all">Go to Claims</a>
+    </div>
+
+    <div class="hr"></div>
+
+    <h3>Payment Records</h3>
+    <div style="overflow:auto;">
+      <table>
+        <thead><tr><th>Claim #</th><th>Date Paid</th><th>Payer</th><th>Paid</th><th>Notes</th></tr></thead>
+        <tbody>${payRows || `<tr><td colspan="5" class="muted">No payment rows found for this file.</td></tr>`}</tbody>
+      </table>
+    </div>
+    ${pNav}
+
+    <div class="hr"></div>
+
+    <h3>Claims Affected</h3>
+    <div style="overflow:auto;">
+      <table>
+        <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Status</th></tr></thead>
+        <tbody>${claimRows || `<tr><td colspan="7" class="muted">No matching claims found for this payment file.</td></tr>`}</tbody>
+      </table>
+    </div>
+    ${cNav}
+
+    <div class="hr"></div>
+
+    <h3>Danger Zone</h3>
+    <p class="muted small">Soft delete will remove payment rows from analytics and attempt to reverse payment impact on claims. A deletion record will be stored for audit purposes.</p>
+    <form method="POST" action="/payment-batch/delete" onsubmit="return confirm('Soft delete this payment batch? This will reverse claim paid amounts where possible.');">
+      <input type="hidden" name="file" value="${safeStr(safeFile)}"/>
+      <label>Type CONFIRM to delete</label>
+      <input name="confirm" placeholder="CONFIRM" required />
+      <div class="btnRow">
+        <button class="btn danger" type="submit">Soft Delete Payment Batch</button>
+      </div>
+    </form>
+  `, navUser(), {showChat:true});
+
+  return send(res, 200, html);
+}
+
+if (method === "POST" && pathname === "/payment-batch/delete") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const file = String(params.get("file") || "").trim();
+  const confirm = String(params.get("confirm") || "").trim();
+  if (!file || confirm !== "CONFIRM") return redirect(res, "/upload-payments");
+  const safeFile = path.basename(file);
+
+  const paymentsAll = readJSON(FILES.payments, []);
+  const batch = paymentsAll.filter(p => p.org_id === org.org_id && String(p.source_file||"") === safeFile);
+  if (!batch.length) return redirect(res, "/upload-payments");
+
+  // Reverse impact on billed claims (best-effort)
+  function normalizeClaimNumLocal(x) { return String(x || "").replace(/[^0-9]/g, ""); }
+  const billedAll = readJSON(FILES.billed, []);
+  const updatedBilled = billedAll.map(b => {
+    if (b.org_id !== org.org_id) return b;
+    const cn = normalizeClaimNumLocal(b.claim_number);
+    if (!cn) return b;
+
+    const matching = batch.filter(p => normalizeClaimNumLocal(p.claim_number) === cn);
+    if (!matching.length) return b;
+
+    const totalPaid = matching.reduce((s,p)=> s + num(p.amount_paid), 0);
+    const priorPaid = num(b.insurance_paid || b.paid_amount);
+    const newPaid = Math.max(0, priorPaid - totalPaid);
+
+    b.insurance_paid = newPaid;
+    b.paid_amount = newPaid;
+    if (newPaid <= 0.01) {
+      // revert to Pending if we can’t infer denial; practice can re-classify
+      b.status = "Pending";
+      b.paid_at = null;
+    } else {
+      // recompute status based on expected insurance
+      const billedAmt = num(b.amount_billed);
+      const allowed = num(b.allowed_amount);
+      const patientResp = num(b.patient_responsibility);
+      const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+        ? num(b.expected_insurance)
+        : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+      const underpaid = Math.max(0, expectedInsurance - newPaid);
+      b.underpaid_amount = underpaid;
+      b.status = (underpaid <= 0.01) ? "Paid" : "Underpaid";
+    }
+    return b;
+  });
+  writeJSON(FILES.billed, updatedBilled);
+
+  // Remove batch payments from payments.json
+  const keep = paymentsAll.filter(p => !(p.org_id === org.org_id && String(p.source_file||"") === safeFile));
+  writeJSON(FILES.payments, keep);
+
+  // Soft delete log
+  const delLog = readJSON(FILES.deleted_payment_batches, []);
+  delLog.push({
+    deleted_id: uuid(),
+    org_id: org.org_id,
+    file: safeFile,
+    deleted_at: nowISO(),
+    deleted_by: user.user_id,
+    records: batch.length,
+    total_paid: batch.reduce((s,p)=> s + num(p.amount_paid), 0)
+  });
+  writeJSON(FILES.deleted_payment_batches, delLog);
+
+  auditLog({ actor:"user", action:"payment_batch_soft_delete", org_id: org.org_id, file: safeFile, records: batch.length });
+  return redirect(res, "/upload-payments");
+}
+
 
 // Denials-only upload page (POST handled by /upload-denials)
 if (method === "GET" && pathname === "/upload-denials") {
   const allCasesForStatus = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
   allCasesForStatus.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
   const recentCases = allCasesForStatus.slice(0, 10);
+  const billedAllForDenials = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
 
   const html = renderPage("Upload Denials", `
     <h2>Upload Denials</h2>
@@ -4292,27 +4499,30 @@ if (method === "GET" && pathname === "/upload-denials") {
 
     <div class="hr"></div>
     <h3>Denial Case Queue</h3>
-    ${
-      recentCases.length === 0
-        ? `<p class="muted">No denial cases yet.</p>`
-        : `<table>
-            <thead><tr><th>Case ID</th><th>Status</th><th>Open</th></tr></thead>
-            <tbody>${
-              recentCases.map(c => {
-                const openLink = (c.status === "DRAFT_READY")
-                  ? `/draft?case_id=${encodeURIComponent(c.case_id)}`
-                  : `/status?case_id=${encodeURIComponent(c.case_id)}`;
-                return `<tr>
-                  <td>${safeStr(c.case_id)}</td>
-                  <td>${safeStr(c.status)}</td>
-                  <td><a href="${openLink}">Open</a></td>
-                </tr>`;
-              }).join("")
-            }</tbody>
-          </table>`
-    }
-
-    <script>
+${
+  recentCases.length === 0
+    ? `<p class="muted">No denial cases yet.</p>`
+    : `<div style="overflow:auto;">
+        <table>
+          <thead><tr><th>Claim #</th><th>Case ID</th><th>Status</th><th>Open</th></tr></thead>
+          <tbody>${
+            recentCases.map(c => {
+              const m = /Claim #:\s*([^|\s]+)/.exec(c.notes || "");
+              const claimNo = m ? m[1] : "";
+              const billedMatch = claimNo ? billedAllForDenials.find(b => String(b.claim_number||"").trim() === String(claimNo).trim()) : null;
+              const claimLink = billedMatch ? `<a href="/claim-detail?billed_id=${encodeURIComponent(billedMatch.billed_id)}">${safeStr(claimNo)}</a>` : (claimNo ? safeStr(claimNo) : "—");
+              return `<tr>
+                <td>${claimLink}</td>
+                <td class="muted small">${safeStr(c.case_id)}</td>
+                <td>${safeStr(c.status)}</td>
+                <td><a href="/appeal-detail?case_id=${encodeURIComponent(c.case_id)}">Open</a></td>
+              </tr>`;
+            }).join("")
+          }</tbody>
+        </table>
+      </div>`
+}
+<script>
       const caseDrop = document.getElementById('case-dropzone');
       const caseInput = document.getElementById('case-files');
       caseDrop.addEventListener('click', () => caseInput.click());
@@ -4342,7 +4552,7 @@ if (method === "GET" && pathname === "/upload-denials") {
         }
       });
     </script>
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  `, navUser(), {showChat:true});
   return send(res, 200, html);
 }
 
@@ -4424,7 +4634,7 @@ if (method === "GET" && pathname === "/upload-negotiations") {
         <tbody>${rows || `<tr><td colspan="7" class="muted">No negotiations yet.</td></tr>`}</tbody>
       </table>
     </div>
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  `, navUser(), {showChat:true});
 
   return send(res, 200, html);
 }
@@ -4568,7 +4778,7 @@ if (method === "GET" && pathname === "/negotiation-detail") {
 
     <h3>Documents</h3>
     ${docList ? `<ul class="muted small">${docList}</ul>` : `<p class="muted small">No documents uploaded.</p>`}
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  `, navUser(), {showChat:true});
   return send(res, 200, html);
 }
 
@@ -4762,7 +4972,7 @@ if (method === "POST" && pathname === "/negotiations/upload") {
             <tbody>${rows || `<tr><td colspan="12" class="muted">No submissions yet.</td></tr>`}</tbody>
           </table>
         </div>
-      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+      `, navUser(), {showChat:true});
       return send(res, 200, html);
     }
 
@@ -5171,7 +5381,7 @@ const statusCell = (() => {
           </div>
         </div>
       </div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -5194,7 +5404,7 @@ const statusCell = (() => {
         <h2>Billed Claims Upload</h2>
         <p class="error">Only CSV or Excel files are allowed.</p>
         <div class="btnRow"><a class="btn secondary" href="/billed">Back</a></div>
-      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+      `, navUser(), {showChat:true});
       return send(res, 400, html);
     }
 
@@ -5283,7 +5493,7 @@ const statusCell = (() => {
         <a class="btn" href="/billed?submission_id=${encodeURIComponent(submission_id)}">View This Submission</a>
         <a class="btn secondary" href="/billed">Back to Submissions</a>
       </div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -5848,7 +6058,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
         <h2>Limit Reached</h2>
         <p class="error">${safeStr(can.reason)}</p>
         <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
-      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+      `, navUser(), {showChat:true});
       return send(res, 403, html);
     }
 
@@ -5868,7 +6078,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
         <h2>Upload</h2>
         <p class="error">Please upload no more than ${maxFiles} files per case.</p>
         <div class="btnRow"><a class="btn secondary" href="/upload">Back</a></div>
-      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+      `, navUser(), {showChat:true});
       return send(res, 400, html);
     }
 
@@ -5879,7 +6089,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
           <h2>Upload</h2>
           <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
           <div class="btnRow"><a class="btn secondary" href="/upload">Back</a></div>
-        `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+        `, navUser(), {showChat:true});
         return send(res, 400, html);
       }
     }
@@ -5974,8 +6184,228 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
       <h2>Limit Reached</h2>
       <p class="error">${safeStr(limitReason || "Case limit reached")}</p>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 403, html);
+  }
+
+
+  // ==============================
+  // APPEAL DETAIL (NEW - Denial workflow, separate from Negotiation)
+  // ==============================
+  if (method === "GET" && pathname === "/appeal-detail") {
+    const case_id = String(parsed.query.case_id || "").trim();
+    if (!case_id) return redirect(res, "/upload-denials");
+    const cases = readJSON(FILES.cases, []);
+    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+    if (!c) return redirect(res, "/upload-denials");
+
+    // Attempt to find claim number from notes and match billed claim
+    const m = /Claim #:\s*([^|\s]+)/.exec(c.notes || "");
+    const claimNo = m ? m[1] : "";
+    const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+    const billedMatch = claimNo ? billedAll.find(b => String(b.claim_number||"").trim() === String(claimNo).trim()) : null;
+
+    // Ensure ai fields exist
+    if (!c.ai) c.ai = {};
+    if (!c.ai.draft_text) c.ai.draft_text = (c.case_type||"").toLowerCase()==="underpayment" ? aiGenerateUnderpayment(org.org_name, c.underpayment_meta||{}).draft_text : aiGenerate(org.org_name).draft_text;
+
+    const claimSummary = billedMatch ? `
+      <table>
+        <tr><th>Claim #</th><td><a href="/claim-detail?billed_id=${encodeURIComponent(billedMatch.billed_id)}">${safeStr(billedMatch.claim_number||"")}</a></td></tr>
+        <tr><th>Payer</th><td>${safeStr(billedMatch.payer||"")}</td></tr>
+        <tr><th>DOS</th><td>${safeStr(billedMatch.dos||"")}</td></tr>
+        <tr><th>Billed</th><td>$${num(billedMatch.amount_billed).toFixed(2)}</td></tr>
+        <tr><th>Paid</th><td>$${num(billedMatch.insurance_paid || billedMatch.paid_amount).toFixed(2)}</td></tr>
+        <tr><th>Status</th><td>${safeStr(billedMatch.status||"Pending")}</td></tr>
+      </table>
+    ` : `<p class="muted">Claim details not linked (case created from upload). Claim #: <strong>${safeStr(claimNo||"—")}</strong></p>`;
+
+    const html = page("Appeal Detail", `
+      <h2>Appeal Detail</h2>
+      <p class="muted">Denial appeals workflow. This is separate from negotiation packets.</p>
+
+      <div class="hr"></div>
+      <h3>Claim Summary</h3>
+      ${claimSummary}
+
+      <div class="hr"></div>
+      <h3>Appeal Draft</h3>
+      <p class="muted small">Edit the appeal letter below. Use AI assist to strengthen the message.</p>
+
+      <div class="row">
+        <div class="col">
+          <form method="POST" action="/appeal-detail/save">
+            <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+            <label>Appeal Letter</label>
+            <textarea name="draft_text">${safeStr(c.ai.draft_text || "")}</textarea>
+            <div class="btnRow">
+              <button class="btn" type="submit">Save Draft</button>
+              <a class="btn secondary" href="/upload-denials">Back</a>
+            </div>
+          </form>
+        </div>
+
+        <div class="col">
+          <h3>AI Assist</h3>
+          <p class="muted small">Ask AI to improve tone, add structure, or highlight key evidence. (Uses your AI question limit.)</p>
+          <label>Prompt</label>
+          <textarea id="appealAiPrompt" style="min-height:140px;" placeholder="Example: Improve this appeal to be more formal and persuasive. Emphasize medical necessity and timely filing."></textarea>
+          <div class="btnRow">
+            <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('${safeStr(case_id)}')">Run AI</button>
+          </div>
+          <label>AI Output</label>
+          <textarea id="appealAiOut" style="min-height:180px;" placeholder="AI output will appear here..."></textarea>
+          <div class="btnRow">
+            <button class="btn secondary" type="button" onclick="window.__tjhpCopyAiToDraft()">Copy AI Output to Draft</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+      <h3>Appeal Actions</h3>
+      <div class="btnRow">
+        <form method="POST" action="/appeal-detail/mark" style="display:inline;">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="action" value="submitted"/>
+          <button class="btn secondary" type="submit">Mark Submitted</button>
+        </form>
+
+        <form method="POST" action="/appeal-detail/mark" style="display:inline;">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="action" value="denied"/>
+          <button class="btn danger" type="submit">Mark Denied</button>
+        </form>
+      </div>
+
+      <div class="hr"></div>
+      <h3>Mark Approved + Payment (C)</h3>
+      <p class="muted small">If the appeal is approved, enter the approved/paid amount. This can update the claim.</p>
+      <form method="POST" action="/appeal-detail/mark">
+        <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+        <input type="hidden" name="action" value="approved"/>
+        <label>Approved / Paid Amount</label>
+        <input name="approved_amount" placeholder="e.g. 250.00" required />
+        <label style="display:flex;gap:8px;align-items:center;margin-top:10px;">
+          <input type="checkbox" name="apply_to_claim" value="1" style="width:auto;margin:0;">
+          <span class="muted small">Apply to matching claim</span>
+        </label>
+        <div class="btnRow">
+          <button class="btn success" type="submit">Mark Approved</button>
+        </div>
+      </form>
+
+      <script>
+        window.__tjhpAppealAI = async function(caseId){
+          const p = document.getElementById("appealAiPrompt");
+          const out = document.getElementById("appealAiOut");
+          if (!p || !out) return;
+          const msg = (p.value||"").trim();
+          if (!msg) return;
+          out.value = "Thinking...";
+          try{
+            const r = await fetch("/ai/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message: msg }) });
+            const data = await r.json();
+            out.value = (data && data.answer) ? data.answer : "No response.";
+          }catch(e){
+            out.value = "Error contacting assistant.";
+          }
+        };
+        window.__tjhpCopyAiToDraft = function(){
+          const out = document.getElementById("appealAiOut");
+          const draft = document.querySelector('textarea[name="draft_text"]');
+          if (!out || !draft) return;
+          if ((out.value||"").trim()) draft.value = out.value;
+        };
+      </script>
+    `, navUser(), {showChat:true});
+
+    return send(res, 200, html);
+  }
+
+  if (method === "POST" && pathname === "/appeal-detail/save") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const case_id = String(params.get("case_id")||"").trim();
+    const draft_text = String(params.get("draft_text")||"");
+    const cases = readJSON(FILES.cases, []);
+    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+    if (!c) return redirect(res, "/upload-denials");
+    if (!c.ai) c.ai = {};
+    c.ai.draft_text = draft_text;
+    writeJSON(FILES.cases, cases);
+    auditLog({ actor:"user", action:"appeal_save_draft", org_id: org.org_id, case_id });
+    return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
+  }
+
+  if (method === "POST" && pathname === "/appeal-detail/mark") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const case_id = String(params.get("case_id")||"").trim();
+    const action = String(params.get("action")||"").trim();
+    const approved_amount = num(params.get("approved_amount"));
+    const apply_to_claim = params.get("apply_to_claim") === "1";
+
+    const cases = readJSON(FILES.cases, []);
+    const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+    if (!c) return redirect(res, "/upload-denials");
+
+    if (action === "submitted") c.status = "APPEAL_SUBMITTED";
+    if (action === "denied") c.status = "APPEAL_DENIED";
+
+    if (action === "approved") {
+      c.status = "APPEAL_APPROVED";
+      c.paid = true;
+      c.paid_at = new Date().toISOString().split("T")[0];
+      c.paid_amount = approved_amount;
+
+      // log as denied-approved payment record
+      const paymentsData = readJSON(FILES.payments, []);
+      paymentsData.push({
+        payment_id: uuid(),
+        org_id: org.org_id,
+        claim_number: c.case_id, // fallback
+        payer: "Appeal Approved",
+        amount_paid: approved_amount,
+        date_paid: c.paid_at,
+        source_file: "appeal-approved",
+        created_at: nowISO(),
+        denied_approved: true
+      });
+      writeJSON(FILES.payments, paymentsData);
+
+      // Apply to matching billed claim if requested
+      if (apply_to_claim) {
+        const m = /Claim #:\s*([^|\s]+)/.exec(c.notes || "");
+        const claimNo = m ? m[1] : "";
+        if (claimNo) {
+          const billedAll = readJSON(FILES.billed, []);
+          const b = billedAll.find(x => x.org_id === org.org_id && String(x.claim_number||"").trim() === String(claimNo).trim());
+          if (b) {
+            const priorPaid = num(b.insurance_paid || b.paid_amount);
+            const newPaid = priorPaid + approved_amount;
+            b.insurance_paid = newPaid;
+            b.paid_amount = newPaid;
+            b.paid_at = c.paid_at;
+
+            const billedAmt = num(b.amount_billed);
+            const allowed = num(b.allowed_amount);
+            const patientResp = num(b.patient_responsibility);
+            const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+              ? num(b.expected_insurance)
+              : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+            const underpaid = Math.max(0, expectedInsurance - newPaid);
+            b.underpaid_amount = underpaid;
+            b.status = (underpaid <= 0.01) ? "Paid" : "Underpaid";
+
+            writeJSON(FILES.billed, billedAll);
+          }
+        }
+      }
+    }
+
+    writeJSON(FILES.cases, cases);
+    auditLog({ actor:"user", action:"appeal_mark", org_id: org.org_id, case_id, status: c.status });
+    return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
   }
 
   // status (poll)
@@ -6019,7 +6449,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
       <div class="muted small"><strong>Case ID:</strong> ${safeStr(case_id)}</div>
       <script>setTimeout(()=>window.location.reload(), 2500);</script>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
 
     return send(res, 200, html);
   }
@@ -6135,7 +6565,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
           <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=pdf">Open Printable (Save as PDF)</a>
         </div>
       </form>
-`, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+`, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -6321,7 +6751,7 @@ if (method === "POST" && pathname === "/draft-template") {
         <h2>De‑Identified Confirmation Required</h2>
         <p class="error">Please confirm this case is de‑identified before compiling the packet.</p>
         <div class="btnRow"><a class="btn" href="/draft?case_id=${encodeURIComponent(case_id)}">Back</a></div>
-      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+      `, navUser(), {showChat:true});
       return send(res, 400, html);
     }
 
@@ -6592,7 +7022,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       ${detailTable}
       <div class="hr"></div>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back to Dashboard</a></div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -6624,7 +7054,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         <h2>Revenue Management</h2>
         <p class="error">Allowed file types: CSV, Excel (.xls/.xlsx), PDF, Word (.doc/.docx).</p>
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
-      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+      `, navUser(), {showChat:true});
       return send(res, 400, html);
     }
 
@@ -6636,7 +7066,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         <h2>Revenue Management</h2>
         <p class="error">File too large. Max size is ${limits.max_file_size_mb} MB.</p>
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
-      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+      `, navUser(), {showChat:true});
       return send(res, 400, html);
     }
 
@@ -6798,7 +7228,7 @@ rowsAdded = toUse;
         <a class="btn" href="/intelligence">View Revenue Intelligence (AI)</a>
         <a class="btn secondary" href="/upload-payments">Upload more</a>
       </div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -6820,13 +7250,6 @@ rowsAdded = toUse;
       <h2>Account</h2>
       <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
       <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
-      <form method="POST" action="/account/org-name" style="margin-top:8px;">
-        <label>Update Organization Name</label>
-        <input name="org_name" value="${safeStr(org.org_name)}" required />
-        <div class="btnRow">
-          <button class="btn secondary" type="submit">Save Organization Name</button>
-        </div>
-      </form>
 
       <div class="hr"></div>
       <h3>Plan</h3>
@@ -6860,30 +7283,11 @@ rowsAdded = toUse;
       <div class="btnRow">
         <a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Plan</a>
       </div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
-  
-  // Update organization name
-  if (method === "POST" && pathname === "/account/org-name") {
-    const body = await parseBody(req);
-    const params = new URLSearchParams(body);
-    const newName = (params.get("org_name") || "").trim();
-    if (!newName) return redirect(res, "/account");
-
-    const orgs = readJSON(FILES.orgs, []);
-    const oidx = orgs.findIndex(o => o.org_id === org.org_id);
-    if (oidx >= 0) {
-      orgs[oidx].org_name = newName;
-      orgs[oidx].updated_at = nowISO();
-      writeJSON(FILES.orgs, orgs);
-      auditLog({ actor:"user", action:"update_org_name", org_id: org.org_id, user_id: user.user_id });
-    }
-    return redirect(res, "/account");
-  }
-
-if (method === "POST" && pathname === "/account/password") {
+  if (method === "POST" && pathname === "/account/password") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const current = params.get("current_password") || "";
@@ -6895,7 +7299,7 @@ if (method === "POST" && pathname === "/account/password") {
         <h2>Account</h2>
         <p class="error">New passwords must match and be at least 8 characters.</p>
         <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
-      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+      `, navUser(), {showChat:true});
       return send(res, 400, html);
     }
 
@@ -6908,7 +7312,7 @@ if (method === "POST" && pathname === "/account/password") {
         <h2>Account</h2>
         <p class="error">Current password is incorrect.</p>
         <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
-      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+      `, navUser(), {showChat:true});
       return send(res, 401, html);
     }
 
@@ -6920,7 +7324,7 @@ if (method === "POST" && pathname === "/account/password") {
       <h2>Account</h2>
       <p class="muted">Password updated successfully.</p>
       <div class="btnRow"><a class="btn" href="/dashboard">Back to Dashboard</a></div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -6975,7 +7379,7 @@ if (method === "POST" && pathname === "/account/password") {
         <a class="btn secondary" href="/export/analytics.csv">Analytics CSV</a>
         <a class="btn secondary" href="/report">Printable Summary</a>
       </div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -7067,7 +7471,7 @@ if (method === "POST" && pathname === "/account/password") {
             <a class="btn secondary" href="/dashboard">Back</a>
           </div>
         </form>
-      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+      `, navUser(), {showChat:true});
       return send(res, 200, html);
     }
 
@@ -7263,7 +7667,7 @@ else if (type === "payers") {
       </div>
     `;
 
-    const html = renderPage("Report", body, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    const html = renderPage("Report", body, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -7289,7 +7693,7 @@ else if (type === "payers") {
         <a class="btn secondary" href="/exports">Download Exports</a>
         <a class="btn secondary" href="/logout">Logout</a>
       </div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -7380,7 +7784,7 @@ else if (type === "payers") {
       <p class="muted small">${claims.length > 500 ? "Showing first 500 results." : ""}</p>
       <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
       <br><form method="GET" action="/analyze-payer" style="margin-top:10px;"><input type="hidden" name="payer" value="${safeStr(payer)}"/><button class="btn" type="submit">AI Analyze This Payer</button></form>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -7463,7 +7867,7 @@ else if (type === "payers") {
         <button class="btn" type="submit">Send All Underpaid Claims to Appeals</button>
       </form>
       <div class="btnRow" style="margin-top:12px;"><a class="btn secondary" href="/dashboard">Back</a> <a class="btn secondary" href="/payer-claims?payer=${encodeURIComponent(payer)}">Back to Claims</a></div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser(), {showChat:true});
     return send(res, 200, html);
   }
 
@@ -7622,7 +8026,7 @@ ${negHistoryHtml}
       <a class="btn secondary" href="javascript:history.back()">Back</a>
       <a class="btn secondary" href="/billed">Billed Submissions</a>
     </div>
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  `, navUser(), {showChat:true});
 
   return send(res, 200, html);
 }
