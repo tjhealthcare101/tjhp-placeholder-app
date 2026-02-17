@@ -73,6 +73,7 @@ const FILES = {
   negotiations: path.join(DATA_DIR, "negotiations.json"),
   ai_queries: path.join(DATA_DIR, "ai_queries.json"),
   saved_queries: path.join(DATA_DIR, "saved_queries.json"),
+  deleted_payment_batches: path.join(DATA_DIR, "deleted_payment_batches.json"),
 };
 
 // Directory for storing uploaded template files
@@ -203,6 +204,7 @@ ensureFile(FILES.billed_submissions, []);
 ensureFile(FILES.negotiations, []);
 ensureFile(FILES.ai_queries, []);
 ensureFile(FILES.saved_queries, []);
+ensureFile(FILES.deleted_payment_batches, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -1872,6 +1874,22 @@ function saveSavedQuery(rec){
 function deleteSavedQuery(org_id, saved_id){
   const all = readJSON(FILES.saved_queries, []);
   writeJSON(FILES.saved_queries, all.filter(x => !(x.org_id === org_id && x.saved_id === saved_id)));
+}
+
+// ===== Payment Batch Helpers + Soft Delete Log =====
+function getDeletedPaymentBatches(org_id){
+  return readJSON(FILES.deleted_payment_batches, []).filter(x => x.org_id === org_id);
+}
+function logDeletedPaymentBatch(rec){
+  const all = readJSON(FILES.deleted_payment_batches, []);
+  all.push(rec);
+  writeJSON(FILES.deleted_payment_batches, all);
+}
+function normalizeClaimDigits(x){ return String(x || "").replace(/[^0-9]/g, ""); }
+function findBilledByClaim(org_id, billedAll, claimNumber){
+  const norm = normalizeClaimDigits(claimNumber);
+  if (!norm) return null;
+  return billedAll.find(b => b.org_id === org_id && normalizeClaimDigits(b.claim_number) === norm) || null;
 }
 const AI_RESPONSE_STYLES = [
   { key:"exec", label:"Executive Summary + Action Plan" },
@@ -4231,7 +4249,7 @@ if (method === "GET" && pathname === "/upload-payments") {
                     <td>${safeStr(x.source_file)}</td>
                     <td>${x.count}</td>
                     <td>${new Date(x.latest).toLocaleDateString()}</td>
-                    <td><a href="/report?type=payment_detail">Open</a></td>
+                    <td><a href="/payment-batch-detail?file=${encodeURIComponent(x.source_file)}">Open</a></td>
                   </tr>
                 `).join("")
               }</tbody>
@@ -4267,10 +4285,268 @@ if (method === "GET" && pathname === "/upload-payments") {
 }
 
 // Denials-only upload page (POST handled by /upload-denials)
+
+// ==============================
+// PAYMENT BATCH DETAIL (NEW) - shows payment rows + affected claims + soft delete
+// ==============================
+if (method === "GET" && pathname === "/payment-batch-detail") {
+  const file = String(parsed.query.file || "").trim();
+  if (!file) return redirect(res, "/upload-payments");
+
+  const safeFile = path.basename(file);
+  if (safeFile !== file) return send(res, 400, "Invalid file", "text/plain");
+
+  const allPayments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id && String(p.source_file||"") === safeFile);
+  const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+
+  // Summary
+  const totalRecords = allPayments.length;
+  const totalPaid = allPayments.reduce((s,p)=> s + num(p.amount_paid), 0);
+  const uploadedAt = allPayments.reduce((mx,p)=>{
+    const t = new Date(p.created_at || p.date_paid || 0).getTime();
+    return Math.max(mx, t || 0);
+  }, 0);
+
+  // Affected claims (match by normalized claim #)
+  const claimMap = new Map()
+  for (const p of allPayments){
+    const norm = normalizeClaimDigits(p.claim_number);
+    if (!norm) continue;
+    claimMap.set(norm, true);
+  }
+  const affected = billedAll.filter(b => claimMap.has(normalizeClaimDigits(b.claim_number)));
+
+  // Payment table pagination
+  const { page: pPage, pageSize: pSize, startIdx: pStart } = parsePageParams(parsed.query || {});
+  const pTotalPages = Math.max(1, Math.ceil(totalRecords / pSize));
+  const payPage = allPayments.slice(pStart, pStart + pSize);
+
+  // Claims table pagination uses same page params but separate query keys (cpage/cpageSize)
+  const cPageSize = clampInt(parsed.query.cpageSize || 50, 30, 100, 50);
+  const cPage = clampInt(parsed.query.cpage || 1, 1, 999999, 1);
+  const cStart = (cPage - 1) * cPageSize;
+  const cTotalPages = Math.max(1, Math.ceil(affected.length / cPageSize));
+  const claimPage = affected.slice(cStart, cStart + cPageSize);
+
+  const payRows = payPage.map(p=>`
+    <tr>
+      <td>${safeStr(p.claim_number||"")}</td>
+      <td>${safeStr(p.date_paid||"")}</td>
+      <td>${safeStr(p.payer||"")}</td>
+      <td>$${num(p.amount_paid).toFixed(2)}</td>
+      <td class="muted small">${p.source_file ? `<a href="/file?name=${encodeURIComponent(p.source_file)}" target="_blank">${safeStr(p.source_file)}</a>` : ""}</td>
+    </tr>
+  `).join("");
+
+  const claimRows = claimPage.map(b=>{
+    const paidAmt = num(b.insurance_paid || b.paid_amount);
+    const atRisk = computeClaimAtRisk(b);
+    return `
+      <tr>
+        <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number||"")}</a></td>
+        <td>${safeStr(b.dos||"")}</td>
+        <td>${safeStr(b.payer||"")}</td>
+        <td>$${num(b.amount_billed).toFixed(2)}</td>
+        <td>$${paidAmt.toFixed(2)}</td>
+        <td>$${atRisk.toFixed(2)}</td>
+        <td><span class="badge ${badgeClassForStatus(b.status||"Pending")}">${safeStr(b.status||"Pending")}</span></td>
+      </tr>
+    `;
+  }).join("");
+
+  // nav builders
+  const payNav = buildPageNav("/payment-batch-detail", { file: safeFile, pageSize: String(pSize) }, pPage, pTotalPages);
+
+  const buildClaimNav = ()=>{
+    if (cTotalPages <= 1) return "";
+    const links = [];
+    const prev = Math.max(1, cPage - 1);
+    const next = Math.min(cTotalPages, cPage + 1);
+    const base = "/payment-batch-detail";
+    const qsBase = { file: safeFile, page: String(pPage), pageSize: String(pSize), cpageSize: String(cPageSize) };
+
+    const prevQs = new URLSearchParams({ ...qsBase, cpage: String(prev) }).toString();
+    const nextQs = new URLSearchParams({ ...qsBase, cpage: String(next) }).toString();
+    links.push(`<a class="btn secondary small" href="${base}?${prevQs}">Prev</a>`);
+
+    const windowSize = 7;
+    let start = Math.max(1, cPage - Math.floor(windowSize/2));
+    let end = Math.min(cTotalPages, start + windowSize - 1);
+    start = Math.max(1, end - windowSize + 1);
+
+    for (let i=start;i<=end;i++){
+      const qs = new URLSearchParams({ ...qsBase, cpage: String(i) }).toString();
+      links.push(`<a href="${base}?${qs}" style="margin:0 6px;${i===cPage?'font-weight:900;text-decoration:underline;':''}">${i}</a>`);
+    }
+    links.push(`<a class="btn secondary small" href="${base}?${nextQs}">Next</a>`);
+    return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">${links.join("")}</div>`;
+  };
+
+  const html = renderPage("Payment Batch Detail", `
+    <h2>Payment Batch Detail</h2>
+    <p class="muted"><strong>File:</strong> ${safeStr(safeFile)} · <strong>Records:</strong> ${totalRecords} · <strong>Total Paid:</strong> $${totalPaid.toFixed(2)} · <strong>Uploaded:</strong> ${uploadedAt ? new Date(uploadedAt).toLocaleDateString() : "—"}</p>
+
+    <div class="btnRow">
+      <a class="btn secondary" href="/upload-payments">Back to Upload Payments</a>
+      <a class="btn secondary" href="/claims?view=all">View All Claims</a>
+    </div>
+
+    <div class="hr"></div>
+    <h3>Payment Records</h3>
+    <div class="muted small">Showing ${Math.min(pSize, payPage.length)} of ${totalRecords} (Page ${pPage}/${pTotalPages})</div>
+    <div style="overflow:auto;">
+      <table>
+        <thead><tr><th>Claim #</th><th>Date Paid</th><th>Payer</th><th>Paid</th><th>Source</th></tr></thead>
+        <tbody>${payRows || `<tr><td colspan="5" class="muted">No payment rows found.</td></tr>`}</tbody>
+      </table>
+    </div>
+    ${payNav}
+
+    <div class="hr"></div>
+    <h3>Claims Affected</h3>
+    <div class="muted small">Showing ${Math.min(cPageSize, claimPage.length)} of ${affected.length} (Page ${cPage}/${cTotalPages})</div>
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;align-items:center;">
+      <label class="small muted">Per page</label>
+      <select onchange="window.location=this.value">
+        ${PAGE_SIZE_OPTIONS.map(n=>{
+          const qs = new URLSearchParams({ file: safeFile, page: String(pPage), pageSize: String(pSize), cpage: "1", cpageSize: String(n) }).toString();
+          return `<option value="/payment-batch-detail?${qs}" ${n===cPageSize?"selected":""}>${n}</option>`;
+        }).join("")}
+      </select>
+    </div>
+
+    <div style="overflow:auto;">
+      <table>
+        <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Status</th></tr></thead>
+        <tbody>${claimRows || `<tr><td colspan="7" class="muted">No matching claims found.</td></tr>`}</tbody>
+      </table>
+    </div>
+    ${buildClaimNav()}
+
+    <div class="hr"></div>
+    <h3>Danger Zone</h3>
+    <p class="muted">Soft delete will remove payment rows from this file and reverse their impact on affected claims. This is logged for audit.</p>
+    <form method="POST" action="/payment-batch/delete" onsubmit="return confirm('Delete this payment batch? This will reverse payment effects.');">
+      <input type="hidden" name="file" value="${safeStr(safeFile)}"/>
+      <label>Type DELETE to confirm</label>
+      <input name="confirm" placeholder="DELETE" required />
+      <div class="btnRow">
+        <button class="btn danger" type="submit">Delete Payment Batch</button>
+      </div>
+    </form>
+  `, navUser(), {showChat:true, orgName: org.org_name});
+
+  return send(res, 200, html);
+}
+
+if (method === "POST" && pathname === "/payment-batch/delete") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const file = String(params.get("file") || "").trim();
+  const confirm = String(params.get("confirm") || "").trim();
+
+  if (!file) return redirect(res, "/upload-payments");
+  const safeFile = path.basename(file);
+  if (safeFile !== file) return send(res, 400, "Invalid file", "text/plain");
+
+  if (confirm !== "DELETE") return redirect(res, `/payment-batch-detail?file=${encodeURIComponent(safeFile)}`);
+
+  const allPayments = readJSON(FILES.payments, []);
+  const toDelete = allPayments.filter(p => p.org_id === org.org_id && String(p.source_file||"") === safeFile);
+  if (!toDelete.length) return redirect(res, `/payment-batch-detail?file=${encodeURIComponent(safeFile)}`);
+
+  const billedAll = readJSON(FILES.billed, []);
+  const billedOrg = billedAll.filter(b => b.org_id === org.org_id);
+
+  // Reverse: subtract each payment amount from the billed claim insurance_paid/paid_amount (best-effort)
+  for (const p of toDelete){
+    const b = findBilledByClaim(org.org_id, billedOrg, p.claim_number);
+    if (!b) continue;
+    const amt = num(p.amount_paid);
+    const prior = num(b.insurance_paid || b.paid_amount);
+    const newPaid = Math.max(0, prior - amt);
+    b.insurance_paid = newPaid;
+    b.paid_amount = newPaid;
+    if (newPaid <= 0.0001) {
+      b.paid_at = null;
+      // do not force Denied; return to Pending and let user decide
+      b.status = "Pending";
+    } else {
+      // recompute expected and status
+      const billedAmt = num(b.amount_billed);
+      const allowed = num(b.allowed_amount);
+      const patientResp = num(b.patient_responsibility);
+      const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+        ? num(b.expected_insurance)
+        : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+
+      const underpaid = Math.max(0, expectedInsurance - newPaid);
+      b.underpaid_amount = underpaid;
+      b.status = (underpaid <= 0.01) ? "Paid" : "Underpaid";
+    }
+  }
+
+  // Write billed updates
+  const billedOut = billedAll.map(b => {
+    if (b.org_id !== org.org_id) return b;
+    const updated = billedOrg.find(x => x.billed_id === b.billed_id);
+    return updated || b;
+  });
+  writeJSON(FILES.billed, billedOut);
+
+  // Remove payments
+  const remaining = allPayments.filter(p => !(p.org_id === org.org_id && String(p.source_file||"") === safeFile));
+  writeJSON(FILES.payments, remaining);
+
+  // Log soft delete
+  logDeletedPaymentBatch({
+    deleted_id: uuid(),
+    org_id: org.org_id,
+    file: safeFile,
+    deleted_at: nowISO(),
+    deleted_by_user_id: user.user_id,
+    payments_count: toDelete.length,
+    total_paid: toDelete.reduce((s,p)=>s+num(p.amount_paid),0)
+  });
+
+  auditLog({ actor:"user", action:"payment_batch_deleted", org_id: org.org_id, file: safeFile, count: toDelete.length });
+
+  return redirect(res, "/upload-payments");
+}
 if (method === "GET" && pathname === "/upload-denials") {
-  const allCasesForStatus = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+  const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+
+  // show denial-type cases first (exclude underpayment negotiation cases)
+  const allCasesForStatus = readJSON(FILES.cases, [])
+    .filter(c => c.org_id === org.org_id && String(c.case_type || "denial").toLowerCase() !== "underpayment");
   allCasesForStatus.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
-  const recentCases = allCasesForStatus.slice(0, 10);
+  const recentCases = allCasesForStatus.slice(0, 15);
+
+  const rows = recentCases.map(c => {
+    // Link to billed claim if we can find it
+    const linked = billedAll.find(b => b.denial_case_id === c.case_id) || null;
+    const claimNo = linked ? (linked.claim_number || "") : "";
+    const payer = linked ? (linked.payer || "") : "";
+    const dos = linked ? (linked.dos || "") : "";
+    const billedAmt = linked ? Number(linked.amount_billed || 0) : 0;
+
+    const claimLink = linked
+      ? `<a href="/claim-detail?billed_id=${encodeURIComponent(linked.billed_id)}">${safeStr(claimNo)}</a>`
+      : `<span class="muted small">—</span>`;
+
+    const openAppeal = `<a href="/appeal-detail?case_id=${encodeURIComponent(c.case_id)}">Open</a>`;
+
+    return `<tr>
+      <td>${claimLink}</td>
+      <td>${safeStr(payer)}</td>
+      <td>${safeStr(dos)}</td>
+      <td>$${billedAmt.toFixed(2)}</td>
+      <td class="muted small">${safeStr(c.case_id)}</td>
+      <td>${safeStr(c.status)}</td>
+      <td>${openAppeal}</td>
+    </tr>`;
+  }).join("");
 
   const html = renderPage("Upload Denials", `
     <h2>Upload Denials</h2>
@@ -4295,21 +4571,12 @@ if (method === "GET" && pathname === "/upload-denials") {
     ${
       recentCases.length === 0
         ? `<p class="muted">No denial cases yet.</p>`
-        : `<table>
-            <thead><tr><th>Case ID</th><th>Status</th><th>Open</th></tr></thead>
-            <tbody>${
-              recentCases.map(c => {
-                const openLink = (c.status === "DRAFT_READY")
-                  ? `/draft?case_id=${encodeURIComponent(c.case_id)}`
-                  : `/status?case_id=${encodeURIComponent(c.case_id)}`;
-                return `<tr>
-                  <td>${safeStr(c.case_id)}</td>
-                  <td>${safeStr(c.status)}</td>
-                  <td><a href="${openLink}">Open</a></td>
-                </tr>`;
-              }).join("")
-            }</tbody>
-          </table>`
+        : `<div style="overflow:auto;">
+            <table>
+              <thead><tr><th>Claim #</th><th>Payer</th><th>DOS</th><th>Billed</th><th>Case ID</th><th>Status</th><th>Open</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+           </div>`
     }
 
     <script>
@@ -4342,7 +4609,7 @@ if (method === "GET" && pathname === "/upload-denials") {
         }
       });
     </script>
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  `, navUser(), {showChat:true, orgName: org.org_name});
   return send(res, 200, html);
 }
 
@@ -6024,7 +6291,258 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     return send(res, 200, html);
   }
 
-  // draft view + edit
+  
+// ==============================
+// APPEAL DETAIL (NEW) - Denial appeals workflow (separate from negotiation)
+// ==============================
+if (method === "GET" && pathname === "/appeal-detail") {
+  const case_id = String(parsed.query.case_id || "").trim();
+  if (!case_id) return redirect(res, "/upload-denials");
+
+  const cases = readJSON(FILES.cases, []);
+  const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+  if (!c) return redirect(res, "/upload-denials");
+
+  // ensure AI completed if needed
+  if (c.status === "ANALYZING") {
+    maybeCompleteAI(c, org.org_name);
+    writeJSON(FILES.cases, cases);
+  }
+  if (!c.ai) c.ai = {};
+  normalizeAppealPacket(c, org.org_name);
+
+  const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+  const linked = billedAll.find(b => b.denial_case_id === c.case_id) || null;
+
+  const claimSummary = linked ? `
+    <table>
+      <tr><th>Claim #</th><td><a href="/claim-detail?billed_id=${encodeURIComponent(linked.billed_id)}">${safeStr(linked.claim_number||"")}</a></td></tr>
+      <tr><th>Payer</th><td>${safeStr(linked.payer||"")}</td></tr>
+      <tr><th>DOS</th><td>${safeStr(linked.dos||"")}</td></tr>
+      <tr><th>Billed</th><td>$${num(linked.amount_billed).toFixed(2)}</td></tr>
+      <tr><th>Paid</th><td>$${num(linked.insurance_paid || linked.paid_amount).toFixed(2)}</td></tr>
+      <tr><th>Status</th><td><span class="badge ${badgeClassForStatus(linked.status||"Denied")}">${safeStr(linked.status||"Denied")}</span></td></tr>
+    </table>
+  ` : `<p class="muted">No billed claim is linked to this denial case yet.</p>`;
+
+  const statusLabel = safeStr(c.status || "");
+  const draftText = (c.ai && c.ai.draft_text) ? c.ai.draft_text : "";
+  const considerations = (c.ai && c.ai.appeal_considerations) ? c.ai.appeal_considerations : "";
+
+  const html = renderPage("Appeal Detail", `
+    <h2>Appeal Detail</h2>
+    <p class="muted">Denial appeal workflow. Edit the appeal letter, get AI suggestions, upload attachments, and track submission/approval.</p>
+
+    <div class="hr"></div>
+    <h3>Case</h3>
+    <div class="muted small"><strong>Case ID:</strong> ${safeStr(case_id)} · <strong>Status:</strong> ${statusLabel}</div>
+
+    <div class="hr"></div>
+    <h3>Denied Claim</h3>
+    ${claimSummary}
+
+    <div class="hr"></div>
+    <h3>Appeal Letter</h3>
+    <div class="muted small">${safeStr(considerations)}</div>
+
+    <textarea id="appealDraft" style="min-height:240px;">${safeStr(draftText)}</textarea>
+
+    <div class="btnRow">
+      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Improve the tone and clarity. Keep it professional and concise.')">Improve Tone (AI)</button>
+      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Add a short, stronger justification section. Do not invent clinical facts; use placeholders if needed.')">Strengthen Justification (AI)</button>
+      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Rewrite into bullet-point structure suitable for payer review. Do not invent facts.')">Convert to Bullets (AI)</button>
+      <button class="btn" type="button" onclick="window.__tjhpSaveAppeal()">Save Draft</button>
+    </div>
+
+    <div id="appealSaveMsg" class="muted small" style="margin-top:8px;"></div>
+
+    <div class="hr"></div>
+    <h3>Status Actions</h3>
+    <div class="row">
+      <div class="col">
+        <form method="POST" action="/appeal/action">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="action" value="mark_submitted"/>
+          <button class="btn secondary" type="submit">Mark Submitted</button>
+        </form>
+      </div>
+      <div class="col">
+        <form method="POST" action="/appeal/action">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="action" value="mark_denied"/>
+          <button class="btn secondary" type="submit">Mark Denied</button>
+        </form>
+      </div>
+      <div class="col">
+        <form method="POST" action="/appeal/action">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="action" value="close"/>
+          <button class="btn secondary" type="submit">Close Case</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+    <h3>Mark Approved (Option C)</h3>
+    <p class="muted small">Enter the approved amount. You may optionally apply it to the claim now.</p>
+    <form method="POST" action="/appeal/action" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+      <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+      <input type="hidden" name="action" value="mark_approved"/>
+      <div style="min-width:220px;">
+        <label>Approved Amount</label>
+        <input name="approved_amount" placeholder="e.g. 250.00" required />
+      </div>
+      <div style="min-width:220px;">
+        <label>Paid Date (optional)</label>
+        <input type="date" name="paid_at" />
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;margin:0;">
+        <input type="checkbox" name="apply_payment" value="1" style="width:auto;margin:0;">
+        <span class="muted small">Apply payment to claim now</span>
+      </label>
+      <button class="btn" type="submit">Mark Approved</button>
+    </form>
+
+    <div class="hr"></div>
+    <h3>Attachments</h3>
+    <p class="muted small">Upload de-identified supporting documents (auto-delete in 60 minutes).</p>
+    <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+      <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+      <input type="file" name="appeal_docs" multiple />
+      <div class="btnRow">
+        <button class="btn secondary" type="submit">Upload Attachments</button>
+      </div>
+    </form>
+
+    <div class="btnRow">
+      <a class="btn secondary" href="/upload-denials">Back to Denial Queue</a>
+      <a class="btn secondary" href="/claims">Claims Lifecycle</a>
+    </div>
+
+    <script>
+      window.__tjhpAppealAI = async function(instruction){
+        const ta = document.getElementById("appealDraft");
+        const msg = "You are helping improve a denial appeal letter. " + instruction + "\\n\\nCURRENT DRAFT:\\n" + (ta ? ta.value : "");
+        const r = await fetch("/ai/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message: msg }) });
+        const data = await r.json();
+        if (data && data.answer && ta) ta.value = data.answer;
+      };
+
+      window.__tjhpSaveAppeal = async function(){
+        const ta = document.getElementById("appealDraft");
+        const out = document.getElementById("appealSaveMsg");
+        if (!ta) return;
+        out.textContent = "Saving...";
+        try{
+          const r = await fetch("/appeal/save-draft", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ case_id: "${safeStr(case_id)}", draft_text: ta.value }) });
+          const data = await r.json();
+          out.textContent = (data && data.ok) ? "Saved." : "Could not save.";
+        }catch(e){
+          out.textContent = "Could not save.";
+        }
+      };
+    </script>
+  `, navUser(), {showChat:true, orgName: org.org_name});
+
+  return send(res, 200, html);
+}
+
+if (method === "POST" && pathname === "/appeal/save-draft") {
+  const body = await parseBody(req);
+  let payload = {};
+  try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+  const case_id = String(payload.case_id || "").trim();
+  const draft_text = String(payload.draft_text || "");
+
+  if (!case_id) return send(res, 200, JSON.stringify({ ok:false }), "application/json");
+
+  const cases = readJSON(FILES.cases, []);
+  const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+  if (!c) return send(res, 200, JSON.stringify({ ok:false }), "application/json");
+
+  if (!c.ai) c.ai = {};
+  c.ai.draft_text = draft_text;
+  c.updated_at = nowISO();
+  writeJSON(FILES.cases, cases);
+  auditLog({ actor:"user", action:"appeal_save_draft", org_id: org.org_id, case_id });
+  return send(res, 200, JSON.stringify({ ok:true }), "application/json");
+}
+
+if (method === "POST" && pathname === "/appeal/action") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const case_id = String(params.get("case_id") || "").trim();
+  const action = String(params.get("action") || "").trim();
+
+  const cases = readJSON(FILES.cases, []);
+  const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+  if (!c) return redirect(res, "/upload-denials");
+
+  // status transitions
+  if (action === "mark_submitted") c.status = "Submitted";
+  if (action === "mark_denied") c.status = "Denied";
+  if (action === "close") c.status = "Closed";
+
+  if (action === "mark_approved") {
+    c.status = "Approved (Pending Payment)";
+    const approvedAmt = num(params.get("approved_amount"));
+    const applyPay = params.get("apply_payment") === "1";
+    const paidAt = (params.get("paid_at") || "").trim();
+
+    // Link/update claim if available
+    const billedAll = readJSON(FILES.billed, []);
+    const b = billedAll.find(x => x.org_id === org.org_id && x.denial_case_id === case_id) || null;
+
+    if (b) {
+      b.appeal_approved_amount = approvedAmt;
+      b.appeal_approved_at = nowISO();
+      b.status = "Appeal";
+      if (applyPay && approvedAmt > 0) {
+        const prior = num(b.insurance_paid || b.paid_amount);
+        const newPaid = prior + approvedAmt;
+        b.insurance_paid = newPaid;
+        b.paid_amount = newPaid;
+        b.paid_at = paidAt || b.paid_at || new Date().toISOString().split("T")[0];
+
+        const billedAmt = num(b.amount_billed);
+        const allowed = num(b.allowed_amount);
+        const patientResp = num(b.patient_responsibility);
+        const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+          ? num(b.expected_insurance)
+          : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+
+        const underpaid = Math.max(0, expectedInsurance - newPaid);
+        b.underpaid_amount = underpaid;
+        b.status = (underpaid <= 0.01) ? "Paid" : "Underpaid";
+
+        // log payment record
+        const paymentsData = readJSON(FILES.payments, []);
+        paymentsData.push({
+          payment_id: uuid(),
+          org_id: org.org_id,
+          claim_number: b.claim_number || "",
+          payer: b.payer || "Appeal Approved",
+          amount_paid: approvedAmt,
+          date_paid: paidAt || new Date().toISOString().split("T")[0],
+          source_file: "appeal-approved",
+          created_at: nowISO(),
+          denied_approved: true
+        });
+        writeJSON(FILES.payments, paymentsData);
+      }
+      writeJSON(FILES.billed, billedAll);
+    }
+    c.approved_amount = approvedAmt;
+    c.approved_at = nowISO();
+  }
+
+  c.updated_at = nowISO();
+  writeJSON(FILES.cases, cases);
+  auditLog({ actor:"user", action:"appeal_action", org_id: org.org_id, case_id, action_taken: action });
+
+  return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
+}
+// draft view + edit
   if (method === "GET" && pathname === "/draft") {
     const case_id = parsed.query.case_id || "";
     const cases = readJSON(FILES.cases, []);
@@ -6795,7 +7313,7 @@ rowsAdded = toUse;
         <li><strong>Rows processed:</strong> ${isCSV ? rowsAdded : "File stored (not parsed — upload CSV for analytics extraction)"}</li>
       </ul>
       <div class="btnRow">
-        <a class="btn" href="/intelligence">View Revenue Intelligence (AI)</a>
+        <a class="btn" href="/payment-batch-detail?file=${encodeURIComponent(path.basename(stored))}">View Payment Batch</a>
         <a class="btn secondary" href="/upload-payments">Upload more</a>
       </div>
     `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
@@ -7635,5 +8153,4 @@ ${negHistoryHtml}
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
 
