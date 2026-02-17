@@ -3480,6 +3480,84 @@ if (method === "GET" && pathname === "/claims") {
     return acc;
   }, {total:0});
 
+  // Data helpers for dynamic snapshots
+  const paymentsOrg = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+  const denialCasesOrg = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id && String(c.case_type||"denial").toLowerCase() !== "underpayment");
+  const negotiationsOrg = getNegotiations(org.org_id).map(n => normalizeNegotiation(n));
+
+  const paymentFiles = (() => {
+    const map = {};
+    paymentsOrg.forEach(p => {
+      const sf = (p.source_file || "").trim();
+      if (!sf) return;
+      if (!map[sf]) map[sf] = { source_file: sf, count: 0, totalPaid: 0 };
+      map[sf].count += 1;
+      map[sf].totalPaid += num(p.amount_paid);
+    });
+    return Object.values(map);
+  })();
+
+  const viewSnapshot = (() => {
+    if (view === "billed") {
+      const totalBatches = subsAll.length;
+      const claims = billedAll;
+      const totalBilled = claims.reduce((s,b)=>s+num(b.amount_billed),0);
+      const collected = claims.reduce((s,b)=>s+num(b.insurance_paid||b.paid_amount),0);
+      return `
+        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Quick metrics related to the selected tab.</span></span></h3>
+        <div class="row">
+          <div class="col"><div class="kpi-card"><h4>Batches</h4><p>${totalBatches}</p></div><div class="kpi-card"><h4>Total Billed</h4><p>$${totalBilled.toFixed(2)}</p></div></div>
+          <div class="col"><div class="kpi-card"><h4>Collected</h4><p>$${collected.toFixed(2)}</p></div><div class="kpi-card"><h4>At Risk</h4><p>$${Math.max(0,totalBilled-collected).toFixed(2)}</p></div></div>
+        </div>
+      `;
+    }
+    if (view === "payments") {
+      const totalFiles = paymentFiles.length;
+      const totalPaid = paymentFiles.reduce((s,f)=>s+num(f.totalPaid),0);
+      return `
+        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Payment upload metrics.</span></span></h3>
+        <div class="row">
+          <div class="col"><div class="kpi-card"><h4>Payment Files</h4><p>${totalFiles}</p></div><div class="kpi-card"><h4>Total Paid</h4><p>$${totalPaid.toFixed(2)}</p></div></div>
+          <div class="col"><div class="kpi-card"><h4>Payment Rows</h4><p>${paymentsOrg.length}</p></div><div class="kpi-card"><h4>Avg Rows/File</h4><p>${totalFiles?Math.round(paymentsOrg.length/totalFiles):0}</p></div></div>
+        </div>
+      `;
+    }
+    if (view === "denials") {
+      const total = denialCasesOrg.length;
+      const drafts = denialCasesOrg.filter(c => String(c.status||"") === "DRAFT_READY").length;
+      const submitted = denialCasesOrg.filter(c => String(c.status||"") === "Submitted").length;
+      const approved = denialCasesOrg.filter(c => String(c.status||"") === "Approved (Pending Payment)").length;
+      return `
+        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Denial and appeal workflow counts.</span></span></h3>
+        <div class="row">
+          <div class="col"><div class="kpi-card"><h4>Total Denials</h4><p>${total}</p></div><div class="kpi-card"><h4>Draft Ready</h4><p>${drafts}</p></div></div>
+          <div class="col"><div class="kpi-card"><h4>Submitted</h4><p>${submitted}</p></div><div class="kpi-card"><h4>Approved (Pending)</h4><p>${approved}</p></div></div>
+        </div>
+      `;
+    }
+    if (view === "negotiations") {
+      const total = negotiationsOrg.length;
+      const submitted = negotiationsOrg.filter(n => n.status === "Submitted").length;
+      const approved = negotiationsOrg.filter(n => n.status === "Approved (Pending Payment)").length;
+      const paid = negotiationsOrg.filter(n => n.status === "Payment Received").length;
+      return `
+        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Negotiation workflow counts.</span></span></h3>
+        <div class="row">
+          <div class="col"><div class="kpi-card"><h4>Total Negotiations</h4><p>${total}</p></div><div class="kpi-card"><h4>Submitted</h4><p>${submitted}</p></div></div>
+          <div class="col"><div class="kpi-card"><h4>Approved (Pending)</h4><p>${approved}</p></div><div class="kpi-card"><h4>Payment Received</h4><p>${paid}</p></div></div>
+        </div>
+      `;
+    }
+    // view === "all"
+    return `
+      <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Overall claim status distribution.</span></span></h3>
+      <div class="row">
+        <div class="col"><div class="kpi-card"><h4>Total Claims</h4><p>${counts.total||0}</p></div><div class="kpi-card"><h4>At Risk Claims</h4><p>${(counts["Denied"]||0)+(counts["Underpaid"]||0)+(counts["Appeal"]||0)+(counts["Pending"]||0)}</p></div></div>
+        <div class="col"><div class="kpi-card"><h4>Denied</h4><p>${counts["Denied"]||0}</p></div><div class="kpi-card"><h4>Underpaid</h4><p>${counts["Underpaid"]||0}</p></div></div>
+      </div>
+    `;
+  })();
+
   const tab = (key, label, tip) => {
     const active = (view === key);
     return `
@@ -3501,25 +3579,32 @@ if (method === "GET" && pathname === "/claims") {
     </div>
   `;
 
-  const uploadRow = `
+  const primaryUpload = (() => {
+    if (view === "billed") return `<a class="btn" href="/upload-billed">Upload Billed Claims</a>`;
+    if (view === "payments") return `<a class="btn" href="/upload-payments">Upload Payments</a>`;
+    if (view === "denials") return `<a class="btn" href="/upload-denials">Upload Denials</a>`;
+    if (view === "negotiations") return `<a class="btn" href="/upload-negotiations">Upload Negotiations</a>`;
+    return ``;
+  })();
+
+  const uploadRow = primaryUpload ? `
     <div class="btnRow">
-      <a class="btn" href="/upload-billed">Upload Billed Claims</a>
-      <a class="btn secondary" href="/upload-payments">Upload Payments</a>
-      <a class="btn secondary" href="/upload-denials">Upload Denials</a>
-      <a class="btn secondary" href="/upload-negotiations">Upload Negotiations</a>
-      <span class="tooltip">ⓘ<span class="tooltiptext">Uploads create batches/queues below. Use the sub-tabs to review and manage each stage.</span></span>
+      ${primaryUpload}
+      <span class="tooltip">ⓘ<span class="tooltiptext">Uploads create batches/queues below. Use the tabs to review and manage each stage.</span></span>
     </div>
-  `;
+  ` : ``;
 
   // ===== Shared header (always) =====
   let body = `
     <h2>Claims Lifecycle <span class="tooltip">ⓘ<span class="tooltiptext">This is your operational hub for billed batches, payment batches, denial appeals, negotiations, and all claims.</span></span></h2>
     <p class="muted">Everything that happens to claims — billed, denied, appealed, paid, and negotiated — in one place.</p>
+    <div class="muted small">Select a tab below to manage a specific stage.</div>
+    ${subTabs}
     ${uploadRow}
 
     <div class="hr"></div>
 
-    <h3>Quick Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Counts across your full claim population (not just the selected sub-tab).</span></span></h3>
+<h3>Overall Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Counts across your full claim population (not just the selected sub-tab).</span></span></h3>
     <div class="row">
       <div class="col">
         <div class="kpi-card"><h4>Total Claims</h4><p>${counts.total || 0}</p></div>
@@ -3537,12 +3622,15 @@ if (method === "GET" && pathname === "/claims") {
 
     <div class="hr"></div>
 
-    ${subTabs}
+    
+
+    <div class="hr"></div>
+
+    ${viewSnapshot}
 
     <div class="hr"></div>
   `;
-
-  // ===== Subtab content =====
+// ===== Subtab content =====
 
   // (1) Billed Batches
   if (view === "billed") {
@@ -4258,6 +4346,10 @@ if (method === "GET" && pathname === "/actions") {
   const items = [];
   for (const b of billedAll){
     const st = String(b.status || "Pending");
+    const hasDenialCase = !!b.denial_case_id && caseById.has(b.denial_case_id);
+    const denialCaseObj = hasDenialCase ? caseById.get(b.denial_case_id) : null;
+    const denialCaseStatus = denialCaseObj ? String(denialCaseObj.status || "") : "";
+    const denialOpen = hasDenialCase && !["Closed","Denied"].includes(denialCaseStatus);
 
     if (payerF && String(b.payer||"") !== payerF) continue;
     if (q){
@@ -4269,7 +4361,7 @@ if (method === "GET" && pathname === "/actions") {
     let group = null;
     let secondaryStatus = "";
     let kind = null; // denial|negotiation|other
-    if (st === "Denied" || st === "Appeal"){
+    if (st === "Denied" || st.startsWith("Appeal") || denialOpen){
       const d = denialStageForClaim(b);
       group = d.stage;
       secondaryStatus = d.caseStatus;
@@ -5187,6 +5279,7 @@ if (method === "GET" && pathname === "/negotiation-detail") {
   }).join("");
 
   const applyHelp = `When a negotiation is approved, you can track approved vs collected. You may apply collected funds to the claim (manual control) even if approval differs from payment timing.`;
+  const packetDraft = String(n.packet_draft || "");
 
   const html = renderPage("Negotiation Detail", `
     <h2>Negotiation Detail</h2>
@@ -5206,7 +5299,94 @@ if (method === "GET" && pathname === "/negotiation-detail") {
       <tr><th>Updated</th><td>${n.updated_at ? new Date(n.updated_at).toLocaleString() : "—"}</td></tr>
     </table>
 
+
     <div class="hr"></div>
+
+    <h3>Negotiation Packet Builder <span class="tooltip">ⓘ<span class="tooltiptext">Build your negotiation letter/packet here. You can use our template or upload your own. AI can help auto-fill and strengthen the language.</span></span></h3>
+
+    <form method="POST" action="/negotiations/template" enctype="multipart/form-data">
+      <input type="hidden" name="negotiation_id" value="${safeStr(n.negotiation_id)}"/>
+      <div class="row">
+        <div class="col">
+          <label>Use a Saved Template (optional)</label>
+          <select name="template_id">
+            <option value="">Select a saved template</option>
+            ${(() => {
+              const tpls = readJSON(FILES.templates, []).filter(t => t.org_id === org.org_id && t.template_type === "negotiation");
+              return tpls.map(t => `<option value="${safeStr(t.template_id)}">${safeStr(t.filename)}</option>`).join("");
+            })()}
+          </select>
+
+          <label style="margin-top:10px;">Or Upload Your Own Template (TXT recommended)</label>
+          <input type="file" name="templateFile" accept=".txt,.doc,.docx" />
+          <div class="muted small" style="margin-top:6px;">Tip: TXT templates work best in v1. DOC/DOCX are stored but may not parse cleanly yet.</div>
+        </div>
+
+        <div class="col">
+          <label>Template Mode</label>
+          <select name="mode">
+            <option value="autofill">Auto-fill claim data only</option>
+            <option value="enhance">Auto-fill + enhance language with AI</option>
+          </select>
+          <div class="muted small" style="margin-top:6px;">If AI is not configured, “enhance” falls back to auto-fill.</div>
+
+          <div class="btnRow" style="margin-top:12px;">
+            <button class="btn secondary" type="submit">Apply Template</button>
+          </div>
+        </div>
+      </div>
+    </form>
+
+    <div class="hr"></div>
+
+    <label>Packet Draft</label>
+    <textarea id="negDraft" style="min-height:240px;">${safeStr(packetDraft)}</textarea>
+
+    <div class="btnRow">
+      <button class="btn secondary" type="button" onclick="window.__tjhpNegAI('Generate or refine a negotiation letter using the claim details below. Do not invent facts. Use placeholders if needed.')">Generate / Refine (AI)</button>
+      <button class="btn secondary" type="button" onclick="window.__tjhpNegAI('Improve tone and make it concise and professional. Do not invent facts.')">Improve Tone (AI)</button>
+      <button class="btn secondary" type="button" onclick="window.__tjhpNegAI('Add a stronger reimbursement justification section. Reference contract/allowed vs paid. Do not invent facts.')">Strengthen Justification (AI)</button>
+      <button class="btn" type="button" onclick="window.__tjhpSaveNegDraft()">Save Packet Draft</button>
+    </div>
+    <div id="negSaveMsg" class="muted small" style="margin-top:8px;"></div>
+
+    <script>
+      window.__tjhpNegAI = async function(instruction){
+        const ta = document.getElementById("negDraft");
+        const claimContext = ${JSON.stringify({
+          claim_number: n.claim_number,
+          payer: n.payer,
+          dos: n.dos,
+          billed: n.amount_billed,
+          paid: n.amount_paid,
+          underpaid: n.amount_underpaid,
+          requested: n.requested_amount,
+          approved: n.approved_amount,
+          collected: n.collected_amount,
+          status: n.status
+        })};
+        const msg = "You are helping build a payer negotiation packet. " + instruction +
+          "\n\nCLAIM DATA (JSON):\n" + JSON.stringify(claimContext, null, 2) +
+          "\n\nCURRENT DRAFT:\n" + (ta ? ta.value : "");
+        const r = await fetch("/ai/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message: msg }) });
+        const data = await r.json();
+        if (data && data.answer && ta) ta.value = data.answer;
+      };
+
+      window.__tjhpSaveNegDraft = async function(){
+        const ta = document.getElementById("negDraft");
+        const out = document.getElementById("negSaveMsg");
+        if (!ta) return;
+        out.textContent = "Saving...";
+        try{
+          const r = await fetch("/negotiations/save-draft", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ negotiation_id: "${safeStr(n.negotiation_id)}", packet_draft: ta.value }) });
+          const data = await r.json();
+          out.textContent = (data && data.ok) ? "Saved." : "Could not save.";
+        }catch(e){
+          out.textContent = "Could not save.";
+        }
+      };
+    </script>
 
     <h3>Update Negotiation</h3>
     <form method="POST" action="/negotiations/update" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
@@ -5320,6 +5500,160 @@ if (apply && rec.billed_id) {
   }
 
   auditLog({ actor:"user", action:"negotiation_update", org_id: org.org_id, negotiation_id, status: rec.status });
+  return redirect(res, `/negotiation-detail?negotiation_id=${encodeURIComponent(negotiation_id)}`);
+}
+
+
+
+// Save negotiation packet draft (AJAX)
+if (method === "POST" && pathname === "/negotiations/save-draft") {
+  const body = await parseBody(req);
+  let payload = {};
+  try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+  const negotiation_id = String(payload.negotiation_id || "").trim();
+  const packet_draft = String(payload.packet_draft || "");
+
+  if (!negotiation_id) return send(res, 200, JSON.stringify({ ok:false }), "application/json");
+
+  const rec0 = getNegotiationById(org.org_id, negotiation_id);
+  if (!rec0) return send(res, 200, JSON.stringify({ ok:false }), "application/json");
+
+  const rec = normalizeNegotiation({ ...rec0 });
+  rec.packet_draft = packet_draft;
+  saveNegotiation(rec);
+
+  auditLog({ actor:"user", action:"negotiation_save_draft", org_id: org.org_id, negotiation_id });
+  return send(res, 200, JSON.stringify({ ok:true }), "application/json");
+}
+
+// Apply or upload a negotiation template (Option C: autofill only OR enhance)
+if (method === "POST" && pathname === "/negotiations/template") {
+  const contentType = req.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) return redirect(res, "/upload-negotiations");
+  const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+  if (!boundaryMatch) return redirect(res, "/upload-negotiations");
+  const boundary = boundaryMatch[1];
+
+  const { files, fields } = await parseMultipart(req, boundary);
+
+  const negotiation_id = String(fields.negotiation_id || "").trim();
+  const mode = String(fields.mode || "autofill").trim(); // autofill|enhance
+  let template_id = String(fields.template_id || "").trim();
+
+  if (!negotiation_id) return redirect(res, "/upload-negotiations");
+  const rec0 = getNegotiationById(org.org_id, negotiation_id);
+  if (!rec0) return redirect(res, "/upload-negotiations");
+  const rec = normalizeNegotiation({ ...rec0 });
+
+  // Load billed claim for autofill context
+  const billedAll = readJSON(FILES.billed, []);
+  const b = billedAll.find(x => x.org_id === org.org_id && x.billed_id === rec.billed_id) || null;
+
+  const claimData = {
+    claim_number: rec.claim_number || (b ? b.claim_number : ""),
+    payer: rec.payer || (b ? b.payer : ""),
+    dos: rec.dos || (b ? b.dos : ""),
+    amount_billed: num(rec.amount_billed || (b ? b.amount_billed : 0)),
+    amount_paid: num(rec.amount_paid || (b ? (b.insurance_paid || b.paid_amount) : 0)),
+    amount_underpaid: num(rec.amount_underpaid || (b ? computeClaimAtRisk({ ...b, status:"Underpaid" }) : 0)),
+    requested_amount: num(rec.requested_amount),
+    approved_amount: num(rec.approved_amount),
+    collected_amount: num(rec.collected_amount),
+    status: String(rec.status || "Open")
+  };
+
+  function applyAutofill(tpl){
+    let out = String(tpl || "");
+    const map = {
+      claim_number: claimData.claim_number,
+      payer: claimData.payer,
+      dos: claimData.dos,
+      amount_billed: money(claimData.amount_billed),
+      amount_paid: money(claimData.amount_paid),
+      amount_underpaid: money(claimData.amount_underpaid),
+      requested_amount: money(claimData.requested_amount),
+      approved_amount: money(claimData.approved_amount),
+      collected_amount: money(claimData.collected_amount),
+      status: claimData.status
+    };
+    Object.keys(map).forEach(k=>{
+      out = out.replaceAll(`{{${k}}}`, String(map[k] ?? ""));
+    });
+    return out;
+  }
+
+  // Upload new template file (optional)
+  const templateUpload = files.find(f => f.fieldName === "templateFile");
+  if (templateUpload && templateUpload.filename) {
+    const safeName = (templateUpload.filename || "template").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const newId = uuid();
+    const storedPath = path.join(TEMPLATES_DIR, `${newId}_${safeName}`);
+    fs.writeFileSync(storedPath, templateUpload.buffer);
+
+    const templates = readJSON(FILES.templates, []);
+    templates.push({
+      template_id: newId,
+      org_id: org.org_id,
+      filename: safeName,
+      stored_path: storedPath,
+      template_type: "negotiation",
+      uploaded_at: nowISO()
+    });
+    writeJSON(FILES.templates, templates);
+    template_id = newId;
+  }
+
+  // Load selected template contents
+  let templateText = "";
+  if (template_id) {
+    try {
+      const templates = readJSON(FILES.templates, []);
+      const tpl = templates.find(t => t.template_id === template_id && t.org_id === org.org_id);
+      if (tpl && tpl.stored_path && fs.existsSync(tpl.stored_path)) {
+        templateText = fs.readFileSync(tpl.stored_path, "utf8");
+      }
+    } catch {
+      templateText = "";
+    }
+  }
+
+  if (!templateText) {
+    // fallback to existing packet draft, or system-generated underpayment template
+    templateText = rec.packet_draft || aiGenerateUnderpayment(org.org_name, {
+      claim_number: claimData.claim_number,
+      dos: claimData.dos,
+      payer: claimData.payer,
+      allowed_amount: (b ? num(b.allowed_amount) : 0),
+      expected_insurance: (b ? num(b.expected_insurance) : 0),
+      actual_paid: claimData.amount_paid,
+      underpaid_amount: claimData.amount_underpaid
+    }).draft_text;
+  }
+
+  const filled = applyAutofill(templateText);
+
+  // Enhance with AI (optional)
+  let finalText = filled;
+  if (mode === "enhance" && process.env.OPENAI_API_KEY) {
+    const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+    const systemMsg = "You are TJ Healthcare Pro's negotiation packet assistant. Rewrite and improve the negotiation letter using the provided claim data. Do not invent facts. Use placeholders when needed. Keep it professional and concise.";
+    const userMsg = "CLAIM DATA (JSON):\n" + JSON.stringify(claimData, null, 2) + "\n\nCURRENT TEMPLATE (AUTO-FILLED):\n" + filled;
+    try {
+      const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + process.env.OPENAI_API_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ model, messages: [ { role:"system", content: systemMsg }, { role:"user", content: userMsg } ], temperature: 0.2 })
+      });
+      const data = await resp.json();
+      const aiText = data?.choices?.[0]?.message?.content;
+      if (aiText) finalText = aiText;
+    } catch {}
+  }
+
+  rec.packet_draft = finalText;
+  saveNegotiation(rec);
+  auditLog({ actor:"user", action:"negotiation_apply_template", org_id: org.org_id, negotiation_id, template_id: template_id || "", mode });
+
   return redirect(res, `/negotiation-detail?negotiation_id=${encodeURIComponent(negotiation_id)}`);
 }
 
