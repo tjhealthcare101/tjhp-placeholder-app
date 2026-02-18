@@ -268,6 +268,16 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .tooltip .tooltiptext{visibility:hidden;width:220px;background-color:#555;color:#fff;text-align:center;border-radius:6px;padding:5px;position:absolute;z-index:1;bottom:125%;left:50%;margin-left:-110px;opacity:0;transition:opacity 0.3s;font-size:12px;}
 .tooltip:hover .tooltiptext{visibility:visible;opacity:1;}
 
+/* Section layout helpers */
+.section{border:1px solid var(--border);border-radius:14px;padding:14px;margin:14px 0;background:var(--card);} 
+.sectionTitle{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px;font-size:14px;font-weight:900;}
+.statsRow{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;}
+.statPill{flex:1;min-width:160px;border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff;}
+.statPill .label{font-size:12px;color:var(--muted);font-weight:800;}
+.statPill .value{font-size:16px;font-weight:900;margin-top:4px;}
+.filterBar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px;}
+.filterBar .field{display:flex;flex-direction:column;min-width:200px;}
+
 /* Chart and KPI placeholders */
 .chart-placeholder{height:200px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;margin-bottom:10px;}
 .kpi-card{display:inline-block;margin:10px;padding:15px;border:1px solid var(--border);border-radius:8px;width:200px;text-align:center;background:#fff;box-shadow:var(--shadow);}
@@ -3485,6 +3495,12 @@ if (method === "GET" && pathname === "/claims") {
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
 
+  // Claims Lifecycle: simple batch filters
+  const batch_q = String(parsed.query.batch_q || "").trim().toLowerCase();
+  const batch_start = String(parsed.query.batch_start || "").trim();
+  const batch_end = String(parsed.query.batch_end || "").trim();
+
+
   // Snapshot counts across all claims (simple, fast)
   const counts = billedAll.reduce((acc,b)=>{
     const s = String(b.status||"Pending");
@@ -3517,7 +3533,7 @@ if (method === "GET" && pathname === "/claims") {
       const totalBilled = claims.reduce((s,b)=>s+num(b.amount_billed),0);
       const collected = claims.reduce((s,b)=>s+num(b.insurance_paid||b.paid_amount),0);
       return `
-        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Quick metrics related to the selected tab.</span></span></h3>
+        
         <div class="row">
           <div class="col"><div class="kpi-card"><h4>Batches</h4><p>${totalBatches}</p></div><div class="kpi-card"><h4>Total Billed</h4><p>$${totalBilled.toFixed(2)}</p></div></div>
           <div class="col"><div class="kpi-card"><h4>Collected</h4><p>$${collected.toFixed(2)}</p></div><div class="kpi-card"><h4>At Risk</h4><p>$${Math.max(0,totalBilled-collected).toFixed(2)}</p></div></div>
@@ -3528,7 +3544,7 @@ if (method === "GET" && pathname === "/claims") {
       const totalFiles = paymentFiles.length;
       const totalPaid = paymentFiles.reduce((s,f)=>s+num(f.totalPaid),0);
       return `
-        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Payment upload metrics.</span></span></h3>
+        
         <div class="row">
           <div class="col"><div class="kpi-card"><h4>Payment Files</h4><p>${totalFiles}</p></div><div class="kpi-card"><h4>Total Paid</h4><p>$${totalPaid.toFixed(2)}</p></div></div>
           <div class="col"><div class="kpi-card"><h4>Payment Rows</h4><p>${paymentsOrg.length}</p></div><div class="kpi-card"><h4>Avg Rows/File</h4><p>${totalFiles?Math.round(paymentsOrg.length/totalFiles):0}</p></div></div>
@@ -3541,7 +3557,7 @@ if (method === "GET" && pathname === "/claims") {
       const submitted = denialCasesOrg.filter(c => String(c.status||"") === "Submitted").length;
       const approved = denialCasesOrg.filter(c => String(c.status||"") === "Approved (Pending Payment)").length;
       return `
-        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Denial and appeal workflow counts.</span></span></h3>
+        
         <div class="row">
           <div class="col"><div class="kpi-card"><h4>Total Denials</h4><p>${total}</p></div><div class="kpi-card"><h4>Draft Ready</h4><p>${drafts}</p></div></div>
           <div class="col"><div class="kpi-card"><h4>Submitted</h4><p>${submitted}</p></div><div class="kpi-card"><h4>Approved (Pending)</h4><p>${approved}</p></div></div>
@@ -3554,7 +3570,7 @@ if (method === "GET" && pathname === "/claims") {
       const approved = negotiationsOrg.filter(n => n.status === "Approved (Pending Payment)").length;
       const paid = negotiationsOrg.filter(n => n.status === "Payment Received").length;
       return `
-        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Negotiation workflow counts.</span></span></h3>
+        
         <div class="row">
           <div class="col"><div class="kpi-card"><h4>Total Negotiations</h4><p>${total}</p></div><div class="kpi-card"><h4>Submitted</h4><p>${submitted}</p></div></div>
           <div class="col"><div class="kpi-card"><h4>Approved (Pending)</h4><p>${approved}</p></div><div class="kpi-card"><h4>Payment Received</h4><p>${paid}</p></div></div>
@@ -3563,7 +3579,7 @@ if (method === "GET" && pathname === "/claims") {
     }
     // view === "all"
     return `
-      <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Overall claim status distribution.</span></span></h3>
+      
       <div class="row">
         <div class="col"><div class="kpi-card"><h4>Total Claims</h4><p>${counts.total||0}</p></div><div class="kpi-card"><h4>At Risk Claims</h4><p>${(counts["Denied"]||0)+(counts["Underpaid"]||0)+(counts["Appeal"]||0)+(counts["Pending"]||0)}</p></div></div>
         <div class="col"><div class="kpi-card"><h4>Denied</h4><p>${counts["Denied"]||0}</p></div><div class="kpi-card"><h4>Underpaid</h4><p>${counts["Underpaid"]||0}</p></div></div>
@@ -3612,42 +3628,48 @@ if (method === "GET" && pathname === "/claims") {
     <h2>Claims Lifecycle <span class="tooltip">ⓘ<span class="tooltiptext">This is your operational hub for billed batches, payment batches, denial appeals, negotiations, and all claims.</span></span></h2>
     <p class="muted">Everything that happens to claims — billed, denied, appealed, paid, and negotiated — in one place.</p>
     <div class="muted small">Select a tab below to manage a specific stage.</div>
-    ${subTabs}
-    ${uploadRow}
 
-    <div class="hr"></div>
+    <div class="section">
+      <div class="sectionTitle">Stage Navigation</div>
+      ${subTabs}
+      ${uploadRow}
+    </div>
 
-<h3>Overall Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Counts across your full claim population (not just the selected sub-tab).</span></span></h3>
-    <div class="row">
-      <div class="col">
-        <div class="kpi-card"><h4>Total Claims</h4><p>${counts.total || 0}</p></div>
-        <div class="kpi-card"><h4>Denied</h4><p>${counts["Denied"] || 0}</p></div>
+    <div class="section">
+      <div class="sectionTitle">
+        <span>Overall Snapshot</span>
+        <span class="tooltip">ⓘ<span class="tooltiptext">Counts across your full claim population (not just the selected tab).</span></span>
       </div>
-      <div class="col">
-        <div class="kpi-card"><h4>Underpaid</h4><p>${counts["Underpaid"] || 0}</p></div>
-        <div class="kpi-card"><h4>Appeal</h4><p>${counts["Appeal"] || 0}</p></div>
-      </div>
-      <div class="col">
-        <div class="kpi-card"><h4>Paid</h4><p>${counts["Paid"] || 0}</p></div>
-        <div class="kpi-card"><h4>Negotiations</h4><p>${getNegotiations(org.org_id).length}</p></div>
+      <div class="statsRow">
+        <div class="statPill"><div class="label">Total Claims</div><div class="value">${counts.total || 0}</div></div>
+        <div class="statPill"><div class="label">Paid</div><div class="value">${counts["Paid"] || 0}</div></div>
+        <div class="statPill"><div class="label">Denied</div><div class="value">${counts["Denied"] || 0}</div></div>
+        <div class="statPill"><div class="label">Underpaid</div><div class="value">${counts["Underpaid"] || 0}</div></div>
+        <div class="statPill"><div class="label">Appeal</div><div class="value">${counts["Appeal"] || 0}</div></div>
+        <div class="statPill"><div class="label">Negotiations</div><div class="value">${getNegotiations(org.org_id).length}</div></div>
       </div>
     </div>
 
-    <div class="hr"></div>
+    <div class="section">
+      <div class="sectionTitle">
+        <span>This View Snapshot</span>
+        <span class="tooltip">ⓘ<span class="tooltiptext">Quick metrics related to the selected stage tab.</span></span>
+      </div>
+      ${viewSnapshot}
+    </div>
 
-    
-
-    <div class="hr"></div>
-
-    ${viewSnapshot}
-
-    <div class="hr"></div>
   `;
 // ===== Subtab content =====
 
   // (1) Billed Batches
   if (view === "billed") {
-    const batchRows = subsAll
+    let subsFiltered = subsAll.slice();
+    if (batch_q) subsFiltered = subsFiltered.filter(s => String(s.original_filename||"").toLowerCase().includes(batch_q));
+    const bs = batch_start ? new Date(batch_start + "T00:00:00.000Z") : null;
+    const be = batch_end ? new Date(batch_end + "T23:59:59.999Z") : null;
+    if (bs || be) subsFiltered = subsFiltered.filter(s => { const dt = new Date(s.uploaded_at || 0); if (bs && dt < bs) return false; if (be && dt > be) return false; return true; });
+
+    const batchRows = subsFiltered
       .sort((a,b)=> new Date(b.uploaded_at||0).getTime() - new Date(a.uploaded_at||0).getTime())
       .map(s=>{
         const claims = billedAll.filter(b => b.submission_id === s.submission_id);
@@ -3680,6 +3702,26 @@ if (method === "GET" && pathname === "/claims") {
 
     body += `
       <h3>Billed Batches <span class="tooltip">ⓘ<span class="tooltiptext">These are your billed claim submissions. Use them to manage claims by batch.</span></span></h3>
+      <form method="GET" action="/claims" class="filterBar">
+        <input type="hidden" name="view" value="billed"/>
+        <div class="field">
+          <label>Batch search</label>
+          <input name="batch_q" value="${safeStr(parsed.query.batch_q || "")}" placeholder="File name contains..." />
+        </div>
+        <div class="field">
+          <label>From</label>
+          <input type="date" name="batch_start" value="${safeStr(parsed.query.batch_start || "")}" />
+        </div>
+        <div class="field">
+          <label>To</label>
+          <input type="date" name="batch_end" value="${safeStr(parsed.query.batch_end || "")}" />
+        </div>
+        <div>
+          <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
+          <a class="btn secondary" href="/claims?view=billed" style="margin-top:1.6em;">Reset</a>
+        </div>
+      </form>
+      <div class="hr"></div>
       <div style="overflow:auto;">
         <table>
           <thead>
@@ -3706,7 +3748,17 @@ if (method === "GET" && pathname === "/claims") {
       if (dt > cur) paymentFilesMap[sf].latest = p.created_at || p.date_paid || nowISO();
     });
 
-    const files = Object.values(paymentFilesMap).sort((a,b)=> new Date(b.latest).getTime() - new Date(a.latest).getTime());
+    let files = Object.values(paymentFilesMap);
+
+    const file_q = String(parsed.query.file_q || "").trim().toLowerCase();
+    const pay_start = String(parsed.query.pay_start || "").trim();
+    const pay_end = String(parsed.query.pay_end || "").trim();
+    if (file_q) files = files.filter(x => String(x.source_file||"").toLowerCase().includes(file_q));
+    const ps = pay_start ? new Date(pay_start + "T00:00:00.000Z") : null;
+    const pe = pay_end ? new Date(pay_end + "T23:59:59.999Z") : null;
+    if (ps || pe) files = files.filter(x => { const dt = new Date(x.latest || 0); if (ps && dt < ps) return false; if (pe && dt > pe) return false; return true; });
+
+    files = files.sort((a,b)=> new Date(b.latest).getTime() - new Date(a.latest).getTime());
 
     const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
     const total = files.length;
@@ -3736,6 +3788,15 @@ if (method === "GET" && pathname === "/claims") {
 
     body += `
       <h3>Payment Batches <span class="tooltip">ⓘ<span class="tooltiptext">These are your uploaded payment files. Open a batch to see payment rows and affected claims.</span></span></h3>
+      <form method="GET" action="/claims" class="filterBar">
+        <input type="hidden" name="view" value="payments"/>
+        <div class="field"><label>File search</label><input name="file_q" value="${safeStr(parsed.query.file_q || "")}" placeholder="File name contains..."/></div>
+        <div class="field"><label>From</label><input type="date" name="pay_start" value="${safeStr(parsed.query.pay_start || "")}" /></div>
+        <div class="field"><label>To</label><input type="date" name="pay_end" value="${safeStr(parsed.query.pay_end || "")}" /></div>
+        <div><button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
+        <a class="btn secondary" href="/claims?view=payments" style="margin-top:1.6em;">Reset</a></div>
+      </form>
+      <div class="hr"></div>
       <div class="muted small" style="margin-bottom:8px;">Use this to audit what changed after each payment upload.</div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
@@ -3756,9 +3817,31 @@ if (method === "GET" && pathname === "/claims") {
   // (3) Denial Queue
   if (view === "denials") {
     const billedOrg = billedAll;
-    const allDenialCases = readJSON(FILES.cases, [])
+    let allDenialCases = readJSON(FILES.cases, [])
       .filter(c => c.org_id === org.org_id && String(c.case_type||"denial").toLowerCase() !== "underpayment")
       .sort((a,b)=> new Date(b.created_at||0).getTime() - new Date(a.created_at||0).getTime());
+
+    const d_status = String(parsed.query.d_status || "").trim();
+    const d_payer = String(parsed.query.d_payer || "").trim();
+    const d_start = String(parsed.query.d_start || "").trim();
+    const d_end = String(parsed.query.d_end || "").trim();
+    if (d_status) allDenialCases = allDenialCases.filter(c => String(c.status||"") === d_status);
+    if (d_payer) {
+      const billedOrg2 = billedAll;
+      allDenialCases = allDenialCases.filter(c => {
+        const linked2 = billedOrg2.find(b => b.denial_case_id === c.case_id) || null;
+        return linked2 && String(linked2.payer||"") === d_payer;
+      });
+    }
+    const ds = d_start ? new Date(d_start + "T00:00:00.000Z") : null;
+    const de = d_end ? new Date(d_end + "T23:59:59.999Z") : null;
+    if (ds || de) allDenialCases = allDenialCases.filter(c => {
+      const dt = new Date(c.created_at || 0);
+      if (ds && dt < ds) return false;
+      if (de && dt > de) return false;
+      return true;
+    });
+
 
     const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
     const total = allDenialCases.length;
@@ -3795,6 +3878,24 @@ if (method === "GET" && pathname === "/claims") {
 
     body += `
       <h3>Denial Queue <span class="tooltip">ⓘ<span class="tooltiptext">Denied claims and denial cases. Open to edit appeal drafts and track outcomes.</span></span></h3>
+      <form method="GET" action="/claims" class="filterBar">
+        <input type="hidden" name="view" value="denials"/>
+        <div class="field"><label>Status</label>
+          <select name="d_status"><option value="">All</option>
+            <option value="UPLOAD_RECEIVED"${String(parsed.query.d_status||"")==="UPLOAD_RECEIVED"?" selected":""}>Upload Received</option>
+            <option value="ANALYZING"${String(parsed.query.d_status||"")==="ANALYZING"?" selected":""}>Analyzing</option>
+            <option value="DRAFT_READY"${String(parsed.query.d_status||"")==="DRAFT_READY"?" selected":""}>Draft Ready</option>
+            <option value="Submitted"${String(parsed.query.d_status||"")==="Submitted"?" selected":""}>Submitted</option>
+            <option value="Approved (Pending Payment)"${String(parsed.query.d_status||"")==="Approved (Pending Payment)"?" selected":""}>Approved (Pending)</option>
+          </select>
+        </div>
+        <div class="field"><label>Payer</label><input name="d_payer" value="${safeStr(parsed.query.d_payer||"")}" placeholder="Exact payer (optional)"/></div>
+        <div class="field"><label>From</label><input type="date" name="d_start" value="${safeStr(parsed.query.d_start||"")}" /></div>
+        <div class="field"><label>To</label><input type="date" name="d_end" value="${safeStr(parsed.query.d_end||"")}" /></div>
+        <div><button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
+        <a class="btn secondary" href="/claims?view=denials" style="margin-top:1.6em;">Reset</a></div>
+      </form>
+      <div class="hr"></div>
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
         <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${total} (Page ${page}/${totalPages}).</div>
         <div>${sizeSelect}</div>
@@ -4446,6 +4547,7 @@ if (method === "GET" && pathname === "/actions") {
     if (x.kind === "denial") {
       actionsHtml = `
         <a class="btn secondary small" href="/appeal-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Appeal</a>
+        <a class="btn secondary small" href="/payment-reconcile?billed_id=${encodeURIComponent(b.billed_id)}">Paid</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
       `;
     } else if (x.kind === "negotiation") {
@@ -4617,6 +4719,185 @@ if (method === "POST" && pathname === "/claim-action") {
   billedAll[idx] = b;
   writeJSON(FILES.billed, billedAll);
   return redirect(res, `/claim-detail?billed_id=${encodeURIComponent(billed_id)}`);
+}
+
+
+// ==============================
+// PAYMENT RECONCILIATION (from Denials -> Paid)
+// ==============================
+if (method === "GET" && pathname === "/payment-reconcile") {
+  const billed_id = String(parsed.query.billed_id || "").trim();
+  if (!billed_id) return redirect(res, "/actions?tab=denials");
+
+  const billedAll = readJSON(FILES.billed, []);
+  const b = billedAll.find(x => x.org_id === org.org_id && x.billed_id === billed_id);
+  if (!b) return redirect(res, "/actions?tab=denials");
+
+  const billedAmt = num(b.amount_billed);
+  const allowed = num(b.allowed_amount);
+  const patientResp = num(b.patient_responsibility);
+  const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+    ? num(b.expected_insurance)
+    : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+
+  const priorPaid = num(b.insurance_paid || b.paid_amount);
+  const remaining = Math.max(0, expectedInsurance - priorPaid);
+
+  const html = renderPage("Payment Reconciliation", `
+    <h2>Payment Reconciliation</h2>
+    <p class="muted">Post a payment for a denied/appeal claim. If the payment is partial, the claim will convert to <strong>Underpaid</strong>. If you choose negotiation, we’ll take you directly to the negotiation workspace for this claim.</p>
+
+    <div class="section">
+      <div class="sectionTitle">Claim Summary</div>
+      <table>
+        <tr><th>Claim #</th><td>${safeStr(b.claim_number||"")}</td></tr>
+        <tr><th>Payer</th><td>${safeStr(b.payer||"")}</td></tr>
+        <tr><th>DOS</th><td>${safeStr(b.dos||"")}</td></tr>
+        <tr><th>Billed</th><td>${formatMoney(billedAmt)}</td></tr>
+        <tr><th>Already Paid</th><td>${formatMoney(priorPaid)}</td></tr>
+        <tr><th>Expected Insurance</th><td>${formatMoney(expectedInsurance)}</td></tr>
+        <tr><th>Remaining Balance</th><td>${formatMoney(remaining)}</td></tr>
+        <tr><th>Status</th><td><span class="badge ${badgeClassForStatus(b.status||"Denied")}">${safeStr(b.status||"Denied")}</span></td></tr>
+      </table>
+    </div>
+
+    <div class="section">
+      <div class="sectionTitle">Enter Payment Received</div>
+      <form method="POST" action="/payment-reconcile">
+        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+        <div class="filterBar">
+          <div class="field">
+            <label>Amount Received</label>
+            <input name="amount" placeholder="e.g. 250.00" required />
+          </div>
+          <div class="field">
+            <label>Paid Date (optional)</label>
+            <input type="date" name="paid_at" />
+          </div>
+          <div class="field">
+            <label>After posting payment</label>
+            <select name="next_step" required>
+              <option value="negotiate">Proceed to Negotiate Remaining Balance</option>
+              <option value="writeoff">Write Off Remaining Balance</option>
+              <option value="patient">Assign Remaining to Patient Responsibility</option>
+              <option value="stop">Just post payment and stop (leave Underpaid)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="btnRow">
+          <button class="btn" type="submit">Apply Payment</button>
+          <a class="btn secondary" href="/actions?tab=denials">Back</a>
+        </div>
+      </form>
+    </div>
+  `, navUser(), {showChat:true, orgName: org.org_name});
+  return send(res, 200, html);
+}
+
+if (method === "POST" && pathname === "/payment-reconcile") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const billed_id = String(params.get("billed_id") || "").trim();
+  const amtIn = String(params.get("amount") || "").trim();
+  const paid_at = String(params.get("paid_at") || "").trim();
+  const next = String(params.get("next_step") || "negotiate").trim();
+
+  if (!billed_id) return redirect(res, "/actions?tab=denials");
+
+  const billedAll = readJSON(FILES.billed, []);
+  const idx = billedAll.findIndex(x => x.org_id === org.org_id && x.billed_id === billed_id);
+  if (idx < 0) return redirect(res, "/actions?tab=denials");
+
+  const b = billedAll[idx];
+  const addPaid = num(amtIn);
+  const priorPaid = num(b.insurance_paid || b.paid_amount);
+  const newPaid = priorPaid + addPaid;
+
+  b.insurance_paid = newPaid;
+  b.paid_amount = newPaid;
+  b.paid_at = paid_at || b.paid_at || new Date().toISOString().split("T")[0];
+
+  const billedAmt = num(b.amount_billed);
+  const allowed = num(b.allowed_amount);
+  const patientResp = num(b.patient_responsibility);
+  const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+    ? num(b.expected_insurance)
+    : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+
+  const remaining = Math.max(0, expectedInsurance - newPaid);
+  b.underpaid_amount = remaining;
+
+  // Close denial case if exists (payment posted)
+  const case_id = b.denial_case_id || "";
+  if (case_id) {
+    const casesAll = readJSON(FILES.cases, []);
+    const c = casesAll.find(x => x.org_id === org.org_id && x.case_id === case_id);
+    if (c) {
+      c.status = "Closed";
+      c.paid = true;
+      c.paid_at = b.paid_at;
+      c.paid_amount = addPaid;
+      c.updated_at = nowISO();
+      writeJSON(FILES.cases, casesAll);
+    }
+  }
+
+  // Payment record for audit
+  const paymentsData = readJSON(FILES.payments, []);
+  paymentsData.push({
+    payment_id: uuid(),
+    org_id: org.org_id,
+    claim_number: b.claim_number || "",
+    payer: b.payer || "Payment Posted",
+    amount_paid: addPaid,
+    date_paid: b.paid_at,
+    source_file: "manual-reconcile",
+    created_at: nowISO(),
+    denied_approved: true
+  });
+  writeJSON(FILES.payments, paymentsData);
+
+  if (remaining <= 0.01) {
+    b.status = "Paid";
+    b.underpaid_amount = 0;
+    billedAll[idx] = b;
+    writeJSON(FILES.billed, billedAll);
+    auditLog({ actor:"user", action:"reconcile_paid_full", org_id: org.org_id, billed_id, amount: addPaid });
+    return redirect(res, "/actions?tab=denials");
+  }
+
+  // Partial -> Underpaid
+  b.status = "Underpaid";
+  billedAll[idx] = b;
+  writeJSON(FILES.billed, billedAll);
+
+  // Forced choice (A)
+  if (next === "writeoff") {
+    b.status = "Contractual";
+    b.contractual_adjustment = (num(b.contractual_adjustment) + remaining);
+    b.underpaid_amount = 0;
+    billedAll[idx] = b;
+    writeJSON(FILES.billed, billedAll);
+    auditLog({ actor:"user", action:"reconcile_partial_writeoff", org_id: org.org_id, billed_id, amount: addPaid, remaining });
+    return redirect(res, "/actions?tab=denials");
+  }
+  if (next === "patient") {
+    b.patient_responsibility = (num(b.patient_responsibility) + remaining);
+    b.status = "Patient Balance";
+    b.underpaid_amount = 0;
+    billedAll[idx] = b;
+    writeJSON(FILES.billed, billedAll);
+    auditLog({ actor:"user", action:"reconcile_partial_patient", org_id: org.org_id, billed_id, amount: addPaid, remaining });
+    return redirect(res, "/actions?tab=denials");
+  }
+  if (next === "stop") {
+    auditLog({ actor:"user", action:"reconcile_partial_stop", org_id: org.org_id, billed_id, amount: addPaid, remaining });
+    return redirect(res, `/claim-detail?billed_id=${encodeURIComponent(billed_id)}`);
+  }
+
+  auditLog({ actor:"user", action:"reconcile_partial_negotiate", org_id: org.org_id, billed_id, amount: addPaid, remaining });
+  return redirect(res, `/negotiation-workspace?billed_id=${encodeURIComponent(billed_id)}`);
 }
 
 // ==============================
@@ -5725,6 +6006,12 @@ if (method === "POST" && pathname === "/negotiations/upload") {
 
     const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
+
+  // Claims Lifecycle: simple batch filters
+  const batch_q = String(parsed.query.batch_q || "").trim().toLowerCase();
+  const batch_start = String(parsed.query.batch_start || "").trim();
+  const batch_end = String(parsed.query.batch_end || "").trim();
+
 
     // ===== Submissions Overview =====
     if (!submission_id) {
