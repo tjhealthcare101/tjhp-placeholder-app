@@ -74,6 +74,8 @@ const FILES = {
   ai_queries: path.join(DATA_DIR, "ai_queries.json"),
   saved_queries: path.join(DATA_DIR, "saved_queries.json"),
   deleted_payment_batches: path.join(DATA_DIR, "deleted_payment_batches.json"),
+  payer_contracts: path.join(DATA_DIR, "payer_contracts.json"),
+  document_ingests: path.join(DATA_DIR, "document_ingests.json"),
 };
 
 // Directory for storing uploaded template files
@@ -205,6 +207,8 @@ ensureFile(FILES.negotiations, []);
 ensureFile(FILES.ai_queries, []);
 ensureFile(FILES.saved_queries, []);
 ensureFile(FILES.deleted_payment_batches, []);
+ensureFile(FILES.payer_contracts, []);
+ensureFile(FILES.document_ingests, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -770,6 +774,173 @@ function billedPaidCell(billed, paid) {
   const style = (p + 0.0001 < b) ? 'style="color:#d97706;font-weight:900;"' : '';
   return `<td>${formatMoney(b)}</td><td ${style}>${formatMoney(p)}</td>`;
 }
+
+// ===== UI Label Helper (no snake_case in UI) =====
+function labelize(key){
+  return String(key||"")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// ===== Risk & Urgency Score (0–100) =====
+function calculateRiskScore(claim){
+  let score = 0;
+  const atRisk = Number(claim.underpaid_amount ?? computeClaimAtRisk(claim) ?? 0);
+  // Amount at risk (max 40)
+  if (atRisk >= 5000) score += 40;
+  else if (atRisk >= 2000) score += 30;
+  else if (atRisk >= 1000) score += 20;
+  else if (atRisk > 0) score += 10;
+
+  // Age (max 30)
+  const dt = new Date(claim.denied_at || claim.dos || claim.created_at || Date.now());
+  const daysOld = Math.floor((Date.now() - dt.getTime()) / (1000*60*60*24));
+  if (daysOld >= 60) score += 30;
+  else if (daysOld >= 45) score += 25;
+  else if (daysOld >= 30) score += 20;
+  else if (daysOld >= 15) score += 10;
+
+  // Stage severity (max 20)
+  const status = String(claim.status||"").toLowerCase();
+  if (status.includes("denied")) score += 20;
+  else if (status.includes("appeal")) score += 18;
+  else if (status.includes("negotiation")) score += 18;
+  else if (status.includes("underpaid")) score += 15;
+  else if (status.includes("awaiting payment")) score += 12;
+
+  // Network modifier (max 10)
+  if (String(claim.contract_network_status||"") === "out_network") score += 10;
+
+  return Math.min(100, score);
+}
+function getRiskLevel(score){
+  if (score >= 80) return { label:"Critical", color:"#b91c1c" };
+  if (score >= 60) return { label:"High", color:"#d97706" };
+  if (score >= 30) return { label:"Moderate", color:"#b45309" };
+  return { label:"Low", color:"#065f46" };
+}
+function riskBadge(score){
+  const r = getRiskLevel(score);
+  return `<span class="badge" style="border-color:${r.color};color:${r.color};font-weight:900;">${score}/100 (${r.label})</span>`;
+}
+function riskTooltip(){
+  return `<span class="tooltip">ⓘ<span class="tooltiptext">Risk & Urgency Score (0–100) is based on amount at risk, claim age, current stage, and network status. Higher = higher priority.</span></span>`;
+}
+
+// ===== Payer Contracts =====
+function getPayerContracts(org_id){
+  return readJSON(FILES.payer_contracts, []).filter(x => x.org_id === org_id);
+}
+function savePayerContracts(all){
+  writeJSON(FILES.payer_contracts, all);
+}
+function findPayerContract(org_id, payerName){
+  const payers = getPayerContracts(org_id);
+  const pn = String(payerName||"").trim().toLowerCase();
+  return payers.find(p => String(p.payer_name||"").trim().toLowerCase() === pn) || null;
+}
+function findContractRow(org_id, payerName, procedureCode){
+  const payer = findPayerContract(org_id, payerName);
+  if (!payer) return null;
+  const pc = String(procedureCode||"").trim();
+  const row = (payer.contracts||[]).find(r => String(r.procedure_code||"").trim() === pc && r.active !== false) || null;
+  return { payer, row };
+}
+function computeExpectedFromContract(claim, payerObj, contractRow){
+  const model = String(contractRow.reimbursement_model||"fixed");
+  const billedAmt = num(claim.amount_billed);
+  let expected = 0;
+  if (model === "fixed") expected = num(contractRow.expected_amount);
+  else if (model === "percent_charge") expected = billedAmt * (num(contractRow.expected_percentage) / 100);
+  else if (model === "percent_medicare") {
+    // v1: without Medicare rate table, fall back to expected_amount if present
+    expected = num(contractRow.expected_amount);
+  }
+  const pr = num(claim.patient_responsibility);
+  const expectedInsurance = Math.max(0, expected - pr);
+  return { expected_total: expected, expected_insurance: expectedInsurance };
+}
+function applyContractToClaim(org_id, claim){
+  const procedureCode = String(claim.procedure_code || claim.cpt_code || "").trim();
+  if (!procedureCode) return claim;
+  const found = findContractRow(org_id, claim.payer, procedureCode);
+  if (!found || !found.payer || !found.row) return claim;
+  const ex = computeExpectedFromContract(claim, found.payer, found.row);
+  claim.contract_network_status = found.payer.network_status || "in_network";
+  claim.contract_expected_amount = ex.expected_total;
+  claim.contract_expected_insurance = ex.expected_insurance;
+  claim.contract_procedure_code = procedureCode;
+  return claim;
+}
+function classifyClaimUsingContract(claim){
+  const paid = num(claim.insurance_paid || claim.paid_amount);
+  const expectedInsurance = (claim.contract_expected_insurance != null)
+    ? num(claim.contract_expected_insurance)
+    : ((claim.expected_insurance != null && String(claim.expected_insurance).trim()!=="") ? num(claim.expected_insurance) : num(claim.amount_billed));
+
+  // Zero payment => Denied
+  if (expectedInsurance > 0 && paid === 0) {
+    claim.status = "Denied";
+    claim.denial_reason = claim.denial_reason || "ERA Zero Payment";
+    claim.denied_at = claim.denied_at || nowISO();
+    return claim;
+  }
+
+  // Paid vs patient balance
+  if (paid + 0.01 >= expectedInsurance) {
+    const pr = num(claim.patient_responsibility);
+    const pc = num(claim.patient_collected);
+    const remainingPatient = Math.max(0, pr - pc);
+    claim.status = remainingPatient > 0 ? "Patient Balance" : "Paid";
+    claim.underpaid_amount = 0;
+    return claim;
+  }
+
+  claim.status = "Underpaid";
+  claim.underpaid_amount = Math.max(0, expectedInsurance - paid);
+  return claim;
+}
+function recalcClaimsForContracts(org_id){
+  const billedAll = readJSON(FILES.billed, []);
+  let changed = false;
+  for (const b of billedAll){
+    if (b.org_id !== org_id) continue;
+    applyContractToClaim(org_id, b);
+    const before = String(b.status||"");
+    const beforeU = num(b.underpaid_amount);
+    classifyClaimUsingContract(b);
+    if (String(b.status||"") !== before || num(b.underpaid_amount)!==beforeU) changed = true;
+  }
+  if (changed) writeJSON(FILES.billed, billedAll);
+  return changed;
+}
+
+// ===== Document Ingest (multi-PDF/scan ingestion scaffolding) =====
+function getDocumentIngests(org_id){
+  return readJSON(FILES.document_ingests, []).filter(x => x.org_id === org_id);
+}
+function saveDocumentIngest(rec){
+  const all = readJSON(FILES.document_ingests, []);
+  const idx = all.findIndex(x => x.upload_id === rec.upload_id);
+  if (idx >= 0) all[idx] = rec; else all.push(rec);
+  writeJSON(FILES.document_ingests, all);
+}
+function matchClaimForExtract(org_id, billedAll, ex){
+  const norm = normalizeClaimDigits(ex.claim_number);
+  if (norm) {
+    const byClaim = billedAll.find(b => b.org_id===org_id && normalizeClaimDigits(b.claim_number)===norm);
+    if (byClaim) return byClaim;
+  }
+  const payer = String(ex.payer||"").trim().toLowerCase();
+  const dos = String(ex.dos||"").trim();
+  if (payer && dos) {
+    const byPD = billedAll.find(b => b.org_id===org_id && String(b.payer||"").trim().toLowerCase()===payer && String(b.dos||"").trim()===dos);
+    if (byPD) return byPD;
+  }
+  return null;
+}
+
+
 
 function computeExpectedInsurance(allowedAmount, patientResp){
   const allowed = num(allowedAmount);
@@ -3776,6 +3947,7 @@ if (method === "GET" && pathname === "/claims") {
         <td>${safeStr(payer)}</td>
         <td>${safeStr(dos)}</td>
         <td>$${Number(billedAmt).toFixed(2)}</td>
+        <td>${linked ? riskBadge(calculateRiskScore(linked)) : '<span class="muted small">—</span>'} ${riskTooltip()}</td>
         <td class="muted small">${safeStr(c.case_id)}</td>
         <td>${safeStr(c.status||"")}</td>
         <td><a href="/appeal-detail?case_id=${encodeURIComponent(c.case_id)}">Open Appeal</a></td>
@@ -3801,7 +3973,7 @@ if (method === "GET" && pathname === "/claims") {
       </div>
       <div style="overflow:auto;">
         <table>
-          <thead><tr><th>Claim #</th><th>Payer</th><th>DOS</th><th>Billed</th><th>Case ID</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Claim #</th><th>Payer</th><th>DOS</th><th>Billed</th><th>Risk Score</th><th>Case ID</th><th>Status</th><th></th></tr></thead>
           <tbody>${rows || `<tr><td colspan="7" class="muted">No denial cases yet.</td></tr>`}</tbody>
         </table>
       </div>
@@ -3829,6 +4001,7 @@ if (method === "GET" && pathname === "/claims") {
         <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">${safeStr(n.claim_number||"")}</a></td>
         <td>${safeStr(n.payer||"")}</td>
         <td>${safeStr(n.status||"Open")}</td>
+        <td>${(()=>{ const bb = billedAll.find(b=>b.org_id===org.org_id && b.billed_id===n.billed_id); return bb ? riskBadge(calculateRiskScore(bb))+' '+riskTooltip() : '<span class="muted small">—</span>'; })()}</td>
         <td>$${Number(n.requested_amount||0).toFixed(2)}</td>
         <td>$${Number(n.approved_amount||0).toFixed(2)}</td>
         <td>$${Number(n.collected_amount||0).toFixed(2)}</td>
@@ -3872,7 +4045,7 @@ if (method === "GET" && pathname === "/claims") {
 
       <div style="overflow:auto;">
         <table>
-          <thead><tr><th>Claim #</th><th>Payer</th><th>Status</th><th>Requested</th><th>Approved</th><th>Collected</th><th>Updated</th><th></th></tr></thead>
+          <thead><tr><th>Claim #</th><th>Payer</th><th>Status</th><th>Risk Score</th><th>Requested</th><th>Approved</th><th>Collected</th><th>Updated</th><th></th></tr></thead>
           <tbody>${rows || `<tr><td colspan="8" class="muted">No negotiations yet.</td></tr>`}</tbody>
         </table>
       </div>
@@ -3936,6 +4109,7 @@ if (method === "GET" && pathname === "/claims") {
         <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
         <td>$${paidAmt.toFixed(2)}</td>
         <td>$${Number(atRisk||0).toFixed(2)}</td>
+        <td>${riskBadge(calculateRiskScore(b))} ${riskTooltip()}</td>
         <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
         <td class="muted small">${b.submission_id ? `<a href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">Batch</a>` : "—"}</td>
       </tr>`;
@@ -4010,7 +4184,7 @@ if (method === "GET" && pathname === "/claims") {
 
       <div style="overflow:auto;">
         <table>
-          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Status</th><th>Source</th></tr></thead>
+          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Risk Score</th><th>Status</th><th>Source</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="8" class="muted">No claims found.</td></tr>`}</tbody>
         </table>
       </div>
@@ -4322,7 +4496,7 @@ if (method === "GET" && pathname === "/actions") {
   const tab = String(parsed.query.tab || "denials").toLowerCase(); // denials|underpayments|awaiting|followup
   const q = String(parsed.query.q || "").trim().toLowerCase();
   const payerF = String(parsed.query.payer || "").trim();
-  const sort = String(parsed.query.sort || "urgency").trim(); // urgency|atrisk|payer|dos
+  const sort = String(parsed.query.sort || "risk").trim(); // urgency|atrisk|payer|dos
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
@@ -4400,15 +4574,16 @@ if (method === "GET" && pathname === "/actions") {
     if (tabKey !== tab) continue;
 
     const atRisk = computeClaimAtRisk(b);
-    const urgency = computeUrgency(b);
-    items.push({ b, st, kind, atRisk, urgency, secondaryStatus, tabKey });
+    const risk_score = calculateRiskScore(b);
+    items.push({ b, st, kind, atRisk, risk_score, secondaryStatus, tabKey });
   }
 
   // Sorting
-  if (sort === "atrisk") items.sort((a,b)=> b.atRisk - a.atRisk);
+  if (sort === "risk") items.sort((a,b)=> (b.risk_score - a.risk_score) || (b.atRisk - a.atRisk));
+  else if (sort === "atrisk") items.sort((a,b)=> b.atRisk - a.atRisk);
   else if (sort === "payer") items.sort((a,b)=> String(a.b.payer||"").localeCompare(String(b.b.payer||"")));
   else if (sort === "dos") items.sort((a,b)=> new Date(a.b.dos||a.b.created_at||0) - new Date(b.b.dos||b.b.created_at||0));
-  else items.sort((a,b)=> (b.urgency - a.urgency) || (b.atRisk - a.atRisk));
+  else items.sort((a,b)=> (b.risk_score - a.risk_score) || (b.atRisk - a.atRisk));
 
   // Pagination
   const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
@@ -4467,7 +4642,7 @@ if (method === "GET" && pathname === "/actions") {
       ${billedPaidCell(b.amount_billed, (b.insurance_paid || b.paid_amount))}
       <td><span class="badge ${badgeCls}">${safeStr(x.st)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
       <td>$${Number(x.atRisk||0).toFixed(2)}</td>
-      <td>${x.urgency}</td>
+      <td>${riskBadge(x.risk_score)} ${riskTooltip()}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
     </tr>`;
   }).join("");
@@ -4506,7 +4681,7 @@ if (method === "GET" && pathname === "/actions") {
       <div style="display:flex;flex-direction:column;">
         <label>Sort</label>
         <select name="sort">
-          <option value="urgency"${sort==="urgency"?" selected":""}>Urgency</option>
+          <option value="risk"${sort==="urgency"?" selected":""}>Risk Score</option>
           <option value="atrisk"${sort==="atrisk"?" selected":""}>At-Risk $</option>
           <option value="payer"${sort==="payer"?" selected":""}>Payer</option>
           <option value="dos"${sort==="dos"?" selected":""}>Oldest DOS</option>
@@ -4526,7 +4701,7 @@ if (method === "GET" && pathname === "/actions") {
 
     <div style="overflow:auto;">
       <table>
-        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed $</th><th>Paid $</th><th>Status / Stage</th><th>At-Risk $</th><th>Urgency</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed $</th><th>Paid $</th><th>Status / Stage</th><th>At-Risk $</th><th>Risk Score</th><th>Actions</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="8" class="muted">No items in this tab.</td></tr>`}</tbody>
       </table>
     </div>
@@ -5160,6 +5335,7 @@ if (method === "GET" && pathname === "/upload-negotiations") {
         <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">${safeStr(n.claim_number||"")}</a></td>
         <td>${safeStr(n.payer||"")}</td>
         <td>${safeStr(n.status||"Open")}</td>
+        <td>${(()=>{ const bb = billedAll.find(b=>b.org_id===org.org_id && b.billed_id===n.billed_id); return bb ? riskBadge(calculateRiskScore(bb))+' '+riskTooltip() : '<span class="muted small">—</span>'; })()}</td>
         <td>$${Number(n.requested_amount||0).toFixed(2)}</td>
         <td>$${Number(n.approved_amount||0).toFixed(2)}</td>
         <td>$${Number(n.collected_amount||0).toFixed(2)}</td>
@@ -8967,10 +9143,32 @@ const negHistoryHtml = negHistory.length
   : `<p class="muted">No negotiation cases for this claim yet.</p>`;
 
 
-  const claimRows = Object.keys(b).sort().map(k => {
-    const v = (typeof b[k] === "object") ? JSON.stringify(b[k]) : String(b[k] ?? "");
-    return `<tr><th style="width:240px;">${safeStr(k)}</th><td>${safeStr(v)}</td></tr>`;
-  }).join("");
+  
+  // Curated claim overview (no snake_case labels)
+  applyContractToClaim(org.org_id, b);
+  const paidAmt = num(b.insurance_paid || b.paid_amount);
+  const expectedIns = (b.contract_expected_insurance != null) ? num(b.contract_expected_insurance) : num(b.expected_insurance);
+  const variance = (expectedIns ? (expectedIns - paidAmt) : 0);
+
+  const networkBadge = b.contract_network_status
+    ? `<span class="badge ${b.contract_network_status==='out_network'?'warn':'ok'}">${b.contract_network_status==='out_network'?'Out of Network':'In Network'}</span>`
+    : `<span class="muted small">Not set</span>`;
+
+  const claimRows = [
+    ["Claim Number", b.claim_number||""],
+    ["Date of Service", b.dos||""],
+    ["Payer", b.payer||""],
+    ["Status", b.status||"Pending"],
+    ["Billed Amount", formatMoney(b.amount_billed)],
+    ["Paid Amount", formatMoney(paidAmt)],
+    ["Patient Responsibility", formatMoney(b.patient_responsibility)],
+    ["Patient Collected", formatMoney(b.patient_collected)],
+    ["Network Status", networkBadge],
+    ["Contract Expected Amount", (b.contract_expected_amount!=null)?formatMoney(b.contract_expected_amount):"—"],
+    ["Expected Insurance Payment", (expectedIns)?formatMoney(expectedIns):"—"],
+    ["Variance (Expected - Paid)", (expectedIns)?(variance>0?`<span style="color:#d97706;font-weight:900;">${formatMoney(variance)}</span>`:`<span style="color:#065f46;font-weight:900;">${formatMoney(variance)}</span>`):"—"],
+  ].map(([k,v]) => `<tr><th style="width:240px;">${safeStr(k)}</th><td>${typeof v==='string'?safeStr(v):v}</td></tr>`).join("");
+
 
   const paymentTable = relatedPayments.length === 0
     ? `<p class="muted">No payment records found for this claim.</p>`
@@ -9007,6 +9205,27 @@ const negHistoryHtml = negHistory.length
 
     <div class="hr"></div>
     <h3>Denial History</h3>
+    <div class="hr"></div>
+    <h3>Packet Summary</h3>
+    <div class="row">
+      <div class="col">
+        <h4>Appeal Packet</h4>
+        ${
+          b.denial_case_id
+            ? `<div class="muted small">Appeal Case: <a href="/appeal-detail?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></div>`
+            : `<p class="muted">No appeal packet for this claim.</p>`
+        }
+      </div>
+      <div class="col">
+        <h4>Negotiation Packet</h4>
+        ${
+          (negHistory && negHistory.length)
+            ? `<div class="muted small">Latest Negotiation: <a href="/negotiation-detail?negotiation_id=${encodeURIComponent(negHistory[0].negotiation_id)}">${safeStr(negHistory[0].negotiation_id)}</a></div>`
+            : `<p class="muted">No negotiation packet for this claim.</p>`
+        }
+      </div>
+    </div>
+
     ${
       b.denial_case_id
         ? `<div class="muted small">Case: <a href="/appeal-detail?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></div>`
@@ -9075,6 +9294,340 @@ ${negHistoryHtml}
     </div>
   `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
+  return send(res, 200, html);
+}
+
+
+
+// ==============================
+// PAYER CONTRACTS (Account Sub-Tab)
+// ==============================
+if (method === "GET" && pathname === "/payer-contracts") {
+  const payers = getPayerContracts(org.org_id).sort((a,b)=>String(a.payer_name||"").localeCompare(String(b.payer_name||"")));
+  const rows = payers.map(p => {
+    const contractRows = (p.contracts||[]).map(r => `
+      <tr>
+        <td>${safeStr(r.procedure_code||"")}</td>
+        <td class="muted small">${safeStr(r.procedure_type||"")}</td>
+        <td class="muted small">${safeStr(r.diagnosis_code||"")}</td>
+        <td class="muted small">${safeStr(r.reimbursement_model||"fixed")}</td>
+        <td>${r.reimbursement_model==="fixed" ? formatMoney(r.expected_amount) : (r.expected_percentage!=null ? safeStr(String(r.expected_percentage))+"%" : "—")}</td>
+        <td>
+          <form method="POST" action="/payer-contracts/delete" onsubmit="return confirm('Delete this code?');" style="display:inline;">
+            <input type="hidden" name="payer_id" value="${safeStr(p.payer_id)}"/>
+            <input type="hidden" name="contract_id" value="${safeStr(r.contract_id)}"/>
+            <button class="btn danger small" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+    `).join("");
+
+    return `
+      <div class="card" style="margin-top:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+          <div>
+            <h3 style="margin:0;">${safeStr(p.payer_name)}</h3>
+            <div class="muted small">Network Status: <span class="badge ${p.network_status==='out_network'?'warn':'ok'}">${p.network_status==='out_network'?'Out of Network':'In Network'}</span></div>
+          </div>
+          <form method="POST" action="/payer-contracts/delete" onsubmit="return confirm('Delete this payer and all codes?');">
+            <input type="hidden" name="payer_id" value="${safeStr(p.payer_id)}"/>
+            <button class="btn danger" type="submit">Delete Payer</button>
+          </form>
+        </div>
+
+        <div class="hr"></div>
+
+        <h4 style="margin:0 0 8px;">Procedure Code Contracts</h4>
+        <div style="overflow:auto;">
+          <table>
+            <thead><tr><th>Procedure Code</th><th>Type</th><th>Diagnosis Code (Optional)</th><th>Model</th><th>Expected</th><th></th></tr></thead>
+            <tbody>${contractRows || `<tr><td colspan="6" class="muted">No codes yet.</td></tr>`}</tbody>
+          </table>
+        </div>
+
+        <div class="hr"></div>
+
+        <h4 style="margin:0 0 8px;">Add Procedure Code</h4>
+        <form method="POST" action="/payer-contracts/add-code" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+          <input type="hidden" name="payer_id" value="${safeStr(p.payer_id)}"/>
+          <div style="min-width:220px;">
+            <label>Procedure Code</label>
+            <input name="procedure_code" placeholder="Example: CPT 99214" required />
+          </div>
+          <div style="min-width:140px;">
+            <label>Type</label>
+            <select name="procedure_type">
+              <option value="CPT">CPT</option>
+              <option value="HCPCS">HCPCS</option>
+              <option value="DRG">DRG</option>
+              <option value="APC">APC</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div style="min-width:220px;">
+            <label>Diagnosis Code (Optional)</label>
+            <input name="diagnosis_code" placeholder="Example: ICD-10 E11.9" />
+          </div>
+          <div style="min-width:160px;">
+            <label>Model</label>
+            <select name="reimbursement_model">
+              <option value="fixed">Fixed Amount</option>
+              <option value="percent_charge">% of Charge</option>
+              <option value="percent_medicare">% of Medicare (v1 uses fixed fallback)</option>
+            </select>
+          </div>
+          <div style="min-width:160px;">
+            <label>Expected Amount</label>
+            <input name="expected_amount" placeholder="e.g. 125.00" />
+          </div>
+          <div style="min-width:160px;">
+            <label>Expected %</label>
+            <input name="expected_percentage" placeholder="e.g. 120" />
+          </div>
+          <button class="btn" type="submit">Add</button>
+        </form>
+      </div>
+    `;
+  }).join("");
+
+  const html = renderPage("Payer Contracts", `
+    <h2>Payer Contracts</h2>
+    <p class="muted">Define expected reimbursement by <strong>Procedure Code</strong> and optional <strong>Diagnosis Code</strong>. This improves underpayment detection and network-aware analysis.</p>
+
+    <div class="hr"></div>
+
+    <h3>Add Payer</h3>
+    <form method="POST" action="/payer-contracts/add-payer" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+      <div style="min-width:260px;">
+        <label>Payer Name</label>
+        <input name="payer_name" required />
+      </div>
+      <div style="min-width:200px;">
+        <label>Network Status</label>
+        <select name="network_status">
+          <option value="in_network">In Network</option>
+          <option value="out_network">Out of Network</option>
+        </select>
+      </div>
+      <button class="btn" type="submit">Add Payer</button>
+      <a class="btn secondary" href="/account">Back</a>
+    </form>
+
+    <div class="hr"></div>
+
+    <h3>Upload Contract / Fee Schedule</h3>
+    <p class="muted small">Upload a fee schedule or contract. The system will store the file and (when AI is configured) extract procedure codes and expected reimbursement for review before importing.</p>
+    <form method="POST" action="/payer-contracts/upload" enctype="multipart/form-data">
+      <input type="file" name="contract_file" accept=".pdf,.doc,.docx,.csv,.xls,.xlsx" required />
+      <div class="btnRow">
+        <button class="btn secondary" type="submit">Upload & Parse</button>
+      </div>
+    </form>
+
+    <div class="hr"></div>
+
+    <h3>Existing Payers</h3>
+    ${rows || `<p class="muted">No payers added yet.</p>`}
+
+    <div class="hr"></div>
+
+    <h3>Recalculate Claims</h3>
+    <p class="muted small">Updating payer contracts can change underpayment flags. This will recalculate all claims for your organization.</p>
+    <form method="POST" action="/payer-contracts/recalculate" onsubmit="return confirm('Recalculate all claims using current payer contracts?');">
+      <button class="btn" type="submit">Recalculate Now</button>
+    </form>
+  `, navUser(), {showChat:true, orgName: org.org_name});
+  return send(res, 200, html);
+}
+
+if (method === "POST" && pathname === "/payer-contracts/add-payer") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const payer_name = String(params.get("payer_name")||"").trim();
+  const network_status = String(params.get("network_status")||"in_network").trim();
+  if (!payer_name) return redirect(res, "/payer-contracts");
+  const all = readJSON(FILES.payer_contracts, []);
+  all.push({ org_id: org.org_id, payer_id: uuid(), payer_name, network_status, contracts: [], created_at: nowISO(), updated_at: nowISO() });
+  savePayerContracts(all);
+  auditLog({ actor:"user", action:"payer_add", org_id: org.org_id, payer_name, network_status });
+  return redirect(res, "/payer-contracts");
+}
+
+if (method === "POST" && pathname === "/payer-contracts/add-code") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const payer_id = String(params.get("payer_id")||"").trim();
+  const procedure_code = String(params.get("procedure_code")||"").trim();
+  const procedure_type = String(params.get("procedure_type")||"CPT").trim();
+  const diagnosis_code = String(params.get("diagnosis_code")||"").trim();
+  const reimbursement_model = String(params.get("reimbursement_model")||"fixed").trim();
+  const expected_amount = params.get("expected_amount");
+  const expected_percentage = params.get("expected_percentage");
+
+  if (!payer_id || !procedure_code) return redirect(res, "/payer-contracts");
+  const all = readJSON(FILES.payer_contracts, []);
+  const payer = all.find(p => p.org_id === org.org_id && p.payer_id === payer_id);
+  if (!payer) return redirect(res, "/payer-contracts");
+
+  payer.contracts = payer.contracts || [];
+  payer.contracts.push({
+    contract_id: uuid(),
+    procedure_code,
+    procedure_type,
+    diagnosis_code,
+    diagnosis_type: diagnosis_code ? "ICD-10" : "",
+    reimbursement_model,
+    expected_amount: expected_amount ? num(expected_amount) : null,
+    expected_percentage: expected_percentage ? num(expected_percentage) : null,
+    active: true
+  });
+  payer.updated_at = nowISO();
+  savePayerContracts(all);
+
+  // recalc for this org
+  recalcClaimsForContracts(org.org_id);
+
+  auditLog({ actor:"user", action:"payer_add_code", org_id: org.org_id, payer_id, procedure_code });
+  return redirect(res, "/payer-contracts");
+}
+
+if (method === "POST" && pathname === "/payer-contracts/delete") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const payer_id = String(params.get("payer_id")||"").trim();
+  const contract_id = String(params.get("contract_id")||"").trim();
+
+  const all = readJSON(FILES.payer_contracts, []);
+  const payerIdx = all.findIndex(p => p.org_id === org.org_id && p.payer_id === payer_id);
+  if (payerIdx < 0) return redirect(res, "/payer-contracts");
+
+  if (contract_id) {
+    all[payerIdx].contracts = (all[payerIdx].contracts||[]).filter(r => r.contract_id !== contract_id);
+    all[payerIdx].updated_at = nowISO();
+  } else {
+    all.splice(payerIdx, 1);
+  }
+  savePayerContracts(all);
+  recalcClaimsForContracts(org.org_id);
+  auditLog({ actor:"user", action:"payer_delete", org_id: org.org_id, payer_id, contract_id: contract_id||"" });
+  return redirect(res, "/payer-contracts");
+}
+
+if (method === "POST" && pathname === "/payer-contracts/recalculate") {
+  recalcClaimsForContracts(org.org_id);
+  auditLog({ actor:"user", action:"payer_recalculate", org_id: org.org_id });
+  return redirect(res, "/payer-contracts");
+}
+
+// Upload scaffold (stores file + creates upload record; AI extraction handled later by Codex)
+if (method === "POST" && pathname === "/payer-contracts/upload") {
+  const contentType = req.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) return redirect(res, "/payer-contracts");
+  const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+  if (!boundaryMatch) return redirect(res, "/payer-contracts");
+  const boundary = boundaryMatch[1];
+
+  const { files, fields } = await parseMultipart(req, boundary);
+  const f = files.find(x => x.fieldName === "contract_file") || files[0];
+  if (!f) return redirect(res, "/payer-contracts");
+
+  const upload_id = uuid();
+  const dir = path.join(UPLOADS_DIR, org.org_id, "contracts");
+  ensureDir(dir);
+  const safeName = (f.filename || "contract").replace(/[^a-zA-Z0-9._-]/g,"_");
+  const stored = path.join(dir, `${upload_id}_${safeName}`);
+  fs.writeFileSync(stored, f.buffer);
+
+  const rec = {
+    org_id: org.org_id,
+    upload_id,
+    file_name: safeName,
+    stored_path: stored,
+    status: "stored",
+    parsed_result: {},
+    created_at: nowISO()
+  };
+  // Store in document_ingests for now (single store) OR create a dedicated contract_uploads file later
+  const uploads = readJSON(FILES.document_ingests, []);
+  uploads.push({ ...rec, kind:"contract_upload" });
+  writeJSON(FILES.document_ingests, uploads);
+
+  auditLog({ actor:"user", action:"contract_upload", org_id: org.org_id, upload_id, file_name: safeName });
+  return redirect(res, "/payer-contracts");
+}
+
+
+
+// ==============================
+// DOCUMENT INGEST: Multi-PDF Payment Upload (scaffold; AI extraction handled by Codex)
+// ==============================
+if (method === "POST" && pathname === "/payments/upload-documents") {
+  const contentType = req.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain");
+  const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+  if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
+  const boundary = boundaryMatch[1];
+
+  const { files, fields } = await parseMultipart(req, boundary);
+  const uploadFiles = files.filter(f => f.fieldName === "paydocs" || f.fieldName === "files" || f.fieldName === "documents");
+  if (!uploadFiles.length) return redirect(res, "/upload-payments");
+
+  const upload_id = uuid();
+  const dir = path.join(UPLOADS_DIR, org.org_id, "document_ingests", upload_id);
+  ensureDir(dir);
+
+  const savedFiles = [];
+  for (const f of uploadFiles) {
+    const safeName = (f.filename || "document").replace(/[^a-zA-Z0-9._-]/g,"_");
+    const stored = path.join(dir, `${Date.now()}_${safeName}`);
+    fs.writeFileSync(stored, f.buffer);
+    savedFiles.push({ filename: path.basename(stored), original: safeName, stored_path: stored, mime: f.mime, size_bytes: f.buffer.length });
+  }
+
+  const rec = {
+    org_id: org.org_id,
+    upload_id,
+    kind: "payment_documents",
+    status: "stored",
+    files: savedFiles,
+    extracted_claims: [],
+    matched: 0,
+    created: 0,
+    created_at: nowISO()
+  };
+  saveDocumentIngest(rec);
+  auditLog({ actor:"user", action:"payment_documents_uploaded", org_id: org.org_id, upload_id, files: savedFiles.length });
+
+  // In v1 scaffold, we do not parse PDFs; Codex will implement AI extraction & matching.
+  return redirect(res, `/document-ingest-detail?upload_id=${encodeURIComponent(upload_id)}`);
+}
+
+if (method === "GET" && pathname === "/document-ingest-detail") {
+  const upload_id = String(parsed.query.upload_id || "").trim();
+  if (!upload_id) return redirect(res, "/upload-payments");
+  const rec = readJSON(FILES.document_ingests, []).find(x => x.org_id === org.org_id && x.upload_id === upload_id);
+  if (!rec) return redirect(res, "/upload-payments");
+
+  const html = renderPage("Document Ingest Detail", `
+    <h2>Document Ingest Detail</h2>
+    <p class="muted">Upload ID: <strong>${safeStr(upload_id)}</strong></p>
+    <p class="muted">Status: <span class="badge warn">${safeStr(rec.status || "stored")}</span></p>
+
+    <div class="hr"></div>
+    <h3>Files</h3>
+    <ul class="muted small">
+      ${(rec.files || []).map(f => `<li>${safeStr(f.original || f.filename)} (${safeStr(f.mime || "")})</li>`).join("") || "<li>No files</li>"}
+    </ul>
+
+    <div class="hr"></div>
+    <h3>Extracted Claims</h3>
+    <p class="muted small">AI extraction + matching will be implemented by Codex. This page will show matched vs created claims and statuses.</p>
+
+    <div class="btnRow">
+      <a class="btn secondary" href="/upload-payments">Back</a>
+      <a class="btn secondary" href="/claims?view=payments">Payment Batches</a>
+    </div>
+  `, navUser(), {showChat:true, orgName: org.org_name});
   return send(res, 200, html);
 }
 
