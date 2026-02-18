@@ -758,6 +758,19 @@ function num(v){
   return isFinite(n) ? n : 0;
 }
 
+
+// ===== Money formatting helpers (UI) =====
+function formatMoney(val) {
+  return "$" + Number(val || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+// Returns <td>Billed</td><td Paid> with highlight when paid < billed
+function billedPaidCell(billed, paid) {
+  const b = Number(billed || 0);
+  const p = Number(paid || 0);
+  const style = (p + 0.0001 < b) ? 'style="color:#d97706;font-weight:900;"' : '';
+  return `<td>${formatMoney(b)}</td><td ${style}>${formatMoney(p)}</td>`;
+}
+
 function computeExpectedInsurance(allowedAmount, patientResp){
   const allowed = num(allowedAmount);
   const pr = Math.max(0, num(patientResp));
@@ -4451,6 +4464,7 @@ if (method === "GET" && pathname === "/actions") {
     return `<tr>
       <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
       <td>${safeStr(b.payer||"")}</td>
+      ${billedPaidCell(b.amount_billed, (b.insurance_paid || b.paid_amount))}
       <td><span class="badge ${badgeCls}">${safeStr(x.st)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
       <td>$${Number(x.atRisk||0).toFixed(2)}</td>
       <td>${x.urgency}</td>
@@ -4512,8 +4526,8 @@ if (method === "GET" && pathname === "/actions") {
 
     <div style="overflow:auto;">
       <table>
-        <thead><tr><th>Claim #</th><th>Payer</th><th>Status / Stage</th><th>At-Risk $</th><th>Urgency</th><th>Actions</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="6" class="muted">No items in this tab.</td></tr>`}</tbody>
+        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed $</th><th>Paid $</th><th>Status / Stage</th><th>At-Risk $</th><th>Urgency</th><th>Actions</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="8" class="muted">No items in this tab.</td></tr>`}</tbody>
       </table>
     </div>
     ${nav}
@@ -7085,6 +7099,17 @@ if (method === "GET" && pathname === "/appeal-detail") {
   const draftText = (c.ai && c.ai.draft_text) ? c.ai.draft_text : "";
   const considerations = (c.ai && c.ai.appeal_considerations) ? c.ai.appeal_considerations : "";
 
+  const ap = c.appeal_packet || {};
+  const denialEobNotes = String(ap.denial_eob_notes || "");
+  const callLogs = String(ap.contact_log || "");
+  const priorAuth = String(ap.authorization_number || "");
+  const lmnText = String(ap.lmn_text || "");
+  const checklistNotes = String(ap.checklist_notes || "");
+
+  const atts = Array.isArray(c.appeal_attachments) ? c.appeal_attachments : [];
+  const listCat = (cat) => atts.filter(a => String(a.category||"general") === cat)
+    .map(a => `<li>${safeStr(a.filename)} <span class="muted small">(expires: ${safeStr(a.expires_at ? new Date(a.expires_at).toLocaleString() : "—")})</span></li>`).join("") || `<li class="muted small">None uploaded.</li>`;
+
   const html = renderPage("Appeal Detail", `
     <h2>Appeal Detail</h2>
     <p class="muted">Denial appeal workflow. Edit the appeal letter, get AI suggestions, upload attachments, and track submission/approval.</p>
@@ -7160,15 +7185,83 @@ if (method === "GET" && pathname === "/appeal-detail") {
     </form>
 
     <div class="hr"></div>
-    <h3>Attachments</h3>
-    <p class="muted small">Upload de-identified supporting documents (auto-delete in 60 minutes).</p>
-    <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+    <h3>Appeal Packet Components <span class="tooltip">ⓘ<span class="tooltiptext">Build a complete packet: denial/EOB, appeal letter, LMN, records, plan docs, call logs, and prior auth. AI can help draft text; uploads are de‑identified and auto‑delete.</span></span></h3>
+
+    <form method="POST" action="/appeal/packet-save">
       <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-      <input type="file" name="appeal_docs" multiple />
+
+      <label>Denial Letter / EOB Notes (optional)</label>
+      <textarea name="denial_eob_notes" style="min-height:120px;" placeholder="Paste key denial language or reference numbers (no patient identifiers).">${safeStr(denialEobNotes)}</textarea>
+
+      <label>Prior Authorization (if applicable)</label>
+      <input name="authorization_number" value="${safeStr(priorAuth)}" placeholder="Authorization # (no patient identifiers)" />
+
+      <label>Call Logs (dates, times, rep names; no patient identifiers)</label>
+      <textarea name="contact_log" style="min-height:140px;" placeholder="e.g., 02/10 2:15pm — Rep: J. Smith — Ref#: 12345">${safeStr(callLogs)}</textarea>
+
+      <label>Letter of Medical Necessity (LMN)</label>
+      <textarea name="lmn_text" style="min-height:220px;">${safeStr(lmnText)}</textarea>
+
+      <label>Packet Checklist (optional)</label>
+      <textarea name="checklist_notes" style="min-height:160px;">${safeStr(checklistNotes)}</textarea>
+
       <div class="btnRow">
-        <button class="btn secondary" type="submit">Upload Attachments</button>
+        <button class="btn secondary" type="submit">Save Packet Info</button>
+        <a class="btn secondary" href="/draft?case_id=${encodeURIComponent(case_id)}">Open Full Packet Builder</a>
       </div>
     </form>
+
+    <div class="hr"></div>
+    <h3>Upload Packet Documents</h3>
+    <p class="muted small">Uploads are de‑identified and auto‑delete in 60 minutes. Upload only what is safe (no PHI).</p>
+
+    <div class="row">
+      <div class="col">
+        <h4>Denial Letter / EOB</h4>
+        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="category" value="denial_eob"/>
+          <input type="file" name="appeal_docs" multiple />
+          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
+        </form>
+        <ul class="muted small">${listCat("denial_eob")}</ul>
+      </div>
+
+      <div class="col">
+        <h4>Medical Records</h4>
+        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="category" value="medical_records"/>
+          <input type="file" name="appeal_docs" multiple />
+          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
+        </form>
+        <ul class="muted small">${listCat("medical_records")}</ul>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <h4>Plan Documents</h4>
+        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="category" value="plan_docs"/>
+          <input type="file" name="appeal_docs" multiple />
+          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
+        </form>
+        <ul class="muted small">${listCat("plan_docs")}</ul>
+      </div>
+
+      <div class="col">
+        <h4>Other Attachments</h4>
+        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="category" value="general"/>
+          <input type="file" name="appeal_docs" multiple />
+          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
+        </form>
+        <ul class="muted small">${listCat("general")}</ul>
+      </div>
+    </div>
 
     <div class="btnRow">
       <a class="btn secondary" href="/upload-denials">Back to Denial Queue</a>
@@ -7223,6 +7316,32 @@ if (method === "POST" && pathname === "/appeal/save-draft") {
   auditLog({ actor:"user", action:"appeal_save_draft", org_id: org.org_id, case_id });
   return send(res, 200, JSON.stringify({ ok:true }), "application/json");
 }
+if (method === "POST" && pathname === "/appeal/packet-save") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const case_id = String(params.get("case_id") || "").trim();
+  if (!case_id) return redirect(res, "/upload-denials");
+
+  const cases = readJSON(FILES.cases, []);
+  const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
+  if (!c) return redirect(res, "/upload-denials");
+
+  normalizeAppealPacket(c, org.org_name);
+
+  c.appeal_packet.denial_eob_notes = (params.get("denial_eob_notes") || "").trim();
+  c.appeal_packet.authorization_number = (params.get("authorization_number") || "").trim();
+  c.appeal_packet.contact_log = (params.get("contact_log") || "").trim();
+  c.appeal_packet.lmn_text = (params.get("lmn_text") || "").toString();
+  c.appeal_packet.checklist_notes = (params.get("checklist_notes") || "").toString();
+  c.updated_at = nowISO();
+
+  writeJSON(FILES.cases, cases);
+  auditLog({ actor:"user", action:"appeal_packet_save", org_id: org.org_id, case_id });
+
+  return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
+}
+
+
 
 if (method === "POST" && pathname === "/appeal/action") {
   const body = await parseBody(req);
@@ -7565,6 +7684,7 @@ if (method === "POST" && pathname === "/draft-template") {
       c.appeal_attachments.push({
         file_id,
         filename: safeName,
+        category: (fields.category || 'general'),
         stored_path,
         uploaded_at: nowISO(),
         expires_at: new Date(Date.now() + APPEAL_ATTACHMENT_TTL_MS).toISOString()
@@ -7963,6 +8083,8 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 
 let billedAll_sync = readJSON(FILES.billed, []);
 let subsAll_sync = readJSON(FILES.billed_submissions, []);
+let casesAll_sync = readJSON(FILES.cases, []); // for auto-denial cases from ERA
+let casesChanged_sync = false;
 
 function normalizeClaimNum(x) { return String(x || "").replace(/[^0-9]/g, ""); }
 
@@ -7990,10 +8112,45 @@ for (const ap of addedPayments) {
     ? num(billedClaim.expected_insurance)
     : billedAmt;
 
-  if (paid <= 0) {
+  if (Number(expected) > 0 && paid <= 0) {
+    // Zero-payment ERA should be treated as Denied (with reason) and auto-create a denial case
     billedClaim.status = "Denied";
+    billedClaim.denial_reason = "ERA Zero Payment";
+    billedClaim.denied_at = billedClaim.denied_at || nowISO();
     billedClaim.suggested_action = "";
     billedClaim.underpaid_amount = null;
+
+    if (!billedClaim.denial_case_id) {
+      const cid = uuid();
+      casesAll_sync.push({
+        case_id: cid,
+        org_id: org.org_id,
+        created_by_user_id: user.user_id,
+        created_at: billedClaim.denied_at,
+        status: "UPLOAD_RECEIVED",
+        notes: `Auto-created from payment upload (ERA zero payment). Claim #: ${billedClaim.claim_number} | Payer: ${billedClaim.payer} | DOS: ${billedClaim.dos}`,
+        case_type: "denial",
+        files: [],
+        template_id: "",
+        paid: false,
+        paid_at: null,
+        paid_amount: null,
+        ai_started_at: null,
+        appeal_packet: appealPacketDefaults(org.org_name),
+        appeal_attachments: [],
+        ai: { denial_summary:null, appeal_considerations:null, draft_text:null, denial_reason_category:null, missing_info:[], time_to_draft_seconds:0 }
+      });
+
+      // Start AI if capacity allows (non-blocking)
+      const okAI = canStartAI(org.org_id);
+      if (okAI.ok) {
+        const cObj = casesAll_sync.find(x => x.case_id === cid && x.org_id === org.org_id);
+        if (cObj) { cObj.status = "ANALYZING"; cObj.ai_started_at = nowISO(); recordAIJob(org.org_id); }
+      }
+
+      billedClaim.denial_case_id = cid;
+      casesChanged_sync = true;
+    }
   } else if (paid + 0.01 >= expected) {
     billedClaim.status = "Paid";
     billedClaim.suggested_action = "";
@@ -8015,6 +8172,7 @@ for (const ap of addedPayments) {
 if (changed_sync) {
 
   writeJSON(FILES.billed, billedAll_sync);
+  if (casesChanged_sync) { writeJSON(FILES.cases, casesAll_sync); }
 
   subsAll_sync.forEach(s => {
 
@@ -8928,4 +9086,3 @@ ${negHistoryHtml}
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
