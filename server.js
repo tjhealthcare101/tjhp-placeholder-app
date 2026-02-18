@@ -268,16 +268,6 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .tooltip .tooltiptext{visibility:hidden;width:220px;background-color:#555;color:#fff;text-align:center;border-radius:6px;padding:5px;position:absolute;z-index:1;bottom:125%;left:50%;margin-left:-110px;opacity:0;transition:opacity 0.3s;font-size:12px;}
 .tooltip:hover .tooltiptext{visibility:visible;opacity:1;}
 
-/* Section layout helpers */
-.section{border:1px solid var(--border);border-radius:14px;padding:14px;margin:14px 0;background:var(--card);} 
-.sectionTitle{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px;font-size:14px;font-weight:900;}
-.statsRow{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;}
-.statPill{flex:1;min-width:160px;border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff;}
-.statPill .label{font-size:12px;color:var(--muted);font-weight:800;}
-.statPill .value{font-size:16px;font-weight:900;margin-top:4px;}
-.filterBar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px;}
-.filterBar .field{display:flex;flex-direction:column;min-width:200px;}
-
 /* Chart and KPI placeholders */
 .chart-placeholder{height:200px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;margin-bottom:10px;}
 .kpi-card{display:inline-block;margin:10px;padding:15px;border:1px solid var(--border);border-radius:8px;width:200px;text-align:center;background:#fff;box-shadow:var(--shadow);}
@@ -3495,12 +3485,6 @@ if (method === "GET" && pathname === "/claims") {
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
 
-  // Claims Lifecycle: simple batch filters
-  const batch_q = String(parsed.query.batch_q || "").trim().toLowerCase();
-  const batch_start = String(parsed.query.batch_start || "").trim();
-  const batch_end = String(parsed.query.batch_end || "").trim();
-
-
   // Snapshot counts across all claims (simple, fast)
   const counts = billedAll.reduce((acc,b)=>{
     const s = String(b.status||"Pending");
@@ -3533,7 +3517,7 @@ if (method === "GET" && pathname === "/claims") {
       const totalBilled = claims.reduce((s,b)=>s+num(b.amount_billed),0);
       const collected = claims.reduce((s,b)=>s+num(b.insurance_paid||b.paid_amount),0);
       return `
-        
+        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Quick metrics related to the selected tab.</span></span></h3>
         <div class="row">
           <div class="col"><div class="kpi-card"><h4>Batches</h4><p>${totalBatches}</p></div><div class="kpi-card"><h4>Total Billed</h4><p>$${totalBilled.toFixed(2)}</p></div></div>
           <div class="col"><div class="kpi-card"><h4>Collected</h4><p>$${collected.toFixed(2)}</p></div><div class="kpi-card"><h4>At Risk</h4><p>$${Math.max(0,totalBilled-collected).toFixed(2)}</p></div></div>
@@ -3544,7 +3528,7 @@ if (method === "GET" && pathname === "/claims") {
       const totalFiles = paymentFiles.length;
       const totalPaid = paymentFiles.reduce((s,f)=>s+num(f.totalPaid),0);
       return `
-        
+        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Payment upload metrics.</span></span></h3>
         <div class="row">
           <div class="col"><div class="kpi-card"><h4>Payment Files</h4><p>${totalFiles}</p></div><div class="kpi-card"><h4>Total Paid</h4><p>$${totalPaid.toFixed(2)}</p></div></div>
           <div class="col"><div class="kpi-card"><h4>Payment Rows</h4><p>${paymentsOrg.length}</p></div><div class="kpi-card"><h4>Avg Rows/File</h4><p>${totalFiles?Math.round(paymentsOrg.length/totalFiles):0}</p></div></div>
@@ -3557,7 +3541,7 @@ if (method === "GET" && pathname === "/claims") {
       const submitted = denialCasesOrg.filter(c => String(c.status||"") === "Submitted").length;
       const approved = denialCasesOrg.filter(c => String(c.status||"") === "Approved (Pending Payment)").length;
       return `
-        
+        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Denial and appeal workflow counts.</span></span></h3>
         <div class="row">
           <div class="col"><div class="kpi-card"><h4>Total Denials</h4><p>${total}</p></div><div class="kpi-card"><h4>Draft Ready</h4><p>${drafts}</p></div></div>
           <div class="col"><div class="kpi-card"><h4>Submitted</h4><p>${submitted}</p></div><div class="kpi-card"><h4>Approved (Pending)</h4><p>${approved}</p></div></div>
@@ -3570,7 +3554,7 @@ if (method === "GET" && pathname === "/claims") {
       const approved = negotiationsOrg.filter(n => n.status === "Approved (Pending Payment)").length;
       const paid = negotiationsOrg.filter(n => n.status === "Payment Received").length;
       return `
-        
+        <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Negotiation workflow counts.</span></span></h3>
         <div class="row">
           <div class="col"><div class="kpi-card"><h4>Total Negotiations</h4><p>${total}</p></div><div class="kpi-card"><h4>Submitted</h4><p>${submitted}</p></div></div>
           <div class="col"><div class="kpi-card"><h4>Approved (Pending)</h4><p>${approved}</p></div><div class="kpi-card"><h4>Payment Received</h4><p>${paid}</p></div></div>
@@ -3579,7 +3563,7 @@ if (method === "GET" && pathname === "/claims") {
     }
     // view === "all"
     return `
-      
+      <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Overall claim status distribution.</span></span></h3>
       <div class="row">
         <div class="col"><div class="kpi-card"><h4>Total Claims</h4><p>${counts.total||0}</p></div><div class="kpi-card"><h4>At Risk Claims</h4><p>${(counts["Denied"]||0)+(counts["Underpaid"]||0)+(counts["Appeal"]||0)+(counts["Pending"]||0)}</p></div></div>
         <div class="col"><div class="kpi-card"><h4>Denied</h4><p>${counts["Denied"]||0}</p></div><div class="kpi-card"><h4>Underpaid</h4><p>${counts["Underpaid"]||0}</p></div></div>
@@ -3628,48 +3612,42 @@ if (method === "GET" && pathname === "/claims") {
     <h2>Claims Lifecycle <span class="tooltip">ⓘ<span class="tooltiptext">This is your operational hub for billed batches, payment batches, denial appeals, negotiations, and all claims.</span></span></h2>
     <p class="muted">Everything that happens to claims — billed, denied, appealed, paid, and negotiated — in one place.</p>
     <div class="muted small">Select a tab below to manage a specific stage.</div>
+    ${subTabs}
+    ${uploadRow}
 
-    <div class="section">
-      <div class="sectionTitle">Stage Navigation</div>
-      ${subTabs}
-      ${uploadRow}
+    <div class="hr"></div>
+
+<h3>Overall Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Counts across your full claim population (not just the selected sub-tab).</span></span></h3>
+    <div class="row">
+      <div class="col">
+        <div class="kpi-card"><h4>Total Claims</h4><p>${counts.total || 0}</p></div>
+        <div class="kpi-card"><h4>Denied</h4><p>${counts["Denied"] || 0}</p></div>
+      </div>
+      <div class="col">
+        <div class="kpi-card"><h4>Underpaid</h4><p>${counts["Underpaid"] || 0}</p></div>
+        <div class="kpi-card"><h4>Appeal</h4><p>${counts["Appeal"] || 0}</p></div>
+      </div>
+      <div class="col">
+        <div class="kpi-card"><h4>Paid</h4><p>${counts["Paid"] || 0}</p></div>
+        <div class="kpi-card"><h4>Negotiations</h4><p>${getNegotiations(org.org_id).length}</p></div>
+      </div>
     </div>
 
-    <div class="section">
-      <div class="sectionTitle">
-        <span>Overall Snapshot</span>
-        <span class="tooltip">ⓘ<span class="tooltiptext">Counts across your full claim population (not just the selected tab).</span></span>
-      </div>
-      <div class="statsRow">
-        <div class="statPill"><div class="label">Total Claims</div><div class="value">${counts.total || 0}</div></div>
-        <div class="statPill"><div class="label">Paid</div><div class="value">${counts["Paid"] || 0}</div></div>
-        <div class="statPill"><div class="label">Denied</div><div class="value">${counts["Denied"] || 0}</div></div>
-        <div class="statPill"><div class="label">Underpaid</div><div class="value">${counts["Underpaid"] || 0}</div></div>
-        <div class="statPill"><div class="label">Appeal</div><div class="value">${counts["Appeal"] || 0}</div></div>
-        <div class="statPill"><div class="label">Negotiations</div><div class="value">${getNegotiations(org.org_id).length}</div></div>
-      </div>
-    </div>
+    <div class="hr"></div>
 
-    <div class="section">
-      <div class="sectionTitle">
-        <span>This View Snapshot</span>
-        <span class="tooltip">ⓘ<span class="tooltiptext">Quick metrics related to the selected stage tab.</span></span>
-      </div>
-      ${viewSnapshot}
-    </div>
+    
 
+    <div class="hr"></div>
+
+    ${viewSnapshot}
+
+    <div class="hr"></div>
   `;
 // ===== Subtab content =====
 
   // (1) Billed Batches
   if (view === "billed") {
-    let subsFiltered = subsAll.slice();
-    if (batch_q) subsFiltered = subsFiltered.filter(s => String(s.original_filename||"").toLowerCase().includes(batch_q));
-    const bs = batch_start ? new Date(batch_start + "T00:00:00.000Z") : null;
-    const be = batch_end ? new Date(batch_end + "T23:59:59.999Z") : null;
-    if (bs || be) subsFiltered = subsFiltered.filter(s => { const dt = new Date(s.uploaded_at || 0); if (bs && dt < bs) return false; if (be && dt > be) return false; return true; });
-
-    const batchRows = subsFiltered
+    const batchRows = subsAll
       .sort((a,b)=> new Date(b.uploaded_at||0).getTime() - new Date(a.uploaded_at||0).getTime())
       .map(s=>{
         const claims = billedAll.filter(b => b.submission_id === s.submission_id);
@@ -3702,26 +3680,6 @@ if (method === "GET" && pathname === "/claims") {
 
     body += `
       <h3>Billed Batches <span class="tooltip">ⓘ<span class="tooltiptext">These are your billed claim submissions. Use them to manage claims by batch.</span></span></h3>
-      <form method="GET" action="/claims" class="filterBar">
-        <input type="hidden" name="view" value="billed"/>
-        <div class="field">
-          <label>Batch search</label>
-          <input name="batch_q" value="${safeStr(parsed.query.batch_q || "")}" placeholder="File name contains..." />
-        </div>
-        <div class="field">
-          <label>From</label>
-          <input type="date" name="batch_start" value="${safeStr(parsed.query.batch_start || "")}" />
-        </div>
-        <div class="field">
-          <label>To</label>
-          <input type="date" name="batch_end" value="${safeStr(parsed.query.batch_end || "")}" />
-        </div>
-        <div>
-          <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
-          <a class="btn secondary" href="/claims?view=billed" style="margin-top:1.6em;">Reset</a>
-        </div>
-      </form>
-      <div class="hr"></div>
       <div style="overflow:auto;">
         <table>
           <thead>
@@ -3748,17 +3706,7 @@ if (method === "GET" && pathname === "/claims") {
       if (dt > cur) paymentFilesMap[sf].latest = p.created_at || p.date_paid || nowISO();
     });
 
-    let files = Object.values(paymentFilesMap);
-
-    const file_q = String(parsed.query.file_q || "").trim().toLowerCase();
-    const pay_start = String(parsed.query.pay_start || "").trim();
-    const pay_end = String(parsed.query.pay_end || "").trim();
-    if (file_q) files = files.filter(x => String(x.source_file||"").toLowerCase().includes(file_q));
-    const ps = pay_start ? new Date(pay_start + "T00:00:00.000Z") : null;
-    const pe = pay_end ? new Date(pay_end + "T23:59:59.999Z") : null;
-    if (ps || pe) files = files.filter(x => { const dt = new Date(x.latest || 0); if (ps && dt < ps) return false; if (pe && dt > pe) return false; return true; });
-
-    files = files.sort((a,b)=> new Date(b.latest).getTime() - new Date(a.latest).getTime());
+    const files = Object.values(paymentFilesMap).sort((a,b)=> new Date(b.latest).getTime() - new Date(a.latest).getTime());
 
     const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
     const total = files.length;
@@ -3788,15 +3736,6 @@ if (method === "GET" && pathname === "/claims") {
 
     body += `
       <h3>Payment Batches <span class="tooltip">ⓘ<span class="tooltiptext">These are your uploaded payment files. Open a batch to see payment rows and affected claims.</span></span></h3>
-      <form method="GET" action="/claims" class="filterBar">
-        <input type="hidden" name="view" value="payments"/>
-        <div class="field"><label>File search</label><input name="file_q" value="${safeStr(parsed.query.file_q || "")}" placeholder="File name contains..."/></div>
-        <div class="field"><label>From</label><input type="date" name="pay_start" value="${safeStr(parsed.query.pay_start || "")}" /></div>
-        <div class="field"><label>To</label><input type="date" name="pay_end" value="${safeStr(parsed.query.pay_end || "")}" /></div>
-        <div><button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
-        <a class="btn secondary" href="/claims?view=payments" style="margin-top:1.6em;">Reset</a></div>
-      </form>
-      <div class="hr"></div>
       <div class="muted small" style="margin-bottom:8px;">Use this to audit what changed after each payment upload.</div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
@@ -3817,31 +3756,9 @@ if (method === "GET" && pathname === "/claims") {
   // (3) Denial Queue
   if (view === "denials") {
     const billedOrg = billedAll;
-    let allDenialCases = readJSON(FILES.cases, [])
+    const allDenialCases = readJSON(FILES.cases, [])
       .filter(c => c.org_id === org.org_id && String(c.case_type||"denial").toLowerCase() !== "underpayment")
       .sort((a,b)=> new Date(b.created_at||0).getTime() - new Date(a.created_at||0).getTime());
-
-    const d_status = String(parsed.query.d_status || "").trim();
-    const d_payer = String(parsed.query.d_payer || "").trim();
-    const d_start = String(parsed.query.d_start || "").trim();
-    const d_end = String(parsed.query.d_end || "").trim();
-    if (d_status) allDenialCases = allDenialCases.filter(c => String(c.status||"") === d_status);
-    if (d_payer) {
-      const billedOrg2 = billedAll;
-      allDenialCases = allDenialCases.filter(c => {
-        const linked2 = billedOrg2.find(b => b.denial_case_id === c.case_id) || null;
-        return linked2 && String(linked2.payer||"") === d_payer;
-      });
-    }
-    const ds = d_start ? new Date(d_start + "T00:00:00.000Z") : null;
-    const de = d_end ? new Date(d_end + "T23:59:59.999Z") : null;
-    if (ds || de) allDenialCases = allDenialCases.filter(c => {
-      const dt = new Date(c.created_at || 0);
-      if (ds && dt < ds) return false;
-      if (de && dt > de) return false;
-      return true;
-    });
-
 
     const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
     const total = allDenialCases.length;
@@ -3878,24 +3795,6 @@ if (method === "GET" && pathname === "/claims") {
 
     body += `
       <h3>Denial Queue <span class="tooltip">ⓘ<span class="tooltiptext">Denied claims and denial cases. Open to edit appeal drafts and track outcomes.</span></span></h3>
-      <form method="GET" action="/claims" class="filterBar">
-        <input type="hidden" name="view" value="denials"/>
-        <div class="field"><label>Status</label>
-          <select name="d_status"><option value="">All</option>
-            <option value="UPLOAD_RECEIVED"${String(parsed.query.d_status||"")==="UPLOAD_RECEIVED"?" selected":""}>Upload Received</option>
-            <option value="ANALYZING"${String(parsed.query.d_status||"")==="ANALYZING"?" selected":""}>Analyzing</option>
-            <option value="DRAFT_READY"${String(parsed.query.d_status||"")==="DRAFT_READY"?" selected":""}>Draft Ready</option>
-            <option value="Submitted"${String(parsed.query.d_status||"")==="Submitted"?" selected":""}>Submitted</option>
-            <option value="Approved (Pending Payment)"${String(parsed.query.d_status||"")==="Approved (Pending Payment)"?" selected":""}>Approved (Pending)</option>
-          </select>
-        </div>
-        <div class="field"><label>Payer</label><input name="d_payer" value="${safeStr(parsed.query.d_payer||"")}" placeholder="Exact payer (optional)"/></div>
-        <div class="field"><label>From</label><input type="date" name="d_start" value="${safeStr(parsed.query.d_start||"")}" /></div>
-        <div class="field"><label>To</label><input type="date" name="d_end" value="${safeStr(parsed.query.d_end||"")}" /></div>
-        <div><button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
-        <a class="btn secondary" href="/claims?view=denials" style="margin-top:1.6em;">Reset</a></div>
-      </form>
-      <div class="hr"></div>
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
         <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${total} (Page ${page}/${totalPages}).</div>
         <div>${sizeSelect}</div>
@@ -4547,7 +4446,6 @@ if (method === "GET" && pathname === "/actions") {
     if (x.kind === "denial") {
       actionsHtml = `
         <a class="btn secondary small" href="/appeal-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Appeal</a>
-        <a class="btn secondary small" href="/payment-reconcile?billed_id=${encodeURIComponent(b.billed_id)}">Paid</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
       `;
     } else if (x.kind === "negotiation") {
@@ -4719,185 +4617,6 @@ if (method === "POST" && pathname === "/claim-action") {
   billedAll[idx] = b;
   writeJSON(FILES.billed, billedAll);
   return redirect(res, `/claim-detail?billed_id=${encodeURIComponent(billed_id)}`);
-}
-
-
-// ==============================
-// PAYMENT RECONCILIATION (from Denials -> Paid)
-// ==============================
-if (method === "GET" && pathname === "/payment-reconcile") {
-  const billed_id = String(parsed.query.billed_id || "").trim();
-  if (!billed_id) return redirect(res, "/actions?tab=denials");
-
-  const billedAll = readJSON(FILES.billed, []);
-  const b = billedAll.find(x => x.org_id === org.org_id && x.billed_id === billed_id);
-  if (!b) return redirect(res, "/actions?tab=denials");
-
-  const billedAmt = num(b.amount_billed);
-  const allowed = num(b.allowed_amount);
-  const patientResp = num(b.patient_responsibility);
-  const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
-    ? num(b.expected_insurance)
-    : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
-
-  const priorPaid = num(b.insurance_paid || b.paid_amount);
-  const remaining = Math.max(0, expectedInsurance - priorPaid);
-
-  const html = renderPage("Payment Reconciliation", `
-    <h2>Payment Reconciliation</h2>
-    <p class="muted">Post a payment for a denied/appeal claim. If the payment is partial, the claim will convert to <strong>Underpaid</strong>. If you choose negotiation, we’ll take you directly to the negotiation workspace for this claim.</p>
-
-    <div class="section">
-      <div class="sectionTitle">Claim Summary</div>
-      <table>
-        <tr><th>Claim #</th><td>${safeStr(b.claim_number||"")}</td></tr>
-        <tr><th>Payer</th><td>${safeStr(b.payer||"")}</td></tr>
-        <tr><th>DOS</th><td>${safeStr(b.dos||"")}</td></tr>
-        <tr><th>Billed</th><td>${formatMoney(billedAmt)}</td></tr>
-        <tr><th>Already Paid</th><td>${formatMoney(priorPaid)}</td></tr>
-        <tr><th>Expected Insurance</th><td>${formatMoney(expectedInsurance)}</td></tr>
-        <tr><th>Remaining Balance</th><td>${formatMoney(remaining)}</td></tr>
-        <tr><th>Status</th><td><span class="badge ${badgeClassForStatus(b.status||"Denied")}">${safeStr(b.status||"Denied")}</span></td></tr>
-      </table>
-    </div>
-
-    <div class="section">
-      <div class="sectionTitle">Enter Payment Received</div>
-      <form method="POST" action="/payment-reconcile">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
-        <div class="filterBar">
-          <div class="field">
-            <label>Amount Received</label>
-            <input name="amount" placeholder="e.g. 250.00" required />
-          </div>
-          <div class="field">
-            <label>Paid Date (optional)</label>
-            <input type="date" name="paid_at" />
-          </div>
-          <div class="field">
-            <label>After posting payment</label>
-            <select name="next_step" required>
-              <option value="negotiate">Proceed to Negotiate Remaining Balance</option>
-              <option value="writeoff">Write Off Remaining Balance</option>
-              <option value="patient">Assign Remaining to Patient Responsibility</option>
-              <option value="stop">Just post payment and stop (leave Underpaid)</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="btnRow">
-          <button class="btn" type="submit">Apply Payment</button>
-          <a class="btn secondary" href="/actions?tab=denials">Back</a>
-        </div>
-      </form>
-    </div>
-  `, navUser(), {showChat:true, orgName: org.org_name});
-  return send(res, 200, html);
-}
-
-if (method === "POST" && pathname === "/payment-reconcile") {
-  const body = await parseBody(req);
-  const params = new URLSearchParams(body);
-  const billed_id = String(params.get("billed_id") || "").trim();
-  const amtIn = String(params.get("amount") || "").trim();
-  const paid_at = String(params.get("paid_at") || "").trim();
-  const next = String(params.get("next_step") || "negotiate").trim();
-
-  if (!billed_id) return redirect(res, "/actions?tab=denials");
-
-  const billedAll = readJSON(FILES.billed, []);
-  const idx = billedAll.findIndex(x => x.org_id === org.org_id && x.billed_id === billed_id);
-  if (idx < 0) return redirect(res, "/actions?tab=denials");
-
-  const b = billedAll[idx];
-  const addPaid = num(amtIn);
-  const priorPaid = num(b.insurance_paid || b.paid_amount);
-  const newPaid = priorPaid + addPaid;
-
-  b.insurance_paid = newPaid;
-  b.paid_amount = newPaid;
-  b.paid_at = paid_at || b.paid_at || new Date().toISOString().split("T")[0];
-
-  const billedAmt = num(b.amount_billed);
-  const allowed = num(b.allowed_amount);
-  const patientResp = num(b.patient_responsibility);
-  const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
-    ? num(b.expected_insurance)
-    : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
-
-  const remaining = Math.max(0, expectedInsurance - newPaid);
-  b.underpaid_amount = remaining;
-
-  // Close denial case if exists (payment posted)
-  const case_id = b.denial_case_id || "";
-  if (case_id) {
-    const casesAll = readJSON(FILES.cases, []);
-    const c = casesAll.find(x => x.org_id === org.org_id && x.case_id === case_id);
-    if (c) {
-      c.status = "Closed";
-      c.paid = true;
-      c.paid_at = b.paid_at;
-      c.paid_amount = addPaid;
-      c.updated_at = nowISO();
-      writeJSON(FILES.cases, casesAll);
-    }
-  }
-
-  // Payment record for audit
-  const paymentsData = readJSON(FILES.payments, []);
-  paymentsData.push({
-    payment_id: uuid(),
-    org_id: org.org_id,
-    claim_number: b.claim_number || "",
-    payer: b.payer || "Payment Posted",
-    amount_paid: addPaid,
-    date_paid: b.paid_at,
-    source_file: "manual-reconcile",
-    created_at: nowISO(),
-    denied_approved: true
-  });
-  writeJSON(FILES.payments, paymentsData);
-
-  if (remaining <= 0.01) {
-    b.status = "Paid";
-    b.underpaid_amount = 0;
-    billedAll[idx] = b;
-    writeJSON(FILES.billed, billedAll);
-    auditLog({ actor:"user", action:"reconcile_paid_full", org_id: org.org_id, billed_id, amount: addPaid });
-    return redirect(res, "/actions?tab=denials");
-  }
-
-  // Partial -> Underpaid
-  b.status = "Underpaid";
-  billedAll[idx] = b;
-  writeJSON(FILES.billed, billedAll);
-
-  // Forced choice (A)
-  if (next === "writeoff") {
-    b.status = "Contractual";
-    b.contractual_adjustment = (num(b.contractual_adjustment) + remaining);
-    b.underpaid_amount = 0;
-    billedAll[idx] = b;
-    writeJSON(FILES.billed, billedAll);
-    auditLog({ actor:"user", action:"reconcile_partial_writeoff", org_id: org.org_id, billed_id, amount: addPaid, remaining });
-    return redirect(res, "/actions?tab=denials");
-  }
-  if (next === "patient") {
-    b.patient_responsibility = (num(b.patient_responsibility) + remaining);
-    b.status = "Patient Balance";
-    b.underpaid_amount = 0;
-    billedAll[idx] = b;
-    writeJSON(FILES.billed, billedAll);
-    auditLog({ actor:"user", action:"reconcile_partial_patient", org_id: org.org_id, billed_id, amount: addPaid, remaining });
-    return redirect(res, "/actions?tab=denials");
-  }
-  if (next === "stop") {
-    auditLog({ actor:"user", action:"reconcile_partial_stop", org_id: org.org_id, billed_id, amount: addPaid, remaining });
-    return redirect(res, `/claim-detail?billed_id=${encodeURIComponent(billed_id)}`);
-  }
-
-  auditLog({ actor:"user", action:"reconcile_partial_negotiate", org_id: org.org_id, billed_id, amount: addPaid, remaining });
-  return redirect(res, `/negotiation-workspace?billed_id=${encodeURIComponent(billed_id)}`);
 }
 
 // ==============================
@@ -6006,12 +5725,6 @@ if (method === "POST" && pathname === "/negotiations/upload") {
 
     const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
-
-  // Claims Lifecycle: simple batch filters
-  const batch_q = String(parsed.query.batch_q || "").trim().toLowerCase();
-  const batch_start = String(parsed.query.batch_start || "").trim();
-  const batch_end = String(parsed.query.batch_end || "").trim();
-
 
     // ===== Submissions Overview =====
     if (!submission_id) {
@@ -7329,7 +7042,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
       writeJSON(FILES.cases, cases);
     }
 
-    if (c.status === "DRAFT_READY") return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
+    if (c.status === "DRAFT_READY") return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
 
     const badge = c.status === "UPLOAD_RECEIVED"
       ? `<span class="badge warn">Queued</span><p class="muted small">Waiting for capacity (rate/concurrency limits).</p>`
@@ -7397,193 +7110,173 @@ if (method === "GET" && pathname === "/appeal-detail") {
   const listCat = (cat) => atts.filter(a => String(a.category||"general") === cat)
     .map(a => `<li>${safeStr(a.filename)} <span class="muted small">(expires: ${safeStr(a.expires_at ? new Date(a.expires_at).toLocaleString() : "—")})</span></li>`).join("") || `<li class="muted small">None uploaded.</li>`;
 
-  const html = renderPage("Appeal Detail", `    <h2>Appeal Workspace</h2>
-    <p class="muted">Build and track a complete appeal packet in one place. Start with claim details, upload supporting documents, then generate/refine your appeal letter and LMN.</p>
+  const html = renderPage("Appeal Detail", `
+    <h2>Appeal Detail</h2>
+    <p class="muted">Denial appeal workflow. Edit the appeal letter, get AI suggestions, upload attachments, and track submission/approval.</p>
 
-    <div class="section">
-      <div class="sectionTitle">
-        <span>1) Claim Overview</span>
-        <span class="tooltip">ⓘ<span class="tooltiptext">High-level details for the denied claim linked to this appeal case.</span></span>
-      </div>
-      <div class="muted small"><strong>Case ID:</strong> ${safeStr(case_id)} · <strong>Status:</strong> ${statusLabel}</div>
-      <div class="hr"></div>
-      ${claimSummary}
+    <div class="hr"></div>
+    <h3>Case</h3>
+    <div class="muted small"><strong>Case ID:</strong> ${safeStr(case_id)} · <strong>Status:</strong> ${statusLabel}</div>
+
+    <div class="hr"></div>
+    <h3>Denied Claim</h3>
+    ${claimSummary}
+
+    <div class="hr"></div>
+    <h3>Appeal Letter</h3>
+    <div class="muted small">${safeStr(considerations)}</div>
+
+    <textarea id="appealDraft" style="min-height:240px;">${safeStr(draftText)}</textarea>
+
+    <div class="btnRow">
+      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Improve the tone and clarity. Keep it professional and concise.')">Improve Tone (AI)</button>
+      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Add a short, stronger justification section. Do not invent clinical facts; use placeholders if needed.')">Strengthen Justification (AI)</button>
+      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Rewrite into bullet-point structure suitable for payer review. Do not invent facts.')">Convert to Bullets (AI)</button>
+      <button class="btn" type="button" onclick="window.__tjhpSaveAppeal()">Save Draft</button>
     </div>
 
-    <div class="section">
-      <div class="sectionTitle">
-        <span>2) Upload Supporting Documents</span>
-        <span class="tooltip">ⓘ<span class="tooltiptext">Upload documents in the correct section so they compile cleanly. De‑identified only. Auto-deletes in 60 minutes.</span></span>
+    <div id="appealSaveMsg" class="muted small" style="margin-top:8px;"></div>
+
+    <div class="hr"></div>
+    <h3>Status Actions</h3>
+    <div class="row">
+      <div class="col">
+        <form method="POST" action="/appeal/action">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="action" value="mark_submitted"/>
+          <button class="btn secondary" type="submit">Mark Submitted</button>
+        </form>
       </div>
-      <p class="muted small">Upload only de‑identified documents (no patient identifiers). These uploads are temporary and auto-delete.</p>
-
-      <div class="row">
-        <div class="col">
-          <h3 style="margin-top:0;">Denial Letter / EOB</h3>
-          <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
-            <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-            <input type="hidden" name="category" value="denial_eob"/>
-            <input type="file" name="appeal_docs" multiple />
-            <div class="btnRow"><button class="btn secondary" type="submit">Upload Denial/EOB</button></div>
-          </form>
-          <ul class="muted small">${listCat("denial_eob")}</ul>
-        </div>
-
-        <div class="col">
-          <h3 style="margin-top:0;">Medical Records</h3>
-          <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
-            <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-            <input type="hidden" name="category" value="medical_records"/>
-            <input type="file" name="appeal_docs" multiple />
-            <div class="btnRow"><button class="btn secondary" type="submit">Upload Records</button></div>
-          </form>
-          <ul class="muted small">${listCat("medical_records")}</ul>
-        </div>
-      </div>
-
-      <div class="row">
-        <div class="col">
-          <h3 style="margin-top:0;">Plan Documents</h3>
-          <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
-            <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-            <input type="hidden" name="category" value="plan_docs"/>
-            <input type="file" name="appeal_docs" multiple />
-            <div class="btnRow"><button class="btn secondary" type="submit">Upload Plan Docs</button></div>
-          </form>
-          <ul class="muted small">${listCat("plan_docs")}</ul>
-        </div>
-
-        <div class="col">
-          <h3 style="margin-top:0;">Prior Authorization</h3>
-          <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
-            <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-            <input type="hidden" name="category" value="prior_auth"/>
-            <input type="file" name="appeal_docs" multiple />
-            <div class="btnRow"><button class="btn secondary" type="submit">Upload Prior Auth</button></div>
-          </form>
-          <ul class="muted small">${listCat("prior_auth")}</ul>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="sectionTitle">
-        <span>3) Appeal Letter (AI Assisted)</span>
-        <span class="tooltip">ⓘ<span class="tooltiptext">Generate and refine the appeal letter. AI uses your claim context to improve structure and tone.</span></span>
-      </div>
-      <div class="muted small">${safeStr(considerations)}</div>
-
-      <textarea id="appealDraft" style="min-height:220px;">${safeStr(draftText)}</textarea>
-
-      <div class="btnRow">
-        <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Improve the tone and clarity. Keep it professional and concise.')">Improve Tone (AI)</button>
-        <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Strengthen medical necessity argument. Do not invent clinical facts; use placeholders if needed.')">Strengthen Medical Necessity (AI)</button>
-        <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Add a payer policy/citation placeholder section that references plan documents. Do not invent policy text.')">Add Policy Reference (AI)</button>
-        <button class="btn" type="button" onclick="window.__tjhpSaveAppeal()">Save Appeal Letter</button>
-      </div>
-      <div id="appealSaveMsg" class="muted small" style="margin-top:8px;"></div>
-    </div>
-
-    <div class="section">
-      <div class="sectionTitle">
-        <span>4) Letter of Medical Necessity (LMN)</span>
-        <span class="tooltip">ⓘ<span class="tooltiptext">Use the LMN template or paste your own LMN. This will be included in the compiled packet.</span></span>
-      </div>
-      <textarea id="lmnText" style="min-height:200px;">${safeStr(lmnText)}</textarea>
-      <div class="btnRow">
-        <button class="btn secondary" type="button" onclick="window.__tjhpLMNAI('Generate a de-identified LMN based on the denial context. Use placeholders for patient identifiers. Do not invent facts.')">Generate LMN (AI)</button>
-        <button class="btn" type="button" onclick="window.__tjhpSavePacket()">Save Packet Components</button>
-      </div>
-      <div id="packetSaveMsg" class="muted small" style="margin-top:8px;"></div>
-    </div>
-
-    <div class="section">
-      <div class="sectionTitle">
-        <span>5) Call Logs + Prior Auth Reference</span>
-        <span class="tooltip">ⓘ<span class="tooltiptext">Log payer calls and store prior authorization reference numbers (no PHI).</span></span>
-      </div>
-
-      <label>Prior Authorization # (if applicable)</label>
-      <input id="priorAuth" value="${safeStr(priorAuth)}" placeholder="Authorization # (no patient identifiers)" />
-
-      <label style="margin-top:10px;">Call Logs (no patient identifiers)</label>
-      <textarea id="callLogs" style="min-height:140px;" placeholder="Dates, times, rep names, reference numbers...">${safeStr(callLogs)}</textarea>
-
-      <label style="margin-top:10px;">Denial Letter / EOB Notes (optional)</label>
-      <textarea id="denialEobNotes" style="min-height:110px;" placeholder="Paste key denial language or reference numbers (no PHI).">${safeStr(denialEobNotes)}</textarea>
-
-      <label style="margin-top:10px;">Checklist Notes (optional)</label>
-      <textarea id="checklistNotes" style="min-height:140px;">${safeStr(checklistNotes)}</textarea>
-
-      <div class="btnRow">
-        <button class="btn" type="button" onclick="window.__tjhpSavePacket()">Save Packet Components</button>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="sectionTitle">
-        <span>6) Export Packet</span>
-        <span class="tooltip">ⓘ<span class="tooltiptext">Compile the packet in the correct order and download as TXT/Word or print to PDF.</span></span>
-      </div>
-
-      <label style="display:flex;gap:10px;align-items:flex-start;margin-top:8px;">
-        <input id="deidConfirmed" type="checkbox" ${ap.deid_confirmed ? "checked" : ""} style="width:auto;margin:0;margin-top:2px;">
-        <span class="muted">I confirm this packet is de‑identified (no patient identifiers in text or uploads).</span>
-      </label>
-
-      <div class="btnRow" style="margin-top:10px;">
-        <button class="btn secondary" type="button" onclick="window.__tjhpCompilePacket()">Compile Packet</button>
-        <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=txt">Download TXT</a>
-        <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=doc">Download Word</a>
-        <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=pdf">Open Printable (Save as PDF)</a>
-      </div>
-      <div class="muted small" style="margin-top:8px;">Packet compilation order: Appeal Letter → LMN → Denial/EOB → Medical Records → Plan Docs → Prior Auth → Call Logs.</div>
-    </div>
-
-    <div class="section">
-      <div class="sectionTitle">
-        <span>7) Status Controls</span>
-        <span class="tooltip">ⓘ<span class="tooltiptext">Mark the appeal as submitted only after you’ve submitted to the payer. This saves your packet state and updates queues.</span></span>
-      </div>
-
-      <div class="btnRow">
-        <button class="btn" type="button" onclick="window.__tjhpMarkSubmitted()">Mark Submitted</button>
-        <form method="POST" action="/appeal/action" style="display:inline;">
+      <div class="col">
+        <form method="POST" action="/appeal/action">
           <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
           <input type="hidden" name="action" value="mark_denied"/>
           <button class="btn secondary" type="submit">Mark Denied</button>
         </form>
-        <form method="POST" action="/appeal/action" style="display:inline;">
+      </div>
+      <div class="col">
+        <form method="POST" action="/appeal/action">
           <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
           <input type="hidden" name="action" value="close"/>
           <button class="btn secondary" type="submit">Close Case</button>
         </form>
-        <a class="btn secondary" href="/upload-denials">Back to Denial Queue</a>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+    <h3>Mark Approved (Option C)</h3>
+    <p class="muted small">Enter the approved amount. You may optionally apply it to the claim now.</p>
+    <form method="POST" action="/appeal/action" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+      <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+      <input type="hidden" name="action" value="mark_approved"/>
+      <div style="min-width:220px;">
+        <label>Approved Amount</label>
+        <input name="approved_amount" placeholder="e.g. 250.00" required />
+      </div>
+      <div style="min-width:220px;">
+        <label>Paid Date (optional)</label>
+        <input type="date" name="paid_at" />
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;margin:0;">
+        <input type="checkbox" name="apply_payment" value="1" style="width:auto;margin:0;">
+        <span class="muted small">Apply payment to claim now</span>
+      </label>
+      <button class="btn" type="submit">Mark Approved</button>
+    </form>
+
+    <div class="hr"></div>
+    <h3>Appeal Packet Components <span class="tooltip">ⓘ<span class="tooltiptext">Build a complete packet: denial/EOB, appeal letter, LMN, records, plan docs, call logs, and prior auth. AI can help draft text; uploads are de‑identified and auto‑delete.</span></span></h3>
+
+    <form method="POST" action="/appeal/packet-save">
+      <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+
+      <label>Denial Letter / EOB Notes (optional)</label>
+      <textarea name="denial_eob_notes" style="min-height:120px;" placeholder="Paste key denial language or reference numbers (no patient identifiers).">${safeStr(denialEobNotes)}</textarea>
+
+      <label>Prior Authorization (if applicable)</label>
+      <input name="authorization_number" value="${safeStr(priorAuth)}" placeholder="Authorization # (no patient identifiers)" />
+
+      <label>Call Logs (dates, times, rep names; no patient identifiers)</label>
+      <textarea name="contact_log" style="min-height:140px;" placeholder="e.g., 02/10 2:15pm — Rep: J. Smith — Ref#: 12345">${safeStr(callLogs)}</textarea>
+
+      <label>Letter of Medical Necessity (LMN)</label>
+      <textarea name="lmn_text" style="min-height:220px;">${safeStr(lmnText)}</textarea>
+
+      <label>Packet Checklist (optional)</label>
+      <textarea name="checklist_notes" style="min-height:160px;">${safeStr(checklistNotes)}</textarea>
+
+      <div class="btnRow">
+        <button class="btn secondary" type="submit">Save Packet Info</button>
+        <a class="btn secondary" href="/draft?case_id=${encodeURIComponent(case_id)}">Open Full Packet Builder</a>
+      </div>
+    </form>
+
+    <div class="hr"></div>
+    <h3>Upload Packet Documents</h3>
+    <p class="muted small">Uploads are de‑identified and auto‑delete in 60 minutes. Upload only what is safe (no PHI).</p>
+
+    <div class="row">
+      <div class="col">
+        <h4>Denial Letter / EOB</h4>
+        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="category" value="denial_eob"/>
+          <input type="file" name="appeal_docs" multiple />
+          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
+        </form>
+        <ul class="muted small">${listCat("denial_eob")}</ul>
       </div>
 
-      <div class="hr"></div>
-      <h3 style="margin-top:0;">Mark Approved</h3>
-      <p class="muted small">Enter the approved amount. Optionally apply it to the claim now.</p>
-      <form method="POST" action="/appeal/action" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
-        <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-        <input type="hidden" name="action" value="mark_approved"/>
-        <div style="min-width:220px;">
-          <label>Approved Amount</label>
-          <input name="approved_amount" placeholder="e.g. 250.00" required />
-        </div>
-        <div style="min-width:220px;">
-          <label>Paid Date (optional)</label>
-          <input type="date" name="paid_at" />
-        </div>
-        <label style="display:flex;gap:8px;align-items:center;margin:0;">
-          <input type="checkbox" name="apply_payment" value="1" style="width:auto;margin:0;">
-          <span class="muted small">Apply payment to claim now</span>
-        </label>
-        <button class="btn secondary" type="submit">Mark Approved</button>
-      </form>
+      <div class="col">
+        <h4>Medical Records</h4>
+        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="category" value="medical_records"/>
+          <input type="file" name="appeal_docs" multiple />
+          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
+        </form>
+        <ul class="muted small">${listCat("medical_records")}</ul>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <h4>Plan Documents</h4>
+        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="category" value="plan_docs"/>
+          <input type="file" name="appeal_docs" multiple />
+          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
+        </form>
+        <ul class="muted small">${listCat("plan_docs")}</ul>
+      </div>
+
+      <div class="col">
+        <h4>Other Attachments</h4>
+        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+          <input type="hidden" name="category" value="general"/>
+          <input type="file" name="appeal_docs" multiple />
+          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
+        </form>
+        <ul class="muted small">${listCat("general")}</ul>
+      </div>
+    </div>
+
+    <div class="btnRow">
+      <a class="btn secondary" href="/upload-denials">Back to Denial Queue</a>
+      <a class="btn secondary" href="/claims">Claims Lifecycle</a>
     </div>
 
     <script>
+      window.__tjhpAppealAI = async function(instruction){
+        const ta = document.getElementById("appealDraft");
+        const msg = "You are helping improve a denial appeal letter. " + instruction + "\\n\\nCURRENT DRAFT:\\n" + (ta ? ta.value : "");
+        const r = await fetch("/ai/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message: msg }) });
+        const data = await r.json();
+        if (data && data.answer && ta) ta.value = data.answer;
+      };
+
       window.__tjhpSaveAppeal = async function(){
         const ta = document.getElementById("appealDraft");
         const out = document.getElementById("appealSaveMsg");
@@ -7597,61 +7290,8 @@ if (method === "GET" && pathname === "/appeal-detail") {
           out.textContent = "Could not save.";
         }
       };
-
-      window.__tjhpSavePacket = async function(){
-        const out = document.getElementById("packetSaveMsg");
-        out.textContent = "Saving...";
-        try{
-          const params = new URLSearchParams();
-          params.set("case_id", "${safeStr(case_id)}");
-          params.set("denial_eob_notes", (document.getElementById("denialEobNotes")?.value || ""));
-          params.set("authorization_number", (document.getElementById("priorAuth")?.value || ""));
-          params.set("contact_log", (document.getElementById("callLogs")?.value || ""));
-          params.set("lmn_text", (document.getElementById("lmnText")?.value || ""));
-          params.set("checklist_notes", (document.getElementById("checklistNotes")?.value || ""));
-          params.set("deid_confirmed", (document.getElementById("deidConfirmed")?.checked ? "1" : "0"));
-          const r = await fetch("/appeal/packet-save", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: params.toString() });
-          out.textContent = "Saved.";
-        }catch(e){
-          out.textContent = "Could not save.";
-        }
-      };
-
-      window.__tjhpAppealAI = async function(instruction){
-        const ta = document.getElementById("appealDraft");
-        const msg = "You are helping improve a denial appeal letter. " + instruction + "\n\nCURRENT DRAFT:\n" + (ta ? ta.value : "");
-        const r = await fetch("/ai/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message: msg }) });
-        const data = await r.json();
-        if (data && data.answer && ta) ta.value = data.answer;
-      };
-
-      window.__tjhpLMNAI = async function(instruction){
-        const ta = document.getElementById("lmnText");
-        const msg = "You are helping draft a Letter of Medical Necessity (LMN) for a denial appeal. " + instruction + "\n\nCURRENT LMN:\n" + (ta ? ta.value : "");
-        const r = await fetch("/ai/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message: msg }) });
-        const data = await r.json();
-        if (data && data.answer && ta) ta.value = data.answer;
-      };
-
-      window.__tjhpCompilePacket = async function(){
-        await window.__tjhpSavePacket();
-        const params = new URLSearchParams();
-        params.set("case_id", "${safeStr(case_id)}");
-        const r = await fetch("/appeal/compile", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: params.toString() });
-        window.location.reload();
-      };
-
-      window.__tjhpMarkSubmitted = async function(){
-        if (!confirm("Have you submitted this appeal to the payer? This will save your packet and mark the case as Submitted.")) return;
-        await window.__tjhpSaveAppeal();
-        await window.__tjhpSavePacket();
-        const params = new URLSearchParams();
-        params.set("case_id", "${safeStr(case_id)}");
-        params.set("action", "mark_submitted");
-        await fetch("/appeal/action", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: params.toString() });
-        window.location.href = "/claims?view=denials";
-      };
-    </script>`, navUser(), {showChat:true, orgName: org.org_name});
+    </script>
+  `, navUser(), {showChat:true, orgName: org.org_name});
 
   return send(res, 200, html);
 }
@@ -7906,7 +7546,7 @@ if (method === "POST" && pathname === "/appeal/action") {
     if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
     c.ai.draft_text = draft;
     writeJSON(FILES.cases, cases);
-    return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
+    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
   }
 
 // Apply/revert templates from within the draft review page
@@ -7964,7 +7604,7 @@ if (method === "POST" && pathname === "/draft-template") {
   }
 
   writeJSON(FILES.cases, cases);
-  return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
+  return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
 }
 
 
@@ -8006,7 +7646,7 @@ if (method === "POST" && pathname === "/draft-template") {
 
     writeJSON(FILES.cases, cases);
     auditLog({ actor:"user", action:"appeal_save", org_id: org.org_id, case_id });
-    return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
+    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
   }
 
   if (method === "POST" && pathname === "/appeal/upload") {
@@ -8030,7 +7670,7 @@ if (method === "POST" && pathname === "/draft-template") {
     normalizeAppealPacket(c, org.org_name);
 
     const uploadFiles = files.filter(f => f.fieldName === "appeal_docs");
-    if (!uploadFiles.length) return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
+    if (!uploadFiles.length) return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
 
     const caseDir = path.join(UPLOADS_DIR, org.org_id, case_id, "appeal_docs");
     ensureDir(caseDir);
@@ -8053,7 +7693,7 @@ if (method === "POST" && pathname === "/draft-template") {
 
     writeJSON(FILES.cases, cases);
     auditLog({ actor:"user", action:"appeal_upload", org_id: org.org_id, case_id, count: uploadFiles.length });
-    return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
+    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
   }
 
   if (method === "POST" && pathname === "/appeal/compile") {
@@ -8083,7 +7723,7 @@ if (method === "POST" && pathname === "/draft-template") {
     writeJSON(FILES.cases, cases);
 
     auditLog({ actor:"user", action:"appeal_compile", org_id: org.org_id, case_id });
-    return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
+    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
   }
 
   if (method === "GET" && pathname === "/appeal/export") {
@@ -9446,3 +9086,5 @@ ${negHistoryHtml}
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
+
+
