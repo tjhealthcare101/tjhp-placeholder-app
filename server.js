@@ -7329,7 +7329,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
       writeJSON(FILES.cases, cases);
     }
 
-    if (c.status === "DRAFT_READY") return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+    if (c.status === "DRAFT_READY") return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
 
     const badge = c.status === "UPLOAD_RECEIVED"
       ? `<span class="badge warn">Queued</span><p class="muted small">Waiting for capacity (rate/concurrency limits).</p>`
@@ -7397,173 +7397,193 @@ if (method === "GET" && pathname === "/appeal-detail") {
   const listCat = (cat) => atts.filter(a => String(a.category||"general") === cat)
     .map(a => `<li>${safeStr(a.filename)} <span class="muted small">(expires: ${safeStr(a.expires_at ? new Date(a.expires_at).toLocaleString() : "—")})</span></li>`).join("") || `<li class="muted small">None uploaded.</li>`;
 
-  const html = renderPage("Appeal Detail", `
-    <h2>Appeal Detail</h2>
-    <p class="muted">Denial appeal workflow. Edit the appeal letter, get AI suggestions, upload attachments, and track submission/approval.</p>
+  const html = renderPage("Appeal Detail", `    <h2>Appeal Workspace</h2>
+    <p class="muted">Build and track a complete appeal packet in one place. Start with claim details, upload supporting documents, then generate/refine your appeal letter and LMN.</p>
 
-    <div class="hr"></div>
-    <h3>Case</h3>
-    <div class="muted small"><strong>Case ID:</strong> ${safeStr(case_id)} · <strong>Status:</strong> ${statusLabel}</div>
-
-    <div class="hr"></div>
-    <h3>Denied Claim</h3>
-    ${claimSummary}
-
-    <div class="hr"></div>
-    <h3>Appeal Letter</h3>
-    <div class="muted small">${safeStr(considerations)}</div>
-
-    <textarea id="appealDraft" style="min-height:240px;">${safeStr(draftText)}</textarea>
-
-    <div class="btnRow">
-      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Improve the tone and clarity. Keep it professional and concise.')">Improve Tone (AI)</button>
-      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Add a short, stronger justification section. Do not invent clinical facts; use placeholders if needed.')">Strengthen Justification (AI)</button>
-      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Rewrite into bullet-point structure suitable for payer review. Do not invent facts.')">Convert to Bullets (AI)</button>
-      <button class="btn" type="button" onclick="window.__tjhpSaveAppeal()">Save Draft</button>
+    <div class="section">
+      <div class="sectionTitle">
+        <span>1) Claim Overview</span>
+        <span class="tooltip">ⓘ<span class="tooltiptext">High-level details for the denied claim linked to this appeal case.</span></span>
+      </div>
+      <div class="muted small"><strong>Case ID:</strong> ${safeStr(case_id)} · <strong>Status:</strong> ${statusLabel}</div>
+      <div class="hr"></div>
+      ${claimSummary}
     </div>
 
-    <div id="appealSaveMsg" class="muted small" style="margin-top:8px;"></div>
-
-    <div class="hr"></div>
-    <h3>Status Actions</h3>
-    <div class="row">
-      <div class="col">
-        <form method="POST" action="/appeal/action">
-          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-          <input type="hidden" name="action" value="mark_submitted"/>
-          <button class="btn secondary" type="submit">Mark Submitted</button>
-        </form>
+    <div class="section">
+      <div class="sectionTitle">
+        <span>2) Upload Supporting Documents</span>
+        <span class="tooltip">ⓘ<span class="tooltiptext">Upload documents in the correct section so they compile cleanly. De‑identified only. Auto-deletes in 60 minutes.</span></span>
       </div>
-      <div class="col">
-        <form method="POST" action="/appeal/action">
+      <p class="muted small">Upload only de‑identified documents (no patient identifiers). These uploads are temporary and auto-delete.</p>
+
+      <div class="row">
+        <div class="col">
+          <h3 style="margin-top:0;">Denial Letter / EOB</h3>
+          <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+            <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+            <input type="hidden" name="category" value="denial_eob"/>
+            <input type="file" name="appeal_docs" multiple />
+            <div class="btnRow"><button class="btn secondary" type="submit">Upload Denial/EOB</button></div>
+          </form>
+          <ul class="muted small">${listCat("denial_eob")}</ul>
+        </div>
+
+        <div class="col">
+          <h3 style="margin-top:0;">Medical Records</h3>
+          <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+            <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+            <input type="hidden" name="category" value="medical_records"/>
+            <input type="file" name="appeal_docs" multiple />
+            <div class="btnRow"><button class="btn secondary" type="submit">Upload Records</button></div>
+          </form>
+          <ul class="muted small">${listCat("medical_records")}</ul>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <h3 style="margin-top:0;">Plan Documents</h3>
+          <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+            <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+            <input type="hidden" name="category" value="plan_docs"/>
+            <input type="file" name="appeal_docs" multiple />
+            <div class="btnRow"><button class="btn secondary" type="submit">Upload Plan Docs</button></div>
+          </form>
+          <ul class="muted small">${listCat("plan_docs")}</ul>
+        </div>
+
+        <div class="col">
+          <h3 style="margin-top:0;">Prior Authorization</h3>
+          <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
+            <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+            <input type="hidden" name="category" value="prior_auth"/>
+            <input type="file" name="appeal_docs" multiple />
+            <div class="btnRow"><button class="btn secondary" type="submit">Upload Prior Auth</button></div>
+          </form>
+          <ul class="muted small">${listCat("prior_auth")}</ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="sectionTitle">
+        <span>3) Appeal Letter (AI Assisted)</span>
+        <span class="tooltip">ⓘ<span class="tooltiptext">Generate and refine the appeal letter. AI uses your claim context to improve structure and tone.</span></span>
+      </div>
+      <div class="muted small">${safeStr(considerations)}</div>
+
+      <textarea id="appealDraft" style="min-height:220px;">${safeStr(draftText)}</textarea>
+
+      <div class="btnRow">
+        <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Improve the tone and clarity. Keep it professional and concise.')">Improve Tone (AI)</button>
+        <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Strengthen medical necessity argument. Do not invent clinical facts; use placeholders if needed.')">Strengthen Medical Necessity (AI)</button>
+        <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Add a payer policy/citation placeholder section that references plan documents. Do not invent policy text.')">Add Policy Reference (AI)</button>
+        <button class="btn" type="button" onclick="window.__tjhpSaveAppeal()">Save Appeal Letter</button>
+      </div>
+      <div id="appealSaveMsg" class="muted small" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="section">
+      <div class="sectionTitle">
+        <span>4) Letter of Medical Necessity (LMN)</span>
+        <span class="tooltip">ⓘ<span class="tooltiptext">Use the LMN template or paste your own LMN. This will be included in the compiled packet.</span></span>
+      </div>
+      <textarea id="lmnText" style="min-height:200px;">${safeStr(lmnText)}</textarea>
+      <div class="btnRow">
+        <button class="btn secondary" type="button" onclick="window.__tjhpLMNAI('Generate a de-identified LMN based on the denial context. Use placeholders for patient identifiers. Do not invent facts.')">Generate LMN (AI)</button>
+        <button class="btn" type="button" onclick="window.__tjhpSavePacket()">Save Packet Components</button>
+      </div>
+      <div id="packetSaveMsg" class="muted small" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="section">
+      <div class="sectionTitle">
+        <span>5) Call Logs + Prior Auth Reference</span>
+        <span class="tooltip">ⓘ<span class="tooltiptext">Log payer calls and store prior authorization reference numbers (no PHI).</span></span>
+      </div>
+
+      <label>Prior Authorization # (if applicable)</label>
+      <input id="priorAuth" value="${safeStr(priorAuth)}" placeholder="Authorization # (no patient identifiers)" />
+
+      <label style="margin-top:10px;">Call Logs (no patient identifiers)</label>
+      <textarea id="callLogs" style="min-height:140px;" placeholder="Dates, times, rep names, reference numbers...">${safeStr(callLogs)}</textarea>
+
+      <label style="margin-top:10px;">Denial Letter / EOB Notes (optional)</label>
+      <textarea id="denialEobNotes" style="min-height:110px;" placeholder="Paste key denial language or reference numbers (no PHI).">${safeStr(denialEobNotes)}</textarea>
+
+      <label style="margin-top:10px;">Checklist Notes (optional)</label>
+      <textarea id="checklistNotes" style="min-height:140px;">${safeStr(checklistNotes)}</textarea>
+
+      <div class="btnRow">
+        <button class="btn" type="button" onclick="window.__tjhpSavePacket()">Save Packet Components</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="sectionTitle">
+        <span>6) Export Packet</span>
+        <span class="tooltip">ⓘ<span class="tooltiptext">Compile the packet in the correct order and download as TXT/Word or print to PDF.</span></span>
+      </div>
+
+      <label style="display:flex;gap:10px;align-items:flex-start;margin-top:8px;">
+        <input id="deidConfirmed" type="checkbox" ${ap.deid_confirmed ? "checked" : ""} style="width:auto;margin:0;margin-top:2px;">
+        <span class="muted">I confirm this packet is de‑identified (no patient identifiers in text or uploads).</span>
+      </label>
+
+      <div class="btnRow" style="margin-top:10px;">
+        <button class="btn secondary" type="button" onclick="window.__tjhpCompilePacket()">Compile Packet</button>
+        <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=txt">Download TXT</a>
+        <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=doc">Download Word</a>
+        <a class="btn secondary" href="/appeal/export?case_id=${encodeURIComponent(case_id)}&fmt=pdf">Open Printable (Save as PDF)</a>
+      </div>
+      <div class="muted small" style="margin-top:8px;">Packet compilation order: Appeal Letter → LMN → Denial/EOB → Medical Records → Plan Docs → Prior Auth → Call Logs.</div>
+    </div>
+
+    <div class="section">
+      <div class="sectionTitle">
+        <span>7) Status Controls</span>
+        <span class="tooltip">ⓘ<span class="tooltiptext">Mark the appeal as submitted only after you’ve submitted to the payer. This saves your packet state and updates queues.</span></span>
+      </div>
+
+      <div class="btnRow">
+        <button class="btn" type="button" onclick="window.__tjhpMarkSubmitted()">Mark Submitted</button>
+        <form method="POST" action="/appeal/action" style="display:inline;">
           <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
           <input type="hidden" name="action" value="mark_denied"/>
           <button class="btn secondary" type="submit">Mark Denied</button>
         </form>
-      </div>
-      <div class="col">
-        <form method="POST" action="/appeal/action">
+        <form method="POST" action="/appeal/action" style="display:inline;">
           <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
           <input type="hidden" name="action" value="close"/>
           <button class="btn secondary" type="submit">Close Case</button>
         </form>
-      </div>
-    </div>
-
-    <div class="hr"></div>
-    <h3>Mark Approved (Option C)</h3>
-    <p class="muted small">Enter the approved amount. You may optionally apply it to the claim now.</p>
-    <form method="POST" action="/appeal/action" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
-      <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-      <input type="hidden" name="action" value="mark_approved"/>
-      <div style="min-width:220px;">
-        <label>Approved Amount</label>
-        <input name="approved_amount" placeholder="e.g. 250.00" required />
-      </div>
-      <div style="min-width:220px;">
-        <label>Paid Date (optional)</label>
-        <input type="date" name="paid_at" />
-      </div>
-      <label style="display:flex;gap:8px;align-items:center;margin:0;">
-        <input type="checkbox" name="apply_payment" value="1" style="width:auto;margin:0;">
-        <span class="muted small">Apply payment to claim now</span>
-      </label>
-      <button class="btn" type="submit">Mark Approved</button>
-    </form>
-
-    <div class="hr"></div>
-    <h3>Appeal Packet Components <span class="tooltip">ⓘ<span class="tooltiptext">Build a complete packet: denial/EOB, appeal letter, LMN, records, plan docs, call logs, and prior auth. AI can help draft text; uploads are de‑identified and auto‑delete.</span></span></h3>
-
-    <form method="POST" action="/appeal/packet-save">
-      <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-
-      <label>Denial Letter / EOB Notes (optional)</label>
-      <textarea name="denial_eob_notes" style="min-height:120px;" placeholder="Paste key denial language or reference numbers (no patient identifiers).">${safeStr(denialEobNotes)}</textarea>
-
-      <label>Prior Authorization (if applicable)</label>
-      <input name="authorization_number" value="${safeStr(priorAuth)}" placeholder="Authorization # (no patient identifiers)" />
-
-      <label>Call Logs (dates, times, rep names; no patient identifiers)</label>
-      <textarea name="contact_log" style="min-height:140px;" placeholder="e.g., 02/10 2:15pm — Rep: J. Smith — Ref#: 12345">${safeStr(callLogs)}</textarea>
-
-      <label>Letter of Medical Necessity (LMN)</label>
-      <textarea name="lmn_text" style="min-height:220px;">${safeStr(lmnText)}</textarea>
-
-      <label>Packet Checklist (optional)</label>
-      <textarea name="checklist_notes" style="min-height:160px;">${safeStr(checklistNotes)}</textarea>
-
-      <div class="btnRow">
-        <button class="btn secondary" type="submit">Save Packet Info</button>
-        <a class="btn secondary" href="/draft?case_id=${encodeURIComponent(case_id)}">Open Full Packet Builder</a>
-      </div>
-    </form>
-
-    <div class="hr"></div>
-    <h3>Upload Packet Documents</h3>
-    <p class="muted small">Uploads are de‑identified and auto‑delete in 60 minutes. Upload only what is safe (no PHI).</p>
-
-    <div class="row">
-      <div class="col">
-        <h4>Denial Letter / EOB</h4>
-        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
-          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-          <input type="hidden" name="category" value="denial_eob"/>
-          <input type="file" name="appeal_docs" multiple />
-          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
-        </form>
-        <ul class="muted small">${listCat("denial_eob")}</ul>
+        <a class="btn secondary" href="/upload-denials">Back to Denial Queue</a>
       </div>
 
-      <div class="col">
-        <h4>Medical Records</h4>
-        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
-          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-          <input type="hidden" name="category" value="medical_records"/>
-          <input type="file" name="appeal_docs" multiple />
-          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
-        </form>
-        <ul class="muted small">${listCat("medical_records")}</ul>
-      </div>
-    </div>
-
-    <div class="row">
-      <div class="col">
-        <h4>Plan Documents</h4>
-        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
-          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-          <input type="hidden" name="category" value="plan_docs"/>
-          <input type="file" name="appeal_docs" multiple />
-          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
-        </form>
-        <ul class="muted small">${listCat("plan_docs")}</ul>
-      </div>
-
-      <div class="col">
-        <h4>Other Attachments</h4>
-        <form method="POST" action="/appeal/upload" enctype="multipart/form-data">
-          <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
-          <input type="hidden" name="category" value="general"/>
-          <input type="file" name="appeal_docs" multiple />
-          <div class="btnRow"><button class="btn secondary" type="submit">Upload</button></div>
-        </form>
-        <ul class="muted small">${listCat("general")}</ul>
-      </div>
-    </div>
-
-    <div class="btnRow">
-      <a class="btn secondary" href="/upload-denials">Back to Denial Queue</a>
-      <a class="btn secondary" href="/claims">Claims Lifecycle</a>
+      <div class="hr"></div>
+      <h3 style="margin-top:0;">Mark Approved</h3>
+      <p class="muted small">Enter the approved amount. Optionally apply it to the claim now.</p>
+      <form method="POST" action="/appeal/action" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+        <input type="hidden" name="case_id" value="${safeStr(case_id)}"/>
+        <input type="hidden" name="action" value="mark_approved"/>
+        <div style="min-width:220px;">
+          <label>Approved Amount</label>
+          <input name="approved_amount" placeholder="e.g. 250.00" required />
+        </div>
+        <div style="min-width:220px;">
+          <label>Paid Date (optional)</label>
+          <input type="date" name="paid_at" />
+        </div>
+        <label style="display:flex;gap:8px;align-items:center;margin:0;">
+          <input type="checkbox" name="apply_payment" value="1" style="width:auto;margin:0;">
+          <span class="muted small">Apply payment to claim now</span>
+        </label>
+        <button class="btn secondary" type="submit">Mark Approved</button>
+      </form>
     </div>
 
     <script>
-      window.__tjhpAppealAI = async function(instruction){
-        const ta = document.getElementById("appealDraft");
-        const msg = "You are helping improve a denial appeal letter. " + instruction + "\\n\\nCURRENT DRAFT:\\n" + (ta ? ta.value : "");
-        const r = await fetch("/ai/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message: msg }) });
-        const data = await r.json();
-        if (data && data.answer && ta) ta.value = data.answer;
-      };
-
       window.__tjhpSaveAppeal = async function(){
         const ta = document.getElementById("appealDraft");
         const out = document.getElementById("appealSaveMsg");
@@ -7577,8 +7597,61 @@ if (method === "GET" && pathname === "/appeal-detail") {
           out.textContent = "Could not save.";
         }
       };
-    </script>
-  `, navUser(), {showChat:true, orgName: org.org_name});
+
+      window.__tjhpSavePacket = async function(){
+        const out = document.getElementById("packetSaveMsg");
+        out.textContent = "Saving...";
+        try{
+          const params = new URLSearchParams();
+          params.set("case_id", "${safeStr(case_id)}");
+          params.set("denial_eob_notes", (document.getElementById("denialEobNotes")?.value || ""));
+          params.set("authorization_number", (document.getElementById("priorAuth")?.value || ""));
+          params.set("contact_log", (document.getElementById("callLogs")?.value || ""));
+          params.set("lmn_text", (document.getElementById("lmnText")?.value || ""));
+          params.set("checklist_notes", (document.getElementById("checklistNotes")?.value || ""));
+          params.set("deid_confirmed", (document.getElementById("deidConfirmed")?.checked ? "1" : "0"));
+          const r = await fetch("/appeal/packet-save", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: params.toString() });
+          out.textContent = "Saved.";
+        }catch(e){
+          out.textContent = "Could not save.";
+        }
+      };
+
+      window.__tjhpAppealAI = async function(instruction){
+        const ta = document.getElementById("appealDraft");
+        const msg = "You are helping improve a denial appeal letter. " + instruction + "\n\nCURRENT DRAFT:\n" + (ta ? ta.value : "");
+        const r = await fetch("/ai/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message: msg }) });
+        const data = await r.json();
+        if (data && data.answer && ta) ta.value = data.answer;
+      };
+
+      window.__tjhpLMNAI = async function(instruction){
+        const ta = document.getElementById("lmnText");
+        const msg = "You are helping draft a Letter of Medical Necessity (LMN) for a denial appeal. " + instruction + "\n\nCURRENT LMN:\n" + (ta ? ta.value : "");
+        const r = await fetch("/ai/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message: msg }) });
+        const data = await r.json();
+        if (data && data.answer && ta) ta.value = data.answer;
+      };
+
+      window.__tjhpCompilePacket = async function(){
+        await window.__tjhpSavePacket();
+        const params = new URLSearchParams();
+        params.set("case_id", "${safeStr(case_id)}");
+        const r = await fetch("/appeal/compile", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: params.toString() });
+        window.location.reload();
+      };
+
+      window.__tjhpMarkSubmitted = async function(){
+        if (!confirm("Have you submitted this appeal to the payer? This will save your packet and mark the case as Submitted.")) return;
+        await window.__tjhpSaveAppeal();
+        await window.__tjhpSavePacket();
+        const params = new URLSearchParams();
+        params.set("case_id", "${safeStr(case_id)}");
+        params.set("action", "mark_submitted");
+        await fetch("/appeal/action", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: params.toString() });
+        window.location.href = "/claims?view=denials";
+      };
+    </script>`, navUser(), {showChat:true, orgName: org.org_name});
 
   return send(res, 200, html);
 }
@@ -7833,7 +7906,7 @@ if (method === "POST" && pathname === "/appeal/action") {
     if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
     c.ai.draft_text = draft;
     writeJSON(FILES.cases, cases);
-    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+    return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
   }
 
 // Apply/revert templates from within the draft review page
@@ -7891,7 +7964,7 @@ if (method === "POST" && pathname === "/draft-template") {
   }
 
   writeJSON(FILES.cases, cases);
-  return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+  return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
 }
 
 
@@ -7933,7 +8006,7 @@ if (method === "POST" && pathname === "/draft-template") {
 
     writeJSON(FILES.cases, cases);
     auditLog({ actor:"user", action:"appeal_save", org_id: org.org_id, case_id });
-    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+    return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
   }
 
   if (method === "POST" && pathname === "/appeal/upload") {
@@ -7957,7 +8030,7 @@ if (method === "POST" && pathname === "/draft-template") {
     normalizeAppealPacket(c, org.org_name);
 
     const uploadFiles = files.filter(f => f.fieldName === "appeal_docs");
-    if (!uploadFiles.length) return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+    if (!uploadFiles.length) return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
 
     const caseDir = path.join(UPLOADS_DIR, org.org_id, case_id, "appeal_docs");
     ensureDir(caseDir);
@@ -7980,7 +8053,7 @@ if (method === "POST" && pathname === "/draft-template") {
 
     writeJSON(FILES.cases, cases);
     auditLog({ actor:"user", action:"appeal_upload", org_id: org.org_id, case_id, count: uploadFiles.length });
-    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+    return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
   }
 
   if (method === "POST" && pathname === "/appeal/compile") {
@@ -8010,7 +8083,7 @@ if (method === "POST" && pathname === "/draft-template") {
     writeJSON(FILES.cases, cases);
 
     auditLog({ actor:"user", action:"appeal_compile", org_id: org.org_id, case_id });
-    return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
+    return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(case_id)}`);
   }
 
   if (method === "GET" && pathname === "/appeal/export") {
