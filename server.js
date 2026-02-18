@@ -771,18 +771,6 @@ function billedPaidCell(billed, paid) {
   return `<td>${formatMoney(b)}</td><td ${style}>${formatMoney(p)}</td>`;
 }
 
-// ===== Action Center suggestion helper (used in Claim Detail) =====
-function getSuggestedNextActionForClaim(b, casesAll, negotiationsAll){
-  const st = String(b.status || "Pending");
-  if (st === "Denied" || st.startsWith("Appeal")) return { label:"Appeal", href:`/appeal-workspace?billed_id=${encodeURIComponent(b.billed_id)}` };
-  if (st === "Underpaid") return { label:"Negotiate", href:`/negotiation-workspace?billed_id=${encodeURIComponent(b.billed_id)}` };
-  if (st === "Patient Balance") return { label:"Adjust Patient Responsibility", href:`/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp` };
-  if (st === "Pending") return { label:"Review Claim", href:`/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}` };
-  return { label:"Review Claim", href:`/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}` };
-}
-
-
-
 function computeExpectedInsurance(allowedAmount, patientResp){
   const allowed = num(allowedAmount);
   const pr = Math.max(0, num(patientResp));
@@ -1964,8 +1952,6 @@ const server = http.createServer(async (req, res) => {
         </div>
       </form>
     `, navPublic());
-    if (returnTo) return redirect(res, returnTo);
-    if (returnTo) return redirect(res, returnTo);
     return send(res, 200, html);
   }
 
@@ -3627,7 +3613,7 @@ if (method === "GET" && pathname === "/claims") {
     <p class="muted">Everything that happens to claims — billed, denied, appealed, paid, and negotiated — in one place.</p>
     <div class="muted small">Select a tab below to manage a specific stage.</div>
     ${subTabs}
-    
+    ${uploadRow}
 
     <div class="hr"></div>
 
@@ -3693,16 +3679,7 @@ if (method === "GET" && pathname === "/claims") {
       }).join("");
 
     body += `
-      <h3>Billed Batches
-<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-  <div class="muted small">Upload billed claim batches or individual claims. They will appear in the table below. <span class="tooltip">ⓘ<span class="tooltiptext">Upload a billed claims CSV from your EMR/EHR. Results are analyzed and shown here without leaving Claims Lifecycle.</span></span></div>
-  <form method="POST" action="/billed/upload" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-    <input type="hidden" name="return_to" value="/claims?view=billed"/>
-    <input type="file" name="billedfile" accept=".csv,.xls,.xlsx" required />
-    <button class="btn" type="submit">Upload Billed Claims</button>
-  </form>
-</div>
- <span class="tooltip">ⓘ<span class="tooltiptext">These are your billed claim submissions. Use them to manage claims by batch.</span></span></h3>
+      <h3>Billed Batches <span class="tooltip">ⓘ<span class="tooltiptext">These are your billed claim submissions. Use them to manage claims by batch.</span></span></h3>
       <div style="overflow:auto;">
         <table>
           <thead>
@@ -3758,23 +3735,7 @@ if (method === "GET" && pathname === "/claims") {
     const nav = buildPageNav("/claims", { ...parsed.query, view:"payments", pageSize: String(pageSize) }, page, totalPages);
 
     body += `
-      <h3>Payment Batches
-<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-  <div class="muted small">Upload payment files for reconciliation and analytics. <span class="tooltip">ⓘ<span class="tooltiptext">Upload CSV/XLS/XLSX or PDF documents. Results will be reflected in the table below.</span></span></div>
-  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
-    <form method="POST" action="/payments" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <input type="hidden" name="return_to" value="/claims?view=payments"/>
-      <input type="file" name="payfile" accept=".csv,.xls,.xlsx,.pdf,.doc,.docx" required />
-      <button class="btn" type="submit">Upload Payments</button>
-    </form>
-    <form method="POST" action="/payments/upload-documents" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <input type="hidden" name="return_to" value="/claims?view=payments"/>
-      <input type="file" name="paydocs" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx" required />
-      <button class="btn secondary" type="submit">Upload Payment PDFs</button>
-    </form>
-  </div>
-</div>
- <span class="tooltip">ⓘ<span class="tooltiptext">These are your uploaded payment files. Open a batch to see payment rows and affected claims.</span></span></h3>
+      <h3>Payment Batches <span class="tooltip">ⓘ<span class="tooltiptext">These are your uploaded payment files. Open a batch to see payment rows and affected claims.</span></span></h3>
       <div class="muted small" style="margin-bottom:8px;">Use this to audit what changed after each payment upload.</div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
@@ -3833,16 +3794,7 @@ if (method === "GET" && pathname === "/claims") {
     const nav = buildPageNav("/claims", { ...parsed.query, view:"denials", pageSize: String(pageSize) }, page, totalPages);
 
     body += `
-      <h3>Denial Queue
-<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-  <div class="muted small">Upload denial documents. New cases will appear in the Denial Queue below. <span class="tooltip">ⓘ<span class="tooltiptext">Uploads are analyzed here. If a matching claim exists it will be updated; otherwise a claim may be created via document ingestion flow.</span></span></div>
-  <form method="POST" action="/upload-denials" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-    <input type="hidden" name="return_to" value="/claims?view=denials"/>
-    <input type="file" name="files" multiple required accept=".pdf,.doc,.docx,.jpg,.png" />
-    <button class="btn" type="submit">Upload Denials</button>
-  </form>
-</div>
- <span class="tooltip">ⓘ<span class="tooltiptext">Denied claims and denial cases. Open to edit appeal drafts and track outcomes.</span></span></h3>
+      <h3>Denial Queue <span class="tooltip">ⓘ<span class="tooltiptext">Denied claims and denial cases. Open to edit appeal drafts and track outcomes.</span></span></h3>
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
         <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${total} (Page ${page}/${totalPages}).</div>
         <div>${sizeSelect}</div>
@@ -3897,12 +3849,7 @@ if (method === "GET" && pathname === "/claims") {
     const nav = buildPageNav("/claims", { ...parsed.query, view:"negotiations", pageSize: String(pageSize) }, page, totalPages);
 
     body += `
-      <h3>Negotiation Queue
-<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-  <div class="muted small">Create or manage negotiation cases for underpaid claims. <span class="tooltip">ⓘ<span class="tooltiptext">Negotiation cases are tied to claims and update Action Center automatically.</span></span></div>
-  <a class="btn" href="/upload-negotiations">Create/Upload Negotiations</a>
-</div>
- <span class="tooltip">ⓘ<span class="tooltiptext">Track underpayment negotiations and outcomes (approved vs collected).</span></span></h3>
+      <h3>Negotiation Queue <span class="tooltip">ⓘ<span class="tooltiptext">Track underpayment negotiations and outcomes (approved vs collected).</span></span></h3>
 
       <form method="GET" action="/claims" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
         <input type="hidden" name="view" value="negotiations"/>
@@ -5265,12 +5212,7 @@ if (method === "GET" && pathname === "/upload-negotiations") {
 
     <div class="hr"></div>
 
-    <h3>Negotiation Queue
-<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-  <div class="muted small">Create or manage negotiation cases for underpaid claims. <span class="tooltip">ⓘ<span class="tooltiptext">Negotiation cases are tied to claims and update Action Center automatically.</span></span></div>
-  <a class="btn" href="/upload-negotiations">Create/Upload Negotiations</a>
-</div>
- (showing up to 200)</h3>
+    <h3>Negotiation Queue (showing up to 200)</h3>
     <div style="overflow:auto;">
       <table>
         <thead><tr><th>Claim #</th><th>Payer</th><th>Status</th><th>Requested</th><th>Approved</th><th>Collected</th><th>Updated</th></tr></thead>
@@ -5607,7 +5549,6 @@ if (method === "POST" && pathname === "/negotiations/template") {
   const boundary = boundaryMatch[1];
 
   const { files, fields } = await parseMultipart(req, boundary);
-  const returnTo = String((fields && fields.return_to) || "").trim();
 
   const negotiation_id = String(fields.negotiation_id || "").trim();
   const mode = String(fields.mode || "autofill").trim(); // autofill|enhance
@@ -6278,9 +6219,7 @@ const statusCell = (() => {
     if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
     const boundary = boundaryMatch[1];
 
-    const { files, fields } = await parseMultipart(req, boundary);
-
-    const returnTo = String((fields && fields.return_to) || "").trim();
+    const { files } = await parseMultipart(req, boundary);
     const f = files.find(x => x.fieldName === "billedfile") || files[0];
     if (!f) return redirect(res, "/billed");
 
@@ -7065,7 +7004,6 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     }
     // Redirect to status page for first created case
     if (createdCaseIds.length > 0) {
-      if (returnTo) return redirect(res, returnTo);
       return redirect(res, "/upload-denials?submitted=1");
 }
     // If no cases were created (limit reached), show limit message
@@ -8064,9 +8002,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
     if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
     const boundary = boundaryMatch[1];
 
-    const { files, fields } = await parseMultipart(req, boundary);
-
-    const returnTo = String((fields && fields.return_to) || "").trim();
+    const { files } = await parseMultipart(req, boundary);
     const f = files.find(x => x.fieldName === "payfile") || files[0];
     if (!f) return redirect(res, "/payments");
 
@@ -8314,11 +8250,6 @@ rowsAdded = toUse;
 
     const html = renderPage("Account", `
       <h2>Account</h2>
-<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;margin-bottom:8px;">
-  <a href="/account" style="text-decoration:none;display:inline-flex;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:#111827;color:#fff;font-weight:900;font-size:12px;">Profile</a>
-  <a href="/payer-contracts" style="text-decoration:none;display:inline-flex;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:#fff;color:#111827;font-weight:900;font-size:12px;">Payer Contracts</a>
-</div>
-
       <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
       <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
       <form method="POST" action="/account/org-name" style="margin-top:8px;">
@@ -8394,11 +8325,6 @@ if (method === "POST" && pathname === "/account/password") {
     if (p1.length < 8 || p1 !== p2) {
       const html = renderPage("Account", `
         <h2>Account</h2>
-<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;margin-bottom:8px;">
-  <a href="/account" style="text-decoration:none;display:inline-flex;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:#111827;color:#fff;font-weight:900;font-size:12px;">Profile</a>
-  <a href="/payer-contracts" style="text-decoration:none;display:inline-flex;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:#fff;color:#111827;font-weight:900;font-size:12px;">Payer Contracts</a>
-</div>
-
         <p class="error">New passwords must match and be at least 8 characters.</p>
         <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
       `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
@@ -8412,11 +8338,6 @@ if (method === "POST" && pathname === "/account/password") {
     if (!bcrypt.compareSync(current, users[uidx].password_hash)) {
       const html = renderPage("Account", `
         <h2>Account</h2>
-<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;margin-bottom:8px;">
-  <a href="/account" style="text-decoration:none;display:inline-flex;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:#111827;color:#fff;font-weight:900;font-size:12px;">Profile</a>
-  <a href="/payer-contracts" style="text-decoration:none;display:inline-flex;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:#fff;color:#111827;font-weight:900;font-size:12px;">Payer Contracts</a>
-</div>
-
         <p class="error">Current password is incorrect.</p>
         <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
       `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
@@ -8429,11 +8350,6 @@ if (method === "POST" && pathname === "/account/password") {
 
     const html = renderPage("Account", `
       <h2>Account</h2>
-<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;margin-bottom:8px;">
-  <a href="/account" style="text-decoration:none;display:inline-flex;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:#111827;color:#fff;font-weight:900;font-size:12px;">Profile</a>
-  <a href="/payer-contracts" style="text-decoration:none;display:inline-flex;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:#fff;color:#111827;font-weight:900;font-size:12px;">Payer Contracts</a>
-</div>
-
       <p class="muted">Password updated successfully.</p>
       <div class="btnRow"><a class="btn" href="/dashboard">Back to Dashboard</a></div>
     `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
@@ -9080,30 +8996,6 @@ const negHistoryHtml = negHistory.length
 
   const html = renderPage("Claim Detail", `
     <h2>Claim Detail</h2>
-    <div class="hr"></div>
-    <h3>Action Center Status <span class="tooltip">ⓘ<span class="tooltiptext">This section summarizes priority and suggests the next best action based on claim status, age, and dollars at risk.</span></span></h3>
-    ${(() => {
-      const atRisk = computeClaimAtRisk(b);
-      const riskScore = (typeof calculateRiskScore === "function") ? calculateRiskScore(b) : computeUrgency(b);
-      const riskLabel = (typeof getRiskLevel === "function") ? getRiskLevel(riskScore).label : (riskScore >= 80 ? "High" : (riskScore >= 40 ? "Medium" : "Low"));
-      const sug = getSuggestedNextActionForClaim(b, [], []);
-      return `
-        <div class="row">
-          <div class="col">
-            <div class="kpi-card"><h4>Risk Score</h4><p>${riskScore}/100 (${riskLabel})</p></div>
-            <div class="kpi-card"><h4>At Risk</h4><p>$${Number(atRisk||0).toFixed(2)}</p></div>
-          </div>
-          <div class="col">
-            <div class="kpi-card"><h4>Suggested Next Action</h4><p>${safeStr(sug.label)}</p></div>
-            <div class="btnRow" style="margin-top:6px;">
-              <a class="btn" href="${safeStr(sug.href)}">Perform Suggested Action</a>
-              <a class="btn secondary" href="/actions">View in Action Center</a>
-            </div>
-          </div>
-        </div>
-      `;
-    })()}
-
     <div class="hr"></div>
     <table>
       <tbody>${claimRows}</tbody>
