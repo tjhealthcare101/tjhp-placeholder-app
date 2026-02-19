@@ -74,6 +74,8 @@ const FILES = {
   ai_queries: path.join(DATA_DIR, "ai_queries.json"),
   saved_queries: path.join(DATA_DIR, "saved_queries.json"),
   deleted_payment_batches: path.join(DATA_DIR, "deleted_payment_batches.json"),
+  payer_contracts: path.join(DATA_DIR, "payer_contracts.json"),
+  document_ingests: path.join(DATA_DIR, "document_ingests.json"),
 };
 
 // Directory for storing uploaded template files
@@ -205,6 +207,8 @@ ensureFile(FILES.negotiations, []);
 ensureFile(FILES.ai_queries, []);
 ensureFile(FILES.saved_queries, []);
 ensureFile(FILES.deleted_payment_batches, []);
+ensureFile(FILES.payer_contracts, []);
+ensureFile(FILES.document_ingests, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -879,6 +883,30 @@ function pickField(row, candidates) {
   return "";
 }
 
+function runExtractionFromDocumentText() {
+  return { claims: [] };
+}
+
+function findClaimByHeuristics(org_id, billedAll, extracted){
+  const claimNum = normalizeClaimDigits(extracted.claim_number);
+  if (claimNum) {
+    const byClaim = billedAll.find(b => b.org_id === org_id && normalizeClaimDigits(b.claim_number) === claimNum);
+    if (byClaim) return byClaim;
+  }
+  const payer = String(extracted.payer || "").trim().toLowerCase();
+  const dos = String(extracted.dos || "").trim();
+  const billedAmt = num(extracted.billed_amount);
+  if (payer && dos) {
+    const byPayerDos = billedAll.find(b => b.org_id === org_id && String(b.payer || "").trim().toLowerCase() === payer && String(b.dos || "").trim() === dos);
+    if (byPayerDos) return byPayerDos;
+  }
+  if (payer && billedAmt > 0) {
+    const byPayerAmount = billedAll.find(b => b.org_id === org_id && String(b.payer || "").trim().toLowerCase() === payer && Math.abs(num(b.amount_billed) - billedAmt) < 0.01);
+    if (byPayerAmount) return byPayerAmount;
+  }
+  return null;
+}
+
 // ===== AI stub =====
 function aiGenerate(orgName) {
   return {
@@ -997,6 +1025,10 @@ function appealPacketDefaults(orgName) {
     provider_tax_id: "",
     provider_address: "",
     contact_log: "",
+    appeal_letter_text: "",
+    attachments: [],
+    submitted_at: null,
+    exported_at: null,
     lmn_text:
 `LETTER OF MEDICAL NECESSITY (TEMPLATE — DE‑IDENTIFIED)
 Patient Name: ____________________
@@ -1803,6 +1835,11 @@ function normalizeNegotiation(rec){
   if (!rec.status) rec.status = "Open";
   if (!NEGOTIATION_STATUSES.includes(rec.status)) rec.status = "Open";
   if (!Array.isArray(rec.documents)) rec.documents = [];
+  if (!rec.negotiation_packet) rec.negotiation_packet = {};
+  if (!Array.isArray(rec.negotiation_packet.attachments)) rec.negotiation_packet.attachments = [];
+  if (!rec.negotiation_packet.negotiation_letter_text) rec.negotiation_packet.negotiation_letter_text = String(rec.packet_draft || "");
+  if (!rec.negotiation_packet.submitted_at) rec.negotiation_packet.submitted_at = null;
+  if (!rec.negotiation_packet.exported_at) rec.negotiation_packet.exported_at = null;
   if (!rec.created_at) rec.created_at = nowISO();
   rec.updated_at = nowISO();
   rec.approved_amount = num(rec.approved_amount);
@@ -1813,6 +1850,97 @@ function normalizeNegotiation(rec){
 
 function getNegotiationsByBilled(org_id, billed_id){
   return getNegotiations(org_id).filter(n => n.billed_id === billed_id);
+}
+
+function getPayerContracts(org_id){
+  return readJSON(FILES.payer_contracts, []).filter(x => x.org_id === org_id);
+}
+
+function savePayerContracts(org_id, contracts){
+  const all = readJSON(FILES.payer_contracts, []);
+  const keep = all.filter(x => x.org_id !== org_id);
+  writeJSON(FILES.payer_contracts, keep.concat((contracts || []).map(c => ({ ...c, org_id }))));
+}
+
+function normalizeCode(v){
+  return String(v || "").trim().toUpperCase();
+}
+
+function getClaimProcedureCode(b){
+  return normalizeCode(b.procedure_code || b.cpt_code || b.cpt || b.proc_code || b.code || "");
+}
+
+function getClaimDiagnosisCode(b){
+  return normalizeCode(b.diagnosis_code || b.icd10 || b.icd10_code || b.dx_code || "");
+}
+
+function findContractForClaim(org_id, b){
+  const payer = String(b.payer || "").trim().toLowerCase();
+  const proc = getClaimProcedureCode(b);
+  const dx = getClaimDiagnosisCode(b);
+  if (!payer || !proc) return null;
+  const contracts = getPayerContracts(org_id);
+  const exactDx = contracts.find(c =>
+    String(c.payer_name || "").trim().toLowerCase() === payer &&
+    normalizeCode(c.procedure_code) === proc &&
+    normalizeCode(c.diagnosis_code || "") === dx
+  );
+  if (exactDx) return exactDx;
+  return contracts.find(c =>
+    String(c.payer_name || "").trim().toLowerCase() === payer &&
+    normalizeCode(c.procedure_code) === proc &&
+    !normalizeCode(c.diagnosis_code || "")
+  ) || null;
+}
+
+function contractExpectedAmount(contract, billedAmount){
+  if (!contract) return null;
+  const model = String(contract.reimbursement_model || "fixed_amount");
+  const value = num(contract.expected_value);
+  const billed = num(billedAmount);
+  if (model === "percent_of_charge") return billed * (value / 100);
+  if (model === "percent_of_medicare") return billed * (value / 100);
+  return value;
+}
+
+function classifyClaimStatusWithContract(claim){
+  const paid = num(claim.insurance_paid || claim.paid_amount);
+  const expectedInsurance = num(claim.expected_insurance);
+  const patientBalance = Math.max(0, num(claim.patient_responsibility) - num(claim.patient_collected));
+
+  if (expectedInsurance > 0 && paid <= 0.0001) return "Denied";
+  if (expectedInsurance > 0 && paid + 0.0001 >= expectedInsurance) {
+    return patientBalance > 0 ? "Patient Balance" : "Paid";
+  }
+  if (expectedInsurance > 0 && paid < expectedInsurance) return "Underpaid";
+  return String(claim.status || "Pending");
+}
+
+function recalculateContractsForOrg(org_id){
+  const billedAll = readJSON(FILES.billed, []);
+  let changed = false;
+  for (const b of billedAll) {
+    if (b.org_id !== org_id) continue;
+    const contract = findContractForClaim(org_id, b);
+    b.network_status = contract ? String(contract.network_status || "In Network") : "Out of Network";
+    if (!contract) continue;
+
+    const billedAmt = num(b.amount_billed);
+    const patientResp = num(b.patient_responsibility);
+    const expectedAmount = contractExpectedAmount(contract, billedAmt);
+    const expectedInsurance = Math.max(0, num(expectedAmount) - patientResp);
+    const paid = num(b.insurance_paid || b.paid_amount);
+    const underpaid = Math.max(0, expectedInsurance - paid);
+
+    b.contract_reimbursement_model = contract.reimbursement_model;
+    b.contract_expected_value = num(contract.expected_value);
+    b.contract_expected_amount = num(expectedAmount);
+    b.expected_insurance = expectedInsurance;
+    b.underpaid_amount = underpaid;
+    b.status = classifyClaimStatusWithContract(b);
+    changed = true;
+  }
+  if (changed) writeJSON(FILES.billed, billedAll);
 }
 
 function computeClaimAtRisk(b){
@@ -1833,16 +1961,36 @@ function computeClaimAtRisk(b){
   return Math.max(0, billedAmt - insurancePaid);
 }
 
-function computeUrgency(b){
-  // heuristic: older claims + higher at-risk + certain statuses bubble up
+function computeClaimRiskScore(b){
   const st = String(b.status || "Pending");
   const atRisk = computeClaimAtRisk(b);
-  const base = (st === "Denied") ? 45 : (st === "Underpaid" ? 35 : (st === "Appeal" ? 30 : (st === "Patient Balance" ? 20 : 10)));
   const dt = new Date(b.dos || b.denied_at || b.created_at || Date.now()).getTime();
   const days = Math.max(0, (Date.now() - dt) / (1000*60*60*24));
-  const ageScore = Math.min(35, days * 0.5);
-  const moneyScore = Math.min(35, Math.log10(atRisk + 1) * 12);
-  return Math.round(base + ageScore + moneyScore);
+  const amountScore = clamp((Math.log10(atRisk + 1) / 4) * 100, 0, 100); // 40%
+  const ageScore = clamp((days / 120) * 100, 0, 100); // 30%
+  const stageBase = (st === "Denied") ? 100 : (st === "Underpaid" ? 80 : (st === "Appeal" ? 70 : (st === "Patient Balance" ? 60 : 30)));
+  const networkMod = String(b.network_status || "Out of Network").toLowerCase() === "out of network" ? 100 : 40;
+  const total = (0.40 * amountScore) + (0.30 * ageScore) + (0.20 * stageBase) + (0.10 * networkMod);
+  return Math.round(clamp(total, 0, 100));
+}
+
+function claimRiskBand(score){
+  if (score >= 80) return { label: "Critical", cls: "err" };
+  if (score >= 60) return { label: "High", cls: "warn" };
+  if (score >= 30) return { label: "Moderate", cls: "underpaid" };
+  return { label: "Low", cls: "ok" };
+}
+
+function suggestedNextActionForClaim(b){
+  const st = String(b.status || "Pending");
+  if (st === "Denied" || st === "Appeal") return "Appeal";
+  if (st === "Underpaid") return "Negotiate";
+  if (st === "Patient Balance") return "Adjust Patient Responsibility";
+  return "Review Claim";
+}
+
+function formatMoneyUI(v){
+  return "$" + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function badgeClassForStatus(st){
@@ -3592,28 +3740,12 @@ if (method === "GET" && pathname === "/claims") {
     </div>
   `;
 
-  const primaryUpload = (() => {
-    if (view === "billed") return `<a class="btn" href="/upload-billed">Upload Billed Claims</a>`;
-    if (view === "payments") return `<a class="btn" href="/upload-payments">Upload Payments</a>`;
-    if (view === "denials") return `<a class="btn" href="/upload-denials">Upload Denials</a>`;
-    if (view === "negotiations") return `<a class="btn" href="/upload-negotiations">Upload Negotiations</a>`;
-    return ``;
-  })();
-
-  const uploadRow = primaryUpload ? `
-    <div class="btnRow">
-      ${primaryUpload}
-      <span class="tooltip">ⓘ<span class="tooltiptext">Uploads create batches/queues below. Use the tabs to review and manage each stage.</span></span>
-    </div>
-  ` : ``;
-
   // ===== Shared header (always) =====
   let body = `
     <h2>Claims Lifecycle <span class="tooltip">ⓘ<span class="tooltiptext">This is your operational hub for billed batches, payment batches, denial appeals, negotiations, and all claims.</span></span></h2>
     <p class="muted">Everything that happens to claims — billed, denied, appealed, paid, and negotiated — in one place.</p>
     <div class="muted small">Select a tab below to manage a specific stage.</div>
     ${subTabs}
-    ${uploadRow}
 
     <div class="hr"></div>
 
@@ -3647,6 +3779,28 @@ if (method === "GET" && pathname === "/claims") {
 
   // (1) Billed Batches
   if (view === "billed") {
+    body += `
+      <h3>Upload Billed Batches <span class="tooltip">ⓘ<span class="tooltiptext">Upload billed batch files (CSV/XLS/XLSX). Files are processed here and the table refreshes below.</span></span></h3>
+      <form method="POST" action="/billed/upload" enctype="multipart/form-data">
+        <input type="hidden" name="next" value="/claims?view=billed"/>
+        <div id="billed-dropzone" class="dropzone">Drop CSV/XLS/XLSX files here or click to select</div>
+        <input id="billed-files" type="file" name="billedfile" multiple accept=".csv,.xls,.xlsx" required style="display:none" />
+        <div class="btnRow"><button class="btn" type="submit">Upload Billed Files</button></div>
+      </form>
+      <script>
+        (function(){
+          const dz = document.getElementById("billed-dropzone");
+          const inp = document.getElementById("billed-files");
+          if (!dz || !inp) return;
+          dz.addEventListener("click", ()=>inp.click());
+          ["dragenter","dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
+          ["dragleave","drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
+          dz.addEventListener("drop", e => { if (e.dataTransfer.files?.length) { inp.files = e.dataTransfer.files; dz.textContent = inp.files.length + " file(s) selected"; } });
+          inp.addEventListener("change", ()=>{ if (inp.files?.length) dz.textContent = inp.files.length + " file(s) selected"; });
+        })();
+      </script>
+      <div class="hr"></div>
+    `;
     const batchRows = subsAll
       .sort((a,b)=> new Date(b.uploaded_at||0).getTime() - new Date(a.uploaded_at||0).getTime())
       .map(s=>{
@@ -3693,6 +3847,28 @@ if (method === "GET" && pathname === "/claims") {
 
   // (2) Payment Batches
   if (view === "payments") {
+    body += `
+      <h3>Upload Payment Batches <span class="tooltip">ⓘ<span class="tooltiptext">Upload payment files (CSV, PDF, images, DOC). Files are processed in this view and reflected below.</span></span></h3>
+      <form method="POST" action="/payments/upload-documents" enctype="multipart/form-data">
+        <input type="hidden" name="next" value="/claims?view=payments"/>
+        <div id="payments-dropzone" class="dropzone">Drop payment files here or click to select</div>
+        <input id="payments-files" type="file" name="documents" multiple accept=".csv,.pdf,.png,.jpg,.jpeg,.doc,.docx" required style="display:none" />
+        <div class="btnRow"><button class="btn" type="submit">Upload Payment Documents</button></div>
+      </form>
+      <script>
+        (function(){
+          const dz = document.getElementById("payments-dropzone");
+          const inp = document.getElementById("payments-files");
+          if (!dz || !inp) return;
+          dz.addEventListener("click", ()=>inp.click());
+          ["dragenter","dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
+          ["dragleave","drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
+          dz.addEventListener("drop", e => { if (e.dataTransfer.files?.length) { inp.files = e.dataTransfer.files; dz.textContent = inp.files.length + " file(s) selected"; } });
+          inp.addEventListener("change", ()=>{ if (inp.files?.length) dz.textContent = inp.files.length + " file(s) selected"; });
+        })();
+      </script>
+      <div class="hr"></div>
+    `;
     const allPay = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
     const paymentFilesMap = {};
     allPay.forEach(p => {
@@ -3755,10 +3931,36 @@ if (method === "GET" && pathname === "/claims") {
 
   // (3) Denial Queue
   if (view === "denials") {
+    body += `
+      <h3>Upload Denial Documents <span class="tooltip">ⓘ<span class="tooltiptext">Upload denial files (PDF/DOC/images). Each file creates a denial case and appears in this queue.</span></span></h3>
+      <form method="POST" action="/upload-denials" enctype="multipart/form-data">
+        <input type="hidden" name="next" value="/claims?view=denials"/>
+        <div id="denials-dropzone" class="dropzone">Drop denial files here or click to select</div>
+        <input id="denials-files" type="file" name="files" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" required style="display:none" />
+        <div class="btnRow"><button class="btn" type="submit">Upload Denial Files</button></div>
+      </form>
+      <script>
+        (function(){
+          const dz = document.getElementById("denials-dropzone");
+          const inp = document.getElementById("denials-files");
+          if (!dz || !inp) return;
+          dz.addEventListener("click", ()=>inp.click());
+          ["dragenter","dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
+          ["dragleave","drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
+          dz.addEventListener("drop", e => { if (e.dataTransfer.files?.length) { inp.files = e.dataTransfer.files; dz.textContent = inp.files.length + " file(s) selected"; } });
+          inp.addEventListener("change", ()=>{ if (inp.files?.length) dz.textContent = inp.files.length + " file(s) selected"; });
+        })();
+      </script>
+      <div class="hr"></div>
+    `;
     const billedOrg = billedAll;
     const allDenialCases = readJSON(FILES.cases, [])
       .filter(c => c.org_id === org.org_id && String(c.case_type||"denial").toLowerCase() !== "underpayment")
-      .sort((a,b)=> new Date(b.created_at||0).getTime() - new Date(a.created_at||0).getTime());
+      .sort((a,b)=> {
+        const linkedA = billedOrg.find(x => x.denial_case_id === a.case_id) || {};
+        const linkedB = billedOrg.find(x => x.denial_case_id === b.case_id) || {};
+        return computeClaimRiskScore(linkedB) - computeClaimRiskScore(linkedA);
+      });
 
     const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
     const total = allDenialCases.length;
@@ -3771,11 +3973,13 @@ if (method === "GET" && pathname === "/claims") {
       const payer = linked ? (linked.payer || "") : "";
       const dos = linked ? (linked.dos || "") : "";
       const billedAmt = linked ? num(linked.amount_billed) : 0;
+      const riskScore = linked ? computeClaimRiskScore(linked) : 0;
       return `<tr>
         <td>${claimLink}</td>
         <td>${safeStr(payer)}</td>
         <td>${safeStr(dos)}</td>
         <td>$${Number(billedAmt).toFixed(2)}</td>
+        <td>${riskScore}</td>
         <td class="muted small">${safeStr(c.case_id)}</td>
         <td>${safeStr(c.status||"")}</td>
         <td><a href="/appeal-detail?case_id=${encodeURIComponent(c.case_id)}">Open Appeal</a></td>
@@ -3801,8 +4005,8 @@ if (method === "GET" && pathname === "/claims") {
       </div>
       <div style="overflow:auto;">
         <table>
-          <thead><tr><th>Claim #</th><th>Payer</th><th>DOS</th><th>Billed</th><th>Case ID</th><th>Status</th><th></th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="7" class="muted">No denial cases yet.</td></tr>`}</tbody>
+          <thead><tr><th>Claim #</th><th>Payer</th><th>DOS</th><th>Billed</th><th>Risk Score</th><th>Case ID</th><th>Status</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="8" class="muted">No denial cases yet.</td></tr>`}</tbody>
         </table>
       </div>
       ${nav}
@@ -3811,31 +4015,46 @@ if (method === "GET" && pathname === "/claims") {
 
   // (4) Negotiation Queue
   if (view === "negotiations") {
+    body += `
+      <h3>Negotiation Actions <span class="tooltip">ⓘ<span class="tooltiptext">Create or upload negotiation records. New records appear in this queue.</span></span></h3>
+      <div class="btnRow">
+        <a class="btn" href="/upload-negotiations">Create / Upload Negotiation</a>
+      </div>
+      <div class="hr"></div>
+    `;
     const negs = getNegotiations(org.org_id).map(n => normalizeNegotiation(n));
     const q = String(parsed.query.q || "").trim().toLowerCase();
     let filt = negs;
     if (q) {
       filt = negs.filter(n => (`${n.claim_number||""} ${n.payer||""} ${n.status||""}`).toLowerCase().includes(q));
     }
-    filt.sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime());
+    filt.sort((a,b)=>{
+      const claimA = billedAll.find(x => x.billed_id === a.billed_id) || {};
+      const claimB = billedAll.find(x => x.billed_id === b.billed_id) || {};
+      return computeClaimRiskScore(claimB) - computeClaimRiskScore(claimA);
+    });
 
     const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
     const total = filt.length;
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     const pageItems = filt.slice(startIdx, startIdx + pageSize);
 
-    const rows = pageItems.map(n=>`
+    const rows = pageItems.map(n=>{
+      const linked = billedAll.find(x => x.billed_id === n.billed_id) || {};
+      const riskScore = computeClaimRiskScore(linked);
+      return `
       <tr>
         <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">${safeStr(n.claim_number||"")}</a></td>
         <td>${safeStr(n.payer||"")}</td>
         <td>${safeStr(n.status||"Open")}</td>
+        <td>${riskScore}</td>
         <td>$${Number(n.requested_amount||0).toFixed(2)}</td>
         <td>$${Number(n.approved_amount||0).toFixed(2)}</td>
         <td>$${Number(n.collected_amount||0).toFixed(2)}</td>
         <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
         <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">Open</a></td>
       </tr>
-    `).join("");
+    `;}).join("");
 
     const sizeSelect = `
       <label class="small muted" style="margin-right:8px;">Per page</label>
@@ -3872,8 +4091,8 @@ if (method === "GET" && pathname === "/claims") {
 
       <div style="overflow:auto;">
         <table>
-          <thead><tr><th>Claim #</th><th>Payer</th><th>Status</th><th>Requested</th><th>Approved</th><th>Collected</th><th>Updated</th><th></th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="8" class="muted">No negotiations yet.</td></tr>`}</tbody>
+          <thead><tr><th>Claim #</th><th>Payer</th><th>Status</th><th>Risk Score</th><th>Requested</th><th>Approved</th><th>Collected</th><th>Updated</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="9" class="muted">No negotiations yet.</td></tr>`}</tbody>
         </table>
       </div>
       ${nav}
@@ -3919,6 +4138,8 @@ if (method === "GET" && pathname === "/claims") {
     const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
     const statusOpts = ["Pending","Paid","Denied","Underpaid","Appeal","Contractual","Patient Balance"];
 
+    billed.sort((a,b)=> computeClaimRiskScore(b) - computeClaimRiskScore(a));
+
     const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
     const totalFiltered = billed.length;
     const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
@@ -3928,6 +4149,7 @@ if (method === "GET" && pathname === "/claims") {
       const st = String(b.status || "Pending");
       const paidAmt = Number(b.insurance_paid || b.paid_amount || 0);
       const atRisk = computeClaimAtRisk(b);
+      const riskScore = computeClaimRiskScore(b);
 
       return `<tr>
         <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
@@ -3936,6 +4158,7 @@ if (method === "GET" && pathname === "/claims") {
         <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
         <td>$${paidAmt.toFixed(2)}</td>
         <td>$${Number(atRisk||0).toFixed(2)}</td>
+        <td>${riskScore}</td>
         <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
         <td class="muted small">${b.submission_id ? `<a href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">Batch</a>` : "—"}</td>
       </tr>`;
@@ -4010,8 +4233,8 @@ if (method === "GET" && pathname === "/claims") {
 
       <div style="overflow:auto;">
         <table>
-          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Status</th><th>Source</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="8" class="muted">No claims found.</td></tr>`}</tbody>
+          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Risk Score</th><th>Status</th><th>Source</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="9" class="muted">No claims found.</td></tr>`}</tbody>
         </table>
       </div>
 
@@ -4315,6 +4538,12 @@ if (method === "GET" && pathname === "/intelligence") {
   return send(res, 200, html);
 }
 
+// Consolidated upload entry points (single lifecycle location)
+if (method === "GET" && pathname === "/upload-billed") return redirect(res, "/claims?view=billed");
+if (method === "GET" && pathname === "/upload-payments") return redirect(res, "/claims?view=payments");
+if (method === "GET" && pathname === "/upload-denials") return redirect(res, "/claims?view=denials");
+if (method === "GET" && pathname === "/upload-negotiations") return redirect(res, "/claims?view=negotiations");
+
 // ==============================
 // ACTION CENTER (WORKFLOW)
 // ==============================
@@ -4322,7 +4551,7 @@ if (method === "GET" && pathname === "/actions") {
   const tab = String(parsed.query.tab || "denials").toLowerCase(); // denials|underpayments|awaiting|followup
   const q = String(parsed.query.q || "").trim().toLowerCase();
   const payerF = String(parsed.query.payer || "").trim();
-  const sort = String(parsed.query.sort || "urgency").trim(); // urgency|atrisk|payer|dos
+  const sort = String(parsed.query.sort || "risk_score").trim(); // risk_score|atrisk|payer|dos
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
@@ -4400,15 +4629,15 @@ if (method === "GET" && pathname === "/actions") {
     if (tabKey !== tab) continue;
 
     const atRisk = computeClaimAtRisk(b);
-    const urgency = computeUrgency(b);
-    items.push({ b, st, kind, atRisk, urgency, secondaryStatus, tabKey });
+    const riskScore = computeClaimRiskScore(b);
+    items.push({ b, st, kind, atRisk, riskScore, secondaryStatus, tabKey });
   }
 
   // Sorting
   if (sort === "atrisk") items.sort((a,b)=> b.atRisk - a.atRisk);
   else if (sort === "payer") items.sort((a,b)=> String(a.b.payer||"").localeCompare(String(b.b.payer||"")));
   else if (sort === "dos") items.sort((a,b)=> new Date(a.b.dos||a.b.created_at||0) - new Date(b.b.dos||b.b.created_at||0));
-  else items.sort((a,b)=> (b.urgency - a.urgency) || (b.atRisk - a.atRisk));
+  else items.sort((a,b)=> (b.riskScore - a.riskScore) || (b.atRisk - a.atRisk));
 
   // Pagination
   const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
@@ -4467,7 +4696,7 @@ if (method === "GET" && pathname === "/actions") {
       ${billedPaidCell(b.amount_billed, (b.insurance_paid || b.paid_amount))}
       <td><span class="badge ${badgeCls}">${safeStr(x.st)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
       <td>$${Number(x.atRisk||0).toFixed(2)}</td>
-      <td>${x.urgency}</td>
+      <td>${x.riskScore}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
     </tr>`;
   }).join("");
@@ -4484,8 +4713,8 @@ if (method === "GET" && pathname === "/actions") {
   const nav = buildPageNav("/actions", { ...parsed.query, tab, pageSize:String(pageSize) }, page, totalPages);
 
   const html = renderPage("Action Center", `
-    <h2>Action Center <span class="tooltip">ⓘ<span class="tooltiptext">This page prevents revenue leakage by surfacing what needs action. Use the tabs to work denials and underpayments by urgency.</span></span></h2>
-    <p class="muted">Work items are sorted by urgency and revenue at risk so nothing slips through the cracks.</p>
+    <h2>Action Center <span class="tooltip">ⓘ<span class="tooltiptext">This page prevents revenue leakage by surfacing what needs action. Use the tabs to work denials and underpayments by risk score.</span></span></h2>
+    <p class="muted">Work items are sorted by risk score and revenue at risk so nothing slips through the cracks.</p>
     ${tabs}
 
     <div class="hr"></div>
@@ -4506,7 +4735,7 @@ if (method === "GET" && pathname === "/actions") {
       <div style="display:flex;flex-direction:column;">
         <label>Sort</label>
         <select name="sort">
-          <option value="urgency"${sort==="urgency"?" selected":""}>Urgency</option>
+          <option value="risk_score"${sort==="risk_score"?" selected":""}>Risk Score</option>
           <option value="atrisk"${sort==="atrisk"?" selected":""}>At-Risk $</option>
           <option value="payer"${sort==="payer"?" selected":""}>Payer</option>
           <option value="dos"${sort==="dos"?" selected":""}>Oldest DOS</option>
@@ -4526,7 +4755,7 @@ if (method === "GET" && pathname === "/actions") {
 
     <div style="overflow:auto;">
       <table>
-        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed $</th><th>Paid $</th><th>Status / Stage</th><th>At-Risk $</th><th>Urgency</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed $</th><th>Paid $</th><th>Status / Stage</th><th>At-Risk $</th><th>Risk Score</th><th>Actions</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="8" class="muted">No items in this tab.</td></tr>`}</tbody>
       </table>
     </div>
@@ -5231,10 +5460,11 @@ if (method === "POST" && pathname === "/negotiations/create") {
   const params = new URLSearchParams(body);
   const billed_id = (params.get("billed_id") || "").trim();
   const requested_amount = params.get("requested_amount") || "";
+  const nextUrl = (params.get("next") || "").trim();
 
   const billedAll = readJSON(FILES.billed, []);
   const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
-  if (!b) return redirect(res, "/upload-negotiations");
+  if (!b) return redirect(res, nextUrl || "/upload-negotiations");
 
   // If an open negotiation exists for this claim, go there
   const existing = getNegotiations(org.org_id)
@@ -5272,6 +5502,7 @@ if (method === "POST" && pathname === "/negotiations/create") {
   } catch {}
 
   auditLog({ actor:"user", action:"negotiation_create", org_id: org.org_id, negotiation_id, billed_id });
+  if (nextUrl) return redirect(res, nextUrl);
   return redirect(res, `/negotiation-detail?negotiation_id=${encodeURIComponent(negotiation_id)}`);
 }
 
@@ -5473,6 +5704,9 @@ if (method === "POST" && pathname === "/negotiations/update") {
   rec.approved_amount = num(params.get("approved_amount"));
   rec.collected_amount = num(params.get("collected_amount"));
   rec.notes = (params.get("notes") || "").trim();
+  rec.negotiation_packet = rec.negotiation_packet || { negotiation_letter_text: "", attachments: [], submitted_at: null, exported_at: null };
+  rec.negotiation_packet.negotiation_letter_text = rec.packet_draft || rec.negotiation_packet.negotiation_letter_text || "";
+  if (rec.status === "Submitted") rec.negotiation_packet.submitted_at = nowISO();
 
   saveNegotiation(rec);
 
@@ -5534,6 +5768,7 @@ if (method === "POST" && pathname === "/negotiations/save-draft") {
 
   const rec = normalizeNegotiation({ ...rec0 });
   rec.packet_draft = packet_draft;
+  rec.negotiation_packet.negotiation_letter_text = packet_draft;
   saveNegotiation(rec);
 
   auditLog({ actor:"user", action:"negotiation_save_draft", org_id: org.org_id, negotiation_id });
@@ -5702,6 +5937,7 @@ if (method === "POST" && pathname === "/negotiations/upload") {
 
     // Store by filename only; /file route searches org tree by basename
     rec.documents.push({ filename: storedName, uploaded_at: nowISO() });
+    rec.negotiation_packet.attachments.push({ filename: storedName, uploaded_at: nowISO() });
   }
 
   saveNegotiation(rec);
@@ -6219,109 +6455,84 @@ const statusCell = (() => {
     if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
     const boundary = boundaryMatch[1];
 
-    const { files } = await parseMultipart(req, boundary);
-    const f = files.find(x => x.fieldName === "billedfile") || files[0];
-    if (!f) return redirect(res, "/billed");
+    const { files, fields } = await parseMultipart(req, boundary);
+    const nextUrl = (fields.next || "").trim();
+    const uploadFiles = files.filter(x => x.fieldName === "billedfile");
+    if (!uploadFiles.length) return redirect(res, nextUrl || "/billed");
 
-    const nameLower = (f.filename || "").toLowerCase();
-    const isCSV = nameLower.endsWith(".csv");
-    const isXLS = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx");
-    if (!isCSV && !isXLS) {
-      const html = renderPage("Billed Claims Upload", `
-        <h2>Billed Claims Upload</h2>
-        <p class="error">Only CSV or Excel files are allowed.</p>
-        <div class="btnRow"><a class="btn secondary" href="/billed">Back</a></div>
-      `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
-      return send(res, 400, html);
-    }
-
-    // store raw file
+    const billed = readJSON(FILES.billed, []);
+    const subs = readJSON(FILES.billed_submissions, []);
     const dir = path.join(UPLOADS_DIR, org.org_id, "billed");
     ensureDir(dir);
-    const stored = path.join(dir, `${Date.now()}_${(f.filename || "billed").replace(/[^a-zA-Z0-9._-]/g,"_")}`);
-    fs.writeFileSync(stored, f.buffer);
 
-    const submission_id = uuid();
-    const uploaded_at = nowISO();
-    const original_filename = f.filename || "billed_upload";
+    let lastSubmissionId = "";
+    for (const f of uploadFiles) {
+      const nameLower = (f.filename || "").toLowerCase();
+      const isCSV = nameLower.endsWith(".csv");
+      const isXLS = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx");
+      if (!isCSV && !isXLS) continue;
 
-    // Create submission metadata now; update claim_count after parsing CSV
-    const subs = readJSON(FILES.billed_submissions, []);
-    subs.push({
-      submission_id,
-      org_id: org.org_id,
-      uploaded_at,
-      original_filename,
-      claim_count: 0
-    });
-    writeJSON(FILES.billed_submissions, subs);
+      const stored = path.join(dir, `${Date.now()}_${(f.filename || "billed").replace(/[^a-zA-Z0-9._-]/g,"_")}`);
+      fs.writeFileSync(stored, f.buffer);
 
-    let rowsAdded = 0;
-    if (isCSV) {
-      const text = f.buffer.toString("utf8");
-      const parsedCSV = parseCSV(text);
-      const rows = parsedCSV.rows;
+      const submission_id = uuid();
+      lastSubmissionId = submission_id;
+      const uploaded_at = nowISO();
+      const original_filename = f.filename || "billed_upload";
 
-      const billed = readJSON(FILES.billed, []);
+      subs.push({
+        submission_id,
+        org_id: org.org_id,
+        uploaded_at,
+        original_filename,
+        claim_count: 0
+      });
 
-      for (const r of rows) {
-        const claim = (pickField(r, ["claim", "claim#", "claim number", "claimnumber", "clm"]) || "").trim();
-        if (!claim) continue;
-
-        // Avoid duplicates per org by claim number
-        const exists = billed.find(b => b.org_id === org.org_id && String(b.claim_number || "") === claim);
-        if (exists) continue;
-
-        const payer = (pickField(r, ["payer", "insurance", "carrier", "plan"]) || "").trim();
-        const amt = (pickField(r, ["billed", "charge", "amount billed", "total charge", "charges"]) || "").trim();
-        const dos = (pickField(r, ["dos", "date of service", "service date"]) || "").trim();
-        const patient = (pickField(r, ["patient", "member", "name"]) || "").trim();
-
-        billed.push({
-          billed_id: uuid(),
-          org_id: org.org_id,
-          submission_id,
-          claim_number: claim,
-          patient_name: patient || "",
-          dos: dos || "",
-          payer: payer || "",
-          amount_billed: Number(amt || 0) || 0,
-          status: "Pending",
-          paid_amount: null,
-          paid_at: null,
-          denied_at: null,
-          denial_case_id: null,
-          source_file: path.basename(stored),
-          created_at: uploaded_at
-        });
-        rowsAdded += 1;
+      let rowsAdded = 0;
+      if (isCSV) {
+        const text = f.buffer.toString("utf8");
+        const parsedCSV = parseCSV(text);
+        const rows = parsedCSV.rows;
+        for (const r of rows) {
+          const claim = (pickField(r, ["claim", "claim#", "claim number", "claimnumber", "clm"]) || "").trim();
+          if (!claim) continue;
+          const exists = billed.find(bx => bx.org_id === org.org_id && String(bx.claim_number || "") === claim);
+          if (exists) continue;
+          const payer = (pickField(r, ["payer", "insurance", "carrier", "plan"]) || "").trim();
+          const amt = (pickField(r, ["billed", "charge", "amount billed", "total charge", "charges"]) || "").trim();
+          const dos = (pickField(r, ["dos", "date of service", "service date"]) || "").trim();
+          const patient = (pickField(r, ["patient", "member", "name"]) || "").trim();
+          billed.push({
+            billed_id: uuid(),
+            org_id: org.org_id,
+            submission_id,
+            claim_number: claim,
+            patient_name: patient || "",
+            dos: dos || "",
+            payer: payer || "",
+            amount_billed: Number(amt || 0) || 0,
+            status: "Pending",
+            paid_amount: null,
+            paid_at: null,
+            denied_at: null,
+            denial_case_id: null,
+            source_file: path.basename(stored),
+            created_at: uploaded_at
+          });
+          rowsAdded += 1;
+        }
       }
-
-      writeJSON(FILES.billed, billed);
-
-      // update submission claim_count
-      const subs2 = readJSON(FILES.billed_submissions, []);
-      const s = subs2.find(x => x.submission_id === submission_id && x.org_id === org.org_id);
-      if (s) {
-        s.claim_count = rowsAdded;
-        writeJSON(FILES.billed_submissions, subs2);
-      }
+      const subRec = subs.find(x => x.submission_id === submission_id && x.org_id === org.org_id);
+      if (subRec) subRec.claim_count = rowsAdded;
     }
 
-    const html = renderPage("Billed Claims Upload", `
-      <h2>Billed Claims File Received</h2>
-      <p class="muted">Your billed claims file was uploaded successfully.</p>
-      <ul class="muted">
-        <li><strong>File:</strong> ${safeStr(f.filename)}</li>
-        <li><strong>Submission created:</strong> ${safeStr(new Date(uploaded_at).toLocaleString())}</li>
-        <li><strong>Claims added:</strong> ${isCSV ? rowsAdded : "File stored (Excel not parsed — export to CSV for import)"}</li>
-      </ul>
-      <div class="btnRow">
-        <a class="btn" href="/billed?submission_id=${encodeURIComponent(submission_id)}">View This Submission</a>
-        <a class="btn secondary" href="/billed">Back to Submissions</a>
-      </div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
-    return send(res, 200, html);
+    writeJSON(FILES.billed, billed);
+    writeJSON(FILES.billed_submissions, subs);
+    recalculateContractsForOrg(org.org_id);
+
+    if (nextUrl) return redirect(res, nextUrl);
+    if (lastSubmissionId) return redirect(res, `/billed?submission_id=${encodeURIComponent(lastSubmissionId)}`);
+    return redirect(res, "/billed");
   }
 
  
@@ -6896,10 +7107,11 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     const boundary = boundaryMatch[1];
 
     const { files, fields } = await parseMultipart(req, boundary);
+    const nextUrl = (fields.next || "").trim();
 
     const limits = getLimitProfile(org.org_id);
     const maxFiles = limits.max_files_per_case;
-    if (!files.length) return redirect(res, "/upload-denials");
+    if (!files.length) return redirect(res, nextUrl || "/upload-denials");
     if (files.length > maxFiles) {
       const html = renderPage("Upload", `
         <h2>Upload</h2>
@@ -7004,7 +7216,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     }
     // Redirect to status page for first created case
     if (createdCaseIds.length > 0) {
-      return redirect(res, "/upload-denials?submitted=1");
+      return redirect(res, nextUrl || "/upload-denials?submitted=1");
 }
     // If no cases were created (limit reached), show limit message
     const html = renderPage("Limit", `
@@ -7311,6 +7523,11 @@ if (method === "POST" && pathname === "/appeal/save-draft") {
 
   if (!c.ai) c.ai = {};
   c.ai.draft_text = draft_text;
+  normalizeAppealPacket(c, org.org_name);
+  c.appeal_packet.appeal_letter_text = draft_text;
+  if (!Array.isArray(c.appeal_packet.attachments)) c.appeal_packet.attachments = (c.appeal_attachments || []);
+  if (!c.appeal_packet.submitted_at) c.appeal_packet.submitted_at = null;
+  if (!c.appeal_packet.exported_at) c.appeal_packet.exported_at = null;
   c.updated_at = nowISO();
   writeJSON(FILES.cases, cases);
   auditLog({ actor:"user", action:"appeal_save_draft", org_id: org.org_id, case_id });
@@ -7354,7 +7571,11 @@ if (method === "POST" && pathname === "/appeal/action") {
   if (!c) return redirect(res, "/upload-denials");
 
   // status transitions
-  if (action === "mark_submitted") c.status = "Submitted";
+  if (action === "mark_submitted") {
+    c.status = "Submitted";
+    normalizeAppealPacket(c, org.org_name);
+    c.appeal_packet.submitted_at = nowISO();
+  }
   if (action === "mark_denied") c.status = "Denied";
   if (action === "close") c.status = "Closed";
 
@@ -7423,7 +7644,7 @@ if (method === "POST" && pathname === "/appeal/action") {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-    normalizeAppealPacket(c, org.org_name);
+  normalizeAppealPacket(c, org.org_name);
     // If LMN empty, seed template
     if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
@@ -7636,12 +7857,16 @@ if (method === "POST" && pathname === "/draft-template") {
     c.appeal_packet.provider_address = (params.get("provider_address") || "").trim();
     c.appeal_packet.contact_log = (params.get("contact_log") || "").trim();
     c.appeal_packet.checklist_notes = (params.get("checklist_notes") || "").trim();
+    if (!Array.isArray(c.appeal_packet.attachments)) c.appeal_packet.attachments = (c.appeal_attachments || []);
+    if (!c.appeal_packet.submitted_at) c.appeal_packet.submitted_at = null;
+    if (!c.appeal_packet.exported_at) c.appeal_packet.exported_at = null;
 
     // Save AI texts (editable)
     const draft_text = params.get("draft_text") || "";
     const lmn_text = params.get("lmn_text") || "";
     if (!c.ai) c.ai = {};
     c.ai.draft_text = draft_text;
+    c.appeal_packet.appeal_letter_text = (draft_text || c.appeal_packet.appeal_letter_text || "");
     c.appeal_packet.lmn_text = lmn_text;
 
     writeJSON(FILES.cases, cases);
@@ -7690,6 +7915,7 @@ if (method === "POST" && pathname === "/draft-template") {
         expires_at: new Date(Date.now() + APPEAL_ATTACHMENT_TTL_MS).toISOString()
       });
     }
+    c.appeal_packet.attachments = c.appeal_attachments;
 
     writeJSON(FILES.cases, cases);
     auditLog({ actor:"user", action:"appeal_upload", org_id: org.org_id, case_id, count: uploadFiles.length });
@@ -7734,6 +7960,8 @@ if (method === "POST" && pathname === "/draft-template") {
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
     normalizeAppealPacket(c, org.org_name);
+    c.appeal_packet.exported_at = nowISO();
+    writeJSON(FILES.cases, cases);
     // If LMN empty, seed template
     if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
 
@@ -7992,7 +8220,131 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 
   // -------- PAYMENT TRACKING (CSV/XLS allowed; CSV parsed) --------
   if (method === "GET" && pathname === "/payments") {
-    return redirect(res, "/upload-payments");
+    return redirect(res, "/claims?view=payments");
+  }
+
+  if (method === "POST" && pathname === "/payments/upload-documents") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/claims?view=payments");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return redirect(res, "/claims?view=payments");
+    const boundary = boundaryMatch[1];
+    const { files, fields } = await parseMultipart(req, boundary);
+    const nextUrl = (fields.next || "").trim();
+    const uploadFiles = files.filter(f => f.fieldName === "documents");
+    if (!uploadFiles.length) return redirect(res, nextUrl || "/claims?view=payments");
+
+    const ingestDir = path.join(UPLOADS_DIR, org.org_id, "document_ingests");
+    ensureDir(ingestDir);
+    const ingests = readJSON(FILES.document_ingests, []);
+    const paymentsData = readJSON(FILES.payments, []);
+    const billedAll = readJSON(FILES.billed, []);
+
+    const extractedClaims = [];
+    for (const f of uploadFiles) {
+      const safeName = (f.filename || "document").replace(/[^a-zA-Z0-9._-]/g, "_");
+      const storedPath = path.join(ingestDir, `${Date.now()}_${safeName}`);
+      fs.writeFileSync(storedPath, f.buffer);
+      const ext = path.extname(safeName).toLowerCase();
+      const ingest = {
+        ingest_id: uuid(),
+        org_id: org.org_id,
+        filename: safeName,
+        stored_path: storedPath,
+        created_at: nowISO(),
+        status: process.env.OPENAI_API_KEY ? "Queued For Extraction" : "Pending Extraction (AI Not Enabled)",
+        claims_extracted_count: 0
+      };
+
+      if (ext === ".csv") {
+        const parsedCSV = parseCSV(f.buffer.toString("utf8"));
+        for (const r of (parsedCSV.rows || [])) {
+          const claimObj = {
+            claim_number: (pickField(r, ["claim", "claim#", "claim number", "claimnumber"]) || "").trim(),
+            payer: (pickField(r, ["payer", "insurance", "carrier", "plan"]) || "").trim(),
+            dos: (pickField(r, ["dos", "date of service", "service date"]) || "").trim(),
+            billed_amount: num(pickField(r, ["billed", "charge", "amount billed", "total charge"])),
+            paid_amount: num(pickField(r, ["paid", "amount paid", "payment"])),
+            patient_responsibility: num(pickField(r, ["patient responsibility", "patient resp"])),
+            denial_code: (pickField(r, ["denial", "denial code"]) || "").trim()
+          };
+          extractedClaims.push(claimObj);
+          if (claimObj.paid_amount > 0 || claimObj.claim_number) {
+            paymentsData.push({
+              payment_id: uuid(),
+              org_id: org.org_id,
+              claim_number: claimObj.claim_number || "",
+              payer: claimObj.payer || "",
+              amount_paid: claimObj.paid_amount,
+              date_paid: claimObj.dos || "",
+              source_file: safeName,
+              created_at: nowISO(),
+              denied_approved: false
+            });
+          }
+        }
+        ingest.status = "Extracted";
+        ingest.claims_extracted_count = extractedClaims.length;
+      } else if (process.env.OPENAI_API_KEY) {
+        const data = runExtractionFromDocumentText();
+        const claims = Array.isArray(data.claims) ? data.claims : [];
+        for (const c of claims) extractedClaims.push(c);
+        ingest.status = "Extracted";
+        ingest.claims_extracted_count = claims.length;
+      }
+      ingests.push(ingest);
+    }
+
+    for (const ex of extractedClaims) {
+      const matched = findClaimByHeuristics(org.org_id, billedAll, ex);
+      if (matched) {
+        if (num(ex.paid_amount) > 0) {
+          matched.insurance_paid = num(ex.paid_amount);
+          matched.paid_amount = num(ex.paid_amount);
+          matched.paid_at = ex.dos || matched.paid_at || nowISO();
+        }
+        if (num(ex.patient_responsibility) > 0) matched.patient_responsibility = num(ex.patient_responsibility);
+        if (num(ex.billed_amount) > 0 && num(matched.amount_billed) <= 0) matched.amount_billed = num(ex.billed_amount);
+        const expectedInsurance = Math.max(0, num(matched.amount_billed) - num(matched.patient_responsibility));
+        const paid = num(matched.insurance_paid || matched.paid_amount);
+        matched.expected_insurance = expectedInsurance;
+        matched.underpaid_amount = Math.max(0, expectedInsurance - paid);
+        matched.status = classifyClaimStatusWithContract(matched);
+      } else {
+        const autoClaimNo = (ex.claim_number && String(ex.claim_number).trim()) ? String(ex.claim_number).trim() : `AUTO-${uuid().slice(0, 8)}`;
+        const expectedInsurance = Math.max(0, num(ex.billed_amount) - num(ex.patient_responsibility));
+        const paid = num(ex.paid_amount);
+        billedAll.push({
+          billed_id: uuid(),
+          org_id: org.org_id,
+          submission_id: "",
+          claim_number: autoClaimNo,
+          patient_name: "",
+          dos: ex.dos || "",
+          payer: ex.payer || "",
+          amount_billed: num(ex.billed_amount),
+          status: (expectedInsurance > 0 && paid <= 0.0001) ? "Denied" : ((paid >= expectedInsurance) ? "Paid" : "Underpaid"),
+          paid_amount: num(ex.paid_amount),
+          insurance_paid: num(ex.paid_amount),
+          patient_responsibility: num(ex.patient_responsibility),
+          expected_insurance: expectedInsurance,
+          underpaid_amount: Math.max(0, expectedInsurance - paid),
+          paid_at: ex.paid_amount ? (ex.dos || nowISO()) : null,
+          denied_at: null,
+          denial_case_id: null,
+          source_file: "document_ingest",
+          auto_created: true,
+          source: "document_ingest",
+          created_at: nowISO()
+        });
+      }
+    }
+
+    writeJSON(FILES.document_ingests, ingests);
+    writeJSON(FILES.payments, paymentsData);
+    writeJSON(FILES.billed, billedAll);
+    recalculateContractsForOrg(org.org_id);
+    return redirect(res, nextUrl || "/claims?view=payments");
   }
 
   if (method === "POST" && pathname === "/payments") {
@@ -8002,9 +8354,10 @@ if (method === "POST" && pathname === "/case/mark-paid") {
     if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
     const boundary = boundaryMatch[1];
 
-    const { files } = await parseMultipart(req, boundary);
+    const { files, fields } = await parseMultipart(req, boundary);
+    const nextUrl = (fields.next || "").trim();
     const f = files.find(x => x.fieldName === "payfile") || files[0];
-    if (!f) return redirect(res, "/payments");
+    if (!f) return redirect(res, nextUrl || "/payments");
 
     // validate extension
     const nameLower = (f.filename || "").toLowerCase();
@@ -8219,6 +8572,9 @@ rowsAdded = toUse;
       rowsAdded = 0;
     }
 
+    recalculateContractsForOrg(org.org_id);
+    if (nextUrl) return redirect(res, nextUrl);
+
     const html = renderPage("Revenue Management", `
       <h2>Payment File Received</h2>
       <p class="muted">Your file was uploaded successfully.</p>
@@ -8240,6 +8596,192 @@ rowsAdded = toUse;
   }
 
   // -------- ACCOUNT --------
+  if (method === "GET" && pathname === "/payer-contracts") {
+    const contracts = getPayerContracts(org.org_id).sort((a, b) =>
+      String(a.payer_name || "").localeCompare(String(b.payer_name || "")) ||
+      String(a.procedure_code || "").localeCompare(String(b.procedure_code || ""))
+    );
+
+    const rows = contracts.map(c => `
+      <tr>
+        <td>${safeStr(c.payer_name || "")}</td>
+        <td>${safeStr(c.network_status || "Out of Network")}</td>
+        <td>${safeStr(c.procedure_code || "")}</td>
+        <td>${safeStr(c.diagnosis_code || "—")}</td>
+        <td>${safeStr(c.reimbursement_model || "fixed_amount")}</td>
+        <td>${(String(c.reimbursement_model || "") === "fixed_amount") ? formatMoneyUI(c.expected_value) : (Number(c.expected_value || 0).toFixed(2) + "%")}</td>
+        <td>
+          <form method="POST" action="/payer-contracts/delete" onsubmit="return confirm('Delete this payer contract?');" style="display:inline;">
+            <input type="hidden" name="contract_id" value="${safeStr(c.contract_id)}"/>
+            <button class="btn danger small" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+    `).join("");
+
+    const html = renderPage("Payer Contracts", `
+      <h2>Account</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
+        <a class="btn secondary" href="/account">Profile</a>
+        <a class="btn" href="/payer-contracts">Payer Contracts</a>
+      </div>
+      <p class="muted">Define payer contract logic by payer and Procedure Code.</p>
+
+      <div class="hr"></div>
+      <h3>Add Payer Contract</h3>
+      <form method="POST" action="/payer-contracts/add" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+        <div style="min-width:240px;">
+          <label>Payer Name</label>
+          <input name="payer_name" required />
+        </div>
+        <div style="min-width:220px;">
+          <label>Network Status</label>
+          <select name="network_status">
+            <option value="In Network">In Network</option>
+            <option value="Out of Network">Out of Network</option>
+          </select>
+        </div>
+        <div style="min-width:240px;">
+          <label>Procedure Code</label>
+          <input name="procedure_code" placeholder="Example: CPT 99214" required />
+        </div>
+        <div style="min-width:240px;">
+          <label>Diagnosis Code (Optional)</label>
+          <input name="diagnosis_code" placeholder="Example: ICD-10 E11.9" />
+        </div>
+        <div style="min-width:220px;">
+          <label>Reimbursement Model</label>
+          <select name="reimbursement_model">
+            <option value="fixed_amount">Fixed Amount</option>
+            <option value="percent_of_charge">% of Charge</option>
+            <option value="percent_of_medicare">% of Medicare</option>
+          </select>
+        </div>
+        <div style="min-width:240px;">
+          <label>Expected Amount Or Expected Percentage</label>
+          <input name="expected_value" required />
+        </div>
+        <button class="btn" type="submit">Save Contract</button>
+      </form>
+
+      <div class="hr"></div>
+      <h3>Import Contracts (CSV)</h3>
+      <p class="muted small">Columns: payer_name, network_status, procedure_code, diagnosis_code, reimbursement_model, expected_value</p>
+      <form method="POST" action="/payer-contracts/import" enctype="multipart/form-data">
+        <input type="file" name="contract_file" accept=".csv" required />
+        <div class="btnRow">
+          <button class="btn secondary" type="submit">Import Contracts</button>
+          <button class="btn secondary" formaction="/payer-contracts/recalculate" formmethod="POST" type="submit">Recalculate Claims</button>
+        </div>
+      </form>
+
+      <div class="hr"></div>
+      <h3>Saved Contracts</h3>
+      <div style="overflow:auto;">
+        <table>
+          <thead><tr><th>Payer Name</th><th>Network Status</th><th>Procedure Code</th><th>Diagnosis Code</th><th>Reimbursement Model</th><th>Expected</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="7" class="muted">No payer contracts yet.</td></tr>`}</tbody>
+        </table>
+      </div>
+    `, navUser(), {showChat:true, orgName: org.org_name});
+    return send(res, 200, html);
+  }
+
+  if (method === "POST" && pathname === "/payer-contracts/add") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const payer_name = (params.get("payer_name") || "").trim();
+    const network_status = (params.get("network_status") || "Out of Network").trim();
+    const procedure_code = (params.get("procedure_code") || "").trim();
+    if (!payer_name || !procedure_code) return redirect(res, "/payer-contracts");
+    const contracts = getPayerContracts(org.org_id);
+    contracts.push({
+      contract_id: uuid(),
+      org_id: org.org_id,
+      payer_name,
+      network_status: (network_status === "In Network") ? "In Network" : "Out of Network",
+      procedure_code,
+      diagnosis_code: (params.get("diagnosis_code") || "").trim(),
+      reimbursement_model: (params.get("reimbursement_model") || "fixed_amount").trim(),
+      expected_value: num(params.get("expected_value")),
+      updated_at: nowISO()
+    });
+    savePayerContracts(org.org_id, contracts);
+    recalculateContractsForOrg(org.org_id);
+    return redirect(res, "/payer-contracts");
+  }
+
+  if (method === "POST" && pathname === "/payer-contracts/delete") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const contract_id = (params.get("contract_id") || "").trim();
+    if (!contract_id) return redirect(res, "/payer-contracts");
+    const contracts = getPayerContracts(org.org_id).filter(c => c.contract_id !== contract_id);
+    savePayerContracts(org.org_id, contracts);
+    recalculateContractsForOrg(org.org_id);
+    return redirect(res, "/payer-contracts");
+  }
+
+  if (method === "POST" && pathname === "/payer-contracts/update") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const contract_id = (params.get("contract_id") || "").trim();
+    if (!contract_id) return redirect(res, "/payer-contracts");
+    const contracts = getPayerContracts(org.org_id);
+    const idx = contracts.findIndex(c => c.contract_id === contract_id);
+    if (idx >= 0) {
+      contracts[idx].payer_name = (params.get("payer_name") || contracts[idx].payer_name || "").trim();
+      contracts[idx].network_status = (params.get("network_status") || contracts[idx].network_status || "Out of Network").trim();
+      contracts[idx].procedure_code = (params.get("procedure_code") || contracts[idx].procedure_code || "").trim();
+      contracts[idx].diagnosis_code = (params.get("diagnosis_code") || contracts[idx].diagnosis_code || "").trim();
+      contracts[idx].reimbursement_model = (params.get("reimbursement_model") || contracts[idx].reimbursement_model || "fixed_amount").trim();
+      contracts[idx].expected_value = num(params.get("expected_value"));
+      contracts[idx].updated_at = nowISO();
+      savePayerContracts(org.org_id, contracts);
+      recalculateContractsForOrg(org.org_id);
+    }
+    return redirect(res, "/payer-contracts");
+  }
+
+  if (method === "POST" && pathname === "/payer-contracts/import") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/payer-contracts");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return redirect(res, "/payer-contracts");
+    const boundary = boundaryMatch[1];
+    const { files } = await parseMultipart(req, boundary);
+    const f = files.find(x => x.fieldName === "contract_file") || files[0];
+    if (!f) return redirect(res, "/payer-contracts");
+    const text = f.buffer.toString("utf8");
+    const parsedCSV = parseCSV(text);
+    const rows = parsedCSV.rows || [];
+    const contracts = getPayerContracts(org.org_id);
+    for (const r of rows) {
+      const payerName = (r.payer_name || r["Payer Name"] || "").trim();
+      const procedureCode = (r.procedure_code || r["Procedure Code"] || "").trim();
+      if (!payerName || !procedureCode) continue;
+      contracts.push({
+        contract_id: uuid(),
+        org_id: org.org_id,
+        payer_name: payerName,
+        network_status: (String(r.network_status || r["Network Status"] || "Out of Network").trim() === "In Network") ? "In Network" : "Out of Network",
+        procedure_code: procedureCode,
+        diagnosis_code: (r.diagnosis_code || r["Diagnosis Code"] || "").trim(),
+        reimbursement_model: String(r.reimbursement_model || r["Reimbursement Model"] || "fixed_amount").trim().toLowerCase(),
+        expected_value: num(r.expected_value || r["Expected Amount Or Expected Percentage"] || r.expected_amount || r.expected_percentage),
+        updated_at: nowISO()
+      });
+    }
+    savePayerContracts(org.org_id, contracts);
+    recalculateContractsForOrg(org.org_id);
+    return redirect(res, "/payer-contracts");
+  }
+
+  if (method === "POST" && pathname === "/payer-contracts/recalculate") {
+    recalculateContractsForOrg(org.org_id);
+    return redirect(res, "/payer-contracts");
+  }
+
   if (method === "GET" && pathname === "/account") {
     const sub = getSub(org.org_id);
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
@@ -8250,6 +8792,10 @@ rowsAdded = toUse;
 
     const html = renderPage("Account", `
       <h2>Account</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
+        <a class="btn" href="/account">Profile</a>
+        <a class="btn secondary" href="/payer-contracts">Payer Contracts</a>
+      </div>
       <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
       <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
       <form method="POST" action="/account/org-name" style="margin-top:8px;">
@@ -8940,138 +9486,148 @@ if (method === "GET" && pathname === "/claim-detail") {
   if (!b) return redirect(res, "/billed");
 
   const relatedPayments = paymentsAll.filter(p =>
-  p.org_id === org.org_id &&
-  normalizeClaimNum(p.claim_number) === normalizeClaimNum(b.claim_number)
-);
+    p.org_id === org.org_id &&
+    normalizeClaimNum(p.claim_number) === normalizeClaimNum(b.claim_number)
+  );
 
-const negHistory = getNegotiationsByBilled(org.org_id, b.billed_id)
-  .map(n => normalizeNegotiation(n))
-  .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime());
+  const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+  const appealCase = b.denial_case_id ? casesAll.find(c => c.case_id === b.denial_case_id) : null;
 
-const negHistoryHtml = negHistory.length
-  ? `<table>
-       <thead><tr><th>Negotiation</th><th>Status</th><th>Requested</th><th>Approved</th><th>Collected</th><th>Updated</th></tr></thead>
-       <tbody>${
-         negHistory.map(n => `
-           <tr>
-             <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">${safeStr(n.negotiation_id)}</a></td>
-             <td>${safeStr(n.status)}</td>
-             <td>$${Number(n.requested_amount||0).toFixed(2)}</td>
-             <td>$${Number(n.approved_amount||0).toFixed(2)}</td>
-             <td>$${Number(n.collected_amount||0).toFixed(2)}</td>
-             <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
-           </tr>
-         `).join("")
-       }</tbody>
-     </table>`
-  : `<p class="muted">No negotiation cases for this claim yet.</p>`;
+  const negHistory = getNegotiationsByBilled(org.org_id, b.billed_id)
+    .map(n => normalizeNegotiation(n))
+    .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime());
+  const latestNegotiation = negHistory[0] || null;
 
+  const billedAmount = num(b.amount_billed);
+  const paidAmount = num(b.insurance_paid || b.paid_amount);
+  const patientResp = num(b.patient_responsibility);
+  const contractExpectedAmount = num(b.contract_expected_amount || b.expected_insurance || billedAmount);
+  const expectedInsurancePayment = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+    ? num(b.expected_insurance)
+    : computeExpectedInsurance((num(b.allowed_amount) > 0 ? num(b.allowed_amount) : billedAmount), patientResp);
+  const variance = expectedInsurancePayment - paidAmount;
+  const riskScore = computeClaimRiskScore(b);
+  const riskBand = claimRiskBand(riskScore);
+  const atRisk = computeClaimAtRisk(b);
+  const suggested = suggestedNextActionForClaim(b);
 
-  const claimRows = Object.keys(b).sort().map(k => {
-    const v = (typeof b[k] === "object") ? JSON.stringify(b[k]) : String(b[k] ?? "");
-    return `<tr><th style="width:240px;">${safeStr(k)}</th><td>${safeStr(v)}</td></tr>`;
-  }).join("");
+  const networkStatus = String(b.network_status || "Out of Network");
+  const networkBadge = networkStatus === "In Network" ? "ok" : "writeoff";
+  const varianceStyle = variance > 0.0001 ? 'style="color:#d97706;font-weight:900;"' : 'style="color:#166534;font-weight:900;"';
+
+  const negHistoryHtml = negHistory.length
+    ? `<table>
+         <thead><tr><th>Negotiation</th><th>Status</th><th>Requested</th><th>Approved</th><th>Collected</th><th>Updated</th></tr></thead>
+         <tbody>${
+           negHistory.map(n => `
+             <tr>
+               <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">${safeStr(n.negotiation_id)}</a></td>
+               <td>${safeStr(n.status)}</td>
+               <td>${formatMoneyUI(n.requested_amount)}</td>
+               <td>${formatMoneyUI(n.approved_amount)}</td>
+               <td>${formatMoneyUI(n.collected_amount)}</td>
+               <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
+             </tr>
+           `).join("")
+         }</tbody>
+       </table>`
+    : `<p class="muted">No negotiation cases for this claim yet.</p>`;
 
   const paymentTable = relatedPayments.length === 0
     ? `<p class="muted">No payment records found for this claim.</p>`
-    : `
-      <table>
-        <thead>
-          <tr>
-            <th>Date Paid</th><th>Amount</th><th>Payer</th><th>Allowed</th><th>Patient Resp</th><th>Expected Ins</th><th>Underpaid</th><th>Source File</th><th>Notes</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${relatedPayments.map(p => `
-            <tr>
-              <td>${safeStr(p.date_paid || "")}</td>
-              <td>$${num(p.amount_paid).toFixed(2)}</td>
-              <td>${safeStr(p.payer || "")}</td>
-              <td>$${num(b.allowed_amount || 0).toFixed(2)}</td><td>$${num(b.patient_responsibility || 0).toFixed(2)}</td><td>$${num(b.expected_insurance || 0).toFixed(2)}</td><td>$${Math.max(0, num(b.amount_billed||0) - num(b.insurance_paid||b.paid_amount||0) - num(b.patient_collected||0)).toFixed(2)}</td><td class="muted small">${p.source_file ? '<a href="/file?name=' + encodeURIComponent(p.source_file) + '" target="_blank">' + safeStr(p.source_file) + '</a>' : ""}</td><td class="muted small">${safeStr(p.notes || "")}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    `;
+    : `<table>
+         <thead><tr><th>Date Paid</th><th>Amount</th><th>Payer</th><th>Source File</th></tr></thead>
+         <tbody>
+           ${relatedPayments.map(p => `
+             <tr>
+               <td>${safeStr(p.date_paid || "")}</td>
+               <td>${formatMoneyUI(p.amount_paid)}</td>
+               <td>${safeStr(p.payer || "")}</td>
+               <td class="muted small">${p.source_file ? `<a href="/file?name=${encodeURIComponent(p.source_file)}" target="_blank">${safeStr(p.source_file)}</a>` : ""}</td>
+             </tr>`).join("")}
+         </tbody>
+       </table>`;
+
+  const appealPacketSummary = appealCase
+    ? `
+      <ul class="muted">
+        <li>Submitted At: ${safeStr(appealCase.appeal_packet?.submitted_at || "—")}</li>
+        <li>Exported At: ${safeStr(appealCase.appeal_packet?.exported_at || "—")}</li>
+        <li>Attachments: ${(appealCase.appeal_packet?.attachments || appealCase.appeal_attachments || []).length}</li>
+      </ul>
+      <a class="btn secondary" href="/appeal-detail?case_id=${encodeURIComponent(appealCase.case_id)}">Open Appeal Workspace</a>
+    `
+    : `<p class="muted">No appeal packet linked to this claim.</p>`;
+
+  const negotiationPacketSummary = latestNegotiation
+    ? `
+      <ul class="muted">
+        <li>Submitted At: ${safeStr(latestNegotiation.negotiation_packet?.submitted_at || "—")}</li>
+        <li>Exported At: ${safeStr(latestNegotiation.negotiation_packet?.exported_at || "—")}</li>
+        <li>Attachments: ${(latestNegotiation.negotiation_packet?.attachments || latestNegotiation.documents || []).length}</li>
+      </ul>
+      <a class="btn secondary" href="/negotiation-detail?negotiation_id=${encodeURIComponent(latestNegotiation.negotiation_id)}">Open Negotiation Workspace</a>
+    `
+    : `<p class="muted">No negotiation packet linked to this claim.</p>`;
 
   const html = renderPage("Claim Detail", `
     <h2>Claim Detail</h2>
-    <div class="hr"></div>
+
+    <h3>Claim Overview</h3>
     <table>
-      <tbody>${claimRows}</tbody>
+      <tr><th>Claim Number</th><td>${safeStr(b.claim_number || "")}</td></tr>
+      <tr><th>Payer</th><td>${safeStr(b.payer || "")}</td></tr>
+      <tr><th>Date Of Service</th><td>${safeStr(b.dos || "")}</td></tr>
+      <tr><th>Network Information</th><td><span class="badge ${networkBadge}">${safeStr(networkStatus)}</span></td></tr>
+      <tr><th>Status</th><td><span class="badge ${badgeClassForStatus(b.status || "Pending")}">${safeStr(b.status || "Pending")}</span></td></tr>
     </table>
+
+    <div class="hr"></div>
+    <h3>Financial Intelligence</h3>
+    <table>
+      <tr><th>Billed Amount</th><td>${formatMoneyUI(billedAmount)}</td></tr>
+      <tr><th>Paid Amount</th><td>${formatMoneyUI(paidAmount)}</td></tr>
+      <tr><th>Patient Responsibility</th><td>${formatMoneyUI(patientResp)}</td></tr>
+      <tr><th>Contract Expected Amount</th><td>${formatMoneyUI(contractExpectedAmount)}</td></tr>
+      <tr><th>Expected Insurance Payment</th><td>${formatMoneyUI(expectedInsurancePayment)}</td></tr>
+      <tr><th>Variance (Expected − Paid)</th><td ${varianceStyle}>${formatMoneyUI(variance)}</td></tr>
+    </table>
+
+    <div class="hr"></div>
+    <h3>Action Center Status Panel</h3>
+    <table>
+      <tr><th>Risk Score</th><td>${riskScore} / 100 (${riskBand.label}) <span class="tooltip">ⓘ<span class="tooltiptext">Risk Score is based on: Amount at risk, Age of claim, Lifecycle stage, Network status.</span></span></td></tr>
+      <tr><th>At Risk $</th><td>${formatMoneyUI(atRisk)}</td></tr>
+      <tr><th>Suggested Next Action</th><td>${safeStr(suggested)}</td></tr>
+    </table>
+    <div class="btnRow">
+      ${suggested === "Appeal" ? `<a class="btn secondary" href="/appeal-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Perform Suggested Action</a>` : ``}
+      ${suggested === "Negotiate" ? `<a class="btn secondary" href="/negotiation-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Perform Suggested Action</a>` : ``}
+      ${suggested === "Adjust Patient Responsibility" ? `<a class="btn secondary" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Perform Suggested Action</a>` : ``}
+      ${suggested === "Review Claim" ? `<a class="btn secondary" href="/claims?view=all&q=${encodeURIComponent(b.claim_number || "")}">Perform Suggested Action</a>` : ``}
+      <a class="btn secondary" href="/actions?q=${encodeURIComponent(b.claim_number || "")}">View In Action Center</a>
+    </div>
+
+    <div class="hr"></div>
+    <h3>Appeal Packet Summary</h3>
+    ${appealPacketSummary}
+
+    <div class="hr"></div>
+    <h3>Negotiation Packet Summary</h3>
+    ${negotiationPacketSummary}
 
     <div class="hr"></div>
     <h3>Payment History</h3>
     ${paymentTable}
 
     <div class="hr"></div>
-    <h3>Denial History</h3>
-    ${
-      b.denial_case_id
-        ? `<div class="muted small">Case: <a href="/appeal-detail?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></div>`
-        : `<p class="muted">No denial case linked to this claim.</p>`
-    }
+    <h3>Negotiation History</h3>
+    ${negHistoryHtml}
 
     <div class="hr"></div>
-<h3>Negotiation History</h3>
-${negHistoryHtml}
-
-<div class="hr"></div>
-<h3>Timeline</h3>
-<ul class="muted">
-  ${b.created_at ? `<li><strong>Claim created:</strong> ${safeStr(b.created_at)}</li>` : ``}
-  ${b.denied_at ? `<li><strong>Denied:</strong> ${safeStr(b.denied_at)}</li>` : ``}
-  ${b.paid_at ? `<li><strong>Paid/Posted:</strong> ${safeStr(b.paid_at)}</li>` : ``}
-  ${b.denial_case_id ? `<li><strong>Denial case:</strong> <a href="/appeal-detail?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></li>` : ``}
-  ${b.negotiation_id ? `<li><strong>Negotiation:</strong> <a href="/negotiation-detail?negotiation_id=${encodeURIComponent(b.negotiation_id)}">${safeStr(b.negotiation_id)}</a></li>` : ``}
-</ul>
-
-<div class="hr"></div>
-<h3>Actions</h3>
-<div class="btnRow">
-  <a class="btn secondary" href="/appeal-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Appeal Workspace</a>
-  <form method="POST" action="/negotiations/create" style="display:inline;">
-    <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
-    <button class="btn secondary" type="submit">Start Negotiation</button>
-  </form>
-  <a class="btn secondary" href="/upload-negotiations">Negotiations Queue</a>
-</div>
-
-<div class="hr"></div>
-<h3>Quick Status Updates</h3>
-<div class="row">
-  <div class="col">
-    <form method="POST" action="/claim/resolve">
-      <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
-      <input type="hidden" name="submission_id" value="${safeStr(b.submission_id || "")}"/>
-      <input type="hidden" name="resolution" value="Contractual"/>
-      <button class="btn secondary" type="submit">Write Off</button>
-    </form>
-  </div>
-  <div class="col">
-    <form method="POST" action="/claim/resolve">
-      <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
-      <input type="hidden" name="submission_id" value="${safeStr(b.submission_id || "")}"/>
-      <input type="hidden" name="resolution" value="Patient Balance"/>
-      <button class="btn secondary" type="submit">Add Patient Responsibility</button>
-    </form>
-  </div>
-  <div class="col">
-    <form method="POST" action="/billed/mark-paid">
-      <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
-      <input type="hidden" name="submission_id" value="${safeStr(b.submission_id || "")}"/>
-      <input type="hidden" name="paid_at" value="${new Date().toISOString().split("T")[0]}"/>
-      <button class="btn success" type="submit">Mark Paid</button>
-    </form>
-  </div>
-</div>
-
-<div class="hr"></div>
-<div class="btnRow">
+    <div class="btnRow">
       <a class="btn secondary" href="javascript:history.back()">Back</a>
-      ${b.submission_id ? `<a class="btn secondary" href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">View in Lifecycle</a>` : `<a class="btn secondary" href="/claims?view=all&q=${encodeURIComponent(b.claim_number||"")}">View in Lifecycle</a>`}
-      <a class="btn secondary" href="/billed">Billed Submissions</a>
+      <a class="btn secondary" href="/claims?view=all&q=${encodeURIComponent(b.claim_number || "")}">View In Claims Lifecycle</a>
     </div>
   `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
@@ -9086,5 +9642,4 @@ ${negHistoryHtml}
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
 
