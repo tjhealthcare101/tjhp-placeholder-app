@@ -1961,6 +1961,21 @@ function computeClaimAtRisk(b){
   return Math.max(0, billedAmt - insurancePaid);
 }
 
+function classifyStatusFromPaymentImport(claim){
+  const billedAmt = num(claim.amount_billed);
+  const paid = num(claim.insurance_paid || claim.paid_amount);
+  const expectedInsurance = (claim.expected_insurance != null && String(claim.expected_insurance).trim() !== "")
+    ? num(claim.expected_insurance)
+    : billedAmt;
+  const patientBalance = Math.max(0, num(claim.patient_responsibility) - num(claim.patient_collected));
+
+  // Payment import rule: zero payment means denied.
+  if (paid <= 0.0001 && billedAmt > 0) return "Denied";
+  if (expectedInsurance > 0 && paid + 0.0001 >= expectedInsurance) return patientBalance > 0 ? "Patient Balance" : "Paid";
+  if (expectedInsurance > 0 && paid < expectedInsurance) return "Underpaid";
+  return String(claim.status || "Pending");
+}
+
 function computeClaimRiskScore(b){
   const st = String(b.status || "Pending");
   const atRisk = computeClaimAtRisk(b);
@@ -3411,10 +3426,12 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="col">
           <h3>Revenue Trend <span class="tooltip">ⓘ<span class="tooltiptext">Billed vs collected over time (bucketed by ${safeStr(m.series.gran)}).</span></span></h3>
           <canvas id="revTrend" height="140"></canvas>
+          <div id="revTrendCalc" class="muted small" style="margin-top:8px;"></div>
         </div>
         <div class="col">
           <h3>Claim Status Mix <span class="tooltip">ⓘ<span class="tooltiptext">Distribution of claim statuses for the selected range.</span></span></h3>
           <canvas id="statusMix" height="140"></canvas>
+          <div id="statusMixCalc" class="muted small" style="margin-top:8px;"></div>
         </div>
       </div>
 
@@ -3422,6 +3439,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="col">
           <h3>Underpayment by Payer <span class="tooltip">ⓘ<span class="tooltiptext">Top payers by total underpaid dollars.</span></span></h3>
           <canvas id="underpayPayer" height="160"></canvas>
+          <div id="underpayCalc" class="muted small" style="margin-top:8px;"></div>
           <div style="overflow:auto;margin-top:10px;">
             <table>
               <thead><tr><th>Payer</th><th>Billed</th><th>Allowed</th><th>Paid</th><th>Denied</th><th>Write-Off</th><th>Underpaid</th></tr></thead>
@@ -3435,6 +3453,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="col">
           <h3>Patient Revenue <span class="tooltip">ⓘ<span class="tooltiptext">Patient responsibility vs collected and outstanding.</span></span></h3>
           <canvas id="patientRev" height="160"></canvas>
+          <div id="patientCalc" class="muted small" style="margin-top:8px;"></div>
 
           <div class="btnRow" style="margin-top:10px;">
             <a class="btn" href="/claims">Open Claims Lifecycle</a>
@@ -3464,14 +3483,27 @@ if (method === "GET" && pathname === "/weekly-summary") {
 <script>
 (function(){
 
-  if (!window.Chart) return;
-
   const series = JSON.parse(atob("${seriesB64}"));
   const st = JSON.parse(atob("${statusB64}"));
   const pt = JSON.parse(atob("${payerB64}"));
+  const hasChart = !!window.Chart;
+  const moneyFmt = (n) => "$" + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // Revenue Trend
   const revEl = document.getElementById("revTrend");
+  const revCalcEl = document.getElementById("revTrendCalc");
+  const revBilledTotal = (series.billed || []).reduce((s,v)=>s + Number(v||0), 0);
+  const revCollectedTotal = (series.collected || []).reduce((s,v)=>s + Number(v||0), 0);
+  const revAtRiskTotal = (series.atRisk || []).reduce((s,v)=>s + Number(v||0), 0);
+  const revCollectionPct = revBilledTotal > 0 ? (revCollectedTotal / revBilledTotal) * 100 : 0;
+  if (revCalcEl) {
+    revCalcEl.innerHTML =
+      "<strong>Calculation Summary:</strong> " +
+      "Total Billed = " + moneyFmt(revBilledTotal) + " | " +
+      "Total Collected = " + moneyFmt(revCollectedTotal) + " | " +
+      "Total At Risk = " + moneyFmt(revAtRiskTotal) + " | " +
+      "Collection % = " + revCollectionPct.toFixed(1) + "%";
+  }
   const hasRevData =
     series &&
     series.keys &&
@@ -3482,7 +3514,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       (series.atRisk || []).some(v => Number(v) > 0)
     );
 
-  if (hasRevData) {
+  if (hasRevData && hasChart) {
     new Chart(revEl, {
       type: "line",
       data: {
@@ -3495,12 +3527,15 @@ if (method === "GET" && pathname === "/weekly-summary") {
       },
       options: { responsive: true }
     });
+  } else if (!hasChart) {
+    revEl.outerHTML = "<p class='muted'>Chart library not loaded.</p>";
   } else {
     revEl.outerHTML = "<p class='muted'>No revenue trend data.</p>";
   }
 
   // Claim Status Mix
   const statusEl = document.getElementById("statusMix");
+  const statusCalcEl = document.getElementById("statusMixCalc");
   const sumStatus =
     (st["Paid"]||0) +
     (st["Patient Balance"]||0) +
@@ -3509,7 +3544,19 @@ if (method === "GET" && pathname === "/weekly-summary") {
     (st["Write-Off"]||0) +
     (st["Pending"]||0);
 
-  if (sumStatus > 0) {
+  if (statusCalcEl) {
+    const paidPct = sumStatus > 0 ? ((st["Paid"]||0) / sumStatus) * 100 : 0;
+    const deniedPct = sumStatus > 0 ? ((st["Denied"]||0) / sumStatus) * 100 : 0;
+    const underpaidPct = sumStatus > 0 ? ((st["Underpaid"]||0) / sumStatus) * 100 : 0;
+    statusCalcEl.innerHTML =
+      "<strong>Calculation Summary:</strong> " +
+      "Total Claims = " + sumStatus + " | " +
+      "Paid = " + (st["Paid"]||0) + " (" + paidPct.toFixed(1) + "%) | " +
+      "Denied = " + (st["Denied"]||0) + " (" + deniedPct.toFixed(1) + "%) | " +
+      "Underpaid = " + (st["Underpaid"]||0) + " (" + underpaidPct.toFixed(1) + "%)";
+  }
+
+  if (sumStatus > 0 && hasChart) {
     new Chart(statusEl, {
       type: "doughnut",
       data: {
@@ -3527,17 +3574,28 @@ if (method === "GET" && pathname === "/weekly-summary") {
       },
       options: { responsive: true }
     });
+  } else if (!hasChart) {
+    statusEl.outerHTML = "<p class='muted'>Chart library not loaded.</p>";
   } else {
     statusEl.outerHTML = "<p class='muted'>No claim status data.</p>";
   }
 
   // Underpayment by Payer
   const underpayEl = document.getElementById("underpayPayer");
+  const underpayCalcEl = document.getElementById("underpayCalc");
+  const totalUnderpaidPayers = Array.isArray(pt) ? pt.reduce((s,x)=>s + Number(x.underpaid || 0), 0) : 0;
+  const topUnderpaidPayer = (Array.isArray(pt) ? pt.slice().sort((a,b)=>Number(b.underpaid||0)-Number(a.underpaid||0))[0] : null);
+  if (underpayCalcEl) {
+    underpayCalcEl.innerHTML =
+      "<strong>Calculation Summary:</strong> " +
+      "Total Underpaid (Top Payers) = " + moneyFmt(totalUnderpaidPayers) + " | " +
+      "Top Payer = " + (topUnderpaidPayer ? (topUnderpaidPayer.payer + " (" + moneyFmt(topUnderpaidPayer.underpaid) + ")") : "—");
+  }
   const hasUnderpay =
     Array.isArray(pt) &&
     pt.some(x => Number(x.underpaid || 0) > 0);
 
-  if (hasUnderpay) {
+  if (hasUnderpay && hasChart) {
     new Chart(underpayEl, {
       type: "bar",
       data: {
@@ -3549,6 +3607,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
       },
       options: { responsive: true }
     });
+  } else if (!hasChart) {
+    underpayEl.outerHTML = "<p class='muted'>Chart library not loaded.</p>";
   } else {
     underpayEl.outerHTML = "<p class='muted'>No underpayment by payer data.</p>";
   }
@@ -3570,6 +3630,9 @@ const hasPayerBar =
   payerBarEl;
 
 if (hasPayerBar) {
+  if (!hasChart) {
+    payerBarEl.outerHTML = "<p class='muted'>Chart library not loaded.</p>";
+  } else {
   new Chart(payerBarEl, {
     type: "bar",
     data: {
@@ -3585,11 +3648,13 @@ if (hasPayerBar) {
     },
     options: { responsive: true }
   });
+  }
 } else if (payerBarEl) {
   payerBarEl.outerHTML = "<p class='muted'>No payer reconciliation data.</p>";
 }
   // Patient Revenue
   const patientEl = document.getElementById("patientRev");
+  const patientCalcEl = document.getElementById("patientCalc");
   const patientData = [
     ${Number(m.kpis.patientRespTotal||0)},
     ${Number(m.kpis.patientCollected||0)},
@@ -3597,8 +3662,17 @@ if (hasPayerBar) {
   ];
 
   const hasPatientData = patientData.some(v => Number(v) > 0);
+  const patientCollectionPct = Number(patientData[0]) > 0 ? (Number(patientData[1]) / Number(patientData[0])) * 100 : 0;
+  if (patientCalcEl) {
+    patientCalcEl.innerHTML =
+      "<strong>Calculation Summary:</strong> " +
+      "Responsibility = " + moneyFmt(patientData[0]) + " | " +
+      "Collected = " + moneyFmt(patientData[1]) + " | " +
+      "Outstanding = " + moneyFmt(patientData[2]) + " | " +
+      "Patient Collection % = " + patientCollectionPct.toFixed(1) + "%";
+  }
 
-  if (hasPatientData) {
+  if (hasPatientData && hasChart) {
     new Chart(patientEl, {
       type: "bar",
       data: {
@@ -3610,6 +3684,8 @@ if (hasPayerBar) {
       },
       options: { responsive: true }
     });
+  } else if (!hasChart) {
+    patientEl.outerHTML = "<p class='muted'>Chart library not loaded.</p>";
   } else {
     patientEl.outerHTML = "<p class='muted'>No patient revenue data.</p>";
   }
@@ -4564,7 +4640,7 @@ if (method === "GET" && pathname === "/actions") {
 
   function denialStageForClaim(b){
     const cid = b.denial_case_id;
-    if (!cid) return { stage:"Denied", caseStatus:"" };
+    if (!cid) return { stage:"Denials", caseStatus:"No Appeal Case Yet" };
     const c = caseById.get(cid);
     const cs = c ? String(c.status||"") : "";
     // normalize to our stage buckets
@@ -8302,14 +8378,18 @@ if (method === "POST" && pathname === "/case/mark-paid") {
           matched.insurance_paid = num(ex.paid_amount);
           matched.paid_amount = num(ex.paid_amount);
           matched.paid_at = ex.dos || matched.paid_at || nowISO();
+        } else if (ex.paid_amount != null) {
+          matched.insurance_paid = 0;
+          matched.paid_amount = 0;
+          matched.paid_at = ex.dos || matched.paid_at || nowISO();
         }
         if (num(ex.patient_responsibility) > 0) matched.patient_responsibility = num(ex.patient_responsibility);
         if (num(ex.billed_amount) > 0 && num(matched.amount_billed) <= 0) matched.amount_billed = num(ex.billed_amount);
         const expectedInsurance = Math.max(0, num(matched.amount_billed) - num(matched.patient_responsibility));
-        const paid = num(matched.insurance_paid || matched.paid_amount);
+        const paid = num(matched.insurance_paid ?? matched.paid_amount);
         matched.expected_insurance = expectedInsurance;
         matched.underpaid_amount = Math.max(0, expectedInsurance - paid);
-        matched.status = classifyClaimStatusWithContract(matched);
+        matched.status = classifyStatusFromPaymentImport(matched);
       } else {
         const autoClaimNo = (ex.claim_number && String(ex.claim_number).trim()) ? String(ex.claim_number).trim() : `AUTO-${uuid().slice(0, 8)}`;
         const expectedInsurance = Math.max(0, num(ex.billed_amount) - num(ex.patient_responsibility));
@@ -8323,7 +8403,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
           dos: ex.dos || "",
           payer: ex.payer || "",
           amount_billed: num(ex.billed_amount),
-          status: (expectedInsurance > 0 && paid <= 0.0001) ? "Denied" : ((paid >= expectedInsurance) ? "Paid" : "Underpaid"),
+          status: (paid <= 0.0001 && num(ex.billed_amount) > 0) ? "Denied" : ((paid >= expectedInsurance) ? "Paid" : "Underpaid"),
           paid_amount: num(ex.paid_amount),
           insurance_paid: num(ex.paid_amount),
           patient_responsibility: num(ex.patient_responsibility),
@@ -8465,8 +8545,8 @@ for (const ap of addedPayments) {
     ? num(billedClaim.expected_insurance)
     : billedAmt;
 
-  if (Number(expected) > 0 && paid <= 0) {
-    // Zero-payment ERA should be treated as Denied (with reason) and auto-create a denial case
+  if (paid <= 0 && billedAmt > 0) {
+    // Zero-payment import should be treated as Denied (with reason) and auto-create a denial case
     billedClaim.status = "Denied";
     billedClaim.denial_reason = "ERA Zero Payment";
     billedClaim.denied_at = billedClaim.denied_at || nowISO();
