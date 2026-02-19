@@ -3650,7 +3650,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
             tooltip: {
               callbacks: {
                 title: (items) => items[0]?.label || "",
-                label: (ctx) => `${ctx.dataset.label}: ${moneyFmt(ctx.parsed.y)}`,
+                label: (ctx) => (ctx.dataset.label + ": " + moneyFmt(ctx.parsed.y)),
                 footer: (items) => {
                   const total = items.reduce((s,i)=>s + Number(i.parsed.y || 0),0);
                   return "Total: " + moneyFmt(total);
