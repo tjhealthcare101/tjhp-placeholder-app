@@ -2336,7 +2336,20 @@ function classifyStatusFromPaymentImport(claim){
 
 function computeClaimRiskScore(b){
   const st = String(b.status || "Pending");
-  const atRisk = computeClaimAtRisk(b);
+  // Use a local at-risk estimate here to avoid circular dependency with evaluateClaimDerived.
+  const billedAmt = num(b.amount_billed);
+  const insurancePaid = num(b.insurance_paid || b.paid_amount);
+  const patientCollected = num(b.patient_collected);
+  const allowed = num(b.allowed_amount);
+  const patientResp = num(b.patient_responsibility);
+  const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+    ? num(b.expected_insurance)
+    : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+  let atRisk = Math.max(0, billedAmt - insurancePaid);
+  if (st === "Underpaid" || st === "Appeal") atRisk = Math.max(0, expectedInsurance - insurancePaid);
+  else if (st === "Patient Balance") atRisk = Math.max(0, patientResp - patientCollected);
+  else if (st === "Contractual" || st === "Paid") atRisk = 0;
+
   const dt = new Date(b.dos || b.denied_at || b.created_at || Date.now()).getTime();
   const days = Math.max(0, (Date.now() - dt) / (1000*60*60*24));
   const amountScore = clamp((Math.log10(atRisk + 1) / 4) * 100, 0, 100); // 40%
@@ -7338,7 +7351,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
         if (okAI.ok) {
           cObj.status = "ANALYZING";
           cObj.ai_started_at = nowISO();
-          writeJSON(FILES.cases, cases2);
+         writeJSON(FILES.cases, cases2);
           recordAIJob(org.org_id);
         }
       }
@@ -8799,7 +8812,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
           patient_name: "",
           dos: ex.dos || "",
           payer: ex.payer || "",
-         amount_billed: num(ex.billed_amount),
+          amount_billed: num(ex.billed_amount),
           status: (paid <= 0.0001 && num(ex.billed_amount) > 0) ? "Denied" : ((paid >= expectedInsurance) ? "Paid" : "Underpaid"),
           paid_amount: num(ex.paid_amount),
           insurance_paid: num(ex.paid_amount),
