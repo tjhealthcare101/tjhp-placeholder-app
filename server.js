@@ -3887,6 +3887,49 @@ if (method === "GET" && pathname === "/claims") {
   }
 
   function toPipelineStage(b){
+  const d = evaluateClaimDerived(b, claimCtx);
+
+  const paid = num(b.insurance_paid || b.paid_amount);
+  const billed = num(b.amount_billed);
+  const expected = num(d.expectedAmount || 0);
+  const patientResp = num(b.patient_responsibility || 0);
+
+  const hasPayment = d.hasPaymentResponse;
+
+  // 1️⃣ Active case always overrides
+  if (isAppealOpen(b) || isNegotiationOpen(b)) {
+    return "In Appeal/Negotiation";
+  }
+
+  // 2️⃣ If payment exists
+  if (hasPayment) {
+
+    // Zero paid = Denied
+    if (paid === 0 && billed > 0) {
+      return "Denied";
+    }
+
+    // Underpaid (payer underpaid contract amount)
+    if (paid > 0 && paid < expected) {
+      return "Underpaid";
+    }
+
+    // Paid in full (payer met or exceeded expected)
+    if (paid >= expected && expected > 0) {
+      return "Paid";
+    }
+
+    // Fallback if payment exists but doesn't match above
+    return "Paid";
+  }
+
+  // 3️⃣ No payment yet
+  if (b.submission_id) {
+    return "Waiting Payment";
+  }
+
+  return "Submitted";
+}
     const d = evaluateClaimDerived(b, claimCtx);
     const st = String(d.lifecycleStage || "Pending");
 
@@ -3928,8 +3971,13 @@ if (method === "GET" && pathname === "/claims") {
     const stage = toPipelineStage(b);
     if (!pipelineAgg[stage]) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
     pipelineAgg[stage].count += 1;
-    pipelineAgg[stage].billed += num(b.amount_billed);
-    pipelineAgg[stage].atRisk += computeClaimAtRisk(b);
+  pipelineAgg[stage].billed += num(b.amount_billed);
+
+if (stage === "Patient Balance") {
+  pipelineAgg[stage].atRisk += num(b.patient_responsibility || 0);
+} else {
+  pipelineAgg[stage].atRisk += computeClaimAtRisk(b);
+}
   });
 
   const pipelineTotal = PIPE_ORDER.reduce((s, k) => s + (pipelineAgg[k]?.count || 0), 0) || 1;
