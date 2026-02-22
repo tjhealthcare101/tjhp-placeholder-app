@@ -9577,60 +9577,174 @@ rowsAdded = toUse;
     const section = (() => {
       if (tab === "org") {
         const errMsg = parsed.query.err ? `<div class="alert">${safeStr(parsed.query.err)}</div>` : "";
+        const statusDot = (isComplete, hasAny) => {
+          const color = isComplete ? "#16a34a" : (hasAny ? "#eab308" : "#dc2626");
+          return `<span aria-hidden="true" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};margin-left:8px;vertical-align:middle;"></span>`;
+        };
+        const identityRequired = Boolean(org.org_name);
+        const identityAny = ["org_name","dba_name","phone","fax","org_email","tax_id","org_npi"].some((k) => String(org[k] || "").trim());
+        const addressesRequired = Boolean(org.addr_primary_line1 && org.addr_primary_city && org.addr_primary_state && org.addr_primary_zip);
+        const addressesAny = [
+          "addr_primary_line1","addr_primary_line2","addr_primary_city","addr_primary_state","addr_primary_zip",
+          "addr_billing_line1","addr_billing_line2","addr_billing_city","addr_billing_state","addr_billing_zip",
+          "addr_mailing_line1","addr_mailing_line2","addr_mailing_city","addr_mailing_state","addr_mailing_zip"
+        ].some((k) => String(org[k] || "").trim());
+        const providerRequired = true;
+        const providerAny = ["provider_default_name","provider_default_npi","provider_default_taxonomy"].some((k) => String(org[k] || "").trim());
+        const appealsRequired = Boolean(org.phone);
+        const appealsAny = [
+          "phone","letter_contact_name","letter_contact_title","letter_contact_phone",
+          "letter_contact_email","letter_signature_name","letter_signature_title"
+        ].some((k) => String(org[k] || "").trim());
+        const billingSame = typeof org.addr_billing_same_as_primary === "boolean" ? org.addr_billing_same_as_primary : true;
+        const mailingSame = typeof org.addr_mailing_same_as_primary === "boolean" ? org.addr_mailing_same_as_primary : true;
         return `
           <h3>Organization</h3>
           ${errMsg}
           <form method="POST" action="/account/org-settings" style="margin-top:8px;">
-            <h3 style="margin:0 0 10px 0;">Organization Details</h3>
-            <div class="row">
-              <div class="col"><label>Organization Name</label><input name="legal_name" value="${safeStr(orgProfile.legal_name)}" required /></div>
-              <div class="col"><label>Address Line 1</label><input name="address_line1" value="${safeStr(orgProfile.address_line1)}" required /></div>
+            <div style="display:flex;flex-direction:column;gap:10px;">
+              <details open style="border:1px solid #d1d5db;border-radius:8px;background:#f8fafc;">
+                <summary style="padding:12px 14px;font-weight:700;cursor:pointer;list-style:none;">Practice Identity ${statusDot(identityRequired, identityAny)}</summary>
+                <div style="padding:10px 14px 14px 14px;background:#fff;border-top:1px solid #e5e7eb;">
+                  <div class="row">
+                    <div class="col"><label>Practice Legal Name</label><input name="org_name" value="${safeStr(org.org_name)}" required /></div>
+                    <div class="col"><label>DBA Name</label><input name="dba_name" value="${safeStr(org.dba_name)}" /></div>
+                  </div>
+                  <div class="row">
+                    <div class="col"><label>Main Phone</label><input name="phone" value="${safeStr(org.phone)}" required /></div>
+                    <div class="col"><label>Fax</label><input name="fax" value="${safeStr(org.fax)}" /></div>
+                    <div class="col"><label>Organization Email</label><input type="email" name="org_email" value="${safeStr(org.org_email)}" /></div>
+                  </div>
+                  <div class="row">
+                    <div class="col"><label>Tax ID</label><input name="tax_id" value="${safeStr(org.tax_id)}" /></div>
+                    <div class="col"><label>Organization NPI</label><input name="org_npi" value="${safeStr(org.org_npi)}" /></div>
+                  </div>
+                </div>
+              </details>
+
+              <details style="border:1px solid #d1d5db;border-radius:8px;background:#f8fafc;">
+                <summary style="padding:12px 14px;font-weight:700;cursor:pointer;list-style:none;">Addresses ${statusDot(addressesRequired, addressesAny)}</summary>
+                <div style="padding:10px 14px 14px 14px;background:#fff;border-top:1px solid #e5e7eb;">
+                  <h4 style="margin:0 0 8px 0;">Primary Address</h4>
+                  <div class="row">
+                    <div class="col"><label>Line 1</label><input id="addr_primary_line1" name="addr_primary_line1" value="${safeStr(org.addr_primary_line1)}" required /></div>
+                    <div class="col"><label>Line 2</label><input id="addr_primary_line2" name="addr_primary_line2" value="${safeStr(org.addr_primary_line2)}" /></div>
+                  </div>
+                  <div class="row">
+                    <div class="col"><label>City</label><input id="addr_primary_city" name="addr_primary_city" value="${safeStr(org.addr_primary_city)}" required /></div>
+                    <div class="col"><label>State</label><input id="addr_primary_state" name="addr_primary_state" value="${safeStr(org.addr_primary_state)}" required /></div>
+                    <div class="col"><label>ZIP</label><input id="addr_primary_zip" name="addr_primary_zip" value="${safeStr(org.addr_primary_zip)}" required /></div>
+                  </div>
+                  <div style="margin:10px 0;">
+                    <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="billing_same_as_primary" name="addr_billing_same_as_primary" value="1" ${billingSame ? "checked" : ""} /> Billing same as Primary</label>
+                  </div>
+                  <div id="billing_address_fields" style="display:${billingSame ? "none" : "block"};">
+                    <h4 style="margin:0 0 8px 0;">Billing Address</h4>
+                    <div class="row">
+                      <div class="col"><label>Line 1</label><input id="addr_billing_line1" name="addr_billing_line1" value="${safeStr(org.addr_billing_line1)}" /></div>
+                      <div class="col"><label>Line 2</label><input id="addr_billing_line2" name="addr_billing_line2" value="${safeStr(org.addr_billing_line2)}" /></div>
+                    </div>
+                    <div class="row">
+                      <div class="col"><label>City</label><input id="addr_billing_city" name="addr_billing_city" value="${safeStr(org.addr_billing_city)}" /></div>
+                      <div class="col"><label>State</label><input id="addr_billing_state" name="addr_billing_state" value="${safeStr(org.addr_billing_state)}" /></div>
+                      <div class="col"><label>ZIP</label><input id="addr_billing_zip" name="addr_billing_zip" value="${safeStr(org.addr_billing_zip)}" /></div>
+                    </div>
+                  </div>
+
+                  <div style="margin:10px 0;">
+                    <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="mailing_same_as_primary" name="addr_mailing_same_as_primary" value="1" ${mailingSame ? "checked" : ""} /> Mailing same as Primary</label>
+                  </div>
+                  <div id="mailing_address_fields" style="display:${mailingSame ? "none" : "block"};">
+                    <h4 style="margin:0 0 8px 0;">Mailing Address</h4>
+                    <div class="row">
+                      <div class="col"><label>Line 1</label><input id="addr_mailing_line1" name="addr_mailing_line1" value="${safeStr(org.addr_mailing_line1)}" /></div>
+                      <div class="col"><label>Line 2</label><input id="addr_mailing_line2" name="addr_mailing_line2" value="${safeStr(org.addr_mailing_line2)}" /></div>
+                    </div>
+                    <div class="row">
+                      <div class="col"><label>City</label><input id="addr_mailing_city" name="addr_mailing_city" value="${safeStr(org.addr_mailing_city)}" /></div>
+                      <div class="col"><label>State</label><input id="addr_mailing_state" name="addr_mailing_state" value="${safeStr(org.addr_mailing_state)}" /></div>
+                      <div class="col"><label>ZIP</label><input id="addr_mailing_zip" name="addr_mailing_zip" value="${safeStr(org.addr_mailing_zip)}" /></div>
+                    </div>
+                  </div>
+                </div>
+              </details>
+
+              <details style="border:1px solid #d1d5db;border-radius:8px;background:#f8fafc;">
+                <summary style="padding:12px 14px;font-weight:700;cursor:pointer;list-style:none;">Provider Defaults ${statusDot(providerRequired, providerAny)}</summary>
+                <div style="padding:10px 14px 14px 14px;background:#fff;border-top:1px solid #e5e7eb;">
+                  <div class="row">
+                    <div class="col"><label>Default Provider Name</label><input name="provider_default_name" value="${safeStr(org.provider_default_name)}" /></div>
+                    <div class="col"><label>Default Provider NPI</label><input name="provider_default_npi" value="${safeStr(org.provider_default_npi)}" /></div>
+                    <div class="col"><label>Default Taxonomy</label><input name="provider_default_taxonomy" value="${safeStr(org.provider_default_taxonomy)}" /></div>
+                  </div>
+                </div>
+              </details>
+
+              <details style="border:1px solid #d1d5db;border-radius:8px;background:#f8fafc;">
+                <summary style="padding:12px 14px;font-weight:700;cursor:pointer;list-style:none;">Appeal &amp; Negotiation Settings ${statusDot(appealsRequired, appealsAny)}</summary>
+                <div style="padding:10px 14px 14px 14px;background:#fff;border-top:1px solid #e5e7eb;">
+                  <div class="row">
+                    <div class="col"><label>Letter Contact Name</label><input name="letter_contact_name" value="${safeStr(org.letter_contact_name)}" /></div>
+                    <div class="col"><label>Letter Contact Title</label><input name="letter_contact_title" value="${safeStr(org.letter_contact_title)}" /></div>
+                  </div>
+                  <div class="row">
+                    <div class="col"><label>Letter Contact Phone</label><input name="letter_contact_phone" value="${safeStr(org.letter_contact_phone)}" /></div>
+                    <div class="col"><label>Letter Contact Email</label><input type="email" name="letter_contact_email" value="${safeStr(org.letter_contact_email)}" /></div>
+                  </div>
+                  <div class="row">
+                    <div class="col"><label>Letter Signature Name</label><input name="letter_signature_name" value="${safeStr(org.letter_signature_name)}" /></div>
+                    <div class="col"><label>Letter Signature Title</label><input name="letter_signature_title" value="${safeStr(org.letter_signature_title)}" /></div>
+                  </div>
+                  <p class="muted" style="margin:10px 0 0 0;">This information automatically populates appeal and negotiation letters.</p>
+                </div>
+              </details>
             </div>
-            <div class="row">
-              <div class="col"><label>Address Line 2</label><input name="address_line2" value="${safeStr(orgProfile.address_line2)}" /></div>
-              <div class="col"><label>City</label><input name="city" value="${safeStr(orgProfile.city)}" required /></div>
-              <div class="col"><label>State</label><input name="state" value="${safeStr(orgProfile.state)}" required /></div>
-              <div class="col"><label>ZIP</label><input name="zip" value="${safeStr(orgProfile.zip)}" required /></div>
-            </div>
-            <div class="row">
-              <div class="col"><label>Phone</label><input name="main_phone" value="${safeStr(orgProfile.main_phone)}" /></div>
-              <div class="col"><label>Fax</label><input name="fax" value="${safeStr(orgProfile.fax)}" /></div>
-              <div class="col"><label>Tax ID (optional)</label><input name="tax_id" value="${safeStr(orgProfile.tax_id)}" /></div>
-              <div class="col"><label>NPI (optional)</label><input name="npi_number" value="${safeStr(orgProfile.npi_number)}" /></div>
-            </div>
-            <div class="row">
-              <div class="col"><label>Contact Person</label><input name="rep_name" value="${safeStr(orgProfile.rep_name)}" /></div>
-              <div class="col"><label>Contact Email</label><input type="email" name="rep_email" value="${safeStr(orgProfile.rep_email)}" /></div>
-            </div>
-            <p class="muted" style="margin:10px 0 0 0;">This information automatically populates appeal and negotiation letters.</p>
 
             <div class="hr" style="margin:16px 0;"></div>
             <h3 style="margin:0 0 10px 0;">Financial &amp; Network Settings</h3>
             <div style="display:flex;flex-direction:column;gap:16px;">
-              <a class="btn secondary" href="/data-management?tab=network" style="width:fit-content;">Manage Payer Contracts</a>
-              <button class="btn secondary" type="button" disabled title="Configure expected reimbursement logic by payer." style="width:fit-content;">Manage Allowed Amount Rules (Coming Soon)</button>
-              <button class="btn secondary" type="button" disabled title="Upload payer fee schedules for contract modeling." style="width:fit-content;">Upload Fee Schedule (Coming Soon)</button>
+              <a class="btn secondary" href="/payer-contracts" style="width:fit-content;">Manage Payer Contracts</a>
             </div>
 
-            <input type="hidden" name="dba_name" value="${safeStr(orgProfile.dba_name)}" />
-            <input type="hidden" name="npi_type" value="${safeStr(orgProfile.npi_type)}" />
-            <input type="hidden" name="taxonomy_code" value="${safeStr(orgProfile.taxonomy_code)}" />
-            <input type="hidden" name="state_license_number" value="${safeStr(orgProfile.state_license_number)}" />
-            <input type="hidden" name="country" value="${safeStr(orgProfile.country)}" />
-            <input type="hidden" name="mailing_same_as_physical" value="${orgProfile.mailing_same_as_physical ? "1" : "0"}" />
-            <input type="hidden" name="mailing_address_line1" value="${safeStr(orgProfile.mailing_address_line1)}" />
-            <input type="hidden" name="mailing_address_line2" value="${safeStr(orgProfile.mailing_address_line2)}" />
-            <input type="hidden" name="mailing_city" value="${safeStr(orgProfile.mailing_city)}" />
-            <input type="hidden" name="mailing_state" value="${safeStr(orgProfile.mailing_state)}" />
-            <input type="hidden" name="mailing_zip" value="${safeStr(orgProfile.mailing_zip)}" />
-            <input type="hidden" name="billing_phone" value="${safeStr(orgProfile.billing_phone)}" />
-            <input type="hidden" name="billing_email" value="${safeStr(orgProfile.billing_email)}" />
-            <input type="hidden" name="website" value="${safeStr(orgProfile.website)}" />
-            <input type="hidden" name="rep_title" value="${safeStr(orgProfile.rep_title)}" />
-            <input type="hidden" name="rep_phone" value="${safeStr(orgProfile.rep_phone)}" />
-
-            <div class="btnRow" style="margin-top:16px;"><button class="btn secondary" type="submit">Save Organization Settings</button></div>
+            <div class="btnRow" style="margin-top:16px;"><button class="btn" type="submit">Save Organization Settings</button></div>
           </form>
+          <script>
+            (function(){
+              const bindSameAs = (checkboxId, sectionId, targetPrefix) => {
+                const checkbox = document.getElementById(checkboxId);
+                const section = document.getElementById(sectionId);
+                if (!checkbox || !section) return;
+                const fields = ["line1","line2","city","state","zip"];
+                const copyPrimary = () => {
+                  fields.forEach((field) => {
+                    const source = document.getElementById("addr_primary_" + field);
+                    const target = document.getElementById(targetPrefix + "_" + field);
+                    if (source && target) target.value = source.value;
+                  });
+                };
+                const applyVisibility = () => {
+                  if (checkbox.checked) {
+                    copyPrimary();
+                    section.style.display = "none";
+                  } else {
+                    section.style.display = "block";
+                  }
+                };
+                checkbox.addEventListener("change", applyVisibility);
+                ["line1","line2","city","state","zip"].forEach((field) => {
+                  const primary = document.getElementById("addr_primary_" + field);
+                  if (primary) {
+                    primary.addEventListener("input", () => {
+                      if (checkbox.checked) copyPrimary();
+                    });
+                  }
+                });
+                applyVisibility();
+              };
+              bindSameAs("billing_same_as_primary", "billing_address_fields", "addr_billing");
+              bindSameAs("mailing_same_as_primary", "mailing_address_fields", "addr_mailing");
+            })();
+          </script>
         `;
       }
       if (tab === "subscription" || tab === "plan" || tab === "plans") return `
@@ -9692,40 +9806,79 @@ rowsAdded = toUse;
   if (method === "POST" && pathname === "/account/org-settings") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
-    const mailingSame = params.get("mailing_same_as_physical") === "1";
+    const billingSame = params.get("addr_billing_same_as_primary") === "1";
+    const mailingSame = params.get("addr_mailing_same_as_primary") === "1";
+    const primary = {
+      line1: (params.get("addr_primary_line1") || "").trim(),
+      line2: (params.get("addr_primary_line2") || "").trim(),
+      city: (params.get("addr_primary_city") || "").trim(),
+      state: (params.get("addr_primary_state") || "").trim(),
+      zip: (params.get("addr_primary_zip") || "").trim(),
+    };
+    const billing = {
+      line1: billingSame ? primary.line1 : (params.get("addr_billing_line1") || "").trim(),
+      line2: billingSame ? primary.line2 : (params.get("addr_billing_line2") || "").trim(),
+      city: billingSame ? primary.city : (params.get("addr_billing_city") || "").trim(),
+      state: billingSame ? primary.state : (params.get("addr_billing_state") || "").trim(),
+      zip: billingSame ? primary.zip : (params.get("addr_billing_zip") || "").trim(),
+    };
+    const mailing = {
+      line1: mailingSame ? primary.line1 : (params.get("addr_mailing_line1") || "").trim(),
+      line2: mailingSame ? primary.line2 : (params.get("addr_mailing_line2") || "").trim(),
+      city: mailingSame ? primary.city : (params.get("addr_mailing_city") || "").trim(),
+      state: mailingSame ? primary.state : (params.get("addr_mailing_state") || "").trim(),
+      zip: mailingSame ? primary.zip : (params.get("addr_mailing_zip") || "").trim(),
+    };
     const patch = {
-      legal_name: (params.get("legal_name") || "").trim(),
+      org_name: (params.get("org_name") || "").trim(),
+      legal_name: (params.get("org_name") || "").trim(),
       dba_name: (params.get("dba_name") || "").trim(),
+      phone: (params.get("phone") || "").trim(),
+      main_phone: (params.get("phone") || "").trim(),
       tax_id: (params.get("tax_id") || "").trim(),
-      npi_number: (params.get("npi_number") || "").trim(),
-      npi_type: (params.get("npi_type") || "").trim() === "Individual" ? "Individual" : "Group",
-      taxonomy_code: (params.get("taxonomy_code") || "").trim(),
-      state_license_number: (params.get("state_license_number") || "").trim(),
-      address_line1: (params.get("address_line1") || "").trim(),
-      address_line2: (params.get("address_line2") || "").trim(),
-      city: (params.get("city") || "").trim(),
-      state: (params.get("state") || "").trim(),
-      zip: (params.get("zip") || "").trim(),
-      country: (params.get("country") || "").trim() || "US",
-      mailing_same_as_physical: mailingSame,
-      mailing_address_line1: (params.get("mailing_address_line1") || "").trim(),
-      mailing_address_line2: (params.get("mailing_address_line2") || "").trim(),
-      mailing_city: (params.get("mailing_city") || "").trim(),
-      mailing_state: (params.get("mailing_state") || "").trim(),
-      mailing_zip: (params.get("mailing_zip") || "").trim(),
-      main_phone: (params.get("main_phone") || "").trim(),
+      org_npi: (params.get("org_npi") || "").trim(),
+      npi_number: (params.get("org_npi") || "").trim(),
       fax: (params.get("fax") || "").trim(),
-      billing_phone: (params.get("billing_phone") || "").trim(),
-      billing_email: (params.get("billing_email") || "").trim(),
-      website: (params.get("website") || "").trim(),
-      rep_name: (params.get("rep_name") || "").trim(),
-      rep_title: (params.get("rep_title") || "").trim(),
-      rep_phone: (params.get("rep_phone") || "").trim(),
-      rep_email: (params.get("rep_email") || "").trim(),
+      org_email: (params.get("org_email") || "").trim(),
+      addr_primary_line1: primary.line1,
+      addr_primary_line2: primary.line2,
+      addr_primary_city: primary.city,
+      addr_primary_state: primary.state,
+      addr_primary_zip: primary.zip,
+      address_line1: primary.line1,
+      address_line2: primary.line2,
+      city: primary.city,
+      state: primary.state,
+      zip: primary.zip,
+      addr_billing_same_as_primary: billingSame,
+      addr_billing_line1: billing.line1,
+      addr_billing_line2: billing.line2,
+      addr_billing_city: billing.city,
+      addr_billing_state: billing.state,
+      addr_billing_zip: billing.zip,
+      addr_mailing_same_as_primary: mailingSame,
+      addr_mailing_line1: mailing.line1,
+      addr_mailing_line2: mailing.line2,
+      addr_mailing_city: mailing.city,
+      addr_mailing_state: mailing.state,
+      addr_mailing_zip: mailing.zip,
+      provider_default_name: (params.get("provider_default_name") || "").trim(),
+      provider_default_npi: (params.get("provider_default_npi") || "").trim(),
+      provider_default_taxonomy: (params.get("provider_default_taxonomy") || "").trim(),
+      letter_contact_name: (params.get("letter_contact_name") || "").trim(),
+      letter_contact_title: (params.get("letter_contact_title") || "").trim(),
+      letter_contact_phone: (params.get("letter_contact_phone") || "").trim(),
+      letter_contact_email: (params.get("letter_contact_email") || "").trim(),
+      letter_signature_name: (params.get("letter_signature_name") || "").trim(),
+      letter_signature_title: (params.get("letter_signature_title") || "").trim(),
     };
 
-    const merged = normalizeOrgProfile({ ...org, ...patch });
-    const errs = organizationRequiredFieldErrors(merged);
+    const errs = [];
+    if (!patch.org_name) errs.push("Practice legal name is required.");
+    if (!patch.addr_primary_line1 || !patch.addr_primary_city || !patch.addr_primary_state || !patch.addr_primary_zip) {
+      errs.push("Primary address line1, city, state, and zip are required.");
+    }
+    if (!patch.phone) errs.push("Main phone is required.");
     if (errs.length) {
       return redirect(res, `/account?tab=org&err=${encodeURIComponent(errs.join(" "))}`);
     }
@@ -9736,9 +9889,7 @@ rowsAdded = toUse;
       orgs[oidx] = {
         ...orgs[oidx],
         ...patch,
-        legal_name: merged.legal_name,
       };
-      if (!orgs[oidx].org_name) orgs[oidx].org_name = merged.legal_name;
       orgs[oidx].updated_at = nowISO();
       writeJSON(FILES.orgs, orgs);
       auditLog({ actor:"user", action:"update_org_settings", org_id: org.org_id, user_id: user.user_id });
