@@ -154,11 +154,9 @@ function normalizeOrgProfile(org) {
 
 function organizationRequiredFieldErrors(profile) {
   const errors = [];
-  if (!profile.legal_name) errors.push("Legal name is required.");
-  if (!profile.tax_id) errors.push("Tax ID (EIN) is required.");
-  if (!profile.npi_number) errors.push("NPI number is required.");
+  if (!profile.legal_name) errors.push("Organization name is required.");
   if (!profile.address_line1 || !profile.city || !profile.state || !profile.zip || !profile.country) {
-    errors.push("Complete physical address is required.");
+    errors.push("Complete organization address is required.");
   }
   return errors;
 }
@@ -301,7 +299,7 @@ function adminHash() {
 }
 
 // ===== UI =====
-let CURRENT_USER_THEME = "system";
+let CURRENT_USER_THEME = "light";
 
 const css = `
 
@@ -421,8 +419,8 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 function renderPage(title, content, navHtml="", opts={}) {
   const orgName = (opts && opts.orgName) ? safeStr(opts.orgName) : "";
   const showChat = !!(opts && opts.showChat);
-  const prefRaw = String((opts && opts.userTheme) || CURRENT_USER_THEME || "system");
-  const themePref = (prefRaw === "light" || prefRaw === "dark" || prefRaw === "system") ? prefRaw : "system";
+  const prefRaw = String((opts && opts.userTheme) || CURRENT_USER_THEME || "light");
+  const themePref = (prefRaw === "light" || prefRaw === "dark" || prefRaw === "system") ? prefRaw : "light";
   const startTheme = (themePref === "dark") ? "dark" : "light";
   const chatHtml = showChat ? `
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
@@ -3285,7 +3283,7 @@ const server = http.createServer(async (req, res) => {
 
   const org = getOrg(user.org_id);
   if (!org) return redirect(res, "/login");
-  CURRENT_USER_THEME = (user.theme === "light" || user.theme === "dark" || user.theme === "system") ? user.theme : "system";
+  CURRENT_USER_THEME = (user.theme === "light" || user.theme === "dark") ? user.theme : "light";
 
   cleanupIfExpired(org.org_id);
 
@@ -9569,111 +9567,84 @@ rowsAdded = toUse;
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
         ${tabBtn("profile","Profile")}
         ${tabBtn("org","Organization")}
-        ${tabBtn("plan","Plan")}
+        ${tabBtn("subscription","Subscription")}
         ${tabBtn("security","Security")}
         ${tabBtn("prefs","Preferences")}
-        ${tabBtn("plans","Billing")}
       </div>
     `;
+    const usage = getUsage(org.org_id);
+    const themeSelection = (user.theme === "light" || user.theme === "dark") ? user.theme : "light";
     const section = (() => {
       if (tab === "org") {
         const errMsg = parsed.query.err ? `<div class="alert">${safeStr(parsed.query.err)}</div>` : "";
         return `
           <h3>Organization</h3>
-          <div style="display:flex;align-items:flex-start;gap:10px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;border-radius:10px;padding:10px 12px;margin:8px 0 10px 0;">
-            <span style="font-size:14px;line-height:1.2;">ℹ️</span>
-            <span class="small" style="line-height:1.4;">This organization information will automatically populate on AI-generated appeal letters, negotiation packets, and formal payer communications. Please ensure all details are accurate.</span>
-          </div>
-          <p class="muted"><strong>Organization:</strong> ${safeStr(orgProfile.org_name)}</p>
           ${errMsg}
           <form method="POST" action="/account/org-settings" style="margin-top:8px;">
-            <div class="card" style="margin-bottom:12px;">
-              <h3 style="margin-top:0;">Organization Identity</h3>
-              <div class="row">
-                <div class="col"><label>Legal Name *</label><input name="legal_name" value="${safeStr(orgProfile.legal_name)}" required /></div>
-                <div class="col"><label>DBA Name</label><input name="dba_name" value="${safeStr(orgProfile.dba_name)}" /></div>
-              </div>
-              <div class="row">
-                <div class="col"><label>Tax ID (EIN) *</label><input name="tax_id" value="${safeStr(orgProfile.tax_id)}" required /><div class="muted small" style="margin-top:6px;">Used in payer verification and appeal documents.</div></div>
-                <div class="col"><label>NPI Number *</label><input name="npi_number" value="${safeStr(orgProfile.npi_number)}" required /><div class="muted small" style="margin-top:6px;">Primary billing NPI used on submitted claims and appeal packets.</div></div>
-              </div>
-              <div class="row">
-                <div class="col"><label>NPI Type</label><select name="npi_type"><option value="Group"${orgProfile.npi_type === "Group" ? " selected" : ""}>Group</option><option value="Individual"${orgProfile.npi_type === "Individual" ? " selected" : ""}>Individual</option></select></div>
-                <div class="col"><label>Taxonomy Code</label><input name="taxonomy_code" value="${safeStr(orgProfile.taxonomy_code)}" /></div>
-                <div class="col"><label>State License Number</label><input name="state_license_number" value="${safeStr(orgProfile.state_license_number)}" /></div>
-              </div>
+            <h3 style="margin:0 0 10px 0;">Organization Details</h3>
+            <div class="row">
+              <div class="col"><label>Organization Name</label><input name="legal_name" value="${safeStr(orgProfile.legal_name)}" required /></div>
+              <div class="col"><label>Address Line 1</label><input name="address_line1" value="${safeStr(orgProfile.address_line1)}" required /></div>
+            </div>
+            <div class="row">
+              <div class="col"><label>Address Line 2</label><input name="address_line2" value="${safeStr(orgProfile.address_line2)}" /></div>
+              <div class="col"><label>City</label><input name="city" value="${safeStr(orgProfile.city)}" required /></div>
+              <div class="col"><label>State</label><input name="state" value="${safeStr(orgProfile.state)}" required /></div>
+              <div class="col"><label>ZIP</label><input name="zip" value="${safeStr(orgProfile.zip)}" required /></div>
+            </div>
+            <div class="row">
+              <div class="col"><label>Phone</label><input name="main_phone" value="${safeStr(orgProfile.main_phone)}" /></div>
+              <div class="col"><label>Fax</label><input name="fax" value="${safeStr(orgProfile.fax)}" /></div>
+              <div class="col"><label>Tax ID (optional)</label><input name="tax_id" value="${safeStr(orgProfile.tax_id)}" /></div>
+              <div class="col"><label>NPI (optional)</label><input name="npi_number" value="${safeStr(orgProfile.npi_number)}" /></div>
+            </div>
+            <div class="row">
+              <div class="col"><label>Contact Person</label><input name="rep_name" value="${safeStr(orgProfile.rep_name)}" /></div>
+              <div class="col"><label>Contact Email</label><input type="email" name="rep_email" value="${safeStr(orgProfile.rep_email)}" /></div>
+            </div>
+            <p class="muted" style="margin:10px 0 0 0;">This information automatically populates appeal and negotiation letters.</p>
+
+            <div class="hr" style="margin:16px 0;"></div>
+            <h3 style="margin:0 0 10px 0;">Financial &amp; Network Settings</h3>
+            <div style="display:flex;flex-direction:column;gap:16px;">
+              <a class="btn secondary" href="/data-management?tab=network" style="width:fit-content;">Manage Payer Contracts</a>
+              <button class="btn secondary" type="button" disabled title="Configure expected reimbursement logic by payer." style="width:fit-content;">Manage Allowed Amount Rules (Coming Soon)</button>
+              <button class="btn secondary" type="button" disabled title="Upload payer fee schedules for contract modeling." style="width:fit-content;">Upload Fee Schedule (Coming Soon)</button>
             </div>
 
-            <div class="card" style="margin-bottom:12px;">
-              <h3 style="margin-top:0;">Physical Address</h3>
-              <div class="row">
-                <div class="col"><label>Address Line 1 *</label><input name="address_line1" value="${safeStr(orgProfile.address_line1)}" required /></div>
-                <div class="col"><label>Address Line 2</label><input name="address_line2" value="${safeStr(orgProfile.address_line2)}" /></div>
-              </div>
-              <div class="row">
-                <div class="col"><label>City *</label><input name="city" value="${safeStr(orgProfile.city)}" required /></div>
-                <div class="col"><label>State *</label><input name="state" value="${safeStr(orgProfile.state)}" required /></div>
-                <div class="col"><label>ZIP *</label><input name="zip" value="${safeStr(orgProfile.zip)}" required /></div>
-                <div class="col"><label>Country *</label><input name="country" value="${safeStr(orgProfile.country)}" required /></div>
-              </div>
-            </div>
+            <input type="hidden" name="dba_name" value="${safeStr(orgProfile.dba_name)}" />
+            <input type="hidden" name="npi_type" value="${safeStr(orgProfile.npi_type)}" />
+            <input type="hidden" name="taxonomy_code" value="${safeStr(orgProfile.taxonomy_code)}" />
+            <input type="hidden" name="state_license_number" value="${safeStr(orgProfile.state_license_number)}" />
+            <input type="hidden" name="country" value="${safeStr(orgProfile.country)}" />
+            <input type="hidden" name="mailing_same_as_physical" value="${orgProfile.mailing_same_as_physical ? "1" : "0"}" />
+            <input type="hidden" name="mailing_address_line1" value="${safeStr(orgProfile.mailing_address_line1)}" />
+            <input type="hidden" name="mailing_address_line2" value="${safeStr(orgProfile.mailing_address_line2)}" />
+            <input type="hidden" name="mailing_city" value="${safeStr(orgProfile.mailing_city)}" />
+            <input type="hidden" name="mailing_state" value="${safeStr(orgProfile.mailing_state)}" />
+            <input type="hidden" name="mailing_zip" value="${safeStr(orgProfile.mailing_zip)}" />
+            <input type="hidden" name="billing_phone" value="${safeStr(orgProfile.billing_phone)}" />
+            <input type="hidden" name="billing_email" value="${safeStr(orgProfile.billing_email)}" />
+            <input type="hidden" name="website" value="${safeStr(orgProfile.website)}" />
+            <input type="hidden" name="rep_title" value="${safeStr(orgProfile.rep_title)}" />
+            <input type="hidden" name="rep_phone" value="${safeStr(orgProfile.rep_phone)}" />
 
-            <div class="card" style="margin-bottom:12px;">
-              <h3 style="margin-top:0;">Mailing Address</h3>
-              <label style="display:flex;align-items:center;gap:8px;margin:8px 0 12px 0;color:var(--text);font-weight:700;">
-                <input type="checkbox" name="mailing_same_as_physical" value="1" ${orgProfile.mailing_same_as_physical ? "checked" : ""} style="width:auto;margin-top:0;" />
-                Mailing address is same as physical
-              </label>
-              <div class="row">
-                <div class="col"><label>Mailing Address Line 1</label><input name="mailing_address_line1" value="${safeStr(orgProfile.mailing_address_line1)}" /></div>
-                <div class="col"><label>Mailing Address Line 2</label><input name="mailing_address_line2" value="${safeStr(orgProfile.mailing_address_line2)}" /></div>
-              </div>
-              <div class="row">
-                <div class="col"><label>Mailing City</label><input name="mailing_city" value="${safeStr(orgProfile.mailing_city)}" /></div>
-                <div class="col"><label>Mailing State</label><input name="mailing_state" value="${safeStr(orgProfile.mailing_state)}" /></div>
-                <div class="col"><label>Mailing ZIP</label><input name="mailing_zip" value="${safeStr(orgProfile.mailing_zip)}" /></div>
-              </div>
-            </div>
-
-            <div class="card" style="margin-bottom:12px;">
-              <h3 style="margin-top:0;">Contact Info</h3>
-              <div class="row">
-                <div class="col"><label>Main Phone</label><input name="main_phone" value="${safeStr(orgProfile.main_phone)}" /></div>
-                <div class="col"><label>Fax</label><input name="fax" value="${safeStr(orgProfile.fax)}" /></div>
-              </div>
-              <div class="row">
-                <div class="col"><label>Billing Phone</label><input name="billing_phone" value="${safeStr(orgProfile.billing_phone)}" /></div>
-                <div class="col"><label>Billing Email</label><input type="email" name="billing_email" value="${safeStr(orgProfile.billing_email)}" /></div>
-                <div class="col"><label>Website</label><input name="website" value="${safeStr(orgProfile.website)}" /></div>
-              </div>
-            </div>
-
-            <div class="card" style="margin-bottom:12px;">
-              <h3 style="margin-top:0;">Authorized Representative</h3>
-              <div class="row">
-                <div class="col"><label>Representative Name</label><input name="rep_name" value="${safeStr(orgProfile.rep_name)}" /></div>
-                <div class="col"><label>Representative Title</label><input name="rep_title" value="${safeStr(orgProfile.rep_title)}" /></div>
-              </div>
-              <div class="row">
-                <div class="col"><label>Representative Phone</label><input name="rep_phone" value="${safeStr(orgProfile.rep_phone)}" /></div>
-                <div class="col"><label>Representative Email</label><input type="email" name="rep_email" value="${safeStr(orgProfile.rep_email)}" /></div>
-              </div>
-            </div>
-
-            <div class="btnRow"><button class="btn secondary" type="submit">Save Organization Settings</button></div>
+            <div class="btnRow" style="margin-top:16px;"><button class="btn secondary" type="submit">Save Organization Settings</button></div>
           </form>
         `;
       }
-      if (tab === "plan") return `
-        <h3>Plan</h3>
+      if (tab === "subscription" || tab === "plan" || tab === "plans") return `
+        <h3>Subscription</h3>
         <table>
           <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
           <tr><th>Trial Ends</th><td>${safeStr(planEnds)}</td></tr>
           <tr><th>Access Mode</th><td>${safeStr(limits.mode==="pilot" ? "trial" : limits.mode)}</td></tr>
-          <tr><th>AI Questions Used</th><td>${safeStr(String(getUsage(org.org_id).ai_chat_used || 0))}</td></tr>
+          <tr><th>AI Questions Used</th><td>${safeStr(String(usage.ai_chat_used || 0))}</td></tr>
           <tr><th>AI Questions Limit</th><td>${safeStr(String(getAIChatLimit(org.org_id)))}</td></tr>
-          <tr><th>AI Questions Remaining</th><td>${safeStr(String(Math.max(0, getAIChatLimit(org.org_id) - (getUsage(org.org_id).ai_chat_used || 0))))}</td></tr>
+          <tr><th>AI Questions Remaining</th><td>${safeStr(String(Math.max(0, getAIChatLimit(org.org_id) - (usage.ai_chat_used || 0))))}</td></tr>
         </table>
+        <div class="hr" style="margin:16px 0;"></div>
+        <div class="btnRow"><a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Subscription</a></div>
       `;
       if (tab === "security") return `
         <h3>Change Password</h3>
@@ -9694,23 +9665,17 @@ rowsAdded = toUse;
         <form method="POST" action="/account/preferences">
           <label>Theme</label>
           <select name="theme">
-            <option value="system"${(user.theme||"system")==="system"?" selected":""}>System</option>
-            <option value="light"${(user.theme||"system")==="light"?" selected":""}>Light</option>
-            <option value="dark"${(user.theme||"system")==="dark"?" selected":""}>Dark</option>
+            <option value="light"${themeSelection==="light"?" selected":""}>Light</option>
+            <option value="dark"${themeSelection==="dark"?" selected":""}>Dark</option>
           </select>
           <div class="btnRow"><button class="btn" type="submit">Save Preferences</button></div>
         </form>
       `;
-      if (tab === "plans") return `
-        <h3>Upgrade Plan</h3>
-        <p class="muted">Manage billing and upgrades here.</p>
-        <div class="btnRow"><a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Plan</a></div>
-      `;
       return `
-        <h3>Profile</h3>
+        <h3>User Information</h3>
         <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
+        ${user.role ? `<p class="muted"><strong>Role:</strong> ${safeStr(user.role)}</p>` : ""}
         <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
-        <div class="btnRow"><a class="btn secondary" href="/payer-contracts">Open Payer Contracts</a></div>
       `;
     })();
 
@@ -9718,8 +9683,6 @@ rowsAdded = toUse;
       <h2>Account</h2>
       ${tabs}
       ${section}
-      <div class="hr"></div>
-      <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
     `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
@@ -9804,11 +9767,11 @@ rowsAdded = toUse;
 if (method === "POST" && pathname === "/account/preferences") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
-    const theme = String(params.get("theme") || "system");
+    const theme = String(params.get("theme") || "light");
     const users = readJSON(FILES.users, []);
     const uidx = users.findIndex(u => u.user_id === user.user_id);
     if (uidx >= 0) {
-      users[uidx].theme = (theme === "light" || theme === "dark" || theme === "system") ? theme : "system";
+      users[uidx].theme = (theme === "light" || theme === "dark") ? theme : "light";
       users[uidx].updated_at = nowISO();
       writeJSON(FILES.users, users);
       CURRENT_USER_THEME = users[uidx].theme;
