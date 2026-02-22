@@ -109,6 +109,89 @@ function safeStr(s) {
   return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]));
 }
 
+const ORG_PROFILE_DEFAULTS = {
+  legal_name: "",
+  dba_name: "",
+  tax_id: "",
+  npi_number: "",
+  npi_type: "Group",
+  taxonomy_code: "",
+  state_license_number: "",
+  address_line1: "",
+  address_line2: "",
+  city: "",
+  state: "",
+  zip: "",
+  country: "US",
+  mailing_same_as_physical: true,
+  mailing_address_line1: "",
+  mailing_address_line2: "",
+  mailing_city: "",
+  mailing_state: "",
+  mailing_zip: "",
+  main_phone: "",
+  fax: "",
+  billing_phone: "",
+  billing_email: "",
+  website: "",
+  rep_name: "",
+  rep_title: "",
+  rep_phone: "",
+  rep_email: "",
+};
+
+function normalizeOrgProfile(org) {
+  const base = org || {};
+  return {
+    ...base,
+    ...ORG_PROFILE_DEFAULTS,
+    ...base,
+    mailing_same_as_physical: typeof base.mailing_same_as_physical === "boolean" ? base.mailing_same_as_physical : true,
+    npi_type: (base.npi_type === "Individual") ? "Individual" : "Group",
+    country: String(base.country || ORG_PROFILE_DEFAULTS.country).trim() || "US",
+  };
+}
+
+function organizationRequiredFieldErrors(profile) {
+  const errors = [];
+  if (!profile.legal_name) errors.push("Legal name is required.");
+  if (!profile.tax_id) errors.push("Tax ID (EIN) is required.");
+  if (!profile.npi_number) errors.push("NPI number is required.");
+  if (!profile.address_line1 || !profile.city || !profile.state || !profile.zip || !profile.country) {
+    errors.push("Complete physical address is required.");
+  }
+  return errors;
+}
+
+function orgPacketContext(orgLike) {
+  const org = normalizeOrgProfile(typeof orgLike === "object" ? orgLike : { org_name: String(orgLike || "") });
+  const displayName = org.legal_name || org.dba_name || org.org_name || "";
+  const mailingSame = org.mailing_same_as_physical;
+  const mailingAddr = mailingSame
+    ? [org.address_line1, org.address_line2, `${org.city}, ${org.state} ${org.zip}`, org.country].filter(Boolean).join(", ")
+    : [org.mailing_address_line1, org.mailing_address_line2, `${org.mailing_city}, ${org.mailing_state} ${org.mailing_zip}`, org.country].filter(Boolean).join(", ");
+  return {
+    displayName,
+    legalName: org.legal_name,
+    taxId: org.tax_id,
+    npi: org.npi_number,
+    npiType: org.npi_type,
+    taxonomyCode: org.taxonomy_code,
+    stateLicenseNumber: org.state_license_number,
+    physicalAddress: [org.address_line1, org.address_line2, `${org.city}, ${org.state} ${org.zip}`, org.country].filter(Boolean).join(", "),
+    mailingAddress: mailingAddr,
+    mainPhone: org.main_phone,
+    fax: org.fax,
+    billingPhone: org.billing_phone,
+    billingEmail: org.billing_email,
+    website: org.website,
+    repName: org.rep_name,
+    repTitle: org.rep_title,
+    repPhone: org.rep_phone,
+    repEmail: org.rep_email,
+  };
+}
+
 function parseCookies(req) {
   const header = req.headers.cookie || "";
   const out = {};
@@ -1109,7 +1192,9 @@ ${orgName || "[Organization Billing Team]"}
 // Attachments should be de‑identified only. Files are stored temporarily and auto-deleted.
 const APPEAL_ATTACHMENT_TTL_MS = 60 * 60 * 1000; // 60 minutes
 
-function appealPacketDefaults(orgName) {
+function appealPacketDefaults(orgLike) {
+  const orgCtx = orgPacketContext(orgLike);
+  const orgName = orgCtx.displayName;
   return {
     deid_confirmed: false,
     claim_number: "",
@@ -1118,9 +1203,9 @@ function appealPacketDefaults(orgName) {
     cpt_hcpcs_codes: "",
     icd10_codes: "",
     authorization_number: "",
-    provider_npi: "",
-    provider_tax_id: "",
-    provider_address: "",
+    provider_npi: orgCtx.npi || "",
+    provider_tax_id: orgCtx.taxId || "",
+    provider_address: orgCtx.physicalAddress || "",
     contact_log: "",
     appeal_letter_text: "",
     attachments: [],
@@ -1222,15 +1307,30 @@ function cleanupExpiredAppealAttachments(org_id) {
   }
 }
 
-function compileAppealPacketText(c, orgName) {
-  normalizeAppealPacket(c, orgName);
+function compileAppealPacketText(c, orgLike) {
+  const orgCtx = orgPacketContext(orgLike);
+  normalizeAppealPacket(c, orgLike);
   const ap = c.appeal_packet;
 
   const attachmentsIndex = (c.appeal_attachments || []).map(a => `- ${a.filename || "attachment"}`).join("\n") || "- (none uploaded)";
 
   const header =
 `APPEAL PACKET (DE‑IDENTIFIED)
-Organization: ${orgName || ""}
+Organization: ${orgCtx.displayName || ""}
+Legal Name: ${orgCtx.legalName || "(enter legal name)"}
+Tax ID (EIN): ${orgCtx.taxId || "(enter EIN)"}
+NPI: ${orgCtx.npi || "(enter NPI)"} (${orgCtx.npiType || "Group"})
+Taxonomy: ${orgCtx.taxonomyCode || "(enter taxonomy code)"}
+State License: ${orgCtx.stateLicenseNumber || "(enter state license)"}
+Physical Address: ${orgCtx.physicalAddress || "(enter physical address)"}
+Mailing Address: ${orgCtx.mailingAddress || "(enter mailing address)"}
+Main Phone: ${orgCtx.mainPhone || "(enter phone)"}
+Fax: ${orgCtx.fax || "(enter fax)"}
+Billing Phone: ${orgCtx.billingPhone || "(enter billing phone)"}
+Billing Email: ${orgCtx.billingEmail || "(enter billing email)"}
+Website: ${orgCtx.website || "(enter website)"}
+Representative: ${(orgCtx.repName || "(enter representative)")}${orgCtx.repTitle ? `, ${orgCtx.repTitle}` : ""}
+Representative Contact: ${orgCtx.repPhone || "(enter rep phone)"} / ${orgCtx.repEmail || "(enter rep email)"}
 Case ID: ${c.case_id}
 Generated: ${new Date().toLocaleString()}
 
@@ -1249,7 +1349,7 @@ Authorization #: ${ap.authorization_number || "(enter auth #)"}
 
 Provider NPI: ${ap.provider_npi || "(enter NPI)"}
 Provider Tax ID: ${ap.provider_tax_id || "(enter Tax ID)"}
-Provider Address: ${ap.provider_address || "(enter address)"}
+Provider Address: ${ap.provider_address || orgCtx.physicalAddress || "(enter address)"}
 `;
 
   const log =
@@ -2514,7 +2614,14 @@ const server = http.createServer(async (req, res) => {
 
     const orgs = readJSON(FILES.orgs, []);
     const org_id = uuid();
-    orgs.push({ org_id, org_name: orgName, created_at: nowISO(), account_status:"active" });
+    orgs.push({
+      ...ORG_PROFILE_DEFAULTS,
+      org_id,
+      org_name: orgName,
+      legal_name: orgName,
+      created_at: nowISO(),
+      account_status:"active"
+    });
     writeJSON(FILES.orgs, orgs);
 
     users.push({
@@ -5289,7 +5396,7 @@ if (method === "GET" && pathname === "/appeal-workspace") {
       paid_at: null,
       paid_amount: null,
       ai_started_at: null,
-      appeal_packet: appealPacketDefaults(org.org_name),
+      appeal_packet: appealPacketDefaults(org),
       appeal_attachments: [],
       ai: { denial_summary:null, appeal_considerations:null, draft_text:null, denial_reason_category:null, missing_info:[], time_to_draft_seconds:0 }
     });
@@ -7044,7 +7151,7 @@ const statusCell = (() => {
           paid_at: null,
           paid_amount: null,
           ai_started_at: null,
-          appeal_packet: appealPacketDefaults(org.org_name),
+          appeal_packet: appealPacketDefaults(org),
           appeal_attachments: [],
           ai: {
             denial_summary: null,
@@ -7171,7 +7278,7 @@ const statusCell = (() => {
       paid_at: null,
       paid_amount: null,
       ai_started_at: null,
-      appeal_packet: appealPacketDefaults(org.org_name),
+      appeal_packet: appealPacketDefaults(org),
       appeal_attachments: [],
       ai: {
         denial_summary: null,
@@ -7278,7 +7385,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
         paid_at: null,
         paid_amount: null,
         ai_started_at: null,
-        appeal_packet: appealPacketDefaults(org.org_name),
+        appeal_packet: appealPacketDefaults(org),
         appeal_attachments: [],
         ai: {
           denial_summary: null,
@@ -7610,7 +7717,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
         paid_at: null,
         paid_amount: null,
         ai_started_at: null,
-        appeal_packet: appealPacketDefaults(org.org_name),
+        appeal_packet: appealPacketDefaults(org),
         appeal_attachments: [],
         ai: {
           denial_summary: null,
@@ -7657,9 +7764,9 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-    normalizeAppealPacket(c, org.org_name);
+    normalizeAppealPacket(c, org);
     // If LMN empty, seed template
-    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org).lmn_text;
 
     // If queued, attempt to start AI now if capacity available
     if (c.status === "UPLOAD_RECEIVED") {
@@ -7715,7 +7822,7 @@ if (method === "GET" && pathname === "/appeal-detail") {
     writeJSON(FILES.cases, cases);
   }
   if (!c.ai) c.ai = {};
-  normalizeAppealPacket(c, org.org_name);
+  normalizeAppealPacket(c, org);
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const linked = billedAll.find(b => b.denial_case_id === c.case_id) || null;
@@ -7963,7 +8070,7 @@ if (method === "POST" && pathname === "/appeal/save-draft") {
 
   if (!c.ai) c.ai = {};
   c.ai.draft_text = draft_text;
-  normalizeAppealPacket(c, org.org_name);
+  normalizeAppealPacket(c, org);
   c.appeal_packet.appeal_letter_text = draft_text;
   if (!Array.isArray(c.appeal_packet.attachments)) c.appeal_packet.attachments = (c.appeal_attachments || []);
   if (!c.appeal_packet.submitted_at) c.appeal_packet.submitted_at = null;
@@ -7983,7 +8090,7 @@ if (method === "POST" && pathname === "/appeal/packet-save") {
   const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
   if (!c) return redirect(res, "/upload-denials");
 
-  normalizeAppealPacket(c, org.org_name);
+  normalizeAppealPacket(c, org);
 
   c.appeal_packet.denial_eob_notes = (params.get("denial_eob_notes") || "").trim();
   c.appeal_packet.authorization_number = (params.get("authorization_number") || "").trim();
@@ -8013,7 +8120,7 @@ if (method === "POST" && pathname === "/appeal/action") {
   // status transitions
   if (action === "mark_submitted") {
     c.status = "Submitted";
-    normalizeAppealPacket(c, org.org_name);
+    normalizeAppealPacket(c, org);
     c.appeal_packet.submitted_at = nowISO();
   }
   if (action === "mark_denied") c.status = "Denied";
@@ -8084,9 +8191,9 @@ if (method === "POST" && pathname === "/appeal/action") {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-  normalizeAppealPacket(c, org.org_name);
+  normalizeAppealPacket(c, org);
     // If LMN empty, seed template
-    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org).lmn_text;
 
     const html = renderPage("Appeal Packet Builder", `
       <h2>${safeStr(((c.case_type||"").toLowerCase()==="underpayment") ? "Underpayment Negotiation Packet (De‑Identified)" : "Appeal Packet Builder (De‑Identified)")}</h2>
@@ -8202,9 +8309,9 @@ if (method === "POST" && pathname === "/appeal/action") {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-    normalizeAppealPacket(c, org.org_name);
+    normalizeAppealPacket(c, org);
     // If LMN empty, seed template
-    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org).lmn_text;
     c.ai.draft_text = draft;
     writeJSON(FILES.cases, cases);
     return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
@@ -8278,11 +8385,11 @@ if (method === "POST" && pathname === "/draft-template") {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-    normalizeAppealPacket(c, org.org_name);
+    normalizeAppealPacket(c, org);
     // If LMN empty, seed template
-    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org).lmn_text;
 
-    normalizeAppealPacket(c, org.org_name);
+    normalizeAppealPacket(c, org);
 
     // Save non‑PHI fields
     c.appeal_packet.deid_confirmed = params.get("deid_confirmed") === "1";
@@ -8328,11 +8435,11 @@ if (method === "POST" && pathname === "/draft-template") {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-    normalizeAppealPacket(c, org.org_name);
+    normalizeAppealPacket(c, org);
     // If LMN empty, seed template
-    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org).lmn_text;
 
-    normalizeAppealPacket(c, org.org_name);
+    normalizeAppealPacket(c, org);
 
     const uploadFiles = files.filter(f => f.fieldName === "appeal_docs");
     if (!uploadFiles.length) return redirect(res, `/draft?case_id=${encodeURIComponent(case_id)}`);
@@ -8370,11 +8477,11 @@ if (method === "POST" && pathname === "/draft-template") {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-    normalizeAppealPacket(c, org.org_name);
+    normalizeAppealPacket(c, org);
     // If LMN empty, seed template
-    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org).lmn_text;
 
-    normalizeAppealPacket(c, org.org_name);
+    normalizeAppealPacket(c, org);
 
     if (!c.appeal_packet.deid_confirmed) {
       const html = renderPage("Appeal Packet", `
@@ -8385,7 +8492,7 @@ if (method === "POST" && pathname === "/draft-template") {
       return send(res, 400, html);
     }
 
-    compileAppealPacketText(c, org.org_name);
+    compileAppealPacketText(c, org);
     writeJSON(FILES.cases, cases);
 
     auditLog({ actor:"user", action:"appeal_compile", org_id: org.org_id, case_id });
@@ -8399,13 +8506,13 @@ if (method === "POST" && pathname === "/draft-template") {
     const cases = readJSON(FILES.cases, []);
     const c = cases.find(x => x.case_id === case_id && x.org_id === org.org_id);
     if (!c) return redirect(res, "/dashboard");
-    normalizeAppealPacket(c, org.org_name);
+    normalizeAppealPacket(c, org);
     c.appeal_packet.exported_at = nowISO();
     writeJSON(FILES.cases, cases);
     // If LMN empty, seed template
-    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org.org_name).lmn_text;
+    if (!c.appeal_packet.lmn_text) c.appeal_packet.lmn_text = appealPacketDefaults(org).lmn_text;
 
-    normalizeAppealPacket(c, org.org_name);
+    normalizeAppealPacket(c, org);
     const text = (c.appeal_packet && c.appeal_packet.compiled_packet_text) ? c.appeal_packet.compiled_packet_text : "";
     const packet = text || "(Packet not compiled yet. Click 'Generate Full Appeal Packet' first.)";
 
@@ -9449,6 +9556,7 @@ rowsAdded = toUse;
   }
 
   if (method === "GET" && pathname === "/account") {
+    const orgProfile = normalizeOrgProfile(org);
     const sub = getSub(org.org_id);
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
     const limits = getLimitProfile(org.org_id);
@@ -9468,15 +9576,94 @@ rowsAdded = toUse;
       </div>
     `;
     const section = (() => {
-      if (tab === "org") return `
-        <h3>Organization</h3>
-        <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
-        <form method="POST" action="/account/org-name" style="margin-top:8px;">
-          <label>Update Organization Name</label>
-          <input name="org_name" value="${safeStr(org.org_name)}" required />
-          <div class="btnRow"><button class="btn secondary" type="submit">Save Organization Name</button></div>
-        </form>
-      `;
+      if (tab === "org") {
+        const errMsg = parsed.query.err ? `<div class="alert">${safeStr(parsed.query.err)}</div>` : "";
+        return `
+          <h3>Organization</h3>
+          <div style="display:flex;align-items:flex-start;gap:10px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;border-radius:10px;padding:10px 12px;margin:8px 0 10px 0;">
+            <span style="font-size:14px;line-height:1.2;">ℹ️</span>
+            <span class="small" style="line-height:1.4;">This organization information will automatically populate on AI-generated appeal letters, negotiation packets, and formal payer communications. Please ensure all details are accurate.</span>
+          </div>
+          <p class="muted"><strong>Organization:</strong> ${safeStr(orgProfile.org_name)}</p>
+          ${errMsg}
+          <form method="POST" action="/account/org-settings" style="margin-top:8px;">
+            <div class="card" style="margin-bottom:12px;">
+              <h3 style="margin-top:0;">Organization Identity</h3>
+              <div class="row">
+                <div class="col"><label>Legal Name *</label><input name="legal_name" value="${safeStr(orgProfile.legal_name)}" required /></div>
+                <div class="col"><label>DBA Name</label><input name="dba_name" value="${safeStr(orgProfile.dba_name)}" /></div>
+              </div>
+              <div class="row">
+                <div class="col"><label>Tax ID (EIN) *</label><input name="tax_id" value="${safeStr(orgProfile.tax_id)}" required /><div class="muted small" style="margin-top:6px;">Used in payer verification and appeal documents.</div></div>
+                <div class="col"><label>NPI Number *</label><input name="npi_number" value="${safeStr(orgProfile.npi_number)}" required /><div class="muted small" style="margin-top:6px;">Primary billing NPI used on submitted claims and appeal packets.</div></div>
+              </div>
+              <div class="row">
+                <div class="col"><label>NPI Type</label><select name="npi_type"><option value="Group"${orgProfile.npi_type === "Group" ? " selected" : ""}>Group</option><option value="Individual"${orgProfile.npi_type === "Individual" ? " selected" : ""}>Individual</option></select></div>
+                <div class="col"><label>Taxonomy Code</label><input name="taxonomy_code" value="${safeStr(orgProfile.taxonomy_code)}" /></div>
+                <div class="col"><label>State License Number</label><input name="state_license_number" value="${safeStr(orgProfile.state_license_number)}" /></div>
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom:12px;">
+              <h3 style="margin-top:0;">Physical Address</h3>
+              <div class="row">
+                <div class="col"><label>Address Line 1 *</label><input name="address_line1" value="${safeStr(orgProfile.address_line1)}" required /></div>
+                <div class="col"><label>Address Line 2</label><input name="address_line2" value="${safeStr(orgProfile.address_line2)}" /></div>
+              </div>
+              <div class="row">
+                <div class="col"><label>City *</label><input name="city" value="${safeStr(orgProfile.city)}" required /></div>
+                <div class="col"><label>State *</label><input name="state" value="${safeStr(orgProfile.state)}" required /></div>
+                <div class="col"><label>ZIP *</label><input name="zip" value="${safeStr(orgProfile.zip)}" required /></div>
+                <div class="col"><label>Country *</label><input name="country" value="${safeStr(orgProfile.country)}" required /></div>
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom:12px;">
+              <h3 style="margin-top:0;">Mailing Address</h3>
+              <label style="display:flex;align-items:center;gap:8px;margin:8px 0 12px 0;color:var(--text);font-weight:700;">
+                <input type="checkbox" name="mailing_same_as_physical" value="1" ${orgProfile.mailing_same_as_physical ? "checked" : ""} style="width:auto;margin-top:0;" />
+                Mailing address is same as physical
+              </label>
+              <div class="row">
+                <div class="col"><label>Mailing Address Line 1</label><input name="mailing_address_line1" value="${safeStr(orgProfile.mailing_address_line1)}" /></div>
+                <div class="col"><label>Mailing Address Line 2</label><input name="mailing_address_line2" value="${safeStr(orgProfile.mailing_address_line2)}" /></div>
+              </div>
+              <div class="row">
+                <div class="col"><label>Mailing City</label><input name="mailing_city" value="${safeStr(orgProfile.mailing_city)}" /></div>
+                <div class="col"><label>Mailing State</label><input name="mailing_state" value="${safeStr(orgProfile.mailing_state)}" /></div>
+                <div class="col"><label>Mailing ZIP</label><input name="mailing_zip" value="${safeStr(orgProfile.mailing_zip)}" /></div>
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom:12px;">
+              <h3 style="margin-top:0;">Contact Info</h3>
+              <div class="row">
+                <div class="col"><label>Main Phone</label><input name="main_phone" value="${safeStr(orgProfile.main_phone)}" /></div>
+                <div class="col"><label>Fax</label><input name="fax" value="${safeStr(orgProfile.fax)}" /></div>
+              </div>
+              <div class="row">
+                <div class="col"><label>Billing Phone</label><input name="billing_phone" value="${safeStr(orgProfile.billing_phone)}" /></div>
+                <div class="col"><label>Billing Email</label><input type="email" name="billing_email" value="${safeStr(orgProfile.billing_email)}" /></div>
+                <div class="col"><label>Website</label><input name="website" value="${safeStr(orgProfile.website)}" /></div>
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom:12px;">
+              <h3 style="margin-top:0;">Authorized Representative</h3>
+              <div class="row">
+                <div class="col"><label>Representative Name</label><input name="rep_name" value="${safeStr(orgProfile.rep_name)}" /></div>
+                <div class="col"><label>Representative Title</label><input name="rep_title" value="${safeStr(orgProfile.rep_title)}" /></div>
+              </div>
+              <div class="row">
+                <div class="col"><label>Representative Phone</label><input name="rep_phone" value="${safeStr(orgProfile.rep_phone)}" /></div>
+                <div class="col"><label>Representative Email</label><input type="email" name="rep_email" value="${safeStr(orgProfile.rep_email)}" /></div>
+              </div>
+            </div>
+
+            <div class="btnRow"><button class="btn secondary" type="submit">Save Organization Settings</button></div>
+          </form>
+        `;
+      }
       if (tab === "plan") return `
         <h3>Plan</h3>
         <table>
@@ -9538,17 +9725,75 @@ rowsAdded = toUse;
   }
 
   
-  // Update organization name
+  // Update organization settings
+  if (method === "POST" && pathname === "/account/org-settings") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const mailingSame = params.get("mailing_same_as_physical") === "1";
+    const patch = {
+      legal_name: (params.get("legal_name") || "").trim(),
+      dba_name: (params.get("dba_name") || "").trim(),
+      tax_id: (params.get("tax_id") || "").trim(),
+      npi_number: (params.get("npi_number") || "").trim(),
+      npi_type: (params.get("npi_type") || "").trim() === "Individual" ? "Individual" : "Group",
+      taxonomy_code: (params.get("taxonomy_code") || "").trim(),
+      state_license_number: (params.get("state_license_number") || "").trim(),
+      address_line1: (params.get("address_line1") || "").trim(),
+      address_line2: (params.get("address_line2") || "").trim(),
+      city: (params.get("city") || "").trim(),
+      state: (params.get("state") || "").trim(),
+      zip: (params.get("zip") || "").trim(),
+      country: (params.get("country") || "").trim() || "US",
+      mailing_same_as_physical: mailingSame,
+      mailing_address_line1: (params.get("mailing_address_line1") || "").trim(),
+      mailing_address_line2: (params.get("mailing_address_line2") || "").trim(),
+      mailing_city: (params.get("mailing_city") || "").trim(),
+      mailing_state: (params.get("mailing_state") || "").trim(),
+      mailing_zip: (params.get("mailing_zip") || "").trim(),
+      main_phone: (params.get("main_phone") || "").trim(),
+      fax: (params.get("fax") || "").trim(),
+      billing_phone: (params.get("billing_phone") || "").trim(),
+      billing_email: (params.get("billing_email") || "").trim(),
+      website: (params.get("website") || "").trim(),
+      rep_name: (params.get("rep_name") || "").trim(),
+      rep_title: (params.get("rep_title") || "").trim(),
+      rep_phone: (params.get("rep_phone") || "").trim(),
+      rep_email: (params.get("rep_email") || "").trim(),
+    };
+
+    const merged = normalizeOrgProfile({ ...org, ...patch });
+    const errs = organizationRequiredFieldErrors(merged);
+    if (errs.length) {
+      return redirect(res, `/account?tab=org&err=${encodeURIComponent(errs.join(" "))}`);
+    }
+
+    const orgs = readJSON(FILES.orgs, []);
+    const oidx = orgs.findIndex(o => o.org_id === org.org_id);
+    if (oidx >= 0) {
+      orgs[oidx] = {
+        ...orgs[oidx],
+        ...patch,
+        legal_name: merged.legal_name,
+      };
+      if (!orgs[oidx].org_name) orgs[oidx].org_name = merged.legal_name;
+      orgs[oidx].updated_at = nowISO();
+      writeJSON(FILES.orgs, orgs);
+      auditLog({ actor:"user", action:"update_org_settings", org_id: org.org_id, user_id: user.user_id });
+    }
+    return redirect(res, "/account?tab=org");
+  }
+
+  // Backward-compatible organization name endpoint
   if (method === "POST" && pathname === "/account/org-name") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const newName = (params.get("org_name") || "").trim();
     if (!newName) return redirect(res, "/account?tab=org");
-
     const orgs = readJSON(FILES.orgs, []);
     const oidx = orgs.findIndex(o => o.org_id === org.org_id);
     if (oidx >= 0) {
       orgs[oidx].org_name = newName;
+      if (!orgs[oidx].legal_name) orgs[oidx].legal_name = newName;
       orgs[oidx].updated_at = nowISO();
       writeJSON(FILES.orgs, orgs);
       auditLog({ actor:"user", action:"update_org_name", org_id: org.org_id, user_id: user.user_id });
