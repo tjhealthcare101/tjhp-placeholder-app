@@ -3656,14 +3656,39 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
       <div class="hr"></div>
 
-      <div class="insight-card">
-        <h3>Revenue Breakdown</h3>
-        <canvas id="revenueBreakdownChart" height="130"></canvas>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:24px;margin-top:20px;">
+      <div style="background:var(--card);padding:16px;border-radius:12px;border:1px solid var(--border);">
+        <h3 style="margin-bottom:12px;">Revenue Breakdown</h3>
+        <div style="height:320px;max-height:320px;">
+          <canvas id="revenueBreakdownChart"></canvas>
+        </div>
       </div>
 
-      <div class="insight-card">
-        <h3>Revenue Trend</h3>
-        <canvas id="revenueTrendChart" height="150"></canvas>
+      <div style="background:var(--card);padding:16px;border-radius:12px;border:1px solid var(--border);">
+        <h3 style="margin-bottom:12px;">Revenue Trend</h3>
+        <div style="height:350px;max-height:350px;">
+          <canvas id="revenueTrendChart"></canvas>
+        </div>
+      </div>
+
+      <div style="background:var(--card);padding:16px;border-radius:12px;border:1px solid var(--border);">
+        <h3 style="margin-bottom:12px;">Revenue Flow</h3>
+        <div id="flowSkeleton" class="skeleton"></div>
+        <div style="height:350px;max-height:350px;">
+          <canvas id="revenueFlowChart" style="display:none;"></canvas>
+        </div>
+        <p id="flowEmpty" class="muted" style="display:none;">No data for selected range.</p>
+      </div>
+
+      <div style="background:var(--card);padding:16px;border-radius:12px;border:1px solid var(--border);">
+        <h3 style="margin-bottom:12px;">Revenue Trend (Detailed) <span class="tooltip" data-tip="Billed vs collected trend for selected range with at-risk amounts.">ⓘ</span></h3>
+        <div id="trendSkeleton" class="skeleton"></div>
+        <div style="height:350px;max-height:350px;">
+          <canvas id="revenueTrendChartLegacy" style="display:none;"></canvas>
+        </div>
+        <p id="trendEmpty" class="muted" style="display:none;">No data for selected range.</p>
+      </div>
+
       </div>
 
       <h3>Revenue Health <span class="tooltip" data-tip="High-level revenue performance for the selected date range.">ⓘ</span></h3>
@@ -3698,24 +3723,6 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
       <div class="hr"></div>
 
-      <div class="insight-card">
-        <h3>Revenue Flow <span class="tooltip">ⓘ<span class="tooltiptext">${safeStr(flowTooltipText)}</span></span></h3>
-        <div id="flowSkeleton" class="skeleton"></div>
-        <canvas id="revenueFlowChart" height="120" style="display:none;"></canvas>
-        <p id="flowEmpty" class="muted" style="display:none;">No data for selected range.</p>
-      </div>
-
-      <div class="row">
-        <div class="col">
-          <div class="insight-card">
-            <h3>Revenue Trend (Detailed) <span class="tooltip" data-tip="Billed vs collected trend for selected range with at-risk amounts.">ⓘ</span></h3>
-            <div id="trendSkeleton" class="skeleton"></div>
-            <canvas id="revenueTrendChartLegacy" height="150" style="display:none;"></canvas>
-            <p id="trendEmpty" class="muted" style="display:none;">No data for selected range.</p>
-          </div>
-        </div>
-      </div>
-
       <div class="row">
         <div class="col">
           <div class="insight-card">
@@ -3731,7 +3738,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
               </div>
             </div>
             <div id="payerSkeleton" class="skeleton"></div>
-            <canvas id="payerStackedChart" height="170" style="display:none;"></canvas>
+            <canvas id="payerStackedChart" style="display:none;"></canvas>
             <p id="payerEmpty" class="muted" style="display:none;">No payer data for selected range.</p>
             <div id="payerTableSync" style="margin-top:10px;">
               <div class="scrollSyncTop"><div></div></div>
@@ -3748,7 +3755,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <div class="insight-card">
             <h3>Top Denial Reasons</h3>
             <div id="denialSkeleton" class="skeleton"></div>
-            <canvas id="denialReasonsChart" height="170" style="display:none;"></canvas>
+            <canvas id="denialReasonsChart" style="display:none;"></canvas>
             <p id="denialEmpty" class="muted" style="display:none;">No reason data for selected range.</p>
           </div>
         </div>
@@ -3798,7 +3805,7 @@ document.addEventListener("DOMContentLoaded", function(){
       labels: ["Paid","Underpaid","Denied","Write-off","Waiting Payment"],
       datasets: [{ data: [d.flow?.values?.[2]||0, d.flow?.values?.[3]||0, d.flow?.values?.[4]||0, d.flow?.values?.[5]||0, d.flow?.values?.[6]||0], backgroundColor: ["#16a34a","#f59e0b","#ef4444","#64748b","#6366f1"] }]
     },
-    options: { responsive:true }
+    options: { responsive:true, maintainAspectRatio:false }
   });
 
   const trendLabels = d.series?.keys || [];
@@ -3812,7 +3819,7 @@ document.addEventListener("DOMContentLoaded", function(){
       { label: "Collected", data: collected, borderColor:"#0ea5e9", backgroundColor:"#0ea5e9", tension:.2 },
       { label: "At Risk", data: atRisk, borderColor:"#f59e0b", backgroundColor:"#f59e0b", tension:.2 }
     ]},
-    options: { responsive:true, interaction:{mode:"index", intersect:false}, scales:{ y:{ ticks:{ callback:(v)=>moneyFmt(v) } } } }
+    options: { responsive:true, maintainAspectRatio:false, interaction:{mode:"index", intersect:false}, scales:{ y:{ ticks:{ callback:(v)=>moneyFmt(v) } } } }
   };
   new Chart(document.getElementById("revenueTrendChart"), trendCfg);
   new Chart(document.getElementById("revenueTrendChartLegacy"), trendCfg);
@@ -3828,7 +3835,7 @@ document.addEventListener("DOMContentLoaded", function(){
         stack: "flow"
       }))
     },
-    options: { responsive:true, scales:{ x:{ stacked:true }, y:{ stacked:true, ticks:{ callback:(v)=>moneyFmt(v) } } } }
+    options: { responsive:true, maintainAspectRatio:false, scales:{ x:{ stacked:true }, y:{ stacked:true, ticks:{ callback:(v)=>moneyFmt(v) } } } }
   });
   document.getElementById("flowSkeleton").style.display = "none";
   document.getElementById("revenueFlowChart").style.display = "block";
@@ -3856,7 +3863,7 @@ document.addEventListener("DOMContentLoaded", function(){
         { label:"Write-off", data:rows.map(r=>Number(r.writeOff||0)), backgroundColor:"#6b7280", stack:"rev" },
         { label:"Underpaid", data:rows.map(r=>Number(r.underpaid||0)), backgroundColor:"#f59e0b", stack:"rev" }
       ]},
-      options: { responsive:true, scales:{ x:{ stacked:true }, y:{ stacked:true, ticks:{ callback:(v)=>moneyFmt(v) } } } }
+      options: { responsive:true, maintainAspectRatio:false, scales:{ x:{ stacked:true }, y:{ stacked:true, ticks:{ callback:(v)=>moneyFmt(v) } } } }
     });
     document.getElementById("payerSkeleton").style.display = "none";
     document.getElementById("payerStackedChart").style.display = "block";
@@ -3869,7 +3876,7 @@ document.addEventListener("DOMContentLoaded", function(){
     new Chart(document.getElementById("denialReasonsChart"), {
       type: "bar",
       data: { labels:(d.denialTop||[]).map(x=>x.label), datasets:[{ label:"Denied", data:(d.denialTop||[]).map(x=>Number(x.count||0)), backgroundColor:"#ef4444" }] },
-      options: { indexAxis:"y", responsive:true }
+      options: { indexAxis:"y", responsive:true, maintainAspectRatio:false }
     });
     document.getElementById("denialSkeleton").style.display = "none";
     document.getElementById("denialReasonsChart").style.display = "block";
