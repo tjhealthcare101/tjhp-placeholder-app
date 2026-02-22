@@ -76,6 +76,10 @@ const FILES = {
   deleted_payment_batches: path.join(DATA_DIR, "deleted_payment_batches.json"),
   payer_contracts: path.join(DATA_DIR, "payer_contracts.json"),
   document_ingests: path.join(DATA_DIR, "document_ingests.json"),
+  allowed_amount_rules: path.join(DATA_DIR, "allowed_amount_rules.json"),
+  fee_schedules: path.join(DATA_DIR, "fee_schedules.json"),
+  claim_batches: path.join(DATA_DIR, "claim_batches.json"),
+  practice_settings: path.join(DATA_DIR, "practice_settings.json"),
 };
 
 // Directory for storing uploaded template files
@@ -290,6 +294,10 @@ ensureFile(FILES.saved_queries, []);
 ensureFile(FILES.deleted_payment_batches, []);
 ensureFile(FILES.payer_contracts, []);
 ensureFile(FILES.document_ingests, []);
+ensureFile(FILES.allowed_amount_rules, []);
+ensureFile(FILES.fee_schedules, []);
+ensureFile(FILES.claim_batches, []);
+ensureFile(FILES.practice_settings, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -2045,6 +2053,154 @@ function savePayerContracts(org_id, contracts){
   writeJSON(FILES.payer_contracts, keep.concat((contracts || []).map(c => ({ ...c, org_id }))));
 }
 
+function getPracticeSettings(org_id){
+  const all = readJSON(FILES.practice_settings, []);
+  const existing = all.find(x => x.org_id === org_id);
+  if (existing) return existing;
+  return {
+    org_id,
+    auto_create_denial_cases: true,
+    auto_create_negotiation_cases: false,
+    default_underpaid_stage_behavior: "underpaid",
+    default_denial_stage_behavior: "denied_hold",
+    letter_defaults: ""
+  };
+}
+
+function savePracticeSettings(org_id, settings){
+  const all = readJSON(FILES.practice_settings, []);
+  const keep = all.filter(x => x.org_id !== org_id);
+  writeJSON(FILES.practice_settings, keep.concat([{ ...getPracticeSettings(org_id), ...settings, org_id, updated_at: nowISO() }]));
+}
+
+function detectFileType(filename){
+  const ext = path.extname(String(filename || "").toLowerCase());
+  if (ext === ".csv") return "CSV";
+  if (ext === ".xls" || ext === ".xlsx") return "XLSX";
+  if (ext === ".pdf") return "PDF";
+  if (ext === ".txt") return "TXT-835";
+  if (ext === ".doc" || ext === ".docx") return "DOC";
+  if (ext === ".jpg" || ext === ".jpeg" || ext === ".png") return "IMAGE";
+  return "UNKNOWN";
+}
+
+function categoryFromTab(tab){
+  const t = String(tab || "claims").toLowerCase();
+  if (["claims","payments","denials","contracts"].includes(t)) return t;
+  if (t === "fee-schedules") return "fee_schedule";
+  return "claims";
+}
+
+function isSupportedUploadExt(filename){
+  const ext = path.extname(String(filename || "").toLowerCase());
+  return [".csv", ".xls", ".xlsx", ".pdf", ".txt", ".doc", ".docx", ".jpg", ".jpeg", ".png"].includes(ext);
+}
+
+function addDocumentIngest(org_id, category, file, status, linkedCount=0, notes=""){
+  const ingestCat = String(category || "claims").toLowerCase();
+  const safeName = (file.filename || "document").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const dir = path.join(UPLOADS_DIR, org_id, ingestCat);
+  ensureDir(dir);
+  const storedPath = path.join(dir, `${Date.now()}_${safeName}`);
+  fs.writeFileSync(storedPath, file.buffer);
+  const ingests = readJSON(FILES.document_ingests, []);
+  const rec = {
+    ingest_id: uuid(),
+    org_id,
+    category: ingestCat,
+    original_filename: safeName,
+    stored_path: storedPath,
+    uploaded_at: nowISO(),
+    status: status || "Stored",
+    detected_type: detectFileType(safeName),
+    linked_claims_count: Number(linkedCount || 0),
+    notes: String(notes || "")
+  };
+  ingests.push(rec);
+  writeJSON(FILES.document_ingests, ingests);
+  return rec;
+}
+
+function getAllowedAmountRules(org_id){
+  const all = readJSON(FILES.allowed_amount_rules, []);
+  const found = all.find(r => r.org_id === org_id);
+  if (found) return found;
+  return {
+    org_id,
+    default_method: "percent_billed",
+    default_value: 100,
+    ucr_multiplier: 1,
+    tolerance_percent: 1,
+    tolerance_min_dollars: 5,
+    payer_overrides: [],
+    cpt_overrides: []
+  };
+}
+
+function saveAllowedAmountRules(org_id, rules){
+  const all = readJSON(FILES.allowed_amount_rules, []);
+  const keep = all.filter(r => r.org_id !== org_id);
+  writeJSON(FILES.allowed_amount_rules, keep.concat([{ ...getAllowedAmountRules(org_id), ...rules, org_id, updated_at: nowISO() }]));
+}
+
+function getFeeSchedules(org_id){
+  return readJSON(FILES.fee_schedules, []).filter(x => x.org_id === org_id);
+}
+
+function saveFeeSchedules(org_id, schedules){
+  const all = readJSON(FILES.fee_schedules, []);
+  const keep = all.filter(x => x.org_id !== org_id);
+  writeJSON(FILES.fee_schedules, keep.concat((schedules || []).map(s => ({ ...s, org_id }))));
+}
+
+function lookupFeeScheduleAmount(org_id, claim){
+  const schedules = getFeeSchedules(org_id);
+  const proc = getClaimProcedureCode(claim);
+  const payer = String(claim.payer || "").trim().toLowerCase();
+  for (const sch of schedules) {
+    const rows = Array.isArray(sch.rows) ? sch.rows : [];
+    const m = rows.find(r => normalizeCode(r.procedure_code) === proc && (!sch.payer_name || String(sch.payer_name || "").trim().toLowerCase() === payer));
+    if (m) return num(m.amount);
+  }
+  return 0;
+}
+
+function computeExpectedInsuranceForClaim(claim){
+  const billed = num(claim.amount_billed);
+  const patientResp = num(claim.patient_responsibility);
+  const contract = claim?.org_id ? findContractForClaim(claim.org_id, claim) : null;
+  if (contract && String(contract.network_status || "").toLowerCase().includes("in")) {
+    return Math.max(0, num(contractExpectedAmount(contract, billed)) - patientResp);
+  }
+  const rules = getAllowedAmountRules(claim.org_id || "");
+  const payer = String(claim.payer || "").trim().toLowerCase();
+  const cpt = getClaimProcedureCode(claim);
+  const payerOv = (rules.payer_overrides || []).find(x => String(x.payer_name || "").trim().toLowerCase() === payer);
+  const cptOv = (rules.cpt_overrides || []).find(x => normalizeCode(x.procedure_code) === cpt);
+  const method = String(cptOv?.method || payerOv?.method || rules.default_method || "percent_billed");
+  const value = num(cptOv?.value != null ? cptOv.value : (payerOv?.value != null ? payerOv.value : rules.default_value));
+  const ucr = num(rules.ucr_multiplier || 1) || 1;
+  const feeAmount = lookupFeeScheduleAmount(claim.org_id || "", claim);
+  const medicareRate = num(claim.medicare_rate || feeAmount);
+  let allowed = billed;
+  if (feeAmount > 0 && method === "ucr_multiplier") allowed = feeAmount * ucr;
+  else if (method === "percent_medicare") allowed = medicareRate * (value / 100);
+  else if (method === "percent_billed") allowed = billed * (value / 100);
+  else if (method === "flat") allowed = value;
+  else if (method === "ucr_multiplier") allowed = billed * ucr;
+  return Math.max(0, allowed - patientResp);
+}
+
+function getClaimBatches(org_id){
+  return readJSON(FILES.claim_batches, []).filter(x => x.org_id === org_id);
+}
+
+function saveClaimBatches(org_id, batches){
+  const all = readJSON(FILES.claim_batches, []);
+  const keep = all.filter(x => x.org_id !== org_id);
+  writeJSON(FILES.claim_batches, keep.concat((batches || []).map(x => ({ ...x, org_id }))));
+}
+
 function normalizeCode(v){
   return String(v || "").trim().toUpperCase();
 }
@@ -2125,13 +2281,7 @@ function evaluateClaimDerived(claim, ctx={}){
   const billedAmount = num(claim.amount_billed);
   const patientResp = num(claim.patient_responsibility);
   const allowedAmount = num(claim.allowed_amount);
-  const contract = claim?.org_id ? findContractForClaim(claim.org_id, claim) : null;
-  const contractExpected = contract ? contractExpectedAmount(contract, billedAmount) : null;
-  const expectedInsurance = (contractExpected != null)
-    ? Math.max(0, num(contractExpected) - patientResp)
-    : ((claim.expected_insurance != null && String(claim.expected_insurance).trim() !== "")
-      ? num(claim.expected_insurance)
-      : computeExpectedInsurance((allowedAmount > 0 ? allowedAmount : billedAmount), patientResp));
+  const expectedInsurance = computeExpectedInsuranceForClaim(claim);
   const key = normalizeClaimKey(claim.claim_number || "");
   const paymentRows = key && ctx.paymentsByClaim ? (ctx.paymentsByClaim[key] || []) : [];
   const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid), 0);
@@ -2155,7 +2305,10 @@ function evaluateClaimDerived(claim, ctx={}){
     if (paidAmount <= 0.0001) {
       lifecycleStage = "Denied";
       financialStatus = "Denied";
-      ensureDenialCaseForClaim(claim);
+      const settings = getPracticeSettings(claim.org_id);
+      if (settings.auto_create_denial_cases === true) {
+        ensureDenialCaseForClaim(claim);
+      }
     } else if (paidAmount + 0.0001 < expectedInsurance) {
       lifecycleStage = "Underpaid";
       financialStatus = "Underpaid";
@@ -2240,10 +2393,15 @@ function findContractForClaim(org_id, b){
     normalizeCode(c.diagnosis_code || "") === dx
   );
   if (exactDx) return exactDx;
-  return contracts.find(c =>
+  const cptMatch = contracts.find(c =>
     String(c.payer_name || "").trim().toLowerCase() === payer &&
     normalizeCode(c.procedure_code) === proc &&
     !normalizeCode(c.diagnosis_code || "")
+  );
+  if (cptMatch) return cptMatch;
+  return contracts.find(c =>
+    String(c.payer_name || "").trim().toLowerCase() === payer &&
+    !normalizeCode(c.procedure_code || "")
   ) || null;
 }
 
@@ -2272,9 +2430,8 @@ function recalculateContractsForOrg(org_id){
     if (!contract) continue;
 
     const billedAmt = num(b.amount_billed);
-    const patientResp = num(b.patient_responsibility);
     const expectedAmount = contractExpectedAmount(contract, billedAmt);
-    const expectedInsurance = Math.max(0, num(expectedAmount) - patientResp);
+    const expectedInsurance = computeExpectedInsuranceForClaim(b);
     const paid = num(b.insurance_paid || b.paid_amount);
     const underpaid = Math.max(0, expectedInsurance - paid);
 
@@ -2291,9 +2448,10 @@ function recalculateContractsForOrg(org_id){
 
 function getClaimBatchHistory(org_id){
   const submissions = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org_id);
+  const manualBatches = getClaimBatches(org_id);
   const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
   const ctx = buildClaimContext(org_id);
-  return submissions
+  const subRows = submissions
     .map(s => {
       const claims = billed.filter(b => String(b.submission_id || "") === String(s.submission_id || ""));
       const paidCount = claims.filter(c => evaluateClaimDerived(c, ctx).lifecycleStage === "Resolved").length;
@@ -2302,10 +2460,18 @@ function getClaimBatchHistory(org_id){
         filename: s.original_filename || "batch",
         uploaded_at: s.uploaded_at,
         claim_count: claims.length,
+        total_billed: claims.reduce((x,c)=>x+num(c.amount_billed),0),
         paid_count: paidCount,
       };
-    })
-    .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
+    });
+  return subRows.concat((manualBatches || []).map(b => ({
+    submission_id: b.batch_id,
+    filename: b.file || "batch",
+    uploaded_at: b.uploaded_at,
+    claim_count: num(b.claim_count),
+    total_billed: num(b.total_billed),
+    paid_count: 0,
+  }))).sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
 }
 
 function getPaymentBatchHistory(org_id){
@@ -9299,24 +9465,17 @@ rowsAdded = toUse;
 
   if (method === "GET" && pathname === "/data-management") {
     const tab = String(parsed.query.tab || "claims").toLowerCase();
+    const validTabs = ["claims","payments","denials","contracts","allowed-rules","fee-schedules","practice-settings"];
+    const activeTab = validTabs.includes(tab) ? tab : "claims";
     const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const claimBatches = getClaimBatchHistory(org.org_id);
     const paymentBatches = getPaymentBatchHistory(org.org_id);
-    const unmatchedPayments = getUnmatchedPayments(org.org_id, billed).slice(0, 50);
-    const denialCases = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id && String(c.case_type || "denial").toLowerCase() !== "underpayment");
-    const denialUploads = denialCases.map(c => {
-      const linked = billed.find(b => String(b.denial_case_id || "") === String(c.case_id || ""));
-      const docCount = (Array.isArray(c.files) ? c.files.length : 0) + (Array.isArray(c.appeal_attachments) ? c.appeal_attachments.length : 0);
-      return {
-        case_id: c.case_id,
-        status: c.status || "Open",
-        claim_number: linked?.claim_number || "",
-        payer: linked?.payer || "",
-        created_at: c.created_at,
-        doc_count: docCount,
-      };
-    }).sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
-    const denialsWithDocs = denialUploads.filter(x => x.doc_count > 0).length;
+    const unmatchedPayments = getUnmatchedPayments(org.org_id, billed).slice(0, 100);
+    const contracts = getPayerContracts(org.org_id).sort((a,b)=> String(a.payer_name||"").localeCompare(String(b.payer_name||"")));
+    const ingests = readJSON(FILES.document_ingests, []).filter(x => x.org_id === org.org_id).sort((a,b)=>new Date(b.uploaded_at||b.created_at||0)-new Date(a.uploaded_at||a.created_at||0));
+    const rules = getAllowedAmountRules(org.org_id);
+    const feeSchedules = getFeeSchedules(org.org_id).sort((a,b)=>new Date(b.uploaded_at||0)-new Date(a.uploaded_at||0));
+    const practice = getPracticeSettings(org.org_id);
 
     const claimCtx = buildClaimContext(org.org_id);
     const claimIntegrity = billed.reduce((acc, b) => {
@@ -9326,155 +9485,126 @@ rowsAdded = toUse;
       if (!String(b.submission_id || "").trim()) acc.missingSubmission += 1;
       return acc;
     }, { missingPayer: 0, missingExpected: 0, zeroBilled: 0, missingSubmission: 0 });
-    const totalRevenueCollected = billed.reduce((s, b) => s + num(evaluateClaimDerived(b, claimCtx).paidAmount), 0);
 
-    const contracts = getPayerContracts(org.org_id).sort((a,b)=> String(a.payer_name||"").localeCompare(String(b.payer_name||"")));
+    const denialClaims = billed.filter(b => String(evaluateClaimDerived(b, claimCtx).lifecycleStage) === "Denied");
+    const denialWithDoc = denialClaims.filter(b => !!(b.denial_doc_attached || b.denial_document || b.denial_file)).length;
 
-    const tabs = `
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
-        <a class="btn ${tab==="claims"?"":"secondary"}" href="/data-management?tab=claims">Claims</a>
-        <a class="btn ${tab==="payments"?"":"secondary"}" href="/data-management?tab=payments">Payments</a>
-        <a class="btn ${tab==="denials"?"":"secondary"}" href="/data-management?tab=denials">Denials</a>
-        <a class="btn ${tab==="contracts"?"":"secondary"}" href="/data-management?tab=contracts">Contracts</a>
-      </div>
-    `;
+    function tabBtn(id, label){ return `<a class="btn ${activeTab===id?"":"secondary"}" href="/data-management?tab=${id}">${label}</a>`; }
+    const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">${tabBtn("claims","Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("contracts","Contracts")}${tabBtn("allowed-rules","Allowed Amount Rules")}${tabBtn("fee-schedules","Fee Schedules")}${tabBtn("practice-settings","Practice Settings")}</div>`;
 
-    const rebuildControls = `
-      <div class="hr"></div>
-      <h3>Rebuild Controls</h3>
-      <p class="muted">Re-run lifecycle, expected insurance, revenue aggregates, and denial synchronization from evaluateClaimDerived().</p>
-      <div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;">
-        <form method="POST" action="/data-management/rebuild"><input type="hidden" name="op" value="lifecycle"/><button class="btn secondary" type="submit">Recalculate Lifecycle</button></form>
-        <form method="POST" action="/data-management/rebuild"><input type="hidden" name="op" value="expected"/><button class="btn secondary" type="submit">Recompute Expected Insurance</button></form>
-        <form method="POST" action="/data-management/rebuild"><input type="hidden" name="op" value="revenue"/><button class="btn secondary" type="submit">Rebuild Revenue Aggregates</button></form>
-        <form method="POST" action="/data-management/rebuild"><input type="hidden" name="op" value="denials"/><button class="btn secondary" type="submit">Re-sync Denials</button></form>
-      </div>
-    `;
+    const uploadPanel = `
+      <h3>Upload Panel</h3>
+      <form method="POST" action="/data-management/upload" enctype="multipart/form-data">
+        <input type="hidden" name="tab" value="${safeStr(activeTab)}"/>
+        <input type="hidden" name="next" value="/data-management?tab=${safeStr(activeTab)}"/>
+        <label>Category</label>
+        <select name="category">
+          <option value="claims">Claims</option><option value="payments">Payments</option><option value="denials">Denials</option><option value="contracts">Contracts</option><option value="fee_schedule">Fee Schedule</option>
+        </select>
+        <input id="dm-files" type="file" name="documents" accept=".csv,.xls,.xlsx,.pdf,.txt,.doc,.docx,.jpg,.jpeg,.png" multiple required />
+        <div id="dm-drop" class="dropzone" style="margin-top:8px;">Drag and drop files here (multi-file)</div>
+        <div id="dm-filelist" class="muted" style="margin-top:8px;"></div>
+        <div class="btnRow"><button class="btn" type="submit">Upload Files</button></div>
+      </form>`;
 
     const claimsContent = `
-      <h3>Claim Batch Upload</h3>
-      <form method="POST" action="/upload-billed" enctype="multipart/form-data">
-        <input type="hidden" name="next" value="/data-management?tab=claims"/>
-        <input type="file" name="billfile" accept=".csv,.xls,.xlsx" required />
-        <div class="btnRow"><button class="btn" type="submit">Upload Claim Batch</button></div>
-      </form>
+      ${uploadPanel}
       <div class="hr"></div>
-      <h3>Claim Batch History</h3>
-      <div style="overflow:auto;"><table><thead><tr><th>Batch</th><th>Uploaded</th><th>Claims</th><th>Resolved</th><th></th></tr></thead><tbody>
-      ${claimBatches.map(x=>`<tr><td>${safeStr(x.filename)}</td><td>${x.uploaded_at ? new Date(x.uploaded_at).toLocaleDateString() : "—"}</td><td>${x.claim_count}</td><td>${x.paid_count}</td><td><a href="/billed?submission_id=${encodeURIComponent(x.submission_id)}">Open</a></td></tr>`).join("") || '<tr><td colspan="5" class="muted">No claim batches uploaded.</td></tr>'}
+      <h3>Batches</h3>
+      <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded At</th><th>Claim Count</th><th>Total Billed</th><th></th></tr></thead><tbody>
+      ${claimBatches.map(x=>`<tr><td>${safeStr(x.filename)}</td><td>${x.uploaded_at ? new Date(x.uploaded_at).toLocaleString() : "—"}</td><td>${x.claim_count}</td><td>${formatMoneyUI(x.total_billed||0)}</td><td><form method="POST" action="/data-management/ingest/delete"><input type="hidden" name="ingest_id" value="${safeStr((ingests.find(i=>i.original_filename===x.filename)||{}).ingest_id||"")}"/><input type="hidden" name="tab" value="claims"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="5" class="muted">No batches.</td></tr>'}
       </tbody></table></div>
-      <div class="hr"></div>
-      <h3>Data Integrity Metrics</h3>
-      <div class="row">
-        <div class="col"><div class="kpi-card"><h4>Claims Missing Payer</h4><p>${claimIntegrity.missingPayer}</p></div></div>
-        <div class="col"><div class="kpi-card"><h4>Missing Expected Insurance</h4><p>${claimIntegrity.missingExpected}</p></div></div>
-        <div class="col"><div class="kpi-card"><h4>$0 Billed Claims</h4><p>${claimIntegrity.zeroBilled}</p></div></div>
-        <div class="col"><div class="kpi-card"><h4>Missing Submission ID</h4><p>${claimIntegrity.missingSubmission}</p></div></div>
-      </div>
+      <h3>Integrity Metrics</h3>
+      <div class="row"><div class="col"><div class="kpi-card"><h4>Missing payer</h4><p>${claimIntegrity.missingPayer}</p></div></div><div class="col"><div class="kpi-card"><h4>Missing submission_id</h4><p>${claimIntegrity.missingSubmission}</p></div></div><div class="col"><div class="kpi-card"><h4>Billed = 0</h4><p>${claimIntegrity.zeroBilled}</p></div></div><div class="col"><div class="kpi-card"><h4>Missing expected insurance</h4><p>${claimIntegrity.missingExpected}</p></div></div></div>
+      <form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="lifecycle"/><button class="btn secondary" type="submit">Recalculate Lifecycle</button></form>
     `;
 
     const paymentsContent = `
-      <h3>Payment Upload</h3>
-      <form method="POST" action="/payments" enctype="multipart/form-data">
-        <input type="hidden" name="next" value="/data-management?tab=payments"/>
-        <input type="file" name="payfile" accept=".csv,.xls,.xlsx,.txt" required />
-        <div class="btnRow"><button class="btn" type="submit">Upload Payment Batch</button></div>
-      </form>
+      ${uploadPanel}
       <div class="hr"></div>
-      <h3>Payment Batch History</h3>
-      <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded</th><th>Rows</th><th>Total Paid</th><th></th></tr></thead><tbody>
-      ${paymentBatches.map(x=>`<tr><td>${safeStr(x.source_file)}</td><td>${x.uploaded_at ? new Date(x.uploaded_at).toLocaleDateString() : "—"}</td><td>${x.row_count}</td><td>${formatMoneyUI(x.total_paid)}</td><td><a href="/payment-batch-detail?file=${encodeURIComponent(x.source_file)}">Open</a></td></tr>`).join("") || '<tr><td colspan="5" class="muted">No payment batches uploaded.</td></tr>'}
+      <h3>Payments Batch History</h3>
+      <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded</th><th>Rows</th><th>Total Paid</th><th>Matched %</th><th></th></tr></thead><tbody>
+      ${paymentBatches.map(p=>{const matchedPct=p.row_count?Math.round(((p.row_count-unmatchedPayments.filter(u=>u.source_file===p.source_file).length)/p.row_count)*100):0;return `<tr><td>${safeStr(p.source_file)}</td><td>${p.uploaded_at?new Date(p.uploaded_at).toLocaleString():"—"}</td><td>${p.row_count}</td><td>${formatMoneyUI(p.total_paid)}</td><td>${matchedPct}%</td><td><form method="POST" action="/data-management/rematch-payments"><button class="btn secondary small" type="submit">Re-match</button></form></td></tr>`;}).join("") || '<tr><td colspan="6" class="muted">No payment batches.</td></tr>'}
       </tbody></table></div>
-      <div class="hr"></div>
       <h3>Unmatched Payments</h3>
-      <div style="overflow:auto;"><table><thead><tr><th>Claim #</th><th>Payer</th><th>Date Paid</th><th>Amount</th><th>Source File</th></tr></thead><tbody>
-      ${unmatchedPayments.map(p=>`<tr><td>${safeStr(p.claim_number||"")}</td><td>${safeStr(p.payer||"")}</td><td>${safeStr(p.date_paid||"")}</td><td>${formatMoneyUI(p.amount_paid)}</td><td>${safeStr(p.source_file||"")}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No unmatched payments.</td></tr>'}
+      <div style="overflow:auto;"><table><thead><tr><th>Claim Number</th><th>Payer</th><th>Paid</th><th>Source</th><th>Reason</th></tr></thead><tbody>
+      ${unmatchedPayments.map(u=>`<tr><td>${safeStr(u.claim_number||"")}</td><td>${safeStr(u.payer||"")}</td><td>${formatMoneyUI(u.amount_paid||0)}</td><td>${safeStr(u.source_file||"")}</td><td>no claim match</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No unmatched rows.</td></tr>'}
       </tbody></table></div>
-      <div class="hr"></div>
-      <h3>Total Revenue Collected</h3>
-      <div class="kpi-card"><p>${formatMoneyUI(totalRevenueCollected)}</p></div>
+      <form method="POST" action="/data-management/rematch-payments"><button class="btn secondary" type="submit">Re-match Payments</button></form>
     `;
 
-    const denialsContent = `
-      <h3>Upload Denial Documents</h3>
-      <form method="POST" action="/upload-denials" enctype="multipart/form-data">
-        <input type="hidden" name="next" value="/data-management?tab=denials"/>
-        <div id="dm-denials-dropzone" class="dropzone">Drop denial files here or click to select</div>
-        <input id="dm-denials-files" type="file" name="files" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" required style="display:none" />
-        <div class="btnRow"><button class="btn" type="submit">Upload Denial Files</button></div>
-      </form>
-      <div class="btnRow" style="margin-top:8px;"><form method="POST" action="/data-management/reprocess-denials"><button class="btn secondary" type="submit">Reprocess Denials</button></form></div>
+    const denialContent = `
+      ${uploadPanel}
       <div class="hr"></div>
-      <h3>Uploaded Denial Files</h3>
-      <div style="overflow:auto;"><table><thead><tr><th>Case ID</th><th>Claim #</th><th>Payer</th><th>Status</th><th>Documents</th><th>Created</th></tr></thead><tbody>
-      ${denialUploads.map(d=>`<tr><td>${safeStr(d.case_id||"")}</td><td>${safeStr(d.claim_number||"")}</td><td>${safeStr(d.payer||"")}</td><td>${safeStr(d.status||"")}</td><td>${d.doc_count}</td><td>${d.created_at ? new Date(d.created_at).toLocaleDateString() : "—"}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">No denial files uploaded.</td></tr>'}
+      <h3>History</h3>
+      <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded</th><th>Detected Claim</th><th>Linked Claim</th><th>Status</th><th></th></tr></thead><tbody>
+      ${ingests.filter(i=>i.category==="denials").map(i=>`<tr><td>${safeStr(i.original_filename||"")}</td><td>${i.uploaded_at?new Date(i.uploaded_at).toLocaleString():"—"}</td><td>${safeStr(i.detected_claim_number||"")}</td><td>${safeStr(i.linked_claim_number||"")}</td><td>${safeStr(i.status||"")}</td><td><form method="POST" action="/data-management/ingest/delete"><input type="hidden" name="ingest_id" value="${safeStr(i.ingest_id)}"/><input type="hidden" name="tab" value="denials"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="6" class="muted">No denial docs.</td></tr>'}
       </tbody></table></div>
-      <div class="row">
-        <div class="col"><div class="kpi-card"><h4>Total Denials</h4><p>${denialUploads.length}</p></div></div>
-        <div class="col"><div class="kpi-card"><h4>Denials With Documents</h4><p>${denialsWithDocs}</p></div></div>
-        <div class="col"><div class="kpi-card"><h4>Denials Missing Documents</h4><p>${Math.max(0, denialUploads.length - denialsWithDocs)}</p></div></div>
-      </div>
-      <script>
-        (function(){
-          const dz = document.getElementById("dm-denials-dropzone");
-          const inp = document.getElementById("dm-denials-files");
-          if (!dz || !inp) return;
-          dz.addEventListener("click", ()=>inp.click());
-          ["dragenter","dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
-          ["dragleave","drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
-          dz.addEventListener("drop", e => { if (e.dataTransfer.files?.length) { inp.files = e.dataTransfer.files; dz.textContent = inp.files.length + " file(s) selected"; } });
-          inp.addEventListener("change", ()=>{ if (inp.files?.length) dz.textContent = inp.files.length + " file(s) selected"; });
-        })();
-      </script>
+      <div class="row"><div class="col"><div class="kpi-card"><h4>Total denied claims</h4><p>${denialClaims.length}</p></div></div><div class="col"><div class="kpi-card"><h4>Denied claims with doc</h4><p>${denialWithDoc}</p></div></div><div class="col"><div class="kpi-card"><h4>Denied missing doc</h4><p>${Math.max(0,denialClaims.length-denialWithDoc)}</p></div></div></div>
+      <form method="POST" action="/data-management/reprocess-denials"><button class="btn secondary" type="submit">Reprocess Denials</button></form>
     `;
 
     const contractsContent = `
-      <h3>Contracts</h3>
-      <p class="muted">Contracts are the single source of expected insurance calculations.</p>
-      <form method="POST" action="/data-management/contracts/add" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
-        <input name="payer_name" placeholder="Payer name" required />
-        <input name="procedure_code" placeholder="Procedure code" required />
-        <input name="diagnosis_code" placeholder="Diagnosis code" />
-        <input name="allowed_amount" placeholder="Allowed amount" required />
-        <input name="effective_date" type="date" />
-        <button class="btn" type="submit">Add Contract</button>
-      </form>
+      ${uploadPanel}
       <div class="hr"></div>
-      <div style="overflow:auto;"><table><thead><tr><th>Payer</th><th>Procedure</th><th>Diagnosis</th><th>Allowed Amount</th><th>Effective Date</th><th></th></tr></thead><tbody>
-      ${contracts.map(c=>`<tr>
-        <td>${safeStr(c.payer_name||"")}</td>
-        <td>${safeStr(c.procedure_code||"")}</td>
-        <td>${safeStr(c.diagnosis_code||"—")}</td>
-        <td>${formatMoneyUI(c.expected_value)}</td>
-        <td>${safeStr(c.effective_date||"—")}</td>
-        <td>
-          <form method="POST" action="/data-management/contracts/update" style="display:inline-flex;gap:6px;flex-wrap:wrap;">
-            <input type="hidden" name="contract_id" value="${safeStr(c.contract_id)}" />
-            <input name="payer_name" value="${safeStr(c.payer_name||"")}" required />
-            <input name="procedure_code" value="${safeStr(c.procedure_code||"")}" required />
-            <input name="diagnosis_code" value="${safeStr(c.diagnosis_code||"")}" />
-            <input name="allowed_amount" value="${safeStr(String(num(c.expected_value)))}" required />
-            <input name="effective_date" type="date" value="${safeStr(c.effective_date||"")}" />
-            <button class="btn secondary small" type="submit">Edit</button>
-          </form>
-          <form method="POST" action="/data-management/contracts/delete" style="display:inline;" onsubmit="return confirm('Delete this contract?');">
-            <input type="hidden" name="contract_id" value="${safeStr(c.contract_id)}" />
-            <button class="btn danger small" type="submit">Delete</button>
-          </form>
-        </td>
-      </tr>`).join("") || '<tr><td colspan="6" class="muted">No contracts found.</td></tr>'}
+      <h3>Payer Contracts</h3>
+      <form method="POST" action="/data-management/contracts/add" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+        <input name="payer_name" placeholder="payer_name" required/><select name="network_status"><option>In Network</option><option>Out of Network</option></select><input name="procedure_code" placeholder="CPT" required/><input name="diagnosis_code" placeholder="DX optional"/><select name="reimbursement_model"><option value="fixed_amount">fixed</option><option value="percent_of_charge">%charge</option></select><input name="allowed_amount" placeholder="expected_value" required/><input type="date" name="effective_date"/><button class="btn" type="submit">Add</button>
+      </form>
+      <div style="overflow:auto;"><table><thead><tr><th>Payer</th><th>Network</th><th>CPT</th><th>DX</th><th>Model</th><th>Expected</th><th>Effective</th><th></th></tr></thead><tbody>
+      ${contracts.map(c=>`<tr><td>${safeStr(c.payer_name||"")}</td><td>${safeStr(c.network_status||"")}</td><td>${safeStr(c.procedure_code||"")}</td><td>${safeStr(c.diagnosis_code||"")}</td><td>${safeStr(c.reimbursement_model||"")}</td><td>${safeStr(String(c.expected_value||""))}</td><td>${safeStr(c.effective_date||"")}</td><td><form method="POST" action="/data-management/contracts/delete"><input type="hidden" name="contract_id" value="${safeStr(c.contract_id)}"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="8" class="muted">No contracts</td></tr>'}
       </tbody></table></div>
     `;
 
-    const section = tab === "payments" ? paymentsContent : (tab === "denials" ? denialsContent : (tab === "contracts" ? contractsContent : claimsContent));
+    const rulesContent = `
+      ${uploadPanel}
+      <div class="hr"></div>
+      <h3>Allowed Amount Rules</h3>
+      <form method="POST" action="/data-management/allowed-rules/save" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+        <select name="default_method"><option value="percent_medicare" ${rules.default_method==="percent_medicare"?"selected":""}>% of Medicare</option><option value="percent_billed" ${rules.default_method==="percent_billed"?"selected":""}>% of Billed</option><option value="flat" ${rules.default_method==="flat"?"selected":""}>Flat allowed amount</option><option value="ucr_multiplier" ${rules.default_method==="ucr_multiplier"?"selected":""}>UCR multiplier</option></select>
+        <input name="default_value" value="${safeStr(String(rules.default_value||""))}" placeholder="default value"/>
+        <input name="ucr_multiplier" value="${safeStr(String(rules.ucr_multiplier||1))}" placeholder="ucr multiplier"/>
+        <input name="tolerance_percent" value="${safeStr(String(rules.tolerance_percent||1))}" placeholder="tolerance %"/>
+        <input name="tolerance_min_dollars" value="${safeStr(String(rules.tolerance_min_dollars||5))}" placeholder="tolerance $"/>
+        <button class="btn" type="submit">Save Rules</button>
+      </form>
+      <p class="muted">Precedence: in-network contract → OON fee schedule*UCR → %Medicare → %Billed → flat → billed.</p>
+    `;
 
-    const html = renderPage("Data Management", `
-      <h2>Data Management</h2>
-      <p class="muted">Enterprise controls for claims, payments, denials, and contracts.</p>
-      ${tabs}
-      ${section}
-      ${rebuildControls}
-    `, navUser(), {showChat:true, orgName: org.org_name});
+    const feeContent = `
+      ${uploadPanel}
+      <div class="hr"></div>
+      <h3>Fee Schedules</h3>
+      <form method="POST" action="/data-management/fee-schedules/add" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+        <select name="schedule_type"><option value="medicare">Medicare</option><option value="payer">Custom Payer</option></select>
+        <input name="payer_name" placeholder="payer name (optional)"/>
+        <input name="year" placeholder="year"/>
+        <input name="locality" placeholder="locality"/>
+        <input type="file" name="schedule_file" accept=".csv,.xls,.xlsx" required/>
+        <button class="btn" type="submit">Upload Schedule</button>
+      </form>
+      <div style="overflow:auto;"><table><thead><tr><th>Type</th><th>Payer</th><th>Year</th><th>Locality</th><th>Uploaded</th><th>Preview</th><th></th></tr></thead><tbody>
+      ${feeSchedules.map(f=>`<tr><td>${safeStr(f.schedule_type||"")}</td><td>${safeStr(f.payer_name||"—")}</td><td>${safeStr(String(f.year||""))}</td><td>${safeStr(f.locality||"—")}</td><td>${f.uploaded_at?new Date(f.uploaded_at).toLocaleString():"—"}</td><td>${safeStr((f.rows||[]).slice(0,1).map(r=>`${r.procedure_code}:${r.amount}`).join(", ")||"—")}</td><td><form method="POST" action="/data-management/fee-schedules/delete"><input type="hidden" name="schedule_id" value="${safeStr(f.schedule_id)}"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="7" class="muted">No schedules</td></tr>'}
+      </tbody></table></div>
+    `;
+
+    const practiceContent = `
+      <h3>Practice Settings</h3>
+      <form method="POST" action="/data-management/practice-settings/save" style="display:flex;flex-direction:column;gap:8px;max-width:640px;">
+        <label><input type="checkbox" name="auto_create_denial_cases" ${practice.auto_create_denial_cases?"checked":""}/> auto_create_denial_cases</label>
+        <label><input type="checkbox" name="auto_create_negotiation_cases" ${practice.auto_create_negotiation_cases?"checked":""}/> auto_create_negotiation_cases</label>
+        <label>default_underpaid_stage_behavior<select name="default_underpaid_stage_behavior"><option value="underpaid" ${practice.default_underpaid_stage_behavior==="underpaid"?"selected":""}>Keep Underpaid</option><option value="negotiation" ${practice.default_underpaid_stage_behavior==="negotiation"?"selected":""}>Auto move to negotiation</option></select></label>
+        <label>default_denial_stage_behavior<select name="default_denial_stage_behavior"><option value="denied_hold" ${practice.default_denial_stage_behavior==="denied_hold"?"selected":""}>Keep denied until user acts</option><option value="auto_case" ${practice.default_denial_stage_behavior==="auto_case"?"selected":""}>Auto create case</option></select></label>
+        <label>letter defaults<input name="letter_defaults" value="${safeStr(practice.letter_defaults||"")}"/></label>
+        <button class="btn" type="submit">Save Practice Settings</button>
+      </form>
+    `;
+
+    const section = ({"claims":claimsContent,"payments":paymentsContent,"denials":denialContent,"contracts":contractsContent,"allowed-rules":rulesContent,"fee-schedules":feeContent,"practice-settings":practiceContent})[activeTab] || claimsContent;
+
+    const rebuildControls = `<div class="hr"></div><h3>Rebuild / Reprocess Controls</h3><div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;"><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="lifecycle"/><button class="btn secondary" type="submit">Recalculate Lifecycle</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="expected"/><button class="btn secondary" type="submit">Recompute Expected Insurance</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="revenue"/><button class="btn secondary" type="submit">Rebuild Revenue Aggregates</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="denials"/><button class="btn secondary" type="submit">Re-sync Denials</button></form><form method="POST" action="/data-management/rematch-payments"><button class="btn secondary" type="submit">Re-match Payments</button></form></div>`;
+
+    const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Central revenue configuration + ingestion center.</p>${tabs}${section}${rebuildControls}<script>(function(){const dz=document.getElementById('dm-drop');const inp=document.getElementById('dm-files');const list=document.getElementById('dm-filelist');if(!dz||!inp||!list)return;const upd=()=>{const tab='${safeStr(activeTab)}';const suggested=(f)=>{const n=(f.name||'').toLowerCase();if(tab==='claims'&&(n.endsWith('.csv')||n.endsWith('.xls')||n.endsWith('.xlsx'))) return 'Claims';if(tab==='payments') return 'Payments';if(tab==='denials') return 'Denials';if(tab==='contracts') return 'Contracts';if(tab==='fee-schedules') return 'Fee Schedule';return 'Claims';};const lines=[...inp.files].map(f=>(f.name+' • '+f.name.split('.').pop().toUpperCase()+' • suggested: '+suggested(f)));list.innerHTML=lines.join('<br/>')||'No files selected';};dz.addEventListener('click',()=>inp.click());['dragenter','dragover'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{if(e.dataTransfer.files?.length){inp.files=e.dataTransfer.files;upd();}});inp.addEventListener('change',upd);})();</script>`, navUser(), {showChat:true, orgName: org.org_name});
     return send(res, 200, html);
   }
 
@@ -9482,18 +9612,209 @@ rowsAdded = toUse;
     return redirect(res, "/data-management?tab=contracts");
   }
 
+  if (method === "POST" && pathname === "/data-management/upload") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/data-management");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return redirect(res, "/data-management");
+    const { files, fields } = await parseMultipart(req, boundaryMatch[1]);
+    const tab = String(fields.tab || "claims").toLowerCase();
+    const next = String(fields.next || `/data-management?tab=${tab}`);
+    const category = String(fields.category || categoryFromTab(tab)).toLowerCase();
+    const docs = files.filter(f => f.fieldName === "documents");
+    if (!docs.length) return redirect(res, next);
+
+    const billedAll = readJSON(FILES.billed, []);
+    const payments = readJSON(FILES.payments, []);
+    const claimBatches = getClaimBatches(org.org_id);
+
+    for (const f of docs) {
+      const ext = path.extname(String(f.filename || "").toLowerCase());
+      if (!isSupportedUploadExt(f.filename || "")) {
+        addDocumentIngest(org.org_id, category, f, "Unsupported", 0, "Unsupported file type");
+        continue;
+      }
+      const ingest = addDocumentIngest(org.org_id, category, f, "Stored", 0, "");
+
+      if (tab === "claims") {
+        if (ext === ".csv") {
+          const parsedCSV = parseCSV(f.buffer.toString("utf8"));
+          const rows = parsedCSV.rows || [];
+          let insertedClaims = 0;
+          for (const row of rows) {
+            const rawClaimNumber = pickField(row, ["claim", "claim#", "claim number", "claimnumber", "clm"]);
+            const claim_number = normalizeClaimKey(rawClaimNumber);
+            if (!claim_number) continue;
+            billedAll.push({
+              billed_id: uuid(),
+              org_id: org.org_id,
+              claim_number,
+              payer: String(pickField(row, ["payer","insurance","carrier"]) || "").trim(),
+              amount_billed: num(pickField(row, ["billed","amount billed","charge"])),
+              patient_responsibility: num(pickField(row, ["patient_resp","patient responsibility","copay","coinsurance"])),
+              submission_id: uuid(),
+              created_at: nowISO()
+            });
+            insertedClaims += 1;
+          }
+          writeJSON(FILES.billed, billedAll);
+          claimBatches.push({ batch_id: uuid(), org_id: org.org_id, ingest_id: ingest.ingest_id, file: ingest.original_filename, uploaded_at: nowISO(), claim_count: rows.length, total_billed: rows.reduce((s,r)=>s+num(pickField(r,["billed","amount billed","charge"])),0) });
+          ingest.status = "Parsed";
+          ingest.linked_claims_count = insertedClaims;
+        } else {
+          ingest.status = "Unsupported for claims parsing";
+          ingest.notes = "Claims parsing currently supports CSV/XLSX.";
+        }
+      } else if (tab === "payments") {
+        if (ext === ".csv" || ext === ".txt") {
+          const parsedCSV = parseCSV(f.buffer.toString("utf8"));
+          for (const r of (parsedCSV.rows || [])) {
+            payments.push({ payment_id: uuid(), org_id: org.org_id, claim_number: pickField(r,["claim","claim#","claim number","clm"]) || "", payer: pickField(r,["payer","insurance","carrier"]) || "", amount_paid: num(pickField(r,["paid","amount","payment","paid amount"])), date_paid: pickField(r,["date","paid date","remit date"]) || "", source_file: ingest.original_filename, created_at: nowISO(), denied_approved: false });
+          }
+          ingest.status = "Parsed";
+          ingest.linked_claims_count = (parsedCSV.rows || []).length;
+        }
+      } else if (tab === "denials") {
+        ingest.status = "Stored For Denial Linking";
+        const filename = String(ingest.original_filename || "");
+        const candidates = filename.match(/\d{5,}/g) || [];
+        let linkedClaim = null;
+        for (const candidate of candidates) {
+          const key = normalizeClaimKey(candidate);
+          if (!key) continue;
+          linkedClaim = billedAll.find(b => b.org_id === org.org_id && normalizeClaimKey(b.claim_number) === key) || null;
+          if (linkedClaim) break;
+        }
+        if (linkedClaim) {
+          ingest.linked_claim_number = linkedClaim.claim_number;
+          ingest.linked_claim_id = linkedClaim.billed_id;
+          ingest.status = "Linked";
+          linkedClaim.denial_doc_attached = true;
+        }
+      }
+
+      const allIngests = readJSON(FILES.document_ingests, []);
+      const idx = allIngests.findIndex(x => x.ingest_id === ingest.ingest_id);
+      if (idx >= 0) { allIngests[idx] = ingest; writeJSON(FILES.document_ingests, allIngests); }
+    }
+
+    saveClaimBatches(org.org_id, claimBatches);
+    writeJSON(FILES.payments, payments);
+    writeJSON(FILES.billed, billedAll);
+    rebuildOrgDerivedData(org.org_id);
+    return redirect(res, next);
+  }
+
+  if (method === "POST" && pathname === "/data-management/rematch-payments") {
+    const billedAll = readJSON(FILES.billed, []);
+    const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+    const paymentsByClaim = {};
+    for (const p of payments) {
+      const key = normalizeClaimKey(p.claim_number);
+      if (!key) continue;
+      if (!paymentsByClaim[key]) paymentsByClaim[key] = 0;
+      paymentsByClaim[key] += num(p.amount_paid);
+    }
+    for (const claim of billedAll) {
+      if (claim.org_id !== org.org_id) continue;
+      const key = normalizeClaimKey(claim.claim_number);
+      if (!key) continue;
+      const totalPaid = paymentsByClaim[key] || 0;
+      claim.insurance_paid = totalPaid;
+      claim.paid_amount = totalPaid;
+      if (key in paymentsByClaim && totalPaid <= 0) {
+        claim.has_zero_payment_record = true;
+      }
+    }
+    writeJSON(FILES.billed, billedAll);
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: true });
+    return redirect(res, "/data-management?tab=payments");
+  }
+
   if (method === "POST" && pathname === "/data-management/reprocess-denials") {
     rebuildOrgDerivedData(org.org_id, { resyncDenials: true });
     return redirect(res, "/data-management?tab=denials");
   }
 
+  if (method === "POST" && pathname === "/data-management/ingest/delete") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const ingest_id = String(params.get("ingest_id") || "").trim();
+    const tab = String(params.get("tab") || "claims");
+    if (ingest_id) {
+      const all = readJSON(FILES.document_ingests, []);
+      const ingest = all.find(i => i.org_id === org.org_id && String(i.ingest_id) === ingest_id);
+      if (ingest && ingest.stored_path && fs.existsSync(ingest.stored_path)) {
+        fs.unlinkSync(ingest.stored_path);
+      }
+      const keep = all.filter(i => !(i.org_id === org.org_id && String(i.ingest_id) === ingest_id));
+      writeJSON(FILES.document_ingests, keep);
+    }
+    return redirect(res, `/data-management?tab=${encodeURIComponent(tab)}`);
+  }
+
   if (method === "POST" && pathname === "/data-management/rebuild") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
-    const op = String(params.get("op") || "").trim();
-    rebuildOrgDerivedData(org.org_id, { resyncDenials: op === "denials" });
+    const op = String(params.get("action") || params.get("op") || "").trim();
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: op === "denials" || op === "lifecycle" });
     const tabForOp = (op === "revenue") ? "payments" : (op === "denials" ? "denials" : "claims");
     return redirect(res, `/data-management?tab=${tabForOp}`);
+  }
+
+  if (method === "POST" && pathname === "/data-management/allowed-rules/save") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    saveAllowedAmountRules(org.org_id, {
+      default_method: String(params.get("default_method") || "percent_billed"),
+      default_value: num(params.get("default_value")),
+      ucr_multiplier: num(params.get("ucr_multiplier")) || 1,
+      tolerance_percent: num(params.get("tolerance_percent")) || 1,
+      tolerance_min_dollars: num(params.get("tolerance_min_dollars")) || 5,
+    });
+    rebuildOrgDerivedData(org.org_id);
+    return redirect(res, "/data-management?tab=allowed-rules");
+  }
+
+  if (method === "POST" && pathname === "/data-management/fee-schedules/add") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/data-management?tab=fee-schedules");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return redirect(res, "/data-management?tab=fee-schedules");
+    const { files, fields } = await parseMultipart(req, boundaryMatch[1]);
+    const f = files.find(x => x.fieldName === "schedule_file");
+    if (!f) return redirect(res, "/data-management?tab=fee-schedules");
+    const ingest = addDocumentIngest(org.org_id, "fee_schedule", f, "Stored", 0, "Fee schedule upload");
+    const schedules = getFeeSchedules(org.org_id);
+    const rows = path.extname(String(f.filename || "").toLowerCase()) === ".csv"
+      ? (parseCSV(f.buffer.toString("utf8")).rows || []).slice(0, 500).map(r => ({ procedure_code: pickField(r,["cpt","procedure_code","procedure","code"]), amount: num(pickField(r,["amount","rate","allowed","fee"])) }))
+      : [];
+    schedules.push({ schedule_id: uuid(), org_id: org.org_id, schedule_type: String(fields.schedule_type || "medicare"), payer_name: String(fields.payer_name || "").trim(), year: String(fields.year || "").trim(), locality: String(fields.locality || "").trim(), stored_path: ingest.stored_path, uploaded_at: nowISO(), rows });
+    saveFeeSchedules(org.org_id, schedules);
+    rebuildOrgDerivedData(org.org_id);
+    return redirect(res, "/data-management?tab=fee-schedules");
+  }
+
+  if (method === "POST" && pathname === "/data-management/fee-schedules/delete") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const schedule_id = String(params.get("schedule_id") || "").trim();
+    if (schedule_id) saveFeeSchedules(org.org_id, getFeeSchedules(org.org_id).filter(f => String(f.schedule_id)!==schedule_id));
+    rebuildOrgDerivedData(org.org_id);
+    return redirect(res, "/data-management?tab=fee-schedules");
+  }
+
+  if (method === "POST" && pathname === "/data-management/practice-settings/save") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    savePracticeSettings(org.org_id, {
+      auto_create_denial_cases: params.get("auto_create_denial_cases") === "on",
+      auto_create_negotiation_cases: params.get("auto_create_negotiation_cases") === "on",
+      default_underpaid_stage_behavior: String(params.get("default_underpaid_stage_behavior") || "underpaid"),
+      default_denial_stage_behavior: String(params.get("default_denial_stage_behavior") || "denied_hold"),
+      letter_defaults: String(params.get("letter_defaults") || "").trim(),
+    });
+    return redirect(res, "/data-management?tab=practice-settings");
   }
 
   if (method === "POST" && pathname === "/data-management/contracts/add") {
@@ -9507,10 +9828,10 @@ rowsAdded = toUse;
       contract_id: uuid(),
       org_id: org.org_id,
       payer_name,
-      network_status: "In Network",
+      network_status: String(params.get("network_status") || "In Network"),
       procedure_code,
       diagnosis_code: String(params.get("diagnosis_code") || "").trim(),
-      reimbursement_model: "fixed_amount",
+      reimbursement_model: String(params.get("reimbursement_model") || "fixed_amount"),
       expected_value: num(params.get("allowed_amount")),
       effective_date: String(params.get("effective_date") || "").trim(),
       updated_at: nowISO(),
@@ -9533,8 +9854,8 @@ rowsAdded = toUse;
       contracts[idx].expected_value = num(params.get("allowed_amount"));
       contracts[idx].effective_date = String(params.get("effective_date") || contracts[idx].effective_date || "").trim();
       contracts[idx].updated_at = nowISO();
-      contracts[idx].reimbursement_model = "fixed_amount";
-      contracts[idx].network_status = "In Network";
+      contracts[idx].reimbursement_model = String(params.get("reimbursement_model") || contracts[idx].reimbursement_model || "fixed_amount");
+      contracts[idx].network_status = String(params.get("network_status") || contracts[idx].network_status || "In Network");
       savePayerContracts(org.org_id, contracts);
       rebuildOrgDerivedData(org.org_id);
     }
