@@ -1990,8 +1990,9 @@ function evaluateClaimDerived(claim, ctx={}){
   const paymentRows = key && ctx.paymentsByClaim ? (ctx.paymentsByClaim[key] || []) : [];
   const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid), 0);
   const paidFromClaim = num(claim.insurance_paid || claim.paid_amount);
-  const hasPaymentResponse = paymentRows.length > 0 || paidFromClaim > 0.0001 || claim.paid_at;
-  const paidAmount = hasPaymentResponse ? Math.max(paidFromClaim, paymentFromRows) : 0;
+  const claimHasPaidField = [claim.insurance_paid, claim.paid_amount].some(v => v != null && String(v).trim() !== "");
+  const hasPaymentRecord = paymentRows.length > 0 || claimHasPaidField || !!claim.paid_at;
+  const paidAmount = hasPaymentRecord ? Math.max(paidFromClaim, paymentFromRows) : 0;
   const appealCase = claim.denial_case_id && ctx.caseById ? ctx.caseById.get(String(claim.denial_case_id)) : null;
   const negotiation = ctx.negByBilled ? ctx.negByBilled.get(String(claim.billed_id || "")) : null;
   const denialReason = String(claim.denial_reason || appealCase?.denial_reason || appealCase?.issue_reason || "").trim();
@@ -1999,44 +2000,38 @@ function evaluateClaimDerived(claim, ctx={}){
     (appealCase && ((appealCase.files || []).length > 0 || (appealCase.appeal_attachments || []).length > 0)));
   const explicitDenialUpload = denialDocAttached || String(appealCase?.status || "").toLowerCase().includes("denied");
   const hasDenialContext = !!(denialReason || denialDocAttached || appealCase || explicitDenialUpload);
-  const submittedFlag = !!(claim.submission_id || claim.submitted_at || claim.submitted_date || claim.submitted_to_payer || claim.created_at);
+  const submittedFlag = !!(claim.submission_id || claim.submitted_at || claim.submitted_date || claim.submitted_to_payer);
 
-  let lifecycleStage = submittedFlag ? "Submitted" : "Submitted";
-  let financialStatus = "Waiting Payment";
+  let lifecycleStage = submittedFlag ? "Waiting Payment" : "Submitted";
+  let financialStatus = lifecycleStage;
 
-  if (explicitDenialUpload) {
-    lifecycleStage = "Denied";
-    financialStatus = "Denied";
-  } else if (!hasPaymentResponse && !hasDenialContext) {
-    lifecycleStage = submittedFlag ? "Submitted" : "Waiting Payment";
-    financialStatus = "Waiting Payment";
-  } else if (hasPaymentResponse && paidAmount <= 0.0001) {
-    if (hasDenialContext) {
+  if (hasPaymentRecord) {
+    if (paidAmount <= 0.0001) {
       lifecycleStage = "Denied";
       financialStatus = "Denied";
+    } else if (paidAmount + 0.0001 < expectedInsurance) {
+      lifecycleStage = "Underpaid";
+      financialStatus = "Underpaid";
     } else {
-      lifecycleStage = "Waiting Payment";
-      financialStatus = "Zero Payment - Needs Review";
+      lifecycleStage = patientResp > 0 ? "Patient Balance" : "Paid";
+      financialStatus = lifecycleStage;
     }
-  } else if (hasPaymentResponse && paidAmount > 0.0001 && paidAmount + 0.0001 < expectedInsurance) {
-    lifecycleStage = "Underpaid";
-    financialStatus = "Underpaid";
-  } else if (hasPaymentResponse && paidAmount + 0.0001 >= expectedInsurance) {
-    const patientOutstanding = Math.max(0, patientResp - num(claim.patient_collected));
-    lifecycleStage = patientOutstanding > 0 ? "Patient Balance" : "Paid";
-    financialStatus = lifecycleStage;
   }
 
   if (negotiation && ["Open", "Submitted", "In Review", "Counter Offered", "Approved (Pending Payment)"].includes(String(negotiation.status || ""))) {
-    lifecycleStage = lifecycleStage === "Denied" ? lifecycleStage : "Underpaid";
-    if (financialStatus !== "Denied") financialStatus = "Underpaid";
+    lifecycleStage = "In Appeal/Negotiation";
+    financialStatus = "In Appeal/Negotiation";
   }
 
   const writeOff = num(claim.write_off_amount || claim.contractual_adjustment);
   let atRiskAmount = 0;
   if (lifecycleStage === "Underpaid") atRiskAmount = Math.max(0, expectedInsurance - paidAmount);
-  else if (lifecycleStage === "Patient Balance") atRiskAmount = Math.max(0, patientResp - num(claim.patient_collected));
-  else if (lifecycleStage === "Denied" || lifecycleStage === "Submitted" || lifecycleStage === "Waiting Payment") atRiskAmount = Math.max(0, billedAmount - paidAmount);
+  else if (lifecycleStage === "Patient Balance") {
+    const patientCollected = num(claim.patient_collected || 0);
+    atRiskAmount = Math.max(0, patientResp - patientCollected);
+  } else if (lifecycleStage === "Denied" || lifecycleStage === "Submitted" || lifecycleStage === "Waiting Payment" || lifecycleStage === "In Appeal/Negotiation") {
+    atRiskAmount = Math.max(0, billedAmount - paidAmount);
+  }
   else atRiskAmount = 0;
 
   return {
@@ -2049,7 +2044,7 @@ function evaluateClaimDerived(claim, ctx={}){
     atRiskAmount,
     writeOffAmount: Math.max(0, writeOff),
     submittedFlag,
-    hasPaymentResponse,
+    hasPaymentResponse: hasPaymentRecord,
     hasDenialContext
   };
 }
@@ -3887,81 +3882,22 @@ if (method === "GET" && pathname === "/claims") {
   }
 
   function toPipelineStage(b){
-  const d = evaluateClaimDerived(b, claimCtx);
+    const d = evaluateClaimDerived(b, claimCtx);
+    const paid = num(d.paidAmount);
+    const expected = num(d.expectedInsurance || 0);
+    const hasPayment = !!d.hasPaymentResponse;
 
-  const paid = num(b.insurance_paid || b.paid_amount);
-  const billed = num(b.amount_billed);
-  const expected = num(d.expectedAmount || 0);
-  const patientResp = num(b.patient_responsibility || 0);
+    if (isAppealOpen(b) || isNegotiationOpen(b)) return "In Appeal/Negotiation";
 
-  const hasPayment = d.hasPaymentResponse;
-
-  // 1️⃣ Active case always overrides
-  if (isAppealOpen(b) || isNegotiationOpen(b)) {
-    return "In Appeal/Negotiation";
-  }
-
-  // 2️⃣ If payment exists
-  if (hasPayment) {
-
-    // Zero paid = Denied
-    if (paid === 0 && billed > 0) {
-      return "Denied";
-    }
-
-    // Underpaid (payer underpaid contract amount)
-    if (paid > 0 && paid < expected) {
-      return "Underpaid";
-    }
-
-    // Paid in full (payer met or exceeded expected)
-    if (paid >= expected && expected > 0) {
+    if (hasPayment) {
+      if (paid <= 0.0001) return "Denied";
+      if (paid + 0.0001 < expected) return "Underpaid";
+      if (num(b.patient_responsibility || 0) > 0) return "Patient Balance";
       return "Paid";
     }
 
-    // Fallback if payment exists but doesn't match above
-    return "Paid";
-  }
-
-  // 3️⃣ No payment yet
-  if (b.submission_id) {
-    return "Waiting Payment";
-  }
-
-  return "Submitted";
-}
-    const d = evaluateClaimDerived(b, claimCtx);
-    const st = String(d.lifecycleStage || "Pending");
-
-    // Active workflow always wins
-    if (isAppealOpen(b) || isNegotiationOpen(b)) return "In Appeal/Negotiation";
-
-    // Write-off
-    if (st === "Contractual") return "Write-Off";
-
-    // Patient balance
-    if (st === "Patient Balance") return "Patient Balance";
-
-    // Paid
-    if (st === "Paid" || st === "Paid in Full") return "Paid";
-
-    // Denied/Underpaid must ONLY happen after payer response
-    if (d.hasPaymentResponse) {
-      if (st === "Denied") return "Denied";
-      if (st === "Underpaid") return "Underpaid";
-    }
-
-    // No payer response => Submitted or Waiting Payment
-    // Use submission_id as "submitted to payer"; created_at is NOT enough.
-    const submitted = !!(b.submission_id);
-    const age = daysSince(b.created_at || b.dos || b.submitted_at);
-
-    if (submitted && !d.hasPaymentResponse) {
-      return (age <= 2) ? "Submitted" : "Waiting Payment";
-    }
-
-    // fallback for any other case
-    return d.hasPaymentResponse ? "Waiting Payment" : "Submitted";
+    const submitted = !!(b.submission_id || b.submitted_at || b.submitted_date || b.submitted_to_payer);
+    return submitted ? "Waiting Payment" : "Submitted";
   }
 
   const pipelineAgg = {};
@@ -3974,10 +3910,11 @@ if (method === "GET" && pathname === "/claims") {
   pipelineAgg[stage].billed += num(b.amount_billed);
 
 if (stage === "Patient Balance") {
-  pipelineAgg[stage].atRisk += num(b.patient_responsibility || 0);
-} else {
-  pipelineAgg[stage].atRisk += computeClaimAtRisk(b);
-}
+      pipelineAgg[stage].atRisk += num(b.patient_responsibility || 0);
+    } else {
+      const d = evaluateClaimDerived(b, claimCtx);
+      pipelineAgg[stage].atRisk += num(d.atRiskAmount);
+    }
   });
 
   const pipelineTotal = PIPE_ORDER.reduce((s, k) => s + (pipelineAgg[k]?.count || 0), 0) || 1;
