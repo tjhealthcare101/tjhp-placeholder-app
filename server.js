@@ -73,11 +73,9 @@ const FILES = {
   negotiations: path.join(DATA_DIR, "negotiations.json"),
   ai_queries: path.join(DATA_DIR, "ai_queries.json"),
   saved_queries: path.join(DATA_DIR, "saved_queries.json"),
-  intelligence_cache: path.join(DATA_DIR, "intelligence_cache.json"),
   deleted_payment_batches: path.join(DATA_DIR, "deleted_payment_batches.json"),
   payer_contracts: path.join(DATA_DIR, "payer_contracts.json"),
   document_ingests: path.join(DATA_DIR, "document_ingests.json"),
-  reimbursement_settings: path.join(DATA_DIR, "reimbursement_settings.json"),
 };
 
 // Directory for storing uploaded template files
@@ -208,11 +206,9 @@ ensureFile(FILES.billed_submissions, []);
 ensureFile(FILES.negotiations, []);
 ensureFile(FILES.ai_queries, []);
 ensureFile(FILES.saved_queries, []);
-ensureFile(FILES.intelligence_cache, []);
 ensureFile(FILES.deleted_payment_batches, []);
 ensureFile(FILES.payer_contracts, []);
 ensureFile(FILES.document_ingests, []);
-ensureFile(FILES.reimbursement_settings, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -222,6 +218,8 @@ function adminHash() {
 }
 
 // ===== UI =====
+let CURRENT_USER_THEME = "system";
+
 const css = `
 
 :root{
@@ -229,6 +227,14 @@ const css = `
   --border:#e5e7eb; --primary:#111827; --primaryText:#fff;
   --danger:#b91c1c; --warn:#92400e; --ok:#065f46;
   --shadow:0 12px 30px rgba(17,24,39,.06);
+  --navText:#374151; --navHover:#111827; --navActiveBg:#e5e7eb;
+}
+[data-theme="dark"]{
+  --bg:#0b1220; --card:#0f172a; --text:#e5e7eb; --muted:#94a3b8;
+  --border:#334155; --primary:#e2e8f0; --primaryText:#0f172a;
+  --danger:#ef4444; --warn:#f59e0b; --ok:#22c55e;
+  --shadow:0 12px 28px rgba(2,6,23,.55);
+  --navText:#cbd5e1; --navHover:#f8fafc; --navActiveBg:#1e293b;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);}
@@ -238,8 +244,9 @@ html,body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,Roboto
 .brand h1{font-size:18px;margin:0;}
 .brand .sub{font-size:12px;color:var(--muted);}
 .nav{display:flex;gap:12px;flex-wrap:wrap;}
-.nav a{text-decoration:none;color:var(--muted);font-weight:700;font-size:13px;}
-.nav a:hover{color:var(--text);}
+.nav a{text-decoration:none;color:var(--navText);font-weight:700;font-size:13px;padding:7px 10px;border-radius:9px;transition:all .15s ease;}
+.nav a:hover{color:var(--navHover);background:#f3f4f6;}
+.nav a.active{background:var(--navActiveBg);color:var(--navHover);font-weight:900;}
 .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;box-shadow:var(--shadow);}
 .row{display:flex;gap:14px;flex-wrap:wrap;}
 .col{flex:1;min-width:280px;}
@@ -264,13 +271,6 @@ textarea{min-height:220px;}
 .badge.err{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
 .badge.underpaid{border-color:#fdba74;background:#fff7ed;color:#9a3412;}
 .badge.writeoff{border-color:#d1d5db;background:#f3f4f6;color:#374151;}
-.status-pill{display:inline-block;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:900;border:1px solid var(--border);background:#fff;}
-.paid-green{color:#065f46;font-weight:900;}
-.paid-orange{color:#92400e;font-weight:900;}
-.paid-red{color:#b91c1c;font-weight:900;}
-.risk-green{color:#166534;font-weight:900;}
-.risk-orange{color:#b45309;font-weight:900;}
-.risk-red{color:#b91c1c;font-weight:900;}
 .footer{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);}
 .error{color:var(--danger);font-weight:900;}
 .small{font-size:12px;}
@@ -279,9 +279,9 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .center{text-align:center}
 
 /* Tooltip system */
-.tooltip{position:relative;display:inline-block;cursor:pointer;color:var(--muted);}
-.tooltip .tooltiptext{visibility:hidden;width:220px;background-color:#555;color:#fff;text-align:center;border-radius:6px;padding:5px;position:absolute;z-index:1;bottom:125%;left:50%;margin-left:-110px;opacity:0;transition:opacity 0.3s;font-size:12px;}
-.tooltip:hover .tooltiptext{visibility:visible;opacity:1;}
+.tooltip{display:inline-block;cursor:help;color:var(--muted);}
+.tooltip .tooltiptext{display:none;}
+.tooltip-portal{position:fixed;max-width:280px;background:#111827;color:#f9fafb;border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.4;z-index:99999;box-shadow:0 12px 25px rgba(0,0,0,.28);pointer-events:none;}
 
 /* Chart and KPI placeholders */
 .chart-placeholder{height:200px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;margin-bottom:10px;}
@@ -296,6 +296,10 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .skeleton{position:relative;overflow:hidden;background:#f3f4f6;border-radius:10px;min-height:180px;}
 .skeleton::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.6),rgba(255,255,255,0));animation:shimmer 1.4s infinite;}
 @keyframes shimmer{100%{transform:translateX(100%);}}
+.scrollSyncTop,.scrollSyncBottom{overflow-x:scroll;scrollbar-gutter:stable both-edges;}
+.scrollSyncTop{height:14px;}
+.scrollSyncTop > div{height:1px;}
+.tableScrollY{max-height:460px;overflow:auto;}
 
 /* ===== AUTH UI PATCH ===== */
 .password-wrap { position: relative; }
@@ -334,14 +338,14 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 function renderPage(title, content, navHtml="", opts={}) {
   const orgName = (opts && opts.orgName) ? safeStr(opts.orgName) : "";
   const showChat = !!(opts && opts.showChat);
+  const prefRaw = String((opts && opts.userTheme) || CURRENT_USER_THEME || "system");
+  const themePref = (prefRaw === "light" || prefRaw === "dark" || prefRaw === "system") ? prefRaw : "system";
+  const startTheme = (themePref === "dark") ? "dark" : "light";
   const chatHtml = showChat ? `
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
   <button class="btn" type="button" onclick="window.__tjhpToggleChat()">AI Assistant</button>
   <div id="aiChatBox" style="display:none;width:320px;height:420px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;margin-top:8px;box-shadow:0 12px 30px rgba(17,24,39,.10);">
-    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px;">
-      <div class="muted small">Ask questions about your denials, payments, trends, and what pages do.</div>
-      <div class="muted small tooltip">AI Usage: ${((opts && typeof opts.aiRemaining === "number") ? Math.max(0, Number(opts.aiRemaining)) : "—")} remaining<span class="tooltiptext">Each AI request counts as 1. Resets every 30 days.</span></div>
-    </div>
+    <div class="muted small" style="margin-bottom:6px;">Ask questions about your denials, payments, trends, and what pages do.</div>
     <div id="aiChatMsgs" style="height:300px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px;"></div>
     <input id="aiChatInput" placeholder="Ask about your data..." style="margin-top:8px;" />
     <div class="btnRow" style="margin-top:8px;">
@@ -399,7 +403,7 @@ window.__tjhpSendChat = async function(){
 <title>${safeStr(title)}</title>
 <style>${css}</style>
 </head>
-<body>
+<body data-theme="${startTheme}" data-theme-pref="${themePref}">
   <div class="wrap">
     <div class="topbar">
       <div class="brand">
@@ -412,16 +416,91 @@ window.__tjhpSendChat = async function(){
     <div class="card">
       ${content}
       <div class="footer">
-        Platform does not log into payer portals directly. · Submissions require human review and approval. · Optional integrations available on higher-tier plans.
+        No EMR access · No payer portal access · No automated submissions · Human review required before use.
       </div>
     </div>
   </div>
 
 ${chatHtml}
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <script>
+(() => {
+  const pref = document.body.getAttribute("data-theme-pref") || "system";
+  const isDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const resolved = pref === "system" ? (isDark ? "dark" : "light") : pref;
+  document.body.setAttribute("data-theme", resolved);
+})();
+
+(() => {
+  const activePath = location.pathname;
+  document.querySelectorAll(".nav a").forEach(a => {
+    try {
+      const p = new URL(a.href, location.origin).pathname;
+      if (p === activePath) a.classList.add("active");
+    } catch {}
+  });
+})();
+
+(() => {
+  let tipNode = null;
+  const readTip = (el) => el.getAttribute("data-tip") || (el.querySelector(".tooltiptext") ? el.querySelector(".tooltiptext").textContent.trim() : "");
+  const place = (anchor) => {
+    if (!tipNode || !anchor) return;
+    const r = anchor.getBoundingClientRect();
+    const t = tipNode.getBoundingClientRect();
+    let top = r.top - t.height - 8;
+    if (top < 8) top = r.bottom + 8;
+    let left = r.left + (r.width / 2) - (t.width / 2);
+    left = Math.max(8, Math.min(left, window.innerWidth - t.width - 8));
+    tipNode.style.top = Math.round(top) + "px";
+    tipNode.style.left = Math.round(left) + "px";
+  };
+  document.addEventListener("mouseover", (e) => {
+    const el = e.target.closest(".tooltip");
+    if (!el) return;
+    const txt = readTip(el);
+    if (!txt) return;
+    if (tipNode) tipNode.remove();
+    tipNode = document.createElement("div");
+    tipNode.className = "tooltip-portal";
+    tipNode.textContent = txt;
+    document.body.appendChild(tipNode);
+    place(el);
+  });
+  document.addEventListener("mouseout", (e) => {
+    if (!e.target.closest(".tooltip")) return;
+    if (tipNode) { tipNode.remove(); tipNode = null; }
+  });
+  window.addEventListener("resize", () => {
+    const el = document.querySelector(".tooltip:hover");
+    if (el) place(el);
+  });
+})();
+
+window.__syncScrollBars = function(rootId){
+  const root = document.getElementById(rootId);
+  if (!root) return;
+  const top = root.querySelector(".scrollSyncTop");
+  const topInner = root.querySelector(".scrollSyncTop > div");
+  const bottom = root.querySelector(".scrollSyncBottom");
+  const table = root.querySelector("table");
+  if (!top || !topInner || !bottom || !table) return;
+  const syncWidths = () => { topInner.style.width = table.scrollWidth + "px"; };
+  syncWidths();
+  let lock = false;
+  top.addEventListener("scroll", () => {
+    if (lock) return;
+    lock = true; bottom.scrollLeft = top.scrollLeft; lock = false;
+  });
+  bottom.addEventListener("scroll", () => {
+    if (lock) return;
+    lock = true; top.scrollLeft = bottom.scrollLeft; lock = false;
+  });
+  window.addEventListener("resize", syncWidths);
+};
+
 /* ===== PASSWORD VISIBILITY TOGGLE (GLOBAL) ===== */
 document.querySelectorAll('input[type="password"]').forEach(input => {
   if (input.parentNode && input.parentNode.classList && input.parentNode.classList.contains("password-wrap")) return;
@@ -453,7 +532,7 @@ function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Revenue Overview</a><a href="/claims">Claims Lifecycle</a><a href="/intelligence">AI Revenue Intelligence</a><a href="/actions">Action Center</a><a href="/report">Reports</a><a href="/data-management">Data Management</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
+  return `<a href="/dashboard">Revenue Overview</a><a href="/claims">Claims Lifecycle</a><a href="/data-management">Data Management</a><a href="/intelligence">Revenue Intelligence (AI)</a><a href="/actions">Action Center</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -1584,356 +1663,6 @@ function parseDateOnly(s){
   const d = new Date(String(s).trim() + "T00:00:00.000Z");
   return isNaN(d.getTime()) ? null : d;
 }
-function parseDateSafe(s){
-  if (!s) return null;
-  const d = new Date(String(s).trim());
-  return isNaN(d.getTime()) ? null : d;
-}
-function daysBetween(a, b){
-  const da = (a instanceof Date) ? a : parseDateSafe(a);
-  const db = (b instanceof Date) ? b : parseDateSafe(b);
-  if (!da || !db) return 0;
-  return Math.floor((db.getTime() - da.getTime()) / (1000 * 60 * 60 * 24));
-}
-function getRevenueContextFromReq(req){
-  const parsedReq = url.parse(req.url, true);
-  const q = parsedReq.query || {};
-  const now = new Date();
-  const rangeKey = String(q.range || "30").trim().toLowerCase();
-  let endDate = parseDateSafe(q.end) || now;
-  let startDate = parseDateSafe(q.start) || null;
-  if (!startDate) {
-    if (rangeKey === "7") startDate = new Date(endDate.getTime() - (7 * 86400000));
-    else if (rangeKey === "90") startDate = new Date(endDate.getTime() - (90 * 86400000));
-    else if (rangeKey === "ytd") startDate = new Date(Date.UTC(endDate.getUTCFullYear(), 0, 1, 0, 0, 0, 0));
-    else startDate = new Date(endDate.getTime() - (30 * 86400000));
-  }
-  return { startDate, endDate, rangeKey: ["7","30","90","ytd"].includes(rangeKey) ? rangeKey : "30" };
-}
-function saveOrg(org){
-  if (!org || !org.org_id) return;
-  const orgs = readJSON(FILES.orgs, []);
-  const idx = orgs.findIndex(o => o.org_id === org.org_id);
-  if (idx >= 0) orgs[idx] = { ...orgs[idx], ...org };
-  else orgs.push(org);
-  writeJSON(FILES.orgs, orgs);
-}
-function getDefaultAiLimitsForOrg(org){
-  const plan = String(getActivePlanName(org.org_id) || "pilot").toLowerCase();
-  if (plan === "enterprise") return { insight: 999999, draft: 999999 };
-  if (plan === "pro") return { insight: 500, draft: 300 };
-  if (plan === "growth") return { insight: 200, draft: 100 };
-  return { insight: 50, draft: 30 };
-}
-function shouldResetAiCounters(org){
-  const now = new Date();
-  const resetDate = parseDateSafe(org.aiResetDate);
-  if (!resetDate) {
-    org.aiInsightUsed = Number(org.aiInsightUsed || 0);
-    org.aiDraftUsed = Number(org.aiDraftUsed || 0);
-    if (!org.aiInsightLimit || !org.aiDraftLimit) {
-      const lim = getDefaultAiLimitsForOrg(org);
-      org.aiInsightLimit = Number(org.aiInsightLimit || lim.insight);
-      org.aiDraftLimit = Number(org.aiDraftLimit || lim.draft);
-    }
-    org.aiResetDate = now.toISOString();
-    saveOrg(org);
-    return false;
-  }
-  if ((now.getTime() - resetDate.getTime()) >= (30 * 86400000)) {
-    const lim = getDefaultAiLimitsForOrg(org);
-    org.aiInsightUsed = 0;
-    org.aiDraftUsed = 0;
-    org.aiInsightLimit = Number(org.aiInsightLimit || lim.insight);
-    org.aiDraftLimit = Number(org.aiDraftLimit || lim.draft);
-    org.aiResetDate = now.toISOString();
-    saveOrg(org);
-    return true;
-  }
-  return false;
-}
-function enforcePlanGate(org, feature){
-  const plan = String(getActivePlanName(org.org_id) || "pilot").toLowerCase();
-  const featureMap = {
-    reimbursementModeling: ["pro", "enterprise"],
-    unlimitedAI: ["pro", "enterprise"],
-    advancedReports: ["growth", "pro", "enterprise"],
-  };
-  const allowed = featureMap[feature] || [];
-  if (!allowed.length || allowed.includes(plan)) return { ok:true };
-  return { ok:false, reason:"UPGRADE_REQUIRED" };
-}
-function getReimbursementSettings(org_id){
-  const all = readJSON(FILES.reimbursement_settings, []);
-  const hit = all.find(x => x.org_id === org_id);
-  if (hit) return hit;
-  return {
-    org_id,
-    medicareSchedulesByYear: {},
-    medicareFiles: [],
-    ucrMultiplier: null,
-    cptUcrTable: {},
-    updated_at: null,
-  };
-}
-function saveReimbursementSettings(org_id, settings){
-  const all = readJSON(FILES.reimbursement_settings, []);
-  const idx = all.findIndex(x => x.org_id === org_id);
-  const merged = { ...getReimbursementSettings(org_id), ...settings, org_id, updated_at: nowISO() };
-  if (idx >= 0) all[idx] = merged; else all.push(merged);
-  writeJSON(FILES.reimbursement_settings, all);
-}
-function computeExpectedForClaim(claim, org){
-  const billedAmount = num(claim.amount_billed);
-  const cpt = normalizeCode(claim.procedure_code || claim.cpt_code || claim.cpt || "");
-  const dosYear = (parseDateSafe(claim.dos) || new Date()).getUTCFullYear();
-  const settings = getReimbursementSettings(org.org_id);
-  const gate = enforcePlanGate(org, "reimbursementModeling");
-  const hasModeling = gate.ok;
-  if (hasModeling && cpt && settings && settings.medicareSchedulesByYear && settings.medicareSchedulesByYear[String(dosYear)]) {
-    const mVal = num(settings.medicareSchedulesByYear[String(dosYear)][cpt]);
-    if (mVal > 0) return { expectedAmount: mVal, expectedSource: "Medicare Benchmark (User Uploaded)" };
-  }
-  if (hasModeling) {
-    const cptUcr = num((settings.cptUcrTable || {})[cpt]);
-    if (cpt && cptUcr > 0) return { expectedAmount: cptUcr, expectedSource: "UCR (User Provided)" };
-    const mult = Number(settings.ucrMultiplier);
-    if (isFinite(mult) && mult > 0) return { expectedAmount: billedAmount * mult, expectedSource: "UCR (User Provided)" };
-  }
-  return { expectedAmount: billedAmount || null, expectedSource: "Billed Estimate (No Benchmark/Contract)" };
-}
-function normalizeCaseStage(caseObj){
-  if (!caseObj) return "none";
-  const raw = String(caseObj.stage || caseObj.status || "").trim().toLowerCase();
-  if (!raw) return "Drafted";
-  if (raw.includes("payment update")) return "Payment Update";
-  if (raw.includes("resolved") || raw === "closed") return "Resolved";
-  if (raw.includes("waiting") || raw.includes("in review")) return "Waiting";
-  if (raw.includes("submitted")) return "Submitted";
-  return "Drafted";
-}
-function caseRoundInfo(caseObj){
-  const rounds = Array.isArray(caseObj?.rounds) ? caseObj.rounds.slice() : [];
-  if (!rounds.length) return { currentRoundNumber: 1, hasPriorRounds: false };
-  const currentRoundNumber = Math.max(1, ...rounds.map(r => Number(r.roundNumber || 0)));
-  return { currentRoundNumber, hasPriorRounds: currentRoundNumber > 1 };
-}
-function ensureCaseRound(caseObj, type, now){
-  if (!caseObj.rounds || !Array.isArray(caseObj.rounds)) caseObj.rounds = [];
-  if (!caseObj.rounds.length) {
-    caseObj.rounds.push({
-      roundNumber: 1,
-      status: "Drafted",
-      createdAt: now || nowISO(),
-      submittedAt: null,
-      responseType: "",
-      responseDocument: "",
-      draftText: type === "appeal" ? aiGenerate("").draft_text : aiGenerateUnderpayment("", {}).draft_text,
-      attachments: []
-    });
-  }
-  return caseObj;
-}
-function evaluateClaimDerived(claim, org, relatedCaseInfo, now){
-  const dtNow = now || new Date();
-  const paidAmount = num(claim.insurance_paid || claim.paid_amount);
-  const billedAmount = num(claim.amount_billed);
-  const expectedCtx = computeExpectedForClaim(claim, org);
-  const expectedAmount = num(expectedCtx.expectedAmount);
-  const atRisk = Math.max(0, expectedAmount - paidAmount);
-  let financialStatus = "Pending";
-  if (paidAmount <= 0.0001 && billedAmount > 0) financialStatus = "Denied";
-  else if (paidAmount > 0 && paidAmount < expectedAmount) financialStatus = "Underpaid";
-  else if (paidAmount >= expectedAmount && expectedAmount > 0) financialStatus = "Paid";
-  if (String(claim.status || "").toLowerCase() === "patient balance") financialStatus = "Patient Balance";
-
-  const appealCase = relatedCaseInfo?.appealCase || null;
-  const negotiationCase = relatedCaseInfo?.negotiationCase || null;
-  const anyCase = appealCase || negotiationCase || null;
-  const caseType = appealCase ? "appeal" : (negotiationCase ? "negotiation" : "none");
-  const caseStage = normalizeCaseStage(anyCase);
-  const roundInfo = caseRoundInfo(anyCase);
-  const openCase = !!(anyCase && String(anyCase.status || "").toLowerCase() !== "closed" && caseStage !== "Resolved");
-
-  const dos = parseDateSafe(claim.dos || claim.created_at);
-  const ageDays = dos ? Math.max(0, daysBetween(dos, dtNow)) : 0;
-
-  let lifecycleStage = "Submitted";
-  if (anyCase && caseStage === "Resolved" && atRisk === 0) lifecycleStage = "Resolved";
-  else if (anyCase && openCase && ["Drafted","Submitted","Waiting","Payment Update"].includes(caseStage)) lifecycleStage = "In Appeal/Negotiation";
-  else if (paidAmount >= expectedAmount && atRisk === 0 && !openCase) lifecycleStage = "Paid in Full";
-  else if (paidAmount > 0 && paidAmount < expectedAmount && atRisk > 0) lifecycleStage = "Underpaid";
-  else if (paidAmount === 0 && billedAmount > 0) lifecycleStage = "Denied";
-  else if (paidAmount === 0 && billedAmount > 0 && ageDays > 0) lifecycleStage = "Awaiting Payment";
-
-  const riskScore = computeClaimRiskScore(claim);
-  const paidColorClass = paidAmount >= expectedAmount ? "paid-green" : (paidAmount > 0 ? "paid-orange" : "paid-red");
-  const riskColorClass = riskScore >= 80 ? "risk-red" : (riskScore >= 60 ? "risk-orange" : "risk-green");
-  const paymentUpdateFlag = !!(openCase && atRisk <= 0.0001 && caseStage === "Payment Update");
-
-  return {
-    expectedAmount,
-    expectedSource: expectedCtx.expectedSource,
-    atRisk,
-    financialStatus,
-    lifecycleStage,
-    riskScore,
-    paidColorClass,
-    riskColorClass,
-    paymentUpdateFlag,
-    caseType,
-    caseStage,
-    currentRoundNumber: roundInfo.currentRoundNumber,
-    hasPriorRounds: roundInfo.hasPriorRounds
-  };
-}
-function renderClaimTable(rows, options){
-  const opts = options || {};
-  const q = opts.dateContextQuery ? String(opts.dateContextQuery) : "";
-  const qSuffix = q ? (q.startsWith("?") ? q : (q.startsWith("&") ? `?${q.slice(1)}` : `?${q}`)) : "";
-  const thCase = opts.includeCaseColumns ? `<th>Case Type</th>${opts.includeRoundColumn ? `<th>Round</th>` : ``}<th>Case Stage</th>` : ``;
-  const thLife = opts.includeLifecycleColumns ? `<th>Lifecycle</th>` : ``;
-  const thActions = opts.includeActions ? `<th>Actions</th>` : ``;
-  const body = (rows || []).map(r => {
-    const claimHref = r.billed_id ? `/claim/${encodeURIComponent(r.billed_id)}${qSuffix}` : `/claim-detail?billed_id=${encodeURIComponent(r.billed_id || "")}${qSuffix}`;
-    const caseCols = opts.includeCaseColumns ? `<td>${safeStr(r.derived.caseType || "none")}</td>${opts.includeRoundColumn ? `<td>${safeStr("R" + Number(r.derived.currentRoundNumber || 1))}</td>` : ``}<td>${safeStr(r.derived.caseStage || "none")}</td>` : ``;
-    const lifeCol = opts.includeLifecycleColumns ? `<td>${safeStr(r.derived.lifecycleStage || "")}</td>` : ``;
-    let actions = "";
-    if (opts.includeActions) {
-      const acts = [];
-      if (r.derived.caseType === "appeal") acts.push(`<a class="btn secondary small" href="/appeal-workspace?billed_id=${encodeURIComponent(r.billed_id)}">View Appeal</a>`);
-      if (r.derived.caseType === "negotiation") acts.push(`<a class="btn secondary small" href="/negotiation-workspace?billed_id=${encodeURIComponent(r.billed_id)}">View Negotiation</a>`);
-      if (r.derived.paymentUpdateFlag) {
-        acts.push(`<a class="btn secondary small" href="/claim/${encodeURIComponent(r.billed_id)}">Review Update</a>`);
-        acts.push(`<a class="btn secondary small" href="/case/payment-update?action=keep_open&billed_id=${encodeURIComponent(r.billed_id)}">Keep Open</a>`);
-        acts.push(`<a class="btn secondary small" href="/case/payment-update?action=mark_resolved&billed_id=${encodeURIComponent(r.billed_id)}">Mark Resolved</a>`);
-      }
-      if (!acts.length) acts.push(`<a class="btn secondary small" href="/claim/${encodeURIComponent(r.billed_id)}">Open</a>`);
-      actions = `<td style="white-space:nowrap;">${acts.join(" ")}</td>`;
-    }
-    return `<tr>
-      <td><a href="${claimHref}">${safeStr(r.claim_number || "")}</a></td>
-      <td>${safeStr(r.dos || "")}</td>
-      <td>${safeStr(r.patient_name || "")}</td>
-      <td>${safeStr(r.payer || "")}</td>
-      <td>${formatMoneyUI(r.amount_billed)}</td>
-      <td class="${safeStr(r.derived.paidColorClass || "")}">${formatMoneyUI(num(r.insurance_paid || r.paid_amount))}</td>
-      <td>${formatMoneyUI(r.derived.atRisk)}</td>
-      <td class="${safeStr(r.derived.riskColorClass || "")}">${Number(r.derived.riskScore || 0)} <span class="tooltip">ⓘ<span class="tooltiptext">Based on amount at risk, aging, stage, and network status.</span></span></td>
-      <td><span class="status-pill">${safeStr(r.derived.financialStatus || r.status || "Pending")}</span></td>
-      <td class="muted small">${safeStr(r.derived.expectedSource || "")}</td>
-      ${lifeCol}
-      ${caseCols}
-      ${actions}
-    </tr>`;
-  }).join("");
-  return `<div style="overflow:auto;"><table><thead><tr>
-    <th>Claim#</th><th>DOS</th><th>Patient</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Risk Score</th><th>Status</th><th>Source</th>${opts.includeLifecycleColumns ? `<th>Lifecycle</th>` : ``}${thCase}${thActions}
-  </tr></thead><tbody>${body || `<tr><td colspan="14" class="muted">No claims found.</td></tr>`}</tbody></table></div>`;
-}
-function findOrCreateAppealCaseForClaim(claim, org, userId){
-  const casesAll = readJSON(FILES.cases, []);
-  let caseObj = null;
-  if (claim.denial_case_id) caseObj = casesAll.find(c => c.org_id === org.org_id && c.case_id === claim.denial_case_id);
-  if (!caseObj) {
-    caseObj = {
-      case_id: uuid(),
-      org_id: org.org_id,
-      created_by_user_id: userId,
-      created_at: nowISO(),
-      status: "open",
-      stage: "Drafted",
-      notes: `Auto-created from payment upload. Claim #: ${claim.claim_number} | Payer: ${claim.payer} | DOS: ${claim.dos}`,
-      case_type: "appeal",
-      files: [],
-      template_id: "",
-      paid: false,
-      paid_at: null,
-      paid_amount: null,
-      ai_started_at: null,
-      rounds: [],
-      appeal_packet: appealPacketDefaults(org.org_name),
-      appeal_attachments: [],
-      ai: { denial_summary:null, appeal_considerations:null, draft_text:null, denial_reason_category:null, missing_info:[], time_to_draft_seconds:0 }
-    };
-    ensureCaseRound(caseObj, "appeal", nowISO());
-    casesAll.push(caseObj);
-    claim.denial_case_id = caseObj.case_id;
-    writeJSON(FILES.cases, casesAll);
-  } else {
-    ensureCaseRound(caseObj, "appeal", nowISO());
-    caseObj.case_type = "appeal";
-    caseObj.status = "open";
-    caseObj.stage = caseObj.stage || "Drafted";
-    const idx = casesAll.findIndex(c => c.case_id === caseObj.case_id);
-    if (idx >= 0) casesAll[idx] = caseObj;
-    writeJSON(FILES.cases, casesAll);
-  }
-  return caseObj;
-}
-function findOrCreateNegotiationCaseForClaim(claim, org, userId){
-  const casesAll = readJSON(FILES.cases, []);
-  let caseObj = null;
-  if (claim.negotiation_case_id) caseObj = casesAll.find(c => c.org_id === org.org_id && c.case_id === claim.negotiation_case_id);
-  if (!caseObj) {
-    caseObj = {
-      case_id: uuid(),
-      org_id: org.org_id,
-      created_by_user_id: userId,
-      created_at: nowISO(),
-      status: "open",
-      stage: "Drafted",
-      notes: `Auto-created from payment upload. Claim #: ${claim.claim_number} | Payer: ${claim.payer} | DOS: ${claim.dos}`,
-      case_type: "negotiation",
-      files: [],
-      template_id: "",
-      paid: false,
-      paid_at: null,
-      paid_amount: null,
-      ai_started_at: null,
-      rounds: [],
-      negotiation_packet: {},
-      ai: {}
-    };
-    ensureCaseRound(caseObj, "negotiation", nowISO());
-    casesAll.push(caseObj);
-    claim.negotiation_case_id = caseObj.case_id;
-    writeJSON(FILES.cases, casesAll);
-  } else {
-    ensureCaseRound(caseObj, "negotiation", nowISO());
-    caseObj.case_type = "negotiation";
-    caseObj.status = "open";
-    caseObj.stage = caseObj.stage || "Drafted";
-    const idx = casesAll.findIndex(c => c.case_id === caseObj.case_id);
-    if (idx >= 0) casesAll[idx] = caseObj;
-    writeJSON(FILES.cases, casesAll);
-  }
-  return caseObj;
-}
-function markPaymentUpdateDetectedIfEligible(claim, org){
-  const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
-  const openCases = casesAll.filter(c => (c.case_id === claim.denial_case_id || c.case_id === claim.negotiation_case_id) && String(c.status || "").toLowerCase() !== "closed");
-  if (!openCases.length) return false;
-  const derived = evaluateClaimDerived(claim, org, {
-    appealCase: openCases.find(c => c.case_id === claim.denial_case_id) || null,
-    negotiationCase: openCases.find(c => c.case_id === claim.negotiation_case_id) || null
-  }, new Date());
-  if (Number(derived.atRisk || 0) <= 0.0001) {
-    const allCases = readJSON(FILES.cases, []);
-    let changed = false;
-    allCases.forEach(c => {
-      if (c.org_id !== org.org_id) return;
-      if (c.case_id === claim.denial_case_id || c.case_id === claim.negotiation_case_id) {
-        c.stage = "Payment Update Detected";
-        c.status = "open";
-        changed = true;
-      }
-    });
-    if (changed) writeJSON(FILES.cases, allCases);
-    return changed;
-  }
-  return false;
-}
 function rangeFromPreset(preset){
   const now = new Date();
   const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23,59,59,999));
@@ -1972,8 +1701,8 @@ function chooseGranularity(preset){
 
 function computeDashboardMetrics(org_id, start, end, preset){
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
-  const paymentsAll = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
+  const ctx = buildClaimContext(org_id);
 
   const inRange = (dtStr) => {
     const d = dtStr ? new Date(dtStr) : null;
@@ -1981,36 +1710,25 @@ function computeDashboardMetrics(org_id, start, end, preset){
     return d >= start && d <= end;
   };
 
-  const billed = billedAll.filter(b => inRange(b.created_at || b.paid_at || b.denied_at));
-  const payments = paymentsAll.filter(p => inRange(p.date_paid || p.created_at));
+  const billed = billedAll.filter(b => inRange(b.created_at || b.paid_at || b.denied_at || b.dos));
   const underpayCases = casesAll.filter(c => (c.case_type||"").toLowerCase()==="underpayment" && inRange(c.created_at));
 
-  // --- Per-claim reconciliation helpers (Option 2: full transparency) ---
   const rec = (b) => {
-    const billedAmt = safeNum(b.amount_billed);
-    const insurancePaid = safeNum(b.insurance_paid || b.paid_amount);
+    const d = evaluateClaimDerived(b, ctx);
+    const billedAmt = safeNum(d.billedAmount);
+    const paid = safeNum(d.paidAmount);
     const patientCollected = safeNum(b.patient_collected);
-
-    // Write-off: explicit write_off_amount wins; otherwise billed - allowed when allowed present; otherwise contractual_adjustment if present
-    const allowedRaw = safeNum(b.allowed_amount);
     const explicitWO = (b.write_off_amount != null && String(b.write_off_amount).trim() !== "") ? safeNum(b.write_off_amount) : null;
     const contractualAdj = safeNum(b.contractual_adjustment);
-
+    const allowedRaw = safeNum(d.allowedAmount);
     let writeOff = 0;
     if (explicitWO != null) writeOff = Math.max(0, explicitWO);
     else if (allowedRaw > 0) writeOff = Math.max(0, billedAmt - allowedRaw);
     else if (contractualAdj > 0) writeOff = Math.max(0, contractualAdj);
-
     const allowed = (allowedRaw > 0) ? allowedRaw : Math.max(0, billedAmt - writeOff);
-
-    // Underpaid (dynamic): per requirement (prevents stale stored values)
-    const underpaidDyn = Math.max(0, billedAmt - insurancePaid - patientCollected);
-
-    // Denied dollars: if claim is marked Denied, treat denied dollars as allowed (or billed if allowed missing)
-    const st = String(b.status || "Pending");
-    const deniedDollars = (st === "Denied") ? Math.max(0, (allowed > 0 ? allowed : billedAmt)) : 0;
-
-    return { billedAmt, allowed, insurancePaid, patientCollected, writeOff, underpaidDyn, deniedDollars, status: st };
+    const stage = String(d.lifecycleStage || "Waiting Payment");
+    const deniedDollars = (stage === "Denied") ? Math.max(0, billedAmt - paid) : 0;
+    return { billedAmt, allowed, insurancePaid: paid, patientCollected, writeOff, underpaidDyn: Math.max(0, d.expectedInsurance - paid), deniedDollars, stage, atRisk: d.atRiskAmount };
   };
 
   const totals = billed.reduce((acc, b) => {
@@ -2023,7 +1741,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
     acc.writeOffTotal += r.writeOff;
 
     // KPI underpaid: sum of dynamic underpaid dollars for Underpaid + Appeal (money still at-risk from payer)
-    if (r.status === "Underpaid" || r.status === "Appeal") acc.underpaidAmt += r.underpaidDyn;
+    if (r.stage === "Underpaid" || r.stage === "Appeal") acc.underpaidAmt += r.underpaidDyn;
     return acc;
   }, { totalBilled:0, allowedTotal:0, insuranceCollected:0, patientCollected:0, patientRespTotal:0, writeOffTotal:0, underpaidAmt:0 });
 
@@ -2038,14 +1756,16 @@ function computeDashboardMetrics(org_id, start, end, preset){
   const netCollectionRate = totals.allowedTotal > 0 ? (collectedTotal / totals.allowedTotal) * 100 : 0;
 
   // Status counts (align labels with charts)
-  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, "Write-Off":0, Pending:0 };
+  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, "Write-Off":0, Submitted:0, "Waiting Payment":0, Pending:0 };
   billed.forEach(b=>{
-    const st = String(b.status || "Pending");
+    const st = String(evaluateClaimDerived(b, ctx).lifecycleStage || "Pending");
     if (st === "Paid") statusCounts.Paid++;
     else if (st === "Denied") statusCounts.Denied++;
     else if (st === "Underpaid") statusCounts.Underpaid++;
     else if (st === "Patient Balance") statusCounts["Patient Balance"]++;
     else if (st === "Contractual") statusCounts["Write-Off"]++;
+    else if (st === "Submitted") statusCounts.Submitted++;
+    else if (st === "Waiting Payment") statusCounts["Waiting Payment"]++;
     else statusCounts.Pending++;
   });
 
@@ -2058,36 +1778,27 @@ function computeDashboardMetrics(org_id, start, end, preset){
   billed.forEach(b=>{
     const d = new Date(b.created_at || b.paid_at || b.denied_at || Date.now());
     const k = groupKeyForDate(d, gran);
-    billedSeries[k] = (billedSeries[k]||0) + safeNum(b.amount_billed);
+    const r = rec(b);
+    billedSeries[k] = (billedSeries[k]||0) + r.billedAmt;
+    collectedSeries[k] = (collectedSeries[k]||0) + r.insurancePaid + r.patientCollected;
+    atRiskSeries[k] = (atRiskSeries[k]||0) + Math.max(0, r.atRisk);
   });
-  payments.forEach(p=>{
-    const d = new Date(p.date_paid || p.created_at || Date.now());
-    const k = groupKeyForDate(d, gran);
-    collectedSeries[k] = (collectedSeries[k]||0) + safeNum(p.amount_paid);
-  });
-
-  const keys = Array.from(new Set([...Object.keys(billedSeries), ...Object.keys(collectedSeries)])).sort();
-  keys.forEach(k=>{
-    const bsum = safeNum(billedSeries[k]);
-    const csum = safeNum(collectedSeries[k]);
-    // at-risk excludes write-offs at the claim level, but we only have series totals here -> conservative view
-    atRiskSeries[k] = Math.max(0, bsum - csum);
-  });
+  const keys = Array.from(new Set([...Object.keys(billedSeries), ...Object.keys(collectedSeries), ...Object.keys(atRiskSeries)])).sort();
 
   // Payer reconciliation aggregation (Option 2)
   const payerAgg = {};
   billed.forEach(b=>{
     const payer = (b.payer || "Unknown").trim() || "Unknown";
     const r = rec(b);
-    if (!payerAgg[payer]) payerAgg[payer] = { billed:0, allowed:0, paid:0, denied:0, writeOff:0, underpaid:0, count:0 };
+    if (!payerAgg[payer]) payerAgg[payer] = { billed:0, allowed:0, paid:0, denied:0, writeOff:0, underpaid:0, submitted:0, waitingPayment:0, count:0 };
     payerAgg[payer].billed += r.billedAmt;
     payerAgg[payer].allowed += r.allowed;
     payerAgg[payer].paid += r.insurancePaid;
     payerAgg[payer].denied += r.deniedDollars;
     payerAgg[payer].writeOff += r.writeOff;
-
-    // Underpaid dollars attributed to Underpaid + Appeal statuses (payer-side at-risk)
-    if (r.status === "Underpaid" || r.status === "Appeal") payerAgg[payer].underpaid += r.underpaidDyn;
+    if (r.stage === "Underpaid" || r.stage === "Appeal") payerAgg[payer].underpaid += r.underpaidDyn;
+    if (r.stage === "Submitted") payerAgg[payer].submitted += r.billedAmt;
+    if (r.stage === "Waiting Payment") payerAgg[payer].waitingPayment += r.billedAmt;
 
     payerAgg[payer].count += 1;
   });
@@ -2107,11 +1818,13 @@ function computeDashboardMetrics(org_id, start, end, preset){
       grossCollectionRate,
       netCollectionRate,
       underpaidAmt: totals.underpaidAmt,
-      underpaidCount: billed.filter(b => ["Underpaid","Appeal"].includes(String(b.status||""))).length,
+      underpaidCount: billed.filter(b => ["Underpaid","Appeal"].includes(String(evaluateClaimDerived(b, ctx).lifecycleStage||""))).length,
       patientRespTotal: totals.patientRespTotal,
       patientCollected: totals.patientCollected,
       patientOutstanding,
-      negotiationCases: underpayCases.length
+      negotiationCases: underpayCases.length,
+      submittedAmt: billed.filter(b => evaluateClaimDerived(b, ctx).lifecycleStage === "Submitted").reduce((s,b)=>s+safeNum(b.amount_billed),0),
+      waitingPaymentAmt: billed.filter(b => evaluateClaimDerived(b, ctx).lifecycleStage === "Waiting Payment").reduce((s,b)=>s+safeNum(b.amount_billed),0)
     },
     statusCounts,
     series: { gran, keys, billed: keys.map(k=>safeNum(billedSeries[k])), collected: keys.map(k=>safeNum(collectedSeries[k])), atRisk: keys.map(k=>safeNum(atRiskSeries[k])) },
@@ -2246,6 +1959,101 @@ function getClaimDiagnosisCode(b){
   return normalizeCode(b.diagnosis_code || b.icd10 || b.icd10_code || b.dx_code || "");
 }
 
+function normalizeClaimKey(v){
+  return String(v || "").replace(/[^0-9]/g, "");
+}
+
+function buildClaimContext(org_id){
+  const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
+  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
+  const negotiations = getNegotiations(org_id).map(n => normalizeNegotiation(n));
+  const paymentsByClaim = {};
+  payments.forEach(p => {
+    const k = normalizeClaimKey(p.claim_number || "");
+    if (!k) return;
+    if (!paymentsByClaim[k]) paymentsByClaim[k] = [];
+    paymentsByClaim[k].push(p);
+  });
+  const caseById = new Map(cases.map(c => [String(c.case_id), c]));
+  const negByBilled = new Map(negotiations.map(n => [String(n.billed_id || ""), n]));
+  return { paymentsByClaim, caseById, negByBilled };
+}
+
+function evaluateClaimDerived(claim, ctx={}){
+  const billedAmount = num(claim.amount_billed);
+  const patientResp = num(claim.patient_responsibility);
+  const allowedAmount = num(claim.allowed_amount);
+  const expectedInsurance = (claim.expected_insurance != null && String(claim.expected_insurance).trim() !== "")
+    ? num(claim.expected_insurance)
+    : computeExpectedInsurance((allowedAmount > 0 ? allowedAmount : billedAmount), patientResp);
+  const key = normalizeClaimKey(claim.claim_number || "");
+  const paymentRows = key && ctx.paymentsByClaim ? (ctx.paymentsByClaim[key] || []) : [];
+  const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid), 0);
+  const paidFromClaim = num(claim.insurance_paid || claim.paid_amount);
+  const hasPaymentResponse = paymentRows.length > 0 || paidFromClaim > 0.0001 || claim.paid_at;
+  const paidAmount = hasPaymentResponse ? Math.max(paidFromClaim, paymentFromRows) : 0;
+  const appealCase = claim.denial_case_id && ctx.caseById ? ctx.caseById.get(String(claim.denial_case_id)) : null;
+  const negotiation = ctx.negByBilled ? ctx.negByBilled.get(String(claim.billed_id || "")) : null;
+  const denialReason = String(claim.denial_reason || appealCase?.denial_reason || appealCase?.issue_reason || "").trim();
+  const denialDocAttached = !!(claim.denial_doc_attached || claim.denial_document || claim.denial_file ||
+    (appealCase && ((appealCase.files || []).length > 0 || (appealCase.appeal_attachments || []).length > 0)));
+  const explicitDenialUpload = denialDocAttached || String(appealCase?.status || "").toLowerCase().includes("denied");
+  const hasDenialContext = !!(denialReason || denialDocAttached || appealCase || explicitDenialUpload);
+  const submittedFlag = !!(claim.submission_id || claim.submitted_at || claim.submitted_date || claim.submitted_to_payer || claim.created_at);
+
+  let lifecycleStage = submittedFlag ? "Submitted" : "Submitted";
+  let financialStatus = "Waiting Payment";
+
+  if (explicitDenialUpload) {
+    lifecycleStage = "Denied";
+    financialStatus = "Denied";
+  } else if (!hasPaymentResponse && !hasDenialContext) {
+    lifecycleStage = submittedFlag ? "Submitted" : "Waiting Payment";
+    financialStatus = "Waiting Payment";
+  } else if (hasPaymentResponse && paidAmount <= 0.0001) {
+    if (hasDenialContext) {
+      lifecycleStage = "Denied";
+      financialStatus = "Denied";
+    } else {
+      lifecycleStage = "Waiting Payment";
+      financialStatus = "Zero Payment - Needs Review";
+    }
+  } else if (hasPaymentResponse && paidAmount > 0.0001 && paidAmount + 0.0001 < expectedInsurance) {
+    lifecycleStage = "Underpaid";
+    financialStatus = "Underpaid";
+  } else if (hasPaymentResponse && paidAmount + 0.0001 >= expectedInsurance) {
+    const patientOutstanding = Math.max(0, patientResp - num(claim.patient_collected));
+    lifecycleStage = patientOutstanding > 0 ? "Patient Balance" : "Paid";
+    financialStatus = lifecycleStage;
+  }
+
+  if (negotiation && ["Open", "Submitted", "In Review", "Counter Offered", "Approved (Pending Payment)"].includes(String(negotiation.status || ""))) {
+    lifecycleStage = lifecycleStage === "Denied" ? lifecycleStage : "Underpaid";
+    if (financialStatus !== "Denied") financialStatus = "Underpaid";
+  }
+
+  const writeOff = num(claim.write_off_amount || claim.contractual_adjustment);
+  let atRiskAmount = 0;
+  if (lifecycleStage === "Underpaid") atRiskAmount = Math.max(0, expectedInsurance - paidAmount);
+  else if (lifecycleStage === "Patient Balance") atRiskAmount = Math.max(0, patientResp - num(claim.patient_collected));
+  else if (lifecycleStage === "Denied" || lifecycleStage === "Submitted" || lifecycleStage === "Waiting Payment") atRiskAmount = Math.max(0, billedAmount - paidAmount);
+  else atRiskAmount = 0;
+
+  return {
+    lifecycleStage,
+    financialStatus,
+    expectedInsurance,
+    paidAmount,
+    billedAmount,
+    allowedAmount,
+    atRiskAmount,
+    writeOffAmount: Math.max(0, writeOff),
+    submittedFlag,
+    hasPaymentResponse,
+    hasDenialContext
+  };
+}
+
 function findContractForClaim(org_id, b){
   const payer = String(b.payer || "").trim().toLowerCase();
   const proc = getClaimProcedureCode(b);
@@ -2276,16 +2084,8 @@ function contractExpectedAmount(contract, billedAmount){
 }
 
 function classifyClaimStatusWithContract(claim){
-  const paid = num(claim.insurance_paid || claim.paid_amount);
-  const expectedInsurance = num(claim.expected_insurance);
-  const patientBalance = Math.max(0, num(claim.patient_responsibility) - num(claim.patient_collected));
-
-  if (expectedInsurance > 0 && paid <= 0.0001) return "Denied";
-  if (expectedInsurance > 0 && paid + 0.0001 >= expectedInsurance) {
-    return patientBalance > 0 ? "Patient Balance" : "Paid";
-  }
-  if (expectedInsurance > 0 && paid < expectedInsurance) return "Underpaid";
-  return String(claim.status || "Pending");
+  const d = evaluateClaimDerived(claim, {});
+  return String(d.lifecycleStage || claim.status || "Waiting Payment");
 }
 
 function recalculateContractsForOrg(org_id){
@@ -2316,45 +2116,27 @@ function recalculateContractsForOrg(org_id){
 }
 
 function computeClaimAtRisk(b){
-  const org = b && b.org_id ? getOrg(b.org_id) : null;
-  if (!org) {
-    const billedAmt = num(b?.amount_billed);
-    const paid = num(b?.insurance_paid || b?.paid_amount);
-    return Math.max(0, billedAmt - paid);
-  }
-  const d = evaluateClaimDerived(b, org, {}, new Date());
-  if (d.financialStatus === "Patient Balance") return Math.max(0, num(b.patient_responsibility) - num(b.patient_collected));
-  return Math.max(0, num(d.atRisk));
+  const d = evaluateClaimDerived(b, {});
+  if (d.lifecycleStage === "Contractual" || d.lifecycleStage === "Paid") return 0;
+  return Math.max(0, d.atRiskAmount);
 }
 
 function classifyStatusFromPaymentImport(claim){
-  const org = claim && claim.org_id ? getOrg(claim.org_id) : null;
-  if (!org) return String(claim.status || "Pending");
-  const d = evaluateClaimDerived(claim, org, {}, new Date());
-  return d.financialStatus || String(claim.status || "Pending");
+  const d = evaluateClaimDerived(claim, {});
+  if (d.lifecycleStage === "Waiting Payment") return "Waiting Payment";
+  if (d.lifecycleStage === "Submitted") return "Submitted";
+  return String(d.lifecycleStage || claim.status || "Pending");
 }
 
 function computeClaimRiskScore(b){
-  const st = String(b.status || "Pending");
-  // Use a local at-risk estimate here to avoid circular dependency with evaluateClaimDerived.
-  const billedAmt = num(b.amount_billed);
-  const insurancePaid = num(b.insurance_paid || b.paid_amount);
-  const patientCollected = num(b.patient_collected);
-  const allowed = num(b.allowed_amount);
-  const patientResp = num(b.patient_responsibility);
-  const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
-    ? num(b.expected_insurance)
-    : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
-  let atRisk = Math.max(0, billedAmt - insurancePaid);
-  if (st === "Underpaid" || st === "Appeal") atRisk = Math.max(0, expectedInsurance - insurancePaid);
-  else if (st === "Patient Balance") atRisk = Math.max(0, patientResp - patientCollected);
-  else if (st === "Contractual" || st === "Paid") atRisk = 0;
-
+  const d = evaluateClaimDerived(b, {});
+  const st = String(d.lifecycleStage || b.status || "Pending");
+  const atRisk = Math.max(0, d.atRiskAmount);
   const dt = new Date(b.dos || b.denied_at || b.created_at || Date.now()).getTime();
   const days = Math.max(0, (Date.now() - dt) / (1000*60*60*24));
   const amountScore = clamp((Math.log10(atRisk + 1) / 4) * 100, 0, 100); // 40%
   const ageScore = clamp((days / 120) * 100, 0, 100); // 30%
-  const stageBase = (st === "Denied") ? 100 : (st === "Underpaid" ? 80 : (st === "Appeal" ? 70 : (st === "Patient Balance" ? 60 : 30)));
+  const stageBase = (st === "Denied") ? 100 : (st === "Underpaid" ? 80 : (st === "Appeal" ? 70 : (st === "Patient Balance" ? 60 : (st === "Waiting Payment" ? 50 : 30))));
   const networkMod = String(b.network_status || "Out of Network").toLowerCase() === "out of network" ? 100 : 40;
   const total = (0.40 * amountScore) + (0.30 * ageScore) + (0.20 * stageBase) + (0.10 * networkMod);
   return Math.round(clamp(total, 0, 100));
@@ -2368,7 +2150,7 @@ function claimRiskBand(score){
 }
 
 function suggestedNextActionForClaim(b){
-  const st = String(b.status || "Pending");
+  const st = String(evaluateClaimDerived(b, {}).lifecycleStage || b.status || "Pending");
   if (st === "Denied" || st === "Appeal") return "Appeal";
   if (st === "Underpaid") return "Negotiate";
   if (st === "Patient Balance") return "Adjust Patient Responsibility";
@@ -2385,6 +2167,7 @@ function badgeClassForStatus(st){
   if (s === "Denied") return "err";
   if (s === "Underpaid") return "underpaid";
   if (s === "Appeal") return "warn";
+  if (s === "Waiting Payment" || s === "Submitted") return "warn";
   if (s === "Patient Balance") return "warn";
   if (s === "Contractual") return "writeoff";
   return "";
@@ -2421,22 +2204,6 @@ function saveSavedQuery(rec){
 function deleteSavedQuery(org_id, saved_id){
   const all = readJSON(FILES.saved_queries, []);
   writeJSON(FILES.saved_queries, all.filter(x => !(x.org_id === org_id && x.saved_id === saved_id)));
-}
-function getInsightSavedLimit(org){
-  const plan = String(getActivePlanName(org.org_id) || "pilot").toLowerCase();
-  if (plan === "pro" || plan === "enterprise") return Infinity;
-  return 10;
-}
-function getIntelligenceCache(org_id){
-  return readJSON(FILES.intelligence_cache, []).filter(c => c.org_id === org_id);
-}
-function putIntelligenceCache(rec){
-  const all = readJSON(FILES.intelligence_cache, []);
-  const key = `${rec.org_id}::${rec.cache_key}`;
-  const idx = all.findIndex(x => `${x.org_id}::${x.cache_key}` === key);
-  if (idx >= 0) all[idx] = rec;
-  else all.push(rec);
-  writeJSON(FILES.intelligence_cache, all.slice(-1500));
 }
 
 // ===== Payment Batch Helpers + Soft Delete Log =====
@@ -2552,7 +2319,7 @@ const server = http.createServer(async (req, res) => {
         <input name="org_name" type="text" required />
         <label style="display:flex;gap:10px;align-items:flex-start;margin-top:12px;">
           <input type="checkbox" name="ack" required style="width:auto;margin:0;margin-top:2px;">
-          <span class="muted">I understand the platform does not log into payer portals directly, submissions require human review and approval, and optional integrations are available on higher-tier plans.</span>
+          <span class="muted">I understand this system does not access EMRs or payer portals and does not submit appeals automatically.</span>
         </label>
         <div class="btnRow">
           <button class="btn" type="submit">Create Account</button>
@@ -2594,24 +2361,7 @@ const server = http.createServer(async (req, res) => {
 
     const orgs = readJSON(FILES.orgs, []);
     const org_id = uuid();
-    const lim = getDefaultAiLimitsForOrg({ org_id });
-    orgs.push({
-      org_id,
-      org_name: orgName,
-      created_at: nowISO(),
-      account_status:"active",
-      aiInsightUsed: 0,
-      aiDraftUsed: 0,
-      aiInsightLimit: lim.insight,
-      aiDraftLimit: lim.draft,
-      aiResetDate: nowISO(),
-      org_address: "",
-      org_phone: "",
-      org_email: "",
-      signature_name: "",
-      signature_title: "",
-      org_logo: ""
-    });
+    orgs.push({ org_id, org_name: orgName, created_at: nowISO(), account_status:"active" });
     writeJSON(FILES.orgs, orgs);
 
     users.push({
@@ -3275,6 +3025,7 @@ const server = http.createServer(async (req, res) => {
 
   const org = getOrg(user.org_id);
   if (!org) return redirect(res, "/login");
+  CURRENT_USER_THEME = (user.theme === "light" || user.theme === "dark" || user.theme === "system") ? user.theme : "system";
 
   cleanupIfExpired(org.org_id);
 
@@ -3345,18 +3096,16 @@ if (method === "GET" && pathname === "/file") {
 
   // ---------- AI Chat (Org-scoped assistant) ----------
   if (method === "POST" && pathname === "/ai/chat") {
-    shouldResetAiCounters(org);
-    if (!org.aiInsightLimit || !org.aiDraftLimit) {
-      const lim = getDefaultAiLimitsForOrg(org);
-      org.aiInsightLimit = lim.insight;
-      org.aiDraftLimit = lim.draft;
-      saveOrg(org);
-    }
-    if (Number(org.aiInsightUsed || 0) >= Number(org.aiInsightLimit || 0)) {
+    const usage = getUsage(org.org_id);
+    const limit = getAIChatLimit(org.org_id);
+
+    if ((usage.ai_chat_used || 0) >= limit) {
       return send(res, 200, JSON.stringify({ answer: "You have reached your AI question limit for your current plan. Please upgrade to continue." }), "application/json");
     }
-    org.aiInsightUsed = Number(org.aiInsightUsed || 0) + 1;
-    saveOrg(org);
+
+    // Count usage (pilot total; monthly resets via month_key rollover)
+    usage.ai_chat_used = (usage.ai_chat_used || 0) + 1;
+    saveUsage(usage);
 
     const body = await parseBody(req);
     let msg = "";
@@ -3418,7 +3167,6 @@ if (method === "GET" && pathname === "/file") {
 
   // ---------- Revenue Intelligence (AI) Query Endpoint ----------
   if (method === "POST" && pathname === "/intelligence/query") {
-    shouldResetAiCounters(org);
     const body = await parseBody(req);
     let payload = {};
     try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
@@ -3430,34 +3178,6 @@ if (method === "GET" && pathname === "/file") {
 
     if (!prompt) {
       return send(res, 200, JSON.stringify({ ok:false, error:"Missing prompt" }), "application/json");
-    }
-    const splitSignals = (prompt.match(/\?/g) || []).length + (prompt.match(/\band\b/gi) || []).length;
-    if (prompt.length > 220 && splitSignals >= 4) {
-      return send(res, 200, JSON.stringify({ ok:false, error:"This request appears to contain multiple analyses. Split into separate requests for best results." }), "application/json");
-    }
-    const insightLimit = Number(org.aiInsightLimit || getDefaultAiLimitsForOrg(org).insight);
-    if (Number(org.aiInsightUsed || 0) >= insightLimit) {
-      return send(res, 200, JSON.stringify({ ok:false, error:"AI insight limit reached for this 30-day cycle." }), "application/json");
-    }
-
-    const rangeCtx = getRevenueContextFromReq(req);
-    const cacheKey = crypto.createHash("sha256").update(JSON.stringify({
-      org_id: org.org_id,
-      prompt: prompt.toLowerCase(),
-      style,
-      start: (rangeCtx.startDate || "").toString(),
-      end: (rangeCtx.endDate || "").toString()
-    })).digest("hex");
-    const cacheHit = getIntelligenceCache(org.org_id).find(c => c.cache_key === cacheKey);
-    if (cacheHit) {
-      return send(res, 200, JSON.stringify({
-        ok:true,
-        cached:true,
-        answer: cacheHit.answer,
-        charts: cacheHit.charts || [],
-        data: cacheHit.data || {},
-        usageRemaining: Math.max(0, insightLimit - Number(org.aiInsightUsed || 0))
-      }), "application/json");
     }
 
     const denialByMonth = computeDenialTrends(org.org_id);
@@ -3557,11 +3277,6 @@ Next steps:
     saveAIQuery(queryRec);
 
     if (save) {
-      const maxSaved = getInsightSavedLimit(org);
-      const existingSaved = getSavedQueries(org.org_id);
-      if (isFinite(maxSaved) && existingSaved.length >= maxSaved) {
-        return send(res, 200, JSON.stringify({ ok:false, error:`Saved insight limit reached (${maxSaved}).` }), "application/json");
-      }
       const savedRec = {
         saved_id: uuid(),
         org_id: org.org_id,
@@ -3586,25 +3301,8 @@ Next steps:
       negotiationCollectedTotal: negCollectedTotal,
       negotiationSuccessRate: Number(negSuccessRate.toFixed(1))
     };
-    putIntelligenceCache({
-      cache_id: uuid(),
-      org_id: org.org_id,
-      cache_key: cacheKey,
-      answer,
-      charts,
-      data: dataOut,
-      created_at: nowISO()
-    });
-    org.aiInsightUsed = Number(org.aiInsightUsed || 0) + 1;
-    saveOrg(org);
 
-    return send(res, 200, JSON.stringify({
-      ok:true,
-      answer,
-      charts,
-      data: dataOut,
-      usageRemaining: Math.max(0, insightLimit - Number(org.aiInsightUsed || 0))
-    }), "application/json");
+    return send(res, 200, JSON.stringify({ ok:true, answer, charts, data: dataOut }), "application/json");
   }
 
   if (method === "POST" && pathname === "/intelligence/saved/delete") {
@@ -3852,7 +3550,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const html = renderPage("Revenue Overview", `
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
-          <h2 style="margin-bottom:4px;">Revenue Overview</h2>
+          <h2 style="margin-bottom:4px;">Revenue Overview <span class="tooltip" data-tip="Live financial summary generated from your uploaded billed claims, payments, denials, and negotiations.">ⓘ</span></h2>
           <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Trial Ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
           ${planBadge}
         </div>
@@ -3886,7 +3584,17 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
       <div class="hr"></div>
 
-      <h3>Revenue Health <span class="tooltip">ⓘ<span class="tooltiptext">High-level revenue performance for the selected date range.</span></span></h3>
+      <div class="insight-card">
+        <h3>Revenue Breakdown</h3>
+        <canvas id="revenueBreakdownChart" height="130"></canvas>
+      </div>
+
+      <div class="insight-card">
+        <h3>Revenue Trend</h3>
+        <canvas id="revenueTrendChart" height="150"></canvas>
+      </div>
+
+      <h3>Revenue Health <span class="tooltip" data-tip="High-level revenue performance for the selected date range.">ⓘ</span></h3>
 
       <div style="margin-top:8px;">
         <div style="height:14px;background:#e5e7eb;border-radius:999px;overflow:hidden;">
@@ -3928,9 +3636,9 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div class="row">
         <div class="col">
           <div class="insight-card">
-            <h3>Revenue Trend <span class="tooltip">ⓘ<span class="tooltiptext">Billed vs collected trend for selected range with Net Collection Rate.</span></span></h3>
+            <h3>Revenue Trend (Detailed) <span class="tooltip" data-tip="Billed vs collected trend for selected range with at-risk amounts.">ⓘ</span></h3>
             <div id="trendSkeleton" class="skeleton"></div>
-            <canvas id="revTrend" height="150" style="display:none;"></canvas>
+            <canvas id="revenueTrendChartLegacy" height="150" style="display:none;"></canvas>
             <p id="trendEmpty" class="muted" style="display:none;">No data for selected range.</p>
           </div>
         </div>
@@ -3953,11 +3661,14 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <div id="payerSkeleton" class="skeleton"></div>
             <canvas id="payerStackedChart" height="170" style="display:none;"></canvas>
             <p id="payerEmpty" class="muted" style="display:none;">No payer data for selected range.</p>
-            <div style="overflow:auto;margin-top:10px;">
+            <div id="payerTableSync" style="margin-top:10px;">
+              <div class="scrollSyncTop"><div></div></div>
+              <div class="scrollSyncBottom">
               <table>
-                <thead><tr><th>Payer</th><th>Billed</th><th>Allowed</th><th>Paid</th><th>Denied</th><th>Write-Off</th><th>Underpaid</th></tr></thead>
+                <thead><tr><th style="min-width:180px;">Payer</th><th style="min-width:130px;">Billed</th><th style="min-width:130px;">Allowed</th><th style="min-width:130px;">Paid</th><th style="min-width:130px;">Denied</th><th style="min-width:130px;">Write-off</th><th style="min-width:130px;">Underpaid</th></tr></thead>
                 <tbody>${payerRows || `<tr><td colspan="7" class="muted">No payer data in this range.</td></tr>`}</tbody>
               </table>
+            </div>
             </div>
           </div>
         </div>
@@ -3973,7 +3684,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
       <div class="btnRow" style="margin-top:10px;">
         <a class="btn" href="/claims">Open Claims Lifecycle</a>
-        <a class="btn secondary" href="/claims?view=denials">Upload Denials</a>
+        <a class="btn secondary" href="/data-management?tab=denials">Data Management</a>
         <a class="btn secondary" href="/claims?view=negotiations">Upload Negotiations</a>
         <a class="btn secondary" href="/report">Reports</a>
       </div>
@@ -3996,153 +3707,104 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
      
 <script>
-(function(){
-  const series = JSON.parse(atob("${seriesB64}"));
-  const pt = JSON.parse(atob("${payerB64}"));
-  const flow = JSON.parse(atob("${flowB64}"));
-  const denialTop = JSON.parse(atob("${denialReasonsB64}"));
+window.__DASHBOARD__ = {
+  series: JSON.parse(atob("${seriesB64}")),
+  payerTop: JSON.parse(atob("${payerB64}")),
+  flow: JSON.parse(atob("${flowB64}")),
+  denialTop: JSON.parse(atob("${denialReasonsB64}")),
+  statusCounts: JSON.parse(atob("${statusB64}"))
+};
+document.addEventListener("DOMContentLoaded", function(){
+  const d = window.__DASHBOARD__ || {};
   const hasChart = !!window.Chart;
+  if (!hasChart) return;
   const moneyFmt = (n) => "$" + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const showCanvas = (canvasId, skeletonId, emptyId, showEmpty) => {
-    const c = document.getElementById(canvasId);
-    const s = document.getElementById(skeletonId);
-    const e = document.getElementById(emptyId);
-    if (s) s.style.display = "none";
-    if (c) c.style.display = showEmpty ? "none" : "block";
-    if (e) e.style.display = showEmpty ? "block" : "none";
+  new Chart(document.getElementById("revenueBreakdownChart"), {
+    type: "doughnut",
+    data: {
+      labels: ["Paid","Underpaid","Denied","Write-off","Waiting Payment"],
+      datasets: [{ data: [d.flow?.values?.[2]||0, d.flow?.values?.[3]||0, d.flow?.values?.[4]||0, d.flow?.values?.[5]||0, d.flow?.values?.[6]||0], backgroundColor: ["#16a34a","#f59e0b","#ef4444","#64748b","#6366f1"] }]
+    },
+    options: { responsive:true }
+  });
+
+  const trendLabels = d.series?.keys || [];
+  const billed = (d.series?.billed || []).map(v => Number(v || 0));
+  const collected = (d.series?.collected || []).map(v => Number(v || 0));
+  const atRisk = (d.series?.atRisk || []).map(v => Number(v || 0));
+  const trendCfg = {
+    type: "line",
+    data: { labels: trendLabels, datasets: [
+      { label: "Billed", data: billed, borderColor:"#111827", backgroundColor:"#111827", tension:.2 },
+      { label: "Collected", data: collected, borderColor:"#0ea5e9", backgroundColor:"#0ea5e9", tension:.2 },
+      { label: "At Risk", data: atRisk, borderColor:"#f59e0b", backgroundColor:"#f59e0b", tension:.2 }
+    ]},
+    options: { responsive:true, interaction:{mode:"index", intersect:false}, scales:{ y:{ ticks:{ callback:(v)=>moneyFmt(v) } } } }
   };
+  new Chart(document.getElementById("revenueTrendChart"), trendCfg);
+  new Chart(document.getElementById("revenueTrendChartLegacy"), trendCfg);
 
-  try {
-    // Revenue Flow
-    const flowHasData = Array.isArray(flow.values) && flow.values.some(v => Number(v) > 0);
-    if (flowHasData && hasChart) {
-      new Chart(document.getElementById("revenueFlowChart"), {
-        type: "bar",
-        data: {
-          labels: flow.labels,
-          datasets: [{ label: "Amount", data: flow.values, backgroundColor: ["#111827","#1f2937","#0ea5e9","#f59e0b","#ef4444","#6b7280","#f97316"] }]
-        },
-        options: { indexAxis: "y", responsive: true, plugins: { tooltip: { callbacks: { label: (ctx) => moneyFmt(ctx.parsed.x) } } } }
-      });
-      showCanvas("revenueFlowChart","flowSkeleton","flowEmpty",false);
-    } else {
-      showCanvas("revenueFlowChart","flowSkeleton","flowEmpty",true);
-      if (!hasChart) document.getElementById("flowEmpty").textContent = "Chart library not loaded.";
-    }
+  new Chart(document.getElementById("revenueFlowChart"), {
+    type: "bar",
+    data: {
+      labels: ["Revenue Flow"],
+      datasets: (d.flow?.labels || []).map((lbl, idx) => ({
+        label: lbl,
+        data: [Number((d.flow?.values || [])[idx] || 0)],
+        backgroundColor: ["#111827","#334155","#0ea5e9","#ef4444","#6b7280","#f59e0b","#f97316"][idx % 7],
+        stack: "flow"
+      }))
+    },
+    options: { responsive:true, scales:{ x:{ stacked:true }, y:{ stacked:true, ticks:{ callback:(v)=>moneyFmt(v) } } } }
+  });
+  document.getElementById("flowSkeleton").style.display = "none";
+  document.getElementById("revenueFlowChart").style.display = "block";
+  document.getElementById("trendSkeleton").style.display = "none";
+  document.getElementById("revenueTrendChartLegacy").style.display = "block";
 
-    // Revenue Trend (Billed, Collected, Net Collection Rate)
-    const trendLabels = series.keys || [];
-    const billed = (series.billed || []).map(v => Number(v || 0));
-    const collected = (series.collected || []).map(v => Number(v || 0));
-    const ncr = billed.map((b, i) => b > 0 ? (collected[i] / b) * 100 : 0);
-    const hasTrendData = trendLabels.length > 0 && (billed.some(v=>v>0) || collected.some(v=>v>0));
-
-    if (hasTrendData && hasChart) {
-      new Chart(document.getElementById("revTrend"), {
-        type: "line",
-        data: {
-          labels: trendLabels,
-          datasets: [
-            { label: "Total Billed", data: billed, borderColor: "#111827", backgroundColor: "#111827", tension: 0.2, yAxisID: "y" },
-            { label: "Total Collected", data: collected, borderColor: "#0ea5e9", backgroundColor: "#0ea5e9", tension: 0.2, yAxisID: "y" },
-            { label: "Net Collection Rate (%)", data: ncr, borderColor: "#16a34a", backgroundColor: "#16a34a", tension: 0.2, yAxisID: "y1" }
-          ]
-        },
-        options: {
-          responsive: true,
-          interaction: { mode: "index", intersect: false },
-          scales: {
-            y: { position: "left", ticks: { callback: (v) => moneyFmt(v) } },
-            y1: { position: "right", grid: { drawOnChartArea: false }, ticks: { callback: (v) => Number(v).toFixed(1) + "%" }, min: 0, max: 100 }
-          }
-        }
-      });
-      showCanvas("revTrend","trendSkeleton","trendEmpty",false);
-    } else {
-      showCanvas("revTrend","trendSkeleton","trendEmpty",true);
-      if (!hasChart) document.getElementById("trendEmpty").textContent = "Chart library not loaded.";
-    }
-
-    // Stacked Payer Chart with sorting
-    let payerChart = null;
-    const sortSel = document.getElementById("payerSort");
-    const toSorted = (mode) => {
-      const rows = (pt || []).slice();
-      const key = mode === "denied" ? "denied" : (mode === "billed" ? "billed" : "underpaid");
-      rows.sort((a,b)=> Number(b[key] || 0) - Number(a[key] || 0));
-      return rows;
-    };
-    const renderPayer = (mode) => {
-      const rows = toSorted(mode);
-      const hasRows = rows.some(r => Number(r.paid || 0) > 0 || Number(r.underpaid || 0) > 0 || Number(r.denied || 0) > 0);
-      if (!hasRows || !hasChart) {
-        showCanvas("payerStackedChart","payerSkeleton","payerEmpty",true);
-        if (!hasChart) document.getElementById("payerEmpty").textContent = "Chart library not loaded.";
-        return;
-      }
-      if (payerChart) payerChart.destroy();
-      payerChart = new Chart(document.getElementById("payerStackedChart"), {
-        type: "bar",
-        data: {
-          labels: rows.map(r=>r.payer),
-          datasets: [
-            { label: "Paid", data: rows.map(r=>Number(r.paid||0)), backgroundColor: "#0ea5e9", stack: "rev" },
-            { label: "Underpaid", data: rows.map(r=>Number(r.underpaid||0)), backgroundColor: "#f59e0b", stack: "rev" },
-            { label: "Denied", data: rows.map(r=>Number(r.denied||0)), backgroundColor: "#ef4444", stack: "rev" }
-          ]
-        },
-        options: {
-          responsive: true,
-          scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: (v)=>moneyFmt(v) } } },
-          plugins: {
-            tooltip: {
-              callbacks: {
-                title: (items) => items[0]?.label || "",
-                label: (ctx) => (ctx.dataset.label + ": " + moneyFmt(ctx.parsed.y)),
-                footer: (items) => {
-                  const total = items.reduce((s,i)=>s + Number(i.parsed.y || 0),0);
-                  return "Total: " + moneyFmt(total);
-                }
-              }
-            }
-          }
-        }
-      });
-      showCanvas("payerStackedChart","payerSkeleton","payerEmpty",false);
-    };
-    renderPayer("underpaid");
-    if (sortSel) sortSel.addEventListener("change", () => renderPayer(sortSel.value || "underpaid"));
-
-    // Top Denial Reasons (or Top Claim Issues)
-    const denialModule = document.getElementById("denialModule");
-    const hasDenialData = Array.isArray(denialTop) && denialTop.length > 0;
-    if (!hasDenialData) {
-      if (denialModule) denialModule.style.display = "none";
-    } else if (hasChart) {
-      new Chart(document.getElementById("denialReasonsChart"), {
-        type: "bar",
-        data: {
-          labels: denialTop.map(x=>x.label),
-          datasets: [{ label: "Count", data: denialTop.map(x=>Number(x.count||0)), backgroundColor: "#ef4444" }]
-        },
-        options: { indexAxis: "y", responsive: true }
-      });
-      showCanvas("denialReasonsChart","denialSkeleton","denialEmpty",false);
-    } else {
-      showCanvas("denialReasonsChart","denialSkeleton","denialEmpty",true);
-      document.getElementById("denialEmpty").textContent = "Chart library not loaded.";
-    }
-  } catch (err) {
-    ["flow","trend","payer","denial"].forEach(p => {
-      const sk = document.getElementById(p + "Skeleton");
-      if (sk) sk.style.display = "none";
+  let payerChart = null;
+  const sortSel = document.getElementById("payerSort");
+  const sorted = (mode) => {
+    const rows = (d.payerTop || []).slice();
+    const key = mode === "denied" ? "denied" : (mode === "billed" ? "billed" : "underpaid");
+    rows.sort((a,b)=> Number(b[key]||0) - Number(a[key]||0));
+    return rows;
+  };
+  const renderPayer = (mode) => {
+    const rows = sorted(mode);
+    if (payerChart) payerChart.destroy();
+    payerChart = new Chart(document.getElementById("payerStackedChart"), {
+      type: "bar",
+      data: { labels: rows.map(r=>r.payer), datasets: [
+        { label:"Billed", data:rows.map(r=>Number(r.billed||0)), backgroundColor:"#1d4ed8", stack:"rev" },
+        { label:"Allowed", data:rows.map(r=>Number(r.allowed||0)), backgroundColor:"#475569", stack:"rev" },
+        { label:"Paid", data:rows.map(r=>Number(r.paid||0)), backgroundColor:"#16a34a", stack:"rev" },
+        { label:"Denied", data:rows.map(r=>Number(r.denied||0)), backgroundColor:"#ef4444", stack:"rev" },
+        { label:"Write-off", data:rows.map(r=>Number(r.writeOff||0)), backgroundColor:"#6b7280", stack:"rev" },
+        { label:"Underpaid", data:rows.map(r=>Number(r.underpaid||0)), backgroundColor:"#f59e0b", stack:"rev" }
+      ]},
+      options: { responsive:true, scales:{ x:{ stacked:true }, y:{ stacked:true, ticks:{ callback:(v)=>moneyFmt(v) } } } }
     });
-    const em = document.getElementById("trendEmpty");
-    if (em) { em.style.display = "block"; em.textContent = "Error loading insights for selected range."; }
-  }
+    document.getElementById("payerSkeleton").style.display = "none";
+    document.getElementById("payerStackedChart").style.display = "block";
+  };
+  renderPayer("underpaid");
+  if (sortSel) sortSel.addEventListener("change", () => renderPayer(sortSel.value || "underpaid"));
+  window.__syncScrollBars && window.__syncScrollBars("payerTableSync");
 
-})();
+  if ((d.denialTop || []).length) {
+    new Chart(document.getElementById("denialReasonsChart"), {
+      type: "bar",
+      data: { labels:(d.denialTop||[]).map(x=>x.label), datasets:[{ label:"Denied", data:(d.denialTop||[]).map(x=>Number(x.count||0)), backgroundColor:"#ef4444" }] },
+      options: { indexAxis:"y", responsive:true }
+    });
+    document.getElementById("denialSkeleton").style.display = "none";
+    document.getElementById("denialReasonsChart").style.display = "block";
+  } else {
+    document.getElementById("denialModule").style.display = "none";
+  }
+});
 </script>
 
 
@@ -4156,14 +3818,15 @@ if (method === "GET" && pathname === "/weekly-summary") {
 if (method === "GET" && pathname === "/claims") {
 
   // Sub-tabs: billed | payments | denials | negotiations | all
-  const view = String(parsed.query.view || "all").toLowerCase();
+  const view = String(parsed.query.view || "billed").toLowerCase();
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
+  const claimCtx = buildClaimContext(org.org_id);
 
   // Snapshot counts across all claims (simple, fast)
   const counts = billedAll.reduce((acc,b)=>{
-    const s = String(b.status||"Pending");
+    const s = String(evaluateClaimDerived(b, claimCtx).lifecycleStage || "Pending");
     acc.total++;
     acc[s] = (acc[s]||0)+1;
     return acc;
@@ -4185,36 +3848,6 @@ if (method === "GET" && pathname === "/claims") {
     });
     return Object.values(map);
   })();
-
-  const lifecycleRowsAll = billedAll.map(b => {
-    const appealCase = b.denial_case_id ? denialCasesOrg.find(c => c.case_id === b.denial_case_id) : null;
-    const negotiationCase = negotiationsOrg.find(n => n.billed_id === b.billed_id) || null;
-    const derived = evaluateClaimDerived(b, org, { appealCase, negotiationCase }, new Date());
-    return { ...b, derived };
-  });
-  const lifecycleStages = ["Submitted","Awaiting Payment","Paid in Full","Underpaid","Denied","In Appeal/Negotiation","Resolved"];
-  const lifecycleSummary = lifecycleStages.map(stage => {
-    const xs = lifecycleRowsAll.filter(r => r.derived.lifecycleStage === stage);
-    const totalAtRisk = xs.reduce((s, r) => s + Number(r.derived.atRisk || 0), 0);
-    const pct = lifecycleRowsAll.length ? Math.round((xs.length / lifecycleRowsAll.length) * 100) : 0;
-    return { stage, count: xs.length, totalAtRisk, pct };
-  });
-  const stageFilter = String(parsed.query.stage || "").trim();
-  const lifecyclePipelineHtml = `
-    <h3>Lifecycle Pipeline</h3>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      ${lifecycleSummary.map(s => {
-        const active = stageFilter === s.stage;
-        const qs = new URLSearchParams({ ...parsed.query, stage: active ? "" : s.stage, view:"all", page:"1" }).toString();
-        return `<a href="/claims?${qs}" style="text-decoration:none;flex:1;min-width:170px;border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:${active ? "#111827" : "#fff"};color:${active ? "#fff" : "#111827"};">
-          <div style="font-weight:900;font-size:12px;">${safeStr(s.stage)}</div>
-          <div style="font-size:18px;font-weight:900;">${s.count}</div>
-          <div class="small">${formatMoneyUI(s.totalAtRisk)} at risk</div>
-          <div style="margin-top:6px;height:8px;background:#e5e7eb;border-radius:999px;overflow:hidden;"><div style="height:8px;background:${active ? "#fff" : "#111827"};width:${s.pct}%;"></div></div>
-        </a>`;
-      }).join("")}
-    </div>
-  `;
 
   const viewSnapshot = (() => {
     if (view === "billed") {
@@ -4271,7 +3904,7 @@ if (method === "GET" && pathname === "/claims") {
     return `
       <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Overall claim status distribution.</span></span></h3>
       <div class="row">
-        <div class="col"><div class="kpi-card"><h4>Total Claims</h4><p>${counts.total||0}</p></div><div class="kpi-card"><h4>At Risk Claims</h4><p>${(counts["Denied"]||0)+(counts["Underpaid"]||0)+(counts["Appeal"]||0)+(counts["Pending"]||0)}</p></div></div>
+        <div class="col"><div class="kpi-card"><h4>Total Claims</h4><p>${counts.total||0}</p></div><div class="kpi-card"><h4>At Risk Claims</h4><p>${(counts["Denied"]||0)+(counts["Underpaid"]||0)+(counts["Appeal"]||0)+(counts["Pending"]||0)+(counts["Submitted"]||0)+(counts["Waiting Payment"]||0)}</p></div></div>
         <div class="col"><div class="kpi-card"><h4>Denied</h4><p>${counts["Denied"]||0}</p></div><div class="kpi-card"><h4>Underpaid</h4><p>${counts["Underpaid"]||0}</p></div></div>
       </div>
     `;
@@ -4300,35 +3933,12 @@ if (method === "GET" && pathname === "/claims") {
 
   // ===== Shared header (always) =====
   let body = `
-    <h2>Claims Lifecycle <span class="tooltip">ⓘ<span class="tooltiptext">This is your operational hub for billed batches, payment batches, denial appeals, negotiations, and all claims.</span></span></h2>
+    <h2>Claims Lifecycle <span class="tooltip" data-tip="Operational hub for billed batches, payment batches, denials, appeals, negotiations, and all claims.">ⓘ</span></h2>
     <p class="muted">Everything that happens to claims — billed, denied, appealed, paid, and negotiated — in one place.</p>
     <div class="muted small">Select a tab below to manage a specific stage.</div>
     ${subTabs}
 
     <div class="hr"></div>
-    ${lifecyclePipelineHtml}
-    <div class="hr"></div>
-
-<h3>Overall Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Counts across your full claim population (not just the selected sub-tab).</span></span></h3>
-    <div class="row">
-      <div class="col">
-        <div class="kpi-card"><h4>Total Claims</h4><p>${counts.total || 0}</p></div>
-        <div class="kpi-card"><h4>Denied</h4><p>${counts["Denied"] || 0}</p></div>
-      </div>
-      <div class="col">
-        <div class="kpi-card"><h4>Underpaid</h4><p>${counts["Underpaid"] || 0}</p></div>
-        <div class="kpi-card"><h4>Appeal</h4><p>${counts["Appeal"] || 0}</p></div>
-      </div>
-      <div class="col">
-        <div class="kpi-card"><h4>Paid</h4><p>${counts["Paid"] || 0}</p></div>
-        <div class="kpi-card"><h4>Negotiations</h4><p>${getNegotiations(org.org_id).length}</p></div>
-      </div>
-    </div>
-
-    <div class="hr"></div>
-
-    
-
     <div class="hr"></div>
 
     ${viewSnapshot}
@@ -4366,11 +3976,11 @@ if (method === "GET" && pathname === "/claims") {
       .map(s=>{
         const claims = billedAll.filter(b => b.submission_id === s.submission_id);
         const totalClaims = claims.length;
-        const paidCount = claims.filter(b => (b.status||"Pending")==="Paid").length;
-        const deniedCount = claims.filter(b => (b.status||"Pending")==="Denied").length;
-        const underpaidCount = claims.filter(b => (b.status||"Pending")==="Underpaid").length;
-        const appealCount = claims.filter(b => (b.status||"Pending")==="Appeal").length;
-        const pendingCount = claims.filter(b => (b.status||"Pending")==="Pending").length;
+        const paidCount = claims.filter(b => evaluateClaimDerived(b, claimCtx).lifecycleStage === "Paid").length;
+        const deniedCount = claims.filter(b => evaluateClaimDerived(b, claimCtx).lifecycleStage === "Denied").length;
+        const underpaidCount = claims.filter(b => evaluateClaimDerived(b, claimCtx).lifecycleStage === "Underpaid").length;
+        const appealCount = claims.filter(b => evaluateClaimDerived(b, claimCtx).lifecycleStage === "Appeal").length;
+        const pendingCount = claims.filter(b => ["Pending","Submitted","Waiting Payment"].includes(evaluateClaimDerived(b, claimCtx).lifecycleStage)).length;
 
         const totalBilledAmt = claims.reduce((sum,b)=> sum + Number(b.amount_billed || 0), 0);
         const collectedAmt = claims.reduce((sum, b) => sum + Number(b.insurance_paid || b.paid_amount || 0), 0);
@@ -4492,25 +4102,8 @@ if (method === "GET" && pathname === "/claims") {
   // (3) Denial Queue
   if (view === "denials") {
     body += `
-      <h3>Upload Denial Documents <span class="tooltip">ⓘ<span class="tooltiptext">Upload denial files (PDF/DOC/images). Each file creates a denial case and appears in this queue.</span></span></h3>
-      <form method="POST" action="/upload-denials" enctype="multipart/form-data">
-        <input type="hidden" name="next" value="/claims?view=denials"/>
-        <div id="denials-dropzone" class="dropzone">Drop denial files here or click to select</div>
-        <input id="denials-files" type="file" name="files" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" required style="display:none" />
-        <div class="btnRow"><button class="btn" type="submit">Upload Denial Files</button></div>
-      </form>
-      <script>
-        (function(){
-          const dz = document.getElementById("denials-dropzone");
-          const inp = document.getElementById("denials-files");
-          if (!dz || !inp) return;
-          dz.addEventListener("click", ()=>inp.click());
-          ["dragenter","dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
-          ["dragleave","drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
-          dz.addEventListener("drop", e => { if (e.dataTransfer.files?.length) { inp.files = e.dataTransfer.files; dz.textContent = inp.files.length + " file(s) selected"; } });
-          inp.addEventListener("change", ()=>{ if (inp.files?.length) dz.textContent = inp.files.length + " file(s) selected"; });
-        })();
-      </script>
+      <h3>Denial Documents <span class="tooltip">ⓘ<span class="tooltiptext">Upload and manage denial files from Data Management.</span></span></h3>
+      <div class="btnRow"><a class="btn secondary" href="/data-management?tab=denials">Open Data Management</a></div>
       <div class="hr"></div>
     `;
     const billedOrg = billedAll;
@@ -4565,7 +4158,7 @@ if (method === "GET" && pathname === "/claims") {
       </div>
       <div style="overflow:auto;">
         <table>
-          <thead><tr><th>Claim #</th><th>Payer</th><th>DOS</th><th>Billed</th><th>Risk Score</th><th>Case ID</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Claim #</th><th>Payer</th><th>DOS</th><th>Billed</th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Case ID</th><th>Status</th><th></th></tr></thead>
           <tbody>${rows || `<tr><td colspan="8" class="muted">No denial cases yet.</td></tr>`}</tbody>
         </table>
       </div>
@@ -4612,7 +4205,7 @@ if (method === "GET" && pathname === "/claims") {
         <td>$${Number(n.approved_amount||0).toFixed(2)}</td>
         <td>$${Number(n.collected_amount||0).toFixed(2)}</td>
         <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
-        <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">Open</a></td>
+        <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">Open Negotiation</a></td>
       </tr>
     `;}).join("");
 
@@ -4662,15 +4255,15 @@ if (method === "GET" && pathname === "/claims") {
   // (5) All Claims
   if (view === "all") {
     const q = String(parsed.query.q || "").trim().toLowerCase();
+    const statusF = String(parsed.query.status || "").trim();
     const payerF = String(parsed.query.payer || "").trim();
-    const stageF = String(parsed.query.stage || "").trim();
     const start = String(parsed.query.start || "").trim();
     const end = String(parsed.query.end || "").trim();
     const minAmt = String(parsed.query.min || "").trim();
     const submissionF = String(parsed.query.submission_id || "").trim();
 
-    let billed = lifecycleRowsAll.slice();
-    if (submissionF) billed = billed.filter(b => String(b.submission_id || "") === submissionF);
+    let billed = billedAll.slice();
+    if (submissionF) billed = billed.filter(b => String(b.submission_id||"") === submissionF);
 
     const fromDate = start ? new Date(start + "T00:00:00.000Z") : null;
     const toDate = end ? new Date(end + "T23:59:59.999Z") : null;
@@ -4678,10 +4271,11 @@ if (method === "GET" && pathname === "/claims") {
 
     billed = billed.filter(b=>{
       if (q) {
-        const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""} ${b.patient_name||""}`.toLowerCase();
+        const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
         if (!blob.includes(q)) return false;
       }
-      if (stageF && String(b.derived.lifecycleStage || "") !== stageF) return false;
+      const stage = String(evaluateClaimDerived(b, claimCtx).lifecycleStage || b.status || "Pending");
+      if (statusF && stage !== statusF) return false;
       if (payerF && String(b.payer||"") !== payerF) return false;
       if (fromDate || toDate) {
         const dt = new Date((b.dos || b.created_at || b.paid_at || b.denied_at || nowISO()));
@@ -4689,21 +4283,41 @@ if (method === "GET" && pathname === "/claims") {
         if (toDate && dt > toDate) return false;
       }
       if (minAmount != null) {
-        if (Number(b.derived.atRisk || 0) < minAmount) return false;
+        const atRisk = computeClaimAtRisk(b);
+        if (atRisk < minAmount) return false;
       }
       return true;
     });
 
-    const payerOpts = Array.from(new Set(lifecycleRowsAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
-    const batchOpts = Array.from(new Set(lifecycleRowsAll.map(b => (b.submission_id || "").trim()).filter(Boolean))).sort();
-    const stageOpts = lifecycleStages;
+    const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
+    const statusOpts = ["Submitted","Waiting Payment","Pending","Paid","Denied","Underpaid","Appeal","Contractual","Patient Balance"];
 
-    billed.sort((a,b)=> Number(b.derived.riskScore || 0) - Number(a.derived.riskScore || 0));
+    billed.sort((a,b)=> computeClaimRiskScore(b) - computeClaimRiskScore(a));
 
     const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
     const totalFiltered = billed.length;
     const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
     const pageItems = billed.slice(startIdx, startIdx + pageSize);
+
+    const rows = pageItems.map(b=>{
+      const d = evaluateClaimDerived(b, claimCtx);
+      const st = String(d.lifecycleStage || b.status || "Pending");
+      const paidAmt = Number(d.paidAmount || 0);
+      const atRisk = Number(d.atRiskAmount || 0);
+      const riskScore = computeClaimRiskScore(b);
+
+      return `<tr>
+        <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
+        <td>${safeStr(b.dos || "")}</td>
+        <td>${safeStr(b.payer || "")}</td>
+        <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
+        <td>$${paidAmt.toFixed(2)}</td>
+        <td>$${Number(atRisk||0).toFixed(2)}</td>
+        <td>${riskScore}</td>
+        <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
+        <td class="muted small">${b.submission_id ? `<a href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">Batch</a>` : "—"}</td>
+      </tr>`;
+    }).join("");
 
     const sizeSelect = `
       <label class="small muted" style="margin-right:8px;">Per page</label>
@@ -4721,6 +4335,7 @@ if (method === "GET" && pathname === "/claims") {
 
       <form method="GET" action="/claims" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
         <input type="hidden" name="view" value="all"/>
+        ${submissionF ? `<input type="hidden" name="submission_id" value="${safeStr(submissionF)}"/>` : ``}
 
         <div style="display:flex;flex-direction:column;min-width:220px;">
           <label>Search</label>
@@ -4728,26 +4343,18 @@ if (method === "GET" && pathname === "/claims") {
         </div>
 
         <div style="display:flex;flex-direction:column;">
+          <label>Status</label>
+          <select name="status">
+            <option value="">All</option>
+            ${statusOpts.map(s => `<option value="${safeStr(s)}"${statusF===s ? " selected":""}>${safeStr(s)}</option>`).join("")}
+          </select>
+        </div>
+
+        <div style="display:flex;flex-direction:column;">
           <label>Payer</label>
           <select name="payer">
             <option value="">All</option>
             ${payerOpts.map(p => `<option value="${safeStr(p)}"${payerF===p ? " selected":""}>${safeStr(p)}</option>`).join("")}
-          </select>
-        </div>
-
-        <div style="display:flex;flex-direction:column;">
-          <label>Batch</label>
-          <select name="submission_id">
-            <option value="">All</option>
-            ${batchOpts.map(s => `<option value="${safeStr(s)}"${submissionF===s ? " selected":""}>${safeStr(s)}</option>`).join("")}
-          </select>
-        </div>
-
-        <div style="display:flex;flex-direction:column;">
-          <label>Stage</label>
-          <select name="stage">
-            <option value="">All</option>
-            ${stageOpts.map(s => `<option value="${safeStr(s)}"${stageF===s ? " selected":""}>${safeStr(s)}</option>`).join("")}
           </select>
         </div>
 
@@ -4780,14 +4387,17 @@ if (method === "GET" && pathname === "/claims") {
       </div>
 
       <div style="overflow:auto;">
-        ${renderClaimTable(pageItems, { includeLifecycleColumns:true, context:"lifecycle", includeActions:false, includeCaseColumns:false })}
+        <table>
+          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Risk Score</th><th>Status</th><th>Source</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="9" class="muted">No claims found.</td></tr>`}</tbody>
+        </table>
       </div>
 
       ${nav}
     `;
   }
 
-  const html = renderPage("Claims Lifecycle", body, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : ""), aiRemaining: Math.max(0, Number(org.aiInsightLimit || 0) - Number(org.aiInsightUsed || 0))});
+  const html = renderPage("Claims Lifecycle", body, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
   return send(res, 200, html);
 }
 // ==============================
@@ -4824,8 +4434,7 @@ if (method === "GET" && pathname === "/intelligence") {
         and the platform automatically renders charts using your live uploaded data.
       </div>
       <div class="muted small" style="margin-top:8px;">
-        <span class="tooltip">ⓘ<span class="tooltiptext">Charts are always system-generated from your uploaded claims/payments. AI does not invent numbers.</span></span>
-        <span style="margin-left:10px;" class="tooltip">ⓘ<span class="tooltiptext">Saved Insights are shared across your organization.</span></span>
+        <span class="tooltip" data-tip="Charts are system-generated from uploaded claims/payments. Saved Insights are shared across your organization.">ⓘ</span>
       </div>
     </div>
   `;
@@ -4859,10 +4468,8 @@ if (method === "GET" && pathname === "/intelligence") {
     </ul>
   ` : `<p class="muted">No recent questions yet.</p>`;
 
-  const insightRemaining = Math.max(0, Number(org.aiInsightLimit || getDefaultAiLimitsForOrg(org).insight) - Number(org.aiInsightUsed || 0));
-  const html = renderPage("AI Revenue Intelligence", `
-    <h2>AI Revenue Intelligence</h2>
-    <p class="muted tooltip">AI Usage: ${insightRemaining} remaining<span class="tooltiptext">Each AI request counts as 1. Resets every 30 days.</span></p>
+  const html = renderPage("Revenue Intelligence (AI)", `
+    <h2>AI Revenue Intelligence <span class="tooltip" data-tip="Ask questions about denials, underpayments, aging, and negotiation performance using your uploaded data.">ⓘ</span></h2>
     ${infoBox}
 
     <div class="hr"></div>
@@ -4889,43 +4496,39 @@ if (method === "GET" && pathname === "/intelligence") {
     <div class="hr"></div>
 
     <h3>Ask AI about your revenue data</h3>
-
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
-      <div style="flex:1;min-width:260px;">
-        <label>Prompt</label>
-        <textarea id="riPrompt" placeholder="Ask a question about denials, underpayments, aging, negotiations..." style="min-height:90px;"></textarea>
+    <div class="row" style="align-items:flex-start;">
+      <div class="col" style="min-width:360px;">
+        <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+            <div style="flex:1;min-width:260px;">
+              <label>Prompt</label>
+              <textarea id="riPrompt" placeholder="Ask a question about denials, underpayments, aging, negotiations..." style="min-height:120px;"></textarea>
+            </div>
+            <div style="min-width:220px;">
+              <label>Response Style</label>
+              <select id="riStyle">${styleOptions}</select>
+              <div class="muted small" style="margin-top:6px;">Charts render from uploaded data.</div>
+            </div>
+          </div>
+          <div class="btnRow">
+            <button class="btn secondary" type="button" onclick="window.__tjhpRunPrompt()">Generate Insight</button>
+            <button class="btn secondary" type="button" onclick="window.__tjhpRunBriefing()">Run Monthly Briefing</button>
+          </div>
+          <div class="hr"></div>
+          <h4 style="margin:0 0 8px 0;">Starter Prompts</h4>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;">
+            ${starterPrompts.map(p=>`<a class="btn secondary small" href="javascript:void(0)" onclick="window.__tjhpFillPrompt(${JSON.stringify(p)})">${safeStr(p)}</a>`).join("")}
+          </div>
+        </div>
       </div>
-
-      <div style="min-width:260px;">
-        <label>Response Style</label>
-        <select id="riStyle">${styleOptions}</select>
-        <div class="muted small" style="margin-top:6px;">Charts always render below regardless of style.</div>
-      </div>
-      <div style="min-width:200px;">
-        <label>Chart Type</label>
-        <select id="riChartType"><option value="auto">Auto</option><option value="line">Line</option><option value="bar">Bar</option><option value="pie">Pie</option><option value="table">Table</option></select>
-      </div>
-      <div style="min-width:200px;">
-        <label>Response Format</label>
-        <select id="riFormat"><option value="summary">Summary</option><option value="detail">Detailed</option><option value="table">Table</option></select>
-      </div>
-    </div>
-    <div class="muted small">Character limit target: ~750 chars. For multiple distinct analyses, submit separate requests.</div>
-
-    <div class="btnRow">
-      <button class="btn secondary" type="button" onclick="window.__tjhpRunPrompt()">Generate Insight</button>
-      <button class="btn secondary" type="button" onclick="window.__tjhpRunBriefing()">Run Monthly Briefing</button>
-    </div>
-
-    <div class="hr"></div>
-
-    <div id="riResultBox" style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#fff;display:none;">
+      <div class="col" style="min-width:360px;">
+        <div id="riResultBox" style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#fff;display:block;min-height:520px;">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;">
-        <strong>AI Result</strong>
+        <strong>Last AI Result</strong>
         <div class="muted small" id="riRefreshed"></div>
       </div>
       <div class="hr"></div>
-      <div id="riAnswer" style="white-space:pre-wrap;"></div>
+      <div id="riAnswer" style="white-space:pre-wrap;">AI is not configured yet or no question has been run. Select a prompt and generate an insight.</div>
 
       <div class="hr"></div>
 
@@ -4944,6 +4547,8 @@ if (method === "GET" && pathname === "/intelligence") {
       </div>
 
       <div class="muted small" id="riSaveMsg" style="margin-top:8px;"></div>
+        </div>
+      </div>
     </div>
 
     <script>
@@ -5089,7 +4694,7 @@ if (method === "GET" && pathname === "/intelligence") {
         setTimeout(()=>window.__tjhpRunBriefing(), 350);
       }
     </script>
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : ""), aiRemaining: insightRemaining});
+  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
   return send(res, 200, html);
 }
@@ -5104,107 +4709,227 @@ if (method === "GET" && pathname === "/upload-negotiations") return redirect(res
 // ACTION CENTER (WORKFLOW)
 // ==============================
 if (method === "GET" && pathname === "/actions") {
-  const tab = String(parsed.query.tab || "all-risk").toLowerCase();
+  const tab = String(parsed.query.tab || "all").toLowerCase(); // all|denials|underpayments|awaiting|followup
   const q = String(parsed.query.q || "").trim().toLowerCase();
   const payerF = String(parsed.query.payer || "").trim();
-  const sort = String(parsed.query.sort || "risk_score").trim();
+  const sort = String(parsed.query.sort || "risk_score").trim(); // risk_score|atrisk|payer|dos
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
   const negAll = getNegotiations(org.org_id).map(n => normalizeNegotiation(n));
+  const actionCtx = buildClaimContext(org.org_id);
+
+  // helpers
   const caseById = new Map(casesAll.map(c => [c.case_id, c]));
   const negByBilled = new Map();
   negAll.forEach(n => { if (n.billed_id) negByBilled.set(n.billed_id, n); });
 
-  const items = billedAll.map(b => {
-    const appealCase = b.denial_case_id ? caseById.get(b.denial_case_id) : null;
-    const negotiationCase = negByBilled.get(b.billed_id) || null;
-    const derived = evaluateClaimDerived(b, org, { appealCase, negotiationCase }, new Date());
-    const actionTag = derived.paymentUpdateFlag ? "updates"
-      : (derived.financialStatus === "Denied" ? "denials"
-      : (derived.financialStatus === "Underpaid" ? "underpayments"
-      : ((derived.caseStage === "Submitted" || derived.caseStage === "Waiting") ? "followup" : "other")));
-    return { ...b, derived, actionTag };
-  }).filter(x => x.derived.atRisk > 0 || x.derived.paymentUpdateFlag);
+  function denialStageForClaim(b){
+    const cid = b.denial_case_id;
+    if (!cid) return { stage:"Denials", caseStatus:"No Appeal Case Yet" };
+    const c = caseById.get(cid);
+    const cs = c ? String(c.status||"") : "";
+    // normalize to our stage buckets
+    if (cs.includes("Approved")) return { stage:"Awaiting Payment", caseStatus: cs };
+    if (cs === "Submitted" || cs === "In Review") return { stage:"Follow-Up Needed", caseStatus: cs };
+    if (cs === "DRAFT_READY" || cs === "ANALYZING" || cs === "UPLOAD_RECEIVED") return { stage:"Denials", caseStatus: cs };
+    if (cs === "Denied" || cs === "Closed") return { stage:"Closed", caseStatus: cs };
+    return { stage:"Denials", caseStatus: cs };
+  }
+  function negotiationStageForClaim(b){
+    const n = negByBilled.get(b.billed_id);
+    if (!n) return { stage:"Underpayments", negStatus:"" };
+    const st = String(n.status||"Open");
+    if (st === "Approved (Pending Payment)") return { stage:"Awaiting Payment", negStatus: st };
+    if (st === "Submitted" || st === "In Review" || st === "Counter Offered") return { stage:"Follow-Up Needed", negStatus: st };
+    if (st === "Payment Received" || st === "Closed" || st === "Denied") return { stage:"Closed", negStatus: st };
+    return { stage:"Underpayments", negStatus: st };
+  }
 
-  let filtered = items.filter(x => {
-    if (payerF && String(x.payer || "") !== payerF) return false;
-    if (q) {
-      const blob = `${x.claim_number||""} ${x.payer||""} ${x.dos||""} ${x.patient_name||""}`.toLowerCase();
-      if (!blob.includes(q)) return false;
+  // Build actionable items by tab
+  const items = [];
+  for (const b of billedAll){
+    const derived = evaluateClaimDerived(b, actionCtx);
+    const st = String(derived.lifecycleStage || b.status || "Pending");
+    const hasDenialCase = !!b.denial_case_id && caseById.has(b.denial_case_id);
+    const denialCaseObj = hasDenialCase ? caseById.get(b.denial_case_id) : null;
+    const denialCaseStatus = denialCaseObj ? String(denialCaseObj.status || "") : "";
+    const denialOpen = hasDenialCase && !["Closed","Denied"].includes(denialCaseStatus);
+
+    if (payerF && String(b.payer||"") !== payerF) continue;
+    if (q){
+      const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
+      if (!blob.includes(q)) continue;
     }
-    if (tab === "all-risk") return true;
-    if (tab === "updates") return x.derived.paymentUpdateFlag;
-    if (tab === "followup") return x.actionTag === "followup";
-    return x.actionTag === tab;
-  });
 
-  if (sort === "atrisk") filtered.sort((a,b)=> b.derived.atRisk - a.derived.atRisk);
-  else if (sort === "payer") filtered.sort((a,b)=> String(a.payer||"").localeCompare(String(b.payer||"")));
-  else if (sort === "dos") filtered.sort((a,b)=> new Date(a.dos||a.created_at||0) - new Date(b.dos||b.created_at||0));
-  else filtered.sort((a,b)=> (b.derived.riskScore - a.derived.riskScore) || (b.derived.atRisk - a.derived.atRisk));
+    // Determine action center grouping
+    let group = null;
+    let secondaryStatus = "";
+    let kind = null; // denial|negotiation|other
+    if (st === "Denied" || st.startsWith("Appeal") || denialOpen){
+      const d = denialStageForClaim(b);
+      group = d.stage;
+      secondaryStatus = d.caseStatus;
+      kind = "denial";
+    } else if (st === "Underpaid"){
+      const n = negotiationStageForClaim(b);
+      group = n.stage;
+      secondaryStatus = n.negStatus;
+      kind = "negotiation";
+    } else if (st === "Patient Balance"){
+      group = "Follow-Up Needed";
+      kind = "other";
+    } else {
+      continue;
+    }
 
+    // map group to tab key
+    const tabKey = (group === "Denials") ? "denials" :
+                   (group === "Underpayments") ? "underpayments" :
+                   (group === "Awaiting Payment") ? "awaiting" :
+                   (group === "Follow-Up Needed") ? "followup" : "closed";
+
+    if (tab !== "all" && tabKey !== tab) continue;
+
+    const atRisk = Number(derived.atRiskAmount || computeClaimAtRisk(b));
+    const riskScore = computeClaimRiskScore({ ...b, status: st });
+    items.push({ b, st, kind, atRisk, riskScore, secondaryStatus, tabKey });
+  }
+
+  // Sorting
+  if (sort === "atrisk") items.sort((a,b)=> b.atRisk - a.atRisk);
+  else if (sort === "payer") items.sort((a,b)=> String(a.b.payer||"").localeCompare(String(b.b.payer||"")));
+  else if (sort === "dos") items.sort((a,b)=> new Date(a.b.dos||a.b.created_at||0) - new Date(b.b.dos||b.b.created_at||0));
+  else items.sort((a,b)=> (b.riskScore - a.riskScore) || (b.atRisk - a.atRisk));
+
+  // Pagination
   const { page, pageSize, startIdx } = parsePageParams(parsed.query || {});
-  const total = filtered.length;
+  const total = items.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const pageItems = filtered.slice(startIdx, startIdx + pageSize);
+  const pageItems = items.slice(startIdx, startIdx + pageSize);
 
+  // Tabs UI
   const tabBtn = (key, label, tip) => {
     const active = (tab === key);
     const qs = new URLSearchParams({ ...parsed.query, tab: key, page: "1" }).toString();
-    return `<a href="/actions?${qs}" style="text-decoration:none;display:inline-flex;gap:6px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:${active ? "#111827" : "#fff"};color:${active ? "#fff" : "#111827"};font-weight:900;font-size:12px;">${label}<span class="tooltip">ⓘ<span class="tooltiptext">${safeStr(tip)}</span></span></a>`;
+    return `<a href="/actions?${qs}" style="text-decoration:none;display:inline-flex;gap:6px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:${active ? "#111827" : "#fff"};color:${active ? "#fff" : "#111827"};font-weight:900;font-size:12px;">
+      ${label}
+      <span class="tooltip">ⓘ<span class="tooltiptext">${safeStr(tip)}</span></span>
+    </a>`;
   };
 
-  const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-    ${tabBtn("all-risk","All At Risk","All denied + underpaid + payment updates requiring action.")}
-    ${tabBtn("denials","Denials","Denied claims that need an appeal packet or appeal follow-up.")}
-    ${tabBtn("underpayments","Underpayments","Underpaid claims that need negotiation work or follow-up.")}
-    ${tabBtn("updates","Payment Updates","Claims where new payment zeroed at-risk while case remains open.")}
-    ${tabBtn("followup","Follow-Up Needed","Submitted appeals/negotiations requiring follow-up actions.")}
-  </div>`;
+  const tabs = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+      ${tabBtn("all","All At Risk","All denials, underpayments, follow-ups, and awaiting payment work in one queue.")}
+      ${tabBtn("denials","Denials","Denied claims that need an appeal packet or appeal follow-up.")}
+      ${tabBtn("underpayments","Underpayments","Underpaid claims that need negotiation work or follow-up.")}
+      ${tabBtn("awaiting","Awaiting Payment","Approved disputes waiting for payment posting.")}
+      ${tabBtn("followup","Follow-Up Needed","Submitted appeals/negotiations requiring follow-up actions.")}
+    </div>
+  `;
+
   const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer||"").trim()).filter(Boolean))).sort();
 
-  const workload = {
-    allRisk: { c: items.length, v: items.reduce((s,x)=>s + Number(x.derived.atRisk||0), 0) },
-    denials: { c: items.filter(x=>x.actionTag==="denials").length, v: items.filter(x=>x.actionTag==="denials").reduce((s,x)=>s + Number(x.derived.atRisk||0), 0) },
-    underpayments: { c: items.filter(x=>x.actionTag==="underpayments").length, v: items.filter(x=>x.actionTag==="underpayments").reduce((s,x)=>s + Number(x.derived.atRisk||0), 0) },
-    updates: { c: items.filter(x=>x.derived.paymentUpdateFlag).length, v: items.filter(x=>x.derived.paymentUpdateFlag).reduce((s,x)=>s + Number(x.derived.atRisk||0), 0) },
-    followup: { c: items.filter(x=>x.actionTag==="followup").length, v: items.filter(x=>x.actionTag==="followup").reduce((s,x)=>s + Number(x.derived.atRisk||0), 0) },
-  };
-  const stripCard = (key, label, m) => {
-    const active = (tab === key);
-    return `<a href="/actions?${new URLSearchParams({ ...parsed.query, tab:key, page:"1" }).toString()}" style="text-decoration:none;flex:1;min-width:150px;border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:${active ? "#111827" : "#fff"};color:${active ? "#fff" : "#111827"};"><div style="font-weight:900;font-size:12px;">${safeStr(label)}</div><div style="font-size:18px;font-weight:900;">${m.c}</div><div class="small">${formatMoneyUI(m.v)} at risk</div></a>`;
-  };
-  const tableHtml = renderClaimTable(pageItems, { includeActions:true, includeCaseColumns:true, includeRoundColumn:true, context:"action-center" });
+  const rows = pageItems.map(x=>{
+    const b = x.b;
+    const claimLink = `/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}`;
+    const badgeCls = badgeClassForStatus(x.st);
 
-  const sizeSelect = `<label class="small muted" style="margin-right:8px;">Per page</label><select onchange="window.location=this.value">${PAGE_SIZE_OPTIONS.map(n=>{ const qs = new URLSearchParams({ ...parsed.query, tab, page:"1", pageSize:String(n) }).toString(); return `<option value="/actions?${qs}" ${n===pageSize?"selected":""}>${n}</option>`; }).join("")}</select>`;
+    let actionsHtml = '';
+    if (x.kind === "denial") {
+      actionsHtml = `
+        <a class="btn secondary small" href="/appeal-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Appeal</a>
+        <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
+      `;
+    } else if (x.kind === "negotiation") {
+      actionsHtml = `
+        <a class="btn secondary small" href="/negotiation-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Open Negotiation</a>
+        <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
+        <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
+      `;
+    } else {
+      actionsHtml = `
+        <a class="btn secondary small" href="${claimLink}">Open Claim</a>
+        <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
+      `;
+    }
+
+    return `<tr>
+      <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
+      <td>${safeStr(b.payer||"")}</td>
+      ${billedPaidCell(b.amount_billed, (b.insurance_paid || b.paid_amount))}
+      <td><span class="badge ${badgeCls}">${safeStr(x.st)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
+      <td>$${Number(x.atRisk||0).toFixed(2)}</td>
+      <td>${x.riskScore}</td>
+      <td style="white-space:nowrap;">${actionsHtml}</td>
+    </tr>`;
+  }).join("");
+
+  const sizeSelect = `
+    <label class="small muted" style="margin-right:8px;">Per page</label>
+    <select onchange="window.location=this.value">
+      ${PAGE_SIZE_OPTIONS.map(n=>{
+        const qs = new URLSearchParams({ ...parsed.query, tab, page:"1", pageSize:String(n) }).toString();
+        return `<option value="/actions?${qs}" ${n===pageSize?"selected":""}>${n}</option>`;
+      }).join("")}
+    </select>
+  `;
   const nav = buildPageNav("/actions", { ...parsed.query, tab, pageSize:String(pageSize) }, page, totalPages);
 
   const html = renderPage("Action Center", `
-    <h2>Action Center <span class="tooltip">ⓘ<span class="tooltiptext">This page prevents revenue leakage by surfacing what needs action.</span></span></h2>
+    <h2>Action Center <span class="tooltip" data-tip="This page prevents revenue leakage by surfacing what needs action. Use tabs to work denials and underpayments by risk score.">ⓘ</span></h2>
     <p class="muted">Work items are sorted by risk score and revenue at risk so nothing slips through the cracks.</p>
     ${tabs}
+
     <div class="hr"></div>
+
     <form method="GET" action="/actions" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
       <input type="hidden" name="tab" value="${safeStr(tab)}"/>
-      <div style="display:flex;flex-direction:column;min-width:220px;"><label>Search</label><input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, DOS..." /></div>
-      <div style="display:flex;flex-direction:column;"><label>Payer</label><select name="payer"><option value="">All</option>${payerOpts.map(p=>`<option value="${safeStr(p)}"${payerF===p?" selected":""}>${safeStr(p)}</option>`).join("")}</select></div>
-      <div style="display:flex;flex-direction:column;"><label>Sort</label><select name="sort"><option value="risk_score"${sort==="risk_score"?" selected":""}>Risk Score</option><option value="atrisk"${sort==="atrisk"?" selected":""}>At-Risk $</option><option value="payer"${sort==="payer"?" selected":""}>Payer</option><option value="dos"${sort==="dos"?" selected":""}>Oldest DOS</option></select></div>
-      <div><button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button><a class="btn secondary" href="/actions?tab=${encodeURIComponent(tab)}" style="margin-top:1.6em;">Reset</a></div>
+      <div style="display:flex;flex-direction:column;min-width:220px;">
+        <label>Search</label>
+        <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, DOS..." />
+      </div>
+      <div style="display:flex;flex-direction:column;">
+        <label>Payer</label>
+        <select name="payer">
+          <option value="">All</option>
+          ${payerOpts.map(p=>`<option value="${safeStr(p)}"${payerF===p?" selected":""}>${safeStr(p)}</option>`).join("")}
+        </select>
+      </div>
+      <div style="display:flex;flex-direction:column;">
+        <label>Sort</label>
+        <select name="sort">
+          <option value="risk_score"${sort==="risk_score"?" selected":""}>Risk Score</option>
+          <option value="atrisk"${sort==="atrisk"?" selected":""}>At-Risk $</option>
+          <option value="payer"${sort==="payer"?" selected":""}>Payer</option>
+          <option value="dos"${sort==="dos"?" selected":""}>Oldest DOS</option>
+        </select>
+      </div>
+      <div>
+        <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
+        <a class="btn secondary" href="/actions?tab=${encodeURIComponent(tab)}" style="margin-top:1.6em;">Reset</a>
+      </div>
     </form>
+
     <div class="hr"></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      ${stripCard("all-risk","All At Risk", workload.allRisk)}
-      ${stripCard("denials","Denials", workload.denials)}
-      ${stripCard("underpayments","Underpayments", workload.underpayments)}
-      ${stripCard("updates","Payment Updates", workload.updates)}
-      ${stripCard("followup","Follow-Up Needed", workload.followup)}
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${total} results (Page ${page}/${totalPages}).</div>
+      <div>${sizeSelect}</div>
     </div>
-    <div class="hr"></div>
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;"><div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${total} results (Page ${page}/${totalPages}).</div><div>${sizeSelect}</div></div>
-    ${tableHtml}
+
+    <div id="actionTableSync">
+      <div class="scrollSyncTop"><div></div></div>
+      <div class="scrollSyncBottom tableScrollY">
+      <table>
+        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed <span class="tooltip" data-tip="Original submitted claim charge amount.">ⓘ</span></th><th>Paid <span class="tooltip" data-tip="Total payer payment currently posted.">ⓘ</span></th><th>Status / Stage <span class="tooltip" data-tip="Derived from payer response, denial context, and negotiation state.">ⓘ</span></th><th>At Risk <span class="tooltip" data-tip="Estimated collectible dollars not yet recovered.">ⓘ</span></th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Actions</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="8" class="muted">No items in this tab.</td></tr>`}</tbody>
+      </table>
+    </div>
+    </div>
+    <script>window.__syncScrollBars && window.__syncScrollBars("actionTableSync");</script>
     ${nav}
-  `, navUser(), {showChat:true, orgName: org.org_name, aiRemaining: Math.max(0, Number(org.aiInsightLimit || 0) - Number(org.aiInsightUsed || 0))});
+  `, navUser(), {showChat:true, orgName: org.org_name});
+
   return send(res, 200, html);
 }
 
@@ -5289,32 +5014,6 @@ if (method === "POST" && pathname === "/claim-action") {
   billedAll[idx] = b;
   writeJSON(FILES.billed, billedAll);
   return redirect(res, `/claim-detail?billed_id=${encodeURIComponent(billed_id)}`);
-}
-
-if (method === "GET" && pathname === "/case/payment-update") {
-  const billed_id = String(parsed.query.billed_id || "").trim();
-  const action = String(parsed.query.action || "").trim();
-  if (!billed_id) return redirect(res, "/actions?tab=updates");
-  const billedAll = readJSON(FILES.billed, []);
-  const claim = billedAll.find(b => b.org_id === org.org_id && b.billed_id === billed_id);
-  if (!claim) return redirect(res, "/actions?tab=updates");
-  const allCases = readJSON(FILES.cases, []);
-  let changed = false;
-  allCases.forEach(c => {
-    if (c.org_id !== org.org_id) return;
-    if (c.case_id !== claim.denial_case_id && c.case_id !== claim.negotiation_case_id) return;
-    if (action === "mark_resolved") {
-      c.stage = "Resolved";
-      c.status = "closed";
-      changed = true;
-    } else if (action === "keep_open") {
-      c.stage = "Waiting on Payer";
-      c.status = "open";
-      changed = true;
-    }
-  });
-  if (changed) writeJSON(FILES.cases, allCases);
-  return redirect(res, "/actions?tab=updates");
 }
 
 // ==============================
@@ -5994,10 +5693,23 @@ if (method === "GET" && pathname === "/negotiation-detail") {
 
   const applyHelp = `When a negotiation is approved, you can track approved vs collected. You may apply collected funds to the claim (manual control) even if approval differs from payment timing.`;
   const packetDraft = String(n.packet_draft || "");
+  const expected = b
+    ? ((b.expected_insurance != null && String(b.expected_insurance).trim() !== "") ? num(b.expected_insurance) : Math.max(0, num(b.amount_billed) - num(b.patient_responsibility)))
+    : num(n.amount_billed || 0);
+  const variance = Math.max(0, expected - num(n.amount_paid || 0));
 
   const html = renderPage("Negotiation Detail", `
     <h2>Negotiation Detail</h2>
     <p class="muted">${safeStr(applyHelp)}</p>
+
+    <div class="hr"></div>
+    <h3>Financial Summary</h3>
+    <div class="row">
+      <div class="col"><div class="kpi-card"><h4>Billed</h4><p>${formatMoneyUI(n.amount_billed)}</p></div></div>
+      <div class="col"><div class="kpi-card"><h4>Paid</h4><p>${formatMoneyUI(n.amount_paid)}</p></div></div>
+      <div class="col"><div class="kpi-card"><h4>Expected</h4><p>${formatMoneyUI(expected)}</p></div></div>
+      <div class="col"><div class="kpi-card"><h4>Underpaid Variance</h4><p>${formatMoneyUI(variance)}</p></div></div>
+    </div>
 
     <div class="hr"></div>
 
@@ -6226,7 +5938,7 @@ if (apply && rec.billed_id) {
 if (method === "POST" && pathname === "/negotiations/save-draft") {
   const body = await parseBody(req);
   let payload = {};
-  try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+ try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
   const negotiation_id = String(payload.negotiation_id || "").trim();
   const packet_draft = String(payload.packet_draft || "");
 
@@ -6353,11 +6065,6 @@ if (method === "POST" && pathname === "/negotiations/template") {
   // Enhance with AI (optional)
   let finalText = filled;
   if (mode === "enhance" && process.env.OPENAI_API_KEY) {
-    shouldResetAiCounters(org);
-    const draftLimit = Number(org.aiDraftLimit || getDefaultAiLimitsForOrg(org).draft);
-    if (Number(org.aiDraftUsed || 0) >= draftLimit) {
-      return redirect(res, `/negotiation-detail?negotiation_id=${encodeURIComponent(negotiation_id)}`);
-    }
     const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
     const systemMsg = "You are TJ Healthcare Pro's negotiation packet assistant. Rewrite and improve the negotiation letter using the provided claim data. Do not invent facts. Use placeholders when needed. Keep it professional and concise.";
     const userMsg = "CLAIM DATA (JSON):\n" + JSON.stringify(claimData, null, 2) + "\n\nCURRENT TEMPLATE (AUTO-FILLED):\n" + filled;
@@ -6370,8 +6077,6 @@ if (method === "POST" && pathname === "/negotiations/template") {
       const data = await resp.json();
       const aiText = data?.choices?.[0]?.message?.content;
       if (aiText) finalText = aiText;
-      org.aiDraftUsed = Number(org.aiDraftUsed || 0) + 1;
-      saveOrg(org);
     } catch {}
   }
 
@@ -7351,7 +7056,7 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
         if (okAI.ok) {
           cObj.status = "ANALYZING";
           cObj.ai_started_at = nowISO();
-         writeJSON(FILES.cases, cases2);
+          writeJSON(FILES.cases, cases2);
           recordAIJob(org.org_id);
         }
       }
@@ -7811,19 +7516,35 @@ if (method === "GET" && pathname === "/appeal-detail") {
     ${claimSummary}
 
     <div class="hr"></div>
-    <h3>Appeal Letter</h3>
-    <div class="muted small">${safeStr(considerations)}</div>
-
-    <textarea id="appealDraft" style="min-height:240px;">${safeStr(draftText)}</textarea>
-
-    <div class="btnRow">
-      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Improve the tone and clarity. Keep it professional and concise.')">Improve Tone (AI)</button>
-      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Add a short, stronger justification section. Do not invent clinical facts; use placeholders if needed.')">Strengthen Justification (AI)</button>
-      <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Rewrite into bullet-point structure suitable for payer review. Do not invent facts.')">Convert to Bullets (AI)</button>
-      <button class="btn" type="button" onclick="window.__tjhpSaveAppeal()">Save Draft</button>
+    <h3>Appeal Workspace</h3>
+    <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+      <div style="flex:1.1;min-width:360px;">
+        <h4>Packet / Template Editor</h4>
+        <div class="muted small">${safeStr(considerations)}</div>
+        <textarea id="appealDraft" style="min-height:300px;">${safeStr(draftText)}</textarea>
+        <div class="btnRow">
+          <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Improve the tone and clarity. Keep it professional and concise.')">Improve Tone (AI)</button>
+          <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Add a short, stronger justification section. Do not invent clinical facts; use placeholders if needed.')">Strengthen Justification (AI)</button>
+          <button class="btn secondary" type="button" onclick="window.__tjhpAppealAI('Rewrite into bullet-point structure suitable for payer review. Do not invent facts.')">Convert to Bullets (AI)</button>
+          <button class="btn" type="button" onclick="window.__tjhpSaveAppeal()">Save Draft</button>
+        </div>
+        <div id="appealSaveMsg" class="muted small" style="margin-top:8px;"></div>
+      </div>
+      <div style="flex:.9;min-width:320px;">
+        <h4>Claim Detail (Read Only)</h4>
+        ${claimSummary}
+        <div class="hr"></div>
+        <h4>Attachments</h4>
+        <ul class="muted small">${listCat("denial_eob")}${listCat("medical_records")}${listCat("plan_docs")}${listCat("general")}</ul>
+        <div class="hr"></div>
+        <h4>Round History</h4>
+        <ul class="muted small">
+          ${(Array.isArray(c.round_history) && c.round_history.length
+            ? c.round_history.map(rh => `<li>Round ${safeStr(rh.round || "")}: ${safeStr(rh.status || "")} (${safeStr(rh.at || rh.updated_at || "")})</li>`).join("")
+            : `<li>No round history yet. Round 1 starts at initial denial submission.</li>`)}
+        </ul>
+      </div>
     </div>
-
-    <div id="appealSaveMsg" class="muted small" style="margin-top:8px;"></div>
 
     <div class="hr"></div>
     <h3>Status Actions</h3>
@@ -8785,21 +8506,11 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         }
         if (num(ex.patient_responsibility) > 0) matched.patient_responsibility = num(ex.patient_responsibility);
         if (num(ex.billed_amount) > 0 && num(matched.amount_billed) <= 0) matched.amount_billed = num(ex.billed_amount);
-        const derived = evaluateClaimDerived(matched, org, {}, new Date());
-        matched.expected_insurance = num(derived.expectedAmount);
-        matched.underpaid_amount = Math.max(0, num(derived.expectedAmount) - num(matched.insurance_paid ?? matched.paid_amount));
-        matched.status = derived.financialStatus;
-        if (num(matched.paid_amount) <= 0 && num(matched.amount_billed) > 0) {
-          matched.status = "Denied";
-          const c = findOrCreateAppealCaseForClaim(matched, org, user.user_id);
-          c.stage = "Drafted";
-        } else if (num(matched.paid_amount) > 0 && num(matched.paid_amount) < num(derived.expectedAmount || 0)) {
-          matched.status = "Underpaid";
-          const c = findOrCreateNegotiationCaseForClaim(matched, org, user.user_id);
-          c.stage = "Drafted";
-        } else {
-          markPaymentUpdateDetectedIfEligible(matched, org);
-        }
+        const expectedInsurance = Math.max(0, num(matched.amount_billed) - num(matched.patient_responsibility));
+        const paid = num(matched.insurance_paid ?? matched.paid_amount);
+        matched.expected_insurance = expectedInsurance;
+        matched.underpaid_amount = Math.max(0, expectedInsurance - paid);
+        matched.status = classifyStatusFromPaymentImport(matched);
       } else {
         const autoClaimNo = (ex.claim_number && String(ex.claim_number).trim()) ? String(ex.claim_number).trim() : `AUTO-${uuid().slice(0, 8)}`;
         const expectedInsurance = Math.max(0, num(ex.billed_amount) - num(ex.patient_responsibility));
@@ -8813,7 +8524,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
           dos: ex.dos || "",
           payer: ex.payer || "",
           amount_billed: num(ex.billed_amount),
-          status: (paid <= 0.0001 && num(ex.billed_amount) > 0) ? "Denied" : ((paid >= expectedInsurance) ? "Paid" : "Underpaid"),
+          status: (paid <= 0.0001 && num(ex.billed_amount) > 0) ? "Waiting Payment" : ((paid >= expectedInsurance) ? "Paid" : "Underpaid"),
           paid_amount: num(ex.paid_amount),
           insurance_paid: num(ex.paid_amount),
           patient_responsibility: num(ex.patient_responsibility),
@@ -8829,13 +8540,6 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         });
       }
     }
-
-    billedAll.forEach(b => {
-      if (b.org_id !== org.org_id) return;
-      if (String(b.status) === "Denied" && !b.denial_case_id) findOrCreateAppealCaseForClaim(b, org, user.user_id);
-      if (String(b.status) === "Underpaid") findOrCreateNegotiationCaseForClaim(b, org, user.user_id);
-      markPaymentUpdateDetectedIfEligible(b, org);
-    });
 
     writeJSON(FILES.document_ingests, ingests);
     writeJSON(FILES.payments, paymentsData);
@@ -8963,25 +8667,17 @@ for (const ap of addedPayments) {
     : billedAmt;
 
   if (paid <= 0 && billedAmt > 0) {
-    // Zero-payment import should be treated as Denied (with reason) and auto-create a denial case
-    billedClaim.status = "Denied";
-    billedClaim.denial_reason = "ERA Zero Payment";
-    billedClaim.denied_at = billedClaim.denied_at || nowISO();
+    // Zero-paid without denial context should remain a waiting-payment state.
+    billedClaim.status = "Waiting Payment";
     billedClaim.suggested_action = "";
-    billedClaim.underpaid_amount = null;
-
-    findOrCreateAppealCaseForClaim(billedClaim, org, user.user_id);
-    casesChanged_sync = true;
+    billedClaim.underpaid_amount = 0;
   } else if (paid + 0.01 >= expected) {
     billedClaim.status = "Paid";
     billedClaim.suggested_action = "";
     billedClaim.underpaid_amount = 0;
-    markPaymentUpdateDetectedIfEligible(billedClaim, org);
   } else {
     billedClaim.status = "Underpaid";
     billedClaim.underpaid_amount = Math.max(0, num(billedClaim.amount_billed) - paid - num(billedClaim.patient_collected));
-    findOrCreateNegotiationCaseForClaim(billedClaim, org, user.user_id);
-    casesChanged_sync = true;
 
     const gap = Math.max(0, num(billedClaim.amount_billed) - paid - num(billedClaim.patient_collected));
     const diffPct = num(billedClaim.amount_billed) > 0 ? (gap / num(billedClaim.amount_billed)) * 100 : 100;
@@ -9064,31 +8760,6 @@ rowsAdded = toUse;
   // analytics page with placeholders and bar chart preview
   if (method === "GET" && pathname === "/analytics") {
     return redirect(res, "/dashboard");
-  }
-
-  if (method === "GET" && pathname === "/data-management") {
-    const tab = String(parsed.query.tab || "billed").toLowerCase();
-    const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
-    const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
-    const denials = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id && String(c.case_type || "").toLowerCase() === "appeal");
-    const negotiations = getNegotiations(org.org_id);
-    const uploads = readJSON(FILES.document_ingests, []).filter(x => x.org_id === org.org_id);
-    const unmatched = uploads.filter(x => String(x.status || "").toLowerCase().includes("pending") || String(x.status || "").toLowerCase().includes("unmatched"));
-    const tabBtn = (key, label) => `<a class="btn ${tab===key?"":"secondary"}" href="/data-management?tab=${encodeURIComponent(key)}">${safeStr(label)}</a>`;
-    let body = `<h2>Data Management</h2>
-      <div class="btnRow">${tabBtn("billed","Billed Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("negotiations","Negotiation Results")}${tabBtn("history","Upload History")}</div>
-      <p class="muted">Matching rules: primary internal claim #; secondary payer + DOS + billed (+patient when available). Ambiguous rows stay unmatched for review.</p>
-      <div class="hr"></div>`;
-    if (tab === "billed") body += `<p class="muted">Total billed claims: ${billed.length}</p><a class="btn secondary" href="/claims?view=billed">Open Billed Claims</a>`;
-    if (tab === "payments") body += `<p class="muted">Total payments: ${payments.length}</p><a class="btn secondary" href="/claims?view=payments">Open Payments</a>`;
-    if (tab === "denials") body += `<p class="muted">Total denial cases: ${denials.length}</p><a class="btn secondary" href="/claims?view=denials">Open Denials</a>`;
-    if (tab === "negotiations") body += `<p class="muted">Total negotiation results: ${negotiations.length}</p><a class="btn secondary" href="/claims?view=negotiations">Open Negotiations</a>`;
-    if (tab === "history") {
-      body += `<h3>Upload History</h3><div style="overflow:auto;"><table><thead><tr><th>File</th><th>Status</th><th>Extracted Claims</th><th>Uploaded</th></tr></thead><tbody>${uploads.map(u=>`<tr><td>${safeStr(u.filename||"")}</td><td>${safeStr(u.status||"")}</td><td>${Number(u.claims_extracted_count||0)}</td><td>${safeStr((u.created_at||"").slice(0,19).replace("T"," "))}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No uploads yet.</td></tr>`}</tbody></table></div>`;
-      body += `<div class="hr"></div><h3>Unmatched - Needs Review</h3><div style="overflow:auto;"><table><thead><tr><th>File</th><th>Status</th><th>Uploaded</th></tr></thead><tbody>${unmatched.map(u=>`<tr><td>${safeStr(u.filename||"")}</td><td>${safeStr(u.status||"")}</td><td>${safeStr((u.created_at||"").slice(0,19).replace("T"," "))}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">No unmatched uploads.</td></tr>`}</tbody></table></div>`;
-    }
-    const html = renderPage("Data Management", body, navUser(), {showChat:true, orgName: org.org_name, aiRemaining: Math.max(0, Number(org.aiInsightLimit || 0) - Number(org.aiInsightUsed || 0))});
-    return send(res, 200, html);
   }
 
   // -------- ACCOUNT --------
@@ -9278,138 +8949,165 @@ rowsAdded = toUse;
     return redirect(res, "/payer-contracts");
   }
 
-  if (method === "POST" && pathname === "/reimbursement/settings") {
-    const gate = enforcePlanGate(org, "reimbursementModeling");
-    if (!gate.ok) return redirect(res, "/account");
+  if (method === "GET" && pathname === "/data-management") {
+    const tab = String(parsed.query.tab || "denials");
+    const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id).slice(0, 300);
+    const claimOpts = billed.map(b => `<option value="${safeStr(b.billed_id)}">${safeStr(b.claim_number || b.billed_id)} · ${safeStr(b.payer || "")}</option>`).join("");
+    const tabs = `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
+        <a class="btn ${tab==="denials"?"":"secondary"}" href="/data-management?tab=denials">Denials</a>
+        <a class="btn ${tab==="network"?"":"secondary"}" href="/data-management?tab=network">Network</a>
+      </div>
+    `;
+    const denialContent = `
+      <h3>Upload Denial Documents</h3>
+      <form method="POST" action="/upload-denials" enctype="multipart/form-data">
+        <input type="hidden" name="next" value="/data-management?tab=denials"/>
+        <div id="dm-denials-dropzone" class="dropzone">Drop denial files here or click to select</div>
+        <input id="dm-denials-files" type="file" name="files" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" required style="display:none" />
+        <div class="btnRow"><button class="btn" type="submit">Upload Denial Files</button></div>
+      </form>
+      <script>
+        (function(){
+          const dz = document.getElementById("dm-denials-dropzone");
+          const inp = document.getElementById("dm-denials-files");
+          if (!dz || !inp) return;
+          dz.addEventListener("click", ()=>inp.click());
+          ["dragenter","dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
+          ["dragleave","drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
+          dz.addEventListener("drop", e => { if (e.dataTransfer.files?.length) { inp.files = e.dataTransfer.files; dz.textContent = inp.files.length + " file(s) selected"; } });
+          inp.addEventListener("change", ()=>{ if (inp.files?.length) dz.textContent = inp.files.length + " file(s) selected"; });
+        })();
+      </script>
+    `;
+    const networkContent = `
+      <h3>Claim Network Status</h3>
+      <p class="muted">Set network status on the claim record used for risk scoring and workflows.</p>
+      <form method="POST" action="/data-management/network">
+        <label>Claim</label>
+        <select name="billed_id" required>
+          <option value="">Select a claim</option>
+          ${claimOpts}
+        </select>
+        <label>Network Status</label>
+        <select name="network_status">
+          <option value="In Network">In Network</option>
+          <option value="Out of Network">Out of Network</option>
+        </select>
+        <div class="btnRow"><button class="btn" type="submit">Save Network Status</button></div>
+      </form>
+    `;
+    const html = renderPage("Data Management", `
+      <h2>Data Management</h2>
+      <p class="muted">Central place for denial uploads and claim-level network controls.</p>
+      ${tabs}
+      ${tab === "network" ? networkContent : denialContent}
+    `, navUser(), {showChat:true, orgName: org.org_name});
+    return send(res, 200, html);
+  }
+
+  if (method === "POST" && pathname === "/data-management/network") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
-    const year = String(params.get("medicare_year") || "").trim();
-    const csvText = String(params.get("medicare_csv_text") || "").trim();
-    const ucrText = String(params.get("cpt_ucr_csv_text") || "").trim();
-    const ucrMultiplier = (params.get("ucr_multiplier") || "").trim();
-    const settings = getReimbursementSettings(org.org_id);
-    if (ucrMultiplier) settings.ucrMultiplier = Number(ucrMultiplier);
-    if (year && csvText) {
-      settings.medicareSchedulesByYear = settings.medicareSchedulesByYear || {};
-      settings.medicareSchedulesByYear[year] = settings.medicareSchedulesByYear[year] || {};
-      csvText.split(/\r?\n/).forEach(line => {
-        const parts = line.split(",");
-        if (parts.length < 2) return;
-        const code = normalizeCode(parts[0]);
-        const amt = num(parts[1]);
-        if (code && amt > 0) settings.medicareSchedulesByYear[year][code] = amt;
-      });
-      settings.medicareFiles = settings.medicareFiles || [];
-      settings.medicareFiles.push({ year, uploaded_at: nowISO(), source: "manual_text" });
+    const billed_id = String(params.get("billed_id") || "").trim();
+    const network_status = String(params.get("network_status") || "Out of Network").trim();
+    if (billed_id) {
+      const billedAll = readJSON(FILES.billed, []);
+      const idx = billedAll.findIndex(b => b.org_id === org.org_id && b.billed_id === billed_id);
+      if (idx >= 0) {
+        billedAll[idx].network_status = (network_status === "In Network") ? "In Network" : "Out of Network";
+        writeJSON(FILES.billed, billedAll);
+      }
     }
-    if (ucrText) {
-      settings.cptUcrTable = settings.cptUcrTable || {};
-      ucrText.split(/\r?\n/).forEach(line => {
-        const parts = line.split(",");
-        if (parts.length < 2) return;
-        const code = normalizeCode(parts[0]);
-        const amt = num(parts[1]);
-        if (code && amt > 0) settings.cptUcrTable[code] = amt;
-      });
-    }
-    saveReimbursementSettings(org.org_id, settings);
-    recalculateContractsForOrg(org.org_id);
-    auditLog({ actor:"user", action:"reimbursement_settings_update", org_id: org.org_id, user_id: user.user_id });
-    return redirect(res, "/account");
+    return redirect(res, "/data-management?tab=network");
   }
 
   if (method === "GET" && pathname === "/account") {
     const sub = getSub(org.org_id);
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
     const limits = getLimitProfile(org.org_id);
+    const tab = String(parsed.query.tab || "profile").toLowerCase();
 
     const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Free Trial" : "Expired");
     const planEnds = (sub && sub.status === "active") ? "—" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "—");
+    const tabBtn = (id, label) => `<a class="btn ${tab===id?"":"secondary"}" href="/account?tab=${encodeURIComponent(id)}">${label}</a>`;
+    const tabs = `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
+        ${tabBtn("profile","Profile")}
+        ${tabBtn("org","Organization")}
+        ${tabBtn("plan","Plan")}
+        ${tabBtn("security","Security")}
+        ${tabBtn("prefs","Preferences")}
+        ${tabBtn("plans","Billing")}
+      </div>
+    `;
+    const section = (() => {
+      if (tab === "org") return `
+        <h3>Organization</h3>
+        <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
+        <form method="POST" action="/account/org-name" style="margin-top:8px;">
+          <label>Update Organization Name</label>
+          <input name="org_name" value="${safeStr(org.org_name)}" required />
+          <div class="btnRow"><button class="btn secondary" type="submit">Save Organization Name</button></div>
+        </form>
+      `;
+      if (tab === "plan") return `
+        <h3>Plan</h3>
+        <table>
+          <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
+          <tr><th>Trial Ends</th><td>${safeStr(planEnds)}</td></tr>
+          <tr><th>Access Mode</th><td>${safeStr(limits.mode==="pilot" ? "trial" : limits.mode)}</td></tr>
+          <tr><th>AI Questions Used</th><td>${safeStr(String(getUsage(org.org_id).ai_chat_used || 0))}</td></tr>
+          <tr><th>AI Questions Limit</th><td>${safeStr(String(getAIChatLimit(org.org_id)))}</td></tr>
+          <tr><th>AI Questions Remaining</th><td>${safeStr(String(Math.max(0, getAIChatLimit(org.org_id) - (getUsage(org.org_id).ai_chat_used || 0))))}</td></tr>
+        </table>
+      `;
+      if (tab === "security") return `
+        <h3>Change Password</h3>
+        <form method="POST" action="/account/password">
+          <label>Current Password</label>
+          <input name="current_password" type="password" required />
+          <label>New Password (8+ characters)</label>
+          <input name="new_password" type="password" required />
+          <label>Confirm New Password</label>
+          <input name="new_password2" type="password" required />
+          <div class="btnRow">
+            <button class="btn" type="submit">Update Password</button>
+          </div>
+        </form>
+      `;
+      if (tab === "prefs") return `
+        <h3>Preferences</h3>
+        <form method="POST" action="/account/preferences">
+          <label>Theme</label>
+          <select name="theme">
+            <option value="system"${(user.theme||"system")==="system"?" selected":""}>System</option>
+            <option value="light"${(user.theme||"system")==="light"?" selected":""}>Light</option>
+            <option value="dark"${(user.theme||"system")==="dark"?" selected":""}>Dark</option>
+          </select>
+          <div class="btnRow"><button class="btn" type="submit">Save Preferences</button></div>
+        </form>
+      `;
+      if (tab === "plans") return `
+        <h3>Upgrade Plan</h3>
+        <p class="muted">Manage billing and upgrades here.</p>
+        <div class="btnRow"><a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Plan</a></div>
+      `;
+      return `
+        <h3>Profile</h3>
+        <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
+        <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
+        <div class="btnRow"><a class="btn secondary" href="/payer-contracts">Open Payer Contracts</a></div>
+      `;
+    })();
 
-    const aiLimit = Number(org.aiInsightLimit || getDefaultAiLimitsForOrg(org).insight);
-    const aiUsed = Number(org.aiInsightUsed || 0);
-    const aiRemain = Math.max(0, aiLimit - aiUsed);
-    const settings = getReimbursementSettings(org.org_id);
-    const reimbGate = enforcePlanGate(org, "reimbursementModeling");
     const html = renderPage("Account", `
       <h2>Account</h2>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
-        <a class="btn" href="/account">Profile</a>
-        <a class="btn secondary" href="/account?tab=organization">Organization</a>
-        <a class="btn secondary" href="/account?tab=plan">Plan & Billing</a>
-        <a class="btn secondary" href="/account?tab=security">Security</a>
-        <a class="btn secondary" href="/account?tab=preferences">Preferences</a>
-        <a class="btn secondary" href="/account?tab=plans">Plans</a>
-      </div>
-
-      <h3>Profile</h3>
-      <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
-      <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
-
+      ${tabs}
+      ${section}
       <div class="hr"></div>
-      <h3>Organization</h3>
-      <form method="POST" action="/account/org-name" style="margin-top:8px;">
-        <label>Legal Organization Name</label>
-        <input name="org_name" value="${safeStr(org.org_name)}" required />
-        <label>Address</label><input name="org_address" value="${safeStr(org.org_address || "")}" />
-        <label>Phone</label><input name="org_phone" value="${safeStr(org.org_phone || "")}" />
-        <label>Email</label><input name="org_email" value="${safeStr(org.org_email || "")}" />
-        <label>Signature Name</label><input name="signature_name" value="${safeStr(org.signature_name || "")}" />
-        <label>Signature Title</label><input name="signature_title" value="${safeStr(org.signature_title || "")}" />
-        <label>Logo URL (optional)</label><input name="org_logo" value="${safeStr(org.org_logo || "")}" />
-        <div class="btnRow"><button class="btn secondary" type="submit">Save Organization</button></div>
-      </form>
-
-      <div class="hr"></div>
-      <h3>Plan & Billing</h3>
-      <table>
-        <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
-        <tr><th>Trial Ends</th><td>${safeStr(planEnds)}</td></tr>
-        <tr><th>Access Mode</th><td>${safeStr(limits.mode==="pilot" ? "trial" : limits.mode)}</td></tr>
-        <tr><th>AI Usage</th><td>${aiUsed}/${aiLimit} (${aiRemain} remaining)</td></tr>
-      </table>
-      <div class="btnRow"><a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Plan</a></div>
-
-      <div class="hr"></div>
-      <h3>Security</h3>
-      <form method="POST" action="/account/password">
-        <label>Current Password</label><input name="current_password" type="password" required />
-        <label>New Password (8+ characters)</label><input name="new_password" type="password" required />
-        <label>Confirm New Password</label><input name="new_password2" type="password" required />
-        <div class="btnRow"><button class="btn" type="submit">Update Password</button></div>
-      </form>
-
-      <div class="hr"></div>
-      <h3>Preferences</h3>
-      <form method="POST" action="/account/preferences">
-        <label>Theme</label>
-        <select name="theme"><option value="Light"${String(user.theme||"Light")==="Light"?" selected":""}>Light</option><option value="Dark"${String(user.theme||"Light")==="Dark"?" selected":""}>Dark</option><option value="System"${String(user.theme||"Light")==="System"?" selected":""}>System</option></select>
-        <div class="btnRow"><button class="btn secondary" type="submit">Save Preferences</button></div>
-      </form>
-
-      <div class="hr"></div>
-      <h3>Plans</h3>
-      <table>
-        <tr><th>Plan</th><th>Who It's For</th><th>AI Limits</th></tr>
-        <tr><td>Standard</td><td>Smaller teams</td><td>Capped</td></tr>
-        <tr><td>Pro</td><td>Growth practices</td><td>Higher limits + reimbursement modeling</td></tr>
-        <tr><td>Enterprise</td><td>Multi-site organizations</td><td>Unlimited AI + advanced controls</td></tr>
-      </table>
-      <div class="btnRow"><a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">View Plans on Shopify</a></div>
-
-      <div class="hr"></div>
-      <h3>Reimbursement Settings (Pro+)</h3>
-      ${reimbGate.ok ? `
-      <form method="POST" action="/reimbursement/settings">
-        <label>UCR Multiplier</label><input name="ucr_multiplier" value="${safeStr(settings.ucrMultiplier || "")}" placeholder="e.g. 1.25" />
-        <label>Medicare Year</label><input name="medicare_year" placeholder="e.g. 2026" />
-        <label>Medicare CPT CSV Text (CPT,Amount per line)</label><textarea name="medicare_csv_text" style="min-height:120px;" placeholder="99213,89.12"></textarea>
-        <label>CPT UCR CSV Text (CPT,Amount per line)</label><textarea name="cpt_ucr_csv_text" style="min-height:120px;" placeholder="99214,125.00"></textarea>
-        <div class="btnRow"><button class="btn secondary" type="submit">Save & Recompute</button></div>
-      </form>
-      <p class="muted small">Expected reimbursement uses user-provided benchmark data only and recalculates on read for all claims.</p>
-      ` : `<p class="muted">Upgrade required for reimbursement modeling.</p><div class="btnRow"><a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade to Pro+</a></div>`}
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : ""), aiRemaining: aiRemain});
+      <div class="btnRow"><a class="btn secondary" href="/dashboard">Back</a></div>
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -9419,37 +9117,32 @@ rowsAdded = toUse;
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const newName = (params.get("org_name") || "").trim();
-    if (!newName) return redirect(res, "/account");
+    if (!newName) return redirect(res, "/account?tab=org");
 
     const orgs = readJSON(FILES.orgs, []);
     const oidx = orgs.findIndex(o => o.org_id === org.org_id);
     if (oidx >= 0) {
       orgs[oidx].org_name = newName;
-      orgs[oidx].org_address = (params.get("org_address") || "").trim();
-      orgs[oidx].org_phone = (params.get("org_phone") || "").trim();
-      orgs[oidx].org_email = (params.get("org_email") || "").trim();
-      orgs[oidx].signature_name = (params.get("signature_name") || "").trim();
-      orgs[oidx].signature_title = (params.get("signature_title") || "").trim();
-      orgs[oidx].org_logo = (params.get("org_logo") || "").trim();
       orgs[oidx].updated_at = nowISO();
       writeJSON(FILES.orgs, orgs);
       auditLog({ actor:"user", action:"update_org_name", org_id: org.org_id, user_id: user.user_id });
     }
-    return redirect(res, "/account");
+    return redirect(res, "/account?tab=org");
   }
 
-  if (method === "POST" && pathname === "/account/preferences") {
+if (method === "POST" && pathname === "/account/preferences") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
-    const theme = String(params.get("theme") || "Light");
+    const theme = String(params.get("theme") || "system");
     const users = readJSON(FILES.users, []);
     const uidx = users.findIndex(u => u.user_id === user.user_id);
     if (uidx >= 0) {
-      users[uidx].theme = ["Light","Dark","System"].includes(theme) ? theme : "Light";
+      users[uidx].theme = (theme === "light" || theme === "dark" || theme === "system") ? theme : "system";
       users[uidx].updated_at = nowISO();
       writeJSON(FILES.users, users);
+      CURRENT_USER_THEME = users[uidx].theme;
     }
-    return redirect(res, "/account");
+    return redirect(res, "/account?tab=prefs");
   }
 
 if (method === "POST" && pathname === "/account/password") {
@@ -9463,7 +9156,7 @@ if (method === "POST" && pathname === "/account/password") {
       const html = renderPage("Account", `
         <h2>Account</h2>
         <p class="error">New passwords must match and be at least 8 characters.</p>
-        <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
+        <div class="btnRow"><a class="btn secondary" href="/account?tab=security">Back</a></div>
       `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 400, html);
     }
@@ -9476,7 +9169,7 @@ if (method === "POST" && pathname === "/account/password") {
       const html = renderPage("Account", `
         <h2>Account</h2>
         <p class="error">Current password is incorrect.</p>
-        <div class="btnRow"><a class="btn secondary" href="/account">Back</a></div>
+        <div class="btnRow"><a class="btn secondary" href="/account?tab=security">Back</a></div>
       `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 401, html);
     }
@@ -9488,7 +9181,7 @@ if (method === "POST" && pathname === "/account/password") {
     const html = renderPage("Account", `
       <h2>Account</h2>
       <p class="muted">Password updated successfully.</p>
-      <div class="btnRow"><a class="btn" href="/dashboard">Back to Dashboard</a></div>
+      <div class="btnRow"><a class="btn" href="/account?tab=security">Back to Security</a></div>
     `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
@@ -9601,40 +9294,43 @@ if (method === "POST" && pathname === "/account/password") {
         <h2>Generate Report</h2>
         <p class="muted">Choose a date range and report type. Reports are based only on data uploaded into the app.</p>
 
-        <form method="GET" action="/report">
+        <form method="GET" action="/report" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end;">
+          <div>
           <label>Start Date</label>
           <input type="date" name="start" required />
-
+          </div>
+          <div>
           <label>End Date</label>
           <input type="date" name="end" required />
-
+          </div>
+          <div style="grid-column:1/-1;">
           <label>Report Type</label>
           <select name="type">
             <option value="executive">Executive Summary</option>
-            <option value="payers">Payer Performance</option>
-            <option value="operational">Operational Workload</option>
-            <option value="reimbursement">Reimbursement Benchmark (Pro+)</option>
+            <option value="denials">Denial Summary</option>
+            <option value="payments">Payment Summary</option>
+            <option value="recovery">Recovery Analysis</option>
+            <option value="payers">Payer Breakdown</option>
             <option value="payment_detail">Payment Detail Report</option>
+            <option value="kpi_payment_speed">Average Days to Payment</option>
+            <option value="kpi_denial_turnaround">Denial Turnaround Time</option>
+            <option value="kpi_resolution_time">Time to Resolution</option>
+            <option value="kpi_denial_aging">Denial Aging (From Denial Date)</option>
           </select>
-          <label>Report Depth</label>
-          <select name="depth">
-            <option value="executive">Executive</option>
-            <option value="detailed">Detailed</option>
-            <option value="csv">CSV</option>
-          </select>
-          <label>Include AI Summary</label>
-          <select name="include_ai_summary"><option value="0">No</option><option value="1">Yes</option></select>
-
+          </div>
+          <div>
           <label>Optional Payer Filter</label>
           <input name="payer" placeholder="Exact payer name (optional)" />
-
+          </div>
+          <div>
           <label>Denied Recovery Only</label>
           <select name="denied">
             <option value="">All</option>
             <option value="1">Denied → Approved Only</option>
           </select>
+          </div>
 
-          <div class="btnRow">
+          <div class="btnRow" style="grid-column:1/-1;">
             <button class="btn" type="submit">Generate</button>
             <a class="btn secondary" href="/dashboard">Back</a>
           </div>
@@ -9959,17 +9655,13 @@ else if (type === "payers") {
   // AI Analyze Payer route
   if (method === "GET" && pathname === "/analyze-payer") {
     const payer = (parsed.query.payer || "").trim();
-    const rc = getRevenueContextFromReq(req);
     let claims = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id && ((b.payer || "").trim().toLowerCase() === payer.toLowerCase()));
-    claims = claims.filter(c => {
-      const d = parseDateSafe(c.dos || c.created_at || c.paid_at || c.denied_at);
-      if (!d) return false;
-      return d >= rc.startDate && d <= rc.endDate;
-    });
-    const totalExpected = claims.reduce((sum, c) => sum + Number(c.expected_amount || c.amount_billed || 0), 0);
-    const totalPaid = claims.reduce((sum, c) => sum + Number(c.paid_amount || 0), 0);
-    const underpaidClaims = claims.filter(c => Number(c.paid_amount || 0) < Number(c.expected_amount || c.amount_billed || 0));
-    const deniedClaims = claims.filter(c => (c.status || "").toLowerCase() === "denied");
+    const payerCtx = buildClaimContext(org.org_id);
+    const enriched = claims.map(c => ({ claim: c, d: evaluateClaimDerived(c, payerCtx) }));
+    const totalExpected = enriched.reduce((sum, x) => sum + Number(x.d.expectedInsurance || x.claim.amount_billed || 0), 0);
+    const totalPaid = enriched.reduce((sum, x) => sum + Number(x.d.paidAmount || 0), 0);
+    const underpaidClaims = enriched.filter(x => x.d.lifecycleStage === "Underpaid").map(x => x.claim);
+    const deniedClaims = enriched.filter(x => x.d.lifecycleStage === "Denied").map(x => x.claim);
     const appealedClaims = claims.filter(c => c.appealed === true);
     const recoveredClaims = appealedClaims.filter(c => Number(c.paid_amount || 0) > 0);
     const recoveryRate = appealedClaims.length ? (recoveredClaims.length / appealedClaims.length) * 100 : 0;
@@ -10004,24 +9696,35 @@ else if (type === "payers") {
     else if (denialRate > 15 || recoveryRate < 50) grade = "C";
     else if (denialRate > 10 || recoveryRate < 60) grade = "B";
     const underpayPercent = totalExpected > 0 ? ((totalExpected - totalPaid) / totalExpected * 100) : 0;
-    const html = renderPage(`Payer Performance Intelligence: ${safeStr(payer)}`, `
-      <h2>Payer Performance Intelligence: ${safeStr(payer)}</h2>
+    const html = renderPage(`AI Payer Intelligence: ${safeStr(payer)}`, `
+      <h2>AI Payer Intelligence: ${safeStr(payer)}</h2>
       <p><strong>Total Claims:</strong> ${claims.length}</p>
       <p><strong>Denial Rate:</strong> ${denialRate.toFixed(1)}%</p>
       <p><strong>Recovery Rate on Appeals:</strong> ${recoveryRate.toFixed(1)}%</p>
       <p><strong>Average Days to Pay:</strong> ${avgDaysToPay}</p>
       <p><strong>Total Underpaid:</strong> $${(totalExpected - totalPaid).toFixed(2)}</p>
-      <style>
-        .bar-container{background:#eee;border-radius:6px;margin-bottom:12px;}
-        .bar{height:20px;border-radius:6px;color:white;text-align:right;padding-right:5px;font-size:12px;}
-        .denial-bar{background:#d9534f;}
-        .recovery-bar{background:#5cb85c;}
-        .underpay-bar{background:#f0ad4e;}
-      </style>
       <h3>Payer Performance Visual</h3>
-      <div class="bar-container"><div class="bar denial-bar" style="width:${Math.min(denialRate,100)}%">Denial ${denialRate.toFixed(1)}%</div></div>
-      <div class="bar-container"><div class="bar recovery-bar" style="width:${Math.min(recoveryRate,100)}%">Recovery ${recoveryRate.toFixed(1)}%</div></div>
-      <div class="bar-container"><div class="bar underpay-bar" style="width:${Math.min(underpayPercent,100)}%">Underpayment %</div></div>
+      <div style="height:320px;"><canvas id="payerPerformanceChart"></canvas></div>
+      <script>
+        if (window.Chart) {
+          new Chart(document.getElementById("payerPerformanceChart"), {
+            type: "bar",
+            data: {
+              labels: ["Denial Rate %","Recovery Rate %","Underpayment %"],
+              datasets: [{
+                label: "Rate",
+                data: [${Number(denialRate.toFixed(2))}, ${Number(recoveryRate.toFixed(2))}, ${Number(underpayPercent.toFixed(2))}],
+                backgroundColor: ["#ef4444","#16a34a","#f59e0b"],
+                barThickness: 42,
+                maxBarThickness: 54,
+                categoryPercentage: 0.82,
+                barPercentage: 0.9
+              }]
+            },
+            options: { indexAxis: "y", responsive: true, scales: { x: { min: 0, max: 100 } } }
+          });
+        }
+      </script>
       <h3>Payer Scorecard</h3>
       <p style="font-size:24px;">Grade: <strong>${grade}</strong></p>
       <h3>Top Denial Reasons</h3>
@@ -10036,37 +9739,47 @@ else if (type === "payers") {
       <ul>
         ${suggestions.map(s => `<li>${safeStr(s)}</li>`).join("")}
       </ul>
+      <form method="POST" action="/bulk-appeal" style="margin-top:10px;">
+        <input type="hidden" name="payer" value="${safeStr(payer)}"/>
+        <button class="btn" type="submit">Send All Underpaid Claims to Appeals</button>
+      </form>
       <div class="btnRow" style="margin-top:12px;"><a class="btn secondary" href="/dashboard">Back</a> <a class="btn secondary" href="/payer-claims?payer=${encodeURIComponent(payer)}">Back to Claims</a></div>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : ""), aiRemaining: Math.max(0, Number(org.aiInsightLimit || 0) - Number(org.aiInsightUsed || 0))});
+    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
   // Bulk appeal route
   if (method === "POST" && pathname === "/bulk-appeal") {
-    return redirect(res, "/claims?view=all");
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const payer = (params.get("payer") || "").trim();
+      let billedAll = readJSON(FILES.billed, []);
+      billedAll.forEach(c => {
+        if (c.org_id === org.org_id && ((c.payer || "").trim().toLowerCase() === payer.toLowerCase()) && Number(c.paid_amount || 0) < Number(c.expected_amount || c.amount_billed || 0)) {
+          c.appealed = true;
+          c.appeal_date = new Date().toISOString();
+        }
+      });
+      writeJSON(FILES.billed, billedAll);
+      return redirect(res, `/analyze-payer?payer=${encodeURIComponent(payer)}`);
+    });
+    return;
   }
 
 
   // --------- CLAIM DETAIL VIEW ----------
-if (method === "GET" && pathname.startsWith("/claim/")) {
-  const billed_id = pathname.slice("/claim/".length).trim();
-  if (billed_id) {
-    const q = parsed.query || {};
-    const pass = new URLSearchParams();
-    if (q.range) pass.set("range", String(q.range));
-    if (q.start) pass.set("start", String(q.start));
-    if (q.end) pass.set("end", String(q.end));
-    const suffix = pass.toString() ? `&${pass.toString()}` : "";
-    return redirect(res, `/claim-detail?billed_id=${encodeURIComponent(billed_id)}${suffix}`);
-  }
-  return redirect(res, "/claims");
-}
-
+ 
 if (method === "GET" && pathname === "/claim-detail") {
 
   const billed_id = (parsed.query.billed_id || "").trim();
   const billedAll = readJSON(FILES.billed, []);
   const paymentsAll = readJSON(FILES.payments, []);
+
+  function normalizeClaimNum(x) {
+    return String(x || "").replace(/[^0-9]/g, "");
+  }
 
   const b = billedAll.find(x =>
     x.billed_id === billed_id &&
@@ -10075,7 +9788,10 @@ if (method === "GET" && pathname === "/claim-detail") {
 
   if (!b) return redirect(res, "/billed");
 
-  const relatedPayments = paymentsAll.filter(p => p.org_id === org.org_id && normalizeClaimDigits(p.claim_number) === normalizeClaimDigits(b.claim_number));
+  const relatedPayments = paymentsAll.filter(p =>
+    p.org_id === org.org_id &&
+    normalizeClaimNum(p.claim_number) === normalizeClaimNum(b.claim_number)
+  );
 
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
   const appealCase = b.denial_case_id ? casesAll.find(c => c.case_id === b.denial_case_id) : null;
@@ -10084,22 +9800,25 @@ if (method === "GET" && pathname === "/claim-detail") {
     .map(n => normalizeNegotiation(n))
     .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime());
   const latestNegotiation = negHistory[0] || null;
-  const relatedCaseInfo = { appealCase, negotiationCase: latestNegotiation };
-  const derived = evaluateClaimDerived(b, org, relatedCaseInfo, new Date());
 
   const billedAmount = num(b.amount_billed);
   const paidAmount = num(b.insurance_paid || b.paid_amount);
   const patientResp = num(b.patient_responsibility);
-  const expectedInsurancePayment = num(derived.expectedAmount);
+  const contractExpectedAmount = num(b.contract_expected_amount || b.expected_insurance || billedAmount);
+  const expectedInsurancePayment = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
+    ? num(b.expected_insurance)
+    : computeExpectedInsurance((num(b.allowed_amount) > 0 ? num(b.allowed_amount) : billedAmount), patientResp);
   const variance = expectedInsurancePayment - paidAmount;
-  const riskScore = Number(derived.riskScore || 0);
+  const riskScore = computeClaimRiskScore(b);
   const riskBand = claimRiskBand(riskScore);
-  const atRisk = Number(derived.atRisk || 0);
+  const atRisk = computeClaimAtRisk(b);
   const suggested = suggestedNextActionForClaim(b);
+  const derivedStatus = String(evaluateClaimDerived(b, buildClaimContext(org.org_id)).lifecycleStage || b.status || "Pending");
 
   const networkStatus = String(b.network_status || "Out of Network");
   const networkBadge = networkStatus === "In Network" ? "ok" : "writeoff";
-  const varianceStyle = variance > 0.0001 ? 'class="paid-orange"' : 'class="paid-green"';
+  const varianceStyle = variance > 0.0001 ? 'style="color:#d97706;font-weight:900;"' : 'style="color:#166534;font-weight:900;"';
+  const currentRound = appealCase ? Number(appealCase.current_round || appealCase.round || 1) : 0;
 
   const negHistoryHtml = negHistory.length
     ? `<table>
@@ -10122,7 +9841,7 @@ if (method === "GET" && pathname === "/claim-detail") {
   const paymentTable = relatedPayments.length === 0
     ? `<p class="muted">No payment records found for this claim.</p>`
     : `<table>
-         <thead><tr><th>Date Paid</th><th>Amount</th><th>Payer</th><th>Source File</th><th>Batch ID</th><th>Upload Date</th></tr></thead>
+         <thead><tr><th>Date Paid</th><th>Amount</th><th>Payer</th><th>Source File</th></tr></thead>
          <tbody>
            ${relatedPayments.map(p => `
              <tr>
@@ -10130,8 +9849,6 @@ if (method === "GET" && pathname === "/claim-detail") {
                <td>${formatMoneyUI(p.amount_paid)}</td>
                <td>${safeStr(p.payer || "")}</td>
                <td class="muted small">${p.source_file ? `<a href="/file?name=${encodeURIComponent(p.source_file)}" target="_blank">${safeStr(p.source_file)}</a>` : ""}</td>
-               <td class="muted small">${safeStr(p.batch_id || p.source_file || "—")}</td>
-               <td class="muted small">${safeStr((p.created_at || "").slice(0, 10) || "—")}</td>
              </tr>`).join("")}
          </tbody>
        </table>`;
@@ -10158,17 +9875,6 @@ if (method === "GET" && pathname === "/claim-detail") {
     `
     : `<p class="muted">No negotiation packet linked to this claim.</p>`;
 
-  const roundsSrc = Array.isArray((appealCase || latestNegotiation || {}).rounds) ? (appealCase || latestNegotiation || {}).rounds : [];
-  const roundsHtml = roundsSrc.length ? roundsSrc.map(r => `
-    <details style="margin:8px 0;">
-      <summary>Round ${Number(r.roundNumber || 1)} · ${safeStr(r.status || "Drafted")} · ${safeStr(r.submittedAt || r.createdAt || "—")}</summary>
-      <div class="muted small" style="margin-top:6px;">Response: ${safeStr(r.responseType || "—")}</div>
-      <div class="muted small">Response Doc: ${r.responseDocument ? `<a href="/file?name=${encodeURIComponent(r.responseDocument)}" target="_blank">${safeStr(r.responseDocument)}</a>` : "—"}</div>
-      <div class="muted small">Packet: <a href="/appeal-packet/export?case_id=${encodeURIComponent((appealCase || {}).case_id || "")}" target="_blank">Export</a></div>
-      <pre class="muted" style="white-space:pre-wrap;">${safeStr(r.draftText || "")}</pre>
-    </details>
-  `).join("") : `<p class="muted">No rounds yet.</p>`;
-
   const html = renderPage("Claim Detail", `
     <h2>Claim Detail</h2>
 
@@ -10177,15 +9883,10 @@ if (method === "GET" && pathname === "/claim-detail") {
       <tr><th>Claim Number</th><td>${safeStr(b.claim_number || "")}</td></tr>
       <tr><th>Payer</th><td>${safeStr(b.payer || "")}</td></tr>
       <tr><th>Date Of Service</th><td>${safeStr(b.dos || "")}</td></tr>
-      <tr><th>Patient</th><td>${safeStr(b.patient_name || "")}</td></tr>
-      <tr><th>Network Information</th><td><span class="badge ${networkBadge}">${safeStr(networkStatus)}</span></td></tr>
-      <tr><th>Status</th><td><span class="badge ${badgeClassForStatus(derived.financialStatus || b.status || "Pending")}">${safeStr(derived.financialStatus || b.status || "Pending")}</span></td></tr>
-      <tr><th>Lifecycle Stage</th><td>${safeStr(derived.lifecycleStage)}</td></tr>
-      <tr><th>Case Type</th><td>${safeStr(derived.caseType)}</td></tr>
-      <tr><th>Case Stage</th><td>${safeStr(derived.caseStage)}</td></tr>
-      <tr><th>Current Round</th><td>R${Number(derived.currentRoundNumber || 1)}</td></tr>
+      <tr><th>Network Information <span class="tooltip" data-tip="To change network status, go to Data Management.">ⓘ</span></th><td><span class="badge ${networkBadge}">${safeStr(networkStatus)}</span></td></tr>
+      <tr><th>Status</th><td><span class="badge ${badgeClassForStatus(derivedStatus)}">${safeStr(derivedStatus)}</span></td></tr>
+      <tr><th>Current Round <span class="tooltip" data-tip="Rounds track each payer submission cycle. Round 1 is the first submission; later rounds represent follow-up appeals/negotiations.">ⓘ</span></th><td>${currentRound || "—"}</td></tr>
     </table>
-    ${derived.paymentUpdateFlag ? `<div class="alert">Payment Update Detected: review this case before resolving.</div>` : ``}
 
     <div class="hr"></div>
     <h3>Financial Intelligence</h3>
@@ -10193,23 +9894,15 @@ if (method === "GET" && pathname === "/claim-detail") {
       <tr><th>Billed Amount</th><td>${formatMoneyUI(billedAmount)}</td></tr>
       <tr><th>Paid Amount</th><td>${formatMoneyUI(paidAmount)}</td></tr>
       <tr><th>Patient Responsibility</th><td>${formatMoneyUI(patientResp)}</td></tr>
-      <tr><th>Expected Reimbursement</th><td>${formatMoneyUI(expectedInsurancePayment)} <span class="muted small">(${safeStr(derived.expectedSource)})</span></td></tr>
+      <tr><th>Contract Expected Amount</th><td>${formatMoneyUI(contractExpectedAmount)}</td></tr>
+      <tr><th>Expected Insurance Payment</th><td>${formatMoneyUI(expectedInsurancePayment)}</td></tr>
       <tr><th>Variance (Expected − Paid)</th><td ${varianceStyle}>${formatMoneyUI(variance)}</td></tr>
-    </table>
-
-    <div class="hr"></div>
-    <h3>Identifiers + Audit</h3>
-    <table>
-      <tr><th>Submission Batch ID</th><td>${safeStr(b.submission_id || "—")}</td></tr>
-      <tr><th>Payment Batch ID</th><td>${safeStr((relatedPayments[0] && (relatedPayments[0].batch_id || relatedPayments[0].source_file)) || "—")}</td></tr>
-      <tr><th>Upload File Links</th><td>${safeStr(b.source_file || "—")} ${b.source_file ? `<a href="/file?name=${encodeURIComponent(b.source_file)}" target="_blank">Open</a>` : ""}</td></tr>
-      <tr><th>Payer Control #</th><td>${safeStr(b.payer_control_number || "—")}</td></tr>
     </table>
 
     <div class="hr"></div>
     <h3>Action Center Status Panel</h3>
     <table>
-      <tr><th>Risk Score</th><td>${riskScore} / 100 (${riskBand.label}) <span class="tooltip">ⓘ<span class="tooltiptext">Risk Score is based on: Amount at risk, Age of claim, Lifecycle stage, Network status.</span></span></td></tr>
+      <tr><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><td><span class="badge ${riskBand.cls}">${riskScore} / 100 (${riskBand.label})</span></td></tr>
       <tr><th>At Risk $</th><td>${formatMoneyUI(atRisk)}</td></tr>
       <tr><th>Suggested Next Action</th><td>${safeStr(suggested)}</td></tr>
     </table>
@@ -10230,10 +9923,6 @@ if (method === "GET" && pathname === "/claim-detail") {
     ${negotiationPacketSummary}
 
     <div class="hr"></div>
-    <h3>Round Timeline</h3>
-    ${roundsHtml}
-
-    <div class="hr"></div>
     <h3>Payment History</h3>
     ${paymentTable}
 
@@ -10246,7 +9935,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       <a class="btn secondary" href="javascript:history.back()">Back</a>
       <a class="btn secondary" href="/claims?view=all&q=${encodeURIComponent(b.claim_number || "")}">View In Claims Lifecycle</a>
     </div>
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : ""), aiRemaining: Math.max(0, Number(org.aiInsightLimit || 0) - Number(org.aiInsightUsed || 0))});
+  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
   return send(res, 200, html);
 }
@@ -10259,5 +9948,4 @@ if (method === "GET" && pathname === "/claim-detail") {
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
 });
-
 
