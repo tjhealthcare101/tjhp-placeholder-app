@@ -3738,85 +3738,59 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div class="hr"></div>
 
       <style>
-        .dashboard-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-top:20px;}
-        .dashboard-grid .kpi-card{border-radius:12px;padding:16px;background:var(--card);border:1px solid var(--border);margin:0;text-align:left;display:block;box-shadow:none;width:auto;}
-        .dashboard-grid .kpi-card h4{margin:0;font-size:12px;opacity:.7;font-weight:700;}
-        .dashboard-grid .kpi-card p{margin:8px 0 0;font-size:24px;font-weight:600;line-height:1.2;}
-        .dashboard-panel{background:#fff;padding:16px;border-radius:12px;border:1px solid var(--border);grid-column:1 / -1;}
-        .chart-wrap-donut{height:360px;max-height:360px;display:flex;align-items:center;justify-content:center;}
-        .chart-wrap-standard{height:320px;max-height:320px;}
+        .kpi-strip{display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:16px;margin-top:20px;}
+        .kpi-strip .kpi-card{border-radius:12px;padding:14px 16px;background:var(--card);border:1px solid var(--border);margin:0;}
+        .kpi-strip .kpi-value{margin:0;font-size:28px;font-weight:800;line-height:1.1;}
+        .kpi-strip .kpi-label{margin:6px 0 0;font-size:12px;color:var(--muted);font-weight:600;}
+        .kpi-strip .kpi-delta{margin-top:6px;font-size:11px;color:var(--muted);opacity:.8;}
+        .executive-panel{background:#fff;padding:16px;border-radius:12px;border:1px solid var(--border);margin-top:16px;}
+        .chart-container { position: relative; height: 320px; max-height: 360px; width: 100%; }
+        .chart-container.payer{height:340px;}
+        .chart-container.trend{height:300px;}
+        .exec-table{margin-top:12px;overflow:auto;}
+        .trend-toggle{display:flex;gap:8px;align-items:center;}
       </style>
 
-      <div class="dashboard-grid">
-        <div class="kpi-card"><h4>Total Billed</h4><p>${fmtMoney(m.kpis.totalBilled)}</p></div>
-        <div class="kpi-card"><h4>Total Collected</h4><p>${fmtMoney(m.kpis.collectedTotal)}</p></div>
-        <div class="kpi-card"><h4>Revenue At Risk</h4><p>${fmtMoney(m.kpis.revenueAtRisk)}</p></div>
-        <div class="kpi-card"><h4>Gross Collection Rate</h4><p>${Number(m.kpis.grossCollectionRate||0).toFixed(1)}%</p></div>
+      <div class="kpi-strip">
+        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.totalBilled)}</p><p class="kpi-label">Total Billed</p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.collectedTotal)}</p><p class="kpi-label">Total Collected</p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p><p class="kpi-label">Net Collection Rate</p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.revenueAtRisk)}</p><p class="kpi-label">Revenue At Risk</p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.underpaidAmt)}</p><p class="kpi-label">Underpaid Amount</p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.underpaidAmt)}</p><p class="kpi-label">Open Appeals Value</p><div class="kpi-delta">—</div></div>
+      </div>
 
-        <div class="dashboard-panel">
-          <h3 style="margin-bottom:12px;">Revenue Breakdown</h3>
-          <div class="chart-wrap-donut">
-            <canvas id="revenueBreakdownChart"></canvas>
-          </div>
-        </div>
-
-        <div class="dashboard-panel">
-          <h3 style="margin-bottom:12px;">Revenue Flow</h3>
-          <div id="flowSkeleton" class="skeleton"></div>
-          <div class="chart-wrap-standard">
-            <canvas id="revenueFlowChart" style="display:none;"></canvas>
-          </div>
-          <p id="flowEmpty" class="muted" style="display:none;">No data for selected range.</p>
-        </div>
-
-        <div class="dashboard-panel">
-          <h3 style="margin-bottom:12px;">Revenue Trend</h3>
-          <div id="trendSkeleton" class="skeleton"></div>
-          <div class="chart-wrap-standard">
-            <canvas id="revenueTrendChart" style="display:none;"></canvas>
-            <canvas id="revenueTrendChartLegacy" style="display:none;"></canvas>
-          </div>
-          <p id="trendEmpty" class="muted" style="display:none;">No data for selected range.</p>
+      <div class="executive-panel">
+        <h3 style="margin-bottom:12px;">Revenue Health</h3>
+        <div class="chart-container">
+          <canvas id="revenueBreakdownChart"></canvas>
         </div>
       </div>
 
-      <div class="hr"></div>
+      <div class="executive-panel">
+        <h3 style="margin-bottom:12px;">Top Payer Risk (At Risk)</h3>
+        <div class="chart-container payer">
+          <canvas id="payerRiskChart"></canvas>
+        </div>
+        <div class="exec-table">
+          <table>
+            <thead><tr><th>Payer</th><th>Billed</th><th>Collected</th><th>Underpaid</th><th>Denied</th><th>Open Appeals</th></tr></thead>
+            <tbody id="topRiskRows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
 
-      <div class="row">
-        <div class="col">
-          <div class="insight-card">
-            <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:end;">
-              <h3>Revenue By Payer (Stacked)</h3>
-              <div style="min-width:220px;">
-                <label>Sort By</label>
-                <select id="payerSort">
-                  <option value="underpaid">Underpaid (Desc)</option>
-                  <option value="denied">Denied (Desc)</option>
-                  <option value="billed">Total Billed (Desc)</option>
-                </select>
-              </div>
-            </div>
-            <div id="payerSkeleton" class="skeleton"></div>
-            <canvas id="payerStackedChart" style="display:none;"></canvas>
-            <p id="payerEmpty" class="muted" style="display:none;">No payer data for selected range.</p>
-            <div id="payerTableSync" style="margin-top:10px;">
-              <div class="scrollSyncTop"><div></div></div>
-              <div class="scrollSyncBottom">
-              <table>
-                <thead><tr><th style="min-width:180px;">Payer</th><th style="min-width:130px;">Billed</th><th style="min-width:130px;">Allowed</th><th style="min-width:130px;">Paid</th><th style="min-width:130px;">Denied</th><th style="min-width:130px;">Write-off</th><th style="min-width:130px;">Underpaid</th></tr></thead>
-                <tbody>${payerRows || `<tr><td colspan="7" class="muted">No payer data in this range.</td></tr>`}</tbody>
-              </table>
-            </div>
-            </div>
+      <div class="executive-panel">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:end;">
+          <h3 style="margin-bottom:12px;">Revenue Trend (Collected vs Billed)</h3>
+          <div class="trend-toggle">
+            <a class="btn secondary small" href="/dashboard?range=last30">30 days</a>
+            <a class="btn secondary small" href="/dashboard?range=last60">60 days</a>
+            <a class="btn secondary small" href="/dashboard?range=last90">90 days</a>
           </div>
         </div>
-        <div class="col" id="denialModule">
-          <div class="insight-card">
-            <h3>Top Denial Reasons</h3>
-            <div id="denialSkeleton" class="skeleton"></div>
-            <canvas id="denialReasonsChart" style="display:none;"></canvas>
-            <p id="denialEmpty" class="muted" style="display:none;">No reason data for selected range.</p>
-          </div>
+        <div class="chart-container trend">
+          <canvas id="revenueTrendChart"></canvas>
         </div>
       </div>
 
@@ -3857,90 +3831,77 @@ document.addEventListener("DOMContentLoaded", function(){
   const hasChart = !!window.Chart;
   if (!hasChart) return;
   const moneyFmt = (n) => "$" + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const baseChartOptions = {
+    responsive:true,
+    maintainAspectRatio:false,
+    plugins:{ legend:{ position:"bottom" } },
+    scales:{ x:{ ticks:{ maxTicksLimit:6 } }, y:{ ticks:{ maxTicksLimit:6 } } }
+  };
+
+  const collectionRatePlugin = {
+    id: "collectionRateLabel",
+    afterDraw(chart){
+      const {ctx, chartArea:{left,right,top,bottom}} = chart;
+      const cx = (left + right) / 2;
+      const cy = (top + bottom) / 2;
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#64748b";
+      ctx.font = "600 12px sans-serif";
+      ctx.fillText("Collection Rate", cx, cy - 6);
+      ctx.fillStyle = "#0f172a";
+      ctx.font = "700 22px sans-serif";
+      const collectionRate = Number((d.flow?.values?.[0]||0) > 0 ? ((d.flow?.values?.[2]||0)/(d.flow?.values?.[0]||1))*100 : 0).toFixed(1);
+      ctx.fillText(String(collectionRate) + "%", cx, cy + 18);
+      ctx.restore();
+    }
+  };
 
   new Chart(document.getElementById("revenueBreakdownChart"), {
     type: "doughnut",
     data: {
-      labels: ["Paid","Underpaid","Denied","Write-off","Waiting Payment"],
-      datasets: [{ data: [d.flow?.values?.[2]||0, d.flow?.values?.[3]||0, d.flow?.values?.[4]||0, d.flow?.values?.[5]||0, d.flow?.values?.[6]||0], backgroundColor: ["#16a34a","#f59e0b","#ef4444","#64748b","#6366f1"] }]
+      labels: ["Collected","At Risk","Write-Off"],
+      datasets: [{ data: [d.flow?.values?.[2]||0, d.flow?.values?.[3]||0, d.flow?.values?.[5]||0], backgroundColor: ["#16a34a","#f59e0b","#64748b"] }]
     },
-    options: { responsive:true, maintainAspectRatio:false, cutout:"60%" }
+    options: { ...baseChartOptions, cutout:"70%", scales:{} },
+    plugins:[collectionRatePlugin]
   });
 
   const trendLabels = d.series?.keys || [];
   const billed = (d.series?.billed || []).map(v => Number(v || 0));
   const collected = (d.series?.collected || []).map(v => Number(v || 0));
-  const atRisk = (d.series?.atRisk || []).map(v => Number(v || 0));
   const trendCfg = {
     type: "line",
     data: { labels: trendLabels, datasets: [
       { label: "Billed", data: billed, borderColor:"#111827", backgroundColor:"#111827", tension:.2 },
-      { label: "Collected", data: collected, borderColor:"#0ea5e9", backgroundColor:"#0ea5e9", tension:.2 },
-      { label: "At Risk", data: atRisk, borderColor:"#f59e0b", backgroundColor:"#f59e0b", tension:.2 }
+      { label: "Collected", data: collected, borderColor:"#0ea5e9", backgroundColor:"#0ea5e9", tension:.2 }
     ]},
-    options: { responsive:true, maintainAspectRatio:false, interaction:{mode:"index", intersect:false}, scales:{ y:{ ticks:{ callback:(v)=>moneyFmt(v) } } } }
+    options: { ...baseChartOptions, interaction:{mode:"index", intersect:false}, scales:{ x:{ ticks:{ maxTicksLimit:6 } }, y:{ ticks:{ maxTicksLimit:6, callback:(v)=>moneyFmt(v) } } } }
   };
   new Chart(document.getElementById("revenueTrendChart"), trendCfg);
-  new Chart(document.getElementById("revenueTrendChartLegacy"), trendCfg);
 
-  new Chart(document.getElementById("revenueFlowChart"), {
+  const payerRows = (d.payerTop || []).map(r => ({
+    ...r,
+    atRisk: Number(r.underpaid || 0) + Number(r.denied || 0),
+    openAppeals: Number(r.underpaid || 0)
+  })).sort((a,b) => b.atRisk - a.atRisk);
+  const top5 = payerRows.slice(0, 5);
+  const otherAtRisk = payerRows.slice(5).reduce((s, r) => s + Number(r.atRisk || 0), 0);
+  const labels = top5.map(r => r.payer);
+  const data = top5.map(r => Number(r.atRisk || 0));
+  if (otherAtRisk > 0) { labels.push("Other"); data.push(otherAtRisk); }
+
+  new Chart(document.getElementById("payerRiskChart"), {
     type: "bar",
-    data: {
-      labels: ["Revenue Flow"],
-      datasets: (d.flow?.labels || []).map((lbl, idx) => ({
-        label: lbl,
-        data: [Number((d.flow?.values || [])[idx] || 0)],
-        backgroundColor: ["#111827","#334155","#0ea5e9","#ef4444","#6b7280","#f59e0b","#f97316"][idx % 7],
-        stack: "flow"
-      }))
-    },
-    options: { responsive:true, maintainAspectRatio:false, scales:{ x:{ stacked:true }, y:{ stacked:true, ticks:{ callback:(v)=>moneyFmt(v) } } } }
+    data: { labels, datasets: [{ label:"At Risk", data, backgroundColor:"#f59e0b" }] },
+    options: { ...baseChartOptions, indexAxis:"y", scales:{ x:{ ticks:{ maxTicksLimit:6, callback:(v)=>moneyFmt(v) } }, y:{ ticks:{ maxTicksLimit:6 } } } }
   });
-  document.getElementById("flowSkeleton").style.display = "none";
-  document.getElementById("revenueFlowChart").style.display = "block";
-  document.getElementById("trendSkeleton").style.display = "none";
-  document.getElementById("revenueTrendChartLegacy").style.display = "block";
 
-  let payerChart = null;
-  const sortSel = document.getElementById("payerSort");
-  const sorted = (mode) => {
-    const rows = (d.payerTop || []).slice();
-    const key = mode === "denied" ? "denied" : (mode === "billed" ? "billed" : "underpaid");
-    rows.sort((a,b)=> Number(b[key]||0) - Number(a[key]||0));
-    return rows;
-  };
-  const renderPayer = (mode) => {
-    const rows = sorted(mode);
-    if (payerChart) payerChart.destroy();
-    payerChart = new Chart(document.getElementById("payerStackedChart"), {
-      type: "bar",
-      data: { labels: rows.map(r=>r.payer), datasets: [
-        { label:"Billed", data:rows.map(r=>Number(r.billed||0)), backgroundColor:"#1d4ed8", stack:"rev" },
-        { label:"Allowed", data:rows.map(r=>Number(r.allowed||0)), backgroundColor:"#475569", stack:"rev" },
-        { label:"Paid", data:rows.map(r=>Number(r.paid||0)), backgroundColor:"#16a34a", stack:"rev" },
-        { label:"Denied", data:rows.map(r=>Number(r.denied||0)), backgroundColor:"#ef4444", stack:"rev" },
-        { label:"Write-off", data:rows.map(r=>Number(r.writeOff||0)), backgroundColor:"#6b7280", stack:"rev" },
-        { label:"Underpaid", data:rows.map(r=>Number(r.underpaid||0)), backgroundColor:"#f59e0b", stack:"rev" }
-      ]},
-      options: { responsive:true, maintainAspectRatio:false, scales:{ x:{ stacked:true }, y:{ stacked:true, ticks:{ callback:(v)=>moneyFmt(v) } } } }
-    });
-    document.getElementById("payerSkeleton").style.display = "none";
-    document.getElementById("payerStackedChart").style.display = "block";
-  };
-  renderPayer("underpaid");
-  if (sortSel) sortSel.addEventListener("change", () => renderPayer(sortSel.value || "underpaid"));
-  window.__syncScrollBars && window.__syncScrollBars("payerTableSync");
-
-  if ((d.denialTop || []).length) {
-    new Chart(document.getElementById("denialReasonsChart"), {
-      type: "bar",
-      data: { labels:(d.denialTop||[]).map(x=>x.label), datasets:[{ label:"Denied", data:(d.denialTop||[]).map(x=>Number(x.count||0)), backgroundColor:"#ef4444" }] },
-      options: { indexAxis:"y", responsive:true, maintainAspectRatio:false }
-    });
-    document.getElementById("denialSkeleton").style.display = "none";
-    document.getElementById("denialReasonsChart").style.display = "block";
-  } else {
-    document.getElementById("denialModule").style.display = "none";
+  const tbody = document.getElementById("topRiskRows");
+  if (tbody) {
+    tbody.innerHTML = payerRows.length
+      ? payerRows.map(r => '<tr><td><a href="/payer-claims?payer=' + encodeURIComponent(r.payer) + '">' + r.payer + '</a></td><td>' + moneyFmt(r.billed) + '</td><td>' + moneyFmt(r.paid) + '</td><td>' + moneyFmt(r.underpaid) + '</td><td>' + moneyFmt(r.denied) + '</td><td>' + moneyFmt(r.openAppeals) + '</td></tr>').join("")
+      : '<tr><td colspan="6" class="muted">No payer data in this range.</td></tr>';
   }
 });
 </script>
