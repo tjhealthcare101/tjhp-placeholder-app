@@ -1979,6 +1979,50 @@ function buildClaimContext(org_id){
   return { paymentsByClaim, caseById, negByBilled };
 }
 
+function ensureDenialCaseForClaim(claim){
+  if (!claim || claim.denial_case_id) return;
+  if (!claim.org_id || !claim.billed_id) return;
+
+  const billedAll = readJSON(FILES.billed, []);
+  const billedIdx = billedAll.findIndex(b => String(b.billed_id || "") === String(claim.billed_id || ""));
+  if (billedIdx < 0) return;
+
+  if (billedAll[billedIdx].denial_case_id) {
+    claim.denial_case_id = billedAll[billedIdx].denial_case_id;
+    return;
+  }
+
+  const cases = readJSON(FILES.cases, []);
+  const existingCase = cases.find(c =>
+    c.type === "denial" &&
+    String(c.org_id || "") === String(claim.org_id || "") &&
+    String(c.billed_id || "") === String(claim.billed_id || "")
+  );
+
+  if (existingCase) {
+    claim.denial_case_id = existingCase.case_id;
+    billedAll[billedIdx].denial_case_id = existingCase.case_id;
+    writeJSON(FILES.billed, billedAll);
+    return;
+  }
+
+  const newCase = {
+    case_id: uuid(),
+    type: "denial",
+    status: "Open",
+    org_id: claim.org_id,
+    billed_id: claim.billed_id,
+    created_at: nowISO(),
+    stage: "Drafted",
+  };
+  cases.push(newCase);
+  writeJSON(FILES.cases, cases);
+
+  claim.denial_case_id = newCase.case_id;
+  billedAll[billedIdx].denial_case_id = newCase.case_id;
+  writeJSON(FILES.billed, billedAll);
+}
+
 function evaluateClaimDerived(claim, ctx={}){
   const billedAmount = num(claim.amount_billed);
   const patientResp = num(claim.patient_responsibility);
@@ -2009,6 +2053,7 @@ function evaluateClaimDerived(claim, ctx={}){
     if (paidAmount <= 0.0001) {
       lifecycleStage = "Denied";
       financialStatus = "Denied";
+      ensureDenialCaseForClaim(claim);
     } else if (paidAmount + 0.0001 < expectedInsurance) {
       lifecycleStage = "Underpaid";
       financialStatus = "Underpaid";
