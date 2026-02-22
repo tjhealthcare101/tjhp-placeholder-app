@@ -3737,68 +3737,46 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
       <div class="hr"></div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:24px;margin-top:20px;">
-      <div style="background:var(--card);padding:16px;border-radius:12px;border:1px solid var(--border);">
-        <h3 style="margin-bottom:12px;">Revenue Breakdown</h3>
-        <div style="height:320px;max-height:320px;">
-          <canvas id="revenueBreakdownChart"></canvas>
-        </div>
-      </div>
+      <style>
+        .dashboard-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-top:20px;}
+        .dashboard-grid .kpi-card{border-radius:12px;padding:16px;background:var(--card);border:1px solid var(--border);margin:0;text-align:left;display:block;box-shadow:none;width:auto;}
+        .dashboard-grid .kpi-card h4{margin:0;font-size:12px;opacity:.7;font-weight:700;}
+        .dashboard-grid .kpi-card p{margin:8px 0 0;font-size:24px;font-weight:600;line-height:1.2;}
+        .dashboard-panel{background:#fff;padding:16px;border-radius:12px;border:1px solid var(--border);grid-column:1 / -1;}
+        .chart-wrap-donut{height:360px;max-height:360px;display:flex;align-items:center;justify-content:center;}
+        .chart-wrap-standard{height:320px;max-height:320px;}
+      </style>
 
-      <div style="background:var(--card);padding:16px;border-radius:12px;border:1px solid var(--border);">
-        <h3 style="margin-bottom:12px;">Revenue Trend</h3>
-        <div style="height:350px;max-height:350px;">
-          <canvas id="revenueTrendChart"></canvas>
-        </div>
-      </div>
+      <div class="dashboard-grid">
+        <div class="kpi-card"><h4>Total Billed</h4><p>${fmtMoney(m.kpis.totalBilled)}</p></div>
+        <div class="kpi-card"><h4>Total Collected</h4><p>${fmtMoney(m.kpis.collectedTotal)}</p></div>
+        <div class="kpi-card"><h4>Revenue At Risk</h4><p>${fmtMoney(m.kpis.revenueAtRisk)}</p></div>
+        <div class="kpi-card"><h4>Gross Collection Rate</h4><p>${Number(m.kpis.grossCollectionRate||0).toFixed(1)}%</p></div>
 
-      <div style="background:var(--card);padding:16px;border-radius:12px;border:1px solid var(--border);">
-        <h3 style="margin-bottom:12px;">Revenue Flow</h3>
-        <div id="flowSkeleton" class="skeleton"></div>
-        <div style="height:350px;max-height:350px;">
-          <canvas id="revenueFlowChart" style="display:none;"></canvas>
-        </div>
-        <p id="flowEmpty" class="muted" style="display:none;">No data for selected range.</p>
-      </div>
-
-      <div style="background:var(--card);padding:16px;border-radius:12px;border:1px solid var(--border);">
-        <h3 style="margin-bottom:12px;">Revenue Trend (Detailed) <span class="tooltip" data-tip="Billed vs collected trend for selected range with at-risk amounts.">ⓘ</span></h3>
-        <div id="trendSkeleton" class="skeleton"></div>
-        <div style="height:350px;max-height:350px;">
-          <canvas id="revenueTrendChartLegacy" style="display:none;"></canvas>
-        </div>
-        <p id="trendEmpty" class="muted" style="display:none;">No data for selected range.</p>
-      </div>
-
-      </div>
-
-      <h3>Revenue Health <span class="tooltip" data-tip="High-level revenue performance for the selected date range.">ⓘ</span></h3>
-
-      <div style="margin-top:8px;">
-        <div style="height:14px;background:#e5e7eb;border-radius:999px;overflow:hidden;">
-          <div style="width:${percentCollected}%;height:100%;background:${barColor};transition:width .4s ease;"></div>
-        </div>
-        <div class="small muted" style="margin-top:6px;">${percentCollected}% of billed revenue collected · Range: ${safeStr(rangeLabel)}</div>
-      </div>
-
-      <div class="row" style="margin-top:14px;">
-        <div class="col">
-          <div class="kpi-card"><h4>Total Billed <span class="tooltip">ⓘ<span class="tooltiptext">Sum of billed charges in the selected date range.</span></span></h4><p>${fmtMoney(m.kpis.totalBilled)}</p></div>
-          <div class="kpi-card"><h4>Write-Off <span class="tooltip">ⓘ<span class="tooltiptext">Billed minus allowed (or explicit write-off amount), when provided.</span></span></h4><p>${fmtMoney(m.kpis.writeOffTotal)}</p></div>
-          <div class="kpi-card"><h4>Total Collected <span class="tooltip">ⓘ<span class="tooltiptext">Insurance collected + patient collected (based on uploaded data).</span></span></h4><p>${fmtMoney(m.kpis.collectedTotal)}</p></div>
-          <div class="kpi-card"><h4>Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Billed minus collected.</span></span></h4><p>${fmtMoney(m.kpis.revenueAtRisk)}</p></div>
+        <div class="dashboard-panel">
+          <h3 style="margin-bottom:12px;">Revenue Breakdown</h3>
+          <div class="chart-wrap-donut">
+            <canvas id="revenueBreakdownChart"></canvas>
+          </div>
         </div>
 
-        <div class="col">
-          <div class="kpi-card"><h4>Gross Collection Rate <span class="tooltip">ⓘ<span class="tooltiptext">Collected / Billed.</span></span></h4><p>${Number(m.kpis.grossCollectionRate||0).toFixed(1)}%</p></div>
-          <div class="kpi-card"><h4>Net Collection Rate <span class="tooltip">ⓘ<span class="tooltiptext">Collected / Allowed (when allowed is provided).</span></span></h4><p>${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p></div>
-          <div class="kpi-card"><h4>Negotiation Cases <span class="tooltip">ⓘ<span class="tooltiptext">Auto-created underpayment negotiation cases in this date range.</span></span></h4><p>${m.kpis.negotiationCases}</p></div>
+        <div class="dashboard-panel">
+          <h3 style="margin-bottom:12px;">Revenue Flow</h3>
+          <div id="flowSkeleton" class="skeleton"></div>
+          <div class="chart-wrap-standard">
+            <canvas id="revenueFlowChart" style="display:none;"></canvas>
+          </div>
+          <p id="flowEmpty" class="muted" style="display:none;">No data for selected range.</p>
         </div>
 
-        <div class="col">
-          <div class="kpi-card"><h4>Underpaid Amount <span class="tooltip">ⓘ<span class="tooltiptext">Total underpaid dollars based on expected insurance vs paid.</span></span></h4><p>${fmtMoney(m.kpis.underpaidAmt)}</p></div>
-          <div class="kpi-card"><h4>Underpaid Claims <span class="tooltip">ⓘ<span class="tooltiptext">Count of billed claims marked Underpaid.</span></span></h4><p>${m.kpis.underpaidCount}</p></div>
-          <div class="kpi-card"><h4>Patient Outstanding <span class="tooltip">ⓘ<span class="tooltiptext">Patient responsibility minus patient collected.</span></span></h4><p>${fmtMoney(m.kpis.patientOutstanding)}</p></div>
+        <div class="dashboard-panel">
+          <h3 style="margin-bottom:12px;">Revenue Trend</h3>
+          <div id="trendSkeleton" class="skeleton"></div>
+          <div class="chart-wrap-standard">
+            <canvas id="revenueTrendChart" style="display:none;"></canvas>
+            <canvas id="revenueTrendChartLegacy" style="display:none;"></canvas>
+          </div>
+          <p id="trendEmpty" class="muted" style="display:none;">No data for selected range.</p>
         </div>
       </div>
 
@@ -3886,7 +3864,7 @@ document.addEventListener("DOMContentLoaded", function(){
       labels: ["Paid","Underpaid","Denied","Write-off","Waiting Payment"],
       datasets: [{ data: [d.flow?.values?.[2]||0, d.flow?.values?.[3]||0, d.flow?.values?.[4]||0, d.flow?.values?.[5]||0, d.flow?.values?.[6]||0], backgroundColor: ["#16a34a","#f59e0b","#ef4444","#64748b","#6366f1"] }]
     },
-    options: { responsive:true, maintainAspectRatio:false }
+    options: { responsive:true, maintainAspectRatio:false, cutout:"60%" }
   });
 
   const trendLabels = d.series?.keys || [];
