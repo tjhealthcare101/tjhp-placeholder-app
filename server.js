@@ -2027,9 +2027,13 @@ function evaluateClaimDerived(claim, ctx={}){
   const billedAmount = num(claim.amount_billed);
   const patientResp = num(claim.patient_responsibility);
   const allowedAmount = num(claim.allowed_amount);
-  const expectedInsurance = (claim.expected_insurance != null && String(claim.expected_insurance).trim() !== "")
-    ? num(claim.expected_insurance)
-    : computeExpectedInsurance((allowedAmount > 0 ? allowedAmount : billedAmount), patientResp);
+  const contract = claim?.org_id ? findContractForClaim(claim.org_id, claim) : null;
+  const contractExpected = contract ? contractExpectedAmount(contract, billedAmount) : null;
+  const expectedInsurance = (contractExpected != null)
+    ? Math.max(0, num(contractExpected) - patientResp)
+    : ((claim.expected_insurance != null && String(claim.expected_insurance).trim() !== "")
+      ? num(claim.expected_insurance)
+      : computeExpectedInsurance((allowedAmount > 0 ? allowedAmount : billedAmount), patientResp));
   const key = normalizeClaimKey(claim.claim_number || "");
   const paymentRows = key && ctx.paymentsByClaim ? (ctx.paymentsByClaim[key] || []) : [];
   const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid), 0);
@@ -2185,6 +2189,83 @@ function recalculateContractsForOrg(org_id){
     changed = true;
   }
   if (changed) writeJSON(FILES.billed, billedAll);
+}
+
+function getClaimBatchHistory(org_id){
+  const submissions = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org_id);
+  const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  const ctx = buildClaimContext(org_id);
+  return submissions
+    .map(s => {
+      const claims = billed.filter(b => String(b.submission_id || "") === String(s.submission_id || ""));
+      const paidCount = claims.filter(c => evaluateClaimDerived(c, ctx).lifecycleStage === "Resolved").length;
+      return {
+        submission_id: s.submission_id,
+        filename: s.original_filename || "batch",
+        uploaded_at: s.uploaded_at,
+        claim_count: claims.length,
+        paid_count: paidCount,
+      };
+    })
+    .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
+}
+
+function getPaymentBatchHistory(org_id){
+  const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
+  const map = {};
+  for (const p of payments) {
+    const source = String(p.source_file || "manual").trim() || "manual";
+    if (!map[source]) map[source] = { source_file: source, row_count: 0, total_paid: 0, uploaded_at: p.created_at || p.date_paid || nowISO() };
+    map[source].row_count += 1;
+    map[source].total_paid += num(p.amount_paid);
+    const dt = new Date(p.created_at || p.date_paid || 0).getTime();
+    if (dt > new Date(map[source].uploaded_at || 0).getTime()) map[source].uploaded_at = p.created_at || p.date_paid || map[source].uploaded_at;
+  }
+  return Object.values(map).sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
+}
+
+function getUnmatchedPayments(org_id, billed){
+  const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
+  return payments.filter(p => !findBilledByClaim(org_id, billed, p.claim_number));
+}
+
+function rebuildOrgDerivedData(org_id, opts={}){
+  const settings = { resyncDenials: false, ...opts };
+  recalculateContractsForOrg(org_id);
+  const billedAll = readJSON(FILES.billed, []);
+  const ctx = buildClaimContext(org_id);
+  let changed = false;
+  for (const b of billedAll) {
+    if (b.org_id !== org_id) continue;
+    const d = evaluateClaimDerived(b, ctx);
+    b.expected_insurance = num(d.expectedInsurance);
+    b.underpaid_amount = Math.max(0, num(d.expectedInsurance) - num(d.paidAmount));
+    b.lifecycle_stage = d.lifecycleStage;
+    b.status = d.lifecycleStage;
+    if (settings.resyncDenials && d.lifecycleStage === "Denied") ensureDenialCaseForClaim(b);
+    changed = true;
+  }
+  if (changed) writeJSON(FILES.billed, billedAll);
+
+  const subsAll = readJSON(FILES.billed_submissions, []);
+  const orgClaims = billedAll.filter(b => b.org_id === org_id);
+  for (const s of subsAll) {
+    if (s.org_id !== org_id) continue;
+    const claims = orgClaims.filter(c => String(c.submission_id || "") === String(s.submission_id || ""));
+    const totals = claims.reduce((acc, c) => {
+      const d = evaluateClaimDerived(c, ctx);
+      acc.billed += num(c.amount_billed);
+      acc.paid += num(d.paidAmount);
+      acc.expected += num(d.expectedInsurance);
+      return acc;
+    }, { billed: 0, paid: 0, expected: 0 });
+    s.claim_count = claims.length;
+    s.total_billed = totals.billed;
+    s.total_paid = totals.paid;
+    s.total_expected_insurance = totals.expected;
+    s.updated_at = nowISO();
+  }
+  writeJSON(FILES.billed_submissions, subsAll);
 }
 
 function computeClaimAtRisk(b){
@@ -9173,16 +9254,104 @@ rowsAdded = toUse;
   }
 
   if (method === "GET" && pathname === "/data-management") {
-    const tab = String(parsed.query.tab || "denials");
-    const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id).slice(0, 300);
-    const claimOpts = billed.map(b => `<option value="${safeStr(b.billed_id)}">${safeStr(b.claim_number || b.billed_id)} · ${safeStr(b.payer || "")}</option>`).join("");
+    const tab = String(parsed.query.tab || "claims").toLowerCase();
+    const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+    const claimBatches = getClaimBatchHistory(org.org_id);
+    const paymentBatches = getPaymentBatchHistory(org.org_id);
+    const unmatchedPayments = getUnmatchedPayments(org.org_id, billed).slice(0, 50);
+    const denialCases = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id && String(c.case_type || "denial").toLowerCase() !== "underpayment");
+    const denialUploads = denialCases.map(c => {
+      const linked = billed.find(b => String(b.denial_case_id || "") === String(c.case_id || ""));
+      const docCount = (Array.isArray(c.files) ? c.files.length : 0) + (Array.isArray(c.appeal_attachments) ? c.appeal_attachments.length : 0);
+      return {
+        case_id: c.case_id,
+        status: c.status || "Open",
+        claim_number: linked?.claim_number || "",
+        payer: linked?.payer || "",
+        created_at: c.created_at,
+        doc_count: docCount,
+      };
+    }).sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
+    const denialsWithDocs = denialUploads.filter(x => x.doc_count > 0).length;
+
+    const claimCtx = buildClaimContext(org.org_id);
+    const claimIntegrity = billed.reduce((acc, b) => {
+      if (!String(b.payer || "").trim()) acc.missingPayer += 1;
+      if (evaluateClaimDerived(b, claimCtx).expectedInsurance <= 0) acc.missingExpected += 1;
+      if (num(b.amount_billed) <= 0) acc.zeroBilled += 1;
+      if (!String(b.submission_id || "").trim()) acc.missingSubmission += 1;
+      return acc;
+    }, { missingPayer: 0, missingExpected: 0, zeroBilled: 0, missingSubmission: 0 });
+    const totalRevenueCollected = billed.reduce((s, b) => s + num(evaluateClaimDerived(b, claimCtx).paidAmount), 0);
+
+    const contracts = getPayerContracts(org.org_id).sort((a,b)=> String(a.payer_name||"").localeCompare(String(b.payer_name||"")));
+
     const tabs = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
+        <a class="btn ${tab==="claims"?"":"secondary"}" href="/data-management?tab=claims">Claims</a>
+        <a class="btn ${tab==="payments"?"":"secondary"}" href="/data-management?tab=payments">Payments</a>
         <a class="btn ${tab==="denials"?"":"secondary"}" href="/data-management?tab=denials">Denials</a>
-        <a class="btn ${tab==="network"?"":"secondary"}" href="/data-management?tab=network">Network</a>
+        <a class="btn ${tab==="contracts"?"":"secondary"}" href="/data-management?tab=contracts">Contracts</a>
       </div>
     `;
-    const denialContent = `
+
+    const rebuildControls = `
+      <div class="hr"></div>
+      <h3>Rebuild Controls</h3>
+      <p class="muted">Re-run lifecycle, expected insurance, revenue aggregates, and denial synchronization from evaluateClaimDerived().</p>
+      <div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;">
+        <form method="POST" action="/data-management/rebuild"><input type="hidden" name="op" value="lifecycle"/><button class="btn secondary" type="submit">Recalculate Lifecycle</button></form>
+        <form method="POST" action="/data-management/rebuild"><input type="hidden" name="op" value="expected"/><button class="btn secondary" type="submit">Recompute Expected Insurance</button></form>
+        <form method="POST" action="/data-management/rebuild"><input type="hidden" name="op" value="revenue"/><button class="btn secondary" type="submit">Rebuild Revenue Aggregates</button></form>
+        <form method="POST" action="/data-management/rebuild"><input type="hidden" name="op" value="denials"/><button class="btn secondary" type="submit">Re-sync Denials</button></form>
+      </div>
+    `;
+
+    const claimsContent = `
+      <h3>Claim Batch Upload</h3>
+      <form method="POST" action="/upload-billed" enctype="multipart/form-data">
+        <input type="hidden" name="next" value="/data-management?tab=claims"/>
+        <input type="file" name="billfile" accept=".csv,.xls,.xlsx" required />
+        <div class="btnRow"><button class="btn" type="submit">Upload Claim Batch</button></div>
+      </form>
+      <div class="hr"></div>
+      <h3>Claim Batch History</h3>
+      <div style="overflow:auto;"><table><thead><tr><th>Batch</th><th>Uploaded</th><th>Claims</th><th>Resolved</th><th></th></tr></thead><tbody>
+      ${claimBatches.map(x=>`<tr><td>${safeStr(x.filename)}</td><td>${x.uploaded_at ? new Date(x.uploaded_at).toLocaleDateString() : "—"}</td><td>${x.claim_count}</td><td>${x.paid_count}</td><td><a href="/billed?submission_id=${encodeURIComponent(x.submission_id)}">Open</a></td></tr>`).join("") || '<tr><td colspan="5" class="muted">No claim batches uploaded.</td></tr>'}
+      </tbody></table></div>
+      <div class="hr"></div>
+      <h3>Data Integrity Metrics</h3>
+      <div class="row">
+        <div class="col"><div class="kpi-card"><h4>Claims Missing Payer</h4><p>${claimIntegrity.missingPayer}</p></div></div>
+        <div class="col"><div class="kpi-card"><h4>Missing Expected Insurance</h4><p>${claimIntegrity.missingExpected}</p></div></div>
+        <div class="col"><div class="kpi-card"><h4>$0 Billed Claims</h4><p>${claimIntegrity.zeroBilled}</p></div></div>
+        <div class="col"><div class="kpi-card"><h4>Missing Submission ID</h4><p>${claimIntegrity.missingSubmission}</p></div></div>
+      </div>
+    `;
+
+    const paymentsContent = `
+      <h3>Payment Upload</h3>
+      <form method="POST" action="/payments" enctype="multipart/form-data">
+        <input type="hidden" name="next" value="/data-management?tab=payments"/>
+        <input type="file" name="payfile" accept=".csv,.xls,.xlsx,.txt" required />
+        <div class="btnRow"><button class="btn" type="submit">Upload Payment Batch</button></div>
+      </form>
+      <div class="hr"></div>
+      <h3>Payment Batch History</h3>
+      <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded</th><th>Rows</th><th>Total Paid</th><th></th></tr></thead><tbody>
+      ${paymentBatches.map(x=>`<tr><td>${safeStr(x.source_file)}</td><td>${x.uploaded_at ? new Date(x.uploaded_at).toLocaleDateString() : "—"}</td><td>${x.row_count}</td><td>${formatMoneyUI(x.total_paid)}</td><td><a href="/payment-batch-detail?file=${encodeURIComponent(x.source_file)}">Open</a></td></tr>`).join("") || '<tr><td colspan="5" class="muted">No payment batches uploaded.</td></tr>'}
+      </tbody></table></div>
+      <div class="hr"></div>
+      <h3>Unmatched Payments</h3>
+      <div style="overflow:auto;"><table><thead><tr><th>Claim #</th><th>Payer</th><th>Date Paid</th><th>Amount</th><th>Source File</th></tr></thead><tbody>
+      ${unmatchedPayments.map(p=>`<tr><td>${safeStr(p.claim_number||"")}</td><td>${safeStr(p.payer||"")}</td><td>${safeStr(p.date_paid||"")}</td><td>${formatMoneyUI(p.amount_paid)}</td><td>${safeStr(p.source_file||"")}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No unmatched payments.</td></tr>'}
+      </tbody></table></div>
+      <div class="hr"></div>
+      <h3>Total Revenue Collected</h3>
+      <div class="kpi-card"><p>${formatMoneyUI(totalRevenueCollected)}</p></div>
+    `;
+
+    const denialsContent = `
       <h3>Upload Denial Documents</h3>
       <form method="POST" action="/upload-denials" enctype="multipart/form-data">
         <input type="hidden" name="next" value="/data-management?tab=denials"/>
@@ -9190,6 +9359,17 @@ rowsAdded = toUse;
         <input id="dm-denials-files" type="file" name="files" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" required style="display:none" />
         <div class="btnRow"><button class="btn" type="submit">Upload Denial Files</button></div>
       </form>
+      <div class="btnRow" style="margin-top:8px;"><form method="POST" action="/data-management/reprocess-denials"><button class="btn secondary" type="submit">Reprocess Denials</button></form></div>
+      <div class="hr"></div>
+      <h3>Uploaded Denial Files</h3>
+      <div style="overflow:auto;"><table><thead><tr><th>Case ID</th><th>Claim #</th><th>Payer</th><th>Status</th><th>Documents</th><th>Created</th></tr></thead><tbody>
+      ${denialUploads.map(d=>`<tr><td>${safeStr(d.case_id||"")}</td><td>${safeStr(d.claim_number||"")}</td><td>${safeStr(d.payer||"")}</td><td>${safeStr(d.status||"")}</td><td>${d.doc_count}</td><td>${d.created_at ? new Date(d.created_at).toLocaleDateString() : "—"}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">No denial files uploaded.</td></tr>'}
+      </tbody></table></div>
+      <div class="row">
+        <div class="col"><div class="kpi-card"><h4>Total Denials</h4><p>${denialUploads.length}</p></div></div>
+        <div class="col"><div class="kpi-card"><h4>Denials With Documents</h4><p>${denialsWithDocs}</p></div></div>
+        <div class="col"><div class="kpi-card"><h4>Denials Missing Documents</h4><p>${Math.max(0, denialUploads.length - denialsWithDocs)}</p></div></div>
+      </div>
       <script>
         (function(){
           const dz = document.getElementById("dm-denials-dropzone");
@@ -9203,46 +9383,130 @@ rowsAdded = toUse;
         })();
       </script>
     `;
-    const networkContent = `
-      <h3>Claim Network Status</h3>
-      <p class="muted">Set network status on the claim record used for risk scoring and workflows.</p>
-      <form method="POST" action="/data-management/network">
-        <label>Claim</label>
-        <select name="billed_id" required>
-          <option value="">Select a claim</option>
-          ${claimOpts}
-        </select>
-        <label>Network Status</label>
-        <select name="network_status">
-          <option value="In Network">In Network</option>
-          <option value="Out of Network">Out of Network</option>
-        </select>
-        <div class="btnRow"><button class="btn" type="submit">Save Network Status</button></div>
+
+    const contractsContent = `
+      <h3>Contracts</h3>
+      <p class="muted">Contracts are the single source of expected insurance calculations.</p>
+      <form method="POST" action="/data-management/contracts/add" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+        <input name="payer_name" placeholder="Payer name" required />
+        <input name="procedure_code" placeholder="Procedure code" required />
+        <input name="diagnosis_code" placeholder="Diagnosis code" />
+        <input name="allowed_amount" placeholder="Allowed amount" required />
+        <input name="effective_date" type="date" />
+        <button class="btn" type="submit">Add Contract</button>
       </form>
+      <div class="hr"></div>
+      <div style="overflow:auto;"><table><thead><tr><th>Payer</th><th>Procedure</th><th>Diagnosis</th><th>Allowed Amount</th><th>Effective Date</th><th></th></tr></thead><tbody>
+      ${contracts.map(c=>`<tr>
+        <td>${safeStr(c.payer_name||"")}</td>
+        <td>${safeStr(c.procedure_code||"")}</td>
+        <td>${safeStr(c.diagnosis_code||"—")}</td>
+        <td>${formatMoneyUI(c.expected_value)}</td>
+        <td>${safeStr(c.effective_date||"—")}</td>
+        <td>
+          <form method="POST" action="/data-management/contracts/update" style="display:inline-flex;gap:6px;flex-wrap:wrap;">
+            <input type="hidden" name="contract_id" value="${safeStr(c.contract_id)}" />
+            <input name="payer_name" value="${safeStr(c.payer_name||"")}" required />
+            <input name="procedure_code" value="${safeStr(c.procedure_code||"")}" required />
+            <input name="diagnosis_code" value="${safeStr(c.diagnosis_code||"")}" />
+            <input name="allowed_amount" value="${safeStr(String(num(c.expected_value)))}" required />
+            <input name="effective_date" type="date" value="${safeStr(c.effective_date||"")}" />
+            <button class="btn secondary small" type="submit">Edit</button>
+          </form>
+          <form method="POST" action="/data-management/contracts/delete" style="display:inline;" onsubmit="return confirm('Delete this contract?');">
+            <input type="hidden" name="contract_id" value="${safeStr(c.contract_id)}" />
+            <button class="btn danger small" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>`).join("") || '<tr><td colspan="6" class="muted">No contracts found.</td></tr>'}
+      </tbody></table></div>
     `;
+
+    const section = tab === "payments" ? paymentsContent : (tab === "denials" ? denialsContent : (tab === "contracts" ? contractsContent : claimsContent));
+
     const html = renderPage("Data Management", `
       <h2>Data Management</h2>
-      <p class="muted">Central place for denial uploads and claim-level network controls.</p>
+      <p class="muted">Enterprise controls for claims, payments, denials, and contracts.</p>
       ${tabs}
-      ${tab === "network" ? networkContent : denialContent}
+      ${section}
+      ${rebuildControls}
     `, navUser(), {showChat:true, orgName: org.org_name});
     return send(res, 200, html);
   }
 
   if (method === "POST" && pathname === "/data-management/network") {
+    return redirect(res, "/data-management?tab=contracts");
+  }
+
+  if (method === "POST" && pathname === "/data-management/reprocess-denials") {
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: true });
+    return redirect(res, "/data-management?tab=denials");
+  }
+
+  if (method === "POST" && pathname === "/data-management/rebuild") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
-    const billed_id = String(params.get("billed_id") || "").trim();
-    const network_status = String(params.get("network_status") || "Out of Network").trim();
-    if (billed_id) {
-      const billedAll = readJSON(FILES.billed, []);
-      const idx = billedAll.findIndex(b => b.org_id === org.org_id && b.billed_id === billed_id);
-      if (idx >= 0) {
-        billedAll[idx].network_status = (network_status === "In Network") ? "In Network" : "Out of Network";
-        writeJSON(FILES.billed, billedAll);
-      }
+    const op = String(params.get("op") || "").trim();
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: op === "denials" });
+    const tabForOp = (op === "revenue") ? "payments" : (op === "denials" ? "denials" : "claims");
+    return redirect(res, `/data-management?tab=${tabForOp}`);
+  }
+
+  if (method === "POST" && pathname === "/data-management/contracts/add") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const payer_name = String(params.get("payer_name") || "").trim();
+    const procedure_code = String(params.get("procedure_code") || "").trim();
+    if (!payer_name || !procedure_code) return redirect(res, "/data-management?tab=contracts");
+    const contracts = getPayerContracts(org.org_id);
+    contracts.push({
+      contract_id: uuid(),
+      org_id: org.org_id,
+      payer_name,
+      network_status: "In Network",
+      procedure_code,
+      diagnosis_code: String(params.get("diagnosis_code") || "").trim(),
+      reimbursement_model: "fixed_amount",
+      expected_value: num(params.get("allowed_amount")),
+      effective_date: String(params.get("effective_date") || "").trim(),
+      updated_at: nowISO(),
+    });
+    savePayerContracts(org.org_id, contracts);
+    rebuildOrgDerivedData(org.org_id);
+    return redirect(res, "/data-management?tab=contracts");
+  }
+
+  if (method === "POST" && pathname === "/data-management/contracts/update") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const contract_id = String(params.get("contract_id") || "").trim();
+    const contracts = getPayerContracts(org.org_id);
+    const idx = contracts.findIndex(c => String(c.contract_id) === contract_id);
+    if (idx >= 0) {
+      contracts[idx].payer_name = String(params.get("payer_name") || contracts[idx].payer_name || "").trim();
+      contracts[idx].procedure_code = String(params.get("procedure_code") || contracts[idx].procedure_code || "").trim();
+      contracts[idx].diagnosis_code = String(params.get("diagnosis_code") || contracts[idx].diagnosis_code || "").trim();
+      contracts[idx].expected_value = num(params.get("allowed_amount"));
+      contracts[idx].effective_date = String(params.get("effective_date") || contracts[idx].effective_date || "").trim();
+      contracts[idx].updated_at = nowISO();
+      contracts[idx].reimbursement_model = "fixed_amount";
+      contracts[idx].network_status = "In Network";
+      savePayerContracts(org.org_id, contracts);
+      rebuildOrgDerivedData(org.org_id);
     }
-    return redirect(res, "/data-management?tab=network");
+    return redirect(res, "/data-management?tab=contracts");
+  }
+
+  if (method === "POST" && pathname === "/data-management/contracts/delete") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const contract_id = String(params.get("contract_id") || "").trim();
+    if (contract_id) {
+      const contracts = getPayerContracts(org.org_id).filter(c => String(c.contract_id) !== contract_id);
+      savePayerContracts(org.org_id, contracts);
+      rebuildOrgDerivedData(org.org_id);
+    }
+    return redirect(res, "/data-management?tab=contracts");
   }
 
   if (method === "GET" && pathname === "/account") {
