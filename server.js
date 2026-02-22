@@ -3952,16 +3952,14 @@ if (method === "GET" && pathname === "/claims") {
   }
 
   const pipelineAgg = {};
-  for (const stage of PIPE_ORDER) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0, revenueCollected: 0 };
+  for (const stage of PIPE_ORDER) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
 
   billedAll.forEach(b => {
     const d = evaluateClaimDerived(b, claimCtx);
-    const paidAmount = num(d.paidAmount);
     const stage = toPipelineStage(b);
-    if (!pipelineAgg[stage]) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0, revenueCollected: 0 };
+    if (!pipelineAgg[stage]) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
     pipelineAgg[stage].count += 1;
     pipelineAgg[stage].billed += num(b.amount_billed);
-    if (paidAmount > 0) pipelineAgg["Paid"].revenueCollected += paidAmount;
 
     if (stage === "Patient Balance") {
       pipelineAgg[stage].atRisk += num(b.patient_responsibility || 0);
@@ -3971,6 +3969,14 @@ if (method === "GET" && pathname === "/claims") {
   });
 
   const pipelineTotal = PIPE_ORDER.reduce((s, k) => s + (pipelineAgg[k]?.count || 0), 0) || 1;
+  const revenueCollected = billedAll.reduce((sum, b) => {
+    const d = evaluateClaimDerived(b, claimCtx);
+    return sum + num(d.paidAmount);
+  }, 0);
+  const totalBilledAcrossAllClaims = billedAll.reduce((sum, b) => {
+    const d = evaluateClaimDerived(b, claimCtx);
+    return sum + num(d.billedAmount);
+  }, 0);
 
   const stageToStatusFilter = (stage) => {
     // Map pipeline stage to existing All Claims "status" filter
@@ -3985,9 +3991,11 @@ if (method === "GET" && pathname === "/claims") {
       <h3>Claims Lifecycle Pipeline <span class="tooltip" data-tip="Pipeline view of all claims. Denied/Underpaid only appear after payer response.">ⓘ</span></h3>
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         ${PIPE_ORDER.map(stage => {
-          const d = pipelineAgg[stage] || { count:0, billed:0, atRisk:0, revenueCollected:0 };
+          const d = pipelineAgg[stage] || { count:0, billed:0, atRisk:0 };
           const cardTitle = stage === "Paid" ? "Revenue Collected" : stage;
-          const pct = Math.round((d.count / pipelineTotal) * 100);
+          const pct = stage === "Paid"
+            ? Math.round((revenueCollected / (totalBilledAcrossAllClaims || 1)) * 100)
+            : Math.round((d.count / pipelineTotal) * 100);
           const statusFilter = stageToStatusFilter(stage);
           const href = statusFilter
             ? `/claims?view=all&status=${encodeURIComponent(statusFilter)}`
@@ -3999,7 +4007,7 @@ if (method === "GET" && pathname === "/claims") {
               <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);">
                 <div style="font-weight:900;">${cardTitle}</div>
                 <div class="muted small">Claims: ${d.count}</div>
-                <div class="muted small">${stage === "Paid" ? `Revenue Collected: ${formatMoney(d.revenueCollected)}` : `Billed: ${formatMoney(d.billed)}`}</div>
+                <div class="muted small">${stage === "Paid" ? `Revenue Collected: ${formatMoney(revenueCollected)}` : `Billed: ${formatMoney(d.billed)}`}</div>
                 <div class="muted small">At Risk: ${formatMoney(d.atRisk)}</div>
                 <div style="height:10px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:10px;">
                   <div style="width:${pct}%;height:100%;background:#111827;"></div>
