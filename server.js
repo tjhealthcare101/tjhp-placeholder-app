@@ -2074,6 +2074,32 @@ function evaluateClaimDerived(claim, ctx={}){
     financialStatus = "In Appeal/Negotiation";
   }
 
+  const writeOffAmount = num(claim.contractual_adjustment || claim.write_off || 0);
+  const patientCollected = num(claim.patient_collected || 0);
+
+  // A claim is fully paid if:
+  const fullyPaid = (paidAmount >= expectedInsurance);
+
+  // A claim is fully written off if:
+  const fullyWrittenOff = writeOffAmount > 0;
+
+  // A claim is financially complete if:
+  const patientFullyCollected = (patientResp - patientCollected) <= 0;
+
+  const noActiveCase =
+    !appealCase ||
+    ["Closed","Resolved"].includes(String(appealCase.status || ""));
+
+  if (fullyWrittenOff && noActiveCase) {
+    lifecycleStage = "Write-Off";
+    financialStatus = "Write-Off";
+  }
+
+  if ((fullyPaid && patientFullyCollected && noActiveCase) || fullyWrittenOff) {
+    lifecycleStage = "Resolved";
+    financialStatus = "Resolved";
+  }
+
   const writeOff = num(claim.write_off_amount || claim.contractual_adjustment);
   let atRiskAmount = 0;
   if (lifecycleStage === "Underpaid") atRiskAmount = Math.max(0, expectedInsurance - paidAmount);
@@ -3902,9 +3928,9 @@ if (method === "GET" && pathname === "/claims") {
     "Denied",
     "Underpaid",
     "In Appeal/Negotiation",
-    "Paid",
     "Patient Balance",
-    "Write-Off"
+    "Write-Off",
+    "Resolved"
   ];
 
   function isAppealOpen(b){
@@ -3934,6 +3960,7 @@ if (method === "GET" && pathname === "/claims") {
 
   function toPipelineStage(b){
     const d = evaluateClaimDerived(b, claimCtx);
+    if (PIPE_ORDER.includes(d.lifecycleStage)) return d.lifecycleStage;
     const paid = num(d.paidAmount);
     const expected = num(d.expectedInsurance || 0);
     const hasPayment = !!d.hasPaymentResponse;
