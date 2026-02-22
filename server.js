@@ -2313,7 +2313,7 @@ function evaluateClaimDerived(claim, ctx={}){
       lifecycleStage = "Underpaid";
       financialStatus = "Underpaid";
     } else {
-      lifecycleStage = patientResp > 0 ? "Patient Balance" : "Paid";
+      lifecycleStage = "Paid";
       financialStatus = lifecycleStage;
     }
   }
@@ -2358,11 +2358,8 @@ function evaluateClaimDerived(claim, ctx={}){
   const writeOff = num(claim.write_off_amount || claim.contractual_adjustment);
   let atRiskAmount = 0;
   if (lifecycleStage === "Underpaid") atRiskAmount = Math.max(0, expectedInsurance - paidAmount);
-  else if (lifecycleStage === "Patient Balance") {
-    const patientCollected = num(claim.patient_collected || 0);
-    atRiskAmount = Math.max(0, patientResp - patientCollected);
-  } else if (lifecycleStage === "Denied" || lifecycleStage === "Submitted" || lifecycleStage === "Waiting Payment" || lifecycleStage === "In Appeal/Negotiation") {
-    atRiskAmount = Math.max(0, billedAmount - paidAmount);
+  else if (lifecycleStage === "Denied" || lifecycleStage === "Submitted" || lifecycleStage === "Waiting Payment" || lifecycleStage === "In Appeal/Negotiation") {
+    atRiskAmount = Math.max(0, expectedInsurance - paidAmount);
   }
   else atRiskAmount = 0;
 
@@ -2379,6 +2376,28 @@ function evaluateClaimDerived(claim, ctx={}){
     hasPaymentResponse: hasPaymentRecord,
     hasDenialContext
   };
+}
+
+function isResolvedLifecycleStage(stage){
+  const s = String(stage || "").trim();
+  return ["Resolved", "Write-Off", "Revenue Collected", "Paid", "Closed", "Contractual"].includes(s);
+}
+
+function computeExecutiveRevenueMetrics(org_id){
+  const claims = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  const claimCtx = buildClaimContext(org_id);
+  return claims.reduce((acc, claim) => {
+    const d = evaluateClaimDerived(claim, claimCtx);
+    const billed = num(claim.amount_billed);
+    const paid = num(d.paidAmount);
+    const expectedInsurance = num(d.expectedInsurance);
+    acc.totalBilled += billed;
+    acc.totalCollected += paid;
+    if (!isResolvedLifecycleStage(d.lifecycleStage)) {
+      acc.totalAtRisk += Math.max(0, expectedInsurance - paid);
+    }
+    return acc;
+  }, { totalBilled: 0, totalCollected: 0, totalAtRisk: 0 });
 }
 
 function findContractForClaim(org_id, b){
@@ -4193,6 +4212,7 @@ if (method === "GET" && pathname === "/claims") {
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
   const claimCtx = buildClaimContext(org.org_id);
+  const executiveRevenue = computeExecutiveRevenueMetrics(org.org_id);
 
   // Snapshot counts across all claims (simple, fast)
   const counts = billedAll.reduce((acc,b)=>{
@@ -4210,8 +4230,7 @@ if (method === "GET" && pathname === "/claims") {
   // - Denied: payer responded AND paid==0 AND denial context exists
   // - Underpaid: payer responded AND paid>0 AND paid<expected
   // - In Appeal/Negotiation: appeal case is active OR negotiation is active
-  // - Paid: payer responded AND paid>=expected (and no open case)
-  // - Patient Balance: derived says patient balance
+  // - Revenue Collected: claims with any posted payment (> 0)
   // - Write-Off: derived says contractual/write-off
 
   const casesAllOrg = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
@@ -4223,10 +4242,10 @@ if (method === "GET" && pathname === "/claims") {
   const PIPE_ORDER = [
     "Submitted",
     "Waiting Payment",
+    "Revenue Collected",
     "Denied",
     "Underpaid",
     "In Appeal/Negotiation",
-    "Patient Balance",
     "Write-Off",
     "Resolved"
   ];
@@ -4258,6 +4277,7 @@ if (method === "GET" && pathname === "/claims") {
 
   function toPipelineStage(b){
     const d = evaluateClaimDerived(b, claimCtx);
+    if (d.lifecycleStage === "Paid") return "Resolved";
     if (PIPE_ORDER.includes(d.lifecycleStage)) return d.lifecycleStage;
     const paid = num(d.paidAmount);
     const expected = num(d.expectedInsurance || 0);
@@ -4268,8 +4288,7 @@ if (method === "GET" && pathname === "/claims") {
     if (hasPayment) {
       if (paid <= 0.0001) return "Denied";
       if (paid + 0.0001 < expected) return "Underpaid";
-      if (num(b.patient_responsibility || 0) > 0) return "Patient Balance";
-      return "Paid";
+      return "Resolved";
     }
 
     const submitted = !!(b.submission_id || b.submitted_at || b.submitted_date || b.submitted_to_payer);
@@ -4278,37 +4297,38 @@ if (method === "GET" && pathname === "/claims") {
 
   const pipelineAgg = {};
   for (const stage of PIPE_ORDER) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
+  const pipelineBaseStages = PIPE_ORDER.filter(s => s !== "Revenue Collected");
 
   billedAll.forEach(b => {
     const d = evaluateClaimDerived(b, claimCtx);
     const stage = toPipelineStage(b);
-    if (!pipelineAgg[stage]) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
-    pipelineAgg[stage].count += 1;
-    pipelineAgg[stage].billed += num(b.amount_billed);
-
-    if (stage === "Patient Balance") {
-      pipelineAgg[stage].atRisk += num(b.patient_responsibility || 0);
-    } else {
+    if (stage !== "Revenue Collected") {
+      if (!pipelineAgg[stage]) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
+      pipelineAgg[stage].count += 1;
+      pipelineAgg[stage].billed += num(b.amount_billed);
       pipelineAgg[stage].atRisk += num(d.atRiskAmount);
+    }
+
+    if (num(d.paidAmount) > 0) {
+      pipelineAgg["Revenue Collected"].count += 1;
+      pipelineAgg["Revenue Collected"].billed += num(b.amount_billed);
+      if (!isResolvedLifecycleStage(d.lifecycleStage)) {
+        pipelineAgg["Revenue Collected"].atRisk += Math.max(0, num(d.expectedInsurance) - num(d.paidAmount));
+      }
     }
   });
 
-  const pipelineTotal = PIPE_ORDER.reduce((s, k) => s + (pipelineAgg[k]?.count || 0), 0) || 1;
-  const revenueCollected = billedAll.reduce((sum, b) => {
-    const d = evaluateClaimDerived(b, claimCtx);
-    return sum + num(d.paidAmount);
-  }, 0);
-  const totalBilledAcrossAllClaims = billedAll.reduce((sum, b) => {
-    const d = evaluateClaimDerived(b, claimCtx);
-    return sum + num(d.billedAmount);
-  }, 0);
+  const pipelineTotal = pipelineBaseStages.reduce((s, k) => s + (pipelineAgg[k]?.count || 0), 0) || 1;
 
-  const stageToStatusFilter = (stage) => {
-    // Map pipeline stage to existing All Claims "status" filter
-    if (stage === "Waiting Payment") return "Waiting Payment";
-    if (stage === "Write-Off") return "Contractual";
-    if (stage === "In Appeal/Negotiation") return ""; // special: use query param "in_case=1" later if you want
-    return stage; // Submitted, Denied, Underpaid, Paid, Patient Balance
+  const stageToClaimsHref = (stage) => {
+    if (stage === "Waiting Payment") return "/claims?view=all&status=Waiting%20Payment";
+    if (stage === "Denied") return "/claims?view=denials";
+    if (stage === "Underpaid") return "/claims?view=all&status=Underpaid";
+    if (stage === "In Appeal/Negotiation") return "/claims?view=all&status=In%20Appeal%2FNegotiation";
+    if (stage === "Submitted") return "/claims?view=all&status=Submitted";
+    if (stage === "Write-Off") return "/claims?view=all&status=Contractual";
+    if (stage === "Resolved" || stage === "Revenue Collected") return "/claims?view=all&status=Resolved";
+    return "/claims?view=all";
   };
 
   const pipelineHtml = `
@@ -4317,22 +4337,19 @@ if (method === "GET" && pathname === "/claims") {
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         ${PIPE_ORDER.map(stage => {
           const d = pipelineAgg[stage] || { count:0, billed:0, atRisk:0 };
-          const cardTitle = stage === "Paid" ? "Revenue Collected" : stage;
-          const pct = stage === "Paid"
-            ? Math.round((revenueCollected / (totalBilledAcrossAllClaims || 1)) * 100)
+          const pct = stage === "Revenue Collected"
+            ? Math.round((executiveRevenue.totalCollected / (executiveRevenue.totalBilled || 1)) * 100)
             : Math.round((d.count / pipelineTotal) * 100);
-          const statusFilter = stageToStatusFilter(stage);
-          const href = statusFilter
-            ? `/claims?view=all&status=${encodeURIComponent(statusFilter)}`
-            : `/claims?view=all`; // In Appeal/Negotiation falls back to all for now
+          const href = stageToClaimsHref(stage);
 
           return `
             <a href="${href}"
               style="text-decoration:none;color:inherit;flex:1;min-width:170px;">
               <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);">
-                <div style="font-weight:900;">${cardTitle}</div>
+                <div style="font-weight:900;">${stage}</div>
                 <div class="muted small">Claims: ${d.count}</div>
-                <div class="muted small">${stage === "Paid" ? `Revenue Collected: ${formatMoney(revenueCollected)}` : `Billed: ${formatMoney(d.billed)}`}</div>
+                <div class="muted small">Billed: ${formatMoney(d.billed)}</div>
+                ${stage === "Revenue Collected" ? `<div class="muted small">Revenue Collected: ${formatMoney(executiveRevenue.totalCollected)}</div>` : ``}
                 <div class="muted small">At Risk: ${formatMoney(d.atRisk)}</div>
                 <div style="height:10px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:10px;">
                   <div style="width:${pct}%;height:100%;background:#111827;"></div>
@@ -4367,12 +4384,13 @@ if (method === "GET" && pathname === "/claims") {
       const totalBatches = subsAll.length;
       const claims = billedAll;
       const totalBilled = claims.reduce((s,b)=>s+num(b.amount_billed),0);
-      const collected = claims.reduce((s,b)=>s+num(b.insurance_paid||b.paid_amount),0);
+      const collected = executiveRevenue.totalCollected;
+      const atRisk = executiveRevenue.totalAtRisk;
       return `
         <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Quick metrics related to the selected tab.</span></span></h3>
         <div class="row">
           <div class="col"><div class="kpi-card"><h4>Batches</h4><p>${totalBatches}</p></div><div class="kpi-card"><h4>Total Billed</h4><p>$${totalBilled.toFixed(2)}</p></div></div>
-          <div class="col"><div class="kpi-card"><h4>Collected</h4><p>$${collected.toFixed(2)}</p></div><div class="kpi-card"><h4>At Risk</h4><p>$${Math.max(0,totalBilled-collected).toFixed(2)}</p></div></div>
+          <div class="col"><div class="kpi-card"><h4>Collected</h4><p>$${collected.toFixed(2)}</p></div><div class="kpi-card"><h4>At Risk</h4><p>$${atRisk.toFixed(2)}</p></div></div>
         </div>
       `;
     }
@@ -4444,6 +4462,22 @@ if (method === "GET" && pathname === "/claims") {
     </div>
   `;
 
+  const claimsUploadBanner = (tab) => {
+    const target = {
+      billed: "/data-management?tab=claims",
+      payments: "/data-management?tab=payments",
+      denials: "/data-management?tab=denials",
+      negotiations: "/data-management?tab=contracts"
+    }[tab] || "/data-management?tab=claims";
+    return `
+      <div style="border:1px solid var(--border);border-radius:10px;padding:10px;background:#f9fafb;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="muted small">Uploads are managed in Data Management for consistency.</div>
+        <a class="btn secondary" href="${target}">Go to Data Management Uploads</a>
+      </div>
+      <div class="hr"></div>
+    `;
+  };
+
   // ===== Shared header (always) =====
   let body = `
     <h2>Claims Lifecycle <span class="tooltip" data-tip="Operational hub for billed batches, payment batches, denials, appeals, negotiations, and all claims.">ⓘ</span></h2>
@@ -4464,26 +4498,7 @@ if (method === "GET" && pathname === "/claims") {
   // (1) Billed Batches
   if (view === "billed") {
     body += `
-      <h3>Upload Billed Batches <span class="tooltip">ⓘ<span class="tooltiptext">Upload billed batch files (CSV/XLS/XLSX). Files are processed here and the table refreshes below.</span></span></h3>
-      <form method="POST" action="/billed/upload" enctype="multipart/form-data">
-        <input type="hidden" name="next" value="/claims?view=billed"/>
-        <div id="billed-dropzone" class="dropzone">Drop CSV/XLS/XLSX files here or click to select</div>
-        <input id="billed-files" type="file" name="billedfile" multiple accept=".csv,.xls,.xlsx" required style="display:none" />
-        <div class="btnRow"><button class="btn" type="submit">Upload Billed Files</button></div>
-      </form>
-      <script>
-        (function(){
-          const dz = document.getElementById("billed-dropzone");
-          const inp = document.getElementById("billed-files");
-          if (!dz || !inp) return;
-          dz.addEventListener("click", ()=>inp.click());
-          ["dragenter","dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
-          ["dragleave","drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
-          dz.addEventListener("drop", e => { if (e.dataTransfer.files?.length) { inp.files = e.dataTransfer.files; dz.textContent = inp.files.length + " file(s) selected"; } });
-          inp.addEventListener("change", ()=>{ if (inp.files?.length) dz.textContent = inp.files.length + " file(s) selected"; });
-        })();
-      </script>
-      <div class="hr"></div>
+      ${claimsUploadBanner("billed")}
     `;
     const batchRows = subsAll
       .sort((a,b)=> new Date(b.uploaded_at||0).getTime() - new Date(a.uploaded_at||0).getTime())
@@ -4532,26 +4547,7 @@ if (method === "GET" && pathname === "/claims") {
   // (2) Payment Batches
   if (view === "payments") {
     body += `
-      <h3>Upload Payment Batches <span class="tooltip">ⓘ<span class="tooltiptext">Upload payment files (CSV, PDF, images, DOC). Files are processed in this view and reflected below.</span></span></h3>
-      <form method="POST" action="/payments/upload-documents" enctype="multipart/form-data">
-        <input type="hidden" name="next" value="/claims?view=payments"/>
-        <div id="payments-dropzone" class="dropzone">Drop payment files here or click to select</div>
-        <input id="payments-files" type="file" name="documents" multiple accept=".csv,.pdf,.png,.jpg,.jpeg,.doc,.docx" required style="display:none" />
-        <div class="btnRow"><button class="btn" type="submit">Upload Payment Documents</button></div>
-      </form>
-      <script>
-        (function(){
-          const dz = document.getElementById("payments-dropzone");
-          const inp = document.getElementById("payments-files");
-          if (!dz || !inp) return;
-          dz.addEventListener("click", ()=>inp.click());
-          ["dragenter","dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
-          ["dragleave","drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
-          dz.addEventListener("drop", e => { if (e.dataTransfer.files?.length) { inp.files = e.dataTransfer.files; dz.textContent = inp.files.length + " file(s) selected"; } });
-          inp.addEventListener("change", ()=>{ if (inp.files?.length) dz.textContent = inp.files.length + " file(s) selected"; });
-        })();
-      </script>
-      <div class="hr"></div>
+      ${claimsUploadBanner("payments")}
     `;
     const allPay = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
     const paymentFilesMap = {};
@@ -4616,9 +4612,7 @@ if (method === "GET" && pathname === "/claims") {
   // (3) Denial Queue
   if (view === "denials") {
     body += `
-      <h3>Denial Documents <span class="tooltip">ⓘ<span class="tooltiptext">Upload and manage denial files from Data Management.</span></span></h3>
-      <div class="btnRow"><a class="btn secondary" href="/data-management?tab=denials">Open Data Management</a></div>
-      <div class="hr"></div>
+      ${claimsUploadBanner("denials")}
     `;
     const billedOrg = billedAll;
     const allDenialCases = readJSON(FILES.cases, [])
@@ -4683,11 +4677,7 @@ if (method === "GET" && pathname === "/claims") {
   // (4) Negotiation Queue
   if (view === "negotiations") {
     body += `
-      <h3>Negotiation Actions <span class="tooltip">ⓘ<span class="tooltiptext">Create or upload negotiation records. New records appear in this queue.</span></span></h3>
-      <div class="btnRow">
-        <a class="btn" href="/upload-negotiations">Create / Upload Negotiation</a>
-      </div>
-      <div class="hr"></div>
+      ${claimsUploadBanner("negotiations")}
     `;
     const negs = getNegotiations(org.org_id).map(n => normalizeNegotiation(n));
     const q = String(parsed.query.q || "").trim().toLowerCase();
