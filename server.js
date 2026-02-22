@@ -3934,21 +3934,7 @@ if (method === "GET" && pathname === "/claims") {
 
   function toPipelineStage(b){
     const d = evaluateClaimDerived(b, claimCtx);
-    const paid = num(d.paidAmount);
-    const expected = num(d.expectedInsurance || 0);
-    const hasPayment = !!d.hasPaymentResponse;
-
-    if (isAppealOpen(b) || isNegotiationOpen(b)) return "In Appeal/Negotiation";
-
-    if (hasPayment) {
-      if (paid <= 0.0001) return "Denied";
-      if (paid + 0.0001 < expected) return "Underpaid";
-      if (num(b.patient_responsibility || 0) > 0) return "Patient Balance";
-      return "Paid";
-    }
-
-    const submitted = !!(b.submission_id || b.submitted_at || b.submitted_date || b.submitted_to_payer);
-    return submitted ? "Waiting Payment" : "Submitted";
+    return d.lifecycleStage;
   }
 
   const pipelineAgg = {};
