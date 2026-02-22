@@ -2063,7 +2063,13 @@ function evaluateClaimDerived(claim, ctx={}){
     }
   }
 
-  if (negotiation && ["Open", "Submitted", "In Review", "Counter Offered", "Approved (Pending Payment)"].includes(String(negotiation.status || ""))) {
+  const activeCaseStatuses = ["Drafted", "Submitted", "In Review", "Counter Offered", "Approved (Pending Payment)"];
+  const appealStatus = String(appealCase?.status || "");
+  const negotiationStatus = String(negotiation?.status || "");
+  const hasOpenDenialCase = appealStatus === "Open";
+  const hasActiveAppealOrNegotiation = activeCaseStatuses.includes(appealStatus) || activeCaseStatuses.includes(negotiationStatus);
+
+  if (!hasOpenDenialCase && hasActiveAppealOrNegotiation) {
     lifecycleStage = "In Appeal/Negotiation";
     financialStatus = "In Appeal/Negotiation";
   }
