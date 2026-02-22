@@ -3831,7 +3831,148 @@ if (method === "GET" && pathname === "/claims") {
     acc[s] = (acc[s]||0)+1;
     return acc;
   }, {total:0});
+  // =========================================================
+  // LIFECYCLE PIPELINE (ALWAYS VISIBLE ABOVE SUBTABS)
+  // =========================================================
+  // Stage rules (final):
+  // - Submitted: claim in system (submission_id exists) AND no payer response AND age <= 2 days
+  // - Waiting Payment: claim in system AND no payer response AND age > 2 days
+  // - Denied: payer responded AND paid==0 AND denial context exists
+  // - Underpaid: payer responded AND paid>0 AND paid<expected
+  // - In Appeal/Negotiation: appeal case is active OR negotiation is active
+  // - Paid: payer responded AND paid>=expected (and no open case)
+  // - Patient Balance: derived says patient balance
+  // - Write-Off: derived says contractual/write-off
 
+  const casesAllOrg = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+  const caseById = new Map(casesAllOrg.map(c => [String(c.case_id), c]));
+
+  const negotiationsAll = getNegotiations(org.org_id).map(n => normalizeNegotiation(n));
+  const negByBilledId = new Map(negotiationsAll.map(n => [String(n.billed_id || ""), n]));
+
+  const PIPE_ORDER = [
+    "Submitted",
+    "Waiting Payment",
+    "Denied",
+    "Underpaid",
+    "In Appeal/Negotiation",
+    "Paid",
+    "Patient Balance",
+    "Write-Off"
+  ];
+
+  function isAppealOpen(b){
+    const cid = b.denial_case_id ? String(b.denial_case_id) : "";
+    if (!cid) return false;
+    const c = caseById.get(cid);
+    if (!c) return false;
+    const st = String(c.status || "");
+    // treat these as "still being worked"
+    if (["Closed","Resolved"].includes(st)) return false;
+    return true;
+  }
+
+  function isNegotiationOpen(b){
+    const n = negByBilledId.get(String(b.billed_id || ""));
+    if (!n) return false;
+    const st = String(n.status || "Open");
+    return ["Open","Packet Generated","Submitted","In Review","Counter Offered","Approved (Pending Payment)"].includes(st);
+  }
+
+  function daysSince(dtStr){
+    if (!dtStr) return 9999;
+    const d = new Date(dtStr);
+    if (isNaN(d.getTime())) return 9999;
+    return Math.max(0, Math.floor((Date.now() - d.getTime()) / (1000*60*60*24)));
+  }
+
+  function toPipelineStage(b){
+    const d = evaluateClaimDerived(b, claimCtx);
+    const st = String(d.lifecycleStage || "Pending");
+
+    // Active workflow always wins
+    if (isAppealOpen(b) || isNegotiationOpen(b)) return "In Appeal/Negotiation";
+
+    // Write-off
+    if (st === "Contractual") return "Write-Off";
+
+    // Patient balance
+    if (st === "Patient Balance") return "Patient Balance";
+
+    // Paid
+    if (st === "Paid" || st === "Paid in Full") return "Paid";
+
+    // Denied/Underpaid must ONLY happen after payer response
+    if (d.hasPaymentResponse) {
+      if (st === "Denied") return "Denied";
+      if (st === "Underpaid") return "Underpaid";
+    }
+
+    // No payer response => Submitted or Waiting Payment
+    // Use submission_id as "submitted to payer"; created_at is NOT enough.
+    const submitted = !!(b.submission_id);
+    const age = daysSince(b.created_at || b.dos || b.submitted_at);
+
+    if (submitted && !d.hasPaymentResponse) {
+      return (age <= 2) ? "Submitted" : "Waiting Payment";
+    }
+
+    // fallback for any other case
+    return d.hasPaymentResponse ? "Waiting Payment" : "Submitted";
+  }
+
+  const pipelineAgg = {};
+  for (const stage of PIPE_ORDER) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
+
+  billedAll.forEach(b => {
+    const stage = toPipelineStage(b);
+    if (!pipelineAgg[stage]) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
+    pipelineAgg[stage].count += 1;
+    pipelineAgg[stage].billed += num(b.amount_billed);
+    pipelineAgg[stage].atRisk += computeClaimAtRisk(b);
+  });
+
+  const pipelineTotal = PIPE_ORDER.reduce((s, k) => s + (pipelineAgg[k]?.count || 0), 0) || 1;
+
+  const stageToStatusFilter = (stage) => {
+    // Map pipeline stage to existing All Claims "status" filter
+    if (stage === "Waiting Payment") return "Waiting Payment";
+    if (stage === "Write-Off") return "Contractual";
+    if (stage === "In Appeal/Negotiation") return ""; // special: use query param "in_case=1" later if you want
+    return stage; // Submitted, Denied, Underpaid, Paid, Patient Balance
+  };
+
+  const pipelineHtml = `
+    <div class="insight-card" style="margin-top:14px;">
+      <h3>Claims Lifecycle Pipeline <span class="tooltip" data-tip="Pipeline view of all claims. Denied/Underpaid only appear after payer response.">ⓘ</span></h3>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        ${PIPE_ORDER.map(stage => {
+          const d = pipelineAgg[stage] || { count:0, billed:0, atRisk:0 };
+          const pct = Math.round((d.count / pipelineTotal) * 100);
+          const statusFilter = stageToStatusFilter(stage);
+          const href = statusFilter
+            ? `/claims?view=all&status=${encodeURIComponent(statusFilter)}`
+            : `/claims?view=all`; // In Appeal/Negotiation falls back to all for now
+
+          return `
+            <a href="${href}"
+               style="text-decoration:none;color:inherit;flex:1;min-width:170px;">
+              <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);">
+                <div style="font-weight:900;">${stage}</div>
+                <div class="muted small">Claims: ${d.count}</div>
+                <div class="muted small">Billed: ${formatMoney(d.billed)}</div>
+                <div class="muted small">At Risk: ${formatMoney(d.atRisk)}</div>
+                <div style="height:10px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:10px;">
+                  <div style="width:${pct}%;height:100%;background:#111827;"></div>
+                </div>
+                <div class="muted small" style="margin-top:6px;">${pct}%</div>
+              </div>
+            </a>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
   // Data helpers for dynamic snapshots
   const paymentsOrg = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
   const denialCasesOrg = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id && String(c.case_type||"denial").toLowerCase() !== "underpayment");
@@ -3936,6 +4077,7 @@ if (method === "GET" && pathname === "/claims") {
     <h2>Claims Lifecycle <span class="tooltip" data-tip="Operational hub for billed batches, payment batches, denials, appeals, negotiations, and all claims.">ⓘ</span></h2>
     <p class="muted">Everything that happens to claims — billed, denied, appealed, paid, and negotiated — in one place.</p>
     <div class="muted small">Select a tab below to manage a specific stage.</div>
+    ${pipelineHtml}
     ${subTabs}
 
     <div class="hr"></div>
