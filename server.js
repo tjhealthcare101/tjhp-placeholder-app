@@ -3971,6 +3971,14 @@ if (method === "GET" && pathname === "/claims") {
   });
 
   const pipelineTotal = PIPE_ORDER.reduce((s, k) => s + (pipelineAgg[k]?.count || 0), 0) || 1;
+  const totalPaidAcrossAllClaims = billedAll.reduce((sum, b) => {
+    const d = evaluateClaimDerived(b, claimCtx);
+    return sum + num(d.paidAmount);
+  }, 0);
+  const totalBilledAcrossAllClaims = billedAll.reduce((sum, b) => {
+    const d = evaluateClaimDerived(b, claimCtx);
+    return sum + num(d.billedAmount);
+  }, 0);
 
   const stageToStatusFilter = (stage) => {
     // Map pipeline stage to existing All Claims "status" filter
@@ -3987,7 +3995,9 @@ if (method === "GET" && pathname === "/claims") {
         ${PIPE_ORDER.map(stage => {
           const d = pipelineAgg[stage] || { count:0, billed:0, atRisk:0, revenueCollected:0 };
           const cardTitle = stage === "Paid" ? "Revenue Collected" : stage;
-          const pct = Math.round((d.count / pipelineTotal) * 100);
+          const pct = stage === "Paid"
+            ? Math.round((totalPaidAcrossAllClaims / (totalBilledAcrossAllClaims || 1)) * 100)
+            : Math.round((d.count / pipelineTotal) * 100);
           const statusFilter = stageToStatusFilter(stage);
           const href = statusFilter
             ? `/claims?view=all&status=${encodeURIComponent(statusFilter)}`
