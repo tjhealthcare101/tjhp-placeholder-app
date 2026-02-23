@@ -10014,7 +10014,7 @@ rowsAdded = toUse;
             <div class="hr" style="margin:16px 0;"></div>
             <h3 style="margin:0 0 10px 0;">Financial &amp; Network Settings</h3>
             <div style="display:flex;flex-direction:column;gap:16px;">
-              <a class="btn secondary" href="/payer-contracts" style="width:fit-content;">Manage Payer Contracts</a>
+              <a class="btn secondary" href="/data-management?tab=contracts" style="width:fit-content;">Manage Payer Contracts</a>
             </div>
 
             <div class="btnRow" style="margin-top:16px;"><button class="btn" type="submit">Save Organization Settings</button></div>
