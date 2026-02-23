@@ -940,7 +940,7 @@ function consumePaymentRows(org_id, rowCount) {
 
 function money(n){
   const x = Number(n || 0);
-  return "$" + x.toFixed(2);
+  return x.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
 function num(v){
@@ -1784,7 +1784,7 @@ function rangeFromPreset(preset){
   else start = new Date(end.getTime() - 30*24*60*60*1000);
   return { start, end, preset: p };
 }
-function fmtMoney(n){ const x = Number(n||0); return "$" + x.toFixed(2); }
+function fmtMoney(n){ return formatMoneyUI(n); }
 function safeNum(n){ const x = Number(n||0); return isFinite(x) ? x : 0; }
 function groupKeyForDate(d, gran){
   const dt = new Date(d);
@@ -2594,7 +2594,13 @@ function suggestedNextActionForClaim(b){
 }
 
 function formatMoneyUI(v){
-  return "$" + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const n = Number(v || 0);
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+function formatNumberUI(v){
+  const n = Number(v || 0);
+  return n.toLocaleString("en-US");
 }
 
 function badgeClassForStatus(st){
@@ -3677,8 +3683,8 @@ if (method === "GET" && pathname === "/file") {
 
 Snapshot:
 - Recovery rate: ${analytics.recoveryRate}%
-- Projected lost revenue: $${Number(analytics.projectedLostRevenue||0).toFixed(2)}
-- Underpaid (last 30 days): $${Number(dash30.kpis.underpaidAmt||0).toFixed(2)}
+- Projected lost revenue: ${formatMoneyUI(analytics.projectedLostRevenue||0)}
+- Underpaid (last 30 days): ${formatMoneyUI(dash30.kpis.underpaidAmt||0)}
 - Aging 60+: ${Number(analytics.aging?.over60||0)}
 - Negotiation success: ${negSuccessRate.toFixed(1)}%
 
@@ -3807,7 +3813,7 @@ if (method === "GET" && pathname === "/executive") {
       <div class="col">
         <div class="kpi-card">
           <h4>Recovered from Denials</h4>
-          <p>$${Number(a.totalRecoveredFromDenials || 0).toFixed(2)}</p>
+          <p>${formatMoneyUI(a.totalRecoveredFromDenials || 0)}</p>
         </div>
 
         <div class="kpi-card">
@@ -3817,7 +3823,7 @@ if (method === "GET" && pathname === "/executive") {
 
         <div class="kpi-card">
           <h4>Projected Lost Revenue</h4>
-          <p>$${Number(a.projectedLostRevenue || 0).toFixed(2)}</p>
+          <p>${formatMoneyUI(a.projectedLostRevenue || 0)}</p>
         </div>
       </div>
 
@@ -3863,7 +3869,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </div>
       <div class="col">
         <div class="kpi-card"><h4>Denied → Approved Wins</h4><p>${w.deniedWinsCount}</p></div>
-        <div class="kpi-card"><h4>Recovered Dollars</h4><p>$${Number(w.recoveredDollarsThisWeek||0).toFixed(2)}</p></div>
+        <div class="kpi-card"><h4>Recovered Dollars</h4><p>${formatMoneyUI(w.recoveredDollarsThisWeek||0)}</p></div>
       </div>
     </div>
 
@@ -3871,7 +3877,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     <h3>Top Payers This Week</h3>
     ${
       w.top3.length
-        ? `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>${w.top3.map(x => `<tr><td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td><td>$${Number(x.total).toFixed(2)}</td></tr>`).join("")}</tbody></table>`
+        ? `<table><thead><tr><th>Payer</th><th>Total Paid</th></tr></thead><tbody>${w.top3.map(x => `<tr><td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td><td>${formatMoneyUI(x.total)}</td></tr>`).join("")}</tbody></table>`
         : `<p class="muted">No payments recorded in the last 7 days.</p>`
     }
 
@@ -3880,7 +3886,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     <ul class="muted">
       <li><strong>Recovery rate:</strong> ${a.recoveryRate}%</li>
       <li><strong>Unpaid aging:</strong> 30+ ${a.aging.over30}, 60+ ${a.aging.over60}, 90+ ${a.aging.over90}</li>
-      <li><strong>Projected lost revenue:</strong> $${Number(a.projectedLostRevenue||0).toFixed(2)}</li>
+      <li><strong>Projected lost revenue:</strong> ${formatMoneyUI(a.projectedLostRevenue||0)}</li>
       <li><strong>Next month denial projection:</strong> ${proj === null ? "Insufficient data" : proj}</li>
     </ul>
 
@@ -4320,6 +4326,21 @@ if (method === "GET" && pathname === "/claims") {
 
   const pipelineTotal = pipelineBaseStages.reduce((s, k) => s + (pipelineAgg[k]?.count || 0), 0) || 1;
 
+  function pctToColor(pct){
+    const p = Math.max(0, Math.min(100, Number(pct) || 0));
+    // Hue scale: 0=red, 120=green
+    const hue = Math.round((p / 100) * 120);
+    return `hsl(${hue}, 75%, 45%)`;
+  }
+
+  function stageToFillColor(stage, pct){
+    const s = String(stage || "");
+    if (s === "Denied") return "var(--danger)";
+    if (s === "Underpaid") return "var(--warn)";
+    if (s === "Resolved") return "var(--ok)";
+    return pctToColor(pct);
+  }
+
   const stageToClaimsHref = (stage) => {
     if (stage === "Waiting Payment") return "/claims?view=all&status=Waiting%20Payment";
     if (stage === "Denied") return "/claims?view=denials";
@@ -4341,18 +4362,19 @@ if (method === "GET" && pathname === "/claims") {
             ? Math.round((executiveRevenue.totalCollected / (executiveRevenue.totalBilled || 1)) * 100)
             : Math.round((d.count / pipelineTotal) * 100);
           const href = stageToClaimsHref(stage);
+          const fillColor = stageToFillColor(stage, pct);
 
           return `
             <a href="${href}"
               style="text-decoration:none;color:inherit;flex:1;min-width:170px;">
               <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);">
                 <div style="font-weight:900;">${stage}</div>
-                <div class="muted small">Claims: ${d.count}</div>
+                <div class="muted small">Claims: ${formatNumberUI(d.count)}</div>
                 <div class="muted small">Billed: ${formatMoney(d.billed)}</div>
                 ${stage === "Revenue Collected" ? `<div class="muted small">Revenue Collected: ${formatMoney(executiveRevenue.totalCollected)}</div>` : ``}
                 <div class="muted small">At Risk: ${formatMoney(d.atRisk)}</div>
                 <div style="height:10px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:10px;">
-                  <div style="width:${pct}%;height:100%;background:#111827;"></div>
+                  <div style="width:${pct}%;height:100%;background:${fillColor};"></div>
                 </div>
                 <div class="muted small" style="margin-top:6px;">${pct}%</div>
               </div>
@@ -4389,8 +4411,8 @@ if (method === "GET" && pathname === "/claims") {
       return `
         <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Quick metrics related to the selected tab.</span></span></h3>
         <div class="row">
-          <div class="col"><div class="kpi-card"><h4>Batches</h4><p>${totalBatches}</p></div><div class="kpi-card"><h4>Total Billed</h4><p>$${totalBilled.toFixed(2)}</p></div></div>
-          <div class="col"><div class="kpi-card"><h4>Collected</h4><p>$${collected.toFixed(2)}</p></div><div class="kpi-card"><h4>At Risk</h4><p>$${atRisk.toFixed(2)}</p></div></div>
+          <div class="col"><div class="kpi-card"><h4>Batches</h4><p>${formatNumberUI(totalBatches)}</p></div><div class="kpi-card"><h4>Total Billed</h4><p>${formatMoneyUI(totalBilled)}</p></div></div>
+          <div class="col"><div class="kpi-card"><h4>Collected</h4><p>${formatMoneyUI(collected)}</p></div><div class="kpi-card"><h4>At Risk</h4><p>${formatMoneyUI(atRisk)}</p></div></div>
         </div>
       `;
     }
@@ -4400,8 +4422,8 @@ if (method === "GET" && pathname === "/claims") {
       return `
         <h3>This View Snapshot <span class="tooltip">ⓘ<span class="tooltiptext">Payment upload metrics.</span></span></h3>
         <div class="row">
-          <div class="col"><div class="kpi-card"><h4>Payment Files</h4><p>${totalFiles}</p></div><div class="kpi-card"><h4>Total Paid</h4><p>$${totalPaid.toFixed(2)}</p></div></div>
-          <div class="col"><div class="kpi-card"><h4>Payment Rows</h4><p>${paymentsOrg.length}</p></div><div class="kpi-card"><h4>Avg Rows/File</h4><p>${totalFiles?Math.round(paymentsOrg.length/totalFiles):0}</p></div></div>
+          <div class="col"><div class="kpi-card"><h4>Payment Files</h4><p>${formatNumberUI(totalFiles)}</p></div><div class="kpi-card"><h4>Total Paid</h4><p>${formatMoneyUI(totalPaid)}</p></div></div>
+          <div class="col"><div class="kpi-card"><h4>Payment Rows</h4><p>${formatNumberUI(paymentsOrg.length)}</p></div><div class="kpi-card"><h4>Avg Rows/File</h4><p>${formatNumberUI(totalFiles?Math.round(paymentsOrg.length/totalFiles):0)}</p></div></div>
         </div>
       `;
     }
@@ -4524,9 +4546,9 @@ if (method === "GET" && pathname === "/claims") {
           <td>${underpaidCount}</td>
           <td>${appealCount}</td>
           <td>${pendingCount}</td>
-          <td>$${Number(totalBilledAmt||0).toFixed(2)}</td>
-          <td>$${Number(collectedAmt||0).toFixed(2)}</td>
-          <td>$${Number(atRiskAmt||0).toFixed(2)}</td>
+          <td>${formatMoneyUI(totalBilledAmt||0)}</td>
+          <td>${formatMoneyUI(collectedAmt||0)}</td>
+          <td>${formatMoneyUI(atRiskAmt||0)}</td>
           <td><a href="/claims?view=all&submission_id=${encodeURIComponent(s.submission_id)}">View Claims</a></td>
         </tr>`;
       }).join("");
@@ -4573,7 +4595,7 @@ if (method === "GET" && pathname === "/claims") {
       <tr>
         <td>${safeStr(x.source_file)}</td>
         <td>${x.count}</td>
-        <td>$${Number(x.totalPaid||0).toFixed(2)}</td>
+        <td>${formatMoneyUI(x.totalPaid||0)}</td>
         <td>${x.latest ? new Date(x.latest).toLocaleDateString() : "—"}</td>
         <td><a href="/payment-batch-detail?file=${encodeURIComponent(x.source_file)}">Open</a></td>
       </tr>
@@ -4639,7 +4661,7 @@ if (method === "GET" && pathname === "/claims") {
         <td>${claimLink}</td>
         <td>${safeStr(payer)}</td>
         <td>${safeStr(dos)}</td>
-        <td>$${Number(billedAmt).toFixed(2)}</td>
+        <td>${formatMoneyUI(billedAmt)}</td>
         <td>${riskScore}</td>
         <td class="muted small">${safeStr(c.case_id)}</td>
         <td>${safeStr(c.status||"")}</td>
@@ -4705,9 +4727,9 @@ if (method === "GET" && pathname === "/claims") {
         <td>${safeStr(n.payer||"")}</td>
         <td>${safeStr(n.status||"Open")}</td>
         <td>${riskScore}</td>
-        <td>$${Number(n.requested_amount||0).toFixed(2)}</td>
-        <td>$${Number(n.approved_amount||0).toFixed(2)}</td>
-        <td>$${Number(n.collected_amount||0).toFixed(2)}</td>
+        <td>${formatMoneyUI(n.requested_amount||0)}</td>
+        <td>${formatMoneyUI(n.approved_amount||0)}</td>
+        <td>${formatMoneyUI(n.collected_amount||0)}</td>
         <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
         <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">Open Negotiation</a></td>
       </tr>
@@ -4814,9 +4836,9 @@ if (method === "GET" && pathname === "/claims") {
         <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
         <td>${safeStr(b.dos || "")}</td>
         <td>${safeStr(b.payer || "")}</td>
-        <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
-        <td>$${paidAmt.toFixed(2)}</td>
-        <td>$${Number(atRisk||0).toFixed(2)}</td>
+        <td>${formatMoneyUI(b.amount_billed || 0)}</td>
+        <td>${formatMoneyUI(paidAmt)}</td>
+        <td>${formatMoneyUI(atRisk||0)}</td>
         <td>${riskScore}</td>
         <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
         <td class="muted small">${b.submission_id ? `<a href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">Batch</a>` : "—"}</td>
@@ -5363,7 +5385,7 @@ if (method === "GET" && pathname === "/actions") {
       <td>${safeStr(b.payer||"")}</td>
       ${billedPaidCell(b.amount_billed, (b.insurance_paid || b.paid_amount))}
       <td><span class="badge ${badgeCls}">${safeStr(x.st)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
-      <td>$${Number(x.atRisk||0).toFixed(2)}</td>
+      <td>${formatMoneyUI(x.atRisk||0)}</td>
       <td>${x.riskScore}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
     </tr>`;
@@ -5762,7 +5784,7 @@ if (method === "GET" && pathname === "/payment-batch-detail") {
       <td>${safeStr(p.claim_number||"")}</td>
       <td>${safeStr(p.date_paid||"")}</td>
       <td>${safeStr(p.payer||"")}</td>
-      <td>$${num(p.amount_paid).toFixed(2)}</td>
+      <td>${formatMoneyUI(num(p.amount_paid))}</td>
       <td class="muted small">${p.source_file ? `<a href="/file?name=${encodeURIComponent(p.source_file)}" target="_blank">${safeStr(p.source_file)}</a>` : ""}</td>
     </tr>
   `).join("");
@@ -5775,9 +5797,9 @@ if (method === "GET" && pathname === "/payment-batch-detail") {
         <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number||"")}</a></td>
         <td>${safeStr(b.dos||"")}</td>
         <td>${safeStr(b.payer||"")}</td>
-        <td>$${num(b.amount_billed).toFixed(2)}</td>
-        <td>$${paidAmt.toFixed(2)}</td>
-        <td>$${atRisk.toFixed(2)}</td>
+        <td>${formatMoneyUI(num(b.amount_billed))}</td>
+        <td>${formatMoneyUI(paidAmt)}</td>
+        <td>${formatMoneyUI(atRisk)}</td>
         <td><span class="badge ${badgeClassForStatus(b.status||"Pending")}">${safeStr(b.status||"Pending")}</span></td>
       </tr>
     `;
@@ -5813,7 +5835,7 @@ if (method === "GET" && pathname === "/payment-batch-detail") {
 
   const html = renderPage("Payment Batch Detail", `
     <h2>Payment Batch Detail</h2>
-    <p class="muted"><strong>File:</strong> ${safeStr(safeFile)} · <strong>Records:</strong> ${totalRecords} · <strong>Total Paid:</strong> $${totalPaid.toFixed(2)} · <strong>Uploaded:</strong> ${uploadedAt ? new Date(uploadedAt).toLocaleDateString() : "—"}</p>
+    <p class="muted"><strong>File:</strong> ${safeStr(safeFile)} · <strong>Records:</strong> ${totalRecords} · <strong>Total Paid:</strong> ${formatMoneyUI(totalPaid)} · <strong>Uploaded:</strong> ${uploadedAt ? new Date(uploadedAt).toLocaleDateString() : "—"}</p>
 
     <div class="btnRow">
       <a class="btn secondary" href="/upload-payments">Back to Upload Payments</a>
@@ -5970,7 +5992,7 @@ if (method === "GET" && pathname === "/upload-denials") {
       <td>${claimLink}</td>
       <td>${safeStr(payer)}</td>
       <td>${safeStr(dos)}</td>
-      <td>$${billedAmt.toFixed(2)}</td>
+      <td>${formatMoneyUI(billedAmt)}</td>
       <td class="muted small">${safeStr(c.case_id)}</td>
       <td>${safeStr(c.status)}</td>
       <td>${openAppeal}</td>
@@ -6061,9 +6083,9 @@ if (method === "GET" && pathname === "/upload-negotiations") {
         <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">${safeStr(n.claim_number||"")}</a></td>
         <td>${safeStr(n.payer||"")}</td>
         <td>${safeStr(n.status||"Open")}</td>
-        <td>$${Number(n.requested_amount||0).toFixed(2)}</td>
-        <td>$${Number(n.approved_amount||0).toFixed(2)}</td>
-        <td>$${Number(n.collected_amount||0).toFixed(2)}</td>
+        <td>${formatMoneyUI(n.requested_amount||0)}</td>
+        <td>${formatMoneyUI(n.approved_amount||0)}</td>
+        <td>${formatMoneyUI(n.collected_amount||0)}</td>
         <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
       </tr>
     `).join("");
@@ -6223,9 +6245,9 @@ if (method === "GET" && pathname === "/negotiation-detail") {
       <tr><th>Payer</th><td>${safeStr(n.payer)}</td></tr>
       <tr><th>DOS</th><td>${safeStr(n.dos)}</td></tr>
       <tr><th>Status</th><td>${safeStr(n.status)}</td></tr>
-      <tr><th>Requested</th><td>$${Number(n.requested_amount||0).toFixed(2)}</td></tr>
-      <tr><th>Approved</th><td>$${Number(n.approved_amount||0).toFixed(2)}</td></tr>
-      <tr><th>Collected</th><td>$${Number(n.collected_amount||0).toFixed(2)}</td></tr>
+      <tr><th>Requested</th><td>${formatMoneyUI(n.requested_amount||0)}</td></tr>
+      <tr><th>Approved</th><td>${formatMoneyUI(n.approved_amount||0)}</td></tr>
+      <tr><th>Collected</th><td>${formatMoneyUI(n.collected_amount||0)}</td></tr>
       <tr><th>Updated</th><td>${n.updated_at ? new Date(n.updated_at).toLocaleString() : "—"}</td></tr>
     </table>
 
@@ -6675,9 +6697,9 @@ if (method === "POST" && pathname === "/negotiations/upload") {
               <td>${deniedCount}</td>
               <td>${underpaidCount}</td>
               <td>${pendingCount}</td>
-              <td>$${Number(totalBilledAmt||0).toFixed(2)}</td>
-              <td>$${Number(collectedAmt||0).toFixed(2)}</td>
-              <td>$${Number(atRiskAmt||0).toFixed(2)}</td>
+              <td>${formatMoneyUI(totalBilledAmt||0)}</td>
+              <td>${formatMoneyUI(collectedAmt||0)}</td>
+              <td>${formatMoneyUI(atRiskAmt||0)}</td>
               <td style="min-width:160px;">
                 <div style="height:10px;background:#e5e7eb;border-radius:999px;overflow:hidden;">
                   <div style="width:${Math.min(100, Math.max(0, Math.round(collectionRate)))}%;height:100%;background:${barColor};"></div>
@@ -6929,8 +6951,8 @@ const statusCell = (() => {
   if (st2 === "Denied") {
     return `
       <span class="badge err">Denied</span>
-      <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
-      <div class="small">Expected: $${expectedInsurance.toFixed(2)}</div>
+      <div class="small">Paid: ${formatMoneyUI(paidAmt)}</div>
+      <div class="small">Expected: ${formatMoneyUI(expectedInsurance)}</div>
       ${b.denial_case_id ? `<div class="small">Appeal: <a href="/status?case_id=${encodeURIComponent(b.denial_case_id)}">${safeStr(b.denial_case_id)}</a></div>` : ``}
     `;
   }
@@ -6938,17 +6960,17 @@ const statusCell = (() => {
   if (st2 === "Contractual") {
     return `
       <span class="badge writeoff">Write-Off</span>
-      <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
-      <div class="small">Write-Off: $${contractualWriteOff.toFixed(2)}</div>
+      <div class="small">Paid: ${formatMoneyUI(paidAmt)}</div>
+      <div class="small">Write-Off: ${formatMoneyUI(contractualWriteOff)}</div>
     `;
   }
 
   if (st2 === "Underpaid") {
     return `
       <span class="badge underpaid">Underpaid</span>
-      <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
-      <div class="small">Expected: $${expectedInsurance.toFixed(2)}</div>
-      <div class="small">Underpaid: $${underpaid.toFixed(2)}</div>
+      <div class="small">Paid: ${formatMoneyUI(paidAmt)}</div>
+      <div class="small">Expected: ${formatMoneyUI(expectedInsurance)}</div>
+      <div class="small">Underpaid: ${formatMoneyUI(underpaid)}</div>
       ${b.suggested_action ? `<div class="small muted">Suggested: ${safeStr(b.suggested_action)}</div>` : ``}
     `;
   }
@@ -6957,32 +6979,32 @@ const statusCell = (() => {
     const remaining = Math.max(0, patientResp - patientCollected);
     return `
       <span class="badge warn">Patient Owes</span>
-      <div class="small">Insurance Paid: $${paidAmt.toFixed(2)}</div>
-      <div class="small">Patient Resp: $${patientResp.toFixed(2)}</div>
-      <div class="small">Collected: $${patientCollected.toFixed(2)}</div>
-      <div class="small">Remaining: $${remaining.toFixed(2)}</div>
+      <div class="small">Insurance Paid: ${formatMoneyUI(paidAmt)}</div>
+      <div class="small">Patient Resp: ${formatMoneyUI(patientResp)}</div>
+      <div class="small">Collected: ${formatMoneyUI(patientCollected)}</div>
+      <div class="small">Remaining: ${formatMoneyUI(remaining)}</div>
     `;
   }
 
   if (st2 === "Paid") {
     return `
       <span class="badge ok">Paid</span>
-      <div class="small">Insurance Paid: $${paidAmt.toFixed(2)}</div>
-      ${patientResp > 0 ? `<div class="small">Patient: $${patientCollected.toFixed(2)} / $${patientResp.toFixed(2)}</div>` : ``}
+      <div class="small">Insurance Paid: ${formatMoneyUI(paidAmt)}</div>
+      ${patientResp > 0 ? `<div class="small">Patient: ${formatMoneyUI(patientCollected)} / ${formatMoneyUI(patientResp)}</div>` : ``}
     `;
   }
 
   if (st2 === "Appeal") {
     return `
       <span class="badge warn">Appeal</span>
-      <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
-      <div class="small">Expected: $${expectedInsurance.toFixed(2)}</div>
+      <div class="small">Paid: ${formatMoneyUI(paidAmt)}</div>
+      <div class="small">Expected: ${formatMoneyUI(expectedInsurance)}</div>
     `;
   }
 
   return `
     <span class="badge">${safeStr(st2)}</span>
-    <div class="small">Paid: $${paidAmt.toFixed(2)}</div>
+    <div class="small">Paid: ${formatMoneyUI(paidAmt)}</div>
   `;
 
 })();
@@ -6991,7 +7013,7 @@ const statusCell = (() => {
         <td><a href="/claim-detail?billed_id=${encodeURIComponent(safeStr(b.billed_id))}">${safeStr(b.claim_number || "")}</a></td>
         <td>${safeStr(b.dos || "")}</td>
         <td>${safeStr(b.payer || "")}</td>
-        <td>$${Number(b.amount_billed || 0).toFixed(2)}</td>
+        <td>${formatMoneyUI(b.amount_billed || 0)}</td>
         <td>${statusCell}</td>
         <td>${action}</td>
       </tr>`;
@@ -7005,9 +7027,9 @@ const statusCell = (() => {
       <h3>Submission Financial Summary <span class="tooltip">ⓘ<span class="tooltiptext">Snapshot of billed revenue, collected revenue, and revenue at risk for this submission batch.</span></span></h3>
       <div class="row">
         <div class="col">
-          <div class="kpi-card"><h4>Total Billed</h4><p>$${totalBilledAmt.toFixed(2)}</p></div>
-          <div class="kpi-card"><h4>Revenue Collected</h4><p>$${collectedAmt.toFixed(2)}</p></div>
-          <div class="kpi-card"><h4>Revenue At Risk</h4><p>$${atRiskAmt.toFixed(2)}</p></div>
+          <div class="kpi-card"><h4>Total Billed</h4><p>${formatMoneyUI(totalBilledAmt)}</p></div>
+          <div class="kpi-card"><h4>Revenue Collected</h4><p>${formatMoneyUI(collectedAmt)}</p></div>
+          <div class="kpi-card"><h4>Revenue At Risk</h4><p>${formatMoneyUI(atRiskAmt)}</p></div>
         </div>
         <div class="col">
           <div class="kpi-card"><h4>Collection Rate</h4><p>${collectionRate.toFixed(1)}%</p></div>
@@ -7986,8 +8008,8 @@ if (method === "GET" && pathname === "/appeal-detail") {
       <tr><th>Claim #</th><td><a href="/claim-detail?billed_id=${encodeURIComponent(linked.billed_id)}">${safeStr(linked.claim_number||"")}</a></td></tr>
       <tr><th>Payer</th><td>${safeStr(linked.payer||"")}</td></tr>
       <tr><th>DOS</th><td>${safeStr(linked.dos||"")}</td></tr>
-      <tr><th>Billed</th><td>$${num(linked.amount_billed).toFixed(2)}</td></tr>
-      <tr><th>Paid</th><td>$${num(linked.insurance_paid || linked.paid_amount).toFixed(2)}</td></tr>
+      <tr><th>Billed</th><td>${formatMoneyUI(num(linked.amount_billed))}</td></tr>
+      <tr><th>Paid</th><td>${formatMoneyUI(num(linked.insurance_paid || linked.paid_amount))}</td></tr>
       <tr><th>Status</th><td><span class="badge ${badgeClassForStatus(linked.status||"Denied")}">${safeStr(linked.status||"Denied")}</span></td></tr>
     </table>
   ` : `<p class="muted">No billed claim is linked to this denial case yet.</p>`;
@@ -8850,7 +8872,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
     let summaryRows = '';
     Object.keys(stats).sort((a,b) => stats[b].total - stats[a].total).forEach(p => {
       const s = stats[p];
-      summaryRows += `<tr><td>${safeStr(p)}</td><td>${s.count}</td><td>$${s.total.toFixed(2)}</td></tr>`;
+      summaryRows += `<tr><td>${safeStr(p)}</td><td>${s.count}</td><td>${formatMoneyUI(s.total)}</td></tr>`;
     });
     const summaryTable = summaryRows ? `<table><thead><tr><th>Payer</th><th># Payments</th><th>Total Paid</th></tr></thead><tbody>${summaryRows}</tbody></table>` : `<p class='muted'>No payments found.</p>`;
     // Build detailed table (limit to 500 rows)
@@ -8861,7 +8883,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
       try { d = dtStr ? new Date(dtStr) : new Date(); } catch { d = new Date(); }
       const dateStr = d.toLocaleDateString();
       const deniedFlag = p.denied_approved ? "Yes" : "";
-      detailRows += `<tr><td>${safeStr(p.claim_number || p.claimNumber || '')}</td><td>${safeStr((p.payer || 'Unknown').trim() || 'Unknown')}</td><td>$${Number(p.amount_paid || p.amountPaid || 0).toFixed(2)}</td><td>${dateStr}</td><td>${deniedFlag}</td></tr>`;
+      detailRows += `<tr><td>${safeStr(p.claim_number || p.claimNumber || '')}</td><td>${safeStr((p.payer || 'Unknown').trim() || 'Unknown')}</td><td>${formatMoneyUI(p.amount_paid || p.amountPaid || 0)}</td><td>${dateStr}</td><td>${deniedFlag}</td></tr>`;
     });
     const detailTable = detailRows ? `<table><thead><tr><th>Claim Number</th><th>Payer</th><th>Amount Paid</th><th>Payment Date</th><th>Denied?</th></tr></thead><tbody>${detailRows}</tbody></table>` : `<p class='muted'>No payments found.</p>`;
     const html = renderPage("Payment Details", `
@@ -9615,8 +9637,12 @@ rowsAdded = toUse;
     if (!docs.length) return redirect(res, next);
 
     const billedAll = readJSON(FILES.billed, []);
+    const subsAll = readJSON(FILES.billed_submissions, []);
     const payments = readJSON(FILES.payments, []);
+    let cases = readJSON(FILES.cases, []);
+    let casesModified = false;
     const claimBatches = getClaimBatches(org.org_id);
+    const settings = getPracticeSettings(org.org_id);
 
     for (const f of docs) {
       const ext = path.extname(String(f.filename || "").toLowerCase());
@@ -9630,25 +9656,36 @@ rowsAdded = toUse;
         if (ext === ".csv") {
           const parsedCSV = parseCSV(f.buffer.toString("utf8"));
           const rows = parsedCSV.rows || [];
+          const submission_id = uuid();
+          const submissionUploadedAt = nowISO();
+          subsAll.push({
+            submission_id,
+            org_id: org.org_id,
+            original_filename: ingest.original_filename || f.filename || "claims_upload.csv",
+            ingest_id: ingest.ingest_id,
+            uploaded_at: submissionUploadedAt,
+          });
           let insertedClaims = 0;
+          let totalBilledForBatch = 0;
           for (const row of rows) {
             const rawClaimNumber = pickField(row, ["claim", "claim#", "claim number", "claimnumber", "clm"]);
             const claim_number = normalizeClaimKey(rawClaimNumber);
             if (!claim_number) continue;
+            const billedAmount = num(pickField(row, ["billed","amount billed","charge"]));
             billedAll.push({
               billed_id: uuid(),
               org_id: org.org_id,
               claim_number,
               payer: String(pickField(row, ["payer","insurance","carrier"]) || "").trim(),
-              amount_billed: num(pickField(row, ["billed","amount billed","charge"])),
+              amount_billed: billedAmount,
               patient_responsibility: num(pickField(row, ["patient_resp","patient responsibility","copay","coinsurance"])),
-              submission_id: uuid(),
+              submission_id,
               created_at: nowISO()
             });
+            totalBilledForBatch += billedAmount;
             insertedClaims += 1;
           }
-          writeJSON(FILES.billed, billedAll);
-          claimBatches.push({ batch_id: uuid(), org_id: org.org_id, ingest_id: ingest.ingest_id, file: ingest.original_filename, uploaded_at: nowISO(), claim_count: rows.length, total_billed: rows.reduce((s,r)=>s+num(pickField(r,["billed","amount billed","charge"])),0) });
+          claimBatches.push({ batch_id: uuid(), org_id: org.org_id, ingest_id: ingest.ingest_id, file: ingest.original_filename, uploaded_at: submissionUploadedAt, claim_count: insertedClaims, total_billed: totalBilledForBatch, submission_id });
           ingest.status = "Parsed";
           ingest.linked_claims_count = insertedClaims;
         } else {
@@ -9659,7 +9696,7 @@ rowsAdded = toUse;
         if (ext === ".csv" || ext === ".txt") {
           const parsedCSV = parseCSV(f.buffer.toString("utf8"));
           for (const r of (parsedCSV.rows || [])) {
-            payments.push({ payment_id: uuid(), org_id: org.org_id, claim_number: pickField(r,["claim","claim#","claim number","clm"]) || "", payer: pickField(r,["payer","insurance","carrier"]) || "", amount_paid: num(pickField(r,["paid","amount","payment","paid amount"])), date_paid: pickField(r,["date","paid date","remit date"]) || "", source_file: ingest.original_filename, created_at: nowISO(), denied_approved: false });
+            payments.push({ payment_id: uuid(), org_id: org.org_id, claim_number: String(pickField(r,["claim","claim#","claim number","clm"]) || ""), payer: pickField(r,["payer","insurance","carrier"]) || "", amount_paid: num(pickField(r,["paid","amount","payment","paid amount"])), date_paid: pickField(r,["date","paid date","remit date"]) || "", source_file: ingest.original_filename, created_at: nowISO(), denied_approved: false });
           }
           ingest.status = "Parsed";
           ingest.linked_claims_count = (parsedCSV.rows || []).length;
@@ -9680,6 +9717,12 @@ rowsAdded = toUse;
           ingest.linked_claim_id = linkedClaim.billed_id;
           ingest.status = "Linked";
           linkedClaim.denial_doc_attached = true;
+          linkedClaim.denial_document = ingest.original_filename;
+          if (settings.auto_create_denial_cases === true || !linkedClaim.denial_case_id) {
+            ensureDenialCaseForClaim(linkedClaim);
+            casesModified = true;
+            cases = readJSON(FILES.cases, []);
+          }
         }
       }
 
@@ -9689,9 +9732,11 @@ rowsAdded = toUse;
     }
 
     saveClaimBatches(org.org_id, claimBatches);
+    writeJSON(FILES.billed_submissions, subsAll);
     writeJSON(FILES.payments, payments);
     writeJSON(FILES.billed, billedAll);
-    rebuildOrgDerivedData(org.org_id);
+    if (casesModified) writeJSON(FILES.cases, cases);
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: true });
     return redirect(res, next);
   }
 
@@ -10493,7 +10538,7 @@ if (method === "POST" && pathname === "/account/password") {
           <li><strong>Denied cases in range:</strong> ${cases.length}</li>
           <li><strong>Payments logged in range:</strong> ${paymentsFiltered.length}</li>
           <li><strong>Denied → Approved wins:</strong> ${deniedRecovered.length}</li>
-          <li><strong>Recovered dollars (denials):</strong> $${Number(recoveredDollars).toFixed(2)}</li>
+          <li><strong>Recovered dollars (denials):</strong> ${formatMoneyUI(recoveredDollars)}</li>
           <li><strong>Recovery rate (cases paid):</strong> ${recoveryRate}%</li>
         </ul>
       `;
@@ -10525,8 +10570,8 @@ if (method === "POST" && pathname === "/account/password") {
         <h3>Payment Summary</h3>
         <ul class="muted">
           <li><strong>Total payments:</strong> ${paymentsFiltered.length}</li>
-          <li><strong>Total dollars paid:</strong> $${Number(payments.reduce((s,p)=>s+Number(p.amount_paid||0),0)).toFixed(2)}</li>
-          <li><strong>Denied → Approved dollars:</strong> $${Number(recoveredDollars).toFixed(2)}</li>
+          <li><strong>Total dollars paid:</strong> ${formatMoneyUI(payments.reduce((s,p)=>s+Number(p.amount_paid||0),0))}</li>
+          <li><strong>Denied → Approved dollars:</strong> ${formatMoneyUI(recoveredDollars)}</li>
         </ul>
       `;
     } else if (type === "recovery") {
@@ -10537,7 +10582,7 @@ if (method === "POST" && pathname === "/account/password") {
           <li><strong>Paid (marked):</strong> ${paidCases}</li>
           <li><strong>Recovery rate:</strong> ${recoveryRate}%</li>
           <li><strong>Denied → Approved wins (payments):</strong> ${deniedRecovered.length}</li>
-          <li><strong>Denied → Approved dollars:</strong> $${Number(recoveredDollars).toFixed(2)}</li>
+          <li><strong>Denied → Approved dollars:</strong> ${formatMoneyUI(recoveredDollars)}</li>
         </ul>
       `;
     } else if (type === "payment_detail") {
@@ -10558,7 +10603,7 @@ if (method === "POST" && pathname === "/account/password") {
                   return `<tr>
                     <td>${safeStr(p.claim_number || "")}</td>
                     <td>${safeStr((p.payer || "Unknown").trim() || "Unknown")}</td>
-                    <td>$${Number(p.amount_paid || 0).toFixed(2)}</td>
+                    <td>${formatMoneyUI(p.amount_paid || 0)}</td>
                     <td>${dt.toLocaleDateString()}</td>
                     <td>${p.denied_approved ? "Yes" : ""}</td>
                   </tr>`;
@@ -10611,7 +10656,7 @@ else if (type === "payers") {
         ${
           topPayers.length
             ? `<table><thead><tr><th>Payer</th><th># Payments</th><th>Total Paid</th><th>Denied Wins</th></tr></thead><tbody>${
-                topPayers.map(x => `<tr><td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td><td>${x.count}</td><td>$${Number(x.total).toFixed(2)}</td><td>${x.deniedWins}</td></tr>`).join("")
+                topPayers.map(x => `<tr><td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td><td>${x.count}</td><td>${formatMoneyUI(x.total)}</td><td>${x.deniedWins}</td></tr>`).join("")
               }</tbody></table>`
             : `<p class="muted">No payer data available in this date range.</p>`
         }
@@ -10717,8 +10762,8 @@ else if (type === "payers") {
         <td>${safeStr(c.patient_name || "")}</td>
         <td>${safeStr(c.dos || c.date_of_service || "")}</td>
         <td>${safeStr(c.status || "Pending")}</td>
-        <td>$${exp.toFixed(2)}</td>
-        <td>$${paidAmt.toFixed(2)}</td>
+        <td>${formatMoneyUI(exp)}</td>
+        <td>${formatMoneyUI(paidAmt)}</td>
         <td><a href="/billed?submission_id=${encodeURIComponent(c.submission_id || "")}">${safeStr(c.submission_id || "View Batch")}</a></td>
       </tr>`;
     }).join("");
@@ -10798,7 +10843,7 @@ else if (type === "payers") {
       <p><strong>Denial Rate:</strong> ${denialRate.toFixed(1)}%</p>
       <p><strong>Recovery Rate on Appeals:</strong> ${recoveryRate.toFixed(1)}%</p>
       <p><strong>Average Days to Pay:</strong> ${avgDaysToPay}</p>
-      <p><strong>Total Underpaid:</strong> $${(totalExpected - totalPaid).toFixed(2)}</p>
+      <p><strong>Total Underpaid:</strong> ${formatMoneyUI((totalExpected - totalPaid))}</p>
       <h3>Payer Performance Visual</h3>
       <div style="height:320px;"><canvas id="payerPerformanceChart"></canvas></div>
       <script>
@@ -10829,7 +10874,7 @@ else if (type === "payers") {
       </ul>
       <h3>Most Underpaid CPT Codes</h3>
       <ul>
-        ${topUnderpaidCPT.map(c => `<li>${safeStr(c[0])} — $${c[1].toFixed(2)}</li>`).join("")}
+        ${topUnderpaidCPT.map(c => `<li>${safeStr(c[0])} — ${formatMoneyUI(c[1])}</li>`).join("")}
       </ul>
       <h3>AI Suggested Actions</h3>
       <ul>
