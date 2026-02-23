@@ -1824,6 +1824,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
     const billedAmt = safeNum(d.billedAmount);
     const paid = safeNum(d.paidAmount);
     const patientCollected = safeNum(b.patient_collected);
+    const patientWriteOff = safeNum(b.patient_writeoff_amount);
     const explicitWO = (b.write_off_amount != null && String(b.write_off_amount).trim() !== "") ? safeNum(b.write_off_amount) : null;
     const contractualAdj = safeNum(b.contractual_adjustment);
     const allowedRaw = safeNum(d.allowedAmount);
@@ -1834,7 +1835,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
     const allowed = (allowedRaw > 0) ? allowedRaw : Math.max(0, billedAmt - writeOff);
     const stage = String(d.lifecycleStage || "Waiting Payment");
     const deniedDollars = (stage === "Denied") ? Math.max(0, billedAmt - paid) : 0;
-    return { billedAmt, allowed, insurancePaid: paid, patientCollected, writeOff, underpaidDyn: Math.max(0, d.expectedInsurance - paid), deniedDollars, stage, atRisk: d.atRiskAmount };
+    return { billedAmt, allowed, insurancePaid: paid, patientCollected, patientWriteOff, writeOff, underpaidDyn: Math.max(0, d.underpaidAmount), deniedDollars, stage, atRisk: d.atRiskAmount };
   };
 
   const totals = billed.reduce((acc, b) => {
@@ -1844,32 +1845,38 @@ function computeDashboardMetrics(org_id, start, end, preset){
     acc.insuranceCollected += r.insurancePaid;
     acc.patientCollected += r.patientCollected;
     acc.patientRespTotal += safeNum(b.patient_responsibility);
+    acc.patientWriteOff += r.patientWriteOff;
     acc.writeOffTotal += r.writeOff;
 
     // KPI underpaid: sum of dynamic underpaid dollars for Underpaid + Appeal (money still at-risk from payer)
-    if (r.stage === "Underpaid" || r.stage === "Appeal") acc.underpaidAmt += r.underpaidDyn;
+    if (r.stage === "Underpaid" || r.stage === "In Appeal/Negotiation") acc.underpaidAmt += r.underpaidDyn;
     return acc;
-  }, { totalBilled:0, allowedTotal:0, insuranceCollected:0, patientCollected:0, patientRespTotal:0, writeOffTotal:0, underpaidAmt:0 });
+  }, { totalBilled:0, allowedTotal:0, insuranceCollected:0, patientCollected:0, patientWriteOff:0, patientRespTotal:0, writeOffTotal:0, underpaidAmt:0 });
 
-  const patientOutstanding = Math.max(0, totals.patientRespTotal - totals.patientCollected);
+  const patientOutstanding = Math.max(0, totals.patientRespTotal - totals.patientCollected - totals.patientWriteOff);
 
+  // Revenue collected = insurance payments + patient payments (real cash only)
   const collectedTotal = totals.insuranceCollected + totals.patientCollected;
 
-  // Revenue at risk should exclude write-offs (non-collectible)
-  const revenueAtRisk = Math.max(0, totals.totalBilled - totals.writeOffTotal - collectedTotal);
+  const revenueAtRisk = billed.reduce((sum, b) => {
+    const d = evaluateClaimDerived(b, ctx);
+    if (isResolvedLifecycleStage(d.lifecycleStage)) return sum;
+    return sum + Math.max(0, d.underpaidAmount) + Math.max(0, d.patientBalanceRemaining);
+  }, 0);
 
   const grossCollectionRate = totals.totalBilled > 0 ? (collectedTotal / totals.totalBilled) * 100 : 0;
   const netCollectionRate = totals.allowedTotal > 0 ? (collectedTotal / totals.allowedTotal) * 100 : 0;
 
   // Status counts (align labels with charts)
-  const statusCounts = { Paid:0, "Patient Balance":0, Underpaid:0, Denied:0, "Write-Off":0, Submitted:0, "Waiting Payment":0, Pending:0 };
+  const statusCounts = { Resolved:0, "Patient Follow-Up":0, Underpaid:0, Denied:0, "Write-Off":0, Submitted:0, "Waiting Payment":0, "In Appeal/Negotiation":0, Pending:0 };
   billed.forEach(b=>{
     const st = String(evaluateClaimDerived(b, ctx).lifecycleStage || "Pending");
-    if (st === "Paid") statusCounts.Paid++;
+    if (st === "Resolved") statusCounts.Resolved++;
     else if (st === "Denied") statusCounts.Denied++;
     else if (st === "Underpaid") statusCounts.Underpaid++;
-    else if (st === "Patient Balance") statusCounts["Patient Balance"]++;
-    else if (st === "Contractual") statusCounts["Write-Off"]++;
+    else if (st === "Patient Follow-Up") statusCounts["Patient Follow-Up"]++;
+    else if (st === "Write-Off" || st === "Contractual") statusCounts["Write-Off"]++;
+    else if (st === "In Appeal/Negotiation") statusCounts["In Appeal/Negotiation"]++;
     else if (st === "Submitted") statusCounts.Submitted++;
     else if (st === "Waiting Payment") statusCounts["Waiting Payment"]++;
     else statusCounts.Pending++;
@@ -1902,7 +1909,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
     payerAgg[payer].paid += r.insurancePaid;
     payerAgg[payer].denied += r.deniedDollars;
     payerAgg[payer].writeOff += r.writeOff;
-    if (r.stage === "Underpaid" || r.stage === "Appeal") payerAgg[payer].underpaid += r.underpaidDyn;
+    if (r.stage === "Underpaid" || r.stage === "In Appeal/Negotiation") payerAgg[payer].underpaid += r.underpaidDyn;
     if (r.stage === "Submitted") payerAgg[payer].submitted += r.billedAmt;
     if (r.stage === "Waiting Payment") payerAgg[payer].waitingPayment += r.billedAmt;
 
@@ -1924,7 +1931,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
       grossCollectionRate,
       netCollectionRate,
       underpaidAmt: totals.underpaidAmt,
-      underpaidCount: billed.filter(b => ["Underpaid","Appeal"].includes(String(evaluateClaimDerived(b, ctx).lifecycleStage||""))).length,
+      underpaidCount: billed.filter(b => ["Underpaid","In Appeal/Negotiation"].includes(String(evaluateClaimDerived(b, ctx).lifecycleStage||""))).length,
       patientRespTotal: totals.patientRespTotal,
       patientCollected: totals.patientCollected,
       patientOutstanding,
@@ -2278,45 +2285,30 @@ function ensureDenialCaseForClaim(claim){
 }
 
 function evaluateClaimDerived(claim, ctx={}){
+  const claimCtx = (ctx && ctx.paymentsByClaim) ? ctx : buildClaimContext(claim.org_id || "");
   const billedAmount = num(claim.amount_billed);
-  const patientResp = num(claim.patient_responsibility);
   const allowedAmount = num(claim.allowed_amount);
-  const expectedInsurance = computeExpectedInsuranceForClaim(claim);
+  const patient = computePatientBalance(claim);
+  const insurance = computeInsuranceBalance(claim, claimCtx);
+  const expectedInsurance = insurance.expectedInsurance;
   const key = normalizeClaimKey(claim.claim_number || "");
-  const paymentRows = key && ctx.paymentsByClaim ? (ctx.paymentsByClaim[key] || []) : [];
-  const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid), 0);
-  const paidFromClaim = num(claim.insurance_paid || claim.paid_amount);
+  const paymentRows = key && claimCtx.paymentsByClaim ? (claimCtx.paymentsByClaim[key] || []) : [];
+  const paidAmount = insurance.paidAmount;
   const claimHasPaidField = [claim.insurance_paid, claim.paid_amount].some(v => v != null && String(v).trim() !== "");
   const hasPaymentRecord = paymentRows.length > 0 || claimHasPaidField || !!claim.paid_at;
-  const paidAmount = hasPaymentRecord ? Math.max(paidFromClaim, paymentFromRows) : 0;
-  const appealCase = claim.denial_case_id && ctx.caseById ? ctx.caseById.get(String(claim.denial_case_id)) : null;
-  const negotiation = ctx.negByBilled ? ctx.negByBilled.get(String(claim.billed_id || "")) : null;
+  const appealCase = claim.denial_case_id && claimCtx.caseById ? claimCtx.caseById.get(String(claim.denial_case_id)) : null;
+  const negotiation = claimCtx.negByBilled ? claimCtx.negByBilled.get(String(claim.billed_id || "")) : null;
   const denialReason = String(claim.denial_reason || appealCase?.denial_reason || appealCase?.issue_reason || "").trim();
   const denialDocAttached = !!(claim.denial_doc_attached || claim.denial_document || claim.denial_file ||
     (appealCase && ((appealCase.files || []).length > 0 || (appealCase.appeal_attachments || []).length > 0)));
   const explicitDenialUpload = denialDocAttached || String(appealCase?.status || "").toLowerCase().includes("denied");
   const hasDenialContext = !!(denialReason || denialDocAttached || appealCase || explicitDenialUpload);
   const submittedFlag = !!(claim.submission_id || claim.submitted_at || claim.submitted_date || claim.submitted_to_payer);
+  const insuranceRemaining = insurance.insuranceRemaining;
+  const patientBalanceRemaining = patient.patientBalanceRemaining;
 
   let lifecycleStage = submittedFlag ? "Waiting Payment" : "Submitted";
   let financialStatus = lifecycleStage;
-
-  if (hasPaymentRecord) {
-    if (paidAmount <= 0.0001) {
-      lifecycleStage = "Denied";
-      financialStatus = "Denied";
-      const settings = getPracticeSettings(claim.org_id);
-      if (settings.auto_create_denial_cases === true) {
-        ensureDenialCaseForClaim(claim);
-      }
-    } else if (paidAmount + 0.0001 < expectedInsurance) {
-      lifecycleStage = "Underpaid";
-      financialStatus = "Underpaid";
-    } else {
-      lifecycleStage = "Paid";
-      financialStatus = lifecycleStage;
-    }
-  }
 
   const activeCaseStatuses = ["Drafted", "Submitted", "In Review", "Counter Offered", "Approved (Pending Payment)"];
   const appealStatus = String(appealCase?.status || "");
@@ -2327,41 +2319,34 @@ function evaluateClaimDerived(claim, ctx={}){
   if (!hasOpenDenialCase && hasActiveAppealOrNegotiation) {
     lifecycleStage = "In Appeal/Negotiation";
     financialStatus = "In Appeal/Negotiation";
-  }
-
-  const writeOffAmount = num(claim.contractual_adjustment || claim.write_off || 0);
-  const patientCollected = num(claim.patient_collected || 0);
-
-  // A claim is fully paid if:
-  const fullyPaid = (paidAmount >= expectedInsurance);
-
-  // A claim is fully written off if:
-  const fullyWrittenOff = writeOffAmount > 0;
-
-  // A claim is financially complete if:
-  const patientFullyCollected = (patientResp - patientCollected) <= 0;
-
-  const noActiveCase =
-    !appealCase ||
-    ["Closed","Resolved"].includes(String(appealCase.status || ""));
-
-  if (fullyWrittenOff && noActiveCase) {
-    lifecycleStage = "Write-Off";
-    financialStatus = "Write-Off";
-  }
-
-  if ((fullyPaid && patientFullyCollected && noActiveCase) || fullyWrittenOff) {
+  } else if (!hasPaymentRecord && submittedFlag) {
+    lifecycleStage = "Waiting Payment";
+    financialStatus = "Waiting Payment";
+  } else if (hasPaymentRecord && paidAmount <= 0.0001) {
+    lifecycleStage = "Denied";
+    financialStatus = "Denied";
+    const settings = getPracticeSettings(claim.org_id);
+    if (settings.auto_create_denial_cases === true) {
+      ensureDenialCaseForClaim(claim);
+    }
+  } else if (hasPaymentRecord && insuranceRemaining > 0.0001) {
+    lifecycleStage = "Underpaid";
+    financialStatus = "Underpaid";
+  } else if (insuranceRemaining <= 0.0001 && patientBalanceRemaining > 0.0001) {
+    lifecycleStage = "Patient Follow-Up";
+    financialStatus = "Patient Follow-Up";
+  } else if (insuranceRemaining <= 0.0001 && patientBalanceRemaining <= 0.0001) {
     lifecycleStage = "Resolved";
     financialStatus = "Resolved";
   }
 
-  const writeOff = num(claim.write_off_amount || claim.contractual_adjustment);
   let atRiskAmount = 0;
-  if (lifecycleStage === "Underpaid") atRiskAmount = Math.max(0, expectedInsurance - paidAmount);
-  else if (lifecycleStage === "Denied" || lifecycleStage === "Submitted" || lifecycleStage === "Waiting Payment" || lifecycleStage === "In Appeal/Negotiation") {
-    atRiskAmount = Math.max(0, expectedInsurance - paidAmount);
-  }
-  else atRiskAmount = 0;
+  if (lifecycleStage === "Denied") atRiskAmount = Math.max(0, expectedInsurance || billedAmount) - paidAmount;
+  else if (lifecycleStage === "Underpaid") atRiskAmount = insuranceRemaining;
+  else if (lifecycleStage === "Waiting Payment" || lifecycleStage === "Submitted") atRiskAmount = Math.max(0, expectedInsurance || billedAmount) - paidAmount;
+  else if (lifecycleStage === "Patient Follow-Up") atRiskAmount = patientBalanceRemaining;
+  else if (lifecycleStage === "In Appeal/Negotiation") atRiskAmount = insuranceRemaining + patientBalanceRemaining;
+  atRiskAmount = Math.max(0, atRiskAmount);
 
   return {
     lifecycleStage,
@@ -2370,17 +2355,45 @@ function evaluateClaimDerived(claim, ctx={}){
     paidAmount,
     billedAmount,
     allowedAmount,
+    underpaidAmount: Math.max(0, insuranceRemaining),
+    patientBalanceRemaining,
+    insuranceWriteOff: insurance.insuranceWriteOff,
+    patientWriteOff: patient.patientWriteOff,
     atRiskAmount,
-    writeOffAmount: Math.max(0, writeOff),
+    writeOffAmount: Math.max(0, insurance.insuranceWriteOff),
     submittedFlag,
     hasPaymentResponse: hasPaymentRecord,
     hasDenialContext
   };
 }
 
+function computePatientBalance(claim){
+  const patientResp = num(claim.patient_responsibility || 0);
+  const patientCollected = num(claim.patient_collected || 0);
+  const patientWriteOff = num(claim.patient_writeoff_amount || 0);
+  const patientBalanceRemaining = Math.max(0, patientResp - patientCollected - patientWriteOff);
+  return { patientResp, patientCollected, patientWriteOff, patientBalanceRemaining };
+}
+
+function computeInsuranceBalance(claim, ctx={}){
+  const claimCtx = (ctx && ctx.paymentsByClaim) ? ctx : buildClaimContext(claim.org_id || "");
+  const expectedInsurance = computeExpectedInsuranceForClaim(claim);
+  const key = normalizeClaimKey(claim.claim_number || "");
+  const paymentRows = key && claimCtx.paymentsByClaim ? (claimCtx.paymentsByClaim[key] || []) : [];
+  const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid), 0);
+  const paidFromClaim = num(claim.insurance_paid || claim.paid_amount);
+  const paidAmount = Math.max(paymentFromRows, paidFromClaim);
+  const insuranceWriteOff = num(claim.write_off_amount || claim.contractual_adjustment || claim.write_off || 0);
+  const insuranceRemaining = Math.max(
+    0,
+    expectedInsurance - paidAmount - insuranceWriteOff
+  );
+  return { expectedInsurance, paidAmount, insuranceWriteOff, insuranceRemaining };
+}
+
 function isResolvedLifecycleStage(stage){
   const s = String(stage || "").trim();
-  return ["Resolved", "Write-Off", "Revenue Collected", "Paid", "Closed", "Contractual"].includes(s);
+  return ["Resolved", "Write-Off", "Revenue Collected", "Closed", "Contractual"].includes(s);
 }
 
 function computeExecutiveRevenueMetrics(org_id){
@@ -2394,7 +2407,7 @@ function computeExecutiveRevenueMetrics(org_id){
     acc.totalBilled += billed;
     acc.totalCollected += paid;
     if (!isResolvedLifecycleStage(d.lifecycleStage)) {
-      acc.totalAtRisk += Math.max(0, expectedInsurance - paid);
+      acc.totalAtRisk += Math.max(0, d.underpaidAmount) + Math.max(0, d.patientBalanceRemaining);
     }
     return acc;
   }, { totalBilled: 0, totalCollected: 0, totalAtRisk: 0 });
@@ -2552,8 +2565,8 @@ function rebuildOrgDerivedData(org_id, opts={}){
 }
 
 function computeClaimAtRisk(b){
-  const d = evaluateClaimDerived(b, {});
-  if (d.lifecycleStage === "Contractual" || d.lifecycleStage === "Paid") return 0;
+  const d = evaluateClaimDerived(b, b?.org_id ? buildClaimContext(b.org_id) : {});
+  if (isResolvedLifecycleStage(d.lifecycleStage)) return 0;
   return Math.max(0, d.atRiskAmount);
 }
 
@@ -2572,7 +2585,7 @@ function computeClaimRiskScore(b){
   const days = Math.max(0, (Date.now() - dt) / (1000*60*60*24));
   const amountScore = clamp((Math.log10(atRisk + 1) / 4) * 100, 0, 100); // 40%
   const ageScore = clamp((days / 120) * 100, 0, 100); // 30%
-  const stageBase = (st === "Denied") ? 100 : (st === "Underpaid" ? 80 : (st === "Appeal" ? 70 : (st === "Patient Balance" ? 60 : (st === "Waiting Payment" ? 50 : 30))));
+  const stageBase = (st === "Denied") ? 100 : (st === "Underpaid" ? 80 : (st === "In Appeal/Negotiation" ? 70 : (st === "Patient Follow-Up" ? 60 : (st === "Waiting Payment" ? 50 : 30))));
   const networkMod = String(b.network_status || "Out of Network").toLowerCase() === "out of network" ? 100 : 40;
   const total = (0.40 * amountScore) + (0.30 * ageScore) + (0.20 * stageBase) + (0.10 * networkMod);
   return Math.round(clamp(total, 0, 100));
@@ -2587,9 +2600,9 @@ function claimRiskBand(score){
 
 function suggestedNextActionForClaim(b){
   const st = String(evaluateClaimDerived(b, {}).lifecycleStage || b.status || "Pending");
-  if (st === "Denied" || st === "Appeal") return "Appeal";
+  if (st === "Denied" || st === "In Appeal/Negotiation") return "Appeal";
   if (st === "Underpaid") return "Negotiate";
-  if (st === "Patient Balance") return "Adjust Patient Responsibility";
+  if (st === "Patient Follow-Up") return "Adjust Patient Responsibility";
   return "Review Claim";
 }
 
@@ -2610,7 +2623,7 @@ function badgeClassForStatus(st){
   if (s === "Underpaid") return "underpaid";
   if (s === "Appeal") return "warn";
   if (s === "Waiting Payment" || s === "Submitted") return "warn";
-  if (s === "Patient Balance") return "warn";
+  if (s === "Patient Follow-Up") return "warn";
   if (s === "Contractual") return "writeoff";
   return "";
 }
@@ -3956,7 +3969,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         "Denied Claims": Number(m.statusCounts?.Denied || 0),
         "Underpaid Claims": Number(m.statusCounts?.Underpaid || 0),
         "Appeal Claims": Number(m.statusCounts?.Appeal || 0),
-        "Patient Balance Claims": Number(m.statusCounts?.["Patient Balance"] || 0),
+        "Patient Follow-Up Claims": Number(m.statusCounts?.["Patient Follow-Up"] || 0),
         "Pending Claims": Number(m.statusCounts?.Pending || 0),
       };
       Object.keys(fallbackIssues).forEach(k => { if (fallbackIssues[k] > 0) reasonsMap[k] = fallbackIssues[k]; });
@@ -4252,6 +4265,7 @@ if (method === "GET" && pathname === "/claims") {
     "Denied",
     "Underpaid",
     "In Appeal/Negotiation",
+    "Patient Follow-Up",
     "Write-Off",
     "Resolved"
   ];
@@ -4283,7 +4297,6 @@ if (method === "GET" && pathname === "/claims") {
 
   function toPipelineStage(b){
     const d = evaluateClaimDerived(b, claimCtx);
-    if (d.lifecycleStage === "Paid") return "Resolved";
     if (PIPE_ORDER.includes(d.lifecycleStage)) return d.lifecycleStage;
     const paid = num(d.paidAmount);
     const expected = num(d.expectedInsurance || 0);
@@ -4319,7 +4332,7 @@ if (method === "GET" && pathname === "/claims") {
       pipelineAgg["Revenue Collected"].count += 1;
       pipelineAgg["Revenue Collected"].billed += num(b.amount_billed);
       if (!isResolvedLifecycleStage(d.lifecycleStage)) {
-        pipelineAgg["Revenue Collected"].atRisk += Math.max(0, num(d.expectedInsurance) - num(d.paidAmount));
+        pipelineAgg["Revenue Collected"].atRisk += Math.max(0, num(d.underpaidAmount)) + Math.max(0, num(d.patientBalanceRemaining));
       }
     }
   });
@@ -4346,6 +4359,7 @@ if (method === "GET" && pathname === "/claims") {
     if (stage === "Denied") return "/claims?view=denials";
     if (stage === "Underpaid") return "/claims?view=all&status=Underpaid";
     if (stage === "In Appeal/Negotiation") return "/claims?view=all&status=In%20Appeal%2FNegotiation";
+    if (stage === "Patient Follow-Up") return "/claims?view=all&status=Patient%20Follow-Up";
     if (stage === "Submitted") return "/claims?view=all&status=Submitted";
     if (stage === "Write-Off") return "/claims?view=all&status=Contractual";
     if (stage === "Resolved" || stage === "Revenue Collected") return "/claims?view=all&status=Resolved";
@@ -4527,15 +4541,15 @@ if (method === "GET" && pathname === "/claims") {
       .map(s=>{
         const claims = billedAll.filter(b => b.submission_id === s.submission_id);
         const totalClaims = claims.length;
-        const paidCount = claims.filter(b => evaluateClaimDerived(b, claimCtx).lifecycleStage === "Paid").length;
+        const paidCount = claims.filter(b => num(evaluateClaimDerived(b, claimCtx).paidAmount) > 0).length;
         const deniedCount = claims.filter(b => evaluateClaimDerived(b, claimCtx).lifecycleStage === "Denied").length;
         const underpaidCount = claims.filter(b => evaluateClaimDerived(b, claimCtx).lifecycleStage === "Underpaid").length;
-        const appealCount = claims.filter(b => evaluateClaimDerived(b, claimCtx).lifecycleStage === "Appeal").length;
+        const appealCount = claims.filter(b => evaluateClaimDerived(b, claimCtx).lifecycleStage === "In Appeal/Negotiation").length;
         const pendingCount = claims.filter(b => ["Pending","Submitted","Waiting Payment"].includes(evaluateClaimDerived(b, claimCtx).lifecycleStage)).length;
 
         const totalBilledAmt = claims.reduce((sum,b)=> sum + Number(b.amount_billed || 0), 0);
-        const collectedAmt = claims.reduce((sum, b) => sum + Number(b.insurance_paid || b.paid_amount || 0), 0);
-        const atRiskAmt = Math.max(0, totalBilledAmt - collectedAmt);
+        const collectedAmt = claims.reduce((sum, b) => sum + Number(evaluateClaimDerived(b, claimCtx).paidAmount || 0), 0);
+        const atRiskAmt = claims.reduce((sum, b) => sum + num(evaluateClaimDerived(b, claimCtx).atRiskAmount), 0);
 
         return `<tr>
           <td><a href="/billed?submission_id=${encodeURIComponent(s.submission_id)}">${safeStr(s.original_filename || "batch")}</a></td>
@@ -4816,7 +4830,7 @@ if (method === "GET" && pathname === "/claims") {
     });
 
     const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer || "").trim()).filter(Boolean))).sort();
-    const statusOpts = ["Submitted","Waiting Payment","Pending","Paid","Denied","Underpaid","Appeal","Contractual","Patient Balance"];
+    const statusOpts = ["Submitted","Waiting Payment","Pending","Resolved","Denied","Underpaid","In Appeal/Negotiation","Contractual","Patient Follow-Up"];
 
     billed.sort((a,b)=> computeClaimRiskScore(b) - computeClaimRiskScore(a));
 
@@ -5237,13 +5251,12 @@ if (method === "GET" && pathname === "/upload-negotiations") return redirect(res
 function renderClaimFinancialContext(billedClaim, derived){
   const b = billedClaim || {};
   const d = derived || {};
+  const patient = computePatientBalance(b);
   const expected = num(d.expectedInsurance);
   const paid = num(d.paidAmount);
-  const patientResp = num(b.patient_responsibility);
-  const patientCollected = num(b.patient_collected);
-  const writeOff = num(b.write_off_amount || b.contractual_adjustment || b.write_off);
-  const payerRemaining = Math.max(0, expected - paid);
-  const patientRemaining = Math.max(0, patientResp - patientCollected);
+  const writeOff = num(d.insuranceWriteOff);
+  const payerRemaining = Math.max(0, num(d.underpaidAmount));
+  const patientRemaining = Math.max(0, num(d.patientBalanceRemaining));
   const totalRemaining = payerRemaining + patientRemaining;
 
   return `
@@ -5257,9 +5270,11 @@ function renderClaimFinancialContext(billedClaim, derived){
           <tr><th>Amount Billed</th><td>${formatMoneyUI(num(d.billedAmount))}</td></tr>
           <tr><th>Expected Insurance</th><td>${formatMoneyUI(expected)}</td></tr>
           <tr><th>Insurance Paid / Collected</th><td>${formatMoneyUI(paid)}</td></tr>
-          <tr><th>Patient Responsibility</th><td>${formatMoneyUI(patientResp)}</td></tr>
-          <tr><th>Patient Collected</th><td>${formatMoneyUI(patientCollected)}</td></tr>
-          <tr><th>Write-Off Amount</th><td>${formatMoneyUI(writeOff)}</td></tr>
+          <tr><th>Insurance Remaining</th><td>${formatMoneyUI(payerRemaining)}</td></tr>
+          <tr><th>Patient Responsibility</th><td>${formatMoneyUI(patient.patientResp)}</td></tr>
+          <tr><th>Patient Collected</th><td>${formatMoneyUI(patient.patientCollected)}</td></tr>
+          <tr><th>Patient Write-Off</th><td>${formatMoneyUI(patient.patientWriteOff)}</td></tr>
+          <tr><th>Insurance Write-Off</th><td>${formatMoneyUI(writeOff)}</td></tr>
           <tr><th>At Risk</th><td>${formatMoneyUI(num(d.atRiskAmount))}</td></tr>
           <tr><th>Remaining Payer Balance</th><td>${formatMoneyUI(payerRemaining)}</td></tr>
           <tr><th>Remaining Patient Balance</th><td>${formatMoneyUI(patientRemaining)}</td></tr>
@@ -5338,7 +5353,7 @@ if (method === "GET" && pathname === "/actions") {
       group = n.stage;
       secondaryStatus = n.negStatus;
       kind = "negotiation";
-    } else if (st === "Patient Balance"){
+    } else if (st === "Patient Follow-Up"){
       group = "Follow-Up Needed";
       kind = "other";
     } else {
@@ -5355,7 +5370,7 @@ if (method === "GET" && pathname === "/actions") {
 
     const atRisk = Number(derived.atRiskAmount || computeClaimAtRisk(b));
     const riskScore = computeClaimRiskScore({ ...b, status: st });
-    items.push({ b, st, kind, atRisk, riskScore, secondaryStatus, tabKey });
+    items.push({ b, derived, st, kind, atRisk, riskScore, secondaryStatus, tabKey });
   }
 
   // Sorting
@@ -5403,17 +5418,20 @@ if (method === "GET" && pathname === "/actions") {
         <a class="btn secondary small" href="/appeal-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Appeal</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
+        ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Balance Write-Off</a>` : ``}
       `;
     } else if (x.kind === "negotiation") {
       actionsHtml = `
         <a class="btn secondary small" href="/negotiation-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Open Negotiation</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
+        ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Balance Write-Off</a>` : ``}
       `;
     } else {
       actionsHtml = `
         <a class="btn secondary small" href="${claimLink}">Open Claim</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
+        ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Balance Write-Off</a>` : ``}
       `;
     }
 
@@ -5502,7 +5520,7 @@ if (method === "GET" && pathname === "/actions") {
 // ==============================
 if (method === "GET" && pathname === "/claim-action") {
   const billed_id = String(parsed.query.billed_id || "").trim();
-  const action = String(parsed.query.action || "").trim(); // writeoff|patient_resp
+  const action = String(parsed.query.action || "").trim(); // writeoff|patient_resp|patient_writeoff
   if (!billed_id || !action) return redirect(res, "/actions");
 
   const billedAll = readJSON(FILES.billed, []);
@@ -5511,16 +5529,25 @@ if (method === "GET" && pathname === "/claim-action") {
   const claimCtx = buildClaimContext(org.org_id);
   const d = evaluateClaimDerived(b, claimCtx);
 
-  const title = (action === "writeoff") ? "Write Off Claim" : "Adjust Patient Responsibility";
+  const title = (action === "writeoff")
+    ? "Insurance Write-Off"
+    : (action === "patient_writeoff" ? "Patient Balance Write-Off" : "Adjust Patient Responsibility");
   const help = (action === "writeoff")
-    ? "Marks this claim as Write-Off (Contractual) and removes it from at-risk totals."
-    : "Updates patient responsibility fields and moves claim to Patient Balance if needed.";
+    ? "Apply an insurance-side contractual write-off amount."
+    : (action === "patient_writeoff"
+      ? "Write off remaining patient balance only. Leave amount blank to write off full remaining patient balance."
+      : "Update patient responsibility and optionally patient-collected amount (actual money received). This will not force the claim to resolved unless balances are actually covered.");
 
   const formFields = (action === "writeoff") ? `
       <input type="hidden" name="mode" value="writeoff"/>
-      <p class="muted small">Optional: enter write-off amount. If blank, system will estimate using billed vs allowed (when available).</p>
-      <label>Write-Off Amount (optional)</label>
+      <p class="muted small">Optional: enter insurance write-off amount. If blank, system estimates using billed vs allowed (when available).</p>
+      <label>Insurance Write-Off Amount (optional)</label>
       <input name="write_off_amount" placeholder="e.g. 125.00" />
+  ` : (action === "patient_writeoff") ? `
+      <input type="hidden" name="mode" value="patient_writeoff"/>
+      <p class="muted small">Patient balance remaining: <strong>${formatMoneyUI(num(d.patientBalanceRemaining || 0))}</strong></p>
+      <label>Patient Balance Write-Off Amount (optional)</label>
+      <input name="writeoff_amount" placeholder="Leave blank to write off full remaining patient balance" />
   ` : `
       <input type="hidden" name="mode" value="patient_resp"/>
       <label>Patient Responsibility Amount</label>
@@ -5571,14 +5598,27 @@ if (method === "POST" && pathname === "/claim-action") {
 
   if (mode === "patient_resp") {
     b.patient_responsibility = num(params.get("patient_responsibility"));
-    b.patient_collected = num(params.get("patient_collected"));
-    b.status = "Patient Balance";
+    const patientCollectedRaw = (params.get("patient_collected") || "").trim();
+    if (patientCollectedRaw !== "") b.patient_collected = num(patientCollectedRaw);
     auditLog({ actor:"user", action:"claim_patient_resp", org_id: org.org_id, billed_id });
+  }
+
+  if (mode === "patient_writeoff") {
+    const claimCtx = buildClaimContext(org.org_id);
+    const d = evaluateClaimDerived(b, claimCtx);
+    const patient = computePatientBalance(b);
+    const writeoffRaw = (params.get("writeoff_amount") || "").trim();
+    const cap = Math.max(0, patient.patientResp - patient.patientCollected);
+    const requested = writeoffRaw === "" ? num(d.patientBalanceRemaining) : num(writeoffRaw);
+    const nextPatientWriteoff = Math.min(cap, Math.max(0, patient.patientWriteOff + requested));
+    b.patient_writeoff_amount = nextPatientWriteoff;
+    auditLog({ actor:"user", action:"claim_patient_writeoff", org_id: org.org_id, billed_id, writeoff_amount: requested });
   }
 
   billedAll[idx] = b;
   writeJSON(FILES.billed, billedAll);
-  return redirect(res, `/claim-detail?billed_id=${encodeURIComponent(billed_id)}`);
+  rebuildOrgDerivedData(org.org_id, { resyncDenials: true });
+  return redirect(res, `/actions?q=${encodeURIComponent(b.claim_number || "")}`);
 }
 
 // ==============================
@@ -6722,8 +6762,8 @@ if (method === "POST" && pathname === "/negotiations/upload") {
           const pendingCount = claims.filter(b => (b.status||"Pending")==="Pending").length;
 
           const totalBilledAmt = claims.reduce((sum,b)=> sum + Number(b.amount_billed || 0), 0);
-          const collectedAmt = claims.reduce((sum, b) => sum + Number(b.insurance_paid || b.paid_amount || 0), 0);
-          const atRiskAmt = Math.max(0, totalBilledAmt - collectedAmt);
+          const collectedAmt = claims.reduce((sum, b) => sum + Number(evaluateClaimDerived(b, claimCtx).paidAmount || 0), 0);
+          const atRiskAmt = claims.reduce((sum, b) => sum + num(evaluateClaimDerived(b, claimCtx).atRiskAmount), 0);
           const collectionRate = totalBilledAmt > 0 ? (collectedAmt / totalBilledAmt) * 100 : 0;
           const barColor = collectionRate >= 80 ? "#065f46" : (collectionRate >= 60 ? "#f59e0b" : "#b91c1c");
 
@@ -6833,7 +6873,7 @@ if (method === "POST" && pathname === "/negotiations/upload") {
     const allInSub = billedAll.filter(b => b.submission_id === submission_id);
     const totalBilledAmt = allInSub.reduce((sum,b)=> sum + Number(b.amount_billed || 0), 0);
     const collectedAmt = allInSub.reduce((sum, b) => sum + Number(b.insurance_paid || b.paid_amount || 0), 0);
-    const atRiskAmt = Math.max(0, totalBilledAmt - collectedAmt);
+    const atRiskAmt = claims.reduce((sum, b) => sum + num(evaluateClaimDerived(b, claimCtx).atRiskAmount), 0);
     const collectionRate = totalBilledAmt > 0 ? ((collectedAmt / totalBilledAmt) * 100) : 0;
     const barColor = collectionRate >= 80 ? "#065f46" : (collectionRate >= 60 ? "#f59e0b" : "#b91c1c");
 
@@ -10968,10 +11008,10 @@ if (method === "GET" && pathname === "/claim-detail") {
 
   if (!b) return redirect(res, "/billed");
 
-  const relatedPayments = paymentsAll.filter(p =>
-    p.org_id === org.org_id &&
-    normalizeClaimNum(p.claim_number) === normalizeClaimNum(b.claim_number)
-  );
+  const claimCtx = buildClaimContext(org.org_id);
+  const d = evaluateClaimDerived(b, claimCtx);
+  const claimKey = normalizeClaimNum(b.claim_number);
+  const relatedPayments = claimKey ? (claimCtx.paymentsByClaim[claimKey] || []) : [];
 
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
   const appealCase = b.denial_case_id ? casesAll.find(c => c.case_id === b.denial_case_id) : null;
@@ -10981,19 +11021,17 @@ if (method === "GET" && pathname === "/claim-detail") {
     .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime());
   const latestNegotiation = negHistory[0] || null;
 
-  const billedAmount = num(b.amount_billed);
-  const paidAmount = num(b.insurance_paid || b.paid_amount);
-  const patientResp = num(b.patient_responsibility);
-  const contractExpectedAmount = num(b.contract_expected_amount || b.expected_insurance || billedAmount);
-  const expectedInsurancePayment = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
-    ? num(b.expected_insurance)
-    : computeExpectedInsurance((num(b.allowed_amount) > 0 ? num(b.allowed_amount) : billedAmount), patientResp);
+  const billedAmount = num(d.billedAmount);
+  const paidAmount = num(d.paidAmount);
+  const expectedInsurancePayment = num(d.expectedInsurance);
+  const insuranceRemaining = num(d.underpaidAmount);
+  const patient = computePatientBalance(b);
   const variance = expectedInsurancePayment - paidAmount;
   const riskScore = computeClaimRiskScore(b);
   const riskBand = claimRiskBand(riskScore);
-  const atRisk = computeClaimAtRisk(b);
+  const atRisk = num(d.atRiskAmount);
   const suggested = suggestedNextActionForClaim(b);
-  const derivedStatus = String(evaluateClaimDerived(b, buildClaimContext(org.org_id)).lifecycleStage || b.status || "Pending");
+  const derivedStatus = String(d.lifecycleStage || b.status || "Pending");
 
   const networkStatus = String(b.network_status || "Out of Network");
   const networkBadge = networkStatus === "In Network" ? "ok" : "writeoff";
@@ -11073,9 +11111,13 @@ if (method === "GET" && pathname === "/claim-detail") {
     <table>
       <tr><th>Billed Amount</th><td>${formatMoneyUI(billedAmount)}</td></tr>
       <tr><th>Paid Amount</th><td>${formatMoneyUI(paidAmount)}</td></tr>
-      <tr><th>Patient Responsibility</th><td>${formatMoneyUI(patientResp)}</td></tr>
-      <tr><th>Contract Expected Amount</th><td>${formatMoneyUI(contractExpectedAmount)}</td></tr>
       <tr><th>Expected Insurance Payment</th><td>${formatMoneyUI(expectedInsurancePayment)}</td></tr>
+      <tr><th>Insurance Remaining</th><td>${formatMoneyUI(insuranceRemaining)}</td></tr>
+      <tr><th>Insurance Write-Off</th><td>${formatMoneyUI(num(d.insuranceWriteOff))}</td></tr>
+      <tr><th>Patient Responsibility</th><td>${formatMoneyUI(patient.patientResp)}</td></tr>
+      <tr><th>Patient Collected</th><td>${formatMoneyUI(patient.patientCollected)}</td></tr>
+      <tr><th>Patient Write-Off</th><td>${formatMoneyUI(patient.patientWriteOff)}</td></tr>
+      <tr><th>Patient Balance Remaining</th><td>${formatMoneyUI(num(d.patientBalanceRemaining))}</td></tr>
       <tr><th>Variance (Expected − Paid)</th><td ${varianceStyle}>${formatMoneyUI(variance)}</td></tr>
     </table>
 
