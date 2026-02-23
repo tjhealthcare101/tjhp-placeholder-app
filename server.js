@@ -5234,6 +5234,42 @@ if (method === "GET" && pathname === "/upload-negotiations") return redirect(res
 // ==============================
 // ACTION CENTER (WORKFLOW)
 // ==============================
+function renderClaimFinancialContext(billedClaim, derived){
+  const b = billedClaim || {};
+  const d = derived || {};
+  const expected = num(d.expectedInsurance);
+  const paid = num(d.paidAmount);
+  const patientResp = num(b.patient_responsibility);
+  const patientCollected = num(b.patient_collected);
+  const writeOff = num(b.write_off_amount || b.contractual_adjustment || b.write_off);
+  const payerRemaining = Math.max(0, expected - paid);
+  const patientRemaining = Math.max(0, patientResp - patientCollected);
+  const totalRemaining = payerRemaining + patientRemaining;
+
+  return `
+    <div style="border:1px solid var(--border);border-radius:12px;padding:12px;margin:10px 0 14px 0;background:var(--card);">
+      <div style="font-weight:800;margin-bottom:8px;">Claim Financial Context</div>
+      <table>
+        <tbody>
+          <tr><th>Claim #</th><td>${safeStr(b.claim_number || "—")}</td></tr>
+          <tr><th>Payer</th><td>${safeStr(b.payer || "—")}</td></tr>
+          <tr><th>Status</th><td>${safeStr(d.lifecycleStage || "—")}</td></tr>
+          <tr><th>Amount Billed</th><td>${formatMoneyUI(num(d.billedAmount))}</td></tr>
+          <tr><th>Expected Insurance</th><td>${formatMoneyUI(expected)}</td></tr>
+          <tr><th>Insurance Paid / Collected</th><td>${formatMoneyUI(paid)}</td></tr>
+          <tr><th>Patient Responsibility</th><td>${formatMoneyUI(patientResp)}</td></tr>
+          <tr><th>Patient Collected</th><td>${formatMoneyUI(patientCollected)}</td></tr>
+          <tr><th>Write-Off Amount</th><td>${formatMoneyUI(writeOff)}</td></tr>
+          <tr><th>At Risk</th><td>${formatMoneyUI(num(d.atRiskAmount))}</td></tr>
+          <tr><th>Remaining Payer Balance</th><td>${formatMoneyUI(payerRemaining)}</td></tr>
+          <tr><th>Remaining Patient Balance</th><td>${formatMoneyUI(patientRemaining)}</td></tr>
+          <tr><th>Total Remaining Balance</th><td>${formatMoneyUI(totalRemaining)}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 if (method === "GET" && pathname === "/actions") {
   const tab = String(parsed.query.tab || "all").toLowerCase(); // all|denials|underpayments|awaiting|followup
   const q = String(parsed.query.q || "").trim().toLowerCase();
@@ -5365,6 +5401,7 @@ if (method === "GET" && pathname === "/actions") {
     if (x.kind === "denial") {
       actionsHtml = `
         <a class="btn secondary small" href="/appeal-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Appeal</a>
+        <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
       `;
     } else if (x.kind === "negotiation") {
@@ -5471,6 +5508,8 @@ if (method === "GET" && pathname === "/claim-action") {
   const billedAll = readJSON(FILES.billed, []);
   const b = billedAll.find(x => x.org_id === org.org_id && x.billed_id === billed_id);
   if (!b) return redirect(res, "/actions");
+  const claimCtx = buildClaimContext(org.org_id);
+  const d = evaluateClaimDerived(b, claimCtx);
 
   const title = (action === "writeoff") ? "Write Off Claim" : "Adjust Patient Responsibility";
   const help = (action === "writeoff")
@@ -5494,7 +5533,7 @@ if (method === "GET" && pathname === "/claim-action") {
     <h2>${safeStr(title)}</h2>
     <p class="muted">${safeStr(help)}</p>
     <div class="hr"></div>
-    <p class="muted"><strong>Claim:</strong> ${safeStr(b.claim_number||"")} · <strong>Payer:</strong> ${safeStr(b.payer||"")} · <strong>Status:</strong> ${safeStr(b.status||"Pending")}</p>
+    ${renderClaimFinancialContext(b, d)}
 
     <form method="POST" action="/claim-action">
       <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
