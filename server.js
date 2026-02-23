@@ -2616,6 +2616,255 @@ function formatNumberUI(v){
   return n.toLocaleString("en-US");
 }
 
+function clamp01(x){
+  x = Number(x || 0);
+  return Math.max(0, Math.min(1, x));
+}
+
+function formatPct(p){
+  const n = Number(p || 0);
+  if (!isFinite(n)) return "0%";
+  return `${Math.round(n)}%`;
+}
+
+function renderKpiCard(label, value, sub="", tone="neutral"){
+  const toneBg = tone === "bad" ? "rgba(185,28,28,.08)" : (tone === "warn" ? "rgba(245,158,11,.10)" : (tone === "good" ? "rgba(34,197,94,.10)" : "rgba(17,24,39,.04)"));
+  const toneBorder = tone === "bad" ? "rgba(185,28,28,.35)" : (tone === "warn" ? "rgba(245,158,11,.35)" : (tone === "good" ? "rgba(34,197,94,.35)" : "var(--border)"));
+  return `
+    <div style="border:1px solid ${toneBorder};border-radius:14px;padding:14px;background:${toneBg};min-width:180px;flex:1;">
+      <div class="muted small" style="font-weight:800;">${safeStr(label)}</div>
+      <div style="font-size:28px;font-weight:900;margin-top:6px;">${safeStr(value)}</div>
+      ${sub ? `<div class="muted small" style="margin-top:4px;">${safeStr(sub)}</div>` : ``}
+    </div>
+  `;
+}
+
+function svgDonut({labelLeft, labelRight, valueLeft, valueRight, colorLeft, colorRight}){
+  const total = Math.max(1, Number(valueLeft || 0) + Number(valueRight || 0));
+  const leftFrac = clamp01(Number(valueLeft || 0) / total);
+  const r = 46;
+  const c = 2 * Math.PI * r;
+  const leftLen = c * leftFrac;
+  const rightLen = c - leftLen;
+  return `
+  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+    <svg width="130" height="130" viewBox="0 0 120 120" role="img" aria-label="donut">
+      <g transform="rotate(-90 60 60)">
+        <circle cx="60" cy="60" r="${r}" fill="none" stroke="rgba(17,24,39,.10)" stroke-width="16"></circle>
+        <circle cx="60" cy="60" r="${r}" fill="none" stroke="${colorLeft}" stroke-width="16"
+          stroke-dasharray="${leftLen} ${c}" stroke-linecap="butt"></circle>
+        <circle cx="60" cy="60" r="${r}" fill="none" stroke="${colorRight}" stroke-width="16"
+          stroke-dasharray="${rightLen} ${c}" stroke-dashoffset="-${leftLen}" stroke-linecap="butt"></circle>
+      </g>
+      <text x="60" y="56" text-anchor="middle" font-size="12" fill="rgba(17,24,39,.8)" font-weight="800">${safeStr(labelLeft)}</text>
+      <text x="60" y="74" text-anchor="middle" font-size="10" fill="rgba(17,24,39,.65)">${safeStr(labelRight)}</text>
+    </svg>
+    <div style="display:flex;flex-direction:column;gap:8px;min-width:220px;">
+      <div style="display:flex;justify-content:space-between;gap:14px;">
+        <div class="muted small"><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${colorLeft};margin-right:8px;"></span>${safeStr(labelLeft)}</div>
+        <div style="font-weight:900;">${formatMoneyUI(valueLeft)}</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;gap:14px;">
+        <div class="muted small"><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${colorRight};margin-right:8px;"></span>${safeStr(labelRight)}</div>
+        <div style="font-weight:900;">${formatMoneyUI(valueRight)}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function svgBarChart(title, rows){
+  const maxV = Math.max(1, ...rows.map(r => Number(r.value || 0)));
+  const bars = rows.map(r => {
+    const pct = Math.round((Number(r.value || 0) / maxV) * 100);
+    return `
+      <div style="display:flex;align-items:center;gap:10px;margin:8px 0;">
+        <div class="muted small" style="width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${safeStr(r.label)}</div>
+        <div style="flex:1;height:12px;background:rgba(17,24,39,.08);border-radius:999px;overflow:hidden;">
+          <div style="width:${pct}%;height:100%;background:${r.color || "#111827"};"></div>
+        </div>
+        <div style="width:120px;text-align:right;font-weight:900;">${formatMoneyUI(r.value)}</div>
+      </div>
+    `;
+  }).join("");
+  return `
+    <div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
+      <div style="font-weight:900;margin-bottom:6px;">${safeStr(title)}</div>
+      ${bars || `<div class="muted small">No data available.</div>`}
+    </div>
+  `;
+}
+
+function svgSparkline(title, points){
+  const w = 360;
+  const h = 80;
+  const pad = 8;
+  const vals = (points || []).map(x => Number(x || 0));
+  const maxV = Math.max(1, ...vals);
+  const minV = Math.min(0, ...vals);
+  const span = Math.max(1e-9, maxV - minV);
+  const toX = i => pad + (i * (w - 2 * pad)) / Math.max(1, vals.length - 1);
+  const toY = v => pad + (h - 2 * pad) - ((v - minV) / span) * (h - 2 * pad);
+  const d = vals.map((v, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(1)} ${toY(v).toFixed(1)}`).join(" ");
+  const last = vals.length ? vals[vals.length - 1] : 0;
+  return `
+    <div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;">
+        <div style="font-weight:900;">${safeStr(title)}</div>
+        <div class="muted small">Latest: <span style="font-weight:900;">${formatMoneyUI(last)}</span></div>
+      </div>
+      <svg width="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="margin-top:8px;">
+        <path d="${d || `M ${pad} ${h-pad} L ${w-pad} ${h-pad}`}" fill="none" stroke="rgba(17,24,39,.85)" stroke-width="2"/>
+      </svg>
+    </div>
+  `;
+}
+
+function gradeFromScore(score){
+  const s = Number(score || 0);
+  if (s >= 90) return "A";
+  if (s >= 80) return "B";
+  if (s >= 70) return "C";
+  if (s >= 60) return "D";
+  return "F";
+}
+
+function toneForGrade(g){
+  if (g === "A" || g === "B") return "good";
+  if (g === "C") return "warn";
+  return "bad";
+}
+
+
+function computePayerIntelligence(org_id, payerName, preset="last30"){
+  const claimsAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  const ctx = buildClaimContext(org_id);
+
+  const payerKey = String(payerName || "").trim().toLowerCase();
+  const claims = claimsAll.filter(b => String(b.payer || "").trim().toLowerCase() === payerKey);
+
+  const now = Date.now();
+  const daysToPayVals = [];
+  let denialCount = 0;
+  let underpaidCount = 0;
+  let resolvedCount = 0;
+  let appealCount = 0;
+  let followUpCount = 0;
+
+  let totalBilled = 0;
+  let totalCollected = 0;
+  let totalAtRisk = 0;
+  let totalDeniedDollars = 0;
+  let totalUnderpaidDollars = 0;
+
+  const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
+  const casesByBilled = new Map(casesAll.filter(c => c.billed_id).map(c => [String(c.billed_id), c]));
+
+  const denialReasonCounts = {};
+  const cptUnderpaidAgg = {};
+
+  for (const b of claims){
+    const d = evaluateClaimDerived(b, ctx);
+    totalBilled += num(d.billedAmount);
+    totalCollected += num(d.paidAmount) + num(b.patient_collected || 0);
+
+    if (!isResolvedLifecycleStage(d.lifecycleStage)) {
+      totalAtRisk += Math.max(0, num(d.underpaidAmount)) + Math.max(0, num(d.patientBalanceRemaining));
+    }
+
+    const st = String(d.lifecycleStage || "Pending");
+    if (st === "Denied"){
+      denialCount += 1;
+      totalDeniedDollars += Math.max(0, num(d.expectedInsurance || d.billedAmount) - num(d.paidAmount));
+      const c = casesByBilled.get(String(b.billed_id || ""));
+      const reason = String(c?.ai?.denial_reason_category || c?.denial_reason || c?.issue_reason || b.denial_reason || "").trim() || "Unknown";
+      denialReasonCounts[reason] = (denialReasonCounts[reason] || 0) + 1;
+    }
+    if (st === "Underpaid" || st === "In Appeal/Negotiation"){
+      if (st === "Underpaid") underpaidCount += 1;
+      if (st === "In Appeal/Negotiation") appealCount += 1;
+      totalUnderpaidDollars += Math.max(0, num(d.underpaidAmount));
+      const cpt = getClaimProcedureCode(b);
+      const label = cpt && cpt !== "UNKNOWN" ? cpt : "";
+      if (label) cptUnderpaidAgg[label] = (cptUnderpaidAgg[label] || 0) + Math.max(0, num(d.underpaidAmount));
+    }
+    if (st === "Resolved" || st === "Write-Off") resolvedCount += 1;
+    if (st === "Patient Follow-Up") followUpCount += 1;
+
+    const created = new Date(b.created_at || b.dos || now).getTime();
+    if (num(d.paidAmount) > 0 && created && !isNaN(created)){
+      const paidAt = new Date(b.paid_at || b.last_paid_at || now).getTime();
+      const dt = Math.max(created, 0);
+      const dd = Math.max(0, Math.round((paidAt - dt) / (1000*60*60*24)));
+      if (isFinite(dd)) daysToPayVals.push(dd);
+    }
+  }
+
+  const totalClaims = claims.length;
+  const denialRate = totalClaims ? (denialCount / totalClaims) * 100 : 0;
+  const underpaidRate = totalClaims ? (underpaidCount / totalClaims) * 100 : 0;
+
+  let appealsSubmitted = 0;
+  let appealsRecovered = 0;
+  for (const b of claims){
+    const d = evaluateClaimDerived(b, ctx);
+    const c = casesByBilled.get(String(b.billed_id || ""));
+    const st = String(c?.status || "").toLowerCase();
+    const isAppealSubmitted = st.includes("submitted") || st.includes("approved");
+    if (isAppealSubmitted){
+      appealsSubmitted += 1;
+      if (num(d.paidAmount) > 0) appealsRecovered += 1;
+    }
+  }
+  const recoveryRate = appealsSubmitted ? (appealsRecovered / appealsSubmitted) * 100 : 0;
+
+  const avgDaysToPay = daysToPayVals.length ? (daysToPayVals.reduce((a,b)=>a+b,0)/daysToPayVals.length) : 0;
+
+  const denialScore = 100 - Math.min(100, denialRate);
+  const underpaidScore = 100 - Math.min(100, underpaidRate);
+  const daysScore = 100 - Math.min(100, (avgDaysToPay / 60) * 100);
+  const score = Math.round((0.40 * denialScore) + (0.30 * underpaidScore) + (0.30 * daysScore));
+  const grade = gradeFromScore(score);
+
+  const denialReasonsTop = Object.entries(denialReasonCounts)
+    .sort((a,b)=>b[1]-a[1])
+    .slice(0,5)
+    .map(([label,count])=>({ label, count }));
+
+  const cptTop = Object.entries(cptUnderpaidAgg)
+    .sort((a,b)=>b[1]-a[1])
+    .slice(0,5)
+    .map(([label,value])=>({ label, value }));
+
+  const buckets = 8;
+  const series = Array.from({ length: buckets }, () => 0);
+  for (const b of claims){
+    const d = evaluateClaimDerived(b, ctx);
+    const dt = new Date(b.created_at || b.dos || now).getTime();
+    const ageDays = Math.max(0, Math.round((now - dt)/(1000*60*60*24)));
+    const idx = Math.min(buckets - 1, Math.floor((ageDays / Math.max(1, 90)) * buckets));
+    series[buckets - 1 - idx] += Math.max(0, num(d.underpaidAmount));
+  }
+
+  return {
+    payerName: String(payerName || "").trim() || "Unknown",
+    totalClaims,
+    denialRate,
+    recoveryRate,
+    avgDaysToPay,
+    totalUnderpaidDollars,
+    totalDeniedDollars,
+    totalBilled,
+    totalCollected,
+    totalAtRisk,
+    score,
+    grade,
+    denialReasonsTop,
+    cptTop,
+    underpaidTrend: series,
+    meta: { preset, resolvedCount, appealCount, followUpCount }
+  };
+}
+
 function badgeClassForStatus(st){
   const s = String(st||"Pending");
   if (s === "Paid") return "ok";
@@ -10875,98 +11124,109 @@ else if (type === "payers") {
   // AI Analyze Payer route
   if (method === "GET" && pathname === "/analyze-payer") {
     const payer = (parsed.query.payer || "").trim();
-    let claims = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id && ((b.payer || "").trim().toLowerCase() === payer.toLowerCase()));
-    const payerCtx = buildClaimContext(org.org_id);
-    const enriched = claims.map(c => ({ claim: c, d: evaluateClaimDerived(c, payerCtx) }));
-    const totalExpected = enriched.reduce((sum, x) => sum + Number(x.d.expectedInsurance || x.claim.amount_billed || 0), 0);
-    const totalPaid = enriched.reduce((sum, x) => sum + Number(x.d.paidAmount || 0), 0);
-    const underpaidClaims = enriched.filter(x => x.d.lifecycleStage === "Underpaid").map(x => x.claim);
-    const deniedClaims = enriched.filter(x => x.d.lifecycleStage === "Denied").map(x => x.claim);
-    const appealedClaims = claims.filter(c => c.appealed === true);
-    const recoveredClaims = appealedClaims.filter(c => Number(c.paid_amount || 0) > 0);
-    const recoveryRate = appealedClaims.length ? (recoveredClaims.length / appealedClaims.length) * 100 : 0;
-    const denialRate = claims.length ? (deniedClaims.length / claims.length) * 100 : 0;
-    const denialReasons = {};
-    deniedClaims.forEach(c => {
-      const reason = c.denial_reason || (c.ai && c.ai.denial_reason_category) || "Unknown";
-      denialReasons[reason] = (denialReasons[reason] || 0) + 1;
+    const data = computePayerIntelligence(org.org_id, payer, String(parsed.query.preset || "last30"));
+    const gradeTone = toneForGrade(data.grade);
+
+    const donut = svgDonut({
+      labelLeft: "Collected",
+      labelRight: "At Risk",
+      valueLeft: data.totalCollected,
+      valueRight: data.totalAtRisk,
+      colorLeft: "var(--ok)",
+      colorRight: "var(--danger)"
     });
-    const topDenials = Object.entries(denialReasons).sort((a,b) => b[1] - a[1]).slice(0,5);
-    const cptUnderpaid = {};
-    underpaidClaims.forEach(c => {
-      const code = c.cpt_code || c.cpt || "Unknown";
-      const diff = Number(c.expected_amount || c.amount_billed || 0) - Number(c.paid_amount || 0);
-      cptUnderpaid[code] = (cptUnderpaid[code] || 0) + diff;
-    });
-    const topUnderpaidCPT = Object.entries(cptUnderpaid).sort((a,b) => b[1] - a[1]).slice(0,5);
-    const paidClaims = claims.filter(c => c.paid_date || c.paid_at);
-    const avgDaysToPay = paidClaims.length ? (paidClaims.reduce((sum, c) => {
-      const dos = new Date(c.date_of_service || c.denied_at || c.created_at || 0);
-      const pd = new Date(c.paid_date || c.paid_at || 0);
-      return sum + ((pd - dos) / (1000 * 60 * 60 * 24));
-    }, 0) / paidClaims.length).toFixed(1) : 0;
-    let suggestions = [];
-    if (denialRate > 15) suggestions.push("High denial rate. Audit front-end eligibility & coding.");
-    if (recoveryRate < 50 && appealedClaims.length > 0) suggestions.push("Low appeal recovery rate. Review appeal templates.");
-    if (avgDaysToPay > 45) suggestions.push("Slow payment turnaround. Consider follow-up at 30 days.");
-    if (underpaidClaims.length > 0) suggestions.push("Underpayments detected. Audit contract reimbursement rates.");
-    if (!suggestions.length) suggestions.push("Payer performance within expected range.");
-    let grade = "A";
-    if (denialRate > 20 || recoveryRate < 40) grade = "D";
-    else if (denialRate > 15 || recoveryRate < 50) grade = "C";
-    else if (denialRate > 10 || recoveryRate < 60) grade = "B";
-    const underpayPercent = totalExpected > 0 ? ((totalExpected - totalPaid) / totalExpected * 100) : 0;
-    const html = renderPage(`AI Payer Intelligence: ${safeStr(payer)}`, `
-      <h2>AI Payer Intelligence: ${safeStr(payer)}</h2>
-      <p><strong>Total Claims:</strong> ${claims.length}</p>
-      <p><strong>Denial Rate:</strong> ${denialRate.toFixed(1)}%</p>
-      <p><strong>Recovery Rate on Appeals:</strong> ${recoveryRate.toFixed(1)}%</p>
-      <p><strong>Average Days to Pay:</strong> ${avgDaysToPay}</p>
-      <p><strong>Total Underpaid:</strong> ${formatMoneyUI((totalExpected - totalPaid))}</p>
-      <h3>Payer Performance Visual</h3>
-      <div style="height:320px;"><canvas id="payerPerformanceChart"></canvas></div>
-      <script>
-        if (window.Chart) {
-          new Chart(document.getElementById("payerPerformanceChart"), {
-            type: "bar",
-            data: {
-              labels: ["Denial Rate %","Recovery Rate %","Underpayment %"],
-              datasets: [{
-                label: "Rate",
-                data: [${Number(denialRate.toFixed(2))}, ${Number(recoveryRate.toFixed(2))}, ${Number(underpayPercent.toFixed(2))}],
-                backgroundColor: ["#ef4444","#16a34a","#f59e0b"],
-                barThickness: 42,
-                maxBarThickness: 54,
-                categoryPercentage: 0.82,
-                barPercentage: 0.9
-              }]
-            },
-            options: { indexAxis: "y", responsive: true, scales: { x: { min: 0, max: 100 } } }
-          });
-        }
-      </script>
-      <h3>Payer Scorecard</h3>
-      <p style="font-size:24px;">Grade: <strong>${grade}</strong></p>
-      <h3>Top Denial Reasons</h3>
-      <ul>
-        ${topDenials.map(d => `<li>${safeStr(d[0])} (${d[1]})</li>`).join("")}
-      </ul>
-      <h3>Most Underpaid CPT Codes</h3>
-      <ul>
-        ${topUnderpaidCPT.map(c => `<li>${safeStr(c[0])} — ${formatMoneyUI(c[1])}</li>`).join("")}
-      </ul>
-      <h3>AI Suggested Actions</h3>
-      <ul>
-        ${suggestions.map(s => `<li>${safeStr(s)}</li>`).join("")}
-      </ul>
-      <form method="POST" action="/bulk-appeal" style="margin-top:10px;">
-        <input type="hidden" name="payer" value="${safeStr(payer)}"/>
-        <button class="btn" type="submit">Send All Underpaid Claims to Appeals</button>
-      </form>
-      <div class="btnRow" style="margin-top:12px;"><a class="btn secondary" href="/dashboard">Back</a> <a class="btn secondary" href="/payer-claims?payer=${encodeURIComponent(payer)}">Back to Claims</a></div>
+
+    const bars = svgBarChart("Revenue Exposure", [
+      { label: "Denied (est.)", value: data.totalDeniedDollars, color: "var(--danger)" },
+      { label: "Underpaid (est.)", value: data.totalUnderpaidDollars, color: "var(--warn)" },
+      { label: "At Risk (total)", value: data.totalAtRisk, color: "rgba(17,24,39,.80)" },
+    ]);
+
+    const trend = svgSparkline("Underpaid Trend (last 90d buckets)", data.underpaidTrend);
+
+    const reasonsList = (data.denialReasonsTop.length)
+      ? `<ul>${data.denialReasonsTop.map(r => `<li>${safeStr(r.label)} (${formatNumberUI(r.count)})</li>`).join("")}</ul>`
+      : `<div class="muted small">No denial reasons found yet.</div>`;
+
+    const cptList = (data.cptTop.length)
+      ? `<ul>${data.cptTop.map(r => `<li>${safeStr(r.label)} — ${formatMoneyUI(r.value)}</li>`).join("")}</ul>`
+      : `<div class="muted small">No CPT underpayment drivers found yet.</div>`;
+
+    const actionsPanel = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+        <a class="btn" href="/payer-claims?payer=${encodeURIComponent(data.payerName)}">View Claims</a>
+        <a class="btn secondary" href="/actions?payer=${encodeURIComponent(data.payerName)}">Open In Action Center</a>
+        <a class="btn secondary" href="/claims?view=all&status=Underpaid&payer=${encodeURIComponent(data.payerName)}">Underpaid List</a>
+        <a class="btn secondary" href="/claims?view=denials&payer=${encodeURIComponent(data.payerName)}">Denied List</a>
+      </div>
+    `;
+
+    const html = renderPage(`AI Payer Intelligence: ${safeStr(data.payerName)}`, `
+      <h2>AI Payer Intelligence: ${safeStr(data.payerName)}</h2>
+
+      <div class="row" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px;">
+        ${renderKpiCard("Total Claims", formatNumberUI(data.totalClaims), "", "neutral")}
+        ${renderKpiCard("Denial Rate", formatPct(data.denialRate), "lower is better", data.denialRate >= 25 ? "bad" : (data.denialRate >= 12 ? "warn" : "good"))}
+        ${renderKpiCard("Appeals Recovery", formatPct(data.recoveryRate), "best-effort proxy", data.recoveryRate >= 50 ? "good" : (data.recoveryRate >= 20 ? "warn" : "bad"))}
+        ${renderKpiCard("Avg Days to Pay", formatNumberUI(Math.round(data.avgDaysToPay)), "lower is better", data.avgDaysToPay >= 45 ? "bad" : (data.avgDaysToPay >= 25 ? "warn" : "good"))}
+        ${renderKpiCard("Total Underpaid", formatMoneyUI(data.totalUnderpaidDollars), "estimated", data.totalUnderpaidDollars > 0 ? "warn" : "good")}
+      </div>
+
+      <div style="margin-top:14px;display:flex;gap:12px;flex-wrap:wrap;">
+        <div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);min-width:280px;flex:1;">
+          <div style="font-weight:900;">Payer Scorecard</div>
+          <div style="font-size:36px;font-weight:900;margin-top:8px;">
+            Grade: <span class="badge ${gradeTone === "good" ? "ok" : (gradeTone === "warn" ? "warn" : "err")}" style="font-size:18px;padding:6px 10px;">${safeStr(data.grade)}</span>
+            <span class="muted small" style="margin-left:10px;">Score: ${formatNumberUI(data.score)}/100</span>
+          </div>
+          <div class="muted small" style="margin-top:10px;">
+            Scoring: 40% denial rate + 30% underpaid rate + 30% days-to-pay (lower is better).
+          </div>
+          ${actionsPanel}
+        </div>
+
+        <div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);min-width:320px;flex:1;">
+          <div style="font-weight:900;margin-bottom:8px;">Revenue Exposure Snapshot</div>
+          ${donut}
+        </div>
+      </div>
+
+      <div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap;">
+        <div style="min-width:360px;flex:1;">${bars}</div>
+        <div style="min-width:360px;flex:1;">${trend}</div>
+      </div>
+
+      <div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap;">
+        <div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);min-width:360px;flex:1;">
+          <div style="font-weight:900;">Top Denial Reasons</div>
+          <div class="muted small" style="margin-top:6px;">Most common categories driving denials.</div>
+          <div style="margin-top:10px;">${reasonsList}</div>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);min-width:360px;flex:1;">
+          <div style="font-weight:900;">Most Underpaid CPT Codes</div>
+          <div class="muted small" style="margin-top:6px;">Largest estimated underpaid dollars by CPT (unknowns removed).</div>
+          <div style="margin-top:10px;">${cptList}</div>
+        </div>
+      </div>
+
+      <div style="margin-top:14px;border:1px solid var(--border);border-radius:14px;padding:14px;background:rgba(17,24,39,.04);">
+        <div style="font-weight:900;">AI Suggested Actions</div>
+        <ul style="margin-top:10px;">
+          <li>High denial rate: audit eligibility + prior auth + coding patterns.</li>
+          <li>Underpayments detected: validate contract rules + allowed amount rules, then open negotiation cases.</li>
+          <li>If days-to-pay is high: prioritize follow-up cadence and escalate repeat delays.</li>
+        </ul>
+      </div>
+
+      <div class="btnRow" style="margin-top:12px;">
+        <a class="btn secondary" href="/claims?view=all">Back to Claims</a>
+        <a class="btn secondary" href="/revenue-overview">Back to Revenue Overview</a>
+      </div>
     `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+
     return send(res, 200, html);
   }
+
 
   // Bulk appeal route
   if (method === "POST" && pathname === "/bulk-appeal") {
