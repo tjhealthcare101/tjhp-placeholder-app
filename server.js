@@ -2177,6 +2177,7 @@ function ensureAgentWorkspace(org_id, billedClaim){
   let ws = getAgentWorkspace(org_id, billedClaim.billed_id);
   if (ws) {
     ensureWorkspacePacket(ws);
+    ensurePacketSections(ws);
     return ws;
   }
   const ts = nowISO();
@@ -2187,8 +2188,8 @@ function ensureAgentWorkspace(org_id, billedClaim){
     claim_number: billedClaim.claim_number || "",
     payer: billedClaim.payer || "",
     status: "draft",
-    appeal: { draft_text: "", updated_at: null, version: 0, template_id: null, last_run_at: null },
-    negotiation: { draft_text: "", updated_at: null, version: 0, template_id: null, last_run_at: null, requested_amount: null },
+    appeal: { draft_text: "", updated_at: null, version: 0, template_id: null, last_run_at: null, packet_sections: defaultAppealPacketSections() },
+    negotiation: { draft_text: "", updated_at: null, version: 0, template_id: null, last_run_at: null, requested_amount: null, packet_sections: defaultNegotiationPacketSections() },
     attachments: [],
     packet: defaultWorkspacePacket(),
     activity: { last_opened_at: null, last_exported_at: null },
@@ -2196,7 +2197,53 @@ function ensureAgentWorkspace(org_id, billedClaim){
     updated_at: ts
   };
   ensureWorkspacePacket(ws);
+  ensurePacketSections(ws);
   return saveAgentWorkspace(org_id, ws);
+}
+
+function defaultAppealPacketSections(){
+  return {
+    header: "",
+    claim_summary: "",
+    financial_summary: "",
+    argument: "",
+    requested_action: "",
+    attachments_index: "",
+    signature: ""
+  };
+}
+
+function defaultNegotiationPacketSections(){
+  return {
+    header: "",
+    claim_summary: "",
+    financial_summary: "",
+    variance_explanation: "",
+    requested_amount: "",
+    requested_action: "",
+    attachments_index: "",
+    signature: ""
+  };
+}
+
+function ensurePacketSections(ws){
+  ws.appeal = ws.appeal || {};
+  ws.negotiation = ws.negotiation || {};
+
+  const appealDefaults = defaultAppealPacketSections();
+  if (!ws.appeal.packet_sections || typeof ws.appeal.packet_sections !== "object") {
+    ws.appeal.packet_sections = { ...appealDefaults };
+    if (String(ws.appeal.draft_text || "").trim()) ws.appeal.packet_sections.argument = String(ws.appeal.draft_text || "").trim();
+  }
+  ws.appeal.packet_sections = { ...appealDefaults, ...(ws.appeal.packet_sections || {}) };
+
+  const negotiationDefaults = defaultNegotiationPacketSections();
+  if (!ws.negotiation.packet_sections || typeof ws.negotiation.packet_sections !== "object") {
+    ws.negotiation.packet_sections = { ...negotiationDefaults };
+    if (String(ws.negotiation.draft_text || "").trim()) ws.negotiation.packet_sections.variance_explanation = String(ws.negotiation.draft_text || "").trim();
+  }
+  ws.negotiation.packet_sections = { ...negotiationDefaults, ...(ws.negotiation.packet_sections || {}) };
+  return ws;
 }
 
 function defaultWorkspacePacket(){
@@ -2271,6 +2318,44 @@ function workspacePagePath(billed_id, tab){
   const t = String(tab || "").trim();
   if (t === "negotiation") return `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}`;
   return `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}`;
+}
+
+
+function workspaceChannelForClaim(claim, derived){
+  const d = derived && derived.lifecycleStage ? derived : evaluateClaimDerived(claim, buildClaimContext(claim?.org_id));
+  const stage = String(d?.lifecycleStage || "");
+  if (stage === "Denied" || d?.hasDenialContext) return "appeal";
+  if (stage === "Underpaid") return "negotiation";
+  if (stage === "In Appeal/Negotiation") return Number(d?.underpaidAmount || 0) > 0 ? "negotiation" : "appeal";
+  return Number(d?.underpaidAmount || 0) > 0 ? "negotiation" : "appeal";
+}
+
+function packetNarrativeKey(channel){
+  return channel === "negotiation" ? "variance_explanation" : "argument";
+}
+
+function packetSectionDescriptions(channel){
+  if (channel === "negotiation") {
+    return {
+      header: "Letter header and identifiers.",
+      claim_summary: "Claim context, payer, DOS, and status.",
+      financial_summary: "Billed vs expected vs paid snapshot.",
+      variance_explanation: "Core negotiation narrative for variance.",
+      requested_amount: "Target reimbursement amount requested.",
+      requested_action: "Specific adjustment steps requested.",
+      attachments_index: "Attachment index and missing-item hints.",
+      signature: "Organization signature/contact block."
+    };
+  }
+  return {
+    header: "Letter header and identifiers.",
+    claim_summary: "Claim context, denial reason, and payer details.",
+    financial_summary: "Billed vs expected vs paid snapshot.",
+    argument: "Core appeal argument and medical/contract basis.",
+    requested_action: "Specific reversal/reprocessing actions requested.",
+    attachments_index: "Attachment index and missing-item hints.",
+    signature: "Organization signature/contact block."
+  };
 }
 
 function detectEobEraForClaim(org_id, claim, ws){
@@ -2407,9 +2492,9 @@ function renderTemplate(templateBody, claim){
 function generateDraftUsingTemplateOrRules({ org_id, type, claim, derived, appealCase, negotiationCase, ws }){
   const selectedTemplateId = type === "appeal" ? ws?.appeal?.template_id : ws?.negotiation?.template_id;
   const template = getTemplateById(org_id, selectedTemplateId);
+  const financials = claimFinancialSnapshot(derived, claim);
   if (template && String(template.body || "").trim()) {
     const rendered = renderTemplate(template.body, claim).trim();
-    const financials = claimFinancialSnapshot(derived, claim);
     return `${rendered}
 
 Claim Financial Snapshot
@@ -2418,9 +2503,21 @@ ${financials}`.trim();
   return agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile: getOrg(org_id), practiceSettings: getPracticeSettings(org_id) });
 }
 
+
+
+function financialSummaryFromClaim(derived, claim){
+  return claimFinancialSnapshot(derived, claim);
+}
+
+function buildAttachmentsIndex(ws){
+  const names = (ws?.attachments || []).map(a => `- ${a.filename} (${a.kind || "supporting"})`);
+  return names.length ? names.join("\n") : "- No attachments uploaded yet. Add EOB/ERA, claim form, medical records, and contract references as available.";
+}
+
 function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
   if (!org_id || !claim?.billed_id) return 0;
   const ws = ensureAgentWorkspace(org_id, claim);
+  ensurePacketSections(ws);
   const ts = nowISO();
   const refTs = Math.max(
     new Date(claim?.paid_at || 0).getTime() || 0,
@@ -2441,11 +2538,36 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
   const wantNegotiation = stage === "Underpaid" || stage === "In Appeal/Negotiation";
   let generated = 0;
   if (wantAppeal && shouldRefresh(ws.appeal)) {
-    ws.appeal = { ...(ws.appeal || {}), draft_text: generateDraftUsingTemplateOrRules({ org_id, type: "appeal", claim, derived: currentDerived, appealCase, negotiationCase, ws }), updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
+    const narrative = generateDraftUsingTemplateOrRules({ org_id, type: "appeal", claim, derived: currentDerived, appealCase, negotiationCase, ws });
+    ws.appeal.packet_sections = {
+      ...defaultAppealPacketSections(),
+      ...(ws.appeal.packet_sections || {}),
+      header: ws.appeal.packet_sections?.header || `${safeStr(getOrg(org_id)?.org_name || "Practice")} — ${nowISO().slice(0,10)} — Claim #${claim?.claim_number || "N/A"}`,
+      claim_summary: ws.appeal.packet_sections?.claim_summary || `Claim #${claim?.claim_number || "N/A"} | Payer: ${claim?.payer || "Unknown"} | DOS: ${claim?.dos || "N/A"}`,
+      financial_summary: financialSummaryFromClaim(currentDerived, claim),
+      argument: narrative,
+      requested_action: ws.appeal.packet_sections?.requested_action || `- Reverse denial determination.\n- Reprocess claim per benefits/contract.\n- Provide written rationale if denial remains.`,
+      attachments_index: buildAttachmentsIndex(ws),
+      signature: ws.appeal.packet_sections?.signature || (getOrg(org_id)?.org_name || "Practice")
+    };
+    ws.appeal = { ...(ws.appeal || {}), draft_text: ws.appeal.packet_sections.argument, updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
     generated += 1;
   }
   if (wantNegotiation && shouldRefresh(ws.negotiation)) {
-    ws.negotiation = { ...(ws.negotiation || {}), draft_text: generateDraftUsingTemplateOrRules({ org_id, type: "negotiation", claim, derived: currentDerived, appealCase, negotiationCase, ws }), updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
+    const narrative = generateDraftUsingTemplateOrRules({ org_id, type: "negotiation", claim, derived: currentDerived, appealCase, negotiationCase, ws });
+    ws.negotiation.packet_sections = {
+      ...defaultNegotiationPacketSections(),
+      ...(ws.negotiation.packet_sections || {}),
+      header: ws.negotiation.packet_sections?.header || `${safeStr(getOrg(org_id)?.org_name || "Practice")} — ${nowISO().slice(0,10)} — Claim #${claim?.claim_number || "N/A"}`,
+      claim_summary: ws.negotiation.packet_sections?.claim_summary || `Claim #${claim?.claim_number || "N/A"} | Payer: ${claim?.payer || "Unknown"} | DOS: ${claim?.dos || "N/A"}`,
+      financial_summary: financialSummaryFromClaim(currentDerived, claim),
+      variance_explanation: narrative,
+      requested_amount: String(ws.negotiation.packet_sections?.requested_amount || currentDerived?.underpaidAmount || ""),
+      requested_action: ws.negotiation.packet_sections?.requested_action || `- Recalculate reimbursement per contract terms.\n- Remit corrected payment and ERA.\n- Confirm adjustment timeline.`,
+      attachments_index: buildAttachmentsIndex(ws),
+      signature: ws.negotiation.packet_sections?.signature || (getOrg(org_id)?.org_name || "Practice")
+    };
+    ws.negotiation = { ...(ws.negotiation || {}), draft_text: ws.negotiation.packet_sections.variance_explanation, requested_amount: Number(ws.negotiation.packet_sections.requested_amount || currentDerived?.underpaidAmount || 0), updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
     generated += 1;
   }
   if (generated > 0) {
@@ -6883,14 +7005,14 @@ if (method === "GET" && pathname === "/actions") {
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Follow-Up Write-Off</a>` : ``}
-        <a class="btn secondary small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">AI Workspace</a>
       `;
     } else {
+      const channel = workspaceChannelForClaim(b, x.derived);
       actionsHtml = `
         <a class="btn secondary small" href="${claimLink}">Open Claim</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Follow-Up Write-Off</a>` : ``}
-        <a class="btn secondary small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">AI Workspace</a>
+        <a class="btn secondary small" href="${workspacePagePath(b.billed_id, channel)}">AI Workspace</a>
       `;
     }
 
@@ -12371,7 +12493,19 @@ else if (type === "payers") {
 
 
 
-  if (method === "GET" && pathname === "/agent-workspace") {
+  if (method === "GET" && pathname === "/appeal-workspace") {
+    const billed_id = String(parsed.query.billed_id || "").trim();
+    if (!billed_id) return redirect(res, "/claims?view=all");
+    return redirect(res, workspacePagePath(billed_id, "appeal"));
+  }
+
+  if (method === "GET" && pathname === "/negotiation-workspace") {
+    const billed_id = String(parsed.query.billed_id || "").trim();
+    if (!billed_id) return redirect(res, "/claims?view=all");
+    return redirect(res, workspacePagePath(billed_id, "negotiation"));
+  }
+
+if (method === "GET" && pathname === "/agent-workspace") {
     const billed_id = String(parsed.query.billed_id || "").trim();
     const tab = String(parsed.query.tab || "appeal").trim();
     if (!billed_id) return redirect(res, "/claims?view=all");
@@ -12403,11 +12537,21 @@ else if (type === "payers") {
     const templates = getAgentTemplates(org.org_id).filter(t => t.type === channel);
     const templateOptions = templates.map(t => `<option value="${safeStr(t.template_id || "")}" ${String((ws[channel] || {}).template_id || "") === String(t.template_id || "") ? "selected" : ""}>${safeStr(t.name || t.template_id || "Template")}</option>`).join("");
     const eobDetected = detectEobEraForClaim(org.org_id, b, ws);
+    const sectionDescriptions = packetSectionDescriptions(channel);
+    const packetSections = (ws[channel] || {}).packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
+    const mainKey = packetNarrativeKey(channel);
+    const sectionsHtml = Object.keys(packetSections).map(key => {
+      const inputHtml = (channel === "negotiation" && key === "requested_amount")
+        ? `<input name="value" value="${safeStr(packetSections[key] || ws.negotiation?.requested_amount || d.underpaidAmount || "")}" />`
+        : `<textarea name="value" style="min-height:120px;">${safeStr(packetSections[key] || "")}</textarea>`;
+      return `<details ${key===mainKey?"open":""} style="margin:8px 0;border:1px solid var(--border);border-radius:10px;padding:10px;"><summary style="font-weight:800;cursor:pointer;">${safeStr(key.replace(/_/g," "))} <span class="muted small">ⓘ ${safeStr(sectionDescriptions[key]||"")}</span></summary><form method="POST" action="/agent-workspace/save" style="margin-top:8px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="draft_type" value="${safeStr(channel)}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><input type="hidden" name="section_key" value="${safeStr(key)}" />${inputHtml}<button class="btn secondary small" type="submit">Save Section</button></form></details>`;
+    }).join("");
     const checklist = [
       { label: "EOB/ERA", present: eobDetected },
       { label: "Claim Form", present: !!(ws.attachments || []).find(a => String(a.kind || "").toLowerCase() === "supporting") },
       { label: "Medical Records", present: !!(ws.attachments || []).find(a => String(a.kind || "").toLowerCase() === "medical_record") },
-      { label: "Contract Reference", present: !!(ws.attachments || []).find(a => String(a.kind || "").toLowerCase() === "contract") }
+      { label: "Contract Reference", present: !!(ws.attachments || []).find(a => String(a.kind || "").toLowerCase() === "contract") },
+      { label: "LMN", present: !!(ws.attachments || []).find(a => String(a.kind || "").toLowerCase() === "lmn") || !!getWorkspacePacketItem(ws, "lmn")?.lmn_text }
     ];
     const checklistHtml = checklist.map(i => `<li>${i.present ? "☑" : "☐"} ${safeStr(i.label)}</li>`).join("");
     const msgs = getAgentMessages(org.org_id, billed_id).slice(-12).map(m => `<li><strong>${safeStr(m.role || "agent")}</strong> [${safeStr(m.channel || "general")}]: ${safeStr(m.content || "")}</li>`).join("") || `<li class="muted">No messages yet.</li>`;
@@ -12429,7 +12573,7 @@ else if (type === "payers") {
       </table>
 
       <h3>2) Required Documentation Checklist</h3>
-      ${eobDetected ? "" : `<p class="warn">EOB/ERA not detected. Please upload.</p>`}
+      ${eobDetected ? "" : `<p class="warn">EOB/ERA not detected — please upload. If we can’t find it, please provide.</p>`}
       <ul>${checklistHtml}</ul>
       <form method="POST" action="/agent-workspace/upload" enctype="multipart/form-data">
         <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
@@ -12451,16 +12595,8 @@ else if (type === "payers") {
       </form>
       <div class="small muted" style="margin:8px 0;">${refIdLabel}: ${refIdVal}</div>
 
-      <h3>4) Editable Sections</h3>
-      <form method="POST" action="/agent-workspace/save">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
-        <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
-        <input type="hidden" name="tab" value="${safeStr(channel)}" />
-        ${isNegotiation ? `<label>Requested Amount</label><input name="requested_amount" value="${safeStr(ws.negotiation?.requested_amount ?? d.underpaidAmount)}" />` : ""}
-        <textarea name="draft_text" style="min-height:280px;">${safeStr((ws[channel] || {}).draft_text || "")}</textarea>
-        <div class="small muted">Header and signature are included in the full packet structure.</div>
-        <button class="btn" type="submit">Save New Version</button>
-      </form>
+      <h3>4) AI Packet Builder</h3>
+      ${sectionsHtml}
       <form method="POST" action="/agent-workspace/generate" style="margin-top:8px;">
         <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
         <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
@@ -12477,9 +12613,10 @@ else if (type === "payers") {
         <button class="btn secondary" type="submit">Apply Edit + Log Message</button>
       </form>
       <ul>${msgs}</ul>
+      <p class="small muted">Free trial includes full workspace access; usage tracked but not blocked.</p>
 
       <div class="btnRow" style="margin-top:12px;">
-        <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(billed_id)}">Back to Claim Detail</a>
+        <a class="btn secondary" href="/agent-workspace/export?billed_id=${encodeURIComponent(billed_id)}">Export Packet (Print/PDF)</a><a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(billed_id)}">Back to Claim Detail</a>
       </div>
     `, navUser(), {showChat:true, orgName: org.org_name});
 
@@ -12503,10 +12640,16 @@ else if (type === "payers") {
       const appealCase = b.denial_case_id ? casesAll.find(c => c.case_id === b.denial_case_id) : null;
       const negotiationCase = getNegotiationsByBilled(org.org_id, b.billed_id).map(n=>normalizeNegotiation(n))[0] || null;
       const ws = ensureAgentWorkspace(org.org_id, b);
+      ensurePacketSections(ws);
       const draftText = generateDraftUsingTemplateOrRules({ org_id: org.org_id, type: draft_type, claim: b, derived: d, appealCase, negotiationCase, ws });
       const ts = nowISO();
-      if (draft_type === "appeal") ws.appeal = { ...(ws.appeal || {}), draft_text: draftText, updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
-      else ws.negotiation = { ...(ws.negotiation || {}), draft_text: draftText, updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
+      if (draft_type === "appeal") {
+        ws.appeal.packet_sections = { ...defaultAppealPacketSections(), ...(ws.appeal.packet_sections || {}), argument: draftText, financial_summary: financialSummaryFromClaim(d, b) };
+        ws.appeal = { ...(ws.appeal || {}), draft_text: ws.appeal.packet_sections.argument, updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
+      } else {
+        ws.negotiation.packet_sections = { ...defaultNegotiationPacketSections(), ...(ws.negotiation.packet_sections || {}), variance_explanation: draftText, financial_summary: financialSummaryFromClaim(d, b), requested_amount: String(ws.negotiation.packet_sections?.requested_amount || d.underpaidAmount || "") };
+        ws.negotiation = { ...(ws.negotiation || {}), draft_text: ws.negotiation.packet_sections.variance_explanation, requested_amount: Number(ws.negotiation.packet_sections.requested_amount || d.underpaidAmount || 0), updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
+      }
       ws.status = "draft";
       saveAgentWorkspace(org.org_id, ws);
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel: draft_type, content: "Draft generated.", created_at: ts });
@@ -12548,6 +12691,8 @@ else if (type === "payers") {
       const draft_type = String(params.get("draft_type") || "").trim();
       const tab = String(params.get("tab") || draft_type || "packet").trim();
       const draft_text = String(params.get("draft_text") || "");
+      const section_key = String(params.get("section_key") || "").trim();
+      const value = String(params.get("value") || "");
       const lmn_text = String(params.get("lmn_text") || "");
       const billedAll = readJSON(FILES.billed, []);
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
@@ -12555,9 +12700,21 @@ else if (type === "payers") {
       const ws = ensureAgentWorkspace(org.org_id, b);
       ensureWorkspacePacket(ws);
       const ts = nowISO();
-      if (draft_type === "appeal") ws.appeal = { ...(ws.appeal || {}), draft_text, updated_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
-      else if (draft_type === "negotiation") ws.negotiation = { ...(ws.negotiation || {}), draft_text, requested_amount: num(params.get("requested_amount") || ws.negotiation?.requested_amount || 0), updated_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
-      else if (draft_type === "lmn") {
+      ensurePacketSections(ws);
+      if (draft_type === "appeal") {
+        const key = section_key || packetNarrativeKey("appeal");
+        ws.appeal.packet_sections[key] = section_key ? value : draft_text;
+        ws.appeal.draft_text = ws.appeal.packet_sections.argument || "";
+        ws.appeal.updated_at = ts;
+        ws.appeal.version = Number(ws.appeal?.version || 0) + 1;
+      } else if (draft_type === "negotiation") {
+        const key = section_key || packetNarrativeKey("negotiation");
+        ws.negotiation.packet_sections[key] = section_key ? value : draft_text;
+        ws.negotiation.draft_text = ws.negotiation.packet_sections.variance_explanation || "";
+        ws.negotiation.requested_amount = num(ws.negotiation.packet_sections.requested_amount || ws.negotiation?.requested_amount || 0);
+        ws.negotiation.updated_at = ts;
+        ws.negotiation.version = Number(ws.negotiation?.version || 0) + 1;
+      } else if (draft_type === "lmn") {
         ensureWorkspacePacket(ws);
         const lmn = getWorkspacePacketItem(ws, "lmn");
         if (lmn) {
@@ -12611,8 +12768,9 @@ else if (type === "payers") {
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel, content });
       if (content && ["appeal","negotiation"].includes(channel)) {
         const ts = nowISO();
-        if (channel === "appeal") ws.appeal = { ...(ws.appeal || {}), draft_text: applyAgentInstructionToDraft(ws.appeal?.draft_text || "", content, channel), updated_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
-        if (channel === "negotiation") ws.negotiation = { ...(ws.negotiation || {}), draft_text: applyAgentInstructionToDraft(ws.negotiation?.draft_text || "", content, channel), updated_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
+        ensurePacketSections(ws);
+        if (channel === "appeal") { ws.appeal.packet_sections.argument = applyAgentInstructionToDraft(ws.appeal?.packet_sections?.argument || ws.appeal?.draft_text || "", content, channel); ws.appeal.draft_text = ws.appeal.packet_sections.argument; ws.appeal.updated_at = ts; ws.appeal.version = Number(ws.appeal?.version || 0) + 1; }
+        if (channel === "negotiation") { ws.negotiation.packet_sections.variance_explanation = applyAgentInstructionToDraft(ws.negotiation?.packet_sections?.variance_explanation || ws.negotiation?.draft_text || "", content, channel); ws.negotiation.draft_text = ws.negotiation.packet_sections.variance_explanation; ws.negotiation.updated_at = ts; ws.negotiation.version = Number(ws.negotiation?.version || 0) + 1; }
         ws.status = "edited";
         saveAgentWorkspace(org.org_id, ws);
         addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel, content: `Applied instruction to ${channel} draft.` });
@@ -12673,11 +12831,12 @@ else if (type === "payers") {
     const d = evaluateClaimDerived(b, claimCtx);
     const ws = ensureAgentWorkspace(org.org_id, b);
     ensureWorkspacePacket(ws);
+    ensurePacketSections(ws);
     ws.activity.last_exported_at = nowISO();
     saveAgentWorkspace(org.org_id, ws);
     const attachmentRows = (ws.attachments || []).map(a => `<li><a href="/agent-workspace/file?attachment_id=${encodeURIComponent(a.attachment_id)}">${safeStr(a.filename)}</a> (${safeStr(a.kind||"supporting")})</li>`).join("") || `<li>None</li>`;
     const checklist = [...(ws.packet?.required_appeal||[]), ...(ws.packet?.clinical_support||[]), ...(ws.packet?.contract_policy||[])].map(i => `<li>${safeStr(i.label)}: ${i.status === "present" ? "Present" : "Missing"}</li>`).join("");
-    const html = renderPage("Packet Export", `<h2>Packet Export</h2><p class="muted">Print or save this page as PDF.</p><button class="btn" onclick="window.print()">Print / Save as PDF</button><h3>Claim Snapshot</h3><table><tr><th>Claim #</th><td>${safeStr(b.claim_number||"")}</td></tr><tr><th>Payer</th><td>${safeStr(b.payer||"")}</td></tr><tr><th>DOS</th><td>${safeStr(b.dos||"")}</td></tr><tr><th>Status</th><td>${safeStr(d.lifecycleStage||"")}</td></tr></table><h3>Appeal Draft</h3><pre style="white-space:pre-wrap;border:1px solid var(--border);padding:10px;border-radius:8px;">${safeStr(ws.appeal?.draft_text || "")}</pre><h3>Negotiation Draft</h3><pre style="white-space:pre-wrap;border:1px solid var(--border);padding:10px;border-radius:8px;">${safeStr(ws.negotiation?.draft_text || "")}</pre><h3>Packet Checklist</h3><ul>${checklist}</ul><h3>Attachments</h3><ul>${attachmentRows}</ul>`, navUser(), {showChat:false, orgName: org.org_name});
+    const html = renderPage("Packet Export", `<h2>Packet Export</h2><p class="muted">Print or save this page as PDF.</p><button class="btn" onclick="window.print()">Print / Save as PDF</button><h3>Claim Snapshot</h3><table><tr><th>Claim #</th><td>${safeStr(b.claim_number||"")}</td></tr><tr><th>Payer</th><td>${safeStr(b.payer||"")}</td></tr><tr><th>DOS</th><td>${safeStr(b.dos||"")}</td></tr><tr><th>Status</th><td>${safeStr(d.lifecycleStage||"")}</td></tr></table><h3>Appeal Packet Sections</h3><pre style="white-space:pre-wrap;border:1px solid var(--border);padding:10px;border-radius:8px;">${safeStr([ws.appeal?.packet_sections?.header, ws.appeal?.packet_sections?.claim_summary, ws.appeal?.packet_sections?.financial_summary, ws.appeal?.packet_sections?.argument, ws.appeal?.packet_sections?.requested_action, ws.appeal?.packet_sections?.attachments_index, ws.appeal?.packet_sections?.signature].filter(Boolean).join("\n\n"))}</pre><h3>Negotiation Packet Sections</h3><pre style="white-space:pre-wrap;border:1px solid var(--border);padding:10px;border-radius:8px;">${safeStr([ws.negotiation?.packet_sections?.header, ws.negotiation?.packet_sections?.claim_summary, ws.negotiation?.packet_sections?.financial_summary, ws.negotiation?.packet_sections?.variance_explanation, ws.negotiation?.packet_sections?.requested_amount ? `Requested Amount: ${ws.negotiation?.packet_sections?.requested_amount}` : "", ws.negotiation?.packet_sections?.requested_action, ws.negotiation?.packet_sections?.attachments_index, ws.negotiation?.packet_sections?.signature].filter(Boolean).join("\n\n"))}</pre><h3>Packet Checklist</h3><p class="muted">Completeness: ${ws.packet?.completeness?.complete || 0}/${ws.packet?.completeness?.total || 0} (${ws.packet?.completeness?.pct || 0}%)</p><ul>${checklist}</ul><h3>Attachments</h3><ul>${attachmentRows}</ul>`, navUser(), {showChat:false, orgName: org.org_name});
     return send(res, 200, html);
   }
 
@@ -12841,7 +13000,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       ${suggested === "Negotiate" ? `<a class="btn secondary" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Open AI Workspace</a>` : ``}
       ${suggested === "Adjust Patient Responsibility" ? `<a class="btn secondary" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Perform Suggested Action</a>` : ``}
       ${suggested === "Review Claim" ? `<a class="btn secondary" href="/claims?view=all&q=${encodeURIComponent(b.claim_number || "")}">Perform Suggested Action</a>` : ``}
-      <a class="btn secondary" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Open AI Agent Workspace</a>
+      <a class="btn secondary" href="${workspacePagePath(b.billed_id, workspaceChannelForClaim(b, d))}">Open AI Workspace</a>
       <a class="btn secondary" href="/actions?q=${encodeURIComponent(b.claim_number || "")}">View In Action Center</a>
     </div>
 
