@@ -1985,13 +1985,31 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
   const healthGrade = gradeFromScore(healthScore);
 
-  const appeals = casesAll.filter(c => c.case_type === "denial");
-  const appealsWon = appeals.filter(c => c.status === "Approved (Paid)");
-  const appealSuccessRate = appeals.length ? (appealsWon.length / appeals.length) * 100 : 0;
-
-  const negotiations = casesAll.filter(c => c.case_type === "underpayment");
-  const negotiatedTotal = negotiations.reduce((s,n)=> s + Number(n.requested_amount || 0),0);
-  const recoveredTotal = negotiations.reduce((s,n)=> s + Number(n.collected_amount || 0),0);
+  const workspaces = readJSON(FILES.agent_workspaces, []).filter(w => w.org_id === org_id).map(w => ensurePacketSections(w));
+  const hasWorkspaceOutcomes = workspaces.some(w => String(w.submission?.status||"") === "submitted" || String(w.outcome?.status||"") !== "none");
+  let appealSubmitted = 0, appealSuccess = 0, negotiatedTotal = 0, recoveredTotal = 0;
+  workspaces.forEach(w => {
+    const submission = w.submission || {};
+    const outcome = w.outcome || {};
+    const isAppealSubmission = String(submission.status || "") === "submitted" && (!!(w.appeal && (w.appeal.version || (w.appeal.history||[]).length)) || !(w.negotiation && (w.negotiation.version || (w.negotiation.history||[]).length)));
+    if (isAppealSubmission) appealSubmitted += 1;
+    const outStatus = String(outcome.outcome_status || outcome.status || "");
+    if (["approved","partially_approved"].includes(outStatus) && num(outcome.paid_posted_amount) > 0) appealSuccess += 1;
+    const requested = num(w.negotiation?.requested_amount || w.negotiation?.packet_sections?.requested_amount || 0);
+    const recovered = num(outcome.paid_posted_amount || outcome.approved_amount || 0);
+    if (requested > 0) negotiatedTotal += requested;
+    if (recovered > 0) recoveredTotal += recovered;
+  });
+  if (!hasWorkspaceOutcomes) {
+    const appeals = casesAll.filter(c => c.case_type === "denial");
+    const appealsWon = appeals.filter(c => c.status === "Approved (Paid)");
+    appealSubmitted = appeals.length;
+    appealSuccess = appealsWon.length;
+    const negotiations = casesAll.filter(c => c.case_type === "underpayment");
+    negotiatedTotal = negotiations.reduce((s,n)=> s + Number(n.requested_amount || 0),0);
+    recoveredTotal = negotiations.reduce((s,n)=> s + Number(n.collected_amount || 0),0);
+  }
+  const appealSuccessRate = appealSubmitted ? (appealSuccess / appealSubmitted) * 100 : 0;
   const negotiationROI = negotiatedTotal ? (recoveredTotal / negotiatedTotal) * 100 : 0;
 
   return {
@@ -2193,6 +2211,9 @@ function ensureAgentWorkspace(org_id, billedClaim){
     attachments: [],
     packet: defaultWorkspacePacket(),
     activity: { last_opened_at: null, last_exported_at: null },
+    submission: defaultWorkspaceSubmission(),
+    outcome: defaultWorkspaceOutcome(),
+    follow_up: defaultWorkspaceFollowUp(),
     created_at: ts,
     updated_at: ts
   };
@@ -2226,6 +2247,45 @@ function defaultNegotiationPacketSections(){
   };
 }
 
+function defaultWorkspaceSubmission(){
+  return { status:"draft", submitted_at:null, submitted_to:"", submission_method:"portal", confirmation_number:"", follow_up_date:null, notes:"" };
+}
+
+function defaultWorkspaceOutcome(){
+  return { status:"none", outcome_status:"none", response_received_at:null, approved_amount:0, paid_posted_amount:0, denial_reason:"", adjustment_notes:"", final_status:"" };
+}
+
+function defaultWorkspaceFollowUp(){
+  return { due_at:null, reminder_sent:false, escalation_level:0, last_touched_at:null };
+}
+
+function deepCopy(v){
+  return JSON.parse(JSON.stringify(v == null ? null : v));
+}
+
+function pushWorkspaceHistorySnapshot(ws, channel, savedBy){
+  if (!ws || !["appeal","negotiation"].includes(channel)) return;
+  ensurePacketSections(ws);
+  const ch = ws[channel] || {};
+  ch.history = Array.isArray(ch.history) ? ch.history : [];
+  ch.history.push({
+    version: Number(ch.version || 0),
+    saved_at: nowISO(),
+    saved_by: savedBy || "system",
+    packet_sections: deepCopy(ch.packet_sections || {}),
+    template_id: ch.template_id || null
+  });
+  while (ch.history.length > 25) ch.history.shift();
+  ws[channel] = ch;
+}
+
+function incrementWorkspaceEditsUsage(org_id){
+  const usage = getUsage(org_id);
+  usage.monthly_agent_workspace_edits = Number(usage.monthly_agent_workspace_edits || 0) + 1;
+  saveUsage(usage);
+}
+
+
 function ensurePacketSections(ws){
   ws.appeal = ws.appeal || {};
   ws.negotiation = ws.negotiation || {};
@@ -2243,6 +2303,14 @@ function ensurePacketSections(ws){
     if (String(ws.negotiation.draft_text || "").trim()) ws.negotiation.packet_sections.variance_explanation = String(ws.negotiation.draft_text || "").trim();
   }
   ws.negotiation.packet_sections = { ...negotiationDefaults, ...(ws.negotiation.packet_sections || {}) };
+  ws.appeal.version = Number(ws.appeal.version || 0);
+  ws.negotiation.version = Number(ws.negotiation.version || 0);
+  ws.appeal.history = Array.isArray(ws.appeal.history) ? ws.appeal.history : [];
+  ws.negotiation.history = Array.isArray(ws.negotiation.history) ? ws.negotiation.history : [];
+  ws.submission = { ...defaultWorkspaceSubmission(), ...(ws.submission || {}) };
+  ws.outcome = { ...defaultWorkspaceOutcome(), ...(ws.outcome || {}) };
+  ws.follow_up = { ...defaultWorkspaceFollowUp(), ...(ws.follow_up || {}) };
+  ws.negotiation.requested_amount = num(ws.negotiation.requested_amount || ws.negotiation.packet_sections.requested_amount || 0);
   return ws;
 }
 
@@ -6978,6 +7046,19 @@ if (method === "GET" && pathname === "/actions") {
     items.push({ b, derived, st, kind, atRisk, riskScore, secondaryStatus, tabKey });
   }
 
+  const wsAll = readJSON(FILES.agent_workspaces, []).filter(w => w.org_id === org.org_id);
+  const dueSoon = Date.now() + (3 * 24 * 60 * 60 * 1000);
+  for (const ws of wsAll) {
+    ensurePacketSections(ws);
+    const dueAt = ws.follow_up?.due_at ? new Date(ws.follow_up.due_at).getTime() : NaN;
+    if (String(ws.status || "") !== "submitted" || !isFinite(dueAt) || dueAt > dueSoon) continue;
+    if (!["all","followup"].includes(tab)) continue;
+    const b = billedAll.find(x => x.billed_id === ws.billed_id);
+    if (!b) continue;
+    const derived = evaluateClaimDerived(b, claimCtx);
+    items.push({ b, derived, st: "Follow-Up Needed", kind: "followup_ws", atRisk: Number(derived.atRiskAmount || computeClaimAtRisk(b)), riskScore: computeClaimRiskScore({ ...b, status: "Submitted" }), secondaryStatus: `Due ${ws.follow_up?.due_at || ""}`, tabKey: "followup", ws });
+  }
+
   // Sorting
   if (sort === "atrisk") items.sort((a,b)=> b.atRisk - a.atRisk);
   else if (sort === "payer") items.sort((a,b)=> String(a.b.payer||"").localeCompare(String(b.b.payer||"")));
@@ -7040,6 +7121,7 @@ if (method === "GET" && pathname === "/actions") {
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Follow-Up Write-Off</a>` : ``}
         <a class="btn secondary small" href="${workspacePagePath(b.billed_id, channel)}">AI Workspace</a>
+        ${x.kind === "followup_ws" ? `<form method="POST" action="/agent-workspace/followup/escalate" style="display:inline-block;margin:0;"><input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}" /><input type="hidden" name="channel" value="${safeStr(channel)}" /><button class="btn secondary small" type="submit">Escalate</button></form>` : ``}
       `;
     }
 
@@ -12549,6 +12631,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     autoDraftWorkspaceForClaim(org.org_id, b, d, claimCtx);
     const ws = ensureAgentWorkspace(org.org_id, b);
     ensureWorkspacePacket(ws);
+    ensurePacketSections(ws);
     ws.activity = ws.activity || {};
     ws.activity.last_opened_at = nowISO();
     saveAgentWorkspace(org.org_id, ws);
@@ -12556,20 +12639,11 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const isNegotiation = pathname === "/ai-negotiation" || String(parsed.query.tab || "") === "negotiation";
     const channel = isNegotiation ? "negotiation" : "appeal";
     const pageTitle = isNegotiation ? "AI Negotiation Packet" : "AI Appeal Packet";
-    const refIdLabel = isNegotiation ? "Negotiation ID" : "Denial Case ID";
-    const refIdVal = isNegotiation
-      ? safeStr((getNegotiationsByBilled(org.org_id, billed_id)[0] || {}).negotiation_id || "Pending")
-      : safeStr(b.denial_case_id || "Pending");
-
     const templates = getAgentTemplates(org.org_id).filter(t => t.type === channel);
     const templateOptions = templates.map(t => `<option value="${safeStr(t.template_id || "")}" ${String((ws[channel] || {}).template_id || "") === String(t.template_id || "") ? "selected" : ""}>${safeStr(t.name || t.template_id || "Template")}</option>`).join("");
-    const eobDetected = detectEobEraForClaim(org.org_id, b, ws);
     const readyCheck = canMarkReady(ws, channel);
     const missingLabelMap = { denial_letter: "Denial Letter", eob_era: "EOB/ERA", claim_form: "Claim Form / Itemized Bill" };
     const missingKindMap = { denial_letter: "denial", eob_era: "eob", claim_form: "supporting" };
-    const strongPrompt = channel === "negotiation"
-      ? "EOB/ERA required for underpayment validation."
-      : "EOB/ERA OR denial letter required.";
     const sectionDescriptions = packetSectionDescriptions(channel);
     const packetSections = (ws[channel] || {}).packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
     const mainKey = packetNarrativeKey(channel);
@@ -12579,17 +12653,14 @@ if (method === "GET" && pathname === "/agent-workspace") {
         : `<textarea name="value" style="min-height:120px;">${safeStr(packetSections[key] || "")}</textarea>`;
       return `<details ${key===mainKey?"open":""} style="margin:8px 0;border:1px solid var(--border);border-radius:10px;padding:10px;"><summary style="font-weight:800;cursor:pointer;">${safeStr(key.replace(/_/g," "))} <span class="muted small">ⓘ ${safeStr(sectionDescriptions[key]||"")}</span></summary><form method="POST" action="/agent-workspace/save" style="margin-top:8px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="draft_type" value="${safeStr(channel)}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><input type="hidden" name="section_key" value="${safeStr(key)}" />${inputHtml}<button class="btn secondary small" type="submit">Save Section</button></form></details>`;
     }).join("");
-    const checklist = requiredPacketKeysForChannel(channel).map(key => ({
-      key,
-      label: missingLabelMap[key] || key,
-      present: packetHasKey(ws, key)
-    }));
+    const checklist = requiredPacketKeysForChannel(channel).map(key => ({ key, label: missingLabelMap[key] || key, present: packetHasKey(ws, key) }));
     const checklistHtml = checklist.map(i => `<li>${i.present ? "☑" : "☐"} ${safeStr(i.label)}</li>`).join("");
     const missingDocsText = readyCheck.missing.map(k => missingLabelMap[k] || k).join(", ");
     const missingFormsHtml = readyCheck.missing.map(key => `<form method="POST" action="/agent-workspace/upload" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="packet_key" value="${safeStr(key)}" /><input type="hidden" name="kind" value="${safeStr(missingKindMap[key] || "supporting")}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><span class="small" style="min-width:190px;">Upload ${safeStr(missingLabelMap[key] || key)}</span><input type="file" name="files" /><button class="btn secondary small" type="submit">Upload</button></form>`).join("");
     const errs = Array.isArray(parsed.query.err) ? parsed.query.err : [parsed.query.err];
     const hasMissingErr = errs.includes("missing_required");
     const msgs = getAgentMessages(org.org_id, billed_id).slice(-12).map(m => `<li><strong>${safeStr(m.role || "agent")}</strong> [${safeStr(m.channel || "general")}]: ${safeStr(m.content || "")}</li>`).join("") || `<li class="muted">No messages yet.</li>`;
+    const versionNumber = Number(ws[channel]?.version || 0);
 
     const html = renderPage(pageTitle, `
       <h2>${pageTitle}</h2>
@@ -12602,15 +12673,11 @@ if (method === "GET" && pathname === "/agent-workspace") {
         <tr><th>Billed</th><td>${formatMoneyUI(num(d.billedAmount))}</td></tr>
         <tr><th>Expected</th><td>${formatMoneyUI(num(d.expectedInsurance))}</td></tr>
         <tr><th>Paid</th><td>${formatMoneyUI(num(d.paidAmount))}</td></tr>
-        <tr><th>Underpaid</th><td>${formatMoneyUI(num(d.underpaidAmount))}</td></tr>
-        <tr><th>Patient Follow-Up Remaining</th><td>${formatMoneyUI(num(d.patientBalanceRemaining))}</td></tr>
         <tr><th>At Risk</th><td>${formatMoneyUI(num(d.atRiskAmount))}</td></tr>
       </table>
 
-      <h3>2) Required Documentation Checklist</h3>
+      <h3>2) Required Docs Checklist</h3>
       ${(hasMissingErr && !readyCheck.ok) ? `<p class="warn">Cannot mark ready — missing required items: ${safeStr(missingDocsText)}</p>` : ""}
-      ${!readyCheck.ok ? `<p class="warn">${safeStr(strongPrompt)} Missing: ${safeStr(missingDocsText)}.</p>` : ""}
-      ${(!eobDetected && readyCheck.missing.includes("eob_era")) ? `<p class="warn">${safeStr(strongPrompt)}</p>` : ""}
       <ul>${checklistHtml}</ul>
       ${!readyCheck.ok ? `<div>${missingFormsHtml}</div>` : `<p class="small muted">All required items are present.</p>`}
 
@@ -12619,46 +12686,72 @@ if (method === "GET" && pathname === "/agent-workspace") {
         <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
         <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
         <input type="hidden" name="tab" value="${safeStr(channel)}" />
-        <label>Template Selection</label>
         <select name="template_id"><option value="">Default Rules</option>${templateOptions}</select>
         <button class="btn secondary" type="submit">Save Template</button>
       </form>
-      <div class="small muted" style="margin:8px 0;">${refIdLabel}: ${refIdVal}</div>
 
-      <h3>4) AI Packet Builder</h3>
+      <h3>4) AI Packet Builder <span class="small muted">Version ${versionNumber}</span> <a class="btn secondary small" href="/agent-workspace/history?billed_id=${encodeURIComponent(billed_id)}&channel=${encodeURIComponent(channel)}">View History</a></h3>
       ${sectionsHtml}
 
-      <h3>5) Agent Chat</h3>
-      <form method="POST" action="/agent-workspace/chat">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
-        <input type="hidden" name="channel" value="${safeStr(channel)}" />
-        <input type="hidden" name="tab" value="${safeStr(channel)}" />
-        <textarea name="content" style="min-height:80px;" placeholder="Ask agent for deterministic edits..."></textarea>
-        <button class="btn secondary" type="submit">Apply Edit + Log Message</button>
-      </form>
-      <ul>${msgs}</ul>
-      <p class="small muted">Free trial includes full workspace access; usage tracked but not blocked.</p>
+      <details>
+        <summary style="font-weight:800;cursor:pointer;">5) Submission & Follow-Up ${infoIcon("Track where and when the packet was submitted, plus follow-up due date.")}</summary>
+        <form method="POST" action="/agent-workspace/submission" style="margin-top:8px;">
+          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
+          <input type="hidden" name="channel" value="${safeStr(channel)}" />
+          <label>Submitted To</label><input name="submitted_to" value="${safeStr(ws.submission?.submitted_to || "")}" />
+          <label>Method</label><select name="submission_method"><option value="portal">Portal</option><option value="fax">Fax</option><option value="mail">Mail</option><option value="phone">Phone</option></select>
+          <label>Confirmation #</label><input name="confirmation_number" value="${safeStr(ws.submission?.confirmation_number || "")}" />
+          <label>Follow-Up Date</label><input type="date" name="follow_up_date" value="${safeStr(String(ws.submission?.follow_up_date || "").slice(0,10))}" />
+          <label>Notes</label><textarea name="notes" style="min-height:70px;">${safeStr(ws.submission?.notes || "")}</textarea>
+          <button class="btn secondary" type="submit">Mark Submitted</button>
+        </form>
+        <p class="small muted">Status: ${safeStr(ws.submission?.status || "draft")} | Submitted: ${safeStr(ws.submission?.submitted_at || "—")} | Due: ${safeStr(ws.follow_up?.due_at || "—")}</p>
+      </details>
 
-      <h3>6) Actions</h3>
+      <details>
+        <summary style="font-weight:800;cursor:pointer;">6) Outcome / Payer Response ${infoIcon("Record payer response and any posted payment updates.")}</summary>
+        <form method="POST" action="/agent-workspace/outcome" style="margin-top:8px;">
+          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
+          <input type="hidden" name="channel" value="${safeStr(channel)}" />
+          <label>Outcome Status</label><select name="outcome_status"><option value="none">None</option><option value="approved">Approved</option><option value="partially_approved">Partially Approved</option><option value="denied">Denied</option><option value="needs_info">Needs Info</option><option value="closed">Closed</option></select>
+          <label>Response Received At</label><input type="date" name="response_received_at" value="${safeStr(String(ws.outcome?.response_received_at || "").slice(0,10))}" />
+          <label>Approved Amount</label><input name="approved_amount" value="${safeStr(ws.outcome?.approved_amount || 0)}" />
+          <label>Paid Posted Amount</label><input name="paid_posted_amount" value="${safeStr(ws.outcome?.paid_posted_amount || 0)}" />
+          <label>Denial Reason</label><input name="denial_reason" value="${safeStr(ws.outcome?.denial_reason || "")}" />
+          <label>Adjustment Notes</label><textarea name="adjustment_notes" style="min-height:70px;">${safeStr(ws.outcome?.adjustment_notes || "")}</textarea>
+          <label>Final Status</label><input name="final_status" value="${safeStr(ws.outcome?.final_status || "")}" />
+          <button class="btn secondary" type="submit">Save Outcome</button>
+        </form>
+      </details>
+
+      <details>
+        <summary style="font-weight:800;cursor:pointer;">7) Agent Chat</summary>
+        <form method="POST" action="/agent-workspace/chat">
+          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
+          <input type="hidden" name="channel" value="${safeStr(channel)}" />
+          <input type="hidden" name="tab" value="${safeStr(channel)}" />
+          <textarea name="content" style="min-height:80px;" placeholder="Ask agent for deterministic edits..."></textarea>
+          <button class="btn secondary" type="submit">Apply Edit + Log Message</button>
+        </form>
+        <ul>${msgs}</ul>
+      </details>
+
+      <h3>8) Actions</h3>
       <div class="btnRow" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         <form method="POST" action="/agent-workspace/generate" style="margin:0;">
           <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
           <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
           <input type="hidden" name="tab" value="${safeStr(channel)}" />
-          <button class="btn secondary" type="submit">Regenerate AI Draft</button>
+          <button class="btn secondary" type="submit">Save New Version</button>
         </form>
         <a class="btn secondary" href="/agent-workspace/export?billed_id=${encodeURIComponent(billed_id)}">Export Packet (Print/PDF)</a>
         <form method="POST" action="/agent-workspace/status" style="margin:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
           <input type="hidden" name="tab" value="${safeStr(channel)}" />
           <input type="hidden" name="status" value="ready_for_review" />
-          <label style="display:flex;gap:8px;align-items:center;">
-            <input type="checkbox" name="override_missing" />
-            Override missing required docs (not recommended)
-          </label>
+          <label style="display:flex;gap:8px;align-items:center;"><input type="checkbox" name="override_missing" /> Override missing required docs</label>
           <button class="btn secondary" type="submit">Mark Ready</button>
         </form>
-        <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(billed_id)}">Back to Claim Detail</a>
       </div>
     `, navUser(), {showChat:true, orgName: org.org_name});
 
@@ -12688,9 +12781,11 @@ if (method === "GET" && pathname === "/agent-workspace") {
       if (draft_type === "appeal") {
         ws.appeal.packet_sections = { ...defaultAppealPacketSections(), ...(ws.appeal.packet_sections || {}), argument: draftText };
         ws.appeal = { ...(ws.appeal || {}), draft_text: ws.appeal.packet_sections.argument, updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
+        pushWorkspaceHistorySnapshot(ws, "appeal", user.user_id);
       } else {
         ws.negotiation.packet_sections = { ...defaultNegotiationPacketSections(), ...(ws.negotiation.packet_sections || {}), variance_explanation: draftText, requested_amount: String(ws.negotiation.packet_sections?.requested_amount || d.underpaidAmount || "") };
         ws.negotiation = { ...(ws.negotiation || {}), draft_text: ws.negotiation.packet_sections.variance_explanation, requested_amount: Number(ws.negotiation.packet_sections.requested_amount || d.underpaidAmount || 0), updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
+        pushWorkspaceHistorySnapshot(ws, "negotiation", user.user_id);
       }
       ws.appeal.packet_sections.attachments_index = buildAttachmentsIndex(ws);
       ws.appeal.packet_sections.financial_summary = financialSummaryFromClaim(d, b);
@@ -12698,7 +12793,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
       ws.negotiation.packet_sections.financial_summary = financialSummaryFromClaim(d, b);
       ws.negotiation.packet_sections.requested_amount = String(ws.negotiation.packet_sections.requested_amount || d.underpaidAmount || "");
       ws.status = "draft";
+      ws.follow_up.last_touched_at = ts;
       saveAgentWorkspace(org.org_id, ws);
+      incrementWorkspaceEditsUsage(org.org_id);
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel: draft_type, content: "Draft generated.", created_at: ts });
       const usage = getUsage(org.org_id);
       usage.monthly_ai_generations_used = Number(usage.monthly_ai_generations_used || 0) + 1;
@@ -12754,6 +12851,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
         ws.appeal.draft_text = ws.appeal.packet_sections.argument || "";
         ws.appeal.updated_at = ts;
         ws.appeal.version = Number(ws.appeal?.version || 0) + 1;
+        pushWorkspaceHistorySnapshot(ws, "appeal", user.user_id);
       } else if (draft_type === "negotiation") {
         const key = section_key || packetNarrativeKey("negotiation");
         ws.negotiation.packet_sections[key] = section_key ? value : draft_text;
@@ -12761,6 +12859,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
         ws.negotiation.requested_amount = num(ws.negotiation.packet_sections.requested_amount || ws.negotiation?.requested_amount || 0);
         ws.negotiation.updated_at = ts;
         ws.negotiation.version = Number(ws.negotiation?.version || 0) + 1;
+        pushWorkspaceHistorySnapshot(ws, "negotiation", user.user_id);
       } else if (draft_type === "lmn") {
         ensureWorkspacePacket(ws);
         const lmn = getWorkspacePacketItem(ws, "lmn");
@@ -12771,10 +12870,149 @@ if (method === "GET" && pathname === "/agent-workspace") {
         }
       }
       ws.packet.completeness = computePacketCompleteness(ws);
+      ws.follow_up.last_touched_at = ts;
       ws.status = "edited";
       saveAgentWorkspace(org.org_id, ws);
+      incrementWorkspaceEditsUsage(org.org_id);
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: draft_type, content: "Manual edits saved." });
       return redirect(res, `${workspacePagePath(billed_id, tab)}`);
+    });
+    return;
+  }
+
+
+  if (method === "POST" && pathname === "/agent-workspace/submission") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const billed_id = String(params.get("billed_id") || "").trim();
+      const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+      const billedAll = readJSON(FILES.billed, []);
+      const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (!b) return redirect(res, "/claims?view=all");
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      ensurePacketSections(ws);
+      const ts = nowISO();
+      const followDate = String(params.get("follow_up_date") || "").trim();
+      ws.submission = {
+        ...ws.submission,
+        status: "submitted",
+        submitted_at: ts,
+        submitted_to: String(params.get("submitted_to") || "").trim(),
+        submission_method: String(params.get("submission_method") || "portal").trim(),
+        confirmation_number: String(params.get("confirmation_number") || "").trim(),
+        follow_up_date: followDate || null,
+        notes: String(params.get("notes") || "")
+      };
+      ws.follow_up = { ...ws.follow_up, due_at: followDate ? new Date(followDate).toISOString() : addDaysISO(ts, 14), reminder_sent:false, escalation_level:0, last_touched_at: ts };
+      ws.status = "submitted";
+      saveAgentWorkspace(org.org_id, ws);
+      addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: "Marked submitted + set follow-up." });
+      return redirect(res, workspacePagePath(billed_id, channel));
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/agent-workspace/outcome") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const billed_id = String(params.get("billed_id") || "").trim();
+      const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+      const billedAll = readJSON(FILES.billed, []);
+      const idx = billedAll.findIndex(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (idx < 0) return redirect(res, "/claims?view=all");
+      const b = billedAll[idx];
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      ensurePacketSections(ws);
+      const outStatus = String(params.get("outcome_status") || "none").trim();
+      ws.outcome = {
+        ...ws.outcome,
+        status: outStatus,
+        outcome_status: outStatus,
+        response_received_at: String(params.get("response_received_at") || "").trim() || null,
+        approved_amount: num(params.get("approved_amount") || 0),
+        paid_posted_amount: num(params.get("paid_posted_amount") || 0),
+        denial_reason: String(params.get("denial_reason") || ""),
+        adjustment_notes: String(params.get("adjustment_notes") || ""),
+        final_status: String(params.get("final_status") || "")
+      };
+      if (["approved","partially_approved"].includes(outStatus) && num(ws.outcome.paid_posted_amount) > 0) {
+        const paid = Math.max(num(b.insurance_paid || b.paid_amount || 0), num(ws.outcome.paid_posted_amount));
+        billedAll[idx].insurance_paid = paid;
+        billedAll[idx].paid_amount = paid;
+        billedAll[idx].paid_at = nowISO();
+        writeJSON(FILES.billed, billedAll);
+        rebuildOrgDerivedData(org.org_id, { resyncDenials:true, autodraft:true });
+      }
+      if (outStatus === "closed") { ws.status = "closed"; ws.follow_up.due_at = null; }
+      ws.follow_up.last_touched_at = nowISO();
+      saveAgentWorkspace(org.org_id, ws);
+      addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: "Outcome updated." });
+      return redirect(res, workspacePagePath(billed_id, channel));
+    });
+    return;
+  }
+
+  if (method === "GET" && pathname === "/agent-workspace/history") {
+    const billed_id = String(parsed.query.billed_id || "").trim();
+    const channel = String(parsed.query.channel || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const billedAll = readJSON(FILES.billed, []);
+    const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+    if (!b) return redirect(res, "/claims?view=all");
+    const ws = ensureAgentWorkspace(org.org_id, b);
+    ensurePacketSections(ws);
+    const rows = (ws[channel].history || []).map((h, idx) => `<tr><td>${safeStr(String(h.version || 0))}</td><td>${safeStr(h.saved_at || "")}</td><td>${safeStr(h.saved_by || "")}</td><td><form method="POST" action="/agent-workspace/history/restore" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="channel" value="${safeStr(channel)}" /><input type="hidden" name="version_index" value="${idx}" /><button class="btn secondary small" type="submit">Restore</button></form></td></tr>`).join("") || `<tr><td colspan="4" class="muted">No history yet.</td></tr>`;
+    const html = renderPage("Workspace History", `<h2>Workspace History (${safeStr(channel)})</h2><table><tr><th>Version</th><th>Saved At</th><th>Saved By</th><th></th></tr>${rows}</table><a class="btn secondary" href="${workspacePagePath(billed_id, channel)}">Back</a>`, navUser(), {showChat:false, orgName: org.org_name});
+    return send(res, 200, html);
+  }
+
+  if (method === "POST" && pathname === "/agent-workspace/history/restore") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const billed_id = String(params.get("billed_id") || "").trim();
+      const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+      const version_index = Number(params.get("version_index") || -1);
+      const billedAll = readJSON(FILES.billed, []);
+      const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (!b) return redirect(res, "/claims?view=all");
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      ensurePacketSections(ws);
+      const snap = (ws[channel].history || [])[version_index];
+      if (snap && snap.packet_sections) {
+        ws[channel].packet_sections = deepCopy(snap.packet_sections);
+        ws[channel].version = Number(ws[channel].version || 0) + 1;
+        pushWorkspaceHistorySnapshot(ws, channel, user.user_id);
+        ws.follow_up.last_touched_at = nowISO();
+        saveAgentWorkspace(org.org_id, ws);
+        addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: `Restored version ${snap.version}` });
+      }
+      return redirect(res, workspacePagePath(billed_id, channel));
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/agent-workspace/followup/escalate") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const billed_id = String(params.get("billed_id") || "").trim();
+      const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+      const billedAll = readJSON(FILES.billed, []);
+      const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (!b) return redirect(res, "/actions?tab=followup");
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      ensurePacketSections(ws);
+      ws.follow_up.escalation_level = Number(ws.follow_up.escalation_level || 0) + 1;
+      ws.follow_up.last_touched_at = nowISO();
+      saveAgentWorkspace(org.org_id, ws);
+      addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: "Follow-up escalated" });
+      return redirect(res, "/actions?tab=followup");
     });
     return;
   }
@@ -12828,14 +13066,13 @@ if (method === "GET" && pathname === "/agent-workspace") {
       if (content && ["appeal","negotiation"].includes(channel)) {
         const ts = nowISO();
         ensurePacketSections(ws);
-        if (channel === "appeal") { ws.appeal.packet_sections.argument = applyAgentInstructionToDraft(ws.appeal?.packet_sections?.argument || ws.appeal?.draft_text || "", content, channel); ws.appeal.draft_text = ws.appeal.packet_sections.argument; ws.appeal.updated_at = ts; ws.appeal.version = Number(ws.appeal?.version || 0) + 1; }
-        if (channel === "negotiation") { ws.negotiation.packet_sections.variance_explanation = applyAgentInstructionToDraft(ws.negotiation?.packet_sections?.variance_explanation || ws.negotiation?.draft_text || "", content, channel); ws.negotiation.draft_text = ws.negotiation.packet_sections.variance_explanation; ws.negotiation.updated_at = ts; ws.negotiation.version = Number(ws.negotiation?.version || 0) + 1; }
+        if (channel === "appeal") { ws.appeal.packet_sections.argument = applyAgentInstructionToDraft(ws.appeal?.packet_sections?.argument || ws.appeal?.draft_text || "", content, channel); ws.appeal.draft_text = ws.appeal.packet_sections.argument; ws.appeal.updated_at = ts; ws.appeal.version = Number(ws.appeal?.version || 0) + 1; pushWorkspaceHistorySnapshot(ws, "appeal", user.user_id); }
+        if (channel === "negotiation") { ws.negotiation.packet_sections.variance_explanation = applyAgentInstructionToDraft(ws.negotiation?.packet_sections?.variance_explanation || ws.negotiation?.draft_text || "", content, channel); ws.negotiation.draft_text = ws.negotiation.packet_sections.variance_explanation; ws.negotiation.updated_at = ts; ws.negotiation.version = Number(ws.negotiation?.version || 0) + 1; pushWorkspaceHistorySnapshot(ws, "negotiation", user.user_id); }
+        ws.follow_up.last_touched_at = ts;
         ws.status = "edited";
         saveAgentWorkspace(org.org_id, ws);
         addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel, content: `Applied instruction to ${channel} draft.` });
-        const usage = getUsage(org.org_id);
-        usage.monthly_agent_workspace_edits = Number(usage.monthly_agent_workspace_edits || 0) + 1;
-        saveUsage(usage);
+        incrementWorkspaceEditsUsage(org.org_id);
       }
       return redirect(res, `${workspacePagePath(billed_id, tab)}`);
     });
