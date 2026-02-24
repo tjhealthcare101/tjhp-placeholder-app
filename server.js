@@ -1869,8 +1869,10 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
   // Status counts (align labels with charts)
   const statusCounts = { Resolved:0, "Patient Follow-Up":0, Underpaid:0, Denied:0, "Write-Off":0, Submitted:0, "Waiting Payment":0, "In Appeal/Negotiation":0, Pending:0 };
+  const daysToPayVals = [];
   billed.forEach(b=>{
-    const st = String(evaluateClaimDerived(b, ctx).lifecycleStage || "Pending");
+    const d = evaluateClaimDerived(b, ctx);
+    const st = String(d.lifecycleStage || "Pending");
     if (st === "Resolved") statusCounts.Resolved++;
     else if (st === "Denied") statusCounts.Denied++;
     else if (st === "Underpaid") statusCounts.Underpaid++;
@@ -1880,6 +1882,13 @@ function computeDashboardMetrics(org_id, start, end, preset){
     else if (st === "Submitted") statusCounts.Submitted++;
     else if (st === "Waiting Payment") statusCounts["Waiting Payment"]++;
     else statusCounts.Pending++;
+
+    const createdAt = new Date(b.created_at || b.dos || Date.now()).getTime();
+    const paidAt = new Date(b.paid_at || b.last_paid_at || Date.now()).getTime();
+    if (safeNum(d.paidAmount) > 0 && isFinite(createdAt) && isFinite(paidAt)) {
+      const dd = Math.max(0, Math.round((paidAt - createdAt) / (1000*60*60*24)));
+      if (isFinite(dd)) daysToPayVals.push(dd);
+    }
   });
 
   // Time series (billed vs collected vs at-risk)
@@ -1921,6 +1930,54 @@ function computeDashboardMetrics(org_id, start, end, preset){
     .slice(0,8)
     .map(([payer,v])=>({ payer, ...v }));
 
+  // AR Aging Buckets
+  const arBuckets = { "0-30":0, "31-60":0, "61-90":0, "90+":0 };
+  billed.forEach(b=>{
+    const d = evaluateClaimDerived(b, ctx);
+    const atRisk = Math.max(0, d.underpaidAmount + d.patientBalanceRemaining);
+    if (atRisk <= 0) return;
+
+    const created = new Date(b.created_at || b.dos || Date.now());
+    const age = Math.floor((Date.now() - created.getTime()) / (1000*60*60*24));
+
+    if (age <= 30) arBuckets["0-30"] += atRisk;
+    else if (age <= 60) arBuckets["31-60"] += atRisk;
+    else if (age <= 90) arBuckets["61-90"] += atRisk;
+    else arBuckets["90+"] += atRisk;
+  });
+
+  const totalClaims = billed.length;
+  const denialRate = totalClaims ? (statusCounts.Denied / totalClaims) * 100 : 0;
+  const underpaidRate = totalClaims ? (statusCounts.Underpaid / totalClaims) * 100 : 0;
+  const collectionRate = totals.totalBilled > 0 ? (collectedTotal / totals.totalBilled) * 100 : 0;
+  const ar90Rate = totals.totalBilled > 0 ? (arBuckets["90+"] / totals.totalBilled) * 100 : 0;
+  const avgDaysToPay = daysToPayVals.length ? (daysToPayVals.reduce((a,b)=>a+b,0)/daysToPayVals.length) : 0;
+
+  const collectionScore = scoreCollectionRate(collectionRate);
+  const denialScore = scoreDenialRate(denialRate);
+  const underpaidScore = scoreUnderpaidRate(underpaidRate);
+  const daysScore = scoreDaysToPay(avgDaysToPay || 0);
+  const arScore = scoreARAging(ar90Rate);
+
+  const healthScore = Math.round(
+    (collectionScore * 0.30) +
+    (denialScore * 0.20) +
+    (underpaidScore * 0.15) +
+    (daysScore * 0.15) +
+    (arScore * 0.20)
+  );
+
+  const healthGrade = gradeFromScore(healthScore);
+
+  const appeals = casesAll.filter(c => c.case_type === "denial");
+  const appealsWon = appeals.filter(c => c.status === "Approved (Paid)");
+  const appealSuccessRate = appeals.length ? (appealsWon.length / appeals.length) * 100 : 0;
+
+  const negotiations = casesAll.filter(c => c.case_type === "underpayment");
+  const negotiatedTotal = negotiations.reduce((s,n)=> s + Number(n.requested_amount || 0),0);
+  const recoveredTotal = negotiations.reduce((s,n)=> s + Number(n.collected_amount || 0),0);
+  const negotiationROI = negotiatedTotal ? (recoveredTotal / negotiatedTotal) * 100 : 0;
+
   return {
     kpis: {
       totalBilled: totals.totalBilled,
@@ -1941,7 +1998,18 @@ function computeDashboardMetrics(org_id, start, end, preset){
     },
     statusCounts,
     series: { gran, keys, billed: keys.map(k=>safeNum(billedSeries[k])), collected: keys.map(k=>safeNum(collectedSeries[k])), atRisk: keys.map(k=>safeNum(atRiskSeries[k])) },
-    payerTop
+    payerTop,
+    arBuckets,
+    healthScore,
+    healthGrade,
+    denialRate,
+    underpaidRate,
+    collectionRate,
+    ar90Rate,
+    appealSuccessRate,
+    negotiationROI,
+    negotiatedTotal,
+    recoveredTotal
   };
 }
 
@@ -2413,6 +2481,57 @@ function computeExecutiveRevenueMetrics(org_id){
   }, { totalBilled: 0, totalCollected: 0, totalAtRisk: 0 });
 }
 
+// =============================
+// PRACTICE FINANCIAL HEALTH ENGINE
+// =============================
+function scoreCollectionRate(rate){
+  if (rate >= 85) return 100;
+  if (rate >= 75) return 85;
+  if (rate >= 65) return 70;
+  if (rate >= 55) return 55;
+  return 40;
+}
+
+function scoreDenialRate(rate){
+  if (rate <= 5) return 100;
+  if (rate <= 10) return 85;
+  if (rate <= 15) return 70;
+  if (rate <= 20) return 55;
+  return 40;
+}
+
+function scoreUnderpaidRate(rate){
+  if (rate <= 5) return 100;
+  if (rate <= 10) return 85;
+  if (rate <= 15) return 70;
+  if (rate <= 20) return 55;
+  return 40;
+}
+
+function scoreDaysToPay(days){
+  if (days <= 20) return 100;
+  if (days <= 30) return 85;
+  if (days <= 45) return 70;
+  if (days <= 60) return 55;
+  return 40;
+}
+
+function scoreARAging(rate){
+  if (rate <= 10) return 100;
+  if (rate <= 20) return 85;
+  if (rate <= 30) return 70;
+  if (rate <= 40) return 55;
+  return 40;
+}
+
+function gradeFromScore(score){
+  if (score >= 90) return "A";
+  if (score >= 80) return "B";
+  if (score >= 70) return "C";
+  if (score >= 60) return "D";
+  return "F";
+}
+
 function findContractForClaim(org_id, b){
   const payer = String(b.payer || "").trim().toLowerCase();
   const proc = getClaimProcedureCode(b);
@@ -2717,15 +2836,6 @@ function svgSparkline(title, points){
       </svg>
     </div>
   `;
-}
-
-function gradeFromScore(score){
-  const s = Number(score || 0);
-  if (s >= 90) return "A";
-  if (s >= 80) return "B";
-  if (s >= 70) return "C";
-  if (s >= 60) return "D";
-  return "F";
 }
 
 function toneForGrade(g){
@@ -4319,9 +4429,20 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </div>
 
       <div class="executive-panel">
-        <h3 style="margin-bottom:12px;">Revenue Health</h3>
+        <h3 style="margin-bottom:12px;">Practice Financial Health Score <span class="tooltip" data-tip="Weighted score combining collection rate, denial rate, underpaid %, days to pay, and AR aging. 90+ = A grade.">ⓘ</span></h3>
+        <div class="muted" style="margin-bottom:10px;">Score: <strong>${Number(m.healthScore||0)}</strong> · Grade: <strong>${safeStr(m.healthGrade||"—")}</strong></div>
         <div class="chart-container">
           <canvas id="revenueBreakdownChart"></canvas>
+        </div>
+      </div>
+
+      <div class="executive-panel">
+        <h4 style="margin-bottom:12px;">AR Aging Breakdown <span class="tooltip" data-tip="Outstanding balances grouped by claim age in days. 90+ days is highest risk.">ⓘ</span></h4>
+        <div class="kpi-strip" style="margin-top:0;">
+          <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["0-30"]||0)}</p><p class="kpi-label">0-30 Days</p></div>
+          <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["31-60"]||0)}</p><p class="kpi-label">31-60 Days</p></div>
+          <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["61-90"]||0)}</p><p class="kpi-label">61-90 Days</p></div>
+          <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["90+"]||0)}</p><p class="kpi-label">90+ Days</p></div>
         </div>
       </div>
 
@@ -4349,6 +4470,16 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
         <div class="chart-container trend">
           <canvas id="revenueTrendChart"></canvas>
+        </div>
+      </div>
+
+      <div class="executive-panel">
+        <h3 style="margin-bottom:12px;">Appeals & Negotiation Outcomes</h3>
+        <div class="kpi-strip" style="margin-top:0;">
+          <div class="kpi-card"><p class="kpi-value">${Number(m.appealSuccessRate||0).toFixed(1)}%</p><p class="kpi-label">Appeal Success <span class="tooltip" data-tip="Percentage of submitted appeals that resulted in payer approval and payment.">ⓘ</span></p></div>
+          <div class="kpi-card"><p class="kpi-value">${Number(m.negotiationROI||0).toFixed(1)}%</p><p class="kpi-label">Negotiation ROI <span class="tooltip" data-tip="Recovered dollars divided by total negotiated dollars. Measures negotiation effectiveness.">ⓘ</span></p></div>
+          <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.negotiatedTotal||0)}</p><p class="kpi-label">Negotiated Total</p></div>
+          <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.recoveredTotal||0)}</p><p class="kpi-label">Recovered Total</p></div>
         </div>
       </div>
 
