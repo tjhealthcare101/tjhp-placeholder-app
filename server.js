@@ -1985,30 +1985,34 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
   const healthGrade = gradeFromScore(healthScore);
 
-  const workspaces = readJSON(FILES.agent_workspaces, []).filter(w => w.org_id === org_id).map(w => ensurePacketSections(w));
-  const hasWorkspaceOutcomes = workspaces.some(w => String(w.submission?.status||"") === "submitted" || String(w.outcome?.status||"") !== "none");
-  let appealSubmitted = 0, appealSuccess = 0, negotiatedTotal = 0, recoveredTotal = 0;
+  const workspaces = readJSON(FILES.agent_workspaces, [])
+    .filter(w => w.org_id === org_id)
+    .map(w => ensurePacketSections(w));
+
+  let appealSubmitted = 0;
+  let appealSuccess = 0;
+  let negotiatedTotal = 0;
+  let recoveredTotal = 0;
+
   workspaces.forEach(w => {
     const submission = w.submission || {};
     const outcome = w.outcome || {};
-    const isAppealSubmission = String(submission.status || "") === "submitted" && (!!(w.appeal && (w.appeal.version || (w.appeal.history||[]).length)) || !(w.negotiation && (w.negotiation.version || (w.negotiation.history||[]).length)));
-    if (isAppealSubmission) appealSubmitted += 1;
-    const outStatus = String(outcome.outcome_status || outcome.status || "");
-    if (["approved","partially_approved"].includes(outStatus) && num(outcome.paid_posted_amount) > 0) appealSuccess += 1;
-    const requested = num(w.negotiation?.requested_amount || w.negotiation?.packet_sections?.requested_amount || 0);
-    const recovered = num(outcome.paid_posted_amount || outcome.approved_amount || 0);
-    if (requested > 0) negotiatedTotal += requested;
-    if (recovered > 0) recoveredTotal += recovered;
+
+    if (submission.status === "submitted" && submission.channel === "appeal") {
+      appealSubmitted += 1;
+      if (["approved","partially_approved"].includes(outcome.outcome_status) &&
+          num(outcome.paid_posted_amount) > 0) {
+        appealSuccess += 1;
+      }
+    }
+
+    if (submission.status === "submitted" && submission.channel === "negotiation") {
+      const requested = num(w.negotiation?.requested_amount || 0);
+      const recovered = num(outcome.paid_posted_amount || 0);
+      if (requested > 0) negotiatedTotal += requested;
+      if (recovered > 0) recoveredTotal += recovered;
+    }
   });
-  if (!hasWorkspaceOutcomes) {
-    const appeals = casesAll.filter(c => c.case_type === "denial");
-    const appealsWon = appeals.filter(c => c.status === "Approved (Paid)");
-    appealSubmitted = appeals.length;
-    appealSuccess = appealsWon.length;
-    const negotiations = casesAll.filter(c => c.case_type === "underpayment");
-    negotiatedTotal = negotiations.reduce((s,n)=> s + Number(n.requested_amount || 0),0);
-    recoveredTotal = negotiations.reduce((s,n)=> s + Number(n.collected_amount || 0),0);
-  }
   const appealSuccessRate = appealSubmitted ? (appealSuccess / appealSubmitted) * 100 : 0;
   const negotiationROI = negotiatedTotal ? (recoveredTotal / negotiatedTotal) * 100 : 0;
 
@@ -2248,7 +2252,7 @@ function defaultNegotiationPacketSections(){
 }
 
 function defaultWorkspaceSubmission(){
-  return { status:"draft", submitted_at:null, submitted_to:"", submission_method:"portal", confirmation_number:"", follow_up_date:null, notes:"" };
+  return { status:"draft", channel:null, submitted_at:null, submitted_to:"", submission_method:"portal", confirmation_number:"", follow_up_date:null, notes:"" };
 }
 
 function defaultWorkspaceOutcome(){
@@ -3825,7 +3829,7 @@ function badgeClassForStatus(st){
   if (s === "Underpaid") return "underpaid";
   if (s === "Appeal") return "warn";
   if (s === "Waiting Payment" || s === "Submitted") return "warn";
-  if (s === "Patient Follow-Up") return "warn";
+  if (s === "Patient Follow-Up" || s === "Follow-Up Needed") return "warn";
   if (s === "Contractual") return "writeoff";
   return "";
 }
@@ -12699,7 +12703,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
           <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
           <input type="hidden" name="channel" value="${safeStr(channel)}" />
           <label>Submitted To</label><input name="submitted_to" value="${safeStr(ws.submission?.submitted_to || "")}" />
-          <label>Method</label><select name="submission_method"><option value="portal">Portal</option><option value="fax">Fax</option><option value="mail">Mail</option><option value="phone">Phone</option></select>
+          <label>Method</label><select name="submission_method"><option value="portal" ${ws.submission?.submission_method==="portal"?"selected":""}>Portal</option><option value="fax" ${ws.submission?.submission_method==="fax"?"selected":""}>Fax</option><option value="mail" ${ws.submission?.submission_method==="mail"?"selected":""}>Mail</option><option value="phone" ${ws.submission?.submission_method==="phone"?"selected":""}>Phone</option></select>
           <label>Confirmation #</label><input name="confirmation_number" value="${safeStr(ws.submission?.confirmation_number || "")}" />
           <label>Follow-Up Date</label><input type="date" name="follow_up_date" value="${safeStr(String(ws.submission?.follow_up_date || "").slice(0,10))}" />
           <label>Notes</label><textarea name="notes" style="min-height:70px;">${safeStr(ws.submission?.notes || "")}</textarea>
@@ -12713,7 +12717,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
         <form method="POST" action="/agent-workspace/outcome" style="margin-top:8px;">
           <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
           <input type="hidden" name="channel" value="${safeStr(channel)}" />
-          <label>Outcome Status</label><select name="outcome_status"><option value="none">None</option><option value="approved">Approved</option><option value="partially_approved">Partially Approved</option><option value="denied">Denied</option><option value="needs_info">Needs Info</option><option value="closed">Closed</option></select>
+          <label>Outcome Status</label><select name="outcome_status">${["none","approved","partially_approved","denied","needs_info","closed"].map(v=>`<option value="${v}" ${ws.outcome?.outcome_status===v?"selected":""}>${safeStr(v.replace(/_/g," "))}</option>`).join("")}</select>
           <label>Response Received At</label><input type="date" name="response_received_at" value="${safeStr(String(ws.outcome?.response_received_at || "").slice(0,10))}" />
           <label>Approved Amount</label><input name="approved_amount" value="${safeStr(ws.outcome?.approved_amount || 0)}" />
           <label>Paid Posted Amount</label><input name="paid_posted_amount" value="${safeStr(ws.outcome?.paid_posted_amount || 0)}" />
@@ -12742,7 +12746,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
           <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
           <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
           <input type="hidden" name="tab" value="${safeStr(channel)}" />
-          <button class="btn secondary" type="submit">Save New Version</button>
+          <button class="btn secondary" type="submit">Regenerate AI Draft</button>
         </form>
         <a class="btn secondary" href="/agent-workspace/export?billed_id=${encodeURIComponent(billed_id)}">Export Packet (Print/PDF)</a>
         <form method="POST" action="/agent-workspace/status" style="margin:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -12898,6 +12902,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       ws.submission = {
         ...ws.submission,
         status: "submitted",
+        channel,
         submitted_at: ts,
         submitted_to: String(params.get("submitted_to") || "").trim(),
         submission_method: String(params.get("submission_method") || "portal").trim(),
