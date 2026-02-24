@@ -81,8 +81,10 @@ const FILES = {
   claim_batches: path.join(DATA_DIR, "claim_batches.json"),
   practice_settings: path.join(DATA_DIR, "practice_settings.json"),
   ai_agent_drafts: path.join(DATA_DIR, "ai_agent_drafts.json"),
-  agent_templates: path.join(DATA_DIR, "ai_agent_templates.json"),
+  agent_templates: path.join(DATA_DIR, "agent_templates.json"),
   agent_usage: path.join(DATA_DIR, "ai_agent_usage.json"),
+  agent_workspaces: path.join(DATA_DIR, "agent_workspaces.json"),
+  agent_messages: path.join(DATA_DIR, "agent_messages.json"),
 };
 
 // Directory for storing uploaded template files
@@ -304,6 +306,8 @@ ensureFile(FILES.practice_settings, []);
 ensureFile(FILES.ai_agent_drafts, []);
 ensureFile(FILES.agent_templates, []);
 ensureFile(FILES.agent_usage, []);
+ensureFile(FILES.agent_workspaces, []);
+ensureFile(FILES.agent_messages, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -679,6 +683,8 @@ function getUsage(org_id) {
       monthly_case_overage_count: 0,
       monthly_payment_rows_used: 0,
       monthly_payment_credits_used: 0,
+      monthly_ai_generations_used: 0,
+      monthly_agent_workspace_edits: 0,
       ai_job_timestamps: [],
       ai_chat_used: 0
     };
@@ -691,9 +697,13 @@ function getUsage(org_id) {
     u.monthly_case_overage_count = 0;
     u.monthly_payment_rows_used = 0;
     u.monthly_payment_credits_used = 0;
+    u.monthly_ai_generations_used = 0;
+    u.monthly_agent_workspace_edits = 0;
     u.ai_chat_used = 0;
     writeJSON(FILES.usage, usage);
   }
+  if (typeof u.monthly_ai_generations_used !== "number") u.monthly_ai_generations_used = 0;
+  if (typeof u.monthly_agent_workspace_edits !== "number") u.monthly_agent_workspace_edits = 0;
   return u;
 }
 function saveUsage(u) {
@@ -2127,6 +2137,101 @@ function saveAgentDraft(draft){
 
 function getAgentTemplates(org_id){
   return readJSON(FILES.agent_templates, []).filter(t => t.org_id === org_id);
+}
+
+function getAgentWorkspace(org_id, billed_id){
+  return readJSON(FILES.agent_workspaces, []).find(w => w.org_id === org_id && w.billed_id === billed_id) || null;
+}
+
+function saveAgentWorkspace(org_id, ws){
+  const all = readJSON(FILES.agent_workspaces, []);
+  const idx = all.findIndex(x => x.workspace_id === ws.workspace_id && x.org_id === org_id);
+  const next = { ...ws, org_id, updated_at: nowISO() };
+  if (idx >= 0) all[idx] = next;
+  else all.push(next);
+  writeJSON(FILES.agent_workspaces, all);
+  return next;
+}
+
+function addAgentMessage(org_id, msg){
+  const all = readJSON(FILES.agent_messages, []);
+  all.push({ ...msg, org_id, created_at: msg.created_at || nowISO() });
+  writeJSON(FILES.agent_messages, all);
+}
+
+function getAgentMessages(org_id, billed_id){
+  const ws = getAgentWorkspace(org_id, billed_id);
+  if (!ws) return [];
+  return readJSON(FILES.agent_messages, [])
+    .filter(m => m.org_id === org_id && m.workspace_id === ws.workspace_id && m.billed_id === billed_id)
+    .sort((a,b)=> new Date(a.created_at||0).getTime() - new Date(b.created_at||0).getTime());
+}
+
+function ensureAgentWorkspace(org_id, billedClaim){
+  let ws = getAgentWorkspace(org_id, billedClaim.billed_id);
+  if (ws) return ws;
+  const ts = nowISO();
+  ws = {
+    workspace_id: uuid(),
+    org_id,
+    billed_id: billedClaim.billed_id,
+    claim_number: billedClaim.claim_number || "",
+    payer: billedClaim.payer || "",
+    status: "draft",
+    appeal: { draft_text: "", updated_at: null, version: 0, template_id: null, last_run_at: null },
+    negotiation: { draft_text: "", updated_at: null, version: 0, template_id: null, last_run_at: null },
+    attachments: [],
+    created_at: ts,
+    updated_at: ts
+  };
+  return saveAgentWorkspace(org_id, ws);
+}
+
+function storeWorkspaceUpload(org_id, file){
+  const dir = path.join(UPLOADS_DIR, org_id, "agent_workspace");
+  ensureDir(dir);
+  const clean = String(file.filename || "upload.bin").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const stored = `${Date.now()}_${uuid()}_${clean}`;
+  const storedPath = path.join(dir, stored);
+  fs.writeFileSync(storedPath, file.buffer);
+  return { filename: clean, stored_path: storedPath };
+}
+
+function agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile, practiceSettings }){
+  const orgName = String(orgProfile?.legal_name || orgProfile?.org_name || orgProfile?.dba_name || "Practice").trim() || "Practice";
+  const dos = claim?.dos || claim?.date_of_service || "N/A";
+  const underpaidAmount = Math.max(0, Number(derived?.underpaidAmount || 0));
+  const attachmentLine = "Attachments included: denial notice/EOB, claim form, relevant records, contract excerpts, and supporting notes.";
+  const opening = `${orgName}\n${nowISO().slice(0,10)}\n\nRe: Claim #${claim?.claim_number || "N/A"} | Payer: ${claim?.payer || "Unknown"} | DOS: ${dos}`;
+  const financials = [
+    `Billed: ${formatMoneyUI(derived?.billedAmount || claim?.amount_billed || 0)}`,
+    `Expected Insurance: ${formatMoneyUI(derived?.expectedInsurance || claim?.expected_insurance || 0)}`,
+    `Paid by Payer: ${formatMoneyUI(derived?.paidAmount || claim?.paid_amount || 0)}`,
+    `Underpaid Amount: ${formatMoneyUI(underpaidAmount)}`,
+    `Patient Balance Remaining: ${formatMoneyUI(derived?.patientBalanceRemaining || 0)}`,
+  ].join("\n");
+  if (type === "appeal") {
+    const denialRef = appealCase ? `Denial Case ID: ${appealCase.case_id || "N/A"}` : "Denial Case ID: N/A";
+    return `${opening}\n${denialRef}\n\nTo Appeals Department,\n\nWe request reconsideration and reprocessing of the denied claim above. Based on the submitted documentation and treatment details, this claim meets plan requirements and medical necessity standards. Please overturn the denial and issue payment according to applicable plan benefits and contracted terms.\n\nClaim Financial Snapshot\n${financials}\n\nRequested Action\n- Reprocess claim and reverse denial determination.\n- Apply in-network/contracted benefits where applicable.\n- Provide written rationale and policy citation if any portion remains denied.\n\n${attachmentLine}\n\nThank you for your prompt review. Please contact our office with any additional requirements.\n\nSincerely,\n${orgName}`.trim();
+  }
+  const negotiationIdLine = negotiationCase ? `Negotiation ID: ${negotiationCase.negotiation_id || "N/A"}` : "Negotiation ID: N/A";
+  return `${opening}\n${negotiationIdLine}\n\nTo Provider Contracting / Claims Adjustment Team,\n\nWe are submitting this underpayment variance request for review. The paid amount does not align with expected reimbursement based on our contracted terms and claim details.\n\nClaim Financial Snapshot\n${financials}\n\nRequested Action\n- Recalculate reimbursement per contract terms and remit corrected payment.\n- Requested amount: ${formatMoneyUI(underpaidAmount)}\n- Confirm adjustment details and remittance timeline.\n\n${attachmentLine}\n\nWe appreciate your expedited review and response.\n\nSincerely,\n${orgName}`.trim();
+}
+
+function applyAgentInstructionToDraft(draftText, instruction, channel){
+  const txt = String(draftText || "");
+  const ins = String(instruction || "").trim();
+  if (!ins) return txt;
+  let next = txt;
+  const lower = ins.toLowerCase();
+  if (lower.includes("stronger") || lower.includes("firm")) {
+    next = next.replace("We request", "We formally request");
+  }
+  if (lower.includes("shorter") || lower.includes("concise")) {
+    next = next.replace(/\n\nThank you for your prompt review\.[\s\S]*$/m, "\n\nThank you for your review.");
+  }
+  next += `\n\nRequested edits (${channel}):\n- ${ins}`;
+  return next;
 }
 
 function renderTemplate(templateBody, claim){
@@ -5637,7 +5742,7 @@ if (method === "GET" && pathname === "/claims") {
         <td>${riskScore}</td>
         <td class="muted small">${safeStr(c.case_id)}</td>
         <td>${safeStr(c.status||"")}</td>
-        <td><a href="/appeal-detail?case_id=${encodeURIComponent(c.case_id)}">Open Appeal</a></td>
+        <td><a href="/appeal-detail?case_id=${encodeURIComponent(c.case_id)}">Open Appeal</a>${linked ? ` • <a href="/agent-workspace?billed_id=${encodeURIComponent(linked.billed_id)}">AI Workspace</a>` : ``}</td>
       </tr>`;
     }).join("");
 
@@ -5703,7 +5808,7 @@ if (method === "GET" && pathname === "/claims") {
         <td>${formatMoneyUI(n.approved_amount||0)}</td>
         <td>${formatMoneyUI(n.collected_amount||0)}</td>
         <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
-        <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">Open Negotiation</a></td>
+        <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">Open Negotiation</a>${linked.billed_id ? ` • <a href="/agent-workspace?billed_id=${encodeURIComponent(linked.billed_id)}">AI Workspace</a>` : ``}</td>
       </tr>
     `;}).join("");
 
@@ -6641,6 +6746,7 @@ if (method === "GET" && pathname === "/actions") {
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Balance Write-Off</a>` : ``}
+        <a class="btn secondary small" href="/agent-workspace?billed_id=${encodeURIComponent(b.billed_id)}">AI Workspace</a>
       `;
     } else if (x.kind === "negotiation") {
       actionsHtml = `
@@ -6648,12 +6754,14 @@ if (method === "GET" && pathname === "/actions") {
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Balance Write-Off</a>` : ``}
+        <a class="btn secondary small" href="/agent-workspace?billed_id=${encodeURIComponent(b.billed_id)}">AI Workspace</a>
       `;
     } else {
       actionsHtml = `
         <a class="btn secondary small" href="${claimLink}">Open Claim</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Balance Write-Off</a>` : ``}
+        <a class="btn secondary small" href="/agent-workspace?billed_id=${encodeURIComponent(b.billed_id)}">AI Workspace</a>
       `;
     }
 
@@ -12225,6 +12333,209 @@ else if (type === "payers") {
   }
 
 
+  if (method === "GET" && pathname === "/agent-workspace") {
+    const billed_id = String(parsed.query.billed_id || "").trim();
+    const billedAll = readJSON(FILES.billed, []);
+    const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+    if (!billed_id || !b) return redirect(res, "/claims?view=all");
+    const claimCtx = buildClaimContext(org.org_id);
+    const d = evaluateClaimDerived(b, claimCtx);
+    const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+    const appealCase = b.denial_case_id ? casesAll.find(c => c.case_id === b.denial_case_id) : null;
+    const negotiationCase = getNegotiationsByBilled(org.org_id, b.billed_id).map(n=>normalizeNegotiation(n))[0] || null;
+    const ws = ensureAgentWorkspace(org.org_id, b);
+    const msgs = getAgentMessages(org.org_id, billed_id);
+
+    const attachments = (ws.attachments || []).map(a => `<tr><td><a href="/agent-workspace/file?attachment_id=${encodeURIComponent(a.attachment_id)}">${safeStr(a.filename)}</a></td><td>${safeStr(a.kind || "supporting")}</td><td>${a.uploaded_at ? new Date(a.uploaded_at).toLocaleString() : "—"}</td></tr>`).join("");
+    const msgHtml = msgs.map(m => `<div style="padding:8px;border:1px solid var(--border);border-radius:10px;margin-bottom:6px;"><div class="small muted">${safeStr(m.role)} • ${safeStr(m.channel)} • ${m.created_at ? new Date(m.created_at).toLocaleString() : ""}</div><div style="white-space:pre-wrap;">${safeStr(m.content || "")}</div></div>`).join("");
+    const html = renderPage("AI Agent Workspace", `
+      <h2>AI Agent Workspace</h2>
+      <p class="muted">Appeal and negotiation drafting workspace for claim ${safeStr(b.claim_number || "")}. ${infoIcon("Free trial includes full agent workspace access. Usage is tracked but not blocked.")}</p>
+
+      <h3>Claim Snapshot ${infoIcon("Operational summary used by both agents for deterministic draft generation.")}</h3>
+      <table>
+        <tr><th>Claim #</th><td>${safeStr(b.claim_number || "")}</td></tr>
+        <tr><th>Payer</th><td>${safeStr(b.payer || "")}</td></tr>
+        <tr><th>Status</th><td>${safeStr(d.lifecycleStage || b.status || "Pending")}</td></tr>
+        <tr><th>Billed</th><td>${formatMoneyUI(d.billedAmount)}</td></tr>
+        <tr><th>Expected</th><td>${formatMoneyUI(d.expectedInsurance)}</td></tr>
+        <tr><th>Paid</th><td>${formatMoneyUI(d.paidAmount)}</td></tr>
+        <tr><th>Underpaid</th><td>${formatMoneyUI(d.underpaidAmount)}</td></tr>
+        <tr><th>Patient Balance Remaining</th><td>${formatMoneyUI(d.patientBalanceRemaining)}</td></tr>
+        <tr><th>At Risk</th><td>${formatMoneyUI(d.atRiskAmount)}</td></tr>
+      </table>
+
+      <div class="row" style="margin-top:14px;">
+        <div class="col card">
+          <h3>Appeal Agent ${infoIcon("Generate a letter-focused draft for denial reconsideration.")}</h3>
+          <form method="POST" action="/agent-workspace/generate"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><button class="btn secondary" type="submit">Generate/Refresh Appeal Draft</button></form>
+          <form method="POST" action="/agent-workspace/save" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><textarea name="draft_text" style="min-height:250px;">${safeStr(ws.appeal?.draft_text || "")}</textarea><div class="small muted">Version ${formatNumberUI(ws.appeal?.version || 0)}</div><button class="btn" type="submit">Save Appeal Edits</button></form>
+          <form method="POST" action="/agent-workspace/status" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="status" value="ready_for_review"/><button class="btn secondary" type="submit">Mark Ready</button></form>
+        </div>
+        <div class="col card">
+          <h3>Negotiation Agent ${infoIcon("Generate an underpayment negotiation request with requested amount.")}</h3>
+          <form method="POST" action="/agent-workspace/generate"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><button class="btn secondary" type="submit">Generate/Refresh Negotiation Draft</button></form>
+          <form method="POST" action="/agent-workspace/save" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><textarea name="draft_text" style="min-height:250px;">${safeStr(ws.negotiation?.draft_text || "")}</textarea><div class="small muted">Version ${formatNumberUI(ws.negotiation?.version || 0)}</div><button class="btn" type="submit">Save Negotiation Edits</button></form>
+          <form method="POST" action="/agent-workspace/status" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="status" value="ready_for_review"/><button class="btn secondary" type="submit">Mark Ready</button></form>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+      <h3>Supporting Documents ${infoIcon("Upload supporting files for this workspace. Files are scoped to this org.")}</h3>
+      <form method="POST" action="/agent-workspace/upload" enctype="multipart/form-data"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="file" name="files" multiple/><button class="btn secondary" type="submit">Upload</button></form>
+      <table><thead><tr><th>Filename</th><th>Kind</th><th>Uploaded</th></tr></thead><tbody>${attachments || `<tr><td colspan="3" class="muted">No attachments yet.</td></tr>`}</tbody></table>
+
+      <div class="hr"></div>
+      <h3>Agent Chat ${infoIcon("Ask for edits; agent response applies deterministic rule edits to selected draft.")}</h3>
+      <div>${msgHtml || `<p class="muted">No messages yet.</p>`}</div>
+      <form method="POST" action="/agent-workspace/chat"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><label>Channel</label><select name="channel"><option value="general">General</option><option value="appeal">Appeal</option><option value="negotiation">Negotiation</option></select><label>Message</label><textarea name="content" style="min-height:90px;"></textarea><button class="btn" type="submit">Send</button></form>
+    `, navUser(), {showChat:true, orgName: org.org_name});
+    return send(res, 200, html);
+  }
+
+  if (method === "POST" && pathname === "/agent-workspace/generate") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const billed_id = String(params.get("billed_id") || "").trim();
+      const draft_type = String(params.get("draft_type") || "").trim();
+      const billedAll = readJSON(FILES.billed, []);
+      const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (!b || !["appeal","negotiation"].includes(draft_type)) return redirect(res, "/claims?view=all");
+      const claimCtx = buildClaimContext(org.org_id);
+      const d = evaluateClaimDerived(b, claimCtx);
+      const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
+      const appealCase = b.denial_case_id ? casesAll.find(c => c.case_id === b.denial_case_id) : null;
+      const negotiationCase = getNegotiationsByBilled(org.org_id, b.billed_id).map(n=>normalizeNegotiation(n))[0] || null;
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      const draftText = agentDraftFromRules({ type: draft_type, claim: b, derived: d, appealCase, negotiationCase, orgProfile: getOrg(org.org_id), practiceSettings: getPracticeSettings(org.org_id) });
+      const ts = nowISO();
+      if (draft_type === "appeal") ws.appeal = { ...(ws.appeal || {}), draft_text: draftText, updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
+      else ws.negotiation = { ...(ws.negotiation || {}), draft_text: draftText, updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
+      ws.status = "draft";
+      saveAgentWorkspace(org.org_id, ws);
+      addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel: draft_type, content: "Draft generated.", created_at: ts });
+      const usage = getUsage(org.org_id);
+      usage.monthly_ai_generations_used = Number(usage.monthly_ai_generations_used || 0) + 1;
+      saveUsage(usage);
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/agent-workspace/save") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const billed_id = String(params.get("billed_id") || "").trim();
+      const draft_type = String(params.get("draft_type") || "").trim();
+      const draft_text = String(params.get("draft_text") || "");
+      const billedAll = readJSON(FILES.billed, []);
+      const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (!b || !["appeal","negotiation"].includes(draft_type)) return redirect(res, "/claims?view=all");
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      const ts = nowISO();
+      if (draft_type === "appeal") ws.appeal = { ...(ws.appeal || {}), draft_text, updated_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
+      else ws.negotiation = { ...(ws.negotiation || {}), draft_text, updated_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
+      ws.status = "edited";
+      saveAgentWorkspace(org.org_id, ws);
+      addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: draft_type, content: "Manual edits saved." });
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/agent-workspace/status") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const billed_id = String(params.get("billed_id") || "").trim();
+      const status = String(params.get("status") || "draft").trim();
+      const allowed = ["draft","edited","ready_for_review","submitted","closed"];
+      const billedAll = readJSON(FILES.billed, []);
+      const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (!b) return redirect(res, "/claims?view=all");
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      ws.status = allowed.includes(status) ? status : "draft";
+      saveAgentWorkspace(org.org_id, ws);
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/agent-workspace/chat") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const billed_id = String(params.get("billed_id") || "").trim();
+      const channel = String(params.get("channel") || "general").trim();
+      const content = String(params.get("content") || "").trim();
+      const billedAll = readJSON(FILES.billed, []);
+      const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (!b) return redirect(res, "/claims?view=all");
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel, content });
+      if (content && ["appeal","negotiation"].includes(channel)) {
+        const ts = nowISO();
+        if (channel === "appeal") ws.appeal = { ...(ws.appeal || {}), draft_text: applyAgentInstructionToDraft(ws.appeal?.draft_text || "", content, channel), updated_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
+        if (channel === "negotiation") ws.negotiation = { ...(ws.negotiation || {}), draft_text: applyAgentInstructionToDraft(ws.negotiation?.draft_text || "", content, channel), updated_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
+        ws.status = "edited";
+        saveAgentWorkspace(org.org_id, ws);
+        addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel, content: `Applied instruction to ${channel} draft.` });
+        const usage = getUsage(org.org_id);
+        usage.monthly_agent_workspace_edits = Number(usage.monthly_agent_workspace_edits || 0) + 1;
+        saveUsage(usage);
+      }
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/agent-workspace/upload") {
+    const contentType = String(req.headers["content-type"] || "");
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/claims?view=all");
+    const boundaryMatch = /boundary=(.+)$/.exec(contentType);
+    if (!boundaryMatch) return redirect(res, "/claims?view=all");
+    parseMultipart(req, boundaryMatch[1]).then(({ files, fields }) => {
+      const billed_id = String(fields.billed_id || "").trim();
+      const billedAll = readJSON(FILES.billed, []);
+      const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (!b) return redirect(res, "/claims?view=all");
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      const saved = [];
+      for (const f of (files || [])) {
+        const up = storeWorkspaceUpload(org.org_id, f);
+        ws.attachments = ws.attachments || [];
+        ws.attachments.push({ attachment_id: uuid(), filename: up.filename, stored_path: up.stored_path, uploaded_at: nowISO(), kind: "supporting" });
+        saved.push(up);
+      }
+      saveAgentWorkspace(org.org_id, ws);
+      addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: `Uploaded ${saved.length} attachment(s).` });
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+    }).catch(()=> redirect(res, "/claims?view=all"));
+    return;
+  }
+
+  if (method === "GET" && pathname === "/agent-workspace/file") {
+    const attachment_id = String(parsed.query.attachment_id || "").trim();
+    const all = readJSON(FILES.agent_workspaces, []).filter(w => w.org_id === org.org_id);
+    let found = null;
+    for (const ws of all) {
+      const at = (ws.attachments || []).find(a => a.attachment_id === attachment_id);
+      if (at) { found = at; break; }
+    }
+    if (!found || !found.stored_path || !fs.existsSync(found.stored_path)) return send(res, 404, "Attachment not found", "text/plain");
+    const ext = path.extname(String(found.filename || found.stored_path || "")).toLowerCase();
+    const mimeMap = { ".csv": "text/csv", ".pdf": "application/pdf", ".xls": "application/vnd.ms-excel", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".txt": "text/plain", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg" };
+    res.writeHead(200, { "Content-Type": mimeMap[ext] || "application/octet-stream", "Content-Disposition": `inline; filename="${path.basename(found.filename || "attachment")}"` });
+    fs.createReadStream(found.stored_path).pipe(res);
+    return;
+  }
+
   // --------- CLAIM DETAIL VIEW ----------
  
 if (method === "GET" && pathname === "/claim-detail") {
@@ -12369,6 +12680,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       ${suggested === "Negotiate" ? `<a class="btn secondary" href="/negotiation-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Perform Suggested Action</a>` : ``}
       ${suggested === "Adjust Patient Responsibility" ? `<a class="btn secondary" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Perform Suggested Action</a>` : ``}
       ${suggested === "Review Claim" ? `<a class="btn secondary" href="/claims?view=all&q=${encodeURIComponent(b.claim_number || "")}">Perform Suggested Action</a>` : ``}
+      <a class="btn secondary" href="/agent-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Open AI Agent Workspace</a>
       <a class="btn secondary" href="/actions?q=${encodeURIComponent(b.claim_number || "")}">View In Action Center</a>
     </div>
 
