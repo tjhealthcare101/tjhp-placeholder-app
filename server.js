@@ -2175,7 +2175,10 @@ function getAgentMessages(org_id, billed_id){
 
 function ensureAgentWorkspace(org_id, billedClaim){
   let ws = getAgentWorkspace(org_id, billedClaim.billed_id);
-  if (ws) return ws;
+  if (ws) {
+    ensureWorkspacePacket(ws);
+    return ws;
+  }
   const ts = nowISO();
   ws = {
     workspace_id: uuid(),
@@ -2185,12 +2188,88 @@ function ensureAgentWorkspace(org_id, billedClaim){
     payer: billedClaim.payer || "",
     status: "draft",
     appeal: { draft_text: "", updated_at: null, version: 0, template_id: null, last_run_at: null },
-    negotiation: { draft_text: "", updated_at: null, version: 0, template_id: null, last_run_at: null },
+    negotiation: { draft_text: "", updated_at: null, version: 0, template_id: null, last_run_at: null, requested_amount: null },
     attachments: [],
+    packet: defaultWorkspacePacket(),
+    activity: { last_opened_at: null, last_exported_at: null },
     created_at: ts,
     updated_at: ts
   };
+  ensureWorkspacePacket(ws);
   return saveAgentWorkspace(org_id, ws);
+}
+
+function defaultWorkspacePacket(){
+  return {
+    completeness: { total: 0, complete: 0, pct: 0 },
+    required_appeal: [
+      { key:"denial_letter", label:"Denial Letter", required:true, status:"missing", attachment_id:null, updated_at:null },
+      { key:"eob_era", label:"EOB/ERA", required:true, status:"missing", attachment_id:null, updated_at:null },
+      { key:"claim_form", label:"Claim Form / Itemized Bill", required:true, status:"missing", attachment_id:null, updated_at:null }
+    ],
+    clinical_support: [
+      { key:"lmn", label:"Letter of Medical Necessity", required:false, status:"missing", attachment_id:null, lmn_text:"", updated_at:null },
+      { key:"office_notes", label:"Office Notes / Op Note", required:false, status:"missing", attachment_id:null, updated_at:null },
+      { key:"labs_imaging", label:"Labs / Imaging", required:false, status:"missing", attachment_id:null, updated_at:null }
+    ],
+    contract_policy: [
+      { key:"contract_excerpt", label:"Contract Excerpt / Allowed Rules", required:false, status:"missing", attachment_id:null, updated_at:null },
+      { key:"payer_policy", label:"Payer Policy Citation", required:false, status:"missing", attachment_id:null, updated_at:null }
+    ]
+  };
+}
+
+function computePacketCompleteness(ws){
+  const req = ((ws?.packet?.required_appeal) || []).filter(i => i.required);
+  const total = req.length;
+  const complete = req.filter(i => i.status === "present").length;
+  const pct = total ? Math.round((complete / total) * 100) : 0;
+  return { total, complete, pct };
+}
+
+function ensureWorkspacePacket(ws){
+  const base = defaultWorkspacePacket();
+  const merged = { ...(ws.packet || {}) };
+  const mergeArr = (src, cur=[]) => src.map(i => {
+    const found = (cur || []).find(x => x.key === i.key) || {};
+    return { ...i, ...found };
+  });
+  merged.required_appeal = mergeArr(base.required_appeal, ws.packet?.required_appeal);
+  merged.clinical_support = mergeArr(base.clinical_support, ws.packet?.clinical_support);
+  merged.contract_policy = mergeArr(base.contract_policy, ws.packet?.contract_policy);
+  merged.completeness = computePacketCompleteness({ packet: merged });
+  ws.packet = merged;
+  ws.activity = ws.activity || { last_opened_at: null, last_exported_at: null };
+  return ws;
+}
+
+function getWorkspacePacketItem(ws, key){
+  const all = [
+    ...(ws.packet?.required_appeal || []),
+    ...(ws.packet?.clinical_support || []),
+    ...(ws.packet?.contract_policy || [])
+  ];
+  return all.find(i => i.key === key) || null;
+}
+
+function defaultWorkspaceTab(stage){
+  if (stage === "Denied") return "appeal";
+  if (stage === "Underpaid") return "negotiation";
+  return "packet";
+}
+
+function workspaceNextStep(stage){
+  if (stage === "Denied") return "Next: Generate Appeal Draft → Upload Denial Letter → Mark Ready";
+  if (stage === "Underpaid") return "Next: Generate Negotiation Draft → Upload EOB/ERA → Mark Ready";
+  if (stage === "Patient Follow-Up") return "Next: Adjust Patient Collected or Patient Write-Off";
+  if (stage === "In Appeal/Negotiation") return "Next: Update packet → Submit / Follow-up";
+  if (stage === "Waiting Payment") return "Next: Upload payment file in Data Management";
+  return "Next: Complete packet checklist and generate the needed draft.";
+}
+
+function renderWorkspaceTabs(billed_id, activeTab){
+  const mk = (key, label) => `<a class="btn ${activeTab===key?"":"secondary"}" href="/agent-workspace?billed_id=${encodeURIComponent(billed_id)}&tab=${key}">${label}</a>`;
+  return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px;">${mk("appeal","Appeal Draft")}${mk("negotiation","Negotiation Draft")}${mk("packet","Packet Builder")}${mk("activity","Activity")}</div>`;
 }
 
 function storeWorkspaceUpload(org_id, file){
@@ -2346,16 +2425,15 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
   let generated = 0;
   if (wantAppeal && shouldRefresh(ws.appeal)) {
     ws.appeal = { ...(ws.appeal || {}), draft_text: generateDraftUsingTemplateOrRules({ org_id, type: "appeal", claim, derived: currentDerived, appealCase, negotiationCase, ws }), updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
-    addAgentMessage(org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id: claim.billed_id, role: "agent", channel: "appeal", content: "Appeal draft auto-generated during ingestion/rebuild.", created_at: ts });
     generated += 1;
   }
   if (wantNegotiation && shouldRefresh(ws.negotiation)) {
     ws.negotiation = { ...(ws.negotiation || {}), draft_text: generateDraftUsingTemplateOrRules({ org_id, type: "negotiation", claim, derived: currentDerived, appealCase, negotiationCase, ws }), updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
-    addAgentMessage(org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id: claim.billed_id, role: "agent", channel: "negotiation", content: "Negotiation draft auto-generated during ingestion/rebuild.", created_at: ts });
     generated += 1;
   }
   if (generated > 0) {
     ws.status = "draft";
+    addAgentMessage(org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id: claim.billed_id, role: "agent", channel: "general", content: "Draft auto-generated (reason: denial/payment update).", created_at: ts });
     saveAgentWorkspace(org_id, ws);
     const usage = getUsage(org_id);
     usage.monthly_ai_generations_used = Number(usage.monthly_ai_generations_used || 0) + generated;
@@ -6822,7 +6900,7 @@ if (method === "GET" && pathname === "/actions") {
     let actionsHtml = '';
     if (x.kind === "denial") {
       actionsHtml = `
-        <a class="btn secondary small" href="/appeal-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Appeal</a>
+        <a class="btn secondary small" href="/agent-workspace?billed_id=${encodeURIComponent(b.billed_id)}&tab=appeal">Open AI Workspace</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Balance Write-Off</a>` : ``}
@@ -6830,7 +6908,7 @@ if (method === "GET" && pathname === "/actions") {
       `;
     } else if (x.kind === "negotiation") {
       actionsHtml = `
-        <a class="btn secondary small" href="/negotiation-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Open Negotiation</a>
+        <a class="btn secondary small" href="/agent-workspace?billed_id=${encodeURIComponent(b.billed_id)}&tab=negotiation">Open AI Workspace</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Balance Write-Off</a>` : ``}
@@ -7032,99 +7110,18 @@ if (method === "POST" && pathname === "/claim-action") {
 }
 
 // ==============================
-// APPEAL WORKSPACE (execution page)
+// APPEAL/NEGOTIATION WORKSPACE LEGACY REDIRECTS
 // ==============================
 if (method === "GET" && pathname === "/appeal-workspace") {
   const billed_id = String(parsed.query.billed_id || "").trim();
   if (!billed_id) return redirect(res, "/actions");
-
-  const billedAll = readJSON(FILES.billed, []);
-  const b = billedAll.find(x => x.org_id === org.org_id && x.billed_id === billed_id);
-  if (!b) return redirect(res, "/actions");
-
-  // Ensure denial case exists
-  let cases = readJSON(FILES.cases, []);
-  let cid = b.denial_case_id || "";
-  if (!cid) {
-    cid = uuid();
-    cases.push({
-      case_id: cid,
-      org_id: org.org_id,
-      created_by_user_id: user.user_id,
-      created_at: nowISO(),
-      status: "UPLOAD_RECEIVED",
-      notes: `Auto-created from Action Center. Claim #: ${b.claim_number} | Payer: ${b.payer} | DOS: ${b.dos}`,
-      case_type: "denial",
-      files: [],
-      template_id: "",
-      paid: false,
-      paid_at: null,
-      paid_amount: null,
-      ai_started_at: null,
-      appeal_packet: appealPacketDefaults(org),
-      appeal_attachments: [],
-      ai: { denial_summary:null, appeal_considerations:null, draft_text:null, denial_reason_category:null, missing_info:[], time_to_draft_seconds:0 }
-    });
-    writeJSON(FILES.cases, cases);
-    b.denial_case_id = cid;
-    b.status = "Denied";
-    b.denied_at = b.denied_at || nowISO();
-    writeJSON(FILES.billed, billedAll);
-    auditLog({ actor:"user", action:"denial_case_autocreate", org_id: org.org_id, billed_id, case_id: cid });
-  }
-
-  // redirect into appeal-detail (already contains packet builder + AI assist + attachments)
-  return redirect(res, `/appeal-detail?case_id=${encodeURIComponent(cid)}`);
+  return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}&tab=appeal`);
 }
 
-// ==============================
-// NEGOTIATION WORKSPACE (execution page)
-// ==============================
 if (method === "GET" && pathname === "/negotiation-workspace") {
   const billed_id = String(parsed.query.billed_id || "").trim();
   if (!billed_id) return redirect(res, "/actions");
-
-  const billedAll = readJSON(FILES.billed, []);
-  const b = billedAll.find(x => x.org_id === org.org_id && x.billed_id === billed_id);
-  if (!b) return redirect(res, "/actions");
-
-  // Ensure negotiation exists
-  const existing = getNegotiations(org.org_id)
-    .filter(n => n.billed_id === billed_id)
-    .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime())[0];
-
-  if (existing) return redirect(res, `/negotiation-detail?negotiation_id=${encodeURIComponent(existing.negotiation_id)}`);
-
-  // create new negotiation record
-  const negotiation_id = uuid();
-  const rec = normalizeNegotiation({
-    negotiation_id,
-    org_id: org.org_id,
-    billed_id: b.billed_id,
-    claim_number: b.claim_number || "",
-    payer: b.payer || "",
-    dos: b.dos || "",
-    amount_billed: num(b.amount_billed),
-    amount_paid: num(b.insurance_paid || b.paid_amount),
-    amount_underpaid: computeClaimAtRisk({ ...b, status: "Underpaid" }),
-    requested_amount: 0,
-    approved_amount: 0,
-    collected_amount: 0,
-    status: "Open",
-    notes: "",
-    documents: [],
-    packet_draft: aiGenerateUnderpayment(org.org_name, {
-      claim_number: b.claim_number, dos: b.dos, payer: b.payer,
-      allowed_amount: num(b.allowed_amount), expected_insurance: num(b.expected_insurance),
-      actual_paid: num(b.insurance_paid||b.paid_amount), underpaid_amount: computeClaimAtRisk({ ...b, status:"Underpaid" })
-    }).draft_text
-  });
-
-  saveNegotiation(rec);
-  try { updateBilledClaim(b.billed_id, (x)=>{ x.negotiation_id = negotiation_id; }); } catch {}
-  auditLog({ actor:"user", action:"negotiation_autocreate", org_id: org.org_id, billed_id, negotiation_id });
-
-  return redirect(res, `/negotiation-detail?negotiation_id=${encodeURIComponent(negotiation_id)}`);
+  return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}&tab=negotiation`);
 }
 
 // ==============================
@@ -7715,6 +7712,7 @@ if (method === "GET" && pathname === "/negotiation-detail") {
 
   const html = renderPage("Negotiation Detail", `
     <h2>Negotiation Detail</h2>
+    <a class="btn secondary" href="/agent-workspace?billed_id=${encodeURIComponent(n.billed_id)}&tab=negotiation">Open AI Workspace</a>
     <p class="muted">${safeStr(applyHelp)}</p>
 
     <div class="hr"></div>
@@ -9521,6 +9519,7 @@ if (method === "GET" && pathname === "/appeal-detail") {
 
   const html = renderPage("Appeal Detail", `
     <h2>Appeal Detail</h2>
+    <a class="btn secondary" href="/agent-workspace?billed_id=${encodeURIComponent(linked?.billed_id || "")}&tab=appeal">Open AI Workspace</a>
     <p class="muted">Denial appeal workflow. Edit the appeal letter, get AI suggestions, upload attachments, and track submission/approval.</p>
 
     <div class="hr"></div>
@@ -12422,59 +12421,37 @@ else if (type === "payers") {
     if (!billed_id || !b) return redirect(res, "/claims?view=all");
     const claimCtx = buildClaimContext(org.org_id);
     const d = evaluateClaimDerived(b, claimCtx);
-    const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
-    const appealCase = b.denial_case_id ? casesAll.find(c => c.case_id === b.denial_case_id) : null;
-    const negotiationCase = getNegotiationsByBilled(org.org_id, b.billed_id).map(n=>normalizeNegotiation(n))[0] || null;
     const ws = ensureAgentWorkspace(org.org_id, b);
-    const msgs = getAgentMessages(org.org_id, billed_id);
+    ensureWorkspacePacket(ws);
+    ws.activity = ws.activity || {};
+    ws.activity.last_opened_at = nowISO();
+    saveAgentWorkspace(org.org_id, ws);
+
+    const activeTab = ["appeal","negotiation","packet","activity"].includes(String(parsed.query.tab||"")) ? String(parsed.query.tab) : defaultWorkspaceTab(String(d.lifecycleStage || ""));
     const templates = getAgentTemplates(org.org_id);
+    const msgs = getAgentMessages(org.org_id, billed_id);
     const appealTemplateOptions = templates.filter(t => t.type === "appeal").map(t => `<option value="${safeStr(t.template_id || "")}" ${String(ws.appeal?.template_id || "") === String(t.template_id || "") ? "selected" : ""}>${safeStr(t.name || t.template_id || "Template")}</option>`).join("");
     const negotiationTemplateOptions = templates.filter(t => t.type === "negotiation").map(t => `<option value="${safeStr(t.template_id || "")}" ${String(ws.negotiation?.template_id || "") === String(t.template_id || "") ? "selected" : ""}>${safeStr(t.name || t.template_id || "Template")}</option>`).join("");
+    const requiredComp = ws.packet?.completeness || computePacketCompleteness(ws);
+    const nextStep = workspaceNextStep(String(d.lifecycleStage || ""));
 
-    const attachments = (ws.attachments || []).map(a => `<tr><td><a href="/agent-workspace/file?attachment_id=${encodeURIComponent(a.attachment_id)}">${safeStr(a.filename)}</a></td><td>${safeStr(a.kind || "supporting")}</td><td>${a.uploaded_at ? new Date(a.uploaded_at).toLocaleString() : "—"}</td></tr>`).join("");
-    const msgHtml = msgs.map(m => `<div style="padding:8px;border:1px solid var(--border);border-radius:10px;margin-bottom:6px;"><div class="small muted">${safeStr(m.role)} • ${safeStr(m.channel)} • ${m.created_at ? new Date(m.created_at).toLocaleString() : ""}</div><div style="white-space:pre-wrap;">${safeStr(m.content || "")}</div></div>`).join("");
-    const html = renderPage("AI Agent Workspace", `
-      <h2>AI Agent Workspace</h2>
-      <p class="muted">Appeal and negotiation drafting workspace for claim ${safeStr(b.claim_number || "")}. ${infoIcon("Free trial includes full agent workspace access. Usage is tracked but not blocked.")}</p>
+    const attachments = (ws.attachments || []).map(a => `<li><a href="/agent-workspace/file?attachment_id=${encodeURIComponent(a.attachment_id)}">${safeStr(a.filename)}</a> <span class="muted small">(${safeStr(a.kind || "supporting")})</span></li>`).join("") || `<li class="muted">No attachments yet.</li>`;
+    const renderPacketSection = (title, arr) => `<details style="margin-bottom:10px;" open><summary><strong>${title}</strong></summary><div style="margin-top:8px;">${(arr||[]).map(item => `<div style="border:1px solid var(--border);padding:8px;border-radius:8px;margin:6px 0;"><div><strong>${safeStr(item.label)}</strong> ${item.status==="present"?"✅":"⚠ missing"}</div><div class="small muted">${item.attachment_id ? `Updated ${item.updated_at ? new Date(item.updated_at).toLocaleString() : ""}` : "No file attached"}</div><form method="POST" action="/agent-workspace/upload" enctype="multipart/form-data" style="margin-top:6px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="packet_key" value="${safeStr(item.key)}"/><input type="hidden" name="kind" value="supporting"/><input type="hidden" name="tab" value="packet"/><input type="file" name="files"/><button class="btn secondary small" type="submit">Upload</button></form></div>`).join("")}</div></details>`;
 
-      <h3>Claim Snapshot ${infoIcon("Operational summary used by both agents for deterministic draft generation.")}</h3>
-      <table>
-        <tr><th>Claim #</th><td>${safeStr(b.claim_number || "")}</td></tr>
-        <tr><th>Payer</th><td>${safeStr(b.payer || "")}</td></tr>
-        <tr><th>Status</th><td>${safeStr(d.lifecycleStage || b.status || "Pending")}</td></tr>
-        <tr><th>Billed</th><td>${formatMoneyUI(d.billedAmount)}</td></tr>
-        <tr><th>Expected</th><td>${formatMoneyUI(d.expectedInsurance)}</td></tr>
-        <tr><th>Paid</th><td>${formatMoneyUI(d.paidAmount)}</td></tr>
-        <tr><th>Underpaid</th><td>${formatMoneyUI(d.underpaidAmount)}</td></tr>
-        <tr><th>Patient Balance Remaining</th><td>${formatMoneyUI(d.patientBalanceRemaining)}</td></tr>
-        <tr><th>At Risk</th><td>${formatMoneyUI(d.atRiskAmount)}</td></tr>
-      </table>
+    let tabBody = "";
+    if (activeTab === "appeal") {
+      tabBody = `<h3>Appeal Draft</h3><form method="POST" action="/agent-workspace/template"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><input type="hidden" name="tab" value="appeal"/><label>Template</label><select name="template_id"><option value="">Default Rules</option>${appealTemplateOptions}</select><button class="btn secondary" type="submit">Save</button></form><div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;"><form method="POST" action="/agent-workspace/generate"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><input type="hidden" name="tab" value="appeal"/><button class="btn secondary" type="submit">Generate/Refresh</button></form><form method="POST" action="/agent-workspace/status"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="status" value="ready_for_review"/><input type="hidden" name="tab" value="appeal"/><button class="btn secondary" type="submit">Mark Ready</button></form><a class="btn secondary" href="/agent-workspace/export?billed_id=${encodeURIComponent(billed_id)}">Export Packet (PDF)</a></div><form method="POST" action="/agent-workspace/save"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><input type="hidden" name="tab" value="appeal"/><textarea name="draft_text" style="min-height:240px;">${safeStr(ws.appeal?.draft_text || "")}</textarea><div class="small muted">Version ${formatNumberUI(ws.appeal?.version || 0)} • Updated ${ws.appeal?.updated_at ? new Date(ws.appeal.updated_at).toLocaleString() : "—"}</div><button class="btn" type="submit">Save</button></form><form method="POST" action="/agent-workspace/chat" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="appeal"/><input type="hidden" name="tab" value="appeal"/><label>Ask Agent to edit this draft</label><textarea name="content" style="min-height:70px;"></textarea><button class="btn secondary" type="submit">Apply</button></form><details style="margin-top:10px;"><summary>What the agent used</summary><div class="small muted">Claim snapshot: billed ${formatMoneyUI(d.billedAmount)}, expected ${formatMoneyUI(d.expectedInsurance)}, paid ${formatMoneyUI(d.paidAmount)}, status ${safeStr(d.lifecycleStage||"")}</div><ul>${attachments}</ul></details>`;
+    } else if (activeTab === "negotiation") {
+      tabBody = `<h3>Negotiation Draft</h3><form method="POST" action="/agent-workspace/template"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><input type="hidden" name="tab" value="negotiation"/><label>Template</label><select name="template_id"><option value="">Default Rules</option>${negotiationTemplateOptions}</select><button class="btn secondary" type="submit">Save</button></form><div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;"><form method="POST" action="/agent-workspace/generate"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><input type="hidden" name="tab" value="negotiation"/><button class="btn secondary" type="submit">Generate/Refresh</button></form><form method="POST" action="/agent-workspace/status"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="status" value="ready_for_review"/><input type="hidden" name="tab" value="negotiation"/><button class="btn secondary" type="submit">Mark Ready</button></form><a class="btn secondary" href="/agent-workspace/export?billed_id=${encodeURIComponent(billed_id)}">Export Packet (PDF)</a></div><form method="POST" action="/agent-workspace/save"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><input type="hidden" name="tab" value="negotiation"/><label>Requested Amount</label><input name="requested_amount" value="${safeStr(ws.negotiation?.requested_amount ?? d.underpaidAmount)}"/><textarea name="draft_text" style="min-height:240px;">${safeStr(ws.negotiation?.draft_text || "")}</textarea><div class="small muted">Version ${formatNumberUI(ws.negotiation?.version || 0)}</div><button class="btn" type="submit">Save</button></form><form method="POST" action="/agent-workspace/chat" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="negotiation"/><input type="hidden" name="tab" value="negotiation"/><label>Ask Agent to edit this draft</label><textarea name="content" style="min-height:70px;"></textarea><button class="btn secondary" type="submit">Apply</button></form>`;
+    } else if (activeTab === "packet") {
+      const lmnItem = getWorkspacePacketItem(ws, "lmn") || {};
+      tabBody = `<h3>Packet Builder</h3>${renderPacketSection("Required for Appeal", ws.packet?.required_appeal)}${renderPacketSection("Clinical Support", ws.packet?.clinical_support)}${renderPacketSection("Contract / Policy", ws.packet?.contract_policy)}<details><summary>LMN Builder (optional)</summary><form method="POST" action="/agent-workspace/save" style="margin-top:8px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="lmn"/><input type="hidden" name="tab" value="packet"/><textarea name="lmn_text" style="min-height:140px;" placeholder="Create LMN text here...">${safeStr(lmnItem.lmn_text || "")}</textarea><button class="btn secondary" type="submit">Save LMN Text</button></form></details>`;
+    } else {
+      const timeline = msgs.map(m => `<div style="border-left:3px solid var(--border);padding:6px 10px;margin-bottom:6px;"><div class="small muted">${m.created_at ? new Date(m.created_at).toLocaleString() : ""} • <span class="badge">${safeStr(m.channel||"general")}</span> • ${safeStr(m.role)}</div><div style="white-space:pre-wrap;">${safeStr(m.content||"")}</div></div>`).join("") || `<div class="muted">No activity yet.</div>`;
+      tabBody = `<h3>Activity</h3>${timeline}`;
+    }
 
-      <div class="row" style="margin-top:14px;">
-        <div class="col card">
-          <h3>Appeal Agent ${infoIcon("Generate a letter-focused draft for denial reconsideration.")}</h3>
-          <form method="POST" action="/agent-workspace/generate"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><button class="btn secondary" type="submit">Generate/Refresh Appeal Draft</button></form>
-          <form method="POST" action="/agent-workspace/template" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><label>Template</label><select name="template_id"><option value="">Default Rules</option>${appealTemplateOptions}</select><button class="btn secondary" type="submit" style="margin-top:8px;">Save Template</button></form><form method="POST" action="/agent-workspace/save" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><textarea name="draft_text" style="min-height:250px;">${safeStr(ws.appeal?.draft_text || "")}</textarea><div class="small muted">Version ${formatNumberUI(ws.appeal?.version || 0)}</div><button class="btn" type="submit">Save Appeal Edits</button></form>
-          <form method="POST" action="/agent-workspace/status" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="status" value="ready_for_review"/><button class="btn secondary" type="submit">Mark Ready</button></form>
-        </div>
-        <div class="col card">
-          <h3>Negotiation Agent ${infoIcon("Generate an underpayment negotiation request with requested amount.")}</h3>
-          <form method="POST" action="/agent-workspace/generate"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><button class="btn secondary" type="submit">Generate/Refresh Negotiation Draft</button></form>
-          <form method="POST" action="/agent-workspace/template" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><label>Template</label><select name="template_id"><option value="">Default Rules</option>${negotiationTemplateOptions}</select><button class="btn secondary" type="submit" style="margin-top:8px;">Save Template</button></form><form method="POST" action="/agent-workspace/save" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><textarea name="draft_text" style="min-height:250px;">${safeStr(ws.negotiation?.draft_text || "")}</textarea><div class="small muted">Version ${formatNumberUI(ws.negotiation?.version || 0)}</div><button class="btn" type="submit">Save Negotiation Edits</button></form>
-          <form method="POST" action="/agent-workspace/status" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="status" value="ready_for_review"/><button class="btn secondary" type="submit">Mark Ready</button></form>
-        </div>
-      </div>
-
-      <div class="hr"></div>
-      <h3>Supporting Documents ${infoIcon("Upload supporting files for this workspace. Files are scoped to this org.")}</h3>
-      <form method="POST" action="/agent-workspace/upload" enctype="multipart/form-data"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="file" name="files" multiple/><button class="btn secondary" type="submit">Upload</button></form>
-      <table><thead><tr><th>Filename</th><th>Kind</th><th>Uploaded</th></tr></thead><tbody>${attachments || `<tr><td colspan="3" class="muted">No attachments yet.</td></tr>`}</tbody></table>
-
-      <div class="hr"></div>
-      <h3>Agent Chat ${infoIcon("Ask for edits; agent response applies deterministic rule edits to selected draft.")}</h3>
-      <div>${msgHtml || `<p class="muted">No messages yet.</p>`}</div>
-      <form method="POST" action="/agent-workspace/chat"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><label>Channel</label><select name="channel"><option value="general">General</option><option value="appeal">Appeal</option><option value="negotiation">Negotiation</option></select><label>Message</label><textarea name="content" style="min-height:90px;"></textarea><button class="btn" type="submit">Send</button></form>
-    `, navUser(), {showChat:true, orgName: org.org_name});
+    const html = renderPage("AI Agent Workspace", `<h2>AI Workspace</h2><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;"><div><strong>Claim #${safeStr(b.claim_number||"")}</strong> • ${safeStr(b.payer||"")} • DOS ${safeStr(b.dos||"—")} <span class="badge">${safeStr(d.lifecycleStage || b.status || "Pending")}</span></div><div><strong>Packet Completeness:</strong> ${requiredComp.complete}/${requiredComp.total} (${requiredComp.pct}%) ${infoIcon("Completeness is based on required appeal packet items.")}</div></div><div class="row" style="margin-top:8px;">${renderKpiCard("Billed",formatMoneyUI(d.billedAmount),"","")}${renderKpiCard("Expected",formatMoneyUI(d.expectedInsurance),"","")}${renderKpiCard("Paid",formatMoneyUI(d.paidAmount),"","")}${renderKpiCard("At Risk",formatMoneyUI(d.atRiskAmount),"","")}</div><div style="margin:10px 0;padding:10px;border-radius:10px;background:#eef2ff;border:1px solid #c7d2fe;"><strong>${safeStr(nextStep)}</strong> ${infoIcon("Guidance only; actions are not automated.")}</div>${renderWorkspaceTabs(billed_id, activeTab)}${tabBody}`, navUser(), {showChat:true, orgName: org.org_name});
     return send(res, 200, html);
   }
 
@@ -12485,9 +12462,10 @@ else if (type === "payers") {
       const params = new URLSearchParams(body);
       const billed_id = String(params.get("billed_id") || "").trim();
       const draft_type = String(params.get("draft_type") || "").trim();
+      const tab = String(params.get("tab") || draft_type || "packet").trim();
       const billedAll = readJSON(FILES.billed, []);
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
-      if (!b || !["appeal","negotiation"].includes(draft_type)) return redirect(res, "/claims?view=all");
+      if (!b || !["appeal","negotiation","lmn"].includes(draft_type)) return redirect(res, "/claims?view=all");
       const claimCtx = buildClaimContext(org.org_id);
       const d = evaluateClaimDerived(b, claimCtx);
       const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
@@ -12504,7 +12482,7 @@ else if (type === "payers") {
       const usage = getUsage(org.org_id);
       usage.monthly_ai_generations_used = Number(usage.monthly_ai_generations_used || 0) + 1;
       saveUsage(usage);
-      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}&tab=${encodeURIComponent(tab)}`);
     });
     return;
   }
@@ -12516,6 +12494,7 @@ else if (type === "payers") {
       const params = new URLSearchParams(body);
       const billed_id = String(params.get("billed_id") || "").trim();
       const draft_type = String(params.get("draft_type") || "").trim();
+      const tab = String(params.get("tab") || draft_type || "packet").trim();
       const template_id = String(params.get("template_id") || "").trim();
       const billedAll = readJSON(FILES.billed, []);
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
@@ -12524,7 +12503,7 @@ else if (type === "payers") {
       if (draft_type === "appeal") ws.appeal = { ...(ws.appeal || {}), template_id: template_id || null };
       else ws.negotiation = { ...(ws.negotiation || {}), template_id: template_id || null };
       saveAgentWorkspace(org.org_id, ws);
-      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}&tab=${encodeURIComponent(tab)}`);
     });
     return;
   }
@@ -12536,18 +12515,31 @@ else if (type === "payers") {
       const params = new URLSearchParams(body);
       const billed_id = String(params.get("billed_id") || "").trim();
       const draft_type = String(params.get("draft_type") || "").trim();
+      const tab = String(params.get("tab") || draft_type || "packet").trim();
       const draft_text = String(params.get("draft_text") || "");
+      const lmn_text = String(params.get("lmn_text") || "");
       const billedAll = readJSON(FILES.billed, []);
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
-      if (!b || !["appeal","negotiation"].includes(draft_type)) return redirect(res, "/claims?view=all");
+      if (!b || !["appeal","negotiation","lmn"].includes(draft_type)) return redirect(res, "/claims?view=all");
       const ws = ensureAgentWorkspace(org.org_id, b);
+      ensureWorkspacePacket(ws);
       const ts = nowISO();
       if (draft_type === "appeal") ws.appeal = { ...(ws.appeal || {}), draft_text, updated_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
-      else ws.negotiation = { ...(ws.negotiation || {}), draft_text, updated_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
+      else if (draft_type === "negotiation") ws.negotiation = { ...(ws.negotiation || {}), draft_text, requested_amount: num(params.get("requested_amount") || ws.negotiation?.requested_amount || 0), updated_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
+      else if (draft_type === "lmn") {
+        ensureWorkspacePacket(ws);
+        const lmn = getWorkspacePacketItem(ws, "lmn");
+        if (lmn) {
+          lmn.lmn_text = lmn_text;
+          lmn.updated_at = ts;
+          lmn.status = lmn_text.trim() ? "present" : (lmn.attachment_id ? "present" : "missing");
+        }
+      }
+      ws.packet.completeness = computePacketCompleteness(ws);
       ws.status = "edited";
       saveAgentWorkspace(org.org_id, ws);
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: draft_type, content: "Manual edits saved." });
-      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}&tab=${encodeURIComponent(tab)}`);
     });
     return;
   }
@@ -12559,6 +12551,7 @@ else if (type === "payers") {
       const params = new URLSearchParams(body);
       const billed_id = String(params.get("billed_id") || "").trim();
       const status = String(params.get("status") || "draft").trim();
+      const tab = String(params.get("tab") || "packet").trim();
       const allowed = ["draft","edited","ready_for_review","submitted","closed"];
       const billedAll = readJSON(FILES.billed, []);
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
@@ -12566,7 +12559,7 @@ else if (type === "payers") {
       const ws = ensureAgentWorkspace(org.org_id, b);
       ws.status = allowed.includes(status) ? status : "draft";
       saveAgentWorkspace(org.org_id, ws);
-      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}&tab=${encodeURIComponent(tab)}`);
     });
     return;
   }
@@ -12578,6 +12571,7 @@ else if (type === "payers") {
       const params = new URLSearchParams(body);
       const billed_id = String(params.get("billed_id") || "").trim();
       const channel = String(params.get("channel") || "general").trim();
+      const tab = String(params.get("tab") || channel || "activity").trim();
       const content = String(params.get("content") || "").trim();
       const billedAll = readJSON(FILES.billed, []);
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
@@ -12595,7 +12589,7 @@ else if (type === "payers") {
         usage.monthly_agent_workspace_edits = Number(usage.monthly_agent_workspace_edits || 0) + 1;
         saveUsage(usage);
       }
-      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}&tab=${encodeURIComponent(tab)}`);
     });
     return;
   }
@@ -12607,22 +12601,53 @@ else if (type === "payers") {
     if (!boundaryMatch) return redirect(res, "/claims?view=all");
     parseMultipart(req, boundaryMatch[1]).then(({ files, fields }) => {
       const billed_id = String(fields.billed_id || "").trim();
+      const packet_key = String(fields.packet_key || "").trim();
+      const kind = String(fields.kind || "supporting").trim();
+      const tab = String(fields.tab || "packet").trim();
       const billedAll = readJSON(FILES.billed, []);
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
       if (!b) return redirect(res, "/claims?view=all");
       const ws = ensureAgentWorkspace(org.org_id, b);
+      ensureWorkspacePacket(ws);
       const saved = [];
       for (const f of (files || [])) {
         const up = storeWorkspaceUpload(org.org_id, f);
         ws.attachments = ws.attachments || [];
-        ws.attachments.push({ attachment_id: uuid(), filename: up.filename, stored_path: up.stored_path, uploaded_at: nowISO(), kind: "supporting" });
+        const attachment_id = uuid();
+        ws.attachments.push({ attachment_id, filename: up.filename, stored_path: up.stored_path, uploaded_at: nowISO(), kind });
+        if (packet_key) {
+          const item = getWorkspacePacketItem(ws, packet_key);
+          if (item) {
+            item.status = "present";
+            item.attachment_id = attachment_id;
+            item.updated_at = nowISO();
+          }
+        }
         saved.push(up);
       }
+      ws.packet.completeness = computePacketCompleteness(ws);
       saveAgentWorkspace(org.org_id, ws);
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: `Uploaded ${saved.length} attachment(s).` });
-      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}&tab=${encodeURIComponent(tab)}`);
     }).catch(()=> redirect(res, "/claims?view=all"));
     return;
+  }
+
+  if (method === "GET" && pathname === "/agent-workspace/export") {
+    const billed_id = String(parsed.query.billed_id || "").trim();
+    const billedAll = readJSON(FILES.billed, []);
+    const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+    if (!b) return redirect(res, "/claims?view=all");
+    const claimCtx = buildClaimContext(org.org_id);
+    const d = evaluateClaimDerived(b, claimCtx);
+    const ws = ensureAgentWorkspace(org.org_id, b);
+    ensureWorkspacePacket(ws);
+    ws.activity.last_exported_at = nowISO();
+    saveAgentWorkspace(org.org_id, ws);
+    const attachmentRows = (ws.attachments || []).map(a => `<li><a href="/agent-workspace/file?attachment_id=${encodeURIComponent(a.attachment_id)}">${safeStr(a.filename)}</a> (${safeStr(a.kind||"supporting")})</li>`).join("") || `<li>None</li>`;
+    const checklist = [...(ws.packet?.required_appeal||[]), ...(ws.packet?.clinical_support||[]), ...(ws.packet?.contract_policy||[])].map(i => `<li>${safeStr(i.label)}: ${i.status === "present" ? "Present" : "Missing"}</li>`).join("");
+    const html = renderPage("Packet Export", `<h2>Packet Export</h2><p class="muted">Print or save this page as PDF.</p><button class="btn" onclick="window.print()">Print / Save as PDF</button><h3>Claim Snapshot</h3><table><tr><th>Claim #</th><td>${safeStr(b.claim_number||"")}</td></tr><tr><th>Payer</th><td>${safeStr(b.payer||"")}</td></tr><tr><th>DOS</th><td>${safeStr(b.dos||"")}</td></tr><tr><th>Status</th><td>${safeStr(d.lifecycleStage||"")}</td></tr></table><h3>Appeal Draft</h3><pre style="white-space:pre-wrap;border:1px solid var(--border);padding:10px;border-radius:8px;">${safeStr(ws.appeal?.draft_text || "")}</pre><h3>Negotiation Draft</h3><pre style="white-space:pre-wrap;border:1px solid var(--border);padding:10px;border-radius:8px;">${safeStr(ws.negotiation?.draft_text || "")}</pre><h3>Packet Checklist</h3><ul>${checklist}</ul><h3>Attachments</h3><ul>${attachmentRows}</ul>`, navUser(), {showChat:false, orgName: org.org_name});
+    return send(res, 200, html);
   }
 
   if (method === "GET" && pathname === "/agent-workspace/file") {
@@ -12781,8 +12806,8 @@ if (method === "GET" && pathname === "/claim-detail") {
       <tr><th>Suggested Next Action</th><td>${safeStr(suggested)}</td></tr>
     </table>
     <div class="btnRow">
-      ${suggested === "Appeal" ? `<a class="btn secondary" href="/appeal-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Perform Suggested Action</a>` : ``}
-      ${suggested === "Negotiate" ? `<a class="btn secondary" href="/negotiation-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Perform Suggested Action</a>` : ``}
+      ${suggested === "Appeal" ? `<a class="btn secondary" href="/agent-workspace?billed_id=${encodeURIComponent(b.billed_id)}&tab=appeal">Open AI Workspace</a>` : ``}
+      ${suggested === "Negotiate" ? `<a class="btn secondary" href="/agent-workspace?billed_id=${encodeURIComponent(b.billed_id)}&tab=negotiation">Open AI Workspace</a>` : ``}
       ${suggested === "Adjust Patient Responsibility" ? `<a class="btn secondary" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Perform Suggested Action</a>` : ``}
       ${suggested === "Review Claim" ? `<a class="btn secondary" href="/claims?view=all&q=${encodeURIComponent(b.claim_number || "")}">Perform Suggested Action</a>` : ``}
       <a class="btn secondary" href="/agent-workspace?billed_id=${encodeURIComponent(b.billed_id)}">Open AI Agent Workspace</a>
