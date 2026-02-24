@@ -2299,6 +2299,26 @@ function getWorkspacePacketItem(ws, key){
   return all.find(i => i.key === key) || null;
 }
 
+function requiredPacketKeysForChannel(channel){
+  if (channel === "negotiation") return ["eob_era", "claim_form"];
+  return ["denial_letter", "eob_era", "claim_form"];
+}
+
+function packetHasKey(ws, key){
+  const item = getWorkspacePacketItem(ws, key);
+  return !!(item && item.status === "present" && item.attachment_id);
+}
+
+function packetMissingKeys(ws, channel){
+  const keys = requiredPacketKeysForChannel(channel);
+  return keys.filter(k => !packetHasKey(ws, k));
+}
+
+function canMarkReady(ws, channel){
+  const missing = packetMissingKeys(ws, channel);
+  return { ok: missing.length === 0, missing };
+}
+
 function defaultWorkspaceTab(stage){
   if (stage === "Denied") return "appeal";
   if (stage === "Underpaid") return "negotiation";
@@ -2359,14 +2379,15 @@ function packetSectionDescriptions(channel){
 }
 
 function detectEobEraForClaim(org_id, claim, ws){
-  const hasWorkspaceEob = (ws?.attachments || []).some(a => String(a.kind || "").toLowerCase() === "eob");
+  const hasWorkspaceEob = (ws?.attachments || []).some(a => ["eob", "era"].includes(String(a.kind || "").toLowerCase()));
+  const hasPacketEob = packetHasKey(ws, "eob_era");
   const hasClaimDenialDoc = !!(claim?.denial_doc_attached || claim?.denial_document || claim?.denial_file);
   const ingests = readJSON(FILES.document_ingests, []).filter(x => x.org_id === org_id);
   const hasIngestEob = ingests.some(x => {
     const blob = `${x.category || ""} ${x.original_filename || ""} ${x.notes || ""}`.toLowerCase();
     return blob.includes("eob") || blob.includes("era") || blob.includes("denial");
   });
-  return hasWorkspaceEob || hasClaimDenialDoc || hasIngestEob;
+  return hasWorkspaceEob || hasPacketEob || hasClaimDenialDoc || hasIngestEob;
 }
 
 function renderWorkspaceTabs(billed_id, activeTab){
@@ -2570,10 +2591,16 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
     ws.negotiation = { ...(ws.negotiation || {}), draft_text: ws.negotiation.packet_sections.variance_explanation, requested_amount: Number(ws.negotiation.packet_sections.requested_amount || currentDerived?.underpaidAmount || 0), updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
     generated += 1;
   }
+  ws.appeal.packet_sections.attachments_index = buildAttachmentsIndex(ws);
+  ws.appeal.packet_sections.financial_summary = financialSummaryFromClaim(currentDerived, claim);
+  ws.negotiation.packet_sections.attachments_index = buildAttachmentsIndex(ws);
+  ws.negotiation.packet_sections.financial_summary = financialSummaryFromClaim(currentDerived, claim);
+  ws.negotiation.packet_sections.requested_amount = String(ws.negotiation.packet_sections.requested_amount || currentDerived?.underpaidAmount || "");
+  saveAgentWorkspace(org_id, ws);
   if (generated > 0) {
     ws.status = "draft";
-    addAgentMessage(org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id: claim.billed_id, role: "agent", channel: "general", content: "Draft auto-generated (reason: denial/payment update).", created_at: ts });
     saveAgentWorkspace(org_id, ws);
+    addAgentMessage(org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id: claim.billed_id, role: "agent", channel: "general", content: "Draft auto-generated (reason: denial/payment update).", created_at: ts });
     const usage = getUsage(org_id);
     usage.monthly_ai_generations_used = Number(usage.monthly_ai_generations_used || 0) + generated;
     saveUsage(usage);
@@ -12537,6 +12564,12 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const templates = getAgentTemplates(org.org_id).filter(t => t.type === channel);
     const templateOptions = templates.map(t => `<option value="${safeStr(t.template_id || "")}" ${String((ws[channel] || {}).template_id || "") === String(t.template_id || "") ? "selected" : ""}>${safeStr(t.name || t.template_id || "Template")}</option>`).join("");
     const eobDetected = detectEobEraForClaim(org.org_id, b, ws);
+    const readyCheck = canMarkReady(ws, channel);
+    const missingLabelMap = { denial_letter: "Denial Letter", eob_era: "EOB/ERA", claim_form: "Claim Form / Itemized Bill" };
+    const missingKindMap = { denial_letter: "denial", eob_era: "eob", claim_form: "supporting" };
+    const strongPrompt = channel === "negotiation"
+      ? "EOB/ERA required for underpayment validation."
+      : "EOB/ERA OR denial letter required.";
     const sectionDescriptions = packetSectionDescriptions(channel);
     const packetSections = (ws[channel] || {}).packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
     const mainKey = packetNarrativeKey(channel);
@@ -12546,14 +12579,16 @@ if (method === "GET" && pathname === "/agent-workspace") {
         : `<textarea name="value" style="min-height:120px;">${safeStr(packetSections[key] || "")}</textarea>`;
       return `<details ${key===mainKey?"open":""} style="margin:8px 0;border:1px solid var(--border);border-radius:10px;padding:10px;"><summary style="font-weight:800;cursor:pointer;">${safeStr(key.replace(/_/g," "))} <span class="muted small">ⓘ ${safeStr(sectionDescriptions[key]||"")}</span></summary><form method="POST" action="/agent-workspace/save" style="margin-top:8px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="draft_type" value="${safeStr(channel)}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><input type="hidden" name="section_key" value="${safeStr(key)}" />${inputHtml}<button class="btn secondary small" type="submit">Save Section</button></form></details>`;
     }).join("");
-    const checklist = [
-      { label: "EOB/ERA", present: eobDetected },
-      { label: "Claim Form", present: !!(ws.attachments || []).find(a => String(a.kind || "").toLowerCase() === "supporting") },
-      { label: "Medical Records", present: !!(ws.attachments || []).find(a => String(a.kind || "").toLowerCase() === "medical_record") },
-      { label: "Contract Reference", present: !!(ws.attachments || []).find(a => String(a.kind || "").toLowerCase() === "contract") },
-      { label: "LMN", present: !!(ws.attachments || []).find(a => String(a.kind || "").toLowerCase() === "lmn") || !!getWorkspacePacketItem(ws, "lmn")?.lmn_text }
-    ];
+    const checklist = requiredPacketKeysForChannel(channel).map(key => ({
+      key,
+      label: missingLabelMap[key] || key,
+      present: packetHasKey(ws, key)
+    }));
     const checklistHtml = checklist.map(i => `<li>${i.present ? "☑" : "☐"} ${safeStr(i.label)}</li>`).join("");
+    const missingDocsText = readyCheck.missing.map(k => missingLabelMap[k] || k).join(", ");
+    const missingFormsHtml = readyCheck.missing.map(key => `<form method="POST" action="/agent-workspace/upload" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="packet_key" value="${safeStr(key)}" /><input type="hidden" name="kind" value="${safeStr(missingKindMap[key] || "supporting")}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><span class="small" style="min-width:190px;">Upload ${safeStr(missingLabelMap[key] || key)}</span><input type="file" name="files" /><button class="btn secondary small" type="submit">Upload</button></form>`).join("");
+    const errs = Array.isArray(parsed.query.err) ? parsed.query.err : [parsed.query.err];
+    const hasMissingErr = errs.includes("missing_required");
     const msgs = getAgentMessages(org.org_id, billed_id).slice(-12).map(m => `<li><strong>${safeStr(m.role || "agent")}</strong> [${safeStr(m.channel || "general")}]: ${safeStr(m.content || "")}</li>`).join("") || `<li class="muted">No messages yet.</li>`;
 
     const html = renderPage(pageTitle, `
@@ -12573,18 +12608,13 @@ if (method === "GET" && pathname === "/agent-workspace") {
       </table>
 
       <h3>2) Required Documentation Checklist</h3>
-      ${eobDetected ? "" : `<p class="warn">EOB/ERA not detected — please upload. If we can’t find it, please provide.</p>`}
+      ${(hasMissingErr && !readyCheck.ok) ? `<p class="warn">Cannot mark ready — missing required items: ${safeStr(missingDocsText)}</p>` : ""}
+      ${!readyCheck.ok ? `<p class="warn">${safeStr(strongPrompt)} Missing: ${safeStr(missingDocsText)}.</p>` : ""}
+      ${(!eobDetected && readyCheck.missing.includes("eob_era")) ? `<p class="warn">${safeStr(strongPrompt)}</p>` : ""}
       <ul>${checklistHtml}</ul>
-      <form method="POST" action="/agent-workspace/upload" enctype="multipart/form-data">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
-        <input type="hidden" name="packet_key" value="eob_era" />
-        <input type="hidden" name="kind" value="eob" />
-        <input type="hidden" name="tab" value="${safeStr(channel)}" />
-        <input type="file" name="files" />
-        <button class="btn secondary small" type="submit">Upload EOB/ERA</button>
-      </form>
+      ${!readyCheck.ok ? `<div>${missingFormsHtml}</div>` : `<p class="small muted">All required items are present.</p>`}
 
-      <h3>3) AI Drafted ${isNegotiation ? "Negotiation" : "Appeal"} Packet</h3>
+      <h3>3) Template Selection</h3>
       <form method="POST" action="/agent-workspace/template">
         <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
         <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
@@ -12597,12 +12627,6 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
       <h3>4) AI Packet Builder</h3>
       ${sectionsHtml}
-      <form method="POST" action="/agent-workspace/generate" style="margin-top:8px;">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
-        <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
-        <input type="hidden" name="tab" value="${safeStr(channel)}" />
-        <button class="btn secondary" type="submit">Regenerate AI Draft</button>
-      </form>
 
       <h3>5) Agent Chat</h3>
       <form method="POST" action="/agent-workspace/chat">
@@ -12615,8 +12639,26 @@ if (method === "GET" && pathname === "/agent-workspace") {
       <ul>${msgs}</ul>
       <p class="small muted">Free trial includes full workspace access; usage tracked but not blocked.</p>
 
-      <div class="btnRow" style="margin-top:12px;">
-        <a class="btn secondary" href="/agent-workspace/export?billed_id=${encodeURIComponent(billed_id)}">Export Packet (Print/PDF)</a><a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(billed_id)}">Back to Claim Detail</a>
+      <h3>6) Actions</h3>
+      <div class="btnRow" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <form method="POST" action="/agent-workspace/generate" style="margin:0;">
+          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
+          <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
+          <input type="hidden" name="tab" value="${safeStr(channel)}" />
+          <button class="btn secondary" type="submit">Regenerate AI Draft</button>
+        </form>
+        <a class="btn secondary" href="/agent-workspace/export?billed_id=${encodeURIComponent(billed_id)}">Export Packet (Print/PDF)</a>
+        <form method="POST" action="/agent-workspace/status" style="margin:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
+          <input type="hidden" name="tab" value="${safeStr(channel)}" />
+          <input type="hidden" name="status" value="ready_for_review" />
+          <label style="display:flex;gap:8px;align-items:center;">
+            <input type="checkbox" name="override_missing" />
+            Override missing required docs (not recommended)
+          </label>
+          <button class="btn secondary" type="submit">Mark Ready</button>
+        </form>
+        <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(billed_id)}">Back to Claim Detail</a>
       </div>
     `, navUser(), {showChat:true, orgName: org.org_name});
 
@@ -12644,12 +12686,17 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const draftText = generateDraftUsingTemplateOrRules({ org_id: org.org_id, type: draft_type, claim: b, derived: d, appealCase, negotiationCase, ws });
       const ts = nowISO();
       if (draft_type === "appeal") {
-        ws.appeal.packet_sections = { ...defaultAppealPacketSections(), ...(ws.appeal.packet_sections || {}), argument: draftText, financial_summary: financialSummaryFromClaim(d, b) };
+        ws.appeal.packet_sections = { ...defaultAppealPacketSections(), ...(ws.appeal.packet_sections || {}), argument: draftText };
         ws.appeal = { ...(ws.appeal || {}), draft_text: ws.appeal.packet_sections.argument, updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
       } else {
-        ws.negotiation.packet_sections = { ...defaultNegotiationPacketSections(), ...(ws.negotiation.packet_sections || {}), variance_explanation: draftText, financial_summary: financialSummaryFromClaim(d, b), requested_amount: String(ws.negotiation.packet_sections?.requested_amount || d.underpaidAmount || "") };
+        ws.negotiation.packet_sections = { ...defaultNegotiationPacketSections(), ...(ws.negotiation.packet_sections || {}), variance_explanation: draftText, requested_amount: String(ws.negotiation.packet_sections?.requested_amount || d.underpaidAmount || "") };
         ws.negotiation = { ...(ws.negotiation || {}), draft_text: ws.negotiation.packet_sections.variance_explanation, requested_amount: Number(ws.negotiation.packet_sections.requested_amount || d.underpaidAmount || 0), updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
       }
+      ws.appeal.packet_sections.attachments_index = buildAttachmentsIndex(ws);
+      ws.appeal.packet_sections.financial_summary = financialSummaryFromClaim(d, b);
+      ws.negotiation.packet_sections.attachments_index = buildAttachmentsIndex(ws);
+      ws.negotiation.packet_sections.financial_summary = financialSummaryFromClaim(d, b);
+      ws.negotiation.packet_sections.requested_amount = String(ws.negotiation.packet_sections.requested_amount || d.underpaidAmount || "");
       ws.status = "draft";
       saveAgentWorkspace(org.org_id, ws);
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel: draft_type, content: "Draft generated.", created_at: ts });
@@ -12740,11 +12787,23 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const billed_id = String(params.get("billed_id") || "").trim();
       const status = String(params.get("status") || "draft").trim();
       const tab = String(params.get("tab") || "packet").trim();
+      const override_missing = String(params.get("override_missing") || "").trim();
       const allowed = ["draft","edited","ready_for_review","submitted","closed"];
       const billedAll = readJSON(FILES.billed, []);
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
       if (!b) return redirect(res, "/claims?view=all");
       const ws = ensureAgentWorkspace(org.org_id, b);
+      ensureWorkspacePacket(ws);
+      ensurePacketSections(ws);
+      const requestedTab = String(params.get("tab") || "").trim();
+      const channel = requestedTab === "negotiation" ? "negotiation" : "appeal";
+      if (status === "ready_for_review") {
+        const check = canMarkReady(ws, channel);
+        if (!check.ok && override_missing !== "on") {
+          addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel: "general", content: `Cannot mark ready — missing: ${check.missing.join(", ")}`, created_at: nowISO() });
+          return redirect(res, `${workspacePagePath(billed_id, channel)}&err=missing_required`);
+        }
+      }
       ws.status = allowed.includes(status) ? status : "draft";
       saveAgentWorkspace(org.org_id, ws);
       return redirect(res, `${workspacePagePath(billed_id, tab)}`);
