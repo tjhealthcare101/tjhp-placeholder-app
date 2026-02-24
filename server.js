@@ -2919,6 +2919,7 @@ function renderPayerRankingTable(ranks, opts={}){
               <th>Avg Days to Pay <span class="tooltip" data-tip="${tipDays}">ⓘ</span></th>
               <th>Collected</th>
               <th>At Risk <span class="tooltip" data-tip="${tipRisk}">ⓘ</span></th>
+              <th>AI</th>
             </tr>
           </thead>
           <tbody>
@@ -2926,7 +2927,11 @@ function renderPayerRankingTable(ranks, opts={}){
               view.length
                 ? view.map(r => `
                   <tr>
-                    <td>${safeStr(r.payer)}</td>
+                    <td>
+                      <a href="/analyze-payer?payer=${encodeURIComponent(r.payer)}" style="font-weight:700;">
+                        ${safeStr(r.payer)}
+                      </a>
+                    </td>
                     <td><span class="badge ${gradeBadgeClass(r.grade)}">${safeStr(r.grade)}</span></td>
                     <td>${formatNumberUI(r.score)}</td>
                     <td>${formatNumberUI(r.totalClaims)}</td>
@@ -2935,9 +2940,15 @@ function renderPayerRankingTable(ranks, opts={}){
                     <td>${formatNumberUI(Math.round(r.avgDaysToPay||0))}</td>
                     <td>${formatMoneyUI(r.totalCollected||0)}</td>
                     <td>${formatMoneyUI(r.totalAtRisk||0)}</td>
+                    <td>
+                      <a class="btn small"
+                         href="/analyze-payer?payer=${encodeURIComponent(r.payer)}">
+                         AI Intelligence
+                      </a>
+                    </td>
                   </tr>
                 `).join("")
-                : `<tr><td colspan="9" class="muted">No payer data found yet.</td></tr>`
+                : `<tr><td colspan="10" class="muted">No payer data found yet.</td></tr>`
             }
           </tbody>
         </table>
@@ -4556,8 +4567,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
         <div class="exec-table">
           <table>
-            <thead><tr><th>Payer</th><th>Billed</th><th>Collected</th><th>Underpaid</th><th>Denied</th><th>Open Appeals</th></tr></thead>
-            <tbody id="topRiskRows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+            <thead><tr><th>Payer</th><th>Billed</th><th>Collected</th><th>Underpaid</th><th>Denied</th><th>Open Appeals</th><th>AI</th></tr></thead>
+            <tbody id="topRiskRows"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -4695,8 +4706,16 @@ document.addEventListener("DOMContentLoaded", function(){
   const tbody = document.getElementById("topRiskRows");
   if (tbody) {
     tbody.innerHTML = payerRows.length
-      ? payerRows.map(r => '<tr><td><a href="/payer-claims?payer=' + encodeURIComponent(r.payer) + '">' + r.payer + '</a></td><td>' + moneyFmt(r.billed) + '</td><td>' + moneyFmt(r.paid) + '</td><td>' + moneyFmt(r.underpaid) + '</td><td>' + moneyFmt(r.denied) + '</td><td>' + moneyFmt(r.openAppeals) + '</td></tr>').join("")
-      : '<tr><td colspan="6" class="muted">No payer data in this range.</td></tr>';
+      ? payerRows.map(r => '<tr>' +
+          '<td><a href="/analyze-payer?payer=' + encodeURIComponent(r.payer) + '" style="font-weight:700;">' + r.payer + '</a></td>' +
+          '<td>' + moneyFmt(r.billed) + '</td>' +
+          '<td>' + moneyFmt(r.paid) + '</td>' +
+          '<td>' + moneyFmt(r.underpaid) + '</td>' +
+          '<td>' + moneyFmt(r.denied) + '</td>' +
+          '<td>' + moneyFmt(r.openAppeals) + '</td>' +
+          '<td><a class="btn secondary small" href="/analyze-payer?payer=' + encodeURIComponent(r.payer) + '">Analyze</a></td>' +
+        '</tr>').join("")
+      : '<tr><td colspan="7" class="muted">No payer data in this range.</td></tr>';
   }
 });
 </script>
