@@ -80,6 +80,9 @@ const FILES = {
   fee_schedules: path.join(DATA_DIR, "fee_schedules.json"),
   claim_batches: path.join(DATA_DIR, "claim_batches.json"),
   practice_settings: path.join(DATA_DIR, "practice_settings.json"),
+  ai_agent_drafts: path.join(DATA_DIR, "ai_agent_drafts.json"),
+  agent_templates: path.join(DATA_DIR, "ai_agent_templates.json"),
+  agent_usage: path.join(DATA_DIR, "ai_agent_usage.json"),
 };
 
 // Directory for storing uploaded template files
@@ -298,6 +301,9 @@ ensureFile(FILES.allowed_amount_rules, []);
 ensureFile(FILES.fee_schedules, []);
 ensureFile(FILES.claim_batches, []);
 ensureFile(FILES.practice_settings, []);
+ensureFile(FILES.ai_agent_drafts, []);
+ensureFile(FILES.agent_templates, []);
+ensureFile(FILES.agent_usage, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -2107,6 +2113,138 @@ function updateBilledClaim(billed_id, updater){
   return b;
 }
 
+function getAgentDrafts(org_id){
+  return readJSON(FILES.ai_agent_drafts, []).filter(d => d.org_id === org_id);
+}
+
+function saveAgentDraft(draft){
+  const all = readJSON(FILES.ai_agent_drafts, []);
+  const idx = all.findIndex(x => x.draft_id === draft.draft_id);
+  if (idx >= 0) all[idx] = draft;
+  else all.push(draft);
+  writeJSON(FILES.ai_agent_drafts, all);
+}
+
+function getAgentTemplates(org_id){
+  return readJSON(FILES.agent_templates, []).filter(t => t.org_id === org_id);
+}
+
+function renderTemplate(templateBody, claim){
+  return String(templateBody || "")
+    .replace(/{{CLAIM_NUMBER}}/g, claim.claim_number || "")
+    .replace(/{{PAYER}}/g, claim.payer || "")
+    .replace(/{{DOS}}/g, claim.dos || "")
+    .replace(/{{BILLED}}/g, formatMoneyUI(claim.amount_billed || 0))
+    .replace(/{{EXPECTED}}/g, formatMoneyUI(claim.expected_insurance || 0))
+    .replace(/{{PAID}}/g, formatMoneyUI(claim.paid_amount || 0));
+}
+
+function generateAppealDraft(org_id, claim){
+  const templates = getAgentTemplates(org_id).filter(t => t.type === "appeal");
+  const template = templates[0];
+
+  const body = template
+    ? renderTemplate(template.body, claim)
+    : `
+Appeal Request
+
+Claim #: ${claim.claim_number}
+Payer: ${claim.payer}
+DOS: ${claim.dos}
+
+We respectfully request reconsideration of this denial.
+Expected Insurance: ${formatMoneyUI(claim.expected_insurance)}
+Insurance Paid: ${formatMoneyUI(claim.paid_amount)}
+
+Please review and reprocess accordingly.
+`;
+
+  return body.trim();
+}
+
+function generateNegotiationDraft(org_id, claim){
+  const templates = getAgentTemplates(org_id).filter(t => t.type === "negotiation");
+  const template = templates[0];
+
+  const body = template
+    ? renderTemplate(template.body, claim)
+    : `
+Negotiation Request
+
+Claim #: ${claim.claim_number}
+Payer: ${claim.payer}
+DOS: ${claim.dos}
+
+The reimbursement appears underpaid.
+Expected: ${formatMoneyUI(claim.expected_insurance)}
+Paid: ${formatMoneyUI(claim.paid_amount)}
+
+We request adjustment per contract.
+`;
+
+  return body.trim();
+}
+
+function autoGenerateAgentDraftIfNeeded(claim){
+  if (!claim || !claim.org_id || !claim.billed_id) return;
+  const claimCtx = buildClaimContext(claim.org_id);
+  const d = evaluateClaimDerived(claim, claimCtx);
+
+  if (d.lifecycleStage === "Denied"){
+    const existing = getAgentDrafts(claim.org_id).find(x => x.billed_id === claim.billed_id && x.type === "appeal" && x.status === "draft");
+    if (!existing) {
+      const draft = {
+        draft_id: uuid(),
+        org_id: claim.org_id,
+        billed_id: claim.billed_id,
+        type: "appeal",
+        status: "draft",
+        body: generateAppealDraft(claim.org_id, claim),
+        created_at: nowISO(),
+        updated_at: nowISO()
+      };
+      saveAgentDraft(draft);
+    }
+  }
+
+  if (d.lifecycleStage === "Underpaid"){
+    const existing = getAgentDrafts(claim.org_id).find(x => x.billed_id === claim.billed_id && x.type === "negotiation" && x.status === "draft");
+    if (!existing) {
+      const draft = {
+        draft_id: uuid(),
+        org_id: claim.org_id,
+        billed_id: claim.billed_id,
+        type: "negotiation",
+        status: "draft",
+        body: generateNegotiationDraft(claim.org_id, claim),
+        created_at: nowISO(),
+        updated_at: nowISO()
+      };
+      saveAgentDraft(draft);
+    }
+  }
+}
+
+function consumeAgentCredit(org_id){
+  const usage = readJSON(FILES.agent_usage, []);
+  const month = new Date().toISOString().slice(0,7);
+
+  let rec = usage.find(u => u.org_id === org_id && u.month === month);
+  if (!rec){
+    rec = { org_id, month, used: 0 };
+    usage.push(rec);
+  }
+
+  rec.used += 1;
+  writeJSON(FILES.agent_usage, usage);
+}
+
+function getAgentUsage(org_id){
+  const month = new Date().toISOString().slice(0,7);
+  const usage = readJSON(FILES.agent_usage, []);
+  return usage.find(u => u.org_id === org_id && u.month === month) || { used: 0 };
+}
+
 // ===== Pagination + Filtering Helpers =====
 const PAGE_SIZE_OPTIONS = [30, 50, 100];
 
@@ -2721,6 +2859,7 @@ function rebuildOrgDerivedData(org_id, opts={}){
     b.underpaid_amount = Math.max(0, num(d.expectedInsurance) - num(d.paidAmount));
     b.lifecycle_stage = d.lifecycleStage;
     b.status = d.lifecycleStage;
+    autoGenerateAgentDraftIfNeeded(b);
     if (settings.resyncDenials && d.lifecycleStage === "Denied") ensureDenialCaseForClaim(b);
     changed = true;
   }
@@ -4169,7 +4308,27 @@ if (method === "GET" && pathname === "/file") {
 }
 
   // ---------- AI Chat (Org-scoped assistant) ----------
-  if (method === "POST" && pathname === "/ai/chat") {
+  if (method === "POST" && pathname === "/agent/edit") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+
+  const draft_id = String(params.get("draft_id") || "").trim();
+  const instruction = String(params.get("instruction") || "").trim();
+
+  const drafts = readJSON(FILES.ai_agent_drafts, []);
+  const draft = drafts.find(d => d.draft_id === draft_id && d.org_id === org.org_id);
+  if (!draft) return send(res, 400, JSON.stringify({ error: "Draft not found" }), "application/json");
+
+  draft.body = draft.body + "\n\n[User Adjustment]: " + instruction;
+  draft.updated_at = nowISO();
+
+  saveAgentDraft(draft);
+  consumeAgentCredit(org.org_id);
+
+  return send(res, 200, JSON.stringify({ ok: true, body: draft.body }), "application/json");
+}
+
+if (method === "POST" && pathname === "/ai/chat") {
     const usage = getUsage(org.org_id);
     const limit = getAIChatLimit(org.org_id);
 
@@ -8075,7 +8234,8 @@ if (method === "POST" && pathname === "/negotiations/upload") {
 
 const statusCell = (() => {
 
-  const st2 = (b.status || "Pending");
+  const derived2 = evaluateClaimDerived(b, claimCtx);
+  const st2 = derived2.lifecycleStage || "Pending";
 
   const billedAmt = Number(b.amount_billed || 0);
   const paidAmt = Number(b.insurance_paid || b.paid_amount || 0);
@@ -10354,6 +10514,7 @@ for (const ap of addedPayments) {
     else billedClaim.suggested_action = "Appeal";
   }
 
+  autoGenerateAgentDraftIfNeeded(billedClaim);
   changed_sync = true;
 }
 
@@ -10374,7 +10535,7 @@ if (changed_sync) {
 
     s.underpaid = claims.filter(c => (c.status || "Pending") === "Underpaid").length;
     s.contractual = claims.filter(c => (c.status || "Pending") === "Contractual").length;
-    s.appeal = claims.filter(c => (c.status || "Pending") === "Appeal").length;
+    s.appeal = claims.filter(c => (c.status || "Pending") === "In Appeal/Negotiation").length;
     s.patient_follow_up = claims.filter(c => (c.status || "Pending") === "Patient Follow-Up").length;
 
     s.revenue_collected = claims
@@ -10383,13 +10544,13 @@ if (changed_sync) {
 
     // Revenue at risk counts: Pending + Denied + Underpaid + Appeal (NOT Contractual, NOT Patient Follow-Up)
     s.revenue_at_risk = claims
-      .filter(c => ["Pending","Denied","Underpaid","Appeal"].includes((c.status || "Pending")))
+      .filter(c => ["Pending","Denied","Underpaid","In Appeal/Negotiation"].includes((c.status || "Pending")))
       .reduce((sum, c) => {
         const billedAmt = num(c.amount_billed);
         const paidAmt = num(c.paid_amount);
         const exp = (c.expected_insurance != null && String(c.expected_insurance).trim() !== "") ? num(c.expected_insurance) : billedAmt;
 
-        if ((c.status || "Pending") === "Underpaid" || (c.status || "Pending") === "Appeal") {
+        if ((c.status || "Pending") === "Underpaid" || (c.status || "Pending") === "In Appeal/Negotiation") {
           return sum + Math.max(0, exp - paidAmt);
         }
         return sum + Math.max(0, billedAmt - paidAmt);
