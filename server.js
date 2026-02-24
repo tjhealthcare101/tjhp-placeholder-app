@@ -2139,6 +2139,12 @@ function getAgentTemplates(org_id){
   return readJSON(FILES.agent_templates, []).filter(t => t.org_id === org_id);
 }
 
+function getTemplateById(org_id, template_id){
+  const tid = String(template_id || "").trim();
+  if (!tid) return null;
+  return readJSON(FILES.agent_templates, []).find(t => t.org_id === org_id && String(t.template_id || "") === tid) || null;
+}
+
 function getAgentWorkspace(org_id, billed_id){
   return readJSON(FILES.agent_workspaces, []).find(w => w.org_id === org_id && w.billed_id === billed_id) || null;
 }
@@ -2197,25 +2203,83 @@ function storeWorkspaceUpload(org_id, file){
   return { filename: clean, stored_path: storedPath };
 }
 
-function agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile, practiceSettings }){
-  const orgName = String(orgProfile?.legal_name || orgProfile?.org_name || orgProfile?.dba_name || "Practice").trim() || "Practice";
-  const dos = claim?.dos || claim?.date_of_service || "N/A";
+function claimFinancialSnapshot(derived, claim){
   const underpaidAmount = Math.max(0, Number(derived?.underpaidAmount || 0));
-  const attachmentLine = "Attachments included: denial notice/EOB, claim form, relevant records, contract excerpts, and supporting notes.";
-  const opening = `${orgName}\n${nowISO().slice(0,10)}\n\nRe: Claim #${claim?.claim_number || "N/A"} | Payer: ${claim?.payer || "Unknown"} | DOS: ${dos}`;
-  const financials = [
+  return [
     `Billed: ${formatMoneyUI(derived?.billedAmount || claim?.amount_billed || 0)}`,
     `Expected Insurance: ${formatMoneyUI(derived?.expectedInsurance || claim?.expected_insurance || 0)}`,
     `Paid by Payer: ${formatMoneyUI(derived?.paidAmount || claim?.paid_amount || 0)}`,
     `Underpaid Amount: ${formatMoneyUI(underpaidAmount)}`,
     `Patient Balance Remaining: ${formatMoneyUI(derived?.patientBalanceRemaining || 0)}`,
   ].join("\n");
+}
+
+function agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile, practiceSettings }){
+  const orgName = String(orgProfile?.legal_name || orgProfile?.org_name || orgProfile?.dba_name || "Practice").trim() || "Practice";
+  const dos = claim?.dos || claim?.date_of_service || "N/A";
+  const underpaidAmount = Math.max(0, Number(derived?.underpaidAmount || 0));
+  const attachmentLine = "Attachments included: denial notice/EOB, claim form, relevant records, contract excerpts, and supporting notes.";
+  const mailingSame = typeof orgProfile?.addr_mailing_same_as_primary === "boolean" ? orgProfile.addr_mailing_same_as_primary : true;
+  const mailingParts = mailingSame
+    ? [orgProfile?.addr_primary_line1, orgProfile?.addr_primary_line2, `${orgProfile?.addr_primary_city || ""}, ${orgProfile?.addr_primary_state || ""} ${orgProfile?.addr_primary_zip || ""}`.trim()]
+    : [orgProfile?.addr_mailing_line1, orgProfile?.addr_mailing_line2, `${orgProfile?.addr_mailing_city || ""}, ${orgProfile?.addr_mailing_state || ""} ${orgProfile?.addr_mailing_zip || ""}`.trim()];
+  const mailingAddress = mailingParts.filter(Boolean).join(", ");
+  const letterDefaults = String(practiceSettings?.letter_defaults || "").trim();
+  const opening = `${orgName}
+${nowISO().slice(0,10)}
+
+Re: Claim #${claim?.claim_number || "N/A"} | Payer: ${claim?.payer || "Unknown"} | DOS: ${dos}`;
+  const contextLines = [
+    mailingAddress ? `Mailing Address: ${mailingAddress}` : "",
+    letterDefaults ? `Letter Defaults: ${letterDefaults}` : ""
+  ].filter(Boolean).join("\n");
+  const financials = claimFinancialSnapshot(derived, claim);
   if (type === "appeal") {
     const denialRef = appealCase ? `Denial Case ID: ${appealCase.case_id || "N/A"}` : "Denial Case ID: N/A";
-    return `${opening}\n${denialRef}\n\nTo Appeals Department,\n\nWe request reconsideration and reprocessing of the denied claim above. Based on the submitted documentation and treatment details, this claim meets plan requirements and medical necessity standards. Please overturn the denial and issue payment according to applicable plan benefits and contracted terms.\n\nClaim Financial Snapshot\n${financials}\n\nRequested Action\n- Reprocess claim and reverse denial determination.\n- Apply in-network/contracted benefits where applicable.\n- Provide written rationale and policy citation if any portion remains denied.\n\n${attachmentLine}\n\nThank you for your prompt review. Please contact our office with any additional requirements.\n\nSincerely,\n${orgName}`.trim();
+    return `${opening}
+${denialRef}${contextLines ? `\n${contextLines}` : ""}
+
+To Appeals Department,
+
+We request reconsideration and reprocessing of the denied claim above. Based on the submitted documentation and treatment details, this claim meets plan requirements and medical necessity standards. Please overturn the denial and issue payment according to applicable plan benefits and contracted terms.
+
+Claim Financial Snapshot
+${financials}
+
+Requested Action
+- Reprocess claim and reverse denial determination.
+- Apply in-network/contracted benefits where applicable.
+- Provide written rationale and policy citation if any portion remains denied.
+
+${attachmentLine}
+
+Thank you for your prompt review. Please contact our office with any additional requirements.
+
+Sincerely,
+${orgName}`.trim();
   }
   const negotiationIdLine = negotiationCase ? `Negotiation ID: ${negotiationCase.negotiation_id || "N/A"}` : "Negotiation ID: N/A";
-  return `${opening}\n${negotiationIdLine}\n\nTo Provider Contracting / Claims Adjustment Team,\n\nWe are submitting this underpayment variance request for review. The paid amount does not align with expected reimbursement based on our contracted terms and claim details.\n\nClaim Financial Snapshot\n${financials}\n\nRequested Action\n- Recalculate reimbursement per contract terms and remit corrected payment.\n- Requested amount: ${formatMoneyUI(underpaidAmount)}\n- Confirm adjustment details and remittance timeline.\n\n${attachmentLine}\n\nWe appreciate your expedited review and response.\n\nSincerely,\n${orgName}`.trim();
+  return `${opening}
+${negotiationIdLine}${contextLines ? `\n${contextLines}` : ""}
+
+To Provider Contracting / Claims Adjustment Team,
+
+We are submitting this underpayment variance request for review. The paid amount does not align with expected reimbursement based on our contracted terms and claim details.
+
+Claim Financial Snapshot
+${financials}
+
+Requested Action
+- Recalculate reimbursement per contract terms and remit corrected payment.
+- Requested amount: ${formatMoneyUI(underpaidAmount)}
+- Confirm adjustment details and remittance timeline.
+
+${attachmentLine}
+
+We appreciate your expedited review and response.
+
+Sincerely,
+${orgName}`.trim();
 }
 
 function applyAgentInstructionToDraft(draftText, instruction, channel){
@@ -2242,6 +2306,62 @@ function renderTemplate(templateBody, claim){
     .replace(/{{BILLED}}/g, formatMoneyUI(claim.amount_billed || 0))
     .replace(/{{EXPECTED}}/g, formatMoneyUI(claim.expected_insurance || 0))
     .replace(/{{PAID}}/g, formatMoneyUI(claim.paid_amount || 0));
+}
+
+function generateDraftUsingTemplateOrRules({ org_id, type, claim, derived, appealCase, negotiationCase, ws }){
+  const selectedTemplateId = type === "appeal" ? ws?.appeal?.template_id : ws?.negotiation?.template_id;
+  const template = getTemplateById(org_id, selectedTemplateId);
+  if (template && String(template.body || "").trim()) {
+    const rendered = renderTemplate(template.body, claim).trim();
+    const financials = claimFinancialSnapshot(derived, claim);
+    return `${rendered}
+
+Claim Financial Snapshot
+${financials}`.trim();
+  }
+  return agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile: getOrg(org_id), practiceSettings: getPracticeSettings(org_id) });
+}
+
+function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
+  if (!org_id || !claim?.billed_id) return 0;
+  const ws = ensureAgentWorkspace(org_id, claim);
+  const ts = nowISO();
+  const refTs = Math.max(
+    new Date(claim?.paid_at || 0).getTime() || 0,
+    new Date(claim?.updated_at || 0).getTime() || 0,
+    new Date(claim?.created_at || 0).getTime() || 0
+  );
+  const currentDerived = derived && derived.lifecycleStage ? derived : evaluateClaimDerived(claim, claimCtx || buildClaimContext(org_id));
+  const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
+  const appealCase = claim.denial_case_id ? casesAll.find(c => c.case_id === claim.denial_case_id) : null;
+  const negotiationCase = getNegotiationsByBilled(org_id, claim.billed_id).map(n=>normalizeNegotiation(n))[0] || null;
+  const shouldRefresh = (draftMeta) => {
+    if (!String(draftMeta?.draft_text || "").trim()) return true;
+    const runTs = new Date(draftMeta?.last_run_at || draftMeta?.updated_at || 0).getTime() || 0;
+    return runTs < refTs;
+  };
+  const stage = String(currentDerived?.lifecycleStage || "");
+  const wantAppeal = stage === "Denied" || stage === "In Appeal/Negotiation";
+  const wantNegotiation = stage === "Underpaid" || stage === "In Appeal/Negotiation";
+  let generated = 0;
+  if (wantAppeal && shouldRefresh(ws.appeal)) {
+    ws.appeal = { ...(ws.appeal || {}), draft_text: generateDraftUsingTemplateOrRules({ org_id, type: "appeal", claim, derived: currentDerived, appealCase, negotiationCase, ws }), updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
+    addAgentMessage(org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id: claim.billed_id, role: "agent", channel: "appeal", content: "Appeal draft auto-generated during ingestion/rebuild.", created_at: ts });
+    generated += 1;
+  }
+  if (wantNegotiation && shouldRefresh(ws.negotiation)) {
+    ws.negotiation = { ...(ws.negotiation || {}), draft_text: generateDraftUsingTemplateOrRules({ org_id, type: "negotiation", claim, derived: currentDerived, appealCase, negotiationCase, ws }), updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
+    addAgentMessage(org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id: claim.billed_id, role: "agent", channel: "negotiation", content: "Negotiation draft auto-generated during ingestion/rebuild.", created_at: ts });
+    generated += 1;
+  }
+  if (generated > 0) {
+    ws.status = "draft";
+    saveAgentWorkspace(org_id, ws);
+    const usage = getUsage(org_id);
+    usage.monthly_ai_generations_used = Number(usage.monthly_ai_generations_used || 0) + generated;
+    saveUsage(usage);
+  }
+  return generated;
 }
 
 function generateAppealDraft(org_id, claim){
@@ -2288,46 +2408,6 @@ We request adjustment per contract.
 `;
 
   return body.trim();
-}
-
-function autoGenerateAgentDraftIfNeeded(claim){
-  if (!claim || !claim.org_id || !claim.billed_id) return;
-  const claimCtx = buildClaimContext(claim.org_id);
-  const d = evaluateClaimDerived(claim, claimCtx);
-
-  if (d.lifecycleStage === "Denied"){
-    const existing = getAgentDrafts(claim.org_id).find(x => x.billed_id === claim.billed_id && x.type === "appeal" && x.status === "draft");
-    if (!existing) {
-      const draft = {
-        draft_id: uuid(),
-        org_id: claim.org_id,
-        billed_id: claim.billed_id,
-        type: "appeal",
-        status: "draft",
-        body: generateAppealDraft(claim.org_id, claim),
-        created_at: nowISO(),
-        updated_at: nowISO()
-      };
-      saveAgentDraft(draft);
-    }
-  }
-
-  if (d.lifecycleStage === "Underpaid"){
-    const existing = getAgentDrafts(claim.org_id).find(x => x.billed_id === claim.billed_id && x.type === "negotiation" && x.status === "draft");
-    if (!existing) {
-      const draft = {
-        draft_id: uuid(),
-        org_id: claim.org_id,
-        billed_id: claim.billed_id,
-        type: "negotiation",
-        status: "draft",
-        body: generateNegotiationDraft(claim.org_id, claim),
-        created_at: nowISO(),
-        updated_at: nowISO()
-      };
-      saveAgentDraft(draft);
-    }
-  }
 }
 
 function consumeAgentCredit(org_id){
@@ -2952,7 +3032,7 @@ function getUnmatchedPayments(org_id, billed){
 }
 
 function rebuildOrgDerivedData(org_id, opts={}){
-  const settings = { resyncDenials: false, ...opts };
+  const settings = { resyncDenials: false, autodraft: false, ...opts };
   recalculateContractsForOrg(org_id);
   const billedAll = readJSON(FILES.billed, []);
   const ctx = buildClaimContext(org_id);
@@ -2964,7 +3044,7 @@ function rebuildOrgDerivedData(org_id, opts={}){
     b.underpaid_amount = Math.max(0, num(d.expectedInsurance) - num(d.paidAmount));
     b.lifecycle_stage = d.lifecycleStage;
     b.status = d.lifecycleStage;
-    autoGenerateAgentDraftIfNeeded(b);
+    if (settings.autodraft || settings.resyncDenials) autoDraftWorkspaceForClaim(org_id, b, d, ctx);
     if (settings.resyncDenials && d.lifecycleStage === "Denied") ensureDenialCaseForClaim(b);
     changed = true;
   }
@@ -6947,7 +7027,7 @@ if (method === "POST" && pathname === "/claim-action") {
 
   billedAll[idx] = b;
   writeJSON(FILES.billed, billedAll);
-  rebuildOrgDerivedData(org.org_id, { resyncDenials: true });
+  rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
   return redirect(res, `/actions?q=${encodeURIComponent(b.claim_number || "")}`);
 }
 
@@ -10579,6 +10659,7 @@ let casesChanged_sync = false;
 function normalizeClaimNum(x) { return String(x || "").replace(/[^0-9]/g, ""); }
 
 let changed_sync = false;
+const claimCtx_sync = buildClaimContext(org.org_id);
 
 for (const ap of addedPayments) {
 
@@ -10622,7 +10703,8 @@ for (const ap of addedPayments) {
     else billedClaim.suggested_action = "Appeal";
   }
 
-  autoGenerateAgentDraftIfNeeded(billedClaim);
+  const derived_sync = evaluateClaimDerived(billedClaim, claimCtx_sync);
+  autoDraftWorkspaceForClaim(org.org_id, billedClaim, derived_sync, claimCtx_sync);
   changed_sync = true;
 }
 
@@ -11147,7 +11229,7 @@ rowsAdded = toUse;
     writeJSON(FILES.payments, payments);
     writeJSON(FILES.billed, billedAll);
     if (casesModified) writeJSON(FILES.cases, cases);
-    rebuildOrgDerivedData(org.org_id, { resyncDenials: true });
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
     return redirect(res, next);
   }
 
@@ -11173,12 +11255,12 @@ rowsAdded = toUse;
       }
     }
     writeJSON(FILES.billed, billedAll);
-    rebuildOrgDerivedData(org.org_id, { resyncDenials: true });
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
     return redirect(res, "/data-management?tab=payments");
   }
 
   if (method === "POST" && pathname === "/data-management/reprocess-denials") {
-    rebuildOrgDerivedData(org.org_id, { resyncDenials: true });
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
     return redirect(res, "/data-management?tab=denials");
   }
 
@@ -11203,7 +11285,7 @@ rowsAdded = toUse;
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const op = String(params.get("action") || params.get("op") || "").trim();
-    rebuildOrgDerivedData(org.org_id, { resyncDenials: op === "denials" || op === "lifecycle" });
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: op === "denials" || op === "lifecycle", autodraft: op === "denials" || op === "lifecycle" || op === "revenue" || op === "payments" });
     const tabForOp = (op === "revenue") ? "payments" : (op === "denials" ? "denials" : "claims");
     return redirect(res, `/data-management?tab=${tabForOp}`);
   }
@@ -12345,6 +12427,9 @@ else if (type === "payers") {
     const negotiationCase = getNegotiationsByBilled(org.org_id, b.billed_id).map(n=>normalizeNegotiation(n))[0] || null;
     const ws = ensureAgentWorkspace(org.org_id, b);
     const msgs = getAgentMessages(org.org_id, billed_id);
+    const templates = getAgentTemplates(org.org_id);
+    const appealTemplateOptions = templates.filter(t => t.type === "appeal").map(t => `<option value="${safeStr(t.template_id || "")}" ${String(ws.appeal?.template_id || "") === String(t.template_id || "") ? "selected" : ""}>${safeStr(t.name || t.template_id || "Template")}</option>`).join("");
+    const negotiationTemplateOptions = templates.filter(t => t.type === "negotiation").map(t => `<option value="${safeStr(t.template_id || "")}" ${String(ws.negotiation?.template_id || "") === String(t.template_id || "") ? "selected" : ""}>${safeStr(t.name || t.template_id || "Template")}</option>`).join("");
 
     const attachments = (ws.attachments || []).map(a => `<tr><td><a href="/agent-workspace/file?attachment_id=${encodeURIComponent(a.attachment_id)}">${safeStr(a.filename)}</a></td><td>${safeStr(a.kind || "supporting")}</td><td>${a.uploaded_at ? new Date(a.uploaded_at).toLocaleString() : "—"}</td></tr>`).join("");
     const msgHtml = msgs.map(m => `<div style="padding:8px;border:1px solid var(--border);border-radius:10px;margin-bottom:6px;"><div class="small muted">${safeStr(m.role)} • ${safeStr(m.channel)} • ${m.created_at ? new Date(m.created_at).toLocaleString() : ""}</div><div style="white-space:pre-wrap;">${safeStr(m.content || "")}</div></div>`).join("");
@@ -12369,13 +12454,13 @@ else if (type === "payers") {
         <div class="col card">
           <h3>Appeal Agent ${infoIcon("Generate a letter-focused draft for denial reconsideration.")}</h3>
           <form method="POST" action="/agent-workspace/generate"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><button class="btn secondary" type="submit">Generate/Refresh Appeal Draft</button></form>
-          <form method="POST" action="/agent-workspace/save" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><textarea name="draft_text" style="min-height:250px;">${safeStr(ws.appeal?.draft_text || "")}</textarea><div class="small muted">Version ${formatNumberUI(ws.appeal?.version || 0)}</div><button class="btn" type="submit">Save Appeal Edits</button></form>
+          <form method="POST" action="/agent-workspace/template" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><label>Template</label><select name="template_id"><option value="">Default Rules</option>${appealTemplateOptions}</select><button class="btn secondary" type="submit" style="margin-top:8px;">Save Template</button></form><form method="POST" action="/agent-workspace/save" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="appeal"/><textarea name="draft_text" style="min-height:250px;">${safeStr(ws.appeal?.draft_text || "")}</textarea><div class="small muted">Version ${formatNumberUI(ws.appeal?.version || 0)}</div><button class="btn" type="submit">Save Appeal Edits</button></form>
           <form method="POST" action="/agent-workspace/status" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="status" value="ready_for_review"/><button class="btn secondary" type="submit">Mark Ready</button></form>
         </div>
         <div class="col card">
           <h3>Negotiation Agent ${infoIcon("Generate an underpayment negotiation request with requested amount.")}</h3>
           <form method="POST" action="/agent-workspace/generate"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><button class="btn secondary" type="submit">Generate/Refresh Negotiation Draft</button></form>
-          <form method="POST" action="/agent-workspace/save" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><textarea name="draft_text" style="min-height:250px;">${safeStr(ws.negotiation?.draft_text || "")}</textarea><div class="small muted">Version ${formatNumberUI(ws.negotiation?.version || 0)}</div><button class="btn" type="submit">Save Negotiation Edits</button></form>
+          <form method="POST" action="/agent-workspace/template" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><label>Template</label><select name="template_id"><option value="">Default Rules</option>${negotiationTemplateOptions}</select><button class="btn secondary" type="submit" style="margin-top:8px;">Save Template</button></form><form method="POST" action="/agent-workspace/save" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="draft_type" value="negotiation"/><textarea name="draft_text" style="min-height:250px;">${safeStr(ws.negotiation?.draft_text || "")}</textarea><div class="small muted">Version ${formatNumberUI(ws.negotiation?.version || 0)}</div><button class="btn" type="submit">Save Negotiation Edits</button></form>
           <form method="POST" action="/agent-workspace/status" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="status" value="ready_for_review"/><button class="btn secondary" type="submit">Mark Ready</button></form>
         </div>
       </div>
@@ -12409,7 +12494,7 @@ else if (type === "payers") {
       const appealCase = b.denial_case_id ? casesAll.find(c => c.case_id === b.denial_case_id) : null;
       const negotiationCase = getNegotiationsByBilled(org.org_id, b.billed_id).map(n=>normalizeNegotiation(n))[0] || null;
       const ws = ensureAgentWorkspace(org.org_id, b);
-      const draftText = agentDraftFromRules({ type: draft_type, claim: b, derived: d, appealCase, negotiationCase, orgProfile: getOrg(org.org_id), practiceSettings: getPracticeSettings(org.org_id) });
+      const draftText = generateDraftUsingTemplateOrRules({ org_id: org.org_id, type: draft_type, claim: b, derived: d, appealCase, negotiationCase, ws });
       const ts = nowISO();
       if (draft_type === "appeal") ws.appeal = { ...(ws.appeal || {}), draft_text: draftText, updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
       else ws.negotiation = { ...(ws.negotiation || {}), draft_text: draftText, updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
@@ -12419,6 +12504,26 @@ else if (type === "payers") {
       const usage = getUsage(org.org_id);
       usage.monthly_ai_generations_used = Number(usage.monthly_ai_generations_used || 0) + 1;
       saveUsage(usage);
+      return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/agent-workspace/template") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const billed_id = String(params.get("billed_id") || "").trim();
+      const draft_type = String(params.get("draft_type") || "").trim();
+      const template_id = String(params.get("template_id") || "").trim();
+      const billedAll = readJSON(FILES.billed, []);
+      const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (!b || !["appeal","negotiation"].includes(draft_type)) return redirect(res, "/claims?view=all");
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      if (draft_type === "appeal") ws.appeal = { ...(ws.appeal || {}), template_id: template_id || null };
+      else ws.negotiation = { ...(ws.negotiation || {}), template_id: template_id || null };
+      saveAgentWorkspace(org.org_id, ws);
       return redirect(res, `/agent-workspace?billed_id=${encodeURIComponent(billed_id)}`);
     });
     return;
