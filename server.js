@@ -2844,6 +2844,108 @@ function toneForGrade(g){
   return "bad";
 }
 
+function gradeBadgeClass(grade){
+  const g = String(grade || "").toUpperCase();
+  if (g === "A" || g === "B") return "ok";
+  if (g === "C") return "warn";
+  return "err";
+}
+
+function safePct(n){
+  const v = Number(n || 0);
+  return isFinite(v) ? v : 0;
+}
+
+function computeAllPayerRankings(org_id){
+  const claimsAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  const payers = Array.from(new Set(
+    claimsAll.map(b => String(b.payer || "").trim()).filter(Boolean)
+  )).sort((a,b)=>a.localeCompare(b));
+
+  const rows = payers.map(p => {
+    const intel = computePayerIntelligence(org_id, p, "last30");
+    return {
+      payer: intel.payerName,
+      totalClaims: intel.totalClaims,
+      score: Number(intel.score || 0),
+      grade: intel.grade,
+      denialRate: safePct(intel.denialRate),
+      recoveryRate: safePct(intel.recoveryRate),
+      avgDaysToPay: safePct(intel.avgDaysToPay),
+      totalBilled: Number(intel.totalBilled || 0),
+      totalCollected: Number(intel.totalCollected || 0),
+      totalAtRisk: Number(intel.totalAtRisk || 0),
+    };
+  });
+
+  rows.sort((a,b)=> (b.score - a.score) || (b.totalClaims - a.totalClaims) || a.payer.localeCompare(b.payer));
+  return rows;
+}
+
+function renderPayerRankingTable(ranks, opts={}){
+  const limit = Number(opts.limit || 10);
+  const showAllLink = opts.showAllLink !== false;
+  const view = (ranks || []).slice(0, limit);
+
+  const tipGrade = "A–F grade is computed from denial rate, underpaid rate, and days-to-pay (lower is better).";
+  const tipDenial = "Denied claims / total claims (lower is better).";
+  const tipRecovery = "Percent of submitted/approved appeals that later show recovered payment (best-effort proxy).";
+  const tipDays = "Average days between claim created/DOS and payment posting (lower is better).";
+  const tipRisk = "Estimated dollars not yet recovered (underpaid + patient balance remaining).";
+
+  return `
+    <div class="executive-panel">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;">
+        <h3 style="margin-bottom:12px;">Payer Ranking (A–F) <span class="tooltip" data-tip="${tipGrade}">ⓘ</span></h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${showAllLink ? `<a class="btn secondary small" href="/payer-rankings">View Full Payer Rankings</a>` : ``}
+        </div>
+      </div>
+
+      <div class="muted small" style="margin-bottom:10px;">
+        Top payers are ranked by payer score (0–100) and assigned a grade. Use this to prioritize contracting + follow-up strategy.
+      </div>
+
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Payer</th>
+              <th>Grade <span class="tooltip" data-tip="${tipGrade}">ⓘ</span></th>
+              <th>Score</th>
+              <th>Claims</th>
+              <th>Denial % <span class="tooltip" data-tip="${tipDenial}">ⓘ</span></th>
+              <th>Appeal Recovery % <span class="tooltip" data-tip="${tipRecovery}">ⓘ</span></th>
+              <th>Avg Days to Pay <span class="tooltip" data-tip="${tipDays}">ⓘ</span></th>
+              <th>Collected</th>
+              <th>At Risk <span class="tooltip" data-tip="${tipRisk}">ⓘ</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              view.length
+                ? view.map(r => `
+                  <tr>
+                    <td>${safeStr(r.payer)}</td>
+                    <td><span class="badge ${gradeBadgeClass(r.grade)}">${safeStr(r.grade)}</span></td>
+                    <td>${formatNumberUI(r.score)}</td>
+                    <td>${formatNumberUI(r.totalClaims)}</td>
+                    <td>${formatPct(r.denialRate)}</td>
+                    <td>${formatPct(r.recoveryRate)}</td>
+                    <td>${formatNumberUI(Math.round(r.avgDaysToPay||0))}</td>
+                    <td>${formatMoneyUI(r.totalCollected||0)}</td>
+                    <td>${formatMoneyUI(r.totalAtRisk||0)}</td>
+                  </tr>
+                `).join("")
+                : `<tr><td colspan="9" class="muted">No payer data found yet.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 
 function computePayerIntelligence(org_id, payerName, preset="last30"){
   const claimsAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
@@ -4270,7 +4372,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
   return send(res, 200, html);
 }
   // dashboard with empty-state previews and tooltips
-  if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) {
+  if (method === "GET" && (pathname === "/" || pathname === "/dashboard" || pathname === "/revenue-overview")) {
 
     const limits = getLimitProfile(org.org_id);
     const usage = getUsage(org.org_id);
@@ -4291,6 +4393,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     }
 
     const m = computeDashboardMetrics(org.org_id, startDate, endDate, preset);
+    const payerRanks = computeAllPayerRankings(org.org_id);
     const casesInRange = readJSON(FILES.cases, [])
       .filter(c => c.org_id === org.org_id)
       .filter(c => {
@@ -4459,6 +4562,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
       </div>
 
+      ${renderPayerRankingTable(payerRanks, { limit: 10, showAllLink: true })}
+
       <div class="executive-panel">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:end;">
           <h3 style="margin-bottom:12px;">Revenue Trend (Collected vs Billed)</h3>
@@ -4488,6 +4593,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <a class="btn secondary" href="/data-management?tab=denials">Data Management</a>
         <a class="btn secondary" href="/claims?view=negotiations">Upload Negotiations</a>
         <a class="btn secondary" href="/report">Reports</a>
+        <a class="btn secondary" href="/executive-export">Export Executive PDF</a>
       </div>
 
       <div class="hr"></div>
@@ -4600,6 +4706,160 @@ document.addEventListener("DOMContentLoaded", function(){
 
     return send(res, 200, html);
   }
+
+
+if (method === "GET" && pathname === "/payer-rankings") {
+  const ranks = computeAllPayerRankings(org.org_id);
+
+  const html = renderPage("Payer Rankings", `
+    <h2>Payer Rankings (A–F)</h2>
+    <p class="muted">Executive list of payer performance based on denial rate, appeal recovery proxy, and days-to-pay.</p>
+
+    <div class="btnRow" style="margin-top:10px;">
+      <a class="btn" href="/dashboard">Back to Dashboard</a>
+      <a class="btn secondary" href="/revenue-overview">Back to Revenue Overview</a>
+      <a class="btn secondary" href="/executive-export">Export Executive PDF</a>
+    </div>
+
+    <div class="hr"></div>
+
+    ${renderPayerRankingTable(ranks, { limit: 9999, showAllLink: false })}
+  `, navUser(), {showChat:true, orgName: org.org_name});
+
+  return send(res, 200, html);
+}
+
+if (method === "GET" && pathname === "/executive-export") {
+  const preset = (parsed.query.range || "last30").toLowerCase();
+  const customStart = parseDateOnly(parsed.query.start || "");
+  const customEnd = parseDateOnly(parsed.query.end || "");
+
+  let r = rangeFromPreset(preset);
+  let startDate = r.start;
+  let endDate = r.end;
+
+  if (preset === "custom" && customStart && customEnd) {
+    startDate = customStart;
+    endDate = new Date(customEnd.getTime());
+    endDate.setUTCHours(23,59,59,999);
+  }
+
+  const m = computeDashboardMetrics(org.org_id, startDate, endDate, preset);
+  const ranks = computeAllPayerRankings(org.org_id).slice(0, 10);
+
+  const printCss = `
+    <style>
+      @media print {
+        .no-print { display:none !important; }
+        body { background:#fff !important; }
+      }
+      .printWrap{max-width:980px;margin:0 auto;}
+      .printHeader{display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;}
+      .printGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px;}
+      .printCard{border:1px solid #e5e7eb;border-radius:12px;padding:12px;}
+      .printTitle{font-weight:900;font-size:18px;}
+      table{width:100%;border-collapse:collapse;}
+      th,td{border:1px solid #e5e7eb;padding:8px;text-align:left;font-size:12px;}
+      th{background:#f3f4f6;}
+    </style>
+  `;
+
+  const ar = m.arBuckets || {};
+  const html = renderPage("Executive Export", `
+    ${printCss}
+    <div class="printWrap">
+      <div class="printHeader">
+        <div>
+          <div class="printTitle">Executive Revenue Summary</div>
+          <div class="muted small">${safeStr(org.org_name || "")} • Range: ${safeStr(preset || "last30")}</div>
+        </div>
+        <div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn" onclick="window.print()">Save as PDF</button>
+          <a class="btn secondary" href="/revenue-overview">Back</a>
+        </div>
+      </div>
+
+      <div class="printGrid">
+        <div class="printCard">
+          <div style="font-weight:800;">Practice Financial Health</div>
+          <div style="font-size:28px;font-weight:900;margin-top:6px;">
+            ${formatNumberUI(m.healthScore || 0)} / 100
+            <span class="badge ${gradeBadgeClass(m.healthGrade)}" style="margin-left:10px;">${safeStr(m.healthGrade || "—")}</span>
+          </div>
+          <div class="muted small">Weighted score: collection rate, denial %, underpaid %, days-to-pay, AR aging (90+).</div>
+        </div>
+
+        <div class="printCard">
+          <div style="font-weight:800;">Topline KPIs</div>
+          <div class="muted small" style="margin-top:6px;">
+            Total Billed: <strong>${formatMoneyUI(m.kpis.totalBilled||0)}</strong><br/>
+            Total Collected: <strong>${formatMoneyUI(m.kpis.collectedTotal||0)}</strong><br/>
+            Revenue At Risk: <strong>${formatMoneyUI(m.kpis.revenueAtRisk||0)}</strong><br/>
+            Underpaid Amount: <strong>${formatMoneyUI(m.kpis.underpaidAmt||0)}</strong>
+          </div>
+        </div>
+
+        <div class="printCard">
+          <div style="font-weight:800;">AR Aging</div>
+          <div class="muted small" style="margin-top:6px;">
+            0–30: <strong>${formatMoneyUI(ar["0-30"]||0)}</strong><br/>
+            31–60: <strong>${formatMoneyUI(ar["31-60"]||0)}</strong><br/>
+            61–90: <strong>${formatMoneyUI(ar["61-90"]||0)}</strong><br/>
+            90+: <strong>${formatMoneyUI(ar["90+"]||0)}</strong>
+          </div>
+        </div>
+
+        <div class="printCard">
+          <div style="font-weight:800;">Appeals / Negotiation Outcomes</div>
+          <div class="muted small" style="margin-top:6px;">
+            Appeal Success: <strong>${formatPct(m.appealSuccessRate||0)}</strong><br/>
+            Negotiation ROI: <strong>${formatPct(m.negotiationROI||0)}</strong><br/>
+            Negotiated: <strong>${formatMoneyUI(m.negotiatedTotal||0)}</strong><br/>
+            Recovered: <strong>${formatMoneyUI(m.recoveredTotal||0)}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="printCard" style="margin-top:12px;">
+        <div style="font-weight:900;">Top 10 Payer Rankings</div>
+        <div class="muted small" style="margin-top:6px;">Grade is based on payer score (0–100). Higher is better.</div>
+        <div style="margin-top:10px;overflow:auto;">
+          <table>
+            <thead>
+              <tr><th>Payer</th><th>Grade</th><th>Score</th><th>Claims</th><th>Denial %</th><th>Appeal Recovery %</th><th>Avg Days</th><th>Collected</th><th>At Risk</th></tr>
+            </thead>
+            <tbody>
+              ${
+                ranks.length
+                  ? ranks.map(r=>`
+                    <tr>
+                      <td>${safeStr(r.payer)}</td>
+                      <td>${safeStr(r.grade)}</td>
+                      <td>${formatNumberUI(r.score)}</td>
+                      <td>${formatNumberUI(r.totalClaims)}</td>
+                      <td>${formatPct(r.denialRate)}</td>
+                      <td>${formatPct(r.recoveryRate)}</td>
+                      <td>${formatNumberUI(Math.round(r.avgDaysToPay||0))}</td>
+                      <td>${formatMoneyUI(r.totalCollected||0)}</td>
+                      <td>${formatMoneyUI(r.totalAtRisk||0)}</td>
+                    </tr>
+                  `).join("")
+                  : `<tr><td colspan="9" class="muted">No payer data.</td></tr>`
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="muted small" style="margin-top:12px;">
+        Tip: Use your browser print dialog and choose “Save as PDF” to export.
+      </div>
+    </div>
+  `, navUser(), {showChat:false, orgName: org.org_name});
+
+  return send(res, 200, html);
+}
+
 // ==============================
 // CLAIMS LIFECYCLE (HUB + SUBTABS)
 // ==============================
@@ -11289,6 +11549,7 @@ else if (type === "payers") {
         <a class="btn secondary" href="/actions?payer=${encodeURIComponent(data.payerName)}">Open In Action Center</a>
         <a class="btn secondary" href="/claims?view=all&status=Underpaid&payer=${encodeURIComponent(data.payerName)}">Underpaid List</a>
         <a class="btn secondary" href="/claims?view=denials&payer=${encodeURIComponent(data.payerName)}">Denied List</a>
+        <a class="btn secondary" href="/executive-export">Export Executive PDF</a>
       </div>
     `;
 
