@@ -2014,6 +2014,74 @@ function computeDashboardMetrics(org_id, start, end, preset){
 }
 
 
+function smoothSeries(points, window=3){
+  const arr = (points || []).map(x=>Number(x||0));
+  if (!arr.length) return [];
+  const out = [];
+  for (let i=0;i<arr.length;i++){
+    const a = Math.max(0, i - (window-1));
+    const slice = arr.slice(a, i+1);
+    const avg = slice.reduce((s,v)=>s+v,0) / Math.max(1, slice.length);
+    out.push(avg);
+  }
+  return out;
+}
+
+// simple least-squares linear regression on index
+function computeLinearForecast(points, horizon=6){
+  const y = (points || []).map(v=>Number(v||0));
+  const n = y.length;
+  if (!n) return { forecast: Array.from({length:horizon}, ()=>0), slope:0, intercept:0 };
+  if (n === 1) return { forecast: Array.from({length:horizon}, ()=>y[0]), slope:0, intercept:y[0] };
+
+  let sumX=0, sumY=0, sumXY=0, sumXX=0;
+  for (let i=0;i<n;i++){
+    const x=i;
+    sumX += x; sumY += y[i]; sumXY += x*y[i]; sumXX += x*x;
+  }
+  const denom = (n*sumXX - sumX*sumX) || 1e-9;
+  const slope = (n*sumXY - sumX*sumY) / denom;
+  const intercept = (sumY - slope*sumX) / n;
+
+  const forecast = [];
+  for (let h=1; h<=horizon; h++){
+    const x = (n-1) + h;
+    forecast.push(Math.max(0, slope*x + intercept));
+  }
+  return { forecast, slope, intercept };
+}
+
+function buildForecastFromMetrics(m){
+  // Use time-series from computeDashboardMetrics (already returns m.series with keys/billed/collected/atRisk)
+  const series = m.series || {};
+  const keys = (series.keys || []).slice();
+  const billed = smoothSeries(series.billed || [], 3);
+  const collected = smoothSeries(series.collected || [], 3);
+  const atRisk = smoothSeries(series.atRisk || [], 3);
+
+  // Horizon: 6 points (works for day/week/month granularity)
+  const horizon = 6;
+
+  const fBilled = computeLinearForecast(billed, horizon);
+  const fCollected = computeLinearForecast(collected, horizon);
+  const fAtRisk = computeLinearForecast(atRisk, horizon);
+
+  // Labels: add Future 1..horizon (keep simple)
+  const futureLabels = Array.from({length:horizon}, (_,i)=>`Forecast ${i+1}`);
+  const labelsAll = keys.concat(futureLabels);
+
+  return {
+    gran: series.gran || "week",
+    labelsAll,
+    hist: { billed: billed, collected: collected, atRisk: atRisk },
+    fcst: { billed: fBilled.forecast, collected: fCollected.forecast, atRisk: fAtRisk.forecast },
+    model: {
+      collected: { slope: fCollected.slope, intercept: fCollected.intercept },
+      atRisk: { slope: fAtRisk.slope, intercept: fAtRisk.intercept }
+    }
+  };
+}
+
 
 // ===== Negotiations (NEW) =====
 function getNegotiations(org_id){
@@ -5678,6 +5746,216 @@ if (method === "GET" && pathname === "/claims") {
 // ==============================
 // REVENUE INTELLIGENCE (AI)
 // ==============================
+
+function renderForecastTab(org, m, forecastB64){
+  return `
+    <div class="executive-panel">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div>
+          <h3 style="margin:0;">
+            Forecast Engine (Beta) ${infoIcon("Uses recent billed/collected/at-risk time-series. Simple linear model + smoothing. Horizon adapts to chart granularity.")}
+          </h3>
+          <div class="muted small" style="margin-top:6px;">
+            Designed for executive planning: projected collections + projected risk trend.
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <a class="btn secondary small" href="/executive-export">Export Executive PDF</a>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="kpi-strip" style="margin-top:0;">
+        ${renderKpiCard("Projected Trend", "Model-based", "Smoothing + linear forecast", "neutral")}
+        ${renderKpiCard("Current Revenue At Risk", formatMoneyUI(m.kpis.revenueAtRisk||0), "underpaid + patient balance remaining", (m.kpis.revenueAtRisk||0) > 0 ? "warn" : "good")}
+        ${renderKpiCard("AR 90+ Exposure", formatMoneyUI((m.arBuckets||{})["90+"]||0), "highest risk bucket", ((m.arBuckets||{})["90+"]||0) > 0 ? "warn" : "good")}
+        ${renderKpiCard("Denial Rate", Number(m.denialRate||0).toFixed(1)+"%", "lower is better", (m.denialRate||0) >= 20 ? "bad" : ((m.denialRate||0) >= 10 ? "warn" : "good"))}
+      </div>
+
+      <div class="hr"></div>
+
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
+          <div style="font-weight:900;margin-bottom:6px;">Collections Forecast ${infoIcon("Historical collected vs forecasted collected for the next horizon points.")}</div>
+          <div class="muted small">Forecast is trend-based (no seasonality yet). Use as a directional planning tool.</div>
+          <div class="hr"></div>
+          <div class="chart-container trend" style="height:300px;"><canvas id="riForecastCollected"></canvas></div>
+        </div>
+
+        <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
+          <div style="font-weight:900;margin-bottom:6px;">At-Risk Forecast ${infoIcon("Historical at-risk vs forecasted at-risk. Use to anticipate pressure on cash flow.")}</div>
+          <div class="muted small">At risk includes underpaid + patient balance remaining for non-resolved claims.</div>
+          <div class="hr"></div>
+          <div class="chart-container trend" style="height:300px;"><canvas id="riForecastAtRisk"></canvas></div>
+        </div>
+      </div>
+
+      <script>
+        (function(){
+          if (!window.Chart) return;
+          const fc = JSON.parse(atob("${forecastB64}"));
+          const labels = fc.labelsAll || [];
+          const histC = (fc.hist && fc.hist.collected) ? fc.hist.collected : [];
+          const histR = (fc.hist && fc.hist.atRisk) ? fc.hist.atRisk : [];
+          const fC = (fc.fcst && fc.fcst.collected) ? fc.fcst.collected : [];
+          const fR = (fc.fcst && fc.fcst.atRisk) ? fc.fcst.atRisk : [];
+
+          // ensure we align as: [hist... , forecast...]
+          const collectedAll = histC.concat(fC);
+          const atRiskAll = histR.concat(fR);
+
+          // Build "forecast overlay" datasets: historical as solid, forecast as dashed
+          const histCount = histC.length;
+          const toOverlay = (allArr)=> {
+            const histPart = allArr.map((v,i)=> i < histCount ? v : null);
+            const fcstPart = allArr.map((v,i)=> i >= histCount ? v : null);
+            return { histPart, fcstPart };
+          };
+
+          const cO = toOverlay(collectedAll);
+          const rO = toOverlay(atRiskAll);
+
+          const baseOpts = {
+            responsive:true,
+            maintainAspectRatio:false,
+            plugins:{ legend:{ display:true } },
+            scales:{
+              y:{ ticks:{ callback:(v)=> (window.moneyFmt ? window.moneyFmt(v) : v) } }
+            }
+          };
+
+          new Chart(document.getElementById("riForecastCollected"), {
+            type:"line",
+            data:{
+              labels,
+              datasets:[
+                { label:"Collected (Historical)", data:cO.histPart, borderWidth:2 },
+                { label:"Collected (Forecast)", data:cO.fcstPart, borderWidth:2, borderDash:[6,4] }
+              ]
+            },
+            options: baseOpts
+          });
+
+          new Chart(document.getElementById("riForecastAtRisk"), {
+            type:"line",
+            data:{
+              labels,
+              datasets:[
+                { label:"At Risk (Historical)", data:rO.histPart, borderWidth:2 },
+                { label:"At Risk (Forecast)", data:rO.fcstPart, borderWidth:2, borderDash:[6,4] }
+              ]
+            },
+            options: baseOpts
+          });
+        })();
+      </script>
+    </div>
+  `;
+}
+
+function renderDeepDiveTab(org, payerRanks, m, deepDiveB64){
+  const dd = JSON.parse(Buffer.from(String(deepDiveB64 || ""), "base64").toString("utf8") || "{}");
+  const opts = (payerRanks||[]).map(p=>`<option value="${safeStr(p.payer)}" ${String(dd.p1||"") === String(p.payer) ? "selected" : ""}>${safeStr(p.payer)}</option>`).join("");
+  const opts2 = (payerRanks||[]).map(p=>`<option value="${safeStr(p.payer)}" ${String(dd.p2||"") === String(p.payer) ? "selected" : ""}>${safeStr(p.payer)}</option>`).join("");
+  return `
+    <div class="executive-panel">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div>
+          <h3 style="margin:0;">Deep Dive Analytics ${infoIcon("Compare two payers side-by-side. Uses live payer intelligence metrics (A–F) and exposure dollars.")}</h3>
+          <div class="muted small" style="margin-top:6px;">Enterprise-style payer comparison and decision support.</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <a class="btn secondary small" href="/payer-rankings">Payer Rankings</a>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <form method="GET" action="/revenue-intelligence" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+        <input type="hidden" name="tab" value="deep-dive"/>
+        <div style="min-width:240px;">
+          <label>Payer 1</label>
+          <select name="p1" required>${opts}</select>
+        </div>
+        <div style="min-width:240px;">
+          <label>Payer 2</label>
+          <select name="p2" required>${opts2}</select>
+        </div>
+        <button class="btn secondary" type="submit">Compare</button>
+      </form>
+
+      <div class="hr"></div>
+
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
+          <div style="font-weight:900;">Comparison Scorecard ${infoIcon("Scores are computed per payer. Higher is better. At-risk includes underpaid + patient balance remaining.")}</div>
+          <div class="hr"></div>
+          <div class="chart-container payer" style="height:320px;"><canvas id="riCompareBars"></canvas></div>
+        </div>
+
+        <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
+          <div style="font-weight:900;">Exposure Breakdown ${infoIcon("Shows denied dollars vs underpaid dollars vs total at-risk for each payer.")}</div>
+          <div class="hr"></div>
+          <div class="chart-container payer" style="height:320px;"><canvas id="riExposureBars"></canvas></div>
+        </div>
+      </div>
+
+      <script>
+        (function(){
+          if (!window.Chart) return;
+          const dd = JSON.parse(atob("${deepDiveB64}"));
+          const i1 = dd.i1 || null;
+          const i2 = dd.i2 || null;
+          if (!i1 || !i2) return;
+
+          const labels = [i1.payerName, i2.payerName];
+
+          // Score bars: score, denialRate, avgDaysToPay (invert for visual "higher better" on days)
+          const scoreData = [Number(i1.score||0), Number(i2.score||0)];
+          const denialData = [Number(i1.denialRate||0), Number(i2.denialRate||0)];
+          const daysData = [Math.max(0, 100 - Math.min(100,(Number(i1.avgDaysToPay||0)/60)*100)),
+                            Math.max(0, 100 - Math.min(100,(Number(i2.avgDaysToPay||0)/60)*100))];
+
+          new Chart(document.getElementById("riCompareBars"), {
+            type:"bar",
+            data:{
+              labels,
+              datasets:[
+                { label:"Score (0–100)", data:scoreData },
+                { label:"Denial Rate % (lower better)", data:denialData },
+                { label:"Days-to-Pay Score (higher better)", data:daysData }
+              ]
+            },
+            options:{ responsive:true, maintainAspectRatio:false }
+          });
+
+          const denied = [Number(i1.totalDeniedDollars||0), Number(i2.totalDeniedDollars||0)];
+          const underpaid = [Number(i1.totalUnderpaidDollars||0), Number(i2.totalUnderpaidDollars||0)];
+          const atRisk = [Number(i1.totalAtRisk||0), Number(i2.totalAtRisk||0)];
+
+          new Chart(document.getElementById("riExposureBars"), {
+            type:"bar",
+            data:{
+              labels,
+              datasets:[
+                { label:"Denied $ (est.)", data:denied },
+                { label:"Underpaid $ (est.)", data:underpaid },
+                { label:"At Risk $ (total)", data:atRisk }
+              ]
+            },
+            options:{
+              responsive:true,
+              maintainAspectRatio:false,
+              scales:{ y:{ ticks:{ callback:(v)=> (window.moneyFmt ? window.moneyFmt(v) : v) } } }
+            }
+          });
+        })();
+      </script>
+    </div>
+  `;
+}
+
 function renderRevenueAIConsole({ org, parsed }){
   const saved = getSavedQueries(org.org_id)
     .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime())
@@ -5940,6 +6218,25 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   const r = rangeFromPreset(preset);
   const m = computeDashboardMetrics(org.org_id, r.start, r.end, preset);
   const payerRanks = computeAllPayerRankings(org.org_id);
+  const forecastData = buildForecastFromMetrics(m);
+  const forecastB64 = Buffer.from(JSON.stringify(forecastData)).toString("base64");
+
+  const p1 = String(parsed.query.p1 || "").trim();
+  const p2 = String(parsed.query.p2 || "").trim();
+  const payerOpts = payerRanks.map(x=>x.payer);
+  const defaultP1 = p1 || (payerOpts[0] || "");
+  const defaultP2 = p2 || (payerOpts[1] || payerOpts[0] || "");
+
+  const intel1 = defaultP1 ? computePayerIntelligence(org.org_id, defaultP1, "last30") : null;
+  const intel2 = defaultP2 ? computePayerIntelligence(org.org_id, defaultP2, "last30") : null;
+
+  const deepDiveData = {
+    p1: defaultP1,
+    p2: defaultP2,
+    i1: intel1,
+    i2: intel2
+  };
+  const deepDiveB64 = Buffer.from(JSON.stringify(deepDiveData)).toString("base64");
 
   const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
     ${tabLink("/revenue-intelligence", tab, "executive", "Executive Brief", "CEO-style summary of revenue health, risk, and priority payers.")}
@@ -5976,20 +6273,32 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     </div>
   </div>`;
 
-  const forecastStub = `<div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;font-size:16px;">Forecast</div><div class="muted small" style="margin-top:6px;">Next Build: predictive collections + denial exposure + AR aging trend. ${infoIcon("This will use your historical paid + at-risk trends and produce a simple 30-day projection first.")}</div><div class="hr"></div><div class="muted small">Placeholder ready. Add charts + projection engine next.</div></div>`;
-  const deepDiveStub = `<div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;font-size:16px;">Deep Dive</div><div class="muted small" style="margin-top:6px;">Next Build: compare payers, CPT drivers, and date ranges. ${infoIcon("Enterprise users expect drill-down comparisons for root-cause analysis and payer strategy.")}</div><div class="hr"></div><div class="muted small">Placeholder ready. Add compare controls + driver charts next.</div></div>`;
-
   const content = (
     tab === "payers" ? renderPayerHubTable(payerRanks, q) :
-    tab === "forecast" ? forecastStub :
-    tab === "deep-dive" ? deepDiveStub :
+    tab === "forecast" ? renderForecastTab(org, m, forecastB64) :
+    tab === "deep-dive" ? renderDeepDiveTab(org, payerRanks, m, deepDiveB64) :
     tab === "ask-ai" ? renderRevenueAIConsole({ org, parsed }) :
     executiveBrief
   );
 
   const html = renderPage("Revenue Intelligence AI", `
-    <h2>Revenue Intelligence AI</h2>
-    <p class="muted">Enterprise command center for payer intelligence, forecasts, deep dives, and AI-powered reporting.</p>
+    <style>
+      .ri-header { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:flex-end; }
+      .ri-sub { margin-top:6px; }
+      .ri-panel { border:1px solid var(--border); border-radius:14px; padding:14px; background:var(--card); }
+      .ri-muted { color: var(--muted); font-size:12px; }
+      .ri-divider { height:1px; background: var(--border); margin: 12px 0; }
+      .chart-container { position:relative; width:100%; }
+    </style>
+    <div class="ri-header">
+      <div>
+        <h2 style="margin:0;">Revenue Intelligence AI</h2>
+        <div class="muted ri-sub">Enterprise command center for payer intelligence, forecasting, deep dives, and AI reporting.</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a class="btn secondary" href="/executive-export">Export Executive PDF</a>
+      </div>
+    </div>
     ${tabs}
     <div class="hr"></div>
     ${content}
