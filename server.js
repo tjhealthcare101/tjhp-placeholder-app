@@ -621,7 +621,7 @@ function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Revenue Overview</a><a href="/claims">Claims Lifecycle</a><a href="/data-management">Data Management</a><a href="/intelligence">Revenue Intelligence (AI)</a><a href="/actions">Action Center</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
+  return `<a href="/dashboard">Revenue Overview</a><a href="/claims">Claims Lifecycle</a><a href="/data-management">Data Management</a><a href="/revenue-intelligence">Revenue Intelligence AI</a><a href="/actions">Action Center</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -2746,6 +2746,24 @@ function formatPct(p){
   return `${Math.round(n)}%`;
 }
 
+function infoIcon(tip){
+  return `<span class="tooltip" data-tip="${safeStr(tip)}">ⓘ</span>`;
+}
+
+function tabLink(basePath, active, tab, label, tip){
+  const href = `${basePath}?tab=${encodeURIComponent(tab)}`;
+  const isActive = active === tab;
+  return `
+    <a href="${href}"
+      style="text-decoration:none;display:inline-flex;gap:8px;align-items:center;padding:8px 12px;border-radius:10px;border:1px solid var(--border);
+      background:${isActive ? "var(--primary)" : "var(--card)"};
+      color:${isActive ? "var(--primaryText)" : "var(--text)"};
+      font-weight:900;font-size:12px;">
+      ${safeStr(label)} ${infoIcon(tip)}
+    </a>
+  `;
+}
+
 function renderKpiCard(label, value, sub="", tone="neutral"){
   const toneBg = tone === "bad" ? "rgba(185,28,28,.08)" : (tone === "warn" ? "rgba(245,158,11,.10)" : (tone === "good" ? "rgba(34,197,94,.10)" : "rgba(17,24,39,.04)"));
   const toneBorder = tone === "bad" ? "rgba(185,28,28,.35)" : (tone === "warn" ? "rgba(245,158,11,.35)" : (tone === "good" ? "rgba(34,197,94,.35)" : "var(--border)"));
@@ -2950,6 +2968,64 @@ function renderPayerRankingTable(ranks, opts={}){
                 `).join("")
                 : `<tr><td colspan="10" class="muted">No payer data found yet.</td></tr>`
             }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+
+function renderPayerHubTable(payerRanks, qStr=""){
+  const q = String(qStr || "").trim().toLowerCase();
+  const rows = (payerRanks || []).filter(r=>{
+    if (!q) return true;
+    return String(r.payer||"").toLowerCase().includes(q);
+  });
+
+  return `
+    <div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:900;font-size:16px;">Payer Intelligence Hub</div>
+          <div class="muted small" style="margin-top:6px;">
+            Search payers, view grades, and jump directly into AI Payer Intelligence.
+          </div>
+        </div>
+        <form method="GET" action="/revenue-intelligence" style="display:flex;gap:8px;align-items:center;">
+          <input type="hidden" name="tab" value="payers"/>
+          <input name="q" value="${safeStr(qStr)}" placeholder="Search payer..." />
+          <button class="btn secondary" type="submit">Search</button>
+        </form>
+      </div>
+
+      <div class="hr"></div>
+
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Payer</th><th>Grade</th><th>Score</th><th>Claims</th><th>Denial %</th><th>Appeal Recovery %</th><th>Avg Days</th><th>Collected</th><th>At Risk</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.length ? rows.map(r => `
+                <tr>
+                  <td style="font-weight:800;"><a href="/analyze-payer?payer=${encodeURIComponent(r.payer)}">${safeStr(r.payer)}</a></td>
+                  <td><span class="badge ${gradeBadgeClass(r.grade)}">${safeStr(r.grade)}</span></td>
+                  <td>${formatNumberUI(r.score)}</td>
+                  <td>${formatNumberUI(r.totalClaims)}</td>
+                  <td>${formatPct(r.denialRate)}</td>
+                  <td>${formatPct(r.recoveryRate)}</td>
+                  <td>${formatNumberUI(Math.round(r.avgDaysToPay||0))}</td>
+                  <td>${formatMoneyUI(r.totalCollected||0)}</td>
+                  <td>${formatMoneyUI(r.totalAtRisk||0)}</td>
+                  <td style="white-space:nowrap;">
+                    <a class="btn small" href="/analyze-payer?payer=${encodeURIComponent(r.payer)}">Analyze</a>
+                    <a class="btn secondary small" href="/actions?payer=${encodeURIComponent(r.payer)}">Action Center</a>
+                  </td>
+                </tr>
+              `).join("") : `<tr><td colspan="10" class="muted">No payers found.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -5602,8 +5678,7 @@ if (method === "GET" && pathname === "/claims") {
 // ==============================
 // REVENUE INTELLIGENCE (AI)
 // ==============================
-if (method === "GET" && pathname === "/intelligence") {
-
+function renderRevenueAIConsole({ org, parsed }){
   const saved = getSavedQueries(org.org_id)
     .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime())
     .slice(0, 12);
@@ -5633,7 +5708,7 @@ if (method === "GET" && pathname === "/intelligence") {
         and the platform automatically renders charts using your live uploaded data.
       </div>
       <div class="muted small" style="margin-top:8px;">
-        <span class="tooltip" data-tip="Charts are system-generated from uploaded claims/payments. Saved Insights are shared across your organization.">ⓘ</span>
+        ${infoIcon("Charts are system-generated from uploaded claims/payments. Saved Insights are shared across your organization.")}
       </div>
     </div>
   `;
@@ -5667,8 +5742,8 @@ if (method === "GET" && pathname === "/intelligence") {
     </ul>
   ` : `<p class="muted">No recent questions yet.</p>`;
 
-  const html = renderPage("Revenue Intelligence (AI)", `
-    <h2>AI Revenue Intelligence <span class="tooltip" data-tip="Ask questions about denials, underpayments, aging, and negotiation performance using your uploaded data.">ⓘ</span></h2>
+  return `
+    <h2>AI Revenue Intelligence ${infoIcon("Ask questions about denials, underpayments, aging, and negotiation performance using your uploaded data.")}</h2>
     ${infoBox}
 
     <div class="hr"></div>
@@ -5752,24 +5827,20 @@ if (method === "GET" && pathname === "/intelligence") {
 
     <script>
       window.__tjhpLastRI = { prompt:"", style:"exec", charts:[], answer:"", data:null };
-
       window.__tjhpFillPrompt = function(p){
         const el = document.getElementById("riPrompt");
         if (el) el.value = p;
         el && el.focus();
       };
-
       window.__tjhpRunBriefing = function(){
         window.__tjhpRunPrompt(${JSON.stringify(defaultPrompt)}, "exec", []);
       };
-
       window.__tjhpRunSaved = function(savedId){
         const saved = ${JSON.stringify(saved)};
         const s = saved.find(x => x.saved_id === savedId);
         if (!s) return;
         window.__tjhpRunPrompt(s.prompt, s.style || "exec", s.charts || []);
       };
-
       function __riMakeCanvas(id, title){
         const wrap = document.createElement("div");
         wrap.style.margin = "14px 0";
@@ -5784,62 +5855,40 @@ if (method === "GET" && pathname === "/intelligence") {
         wrap.appendChild(c);
         return { wrap, canvas: c };
       }
-
       function __riRenderCharts(charts, data){
         const box = document.getElementById("riCharts");
         box.innerHTML = "";
-        if (!window.Chart || !data) {
-          box.innerHTML = "<p class='muted'>Charts unavailable.</p>";
-          return;
-        }
-
+        if (!window.Chart || !data) { box.innerHTML = "<p class='muted'>Charts unavailable.</p>"; return; }
         charts.forEach((ch, idx) => {
           if (ch === "denial_trend") {
             const {wrap, canvas} = __riMakeCanvas("riDenial"+idx, "Denial Trend");
             box.appendChild(wrap);
-            new Chart(canvas, { type:"line", data:{ labels:data.denialMonths, datasets:[
-              { label:"Denials", data:data.denialTotals },
-              { label:"Drafts", data:data.draftTotals }
-            ]}, options:{ responsive:true } });
+            new Chart(canvas, { type:"line", data:{ labels:data.denialMonths, datasets:[{ label:"Denials", data:data.denialTotals },{ label:"Drafts", data:data.draftTotals }]}, options:{ responsive:true } });
           }
           if (ch === "payment_trend") {
             const {wrap, canvas} = __riMakeCanvas("riPay"+idx, "Payment Trend");
             box.appendChild(wrap);
-            new Chart(canvas, { type:"bar", data:{ labels:data.payMonths, datasets:[
-              { label:"Payments ($)", data:data.payTotals }
-            ]}, options:{ responsive:true } });
+            new Chart(canvas, { type:"bar", data:{ labels:data.payMonths, datasets:[{ label:"Payments ($)", data:data.payTotals }]}, options:{ responsive:true } });
           }
           if (ch === "underpay_by_payer") {
             const {wrap, canvas} = __riMakeCanvas("riUnderpay"+idx, "Underpayment by Payer (Last 30 Days)");
             box.appendChild(wrap);
-            new Chart(canvas, { type:"bar", data:{ labels:data.payerLabels, datasets:[
-              { label:"Underpaid ($)", data:data.payerUnderpaid }
-            ]}, options:{ responsive:true } });
+            new Chart(canvas, { type:"bar", data:{ labels:data.payerLabels, datasets:[{ label:"Underpaid ($)", data:data.payerUnderpaid }]}, options:{ responsive:true } });
           }
           if (ch === "aging_buckets") {
             const {wrap, canvas} = __riMakeCanvas("riAging"+idx, "Aging Buckets (Unpaid)");
             box.appendChild(wrap);
-            new Chart(canvas, { type:"bar", data:{ labels:data.agingLabels, datasets:[
-              { label:"Claims", data:data.agingCounts }
-            ]}, options:{ responsive:true } });
+            new Chart(canvas, { type:"bar", data:{ labels:data.agingLabels, datasets:[{ label:"Claims", data:data.agingCounts }]}, options:{ responsive:true } });
           }
           if (ch === "negotiation_success") {
             const {wrap, canvas} = __riMakeCanvas("riNeg"+idx, "Negotiation Performance");
             box.appendChild(wrap);
-            new Chart(canvas, { type:"bar", data:{ labels:["Approved","Collected"], datasets:[
-              { label:"$", data:[data.negotiationApprovedTotal, data.negotiationCollectedTotal] }
-            ]}, options:{ responsive:true } });
-            const p = document.createElement("div");
-            p.className = "muted small";
-            p.style.marginTop = "6px";
-            p.textContent = "Success rate: " + (data.negotiationSuccessRate || 0) + "%";
-            wrap.appendChild(p);
+            new Chart(canvas, { type:"bar", data:{ labels:["Approved","Collected"], datasets:[{ label:"$", data:[data.negotiationApprovedTotal, data.negotiationCollectedTotal] }]}, options:{ responsive:true } });
+            const p = document.createElement("div"); p.className = "muted small"; p.style.marginTop = "6px"; p.textContent = "Success rate: " + (data.negotiationSuccessRate || 0) + "%"; wrap.appendChild(p);
           }
         });
-
         if (!charts.length) box.innerHTML = "<p class='muted'>No charts selected.</p>";
       }
-
       window.__tjhpRunPrompt = async function(p, s, charts){
         const promptEl = document.getElementById("riPrompt");
         const styleEl = document.getElementById("riStyle");
@@ -5847,54 +5896,104 @@ if (method === "GET" && pathname === "/intelligence") {
         const ansEl = document.getElementById("riAnswer");
         const refEl = document.getElementById("riRefreshed");
         const saveMsg = document.getElementById("riSaveMsg");
-
         const prompt = (typeof p === "string" && p.length) ? p : (promptEl ? (promptEl.value||"").trim() : "");
         const style = (typeof s === "string" && s.length) ? s : (styleEl ? styleEl.value : "exec");
-
         if (!prompt) return;
-
-        saveMsg.textContent = "";
-        ansEl.textContent = "Thinking...";
-        resultBox.style.display = "block";
-        refEl.textContent = "";
-
+        saveMsg.textContent = ""; ansEl.textContent = "Thinking..."; resultBox.style.display = "block"; refEl.textContent = "";
         try{
           const r = await fetch("/intelligence/query", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ prompt, style, charts: charts || [] }) });
           const data = await r.json();
           if (!data || !data.ok) { ansEl.textContent = (data && data.error) ? data.error : "No response."; return; }
-
           window.__tjhpLastRI = { prompt, style, charts: data.charts || [], answer: data.answer || "", data: data.data || null };
-
-          ansEl.textContent = data.answer || "";
-          refEl.textContent = "Refreshed: " + new Date().toLocaleString();
-          __riRenderCharts(data.charts || [], data.data || null);
-        }catch(e){
-          ansEl.textContent = "Error contacting assistant. Try again.";
-        }
+          ansEl.textContent = data.answer || ""; refEl.textContent = "Refreshed: " + new Date().toLocaleString(); __riRenderCharts(data.charts || [], data.data || null);
+        }catch(e){ ansEl.textContent = "Error contacting assistant. Try again."; }
       };
-
       window.__tjhpSaveCurrent = async function(){
         const nameEl = document.getElementById("riSaveName");
         const saveMsg = document.getElementById("riSaveMsg");
         const cur = window.__tjhpLastRI;
         if (!cur || !cur.prompt) return;
         saveMsg.textContent = "Saving...";
-
         try{
           const r = await fetch("/intelligence/query", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ prompt: cur.prompt, style: cur.style, charts: cur.charts, save:"1", save_name: (nameEl ? nameEl.value : "") }) });
           const data = await r.json();
           saveMsg.textContent = (data && data.ok) ? "Saved. Refresh to see it under Saved Insights." : "Could not save.";
-        }catch(e){
-          saveMsg.textContent = "Could not save.";
-        }
+        }catch(e){ saveMsg.textContent = "Could not save."; }
       };
-
-      if (${runBrief ? "true" : "false"}) {
-        setTimeout(()=>window.__tjhpRunBriefing(), 350);
-      }
+      if (${runBrief ? "true" : "false"}) setTimeout(()=>window.__tjhpRunBriefing(), 350);
     </script>
-  `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  `;
+}
 
+if (method === "GET" && pathname === "/intelligence") {
+  const tabRaw = String(parsed.query.tab || "ask-ai").toLowerCase();
+  const tab = ["executive", "payers", "forecast", "deep-dive", "ask-ai"].includes(tabRaw) ? tabRaw : "ask-ai";
+  const q = String(parsed.query.q || "");
+  const extra = new URLSearchParams({ tab, ...(q ? { q } : {}) }).toString();
+  return redirect(res, `/revenue-intelligence?${extra}`);
+}
+
+if (method === "GET" && pathname === "/revenue-intelligence") {
+  const tab = String(parsed.query.tab || "executive").toLowerCase();
+  const q = String(parsed.query.q || "");
+  const preset = (parsed.query.range || "last30").toLowerCase();
+  const r = rangeFromPreset(preset);
+  const m = computeDashboardMetrics(org.org_id, r.start, r.end, preset);
+  const payerRanks = computeAllPayerRankings(org.org_id);
+
+  const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+    ${tabLink("/revenue-intelligence", tab, "executive", "Executive Brief", "CEO-style summary of revenue health, risk, and priority payers.")}
+    ${tabLink("/revenue-intelligence", tab, "payers", "Payer Hub", "Search payers, see grades, and open AI Payer Intelligence instantly.")}
+    ${tabLink("/revenue-intelligence", tab, "forecast", "Forecast", "Next Build: projections for collections, denials, and AR aging trends.")}
+    ${tabLink("/revenue-intelligence", tab, "deep-dive", "Deep Dive", "Next Build: compare payers, CPT drivers, and time windows.")}
+    ${tabLink("/revenue-intelligence", tab, "ask-ai", "Ask AI", "Your existing Revenue Intelligence AI prompt console (unchanged).")}
+  </div>`;
+
+  const top5 = payerRanks.slice(0, 5);
+  const executiveBrief = `<div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <div><div style="font-weight:900;font-size:16px;">Executive Brief</div><div class="muted small" style="margin-top:6px;">A fast snapshot of financial performance and what needs attention now.</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;"><a class="btn secondary" href="/executive-export">Export Executive PDF</a><a class="btn secondary" href="/dashboard">Revenue Overview</a></div>
+    </div>
+    <div class="hr"></div>
+    <div class="row" style="display:flex;gap:12px;flex-wrap:wrap;">
+      ${renderKpiCard("Financial Health", `${formatNumberUI(m.healthScore||0)}/100`, `Grade: ${safeStr(m.healthGrade||"—")}`, toneForGrade(m.healthGrade))}
+      ${renderKpiCard("Collected", formatMoneyUI(m.kpis.collectedTotal||0), "real cash collected", "good")}
+      ${renderKpiCard("Revenue At Risk", formatMoneyUI(m.kpis.revenueAtRisk||0), "underpaid + patient balance remaining", (m.kpis.revenueAtRisk||0) > 0 ? "warn" : "good")}
+      ${renderKpiCard("Denial Rate", `${Number(m.denialRate||0).toFixed(1)}%`, "lower is better", (m.denialRate||0) >= 20 ? "bad" : ((m.denialRate||0) >= 10 ? "warn" : "good"))}
+      ${renderKpiCard("Underpaid Rate", `${Number(m.underpaidRate||0).toFixed(1)}%`, "lower is better", (m.underpaidRate||0) >= 20 ? "bad" : ((m.underpaidRate||0) >= 10 ? "warn" : "good"))}
+      ${renderKpiCard("AR 90+ Exposure", `${Number(m.ar90Rate||0).toFixed(1)}%`, "portion of billed sitting 90+ days", (m.ar90Rate||0) >= 25 ? "bad" : ((m.ar90Rate||0) >= 12 ? "warn" : "good"))}
+    </div>
+    <div class="hr"></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:rgba(17,24,39,.04);">
+        <div style="font-weight:900;">Top Payers To Review</div><div class="muted small" style="margin-top:6px;">Fast access into AI Payer Intelligence.</div>
+        <div style="margin-top:10px;overflow:auto;"><table><thead><tr><th>Payer</th><th>Grade</th><th>Score</th><th>At Risk</th><th></th></tr></thead><tbody>
+          ${top5.length ? top5.map(p=>`<tr><td style="font-weight:800;">${safeStr(p.payer)}</td><td><span class="badge ${gradeBadgeClass(p.grade)}">${safeStr(p.grade)}</span></td><td>${formatNumberUI(p.score)}</td><td>${formatMoneyUI(p.totalAtRisk||0)}</td><td style="white-space:nowrap;"><a class="btn small" href="/analyze-payer?payer=${encodeURIComponent(p.payer)}">Analyze</a> <a class="btn secondary small" href="/actions?payer=${encodeURIComponent(p.payer)}">Actions</a></td></tr>`).join("") : `<tr><td colspan="5" class="muted">No payer data yet.</td></tr>`}
+        </tbody></table></div>
+      </div>
+      <div style="flex:1;min-width:360px;">${renderPayerRankingTable(payerRanks, { limit: 10, showAllLink: true })}</div>
+    </div>
+  </div>`;
+
+  const forecastStub = `<div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;font-size:16px;">Forecast</div><div class="muted small" style="margin-top:6px;">Next Build: predictive collections + denial exposure + AR aging trend. ${infoIcon("This will use your historical paid + at-risk trends and produce a simple 30-day projection first.")}</div><div class="hr"></div><div class="muted small">Placeholder ready. Add charts + projection engine next.</div></div>`;
+  const deepDiveStub = `<div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;font-size:16px;">Deep Dive</div><div class="muted small" style="margin-top:6px;">Next Build: compare payers, CPT drivers, and date ranges. ${infoIcon("Enterprise users expect drill-down comparisons for root-cause analysis and payer strategy.")}</div><div class="hr"></div><div class="muted small">Placeholder ready. Add compare controls + driver charts next.</div></div>`;
+
+  const content = (
+    tab === "payers" ? renderPayerHubTable(payerRanks, q) :
+    tab === "forecast" ? forecastStub :
+    tab === "deep-dive" ? deepDiveStub :
+    tab === "ask-ai" ? renderRevenueAIConsole({ org, parsed }) :
+    executiveBrief
+  );
+
+  const html = renderPage("Revenue Intelligence AI", `
+    <h2>Revenue Intelligence AI</h2>
+    <p class="muted">Enterprise command center for payer intelligence, forecasts, deep dives, and AI-powered reporting.</p>
+    ${tabs}
+    <div class="hr"></div>
+    ${content}
+  `, navUser(), {showChat:true, orgName: org.org_name});
   return send(res, 200, html);
 }
 
