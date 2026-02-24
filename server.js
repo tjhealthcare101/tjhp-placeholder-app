@@ -2427,76 +2427,72 @@ function evaluateClaimDerived(claim, ctx={}){
   const patient = computePatientBalance(claim);
   const insurance = computeInsuranceBalance(claim, claimCtx);
   const expectedInsurance = insurance.expectedInsurance;
+  const paidAmount = insurance.paidAmount;
+  const insuranceWriteOff = insurance.insuranceWriteOff;
+  const insuranceRemaining = insurance.insuranceRemaining;
+  const patientWriteOff = patient.patientWriteOff;
+  const patientBalanceRemaining = patient.patientBalanceRemaining;
+
   const key = normalizeClaimKey(claim.claim_number || "");
   const paymentRows = key && claimCtx.paymentsByClaim ? (claimCtx.paymentsByClaim[key] || []) : [];
-  const paidAmount = insurance.paidAmount;
   const claimHasPaidField = [claim.insurance_paid, claim.paid_amount].some(v => v != null && String(v).trim() !== "");
   const hasPaymentRecord = paymentRows.length > 0 || claimHasPaidField || !!claim.paid_at;
+  const submittedFlag = !!(claim.submission_id || claim.submitted_at || claim.submitted_date || claim.submitted_to_payer);
+
   const appealCase = claim.denial_case_id && claimCtx.caseById ? claimCtx.caseById.get(String(claim.denial_case_id)) : null;
   const negotiation = claimCtx.negByBilled ? claimCtx.negByBilled.get(String(claim.billed_id || "")) : null;
+  const activeCaseStatuses = ["Drafted", "Submitted", "In Review", "Counter Offered", "Approved (Pending Payment)"];
+  const appealStatus = String(appealCase?.status || "");
+  const negotiationStatus = String(negotiation?.status || "");
+  const hasActiveAppealOrNegotiation = activeCaseStatuses.includes(appealStatus) || activeCaseStatuses.includes(negotiationStatus);
+
   const denialReason = String(claim.denial_reason || appealCase?.denial_reason || appealCase?.issue_reason || "").trim();
   const denialDocAttached = !!(claim.denial_doc_attached || claim.denial_document || claim.denial_file ||
     (appealCase && ((appealCase.files || []).length > 0 || (appealCase.appeal_attachments || []).length > 0)));
   const explicitDenialUpload = denialDocAttached || String(appealCase?.status || "").toLowerCase().includes("denied");
   const hasDenialContext = !!(denialReason || denialDocAttached || appealCase || explicitDenialUpload);
-  const submittedFlag = !!(claim.submission_id || claim.submitted_at || claim.submitted_date || claim.submitted_to_payer);
-  const insuranceRemaining = insurance.insuranceRemaining;
-  const patientBalanceRemaining = patient.patientBalanceRemaining;
 
-  let lifecycleStage = submittedFlag ? "Waiting Payment" : "Submitted";
-  let financialStatus = lifecycleStage;
-
-  const activeCaseStatuses = ["Drafted", "Submitted", "In Review", "Counter Offered", "Approved (Pending Payment)"];
-  const appealStatus = String(appealCase?.status || "");
-  const negotiationStatus = String(negotiation?.status || "");
-  const hasOpenDenialCase = appealStatus === "Open";
-  const hasActiveAppealOrNegotiation = activeCaseStatuses.includes(appealStatus) || activeCaseStatuses.includes(negotiationStatus);
-
-  if (!hasOpenDenialCase && hasActiveAppealOrNegotiation) {
+  let lifecycleStage = "Submitted";
+  if (hasActiveAppealOrNegotiation) {
     lifecycleStage = "In Appeal/Negotiation";
-    financialStatus = "In Appeal/Negotiation";
-  } else if (!hasPaymentRecord && submittedFlag) {
+  } else if (submittedFlag && !hasPaymentRecord) {
     lifecycleStage = "Waiting Payment";
-    financialStatus = "Waiting Payment";
   } else if (hasPaymentRecord && paidAmount <= 0.0001) {
     lifecycleStage = "Denied";
-    financialStatus = "Denied";
     const settings = getPracticeSettings(claim.org_id);
-    if (settings.auto_create_denial_cases === true) {
-      ensureDenialCaseForClaim(claim);
-    }
+    if (settings.auto_create_denial_cases === true) ensureDenialCaseForClaim(claim);
   } else if (hasPaymentRecord && insuranceRemaining > 0.0001) {
     lifecycleStage = "Underpaid";
-    financialStatus = "Underpaid";
   } else if (insuranceRemaining <= 0.0001 && patientBalanceRemaining > 0.0001) {
     lifecycleStage = "Patient Follow-Up";
-    financialStatus = "Patient Follow-Up";
   } else if (insuranceRemaining <= 0.0001 && patientBalanceRemaining <= 0.0001) {
     lifecycleStage = "Resolved";
-    financialStatus = "Resolved";
+  } else if (!submittedFlag) {
+    lifecycleStage = "Submitted";
+  } else {
+    lifecycleStage = "Waiting Payment";
   }
 
   let atRiskAmount = 0;
-  if (lifecycleStage === "Denied") atRiskAmount = Math.max(0, expectedInsurance || billedAmount) - paidAmount;
+  if (lifecycleStage === "Denied") atRiskAmount = Math.max(0, (expectedInsurance || billedAmount) - paidAmount);
   else if (lifecycleStage === "Underpaid") atRiskAmount = insuranceRemaining;
-  else if (lifecycleStage === "Waiting Payment" || lifecycleStage === "Submitted") atRiskAmount = Math.max(0, expectedInsurance || billedAmount) - paidAmount;
+  else if (lifecycleStage === "Waiting Payment" || lifecycleStage === "Submitted") atRiskAmount = Math.max(0, (expectedInsurance || billedAmount) - paidAmount);
   else if (lifecycleStage === "Patient Follow-Up") atRiskAmount = patientBalanceRemaining;
   else if (lifecycleStage === "In Appeal/Negotiation") atRiskAmount = insuranceRemaining + patientBalanceRemaining;
-  atRiskAmount = Math.max(0, atRiskAmount);
 
   return {
     lifecycleStage,
-    financialStatus,
+    financialStatus: lifecycleStage,
     expectedInsurance,
     paidAmount,
     billedAmount,
     allowedAmount,
     underpaidAmount: Math.max(0, insuranceRemaining),
     patientBalanceRemaining,
-    insuranceWriteOff: insurance.insuranceWriteOff,
-    patientWriteOff: patient.patientWriteOff,
-    atRiskAmount,
-    writeOffAmount: Math.max(0, insurance.insuranceWriteOff),
+    insuranceWriteOff,
+    patientWriteOff,
+    atRiskAmount: Math.max(0, atRiskAmount),
+    writeOffAmount: Math.max(0, insuranceWriteOff),
     submittedFlag,
     hasPaymentResponse: hasPaymentRecord,
     hasDenialContext
@@ -2541,7 +2537,7 @@ function computeExecutiveRevenueMetrics(org_id){
     const paid = num(d.paidAmount);
     const expectedInsurance = num(d.expectedInsurance);
     acc.totalBilled += billed;
-    acc.totalCollected += paid;
+    acc.totalCollected += paid + num(claim.patient_collected);
     if (!isResolvedLifecycleStage(d.lifecycleStage)) {
       acc.totalAtRisk += Math.max(0, d.underpaidAmount) + Math.max(0, d.patientBalanceRemaining);
     }
@@ -5351,7 +5347,7 @@ if (method === "GET" && pathname === "/claims") {
         const pendingCount = claims.filter(b => ["Pending","Submitted","Waiting Payment"].includes(evaluateClaimDerived(b, claimCtx).lifecycleStage)).length;
 
         const totalBilledAmt = claims.reduce((sum,b)=> sum + Number(b.amount_billed || 0), 0);
-        const collectedAmt = claims.reduce((sum, b) => sum + Number(evaluateClaimDerived(b, claimCtx).paidAmount || 0), 0);
+        const collectedAmt = claims.reduce((sum, b) => { const d = evaluateClaimDerived(b, claimCtx); return sum + Number(d.paidAmount || 0) + num(b.patient_collected); }, 0);
         const atRiskAmt = claims.reduce((sum, b) => sum + num(evaluateClaimDerived(b, claimCtx).atRiskAmount), 0);
 
         return `<tr>
@@ -7829,7 +7825,7 @@ if (method === "POST" && pathname === "/negotiations/upload") {
           const pendingCount = claims.filter(b => (b.status||"Pending")==="Pending").length;
 
           const totalBilledAmt = claims.reduce((sum,b)=> sum + Number(b.amount_billed || 0), 0);
-          const collectedAmt = claims.reduce((sum, b) => sum + Number(evaluateClaimDerived(b, claimCtx).paidAmount || 0), 0);
+          const collectedAmt = claims.reduce((sum, b) => { const d = evaluateClaimDerived(b, claimCtx); return sum + Number(d.paidAmount || 0) + num(b.patient_collected); }, 0);
           const atRiskAmt = claims.reduce((sum, b) => sum + num(evaluateClaimDerived(b, claimCtx).atRiskAmount), 0);
           const collectionRate = totalBilledAmt > 0 ? (collectedAmt / totalBilledAmt) * 100 : 0;
           const barColor = collectionRate >= 80 ? "#065f46" : (collectionRate >= 60 ? "#f59e0b" : "#b91c1c");
@@ -7939,7 +7935,7 @@ if (method === "POST" && pathname === "/negotiations/upload") {
     // Summary metrics for this submission (all claims, not filtered page)
     const allInSub = billedAll.filter(b => b.submission_id === submission_id);
     const totalBilledAmt = allInSub.reduce((sum,b)=> sum + Number(b.amount_billed || 0), 0);
-    const collectedAmt = allInSub.reduce((sum, b) => sum + Number(b.insurance_paid || b.paid_amount || 0), 0);
+    const collectedAmt = allInSub.reduce((sum, b) => { const d = evaluateClaimDerived(b, claimCtx); return sum + Number(d.paidAmount || 0) + num(b.patient_collected); }, 0);
     const atRiskAmt = claims.reduce((sum, b) => sum + num(evaluateClaimDerived(b, claimCtx).atRiskAmount), 0);
     const collectionRate = totalBilledAmt > 0 ? ((collectedAmt / totalBilledAmt) * 100) : 0;
     const barColor = collectionRate >= 80 ? "#065f46" : (collectionRate >= 60 ? "#f59e0b" : "#b91c1c");
@@ -8066,7 +8062,7 @@ if (method === "POST" && pathname === "/negotiations/upload") {
                   <select name="resolution" required style="width:260px;">
                     <option value="">Select</option>
                     <option value="Contractual">Contractual Agreement (Write-off)</option>
-                    <option value="Patient Balance">Patient Responsibility Needed</option>
+                    <option value="Patient Follow-Up">Patient Responsibility Needed</option>
                     <option value="Appeal">Send to Appeal</option>
                   </select>
                 </div>
@@ -8121,7 +8117,7 @@ const statusCell = (() => {
     `;
   }
 
-  if (st2 === "Patient Balance") {
+  if (st2 === "Patient Follow-Up") {
     const remaining = Math.max(0, patientResp - patientCollected);
     return `
       <span class="badge warn">Patient Owes</span>
@@ -8227,7 +8223,7 @@ const statusCell = (() => {
             <option value="Underpaid"${statusF==="Underpaid"?" selected":""}>Underpaid</option>
             <option value="Contractual"${statusF==="Contractual"?" selected":""}>Contractual</option>
             <option value="Appeal"${statusF==="Appeal"?" selected":""}>Appeal</option>
-            <option value="Patient Balance"${statusF==="Patient Balance"?" selected":""}>Patient Balance</option>
+            <option value="Patient Follow-Up"${statusF==="Patient Follow-Up"?" selected":""}>Patient Follow-Up</option>
           </select>
         </div>
         <div style="display:flex;flex-direction:column;">
@@ -8540,9 +8536,9 @@ const statusCell = (() => {
       b.status = "Underpaid";
     } else {
       // insurance_partial
-      // if patient still owes, keep Patient Balance; otherwise Paid
+      // if patient still owes, keep Patient Follow-Up; otherwise Paid
       const remainingPatient = Math.max(0, b.patient_responsibility - b.patient_collected);
-      b.status = (remainingPatient > 0) ? "Patient Balance" : "Paid";
+      b.status = (remainingPatient > 0) ? "Patient Follow-Up" : "Paid";
       // If it looks like underpaid, prioritize Underpaid (A)
       if (b.underpaid_amount > 0.01) b.status = "Underpaid";
     }
@@ -8904,14 +8900,14 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     return redirect(res, `/billed?submission_id=${encodeURIComponent(submission_id)}`);
   }
 
-  // --------- UNDERPAID RESOLUTION (Contractual / Appeal / Patient Balance) ----------
+  // --------- UNDERPAID RESOLUTION (Contractual / Appeal / Patient Follow-Up) ----------
   if (method === "POST" && pathname === "/claim/resolve") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
 
     const billed_id = (params.get("billed_id") || "").trim();
     const submission_id = (params.get("submission_id") || "").trim();
-    const resolution = (params.get("resolution") || "").trim(); // Contractual | Appeal | Patient Balance
+    const resolution = (params.get("resolution") || "").trim(); // Contractual | Appeal | Patient Follow-Up
 
     const billedAll = readJSON(FILES.billed, []);
     const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
@@ -8923,8 +8919,8 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
     } else if (resolution === "Appeal") {
       b.status = "Appeal";
       b.appeal_flag = true;
-    } else if (resolution === "Patient Balance") {
-      b.status = "Patient Balance";
+    } else if (resolution === "Patient Follow-Up") {
+      b.status = "Patient Follow-Up";
       b.patient_balance = Math.max(0, num(b.patient_responsibility) - num(b.patient_collected));
     }
 
@@ -10196,7 +10192,7 @@ if (method === "POST" && pathname === "/case/mark-paid") {
           dos: ex.dos || "",
           payer: ex.payer || "",
           amount_billed: num(ex.billed_amount),
-          status: (paid <= 0.0001 && num(ex.billed_amount) > 0) ? "Waiting Payment" : ((paid >= expectedInsurance) ? "Paid" : "Underpaid"),
+          status: (paid <= 0.0001 && num(ex.billed_amount) > 0) ? "Waiting Payment" : ((paid >= expectedInsurance) ? "Resolved" : "Underpaid"),
           paid_amount: num(ex.paid_amount),
           insurance_paid: num(ex.paid_amount),
           patient_responsibility: num(ex.patient_responsibility),
@@ -10344,7 +10340,7 @@ for (const ap of addedPayments) {
     billedClaim.suggested_action = "";
     billedClaim.underpaid_amount = 0;
   } else if (paid + 0.01 >= expected) {
-    billedClaim.status = "Paid";
+    billedClaim.status = "Resolved";
     billedClaim.suggested_action = "";
     billedClaim.underpaid_amount = 0;
   } else {
@@ -10354,7 +10350,7 @@ for (const ap of addedPayments) {
     const gap = Math.max(0, num(billedClaim.amount_billed) - paid - num(billedClaim.patient_collected));
     const diffPct = num(billedClaim.amount_billed) > 0 ? (gap / num(billedClaim.amount_billed)) * 100 : 100;
     if (diffPct <= 5) billedClaim.suggested_action = "Contractual";
-    else if (diffPct <= 20) billedClaim.suggested_action = "Patient Balance";
+    else if (diffPct <= 20) billedClaim.suggested_action = "Patient Follow-Up";
     else billedClaim.suggested_action = "Appeal";
   }
 
@@ -10372,20 +10368,20 @@ if (changed_sync) {
 
     const claims = billedAll_sync.filter(b => b.submission_id === s.submission_id);
 
-    s.paid = claims.filter(c => (c.status || "Pending") === "Paid").length;
+    s.paid = claims.filter(c => (c.status || "Pending") === "Resolved").length;
     s.denied = claims.filter(c => (c.status || "Pending") === "Denied").length;
     s.pending = claims.filter(c => (c.status || "Pending") === "Pending").length;
 
     s.underpaid = claims.filter(c => (c.status || "Pending") === "Underpaid").length;
     s.contractual = claims.filter(c => (c.status || "Pending") === "Contractual").length;
     s.appeal = claims.filter(c => (c.status || "Pending") === "Appeal").length;
-    s.patient_balance = claims.filter(c => (c.status || "Pending") === "Patient Balance").length;
+    s.patient_follow_up = claims.filter(c => (c.status || "Pending") === "Patient Follow-Up").length;
 
     s.revenue_collected = claims
-      .filter(c => (c.status || "Pending") === "Paid")
+      .filter(c => (c.status || "Pending") === "Resolved")
       .reduce((sum, c) => sum + num(c.paid_amount), 0);
 
-    // Revenue at risk counts: Pending + Denied + Underpaid + Appeal (NOT Contractual, NOT Patient Balance)
+    // Revenue at risk counts: Pending + Denied + Underpaid + Appeal (NOT Contractual, NOT Patient Follow-Up)
     s.revenue_at_risk = claims
       .filter(c => ["Pending","Denied","Underpaid","Appeal"].includes((c.status || "Pending")))
       .reduce((sum, c) => {
@@ -12188,16 +12184,16 @@ if (method === "GET" && pathname === "/claim-detail") {
     <div class="hr"></div>
     <h3>Financial Intelligence</h3>
     <table>
-      <tr><th>Billed Amount</th><td>${formatMoneyUI(billedAmount)}</td></tr>
-      <tr><th>Paid Amount</th><td>${formatMoneyUI(paidAmount)}</td></tr>
-      <tr><th>Expected Insurance Payment</th><td>${formatMoneyUI(expectedInsurancePayment)}</td></tr>
+      <tr><th>Billed</th><td>${formatMoneyUI(billedAmount)}</td></tr>
+      <tr><th>Paid (Insurance)</th><td>${formatMoneyUI(paidAmount)}</td></tr>
+      <tr><th>Expected Insurance</th><td>${formatMoneyUI(expectedInsurancePayment)}</td></tr>
       <tr><th>Insurance Remaining</th><td>${formatMoneyUI(insuranceRemaining)}</td></tr>
       <tr><th>Insurance Write-Off</th><td>${formatMoneyUI(num(d.insuranceWriteOff))}</td></tr>
       <tr><th>Patient Responsibility</th><td>${formatMoneyUI(patient.patientResp)}</td></tr>
       <tr><th>Patient Collected</th><td>${formatMoneyUI(patient.patientCollected)}</td></tr>
       <tr><th>Patient Write-Off</th><td>${formatMoneyUI(patient.patientWriteOff)}</td></tr>
       <tr><th>Patient Balance Remaining</th><td>${formatMoneyUI(num(d.patientBalanceRemaining))}</td></tr>
-      <tr><th>Variance (Expected − Paid)</th><td ${varianceStyle}>${formatMoneyUI(variance)}</td></tr>
+      <tr><th>At Risk</th><td>${formatMoneyUI(num(d.atRiskAmount))}</td></tr>
     </table>
 
     <div class="hr"></div>
