@@ -7827,9 +7827,50 @@ if (method === "POST" && pathname === "/copilot/query") {
 
     const responseHTML = `
       <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-      <div class="copilot-panel">
-        <h2>Executive Summary</h2>
-        <ul>
+
+      <div class="copilot-panel" style="padding:18px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+          <div>
+            <div class="muted" style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;">Executive Copilot Brief</div>
+            <h2 style="margin:6px 0 4px;">Financial Performance Snapshot</h2>
+            <div class="muted">AI-generated executive summary with KPI highlights and recovery focus areas.</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <a class="btn secondary" href="/copilot/export?brief_id=${encodeURIComponent(brief_id)}">Export PDF</a>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:14px;">
+          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
+            <div class="muted small">Total Billed</div>
+            <div style="font-weight:700;font-size:1.1rem;">$${Number(result.metrics?.totals?.billed || 0).toLocaleString()}</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
+            <div class="muted small">Total Collected</div>
+            <div style="font-weight:700;font-size:1.1rem;">$${Number(result.metrics?.totals?.collected || 0).toLocaleString()}</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
+            <div class="muted small">Revenue at Risk</div>
+            <div style="font-weight:700;font-size:1.1rem;">$${Number(result.metrics?.totals?.atRisk || 0).toLocaleString()}</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
+            <div class="muted small">Recovery Rate</div>
+            <div style="font-weight:700;font-size:1.1rem;">${Number(result.metrics?.rates?.recoveryRate || 0).toLocaleString()}%</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
+            <div class="muted small">Denial Rate</div>
+            <div style="font-weight:700;font-size:1.1rem;">${Number(result.metrics?.rates?.denialRate || 0).toLocaleString()}%</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
+            <div class="muted small">Operational Discipline</div>
+            <div style="font-weight:700;font-size:1.1rem;">${Number(result.metrics?.disciplineScore || 0).toLocaleString()}/100</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="copilot-panel" style="margin-top:14px;">
+        <h3 style="margin:0 0 8px;">Executive Summary</h3>
+        <ul style="margin:0;padding-left:18px;display:grid;gap:6px;">
           ${(result.bullets || []).map(b => `<li>${safeStr(b)}</li>`).join("")}
         </ul>
       </div>
@@ -7840,7 +7881,6 @@ if (method === "POST" && pathname === "/copilot/query") {
         <a class="btn" href="/actions?tab=denials">Denials</a>
         <a class="btn" href="/actions?tab=underpayments">Underpayments</a>
         <a class="btn" href="/revenue-intelligence?tab=payers">Payer Intelligence</a>
-        <a class="btn secondary" href="/copilot/export?brief_id=${encodeURIComponent(brief_id)}">Export PDF</a>
       </div>
 
       <script>
