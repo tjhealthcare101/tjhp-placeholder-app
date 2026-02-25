@@ -14658,4 +14658,4 @@ if (method === "GET" && pathname === "/claim-detail") {
 
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
-});
+}); 
