@@ -741,6 +741,35 @@ function detectCopilotIntent(text){
   return { key:"general", label:"General" };
 }
 
+function computeSimpleAtRiskForecast(org_id, rangePreset){
+  const r = rangeFromPreset(rangePreset || "last30");
+
+  // compare first half vs second half of the range
+  const mid = new Date((r.start.getTime() + r.end.getTime()) / 2);
+
+  const m1 = computeDashboardMetrics(org_id, r.start, mid, r.preset);
+  const m2 = computeDashboardMetrics(org_id, mid, r.end, r.preset);
+
+  const a1 = Number(m1?.kpis?.revenueAtRisk || 0);
+  const a2 = Number(m2?.kpis?.revenueAtRisk || 0);
+  const safeA1 = Number.isFinite(a1) ? a1 : 0;
+  const safeA2 = Number.isFinite(a2) ? a2 : 0;
+
+  // daily slope estimate across half-range
+  const days = Math.max(1, (r.end.getTime() - r.start.getTime()) / (1000 * 60 * 60 * 24));
+  const slopePerDay = (safeA2 - safeA1) / (days / 2);
+  const safeSlopePerDay = Number.isFinite(slopePerDay) ? slopePerDay : 0;
+
+  // project 30 days out
+  const projected30 = Math.max(0, safeA2 + (safeSlopePerDay * 30));
+
+  return {
+    currentAtRisk: safeA2,
+    slopePerDay: safeSlopePerDay,
+    projected30: Number.isFinite(projected30) ? projected30 : 0
+  };
+}
+
 function buildCopilotResponse({
   org_id,
   rangePreset,
@@ -774,6 +803,7 @@ function buildCopilotResponse({
       dashboard.operationalDisciplineScore ?? 0
     )
   };
+  const forecast = computeSimpleAtRiskForecast(org_id, rangePreset);
   const format = String(responseFormat || "executive").toLowerCase();
 
   const disciplineDrivers = [];
@@ -825,7 +855,8 @@ function buildCopilotResponse({
       `Revenue At Risk: $${metrics.totals.atRisk.toLocaleString()}`,
       `Recovery Rate: ${metrics.rates.recoveryRate}%`,
       `Denial Rate: ${metrics.rates.denialRate}%`,
-      `Operational Discipline Score: ${metrics.disciplineScore}/100`
+      `Operational Discipline Score: ${metrics.disciplineScore}/100`,
+      `30-day At-Risk Projection: $${Math.round(forecast.projected30).toLocaleString()} (trend: ${Math.round(forecast.slopePerDay).toLocaleString()}/day)`
     ];
   }
 
@@ -844,7 +875,8 @@ function buildCopilotResponse({
       `Denial Exposure Rate: ${metrics.rates.denialRate}%`,
       `Appeal Conversion: ${metrics.rates.appealSuccessRate}%`,
       `Negotiation Yield: ${metrics.rates.negotiationROI}%`,
-      `Discipline Score: ${metrics.disciplineScore}`
+      `Discipline Score: ${metrics.disciplineScore}`,
+      `30-day At-Risk Projection: $${Math.round(forecast.projected30).toLocaleString()} (trend: ${Math.round(forecast.slopePerDay).toLocaleString()}/day)`
     ];
   }
 
@@ -896,6 +928,7 @@ function buildCopilotResponse({
     bullets,
     charts,
     metrics,
+    forecast,
     disciplineDrivers,
     executiveActions,
     payerRiskScore
