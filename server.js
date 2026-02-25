@@ -662,6 +662,16 @@ function resetAICircuit() {
   AI_CIRCUIT.disabledUntil = 0;
 }
 
+function getAIStatusLabel(){
+  if (isAIDisabled()) {
+    return `<span style="color:#b91c1c;font-weight:600;">AI: Disabled</span>`;
+  }
+  if (AI_CIRCUIT.failureCount > 0) {
+    return `<span style="color:#92400e;font-weight:600;">AI: Degraded</span>`;
+  }
+  return `<span style="color:#065f46;font-weight:600;">AI: Active</span>`;
+}
+
 async function safeAIRequest(executorFn) {
   if (isAIDisabled()) {
     return {
@@ -940,7 +950,18 @@ function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Revenue Overview</a><a href="/claims">Claims Lifecycle</a><a href="/data-management">Data Management</a><a href="/revenue-intelligence">Revenue Intelligence AI</a><a href="/copilot">AI Copilot</a><a href="/actions">Action Center</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
+  return `
+    <a href="/dashboard">Revenue Overview</a>
+    <a href="/claims">Claims Lifecycle</a>
+    <a href="/data-management">Data Management</a>
+    <a href="/revenue-intelligence">Revenue Intelligence AI</a>
+    <a href="/copilot">AI Copilot</a>
+    <a href="/actions">Action Center</a>
+    <a href="/report">Reports</a>
+    <a href="/account">Account</a>
+    <span style="margin-left:16px;">${getAIStatusLabel()}</span>
+    <a href="/logout">Logout</a>
+  `;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -7992,19 +8013,74 @@ if (method === "GET" && pathname === "/copilot/export") {
 
   const result = brief.result || { bullets: [], charts: [] };
   const html = renderPage("Executive Briefing", `
-    <h1>AI Revenue Executive Briefing</h1>
-    <div class="copilot-panel">
-      <h2>Executive Summary</h2>
-      <ul>
-        ${(result.bullets || []).map(b => `<li>${safeStr(b)}</li>`).join("")}
-      </ul>
+  <style>
+    body { font-family: Arial; }
+    .pdf-header { margin-bottom:20px; }
+    .pdf-title { font-size:20px;font-weight:700; }
+    .pdf-section { margin-bottom:18px; }
+    .pdf-kpi-row { display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px; }
+    .pdf-kpi { min-width:160px; }
+    .pdf-kpi-label { font-size:12px;color:#666; }
+    .pdf-kpi-value { font-size:16px;font-weight:700; }
+  </style>
+
+  <div class="pdf-header">
+    <div class="pdf-title">Executive Revenue Briefing</div>
+    <div>Generated: ${new Date().toLocaleString()}</div>
+  </div>
+
+  <div class="pdf-section">
+    <div class="pdf-kpi-row">
+      <div class="pdf-kpi">
+        <div class="pdf-kpi-label">Total Billed</div>
+        <div class="pdf-kpi-value">$${(result.metrics?.totals?.billed || 0).toLocaleString()}</div>
+      </div>
+      <div class="pdf-kpi">
+        <div class="pdf-kpi-label">Collected</div>
+        <div class="pdf-kpi-value">$${(result.metrics?.totals?.collected || 0).toLocaleString()}</div>
+      </div>
+      <div class="pdf-kpi">
+        <div class="pdf-kpi-label">Revenue At Risk</div>
+        <div class="pdf-kpi-value">$${(result.metrics?.totals?.atRisk || 0).toLocaleString()}</div>
+      </div>
+      <div class="pdf-kpi">
+        <div class="pdf-kpi-label">Recovery Rate</div>
+        <div class="pdf-kpi-value">${(result.metrics?.rates?.recoveryRate || 0)}%</div>
+      </div>
     </div>
-    <div class="copilot-panel" style="margin-top:14px;">
-      <h2>Insights</h2>
-      ${(result.charts || []).map(chart => `<p><strong>${safeStr(chart.title || "Insight")}</strong></p>`).join("")}
-    </div>
-    <p>Generated: ${safeStr(new Date(brief.created || nowISO()).toLocaleString())}</p>
-    <button class="btn" onclick="window.print()">Print / Save as PDF</button>
+  </div>
+
+  <div class="pdf-section">
+    <h3>Executive Summary</h3>
+    <ul>
+      ${(result.bullets || []).map(b => `<li>${safeStr(b)}</li>`).join("")}
+    </ul>
+  </div>
+
+  <div class="pdf-section">
+    <h3>Operational Discipline Drivers</h3>
+    <ul>
+      ${(result.disciplineDrivers || []).map(d => `<li>${safeStr(d)}</li>`).join("")}
+    </ul>
+  </div>
+
+  <div class="pdf-section">
+    <h3>Recommended Executive Actions</h3>
+    <ul>
+      ${(result.executiveActions || []).map(a => `<li>${safeStr(a)}</li>`).join("")}
+    </ul>
+  </div>
+
+  <div class="pdf-section">
+    <h3>30-Day Forecast</h3>
+    <p>
+      Projected At Risk: $${Math.round(result.forecast?.projected30 || 0).toLocaleString()}
+      <br/>
+      Trend Per Day: ${Math.round(result.forecast?.slopePerDay || 0).toLocaleString()}
+    </p>
+  </div>
+
+  <button onclick="window.print()">Print / Save as PDF</button>
   `, navUser(), {showChat:false, orgName: org.org_name});
   return send(res, 200, html);
 }
