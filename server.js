@@ -638,6 +638,88 @@ ${chatScript}
 // ==============================
 // AI COPILOT (NEW) - Structured Chat + Charts
 // ==============================
+const AI_CIRCUIT = {
+  failureCount: 0,
+  failureThreshold: 5,
+  disabledUntil: 0,
+  cooldownMs: 5 * 60 * 1000,
+};
+
+function isAIDisabled() {
+  return Date.now() < AI_CIRCUIT.disabledUntil;
+}
+
+function recordAIFailure() {
+  AI_CIRCUIT.failureCount += 1;
+  if (AI_CIRCUIT.failureCount >= AI_CIRCUIT.failureThreshold) {
+    AI_CIRCUIT.disabledUntil = Date.now() + AI_CIRCUIT.cooldownMs;
+    console.error("AI CIRCUIT BREAKER ACTIVATED");
+  }
+}
+
+function resetAICircuit() {
+  AI_CIRCUIT.failureCount = 0;
+  AI_CIRCUIT.disabledUntil = 0;
+}
+
+async function safeAIRequest(executorFn) {
+  if (isAIDisabled()) {
+    return {
+      aiDisabled: true,
+      message: "AI services temporarily unavailable. Core analytics unaffected.",
+    };
+  }
+
+  try {
+    const result = await executorFn();
+    resetAICircuit();
+    return result;
+  } catch (err) {
+    const msg = (err && err.message) ? err.message : String(err);
+    console.error("AI ERROR:", msg);
+    recordAIFailure();
+    return {
+      aiError: true,
+      message: "AI service temporarily unavailable. Core analytics unaffected.",
+    };
+  }
+}
+
+
+
+async function requestOpenAIChatCompletion({ messages, temperature = 0.2 }) {
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  return safeAIRequest(async () => {
+    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model, messages, temperature }),
+    });
+
+    const data = await resp.json();
+    if (!resp.ok) {
+      const errMsg = data?.error?.message || `OpenAI request failed (${resp.status})`;
+      throw new Error(errMsg);
+    }
+    return data;
+  });
+}
+
+function renderFallbackPage(message) {
+  return renderPage("AI Unavailable", `
+    <div class="card">
+      <h2>AI Temporarily Unavailable</h2>
+      <p>${safeStr(message || "AI service temporarily unavailable.")}</p>
+      <p class="muted">Core analytics remain available.</p>
+      <div class="btnRow" style="margin-top:12px;">
+        <a class="btn" href="/dashboard">Back to Dashboard</a>
+      </div>
+    </div>
+  `, navUser(), { showChat:false });
+}
 function copilotIntents(){
   return [
     { key:"revenue_at_risk",  label:"Revenue At Risk",  match:[/revenue at risk/i,/at risk\b/i,/risk dollars/i] },
@@ -659,85 +741,44 @@ function detectCopilotIntent(text){
   return { key:"general", label:"General" };
 }
 
-function computeCopilotDashboardMetrics(org_id, start, end){
-  const inRange = (row) => {
-    const stamp = row.updated_at || row.created_at || row.dos || row.date_of_service;
-    const d = stamp ? new Date(stamp) : null;
-    return !!(d && !isNaN(d.getTime()) && d >= start && d <= end);
-  };
+function buildCopilotResponse({
+  org_id,
+  rangePreset,
+  responseFormat
+}){
 
-  const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id && inRange(b));
-  const negotiations = readJSON(FILES.negotiations, []).filter(n => n.org_id === org_id && inRange(n));
-  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id && inRange(c));
-
-  let totalBilled = 0;
-  let totalCollected = 0;
-  let totalExpected = 0;
-  let totalDenials = 0;
-
-  billed.forEach(b => {
-    const billedAmt = safeNum(b.amount_billed || b.billed_amount || b.billedAmount);
-    const paidAmt = safeNum(b.insurance_paid || b.paid_amount || b.paidAmount);
-    const expectedAmt = safeNum(b.expected_insurance || b.allowed_amount || b.allowedAmount || billedAmt);
-    const status = String(b.status || b.claim_status || "").toLowerCase();
-
-    totalBilled += billedAmt;
-    totalCollected += paidAmt;
-    totalExpected += expectedAmt;
-
-    if (status === "denied") totalDenials += billedAmt;
-  });
-
-  const totalAtRisk = Math.max(0, totalExpected - totalCollected);
-  const recoveryRate = percent(totalCollected, totalExpected);
-  const denialRate = percent(totalDenials, totalBilled);
-
-  let negotiationRequested = 0;
-  let negotiationRecovered = 0;
-  negotiations.forEach(n => {
-    negotiationRequested += safeNum(n.requested_amount || n.requestedAmount);
-    negotiationRecovered += safeNum(n.amount_paid || n.collected_amount || n.collectedAmount);
-  });
-  const negotiationROI = percent(negotiationRecovered, negotiationRequested);
-
-  const appealRows = cases.filter(c => String(c.type || c.case_type || "").toLowerCase() === "appeal");
-  const successfulAppeals = appealRows.filter(c => String(c.status || c.outcome || "").toLowerCase() === "approved").length;
-  const appealSuccessRate = percent(successfulAppeals, appealRows.length);
-
-  let disciplineScore = 100;
-  if (denialRate > 15) disciplineScore -= 20;
-  if (recoveryRate < 80) disciplineScore -= 20;
-  if (appealSuccessRate < 50) disciplineScore -= 20;
-  if (negotiationROI < 50) disciplineScore -= 20;
-  if (totalAtRisk > totalBilled * 0.2) disciplineScore -= 20;
-
-  disciplineScore = Math.max(0, disciplineScore);
-
-  return {
+  const range = rangeFromPreset(rangePreset || "last30");
+  const dashboard = computeDashboardMetrics(org_id, range.start, range.end, range.preset);
+  const metrics = {
     totals: {
-      billed: round2(totalBilled),
-      collected: round2(totalCollected),
-      expected: round2(totalExpected),
-      atRisk: round2(totalAtRisk)
+      billed: round2(dashboard.kpis?.totalBilled || 0),
+      collected: round2(dashboard.kpis?.collectedTotal || 0),
+      expected: round2(dashboard.kpis?.allowedTotal || dashboard.kpis?.totalBilled || 0),
+      atRisk: round2(dashboard.kpis?.revenueAtRisk || 0)
     },
     rates: {
-      recoveryRate: round2(recoveryRate),
-      denialRate: round2(denialRate),
-      appealSuccessRate: round2(appealSuccessRate),
-      negotiationROI: round2(negotiationROI)
-    },
-    disciplineScore: round2(disciplineScore)
-  };
-}
+      // Use existing dashboard fields
+      recoveryRate: round2(
+        dashboard.kpis?.netCollectionRate ??
+        dashboard.kpis?.grossCollectionRate ??
+        0
+      ),
 
-function buildCopilotResponse({ org_id, rangePreset, responseFormat, question }){
-  const range = rangeFromPreset(rangePreset || "last30");
-  const metrics = computeCopilotDashboardMetrics(org_id, range.start, range.end);
+      // These may not exist in legacy return, so default safely
+      denialRate: round2(dashboard.denialRate ?? 0),
+      appealSuccessRate: round2(dashboard.appealSuccessRate ?? 0),
+      negotiationROI: round2(dashboard.negotiationROI ?? 0)
+    },
+
+    disciplineScore: round2(
+      dashboard.operationalDisciplineScore ?? 0
+    )
+  };
   const format = String(responseFormat || "executive").toLowerCase();
 
   let bullets = [];
 
-  if (format === "executive") {
+  if (format === "executive"){
     bullets = [
       `Total Revenue Billed: $${metrics.totals.billed.toLocaleString()}`,
       `Total Revenue Collected: $${metrics.totals.collected.toLocaleString()}`,
@@ -746,14 +787,18 @@ function buildCopilotResponse({ org_id, rangePreset, responseFormat, question })
       `Denial Rate: ${metrics.rates.denialRate}%`,
       `Operational Discipline Score: ${metrics.disciplineScore}/100`
     ];
-  } else if (format === "operational") {
+  }
+
+  else if (format === "operational"){
     bullets = [
       `Appeal Success Rate: ${metrics.rates.appealSuccessRate}%`,
       `Negotiation ROI: ${metrics.rates.negotiationROI}%`,
       `Revenue Exposure: $${metrics.totals.atRisk.toLocaleString()}`,
       `Operational Discipline Composite: ${metrics.disciplineScore}`
     ];
-  } else if (format === "deep") {
+  }
+
+  else if (format === "deep"){
     bullets = [
       `Expected vs Collected Gap: $${(metrics.totals.expected - metrics.totals.collected).toLocaleString()}`,
       `Denial Exposure Rate: ${metrics.rates.denialRate}%`,
@@ -761,7 +806,9 @@ function buildCopilotResponse({ org_id, rangePreset, responseFormat, question })
       `Negotiation Yield: ${metrics.rates.negotiationROI}%`,
       `Discipline Score: ${metrics.disciplineScore}`
     ];
-  } else {
+  }
+
+  else {
     bullets = [
       `Revenue At Risk: $${metrics.totals.atRisk.toLocaleString()}`,
       `Recovery Rate: ${metrics.rates.recoveryRate}%`,
@@ -776,7 +823,11 @@ function buildCopilotResponse({ org_id, rangePreset, responseFormat, question })
       labels: ["Billed", "Collected", "At Risk"],
       datasets: [{
         label: "Revenue",
-        data: [metrics.totals.billed, metrics.totals.collected, metrics.totals.atRisk]
+        data: [
+          metrics.totals.billed,
+          metrics.totals.collected,
+          metrics.totals.atRisk
+        ]
       }]
     },
     {
@@ -795,9 +846,12 @@ function buildCopilotResponse({ org_id, rangePreset, responseFormat, question })
     }
   ];
 
-  return { bullets, charts, metrics };
+  return {
+    bullets,
+    charts,
+    metrics
+  };
 }
-
 
 
 function navPublic() {
@@ -2157,11 +2211,14 @@ function rangeFromPreset(preset){
   return { start, end, preset: p };
 }
 function fmtMoney(n){ return formatMoneyUI(n); }
-function safeNum(n){ const x = Number(n||0); return isFinite(x) ? x : 0; }
+function safeNum(v){
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
 function safeDiv(a, b){
   const x = safeNum(a);
   const y = safeNum(b);
-  return y === 0 ? 0 : (x / y);
+  return y === 0 ? 0 : x / y;
 }
 function percent(a, b){ return safeDiv(a, b) * 100; }
 function round2(n){ return Math.round(safeNum(n) * 100) / 100; }
@@ -5471,33 +5528,23 @@ if (method === "POST" && pathname === "/ai/chat") {
       }), "application/json");
     }
 
-    const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
-
     const systemMsg = "You are TJ Healthcare Pro's internal AI assistant. Only answer using the organization's uploaded denial and payment data and computed analytics provided. If asked about unrelated topics, explain you can only answer questions about their uploaded data and what the app does. Do not provide medical advice. Be concise and actionable.";
     const userMsg = "ORG DATA (JSON):\n" + JSON.stringify(context, null, 2) + "\n\nUSER QUESTION:\n" + msg;
 
-    try {
-      const resp = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: systemMsg },
-            { role: "user", content: userMsg }
-          ],
-          temperature: 0.2
-        })
-      });
-      const data = await resp.json();
-      const answer = data?.choices?.[0]?.message?.content || "I couldn't generate an answer right now.";
-      return send(res, 200, JSON.stringify({ answer }), "application/json");
-    } catch (e) {
-      return send(res, 200, JSON.stringify({ answer: "AI Assistant error. Please try again." }), "application/json");
+    const aiResult = await requestOpenAIChatCompletion({
+      messages: [
+        { role: "system", content: systemMsg },
+        { role: "user", content: userMsg },
+      ],
+      temperature: 0.2,
+    });
+
+    if (aiResult.aiError || aiResult.aiDisabled) {
+      return send(res, 200, JSON.stringify({ answer: aiResult.message }), "application/json");
     }
+
+    const answer = aiResult?.choices?.[0]?.message?.content || "I couldn't generate an answer right now.";
+    return send(res, 200, JSON.stringify({ answer }), "application/json");
   }
 
 
@@ -5583,7 +5630,6 @@ Next steps:
 - Upload payments if missing and re-run this insight.
 - Review top underpaid payer and highest at-risk claims in Action Center.`;
     } else {
-      const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
       const systemMsg = "You are TJ Healthcare Pro's Revenue Intelligence assistant. Only use the provided organization analytics and uploaded data. Be accurate, concise, and operational. Do not invent numbers. Do not provide medical advice.";
       const context = {
         organization: org.org_name,
@@ -5597,17 +5643,19 @@ Next steps:
       };
       const userMsg = styleInstr + "\n\nORG DATA (JSON):\n" + JSON.stringify(context, null, 2);
 
-      try {
-        const resp = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: { "Authorization": "Bearer " + process.env.OPENAI_API_KEY, "Content-Type": "application/json" },
-          body: JSON.stringify({ model, messages: [ { role: "system", content: systemMsg }, { role: "user", content: userMsg } ], temperature: 0.2 })
-        });
-        const data = await resp.json();
-        answer = data?.choices?.[0]?.message?.content || "I couldn't generate an answer right now.";
-      } catch {
-        answer = "AI Assistant error. Please try again.";
+      const aiResult = await requestOpenAIChatCompletion({
+        messages: [
+          { role: "system", content: systemMsg },
+          { role: "user", content: userMsg },
+        ],
+        temperature: 0.2,
+      });
+
+      if (aiResult.aiError || aiResult.aiDisabled) {
+        return send(res, 200, JSON.stringify({ ok: false, answer: aiResult.message, charts, data: null }), "application/json");
       }
+
+      answer = aiResult?.choices?.[0]?.message?.content || "I couldn't generate an answer right now.";
     }
 
     const queryRec = { query_id: uuid(), org_id: org.org_id, prompt, style, charts, answer, created_at: nowISO() };
@@ -9192,19 +9240,23 @@ if (method === "POST" && pathname === "/negotiations/template") {
   // Enhance with AI (optional)
   let finalText = filled;
   if (mode === "enhance" && process.env.OPENAI_API_KEY) {
-    const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
     const systemMsg = "You are TJ Healthcare Pro's negotiation packet assistant. Rewrite and improve the negotiation letter using the provided claim data. Do not invent facts. Use placeholders when needed. Keep it professional and concise.";
     const userMsg = "CLAIM DATA (JSON):\n" + JSON.stringify(claimData, null, 2) + "\n\nCURRENT TEMPLATE (AUTO-FILLED):\n" + filled;
-    try {
-      const resp = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: { "Authorization": "Bearer " + process.env.OPENAI_API_KEY, "Content-Type": "application/json" },
-        body: JSON.stringify({ model, messages: [ { role:"system", content: systemMsg }, { role:"user", content: userMsg } ], temperature: 0.2 })
-      });
-      const data = await resp.json();
-      const aiText = data?.choices?.[0]?.message?.content;
-      if (aiText) finalText = aiText;
-    } catch {}
+
+    const aiResult = await requestOpenAIChatCompletion({
+      messages: [
+        { role:"system", content: systemMsg },
+        { role:"user", content: userMsg },
+      ],
+      temperature: 0.2,
+    });
+
+    if (aiResult.aiError || aiResult.aiDisabled) {
+      return send(res, 200, renderFallbackPage(aiResult.message));
+    }
+
+    const aiText = aiResult?.choices?.[0]?.message?.content;
+    if (aiText) finalText = aiText;
   }
 
   rec.packet_draft = finalText;
