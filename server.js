@@ -2698,6 +2698,13 @@ function computeDashboardMetrics(org_id, start, end, preset){
     operationalDisciplineSample = 0;
   }
 
+  // If no billed claims exist, override readiness to 0
+  if (billed.length === 0) {
+    operationalDisciplineRate = 0;
+    operationalDisciplineScore = 0;
+    operationalDisciplineSample = 0;
+  }
+
   const collectionScore = scoreCollectionRate(collectionRate);
   const denialScore = scoreDenialRate(denialRate);
   const underpaidScore = scoreUnderpaidRate(underpaidRate);
