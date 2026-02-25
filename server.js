@@ -372,6 +372,7 @@ textarea{min-height:220px;}
 .badge.ok{border-color:#a7f3d0;background:#ecfdf5;color:var(--ok);}
 .badge.warn{border-color:#fde68a;background:#fffbeb;color:var(--warn);}
 .badge.err{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
+.badge.bad{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
 .badge.underpaid{border-color:#fdba74;background:#fff7ed;color:#9a3412;}
 .badge.writeoff{border-color:#d1d5db;background:#f3f4f6;color:#374151;}
 .footer{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);}
@@ -6112,7 +6113,20 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
     const planBadge = (limits.mode==="monthly")
       ? `<span class="badge ok">Monthly Active</span>`
-      : `<span class="badge warn">Free Trial</span>`;
+      : `<span class="badge warn">Starter Plan</span>`;
+
+    const caseCreditsUsed = Number(usage.monthly_case_credits_used || 0);
+    const caseCreditsLimit = Number(limits.case_credits_per_month || 0);
+    const copilotQueriesUsed = Number(usage.copilot_questions_used || 0);
+    const copilotQueriesLimit = Number(getCopilotLimit(org.org_id) || 0);
+    const paymentRowsUsed = Number(usage.monthly_payment_rows_used || 0);
+
+    function buildLimitBadge(used, limit){
+      if (!Number.isFinite(limit) || limit <= 0) return "";
+      if (used > limit) return `<span class="badge bad">Limit Reached – Upgrade Required</span>`;
+      if (used >= Math.ceil(limit * 0.8)) return `<span class="badge warn">Approaching Limit</span>`;
+      return "";
+    }
 
     const percentCollected = m.kpis.totalBilled > 0 ? Math.round((m.kpis.collectedTotal / m.kpis.totalBilled) * 100) : 0;
     const barColor = percentCollected >= 70 ? "#16a34a" : (percentCollected >= 30 ? "#f59e0b" : "#dc2626");
@@ -6144,7 +6158,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
           <h2 style="margin-bottom:4px;">Revenue Overview <span class="tooltip" data-tip="Live financial summary generated from your uploaded billed claims, payments, denials, and negotiations.">ⓘ</span></h2>
-          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Trial Ends: ${new Date(pilot.ends_at).toLocaleDateString()}</p>
+          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Plan cycle active</p>
           ${planBadge}
         </div>
 
@@ -6304,29 +6318,34 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
       </details>
 
-      <div class="btnRow" style="margin-top:10px;">
+      <div class="btnRow" style="margin-top:14px;">
         <a class="btn" href="/claims">Open Claims Lifecycle</a>
-        <a class="btn secondary" href="/data-management?tab=denials">Data Management</a>
-        <a class="btn secondary" href="/claims?view=negotiations">Upload Negotiations</a>
-        <a class="btn secondary" href="/report">Reports</a>
-        <a class="btn secondary" href="/executive-export">Export Executive PDF</a>
+        <a class="btn secondary" href="/actions?tab=denials">Review Denials</a>
+        <a class="btn secondary" href="/executive-export">Export Executive Brief</a>
       </div>
 
       <div class="hr"></div>
 
-      <h3>Usage <span class="tooltip">ⓘ<span class="tooltiptext">Pilot or plan usage for your organization.</span></span></h3>
-      ${
-        limits.mode === "pilot" ? `
-        <ul class="muted">
-          <li>Cases used: ${usage.pilot_cases_used}/${PILOT_LIMITS.max_cases_total}</li>
-          <li>Payment rows used: ${usage.pilot_payment_rows_used}/${PILOT_LIMITS.payment_records_included}</li>
-        </ul>` : `
-        <ul class="muted">
-          <li>Cases used: ${usage.monthly_case_credits_used}/${limits.case_credits_per_month}</li>
-          <li>Overage cases: ${usage.monthly_case_overage_count}</li>
-          <li>Payment rows used: ${usage.monthly_payment_rows_used}</li>
-        </ul>`
-      }
+      <h3>Plan Usage <span class="tooltip">ⓘ<span class="tooltiptext">Your current monthly usage relative to your plan limits.</span></span></h3>
+
+      <div class="kpi-strip" style="margin-top:12px;">
+        <div class="kpi-card">
+          <p class="kpi-value">${formatNumberUI(caseCreditsUsed)} / ${caseCreditsLimit || 0}</p>
+          <p class="kpi-label">Case Credits Used</p>
+          ${buildLimitBadge(caseCreditsUsed, caseCreditsLimit)}
+        </div>
+
+        <div class="kpi-card">
+          <p class="kpi-value">${formatNumberUI(copilotQueriesUsed)} / ${copilotQueriesLimit || 0}</p>
+          <p class="kpi-label">AI Copilot Queries</p>
+          ${buildLimitBadge(copilotQueriesUsed, copilotQueriesLimit)}
+        </div>
+
+        <div class="kpi-card">
+          <p class="kpi-value">${formatNumberUI(paymentRowsUsed)}</p>
+          <p class="kpi-label">Payment Rows Processed</p>
+        </div>
+      </div>
 
      
 <script>
