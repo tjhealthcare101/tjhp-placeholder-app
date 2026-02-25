@@ -1969,18 +1969,90 @@ function computeDashboardMetrics(org_id, start, end, preset){
   const ar90Rate = totals.totalBilled > 0 ? (arBuckets["90+"] / totals.totalBilled) * 100 : 0;
   const avgDaysToPay = daysToPayVals.length ? (daysToPayVals.reduce((a,b)=>a+b,0)/daysToPayVals.length) : 0;
 
+  // ===========================
+  // Operational Discipline (Option 1)
+  // Based on required-doc completeness for AI workspaces marked ready/submitted/closed
+  // ===========================
+  let operationalDisciplineRate = 0;
+  let operationalDisciplineScore = 0;
+  let operationalDisciplineSample = 0;
+  try {
+    const workspacesAll = readJSON(FILES.agent_workspaces, []).filter(w => w.org_id === org_id);
+    const billedById = new Map(billedAll.map(b => [String(b.billed_id), b]));
+
+    // Consider workspaces that are actually "in workflow"
+    const eligible = workspacesAll.filter(ws => ["ready_for_review","submitted","closed"].includes(String(ws.status||"").trim()));
+
+    let okCount = 0;
+    let totalCount = 0;
+    for (const ws of eligible) {
+      const b = billedById.get(String(ws.billed_id || "")) || null;
+      if (!b) continue;
+      // Tie discipline to the same date window as the dashboard where possible:
+      const touched = new Date(ws.updated_at || ws.created_at || b.updated_at || b.created_at || 0);
+      if (!touched || isNaN(touched.getTime())) continue;
+      if (touched < start || touched > end) continue;
+
+      // Determine channel (appeal vs negotiation) for required-doc checklist
+      const d0 = evaluateClaimDerived(b, ctx);
+      const channel = (typeof workspaceChannelForClaim === "function")
+        ? workspaceChannelForClaim(b, d0)
+        : (String(d0.lifecycleStage||"") === "Underpaid" ? "negotiation" : "appeal");
+
+      // Use your existing required-doc logic if available
+      let checkOk = false;
+      if (typeof canMarkReady === "function") {
+        const chk = canMarkReady(ws, channel);
+        checkOk = !!(chk && chk.ok);
+      } else if (typeof packetHasKey === "function" && typeof requiredPacketKeysForChannel === "function") {
+        const reqKeys = requiredPacketKeysForChannel(channel);
+        checkOk = reqKeys.every(k => packetHasKey(ws, k));
+      } else {
+        // Fallback: use packet.completeness if present
+        const pct = Number(ws.packet?.completeness?.pct || 0);
+        checkOk = pct >= 100;
+      }
+
+      totalCount += 1;
+      if (checkOk) okCount += 1;
+    }
+
+    operationalDisciplineSample = totalCount;
+    operationalDisciplineRate = totalCount ? (okCount / totalCount) * 100 : 0;
+    operationalDisciplineScore = scoreOperationalDiscipline(operationalDisciplineRate);
+  } catch (e) {
+    operationalDisciplineRate = 0;
+    operationalDisciplineScore = 0;
+    operationalDisciplineSample = 0;
+  }
+
   const collectionScore = scoreCollectionRate(collectionRate);
   const denialScore = scoreDenialRate(denialRate);
   const underpaidScore = scoreUnderpaidRate(underpaidRate);
   const daysScore = scoreDaysToPay(avgDaysToPay || 0);
   const arScore = scoreARAging(ar90Rate);
 
+  // ===========================
+  // Practice Financial Health Score 2.0 (signature, explainable)
+  // Adds Operational Discipline (packet readiness) without adding staff analytics.
+  // Weights sum to 1.00
+  // ===========================
+  const subscores = {
+    collection_strength: collectionScore,         // 0–100
+    denial_discipline: denialScore,               // 0–100
+    underpaid_discipline: underpaidScore,         // 0–100
+    days_to_pay: daysScore,                       // 0–100
+    ar_aging: arScore,                            // 0–100
+    operational_discipline: operationalDisciplineScore, // 0–100
+  };
+
   const healthScore = Math.round(
-    (collectionScore * 0.30) +
-    (denialScore * 0.20) +
-    (underpaidScore * 0.15) +
-    (daysScore * 0.15) +
-    (arScore * 0.20)
+    (subscores.collection_strength * 0.28) +
+    (subscores.denial_discipline * 0.18) +
+    (subscores.underpaid_discipline * 0.14) +
+    (subscores.days_to_pay * 0.14) +
+    (subscores.ar_aging * 0.16) +
+    (subscores.operational_discipline * 0.10)
   );
 
   const healthGrade = gradeFromScore(healthScore);
@@ -2040,6 +2112,10 @@ function computeDashboardMetrics(org_id, start, end, preset){
     arBuckets,
     healthScore,
     healthGrade,
+    subscores,
+    operationalDisciplineRate: clampPct(operationalDisciplineRate),
+    operationalDisciplineScore: clampPct(operationalDisciplineScore),
+    operationalDisciplineSample,
     denialRate,
     underpaidRate,
     collectionRate,
@@ -3179,6 +3255,21 @@ function scoreARAging(rate){
   if (rate <= 30) return 70;
   if (rate <= 40) return 55;
   return 40;
+}
+
+function scoreOperationalDiscipline(rate){
+  // rate = % of AI workspaces with required docs present (by channel) among "ready/submitted/closed"
+  if (rate >= 90) return 100;
+  if (rate >= 75) return 85;
+  if (rate >= 60) return 70;
+  if (rate >= 40) return 55;
+  return 40;
+}
+
+function clampPct(n){
+  const v = Number(n || 0);
+  if (!isFinite(v)) return 0;
+  return Math.max(0, Math.min(100, v));
 }
 
 function gradeFromScore(score){
@@ -5297,8 +5388,33 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </div>
 
       <div class="executive-panel">
-        <h3 style="margin-bottom:12px;">Practice Financial Health Score <span class="tooltip" data-tip="Weighted score combining collection rate, denial rate, underpaid %, days to pay, and AR aging. 90+ = A grade.">ⓘ</span></h3>
+        <h3 style="margin-bottom:12px;">Practice Financial Health Score <span class="tooltip" data-tip="Weighted score combining collection rate, denial rate, underpaid %, days to pay, AR aging, and operational discipline. 90+ = A grade.">ⓘ</span></h3>
         <div class="muted" style="margin-bottom:10px;">Score: <strong>${Number(m.healthScore||0)}</strong> · Grade: <strong>${safeStr(m.healthGrade||"—")}</strong></div>
+        <div class="muted small" style="margin-top:8px;">
+          <strong>Subscores (0–100):</strong>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
+            <span class="badge">${formatNumberUI(m.subscores?.collection_strength || 0)}</span>
+            <span class="muted small">Collection Strength <span class="tooltip" data-tip="Higher is better. Based on collection rate.">ⓘ</span></span>
+
+            <span class="badge">${formatNumberUI(m.subscores?.denial_discipline || 0)}</span>
+            <span class="muted small">Denial Discipline <span class="tooltip" data-tip="Higher is better. Based on denial rate (lower denial rate = higher score).">ⓘ</span></span>
+
+            <span class="badge">${formatNumberUI(m.subscores?.underpaid_discipline || 0)}</span>
+            <span class="muted small">Underpaid Discipline <span class="tooltip" data-tip="Higher is better. Based on underpaid rate (lower underpaid rate = higher score).">ⓘ</span></span>
+
+            <span class="badge">${formatNumberUI(m.subscores?.days_to_pay || 0)}</span>
+            <span class="muted small">Days-to-Pay <span class="tooltip" data-tip="Higher is better. Faster payer payments yield a higher score.">ⓘ</span></span>
+
+            <span class="badge">${formatNumberUI(m.subscores?.ar_aging || 0)}</span>
+            <span class="muted small">AR Aging <span class="tooltip" data-tip="Higher is better. Lower 90+ AR exposure yields a higher score.">ⓘ</span></span>
+
+            <span class="badge">${formatNumberUI(m.subscores?.operational_discipline || 0)}</span>
+            <span class="muted small">Operational Discipline <span class="tooltip" data-tip="Higher is better. Measures % of AI workspaces marked ready/submitted with required docs present. Sample size shown below.">ⓘ</span></span>
+          </div>
+          <div class="muted small" style="margin-top:6px;">
+            Operational discipline sample: ${formatNumberUI(m.operationalDisciplineSample || 0)} workspace(s) in range · Ready docs rate: ${Number(m.operationalDisciplineRate||0).toFixed(1)}%
+          </div>
+        </div>
         <div class="chart-container">
           <canvas id="revenueBreakdownChart"></canvas>
         </div>
