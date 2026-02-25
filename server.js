@@ -2437,6 +2437,10 @@ function updateBilledClaim(billed_id, updater){
   return b;
 }
 
+function getBilledById(org_id, billed_id){
+  return readJSON(FILES.billed, []).find(b => b.org_id === org_id && b.billed_id === billed_id) || null;
+}
+
 function getAgentDrafts(org_id){
   return readJSON(FILES.ai_agent_drafts, []).filter(d => d.org_id === org_id);
 }
@@ -2514,7 +2518,7 @@ function ensureAgentWorkspace(org_id, billedClaim){
     updated_at: ts
   };
   ensureWorkspacePacket(ws);
-  ensurePacketSections(ws);
+  ensurePacketSections(ws, billedClaim);
   return saveAgentWorkspace(org_id, ws);
 }
 
@@ -2585,10 +2589,11 @@ function incrementWorkspaceEditsUsage(org_id){
 function ensurePacketSections(ws, claim){
   ws.appeal = ws.appeal || {};
   ws.negotiation = ws.negotiation || {};
+  const claimContext = claim || (ws?.org_id && ws?.billed_id ? getBilledById(ws.org_id, ws.billed_id) : null) || ws || {};
   const orgSettings = ws?.org_id ? getOrgSettings(ws.org_id) : orgSettingsDefaults("unknown");
   const orgRecord = ws?.org_id ? getOrg(ws.org_id) : null;
   const letterDefaults = getLetterDefaults(orgSettings);
-  const hdr = packetHeaderFromSettings(orgSettings, orgRecord, claim || ws || {});
+  const hdr = packetHeaderFromSettings(orgSettings, orgRecord, claimContext);
   const sig = signatureFromSettings(orgSettings, orgRecord);
 
   const appealDefaults = defaultAppealPacketSections();
@@ -2846,13 +2851,10 @@ function applyDefaultTone(text, tone, type){
 }
 
 function agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile, practiceSettings, orgSettings }){
-  const orgName = getOrgDisplayName(orgSettings, orgProfile);
   const dos = claim?.dos || claim?.date_of_service || "N/A";
   const underpaidAmount = Math.max(0, Number(derived?.underpaidAmount || 0));
   const attachmentLine = "Attachments included: denial notice/EOB, claim form, relevant records, contract excerpts, and supporting notes.";
-  const letterDefaults = getLetterDefaults(orgSettings);
-  const opening = `${orgName}
-${nowISO().slice(0,10)}
+  const opening = `${packetHeaderFromSettings(orgSettings, orgProfile, claim)}
 
 Re: Claim #${claim?.claim_number || "N/A"} | Payer: ${claim?.payer || "Unknown"} | DOS: ${dos}`;
   const financials = claimFinancialSnapshot(derived, claim);
@@ -2879,14 +2881,7 @@ Thank you for your prompt review. Please contact our office with any additional 
 
 Sincerely,
 ${signatureFromSettings(orgSettings, orgProfile)}`.trim();
-    let result = draft;
-    if (letterDefaults.appeal_opening) result = `${letterDefaults.appeal_opening.trim()}
-
-${result}`;
-    if (letterDefaults.appeal_footer) result = `${result}
-
-${letterDefaults.appeal_footer.trim()}`;
-    return applyDefaultTone(result, letterDefaults.appeal_tone, "appeal");
+    return draft;
   }
   const negotiationIdLine = negotiationCase ? `Negotiation ID: ${negotiationCase.negotiation_id || "N/A"}` : "Negotiation ID: N/A";
   const draft = `${opening}
@@ -2910,14 +2905,7 @@ We appreciate your expedited review and response.
 
 Sincerely,
 ${signatureFromSettings(orgSettings, orgProfile)}`.trim();
-  let result = draft;
-  if (letterDefaults.negotiation_opening) result = `${letterDefaults.negotiation_opening.trim()}
-
-${result}`;
-  if (letterDefaults.negotiation_footer) result = `${result}
-
-${letterDefaults.negotiation_footer.trim()}`;
-  return applyDefaultTone(result, letterDefaults.appeal_tone, "negotiation");
+  return draft;
 }
 
 function applyAgentInstructionToDraft(draftText, instruction, channel){
@@ -2947,35 +2935,40 @@ function renderTemplate(templateBody, claim){
 }
 
 function generateDraftUsingTemplateOrRules({ org_id, type, claim, derived, appealCase, negotiationCase, ws }){
+  const orgSettings = getOrgSettings(org_id);
+  const letterDefaults = getLetterDefaults(orgSettings);
+  const orgRecord = getOrg(org_id);
+  const header = packetHeaderFromSettings(orgSettings, orgRecord, claim);
+  const signature = signatureFromSettings(orgSettings, orgRecord);
+  const applyChannelDefaults = (text) => {
+    let draft = String(text || "").trim();
+    if (type === "appeal") {
+      if (letterDefaults.appeal_opening) draft = `${letterDefaults.appeal_opening}\n\n${draft}`;
+      if (letterDefaults.appeal_footer) draft = `${draft}\n\n${letterDefaults.appeal_footer}`;
+    } else {
+      if (letterDefaults.negotiation_opening) draft = `${letterDefaults.negotiation_opening}\n\n${draft}`;
+      if (letterDefaults.negotiation_footer) draft = `${draft}\n\n${letterDefaults.negotiation_footer}`;
+    }
+    return applyDefaultTone(draft, letterDefaults.appeal_tone, type);
+  };
+
   const selectedTemplateId = type === "appeal" ? ws?.appeal?.template_id : ws?.negotiation?.template_id;
   const template = getTemplateById(org_id, selectedTemplateId);
   const financials = claimFinancialSnapshot(derived, claim);
   if (template && String(template.body || "").trim()) {
     const rendered = renderTemplate(template.body, claim).trim();
-    const orgSettings = getOrgSettings(org_id);
-    const letterDefaults = getLetterDefaults(orgSettings);
-    let draft = `${rendered}
+    return applyChannelDefaults(`${header}
+
+${rendered}
 
 Claim Financial Snapshot
-${financials}`.trim();
-    if (type === "appeal") {
-      if (letterDefaults.appeal_opening) draft = `${letterDefaults.appeal_opening}
+${financials}
 
-${draft}`;
-      if (letterDefaults.appeal_footer) draft = `${draft}
-
-${letterDefaults.appeal_footer}`;
-    } else {
-      if (letterDefaults.negotiation_opening) draft = `${letterDefaults.negotiation_opening}
-
-${draft}`;
-      if (letterDefaults.negotiation_footer) draft = `${draft}
-
-${letterDefaults.negotiation_footer}`;
-    }
-    return applyDefaultTone(draft, letterDefaults.appeal_tone, type);
+Sincerely,
+${signature}`);
   }
-  return agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile: getOrg(org_id), practiceSettings: getPracticeSettings(org_id), orgSettings: getOrgSettings(org_id) });
+  const rulesDraft = agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile: orgRecord, practiceSettings: getPracticeSettings(org_id), orgSettings });
+  return applyChannelDefaults(rulesDraft);
 }
 
 
@@ -2992,7 +2985,7 @@ function buildAttachmentsIndex(ws){
 function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
   if (!org_id || !claim?.billed_id) return 0;
   const ws = ensureAgentWorkspace(org_id, claim);
-  ensurePacketSections(ws);
+  ensurePacketSections(ws, claim);
   const ts = nowISO();
   const refTs = Math.max(
     new Date(claim?.paid_at || 0).getTime() || 0,
@@ -3251,23 +3244,9 @@ function addDocumentIngest(org_id, category, file, status, linkedCount=0, notes=
 function getAllowedAmountRules(org_id){
   const legacyAll = readJSON(FILES.allowed_amount_rules, []);
   const legacy = legacyAll.find(r => r.org_id === org_id);
-  const orgAll = readJSON(FILES.org_settings, []);
-  const orgRec = orgAll.find(r => r.org_id === org_id);
-  if (!orgRec && legacy) {
-    saveOrgSettings(org_id, { allowed_rules: { ...legacy } });
-  }
   const settings = getOrgSettings(org_id);
   const fromSettings = getAllowedRulesFromSettings(settings);
-  if (settings && settings.allowed_rules) {
-    return {
-      org_id,
-      ...fromSettings,
-      payer_overrides: Array.isArray(fromSettings.payer_overrides) ? fromSettings.payer_overrides : (legacy?.payer_overrides || []),
-      cpt_overrides: Array.isArray(fromSettings.cpt_overrides) ? fromSettings.cpt_overrides : (legacy?.cpt_overrides || []),
-    };
-  }
-  if (legacy) return legacy;
-  return {
+  const defaults = {
     org_id,
     default_method: "percent_billed",
     default_value: 65,
@@ -3277,10 +3256,20 @@ function getAllowedAmountRules(org_id){
     payer_overrides: [],
     cpt_overrides: []
   };
+  const hasSettingsRules = !!(settings && settings.allowed_rules && typeof settings.allowed_rules === "object");
+  const base = hasSettingsRules ? { ...defaults, ...fromSettings } : (legacy ? { ...defaults, ...legacy } : defaults);
+  if (!Array.isArray(base.payer_overrides) && Array.isArray(legacy?.payer_overrides)) base.payer_overrides = legacy.payer_overrides;
+  if (!Array.isArray(base.cpt_overrides) && Array.isArray(legacy?.cpt_overrides)) base.cpt_overrides = legacy.cpt_overrides;
+  if (hasSettingsRules && !Array.isArray(fromSettings.payer_overrides) && Array.isArray(legacy?.payer_overrides)) base.payer_overrides = legacy.payer_overrides;
+  if (hasSettingsRules && !Array.isArray(fromSettings.cpt_overrides) && Array.isArray(legacy?.cpt_overrides)) base.cpt_overrides = legacy.cpt_overrides;
+  return { ...base, org_id };
 }
 
 function saveAllowedAmountRules(org_id, rules){
-  const mergedRules = { ...getAllowedAmountRules(org_id), ...(rules || {}) };
+  const current = getAllowedAmountRules(org_id);
+  const mergedRules = { ...current, ...(rules || {}), org_id };
+  if (!Array.isArray(mergedRules.payer_overrides)) mergedRules.payer_overrides = [];
+  if (!Array.isArray(mergedRules.cpt_overrides)) mergedRules.cpt_overrides = [];
   const settings = getOrgSettings(org_id);
   saveOrgSettings(org_id, { allowed_rules: { ...(settings.allowed_rules || {}), ...mergedRules } });
   const all = readJSON(FILES.allowed_amount_rules, []);
@@ -12331,6 +12320,7 @@ rowsAdded = toUse;
       default_followup_days: patch.workflow_defaults.default_followup_days,
       require_confirmation_before_submitted: patch.workflow_defaults.require_confirmation_before_submitted,
     });
+    rebuildOrgDerivedData(org.org_id, { resyncDenials:true, autodraft:true });
 
     auditLog({ actor:"user", action:"update_org_settings_v2", org_id: org.org_id, user_id: user.user_id });
     return redirect(res, "/account?tab=org&saved=1");
@@ -13040,7 +13030,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     autoDraftWorkspaceForClaim(org.org_id, b, d, claimCtx);
     const ws = ensureAgentWorkspace(org.org_id, b);
     ensureWorkspacePacket(ws);
-    ensurePacketSections(ws);
+    ensurePacketSections(ws, b);
     ws.activity = ws.activity || {};
     ws.activity.last_opened_at = nowISO();
     saveAgentWorkspace(org.org_id, ws);
@@ -13184,7 +13174,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const appealCase = b.denial_case_id ? casesAll.find(c => c.case_id === b.denial_case_id) : null;
       const negotiationCase = getNegotiationsByBilled(org.org_id, b.billed_id).map(n=>normalizeNegotiation(n))[0] || null;
       const ws = ensureAgentWorkspace(org.org_id, b);
-      ensurePacketSections(ws);
+      ensurePacketSections(ws, b);
       const draftText = generateDraftUsingTemplateOrRules({ org_id: org.org_id, type: draft_type, claim: b, derived: d, appealCase, negotiationCase, ws });
       const ts = nowISO();
       if (draft_type === "appeal") {
@@ -13253,7 +13243,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const ws = ensureAgentWorkspace(org.org_id, b);
       ensureWorkspacePacket(ws);
       const ts = nowISO();
-      ensurePacketSections(ws);
+      ensurePacketSections(ws, b);
       if (draft_type === "appeal") {
         const key = section_key || packetNarrativeKey("appeal");
         ws.appeal.packet_sections[key] = section_key ? value : draft_text;
@@ -13303,7 +13293,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
       if (!b) return redirect(res, "/claims?view=all");
       const ws = ensureAgentWorkspace(org.org_id, b);
-      ensurePacketSections(ws);
+      ensurePacketSections(ws, b);
       const ts = nowISO();
       const followDate = String(params.get("follow_up_date") || "").trim();
       ws.submission = {
@@ -13338,7 +13328,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       if (idx < 0) return redirect(res, "/claims?view=all");
       const b = billedAll[idx];
       const ws = ensureAgentWorkspace(org.org_id, b);
-      ensurePacketSections(ws);
+      ensurePacketSections(ws, b);
       const outStatus = String(params.get("outcome_status") || "none").trim();
       ws.outcome = {
         ...ws.outcome,
@@ -13375,7 +13365,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
     if (!b) return redirect(res, "/claims?view=all");
     const ws = ensureAgentWorkspace(org.org_id, b);
-    ensurePacketSections(ws);
+    ensurePacketSections(ws, b);
     const rows = (ws[channel].history || []).map((h, idx) => `<tr><td>${safeStr(String(h.version || 0))}</td><td>${safeStr(h.saved_at || "")}</td><td>${safeStr(h.saved_by || "")}</td><td><form method="POST" action="/agent-workspace/history/restore" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="channel" value="${safeStr(channel)}" /><input type="hidden" name="version_index" value="${idx}" /><button class="btn secondary small" type="submit">Restore</button></form></td></tr>`).join("") || `<tr><td colspan="4" class="muted">No history yet.</td></tr>`;
     const html = renderPage("Workspace History", `<h2>Workspace History (${safeStr(channel)})</h2><table><tr><th>Version</th><th>Saved At</th><th>Saved By</th><th></th></tr>${rows}</table><a class="btn secondary" href="${workspacePagePath(billed_id, channel)}">Back</a>`, navUser(), {showChat:false, orgName: org.org_name});
     return send(res, 200, html);
@@ -13393,7 +13383,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
       if (!b) return redirect(res, "/claims?view=all");
       const ws = ensureAgentWorkspace(org.org_id, b);
-      ensurePacketSections(ws);
+      ensurePacketSections(ws, b);
       const snap = (ws[channel].history || [])[version_index];
       if (snap && snap.packet_sections) {
         ws[channel].packet_sections = deepCopy(snap.packet_sections);
@@ -13419,7 +13409,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
       if (!b) return redirect(res, "/actions?tab=followup");
       const ws = ensureAgentWorkspace(org.org_id, b);
-      ensurePacketSections(ws);
+      ensurePacketSections(ws, b);
       ws.follow_up.escalation_level = Number(ws.follow_up.escalation_level || 0) + 1;
       ws.follow_up.last_touched_at = nowISO();
       saveAgentWorkspace(org.org_id, ws);
@@ -13444,7 +13434,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       if (!b) return redirect(res, "/claims?view=all");
       const ws = ensureAgentWorkspace(org.org_id, b);
       ensureWorkspacePacket(ws);
-      ensurePacketSections(ws);
+      ensurePacketSections(ws, b);
       const requestedTab = String(params.get("tab") || "").trim();
       const channel = requestedTab === "negotiation" ? "negotiation" : "appeal";
       if (status === "ready_for_review") {
@@ -13477,7 +13467,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel, content });
       if (content && ["appeal","negotiation"].includes(channel)) {
         const ts = nowISO();
-        ensurePacketSections(ws);
+        ensurePacketSections(ws, b);
         if (channel === "appeal") { ws.appeal.packet_sections.argument = applyAgentInstructionToDraft(ws.appeal?.packet_sections?.argument || ws.appeal?.draft_text || "", content, channel); ws.appeal.draft_text = ws.appeal.packet_sections.argument; ws.appeal.updated_at = ts; ws.appeal.version = Number(ws.appeal?.version || 0) + 1; pushWorkspaceHistorySnapshot(ws, "appeal", user.user_id); }
         if (channel === "negotiation") { ws.negotiation.packet_sections.variance_explanation = applyAgentInstructionToDraft(ws.negotiation?.packet_sections?.variance_explanation || ws.negotiation?.draft_text || "", content, channel); ws.negotiation.draft_text = ws.negotiation.packet_sections.variance_explanation; ws.negotiation.updated_at = ts; ws.negotiation.version = Number(ws.negotiation?.version || 0) + 1; pushWorkspaceHistorySnapshot(ws, "negotiation", user.user_id); }
         ws.follow_up.last_touched_at = ts;
@@ -13539,7 +13529,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const d = evaluateClaimDerived(b, claimCtx);
     const ws = ensureAgentWorkspace(org.org_id, b);
     ensureWorkspacePacket(ws);
-    ensurePacketSections(ws);
+    ensurePacketSections(ws, b);
     ws.activity.last_exported_at = nowISO();
     saveAgentWorkspace(org.org_id, ws);
     const attachmentRows = (ws.attachments || []).map(a => `<li><a href="/agent-workspace/file?attachment_id=${encodeURIComponent(a.attachment_id)}">${safeStr(a.filename)}</a> (${safeStr(a.kind||"supporting")})</li>`).join("") || `<li>None</li>`;
