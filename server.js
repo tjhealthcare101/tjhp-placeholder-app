@@ -770,13 +770,55 @@ function computeSimpleAtRiskForecast(org_id, rangePreset){
   const slopePerDay = (safeA2 - safeA1) / (days / 2);
   const safeSlopePerDay = Number.isFinite(slopePerDay) ? slopePerDay : 0;
 
-  // project 30 days out
+  // project 30/60/90 days out
   const projected30 = Math.max(0, safeA2 + (safeSlopePerDay * 30));
+  const projected60 = Math.max(0, safeA2 + (safeSlopePerDay * 60));
+  const projected90 = Math.max(0, safeA2 + (safeSlopePerDay * 90));
 
   return {
     currentAtRisk: safeA2,
     slopePerDay: safeSlopePerDay,
-    projected30: Number.isFinite(projected30) ? projected30 : 0
+    projected30: Number.isFinite(projected30) ? projected30 : 0,
+    projected60: Number.isFinite(projected60) ? projected60 : 0,
+    projected90: Number.isFinite(projected90) ? projected90 : 0
+  };
+}
+
+function computeSimpleDenialRateForecast(org_id, rangePreset){
+  const r = rangeFromPreset(rangePreset || "last30");
+  const mid = new Date((r.start.getTime() + r.end.getTime()) / 2);
+
+  const m1 = computeDashboardMetrics(org_id, r.start, mid, r.preset);
+  const m2 = computeDashboardMetrics(org_id, mid, r.end, r.preset);
+
+  const d1 = Number(m1?.denialRate || 0);
+  const d2 = Number(m2?.denialRate || 0);
+
+  const safeD1 = Number.isFinite(d1) ? d1 : 0;
+  const safeD2 = Number.isFinite(d2) ? d2 : 0;
+
+  const days = Math.max(1, (r.end.getTime() - r.start.getTime()) / (1000*60*60*24));
+  const slopePerDay = (safeD2 - safeD1) / (days / 2);
+  const safeSlopePerDay = Number.isFinite(slopePerDay) ? slopePerDay : 0;
+
+  const proj30 = safeD2 + (safeSlopePerDay * 30);
+  const proj60 = safeD2 + (safeSlopePerDay * 60);
+  const proj90 = safeD2 + (safeSlopePerDay * 90);
+
+  const clamp = (x)=> Math.max(0, Math.min(100, Number.isFinite(x) ? x : 0));
+
+  const velocity =
+    (safeD2 > 15) ? "High" :
+    (safeD2 > 8)  ? "Moderate" :
+    "Stable";
+
+  return {
+    currentDenialRate: clamp(safeD2),
+    slopePerDay: safeSlopePerDay,
+    projected30: clamp(proj30),
+    projected60: clamp(proj60),
+    projected90: clamp(proj90),
+    velocity
   };
 }
 
@@ -789,7 +831,6 @@ function buildCopilotResponse({
   const range = rangeFromPreset(rangePreset || "last30");
   const dashboard = computeDashboardMetrics(org_id, range.start, range.end, range.preset);
   const topPayers = Array.isArray(dashboard.payerRiskRanking) ? dashboard.payerRiskRanking : [];
-  const denialVelocity = String(dashboard.denialVelocity || "Stable");
   const metrics = {
     totals: {
       billed: round2(dashboard.kpis?.totalBilled || 0),
@@ -816,6 +857,7 @@ function buildCopilotResponse({
     )
   };
   const forecast = computeSimpleAtRiskForecast(org_id, rangePreset);
+  const denialForecast = computeSimpleDenialRateForecast(org_id, rangePreset);
   const format = String(responseFormat || "executive").toLowerCase();
 
   const disciplineDrivers = [];
@@ -871,7 +913,14 @@ function buildCopilotResponse({
       `30-day At-Risk Projection: $${Math.round(forecast.projected30).toLocaleString()} (trend: ${Math.round(forecast.slopePerDay).toLocaleString()}/day)`
     ];
 
-    bullets.push(`Denial Trend Velocity: ${denialVelocity}`);
+    bullets.push(
+      `60/90-day At-Risk Projection: $${Math.round(forecast.projected60).toLocaleString()} / $${Math.round(forecast.projected90).toLocaleString()}`
+    );
+
+    bullets.push(
+      `Denial Rate Forecast (30/60/90): ${denialForecast.projected30.toFixed(1)}% / ${denialForecast.projected60.toFixed(1)}% / ${denialForecast.projected90.toFixed(1)}% (velocity: ${denialForecast.velocity})`
+    );
+
     if (topPayers.length > 0) {
       bullets.push(`Top Risk Payer: ${topPayers[0].payer} ($${Math.round(topPayers[0].risk).toLocaleString()} at risk)`);
     }
@@ -946,6 +995,7 @@ function buildCopilotResponse({
     charts,
     metrics,
     forecast,
+    denialForecast,
     disciplineDrivers,
     executiveActions,
     payerRiskScore
@@ -6115,9 +6165,9 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .kpi-strip .kpi-label{margin:6px 0 0;font-size:12px;color:var(--muted);font-weight:600;}
         .kpi-strip .kpi-delta{margin-top:6px;font-size:11px;color:var(--muted);opacity:.8;}
         .executive-panel{background:#fff;padding:16px;border-radius:12px;border:1px solid var(--border);margin-top:16px;}
-        .chart-container { position: relative; height: 320px; max-height: 360px; width: 100%; }
-        .chart-container.payer{height:340px;}
-        .chart-container.trend{height:300px;}
+        .chart-container { position:relative; height:320px; max-height:320px; width:100%; }
+        .chart-container.payer{height:320px;max-height:320px;}
+        .chart-container.trend{height:320px;max-height:320px;}
         .exec-table{margin-top:12px;overflow:auto;}
         .trend-toggle{display:flex;gap:8px;align-items:center;}
       </style>
@@ -7256,14 +7306,14 @@ function renderForecastTab(org, m, forecastB64){
           <div style="font-weight:900;margin-bottom:6px;">Collections Forecast ${infoIcon("Historical collected vs forecasted collected for the next horizon points.")}</div>
           <div class="muted small">Forecast is trend-based (no seasonality yet). Use as a directional planning tool.</div>
           <div class="hr"></div>
-          <div class="chart-container trend" style="height:300px;"><canvas id="riForecastCollected"></canvas></div>
+          <div class="chart-container trend" style="height:320px;max-height:320px;"><canvas id="riForecastCollected"></canvas></div>
         </div>
 
         <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
           <div style="font-weight:900;margin-bottom:6px;">At-Risk Forecast ${infoIcon("Historical at-risk vs forecasted at-risk. Use to anticipate pressure on cash flow.")}</div>
           <div class="muted small">At risk includes underpaid + patient follow-up remaining for non-resolved claims.</div>
           <div class="hr"></div>
-          <div class="chart-container trend" style="height:300px;"><canvas id="riForecastAtRisk"></canvas></div>
+          <div class="chart-container trend" style="height:320px;max-height:320px;"><canvas id="riForecastAtRisk"></canvas></div>
         </div>
       </div>
 
@@ -7367,13 +7417,13 @@ function renderDeepDiveTab(org, payerRanks, m, deepDiveB64){
         <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
           <div style="font-weight:900;">Comparison Scorecard ${infoIcon("Scores are computed per payer. Higher is better. At-risk includes underpaid + patient follow-up remaining.")}</div>
           <div class="hr"></div>
-          <div class="chart-container payer" style="height:320px;"><canvas id="riCompareBars"></canvas></div>
+          <div class="chart-container payer" style="height:320px;max-height:320px;"><canvas id="riCompareBars"></canvas></div>
         </div>
 
         <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
           <div style="font-weight:900;">Exposure Breakdown ${infoIcon("Shows denied dollars vs underpaid dollars vs total at-risk for each payer.")}</div>
           <div class="hr"></div>
-          <div class="chart-container payer" style="height:320px;"><canvas id="riExposureBars"></canvas></div>
+          <div class="chart-container payer" style="height:320px;max-height:320px;"><canvas id="riExposureBars"></canvas></div>
         </div>
       </div>
 
@@ -7804,7 +7854,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       .ri-panel { border:1px solid var(--border); border-radius:14px; padding:14px; background:var(--card); }
       .ri-muted { color: var(--muted); font-size:12px; }
       .ri-divider { height:1px; background: var(--border); margin: 12px 0; }
-      .chart-container { position:relative; width:100%; }
+      .chart-container { position:relative; height:320px; max-height:320px; width:100%; }
     </style>
     <div class="ri-header">
       <div>
@@ -8021,7 +8071,7 @@ if (method === "POST" && pathname === "/copilot/query") {
       <style>
         .exec-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);margin-top:14px;}
         .exec-card h3{margin:0 0 8px;}
-        .chart-container{height:320px;max-height:320px;}
+        .chart-container{position:relative;height:320px;max-height:320px;width:100%;}
       </style>
 
       <div class="copilot-panel" style="padding:18px;">
