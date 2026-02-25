@@ -458,6 +458,11 @@ function renderPage(title, content, navHtml="", opts={}) {
 
   const chatScript = showChat ? `
 <script>
+try{
+  const btn = document.querySelector("#aiChat button.btn");
+  if (btn) btn.textContent = "AI Copilot";
+}catch(e){}
+
 window.__tjhpToggleChat = function(){
   const box = document.getElementById("aiChatBox");
   if (!box) return;
@@ -628,12 +633,130 @@ ${chatScript}
 </body></html>`;
 }
 
+// ==============================
+// AI COPILOT (NEW) - Structured Chat + Charts
+// ==============================
+function copilotIntents(){
+  return [
+    { key:"revenue_at_risk",  label:"Revenue At Risk",  match:[/revenue at risk/i,/at risk\b/i,/risk dollars/i] },
+    { key:"denials",         label:"Denials",          match:[/\bdenial/i,/\bdenied\b/i,/appeal success/i] },
+    { key:"underpayments",   label:"Underpayments",    match:[/underpaid/i,/underpayment/i,/negotiation roi/i] },
+    { key:"ar_aging",        label:"AR Aging",         match:[/\bar\b/i,/aging/i,/90\+/i,/days/i] },
+    { key:"payer_compare",   label:"Payer Comparison", match:[/\bpayer\b/i,/rank/i,/compare/i,/top payer/i] },
+    { key:"health_score",    label:"Financial Health", match:[/health score/i,/financial health/i,/score\b/i] },
+    { key:"forecast",        label:"Forecast",         match:[/forecast/i,/projection/i,/next 30/i] },
+  ];
+}
+
+function detectCopilotIntent(text){
+  const t = String(text||"").trim();
+  if (!t) return { key:"unknown", label:"Unknown" };
+  for (const it of copilotIntents()){
+    if (it.match.some(r => r.test(t))) return { key: it.key, label: it.label };
+  }
+  return { key:"general", label:"General" };
+}
+
+function buildCopilotResponse({ org_id, preset, question }){
+  const r = rangeFromPreset((preset||"last30").toLowerCase());
+  const m = computeDashboardMetrics(org_id, r.start, r.end, preset||"last30");
+  const intent = detectCopilotIntent(question);
+
+  const bullets = [];
+  const charts = [];
+
+  const money = (v)=>formatMoneyUI(Number(v||0));
+  const pct = (v)=>`${Number(v||0).toFixed(1)}%`;
+
+  bullets.push(`Range: ${String(preset||"last30")} • Total Billed ${money(m.kpis.totalBilled)} • Collected ${money(m.kpis.collectedTotal)} • At Risk ${money(m.kpis.revenueAtRisk)}`);
+  bullets.push(`Financial Health: ${Number(m.healthScore||0)}/100 (Grade ${String(m.healthGrade||"—")})`);
+
+  if (intent.key === "revenue_at_risk" || intent.key === "general"){
+    bullets.push(`Primary pressure: At Risk ${money(m.kpis.revenueAtRisk)} (underpaid + patient follow-up remaining).`);
+    charts.push({
+      type:"bar",
+      title:"Revenue At Risk Breakdown",
+      labels:["Underpaid", "Denied (est.)", "Patient Follow-Up", "Total At Risk"],
+      datasets:[{ label:"$", data:[
+        Number(m.kpis.underpaidAmt||0),
+        Number((m.payerTop||[]).reduce((s,x)=>s+Number(x.denied||0),0) || 0),
+        Number(m.patientOutstanding||0),
+        Number(m.kpis.revenueAtRisk||0)
+      ]}]
+    });
+  }
+
+  if (intent.key === "ar_aging"){
+    bullets.push(`AR 90+ exposure: ${pct(m.ar90Rate||0)} • 90+ bucket ${money((m.arBuckets||{})["90+"]||0)}.`);
+    const ar = m.arBuckets||{};
+    charts.push({
+      type:"bar",
+      title:"AR Aging Buckets",
+      labels:["0-30","31-60","61-90","90+"],
+      datasets:[{ label:"$", data:[Number(ar["0-30"]||0),Number(ar["31-60"]||0),Number(ar["61-90"]||0),Number(ar["90+"]||0)] }]
+    });
+  }
+
+  if (intent.key === "payer_compare"){
+    bullets.push("Top payer risk list is ranked by estimated at-risk dollars. Click a payer to open AI Payer Intelligence.");
+    const top = (m.payerTop||[]).slice(0,8);
+    charts.push({
+      type:"bar",
+      title:"Top Payers by At Risk",
+      labels: top.map(x=>x.payer),
+      datasets:[{ label:"At Risk", data: top.map(x=>Number(x.underpaid||0)+Number(x.denied||0)) }]
+    });
+  }
+
+  if (intent.key === "denials"){
+    bullets.push(`Appeal success rate: ${pct(m.appealSuccessRate||0)} • Appeals submitted: ${Number(m.appealSubmittedCount||0)}.`);
+    charts.push({
+      type:"bar",
+      title:"Recovery Intelligence (Appeals)",
+      labels:["Appeals Submitted","Appeal Wins"],
+      datasets:[{ label:"Count", data:[Number(m.appealSubmittedCount||0), Number(m.appealWinsCount||0)] }]
+    });
+  }
+
+  if (intent.key === "underpayments"){
+    bullets.push(`Negotiation ROI: ${pct(m.negotiationROI||0)} • Requested ${money(m.negotiatedTotal||0)} • Recovered ${money(m.recoveredTotal||0)}.`);
+    charts.push({
+      type:"bar",
+      title:"Recovery Intelligence (Negotiations)",
+      labels:["Requested","Recovered","Approved vs Paid %"],
+      datasets:[{ label:"$", data:[Number(m.negotiatedTotal||0), Number(m.recoveredTotal||0), Number(m.approvedVsPaidPct||0)] }]
+    });
+  }
+
+  if (intent.key === "health_score"){
+    bullets.push(`Operational Discipline: ${pct(m.operationalDisciplineRate||0)} (sample ${Number(m.operationalDisciplineSample||0)}).`);
+    const s = m.subscores||{};
+    charts.push({
+      type:"bar",
+      title:"Health Score Subscores (0–100)",
+      labels:["Collection","Denials","Underpaid","Days","AR Aging","Ops Discipline"],
+      datasets:[{ label:"Score", data:[
+        Number(s.collection_strength||0),
+        Number(s.denial_discipline||0),
+        Number(s.underpaid_discipline||0),
+        Number(s.days_to_pay||0),
+        Number(s.ar_aging||0),
+        Number(s.operational_discipline||0),
+      ]}]
+    });
+  }
+
+  bullets.push("Next best action: open Action Center and work highest at-risk items first (Denied → Appeal packet, Underpaid → Negotiation packet).");
+
+  return { ok:true, intent, bullets, charts, metrics: { preset: preset||"last30" } };
+}
+
 
 function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
 function navUser() {
-  return `<a href="/dashboard">Revenue Overview</a><a href="/claims">Claims Lifecycle</a><a href="/data-management">Data Management</a><a href="/revenue-intelligence">Revenue Intelligence AI</a><a href="/actions">Action Center</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
+  return `<a href="/dashboard">Revenue Overview</a><a href="/claims">Claims Lifecycle</a><a href="/data-management">Data Management</a><a href="/revenue-intelligence">Revenue Intelligence AI</a><a href="/copilot">AI Copilot</a><a href="/actions">Action Center</a><a href="/report">Reports</a><a href="/account">Account</a><a href="/logout">Logout</a>`;
 }
 function navAdmin() {
   return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
@@ -7327,12 +7450,12 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   };
   const deepDiveB64 = Buffer.from(JSON.stringify(deepDiveData)).toString("base64");
 
+  // Revenue Intelligence stays structured. Copilot handles conversational AI.
   const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
     ${tabLink("/revenue-intelligence", tab, "executive", "Executive Brief", "CEO-style summary of revenue health, risk, and priority payers.")}
     ${tabLink("/revenue-intelligence", tab, "payers", "Payer Hub", "Search payers, see grades, and open AI Payer Intelligence instantly.")}
-    ${tabLink("/revenue-intelligence", tab, "forecast", "Forecast", "Next Build: projections for collections, denials, and AR aging trends.")}
-    ${tabLink("/revenue-intelligence", tab, "deep-dive", "Deep Dive", "Next Build: compare payers, CPT drivers, and time windows.")}
-    ${tabLink("/revenue-intelligence", tab, "ask-ai", "Ask AI", "Your existing Revenue Intelligence AI prompt console (unchanged).")}
+    ${tabLink("/revenue-intelligence", tab, "forecast", "Forecast", "Projections for collections, denials, and AR aging trends.")}
+    ${tabLink("/revenue-intelligence", tab, "deep-dive", "Deep Dive", "Compare payers, CPT drivers, and time windows.")}
   </div>`;
 
   const top5 = payerRanks.slice(0, 5);
@@ -7433,6 +7556,255 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     ${content}
   `, navUser(), {showChat:true, orgName: org.org_name});
   return send(res, 200, html);
+}
+
+
+// ==============================
+// AI COPILOT PAGE
+// ==============================
+if (method === "GET" && pathname === "/copilot") {
+  const preset = String(parsed.query.range || "last30").toLowerCase();
+  const html = renderPage("AI Copilot", `
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;">
+      <div>
+        <h2 style="margin:0;">AI Copilot</h2>
+        <div class="muted" style="margin-top:6px;">Ask anything in revenue-cycle language. Copilot routes your request into structured analytics, then returns executive answers + charts.</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence AI</a>
+        <a class="btn secondary" href="/actions">Open Action Center</a>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
+        <div style="font-weight:900;">Conversation</div>
+        <div class="muted small" style="margin-top:6px;">
+          ${infoIcon("Copilot responses are deterministic + metric-backed. Free trial has full access; usage tracked but not blocked.")}
+        </div>
+
+        <div id="cpHistory" style="margin-top:10px;max-height:340px;overflow:auto;border:1px solid var(--border);border-radius:12px;padding:10px;background:rgba(17,24,39,.03);"></div>
+
+        <div style="margin-top:10px;">
+          <label>Range</label>
+          <select id="cpRange">
+            ${["today","last7","last30","last60","last90","thismonth","thisyear"].map(x=>`<option value="${x}" ${x===preset?"selected":""}>${x}</option>`).join("")}
+          </select>
+        </div>
+
+        <div style="margin-top:10px;">
+          <label>Ask AI Copilot</label>
+          <textarea id="cpQ" style="min-height:90px;" placeholder="Examples: What is driving revenue at risk? Compare top payers. Show AR aging and what to do next."></textarea>
+        </div>
+        <div class="btnRow" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn" id="cpAskBtn" type="button">Ask Copilot</button>
+          <button class="btn secondary" id="cpClearBtn" type="button">Clear</button>
+        </div>
+        <div class="muted small" id="cpStatus" style="margin-top:8px;"></div>
+      </div>
+
+      <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div style="font-weight:900;">Intelligence Panel</div>
+          <div class="muted small">Charts auto-render from your uploaded data.</div>
+        </div>
+        <div class="hr"></div>
+        <div id="cpBullets"></div>
+        <div class="hr"></div>
+        <div id="cpCharts"></div>
+
+        <div class="hr"></div>
+        <div id="cpActions" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+
+        <div class="btnRow" style="margin-top:10px;">
+          <button class="btn secondary" id="cpExportBtn" type="button">Export Briefing to PDF</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function(){
+        const histEl = document.getElementById("cpHistory");
+        const bulletsEl = document.getElementById("cpBullets");
+        const chartsEl = document.getElementById("cpCharts");
+        const actionsEl = document.getElementById("cpActions");
+        const exportBtn = document.getElementById("cpExportBtn");
+        const qEl = document.getElementById("cpQ");
+        const rangeEl = document.getElementById("cpRange");
+        const statusEl = document.getElementById("cpStatus");
+        const askBtn = document.getElementById("cpAskBtn");
+        const clearBtn = document.getElementById("cpClearBtn");
+
+        window.__COPILOT__ = window.__COPILOT__ || { history: [] };
+
+        function escapeHtml(s){
+          return String(s||"").replace(/[&<>"']/g, function(m){
+            return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]);
+          });
+        }
+
+        function renderHistory(){
+          const h = window.__COPILOT__.history;
+          if (!h.length){
+            histEl.innerHTML = "<div class='muted small'>No messages yet.</div>";
+            return;
+          }
+          histEl.innerHTML = h.map(x => {
+            const cls = x.role === "user" ? "badge" : "badge ok";
+            return "<div style='margin-bottom:8px;'>" +
+              "<div class='muted small'><span class='" + cls + "'>" + escapeHtml(x.role) + "</span> • " + escapeHtml(x.when) + "</div>" +
+              "<div style='white-space:pre-wrap;'>" + escapeHtml(x.text) + "</div>" +
+            "</div>";
+          }).join("");
+          histEl.scrollTop = histEl.scrollHeight;
+        }
+
+        function renderBullets(arr){
+          bulletsEl.innerHTML = (arr && arr.length)
+            ? "<ul>" + arr.map(b => "<li>" + escapeHtml(b) + "</li>").join("") + "</ul>"
+            : "<div class='muted small'>No summary yet.</div>";
+        }
+
+        function renderCharts(charts){
+          chartsEl.innerHTML = "";
+          if (!window.Chart || !charts || !charts.length){
+            chartsEl.innerHTML = "<div class='muted small'>No charts yet.</div>";
+            return;
+          }
+          charts.forEach((ch, idx) => {
+            const wrap = document.createElement("div");
+            wrap.style.margin = "10px 0";
+            const title = document.createElement("div");
+            title.style.fontWeight = "900";
+            title.style.marginBottom = "6px";
+            title.textContent = ch.title || ("Chart " + (idx+1));
+            const canvas = document.createElement("canvas");
+            canvas.height = 140;
+            wrap.appendChild(title);
+            wrap.appendChild(canvas);
+            chartsEl.appendChild(wrap);
+            new Chart(canvas, {
+              type: ch.type || "bar",
+              data: { labels: ch.labels || [], datasets: (ch.datasets || []).map(d => ({ label: d.label || "", data: d.data || [] })) },
+              options: { responsive:true, maintainAspectRatio:false }
+            });
+          });
+        }
+
+        function renderActions(intentKey){
+          actionsEl.innerHTML = "";
+          const map = {
+            revenue_at_risk: { label:"Open Action Center", href:"/actions?sort=atrisk" },
+            denials: { label:"View Denials", href:"/actions?tab=denials" },
+            underpayments: { label:"View Underpayments", href:"/actions?tab=underpayments" },
+            payer_compare: { label:"Open Payer Hub", href:"/revenue-intelligence?tab=payers" },
+            ar_aging: { label:"Open Revenue Overview", href:"/dashboard" },
+            health_score: { label:"Open Executive Dashboard", href:"/dashboard" },
+            general: { label:"Open Revenue Intelligence AI", href:"/revenue-intelligence" }
+          };
+
+          const btn = map[intentKey] || map.general;
+          const a = document.createElement("a");
+          a.className = "btn";
+          a.href = btn.href;
+          a.textContent = btn.label;
+          actionsEl.appendChild(a);
+        }
+
+        async function ask(){
+          const q = (qEl.value||"").trim();
+          if (!q) return;
+          const preset = rangeEl.value || "last30";
+          const now = new Date().toLocaleString();
+          window.__COPILOT__.history.push({ role:"user", when:now, text:q });
+          renderHistory();
+          statusEl.textContent = "Thinking…";
+          try{
+            const resp = await fetch("/copilot/query", {
+              method:"POST",
+              headers:{ "Content-Type":"application/json" },
+              body: JSON.stringify({ question:q, range:preset })
+            });
+            const data = await resp.json();
+            if (!data || !data.ok){
+              statusEl.textContent = "Error.";
+              window.__COPILOT__.history.push({ role:"agent", when:new Date().toLocaleString(), text:(data && data.error) ? data.error : "No response." });
+              renderHistory();
+              return;
+            }
+            window.__COPILOT__.history.push({ role:"agent", when:new Date().toLocaleString(), text:"Intent: " + (data.intent && data.intent.label ? data.intent.label : "General") });
+            renderHistory();
+            renderBullets(data.bullets || []);
+            renderCharts(data.charts || []);
+            renderActions(data.intent && data.intent.key ? data.intent.key : "general");
+            statusEl.textContent = "Updated: " + new Date().toLocaleString();
+          }catch(e){
+            statusEl.textContent = "Error contacting Copilot.";
+          }
+        }
+
+        askBtn.addEventListener("click", ask);
+        clearBtn.addEventListener("click", function(){
+          window.__COPILOT__.history = [];
+          renderHistory();
+          renderBullets([]);
+          chartsEl.innerHTML = "<div class='muted small'>No charts yet.</div>";
+          actionsEl.innerHTML = "";
+          statusEl.textContent = "";
+          qEl.value = "";
+        });
+
+        renderHistory();
+
+        exportBtn.addEventListener("click", function(){
+          const content = document.getElementById("cpBullets").innerHTML;
+          const win = window.open("", "_blank");
+          if (!win) return;
+          const stamp = new Date().toLocaleString();
+          win.document.write(
+            "<html><head><title>AI Copilot Briefing</title><style>" +
+            "body{font-family:Arial;padding:20px;}" +
+            "h1{margin-bottom:10px;}" +
+            "ul{line-height:1.6;}" +
+            "</style></head><body>" +
+            "<h1>AI Copilot Executive Brief</h1>" +
+            content +
+            "<p style='margin-top:20px;font-size:12px;color:#666;'>Generated " + stamp + "</p>" +
+            "</body></html>"
+          );
+          win.document.close();
+          win.print();
+        });
+      })();
+    </script>
+  `, navUser(), {showChat:false, orgName: org.org_name});
+  return send(res, 200, html);
+}
+
+// Copilot API (structured)
+if (method === "POST" && pathname === "/copilot/query") {
+  let body = "";
+  req.on("data", c => body += c);
+  req.on("end", () => {
+    try{
+      const payload = JSON.parse(body||"{}");
+      const question = String(payload.question||"").trim();
+      const range = String(payload.range||"last30").trim().toLowerCase();
+      if (!question) return send(res, 400, JSON.stringify({ ok:false, error:"Missing question." }), "application/json");
+
+      const u = getUsage(org.org_id);
+      u.ai_chat_used = Number(u.ai_chat_used||0) + 1;
+      saveUsage(u);
+
+      const out = buildCopilotResponse({ org_id: org.org_id, preset: range, question });
+      return send(res, 200, JSON.stringify(out), "application/json");
+    }catch(e){
+      return send(res, 500, JSON.stringify({ ok:false, error:"Copilot error." }), "application/json");
+    }
+  });
+  return;
 }
 
 // Consolidated upload entry points (single lifecycle location)
