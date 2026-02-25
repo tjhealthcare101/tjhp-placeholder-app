@@ -3822,6 +3822,40 @@ function infoIcon(tip){
   return `<span class="tooltip" data-tip="${safeStr(tip)}">ⓘ</span>`;
 }
 
+// ==============================
+// ENTERPRISE ORG SETTINGS SNAPSHOT (AI WORKSPACE PANEL)
+// ==============================
+function renderOrgSettingsSnapshotPanel(org_id){
+  const settings = getOrgSettings(org_id);
+  const letter = getLetterDefaults(settings);
+  const workflow = getWorkflowDefaults(settings);
+  const allowed = getAllowedRulesFromSettings(settings);
+
+  return `
+  <div style="border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:14px;background:var(--card);">
+    <div style="font-weight:900;">Organization Defaults Snapshot</div>
+    <div class="muted small" style="margin-top:6px;">
+      These settings automatically apply to this packet.
+      <a class="btn secondary small" style="margin-left:8px;" href="/account?tab=org">Edit</a>
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;">
+      <div>
+        <strong>Tone</strong> ${infoIcon("Default letter tone applied deterministically.")}<br/>
+        <span class="muted small">${safeStr(letter.appeal_tone || "Professional")}</span>
+      </div>
+      <div>
+        <strong>Follow-Up Default</strong> ${infoIcon("Days added automatically after submission if not specified.")}<br/>
+        <span class="muted small">${Number(workflow.default_followup_days || 14)} days</span>
+      </div>
+      <div>
+        <strong>Allowed Rule</strong> ${infoIcon("Baseline allowed amount calculation for underpayment detection.")}<br/>
+        <span class="muted small">${safeStr(allowed.default_method)} (${safeStr(String(allowed.default_value))})</span>
+      </div>
+    </div>
+  </div>
+  `;
+}
+
 function tabLink(basePath, active, tab, label, tip){
   const href = `${basePath}?tab=${encodeURIComponent(tab)}`;
   const isActive = active === tab;
@@ -7328,6 +7362,33 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         ${renderKpiCard("Negotiated Requested", formatMoneyUI(m.negotiatedTotal||0), "submitted negotiation requested amount", "warn")}
         ${renderKpiCard("Negotiated Recovered", formatMoneyUI(m.recoveredTotal||0), "paid_posted_amount (cash realized)", "good")}
         ${renderKpiCard("Approved vs Paid", `${Number(m.approvedVsPaidPct||0).toFixed(1)}%`, "Recovered cash compared with approved dollars.", "warn")}
+      </div>
+    </div>
+    <div class="ri-panel" style="margin-bottom:12px;">
+      <div style="font-weight:900;font-size:16px;">
+        Organization Targets ${infoIcon("Configured inside Organization Settings. Used for executive comparison.")}
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;">
+        <div>
+          <strong>Appeal Target</strong><br/>
+          <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_appeal_success_rate || 60)}%</span>
+        </div>
+        <div>
+          <strong>Negotiation ROI Target</strong><br/>
+          <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_negotiation_roi || 60)}%</span>
+        </div>
+        <div>
+          <strong>Days-to-Pay Target</strong><br/>
+          <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_days_to_pay || 30)}</span>
+        </div>
+        <div>
+          <strong>AR90 Target</strong><br/>
+          <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_ar90_rate || 15)}%</span>
+        </div>
+        <div>
+          <strong>Operational Discipline Target</strong><br/>
+          <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_operational_discipline || 80)}%</span>
+        </div>
       </div>
     </div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;">
@@ -13031,6 +13092,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const ws = ensureAgentWorkspace(org.org_id, b);
     ensureWorkspacePacket(ws);
     ensurePacketSections(ws, b);
+
+    const orgSnapshot = renderOrgSettingsSnapshotPanel(org.org_id);
     ws.activity = ws.activity || {};
     ws.activity.last_opened_at = nowISO();
     saveAgentWorkspace(org.org_id, ws);
@@ -13063,6 +13126,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
     const html = renderPage(pageTitle, `
       <h2>${pageTitle}</h2>
+
+      ${orgSnapshot}
 
       <h3>1) Packet Overview</h3>
       <table>
@@ -13295,7 +13360,12 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const ws = ensureAgentWorkspace(org.org_id, b);
       ensurePacketSections(ws, b);
       const ts = nowISO();
-      const followDate = String(params.get("follow_up_date") || "").trim();
+      const settings = getOrgSettings(org.org_id);
+      const workflow = getWorkflowDefaults(settings);
+      const followDateRaw = String(params.get("follow_up_date") || "").trim();
+      const followDate = followDateRaw
+        ? followDateRaw
+        : addDaysISO(ts, Number(workflow.default_followup_days || 14));
       ws.submission = {
         ...ws.submission,
         status: "submitted",
@@ -13307,7 +13377,13 @@ if (method === "GET" && pathname === "/agent-workspace") {
         follow_up_date: followDate || null,
         notes: String(params.get("notes") || "")
       };
-      ws.follow_up = { ...ws.follow_up, due_at: followDate ? new Date(followDate).toISOString() : addDaysISO(ts, 14), reminder_sent:false, escalation_level:0, last_touched_at: ts };
+      ws.follow_up = {
+        ...ws.follow_up,
+        due_at: followDate ? new Date(followDate).toISOString() : null,
+        reminder_sent:false,
+        escalation_level:0,
+        last_touched_at: ts
+      };
       ws.status = "submitted";
       saveAgentWorkspace(org.org_id, ws);
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: "Marked submitted + set follow-up." });
@@ -13349,7 +13425,10 @@ if (method === "GET" && pathname === "/agent-workspace") {
         writeJSON(FILES.billed, billedAll);
         rebuildOrgDerivedData(org.org_id, { resyncDenials:true, autodraft:true });
       }
-      if (outStatus === "closed") { ws.status = "closed"; ws.follow_up.due_at = null; }
+      if (outStatus === "closed") {
+        ws.status = "closed";
+        ws.follow_up.due_at = null;
+      }
       ws.follow_up.last_touched_at = nowISO();
       saveAgentWorkspace(org.org_id, ws);
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: "Outcome updated." });
