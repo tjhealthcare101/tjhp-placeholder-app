@@ -788,6 +788,8 @@ function buildCopilotResponse({
 
   const range = rangeFromPreset(rangePreset || "last30");
   const dashboard = computeDashboardMetrics(org_id, range.start, range.end, range.preset);
+  const topPayers = Array.isArray(dashboard.payerRiskRanking) ? dashboard.payerRiskRanking : [];
+  const denialVelocity = String(dashboard.denialVelocity || "Stable");
   const metrics = {
     totals: {
       billed: round2(dashboard.kpis?.totalBilled || 0),
@@ -868,6 +870,11 @@ function buildCopilotResponse({
       `Operational Discipline Score: ${metrics.disciplineScore}/100`,
       `30-day At-Risk Projection: $${Math.round(forecast.projected30).toLocaleString()} (trend: ${Math.round(forecast.slopePerDay).toLocaleString()}/day)`
     ];
+
+    bullets.push(`Denial Trend Velocity: ${denialVelocity}`);
+    if (topPayers.length > 0) {
+      bullets.push(`Top Risk Payer: ${topPayers[0].payer} ($${Math.round(topPayers[0].risk).toLocaleString()} at risk)`);
+    }
   }
 
   else if (format === "operational"){
@@ -2659,6 +2666,32 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
   const recov = computeRecoveryIntelligence(org_id, start, end);
 
+  const payerMap = {};
+  billed.forEach(b => {
+    const payer = b.payer || "Unknown";
+    const billedAmt = safeNum(b.amount_billed || b.billed_amount || 0);
+    const paidAmt = safeNum(b.insurance_paid || b.paid_amount || 0);
+    const riskAmt = Math.max(0, billedAmt - paidAmt);
+
+    if (!payerMap[payer]) payerMap[payer] = { billed: 0, risk: 0 };
+    payerMap[payer].billed += billedAmt;
+    payerMap[payer].risk += riskAmt;
+  });
+
+  const payerRiskRanking = Object.entries(payerMap)
+    .map(([payer, data]) => ({
+      payer,
+      risk: data.risk,
+      riskRate: percent(data.risk, data.billed)
+    }))
+    .sort((a,b) => b.risk - a.risk)
+    .slice(0,5);
+
+  const denialVelocity =
+    (Number(denialRate || 0) > 15) ? "High" :
+    (Number(denialRate || 0) > 8)  ? "Moderate" :
+    "Stable";
+
   return {
     kpis: {
       totalBilled: totals.totalBilled,
@@ -2700,7 +2733,9 @@ function computeDashboardMetrics(org_id, start, end, preset){
     negotiationSubmittedCount: recov.negotiationSubmittedCount,
     negotiatedApprovedTotal: recov.negotiatedApprovedTotal,
     approvedVsPaidPct: recov.approvedVsPaidPct,
-    usingLegacyRecoveryFallback: !!recov.usingLegacyFallback
+    usingLegacyRecoveryFallback: !!recov.usingLegacyFallback,
+    payerRiskRanking,
+    denialVelocity
   };
 }
 
@@ -7797,14 +7832,64 @@ if (method === "GET" && pathname === "/copilot") {
   const limit = getCopilotLimit(org.org_id);
   const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
 
-  const promptButtons = [
-    "Executive revenue summary",
-    "Why is revenue at risk increasing?",
-    "Top payer risk drivers",
-    "AR aging breakdown analysis",
-    "Denial trend summary",
-    "Recovery performance review"
-  ].map(p => `<button class="btn secondary small" onclick="document.getElementById('copilotQuery').value='${p.replace(/'/g, "")}';">${p}</button>`).join("");
+  const executiveTiles = `
+<style>
+  .tile-grid {
+    display:grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap:16px;
+  }
+  .tile {
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:18px;
+    cursor:pointer;
+    transition:all 0.15s ease;
+  }
+  .tile:hover {
+    box-shadow: var(--shadow);
+  }
+  .tile-title {
+    font-weight:700;
+    margin-bottom:6px;
+  }
+  .tile-sub {
+    font-size:13px;
+    color:var(--muted);
+  }
+  @media (max-width:900px){
+    .tile-grid { grid-template-columns:1fr; }
+  }
+</style>
+
+<div class="tile-grid">
+  <div class="tile" onclick="document.getElementById('copilotQuery').value='Executive revenue snapshot';">
+    <div class="tile-title">Executive Revenue Snapshot</div>
+    <div class="tile-sub">High-level performance overview</div>
+  </div>
+  <div class="tile" onclick="document.getElementById('copilotQuery').value='Revenue risk drivers';">
+    <div class="tile-title">Revenue Risk Drivers</div>
+    <div class="tile-sub">What is increasing exposure</div>
+  </div>
+  <div class="tile" onclick="document.getElementById('copilotQuery').value='Payer exposure analysis';">
+    <div class="tile-title">Payer Exposure Overview</div>
+    <div class="tile-sub">Risk concentration by payer</div>
+  </div>
+  <div class="tile" onclick="document.getElementById('copilotQuery').value='Denial performance review';">
+    <div class="tile-title">Denial Performance</div>
+    <div class="tile-sub">Denial trends and appeal health</div>
+  </div>
+  <div class="tile" onclick="document.getElementById('copilotQuery').value='Underpayment recovery';">
+    <div class="tile-title">Underpayment Recovery</div>
+    <div class="tile-sub">Negotiation effectiveness</div>
+  </div>
+  <div class="tile" onclick="document.getElementById('copilotQuery').value='Operational health summary';">
+    <div class="tile-title">Operational Health</div>
+    <div class="tile-sub">Discipline and recovery posture</div>
+  </div>
+</div>
+`;
 
   const html = renderPage("AI Copilot", `
     <style>
@@ -7812,7 +7897,7 @@ if (method === "GET" && pathname === "/copilot") {
       .copilot-usage{font-size:12px;color:var(--muted);}
       .copilot-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;}
       .copilot-panel{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);}
-      .chart-container{position:relative;height:320px;max-height:360px;width:100%;}
+      .chart-container{position:relative;height:320px;max-height:320px;width:100%;}
       @media (max-width: 900px){ .copilot-grid{grid-template-columns:1fr;} }
     </style>
 
@@ -7826,7 +7911,7 @@ if (method === "GET" && pathname === "/copilot") {
     <div class="copilot-grid">
       <div class="copilot-panel">
         <div style="font-weight:800;margin-bottom:6px;">Prompt Library</div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;">${promptButtons}</div>
+        ${executiveTiles}
       </div>
 
       <div class="copilot-panel">
@@ -7906,7 +7991,7 @@ if (method === "POST" && pathname === "/copilot/query") {
       <div class="copilot-panel" style="margin-top:14px;">
         <h3>${safeStr(chart.title || `Chart ${i + 1}`)}</h3>
         <div class="chart-container">
-          <canvas id="chart${i}" width="900" height="320"></canvas>
+          <canvas id="chart${i}" width="900"></canvas>
         </div>
       </div>
     `).join("");
@@ -7928,8 +8013,16 @@ if (method === "POST" && pathname === "/copilot/query") {
       `;
     }).join("\n");
 
+    const disciplineDrivers = Array.isArray(result.disciplineDrivers) ? result.disciplineDrivers : [];
+    const executiveActions = Array.isArray(result.executiveActions) ? result.executiveActions : [];
+
     const responseHTML = `
       <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+      <style>
+        .exec-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);margin-top:14px;}
+        .exec-card h3{margin:0 0 8px;}
+        .chart-container{height:320px;max-height:320px;}
+      </style>
 
       <div class="copilot-panel" style="padding:18px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
@@ -7976,6 +8069,24 @@ if (method === "POST" && pathname === "/copilot/query") {
         <ul style="margin:0;padding-left:18px;display:grid;gap:6px;">
           ${(result.bullets || []).map(b => `<li>${safeStr(b)}</li>`).join("")}
         </ul>
+      </div>
+
+      <div class="exec-card">
+        <h3>Operational Discipline Drivers</h3>
+        ${
+          (disciplineDrivers && disciplineDrivers.length > 0)
+            ? `<ul>${disciplineDrivers.map(d => `<li>${safeStr(d)}</li>`).join("")}</ul>`
+            : `<div class="muted">No threshold breaches detected.</div>`
+        }
+      </div>
+
+      <div class="exec-card">
+        <h3>Recommended Executive Actions</h3>
+        ${
+          (executiveActions && executiveActions.length > 0)
+            ? `<ul>${executiveActions.map(a => `<li>${safeStr(a)}</li>`).join("")}</ul>`
+            : `<div class="muted">No immediate corrective actions required.</div>`
+        }
       </div>
 
       ${chartCards}
