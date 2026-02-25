@@ -659,99 +659,145 @@ function detectCopilotIntent(text){
   return { key:"general", label:"General" };
 }
 
-function buildCopilotResponse({ org_id, preset, question }){
-  const r = rangeFromPreset((preset||"last30").toLowerCase());
-  const m = computeDashboardMetrics(org_id, r.start, r.end, preset||"last30");
-  const intent = detectCopilotIntent(question);
+function computeCopilotDashboardMetrics(org_id, start, end){
+  const inRange = (row) => {
+    const stamp = row.updated_at || row.created_at || row.dos || row.date_of_service;
+    const d = stamp ? new Date(stamp) : null;
+    return !!(d && !isNaN(d.getTime()) && d >= start && d <= end);
+  };
 
-  const bullets = [];
-  const charts = [];
+  const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id && inRange(b));
+  const negotiations = readJSON(FILES.negotiations, []).filter(n => n.org_id === org_id && inRange(n));
+  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id && inRange(c));
 
-  const money = (v)=>formatMoneyUI(Number(v||0));
-  const pct = (v)=>`${Number(v||0).toFixed(1)}%`;
+  let totalBilled = 0;
+  let totalCollected = 0;
+  let totalExpected = 0;
+  let totalDenials = 0;
 
-  bullets.push(`Range: ${String(preset||"last30")} • Total Billed ${money(m.kpis.totalBilled)} • Collected ${money(m.kpis.collectedTotal)} • At Risk ${money(m.kpis.revenueAtRisk)}`);
-  bullets.push(`Financial Health: ${Number(m.healthScore||0)}/100 (Grade ${String(m.healthGrade||"—")})`);
+  billed.forEach(b => {
+    const billedAmt = safeNum(b.amount_billed || b.billed_amount || b.billedAmount);
+    const paidAmt = safeNum(b.insurance_paid || b.paid_amount || b.paidAmount);
+    const expectedAmt = safeNum(b.expected_insurance || b.allowed_amount || b.allowedAmount || billedAmt);
+    const status = String(b.status || b.claim_status || "").toLowerCase();
 
-  if (intent.key === "revenue_at_risk" || intent.key === "general"){
-    bullets.push(`Primary pressure: At Risk ${money(m.kpis.revenueAtRisk)} (underpaid + patient follow-up remaining).`);
-    charts.push({
-      type:"bar",
-      title:"Revenue At Risk Breakdown",
-      labels:["Underpaid", "Denied (est.)", "Patient Follow-Up", "Total At Risk"],
-      datasets:[{ label:"$", data:[
-        Number(m.kpis.underpaidAmt||0),
-        Number((m.payerTop||[]).reduce((s,x)=>s+Number(x.denied||0),0) || 0),
-        Number(m.patientOutstanding||0),
-        Number(m.kpis.revenueAtRisk||0)
-      ]}]
-    });
-  }
+    totalBilled += billedAmt;
+    totalCollected += paidAmt;
+    totalExpected += expectedAmt;
 
-  if (intent.key === "ar_aging"){
-    bullets.push(`AR 90+ exposure: ${pct(m.ar90Rate||0)} • 90+ bucket ${money((m.arBuckets||{})["90+"]||0)}.`);
-    const ar = m.arBuckets||{};
-    charts.push({
-      type:"bar",
-      title:"AR Aging Buckets",
-      labels:["0-30","31-60","61-90","90+"],
-      datasets:[{ label:"$", data:[Number(ar["0-30"]||0),Number(ar["31-60"]||0),Number(ar["61-90"]||0),Number(ar["90+"]||0)] }]
-    });
-  }
+    if (status === "denied") totalDenials += billedAmt;
+  });
 
-  if (intent.key === "payer_compare"){
-    bullets.push("Top payer risk list is ranked by estimated at-risk dollars. Click a payer to open AI Payer Intelligence.");
-    const top = (m.payerTop||[]).slice(0,8);
-    charts.push({
-      type:"bar",
-      title:"Top Payers by At Risk",
-      labels: top.map(x=>x.payer),
-      datasets:[{ label:"At Risk", data: top.map(x=>Number(x.underpaid||0)+Number(x.denied||0)) }]
-    });
-  }
+  const totalAtRisk = Math.max(0, totalExpected - totalCollected);
+  const recoveryRate = percent(totalCollected, totalExpected);
+  const denialRate = percent(totalDenials, totalBilled);
 
-  if (intent.key === "denials"){
-    bullets.push(`Appeal success rate: ${pct(m.appealSuccessRate||0)} • Appeals submitted: ${Number(m.appealSubmittedCount||0)}.`);
-    charts.push({
-      type:"bar",
-      title:"Recovery Intelligence (Appeals)",
-      labels:["Appeals Submitted","Appeal Wins"],
-      datasets:[{ label:"Count", data:[Number(m.appealSubmittedCount||0), Number(m.appealWinsCount||0)] }]
-    });
-  }
+  let negotiationRequested = 0;
+  let negotiationRecovered = 0;
+  negotiations.forEach(n => {
+    negotiationRequested += safeNum(n.requested_amount || n.requestedAmount);
+    negotiationRecovered += safeNum(n.amount_paid || n.collected_amount || n.collectedAmount);
+  });
+  const negotiationROI = percent(negotiationRecovered, negotiationRequested);
 
-  if (intent.key === "underpayments"){
-    bullets.push(`Negotiation ROI: ${pct(m.negotiationROI||0)} • Requested ${money(m.negotiatedTotal||0)} • Recovered ${money(m.recoveredTotal||0)}.`);
-    charts.push({
-      type:"bar",
-      title:"Recovery Intelligence (Negotiations)",
-      labels:["Requested","Recovered","Approved vs Paid %"],
-      datasets:[{ label:"$", data:[Number(m.negotiatedTotal||0), Number(m.recoveredTotal||0), Number(m.approvedVsPaidPct||0)] }]
-    });
-  }
+  const appealRows = cases.filter(c => String(c.type || c.case_type || "").toLowerCase() === "appeal");
+  const successfulAppeals = appealRows.filter(c => String(c.status || c.outcome || "").toLowerCase() === "approved").length;
+  const appealSuccessRate = percent(successfulAppeals, appealRows.length);
 
-  if (intent.key === "health_score"){
-    bullets.push(`Operational Discipline: ${pct(m.operationalDisciplineRate||0)} (sample ${Number(m.operationalDisciplineSample||0)}).`);
-    const s = m.subscores||{};
-    charts.push({
-      type:"bar",
-      title:"Health Score Subscores (0–100)",
-      labels:["Collection","Denials","Underpaid","Days","AR Aging","Ops Discipline"],
-      datasets:[{ label:"Score", data:[
-        Number(s.collection_strength||0),
-        Number(s.denial_discipline||0),
-        Number(s.underpaid_discipline||0),
-        Number(s.days_to_pay||0),
-        Number(s.ar_aging||0),
-        Number(s.operational_discipline||0),
-      ]}]
-    });
-  }
+  let disciplineScore = 100;
+  if (denialRate > 15) disciplineScore -= 20;
+  if (recoveryRate < 80) disciplineScore -= 20;
+  if (appealSuccessRate < 50) disciplineScore -= 20;
+  if (negotiationROI < 50) disciplineScore -= 20;
+  if (totalAtRisk > totalBilled * 0.2) disciplineScore -= 20;
 
-  bullets.push("Next best action: open Action Center and work highest at-risk items first (Denied → Appeal packet, Underpaid → Negotiation packet).");
+  disciplineScore = Math.max(0, disciplineScore);
 
-  return { ok:true, intent, bullets, charts, metrics: { preset: preset||"last30" } };
+  return {
+    totals: {
+      billed: round2(totalBilled),
+      collected: round2(totalCollected),
+      expected: round2(totalExpected),
+      atRisk: round2(totalAtRisk)
+    },
+    rates: {
+      recoveryRate: round2(recoveryRate),
+      denialRate: round2(denialRate),
+      appealSuccessRate: round2(appealSuccessRate),
+      negotiationROI: round2(negotiationROI)
+    },
+    disciplineScore: round2(disciplineScore)
+  };
 }
+
+function buildCopilotResponse({ org_id, rangePreset, responseFormat, question }){
+  const range = rangeFromPreset(rangePreset || "last30");
+  const metrics = computeCopilotDashboardMetrics(org_id, range.start, range.end);
+  const format = String(responseFormat || "executive").toLowerCase();
+
+  let bullets = [];
+
+  if (format === "executive") {
+    bullets = [
+      `Total Revenue Billed: $${metrics.totals.billed.toLocaleString()}`,
+      `Total Revenue Collected: $${metrics.totals.collected.toLocaleString()}`,
+      `Revenue At Risk: $${metrics.totals.atRisk.toLocaleString()}`,
+      `Recovery Rate: ${metrics.rates.recoveryRate}%`,
+      `Denial Rate: ${metrics.rates.denialRate}%`,
+      `Operational Discipline Score: ${metrics.disciplineScore}/100`
+    ];
+  } else if (format === "operational") {
+    bullets = [
+      `Appeal Success Rate: ${metrics.rates.appealSuccessRate}%`,
+      `Negotiation ROI: ${metrics.rates.negotiationROI}%`,
+      `Revenue Exposure: $${metrics.totals.atRisk.toLocaleString()}`,
+      `Operational Discipline Composite: ${metrics.disciplineScore}`
+    ];
+  } else if (format === "deep") {
+    bullets = [
+      `Expected vs Collected Gap: $${(metrics.totals.expected - metrics.totals.collected).toLocaleString()}`,
+      `Denial Exposure Rate: ${metrics.rates.denialRate}%`,
+      `Appeal Conversion: ${metrics.rates.appealSuccessRate}%`,
+      `Negotiation Yield: ${metrics.rates.negotiationROI}%`,
+      `Discipline Score: ${metrics.disciplineScore}`
+    ];
+  } else {
+    bullets = [
+      `Revenue At Risk: $${metrics.totals.atRisk.toLocaleString()}`,
+      `Recovery Rate: ${metrics.rates.recoveryRate}%`,
+      `Discipline Score: ${metrics.disciplineScore}`
+    ];
+  }
+
+  const charts = [
+    {
+      title: "Revenue Overview",
+      type: "bar",
+      labels: ["Billed", "Collected", "At Risk"],
+      datasets: [{
+        label: "Revenue",
+        data: [metrics.totals.billed, metrics.totals.collected, metrics.totals.atRisk]
+      }]
+    },
+    {
+      title: "Performance Rates",
+      type: "bar",
+      labels: ["Recovery", "Denial", "Appeal Success", "Negotiation ROI"],
+      datasets: [{
+        label: "Rates (%)",
+        data: [
+          metrics.rates.recoveryRate,
+          metrics.rates.denialRate,
+          metrics.rates.appealSuccessRate,
+          metrics.rates.negotiationROI
+        ]
+      }]
+    }
+  ];
+
+  return { bullets, charts, metrics };
+}
+
 
 
 function navPublic() {
@@ -2112,6 +2158,13 @@ function rangeFromPreset(preset){
 }
 function fmtMoney(n){ return formatMoneyUI(n); }
 function safeNum(n){ const x = Number(n||0); return isFinite(x) ? x : 0; }
+function safeDiv(a, b){
+  const x = safeNum(a);
+  const y = safeNum(b);
+  return y === 0 ? 0 : (x / y);
+}
+function percent(a, b){ return safeDiv(a, b) * 100; }
+function round2(n){ return Math.round(safeNum(n) * 100) / 100; }
 function groupKeyForDate(d, gran){
   const dt = new Date(d);
   if (gran === "day") return dt.toISOString().slice(0,10);
@@ -7628,6 +7681,7 @@ if (method === "GET" && pathname === "/copilot") {
       <div class="copilot-panel">
         <div style="font-weight:800;margin-bottom:6px;">Ask Copilot</div>
         <form method="POST" action="/copilot/query" id="copilotForm">
+          <input type="hidden" name="preset" value="last30">
           <textarea id="copilotQuery" name="query" style="min-height:100px;" placeholder="Ask for an executive summary, risk drivers, or payer analysis..."></textarea>
           <label>Response Format</label>
           <select name="format">
@@ -7671,7 +7725,8 @@ if (method === "POST" && pathname === "/copilot/query") {
 
     const params = new URLSearchParams(body);
     const question = String(params.get("question") || params.get("query") || "").trim();
-    const preset = String(params.get("preset") || params.get("format") || "last30");
+    const responseFormat = String(params.get("format") || "executive");
+    const rangePreset = String(params.get("preset") || "last30");
     if (!question) {
       return redirect(res, "/copilot");
     }
@@ -7681,7 +7736,8 @@ if (method === "POST" && pathname === "/copilot/query") {
 
     const result = buildCopilotResponse({
       org_id: org.org_id,
-      preset,
+      rangePreset,
+      responseFormat,
       question
     });
 
