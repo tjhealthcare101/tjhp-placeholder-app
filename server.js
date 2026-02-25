@@ -922,7 +922,7 @@ function buildCopilotResponse({
       `Revenue At Risk: $${metrics.totals.atRisk.toLocaleString()}`,
       `Recovery Rate: ${metrics.rates.recoveryRate}%`,
       `Denial Rate: ${metrics.rates.denialRate}%`,
-      `Operational Discipline Score: ${metrics.disciplineScore}/100`,
+      `AI Case Readiness Score: ${metrics.disciplineScore}/100`,
       `30-day At-Risk Projection: $${Math.round(forecast.projected30).toLocaleString()} (trend: ${Math.round(forecast.slopePerDay).toLocaleString()}/day)`
     ];
 
@@ -944,7 +944,7 @@ function buildCopilotResponse({
       `Appeal Success Rate: ${metrics.rates.appealSuccessRate}%`,
       `Negotiation ROI: ${metrics.rates.negotiationROI}%`,
       `Revenue Exposure: $${metrics.totals.atRisk.toLocaleString()}`,
-      `Operational Discipline Composite: ${metrics.disciplineScore}`
+      `AI Case Readiness Composite: ${metrics.disciplineScore}`
     ];
   }
 
@@ -2642,7 +2642,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
   const avgDaysToPay = daysToPayVals.length ? (daysToPayVals.reduce((a,b)=>a+b,0)/daysToPayVals.length) : 0;
 
   // ===========================
-  // Operational Discipline (Option 1)
+  // AI Case Readiness (Option 1)
   // Based on required-doc completeness for AI workspaces marked ready/submitted/closed
   // ===========================
   let operationalDisciplineRate = 0;
@@ -2706,7 +2706,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
   // ===========================
   // Practice Financial Health Score 2.0 (signature, explainable)
-  // Adds Operational Discipline (packet readiness) without adding staff analytics.
+  // Adds AI Case Readiness (packet readiness) without adding staff analytics.
   // Weights sum to 1.00
   // ===========================
   const hasFinancialData = billed.length > 0;
@@ -6118,9 +6118,17 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const denialReasonsB64 = Buffer.from(JSON.stringify(reasonTop)).toString("base64");
 
 
-    const planBadge = (limits.mode==="monthly")
-      ? `<span class="badge ok">Monthly Active</span>`
-      : `<span class="badge warn">Starter Plan</span>`;
+    let planBadge = "";
+
+    if (!org.shopify_subscription_active) {
+      planBadge = `<span class="badge warn">Free Trial</span>`;
+    } else {
+      planBadge = `<span class="badge ok">Starter Plan</span>`;
+    }
+
+    if (org.subscription_status === "expired") {
+      planBadge = `<span class="badge err">Upgrade Required</span>`;
+    }
 
     const caseCreditsUsed = Number(usage.monthly_case_credits_used || 0);
     const caseCreditsLimit = Number(limits.case_credits_per_month || 0);
@@ -6154,7 +6162,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
     let verdictTitle = "Financial Performance Stable";
     let verdictColor = "#065f46";
 
-    if (m.denialRate > 15 || m.kpis.netCollectionRate < 80) {
+    if ((m.kpis?.totalBilled || 0) === 0) {
+      verdictTitle = "No Financial Data Available";
+      verdictColor = "#64748b";
+    } else if (m.denialRate > 15 || m.kpis.netCollectionRate < 80) {
       verdictTitle = "Financial Risk Elevated";
       verdictColor = "#b91c1c";
     }
@@ -6165,7 +6176,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
           <h2 style="margin-bottom:4px;">Revenue Overview <span class="tooltip" data-tip="Live financial summary generated from your uploaded billed claims, payments, denials, and negotiations.">ⓘ</span></h2>
-          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)} · Plan cycle active</p>
+          <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)}</p>
           ${planBadge}
         </div>
 
@@ -6224,16 +6235,16 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </div>
 
       <div class="kpi-strip">
-        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.revenueAtRisk)}</p><p class="kpi-label">Revenue At Risk</p><div class="kpi-delta">—</div></div>
-        <div class="kpi-card"><p class="kpi-value">${Number(m.denialRate||0).toFixed(1)}%</p><p class="kpi-label">Denial Rate</p><div class="kpi-delta">—</div></div>
-        <div class="kpi-card"><p class="kpi-value">${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p><p class="kpi-label">Recovery Rate</p><div class="kpi-delta">—</div></div>
-        <div class="kpi-card"><p class="kpi-value">${Number(m.operationalDisciplineScore||0).toFixed(0)}/100</p><p class="kpi-label">Operational Discipline</p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.revenueAtRisk)}</p><p class="kpi-label">Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Outstanding revenue from denied, underpaid, or unpaid claims.</span></span></p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${Number(m.denialRate||0).toFixed(1)}%</p><p class="kpi-label">Denial Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed claims that were denied by payers.</span></span></p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p><p class="kpi-label">Recovery Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed revenue successfully collected.</span></span></p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${Number(m.operationalDisciplineScore||0).toFixed(0)}/100</p><p class="kpi-label">AI Case Readiness <span class="tooltip">ⓘ<span class="tooltiptext">Measures whether AI appeal and negotiation workspaces include required documentation before submission.</span></span></p><div class="kpi-delta">—</div></div>
       </div>
 
       <div class="exec-card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
           <div>
-            <h3 style="margin:0 0 6px;">Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, AR aging, and operational discipline. Higher is better.">ⓘ</span></h3>
+            <h3 style="margin:0 0 6px;">Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, AR aging, and AI Case Readiness. Higher is better.">ⓘ</span></h3>
             <div style="font-size:28px;font-weight:900;line-height:1;">
               ${formatNumberUI(m.healthScore || 0)} / 100
               <span class="badge ${gradeBadgeClass(m.healthGrade)}" style="margin-left:8px;">${safeStr(m.healthGrade || "—")}</span>
@@ -6294,10 +6305,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.collection_efficiency || 0)}</p><p class="kpi-label">Collection Efficiency</p></div>
             <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.denial_risk || 0)}</p><p class="kpi-label">Denial Risk</p></div>
             <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.ar_aging || 0)}</p><p class="kpi-label">AR Aging</p></div>
-            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.operational_discipline || 0)}</p><p class="kpi-label">Operational Discipline</p></div>
+            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.operational_discipline || 0)}</p><p class="kpi-label">AI Case Readiness <span class="tooltip">ⓘ<span class="tooltiptext">Higher score indicates appeals and negotiations are properly documented before submission.</span></span></p></div>
           </div>
           <div class="muted small" style="margin-top:6px;">
-            Operational discipline sample: ${formatNumberUI(m.operationalDisciplineSample || 0)} workspace(s) in range · Ready docs rate: ${Number(m.operationalDisciplineRate||0).toFixed(1)}%
+            AI Case Readiness sample: ${formatNumberUI(m.operationalDisciplineSample || 0)} workspace(s) in range · Ready docs rate: ${Number(m.operationalDisciplineRate||0).toFixed(1)}%
           </div>
         </div>
 
@@ -7846,7 +7857,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
           <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_ar90_rate || 15)}%</span>
         </div>
         <div>
-          <strong>Operational Discipline Target</strong><br/>
+          <strong>AI Case Readiness Target</strong><br/>
           <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_operational_discipline || 80)}%</span>
         </div>
       </div>
@@ -8133,7 +8144,7 @@ if (method === "POST" && pathname === "/copilot/query") {
             <div style="font-weight:700;font-size:1.1rem;">${Number(result.metrics?.rates?.denialRate || 0).toLocaleString()}%</div>
           </div>
           <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">Operational Discipline</div>
+            <div class="muted small">AI Case Readiness</div>
             <div style="font-weight:700;font-size:1.1rem;">${Number(result.metrics?.disciplineScore || 0).toLocaleString()}/100</div>
           </div>
         </div>
@@ -8147,7 +8158,7 @@ if (method === "POST" && pathname === "/copilot/query") {
       </div>
 
       <div class="exec-card">
-        <h3>Operational Discipline Drivers</h3>
+        <h3>AI Case Readiness Drivers</h3>
         ${
           (disciplineDrivers && disciplineDrivers.length > 0)
             ? `<ul>${disciplineDrivers.map(d => `<li>${safeStr(d)}</li>`).join("")}</ul>`
@@ -8274,7 +8285,7 @@ if (method === "GET" && pathname === "/copilot/export") {
   </div>
 
   <div class="pdf-section">
-    <h3>Operational Discipline Drivers</h3>
+    <h3>AI Case Readiness Drivers</h3>
     <ul>
       ${(result.disciplineDrivers || []).map(d => `<li>${safeStr(d)}</li>`).join("")}
     </ul>
@@ -13080,7 +13091,7 @@ rowsAdded = toUse;
                 <div class="col"><label>Negotiation ROI % ${infoIcon("Recovered cash as % of requested amount.")}</label><input type="number" step="0.01" name="target_negotiation_roi" value="${safeStr(String(targets.target_negotiation_roi ?? 60))}" /></div>
                 <div class="col"><label>Days to Pay ${infoIcon("Target turnaround days from submission to posted payment.")}</label><input type="number" step="1" name="target_days_to_pay" value="${safeStr(String(targets.target_days_to_pay ?? 30))}" /></div>
                 <div class="col"><label>AR90 Rate % ${infoIcon("Target percentage of receivables that age beyond 90 days.")}</label><input type="number" step="0.01" name="target_ar90_rate" value="${safeStr(String(targets.target_ar90_rate ?? 15))}" /></div>
-                <div class="col"><label>Operational Discipline % ${infoIcon("Internal cadence adherence target across follow-up tasks.")}</label><input type="number" step="0.01" name="target_operational_discipline" value="${safeStr(String(targets.target_operational_discipline ?? 80))}" /></div>
+                <div class="col"><label>AI Case Readiness % ${infoIcon("Internal cadence adherence target across follow-up tasks.")}</label><input type="number" step="0.01" name="target_operational_discipline" value="${safeStr(String(targets.target_operational_discipline ?? 80))}" /></div>
               </div></details>
 
             <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">6) Integrations (Placeholder)</summary>
