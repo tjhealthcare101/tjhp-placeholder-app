@@ -6134,9 +6134,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const paymentRowsUsed = Number(usage.monthly_payment_rows_used || 0);
 
     function buildLimitBadge(used, limit){
-      if (!Number.isFinite(limit) || limit <= 0) return "";
-      if (used > limit) return `<span class="badge bad">Limit Reached – Upgrade Required</span>`;
-      if (used >= Math.ceil(limit * 0.8)) return `<span class="badge warn">Approaching Limit</span>`;
+      const u = Number(used || 0);
+      const l = Number(limit || 0);
+      if (!Number.isFinite(l) || l <= 0) return "";
+      if (u >= l) return `<span class="badge bad">Limit Reached – Upgrade Required</span>`;
+      if (u >= Math.ceil(l * 0.8)) return `<span class="badge warn">Approaching Limit</span>`;
       return "";
     }
 
@@ -8023,6 +8025,7 @@ if (method === "GET" && pathname === "/copilot") {
 }
 
 if (method === "POST" && pathname === "/copilot/query") {
+  const UPGRADE_LINK = "/account?tab=billing";
   let body = "";
   req.on("data", c => body += c);
   req.on("end", async () => {
@@ -8035,7 +8038,7 @@ if (method === "POST" && pathname === "/copilot/query") {
       const html = renderPage("AI Copilot", `
         <h2>Copilot Limit Reached</h2>
         <p>You have reached your monthly Copilot question limit.</p>
-        <div style="margin-top:12px;"><a class="btn" href="/account">Upgrade Plan</a></div>
+        <div style="margin-top:12px;"><a class="btn" href="${UPGRADE_LINK}">Upgrade Plan</a></div>
       `, navUser(), {showChat:false, orgName: org.org_name});
       return send(res, 200, html);
     }
@@ -13177,17 +13180,41 @@ rowsAdded = toUse;
           </form>
         `;
       }
-      if (tab === "billing") return `
-        <h3>Plan & Billing</h3>
-        <table>
-          <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
-          <tr><th>Trial Ends</th><td>${safeStr(planEnds)}</td></tr>
-          <tr><th>Access Mode</th><td>${safeStr(limits.mode==="pilot" ? "trial" : limits.mode)}</td></tr>
-          <tr><th>AI Questions Used</th><td>${safeStr(String(usage.ai_chat_used || 0))}</td></tr>
-          <tr><th>AI Questions Limit</th><td>${safeStr(String(getAIChatLimit(org.org_id)))}</td></tr>
-        </table>
-        <div class="btnRow"><a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Subscription</a></div>
-      `;
+      if (tab === "billing") {
+        const planName = getActivePlanName(org.org_id);
+        const planEnds = (() => {
+          const p = getPilot(org.org_id) || ensurePilot(org.org_id);
+          return p?.ends_at ? new Date(p.ends_at).toLocaleDateString() : "—";
+        })();
+
+        const copilotUsed = Number(usage.copilot_questions_used || 0);
+        const copilotLimit = Number(getCopilotLimit(org.org_id) || 0);
+
+        const caseUsed = Number(usage.monthly_case_credits_used || 0);
+        const caseLimit = Number(limits.case_credits_per_month || 0);
+        const caseOver = Number(usage.monthly_case_overage_count || 0);
+
+        return `
+          <h3>Plan & Billing</h3>
+          <table>
+            <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
+            <tr><th>Trial Ends</th><td>${safeStr(planEnds)}</td></tr>
+            <tr><th>Access Mode</th><td>${safeStr(limits.mode==="pilot" ? "trial" : limits.mode)}</td></tr>
+
+            <tr><th>Case Credits Used</th><td>${safeStr(String(caseUsed))}</td></tr>
+            <tr><th>Case Credits Limit</th><td>${safeStr(String(caseLimit))}</td></tr>
+            <tr><th>Overage Cases</th><td>${safeStr(String(caseOver))}</td></tr>
+
+            <tr><th>AI Copilot Queries Used</th><td>${safeStr(String(copilotUsed))}</td></tr>
+            <tr><th>AI Copilot Queries Limit</th><td>${safeStr(String(copilotLimit))}</td></tr>
+          </table>
+
+          <div class="btnRow">
+            <a class="btn secondary" href="/account?tab=billing">Refresh</a>
+            <a class="btn" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Subscription</a>
+          </div>
+        `;
+      }
       if (tab === "integrations") return `<h3>Integrations</h3><p class="muted">Placeholder tab for enterprise integrations roadmap.</p>`;
       if (tab === "security") return `
         <h3>Security</h3>
