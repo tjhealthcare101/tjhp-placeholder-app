@@ -322,6 +322,7 @@ function adminHash() {
 
 // ===== UI =====
 let CURRENT_USER_THEME = "light";
+let CURRENT_SESSION_ORG_ID = "";
 
 const css = `
 
@@ -664,13 +665,18 @@ function resetAICircuit() {
 }
 
 function getAIStatusLabel(){
-  if (isAIDisabled()) {
-    return `<span style="color:#b91c1c;font-weight:600;">AI: Disabled</span>`;
+  const aiDisabled = AI_CIRCUIT.disabledUntil > Date.now();
+  let usageLimited = false;
+  if (CURRENT_SESSION_ORG_ID) {
+    const usage = getUsage(CURRENT_SESSION_ORG_ID);
+    const limit = Number(getCopilotLimit(CURRENT_SESSION_ORG_ID) || 0);
+    const used = Number(usage.copilot_questions_used || 0);
+    usageLimited = Number.isFinite(limit) && limit > 0 && used >= limit;
   }
-  if (AI_CIRCUIT.failureCount > 0) {
-    return `<span style="color:#92400e;font-weight:600;">AI: Degraded</span>`;
+  if (aiDisabled || usageLimited) {
+    return `<span class="badge err">AI Limited</span>`;
   }
-  return `<span style="color:#065f46;font-weight:600;">AI: Active</span>`;
+  return "";
 }
 
 async function safeAIRequest(executorFn) {
@@ -1025,7 +1031,7 @@ function navUser() {
     <a href="/actions">Action Center</a>
     <a href="/report">Reports</a>
     <a href="/account">Account</a>
-    <span style="margin-left:16px;">${getAIStatusLabel()}</span>
+    ${getAIStatusLabel()}
     <a href="/logout">Logout</a>
   `;
 }
@@ -4827,6 +4833,7 @@ const server = http.createServer(async (req, res) => {
 
   // auth
   const sess = getAuth(req);
+  CURRENT_SESSION_ORG_ID = (sess && sess.org_id) ? String(sess.org_id) : "";
   if (sess && sess.org_id) cleanupIfExpired(sess.org_id);
 
   // ---------- PUBLIC: Admin login ----------
