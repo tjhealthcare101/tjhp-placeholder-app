@@ -85,6 +85,7 @@ const FILES = {
   agent_usage: path.join(DATA_DIR, "ai_agent_usage.json"),
   agent_workspaces: path.join(DATA_DIR, "agent_workspaces.json"),
   agent_messages: path.join(DATA_DIR, "agent_messages.json"),
+  org_settings: path.join(DATA_DIR, "org_settings.json"),
 };
 
 // Directory for storing uploaded template files
@@ -308,6 +309,7 @@ ensureFile(FILES.agent_templates, []);
 ensureFile(FILES.agent_usage, []);
 ensureFile(FILES.agent_workspaces, []);
 ensureFile(FILES.agent_messages, []);
+ensureFile(FILES.org_settings, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -641,6 +643,166 @@ function navAdmin() {
 function getOrg(org_id) {
   return readJSON(FILES.orgs, []).find(o => o.org_id === org_id);
 }
+function orgSettingsDefaults(org_id) {
+  return {
+    org_id,
+    identity: {
+      legal_name: "",
+      dba_name: "",
+      tax_id: "",
+      npi: "",
+      phone: "",
+      fax: "",
+      website: "",
+      email: "",
+      addr_primary: { line1:"", line2:"", city:"", state:"", zip:"" },
+      mailing_same_as_primary: true,
+      addr_mailing: { line1:"", line2:"", city:"", state:"", zip:"" }
+    },
+    letter_defaults: {
+      appeal_tone: "Professional",
+      signature_block: "",
+      appeal_opening: "",
+      appeal_footer: "",
+      negotiation_opening: "",
+      negotiation_footer: ""
+    },
+    allowed_rules: {
+      default_method: "percent_billed",
+      default_value: 65,
+      ucr_multiplier: 1.0,
+      tolerance_percent: 1.0,
+      tolerance_min_dollars: 5
+    },
+    workflow_defaults: {
+      auto_create_denial_cases: true,
+      auto_draft_denials: true,
+      auto_draft_underpayments: true,
+      default_followup_days: 14,
+      require_confirmation_before_submitted: false
+    },
+    recovery_targets: {
+      target_appeal_success_rate: 60,
+      target_negotiation_roi: 60,
+      target_days_to_pay: 30,
+      target_ar90_rate: 15,
+      target_operational_discipline: 80
+    },
+    placeholders: {
+      integrations_enabled: false,
+      security_mode: "standard"
+    },
+    created_at: nowISO(),
+    updated_at: nowISO()
+  };
+}
+
+function getOrgSettings(org_id) {
+  const all = readJSON(FILES.org_settings, []);
+  const existing = all.find(x => x.org_id === org_id) || {};
+  const legacyOrg = getOrg(org_id) || {};
+  const defaults = orgSettingsDefaults(org_id);
+  const merged = {
+    ...defaults,
+    ...existing,
+    identity: {
+      ...defaults.identity,
+      ...(existing.identity || {}),
+      legal_name: String(existing?.identity?.legal_name || legacyOrg.legal_name || legacyOrg.org_name || "").trim(),
+      dba_name: String(existing?.identity?.dba_name || legacyOrg.dba_name || "").trim(),
+      tax_id: String(existing?.identity?.tax_id || legacyOrg.tax_id || "").trim(),
+      npi: String(existing?.identity?.npi || legacyOrg.org_npi || legacyOrg.npi_number || "").trim(),
+      phone: String(existing?.identity?.phone || legacyOrg.phone || legacyOrg.main_phone || "").trim(),
+      fax: String(existing?.identity?.fax || legacyOrg.fax || "").trim(),
+      website: String(existing?.identity?.website || legacyOrg.website || "").trim(),
+      email: String(existing?.identity?.email || legacyOrg.org_email || legacyOrg.billing_email || "").trim(),
+      mailing_same_as_primary: typeof existing?.identity?.mailing_same_as_primary === "boolean"
+        ? existing.identity.mailing_same_as_primary
+        : (typeof legacyOrg.addr_mailing_same_as_primary === "boolean" ? legacyOrg.addr_mailing_same_as_primary : true),
+      addr_primary: {
+        ...defaults.identity.addr_primary,
+        ...(existing?.identity?.addr_primary || {}),
+        line1: String(existing?.identity?.addr_primary?.line1 || legacyOrg.addr_primary_line1 || legacyOrg.address_line1 || "").trim(),
+        line2: String(existing?.identity?.addr_primary?.line2 || legacyOrg.addr_primary_line2 || legacyOrg.address_line2 || "").trim(),
+        city: String(existing?.identity?.addr_primary?.city || legacyOrg.addr_primary_city || legacyOrg.city || "").trim(),
+        state: String(existing?.identity?.addr_primary?.state || legacyOrg.addr_primary_state || legacyOrg.state || "").trim(),
+        zip: String(existing?.identity?.addr_primary?.zip || legacyOrg.addr_primary_zip || legacyOrg.zip || "").trim(),
+      },
+      addr_mailing: {
+        ...defaults.identity.addr_mailing,
+        ...(existing?.identity?.addr_mailing || {}),
+        line1: String(existing?.identity?.addr_mailing?.line1 || legacyOrg.addr_mailing_line1 || "").trim(),
+        line2: String(existing?.identity?.addr_mailing?.line2 || legacyOrg.addr_mailing_line2 || "").trim(),
+        city: String(existing?.identity?.addr_mailing?.city || legacyOrg.addr_mailing_city || "").trim(),
+        state: String(existing?.identity?.addr_mailing?.state || legacyOrg.addr_mailing_state || "").trim(),
+        zip: String(existing?.identity?.addr_mailing?.zip || legacyOrg.addr_mailing_zip || "").trim(),
+      }
+    },
+    letter_defaults: { ...defaults.letter_defaults, ...(existing.letter_defaults || {}) },
+    allowed_rules: { ...defaults.allowed_rules, ...(existing.allowed_rules || {}) },
+    workflow_defaults: { ...defaults.workflow_defaults, ...(existing.workflow_defaults || {}) },
+    recovery_targets: { ...defaults.recovery_targets, ...(existing.recovery_targets || {}) },
+    placeholders: { ...defaults.placeholders, ...(existing.placeholders || {}) },
+    created_at: existing.created_at || defaults.created_at,
+    updated_at: existing.updated_at || defaults.updated_at,
+  };
+  if (!all.find(x => x.org_id === org_id)) {
+    all.push(merged);
+    writeJSON(FILES.org_settings, all);
+  }
+  return merged;
+}
+
+function saveOrgSettings(org_id, patch) {
+  const all = readJSON(FILES.org_settings, []);
+  const idx = all.findIndex(x => x.org_id === org_id);
+  const prev = getOrgSettings(org_id);
+  const next = {
+    ...prev,
+    ...patch,
+    identity: { ...prev.identity, ...(patch.identity || {}) },
+    letter_defaults: { ...prev.letter_defaults, ...(patch.letter_defaults || {}) },
+    allowed_rules: { ...prev.allowed_rules, ...(patch.allowed_rules || {}) },
+    workflow_defaults: { ...prev.workflow_defaults, ...(patch.workflow_defaults || {}) },
+    recovery_targets: { ...prev.recovery_targets, ...(patch.recovery_targets || {}) },
+    placeholders: { ...prev.placeholders, ...(patch.placeholders || {}) },
+    updated_at: nowISO(),
+    created_at: prev.created_at || nowISO(),
+    org_id
+  };
+  if (idx >= 0) all[idx] = next;
+  else all.push(next);
+  writeJSON(FILES.org_settings, all);
+  return next;
+}
+
+function getOrgDisplayName(settings, orgRecord) {
+  return String(settings?.identity?.legal_name || settings?.identity?.dba_name || orgRecord?.org_name || "Practice").trim() || "Practice";
+}
+
+function formatOrgMailingBlock(settings) {
+  const identity = settings?.identity || {};
+  const mailingSame = typeof identity.mailing_same_as_primary === "boolean" ? identity.mailing_same_as_primary : true;
+  const src = mailingSame ? (identity.addr_primary || {}) : (identity.addr_mailing || {});
+  return [
+    String(src.line1 || "").trim(),
+    String(src.line2 || "").trim(),
+    [String(src.city || "").trim(), String(src.state || "").trim(), String(src.zip || "").trim()].filter(Boolean).join(", "),
+  ].filter(Boolean).join("\n");
+}
+
+function getLetterDefaults(settings) {
+  return { ...(orgSettingsDefaults("tmp").letter_defaults), ...((settings || {}).letter_defaults || {}) };
+}
+
+function getWorkflowDefaults(settings) {
+  return { ...(orgSettingsDefaults("tmp").workflow_defaults), ...((settings || {}).workflow_defaults || {}) };
+}
+
+function getAllowedRulesFromSettings(settings) {
+  return { ...(orgSettingsDefaults("tmp").allowed_rules), ...((settings || {}).allowed_rules || {}) };
+}
+
 function getUserByEmail(email) {
   const e = (email || "").toLowerCase();
   return readJSON(FILES.users, []).find(u => (u.email || "").toLowerCase() === e);
@@ -2329,7 +2491,7 @@ function ensureAgentWorkspace(org_id, billedClaim){
   let ws = getAgentWorkspace(org_id, billedClaim.billed_id);
   if (ws) {
     ensureWorkspacePacket(ws);
-    ensurePacketSections(ws);
+    ensurePacketSections(ws, billedClaim);
     return ws;
   }
   const ts = nowISO();
@@ -2420,9 +2582,14 @@ function incrementWorkspaceEditsUsage(org_id){
 }
 
 
-function ensurePacketSections(ws){
+function ensurePacketSections(ws, claim){
   ws.appeal = ws.appeal || {};
   ws.negotiation = ws.negotiation || {};
+  const orgSettings = ws?.org_id ? getOrgSettings(ws.org_id) : orgSettingsDefaults("unknown");
+  const orgRecord = ws?.org_id ? getOrg(ws.org_id) : null;
+  const letterDefaults = getLetterDefaults(orgSettings);
+  const hdr = packetHeaderFromSettings(orgSettings, orgRecord, claim || ws || {});
+  const sig = signatureFromSettings(orgSettings, orgRecord);
 
   const appealDefaults = defaultAppealPacketSections();
   if (!ws.appeal.packet_sections || typeof ws.appeal.packet_sections !== "object") {
@@ -2437,6 +2604,32 @@ function ensurePacketSections(ws){
     if (String(ws.negotiation.draft_text || "").trim()) ws.negotiation.packet_sections.variance_explanation = String(ws.negotiation.draft_text || "").trim();
   }
   ws.negotiation.packet_sections = { ...negotiationDefaults, ...(ws.negotiation.packet_sections || {}) };
+
+  if (!String(ws.appeal.packet_sections.header || "").trim()) ws.appeal.packet_sections.header = hdr;
+  if (!String(ws.negotiation.packet_sections.header || "").trim()) ws.negotiation.packet_sections.header = hdr;
+  if (!String(ws.appeal.packet_sections.signature || "").trim()) ws.appeal.packet_sections.signature = sig;
+  if (!String(ws.negotiation.packet_sections.signature || "").trim()) ws.negotiation.packet_sections.signature = sig;
+  if (letterDefaults.appeal_opening && ws.appeal.packet_sections.argument && !ws.appeal.packet_sections.argument.startsWith(letterDefaults.appeal_opening)) {
+    ws.appeal.packet_sections.argument = `${letterDefaults.appeal_opening}
+
+${ws.appeal.packet_sections.argument}`;
+  }
+  if (letterDefaults.appeal_footer && ws.appeal.packet_sections.argument && !ws.appeal.packet_sections.argument.includes(letterDefaults.appeal_footer)) {
+    ws.appeal.packet_sections.argument = `${ws.appeal.packet_sections.argument}
+
+${letterDefaults.appeal_footer}`;
+  }
+  if (letterDefaults.negotiation_opening && ws.negotiation.packet_sections.variance_explanation && !ws.negotiation.packet_sections.variance_explanation.startsWith(letterDefaults.negotiation_opening)) {
+    ws.negotiation.packet_sections.variance_explanation = `${letterDefaults.negotiation_opening}
+
+${ws.negotiation.packet_sections.variance_explanation}`;
+  }
+  if (letterDefaults.negotiation_footer && ws.negotiation.packet_sections.variance_explanation && !ws.negotiation.packet_sections.variance_explanation.includes(letterDefaults.negotiation_footer)) {
+    ws.negotiation.packet_sections.variance_explanation = `${ws.negotiation.packet_sections.variance_explanation}
+
+${letterDefaults.negotiation_footer}`;
+  }
+
   ws.appeal.version = Number(ws.appeal.version || 0);
   ws.negotiation.version = Number(ws.negotiation.version || 0);
   ws.appeal.history = Array.isArray(ws.appeal.history) ? ws.appeal.history : [];
@@ -2447,6 +2640,7 @@ function ensurePacketSections(ws){
   ws.negotiation.requested_amount = num(ws.negotiation.requested_amount || ws.negotiation.packet_sections.requested_amount || 0);
   return ws;
 }
+
 
 function defaultWorkspacePacket(){
   return {
@@ -2618,30 +2812,54 @@ function claimFinancialSnapshot(derived, claim){
   ].join("\n");
 }
 
-function agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile, practiceSettings }){
-  const orgName = String(orgProfile?.legal_name || orgProfile?.org_name || orgProfile?.dba_name || "Practice").trim() || "Practice";
+function packetHeaderFromSettings(orgSettings, orgRecord, claim){
+  const identity = (orgSettings || {}).identity || {};
+  const orgName = getOrgDisplayName(orgSettings, orgRecord);
+  const mailing = formatOrgMailingBlock(orgSettings);
+  const contact = [
+    identity.phone ? `Phone: ${identity.phone}` : "",
+    identity.fax ? `Fax: ${identity.fax}` : "",
+    `Date: ${nowISO().slice(0,10)}`,
+    `Claim #: ${claim?.claim_number || "N/A"}`
+  ].filter(Boolean).join("\n");
+  return [orgName, mailing, contact].filter(Boolean).join("\n");
+}
+
+function signatureFromSettings(orgSettings, orgRecord){
+  const defaults = getLetterDefaults(orgSettings);
+  return String(defaults.signature_block || "").trim() || getOrgDisplayName(orgSettings, orgRecord);
+}
+
+function applyDefaultTone(text, tone, type){
+  let out = String(text || "");
+  const t = String(tone || "Professional");
+  if (t === "Firm") {
+    out = out.replace("We request", "We formally request");
+    out = out.replace("We are submitting", "We are formally submitting");
+  }
+  if (t === "Aggressive") {
+    out = out.replace("We request", "We demand immediate");
+    out = out.replace("Please overturn", "You must overturn");
+    if (type === "negotiation") out = out.replace("We are submitting", "We require prompt correction of");
+  }
+  return out;
+}
+
+function agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile, practiceSettings, orgSettings }){
+  const orgName = getOrgDisplayName(orgSettings, orgProfile);
   const dos = claim?.dos || claim?.date_of_service || "N/A";
   const underpaidAmount = Math.max(0, Number(derived?.underpaidAmount || 0));
   const attachmentLine = "Attachments included: denial notice/EOB, claim form, relevant records, contract excerpts, and supporting notes.";
-  const mailingSame = typeof orgProfile?.addr_mailing_same_as_primary === "boolean" ? orgProfile.addr_mailing_same_as_primary : true;
-  const mailingParts = mailingSame
-    ? [orgProfile?.addr_primary_line1, orgProfile?.addr_primary_line2, `${orgProfile?.addr_primary_city || ""}, ${orgProfile?.addr_primary_state || ""} ${orgProfile?.addr_primary_zip || ""}`.trim()]
-    : [orgProfile?.addr_mailing_line1, orgProfile?.addr_mailing_line2, `${orgProfile?.addr_mailing_city || ""}, ${orgProfile?.addr_mailing_state || ""} ${orgProfile?.addr_mailing_zip || ""}`.trim()];
-  const mailingAddress = mailingParts.filter(Boolean).join(", ");
-  const letterDefaults = String(practiceSettings?.letter_defaults || "").trim();
+  const letterDefaults = getLetterDefaults(orgSettings);
   const opening = `${orgName}
 ${nowISO().slice(0,10)}
 
 Re: Claim #${claim?.claim_number || "N/A"} | Payer: ${claim?.payer || "Unknown"} | DOS: ${dos}`;
-  const contextLines = [
-    mailingAddress ? `Mailing Address: ${mailingAddress}` : "",
-    letterDefaults ? `Letter Defaults: ${letterDefaults}` : ""
-  ].filter(Boolean).join("\n");
   const financials = claimFinancialSnapshot(derived, claim);
   if (type === "appeal") {
     const denialRef = appealCase ? `Denial Case ID: ${appealCase.case_id || "N/A"}` : "Denial Case ID: N/A";
-    return `${opening}
-${denialRef}${contextLines ? `\n${contextLines}` : ""}
+    const draft = `${opening}
+${denialRef}
 
 To Appeals Department,
 
@@ -2660,11 +2878,19 @@ ${attachmentLine}
 Thank you for your prompt review. Please contact our office with any additional requirements.
 
 Sincerely,
-${orgName}`.trim();
+${signatureFromSettings(orgSettings, orgProfile)}`.trim();
+    let result = draft;
+    if (letterDefaults.appeal_opening) result = `${letterDefaults.appeal_opening.trim()}
+
+${result}`;
+    if (letterDefaults.appeal_footer) result = `${result}
+
+${letterDefaults.appeal_footer.trim()}`;
+    return applyDefaultTone(result, letterDefaults.appeal_tone, "appeal");
   }
   const negotiationIdLine = negotiationCase ? `Negotiation ID: ${negotiationCase.negotiation_id || "N/A"}` : "Negotiation ID: N/A";
-  return `${opening}
-${negotiationIdLine}${contextLines ? `\n${contextLines}` : ""}
+  const draft = `${opening}
+${negotiationIdLine}
 
 To Provider Contracting / Claims Adjustment Team,
 
@@ -2683,7 +2909,15 @@ ${attachmentLine}
 We appreciate your expedited review and response.
 
 Sincerely,
-${orgName}`.trim();
+${signatureFromSettings(orgSettings, orgProfile)}`.trim();
+  let result = draft;
+  if (letterDefaults.negotiation_opening) result = `${letterDefaults.negotiation_opening.trim()}
+
+${result}`;
+  if (letterDefaults.negotiation_footer) result = `${result}
+
+${letterDefaults.negotiation_footer.trim()}`;
+  return applyDefaultTone(result, letterDefaults.appeal_tone, "negotiation");
 }
 
 function applyAgentInstructionToDraft(draftText, instruction, channel){
@@ -2718,12 +2952,30 @@ function generateDraftUsingTemplateOrRules({ org_id, type, claim, derived, appea
   const financials = claimFinancialSnapshot(derived, claim);
   if (template && String(template.body || "").trim()) {
     const rendered = renderTemplate(template.body, claim).trim();
-    return `${rendered}
+    const orgSettings = getOrgSettings(org_id);
+    const letterDefaults = getLetterDefaults(orgSettings);
+    let draft = `${rendered}
 
 Claim Financial Snapshot
 ${financials}`.trim();
+    if (type === "appeal") {
+      if (letterDefaults.appeal_opening) draft = `${letterDefaults.appeal_opening}
+
+${draft}`;
+      if (letterDefaults.appeal_footer) draft = `${draft}
+
+${letterDefaults.appeal_footer}`;
+    } else {
+      if (letterDefaults.negotiation_opening) draft = `${letterDefaults.negotiation_opening}
+
+${draft}`;
+      if (letterDefaults.negotiation_footer) draft = `${draft}
+
+${letterDefaults.negotiation_footer}`;
+    }
+    return applyDefaultTone(draft, letterDefaults.appeal_tone, type);
   }
-  return agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile: getOrg(org_id), practiceSettings: getPracticeSettings(org_id) });
+  return agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile: getOrg(org_id), practiceSettings: getPracticeSettings(org_id), orgSettings: getOrgSettings(org_id) });
 }
 
 
@@ -2922,14 +3174,23 @@ function savePayerContracts(org_id, contracts){
 function getPracticeSettings(org_id){
   const all = readJSON(FILES.practice_settings, []);
   const existing = all.find(x => x.org_id === org_id);
-  if (existing) return existing;
-  return {
+  const orgSettings = getOrgSettings(org_id);
+  const workflow = getWorkflowDefaults(orgSettings);
+  const base = existing || {
     org_id,
     auto_create_denial_cases: true,
     auto_create_negotiation_cases: false,
     default_underpaid_stage_behavior: "underpaid",
     default_denial_stage_behavior: "denied_hold",
     letter_defaults: ""
+  };
+  return {
+    ...base,
+    auto_create_denial_cases: typeof workflow.auto_create_denial_cases === "boolean" ? workflow.auto_create_denial_cases : base.auto_create_denial_cases,
+    auto_draft_denials: typeof workflow.auto_draft_denials === "boolean" ? workflow.auto_draft_denials : true,
+    auto_draft_underpayments: typeof workflow.auto_draft_underpayments === "boolean" ? workflow.auto_draft_underpayments : true,
+    default_followup_days: Number(workflow.default_followup_days || 14),
+    require_confirmation_before_submitted: !!workflow.require_confirmation_before_submitted,
   };
 }
 
@@ -2988,13 +3249,28 @@ function addDocumentIngest(org_id, category, file, status, linkedCount=0, notes=
 }
 
 function getAllowedAmountRules(org_id){
-  const all = readJSON(FILES.allowed_amount_rules, []);
-  const found = all.find(r => r.org_id === org_id);
-  if (found) return found;
+  const legacyAll = readJSON(FILES.allowed_amount_rules, []);
+  const legacy = legacyAll.find(r => r.org_id === org_id);
+  const orgAll = readJSON(FILES.org_settings, []);
+  const orgRec = orgAll.find(r => r.org_id === org_id);
+  if (!orgRec && legacy) {
+    saveOrgSettings(org_id, { allowed_rules: { ...legacy } });
+  }
+  const settings = getOrgSettings(org_id);
+  const fromSettings = getAllowedRulesFromSettings(settings);
+  if (settings && settings.allowed_rules) {
+    return {
+      org_id,
+      ...fromSettings,
+      payer_overrides: Array.isArray(fromSettings.payer_overrides) ? fromSettings.payer_overrides : (legacy?.payer_overrides || []),
+      cpt_overrides: Array.isArray(fromSettings.cpt_overrides) ? fromSettings.cpt_overrides : (legacy?.cpt_overrides || []),
+    };
+  }
+  if (legacy) return legacy;
   return {
     org_id,
     default_method: "percent_billed",
-    default_value: 100,
+    default_value: 65,
     ucr_multiplier: 1,
     tolerance_percent: 1,
     tolerance_min_dollars: 5,
@@ -3004,9 +3280,12 @@ function getAllowedAmountRules(org_id){
 }
 
 function saveAllowedAmountRules(org_id, rules){
+  const mergedRules = { ...getAllowedAmountRules(org_id), ...(rules || {}) };
+  const settings = getOrgSettings(org_id);
+  saveOrgSettings(org_id, { allowed_rules: { ...(settings.allowed_rules || {}), ...mergedRules } });
   const all = readJSON(FILES.allowed_amount_rules, []);
   const keep = all.filter(r => r.org_id !== org_id);
-  writeJSON(FILES.allowed_amount_rules, keep.concat([{ ...getAllowedAmountRules(org_id), ...rules, org_id, updated_at: nowISO() }]));
+  writeJSON(FILES.allowed_amount_rules, keep.concat([{ ...mergedRules, org_id, updated_at: nowISO() }]));
 }
 
 function getFeeSchedules(org_id){
@@ -3049,10 +3328,11 @@ function computeExpectedInsuranceForClaim(claim){
   const feeAmount = lookupFeeScheduleAmount(claim.org_id || "", claim);
   const medicareRate = num(claim.medicare_rate || feeAmount);
   let allowed = billed;
-  if (feeAmount > 0 && method === "ucr_multiplier") allowed = feeAmount * ucr;
+  if (method === "fee_schedule" && feeAmount > 0) allowed = feeAmount;
+  else if (feeAmount > 0 && method === "ucr_multiplier") allowed = feeAmount * ucr;
   else if (method === "percent_medicare") allowed = medicareRate * (value / 100);
   else if (method === "percent_billed") allowed = billed * (value / 100);
-  else if (method === "flat") allowed = value;
+  else if (method === "fixed_fee" || method === "flat") allowed = value;
   else if (method === "ucr_multiplier") allowed = billed * ucr;
   return Math.max(0, allowed - patientResp);
 }
@@ -11783,227 +12063,144 @@ rowsAdded = toUse;
 
   if (method === "GET" && pathname === "/account") {
     const orgProfile = normalizeOrgProfile(org);
+    const orgSettings = getOrgSettings(org.org_id);
     const sub = getSub(org.org_id);
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
     const limits = getLimitProfile(org.org_id);
     const tab = String(parsed.query.tab || "profile").toLowerCase();
+    const usage = getUsage(org.org_id);
+    const savedBanner = (tab === "org" && String(parsed.query.saved || "") === "1") ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;">Saved ✓ Organization Settings updated.</div>` : "";
+    const errBanner = parsed.query.err ? `<div class="alert">${safeStr(parsed.query.err)}</div>` : "";
 
-    const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Free Trial" : "Expired");
-    const planEnds = (sub && sub.status === "active") ? "—" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "—");
-    const tabBtn = (id, label) => `<a class="btn ${tab===id?"":"secondary"}" href="/account?tab=${encodeURIComponent(id)}">${label}</a>`;
+    const tabBtn = (id, label, tip="") => `<a class="btn ${tab===id?"":"secondary"}" href="/account?tab=${encodeURIComponent(id)}">${safeStr(label)} ${tip ? infoIcon(tip) : ""}</a>`;
     const tabs = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
         ${tabBtn("profile","Profile")}
-        ${tabBtn("org","Organization")}
-        ${tabBtn("subscription","Subscription")}
-        ${tabBtn("security","Security")}
-        ${tabBtn("prefs","Preferences")}
+        ${tabBtn("org","Organization Settings","Canonical source for identity, defaults, and workflow rules.")}
+        ${tabBtn("billing","Plan & Billing")}
+        ${tabBtn("integrations","Integrations","Enterprise placeholder; not yet operable.")}
+        ${tabBtn("security","Security","Account password and security mode placeholders.")}
       </div>
     `;
-    const usage = getUsage(org.org_id);
+
+    const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Free Trial" : "Expired");
+    const planEnds = (sub && sub.status === "active") ? "—" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "—");
     const themeSelection = (user.theme === "light" || user.theme === "dark") ? user.theme : "light";
+
     const section = (() => {
       if (tab === "org") {
-        const errMsg = parsed.query.err ? `<div class="alert">${safeStr(parsed.query.err)}</div>` : "";
-        const statusDot = (isComplete, hasAny) => {
-          const color = isComplete ? "#16a34a" : (hasAny ? "#eab308" : "#dc2626");
-          return `<span aria-hidden="true" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};margin-left:8px;vertical-align:middle;"></span>`;
-        };
-        const identityRequired = Boolean(org.org_name);
-        const identityAny = ["org_name","dba_name","phone","fax","org_email","tax_id","org_npi"].some((k) => String(org[k] || "").trim());
-        const addressesRequired = Boolean(org.addr_primary_line1 && org.addr_primary_city && org.addr_primary_state && org.addr_primary_zip);
-        const addressesAny = [
-          "addr_primary_line1","addr_primary_line2","addr_primary_city","addr_primary_state","addr_primary_zip",
-          "addr_billing_line1","addr_billing_line2","addr_billing_city","addr_billing_state","addr_billing_zip",
-          "addr_mailing_line1","addr_mailing_line2","addr_mailing_city","addr_mailing_state","addr_mailing_zip"
-        ].some((k) => String(org[k] || "").trim());
-        const providerRequired = true;
-        const providerAny = ["provider_default_name","provider_default_npi","provider_default_taxonomy"].some((k) => String(org[k] || "").trim());
-        const appealsRequired = Boolean(org.phone);
-        const appealsAny = [
-          "phone","letter_contact_name","letter_contact_title","letter_contact_phone",
-          "letter_contact_email","letter_signature_name","letter_signature_title"
-        ].some((k) => String(org[k] || "").trim());
-        const billingSame = typeof org.addr_billing_same_as_primary === "boolean" ? org.addr_billing_same_as_primary : true;
-        const mailingSame = typeof org.addr_mailing_same_as_primary === "boolean" ? org.addr_mailing_same_as_primary : true;
+        const identity = orgSettings.identity || {};
+        const letter = getLetterDefaults(orgSettings);
+        const allowed = getAllowedRulesFromSettings(orgSettings);
+        const workflow = getWorkflowDefaults(orgSettings);
+        const targets = orgSettings.recovery_targets || {};
         return `
-          <h3>Organization</h3>
-          ${errMsg}
-          <form method="POST" action="/account/org-settings" style="margin-top:8px;">
-            <div style="display:flex;flex-direction:column;gap:10px;">
-              <details open style="border:1px solid #d1d5db;border-radius:8px;background:#f8fafc;">
-                <summary style="padding:12px 14px;font-weight:700;cursor:pointer;list-style:none;">Practice Identity ${statusDot(identityRequired, identityAny)}</summary>
-                <div style="padding:10px 14px 14px 14px;background:#fff;border-top:1px solid #e5e7eb;">
-                  <div class="row">
-                    <div class="col"><label>Practice Legal Name</label><input name="org_name" value="${safeStr(org.org_name)}" required /></div>
-                    <div class="col"><label>DBA Name</label><input name="dba_name" value="${safeStr(org.dba_name)}" /></div>
-                  </div>
-                  <div class="row">
-                    <div class="col"><label>Main Phone</label><input name="phone" value="${safeStr(org.phone)}" required /></div>
-                    <div class="col"><label>Fax</label><input name="fax" value="${safeStr(org.fax)}" /></div>
-                    <div class="col"><label>Organization Email</label><input type="email" name="org_email" value="${safeStr(org.org_email)}" /></div>
-                  </div>
-                  <div class="row">
-                    <div class="col"><label>Tax ID</label><input name="tax_id" value="${safeStr(org.tax_id)}" /></div>
-                    <div class="col"><label>Organization NPI</label><input name="org_npi" value="${safeStr(org.org_npi)}" /></div>
-                  </div>
-                </div>
-              </details>
+          ${savedBanner}
+          ${errBanner}
+          <h3>Organization Settings</h3>
+          <p class="muted">Set organization identity, letter defaults, contract/allowed rules, workflows, KPI targets, and enterprise placeholders in one place.</p>
+          <p class="muted">Last updated: ${safeStr(orgSettings.updated_at ? new Date(orgSettings.updated_at).toLocaleString() : "—")}</p>
+          <form method="POST" action="/account/org-settings/save" style="margin-top:10px;display:flex;flex-direction:column;gap:10px;">
+            <details open class="card" style="padding:0;">
+              <summary style="padding:12px 14px;font-weight:800;cursor:pointer;">1) Organization Identity</summary>
+              <div style="padding:0 14px 14px;" class="row">
+                <div class="col"><label>Legal Name</label><input name="identity_legal_name" value="${safeStr(identity.legal_name||"")}" required /></div>
+                <div class="col"><label>DBA Name</label><input name="identity_dba_name" value="${safeStr(identity.dba_name||"")}" /></div>
+                <div class="col"><label>Tax ID</label><input name="identity_tax_id" value="${safeStr(identity.tax_id||"")}" /></div>
+                <div class="col"><label>NPI</label><input name="identity_npi" value="${safeStr(identity.npi||"")}" /></div>
+                <div class="col"><label>Phone</label><input name="identity_phone" value="${safeStr(identity.phone||"")}" /></div>
+                <div class="col"><label>Fax</label><input name="identity_fax" value="${safeStr(identity.fax||"")}" /></div>
+                <div class="col"><label>Website</label><input name="identity_website" value="${safeStr(identity.website||"")}" /></div>
+                <div class="col"><label>Email</label><input name="identity_email" value="${safeStr(identity.email||"")}" /></div>
+                <div class="col"><label>Primary Address Line 1</label><input name="addr_primary_line1" value="${safeStr(identity.addr_primary?.line1||"")}" /></div>
+                <div class="col"><label>Primary Address Line 2</label><input name="addr_primary_line2" value="${safeStr(identity.addr_primary?.line2||"")}" /></div>
+                <div class="col"><label>Primary City</label><input name="addr_primary_city" value="${safeStr(identity.addr_primary?.city||"")}" /></div>
+                <div class="col"><label>Primary State</label><input name="addr_primary_state" value="${safeStr(identity.addr_primary?.state||"")}" /></div>
+                <div class="col"><label>Primary ZIP</label><input name="addr_primary_zip" value="${safeStr(identity.addr_primary?.zip||"")}" /></div>
+                <div class="col" style="display:flex;align-items:flex-end;"><label><input type="checkbox" name="mailing_same_as_primary" value="1" ${identity.mailing_same_as_primary!==false?"checked":""}/> Mailing same as primary</label></div>
+                <div class="col"><label>Mailing Line 1</label><input name="addr_mailing_line1" value="${safeStr(identity.addr_mailing?.line1||"")}" /></div>
+                <div class="col"><label>Mailing Line 2</label><input name="addr_mailing_line2" value="${safeStr(identity.addr_mailing?.line2||"")}" /></div>
+                <div class="col"><label>Mailing City</label><input name="addr_mailing_city" value="${safeStr(identity.addr_mailing?.city||"")}" /></div>
+                <div class="col"><label>Mailing State</label><input name="addr_mailing_state" value="${safeStr(identity.addr_mailing?.state||"")}" /></div>
+                <div class="col"><label>Mailing ZIP</label><input name="addr_mailing_zip" value="${safeStr(identity.addr_mailing?.zip||"")}" /></div>
+              </div>
+            </details>
 
-              <details style="border:1px solid #d1d5db;border-radius:8px;background:#f8fafc;">
-                <summary style="padding:12px 14px;font-weight:700;cursor:pointer;list-style:none;">Addresses ${statusDot(addressesRequired, addressesAny)}</summary>
-                <div style="padding:10px 14px 14px 14px;background:#fff;border-top:1px solid #e5e7eb;">
-                  <h4 style="margin:0 0 8px 0;">Primary Address</h4>
-                  <div class="row">
-                    <div class="col"><label>Line 1</label><input id="addr_primary_line1" name="addr_primary_line1" value="${safeStr(org.addr_primary_line1)}" required /></div>
-                    <div class="col"><label>Line 2</label><input id="addr_primary_line2" name="addr_primary_line2" value="${safeStr(org.addr_primary_line2)}" /></div>
-                  </div>
-                  <div class="row">
-                    <div class="col"><label>City</label><input id="addr_primary_city" name="addr_primary_city" value="${safeStr(org.addr_primary_city)}" required /></div>
-                    <div class="col"><label>State</label><input id="addr_primary_state" name="addr_primary_state" value="${safeStr(org.addr_primary_state)}" required /></div>
-                    <div class="col"><label>ZIP</label><input id="addr_primary_zip" name="addr_primary_zip" value="${safeStr(org.addr_primary_zip)}" required /></div>
-                  </div>
-                  <div style="margin:10px 0;">
-                    <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="billing_same_as_primary" name="addr_billing_same_as_primary" value="1" ${billingSame ? "checked" : ""} /> Billing same as Primary</label>
-                  </div>
-                  <div id="billing_address_fields" style="display:${billingSame ? "none" : "block"};">
-                    <h4 style="margin:0 0 8px 0;">Billing Address</h4>
-                    <div class="row">
-                      <div class="col"><label>Line 1</label><input id="addr_billing_line1" name="addr_billing_line1" value="${safeStr(org.addr_billing_line1)}" /></div>
-                      <div class="col"><label>Line 2</label><input id="addr_billing_line2" name="addr_billing_line2" value="${safeStr(org.addr_billing_line2)}" /></div>
-                    </div>
-                    <div class="row">
-                      <div class="col"><label>City</label><input id="addr_billing_city" name="addr_billing_city" value="${safeStr(org.addr_billing_city)}" /></div>
-                      <div class="col"><label>State</label><input id="addr_billing_state" name="addr_billing_state" value="${safeStr(org.addr_billing_state)}" /></div>
-                      <div class="col"><label>ZIP</label><input id="addr_billing_zip" name="addr_billing_zip" value="${safeStr(org.addr_billing_zip)}" /></div>
-                    </div>
-                  </div>
+            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">2) Letter Defaults</summary>
+              <div style="padding:0 14px 14px;" class="row">
+                <div class="col"><label>Appeal Tone ${infoIcon("Professional, Firm, or Aggressive. Deterministic wording changes are applied automatically.")}</label><select name="appeal_tone"><option ${letter.appeal_tone==="Professional"?"selected":""}>Professional</option><option ${letter.appeal_tone==="Firm"?"selected":""}>Firm</option><option ${letter.appeal_tone==="Aggressive"?"selected":""}>Aggressive</option></select></div>
+                <div class="col"><label>Signature Block</label><textarea name="signature_block" style="min-height:90px;">${safeStr(letter.signature_block||"")}</textarea></div>
+                <div class="col"><label>Appeal Opening</label><textarea name="appeal_opening" style="min-height:90px;">${safeStr(letter.appeal_opening||"")}</textarea></div>
+                <div class="col"><label>Appeal Footer</label><textarea name="appeal_footer" style="min-height:90px;">${safeStr(letter.appeal_footer||"")}</textarea></div>
+                <div class="col"><label>Negotiation Opening</label><textarea name="negotiation_opening" style="min-height:90px;">${safeStr(letter.negotiation_opening||"")}</textarea></div>
+                <div class="col"><label>Negotiation Footer</label><textarea name="negotiation_footer" style="min-height:90px;">${safeStr(letter.negotiation_footer||"")}</textarea></div>
+              </div></details>
 
-                  <div style="margin:10px 0;">
-                    <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="mailing_same_as_primary" name="addr_mailing_same_as_primary" value="1" ${mailingSame ? "checked" : ""} /> Mailing same as Primary</label>
-                  </div>
-                  <div id="mailing_address_fields" style="display:${mailingSame ? "none" : "block"};">
-                    <h4 style="margin:0 0 8px 0;">Mailing Address</h4>
-                    <div class="row">
-                      <div class="col"><label>Line 1</label><input id="addr_mailing_line1" name="addr_mailing_line1" value="${safeStr(org.addr_mailing_line1)}" /></div>
-                      <div class="col"><label>Line 2</label><input id="addr_mailing_line2" name="addr_mailing_line2" value="${safeStr(org.addr_mailing_line2)}" /></div>
-                    </div>
-                    <div class="row">
-                      <div class="col"><label>City</label><input id="addr_mailing_city" name="addr_mailing_city" value="${safeStr(org.addr_mailing_city)}" /></div>
-                      <div class="col"><label>State</label><input id="addr_mailing_state" name="addr_mailing_state" value="${safeStr(org.addr_mailing_state)}" /></div>
-                      <div class="col"><label>ZIP</label><input id="addr_mailing_zip" name="addr_mailing_zip" value="${safeStr(org.addr_mailing_zip)}" /></div>
-                    </div>
-                  </div>
-                </div>
-              </details>
+            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">3) Contract & Allowed Rules</summary>
+              <div style="padding:0 14px 14px;" class="row">
+                <div class="col"><label>Default Method ${infoIcon("Controls allowed amount baseline used by underpayment detection.")}</label><select name="allowed_default_method"><option value="percent_billed" ${allowed.default_method==="percent_billed"?"selected":""}>Percent of billed</option><option value="fixed_fee" ${allowed.default_method==="fixed_fee"?"selected":""}>Fixed fee</option><option value="fee_schedule" ${allowed.default_method==="fee_schedule"?"selected":""}>Fee schedule</option></select></div>
+                <div class="col"><label>Default Value</label><input type="number" step="0.01" name="allowed_default_value" value="${safeStr(String(allowed.default_value ?? 65))}" /></div>
+                <div class="col"><label>UCR Multiplier ${infoIcon("Used when method/override references UCR multiplier logic.")}</label><input type="number" step="0.01" name="allowed_ucr_multiplier" value="${safeStr(String(allowed.ucr_multiplier ?? 1))}" /></div>
+                <div class="col"><label>Tolerance % ${infoIcon("Ignore small differences below this percent variance.")}</label><input type="number" step="0.01" name="allowed_tolerance_percent" value="${safeStr(String(allowed.tolerance_percent ?? 1))}" /></div>
+                <div class="col"><label>Tolerance $ ${infoIcon("Ignore small dollar variances under this amount.")}</label><input type="number" step="0.01" name="allowed_tolerance_min_dollars" value="${safeStr(String(allowed.tolerance_min_dollars ?? 5))}" /></div>
+              </div></details>
 
-              <details style="border:1px solid #d1d5db;border-radius:8px;background:#f8fafc;">
-                <summary style="padding:12px 14px;font-weight:700;cursor:pointer;list-style:none;">Provider Defaults ${statusDot(providerRequired, providerAny)}</summary>
-                <div style="padding:10px 14px 14px 14px;background:#fff;border-top:1px solid #e5e7eb;">
-                  <div class="row">
-                    <div class="col"><label>Default Provider Name</label><input name="provider_default_name" value="${safeStr(org.provider_default_name)}" /></div>
-                    <div class="col"><label>Default Provider NPI</label><input name="provider_default_npi" value="${safeStr(org.provider_default_npi)}" /></div>
-                    <div class="col"><label>Default Taxonomy</label><input name="provider_default_taxonomy" value="${safeStr(org.provider_default_taxonomy)}" /></div>
-                  </div>
-                </div>
-              </details>
+            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">4) Appeals/Negotiations Defaults</summary>
+              <div style="padding:0 14px 14px;" class="row">
+                <div class="col" style="display:flex;align-items:flex-end;"><label><input type="checkbox" name="wf_auto_create_denial_cases" value="1" ${workflow.auto_create_denial_cases?"checked":""}/> Auto-create denial cases</label></div>
+                <div class="col" style="display:flex;align-items:flex-end;"><label><input type="checkbox" name="wf_auto_draft_denials" value="1" ${workflow.auto_draft_denials?"checked":""}/> Auto-draft denials ${infoIcon("Automatically creates/upgrades appeal draft text when claims update.")}</label></div>
+                <div class="col" style="display:flex;align-items:flex-end;"><label><input type="checkbox" name="wf_auto_draft_underpayments" value="1" ${workflow.auto_draft_underpayments?"checked":""}/> Auto-draft underpayments ${infoIcon("Automatically creates/upgrades negotiation draft text when underpaid claims update.")}</label></div>
+                <div class="col"><label>Default Follow-up Days ${infoIcon("Initial follow-up date offset from submission date.")}</label><input type="number" min="1" step="1" name="wf_default_followup_days" value="${safeStr(String(workflow.default_followup_days ?? 14))}" /></div>
+                <div class="col" style="display:flex;align-items:flex-end;"><label><input type="checkbox" name="wf_require_confirmation_before_submitted" value="1" ${workflow.require_confirmation_before_submitted?"checked":""}/> Require confirmation before submitted</label></div>
+              </div></details>
 
-              <details style="border:1px solid #d1d5db;border-radius:8px;background:#f8fafc;">
-                <summary style="padding:12px 14px;font-weight:700;cursor:pointer;list-style:none;">Appeal &amp; Negotiation Settings ${statusDot(appealsRequired, appealsAny)}</summary>
-                <div style="padding:10px 14px 14px 14px;background:#fff;border-top:1px solid #e5e7eb;">
-                  <div class="row">
-                    <div class="col"><label>Letter Contact Name</label><input name="letter_contact_name" value="${safeStr(org.letter_contact_name)}" /></div>
-                    <div class="col"><label>Letter Contact Title</label><input name="letter_contact_title" value="${safeStr(org.letter_contact_title)}" /></div>
-                  </div>
-                  <div class="row">
-                    <div class="col"><label>Letter Contact Phone</label><input name="letter_contact_phone" value="${safeStr(org.letter_contact_phone)}" /></div>
-                    <div class="col"><label>Letter Contact Email</label><input type="email" name="letter_contact_email" value="${safeStr(org.letter_contact_email)}" /></div>
-                  </div>
-                  <div class="row">
-                    <div class="col"><label>Letter Signature Name</label><input name="letter_signature_name" value="${safeStr(org.letter_signature_name)}" /></div>
-                    <div class="col"><label>Letter Signature Title</label><input name="letter_signature_title" value="${safeStr(org.letter_signature_title)}" /></div>
-                  </div>
-                  <p class="muted" style="margin:10px 0 0 0;">This information automatically populates appeal and negotiation letters.</p>
-                </div>
-              </details>
-            </div>
+            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">5) Recovery Intelligence Targets</summary>
+              <div style="padding:0 14px 14px;" class="row">
+                <div class="col"><label>Appeal Success Rate % ${infoIcon("Executive KPI target for approved/partial appeal outcomes.")}</label><input type="number" step="0.01" name="target_appeal_success_rate" value="${safeStr(String(targets.target_appeal_success_rate ?? 60))}" /></div>
+                <div class="col"><label>Negotiation ROI % ${infoIcon("Recovered cash as % of requested amount.")}</label><input type="number" step="0.01" name="target_negotiation_roi" value="${safeStr(String(targets.target_negotiation_roi ?? 60))}" /></div>
+                <div class="col"><label>Days to Pay ${infoIcon("Target turnaround days from submission to posted payment.")}</label><input type="number" step="1" name="target_days_to_pay" value="${safeStr(String(targets.target_days_to_pay ?? 30))}" /></div>
+                <div class="col"><label>AR90 Rate % ${infoIcon("Target percentage of receivables that age beyond 90 days.")}</label><input type="number" step="0.01" name="target_ar90_rate" value="${safeStr(String(targets.target_ar90_rate ?? 15))}" /></div>
+                <div class="col"><label>Operational Discipline % ${infoIcon("Internal cadence adherence target across follow-up tasks.")}</label><input type="number" step="0.01" name="target_operational_discipline" value="${safeStr(String(targets.target_operational_discipline ?? 80))}" /></div>
+              </div></details>
 
-            <div class="hr" style="margin:16px 0;"></div>
-            <h3 style="margin:0 0 10px 0;">Financial &amp; Network Settings</h3>
-            <div style="display:flex;flex-direction:column;gap:16px;">
-              <a class="btn secondary" href="/data-management?tab=contracts" style="width:fit-content;">Manage Payer Contracts</a>
-            </div>
+            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">6) Integrations (Placeholder)</summary>
+              <div style="padding:0 14px 14px;"><p class="muted">Enterprise connectors will appear here (PM/EHR, clearinghouse, and payer portals). This section is non-operable in current build.</p></div>
+            </details>
+            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">7) Security (Placeholder)</summary>
+              <div style="padding:0 14px 14px;"><p class="muted">Security posture controls (SSO, MFA policy, IP restrictions, audit exports) will be configurable here in enterprise mode.</p></div>
+            </details>
 
-            <div class="btnRow" style="margin-top:16px;"><button class="btn" type="submit">Save Organization Settings</button></div>
+            <div class="btnRow"><button class="btn" type="submit">Save Organization Settings</button></div>
           </form>
-          <script>
-            (function(){
-              const bindSameAs = (checkboxId, sectionId, targetPrefix) => {
-                const checkbox = document.getElementById(checkboxId);
-                const section = document.getElementById(sectionId);
-                if (!checkbox || !section) return;
-                const fields = ["line1","line2","city","state","zip"];
-                const copyPrimary = () => {
-                  fields.forEach((field) => {
-                    const source = document.getElementById("addr_primary_" + field);
-                    const target = document.getElementById(targetPrefix + "_" + field);
-                    if (source && target) target.value = source.value;
-                  });
-                };
-                const applyVisibility = () => {
-                  if (checkbox.checked) {
-                    copyPrimary();
-                    section.style.display = "none";
-                  } else {
-                    section.style.display = "block";
-                  }
-                };
-                checkbox.addEventListener("change", applyVisibility);
-                ["line1","line2","city","state","zip"].forEach((field) => {
-                  const primary = document.getElementById("addr_primary_" + field);
-                  if (primary) {
-                    primary.addEventListener("input", () => {
-                      if (checkbox.checked) copyPrimary();
-                    });
-                  }
-                });
-                applyVisibility();
-              };
-              bindSameAs("billing_same_as_primary", "billing_address_fields", "addr_billing");
-              bindSameAs("mailing_same_as_primary", "mailing_address_fields", "addr_mailing");
-            })();
-          </script>
         `;
       }
-      if (tab === "subscription" || tab === "plan" || tab === "plans") return `
-        <h3>Subscription</h3>
+      if (tab === "billing") return `
+        <h3>Plan & Billing</h3>
         <table>
           <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
           <tr><th>Trial Ends</th><td>${safeStr(planEnds)}</td></tr>
           <tr><th>Access Mode</th><td>${safeStr(limits.mode==="pilot" ? "trial" : limits.mode)}</td></tr>
           <tr><th>AI Questions Used</th><td>${safeStr(String(usage.ai_chat_used || 0))}</td></tr>
           <tr><th>AI Questions Limit</th><td>${safeStr(String(getAIChatLimit(org.org_id)))}</td></tr>
-          <tr><th>AI Questions Remaining</th><td>${safeStr(String(Math.max(0, getAIChatLimit(org.org_id) - (usage.ai_chat_used || 0))))}</td></tr>
         </table>
-        <div class="hr" style="margin:16px 0;"></div>
         <div class="btnRow"><a class="btn secondary" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Subscription</a></div>
       `;
+      if (tab === "integrations") return `<h3>Integrations</h3><p class="muted">Placeholder tab for enterprise integrations roadmap.</p>`;
       if (tab === "security") return `
-        <h3>Change Password</h3>
+        <h3>Security</h3>
         <form method="POST" action="/account/password">
-          <label>Current Password</label>
-          <input name="current_password" type="password" required />
-          <label>New Password (8+ characters)</label>
-          <input name="new_password" type="password" required />
-          <label>Confirm New Password</label>
-          <input name="new_password2" type="password" required />
-          <div class="btnRow">
-            <button class="btn" type="submit">Update Password</button>
-          </div>
+          <label>Current Password</label><input name="current_password" type="password" required />
+          <label>New Password (8+ characters)</label><input name="new_password" type="password" required />
+          <label>Confirm New Password</label><input name="new_password2" type="password" required />
+          <div class="btnRow"><button class="btn" type="submit">Update Password</button></div>
         </form>
       `;
-      if (tab === "prefs") return `
-        <h3>Preferences</h3>
+      return `
+        <h3>Profile</h3>
+        <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
+        ${user.role ? `<p class="muted"><strong>Role:</strong> ${safeStr(user.role)}</p>` : ""}
+        <p class="muted"><strong>Organization:</strong> ${safeStr(orgProfile.org_name || orgSettings.identity?.legal_name || "")}</p>
+        <div class="hr"></div>
         <form method="POST" action="/account/preferences">
           <label>Theme</label>
           <select name="theme">
@@ -12013,115 +12210,134 @@ rowsAdded = toUse;
           <div class="btnRow"><button class="btn" type="submit">Save Preferences</button></div>
         </form>
       `;
-      return `
-        <h3>User Information</h3>
-        <p class="muted"><strong>Email:</strong> ${safeStr(user.email || "")}</p>
-        ${user.role ? `<p class="muted"><strong>Role:</strong> ${safeStr(user.role)}</p>` : ""}
-        <p class="muted"><strong>Organization:</strong> ${safeStr(org.org_name)}</p>
-      `;
     })();
 
-    const html = renderPage("Account", `
-      <h2>Account</h2>
-      ${tabs}
-      ${section}
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    const html = renderPage("Account", `<h2>Account</h2>${tabs}${section}`, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
-  
-  // Update organization settings
-  if (method === "POST" && pathname === "/account/org-settings") {
+  if (method === "POST" && pathname === "/account/org-settings/save") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
-    const billingSame = params.get("addr_billing_same_as_primary") === "1";
-    const mailingSame = params.get("addr_mailing_same_as_primary") === "1";
-    const primary = {
-      line1: (params.get("addr_primary_line1") || "").trim(),
-      line2: (params.get("addr_primary_line2") || "").trim(),
-      city: (params.get("addr_primary_city") || "").trim(),
-      state: (params.get("addr_primary_state") || "").trim(),
-      zip: (params.get("addr_primary_zip") || "").trim(),
+    const numberOr = (name, fallback) => {
+      const raw = String(params.get(name) || "").trim();
+      if (!raw) return fallback;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : fallback;
     };
-    const billing = {
-      line1: billingSame ? primary.line1 : (params.get("addr_billing_line1") || "").trim(),
-      line2: billingSame ? primary.line2 : (params.get("addr_billing_line2") || "").trim(),
-      city: billingSame ? primary.city : (params.get("addr_billing_city") || "").trim(),
-      state: billingSame ? primary.state : (params.get("addr_billing_state") || "").trim(),
-      zip: billingSame ? primary.zip : (params.get("addr_billing_zip") || "").trim(),
+    const identity = {
+      legal_name: String(params.get("identity_legal_name") || "").trim(),
+      dba_name: String(params.get("identity_dba_name") || "").trim(),
+      tax_id: String(params.get("identity_tax_id") || "").trim(),
+      npi: String(params.get("identity_npi") || "").trim(),
+      phone: String(params.get("identity_phone") || "").trim(),
+      fax: String(params.get("identity_fax") || "").trim(),
+      website: String(params.get("identity_website") || "").trim(),
+      email: String(params.get("identity_email") || "").trim(),
+      mailing_same_as_primary: params.get("mailing_same_as_primary") === "1",
+      addr_primary: {
+        line1: String(params.get("addr_primary_line1") || "").trim(),
+        line2: String(params.get("addr_primary_line2") || "").trim(),
+        city: String(params.get("addr_primary_city") || "").trim(),
+        state: String(params.get("addr_primary_state") || "").trim(),
+        zip: String(params.get("addr_primary_zip") || "").trim(),
+      },
+      addr_mailing: {
+        line1: String(params.get("addr_mailing_line1") || "").trim(),
+        line2: String(params.get("addr_mailing_line2") || "").trim(),
+        city: String(params.get("addr_mailing_city") || "").trim(),
+        state: String(params.get("addr_mailing_state") || "").trim(),
+        zip: String(params.get("addr_mailing_zip") || "").trim(),
+      }
     };
-    const mailing = {
-      line1: mailingSame ? primary.line1 : (params.get("addr_mailing_line1") || "").trim(),
-      line2: mailingSame ? primary.line2 : (params.get("addr_mailing_line2") || "").trim(),
-      city: mailingSame ? primary.city : (params.get("addr_mailing_city") || "").trim(),
-      state: mailingSame ? primary.state : (params.get("addr_mailing_state") || "").trim(),
-      zip: mailingSame ? primary.zip : (params.get("addr_mailing_zip") || "").trim(),
-    };
+    if (identity.mailing_same_as_primary) identity.addr_mailing = { ...identity.addr_primary };
+
     const patch = {
-      org_name: (params.get("org_name") || "").trim(),
-      legal_name: (params.get("org_name") || "").trim(),
-      dba_name: (params.get("dba_name") || "").trim(),
-      phone: (params.get("phone") || "").trim(),
-      main_phone: (params.get("phone") || "").trim(),
-      tax_id: (params.get("tax_id") || "").trim(),
-      org_npi: (params.get("org_npi") || "").trim(),
-      npi_number: (params.get("org_npi") || "").trim(),
-      fax: (params.get("fax") || "").trim(),
-      org_email: (params.get("org_email") || "").trim(),
-      addr_primary_line1: primary.line1,
-      addr_primary_line2: primary.line2,
-      addr_primary_city: primary.city,
-      addr_primary_state: primary.state,
-      addr_primary_zip: primary.zip,
-      address_line1: primary.line1,
-      address_line2: primary.line2,
-      city: primary.city,
-      state: primary.state,
-      zip: primary.zip,
-      addr_billing_same_as_primary: billingSame,
-      addr_billing_line1: billing.line1,
-      addr_billing_line2: billing.line2,
-      addr_billing_city: billing.city,
-      addr_billing_state: billing.state,
-      addr_billing_zip: billing.zip,
-      addr_mailing_same_as_primary: mailingSame,
-      addr_mailing_line1: mailing.line1,
-      addr_mailing_line2: mailing.line2,
-      addr_mailing_city: mailing.city,
-      addr_mailing_state: mailing.state,
-      addr_mailing_zip: mailing.zip,
-      provider_default_name: (params.get("provider_default_name") || "").trim(),
-      provider_default_npi: (params.get("provider_default_npi") || "").trim(),
-      provider_default_taxonomy: (params.get("provider_default_taxonomy") || "").trim(),
-      letter_contact_name: (params.get("letter_contact_name") || "").trim(),
-      letter_contact_title: (params.get("letter_contact_title") || "").trim(),
-      letter_contact_phone: (params.get("letter_contact_phone") || "").trim(),
-      letter_contact_email: (params.get("letter_contact_email") || "").trim(),
-      letter_signature_name: (params.get("letter_signature_name") || "").trim(),
-      letter_signature_title: (params.get("letter_signature_title") || "").trim(),
+      identity,
+      letter_defaults: {
+        appeal_tone: String(params.get("appeal_tone") || "Professional").trim() || "Professional",
+        signature_block: String(params.get("signature_block") || "").trim(),
+        appeal_opening: String(params.get("appeal_opening") || "").trim(),
+        appeal_footer: String(params.get("appeal_footer") || "").trim(),
+        negotiation_opening: String(params.get("negotiation_opening") || "").trim(),
+        negotiation_footer: String(params.get("negotiation_footer") || "").trim(),
+      },
+      allowed_rules: {
+        default_method: String(params.get("allowed_default_method") || "percent_billed").trim() || "percent_billed",
+        default_value: numberOr("allowed_default_value", 65),
+        ucr_multiplier: numberOr("allowed_ucr_multiplier", 1),
+        tolerance_percent: numberOr("allowed_tolerance_percent", 1),
+        tolerance_min_dollars: numberOr("allowed_tolerance_min_dollars", 5),
+      },
+      workflow_defaults: {
+        auto_create_denial_cases: params.get("wf_auto_create_denial_cases") === "1",
+        auto_draft_denials: params.get("wf_auto_draft_denials") === "1",
+        auto_draft_underpayments: params.get("wf_auto_draft_underpayments") === "1",
+        default_followup_days: Math.max(1, numberOr("wf_default_followup_days", 14)),
+        require_confirmation_before_submitted: params.get("wf_require_confirmation_before_submitted") === "1",
+      },
+      recovery_targets: {
+        target_appeal_success_rate: numberOr("target_appeal_success_rate", 60),
+        target_negotiation_roi: numberOr("target_negotiation_roi", 60),
+        target_days_to_pay: numberOr("target_days_to_pay", 30),
+        target_ar90_rate: numberOr("target_ar90_rate", 15),
+        target_operational_discipline: numberOr("target_operational_discipline", 80),
+      },
+      placeholders: {
+        integrations_enabled: false,
+        security_mode: "standard"
+      }
     };
 
-    const errs = [];
-    if (!patch.org_name) errs.push("Practice legal name is required.");
-    if (!patch.addr_primary_line1 || !patch.addr_primary_city || !patch.addr_primary_state || !patch.addr_primary_zip) {
-      errs.push("Primary address line1, city, state, and zip are required.");
-    }
-    if (!patch.phone) errs.push("Main phone is required.");
-    if (errs.length) {
-      return redirect(res, `/account?tab=org&err=${encodeURIComponent(errs.join(" "))}`);
-    }
+    if (!patch.identity.legal_name) return redirect(res, `/account?tab=org&err=${encodeURIComponent("Legal name is required.")}`);
+    saveOrgSettings(org.org_id, patch);
+    saveAllowedAmountRules(org.org_id, patch.allowed_rules);
 
     const orgs = readJSON(FILES.orgs, []);
     const oidx = orgs.findIndex(o => o.org_id === org.org_id);
     if (oidx >= 0) {
       orgs[oidx] = {
         ...orgs[oidx],
-        ...patch,
+        org_name: patch.identity.legal_name,
+        legal_name: patch.identity.legal_name,
+        dba_name: patch.identity.dba_name,
+        phone: patch.identity.phone,
+        main_phone: patch.identity.phone,
+        fax: patch.identity.fax,
+        org_email: patch.identity.email,
+        tax_id: patch.identity.tax_id,
+        org_npi: patch.identity.npi,
+        npi_number: patch.identity.npi,
+        addr_primary_line1: patch.identity.addr_primary.line1,
+        addr_primary_line2: patch.identity.addr_primary.line2,
+        addr_primary_city: patch.identity.addr_primary.city,
+        addr_primary_state: patch.identity.addr_primary.state,
+        addr_primary_zip: patch.identity.addr_primary.zip,
+        addr_mailing_same_as_primary: patch.identity.mailing_same_as_primary,
+        addr_mailing_line1: patch.identity.addr_mailing.line1,
+        addr_mailing_line2: patch.identity.addr_mailing.line2,
+        addr_mailing_city: patch.identity.addr_mailing.city,
+        addr_mailing_state: patch.identity.addr_mailing.state,
+        addr_mailing_zip: patch.identity.addr_mailing.zip,
+        updated_at: nowISO(),
       };
-      orgs[oidx].updated_at = nowISO();
       writeJSON(FILES.orgs, orgs);
-      auditLog({ actor:"user", action:"update_org_settings", org_id: org.org_id, user_id: user.user_id });
     }
+
+    savePracticeSettings(org.org_id, {
+      auto_create_denial_cases: patch.workflow_defaults.auto_create_denial_cases,
+      auto_draft_denials: patch.workflow_defaults.auto_draft_denials,
+      auto_draft_underpayments: patch.workflow_defaults.auto_draft_underpayments,
+      default_followup_days: patch.workflow_defaults.default_followup_days,
+      require_confirmation_before_submitted: patch.workflow_defaults.require_confirmation_before_submitted,
+    });
+
+    auditLog({ actor:"user", action:"update_org_settings_v2", org_id: org.org_id, user_id: user.user_id });
+    return redirect(res, "/account?tab=org&saved=1");
+  }
+
+  // Backward-compatible route
+  if (method === "POST" && pathname === "/account/org-settings") {
     return redirect(res, "/account?tab=org");
   }
 
