@@ -776,6 +776,46 @@ function buildCopilotResponse({
   };
   const format = String(responseFormat || "executive").toLowerCase();
 
+  const disciplineDrivers = [];
+
+  if (metrics.rates.denialRate > 15) {
+    disciplineDrivers.push("Denial rate exceeds 15% threshold.");
+  }
+
+  if (metrics.rates.recoveryRate < 80) {
+    disciplineDrivers.push("Recovery rate below 80% target.");
+  }
+
+  if (metrics.rates.appealSuccessRate < 50) {
+    disciplineDrivers.push("Appeal success rate under 50%.");
+  }
+
+  if (metrics.rates.negotiationROI < 50) {
+    disciplineDrivers.push("Negotiation ROI below 50%.");
+  }
+
+  if (metrics.totals.atRisk > metrics.totals.billed * 0.2) {
+    disciplineDrivers.push("Revenue at risk exceeds 20% of billed.");
+  }
+
+  const executiveActions = [];
+
+  if (metrics.totals.atRisk > 0) {
+    executiveActions.push("Prioritize highest at-risk claims in Action Center.");
+  }
+
+  if (metrics.rates.denialRate > 15) {
+    executiveActions.push("Review top denial payer performance.");
+  }
+
+  if (metrics.rates.negotiationROI < 50) {
+    executiveActions.push("Escalate negotiation review process.");
+  }
+
+  if (metrics.rates.appealSuccessRate < 50) {
+    executiveActions.push("Audit appeal documentation quality.");
+  }
+
   let bullets = [];
 
   if (format === "executive"){
@@ -846,10 +886,19 @@ function buildCopilotResponse({
     }
   ];
 
+  const payerRiskScore = round2(
+    (metrics.rates.denialRate * 0.4) +
+    (metrics.rates.negotiationROI < 50 ? 20 : 0) +
+    (metrics.totals.atRisk > metrics.totals.billed * 0.2 ? 20 : 0)
+  );
+
   return {
     bullets,
     charts,
-    metrics
+    metrics,
+    disciplineDrivers,
+    executiveActions,
+    payerRiskScore
   };
 }
 
