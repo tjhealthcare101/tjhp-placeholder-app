@@ -1821,6 +1821,83 @@ function chooseGranularity(preset){
   return "week";
 }
 
+function computeLegacyRecoveryIntelligence(org_id, start, end){
+  const inRange = (dtStr) => {
+    const d = dtStr ? new Date(dtStr) : null;
+    return !!(d && !isNaN(d.getTime()) && d >= start && d <= end);
+  };
+
+  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id && inRange(c.updated_at || c.created_at));
+  const negotiations = getNegotiations(org_id)
+    .map(n => normalizeNegotiation(n))
+    .filter(n => inRange(n.updated_at || n.created_at));
+
+  const appealSubmittedCount = cases.length;
+  const appealWinsCount = cases.filter(c => !!c.paid).length;
+  const appealSuccessRate = appealSubmittedCount ? (appealWinsCount / appealSubmittedCount) * 100 : 0;
+
+  const negotiationSubmittedCount = negotiations.length;
+  const negotiatedRequestedTotal = negotiations.reduce((sum, n) => sum + Math.max(0, num(n.requested_amount || 0)), 0);
+  const negotiatedRecoveredTotal = negotiations.reduce((sum, n) => sum + Math.max(0, num(n.collected_amount || 0)), 0);
+  const negotiatedApprovedTotal = negotiations.reduce((sum, n) => sum + Math.max(0, num(n.approved_amount || 0)), 0);
+  const negotiationROI = negotiatedRequestedTotal ? (negotiatedRecoveredTotal / negotiatedRequestedTotal) * 100 : 0;
+  const approvedVsPaidPct = negotiatedApprovedTotal ? (negotiatedRecoveredTotal / negotiatedApprovedTotal) * 100 : 0;
+
+  return {
+    appealSubmittedCount,
+    appealWinsCount,
+    appealSuccessRate,
+    negotiationSubmittedCount,
+    negotiatedRequestedTotal,
+    negotiatedApprovedTotal,
+    negotiatedRecoveredTotal,
+    negotiationROI,
+    approvedVsPaidPct,
+    usingLegacyFallback: true
+  };
+}
+
+function computeRecoveryIntelligence(org_id, start, end){
+  const workspaces = readJSON(FILES.agent_workspaces, [])
+    .filter(w => w.org_id === org_id)
+    .map(w => ensurePacketSections(w));
+  const inRange = (ws) => {
+    const t = new Date(ws.updated_at || ws.created_at || 0);
+    return !!(t && !isNaN(t.getTime()) && t >= start && t <= end);
+  };
+  const ws = workspaces.filter(inRange);
+
+  const appealSubmitted = ws.filter(w => String(w.submission?.status || "") === "submitted" && String(w.submission?.channel || "") === "appeal");
+  const appealWins = appealSubmitted.filter(w => ["approved", "partially_approved"].includes(String(w.outcome?.outcome_status || "")) && num(w.outcome?.paid_posted_amount) > 0);
+  const appealSuccessRate = appealSubmitted.length ? (appealWins.length / appealSubmitted.length) * 100 : 0;
+
+  const negotiationSubmitted = ws.filter(w => String(w.submission?.status || "") === "submitted" && String(w.submission?.channel || "") === "negotiation");
+  const negotiatedRequestedTotal = negotiationSubmitted.reduce((s, w) => s + Math.max(0, num(w.negotiation?.requested_amount || w.negotiation?.packet_sections?.requested_amount || 0)), 0);
+  const negotiatedRecoveredTotal = negotiationSubmitted.reduce((s, w) => s + Math.max(0, num(w.outcome?.paid_posted_amount || 0)), 0);
+  const negotiationROI = negotiatedRequestedTotal ? (negotiatedRecoveredTotal / negotiatedRequestedTotal) * 100 : 0;
+
+  const negotiatedApprovedTotal = negotiationSubmitted.reduce((s, w) => s + Math.max(0, num(w.outcome?.approved_amount || 0)), 0);
+  const approvedVsPaidPct = negotiatedApprovedTotal ? (negotiatedRecoveredTotal / negotiatedApprovedTotal) * 100 : 0;
+
+  const submittedWorkspaceCount = appealSubmitted.length + negotiationSubmitted.length;
+  if (submittedWorkspaceCount === 0) {
+    return computeLegacyRecoveryIntelligence(org_id, start, end);
+  }
+
+  return {
+    appealSubmittedCount: appealSubmitted.length,
+    appealWinsCount: appealWins.length,
+    appealSuccessRate,
+    negotiationSubmittedCount: negotiationSubmitted.length,
+    negotiatedRequestedTotal,
+    negotiatedApprovedTotal,
+    negotiatedRecoveredTotal,
+    negotiationROI,
+    approvedVsPaidPct,
+    usingLegacyFallback: false
+  };
+}
+
 function computeDashboardMetrics(org_id, start, end, preset){
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
@@ -2057,36 +2134,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
   const healthGrade = gradeFromScore(healthScore);
 
-  const workspaces = readJSON(FILES.agent_workspaces, [])
-    .filter(w => w.org_id === org_id)
-    .map(w => ensurePacketSections(w));
-
-  let appealSubmitted = 0;
-  let appealSuccess = 0;
-  let negotiatedTotal = 0;
-  let recoveredTotal = 0;
-
-  workspaces.forEach(w => {
-    const submission = w.submission || {};
-    const outcome = w.outcome || {};
-
-    if (submission.status === "submitted" && submission.channel === "appeal") {
-      appealSubmitted += 1;
-      if (["approved","partially_approved"].includes(outcome.outcome_status) &&
-          num(outcome.paid_posted_amount) > 0) {
-        appealSuccess += 1;
-      }
-    }
-
-    if (submission.status === "submitted" && submission.channel === "negotiation") {
-      const requested = num(w.negotiation?.requested_amount || 0);
-      const recovered = num(outcome.paid_posted_amount || 0);
-      if (requested > 0) negotiatedTotal += requested;
-      if (recovered > 0) recoveredTotal += recovered;
-    }
-  });
-  const appealSuccessRate = appealSubmitted ? (appealSuccess / appealSubmitted) * 100 : 0;
-  const negotiationROI = negotiatedTotal ? (recoveredTotal / negotiatedTotal) * 100 : 0;
+  const recov = computeRecoveryIntelligence(org_id, start, end);
 
   return {
     kpis: {
@@ -2120,10 +2168,16 @@ function computeDashboardMetrics(org_id, start, end, preset){
     underpaidRate,
     collectionRate,
     ar90Rate,
-    appealSuccessRate,
-    negotiationROI,
-    negotiatedTotal,
-    recoveredTotal
+    appealSuccessRate: recov.appealSuccessRate,
+    negotiationROI: recov.negotiationROI,
+    negotiatedTotal: recov.negotiatedRequestedTotal,
+    recoveredTotal: recov.negotiatedRecoveredTotal,
+    appealSubmittedCount: recov.appealSubmittedCount,
+    appealWinsCount: recov.appealWinsCount,
+    negotiationSubmittedCount: recov.negotiationSubmittedCount,
+    negotiatedApprovedTotal: recov.negotiatedApprovedTotal,
+    approvedVsPaidPct: recov.approvedVsPaidPct,
+    usingLegacyRecoveryFallback: !!recov.usingLegacyFallback
   };
 }
 
@@ -5460,12 +5514,15 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </div>
 
       <div class="executive-panel">
-        <h3 style="margin-bottom:12px;">Appeals & Negotiation Outcomes</h3>
+        <h3 style="margin-bottom:12px;">Recovery Intelligence</h3>
         <div class="kpi-strip" style="margin-top:0;">
-          <div class="kpi-card"><p class="kpi-value">${Number(m.appealSuccessRate||0).toFixed(1)}%</p><p class="kpi-label">Appeal Success <span class="tooltip" data-tip="Percentage of submitted appeals that resulted in payer approval and payment.">ⓘ</span></p></div>
-          <div class="kpi-card"><p class="kpi-value">${Number(m.negotiationROI||0).toFixed(1)}%</p><p class="kpi-label">Negotiation ROI <span class="tooltip" data-tip="Recovered dollars divided by total negotiated dollars. Measures negotiation effectiveness.">ⓘ</span></p></div>
-          <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.negotiatedTotal||0)}</p><p class="kpi-label">Negotiated Total</p></div>
-          <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.recoveredTotal||0)}</p><p class="kpi-label">Recovered Total</p></div>
+          <div class="kpi-card"><p class="kpi-value">${Number(m.appealSuccessRate||0).toFixed(1)}%</p><p class="kpi-label">Appeal Success Rate ${infoIcon("% of submitted appeals that resulted in approved/partial + payment posted.")}</p></div>
+          <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.appealSubmittedCount||0)}</p><p class="kpi-label">Appeals Submitted</p></div>
+          <div class="kpi-card"><p class="kpi-value">${Number(m.negotiationROI||0).toFixed(1)}%</p><p class="kpi-label">Negotiation ROI ${infoIcon("Recovered cash / requested amount for submitted negotiation workspaces.")}</p></div>
+          <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.negotiationSubmittedCount||0)}</p><p class="kpi-label">Negotiations Submitted</p></div>
+          <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.negotiatedTotal||0)}</p><p class="kpi-label">Negotiated Requested</p></div>
+          <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.recoveredTotal||0)}</p><p class="kpi-label">Negotiated Recovered</p></div>
+          <div class="kpi-card"><p class="kpi-value">${Number(m.approvedVsPaidPct||0).toFixed(1)}%</p><p class="kpi-label">Approved vs Paid</p></div>
         </div>
       </div>
 
@@ -5699,12 +5756,15 @@ if (method === "GET" && pathname === "/executive-export") {
         </div>
 
         <div class="printCard">
-          <div style="font-weight:800;">Appeals / Negotiation Outcomes</div>
+          <div style="font-weight:800;">Recovery Intelligence</div>
           <div class="muted small" style="margin-top:6px;">
-            Appeal Success: <strong>${formatPct(m.appealSuccessRate||0)}</strong><br/>
+            Appeal Success Rate: <strong>${formatPct(m.appealSuccessRate||0)}</strong><br/>
+            Appeals Submitted: <strong>${formatNumberUI(m.appealSubmittedCount||0)}</strong><br/>
             Negotiation ROI: <strong>${formatPct(m.negotiationROI||0)}</strong><br/>
-            Negotiated: <strong>${formatMoneyUI(m.negotiatedTotal||0)}</strong><br/>
-            Recovered: <strong>${formatMoneyUI(m.recoveredTotal||0)}</strong>
+            Negotiations Submitted: <strong>${formatNumberUI(m.negotiationSubmittedCount||0)}</strong><br/>
+            Negotiated Requested: <strong>${formatMoneyUI(m.negotiatedTotal||0)}</strong><br/>
+            Negotiated Recovered: <strong>${formatMoneyUI(m.recoveredTotal||0)}</strong><br/>
+            Approved vs Paid: <strong>${formatPct(m.approvedVsPaidPct||0)}</strong>
           </div>
         </div>
       </div>
@@ -6988,6 +7048,19 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       ${renderKpiCard("AR 90+ Exposure", `${Number(m.ar90Rate||0).toFixed(1)}%`, "portion of billed sitting 90+ days", (m.ar90Rate||0) >= 25 ? "bad" : ((m.ar90Rate||0) >= 12 ? "warn" : "good"))}
     </div>
     <div class="hr"></div>
+    <div class="ri-panel" style="margin-bottom:12px;">
+      <div style="font-weight:900;font-size:16px;">Recovery Intelligence ${infoIcon("Appeal Success: % of submitted appeals that resulted in approved/partial + payment posted. Negotiation ROI: Recovered cash / requested amount for submitted negotiation workspaces.")}</div>
+      <div class="ri-muted" style="margin-top:4px;">Standardized workspace-based recovery KPIs for executive tracking.</div>
+      <div class="row" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;">
+        ${renderKpiCard("Appeal Success Rate", `${Number(m.appealSuccessRate||0).toFixed(1)}%`, `% of submitted appeals that resulted in approved/partial + payment posted.`, (m.appealSuccessRate||0) >= 60 ? "good" : ((m.appealSuccessRate||0) >= 30 ? "warn" : "bad"))}
+        ${renderKpiCard("Appeals Submitted", formatNumberUI(m.appealSubmittedCount||0), "submitted appeal workspaces", "good")}
+        ${renderKpiCard("Negotiation ROI", `${Number(m.negotiationROI||0).toFixed(1)}%`, "Recovered cash / requested amount for submitted negotiation workspaces.", (m.negotiationROI||0) >= 60 ? "good" : ((m.negotiationROI||0) >= 30 ? "warn" : "bad"))}
+        ${renderKpiCard("Negotiations Submitted", formatNumberUI(m.negotiationSubmittedCount||0), "submitted negotiation workspaces", "good")}
+        ${renderKpiCard("Negotiated Requested", formatMoneyUI(m.negotiatedTotal||0), "submitted negotiation requested amount", "warn")}
+        ${renderKpiCard("Negotiated Recovered", formatMoneyUI(m.recoveredTotal||0), "paid_posted_amount (cash realized)", "good")}
+        ${renderKpiCard("Approved vs Paid", `${Number(m.approvedVsPaidPct||0).toFixed(1)}%`, "Recovered cash compared with approved dollars.", "warn")}
+      </div>
+    </div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;">
       <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:rgba(17,24,39,.04);">
         <div style="font-weight:900;">Top Payers To Review</div><div class="muted small" style="margin-top:6px;">Fast access into AI Payer Intelligence.</div>
@@ -13007,7 +13080,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
     req.on("end", () => {
       const params = new URLSearchParams(body);
       const billed_id = String(params.get("billed_id") || "").trim();
-      const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+      const rawChannel = String(params.get("channel") || "").trim().toLowerCase();
+      if (!["appeal","negotiation"].includes(rawChannel)) return redirect(res, `/claims?view=all`);
+      const channel = rawChannel;
       const billedAll = readJSON(FILES.billed, []);
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
       if (!b) return redirect(res, "/claims?view=all");
