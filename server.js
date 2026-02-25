@@ -859,6 +859,12 @@ function buildCopilotResponse({
   const forecast = computeSimpleAtRiskForecast(org_id, rangePreset);
   const denialForecast = computeSimpleDenialRateForecast(org_id, rangePreset);
   const format = String(responseFormat || "executive").toLowerCase();
+  const disciplineBreakdown = [
+    { label: "Denial Rate", value: metrics.rates.denialRate },
+    { label: "Recovery Rate", value: metrics.rates.recoveryRate },
+    { label: "Appeal Success", value: metrics.rates.appealSuccessRate },
+    { label: "Negotiation ROI", value: metrics.rates.negotiationROI }
+  ];
 
   const disciplineDrivers = [];
 
@@ -996,9 +1002,11 @@ function buildCopilotResponse({
     metrics,
     forecast,
     denialForecast,
+    disciplineBreakdown,
     disciplineDrivers,
     executiveActions,
-    payerRiskScore
+    payerRiskScore,
+    topPayers
   };
 }
 
@@ -2694,25 +2702,37 @@ function computeDashboardMetrics(org_id, start, end, preset){
   // Adds Operational Discipline (packet readiness) without adding staff analytics.
   // Weights sum to 1.00
   // ===========================
-  const subscores = {
-    collection_strength: collectionScore,         // 0–100
-    denial_discipline: denialScore,               // 0–100
-    underpaid_discipline: underpaidScore,         // 0–100
-    days_to_pay: daysScore,                       // 0–100
-    ar_aging: arScore,                            // 0–100
-    operational_discipline: operationalDisciplineScore, // 0–100
-  };
+  const hasFinancialData = billed.length > 0;
+  const subscores = hasFinancialData
+    ? {
+      collection_strength: collectionScore,         // 0–100
+      denial_discipline: denialScore,               // 0–100
+      underpaid_discipline: underpaidScore,         // 0–100
+      days_to_pay: daysScore,                       // 0–100
+      ar_aging: arScore,                            // 0–100
+      operational_discipline: operationalDisciplineScore, // 0–100
+    }
+    : {
+      collection_strength: 0,
+      denial_discipline: 0,
+      underpaid_discipline: 0,
+      days_to_pay: 0,
+      ar_aging: 0,
+      operational_discipline: 0,
+    };
 
-  const healthScore = Math.round(
-    (subscores.collection_strength * 0.28) +
-    (subscores.denial_discipline * 0.18) +
-    (subscores.underpaid_discipline * 0.14) +
-    (subscores.days_to_pay * 0.14) +
-    (subscores.ar_aging * 0.16) +
-    (subscores.operational_discipline * 0.10)
-  );
+  const healthScore = hasFinancialData
+    ? Math.round(
+      (subscores.collection_strength * 0.28) +
+      (subscores.denial_discipline * 0.18) +
+      (subscores.underpaid_discipline * 0.14) +
+      (subscores.days_to_pay * 0.14) +
+      (subscores.ar_aging * 0.16) +
+      (subscores.operational_discipline * 0.10)
+    )
+    : 0;
 
-  const healthGrade = gradeFromScore(healthScore);
+  const healthGrade = hasFinancialData ? gradeFromScore(healthScore) : "—";
 
   const recov = computeRecoveryIntelligence(org_id, start, end);
 
@@ -6165,12 +6185,24 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .kpi-strip .kpi-label{margin:6px 0 0;font-size:12px;color:var(--muted);font-weight:600;}
         .kpi-strip .kpi-delta{margin-top:6px;font-size:11px;color:var(--muted);opacity:.8;}
         .executive-panel{background:#fff;padding:16px;border-radius:12px;border:1px solid var(--border);margin-top:16px;}
+        .exec-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);margin-top:14px;}
+        .exec-card h3{margin:0 0 8px;}
         .chart-container { position:relative; height:320px; max-height:320px; width:100%; }
         .chart-container.payer{height:320px;max-height:320px;}
         .chart-container.trend{height:320px;max-height:320px;}
         .exec-table{margin-top:12px;overflow:auto;}
         .trend-toggle{display:flex;gap:8px;align-items:center;}
       </style>
+
+      <div class="exec-card">
+        <h3>Executive Snapshot</h3>
+        <ul>
+          <li>Revenue At Risk: ${formatMoneyUI(m.kpis.revenueAtRisk || 0)}</li>
+          <li>Denial Rate: ${Number(m.denialRate || 0).toFixed(1)}%</li>
+          <li>Recovery Rate: ${Number(m.kpis.netCollectionRate || 0).toFixed(1)}%</li>
+          <li>Operational Discipline: ${Number(m.operationalDisciplineScore || 0).toFixed(0)}/100</li>
+        </ul>
+      </div>
 
       <div class="kpi-strip">
         <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.totalBilled)}</p><p class="kpi-label">Total Billed</p><div class="kpi-delta">—</div></div>
@@ -8065,6 +8097,8 @@ if (method === "POST" && pathname === "/copilot/query") {
 
     const disciplineDrivers = Array.isArray(result.disciplineDrivers) ? result.disciplineDrivers : [];
     const executiveActions = Array.isArray(result.executiveActions) ? result.executiveActions : [];
+    const topPayers = Array.isArray(result.topPayers) ? result.topPayers : [];
+    const disciplineBreakdown = Array.isArray(result.disciplineBreakdown) ? result.disciplineBreakdown : [];
 
     const responseHTML = `
       <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -8139,6 +8173,22 @@ if (method === "POST" && pathname === "/copilot/query") {
         }
       </div>
 
+      <div class="exec-card">
+        <h3>Top Risk Payers</h3>
+        ${
+          (topPayers && topPayers.length > 0)
+            ? `<ul>${topPayers.map(p => `<li>${safeStr(p.payer)} — $${Math.round(p.risk).toLocaleString()} at risk</li>`).join("")}</ul>`
+            : `<div class="muted">No payer risk data available.</div>`
+        }
+      </div>
+
+      <div class="exec-card">
+        <h3>Operational Score Breakdown</h3>
+        <div class="chart-container">
+          <canvas id="disciplineChart"></canvas>
+        </div>
+      </div>
+
       ${chartCards}
 
       <div class="copilot-panel" style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
@@ -8148,6 +8198,20 @@ if (method === "POST" && pathname === "/copilot/query") {
       </div>
 
       <script>
+        (function(){
+          if (typeof Chart === 'undefined') return;
+          new Chart(document.getElementById('disciplineChart'), {
+            type: 'bar',
+            data: {
+              labels: ${JSON.stringify(disciplineBreakdown.map(d=>d.label))},
+              datasets: [{
+                label: 'Score (%)',
+                data: ${JSON.stringify(disciplineBreakdown.map(d=>d.value))}
+              }]
+            },
+            options: { responsive:true, maintainAspectRatio:false }
+          });
+        })();
         ${chartScripts}
       </script>
     `;
