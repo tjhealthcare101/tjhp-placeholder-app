@@ -79,6 +79,8 @@ const FILES = {
   allowed_amount_rules: path.join(DATA_DIR, "allowed_amount_rules.json"),
   fee_schedules: path.join(DATA_DIR, "fee_schedules.json"),
   claim_batches: path.join(DATA_DIR, "claim_batches.json"),
+  upload_batches: path.join(DATA_DIR, "upload_batches.json"),
+  audit_log: path.join(DATA_DIR, "audit_log.json"),
   practice_settings: path.join(DATA_DIR, "practice_settings.json"),
   ai_agent_drafts: path.join(DATA_DIR, "ai_agent_drafts.json"),
   agent_templates: path.join(DATA_DIR, "agent_templates.json"),
@@ -304,6 +306,8 @@ ensureFile(FILES.document_ingests, []);
 ensureFile(FILES.allowed_amount_rules, []);
 ensureFile(FILES.fee_schedules, []);
 ensureFile(FILES.claim_batches, []);
+ensureFile(FILES.upload_batches, []);
+ensureFile(FILES.audit_log, []);
 ensureFile(FILES.practice_settings, []);
 ensureFile(FILES.ai_agent_drafts, []);
 ensureFile(FILES.agent_templates, []);
@@ -4149,31 +4153,17 @@ function recalculateContractsForOrg(org_id){
 }
 
 function getClaimBatchHistory(org_id){
-  const submissions = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org_id);
-  const manualBatches = getClaimBatches(org_id);
-  const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
-  const ctx = buildClaimContext(org_id);
-  const subRows = submissions
-    .map(s => {
-      const claims = billed.filter(b => String(b.submission_id || "") === String(s.submission_id || ""));
-      const paidCount = claims.filter(c => evaluateClaimDerived(c, ctx).lifecycleStage === "Resolved").length;
-      return {
-        submission_id: s.submission_id,
-        filename: s.original_filename || "batch",
-        uploaded_at: s.uploaded_at,
-        claim_count: claims.length,
-        total_billed: claims.reduce((x,c)=>x+num(c.amount_billed),0),
-        paid_count: paidCount,
-      };
-    });
-  return subRows.concat((manualBatches || []).map(b => ({
-    submission_id: b.batch_id,
-    filename: b.file || "batch",
-    uploaded_at: b.uploaded_at,
-    claim_count: num(b.claim_count),
-    total_billed: num(b.total_billed),
-    paid_count: 0,
-  }))).sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
+  return readJSON(FILES.upload_batches, [])
+    .filter(b => b.org_id === org_id)
+    .map(b => ({
+      upload_id: String(b.upload_id || ""),
+      filename: b.file_name || "batch",
+      uploaded_at: b.uploaded_at,
+      uploaded_by: b.uploaded_by || "",
+      claim_count: num(b.claim_count),
+      total_billed: num(b.total_billed),
+    }))
+    .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
 }
 
 function getPaymentBatchHistory(org_id){
@@ -12599,10 +12589,6 @@ rowsAdded = toUse;
       <form method="POST" action="/data-management/upload" enctype="multipart/form-data">
         <input type="hidden" name="tab" value="${safeStr(activeTab)}"/>
         <input type="hidden" name="next" value="/data-management?tab=${safeStr(activeTab)}"/>
-        <label>Category</label>
-        <select name="category">
-          <option value="claims">Claims</option><option value="payments">Payments</option><option value="denials">Denials</option><option value="contracts">Contracts</option><option value="fee_schedule">Fee Schedule</option>
-        </select>
         <input id="dm-files" type="file" name="documents" accept=".csv,.xls,.xlsx,.pdf,.txt,.doc,.docx,.jpg,.jpeg,.png" multiple required />
         <div id="dm-drop" class="dropzone" style="margin-top:8px;">Drag and drop files here (multi-file)</div>
         <div id="dm-filelist" class="muted" style="margin-top:8px;"></div>
@@ -12613,8 +12599,8 @@ rowsAdded = toUse;
       ${uploadPanel}
       <div class="hr"></div>
       <h3>Batches</h3>
-      <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded At</th><th>Claim Count</th><th>Total Billed</th><th></th></tr></thead><tbody>
-      ${claimBatches.map(x=>`<tr><td>${safeStr(x.filename)}</td><td>${x.uploaded_at ? new Date(x.uploaded_at).toLocaleString() : "—"}</td><td>${x.claim_count}</td><td>${formatMoneyUI(x.total_billed||0)}</td><td><form method="POST" action="/data-management/ingest/delete"><input type="hidden" name="ingest_id" value="${safeStr((ingests.find(i=>i.original_filename===x.filename)||{}).ingest_id||"")}"/><input type="hidden" name="tab" value="claims"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="5" class="muted">No batches.</td></tr>'}
+      <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded By</th><th>Uploaded At</th><th>Claim Count</th><th>Total Billed</th><th></th></tr></thead><tbody>
+      ${claimBatches.map(batch=>`<tr><td><a href="/batch-detail?upload_id=${encodeURIComponent(batch.upload_id)}">${safeStr(batch.filename)}</a></td><td>${safeStr(batch.uploaded_by || "")}</td><td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "—"}</td><td>${batch.claim_count}</td><td>${formatMoneyUI(batch.total_billed||0)}</td><td><form method="POST" action="/batch-delete" onsubmit="return confirm('Are you sure you want to permanently delete this batch and all associated claims?');"><input type="hidden" name="upload_id" value="${safeStr(batch.upload_id || "")}"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="6" class="muted">No batches.</td></tr>'}
       </tbody></table></div>
       <h3>Integrity Metrics</h3>
       <div class="row"><div class="col"><div class="kpi-card"><h4>Missing payer</h4><p>${claimIntegrity.missingPayer}</p></div></div><div class="col"><div class="kpi-card"><h4>Missing submission_id</h4><p>${claimIntegrity.missingSubmission}</p></div></div><div class="col"><div class="kpi-card"><h4>Billed = 0</h4><p>${claimIntegrity.zeroBilled}</p></div></div><div class="col"><div class="kpi-card"><h4>Missing expected insurance</h4><p>${claimIntegrity.missingExpected}</p></div></div></div>
@@ -12710,6 +12696,70 @@ rowsAdded = toUse;
     return send(res, 200, html);
   }
 
+  if (method === "GET" && pathname === "/batch-detail") {
+    const uploadId = String(parsed.query.upload_id || "").trim();
+    if (!uploadId) return redirect(res, "/data-management?tab=claims");
+    const batches = readJSON(FILES.upload_batches, []).filter(b => b.org_id === org.org_id);
+    const batch = batches.find(b => String(b.upload_id || "") === uploadId);
+    if (!batch) return redirect(res, "/data-management?tab=claims");
+    const claims = readJSON(FILES.billed, []).filter(c => c.org_id === org.org_id && String(c.upload_id || "") === uploadId);
+    const claimRows = claims.map(c => `<tr><td>${safeStr(c.billed_id || c.claim_number || "")}</td><td>${safeStr(c.payer || "")}</td><td>${formatMoneyUI(c.amount_billed || 0)}</td></tr>`).join("") || '<tr><td colspan="3" class="muted">No claims for this batch.</td></tr>';
+    const html = renderPage("Batch Detail", `
+      <h2>Batch Detail</h2>
+      <table>
+        <tr><th>File name</th><td>${safeStr(batch.file_name || "")}</td></tr>
+        <tr><th>Uploaded by</th><td>${safeStr(batch.uploaded_by || "")}</td></tr>
+        <tr><th>Uploaded at</th><td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "—"}</td></tr>
+        <tr><th>Claim count</th><td>${num(batch.claim_count)}</td></tr>
+        <tr><th>Total billed</th><td>${formatMoneyUI(batch.total_billed || 0)}</td></tr>
+      </table>
+      <div class="hr"></div>
+      <h3>Associated Claim IDs</h3>
+      <div style="overflow:auto;"><table><thead><tr><th>Claim ID</th><th>Payer</th><th>Billed</th></tr></thead><tbody>${claimRows}</tbody></table></div>
+      <div class="btnRow" style="margin-top:12px;">
+        <form method="POST" action="/batch-delete" onsubmit="return confirm('Are you sure you want to permanently delete this batch and all associated claims?');" style="display:inline-block;">
+          <input type="hidden" name="upload_id" value="${safeStr(batch.upload_id || "")}" />
+          <button class="btn danger" type="submit">Delete Batch</button>
+        </form>
+        <a class="btn secondary" href="/data-management?tab=claims">Back</a>
+      </div>
+    `, navUser(), {showChat:false, orgName: org.org_name});
+    return send(res, 200, html);
+  }
+
+  if (method === "POST" && pathname === "/batch-delete") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const uploadId = String(params.get("upload_id") || "").trim();
+
+    const batches = readJSON(FILES.upload_batches, []);
+    const batch = batches.find(b => b.upload_id === uploadId && b.org_id === org.org_id);
+    if (!batch) return redirect(res, "/data-management?tab=claims");
+
+    const billed = readJSON(FILES.billed, []);
+    const updatedBilled = billed.filter(c => !(c.org_id === org.org_id && c.upload_id === uploadId));
+    writeJSON(FILES.billed, updatedBilled);
+
+    const updatedBatches = batches.filter(b => !(b.upload_id === uploadId && b.org_id === org.org_id));
+    writeJSON(FILES.upload_batches, updatedBatches);
+
+    const auditLog = readJSON(FILES.audit_log, []);
+    auditLog.push({
+      audit_id: uuid(),
+      org_id: org.org_id,
+      action: "batch_deleted",
+      upload_id: batch.upload_id,
+      file_name: batch.file_name,
+      claim_count: batch.claim_count,
+      deleted_by: user.user_id,
+      deleted_at: nowISO()
+    });
+    writeJSON(FILES.audit_log, auditLog);
+
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
+    return redirect(res, "/data-management?tab=claims");
+  }
+
   if (method === "POST" && pathname === "/data-management/network") {
     return redirect(res, "/data-management?tab=contracts");
   }
@@ -12722,7 +12772,7 @@ rowsAdded = toUse;
     const { files, fields } = await parseMultipart(req, boundaryMatch[1]);
     const tab = String(fields.tab || "claims").toLowerCase();
     const next = String(fields.next || `/data-management?tab=${tab}`);
-    const category = String(fields.category || categoryFromTab(tab)).toLowerCase();
+    const category = categoryFromTab(tab);
     const docs = files.filter(f => f.fieldName === "documents");
     if (!docs.length) return redirect(res, next);
 
@@ -12731,7 +12781,7 @@ rowsAdded = toUse;
     const payments = readJSON(FILES.payments, []);
     let cases = readJSON(FILES.cases, []);
     let casesModified = false;
-    const claimBatches = getClaimBatches(org.org_id);
+    const uploadBatches = readJSON(FILES.upload_batches, []);
     const settings = getPracticeSettings(org.org_id);
 
     for (const f of docs) {
@@ -12746,6 +12796,11 @@ rowsAdded = toUse;
         if (ext === ".csv") {
           const parsedCSV = parseCSV(f.buffer.toString("utf8"));
           const rows = parsedCSV.rows || [];
+          const uploadId = uuid();
+          const existing = readJSON(FILES.upload_batches, []);
+          if (existing.some(b => b.upload_id === uploadId)) {
+            continue;
+          }
           const submission_id = uuid();
           const submissionUploadedAt = nowISO();
           subsAll.push({
@@ -12770,12 +12825,22 @@ rowsAdded = toUse;
               amount_billed: billedAmount,
               patient_responsibility: num(pickField(row, ["patient_resp","patient responsibility","copay","coinsurance"])),
               submission_id,
+              upload_id: uploadId,
               created_at: nowISO()
             });
             totalBilledForBatch += billedAmount;
             insertedClaims += 1;
           }
-          claimBatches.push({ batch_id: uuid(), org_id: org.org_id, ingest_id: ingest.ingest_id, file: ingest.original_filename, uploaded_at: submissionUploadedAt, claim_count: insertedClaims, total_billed: totalBilledForBatch, submission_id });
+          const batchRecord = {
+            upload_id: uploadId,
+            org_id: org.org_id,
+            file_name: ingest.original_filename || f.filename || "claims_upload.csv",
+            uploaded_by: user.user_id,
+            uploaded_at: submissionUploadedAt,
+            claim_count: insertedClaims,
+            total_billed: totalBilledForBatch,
+          };
+          uploadBatches.push(batchRecord);
           ingest.status = "Parsed";
           ingest.linked_claims_count = insertedClaims;
         } else {
@@ -12821,7 +12886,7 @@ rowsAdded = toUse;
       if (idx >= 0) { allIngests[idx] = ingest; writeJSON(FILES.document_ingests, allIngests); }
     }
 
-    saveClaimBatches(org.org_id, claimBatches);
+    writeJSON(FILES.upload_batches, uploadBatches);
     writeJSON(FILES.billed_submissions, subsAll);
     writeJSON(FILES.payments, payments);
     writeJSON(FILES.billed, billedAll);
