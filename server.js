@@ -6129,17 +6129,16 @@ if (method === "GET" && pathname === "/weekly-summary") {
       return "Last 30 days";
     })();
 
-    const payerRows = (m.payerTop || []).map(x => `
-      <tr>
-        <td><a href="/payer-claims?payer=${encodeURIComponent(x.payer)}">${safeStr(x.payer)}</a></td>
-        <td>${fmtMoney(x.billed)}</td>
-        <td>${fmtMoney(x.allowed)}</td>
-        <td>${fmtMoney(x.paid)}</td>
-        <td>${fmtMoney(x.denied)}</td>
-        <td>${fmtMoney(x.writeOff)}</td>
-        <td>${fmtMoney(x.underpaid)}</td>
-      </tr>
-    `).join("");
+
+    let verdictTitle = "Financial Performance Stable";
+    let verdictColor = "#065f46";
+
+    if (m.denialRate > 15 || m.kpis.netCollectionRate < 80) {
+      verdictTitle = "Financial Risk Elevated";
+      verdictColor = "#b91c1c";
+    }
+
+    const topRiskPayer = (m.payerRiskRanking || [])[0];
 
     const html = renderPage("Revenue Overview", `
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
@@ -6194,82 +6193,57 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .trend-toggle{display:flex;gap:8px;align-items:center;}
       </style>
 
-      <div class="exec-card">
-        <h3>Executive Snapshot</h3>
-        <ul>
-          <li>Revenue At Risk: ${formatMoneyUI(m.kpis.revenueAtRisk || 0)}</li>
-          <li>Denial Rate: ${Number(m.denialRate || 0).toFixed(1)}%</li>
-          <li>Recovery Rate: ${Number(m.kpis.netCollectionRate || 0).toFixed(1)}%</li>
-          <li>Operational Discipline: ${Number(m.operationalDisciplineScore || 0).toFixed(0)}/100</li>
-        </ul>
+      <div style="border-left:6px solid ${verdictColor};padding:14px 18px;margin-bottom:18px;background:var(--card);border-radius:10px;">
+        <div style="font-size:18px;font-weight:800;color:${verdictColor};">
+          ${verdictTitle}
+        </div>
+        <div class="muted" style="margin-top:4px;">
+          Denial Rate: ${Number(m.denialRate||0).toFixed(1)}% · Recovery Rate: ${Number(m.kpis.netCollectionRate||0).toFixed(1)}%
+        </div>
       </div>
 
       <div class="kpi-strip">
-        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.totalBilled)}</p><p class="kpi-label">Total Billed</p><div class="kpi-delta">—</div></div>
-        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.collectedTotal)}</p><p class="kpi-label">Total Collected</p><div class="kpi-delta">—</div></div>
-        <div class="kpi-card"><p class="kpi-value">${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p><p class="kpi-label">Net Collection Rate</p><div class="kpi-delta">—</div></div>
         <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.revenueAtRisk)}</p><p class="kpi-label">Revenue At Risk</p><div class="kpi-delta">—</div></div>
-        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.underpaidAmt)}</p><p class="kpi-label">Underpaid Amount</p><div class="kpi-delta">—</div></div>
-        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.underpaidAmt)}</p><p class="kpi-label">Open Appeals Value</p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${Number(m.denialRate||0).toFixed(1)}%</p><p class="kpi-label">Denial Rate</p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p><p class="kpi-label">Recovery Rate</p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${Number(m.operationalDisciplineScore||0).toFixed(0)}/100</p><p class="kpi-label">Operational Discipline</p><div class="kpi-delta">—</div></div>
       </div>
 
-      <div class="executive-panel">
-        <h3 style="margin-bottom:12px;">Practice Financial Health Score <span class="tooltip" data-tip="Weighted score combining collection rate, denial rate, underpaid %, days to pay, AR aging, and operational discipline. 90+ = A grade.">ⓘ</span></h3>
-        <div class="muted" style="margin-bottom:10px;">Score: <strong>${Number(m.healthScore||0)}</strong> · Grade: <strong>${safeStr(m.healthGrade||"—")}</strong></div>
-        <div class="muted small" style="margin-top:8px;">
-          <strong>Subscores (0–100):</strong>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
-            <span class="badge">${formatNumberUI(m.subscores?.collection_strength || 0)}</span>
-            <span class="muted small">Collection Strength <span class="tooltip" data-tip="Higher is better. Based on collection rate.">ⓘ</span></span>
-
-            <span class="badge">${formatNumberUI(m.subscores?.denial_discipline || 0)}</span>
-            <span class="muted small">Denial Discipline <span class="tooltip" data-tip="Higher is better. Based on denial rate (lower denial rate = higher score).">ⓘ</span></span>
-
-            <span class="badge">${formatNumberUI(m.subscores?.underpaid_discipline || 0)}</span>
-            <span class="muted small">Underpaid Discipline <span class="tooltip" data-tip="Higher is better. Based on underpaid rate (lower underpaid rate = higher score).">ⓘ</span></span>
-
-            <span class="badge">${formatNumberUI(m.subscores?.days_to_pay || 0)}</span>
-            <span class="muted small">Days-to-Pay <span class="tooltip" data-tip="Higher is better. Faster payer payments yield a higher score.">ⓘ</span></span>
-
-            <span class="badge">${formatNumberUI(m.subscores?.ar_aging || 0)}</span>
-            <span class="muted small">AR Aging <span class="tooltip" data-tip="Higher is better. Lower 90+ AR exposure yields a higher score.">ⓘ</span></span>
-
-            <span class="badge">${formatNumberUI(m.subscores?.operational_discipline || 0)}</span>
-            <span class="muted small">Operational Discipline <span class="tooltip" data-tip="Higher is better. Measures % of AI workspaces marked ready/submitted with required docs present. Sample size shown below.">ⓘ</span></span>
+      <div class="exec-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+          <div>
+            <h3 style="margin:0 0 6px;">Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, AR aging, and operational discipline. Higher is better.">ⓘ</span></h3>
+            <div style="font-size:28px;font-weight:900;line-height:1;">
+              ${formatNumberUI(m.healthScore || 0)} / 100
+              <span class="badge ${gradeBadgeClass(m.healthGrade)}" style="margin-left:8px;">${safeStr(m.healthGrade || "—")}</span>
+            </div>
+            <div class="muted small" style="margin-top:6px;">This is your high-level revenue health indicator.</div>
+            <div style="margin-top:10px;">
+              <a class="btn secondary small" href="#advancedBreakdown" onclick="document.getElementById('advancedBreakdown').open=true;">View Breakdown</a>
+            </div>
           </div>
-          <div class="muted small" style="margin-top:6px;">
-            Operational discipline sample: ${formatNumberUI(m.operationalDisciplineSample || 0)} workspace(s) in range · Ready docs rate: ${Number(m.operationalDisciplineRate||0).toFixed(1)}%
+          <div style="min-width:320px;flex:1;">
+            <div class="chart-container" style="height:260px;max-height:260px;">
+              <canvas id="healthScoreDonut"></canvas>
+            </div>
           </div>
         </div>
-        <div class="chart-container">
-          <canvas id="revenueBreakdownChart"></canvas>
-        </div>
       </div>
 
-      <div class="executive-panel">
-        <h4 style="margin-bottom:12px;">AR Aging Breakdown <span class="tooltip" data-tip="Outstanding balances grouped by claim age in days. 90+ days is highest risk.">ⓘ</span></h4>
-        <div class="kpi-strip" style="margin-top:0;">
-          <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["0-30"]||0)}</p><p class="kpi-label">0-30 Days</p></div>
-          <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["31-60"]||0)}</p><p class="kpi-label">31-60 Days</p></div>
-          <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["61-90"]||0)}</p><p class="kpi-label">61-90 Days</p></div>
-          <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["90+"]||0)}</p><p class="kpi-label">90+ Days</p></div>
+      ${topRiskPayer ? `
+      <div class="exec-card">
+        <h3>Top Risk Payer</h3>
+        <div style="font-weight:700;">
+          ${safeStr(topRiskPayer.payer)}
+        </div>
+        <div class="muted">
+          $${Math.round(topRiskPayer.risk || 0).toLocaleString()} at risk · ${Number(topRiskPayer.riskRate||0).toFixed(1)}% exposure
+        </div>
+        <div style="margin-top:8px;">
+          <a class="btn small" href="/revenue-intelligence?tab=payers">Analyze in Revenue Intelligence</a>
         </div>
       </div>
-
-      <div class="executive-panel">
-        <h3 style="margin-bottom:12px;">Top Payer Risk (At Risk)</h3>
-        <div class="chart-container payer">
-          <canvas id="payerRiskChart"></canvas>
-        </div>
-        <div class="exec-table">
-          <table>
-            <thead><tr><th>Payer</th><th>Billed</th><th>Collected</th><th>Underpaid</th><th>Denied</th><th>Open Appeals</th><th>AI</th></tr></thead>
-            <tbody id="topRiskRows"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-
-      ${renderPayerRankingTable(payerRanks, { limit: 10, showAllLink: true })}
+      ` : ""}
 
       <div class="executive-panel">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:end;">
@@ -6285,18 +6259,50 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
       </div>
 
-      <div class="executive-panel">
-        <h3 style="margin-bottom:12px;">Recovery Intelligence</h3>
-        <div class="kpi-strip" style="margin-top:0;">
-          <div class="kpi-card"><p class="kpi-value">${Number(m.appealSuccessRate||0).toFixed(1)}%</p><p class="kpi-label">Appeal Success Rate ${infoIcon("% of submitted appeals that resulted in approved/partial + payment posted.")}</p></div>
-          <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.appealSubmittedCount||0)}</p><p class="kpi-label">Appeals Submitted</p></div>
-          <div class="kpi-card"><p class="kpi-value">${Number(m.negotiationROI||0).toFixed(1)}%</p><p class="kpi-label">Negotiation ROI ${infoIcon("Recovered cash / requested amount for submitted negotiation workspaces.")}</p></div>
-          <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.negotiationSubmittedCount||0)}</p><p class="kpi-label">Negotiations Submitted</p></div>
-          <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.negotiatedTotal||0)}</p><p class="kpi-label">Negotiated Requested</p></div>
-          <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.recoveredTotal||0)}</p><p class="kpi-label">Negotiated Recovered</p></div>
-          <div class="kpi-card"><p class="kpi-value">${Number(m.approvedVsPaidPct||0).toFixed(1)}%</p><p class="kpi-label">Approved vs Paid</p></div>
+      <details id="advancedBreakdown" class="executive-panel">
+        <summary style="font-weight:700;cursor:pointer;">View Advanced Financial Breakdown</summary>
+
+        <div style="margin-top:14px;">
+          <h3 style="margin-bottom:12px;">Practice Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, and AR aging. Higher is better.">ⓘ</span></h3>
+          <div>
+            <div style="font-size:32px;font-weight:900;line-height:1;">${formatNumberUI(m.healthScore || 0)} / 100 <span class="badge ${gradeBadgeClass(m.healthGrade)}">${safeStr(m.healthGrade || "—")}</span></div>
+            <div class="muted" style="margin-top:6px;">Range: ${safeStr(rangeLabel)}</div>
+            <div class="muted small" style="margin-top:8px;">Calculated from weighted metrics across payout performance and receivables risk.</div>
+          </div>
+          <div class="kpi-strip" style="margin-top:12px;">
+            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.collection_efficiency || 0)}</p><p class="kpi-label">Collection Efficiency</p></div>
+            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.denial_risk || 0)}</p><p class="kpi-label">Denial Risk</p></div>
+            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.ar_aging || 0)}</p><p class="kpi-label">AR Aging</p></div>
+            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.operational_discipline || 0)}</p><p class="kpi-label">Operational Discipline</p></div>
+          </div>
+          <div class="muted small" style="margin-top:6px;">
+            Operational discipline sample: ${formatNumberUI(m.operationalDisciplineSample || 0)} workspace(s) in range · Ready docs rate: ${Number(m.operationalDisciplineRate||0).toFixed(1)}%
+          </div>
         </div>
-      </div>
+
+        <div style="margin-top:16px;">
+          <h4 style="margin-bottom:12px;">AR Aging Breakdown <span class="tooltip" data-tip="Outstanding balances grouped by claim age in days. 90+ days is highest risk.">ⓘ</span></h4>
+          <div class="kpi-strip" style="margin-top:0;">
+            <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["0-30"]||0)}</p><p class="kpi-label">0-30 Days</p></div>
+            <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["31-60"]||0)}</p><p class="kpi-label">31-60 Days</p></div>
+            <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["61-90"]||0)}</p><p class="kpi-label">61-90 Days</p></div>
+            <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["90+"]||0)}</p><p class="kpi-label">90+ Days</p></div>
+          </div>
+        </div>
+
+        <div style="margin-top:16px;">
+          <h3 style="margin-bottom:12px;">Recovery Intelligence</h3>
+          <div class="kpi-strip" style="margin-top:0;">
+            <div class="kpi-card"><p class="kpi-value">${Number(m.appealSuccessRate||0).toFixed(1)}%</p><p class="kpi-label">Appeal Success Rate ${infoIcon("% of submitted appeals that resulted in approved/partial + payment posted.")}</p></div>
+            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.appealSubmittedCount||0)}</p><p class="kpi-label">Appeals Submitted</p></div>
+            <div class="kpi-card"><p class="kpi-value">${Number(m.negotiationROI||0).toFixed(1)}%</p><p class="kpi-label">Negotiation ROI ${infoIcon("Recovered cash / requested amount for submitted negotiation workspaces.")}</p></div>
+            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.negotiationSubmittedCount||0)}</p><p class="kpi-label">Negotiations Submitted</p></div>
+            <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.negotiatedTotal||0)}</p><p class="kpi-label">Negotiated Requested</p></div>
+            <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.recoveredTotal||0)}</p><p class="kpi-label">Negotiated Recovered</p></div>
+            <div class="kpi-card"><p class="kpi-value">${Number(m.approvedVsPaidPct||0).toFixed(1)}%</p><p class="kpi-label">Approved vs Paid</p></div>
+          </div>
+        </div>
+      </details>
 
       <div class="btnRow" style="margin-top:10px;">
         <a class="btn" href="/claims">Open Claims Lifecycle</a>
@@ -6343,38 +6349,28 @@ document.addEventListener("DOMContentLoaded", function(){
     scales:{ x:{ ticks:{ maxTicksLimit:6 } }, y:{ ticks:{ maxTicksLimit:6 } } }
   };
 
-  const collectionRatePlugin = {
-    id: "collectionRateLabel",
-    afterDraw(chart){
-      const {ctx, chartArea:{left,right,top,bottom}} = chart;
-      const cx = (left + right) / 2;
-      const cy = (top + bottom) / 2;
-      ctx.save();
-      ctx.textAlign = "center";
-      ctx.fillStyle = "#64748b";
-      ctx.font = "600 12px sans-serif";
-      ctx.fillText("Collection Rate", cx, cy - 6);
-      ctx.fillStyle = "#0f172a";
-      ctx.font = "700 22px sans-serif";
-      const collectionRate = Number((d.flow?.values?.[0]||0) > 0 ? ((d.flow?.values?.[2]||0)/(d.flow?.values?.[0]||1))*100 : 0).toFixed(1);
-      ctx.fillText(String(collectionRate) + "%", cx, cy + 18);
-      ctx.restore();
-    }
-  };
-
-  new Chart(document.getElementById("revenueBreakdownChart"), {
-    type: "doughnut",
-    data: {
-      labels: ["Collected","At Risk","Write-Off"],
-      datasets: [{ data: [d.flow?.values?.[2]||0, d.flow?.values?.[3]||0, d.flow?.values?.[5]||0], backgroundColor: ["#16a34a","#f59e0b","#64748b"] }]
-    },
-    options: { ...baseChartOptions, cutout:"70%", scales:{} },
-    plugins:[collectionRatePlugin]
-  });
-
   const trendLabels = d.series?.keys || [];
   const billed = (d.series?.billed || []).map(v => Number(v || 0));
   const collected = (d.series?.collected || []).map(v => Number(v || 0));
+
+  const hs = Number(${Number(m.healthScore || 0)});
+  const good = Math.max(0, Math.min(100, hs));
+  const remaining = Math.max(0, 100 - good);
+
+  new Chart(document.getElementById("healthScoreDonut"), {
+    type: "doughnut",
+    data: {
+      labels: ["Health Score", "Remaining"],
+      datasets: [{ data: [good, remaining] }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: "72%",
+      plugins: { legend: { position: "bottom" } }
+    }
+  });
+
   const trendCfg = {
     type: "line",
     data: { labels: trendLabels, datasets: [
@@ -6385,37 +6381,6 @@ document.addEventListener("DOMContentLoaded", function(){
   };
   new Chart(document.getElementById("revenueTrendChart"), trendCfg);
 
-  const payerRows = (d.payerTop || []).map(r => ({
-    ...r,
-    atRisk: Number(r.underpaid || 0) + Number(r.denied || 0),
-    openAppeals: Number(r.underpaid || 0)
-  })).sort((a,b) => b.atRisk - a.atRisk);
-  const top5 = payerRows.slice(0, 5);
-  const otherAtRisk = payerRows.slice(5).reduce((s, r) => s + Number(r.atRisk || 0), 0);
-  const labels = top5.map(r => r.payer);
-  const data = top5.map(r => Number(r.atRisk || 0));
-  if (otherAtRisk > 0) { labels.push("Other"); data.push(otherAtRisk); }
-
-  new Chart(document.getElementById("payerRiskChart"), {
-    type: "bar",
-    data: { labels, datasets: [{ label:"At Risk", data, backgroundColor:"#f59e0b" }] },
-    options: { ...baseChartOptions, indexAxis:"y", scales:{ x:{ ticks:{ maxTicksLimit:6, callback:(v)=>moneyFmt(v) } }, y:{ ticks:{ maxTicksLimit:6 } } } }
-  });
-
-  const tbody = document.getElementById("topRiskRows");
-  if (tbody) {
-    tbody.innerHTML = payerRows.length
-      ? payerRows.map(r => '<tr>' +
-          '<td><a href="/analyze-payer?payer=' + encodeURIComponent(r.payer) + '" style="font-weight:700;">' + r.payer + '</a></td>' +
-          '<td>' + moneyFmt(r.billed) + '</td>' +
-          '<td>' + moneyFmt(r.paid) + '</td>' +
-          '<td>' + moneyFmt(r.underpaid) + '</td>' +
-          '<td>' + moneyFmt(r.denied) + '</td>' +
-          '<td>' + moneyFmt(r.openAppeals) + '</td>' +
-          '<td><a class="btn secondary small" href="/analyze-payer?payer=' + encodeURIComponent(r.payer) + '">Analyze</a></td>' +
-        '</tr>').join("")
-      : '<tr><td colspan="7" class="muted">No payer data in this range.</td></tr>';
-  }
 });
 </script>
 
