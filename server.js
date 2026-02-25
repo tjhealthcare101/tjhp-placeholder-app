@@ -86,6 +86,7 @@ const FILES = {
   agent_workspaces: path.join(DATA_DIR, "agent_workspaces.json"),
   agent_messages: path.join(DATA_DIR, "agent_messages.json"),
   org_settings: path.join(DATA_DIR, "org_settings.json"),
+  copilot_briefs: path.join(DATA_DIR, "copilot_briefs.json"),
 };
 
 // Directory for storing uploaded template files
@@ -310,6 +311,7 @@ ensureFile(FILES.agent_usage, []);
 ensureFile(FILES.agent_workspaces, []);
 ensureFile(FILES.agent_messages, []);
 ensureFile(FILES.org_settings, []);
+ensureFile(FILES.copilot_briefs, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -971,7 +973,8 @@ function getUsage(org_id) {
       monthly_ai_generations_used: 0,
       monthly_agent_workspace_edits: 0,
       ai_job_timestamps: [],
-      ai_chat_used: 0
+      ai_chat_used: 0,
+      copilot_questions_used: 0
     };
     usage.push(u);
     writeJSON(FILES.usage, usage);
@@ -985,10 +988,12 @@ function getUsage(org_id) {
     u.monthly_ai_generations_used = 0;
     u.monthly_agent_workspace_edits = 0;
     u.ai_chat_used = 0;
+    u.copilot_questions_used = 0;
     writeJSON(FILES.usage, usage);
   }
   if (typeof u.monthly_ai_generations_used !== "number") u.monthly_ai_generations_used = 0;
   if (typeof u.monthly_agent_workspace_edits !== "number") u.monthly_agent_workspace_edits = 0;
+  if (typeof u.copilot_questions_used !== "number") u.copilot_questions_used = 0;
   return u;
 }
 function saveUsage(u) {
@@ -1007,11 +1012,20 @@ function auditLog(entry) {
 // ===== Plans (Pricing + Limits) =====
 // Pricing (for partner summary / UI display): Starter $249, Growth $599, Pro $1200, Enterprise $2000
 const PLAN_CONFIG = {
-  starter:   { price_monthly: 249, ai_chat_limit: 50,  case_credits_per_month: 50,  payment_tracking_credits_per_month: 10 },
-  growth:    { price_monthly: 599, ai_chat_limit: 150, case_credits_per_month: 150, payment_tracking_credits_per_month: 50 },
-  pro:       { price_monthly: 1200, ai_chat_limit: 400, case_credits_per_month: 400, payment_tracking_credits_per_month: 150 },
-  enterprise:{ price_monthly: 2000, ai_chat_limit: 999999, case_credits_per_month: 999999, payment_tracking_credits_per_month: 999999 },
+  starter:   { price_monthly: 249, ai_chat_limit: 50,  copilot_limit: 50,  case_credits_per_month: 50,  payment_tracking_credits_per_month: 10 },
+  growth:    { price_monthly: 599, ai_chat_limit: 150, copilot_limit: 150, case_credits_per_month: 150, payment_tracking_credits_per_month: 50 },
+  pro:       { price_monthly: 1200, ai_chat_limit: 400, copilot_limit: 400, case_credits_per_month: 400, payment_tracking_credits_per_month: 150 },
+  enterprise:{ price_monthly: 2000, ai_chat_limit: 999999, copilot_limit: 999999, case_credits_per_month: 999999, payment_tracking_credits_per_month: 999999 },
 };
+
+if (!PLAN_CONFIG.pro) {
+  console.error("PLAN_CONFIG not defined before Copilot module.");
+}
+Object.keys(PLAN_CONFIG).forEach(plan => {
+  if (!PLAN_CONFIG[plan].copilot_limit) {
+    PLAN_CONFIG[plan].copilot_limit = 50;
+  }
+});
 
 function getActivePlanName(org_id) {
   const sub = getSub(org_id);
@@ -1026,6 +1040,17 @@ function getAIChatLimit(org_id) {
     return (PLAN_CONFIG[plan]?.ai_chat_limit) ?? 50;
   }
   // Pilot = 10 total questions for the 14-day trial
+  const pilot = getPilot(org_id) || ensurePilot(org_id);
+  if (pilot && pilot.status === "active") return 10;
+  return 0;
+}
+
+function getCopilotLimit(org_id) {
+  const sub = getSub(org_id);
+  if (sub && sub.status === "active") {
+    const plan = (sub.plan || "starter").toLowerCase();
+    return (PLAN_CONFIG[plan]?.copilot_limit) ?? 50;
+  }
   const pilot = getPilot(org_id) || ensurePilot(org_id);
   if (pilot && pilot.status === "active") return 10;
   return 0;
@@ -7564,8 +7589,8 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 // ==============================
 if (method === "GET" && pathname === "/copilot") {
   const usage = getUsage(org.org_id);
-  const used = Number(usage.ai_chat_used || 0);
-  const limit = getAIChatLimit(org.org_id);
+  const used = Number(usage.copilot_questions_used || 0);
+  const limit = getCopilotLimit(org.org_id);
   const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
 
   const promptButtons = [
@@ -7630,78 +7655,93 @@ if (method === "POST" && pathname === "/copilot/query") {
   let body = "";
   req.on("data", c => body += c);
   req.on("end", async () => {
-    const limit = getAIChatLimit(org.org_id);
+    const limit = getCopilotLimit(org.org_id);
     const usage = getUsage(org.org_id);
-    const used = Number(usage.ai_chat_used || 0);
+    const used = Number(usage.copilot_questions_used || 0);
     const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
 
     if (!isUnlimited && used >= limit) {
       const html = renderPage("AI Copilot", `
-        <h2>AI Copilot</h2>
-        <div class="alert warning">Limit reached for this billing period.</div>
-        <div style="margin-top:12px;"><a class="btn" href="/account">View plan and limits</a></div>
+        <h2>Copilot Limit Reached</h2>
+        <p>You have reached your monthly Copilot question limit.</p>
+        <div style="margin-top:12px;"><a class="btn" href="/account">Upgrade Plan</a></div>
       `, navUser(), {showChat:false, orgName: org.org_name});
       return send(res, 200, html);
     }
 
     const params = new URLSearchParams(body);
-    const query = String(params.get("query") || "").trim();
-    const format = String(params.get("format") || "executive");
-    if (!query) {
+    const question = String(params.get("question") || params.get("query") || "").trim();
+    const preset = String(params.get("preset") || params.get("format") || "last30");
+    if (!question) {
       return redirect(res, "/copilot");
     }
 
-    const [from, to] = rangeFromPreset("last30");
-    const m = computeDashboardMetrics(org.org_id, from, to);
-
-    usage.ai_chat_used = used + 1;
+    usage.copilot_questions_used = used + 1;
     saveUsage(usage);
 
-    const responseHTML = `
-      <h3>Copilot Insight</h3>
-      <p><strong>Format:</strong> ${safeStr(format)}</p>
-      <p>${safeStr(query)}</p>
-      <ul>
-        <li>Net collected: <strong>${formatMoneyUI(num(m.netCollected))}</strong></li>
-        <li>Revenue at risk: <strong>${formatMoneyUI(num(m.totalAtRisk))}</strong></li>
-        <li>Open balance: <strong>${formatMoneyUI(num(m.openBalance))}</strong></li>
-        <li>Denials amount: <strong>${formatMoneyUI(num(m.denialsAmount))}</strong></li>
-      </ul>
+    const result = buildCopilotResponse({
+      org_id: org.org_id,
+      preset,
+      question
+    });
 
-      <div class="chart-container">
-        <canvas id="copilotChart" width="900" height="320"></canvas>
+    const briefs = readJSON(FILES.copilot_briefs, []);
+    const brief_id = "BRF-" + Date.now();
+    briefs.push({
+      brief_id,
+      org_id: org.org_id,
+      created: nowISO(),
+      result
+    });
+    writeJSON(FILES.copilot_briefs, briefs);
+
+    const chartCards = (result.charts || []).map((chart, i) => `
+      <div class="copilot-panel" style="margin-top:14px;">
+        <h3>${safeStr(chart.title || `Chart ${i + 1}`)}</h3>
+        <div class="chart-container">
+          <canvas id="chart${i}" width="900" height="320"></canvas>
+        </div>
+      </div>
+    `).join("");
+
+    const chartScripts = (result.charts || []).map((chart, i) => {
+      const labels = JSON.stringify(Array.isArray(chart.labels) ? chart.labels : []);
+      const datasets = JSON.stringify(Array.isArray(chart.datasets) ? chart.datasets : []);
+      const type = String(chart.type || "bar").replace(/[^a-z]/gi, "") || "bar";
+      return `
+        (function(){
+          const c = document.getElementById('chart${i}');
+          if (!c || typeof Chart === 'undefined') return;
+          new Chart(c, {
+            type: '${type}',
+            data: { labels: ${labels}, datasets: ${datasets} },
+            options: { responsive: true, maintainAspectRatio: false }
+          });
+        })();
+      `;
+    }).join("\n");
+
+    const responseHTML = `
+      <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+      <div class="copilot-panel">
+        <h2>Executive Summary</h2>
+        <ul>
+          ${(result.bullets || []).map(b => `<li>${safeStr(b)}</li>`).join("")}
+        </ul>
+      </div>
+
+      ${chartCards}
+
+      <div class="copilot-panel" style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+        <a class="btn" href="/actions?tab=denials">Denials</a>
+        <a class="btn" href="/actions?tab=underpayments">Underpayments</a>
+        <a class="btn" href="/revenue-intelligence?tab=payers">Payer Intelligence</a>
+        <a class="btn secondary" href="/copilot/export?brief_id=${encodeURIComponent(brief_id)}">Export PDF</a>
       </div>
 
       <script>
-        (function(){
-          const c = document.getElementById("copilotChart");
-          if (!c) return;
-          const ctx = c.getContext("2d");
-          const labels = ["Net", "Risk", "Open", "Denials"];
-          const values = [${num(m.netCollected)}, ${num(m.totalAtRisk)}, ${num(m.openBalance)}, ${num(m.denialsAmount)}];
-          const max = Math.max(...values, 1);
-          const w = c.width, h = c.height, pad = 30, barW = 120, gap = 70;
-          ctx.clearRect(0, 0, w, h);
-          ctx.fillStyle = "#6b7280";
-          ctx.font = "12px Arial";
-          values.forEach((v, i) => {
-            const x = pad + i * (barW + gap);
-            const bh = Math.round((v / max) * (h - 90));
-            const y = h - 50 - bh;
-            ctx.fillStyle = ["#3b82f6", "#ef4444", "#f59e0b", "#8b5cf6"][i];
-            ctx.fillRect(x, y, barW, bh);
-            ctx.fillStyle = "#111827";
-            ctx.fillText(labels[i], x + 44, h - 30);
-            ctx.fillText("$" + Math.round(v).toLocaleString(), x + 16, y - 8);
-          });
-        })();
+        ${chartScripts}
       </script>
-
-      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
-        <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence</a>
-        <a class="btn secondary" href="/actions">Open Action Center</a>
-        <a class="btn secondary" href="/copilot/export">Export Copilot Briefing</a>
-      </div>
     `;
 
     const html = renderPage("AI Copilot Result", responseHTML, navUser(), {showChat:false, orgName: org.org_name});
@@ -7711,9 +7751,33 @@ if (method === "POST" && pathname === "/copilot/query") {
 }
 
 if (method === "GET" && pathname === "/copilot/export") {
-  const html = renderPage("Copilot Briefing", `
-    <h2>Copilot Executive Briefing</h2>
-    <p>Print or save this page as PDF.</p>
+  const briefId = String(parsed.query.brief_id || "").trim();
+  const briefs = readJSON(FILES.copilot_briefs, []);
+  const brief = briefs.find(b => b.brief_id === briefId && b.org_id === org.org_id);
+
+  if (!brief) {
+    const html = renderPage("Executive Briefing", `
+      <h2>Executive Briefing</h2>
+      <div class="alert warning">Brief not found.</div>
+      <a class="btn" href="/copilot">Back to Copilot</a>
+    `, navUser(), {showChat:false, orgName: org.org_name});
+    return send(res, 200, html);
+  }
+
+  const result = brief.result || { bullets: [], charts: [] };
+  const html = renderPage("Executive Briefing", `
+    <h1>AI Revenue Executive Briefing</h1>
+    <div class="copilot-panel">
+      <h2>Executive Summary</h2>
+      <ul>
+        ${(result.bullets || []).map(b => `<li>${safeStr(b)}</li>`).join("")}
+      </ul>
+    </div>
+    <div class="copilot-panel" style="margin-top:14px;">
+      <h2>Insights</h2>
+      ${(result.charts || []).map(chart => `<p><strong>${safeStr(chart.title || "Insight")}</strong></p>`).join("")}
+    </div>
+    <p>Generated: ${safeStr(new Date(brief.created || nowISO()).toLocaleString())}</p>
     <button class="btn" onclick="window.print()">Print / Save as PDF</button>
   `, navUser(), {showChat:false, orgName: org.org_name});
   return send(res, 200, html);
@@ -7941,7 +8005,7 @@ if (method === "GET" && pathname === "/actions") {
       <td>${x.riskScore}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
     </tr>`;
-  }).join("");
+  }).join("\n");
 
   const sizeSelect = `
     <label class="small muted" style="margin-right:8px;">Per page</label>
@@ -8283,7 +8347,7 @@ if (method === "GET" && pathname === "/payment-batch-detail") {
         <td><span class="badge ${badgeClassForStatus(b.status||"Pending")}">${safeStr(b.status||"Pending")}</span></td>
       </tr>
     `;
-  }).join("");
+  }).join("\n");
 
   // nav builders
   const payNav = buildPageNav("/payment-batch-detail", { file: safeFile, pageSize: String(pSize) }, pPage, pTotalPages);
@@ -8477,7 +8541,7 @@ if (method === "GET" && pathname === "/upload-denials") {
       <td>${safeStr(c.status)}</td>
       <td>${openAppeal}</td>
     </tr>`;
-  }).join("");
+  }).join("\n");
 
   const html = renderPage("Upload Denials", `
     <h2>Upload Denials</h2>
@@ -8695,7 +8759,7 @@ if (method === "GET" && pathname === "/negotiation-detail") {
   const docList = (n.documents || []).map(d => {
     const link = d && d.filename ? `<a href="/file?name=${encodeURIComponent(d.filename)}" target="_blank">${safeStr(d.filename)}</a>` : "";
     return `<li>${link} <span class="muted small">${d.uploaded_at ? new Date(d.uploaded_at).toLocaleString() : ""}</span></li>`;
-  }).join("");
+  }).join("\n");
 
   const applyHelp = `When a negotiation is approved, you can track approved vs collected. You may apply collected funds to the claim (manual control) even if approval differs from payment timing.`;
   const packetDraft = String(n.packet_draft || "");
@@ -9195,7 +9259,7 @@ if (method === "POST" && pathname === "/negotiations/upload") {
               </td>
             </tr>
           `;
-        }).join("");
+        }).join("\n");
 
       const html = renderPage("Billed Claims Upload", `
         <h2>Billed Claims Upload</h2>
@@ -9499,7 +9563,7 @@ const statusCell = (() => {
         <td>${statusCell}</td>
         <td>${action}</td>
       </tr>`;
-    }).join("");
+    }).join("\n");
 
     const html = renderPage("Billed Submission", `
       <h2>Billed Claims Submission</h2>
@@ -13189,7 +13253,7 @@ else if (type === "payers") {
         <td>${formatMoneyUI(paidAmt)}</td>
         <td><a href="/billed?submission_id=${encodeURIComponent(c.submission_id || "")}">${safeStr(c.submission_id || "View Batch")}</a></td>
       </tr>`;
-    }).join("");
+    }).join("\n");
     const html = renderPage(`${safeStr(payer)} Claims`, `
       <h2>${safeStr(payer)} Claims</h2>
       <form method="GET" action="/payer-claims">
@@ -13398,7 +13462,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
         ? `<input name="value" value="${safeStr(packetSections[key] || ws.negotiation?.requested_amount || d.underpaidAmount || "")}" />`
         : `<textarea name="value" style="min-height:120px;">${safeStr(packetSections[key] || "")}</textarea>`;
       return `<details ${key===mainKey?"open":""} style="margin:8px 0;border:1px solid var(--border);border-radius:10px;padding:10px;"><summary style="font-weight:800;cursor:pointer;">${safeStr(key.replace(/_/g," "))} <span class="muted small">ⓘ ${safeStr(sectionDescriptions[key]||"")}</span></summary><form method="POST" action="/agent-workspace/save" style="margin-top:8px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="draft_type" value="${safeStr(channel)}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><input type="hidden" name="section_key" value="${safeStr(key)}" />${inputHtml}<button class="btn secondary small" type="submit">Save Section</button></form></details>`;
-    }).join("");
+    }).join("\n");
     const checklist = requiredPacketKeysForChannel(channel).map(key => ({ key, label: missingLabelMap[key] || key, present: packetHasKey(ws, key) }));
     const checklistHtml = checklist.map(i => `<li>${i.present ? "☑" : "☐"} ${safeStr(i.label)}</li>`).join("");
     const missingDocsText = readyCheck.missing.map(k => missingLabelMap[k] || k).join(", ");
