@@ -6900,7 +6900,7 @@ if (method === "GET" && pathname === "/claims") {
       billed: "/data-management?tab=claims",
       payments: "/data-management?tab=payments",
       denials: "/data-management?tab=denials",
-      negotiations: "/data-management?tab=contracts"
+      negotiations: "/data-management?tab=reimbursement"
     }[tab] || "/data-management?tab=claims";
     return `
       <div style="border:1px solid var(--border);border-radius:10px;padding:10px;background:#f9fafb;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -12407,195 +12407,23 @@ rowsAdded = toUse;
   }
 
   // -------- ACCOUNT --------
+  // ===============================
+  // Legacy Payer Contracts Redirect Cleanup
+  // ===============================
+
+  // Any legacy GET to /payer-contracts
   if (method === "GET" && pathname === "/payer-contracts") {
-    const contracts = getPayerContracts(org.org_id).sort((a, b) =>
-      String(a.payer_name || "").localeCompare(String(b.payer_name || "")) ||
-      String(a.procedure_code || "").localeCompare(String(b.procedure_code || ""))
-    );
-
-    const rows = contracts.map(c => `
-      <tr>
-        <td>${safeStr(c.payer_name || "")}</td>
-        <td>${safeStr(c.network_status || "Out of Network")}</td>
-        <td>${safeStr(c.procedure_code || "")}</td>
-        <td>${safeStr(c.diagnosis_code || "—")}</td>
-        <td>${safeStr(c.reimbursement_model || "fixed_amount")}</td>
-        <td>${(String(c.reimbursement_model || "") === "fixed_amount") ? formatMoneyUI(c.expected_value) : (Number(c.expected_value || 0).toFixed(2) + "%")}</td>
-        <td>
-          <form method="POST" action="/payer-contracts/delete" onsubmit="return confirm('Delete this payer contract?');" style="display:inline;">
-            <input type="hidden" name="contract_id" value="${safeStr(c.contract_id)}"/>
-            <button class="btn danger small" type="submit">Delete</button>
-          </form>
-        </td>
-      </tr>
-    `).join("");
-
-    const html = renderPage("Payer Contracts", `
-      <h2>Account</h2>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
-        <a class="btn secondary" href="/account">Profile</a>
-        <a class="btn" href="/payer-contracts">Payer Contracts</a>
-      </div>
-      <p class="muted">Define payer contract logic by payer and Procedure Code.</p>
-
-      <div class="hr"></div>
-      <h3>Add Payer Contract</h3>
-      <form method="POST" action="/payer-contracts/add" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
-        <div style="min-width:240px;">
-          <label>Payer Name</label>
-          <input name="payer_name" required />
-        </div>
-        <div style="min-width:220px;">
-          <label>Network Status</label>
-          <select name="network_status">
-            <option value="In Network">In Network</option>
-            <option value="Out of Network">Out of Network</option>
-          </select>
-        </div>
-        <div style="min-width:240px;">
-          <label>Procedure Code</label>
-          <input name="procedure_code" placeholder="Example: CPT 99214" required />
-        </div>
-        <div style="min-width:240px;">
-          <label>Diagnosis Code (Optional)</label>
-          <input name="diagnosis_code" placeholder="Example: ICD-10 E11.9" />
-        </div>
-        <div style="min-width:220px;">
-          <label>Reimbursement Model</label>
-          <select name="reimbursement_model">
-            <option value="fixed_amount">Fixed Amount</option>
-            <option value="percent_of_charge">% of Charge</option>
-            <option value="percent_of_medicare">% of Medicare</option>
-          </select>
-        </div>
-        <div style="min-width:240px;">
-          <label>Expected Amount Or Expected Percentage</label>
-          <input name="expected_value" required />
-        </div>
-        <button class="btn" type="submit">Save Contract</button>
-      </form>
-
-      <div class="hr"></div>
-      <h3>Import Contracts (CSV)</h3>
-      <p class="muted small">Columns: payer_name, network_status, procedure_code, diagnosis_code, reimbursement_model, expected_value</p>
-      <form method="POST" action="/payer-contracts/import" enctype="multipart/form-data">
-        <input type="file" name="contract_file" accept=".csv" required />
-        <div class="btnRow">
-          <button class="btn secondary" type="submit">Import Contracts</button>
-          <button class="btn secondary" formaction="/payer-contracts/recalculate" formmethod="POST" type="submit">Recalculate Claims</button>
-        </div>
-      </form>
-
-      <div class="hr"></div>
-      <h3>Saved Contracts</h3>
-      <div style="overflow:auto;">
-        <table>
-          <thead><tr><th>Payer Name</th><th>Network Status</th><th>Procedure Code</th><th>Diagnosis Code</th><th>Reimbursement Model</th><th>Expected</th><th></th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="7" class="muted">No payer contracts yet.</td></tr>`}</tbody>
-        </table>
-      </div>
-    `, navUser(), {showChat:true, orgName: org.org_name});
-    return send(res, 200, html);
+    return redirect(res, "/data-management?tab=reimbursement");
   }
 
-  if (method === "POST" && pathname === "/payer-contracts/add") {
-    const body = await parseBody(req);
-    const params = new URLSearchParams(body);
-    const payer_name = (params.get("payer_name") || "").trim();
-    const network_status = (params.get("network_status") || "Out of Network").trim();
-    const procedure_code = (params.get("procedure_code") || "").trim();
-    if (!payer_name || !procedure_code) return redirect(res, "/payer-contracts");
-    const contracts = getPayerContracts(org.org_id);
-    contracts.push({
-      contract_id: uuid(),
-      org_id: org.org_id,
-      payer_name,
-      network_status: (network_status === "In Network") ? "In Network" : "Out of Network",
-      procedure_code,
-      diagnosis_code: (params.get("diagnosis_code") || "").trim(),
-      reimbursement_model: (params.get("reimbursement_model") || "fixed_amount").trim(),
-      expected_value: num(params.get("expected_value")),
-      updated_at: nowISO()
-    });
-    savePayerContracts(org.org_id, contracts);
-    recalculateContractsForOrg(org.org_id);
-    return redirect(res, "/payer-contracts");
-  }
-
-  if (method === "POST" && pathname === "/payer-contracts/delete") {
-    const body = await parseBody(req);
-    const params = new URLSearchParams(body);
-    const contract_id = (params.get("contract_id") || "").trim();
-    if (!contract_id) return redirect(res, "/payer-contracts");
-    const contracts = getPayerContracts(org.org_id).filter(c => c.contract_id !== contract_id);
-    savePayerContracts(org.org_id, contracts);
-    recalculateContractsForOrg(org.org_id);
-    return redirect(res, "/payer-contracts");
-  }
-
-  if (method === "POST" && pathname === "/payer-contracts/update") {
-    const body = await parseBody(req);
-    const params = new URLSearchParams(body);
-    const contract_id = (params.get("contract_id") || "").trim();
-    if (!contract_id) return redirect(res, "/payer-contracts");
-    const contracts = getPayerContracts(org.org_id);
-    const idx = contracts.findIndex(c => c.contract_id === contract_id);
-    if (idx >= 0) {
-      contracts[idx].payer_name = (params.get("payer_name") || contracts[idx].payer_name || "").trim();
-      contracts[idx].network_status = (params.get("network_status") || contracts[idx].network_status || "Out of Network").trim();
-      contracts[idx].procedure_code = (params.get("procedure_code") || contracts[idx].procedure_code || "").trim();
-      contracts[idx].diagnosis_code = (params.get("diagnosis_code") || contracts[idx].diagnosis_code || "").trim();
-      contracts[idx].reimbursement_model = (params.get("reimbursement_model") || contracts[idx].reimbursement_model || "fixed_amount").trim();
-      contracts[idx].expected_value = num(params.get("expected_value"));
-      contracts[idx].updated_at = nowISO();
-      savePayerContracts(org.org_id, contracts);
-      recalculateContractsForOrg(org.org_id);
-    }
-    return redirect(res, "/payer-contracts");
-  }
-
-  if (method === "POST" && pathname === "/payer-contracts/import") {
-    const contentType = req.headers["content-type"] || "";
-    if (!contentType.includes("multipart/form-data")) return redirect(res, "/payer-contracts");
-    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
-    if (!boundaryMatch) return redirect(res, "/payer-contracts");
-    const boundary = boundaryMatch[1];
-    const { files } = await parseMultipart(req, boundary);
-    const f = files.find(x => x.fieldName === "contract_file") || files[0];
-    if (!f) return redirect(res, "/payer-contracts");
-    const text = f.buffer.toString("utf8");
-    const parsedCSV = parseCSV(text);
-    const rows = parsedCSV.rows || [];
-    const contracts = getPayerContracts(org.org_id);
-    for (const r of rows) {
-      const payerName = (r.payer_name || r["Payer Name"] || "").trim();
-      const procedureCode = (r.procedure_code || r["Procedure Code"] || "").trim();
-      if (!payerName || !procedureCode) continue;
-      contracts.push({
-        contract_id: uuid(),
-        org_id: org.org_id,
-        payer_name: payerName,
-        network_status: (String(r.network_status || r["Network Status"] || "Out of Network").trim() === "In Network") ? "In Network" : "Out of Network",
-        procedure_code: procedureCode,
-        diagnosis_code: (r.diagnosis_code || r["Diagnosis Code"] || "").trim(),
-        reimbursement_model: String(r.reimbursement_model || r["Reimbursement Model"] || "fixed_amount").trim().toLowerCase(),
-        expected_value: num(r.expected_value || r["Expected Amount Or Expected Percentage"] || r.expected_amount || r.expected_percentage),
-        updated_at: nowISO()
-      });
-    }
-    savePayerContracts(org.org_id, contracts);
-    recalculateContractsForOrg(org.org_id);
-    return redirect(res, "/payer-contracts");
-  }
-
-  if (method === "POST" && pathname === "/payer-contracts/recalculate") {
-    recalculateContractsForOrg(org.org_id);
-    return redirect(res, "/payer-contracts");
+  // Any legacy POST under /payer-contracts/*
+  if (method === "POST" && pathname.startsWith("/payer-contracts")) {
+    return redirect(res, "/data-management?tab=reimbursement");
   }
 
   if (method === "GET" && pathname === "/data-management") {
     const tab = String(parsed.query.tab || "claims").toLowerCase();
-    const validTabs = ["claims","payments","denials","contracts","allowed-rules","fee-schedules","practice-settings"];
+    const validTabs = ["claims","payments","denials","reimbursement","practice-settings"];
     const activeTab = validTabs.includes(tab) ? tab : "claims";
     const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const claimBatches = getClaimBatchHistory(org.org_id);
@@ -12620,7 +12448,7 @@ rowsAdded = toUse;
     const denialWithDoc = denialClaims.filter(b => !!(b.denial_doc_attached || b.denial_document || b.denial_file)).length;
 
     function tabBtn(id, label){ return `<a class="btn ${activeTab===id?"":"secondary"}" href="/data-management?tab=${id}">${label}</a>`; }
-    const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">${tabBtn("claims","Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("contracts","Contracts")}${tabBtn("allowed-rules","Allowed Amount Rules")}${tabBtn("fee-schedules","Fee Schedules")}${tabBtn("practice-settings","Practice Settings")}</div>`;
+    const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">${tabBtn("claims","Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("reimbursement","Reimbursement Engine")}${tabBtn("practice-settings","Practice Settings")}</div>`;
 
     const uploadPanel = `
       <h3>Upload Panel</h3>
@@ -12828,6 +12656,121 @@ rowsAdded = toUse;
       </tbody></table></div>
     `;
 
+    const reimbursementContent = `
+  <h2>Reimbursement Engine</h2>
+
+  <div class="card" style="margin-bottom:16px;">
+    <h3>
+      Reimbursement Precedence
+      <span class="tooltip">ⓘ
+        <span class="tooltiptext">
+          Calculation Order:
+          1. Payer Contract
+          2. Fee Schedule
+          3. Default Allowed Logic
+        </span>
+      </span>
+    </h3>
+    <p class="muted">
+      Configure how expected insurance is calculated.
+      These settings power underpayment detection,
+      revenue at risk, and negotiation automation.
+    </p>
+  </div>
+
+  <!-- ===================== -->
+  <!-- PAYER CONTRACTS -->
+  <!-- ===================== -->
+
+  <details class="card" open>
+    <summary style="font-weight:800;font-size:16px;cursor:pointer;">
+      Payer Contracts
+      <span class="tooltip">ⓘ
+        <span class="tooltiptext">
+          Upload payer-specific reimbursement agreements.
+          Overrides fee schedules and fallback logic.
+        </span>
+      </span>
+    </summary>
+
+    <form method="POST" action="/data-management/contracts/upload" enctype="multipart/form-data" style="margin-top:12px;">
+      <input type="file" name="contracts" multiple accept=".csv" required />
+      <div class="dropzone" style="margin-top:8px;">
+        Drag & drop multiple contract CSV files here
+      </div>
+      <div class="btnRow">
+        <button class="btn secondary">Upload Contracts</button>
+      </div>
+    </form>
+
+  </details>
+
+  <!-- ===================== -->
+  <!-- FEE SCHEDULES -->
+  <!-- ===================== -->
+
+  <details class="card" style="margin-top:14px;">
+    <summary style="font-weight:800;font-size:16px;cursor:pointer;">
+      Fee Schedules
+      <span class="tooltip">ⓘ
+        <span class="tooltiptext">
+          Upload Medicare or payer fee schedules.
+          Used when no custom contract applies.
+        </span>
+      </span>
+    </summary>
+
+    <form method="POST" action="/data-management/fee-schedules/upload" enctype="multipart/form-data" style="margin-top:12px;">
+      <input type="file" name="fee_schedules" multiple accept=".csv" required />
+      <div class="dropzone" style="margin-top:8px;">
+        Drag & drop multiple fee schedule CSV files here
+      </div>
+      <div class="btnRow">
+        <button class="btn secondary">Upload Fee Schedules</button>
+      </div>
+    </form>
+
+  </details>
+
+  <!-- ===================== -->
+  <!-- DEFAULT LOGIC -->
+  <!-- ===================== -->
+
+  <details class="card" style="margin-top:14px;">
+    <summary style="font-weight:800;font-size:16px;cursor:pointer;">
+      Default Allowed Logic
+      <span class="tooltip">ⓘ
+        <span class="tooltiptext">
+          Used when no contract or fee schedule rule applies.
+        </span>
+      </span>
+    </summary>
+
+    <form method="POST" action="/data-management/allowed-rules/save" style="margin-top:12px;">
+      <div class="row">
+        <div class="col">
+          <label>Default Method</label>
+          <select name="default_method">
+            <option value="percent_medicare">% of Medicare</option>
+            <option value="percent_billed">% of Billed</option>
+            <option value="flat">Flat Amount</option>
+            <option value="ucr_multiplier">UCR Multiplier</option>
+          </select>
+        </div>
+        <div class="col">
+          <label>Default Value</label>
+          <input name="default_value" />
+        </div>
+      </div>
+
+      <div class="btnRow" style="margin-top:12px;">
+        <button class="btn">Save Default Logic</button>
+      </div>
+    </form>
+
+  </details>
+`;
+
     const practiceContent = `
       <h3>Practice Settings</h3>
       <form method="POST" action="/data-management/practice-settings/save" style="display:flex;flex-direction:column;gap:8px;max-width:640px;">
@@ -12840,11 +12783,11 @@ rowsAdded = toUse;
       </form>
     `;
 
-    const section = ({"claims":claimsContent,"payments":paymentsContent,"denials":denialContent,"contracts":contractsContent,"allowed-rules":rulesContent,"fee-schedules":feeContent,"practice-settings":practiceContent})[activeTab] || claimsContent;
+    const section = ({"claims":claimsContent,"payments":paymentsContent,"denials":denialContent,"reimbursement":reimbursementContent,"practice-settings":practiceContent})[activeTab] || claimsContent;
 
     const rebuildControls = `<div class="hr"></div><h3>Rebuild / Reprocess Controls</h3><div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;"><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="lifecycle"/><button class="btn secondary" type="submit">Recalculate Lifecycle</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="expected"/><button class="btn secondary" type="submit">Recompute Expected Insurance</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="revenue"/><button class="btn secondary" type="submit">Rebuild Revenue Aggregates</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="denials"/><button class="btn secondary" type="submit">Re-sync Denials</button></form><form method="POST" action="/data-management/rematch-payments"><button class="btn secondary" type="submit">Re-match Payments</button></form></div>`;
 
-    const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Central revenue configuration + ingestion center.</p>${tabs}${section}${rebuildControls}<script>(function(){const dz=document.getElementById('dm-drop');const inp=document.getElementById('dm-files');const list=document.getElementById('dm-filelist');if(!dz||!inp||!list)return;const upd=()=>{const tab='${safeStr(activeTab)}';const suggested=(f)=>{const n=(f.name||'').toLowerCase();if(tab==='claims'&&(n.endsWith('.csv')||n.endsWith('.xls')||n.endsWith('.xlsx'))) return 'Claims';if(tab==='payments') return 'Payments';if(tab==='denials') return 'Denials';if(tab==='contracts') return 'Contracts';if(tab==='fee-schedules') return 'Fee Schedule';return 'Claims';};const lines=[...inp.files].map(f=>(f.name+' • '+f.name.split('.').pop().toUpperCase()+' • suggested: '+suggested(f)));list.innerHTML=lines.join('<br/>')||'No files selected';};dz.addEventListener('click',()=>inp.click());['dragenter','dragover'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{if(e.dataTransfer.files?.length){inp.files=e.dataTransfer.files;upd();}});inp.addEventListener('change',upd);})();</script>`, navUser(), {showChat:true, orgName: org.org_name});
+    const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Central revenue configuration + ingestion center.</p>${tabs}${section}${rebuildControls}<script>(function(){const dz=document.getElementById('dm-drop');const inp=document.getElementById('dm-files');const list=document.getElementById('dm-filelist');if(!dz||!inp||!list)return;const upd=()=>{const tab='${safeStr(activeTab)}';const suggested=(f)=>{const n=(f.name||'').toLowerCase();if(tab==='claims'&&(n.endsWith('.csv')||n.endsWith('.xls')||n.endsWith('.xlsx'))) return 'Claims';if(tab==='payments') return 'Payments';if(tab==='denials') return 'Denials';if(tab==='reimbursement') return 'Reimbursement';return 'Claims';};const lines=[...inp.files].map(f=>(f.name+' • '+f.name.split('.').pop().toUpperCase()+' • suggested: '+suggested(f)));list.innerHTML=lines.join('<br/>')||'No files selected';};dz.addEventListener('click',()=>inp.click());['dragenter','dragover'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{if(e.dataTransfer.files?.length){inp.files=e.dataTransfer.files;upd();}});inp.addEventListener('change',upd);})();</script>`, navUser(), {showChat:true, orgName: org.org_name});
     return send(res, 200, html);
   }
 
@@ -12967,7 +12910,7 @@ rowsAdded = toUse;
   }
 
   if (method === "POST" && pathname === "/data-management/network") {
-    return redirect(res, "/data-management?tab=contracts");
+    return redirect(res, "/data-management?tab=reimbursement");
   }
 
   if (method === "POST" && pathname === "/data-management/upload") {
@@ -13161,26 +13104,28 @@ rowsAdded = toUse;
       tolerance_min_dollars: num(params.get("tolerance_min_dollars")) || 5,
     });
     rebuildOrgDerivedData(org.org_id);
-    return redirect(res, "/data-management?tab=allowed-rules");
+    return redirect(res, "/data-management?tab=reimbursement");
   }
 
-  if (method === "POST" && pathname === "/data-management/fee-schedules/add") {
+  if (method === "POST" && (pathname === "/data-management/fee-schedules/add" || pathname === "/data-management/fee-schedules/upload")) {
     const contentType = req.headers["content-type"] || "";
-    if (!contentType.includes("multipart/form-data")) return redirect(res, "/data-management?tab=fee-schedules");
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/data-management?tab=reimbursement");
     const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
-    if (!boundaryMatch) return redirect(res, "/data-management?tab=fee-schedules");
+    if (!boundaryMatch) return redirect(res, "/data-management?tab=reimbursement");
     const { files, fields } = await parseMultipart(req, boundaryMatch[1]);
-    const f = files.find(x => x.fieldName === "schedule_file");
-    if (!f) return redirect(res, "/data-management?tab=fee-schedules");
-    const ingest = addDocumentIngest(org.org_id, "fee_schedule", f, "Stored", 0, "Fee schedule upload");
+    const feeFiles = files.filter(x => x.fieldName === "schedule_file" || x.fieldName === "fee_schedules");
+    if (!feeFiles.length) return redirect(res, "/data-management?tab=reimbursement");
     const schedules = getFeeSchedules(org.org_id);
-    const rows = path.extname(String(f.filename || "").toLowerCase()) === ".csv"
-      ? (parseCSV(f.buffer.toString("utf8")).rows || []).slice(0, 500).map(r => ({ procedure_code: pickField(r,["cpt","procedure_code","procedure","code"]), amount: num(pickField(r,["amount","rate","allowed","fee"])) }))
-      : [];
-    schedules.push({ schedule_id: uuid(), org_id: org.org_id, schedule_type: String(fields.schedule_type || "medicare"), payer_name: String(fields.payer_name || "").trim(), year: String(fields.year || "").trim(), locality: String(fields.locality || "").trim(), stored_path: ingest.stored_path, uploaded_at: nowISO(), rows });
+    for (const f of feeFiles) {
+      const ingest = addDocumentIngest(org.org_id, "fee_schedule", f, "Stored", 0, "Fee schedule upload");
+      const rows = path.extname(String(f.filename || "").toLowerCase()) === ".csv"
+        ? (parseCSV(f.buffer.toString("utf8")).rows || []).slice(0, 500).map(r => ({ procedure_code: pickField(r,["cpt","procedure_code","procedure","code"]), amount: num(pickField(r,["amount","rate","allowed","fee"])) }))
+        : [];
+      schedules.push({ schedule_id: uuid(), org_id: org.org_id, schedule_type: String(fields.schedule_type || "medicare"), payer_name: String(fields.payer_name || "").trim(), year: String(fields.year || "").trim(), locality: String(fields.locality || "").trim(), stored_path: ingest.stored_path, uploaded_at: nowISO(), rows });
+    }
     saveFeeSchedules(org.org_id, schedules);
     rebuildOrgDerivedData(org.org_id);
-    return redirect(res, "/data-management?tab=fee-schedules");
+    return redirect(res, "/data-management?tab=reimbursement");
   }
 
   if (method === "POST" && pathname === "/data-management/fee-schedules/delete") {
@@ -13189,7 +13134,7 @@ rowsAdded = toUse;
     const schedule_id = String(params.get("schedule_id") || "").trim();
     if (schedule_id) saveFeeSchedules(org.org_id, getFeeSchedules(org.org_id).filter(f => String(f.schedule_id)!==schedule_id));
     rebuildOrgDerivedData(org.org_id);
-    return redirect(res, "/data-management?tab=fee-schedules");
+    return redirect(res, "/data-management?tab=reimbursement");
   }
 
   if (method === "POST" && pathname === "/data-management/practice-settings/save") {
@@ -13210,7 +13155,7 @@ rowsAdded = toUse;
     const params = new URLSearchParams(body);
     const payer_name = String(params.get("payer_name") || "").trim();
     const procedure_code = String(params.get("procedure_code") || "").trim();
-    if (!payer_name || !procedure_code) return redirect(res, "/data-management?tab=contracts");
+    if (!payer_name || !procedure_code) return redirect(res, "/data-management?tab=reimbursement");
 
     const contract = {
       contract_id: uuid(),
@@ -13231,7 +13176,7 @@ rowsAdded = toUse;
     saveContractVersion(org.org_id, contract);
     logAudit("contract_created", { org_id: org.org_id, contract_id: contract.contract_id });
     rebuildOrgDerivedData(org.org_id);
-    return redirect(res, "/data-management?tab=contracts");
+    return redirect(res, "/data-management?tab=reimbursement");
   }
 
   if (method === "POST" && (pathname === "/data-management/contracts/edit" || pathname === "/data-management/contracts/update")) {
@@ -13254,7 +13199,7 @@ rowsAdded = toUse;
       logAudit("contract_updated", { org_id: org.org_id, contract_id });
       rebuildOrgDerivedData(org.org_id);
     }
-    return redirect(res, "/data-management?tab=contracts");
+    return redirect(res, "/data-management?tab=reimbursement");
   }
 
   if (method === "POST" && pathname === "/data-management/contracts/delete") {
@@ -13270,19 +13215,19 @@ rowsAdded = toUse;
       logAudit("contract_deleted", { org_id: org.org_id, contract_id });
       rebuildOrgDerivedData(org.org_id);
     }
-    return redirect(res, "/data-management?tab=contracts");
+    return redirect(res, "/data-management?tab=reimbursement");
   }
 
 
   if (method === "POST" && pathname === "/data-management/contracts/upload") {
     const contentType = req.headers["content-type"] || "";
-    if (!contentType.includes("multipart/form-data")) return redirect(res, "/data-management?tab=contracts");
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/data-management?tab=reimbursement");
     const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
-    if (!boundaryMatch) return redirect(res, "/data-management?tab=contracts");
+    if (!boundaryMatch) return redirect(res, "/data-management?tab=reimbursement");
 
     const { files } = await parseMultipart(req, boundaryMatch[1]);
     const docs = files.filter(f => f.fieldName === "contracts");
-    if (!docs.length) return redirect(res, "/data-management?tab=contracts");
+    if (!docs.length) return redirect(res, "/data-management?tab=reimbursement");
 
     const contracts = getPayerContracts(org.org_id);
     for (const f of docs) {
@@ -13311,12 +13256,12 @@ rowsAdded = toUse;
     savePayerContracts(org.org_id, contracts);
     logAudit("bulk_contract_upload", { org_id: org.org_id });
     rebuildOrgDerivedData(org.org_id);
-    return redirect(res, "/data-management?tab=contracts");
+    return redirect(res, "/data-management?tab=reimbursement");
   }
 
   if (method === "GET" && pathname === "/data-management/contracts/history") {
     const contractId = String(parsed.query.contract_id || "").trim();
-    if (!contractId) return redirect(res, "/data-management?tab=contracts");
+    if (!contractId) return redirect(res, "/data-management?tab=reimbursement");
 
     const versions = readJSON(FILES.contract_versions, [])
       .filter(v => v.org_id === org.org_id && v.contract_id === contractId)
@@ -13354,7 +13299,7 @@ rowsAdded = toUse;
         </table>
       </div>
       <div class="btnRow" style="margin-top:12px;">
-        <a class="btn secondary" href="/data-management?tab=contracts">Back</a>
+        <a class="btn secondary" href="/data-management?tab=reimbursement">Back</a>
       </div>
     `, navUser(), {showChat:false, orgName: org.org_name});
 
@@ -13368,7 +13313,7 @@ rowsAdded = toUse;
 
     const versions = readJSON(FILES.contract_versions, []);
     const version = versions.find(v => v.version_id === versionId && v.org_id === org.org_id);
-    if (!version) return redirect(res, "/data-management?tab=contracts");
+    if (!version) return redirect(res, "/data-management?tab=reimbursement");
 
     const contracts = getPayerContracts(org.org_id);
     const idx = contracts.findIndex(c => c.contract_id === version.contract_id);
@@ -13393,7 +13338,7 @@ rowsAdded = toUse;
 
     rebuildOrgDerivedData(org.org_id);
 
-    return redirect(res, "/data-management?tab=contracts");
+    return redirect(res, "/data-management?tab=reimbursement");
   }
 
   if (method === "GET" && pathname === "/account") {
