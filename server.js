@@ -75,6 +75,7 @@ const FILES = {
   saved_queries: path.join(DATA_DIR, "saved_queries.json"),
   deleted_payment_batches: path.join(DATA_DIR, "deleted_payment_batches.json"),
   payer_contracts: path.join(DATA_DIR, "payer_contracts.json"),
+  contract_versions: path.join(DATA_DIR, "contract_versions.json"),
   document_ingests: path.join(DATA_DIR, "document_ingests.json"),
   allowed_amount_rules: path.join(DATA_DIR, "allowed_amount_rules.json"),
   fee_schedules: path.join(DATA_DIR, "fee_schedules.json"),
@@ -302,6 +303,7 @@ ensureFile(FILES.ai_queries, []);
 ensureFile(FILES.saved_queries, []);
 ensureFile(FILES.deleted_payment_batches, []);
 ensureFile(FILES.payer_contracts, []);
+ensureFile(FILES.contract_versions, []);
 ensureFile(FILES.document_ingests, []);
 ensureFile(FILES.allowed_amount_rules, []);
 ensureFile(FILES.fee_schedules, []);
@@ -3646,6 +3648,39 @@ function savePayerContracts(org_id, contracts){
   const all = readJSON(FILES.payer_contracts, []);
   const keep = all.filter(x => x.org_id !== org_id);
   writeJSON(FILES.payer_contracts, keep.concat((contracts || []).map(c => ({ ...c, org_id }))));
+}
+
+
+function logAudit(action, payload = {}) {
+  const audit = readJSON(FILES.audit_log, []);
+  audit.push({
+    audit_id: uuid(),
+    org_id: payload.org_id,
+    action,
+    ...payload,
+    timestamp: nowISO()
+  });
+  writeJSON(FILES.audit_log, audit);
+}
+
+function saveContractVersion(org_id, contract) {
+  const versions = readJSON(FILES.contract_versions, []);
+  versions.push({
+    version_id: uuid(),
+    org_id,
+    contract_id: contract.contract_id,
+    snapshot: { ...contract },
+    created_at: nowISO()
+  });
+  writeJSON(FILES.contract_versions, versions);
+}
+
+function countClaimsImpacted(org_id, contract) {
+  const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  return billed.filter(b =>
+    String(b.payer || "").trim() === String(contract.payer_name || "").trim() &&
+    String(b.procedure_code || "").trim() === String(contract.procedure_code || "").trim()
+  ).length;
 }
 
 function getPracticeSettings(org_id){
@@ -12636,16 +12671,130 @@ rowsAdded = toUse;
     `;
 
     const contractsContent = `
-      ${uploadPanel}
-      <div class="hr"></div>
-      <h3>Payer Contracts</h3>
-      <form method="POST" action="/data-management/contracts/add" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
-        <input name="payer_name" placeholder="payer_name" required/><select name="network_status"><option>In Network</option><option>Out of Network</option></select><input name="procedure_code" placeholder="CPT" required/><input name="diagnosis_code" placeholder="DX optional"/><select name="reimbursement_model"><option value="fixed_amount">fixed</option><option value="percent_of_charge">%charge</option></select><input name="allowed_amount" placeholder="expected_value" required/><input type="date" name="effective_date"/><button class="btn" type="submit">Add</button>
+      <h3>Upload Panel</h3>
+      <form method="POST" action="/data-management/contracts/upload" enctype="multipart/form-data">
+        <input type="file" name="contracts" accept=".csv" multiple required />
+        <p class="muted small">CSV columns: payer_name, network_status, procedure_code, diagnosis_code, reimbursement_model, allowed_amount, effective_date</p>
+        <div class="btnRow"><button class="btn secondary" type="submit">Bulk Upload Contracts</button></div>
       </form>
-      <div style="overflow:auto;"><table><thead><tr><th>Payer</th><th>Network</th><th>CPT</th><th>DX</th><th>Model</th><th>Expected</th><th>Effective</th><th></th></tr></thead><tbody>
-      ${contracts.map(c=>`<tr><td>${safeStr(c.payer_name||"")}</td><td>${safeStr(c.network_status||"")}</td><td>${safeStr(c.procedure_code||"")}</td><td>${safeStr(c.diagnosis_code||"")}</td><td>${safeStr(c.reimbursement_model||"")}</td><td>${safeStr(String(c.expected_value||""))}</td><td>${safeStr(c.effective_date||"")}</td><td><form method="POST" action="/data-management/contracts/delete"><input type="hidden" name="contract_id" value="${safeStr(c.contract_id)}"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="8" class="muted">No contracts</td></tr>'}
-      </tbody></table></div>
-    `;
+
+      <div class="hr"></div>
+
+      <div class="card" style="margin-bottom:16px;">
+        <h3>
+          Payer Contract Configuration
+          <span class="tooltip">ⓘ
+            <span class="tooltiptext">
+              Upload or manually configure payer reimbursement rules.
+              These rules determine expected insurance amounts,
+              underpayment detection, and revenue variance analysis.
+            </span>
+          </span>
+        </h3>
+        <p class="muted">
+          Contracts power Expected Insurance calculations, underpayment detection,
+          AI negotiation logic, and Revenue Intelligence scoring.
+        </p>
+      </div>
+
+      <h3>Manual Contract Entry</h3>
+      <form method="POST" action="/data-management/contracts/add" style="display:flex;flex-direction:column;gap:16px;">
+        <div class="row">
+          <div class="col">
+            <label>Payer Name <span class="tooltip">ⓘ<span class="tooltiptext">Insurance company this rule applies to (e.g., Aetna, BCBS).</span></span></label>
+            <input name="payer_name" placeholder="Aetna" required />
+          </div>
+          <div class="col">
+            <label>Network Status <span class="tooltip">ⓘ<span class="tooltiptext">Indicates whether reimbursement applies to in-network or out-of-network claims.</span></span></label>
+            <select name="network_status"><option>In Network</option><option>Out of Network</option></select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label>CPT Code <span class="tooltip">ⓘ<span class="tooltiptext">Procedure code this reimbursement rule applies to.</span></span></label>
+            <input name="procedure_code" placeholder="99213" required />
+          </div>
+          <div class="col">
+            <label>Diagnosis Code (Optional) <span class="tooltip">ⓘ<span class="tooltiptext">Restricts this rule to specific diagnosis codes. Leave blank to apply to all diagnoses.</span></span></label>
+            <input name="diagnosis_code" placeholder="Optional" />
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label>Reimbursement Model <span class="tooltip">ⓘ<span class="tooltiptext">Fixed Amount = flat payment. Percent of Charge = percentage of billed amount.</span></span></label>
+            <select name="reimbursement_model"><option value="fixed_amount">Fixed Amount</option><option value="percent_of_charge">Percent of Charge</option></select>
+          </div>
+          <div class="col">
+            <label>Expected Amount / Percentage <span class="tooltip">ⓘ<span class="tooltiptext">If Fixed Model → Enter dollar amount. If Percent Model → Enter percentage (e.g., 65 for 65%).</span></span></label>
+            <input name="allowed_amount" placeholder="Enter value" required />
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label>Effective Date <span class="tooltip">ⓘ<span class="tooltiptext">Date this reimbursement rule becomes active.</span></span></label>
+            <input type="date" name="effective_date" />
+          </div>
+        </div>
+        <div class="btnRow"><button class="btn" type="submit">Add Contract Rule</button></div>
+      </form>
+
+      <div class="hr"></div>
+
+      <h3>Existing Contract Rules</h3>
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Payer</th><th>Network</th><th>CPT</th><th>DX</th><th>Model</th><th>Expected</th><th>Effective</th><th>Impacted Claims</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${contracts.map(c => `
+              <tr>
+                <td>${safeStr(c.payer_name || "")}</td>
+                <td>${safeStr(c.network_status || "")}</td>
+                <td>${safeStr(c.procedure_code || "")}</td>
+                <td>${safeStr(c.diagnosis_code || "")}</td>
+                <td>${safeStr(c.reimbursement_model || "")}</td>
+                <td>${
+                  formatMoneyUI(
+                    Number(c.expected_value ?? c.allowed_amount ?? 0)
+                  )
+                }</td>
+                <td>${c.effective_date ? new Date(c.effective_date).toLocaleDateString() : "—"}</td>
+                <td>${countClaimsImpacted(org.org_id, c)}</td>
+                <td style="white-space:nowrap;">
+                  <details>
+                    <summary class="btn secondary small" style="display:inline-block;cursor:pointer;">Edit</summary>
+                    <form method="POST" action="/data-management/contracts/edit" style="margin-top:8px;display:grid;gap:6px;min-width:260px;">
+                      <input type="hidden" name="contract_id" value="${safeStr(c.contract_id || "")}" />
+                      <input name="payer_name" value="${safeStr(c.payer_name || "")}" required />
+                      <input name="procedure_code" value="${safeStr(c.procedure_code || "")}" required />
+                      <input name="diagnosis_code" value="${safeStr(c.diagnosis_code || "")}" />
+                      <select name="network_status"><option ${String(c.network_status||"")==='In Network'?'selected':''}>In Network</option><option ${String(c.network_status||"")==='Out of Network'?'selected':''}>Out of Network</option></select>
+                      <select name="reimbursement_model"><option value="fixed_amount" ${String(c.reimbursement_model||"")==='fixed_amount'?'selected':''}>Fixed Amount</option><option value="percent_of_charge" ${String(c.reimbursement_model||"")==='percent_of_charge'?'selected':''}>Percent of Charge</option></select>
+                      <input name="allowed_amount" value="${safeStr(String(c.expected_value ?? 0))}" required />
+                      <input type="date" name="effective_date" value="${safeStr(String(c.effective_date || "").slice(0,10))}" />
+                      <button class="btn small" type="submit">Save</button>
+                    </form>
+                  </details>
+
+                  <form method="GET" action="/data-management/contracts/history" style="display:inline-block;margin-left:6px;">
+                    <input type="hidden" name="contract_id" value="${safeStr(c.contract_id || "")}" />
+                    <button class="btn secondary small" type="submit">History</button>
+                  </form>
+
+                  <form method="POST" action="/data-management/contracts/delete" style="display:inline-block;margin-left:6px;" onsubmit="return confirm('Delete this contract rule?');">
+                    <input type="hidden" name="contract_id" value="${safeStr(c.contract_id || "")}" />
+                    <button class="btn danger small" type="submit">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            `).join("") || '<tr><td colspan="9" class="muted">No contracts configured.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+        `;
 
     const rulesContent = `
       ${uploadPanel}
@@ -13062,40 +13211,47 @@ rowsAdded = toUse;
     const payer_name = String(params.get("payer_name") || "").trim();
     const procedure_code = String(params.get("procedure_code") || "").trim();
     if (!payer_name || !procedure_code) return redirect(res, "/data-management?tab=contracts");
-    const contracts = getPayerContracts(org.org_id);
-    contracts.push({
+
+    const contract = {
       contract_id: uuid(),
       org_id: org.org_id,
       payer_name,
-      network_status: String(params.get("network_status") || "In Network"),
+      network_status: String(params.get("network_status") || "In Network").trim() || "In Network",
       procedure_code,
       diagnosis_code: String(params.get("diagnosis_code") || "").trim(),
-      reimbursement_model: String(params.get("reimbursement_model") || "fixed_amount"),
+      reimbursement_model: String(params.get("reimbursement_model") || "fixed_amount").trim() || "fixed_amount",
       expected_value: num(params.get("allowed_amount")),
       effective_date: String(params.get("effective_date") || "").trim(),
       updated_at: nowISO(),
-    });
+    };
+
+    const contracts = getPayerContracts(org.org_id);
+    contracts.push(contract);
     savePayerContracts(org.org_id, contracts);
+    saveContractVersion(org.org_id, contract);
+    logAudit("contract_created", { org_id: org.org_id, contract_id: contract.contract_id });
     rebuildOrgDerivedData(org.org_id);
     return redirect(res, "/data-management?tab=contracts");
   }
 
-  if (method === "POST" && pathname === "/data-management/contracts/update") {
+  if (method === "POST" && (pathname === "/data-management/contracts/edit" || pathname === "/data-management/contracts/update")) {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const contract_id = String(params.get("contract_id") || "").trim();
     const contracts = getPayerContracts(org.org_id);
     const idx = contracts.findIndex(c => String(c.contract_id) === contract_id);
     if (idx >= 0) {
+      saveContractVersion(org.org_id, contracts[idx]);
       contracts[idx].payer_name = String(params.get("payer_name") || contracts[idx].payer_name || "").trim();
       contracts[idx].procedure_code = String(params.get("procedure_code") || contracts[idx].procedure_code || "").trim();
       contracts[idx].diagnosis_code = String(params.get("diagnosis_code") || contracts[idx].diagnosis_code || "").trim();
       contracts[idx].expected_value = num(params.get("allowed_amount"));
       contracts[idx].effective_date = String(params.get("effective_date") || contracts[idx].effective_date || "").trim();
       contracts[idx].updated_at = nowISO();
-      contracts[idx].reimbursement_model = String(params.get("reimbursement_model") || contracts[idx].reimbursement_model || "fixed_amount");
-      contracts[idx].network_status = String(params.get("network_status") || contracts[idx].network_status || "In Network");
+      contracts[idx].reimbursement_model = String(params.get("reimbursement_model") || contracts[idx].reimbursement_model || "fixed_amount").trim() || "fixed_amount";
+      contracts[idx].network_status = String(params.get("network_status") || contracts[idx].network_status || "In Network").trim() || "In Network";
       savePayerContracts(org.org_id, contracts);
+      logAudit("contract_updated", { org_id: org.org_id, contract_id });
       rebuildOrgDerivedData(org.org_id);
     }
     return redirect(res, "/data-management?tab=contracts");
@@ -13106,10 +13262,137 @@ rowsAdded = toUse;
     const params = new URLSearchParams(body);
     const contract_id = String(params.get("contract_id") || "").trim();
     if (contract_id) {
-      const contracts = getPayerContracts(org.org_id).filter(c => String(c.contract_id) !== contract_id);
-      savePayerContracts(org.org_id, contracts);
+      const contracts = getPayerContracts(org.org_id);
+      const existing = contracts.find(c => String(c.contract_id) === contract_id);
+      const updated = contracts.filter(c => String(c.contract_id) !== contract_id);
+      savePayerContracts(org.org_id, updated);
+      if (existing) saveContractVersion(org.org_id, existing);
+      logAudit("contract_deleted", { org_id: org.org_id, contract_id });
       rebuildOrgDerivedData(org.org_id);
     }
+    return redirect(res, "/data-management?tab=contracts");
+  }
+
+
+  if (method === "POST" && pathname === "/data-management/contracts/upload") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/data-management?tab=contracts");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return redirect(res, "/data-management?tab=contracts");
+
+    const { files } = await parseMultipart(req, boundaryMatch[1]);
+    const docs = files.filter(f => f.fieldName === "contracts");
+    if (!docs.length) return redirect(res, "/data-management?tab=contracts");
+
+    const contracts = getPayerContracts(org.org_id);
+    for (const f of docs) {
+      const parsed = parseCSV(f.buffer.toString("utf8"));
+      for (const row of (parsed.rows || [])) {
+        const payer_name = String(row.payer_name || "").trim();
+        const procedure_code = String(row.procedure_code || "").trim();
+        if (!payer_name || !procedure_code) continue;
+        const contract = {
+          contract_id: uuid(),
+          org_id: org.org_id,
+          payer_name,
+          network_status: String(row.network_status || "In Network").trim() || "In Network",
+          procedure_code,
+          diagnosis_code: String(row.diagnosis_code || "").trim(),
+          reimbursement_model: String(row.reimbursement_model || "fixed_amount").trim() || "fixed_amount",
+          expected_value: num(row.allowed_amount),
+          effective_date: String(row.effective_date || "").trim(),
+          updated_at: nowISO(),
+        };
+        contracts.push(contract);
+        saveContractVersion(org.org_id, contract);
+      }
+    }
+
+    savePayerContracts(org.org_id, contracts);
+    logAudit("bulk_contract_upload", { org_id: org.org_id });
+    rebuildOrgDerivedData(org.org_id);
+    return redirect(res, "/data-management?tab=contracts");
+  }
+
+  if (method === "GET" && pathname === "/data-management/contracts/history") {
+    const contractId = String(parsed.query.contract_id || "").trim();
+    if (!contractId) return redirect(res, "/data-management?tab=contracts");
+
+    const versions = readJSON(FILES.contract_versions, [])
+      .filter(v => v.org_id === org.org_id && v.contract_id === contractId)
+      .sort((a,b)=> new Date(b.created_at) - new Date(a.created_at));
+
+    const rows = versions.map(v => `
+      <tr>
+        <td>${new Date(v.created_at).toLocaleString()}</td>
+        <td>${safeStr((v.snapshot || {}).payer_name || "")}</td>
+        <td>${safeStr((v.snapshot || {}).procedure_code || "")}</td>
+        <td>${formatMoneyUI(Number((v.snapshot || {}).expected_value ?? (v.snapshot || {}).allowed_amount ?? 0))}</td>
+        <td>
+          <form method="POST" action="/data-management/contracts/rollback" onsubmit="return confirm('Rollback to this version?');">
+            <input type="hidden" name="version_id" value="${safeStr(v.version_id)}" />
+            <button class="btn small">Rollback</button>
+          </form>
+        </td>
+      </tr>
+    `).join("") || `<tr><td colspan="5" class="muted">No version history.</td></tr>`;
+
+    const html = renderPage("Contract History", `
+      <h2>Contract Version History</h2>
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Saved At</th>
+              <th>Payer</th>
+              <th>CPT</th>
+              <th>Expected</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="btnRow" style="margin-top:12px;">
+        <a class="btn secondary" href="/data-management?tab=contracts">Back</a>
+      </div>
+    `, navUser(), {showChat:false, orgName: org.org_name});
+
+    return send(res, 200, html);
+  }
+
+  if (method === "POST" && pathname === "/data-management/contracts/rollback") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const versionId = String(params.get("version_id") || "").trim();
+
+    const versions = readJSON(FILES.contract_versions, []);
+    const version = versions.find(v => v.version_id === versionId && v.org_id === org.org_id);
+    if (!version) return redirect(res, "/data-management?tab=contracts");
+
+    const contracts = getPayerContracts(org.org_id);
+    const idx = contracts.findIndex(c => c.contract_id === version.contract_id);
+    if (idx >= 0) {
+      saveContractVersion(org.org_id, contracts[idx]);
+      const currentId = contracts[idx].contract_id;
+
+      contracts[idx] = {
+        ...version.snapshot,
+        org_id: org.org_id,
+        contract_id: currentId,
+        updated_at: nowISO()
+      };
+      savePayerContracts(org.org_id, contracts);
+    }
+
+    logAudit("contract_rollback", {
+      org_id: org.org_id,
+      contract_id: version.contract_id,
+      version_id: version.version_id
+    });
+
+    rebuildOrgDerivedData(org.org_id);
+
     return redirect(res, "/data-management?tab=contracts");
   }
 
