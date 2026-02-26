@@ -12614,8 +12614,8 @@ rowsAdded = toUse;
       ${uploadPanel}
       <div class="hr"></div>
       <h3>Payments Batch History</h3>
-      <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded</th><th>Rows</th><th>Total Paid</th><th>Matched %</th><th></th></tr></thead><tbody>
-      ${paymentBatches.map(p=>{const matchedPct=p.row_count?Math.round(((p.row_count-unmatchedPayments.filter(u=>u.source_file===p.source_file).length)/p.row_count)*100):0;return `<tr><td>${safeStr(p.source_file)}</td><td>${p.uploaded_at?new Date(p.uploaded_at).toLocaleString():"—"}</td><td>${p.row_count}</td><td>${formatMoneyUI(p.total_paid)}</td><td>${matchedPct}%</td><td><form method="POST" action="/data-management/rematch-payments"><button class="btn secondary small" type="submit">Re-match</button></form></td></tr>`;}).join("") || '<tr><td colspan="6" class="muted">No payment batches.</td></tr>'}
+      <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded</th><th>Rows</th><th>Total Paid</th><th>Matched %</th><th>Actions</th></tr></thead><tbody>
+      ${paymentBatches.map(p=>{const matchedPct=p.row_count?Math.round(((p.row_count-unmatchedPayments.filter(u=>u.source_file===p.source_file).length)/p.row_count)*100):0;return `<tr><td>${safeStr(p.source_file)}</td><td>${p.uploaded_at?new Date(p.uploaded_at).toLocaleString():"—"}</td><td>${p.row_count}</td><td>${formatMoneyUI(p.total_paid)}</td><td>${matchedPct}%</td><td style="white-space:nowrap;"><form method="POST" action="/data-management/rematch-payments" style="display:inline-block;"><button class="btn secondary small" type="submit">Re-match</button></form><form method="POST" action="/payment-batch-delete" onsubmit="return confirm('Are you sure you want to permanently delete this payment batch? This cannot be undone.');" style="display:inline-block;margin-left:6px;"><input type="hidden" name="source_file" value="${safeStr(p.source_file)}" /><button class="btn danger small" type="submit">Delete</button></form></td></tr>`;}).join("") || '<tr><td colspan="6" class="muted">No payment batches.</td></tr>'}
       </tbody></table></div>
       <h3>Unmatched Payments</h3>
       <div style="overflow:auto;"><table><thead><tr><th>Claim Number</th><th>Payer</th><th>Paid</th><th>Source</th><th>Reason</th></tr></thead><tbody>
@@ -12834,7 +12834,6 @@ rowsAdded = toUse;
     if (!docs.length) return redirect(res, next);
 
     const billedAll = readJSON(FILES.billed, []);
-    const subsAll = readJSON(FILES.billed_submissions, []);
     const payments = readJSON(FILES.payments, []);
     let cases = readJSON(FILES.cases, []);
     let casesModified = false;
@@ -12938,7 +12937,6 @@ rowsAdded = toUse;
     }
 
     writeJSON(FILES.upload_batches, uploadBatches);
-    writeJSON(FILES.billed_submissions, subsAll);
     writeJSON(FILES.payments, payments);
     writeJSON(FILES.billed, billedAll);
     if (casesModified) writeJSON(FILES.cases, cases);
