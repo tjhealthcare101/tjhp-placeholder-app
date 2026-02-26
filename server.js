@@ -92,6 +92,10 @@ const FILES = {
   copilot_briefs: path.join(DATA_DIR, "copilot_briefs.json"),
   reimbursement_uploads: path.join(DATA_DIR, "reimbursement_uploads.json"),
   pending_reimbursement_uploads: path.join(DATA_DIR, "pending_reimbursement_uploads.json"),
+  template_settings: path.join(DATA_DIR, "template_settings.json"),
+  template_versions: path.join(DATA_DIR, "template_versions.json"),
+  revenue_automation_templates: path.join(DATA_DIR, "revenue_automation_templates.json"),
+  revenue_template_versions: path.join(DATA_DIR, "revenue_template_versions.json"),
 };
 
 // Directory for storing uploaded template files
@@ -322,6 +326,10 @@ ensureFile(FILES.org_settings, []);
 ensureFile(FILES.copilot_briefs, []);
 ensureFile(FILES.reimbursement_uploads, []);
 ensureFile(FILES.pending_reimbursement_uploads, []);
+ensureFile(FILES.template_settings, []);
+ensureFile(FILES.template_versions, []);
+ensureFile(FILES.revenue_automation_templates, []);
+ensureFile(FILES.revenue_template_versions, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -3801,6 +3809,7 @@ function getPracticeSettings(org_id){
   const existing = all.find(x => x.org_id === org_id);
   const orgSettings = getOrgSettings(org_id);
   const workflow = getWorkflowDefaults(orgSettings);
+  const letters = getLetterDefaults(orgSettings);
   const base = existing || {
     org_id,
     auto_create_denial_cases: true,
@@ -3815,7 +3824,14 @@ function getPracticeSettings(org_id){
     auto_draft_denials: typeof workflow.auto_draft_denials === "boolean" ? workflow.auto_draft_denials : true,
     auto_draft_underpayments: typeof workflow.auto_draft_underpayments === "boolean" ? workflow.auto_draft_underpayments : true,
     default_followup_days: Number(workflow.default_followup_days || 14),
+    default_follow_up_days: Number(workflow.default_followup_days || 14),
     require_confirmation_before_submitted: !!workflow.require_confirmation_before_submitted,
+    require_confirmation_before_submission: !!workflow.require_confirmation_before_submitted,
+    signature_block: String(letters.signature_block || ""),
+    appeal_opening: String(letters.appeal_opening || ""),
+    appeal_footer: String(letters.appeal_footer || ""),
+    negotiation_opening: String(letters.negotiation_opening || ""),
+    negotiation_footer: String(letters.negotiation_footer || ""),
   };
 }
 
@@ -3824,6 +3840,133 @@ function savePracticeSettings(org_id, settings){
   const keep = all.filter(x => x.org_id !== org_id);
   writeJSON(FILES.practice_settings, keep.concat([{ ...getPracticeSettings(org_id), ...settings, org_id, updated_at: nowISO() }]));
 }
+
+function getTemplateSettings(org_id){
+  const all = readJSON(FILES.template_settings, []);
+  const row = all.find(x => x.org_id === org_id);
+  const letters = getLetterDefaults(getOrgSettings(org_id));
+  return row ? row : {
+    org_id,
+    appeal_opening: String(letters.appeal_opening || ""),
+    appeal_footer: String(letters.appeal_footer || ""),
+    negotiation_opening: String(letters.negotiation_opening || ""),
+    negotiation_footer: String(letters.negotiation_footer || ""),
+    signature_block: String(letters.signature_block || ""),
+    updated_at: nowISO(),
+    updated_by: ""
+  };
+}
+
+function saveTemplateSettings(org_id, settings){
+  const all = readJSON(FILES.template_settings, []);
+  const keep = all.filter(x => x.org_id !== org_id);
+  writeJSON(FILES.template_settings, keep.concat([{ ...settings, org_id }]));
+}
+
+function saveTemplateVersion(org_id, snapshot, meta={}){
+  const versions = readJSON(FILES.template_versions, []);
+  versions.push({
+    version_id: uuid(),
+    org_id,
+    created_at: nowISO(),
+    created_by: meta.created_by || "",
+    reason: meta.reason || "save",
+    snapshot: {
+      appeal_opening: String(snapshot.appeal_opening || ""),
+      appeal_footer: String(snapshot.appeal_footer || ""),
+      negotiation_opening: String(snapshot.negotiation_opening || ""),
+      negotiation_footer: String(snapshot.negotiation_footer || ""),
+      signature_block: String(snapshot.signature_block || "")
+    }
+  });
+  writeJSON(FILES.template_versions, versions);
+}
+
+function listTemplateVersions(org_id){
+  return readJSON(FILES.template_versions, [])
+    .filter(v => v.org_id === org_id)
+    .sort((a,b)=> new Date(b.created_at||0)-new Date(a.created_at||0));
+}
+
+function applyTemplateVariables(template, data){
+  return String(template || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, k) => {
+    const v = (data && Object.prototype.hasOwnProperty.call(data, k)) ? data[k] : undefined;
+    return (v === null || v === undefined) ? `{{${k}}}` : String(v);
+  });
+}
+
+function getTemplatePreviewSample(org_id){
+  const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  const sample = billed[0] || {};
+  const claimCtx = buildClaimContext(org_id);
+  const derived = sample ? evaluateClaimDerived(sample, claimCtx) : {};
+  const settings = getOrgSettings(org_id);
+  return {
+    claim_number: sample.claim_number || "EMH-CLM-100001",
+    billed_id: sample.billed_id || "BILLED-0001",
+    payer: sample.payer || "Aetna",
+    dos: sample.dos || "2026-02-01",
+    cpt: sample.procedure_code || "99213",
+    dx: sample.diagnosis_code || "E11.9",
+    amount_billed: Number(sample.amount_billed || 0).toFixed(2),
+    amount_paid: Number(sample.insurance_paid || sample.paid_amount || 0).toFixed(2),
+    expected_insurance: Number(derived.expectedInsurance || 0).toFixed(2),
+    underpaid_amount: Number(derived.underpaidAmount || 0).toFixed(2),
+    denial_reason: (sample.denial_reason || sample.issue_reason || sample.ai?.denial_reason_category || "CO-50").toString(),
+    provider_name: (settings?.identity?.legal_name || "").toString() || "Your Practice",
+    npi: (settings?.identity?.npi || "").toString() || "1234567890",
+    tin: (settings?.identity?.tax_id || "").toString() || "12-3456789",
+    phone: (settings?.identity?.phone || "").toString() || "(000) 000-0000",
+    fax: (settings?.identity?.fax || "").toString() || "(000) 000-0000",
+    today: new Date().toLocaleDateString()
+  };
+}
+
+
+function getRevenueTemplates(org_id){
+  return readJSON(FILES.revenue_automation_templates, [])
+    .filter(t => t.org_id === org_id);
+}
+
+function saveRevenueTemplate(org_id, type, content, user_id){
+  const all = readJSON(FILES.revenue_automation_templates, []);
+  const existingIndex = all.findIndex(t => t.org_id === org_id && t.type === type);
+
+  const record = {
+    template_id: uuid(),
+    org_id,
+    type,
+    content,
+    updated_at: nowISO(),
+    updated_by: user_id
+  };
+
+  if (existingIndex >= 0){
+    all[existingIndex] = record;
+  } else {
+    all.push(record);
+  }
+
+  writeJSON(FILES.revenue_automation_templates, all);
+
+  const versions = readJSON(FILES.revenue_template_versions, []);
+  versions.push({
+    version_id: uuid(),
+    org_id,
+    type,
+    content,
+    created_at: nowISO(),
+    created_by: user_id
+  });
+  writeJSON(FILES.revenue_template_versions, versions);
+}
+
+function getTemplateVersions(org_id, type){
+  return readJSON(FILES.revenue_template_versions, [])
+    .filter(v => v.org_id === org_id && v.type === type)
+    .sort((a,b)=> new Date(b.created_at) - new Date(a.created_at));
+}
+
 
 function detectFileType(filename){
   const ext = path.extname(String(filename || "").toLowerCase());
@@ -12547,9 +12690,226 @@ rowsAdded = toUse;
     return redirect(res, "/data-management?tab=reimbursement");
   }
 
+  if (method === "GET" && pathname === "/data-management/revenue-automation") {
+    const templates = getRevenueTemplates(org.org_id);
+    const appealTemplate = templates.find(t => t.type === "appeal")?.content || "";
+    const negotiationTemplate = templates.find(t => t.type === "negotiation")?.content || "";
+
+    const variableList = [
+      "{{claim_number}}",
+      "{{payer}}",
+      "{{dos}}",
+      "{{billed_amount}}",
+      "{{expected_amount}}",
+      "{{paid_amount}}",
+      "{{at_risk_amount}}",
+      "{{provider_name}}"
+    ];
+
+    const html = renderPage("Revenue Automation Settings", `
+      <h2>Revenue Automation Settings</h2>
+      <p class="muted">Configure automation defaults and organization-level packet templates.</p>
+
+      <div class="card">
+        <h3>Template Variables</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          ${variableList.map(v => `<code style="background:#f3f4f6;padding:6px;border-radius:6px;">${safeStr(v)}</code>`).join("")}
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:20px;">
+        <h3>Default Appeal Template</h3>
+        <form method="POST" action="/data-management/revenue-automation/save">
+          <input type="hidden" name="type" value="appeal"/>
+          <textarea name="content" rows="10" style="width:100%;font-family:monospace;">${safeStr(appealTemplate)}</textarea>
+          <div class="btnRow" style="margin-top:12px;">
+            <button class="btn">Save Appeal Template</button>
+            <button type="button" class="btn secondary" onclick="enhanceTemplate('appeal')">AI Enhance</button>
+            <a class="btn secondary" href="/data-management/revenue-automation/history?type=appeal">Version History</a>
+          </div>
+        </form>
+      </div>
+
+      <div class="card" style="margin-top:20px;">
+        <h3>Default Negotiation Template</h3>
+        <form method="POST" action="/data-management/revenue-automation/save">
+          <input type="hidden" name="type" value="negotiation"/>
+          <textarea name="content" rows="10" style="width:100%;font-family:monospace;">${safeStr(negotiationTemplate)}</textarea>
+          <div class="btnRow" style="margin-top:12px;">
+            <button class="btn">Save Negotiation Template</button>
+            <button type="button" class="btn secondary" onclick="enhanceTemplate('negotiation')">AI Enhance</button>
+            <a class="btn secondary" href="/data-management/revenue-automation/history?type=negotiation">Version History</a>
+          </div>
+        </form>
+      </div>
+
+      <script>
+        function enhanceTemplate(type){
+          alert("AI Enhancement logic placeholder. Connect to AI endpoint here.");
+        }
+      </script>
+    `, navUser(), {showChat:true, orgName: org.org_name});
+
+    return send(res, 200, html);
+  }
+
+  if (method === "POST" && pathname === "/data-management/revenue-automation/save") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const type = String(params.get("type") || "").trim();
+    const content = String(params.get("content") || "").trim();
+
+    if (!type || !content){
+      return redirect(res, "/data-management/revenue-automation");
+    }
+
+    saveRevenueTemplate(org.org_id, type, content, user.user_id);
+    return redirect(res, "/data-management/revenue-automation");
+  }
+
+  if (method === "GET" && pathname === "/data-management/revenue-automation/history") {
+    const type = String(parsed.query.type || "").trim();
+    const versions = getTemplateVersions(org.org_id, type);
+
+    const rows = versions.map(v => `
+      <tr>
+        <td>${new Date(v.created_at).toLocaleString()}</td>
+        <td>${safeStr(v.created_by || "")}</td>
+        <td>
+          <form method="POST" action="/data-management/revenue-automation/rollback">
+            <input type="hidden" name="type" value="${safeStr(type)}"/>
+            <input type="hidden" name="version_id" value="${safeStr(v.version_id)}"/>
+            <button class="btn small">Restore</button>
+          </form>
+        </td>
+      </tr>
+    `).join("") || `<tr><td colspan="3" class="muted">No versions.</td></tr>`;
+
+    const html = renderPage("Template History", `
+      <h2>${safeStr(type)} Template History</h2>
+      <table>
+        <thead><tr><th>Date</th><th>User</th><th>Restore</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="btnRow" style="margin-top:16px;">
+        <a class="btn secondary" href="/data-management/revenue-automation">Back</a>
+      </div>
+    `, navUser(), {showChat:false, orgName: org.org_name});
+
+    return send(res, 200, html);
+  }
+
+  if (method === "POST" && pathname === "/data-management/revenue-automation/rollback") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const version_id = String(params.get("version_id") || "").trim();
+    const type = String(params.get("type") || "").trim();
+
+    const versions = readJSON(FILES.revenue_template_versions, []);
+    const match = versions.find(v => v.version_id === version_id && v.org_id === org.org_id);
+
+    if (match){
+      saveRevenueTemplate(org.org_id, type, match.content, user.user_id);
+    }
+
+    return redirect(res, "/data-management/revenue-automation");
+  }
+
+
+function renderTemplateEditor(org, user){
+  const t = getTemplateSettings(org.org_id);
+  const practice = getPracticeSettings(org.org_id);
+  const rules = getAllowedAmountRules(org.org_id);
+  const sample = getTemplatePreviewSample(org.org_id);
+  const sampleB64 = Buffer.from(JSON.stringify(sample)).toString("base64");
+
+  const vars = ["claim_number","billed_id","payer","dos","cpt","dx","amount_billed","amount_paid","expected_insurance","underpaid_amount","denial_reason","provider_name","npi","tin","phone","fax","today"];
+  const chips = vars.map(k => `<button type="button" class="tpl-chip" data-insert="{{${k}}}">{{${k}}}</button>`).join("");
+
+  return `
+  <style>
+    .tpl-wrap{display:grid;grid-template-columns:1.2fr .8fr;gap:14px;align-items:start;}
+    .tpl-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;box-shadow:var(--shadow);}
+    .tpl-chipbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+    .tpl-chip{border:1px solid var(--border);background:#fff;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:800;cursor:pointer;}
+    .tpl-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+    .tpl-textarea{width:100%;min-height:140px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;font-size:13px;outline:none;}
+    .tpl-preview{white-space:pre-wrap;font-size:13px;line-height:1.45;border:1px dashed var(--border);border-radius:12px;padding:12px;background:rgba(17,24,39,.03);}
+  </style>
+  <h2>Revenue Automation & Templates</h2>
+  <p class="muted">Configure automation rules, reimbursement defaults, and templates in one place.</p>
+
+  <div class="card" style="margin-top:16px;">
+    <h3>Appeals & Negotiations Automation</h3>
+    <form method="POST" action="/data-management/practice-settings/save" style="display:flex;flex-direction:column;gap:12px;max-width:900px;">
+      <label><input type="checkbox" name="auto_create_denial_cases" ${practice.auto_create_denial_cases ? "checked" : ""}/> Auto-create denial cases</label>
+      <label><input type="checkbox" name="auto_create_negotiation_cases" ${practice.auto_create_negotiation_cases ? "checked" : ""}/> Auto-create negotiation cases</label>
+      <label><input type="checkbox" name="auto_draft_denials" ${practice.auto_draft_denials ? "checked" : ""}/> Auto-draft denial appeal letters</label>
+      <label><input type="checkbox" name="auto_draft_underpayments" ${practice.auto_draft_underpayments ? "checked" : ""}/> Auto-draft underpayment letters</label>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+        <div style="flex:1;"><label>Default Follow-up Days</label><input name="default_follow_up_days" value="${safeStr(String(practice.default_follow_up_days || practice.default_followup_days || 14))}"/></div>
+        <div style="flex:1;"><label>Require Confirmation Before Submission</label><select name="require_confirmation_before_submission"><option value="yes" ${(practice.require_confirmation_before_submission || practice.require_confirmation_before_submitted) ? "selected" : ""}>Yes</option><option value="no" ${(practice.require_confirmation_before_submission || practice.require_confirmation_before_submitted) ? "" : "selected"}>No</option></select></div>
+      </div>
+      <button class="btn">Save Automation Settings</button>
+    </form>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <h3>Reimbursement Defaults & Detection Rules</h3>
+    <form method="POST" action="/data-management/allowed-rules/save" style="display:flex;flex-direction:column;gap:12px;max-width:900px;">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+        <div style="flex:1;"><label>Default Method</label><select name="default_method"><option value="percent_medicare" ${rules.default_method==="percent_medicare"?"selected":""}>% of Medicare</option><option value="percent_billed" ${rules.default_method==="percent_billed"?"selected":""}>% of Billed</option><option value="flat" ${rules.default_method==="flat"?"selected":""}>Flat Amount</option><option value="ucr_multiplier" ${rules.default_method==="ucr_multiplier"?"selected":""}>UCR Multiplier</option></select></div>
+        <div style="flex:1;"><label>Default Value</label><input name="default_value" value="${safeStr(String(rules.default_value || ""))}"/></div>
+        <div style="flex:1;"><label>UCR Multiplier</label><input name="ucr_multiplier" value="${safeStr(String(rules.ucr_multiplier || 1))}"/></div>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+        <div style="flex:1;"><label>Tolerance %</label><input name="tolerance_percent" value="${safeStr(String(rules.tolerance_percent || 1))}"/></div>
+        <div style="flex:1;"><label>Tolerance $</label><input name="tolerance_min_dollars" value="${safeStr(String(rules.tolerance_min_dollars || 5))}"/></div>
+      </div>
+      <button class="btn">Save Reimbursement Rules</button>
+    </form>
+  </div>
+
+  <div class="tpl-wrap" style="margin-top:16px;">
+    <div>
+      <div class="tpl-card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div><strong>Template Variables</strong><div class="muted">Click to insert into the active text box.</div></div><a class="btn secondary small" href="/data-management/templates/history">Version History</a></div><div class="tpl-chipbar" id="tplChipBar">${chips}</div></div>
+      <div class="tpl-card" style="margin-top:14px;">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><strong>Letter & Negotiation Templates</strong><form method="POST" action="/data-management/templates/ai-enhance" style="margin:0;"><button class="btn secondary small" type="submit">AI Enhance Templates</button></form></div>
+        <form method="POST" action="/data-management/templates/save" style="margin-top:12px;">
+          <div class="tpl-grid2">
+            <div><label>Appeal Opening</label><textarea class="tpl-textarea" name="appeal_opening" id="appeal_opening">${safeStr(t.appeal_opening || "")}</textarea></div>
+            <div><label>Appeal Footer</label><textarea class="tpl-textarea" name="appeal_footer" id="appeal_footer">${safeStr(t.appeal_footer || "")}</textarea></div>
+            <div><label>Negotiation Opening</label><textarea class="tpl-textarea" name="negotiation_opening" id="negotiation_opening">${safeStr(t.negotiation_opening || "")}</textarea></div>
+            <div><label>Negotiation Footer</label><textarea class="tpl-textarea" name="negotiation_footer" id="negotiation_footer">${safeStr(t.negotiation_footer || "")}</textarea></div>
+          </div>
+          <div style="margin-top:12px;"><label>Signature Block</label><textarea class="tpl-textarea" style="min-height:90px;" name="signature_block" id="signature_block">${safeStr(t.signature_block || "")}</textarea></div>
+          <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;"><button class="btn" type="submit">Save Templates</button><a class="btn secondary" href="/data-management?tab=reimbursement">Back to Reimbursement Engine</a></div>
+        </form>
+      </div>
+    </div>
+    <div>
+      <div class="tpl-card"><strong>Live Preview</strong><div class="muted">Preview uses a sample claim (or defaults).</div><div style="margin-top:10px;"><label>Appeal Preview</label><div class="tpl-preview" id="previewAppeal"></div></div><div style="margin-top:10px;"><label>Negotiation Preview</label><div class="tpl-preview" id="previewNegotiation"></div></div></div>
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const sample = JSON.parse(atob("${sampleB64}"));
+      let activeEl = null;
+      const ids = ["appeal_opening","appeal_footer","negotiation_opening","negotiation_footer","signature_block"];
+      ids.forEach(id=>{const el=document.getElementById(id); if(!el) return; el.addEventListener("focus",()=>activeEl=el); el.addEventListener("click",()=>activeEl=el); el.addEventListener("keyup",()=>updatePreviews());});
+      document.getElementById("tplChipBar")?.addEventListener("click", (e)=>{const btn=e.target.closest('.tpl-chip'); if(!btn) return; const token=btn.getAttribute('data-insert')||''; const el=activeEl||document.getElementById('appeal_opening'); if(!el) return; const start=el.selectionStart||0; const end=el.selectionEnd||0; const text=el.value||''; el.value=text.slice(0,start)+token+text.slice(end); el.focus(); el.selectionStart=el.selectionEnd=start+token.length; updatePreviews();});
+      function applyVars(tpl){ return String(tpl||"").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (m,k)=>Object.prototype.hasOwnProperty.call(sample,k)?String(sample[k]??""):m); }
+      function updatePreviews(){ const appeal=[document.getElementById('appeal_opening')?.value||'', '', document.getElementById('signature_block')?.value||'', '', document.getElementById('appeal_footer')?.value||''].join('\n'); const nego=[document.getElementById('negotiation_opening')?.value||'', '', document.getElementById('signature_block')?.value||'', '', document.getElementById('negotiation_footer')?.value||''].join('\n'); const elA=document.getElementById('previewAppeal'); const elN=document.getElementById('previewNegotiation'); if(elA) elA.textContent=applyVars(appeal).trim()||'(empty)'; if(elN) elN.textContent=applyVars(nego).trim()||'(empty)'; }
+      updatePreviews();
+    })();
+  </script>
+  `;
+}
+
   if (method === "GET" && pathname === "/data-management") {
     const tab = String(parsed.query.tab || "claims").toLowerCase();
-    const validTabs = ["claims","payments","denials","reimbursement","practice-settings"];
+    const validTabs = ["claims","payments","denials","reimbursement","automation","practice-settings"];
     const activeTab = validTabs.includes(tab) ? tab : "claims";
     const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const claimBatches = getClaimBatchHistory(org.org_id);
@@ -12575,7 +12935,7 @@ rowsAdded = toUse;
     const denialWithDoc = denialClaims.filter(b => !!(b.denial_doc_attached || b.denial_document || b.denial_file)).length;
 
     function tabBtn(id, label){ return `<a class="btn ${activeTab===id?"":"secondary"}" href="/data-management?tab=${id}">${label}</a>`; }
-    const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">${tabBtn("claims","Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("reimbursement","Reimbursement Engine")}${tabBtn("practice-settings","Practice Settings")}</div>`;
+    const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">${tabBtn("claims","Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("reimbursement","Reimbursement Engine")}${tabBtn("automation","Revenue Automation & Templates")}</div>`;
 
     const uploadPanel = `
       <h3>Upload Panel</h3>
@@ -13087,20 +13447,9 @@ rowsAdded = toUse;
 })();
 </script>
 `
+    const practiceContent = renderTemplateEditor(org, user);
 
-    const practiceContent = `
-      <h3>Practice Settings</h3>
-      <form method="POST" action="/data-management/practice-settings/save" style="display:flex;flex-direction:column;gap:8px;max-width:640px;">
-        <label><input type="checkbox" name="auto_create_denial_cases" ${practice.auto_create_denial_cases?"checked":""}/> auto_create_denial_cases</label>
-        <label><input type="checkbox" name="auto_create_negotiation_cases" ${practice.auto_create_negotiation_cases?"checked":""}/> auto_create_negotiation_cases</label>
-        <label>default_underpaid_stage_behavior<select name="default_underpaid_stage_behavior"><option value="underpaid" ${practice.default_underpaid_stage_behavior==="underpaid"?"selected":""}>Keep Underpaid</option><option value="negotiation" ${practice.default_underpaid_stage_behavior==="negotiation"?"selected":""}>Auto move to negotiation</option></select></label>
-        <label>default_denial_stage_behavior<select name="default_denial_stage_behavior"><option value="denied_hold" ${practice.default_denial_stage_behavior==="denied_hold"?"selected":""}>Keep denied until user acts</option><option value="auto_case" ${practice.default_denial_stage_behavior==="auto_case"?"selected":""}>Auto create case</option></select></label>
-        <label>letter defaults<input name="letter_defaults" value="${safeStr(practice.letter_defaults||"")}"/></label>
-        <button class="btn" type="submit">Save Practice Settings</button>
-      </form>
-    `;
-
-    const section = ({"claims":claimsContent,"payments":paymentsContent,"denials":denialContent,"reimbursement":reimbursementContent,"practice-settings":practiceContent})[activeTab] || claimsContent;
+    const section = ({"claims":claimsContent,"payments":paymentsContent,"denials":denialContent,"reimbursement":reimbursementContent,"automation":practiceContent,"practice-settings":practiceContent})[activeTab] || claimsContent;
 
     const rebuildControls = `<div class="hr"></div><h3>Rebuild / Reprocess Controls</h3><div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;"><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="lifecycle"/><button class="btn secondary" type="submit">Recalculate Lifecycle</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="expected"/><button class="btn secondary" type="submit">Recompute Expected Insurance</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="revenue"/><button class="btn secondary" type="submit">Rebuild Revenue Aggregates</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="denials"/><button class="btn secondary" type="submit">Re-sync Denials</button></form><form method="POST" action="/data-management/rematch-payments"><button class="btn secondary" type="submit">Re-match Payments</button></form></div>`;
 
@@ -13818,14 +14167,169 @@ rowsAdded = toUse;
   if (method === "POST" && pathname === "/data-management/practice-settings/save") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
+    const defaultFollowupDays = Math.max(1, Number(params.get("default_follow_up_days") || 14));
+    const requireConfirm = String(params.get("require_confirmation_before_submission") || "no") === "yes";
+
     savePracticeSettings(org.org_id, {
       auto_create_denial_cases: params.get("auto_create_denial_cases") === "on",
       auto_create_negotiation_cases: params.get("auto_create_negotiation_cases") === "on",
-      default_underpaid_stage_behavior: String(params.get("default_underpaid_stage_behavior") || "underpaid"),
-      default_denial_stage_behavior: String(params.get("default_denial_stage_behavior") || "denied_hold"),
-      letter_defaults: String(params.get("letter_defaults") || "").trim(),
+      auto_draft_denials: params.get("auto_draft_denials") === "on",
+      auto_draft_underpayments: params.get("auto_draft_underpayments") === "on",
+      default_followup_days: defaultFollowupDays,
+      default_follow_up_days: defaultFollowupDays,
+      require_confirmation_before_submitted: requireConfirm,
+      require_confirmation_before_submission: requireConfirm,
     });
-    return redirect(res, "/data-management?tab=practice-settings");
+
+    const orgSettings = getOrgSettings(org.org_id);
+    saveOrgSettings(org.org_id, {
+      workflow_defaults: {
+        ...(orgSettings.workflow_defaults || {}),
+        auto_create_denial_cases: params.get("auto_create_denial_cases") === "on",
+        auto_create_negotiation_cases: params.get("auto_create_negotiation_cases") === "on",
+        auto_draft_denials: params.get("auto_draft_denials") === "on",
+        auto_draft_underpayments: params.get("auto_draft_underpayments") === "on",
+        default_followup_days: defaultFollowupDays,
+        require_confirmation_before_submitted: requireConfirm,
+      }
+    });
+    return redirect(res, "/data-management?tab=automation");
+  }
+
+  if (method === "POST" && pathname === "/data-management/templates/save") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const current = getTemplateSettings(org.org_id);
+    saveTemplateVersion(org.org_id, current, { created_by: user.user_id, reason: "save" });
+
+    const next = {
+      org_id: org.org_id,
+      appeal_opening: String(params.get("appeal_opening") || "").trim(),
+      appeal_footer: String(params.get("appeal_footer") || "").trim(),
+      negotiation_opening: String(params.get("negotiation_opening") || "").trim(),
+      negotiation_footer: String(params.get("negotiation_footer") || "").trim(),
+      signature_block: String(params.get("signature_block") || "").trim(),
+      updated_at: nowISO(),
+      updated_by: user.user_id
+    };
+    saveTemplateSettings(org.org_id, next);
+    savePracticeSettings(org.org_id, { ...next });
+
+    const orgSettings = getOrgSettings(org.org_id);
+    saveOrgSettings(org.org_id, {
+      letter_defaults: {
+        ...(orgSettings.letter_defaults || {}),
+        appeal_opening: next.appeal_opening,
+        appeal_footer: next.appeal_footer,
+        negotiation_opening: next.negotiation_opening,
+        negotiation_footer: next.negotiation_footer,
+        signature_block: next.signature_block,
+      }
+    });
+
+    if (typeof logAudit === "function") {
+      logAudit("template_saved", { org_id: org.org_id, user_id: user.user_id });
+    }
+    return redirect(res, "/data-management?tab=automation");
+  }
+
+  if (method === "GET" && pathname === "/data-management/templates/history") {
+    const versions = listTemplateVersions(org.org_id).slice(0, 50);
+    const rows = versions.length ? versions.map(v => `
+      <tr>
+        <td>${v.created_at ? new Date(v.created_at).toLocaleString() : "—"}</td>
+        <td>${safeStr(v.created_by || "")}</td>
+        <td>${safeStr(v.reason || "")}</td>
+        <td style="white-space:nowrap;">
+          <form method="POST" action="/data-management/templates/rollback" style="display:inline-block;" onsubmit="return confirm('Rollback templates to this version?');">
+            <input type="hidden" name="version_id" value="${safeStr(v.version_id)}" />
+            <button class="btn small">Rollback</button>
+          </form>
+        </td>
+      </tr>
+    `).join("") : `<tr><td colspan="4" class="muted">No versions yet.</td></tr>`;
+
+    const html = renderPage("Template History", `
+      <h2>Template Version History</h2>
+      <p class="muted">Each save creates a version. Rollback restores prior content.</p>
+      <div class="card" style="overflow:auto;">
+        <table>
+          <thead><tr><th>Saved</th><th>By</th><th>Reason</th><th>Action</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="btnRow" style="margin-top:12px;"><a class="btn secondary" href="/data-management?tab=automation">Back</a></div>
+    `, navUser(), { showChat:false, orgName: org.org_name });
+    return send(res, 200, html);
+  }
+
+  if (method === "POST" && pathname === "/data-management/templates/rollback") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const versionId = String(params.get("version_id") || "").trim();
+    if (!versionId) return redirect(res, "/data-management/templates/history");
+
+    const versions = listTemplateVersions(org.org_id);
+    const v = versions.find(x => String(x.version_id) === versionId);
+    if (!v) return redirect(res, "/data-management/templates/history");
+
+    const current = getTemplateSettings(org.org_id);
+    saveTemplateVersion(org.org_id, current, { created_by: user.user_id, reason: "rollback_backup" });
+
+    const next = { org_id: org.org_id, ...(v.snapshot || {}), updated_at: nowISO(), updated_by: user.user_id };
+    saveTemplateSettings(org.org_id, next);
+    savePracticeSettings(org.org_id, { ...next });
+
+    const orgSettings = getOrgSettings(org.org_id);
+    saveOrgSettings(org.org_id, {
+      letter_defaults: {
+        ...(orgSettings.letter_defaults || {}),
+        appeal_opening: String(next.appeal_opening || ""),
+        appeal_footer: String(next.appeal_footer || ""),
+        negotiation_opening: String(next.negotiation_opening || ""),
+        negotiation_footer: String(next.negotiation_footer || ""),
+        signature_block: String(next.signature_block || ""),
+      }
+    });
+
+    if (typeof logAudit === "function") logAudit("template_rollback", { org_id: org.org_id, version_id: versionId, user_id: user.user_id });
+    return redirect(res, "/data-management?tab=automation");
+  }
+
+  if (method === "POST" && pathname === "/data-management/templates/ai-enhance") {
+    const current = getTemplateSettings(org.org_id);
+    saveTemplateVersion(org.org_id, current, { created_by: user.user_id, reason: "ai_enhance_backup" });
+
+    const polish = (txt) => String(txt || "")
+      .trim()
+      .replace(/\r\n/g, "\n")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    const addIfMissing = (txt, snippet) => {
+      const t = String(txt || "");
+      if (!t.trim()) return t;
+      return t.includes(snippet) ? t : (t.trim() + "\n\n" + snippet).trim();
+    };
+    const reminder = "Key fields: Claim {{claim_number}}, DOS {{dos}}, CPT {{cpt}}, Expected ${{expected_insurance}}, Paid ${{amount_paid}}.";
+    const next = {
+      org_id: org.org_id,
+      appeal_opening: addIfMissing(polish(current.appeal_opening), reminder),
+      appeal_footer: polish(current.appeal_footer),
+      negotiation_opening: addIfMissing(polish(current.negotiation_opening), reminder),
+      negotiation_footer: polish(current.negotiation_footer),
+      signature_block: polish(current.signature_block),
+      updated_at: nowISO(),
+      updated_by: user.user_id
+    };
+
+    saveTemplateSettings(org.org_id, next);
+    savePracticeSettings(org.org_id, { ...next });
+    const orgSettings = getOrgSettings(org.org_id);
+    saveOrgSettings(org.org_id, { letter_defaults: { ...(orgSettings.letter_defaults || {}), ...next } });
+
+    if (typeof logAudit === "function") logAudit("template_ai_enhance", { org_id: org.org_id, user_id: user.user_id });
+    return redirect(res, "/data-management?tab=automation");
   }
 
   if (method === "POST" && pathname === "/data-management/contracts/add") {
