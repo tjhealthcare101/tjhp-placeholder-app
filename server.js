@@ -90,6 +90,8 @@ const FILES = {
   agent_messages: path.join(DATA_DIR, "agent_messages.json"),
   org_settings: path.join(DATA_DIR, "org_settings.json"),
   copilot_briefs: path.join(DATA_DIR, "copilot_briefs.json"),
+  reimbursement_uploads: path.join(DATA_DIR, "reimbursement_uploads.json"),
+  pending_reimbursement_uploads: path.join(DATA_DIR, "pending_reimbursement_uploads.json"),
 };
 
 // Directory for storing uploaded template files
@@ -318,6 +320,8 @@ ensureFile(FILES.agent_workspaces, []);
 ensureFile(FILES.agent_messages, []);
 ensureFile(FILES.org_settings, []);
 ensureFile(FILES.copilot_briefs, []);
+ensureFile(FILES.reimbursement_uploads, []);
+ensureFile(FILES.pending_reimbursement_uploads, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -1674,6 +1678,115 @@ function pickField(row, candidates) {
     if (k) return row[k];
   }
   return "";
+}
+
+function detectReimbursementUploadType(file, parsedCsv) {
+  const headers = (parsedCsv.headers || []).map(h => String(h || "").toLowerCase().trim());
+  const hasAny = (candidates) => candidates.some(c => headers.some(h => h.includes(c)));
+
+  const contractSignals = [
+    "payer_name", "network_status", "diagnosis_code", "reimbursement_model", "allowed_amount", "effective_date"
+  ];
+  const feeSignals = ["schedule_type", "locality", "year", "rate", "fee", "amount"];
+
+  const contractScore = contractSignals.filter(s => hasAny([s])).length
+    + (hasAny(["payer", "insurance", "carrier"]) ? 1 : 0)
+    + (hasAny(["procedure_code", "cpt"]) ? 1 : 0);
+  const feeScore = feeSignals.filter(s => hasAny([s])).length
+    + (hasAny(["procedure_code", "cpt", "hcpcs"]) ? 1 : 0)
+    + (hasAny(["allowed", "amount", "rate", "fee"]) ? 1 : 0);
+
+  if (contractScore > feeScore) return "contract";
+  if (feeScore > contractScore) return "fee_schedule";
+
+  const filename = String(file.filename || "").toLowerCase();
+  if (filename.includes("contract")) return "contract";
+  if (filename.includes("fee") || filename.includes("schedule")) return "fee_schedule";
+  return "unknown";
+}
+
+function saveReimbursementUploadLog(entry){
+  const logs = readJSON(FILES.reimbursement_uploads, []);
+  logs.push(entry);
+  writeJSON(FILES.reimbursement_uploads, logs);
+}
+function getReimbursementUploadLogs(org_id){
+  return readJSON(FILES.reimbursement_uploads, [])
+    .filter(x => x.org_id === org_id)
+    .sort((a,b)=> new Date(b.created_at||0) - new Date(a.created_at||0));
+}
+function savePendingReimbursement(pending){
+  const all = readJSON(FILES.pending_reimbursement_uploads, []);
+  all.push(pending);
+  writeJSON(FILES.pending_reimbursement_uploads, all);
+}
+function getPendingReimbursement(org_id, token){
+  return readJSON(FILES.pending_reimbursement_uploads, [])
+    .find(x => x.org_id === org_id && x.token === token) || null;
+}
+function deletePendingReimbursement(org_id, token){
+  const all = readJSON(FILES.pending_reimbursement_uploads, []);
+  const keep = all.filter(x => !(x.org_id === org_id && x.token === token));
+  writeJSON(FILES.pending_reimbursement_uploads, keep);
+}
+
+// ===============================
+// AI Contract Validation Engine (Rule-Based MVP)
+// ===============================
+function validateContractBatch(org_id, newContracts) {
+  const existing = getPayerContracts(org_id);
+  const issues = [];
+  const warnings = [];
+  const seenKeys = new Set();
+
+  for (const c of newContracts) {
+
+    const key = `${c.payer_name}|${c.procedure_code}|${c.network_status}`;
+    if (seenKeys.has(key)) {
+      issues.push(`Duplicate in upload: ${key}`);
+    }
+    seenKeys.add(key);
+
+    if (!c.payer_name || !c.procedure_code) {
+      issues.push(`Missing required fields for CPT ${c.procedure_code || "UNKNOWN"}`);
+    }
+
+    if (!c.reimbursement_model) {
+      issues.push(`Missing reimbursement model for ${c.payer_name} ${c.procedure_code}`);
+    }
+
+    if (c.reimbursement_model === "percent_of_charge") {
+      if (c.expected_value <= 0 || c.expected_value > 200) {
+        warnings.push(`Unusual percentage value (${c.expected_value}%) for ${c.payer_name} ${c.procedure_code}`);
+      }
+    }
+
+    if (c.reimbursement_model === "fixed_amount") {
+      if (c.expected_value <= 0) {
+        issues.push(`Invalid fixed amount for ${c.payer_name} ${c.procedure_code}`);
+      }
+      if (c.expected_value > 10000) {
+        warnings.push(`Unusually high fixed reimbursement (${c.expected_value}) for ${c.payer_name} ${c.procedure_code}`);
+      }
+    }
+
+    const conflict = existing.find(e =>
+      e.payer_name === c.payer_name &&
+      e.procedure_code === c.procedure_code &&
+      e.network_status === c.network_status &&
+      e.reimbursement_model !== c.reimbursement_model
+    );
+
+    if (conflict) {
+      warnings.push(`Model conflict detected for ${c.payer_name} ${c.procedure_code}`);
+    }
+  }
+
+  return {
+    issues,
+    warnings,
+    valid: issues.length === 0
+  };
 }
 
 function runExtractionFromDocumentText() {
@@ -6624,6 +6737,7 @@ if (method === "GET" && pathname === "/claims") {
 
   // Sub-tabs: billed | payments | denials | negotiations | all
   const view = String(parsed.query.view || "billed").toLowerCase();
+  const reimbursementBatch = String(parsed.query.reimbursement_batch || "").trim();
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
@@ -7200,7 +7314,17 @@ if (method === "GET" && pathname === "/claims") {
     const submissionF = String(parsed.query.submission_id || "").trim();
 
     let billed = billedAll.slice();
+    let emptyBanner = "";
     if (submissionF) billed = billed.filter(b => String(b.submission_id||"") === submissionF);
+    if (reimbursementBatch) {
+      billed = billed.filter(c =>
+        String(c.upload_batch_id || "") === reimbursementBatch
+      );
+
+      emptyBanner = billed.length === 0
+        ? `<div class="card muted">No claims currently impacted by this reimbursement upload.</div>`
+        : "";
+    }
 
     const fromDate = start ? new Date(start + "T00:00:00.000Z") : null;
     const toDate = end ? new Date(end + "T23:59:59.999Z") : null;
@@ -7322,6 +7446,8 @@ if (method === "GET" && pathname === "/claims") {
         <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${totalFiltered} results (Page ${page}/${totalPages}).</div>
         <div>${sizeSelect}</div>
       </div>
+
+      ${emptyBanner}
 
       <div style="overflow:auto;">
         <table>
@@ -12430,6 +12556,7 @@ rowsAdded = toUse;
     const paymentBatches = getPaymentBatchHistory(org.org_id);
     const unmatchedPayments = getUnmatchedPayments(org.org_id, billed).slice(0, 100);
     const contracts = getPayerContracts(org.org_id).sort((a,b)=> String(a.payer_name||"").localeCompare(String(b.payer_name||"")));
+    const uploads = getReimbursementUploadLogs(org.org_id).slice(0, 20);
     const ingests = readJSON(FILES.document_ingests, []).filter(x => x.org_id === org.org_id).sort((a,b)=>new Date(b.uploaded_at||b.created_at||0)-new Date(a.uploaded_at||a.created_at||0));
     const rules = getAllowedAmountRules(org.org_id);
     const feeSchedules = getFeeSchedules(org.org_id).sort((a,b)=>new Date(b.uploaded_at||0)-new Date(a.uploaded_at||0));
@@ -12657,119 +12784,309 @@ rowsAdded = toUse;
     `;
 
     const reimbursementContent = `
-  <h2>Reimbursement Engine</h2>
+<h2>Reimbursement Engine</h2>
 
-  <div class="card" style="margin-bottom:16px;">
-    <h3>
-      Reimbursement Precedence
-      <span class="tooltip">ⓘ
-        <span class="tooltiptext">
-          Calculation Order:
-          1. Payer Contract
-          2. Fee Schedule
-          3. Default Allowed Logic
-        </span>
+<div class="card" style="margin-bottom:16px;">
+  <h3>
+    Reimbursement Precedence
+    <span class="tooltip">ⓘ
+      <span class="tooltiptext">
+        Calculation Order:
+        1. Payer Contract (Highest Priority)
+        2. Fee Schedule
+        3. Default Allowed Logic (Fallback)
       </span>
-    </h3>
-    <p class="muted">
-      Configure how expected insurance is calculated.
-      These settings power underpayment detection,
-      revenue at risk, and negotiation automation.
-    </p>
+    </span>
+  </h3>
+  <p class="muted">
+    These settings power Expected Insurance calculations,
+    underpayment detection, revenue at risk,
+    and negotiation automation.
+  </p>
+</div>
+
+<div class="card" style="margin-top:14px;">
+  <h3>
+    Upload History
+    <span class="tooltip">ⓘ<span class="tooltiptext">Track reimbursement uploads with timestamps. You can rollback an upload if needed.</span></span>
+  </h3>
+  <div style="overflow:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Uploaded</th>
+          <th>By</th>
+          <th>Contracts Added</th>
+          <th>Fee Rows Added</th>
+          <th>Duplicates Skipped</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${
+          uploads.length
+            ? uploads.map(u => `
+              <tr>
+                <td>${u.created_at ? new Date(u.created_at).toLocaleString() : "—"}</td>
+                <td>${safeStr(u.created_by || "")}</td>
+                <td>${formatNumberUI(u.contracts_added || 0)}</td>
+                <td>${formatNumberUI(u.fee_schedules_added || 0)}</td>
+                <td>${formatNumberUI(u.duplicates_skipped || 0)}</td>
+                <td style="white-space:nowrap;">
+                  <form method="POST" action="/data-management/reimbursement/delete-upload"
+                        onsubmit="return confirm('Delete this reimbursement upload and rollback all records created by it?');"
+                        style="display:inline-block;">
+                    <input type="hidden" name="upload_batch_id" value="${safeStr(u.upload_batch_id)}"/>
+                    <button class="btn danger small" type="submit">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            `).join("")
+            : `<tr><td colspan="6" class="muted">No uploads yet.</td></tr>`
+        }
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============================= -->
+<!-- PAYER CONTRACTS SECTION -->
+<!-- ============================= -->
+
+<details class="card" open>
+  <summary style="font-weight:800;font-size:16px;cursor:pointer;">
+    Payer Contracts
+    <span class="tooltip">ⓘ
+      <span class="tooltiptext">
+        Upload or manually define payer reimbursement rules.
+        Overrides fee schedules and fallback logic.
+      </span>
+    </span>
+  </summary>
+
+  <!-- Bulk Upload -->
+  <div style="margin-top:16px;">
+    <h4>Bulk Upload Contracts</h4>
+    <form method="POST" action="/data-management/reimbursement/upload" enctype="multipart/form-data">
+      <input type="file" name="reimbursement_files" id="reimbursement-files" multiple accept=".csv" required />
+      <div class="dropzone" id="reimbursement-dropzone" style="margin-top:8px;">
+        Drag & drop reimbursement CSV files here (contracts + fee schedules supported)
+      </div>
+      <p class="muted small" id="reimbursement-file-hints"></p>
+      <p class="muted small">
+        CSV Columns: payer_name, network_status, procedure_code,
+        diagnosis_code, reimbursement_model, allowed_amount, effective_date
+      </p>
+      <div class="btnRow">
+        <button class="btn secondary">Upload Reimbursement Files</button>
+      </div>
+    </form>
   </div>
 
-  <!-- ===================== -->
-  <!-- PAYER CONTRACTS -->
-  <!-- ===================== -->
+  <div class="hr"></div>
 
-  <details class="card" open>
-    <summary style="font-weight:800;font-size:16px;cursor:pointer;">
-      Payer Contracts
-      <span class="tooltip">ⓘ
-        <span class="tooltiptext">
-          Upload payer-specific reimbursement agreements.
-          Overrides fee schedules and fallback logic.
-        </span>
-      </span>
-    </summary>
-
-    <form method="POST" action="/data-management/contracts/upload" enctype="multipart/form-data" style="margin-top:12px;">
-      <input type="file" name="contracts" multiple accept=".csv" required />
-      <div class="dropzone" style="margin-top:8px;">
-        Drag & drop multiple contract CSV files here
-      </div>
-      <div class="btnRow">
-        <button class="btn secondary">Upload Contracts</button>
-      </div>
-    </form>
-
-  </details>
-
-  <!-- ===================== -->
-  <!-- FEE SCHEDULES -->
-  <!-- ===================== -->
-
-  <details class="card" style="margin-top:14px;">
-    <summary style="font-weight:800;font-size:16px;cursor:pointer;">
-      Fee Schedules
-      <span class="tooltip">ⓘ
-        <span class="tooltiptext">
-          Upload Medicare or payer fee schedules.
-          Used when no custom contract applies.
-        </span>
-      </span>
-    </summary>
-
-    <form method="POST" action="/data-management/fee-schedules/upload" enctype="multipart/form-data" style="margin-top:12px;">
-      <input type="file" name="fee_schedules" multiple accept=".csv" required />
-      <div class="dropzone" style="margin-top:8px;">
-        Drag & drop multiple fee schedule CSV files here
-      </div>
-      <div class="btnRow">
-        <button class="btn secondary">Upload Fee Schedules</button>
-      </div>
-    </form>
-
-  </details>
-
-  <!-- ===================== -->
-  <!-- DEFAULT LOGIC -->
-  <!-- ===================== -->
-
-  <details class="card" style="margin-top:14px;">
-    <summary style="font-weight:800;font-size:16px;cursor:pointer;">
-      Default Allowed Logic
-      <span class="tooltip">ⓘ
-        <span class="tooltiptext">
-          Used when no contract or fee schedule rule applies.
-        </span>
-      </span>
-    </summary>
-
-    <form method="POST" action="/data-management/allowed-rules/save" style="margin-top:12px;">
+  <!-- Manual Entry -->
+  <div>
+    <h4>Manual Contract Rule Entry</h4>
+    <form method="POST" action="/data-management/contracts/add" style="display:flex;flex-direction:column;gap:14px;">
       <div class="row">
         <div class="col">
-          <label>Default Method</label>
-          <select name="default_method">
-            <option value="percent_medicare">% of Medicare</option>
-            <option value="percent_billed">% of Billed</option>
-            <option value="flat">Flat Amount</option>
-            <option value="ucr_multiplier">UCR Multiplier</option>
+          <label>Payer Name</label>
+          <input name="payer_name" placeholder="Aetna" required />
+        </div>
+        <div class="col">
+          <label>Network Status</label>
+          <select name="network_status">
+            <option>In Network</option>
+            <option>Out of Network</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <label>CPT Code</label>
+          <input name="procedure_code" placeholder="99213" required />
+        </div>
+        <div class="col">
+          <label>Diagnosis Code (Optional)</label>
+          <input name="diagnosis_code" placeholder="Optional" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <label>Reimbursement Model</label>
+          <select name="reimbursement_model">
+            <option value="fixed_amount">Fixed Amount</option>
+            <option value="percent_of_charge">Percent of Charge</option>
           </select>
         </div>
         <div class="col">
-          <label>Default Value</label>
-          <input name="default_value" />
+          <label>Expected Amount / %</label>
+          <input name="allowed_amount" required />
         </div>
       </div>
 
-      <div class="btnRow" style="margin-top:12px;">
-        <button class="btn">Save Default Logic</button>
+      <div class="row">
+        <div class="col">
+          <label>Effective Date</label>
+          <input type="date" name="effective_date" />
+        </div>
+      </div>
+
+      <div class="btnRow">
+        <button class="btn">Add Contract Rule</button>
       </div>
     </form>
+  </div>
 
-  </details>
-`;
+  <div class="hr"></div>
+
+  <!-- Existing Rules Table -->
+  <h4>Existing Contract Rules</h4>
+  <div style="overflow:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Payer</th>
+          <th>Network</th>
+          <th>CPT</th>
+          <th>DX</th>
+          <th>Model</th>
+          <th>Expected</th>
+          <th>Effective</th>
+          <th>Impacted Claims</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${contracts.map(c => `
+          <tr>
+            <td>${safeStr(c.payer_name || "")}</td>
+            <td>${safeStr(c.network_status || "")}</td>
+            <td>${safeStr(c.procedure_code || "")}</td>
+            <td>${safeStr(c.diagnosis_code || "")}</td>
+            <td>${safeStr(c.reimbursement_model || "")}</td>
+            <td>${formatMoneyUI(Number(c.expected_value ?? 0))}</td>
+            <td>${c.effective_date ? new Date(c.effective_date).toLocaleDateString() : "—"}</td>
+            <td>${countClaimsImpacted(org.org_id, c)}</td>
+            <td style="white-space:nowrap;">
+              <form method="GET" action="/data-management/contracts/history" style="display:inline;">
+                <input type="hidden" name="contract_id" value="${safeStr(c.contract_id)}"/>
+                <button class="btn secondary small">History</button>
+              </form>
+              <form method="POST" action="/data-management/contracts/delete"
+                    style="display:inline;margin-left:6px;"
+                    onsubmit="return confirm('Delete this contract rule?');">
+                <input type="hidden" name="contract_id" value="${safeStr(c.contract_id)}"/>
+                <button class="btn danger small">Delete</button>
+              </form>
+            </td>
+          </tr>
+        `).join("") || '<tr><td colspan="9" class="muted">No contracts configured.</td></tr>'}
+      </tbody>
+    </table>
+  </div>
+
+</details>
+
+<!-- ============================= -->
+<!-- FEE SCHEDULES -->
+<!-- ============================= -->
+
+<details class="card" style="margin-top:16px;">
+  <summary style="font-weight:800;font-size:16px;cursor:pointer;">
+    Fee Schedules
+  </summary>
+
+  <form method="POST" action="/data-management/reimbursement/upload"
+        enctype="multipart/form-data" style="margin-top:12px;">
+    <input type="file" name="reimbursement_files" id="reimbursement-files-mirror" multiple accept=".csv" />
+    <div class="dropzone" style="margin-top:8px;">
+      Drag & drop multiple fee schedule CSV files here
+    </div>
+    <div class="btnRow">
+      <button class="btn secondary">Upload Fee Schedules</button>
+    </div>
+  </form>
+</details>
+
+<!-- ============================= -->
+<!-- DEFAULT LOGIC -->
+<!-- ============================= -->
+
+<details class="card" style="margin-top:16px;">
+  <summary style="font-weight:800;font-size:16px;cursor:pointer;">
+    Default Allowed Logic
+  </summary>
+
+  <form method="POST" action="/data-management/allowed-rules/save"
+        style="margin-top:12px;">
+    <div class="row">
+      <div class="col">
+        <label>Default Method</label>
+        <select name="default_method">
+          <option value="percent_medicare">% of Medicare</option>
+          <option value="percent_billed">% of Billed</option>
+          <option value="flat">Flat Amount</option>
+          <option value="ucr_multiplier">UCR Multiplier</option>
+        </select>
+      </div>
+      <div class="col">
+        <label>Default Value</label>
+        <input name="default_value" />
+      </div>
+    </div>
+
+    <div class="btnRow" style="margin-top:12px;">
+      <button class="btn">Save Default Logic</button>
+    </div>
+  </form>
+</details>
+
+<script>
+(function(){
+  const input = document.getElementById('reimbursement-files');
+  const dropzone = document.getElementById('reimbursement-dropzone');
+  const hints = document.getElementById('reimbursement-file-hints');
+  const mirror = document.getElementById('reimbursement-files-mirror');
+  if (!input || !dropzone || !hints) return;
+
+  const detectType = (fileName) => {
+    const n = String(fileName || '').toLowerCase();
+    if (n.includes('contract')) return 'Contract';
+    if (n.includes('fee') || n.includes('schedule')) return 'Fee Schedule';
+    return 'Auto-detect on upload';
+  };
+
+  const renderHints = () => {
+    const lines = [...(input.files || [])].map(f => (f.name + ' → ' + detectType(f.name)));
+    hints.innerHTML = lines.join('<br/>') || 'Tip: drop mixed reimbursement CSVs here; the server auto-sorts contract vs fee schedule files.';
+    if (mirror) {
+      try { mirror.files = input.files; } catch (e) {}
+    }
+  };
+
+  ['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, e => {
+    e.preventDefault();
+    dropzone.classList.add('dragover');
+  }));
+  ['dragleave','drop'].forEach(evt => dropzone.addEventListener(evt, e => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+  }));
+  dropzone.addEventListener('click', () => input.click());
+  dropzone.addEventListener('drop', e => {
+    if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+    input.files = e.dataTransfer.files;
+    renderHints();
+  });
+  input.addEventListener('change', renderHints);
+  renderHints();
+})();
+</script>
+`
 
     const practiceContent = `
       <h3>Practice Settings</h3>
@@ -13107,24 +13424,385 @@ rowsAdded = toUse;
     return redirect(res, "/data-management?tab=reimbursement");
   }
 
-  if (method === "POST" && (pathname === "/data-management/fee-schedules/add" || pathname === "/data-management/fee-schedules/upload")) {
+  if (method === "POST" && pathname === "/data-management/reimbursement/upload") {
     const contentType = req.headers["content-type"] || "";
     if (!contentType.includes("multipart/form-data")) return redirect(res, "/data-management?tab=reimbursement");
+
     const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
     if (!boundaryMatch) return redirect(res, "/data-management?tab=reimbursement");
-    const { files, fields } = await parseMultipart(req, boundaryMatch[1]);
-    const feeFiles = files.filter(x => x.fieldName === "schedule_file" || x.fieldName === "fee_schedules");
-    if (!feeFiles.length) return redirect(res, "/data-management?tab=reimbursement");
-    const schedules = getFeeSchedules(org.org_id);
-    for (const f of feeFiles) {
-      const ingest = addDocumentIngest(org.org_id, "fee_schedule", f, "Stored", 0, "Fee schedule upload");
-      const rows = path.extname(String(f.filename || "").toLowerCase()) === ".csv"
-        ? (parseCSV(f.buffer.toString("utf8")).rows || []).slice(0, 500).map(r => ({ procedure_code: pickField(r,["cpt","procedure_code","procedure","code"]), amount: num(pickField(r,["amount","rate","allowed","fee"])) }))
-        : [];
-      schedules.push({ schedule_id: uuid(), org_id: org.org_id, schedule_type: String(fields.schedule_type || "medicare"), payer_name: String(fields.payer_name || "").trim(), year: String(fields.year || "").trim(), locality: String(fields.locality || "").trim(), stored_path: ingest.stored_path, uploaded_at: nowISO(), rows });
+
+    const { files } = await parseMultipart(req, boundaryMatch[1]);
+    const docs = files.filter(f => f.fieldName === "reimbursement_files");
+    if (!docs.length) return redirect(res, "/data-management?tab=reimbursement");
+
+    const token = "RPU-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    const upload_batch_id = uuid();
+
+    let contractsAdded = 0;
+    let feeSchedulesAdded = 0;
+    let duplicatesSkipped = 0;
+    const warnings = [];
+    const issues = [];
+    const previewRows = [];
+
+    // We'll stage these, then commit later
+    const stagedContracts = [];
+    const stagedFeeSchedules = [];
+
+    // Duplicate detection baseline
+    const existingContracts = getPayerContracts(org.org_id);
+
+    for (const f of docs) {
+      const ext = String(f.filename || "").toLowerCase();
+      if (!ext.endsWith(".csv")) {
+        warnings.push(`${f.filename} → Unsupported file type (CSV required).`);
+        continue;
+      }
+
+      const parsed = parseCSV(f.buffer.toString("utf8"));
+      const rows = parsed.rows || [];
+      if (!rows.length) {
+        warnings.push(`${f.filename} → File contained no rows.`);
+        continue;
+      }
+
+      // Use your detection helper if present:
+      const kind = (typeof detectReimbursementUploadType === "function")
+        ? detectReimbursementUploadType(f, parsed)
+        : ((rows[0].payer_name && rows[0].procedure_code) ? "contract" : ((rows[0].procedure_code && rows[0].amount) ? "fee_schedule" : "unknown"));
+
+      // =========================
+      // CONTRACT FILE
+      // =========================
+      if (kind === "contract") {
+        // Build contracts, validate, and stage
+        for (const row of rows) {
+          const payer = String(row.payer_name || "").trim();
+          const cpt = String(row.procedure_code || "").trim();
+          const dx = String(row.diagnosis_code || "").trim();
+          const effective = String(row.effective_date || "").trim();
+
+          if (!payer || !cpt) {
+            issues.push(`${f.filename} → Missing payer_name or procedure_code on a row.`);
+            continue;
+          }
+
+          // Duplicate check against existing + staged
+          const dup = existingContracts.find(c =>
+            String(c.payer_name||"") === payer &&
+            String(c.procedure_code||"") === cpt &&
+            String(c.diagnosis_code||"") === dx &&
+            String(c.effective_date||"") === effective
+          ) || stagedContracts.find(c =>
+            c.payer_name === payer &&
+            c.procedure_code === cpt &&
+            (c.diagnosis_code||"") === dx &&
+            (c.effective_date||"") === effective
+          );
+
+          if (dup) { duplicatesSkipped++; continue; }
+
+          const reimbursement_model = String(row.reimbursement_model || "fixed_amount").trim() || "fixed_amount";
+          const expected_value = num(row.allowed_amount);
+
+          const contract = {
+            contract_id: uuid(),
+            org_id: org.org_id,
+            upload_batch_id,
+            payer_name: payer,
+            network_status: String(row.network_status || "In Network").trim() || "In Network",
+            procedure_code: cpt,
+            diagnosis_code: dx,
+            reimbursement_model,
+            expected_value,
+            effective_date: effective,
+            updated_at: nowISO()
+          };
+
+          stagedContracts.push(contract);
+          contractsAdded++;
+
+          if (previewRows.length < 20) {
+            previewRows.push({ type:"Contract", payer, code:cpt, expected: expected_value, file: f.filename });
+          }
+        }
+
+        // AI validation (rule-based MVP) — block on issues
+        if (typeof validateContractBatch === "function") {
+          const v = validateContractBatch(org.org_id, stagedContracts);
+          if (!v.valid) {
+            v.issues.forEach(x => issues.push(x));
+          }
+          v.warnings.forEach(x => warnings.push(x));
+        }
+      }
+
+      // =========================
+      // FEE SCHEDULE FILE
+      // =========================
+      else if (kind === "fee_schedule") {
+        const scheduleRows = [];
+        const seenCodes = new Set();
+
+        for (const row of rows) {
+          const code = String(row.procedure_code || row.cpt || row.hcpcs || "").trim();
+          const amt = num(row.amount || row.rate || row.allowed || row.fee);
+
+          if (!code) { issues.push(`${f.filename} → Missing procedure_code/cpt on a row.`); continue; }
+
+          if (seenCodes.has(code)) { duplicatesSkipped++; continue; }
+          seenCodes.add(code);
+
+          scheduleRows.push({ procedure_code: code, amount: amt });
+          feeSchedulesAdded++;
+
+          if (previewRows.length < 20) {
+            previewRows.push({ type:"Fee Schedule", payer:"", code, expected: amt, file: f.filename });
+          }
+        }
+
+        stagedFeeSchedules.push({
+          schedule_id: uuid(),
+          org_id: org.org_id,
+          upload_batch_id,
+          schedule_type: "payer",
+          payer_name: "",
+          year: "",
+          locality: "",
+          uploaded_at: nowISO(),
+          rows: scheduleRows
+        });
+      }
+
+      else {
+        warnings.push(`${f.filename} → Could not detect file structure (contract vs fee schedule).`);
+      }
     }
-    saveFeeSchedules(org.org_id, schedules);
+
+    // If there are blocking issues, show validation page (no commit)
+    if (issues.length > 0) {
+      const html = renderPage("Reimbursement Upload Validation", `
+        <h2>Upload Validation Failed</h2>
+        <div class="alert">${issues.map(x=>safeStr(x)).join("<br/>")}</div>
+        ${warnings.length ? `<div class="card" style="border:1px solid #f59e0b;background:#fff7ed;"><strong>Warnings:</strong><ul>${warnings.map(w=>`<li>${safeStr(w)}</li>`).join("")}</ul></div>` : ""}
+        <div class="btnRow" style="margin-top:16px;">
+          <a class="btn secondary" href="/data-management?tab=reimbursement">Back</a>
+        </div>
+      `, navUser(), {showChat:false, orgName: org.org_name});
+      return send(res, 200, html);
+    }
+
+    // Save pending payload (preview-before-commit)
+    savePendingReimbursement({
+      token,
+      upload_batch_id,
+      org_id: org.org_id,
+      created_by: user.user_id,
+      created_at: nowISO(),
+      contractsAdded,
+      feeSchedulesAdded,
+      duplicatesSkipped,
+      warnings,
+      previewRows,
+      stagedContracts,
+      stagedFeeSchedules
+    });
+
+    const previewTable = previewRows.length
+      ? `<div class="card"><h3>Preview (First 20 rows)</h3><div style="overflow:auto;"><table><thead><tr><th>Type</th><th>File</th><th>Payer</th><th>Code</th><th>Expected</th></tr></thead><tbody>${
+          previewRows.map(r=>`<tr><td>${safeStr(r.type)}</td><td>${safeStr(r.file||"")}</td><td>${safeStr(r.payer||"—")}</td><td>${safeStr(r.code||"")}</td><td>${safeStr(String(r.expected||""))}</td></tr>`).join("")
+        }</tbody></table></div></div>`
+      : "";
+
+    const warnBlock = warnings.length
+      ? `<div class="card" style="border:1px solid #f59e0b;background:#fff7ed;"><strong>Warnings:</strong><ul>${warnings.map(w=>`<li>${safeStr(w)}</li>`).join("")}</ul></div>`
+      : "";
+
+    const warningAcknowledge = warnings.length
+      ? `
+        <div class="card" style="margin-top:12px;">
+          <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="ack-warnings"/>
+            I acknowledge the warnings above and wish to proceed.
+          </label>
+        </div>
+        <script>
+          document.addEventListener("DOMContentLoaded", function(){
+            const cb = document.getElementById("ack-warnings");
+            const btn = document.querySelector("form[action='/data-management/reimbursement/commit'] button");
+            if(btn) btn.disabled = true;
+            if(cb && btn){
+              cb.addEventListener("change", ()=> btn.disabled = !cb.checked);
+            }
+          });
+        </script>
+      ` : "";
+
+    const html = renderPage("Reimbursement Upload Preview", `
+      <h2>Upload Preview</h2>
+      <div class="card">
+        <strong>${contractsAdded}</strong> contract rows staged<br/>
+        <strong>${feeSchedulesAdded}</strong> fee schedule rows staged<br/>
+        <strong>${duplicatesSkipped}</strong> duplicates skipped
+        <div class="muted small" style="margin-top:6px;">Nothing has been saved yet. Confirm to commit.</div>
+      </div>
+
+      ${warnBlock}
+      ${warningAcknowledge}
+      ${previewTable}
+
+      <div class="btnRow" style="margin-top:16px;">
+        <form method="POST" action="/data-management/reimbursement/commit" style="display:inline-block;">
+          <input type="hidden" name="token" value="${safeStr(token)}"/>
+          <button class="btn" type="submit">Confirm & Commit</button>
+        </form>
+        <form method="POST" action="/data-management/reimbursement/cancel" style="display:inline-block;">
+          <input type="hidden" name="token" value="${safeStr(token)}"/>
+          <button class="btn secondary" type="submit">Cancel</button>
+        </form>
+        <a class="btn secondary" href="/data-management?tab=reimbursement">Back</a>
+      </div>
+    `, navUser(), {showChat:false, orgName: org.org_name});
+
+    return send(res, 200, html);
+  }
+
+  // Commit pending reimbursement upload
+  if (method === "POST" && pathname === "/data-management/reimbursement/commit") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const token = String(params.get("token") || "").trim();
+    const pending = getPendingReimbursement(org.org_id, token);
+    if (!pending) return redirect(res, "/data-management?tab=reimbursement");
+
+    let affectedClaimIds = new Set();
+
+    // Commit contracts
+    if (pending.stagedContracts && pending.stagedContracts.length) {
+      const contracts = getPayerContracts(org.org_id);
+      const billed = readJSON(FILES.billed, [])
+        .filter(b => b.org_id === org.org_id);
+
+      for (const c of pending.stagedContracts) {
+        contracts.push(c);
+        if (typeof saveContractVersion === "function") saveContractVersion(org.org_id, c);
+
+        // Detect affected claims
+        const matches = billed.filter(b =>
+          String(b.payer || "").trim() === String(c.payer_name || "").trim() &&
+          String(b.procedure_code || "").trim() === String(c.procedure_code || "").trim()
+        );
+
+        matches.forEach(m => {
+          if (m && m.billed_id) {
+            affectedClaimIds.add(m.billed_id);
+          }
+        });
+      }
+      savePayerContracts(org.org_id, contracts);
+    }
+
+    // Commit fee schedules
+    if (pending.stagedFeeSchedules && pending.stagedFeeSchedules.length) {
+      const schedules = getFeeSchedules(org.org_id);
+      schedules.push(...pending.stagedFeeSchedules);
+      saveFeeSchedules(org.org_id, schedules);
+    }
+
+    // Persist upload audit record (viewable)
+    saveReimbursementUploadLog({
+      upload_batch_id: pending.upload_batch_id,
+      org_id: org.org_id,
+      created_by: pending.created_by,
+      created_at: pending.created_at,
+      contracts_added: pending.contractsAdded,
+      fee_schedules_added: pending.feeSchedulesAdded,
+      duplicates_skipped: pending.duplicatesSkipped,
+      warnings: pending.warnings || []
+    });
+
+    // Also write audit_log entry
+    if (typeof logAudit === "function") {
+      logAudit("reimbursement_upload_committed", {
+        org_id: org.org_id,
+        uploaded_by: pending.created_by,
+        upload_batch_id: pending.upload_batch_id,
+        contracts_added: pending.contractsAdded,
+        fee_schedules_added: pending.feeSchedulesAdded,
+        duplicates_skipped: pending.duplicatesSkipped
+      });
+    }
+
+    deletePendingReimbursement(org.org_id, token);
     rebuildOrgDerivedData(org.org_id);
+
+    const impactedCount = affectedClaimIds.size;
+
+    const html = renderPage("Reimbursement Commit Complete", `
+      <h2>Upload Committed</h2>
+      <div class="card">
+        <strong>${safeStr(String(pending.contractsAdded || 0))}</strong> contract rows committed<br/>
+        <strong>${safeStr(String(pending.feeSchedulesAdded || 0))}</strong> fee schedule rows committed<br/>
+        <strong>${safeStr(String(pending.duplicatesSkipped || 0))}</strong> duplicates skipped
+      </div>
+
+      <div class="btnRow" style="margin-top:16px;">
+        <a class="btn" href="/data-management?tab=reimbursement">Back to Reimbursement Engine</a>
+
+        <a class="btn secondary"
+           href="/claims?view=all&reimbursement_batch=${encodeURIComponent(safeStr(pending.upload_batch_id))}">
+           View Affected Claims (${impactedCount || 0})
+        </a>
+      </div>
+    `, navUser(), {showChat:false, orgName: org.org_name});
+
+    return send(res, 200, html);
+  }
+
+  // Cancel pending reimbursement upload
+  if (method === "POST" && pathname === "/data-management/reimbursement/cancel") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const token = String(params.get("token") || "").trim();
+    deletePendingReimbursement(org.org_id, token);
+    return redirect(res, "/data-management?tab=reimbursement");
+  }
+
+  // Delete (rollback) a committed reimbursement upload
+  if (method === "POST" && pathname === "/data-management/reimbursement/delete-upload") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const upload_batch_id = String(params.get("upload_batch_id") || "").trim();
+    if (!upload_batch_id) return redirect(res, "/data-management?tab=reimbursement");
+
+    // Remove contracts created by this upload
+    const contracts = getPayerContracts(org.org_id);
+    const remainingContracts = contracts.filter(c => String(c.upload_batch_id||"") !== upload_batch_id);
+    savePayerContracts(org.org_id, remainingContracts);
+
+    // Remove fee schedules created by this upload
+    const schedules = getFeeSchedules(org.org_id);
+    const remainingSchedules = schedules.filter(s => String(s.upload_batch_id||"") !== upload_batch_id);
+    saveFeeSchedules(org.org_id, remainingSchedules);
+
+    // Remove upload record
+    const logs = readJSON(FILES.reimbursement_uploads, []);
+    const keep = logs.filter(x => !(x.org_id === org.org_id && String(x.upload_batch_id||"") === upload_batch_id));
+    writeJSON(FILES.reimbursement_uploads, keep);
+
+    if (typeof logAudit === "function") {
+      logAudit("reimbursement_upload_deleted", {
+        org_id: org.org_id,
+        upload_batch_id,
+        deleted_by: user.user_id
+      });
+    }
+
+    rebuildOrgDerivedData(org.org_id);
+    return redirect(res, "/data-management?tab=reimbursement");
+  }
+
+  if (method === "POST" && (pathname === "/data-management/fee-schedules/add" || pathname === "/data-management/fee-schedules/upload")) {
     return redirect(res, "/data-management?tab=reimbursement");
   }
 
@@ -13220,42 +13898,8 @@ rowsAdded = toUse;
 
 
   if (method === "POST" && pathname === "/data-management/contracts/upload") {
-    const contentType = req.headers["content-type"] || "";
-    if (!contentType.includes("multipart/form-data")) return redirect(res, "/data-management?tab=reimbursement");
-    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
-    if (!boundaryMatch) return redirect(res, "/data-management?tab=reimbursement");
-
-    const { files } = await parseMultipart(req, boundaryMatch[1]);
-    const docs = files.filter(f => f.fieldName === "contracts");
-    if (!docs.length) return redirect(res, "/data-management?tab=reimbursement");
-
-    const contracts = getPayerContracts(org.org_id);
-    for (const f of docs) {
-      const parsed = parseCSV(f.buffer.toString("utf8"));
-      for (const row of (parsed.rows || [])) {
-        const payer_name = String(row.payer_name || "").trim();
-        const procedure_code = String(row.procedure_code || "").trim();
-        if (!payer_name || !procedure_code) continue;
-        const contract = {
-          contract_id: uuid(),
-          org_id: org.org_id,
-          payer_name,
-          network_status: String(row.network_status || "In Network").trim() || "In Network",
-          procedure_code,
-          diagnosis_code: String(row.diagnosis_code || "").trim(),
-          reimbursement_model: String(row.reimbursement_model || "fixed_amount").trim() || "fixed_amount",
-          expected_value: num(row.allowed_amount),
-          effective_date: String(row.effective_date || "").trim(),
-          updated_at: nowISO(),
-        };
-        contracts.push(contract);
-        saveContractVersion(org.org_id, contract);
-      }
-    }
-
-    savePayerContracts(org.org_id, contracts);
-    logAudit("bulk_contract_upload", { org_id: org.org_id });
-    rebuildOrgDerivedData(org.org_id);
+    // Legacy route fully removed. All reimbursement uploads handled by:
+    // POST /data-management/reimbursement/upload
     return redirect(res, "/data-management?tab=reimbursement");
   }
 
