@@ -12743,6 +12743,10 @@ rowsAdded = toUse;
     const updatedBilled = billed.filter(c => !(c.org_id === org.org_id && c.upload_id === uploadId));
     writeJSON(FILES.billed, updatedBilled);
 
+    const cases = readJSON(FILES.cases, []);
+    const updatedCases = cases.filter(c => !(c.org_id === org.org_id && c.upload_id === uploadId));
+    writeJSON(FILES.cases, updatedCases);
+
     const updatedBatches = batches.filter(b => !(b.upload_id === uploadId && b.org_id === org.org_id));
     writeJSON(FILES.upload_batches, updatedBatches);
 
@@ -12750,7 +12754,7 @@ rowsAdded = toUse;
     auditLog.push({
       audit_id: uuid(),
       org_id: org.org_id,
-      action: "batch_deleted",
+      action: "claim_batch_deleted",
       upload_id: batch.upload_id,
       file_name: batch.file_name,
       claim_count: batch.claim_count,
@@ -12761,6 +12765,56 @@ rowsAdded = toUse;
 
     rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
     return redirect(res, "/data-management?tab=claims");
+  }
+
+  if (method === "POST" && pathname === "/payment-batch-delete") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const sourceFile = String(params.get("source_file") || "");
+
+    const payments = readJSON(FILES.payments, []);
+    const updated = payments.filter(p => !(p.org_id === org.org_id && p.source_file === sourceFile));
+    writeJSON(FILES.payments, updated);
+
+    const auditLog = readJSON(FILES.audit_log, []);
+    auditLog.push({
+      audit_id: uuid(),
+      org_id: org.org_id,
+      action: "payment_batch_deleted",
+      source_file: sourceFile,
+      deleted_by: user.user_id,
+      deleted_at: nowISO()
+    });
+    writeJSON(FILES.audit_log, auditLog);
+
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
+
+    return redirect(res, "/data-management?tab=payments");
+  }
+
+  if (method === "POST" && pathname === "/denial-batch-delete") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const ingestId = String(params.get("ingest_id") || "");
+
+    const ingests = readJSON(FILES.document_ingests, []);
+    const updated = ingests.filter(i => !(i.org_id === org.org_id && i.ingest_id === ingestId));
+    writeJSON(FILES.document_ingests, updated);
+
+    const auditLog = readJSON(FILES.audit_log, []);
+    auditLog.push({
+      audit_id: uuid(),
+      org_id: org.org_id,
+      action: "denial_upload_deleted",
+      ingest_id: ingestId,
+      deleted_by: user.user_id,
+      deleted_at: nowISO()
+    });
+    writeJSON(FILES.audit_log, auditLog);
+
+    rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
+
+    return redirect(res, "/data-management?tab=denials");
   }
 
   if (method === "POST" && pathname === "/data-management/network") {
@@ -12799,27 +12853,20 @@ rowsAdded = toUse;
         if (ext === ".csv") {
           const parsedCSV = parseCSV(f.buffer.toString("utf8"));
           const rows = parsedCSV.rows || [];
+
           const uploadId = uuid();
-          const existing = readJSON(FILES.upload_batches, []);
-          if (existing.some(b => b.upload_id === uploadId)) {
-            continue;
-          }
-          const submission_id = uuid();
           const submissionUploadedAt = nowISO();
-          subsAll.push({
-            submission_id,
-            org_id: org.org_id,
-            original_filename: ingest.original_filename || f.filename || "claims_upload.csv",
-            ingest_id: ingest.ingest_id,
-            uploaded_at: submissionUploadedAt,
-          });
+
           let insertedClaims = 0;
           let totalBilledForBatch = 0;
+
           for (const row of rows) {
             const rawClaimNumber = pickField(row, ["claim", "claim#", "claim number", "claimnumber", "clm"]);
             const claim_number = normalizeClaimKey(rawClaimNumber);
             if (!claim_number) continue;
+
             const billedAmount = num(pickField(row, ["billed","amount billed","charge"]));
+
             billedAll.push({
               billed_id: uuid(),
               org_id: org.org_id,
@@ -12827,14 +12874,15 @@ rowsAdded = toUse;
               payer: String(pickField(row, ["payer","insurance","carrier"]) || "").trim(),
               amount_billed: billedAmount,
               patient_responsibility: num(pickField(row, ["patient_resp","patient responsibility","copay","coinsurance"])),
-              submission_id,
               upload_id: uploadId,
               created_at: nowISO()
             });
+
             totalBilledForBatch += billedAmount;
             insertedClaims += 1;
           }
-          const batchRecord = {
+
+          uploadBatches.push({
             upload_id: uploadId,
             org_id: org.org_id,
             file_name: ingest.original_filename || f.filename || "claims_upload.csv",
@@ -12842,8 +12890,8 @@ rowsAdded = toUse;
             uploaded_at: submissionUploadedAt,
             claim_count: insertedClaims,
             total_billed: totalBilledForBatch,
-          };
-          uploadBatches.push(batchRecord);
+          });
+
           ingest.status = "Parsed";
           ingest.linked_claims_count = insertedClaims;
         } else {
