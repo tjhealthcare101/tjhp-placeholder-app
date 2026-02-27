@@ -8518,10 +8518,8 @@ if (method === "GET" && pathname === "/ai-copilot") {
       })();
     </script>
   `, navUser(), {showChat:true, orgName: org.org_name});
-
-  const html = renderPage("AI Copilot Workspace", `
-    <h2>AI Revenue Copilot</h2>
-    <p class="muted">Interactive revenue intelligence workspace.</p>
+  return send(res, 200, html);
+}
 
 if (method === "POST" && pathname === "/ai-copilot/new") {
   const body = await parseBody(req);
