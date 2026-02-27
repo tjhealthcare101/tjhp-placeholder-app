@@ -473,7 +473,8 @@ function renderPage(title, content, navHtml="", opts={}) {
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
   <button class="btn" type="button" onclick="window.__tjhpToggleChat(event)">AI Assistant</button>
   <div id="aiChatBox" style="
-  display:none;
+  display:flex;
+  flex-direction:column;
   width:380px;
   max-width:92vw;
   height:560px;
@@ -483,7 +484,6 @@ function renderPage(title, content, navHtml="", opts={}) {
   padding:14px;
   margin-top:8px;
   box-shadow:0 18px 40px rgba(17,24,39,.18);
-  flex-direction:column;
 ">
     <!-- Header / Banner -->
     <div style="margin-bottom:10px;padding:10px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:space-between;gap:10px;">
