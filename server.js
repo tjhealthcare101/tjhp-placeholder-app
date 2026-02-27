@@ -751,6 +751,19 @@ window.__tjhpSendChat = async function(){
     sendBtn.textContent = "Send";
   }
 };
+
+// Allow Enter key to submit floating AI chat
+(function(){
+  const input = document.getElementById("aiChatInput");
+  if (!input) return;
+
+  input.addEventListener("keydown", function(e){
+    if (e.key === "Enter") {
+      e.preventDefault();
+      window.__tjhpSendChat();
+    }
+  });
+})();
 </script>` : "";
 
   return `<!doctype html>
