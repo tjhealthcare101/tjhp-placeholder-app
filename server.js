@@ -90,6 +90,7 @@ const FILES = {
   agent_messages: path.join(DATA_DIR, "agent_messages.json"),
   org_settings: path.join(DATA_DIR, "org_settings.json"),
   copilot_briefs: path.join(DATA_DIR, "copilot_briefs.json"),
+  copilot_workspaces: path.join(DATA_DIR, "copilot_workspaces.json"),
   reimbursement_uploads: path.join(DATA_DIR, "reimbursement_uploads.json"),
   pending_reimbursement_uploads: path.join(DATA_DIR, "pending_reimbursement_uploads.json"),
   template_settings: path.join(DATA_DIR, "template_settings.json"),
@@ -325,6 +326,7 @@ ensureFile(FILES.agent_workspaces, []);
 ensureFile(FILES.agent_messages, []);
 ensureFile(FILES.org_settings, []);
 ensureFile(FILES.copilot_briefs, []);
+ensureFile(FILES.copilot_workspaces, []);
 ensureFile(FILES.reimbursement_uploads, []);
 ensureFile(FILES.pending_reimbursement_uploads, []);
 ensureFile(FILES.template_settings, []);
@@ -849,6 +851,150 @@ function computeSimpleDenialRateForecast(org_id, rangePreset){
   };
 }
 
+function renderCopilotTiles(){
+  const tiles = [
+    { title:"Executive Revenue Snapshot", desc:"High-level performance overview", prompt:"Executive revenue snapshot for the last 30 days. Include billed, collected, revenue at risk, denial rate, recovery rate, and top risk payer." },
+    { title:"Revenue Risk Drivers", desc:"What is increasing exposure", prompt:"What are the top revenue risk drivers right now? Break down denials, underpayments, and AR aging. Provide top 5 actions to reduce exposure." },
+    { title:"Payer Exposure Overview", desc:"Risk concentration by payer", prompt:"Analyze payer exposure. Which payers drive the most at-risk dollars, denial rate, and underpayments? Provide a ranked list and suggested actions." },
+    { title:"Denial Performance", desc:"Denial trends and appeal health", prompt:"Review denial performance: denial rate trend, top denial reasons, top denial payers, and recommended appeal focus areas." },
+    { title:"Underpayment Recovery", desc:"Negotiation effectiveness", prompt:"Evaluate underpayment recovery: negotiation ROI, underpaid dollars, top underpaying payers, and tactics to improve recovery." },
+    { title:"Operational Health", desc:"Readiness + workflow posture", prompt:"Provide an operational health summary: AI Case Readiness, documentation gaps, and process improvements to speed appeal/negotiation cycles." }
+  ];
+  const tilesB64 = Buffer.from(JSON.stringify(tiles)).toString("base64");
+
+  return `
+  <style>
+    .pl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px;}
+    .pl-tile{border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);cursor:pointer;transition:all .15s ease;}
+    .pl-tile:hover{box-shadow:var(--shadow);}
+    .pl-title{font-weight:900;margin:0 0 4px;font-size:13px;}
+    .pl-desc{color:var(--muted);font-size:12px;margin:0;}
+    @media(max-width:900px){.pl-grid{grid-template-columns:1fr;}}
+  </style>
+
+  <div class="pl-grid" id="copilotTileGrid">
+    ${tiles.map((t,i)=>`
+      <div class="pl-tile" data-i="${i}">
+        <div class="pl-title">${safeStr(t.title)}</div>
+        <div class="pl-desc">${safeStr(t.desc)}</div>
+      </div>
+    `).join("")}
+  </div>
+
+  <script>
+    (function(){
+      const tiles = JSON.parse(atob("${tilesB64}"));
+      const grid = document.getElementById("copilotTileGrid");
+      if(!grid) return;
+      grid.addEventListener("click", (e)=>{
+        const tile = e.target.closest(".pl-tile");
+        if(!tile) return;
+        const idx = Number(tile.getAttribute("data-i")||"0");
+        const t = tiles[idx] || {};
+        const ta = document.getElementById("copilotComposer");
+        if(ta){
+          ta.value = (t.prompt || "");
+          ta.focus();
+        }
+      });
+    })();
+  </script>
+  `;
+}
+
+function renderCopilotBriefMessage(result, brief_id){
+  const r = result || {};
+  const m = r.metrics || {};
+  const totals = m.totals || {};
+  const rates = m.rates || {};
+  const bullets = Array.isArray(r.bullets) ? r.bullets : [];
+  const drivers = Array.isArray(r.disciplineDrivers) ? r.disciplineDrivers : [];
+  const actions = Array.isArray(r.executiveActions) ? r.executiveActions : [];
+  const payers = Array.isArray(r.topPayers) ? r.topPayers : [];
+  const charts = Array.isArray(r.charts) ? r.charts : [];
+
+  const safeBriefId = safeStr(String(brief_id || "brief")).replace(/[^a-zA-Z0-9_-]/g, "_");
+
+  const chartCards = charts.map((c, i) => `
+    <div style="margin-top:12px;">
+      <div style="font-weight:900;margin-bottom:6px;">${safeStr(c.title || ("Chart " + (i+1)))}</div>
+      <div class="ws-chart"><canvas id="wsChart_${safeBriefId}_${i}"></canvas></div>
+    </div>
+  `).join("");
+
+  const chartScripts = charts.map((c, i) => {
+    const labels = JSON.stringify(Array.isArray(c.labels) ? c.labels : []);
+    const datasets = JSON.stringify(Array.isArray(c.datasets) ? c.datasets : []);
+    const type = String(c.type || "bar").replace(/[^a-z]/gi,"") || "bar";
+    return `
+      (function(){
+        const el = document.getElementById("wsChart_${safeBriefId}_${i}");
+        if(!el || typeof Chart === "undefined") return;
+        new Chart(el, { type: "${type}", data: { labels: ${labels}, datasets: ${datasets} }, options: { responsive:true, maintainAspectRatio:false } });
+      })();
+    `;
+  }).join("\n");
+
+  return `
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <div class="ws-msg ws-ai">
+      <div class="ws-who">Copilot <span class="badge ok" style="margin-left:8px;">Executive Brief</span></div>
+
+      <div class="ws-card">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+          <div>
+            <div class="muted" style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;">Executive Copilot Brief</div>
+            <div style="font-size:18px;font-weight:900;margin-top:4px;">Financial Performance Snapshot</div>
+            <div class="muted">KPI highlights, drivers, and recommended actions.</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <a class="btn secondary small" href="/copilot/export?brief_id=${encodeURIComponent(brief_id)}">Export PDF</a>
+          </div>
+        </div>
+
+        <div class="ws-kpis">
+          <div class="ws-kpi"><div class="ws-kpi-l">Total Billed</div><div class="ws-kpi-v">$${Number(totals.billed||0).toLocaleString()}</div></div>
+          <div class="ws-kpi"><div class="ws-kpi-l">Total Collected</div><div class="ws-kpi-v">$${Number(totals.collected||0).toLocaleString()}</div></div>
+          <div class="ws-kpi"><div class="ws-kpi-l">Revenue At Risk</div><div class="ws-kpi-v">$${Number(totals.atRisk||0).toLocaleString()}</div></div>
+          <div class="ws-kpi"><div class="ws-kpi-l">Recovery Rate</div><div class="ws-kpi-v">${Number(rates.recoveryRate||0).toFixed(1)}%</div></div>
+          <div class="ws-kpi"><div class="ws-kpi-l">Denial Rate</div><div class="ws-kpi-v">${Number(rates.denialRate||0).toFixed(1)}%</div></div>
+          <div class="ws-kpi"><div class="ws-kpi-l">AI Case Readiness</div><div class="ws-kpi-v">${Number(r.metrics?.disciplineScore||0).toFixed(0)}/100</div></div>
+        </div>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:900;margin-bottom:6px;">Executive Summary</div>
+          ${bullets.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${bullets.map(b=>`<li>${safeStr(b)}</li>`).join("")}</ul>` : `<div class="muted">No summary available.</div>`}
+        </div>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:900;margin-bottom:6px;">AI Case Readiness Drivers</div>
+          ${drivers.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${drivers.map(d=>`<li>${safeStr(d)}</li>`).join("")}</ul>` : `<div class="muted">No threshold breaches detected.</div>`}
+        </div>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:900;margin-bottom:6px;">Recommended Executive Actions</div>
+          ${actions.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${actions.map(a=>`<li>${safeStr(a)}</li>`).join("")}</ul>` : `<div class="muted">No immediate corrective actions required.</div>`}
+        </div>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:900;margin-bottom:6px;">Top Risk Payers</div>
+          ${payers.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${payers.map(p=>`<li>${safeStr(p.payer)} — $${Math.round(p.risk||0).toLocaleString()} at risk</li>`).join("")}</ul>` : `<div class="muted">No payer risk data available.</div>`}
+        </div>
+
+        ${chartCards}
+
+        <div class="ws-actions">
+          <a class="btn secondary small" href="/actions?tab=denials">Denials</a>
+          <a class="btn secondary small" href="/actions?tab=underpayments">Underpayments</a>
+          <a class="btn secondary small" href="/revenue-intelligence?tab=payers">Payer Intelligence</a>
+        </div>
+      </div>
+    </div>
+
+    <script>(function(){ ${chartScripts} })();</script>
+  `;
+}
+
 function buildCopilotResponse({
   org_id,
   rangePreset,
@@ -1047,7 +1193,7 @@ function navUser() {
     <a href="/claims">Claims Lifecycle</a>
     <a href="/data-management">Data Management</a>
     <a href="/revenue-intelligence">Revenue Intelligence AI</a>
-    <a href="/copilot">AI Copilot</a>
+    <a href="/ai-copilot">AI Copilot</a>
     <a href="/actions">Action Center</a>
     <a href="/report">Reports</a>
     <a href="/account">Account</a>
@@ -1349,6 +1495,23 @@ function getCopilotLimit(org_id) {
   const pilot = getPilot(org_id) || ensurePilot(org_id);
   if (pilot && pilot.status === "active") return 10;
   return 0;
+}
+
+function getCopilotWorkspaces(org_id){
+  return readJSON(FILES.copilot_workspaces, [])
+    .filter(w => w.org_id === org_id)
+    .sort((a,b)=> new Date(b.updated_at||0)-new Date(a.updated_at||0));
+}
+
+function getCopilotWorkspace(org_id, workspace_id){
+  return readJSON(FILES.copilot_workspaces, [])
+    .find(w => w.org_id === org_id && w.workspace_id === workspace_id);
+}
+
+function saveCopilotWorkspace(workspace){
+  const all = readJSON(FILES.copilot_workspaces, []);
+  const keep = all.filter(w => w.workspace_id !== workspace.workspace_id);
+  writeJSON(FILES.copilot_workspaces, keep.concat([workspace]));
 }
 
 function ensureSubscriptionForOrg(org_id) {
@@ -8236,322 +8399,212 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 }
 
 
-// ==============================
-// AI COPILOT PAGE
-// ==============================
-if (method === "GET" && pathname === "/copilot") {
-  const usage = getUsage(org.org_id);
-  const used = Number(usage.copilot_questions_used || 0);
-  const limit = getCopilotLimit(org.org_id);
-  const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
+// ===============================
+// AI COPILOT WORKSPACE
+// ===============================
+if (method === "GET" && pathname === "/ai-copilot") {
+  const workspace_id = String(parsed.query.workspace || "").trim();
 
-  const executiveTiles = `
-<style>
-  .tile-grid {
-    display:grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap:16px;
-  }
-  .tile {
-    background:var(--card);
-    border:1px solid var(--border);
-    border-radius:12px;
-    padding:18px;
-    cursor:pointer;
-    transition:all 0.15s ease;
-  }
-  .tile:hover {
-    box-shadow: var(--shadow);
-  }
-  .tile-title {
-    font-weight:700;
-    margin-bottom:6px;
-  }
-  .tile-sub {
-    font-size:13px;
-    color:var(--muted);
-  }
-  @media (max-width:900px){
-    .tile-grid { grid-template-columns:1fr; }
-  }
-</style>
+  let workspace = workspace_id ? getCopilotWorkspace(org.org_id, workspace_id) : null;
+  const allWorkspaces = getCopilotWorkspaces(org.org_id);
 
-<div class="tile-grid">
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Executive revenue snapshot';">
-    <div class="tile-title">Executive Revenue Snapshot</div>
-    <div class="tile-sub">High-level performance overview</div>
-  </div>
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Revenue risk drivers';">
-    <div class="tile-title">Revenue Risk Drivers</div>
-    <div class="tile-sub">What is increasing exposure</div>
-  </div>
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Payer exposure analysis';">
-    <div class="tile-title">Payer Exposure Overview</div>
-    <div class="tile-sub">Risk concentration by payer</div>
-  </div>
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Denial performance review';">
-    <div class="tile-title">Denial Performance</div>
-    <div class="tile-sub">Denial trends and appeal health</div>
-  </div>
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Underpayment recovery';">
-    <div class="tile-title">Underpayment Recovery</div>
-    <div class="tile-sub">Negotiation effectiveness</div>
-  </div>
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Operational health summary';">
-    <div class="tile-title">Operational Health</div>
-    <div class="tile-sub">Discipline and recovery posture</div>
-  </div>
-</div>
-`;
+  if (!workspace && allWorkspaces.length && !parsed.query.new) {
+    workspace = allWorkspaces[0];
+  }
+
+  const tilesHtml = renderCopilotTiles();
+
+  const thread = (workspace && Array.isArray(workspace.messages)) ? workspace.messages : [];
+  const brief = workspace?.latest_brief || null;
+
+  const threadHtml = `
+    <div class="ws-thread" id="wsThread">
+      ${thread.map(msg => `
+        <div class="ws-msg ${msg.role === "user" ? "ws-user" : "ws-ai"}">
+          <div class="ws-who">${msg.role === "user" ? "You" : "Copilot"}</div>
+          <div class="ws-card">${safeStr(msg.content || "")}</div>
+        </div>
+      `).join("")}
+
+      ${brief ? renderCopilotBriefMessage(brief.result, brief.brief_id) : (workspace ? `<div class="ws-msg ws-ai"><div class="ws-who">Copilot</div><div class="ws-card muted">Ask a question to generate an executive brief.</div></div>` : ``)}
+    </div>
+  `;
 
   const html = renderPage("AI Copilot", `
     <style>
-      .copilot-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
-      .copilot-usage{font-size:12px;color:var(--muted);}
-      .copilot-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;}
-      .copilot-panel{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);}
-      .chart-container{position:relative;height:320px;max-height:320px;width:100%;}
-      @media (max-width: 900px){ .copilot-grid{grid-template-columns:1fr;} }
+      .ws-layout{display:grid;grid-template-columns:260px 1fr;gap:14px;align-items:stretch;}
+      .ws-side{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:12px;box-shadow:var(--shadow);height:calc(100vh - 170px);overflow:auto;}
+      .ws-main{border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:var(--shadow);height:calc(100vh - 170px);display:flex;flex-direction:column;overflow:hidden;}
+      .ws-topbar{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;}
+      .ws-title{font-weight:900;font-size:16px;margin:0;}
+      .ws-thread{padding:14px;overflow:auto;flex:1;}
+      .ws-msg{margin-bottom:14px;}
+      .ws-who{font-weight:900;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
+      .ws-card{margin-top:6px;border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);}
+      .ws-user .ws-card{background:rgba(99,102,241,.06);}
+      .ws-ai .ws-card{background:rgba(17,24,39,.03);}
+      .ws-composer{padding:12px 14px;border-top:1px solid var(--border);background:var(--card);}
+      .ws-composer textarea{width:100%;min-height:90px;}
+      .ws-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px;}
+      .ws-kpi{border:1px solid var(--border);border-radius:10px;padding:10px;background:#fff;}
+      .ws-kpi-l{font-size:12px;color:var(--muted);}
+      .ws-kpi-v{font-weight:900;margin-top:4px;}
+      .ws-chart{position:relative;height:320px;max-height:320px;width:100%;border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff;}
+      .ws-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
+      .ws-side a{display:block;padding:8px 10px;border-radius:10px;text-decoration:none;font-weight:800;color:var(--text);}
+      .ws-side a:hover{background:rgba(17,24,39,.05);}
+      .ws-side a.active{background:rgba(99,102,241,.10);}
+      @media(max-width:900px){.ws-layout{grid-template-columns:1fr;} .ws-side{height:auto;} .ws-main{height:auto;}}
     </style>
 
-    <div class="copilot-header">
-      <h2>AI Copilot</h2>
-      <div class="copilot-usage">
-        Usage: <strong>${used}</strong> / ${isUnlimited ? "Unlimited" : limit}
+    <div class="ws-layout">
+      <div class="ws-side">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div style="font-weight:900;">Workspaces</div>
+          <a class="btn secondary small" href="/ai-copilot?new=1">New</a>
+        </div>
+        <div class="hr"></div>
+        ${
+          allWorkspaces.length
+            ? allWorkspaces.map(w => `
+              <a class="${workspace && w.workspace_id===workspace.workspace_id ? "active" : ""}"
+                 href="/ai-copilot?workspace=${encodeURIComponent(w.workspace_id)}">
+                ${safeStr(w.title || "Untitled")}
+                <div class="muted" style="font-size:11px;margin-top:2px;">
+                  ${w.updated_at ? new Date(w.updated_at).toLocaleString() : ""}
+                </div>
+              </a>
+            `).join("")
+            : `<div class="muted">No workspaces yet.</div>`
+        }
       </div>
-    </div>
 
-    <div class="copilot-grid">
-      <div class="copilot-panel">
-        <div style="font-weight:800;margin-bottom:6px;">Prompt Library</div>
-        ${executiveTiles}
-      </div>
-
-      <div class="copilot-panel">
-        <div style="font-weight:800;margin-bottom:6px;">Ask Copilot</div>
-        <form method="POST" action="/copilot/query" id="copilotForm">
-          <input type="hidden" name="preset" value="last30">
-          <textarea id="copilotQuery" name="query" style="min-height:100px;" placeholder="Ask for an executive summary, risk drivers, or payer analysis..."></textarea>
-          <label>Response Format</label>
-          <select name="format">
-            <option value="executive">Executive Summary</option>
-            <option value="operational">Operational Brief</option>
-            <option value="deep">Deep Analysis</option>
-            <option value="bullets">Bullet Insights</option>
-          </select>
-          <div class="btnRow" style="margin-top:8px;">
-            <button class="btn">Run Copilot</button>
+      <div class="ws-main">
+        <div class="ws-topbar">
+          <div>
+            <div class="ws-title">AI Copilot</div>
+            <div class="muted" style="font-size:12px;">Chat-style revenue intelligence. Prompts + executive brief stay in the thread.</div>
           </div>
-        </form>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            ${workspace?.latest_brief?.brief_id ? `<a class="btn secondary small" href="/copilot/export?brief_id=${encodeURIComponent(workspace.latest_brief.brief_id)}">Export PDF</a>` : ``}
+            <a class="btn secondary small" href="/ai-copilot">Refresh</a>
+          </div>
+        </div>
+
+        ${threadHtml}
+
+        <div class="ws-composer">
+          <div class="muted" style="font-weight:900;font-size:12px;">Prompt Library</div>
+          ${tilesHtml}
+
+          <form method="POST" action="${workspace ? "/ai-copilot/followup" : "/ai-copilot/new"}" style="margin-top:12px;">
+            ${workspace ? `<input type="hidden" name="workspace_id" value="${safeStr(workspace.workspace_id)}" />` : ``}
+            <label style="margin-top:0;">Ask Copilot</label>
+            <textarea id="copilotComposer" name="prompt" required placeholder="Ask for an executive brief, risk drivers, payer analysis, denial trends, underpayment recovery..."></textarea>
+            <div class="btnRow" style="margin-top:10px;">
+              <button class="btn" type="submit">Send</button>
+              <a class="btn secondary" href="/ai-copilot?new=1">New Brief</a>
+              <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence AI</a>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
 
-    <div id="copilotResponse" class="copilot-panel" style="margin-top:14px;">
-      <div class="muted">Run a prompt to generate insights.</div>
-    </div>
-  `, navUser(), {showChat:false, orgName: org.org_name});
+    <script>
+      (function(){
+        const t = document.getElementById("wsThread");
+        if(t){ t.scrollTop = t.scrollHeight; }
+      })();
+    </script>
+  `, navUser(), {showChat:true, orgName: org.org_name});
 
   return send(res, 200, html);
 }
 
-if (method === "POST" && pathname === "/copilot/query") {
-  const UPGRADE_LINK = "/account?tab=billing";
-  let body = "";
-  req.on("data", c => body += c);
-  req.on("end", async () => {
-    const limit = getCopilotLimit(org.org_id);
-    const usage = getUsage(org.org_id);
-    const used = Number(usage.copilot_questions_used || 0);
-    const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
+if (method === "POST" && pathname === "/ai-copilot/new") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const prompt = String(params.get("prompt") || "").trim();
+  if (!prompt) return redirect(res, "/ai-copilot");
 
-    if (!isUnlimited && used >= limit) {
-      const html = renderPage("AI Copilot", `
-        <h2>Copilot Limit Reached</h2>
-        <p>You have reached your monthly Copilot question limit.</p>
-        <div style="margin-top:12px;"><a class="btn" href="${UPGRADE_LINK}">Upgrade Plan</a></div>
-      `, navUser(), {showChat:false, orgName: org.org_name});
-      return send(res, 200, html);
-    }
+  const limit = getCopilotLimit(org.org_id);
+  const usage = getUsage(org.org_id);
+  const used = Number(usage.copilot_questions_used || 0);
+  const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
+  if (!isUnlimited && used >= limit) return redirect(res, "/account?tab=billing");
+  usage.copilot_questions_used = used + 1;
+  saveUsage(usage);
 
-    const params = new URLSearchParams(body);
-    const question = String(params.get("question") || params.get("query") || "").trim();
-    const responseFormat = String(params.get("format") || "executive");
-    const rangePreset = String(params.get("preset") || "last30");
-    if (!question) {
-      return redirect(res, "/copilot");
-    }
+  const workspace_id = uuid();
 
-    usage.copilot_questions_used = used + 1;
-    saveUsage(usage);
-
-    const result = buildCopilotResponse({
-      org_id: org.org_id,
-      rangePreset,
-      responseFormat,
-      question
-    });
-
-    const briefs = readJSON(FILES.copilot_briefs, []);
-    const brief_id = "BRF-" + Date.now();
-    briefs.push({
-      brief_id,
-      org_id: org.org_id,
-      created: nowISO(),
-      result
-    });
-    writeJSON(FILES.copilot_briefs, briefs);
-
-    const chartCards = (result.charts || []).map((chart, i) => `
-      <div class="copilot-panel" style="margin-top:14px;">
-        <h3>${safeStr(chart.title || `Chart ${i + 1}`)}</h3>
-        <div class="chart-container">
-          <canvas id="chart${i}" width="900"></canvas>
-        </div>
-      </div>
-    `).join("");
-
-    const chartScripts = (result.charts || []).map((chart, i) => {
-      const labels = JSON.stringify(Array.isArray(chart.labels) ? chart.labels : []);
-      const datasets = JSON.stringify(Array.isArray(chart.datasets) ? chart.datasets : []);
-      const type = String(chart.type || "bar").replace(/[^a-z]/gi, "") || "bar";
-      return `
-        (function(){
-          const c = document.getElementById('chart${i}');
-          if (!c || typeof Chart === 'undefined') return;
-          new Chart(c, {
-            type: '${type}',
-            data: { labels: ${labels}, datasets: ${datasets} },
-            options: { responsive: true, maintainAspectRatio: false }
-          });
-        })();
-      `;
-    }).join("\n");
-
-    const disciplineDrivers = Array.isArray(result.disciplineDrivers) ? result.disciplineDrivers : [];
-    const executiveActions = Array.isArray(result.executiveActions) ? result.executiveActions : [];
-    const topPayers = Array.isArray(result.topPayers) ? result.topPayers : [];
-    const disciplineBreakdown = Array.isArray(result.disciplineBreakdown) ? result.disciplineBreakdown : [];
-
-    const responseHTML = `
-      <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-      <style>
-        .exec-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);margin-top:14px;}
-        .exec-card h3{margin:0 0 8px;}
-        .chart-container{position:relative;height:320px;max-height:320px;width:100%;}
-      </style>
-
-      <div class="copilot-panel" style="padding:18px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
-          <div>
-            <div class="muted" style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;">Executive Copilot Brief</div>
-            <h2 style="margin:6px 0 4px;">Financial Performance Snapshot</h2>
-            <div class="muted">AI-generated executive summary with KPI highlights and recovery focus areas.</div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <a class="btn secondary" href="/copilot/export?brief_id=${encodeURIComponent(brief_id)}">Export PDF</a>
-          </div>
-        </div>
-
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:14px;">
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">Total Billed</div>
-            <div style="font-weight:700;font-size:1.1rem;">$${Number(result.metrics?.totals?.billed || 0).toLocaleString()}</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">Total Collected</div>
-            <div style="font-weight:700;font-size:1.1rem;">$${Number(result.metrics?.totals?.collected || 0).toLocaleString()}</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">Revenue at Risk</div>
-            <div style="font-weight:700;font-size:1.1rem;">$${Number(result.metrics?.totals?.atRisk || 0).toLocaleString()}</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">Recovery Rate</div>
-            <div style="font-weight:700;font-size:1.1rem;">${Number(result.metrics?.rates?.recoveryRate || 0).toLocaleString()}%</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">Denial Rate</div>
-            <div style="font-weight:700;font-size:1.1rem;">${Number(result.metrics?.rates?.denialRate || 0).toLocaleString()}%</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">AI Case Readiness</div>
-            <div style="font-weight:700;font-size:1.1rem;">${Number(result.metrics?.disciplineScore || 0).toLocaleString()}/100</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="copilot-panel" style="margin-top:14px;">
-        <h3 style="margin:0 0 8px;">Executive Summary</h3>
-        <ul style="margin:0;padding-left:18px;display:grid;gap:6px;">
-          ${(result.bullets || []).map(b => `<li>${safeStr(b)}</li>`).join("")}
-        </ul>
-      </div>
-
-      <div class="exec-card">
-        <h3>AI Case Readiness Drivers</h3>
-        ${
-          (disciplineDrivers && disciplineDrivers.length > 0)
-            ? `<ul>${disciplineDrivers.map(d => `<li>${safeStr(d)}</li>`).join("")}</ul>`
-            : `<div class="muted">No threshold breaches detected.</div>`
-        }
-      </div>
-
-      <div class="exec-card">
-        <h3>Recommended Executive Actions</h3>
-        ${
-          (executiveActions && executiveActions.length > 0)
-            ? `<ul>${executiveActions.map(a => `<li>${safeStr(a)}</li>`).join("")}</ul>`
-            : `<div class="muted">No immediate corrective actions required.</div>`
-        }
-      </div>
-
-      <div class="exec-card">
-        <h3>Top Risk Payers</h3>
-        ${
-          (topPayers && topPayers.length > 0)
-            ? `<ul>${topPayers.map(p => `<li>${safeStr(p.payer)} — $${Math.round(p.risk).toLocaleString()} at risk</li>`).join("")}</ul>`
-            : `<div class="muted">No payer risk data available.</div>`
-        }
-      </div>
-
-      <div class="exec-card">
-        <h3>Operational Score Breakdown</h3>
-        <div class="chart-container">
-          <canvas id="disciplineChart"></canvas>
-        </div>
-      </div>
-
-      ${chartCards}
-
-      <div class="copilot-panel" style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
-        <a class="btn" href="/actions?tab=denials">Denials</a>
-        <a class="btn" href="/actions?tab=underpayments">Underpayments</a>
-        <a class="btn" href="/revenue-intelligence?tab=payers">Payer Intelligence</a>
-      </div>
-
-      <script>
-        (function(){
-          if (typeof Chart === 'undefined') return;
-          new Chart(document.getElementById('disciplineChart'), {
-            type: 'bar',
-            data: {
-              labels: ${JSON.stringify(disciplineBreakdown.map(d=>d.label))},
-              datasets: [{
-                label: 'Score (%)',
-                data: ${JSON.stringify(disciplineBreakdown.map(d=>d.value))}
-              }]
-            },
-            options: { responsive:true, maintainAspectRatio:false }
-          });
-        })();
-        ${chartScripts}
-      </script>
-    `;
-
-    const html = renderPage("AI Copilot Result", responseHTML, navUser(), {showChat:false, orgName: org.org_name});
-    return send(res, 200, html);
+  const result = buildCopilotResponse({
+    org_id: org.org_id,
+    rangePreset: "last30",
+    responseFormat: "executive",
+    question: prompt
   });
-  return;
+
+  const briefs = readJSON(FILES.copilot_briefs, []);
+  const brief_id = "BRF-" + Date.now();
+  briefs.push({ brief_id, org_id: org.org_id, created: nowISO(), result });
+  writeJSON(FILES.copilot_briefs, briefs);
+
+  const workspace = {
+    workspace_id,
+    org_id: org.org_id,
+    title: prompt.slice(0, 60),
+    messages: [{ role: "user", content: prompt }],
+    latest_brief: { brief_id, result },
+    created_at: nowISO(),
+    updated_at: nowISO()
+  };
+  saveCopilotWorkspace(workspace);
+
+  return redirect(res, `/ai-copilot?workspace=${encodeURIComponent(workspace_id)}`);
+}
+
+if (method === "POST" && pathname === "/ai-copilot/followup") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const workspace_id = String(params.get("workspace_id") || "").trim();
+  const prompt = String(params.get("prompt") || "").trim();
+
+  if (!workspace_id || !prompt) return redirect(res, "/ai-copilot");
+
+  const workspace = getCopilotWorkspace(org.org_id, workspace_id);
+  if (!workspace) return redirect(res, "/ai-copilot");
+
+  const limit = getCopilotLimit(org.org_id);
+  const usage = getUsage(org.org_id);
+  const used = Number(usage.copilot_questions_used || 0);
+  const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
+  if (!isUnlimited && used >= limit) return redirect(res, "/account?tab=billing");
+  usage.copilot_questions_used = used + 1;
+  saveUsage(usage);
+
+  workspace.messages = Array.isArray(workspace.messages) ? workspace.messages : [];
+  workspace.messages.push({ role: "user", content: prompt });
+
+  const result = buildCopilotResponse({
+    org_id: org.org_id,
+    rangePreset: "last30",
+    responseFormat: "executive",
+    question: prompt
+  });
+
+  const briefs = readJSON(FILES.copilot_briefs, []);
+  const brief_id = "BRF-" + Date.now();
+  briefs.push({ brief_id, org_id: org.org_id, created: nowISO(), result });
+  writeJSON(FILES.copilot_briefs, briefs);
+
+  workspace.latest_brief = { brief_id, result };
+  workspace.messages.push({ role: "assistant", content: "Executive brief generated below." });
+
+  workspace.updated_at = nowISO();
+  saveCopilotWorkspace(workspace);
+
+  return redirect(res, `/ai-copilot?workspace=${encodeURIComponent(workspace_id)}`);
 }
 
 if (method === "GET" && pathname === "/copilot/export") {
@@ -8563,7 +8616,7 @@ if (method === "GET" && pathname === "/copilot/export") {
     const html = renderPage("Executive Briefing", `
       <h2>Executive Briefing</h2>
       <div class="alert warning">Brief not found.</div>
-      <a class="btn" href="/copilot">Back to Copilot</a>
+      <a class="btn" href="/ai-copilot">Back to Copilot</a>
     `, navUser(), {showChat:false, orgName: org.org_name});
     return send(res, 200, html);
   }
