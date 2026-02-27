@@ -8434,10 +8434,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
     <style>
       .ws-layout{display:grid;grid-template-columns:260px 1fr;gap:14px;align-items:stretch;}
       .ws-side{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:12px;box-shadow:var(--shadow);height:calc(100vh - 170px);overflow:auto;}
-      .ws-main{border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:var(--shadow);height:calc(100vh - 170px);display:flex;flex-direction:column;overflow:hidden;}
+      .ws-main{border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:var(--shadow);min-height:600px;display:flex;flex-direction:column;}
       .ws-topbar{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;}
       .ws-title{font-weight:900;font-size:16px;margin:0;}
-      .ws-thread{padding:14px;overflow:auto;flex:1;}
+      .ws-thread{padding:14px;flex:1;overflow-y:auto;max-height:65vh;}
       .ws-msg{margin-bottom:14px;}
       .ws-who{font-weight:900;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
       .ws-card{margin-top:6px;border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);}
