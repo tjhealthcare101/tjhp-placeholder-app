@@ -473,7 +473,7 @@ function renderPage(title, content, navHtml="", opts={}) {
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
   <button class="btn" type="button" onclick="window.__tjhpToggleChat(event)">AI Assistant</button>
   <div id="aiChatBox" style="
-  display:flex;
+  display:none;
   flex-direction:column;
   width:380px;
   max-width:92vw;
