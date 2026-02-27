@@ -471,7 +471,7 @@ function renderPage(title, content, navHtml="", opts={}) {
   const startTheme = (themePref === "dark") ? "dark" : "light";
   const chatHtml = showChat ? `
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
-  <button class="btn" type="button" onclick="window.__tjhpToggleChat()">AI Assistant</button>
+  <button class="btn" type="button" onclick="window.__tjhpToggleChat(event)">AI Assistant</button>
   <div id="aiChatBox" style="
   display:none;
   width:380px;
@@ -483,40 +483,65 @@ function renderPage(title, content, navHtml="", opts={}) {
   padding:14px;
   margin-top:8px;
   box-shadow:0 18px 40px rgba(17,24,39,.18);
-  display:flex;
   flex-direction:column;
 ">
-    <div style="margin-bottom:8px;padding:8px 10px;border-radius:10px;background:#eff6ff;border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:space-between;gap:8px;">
-      <div class="small" style="color:#1e3a8a;line-height:1.35;">For executive briefs, charts, and deeper analysis, use the full AI Copilot workspace.</div>
+    <!-- Header / Banner -->
+    <div style="margin-bottom:10px;padding:10px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+      <div class="small" style="color:#1e3a8a;line-height:1.35;">
+        For executive briefs, charts, and deeper analysis, use the full AI Copilot workspace.
+      </div>
       <a class="btn secondary small" href="/ai-copilot">Open AI Copilot</a>
     </div>
-    <div class="muted small" style="margin-bottom:6px;">Ask questions about your denials, payments, trends, and what pages do.</div>
-    ${floatCopilotUsage.limitReached ? `<div style="margin-bottom:6px;"><span class="badge bad">Limit Reached</span></div>` : ``}
+
+    <div class="muted small" style="margin-bottom:8px;">
+      Ask questions about your denials, payments, trends, and what pages do.
+    </div>
+
+    ${floatCopilotUsage.limitReached ? `<div style="margin-bottom:8px;"><span class="badge bad">Limit Reached</span></div>` : ``}
+
+    <!-- Message Area (THIS fills available space) -->
     <div id="aiChatMsgs" style="
   flex:1;
   overflow:auto;
   border:1px solid #e5e7eb;
   border-radius:12px;
-  padding:10px;
+  padding:12px;
   background:#fafafa;
+  margin-bottom:10px;
 "></div>
-    <input id="aiChatInput"
-  placeholder="Ask about your data..."
-  style="
-    margin-top:10px;
-    padding:10px;
-    border-radius:10px;
-    border:1px solid #e5e7eb;
-    width:100%;
-  "
-/>
-    <div id="aiChatSavedNotice" class="small" style="display:none;margin-top:8px;padding:8px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;">
-      Full report saved to AI Copilot workspace.
-      <a href="/ai-copilot" style="font-weight:800;margin-left:6px;">→ View Full Analysis</a>
-    </div>
-    <div class="btnRow" style="margin-top:8px;">
-      <button id="aiChatSendBtn" class="btn secondary" type="button" onclick="window.__tjhpSendChat()" ${floatCopilotUsage.limitReached ? "disabled" : ""}>${floatCopilotUsage.limitReached ? "Limit Reached" : "Send"}</button>
-      <button class="btn secondary" type="button" onclick="window.__tjhpToggleChat()">Close</button>
+
+    <!-- Bottom Input Section (fixed height) -->
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <input id="aiChatInput"
+        placeholder="Ask about your data..."
+        style="
+          padding:10px;
+          border-radius:10px;
+          border:1px solid #e5e7eb;
+          width:100%;
+        "
+      />
+
+      <div id="aiChatSavedNotice" class="small" style="display:none;padding:8px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;">
+        Full report saved to AI Copilot workspace.
+        <a href="/ai-copilot" style="font-weight:800;margin-left:6px;">→ View Full Analysis</a>
+      </div>
+
+      <div class="btnRow">
+        <button id="aiChatSendBtn"
+          class="btn secondary"
+          type="button"
+          onclick="window.__tjhpSendChat(event)"
+          ${floatCopilotUsage.limitReached ? "disabled" : ""}>
+          ${floatCopilotUsage.limitReached ? "Limit Reached" : "Send"}
+        </button>
+
+        <button class="btn secondary"
+          type="button"
+          onclick="window.__tjhpToggleChat(event)">
+          Close
+        </button>
+      </div>
     </div>
   </div>
 </div>` : "";
@@ -528,25 +553,63 @@ try{
   if (btn) btn.textContent = "AI Copilot";
 }catch(e){}
 
-window.__tjhpToggleChat = function(){
+// ===== Floating Copilot Open/Close Controller =====
+window.__tjhpChatState = window.__tjhpChatState || { open: false, justOpenedAt: 0 };
+
+window.__tjhpOpenChat = function(){
   const box = document.getElementById("aiChatBox");
   if (!box) return;
-  box.style.display = (box.style.display === "none" || !box.style.display) ? "block" : "none";
+  box.style.display = "block";
+  window.__tjhpChatState.open = true;
+  window.__tjhpChatState.justOpenedAt = Date.now();
 };
 
-document.addEventListener("click", function(e){
+window.__tjhpCloseChat = function(){
   const box = document.getElementById("aiChatBox");
-  const container = document.getElementById("aiChat");
-  if (!box || !container) return;
+  if (!box) return;
+  box.style.display = "none";
+  window.__tjhpChatState.open = false;
+};
 
-  const isOpen = box.style.display === "block";
-  if (!isOpen) return;
+window.__tjhpToggleChat = function(ev){
+  // If this is called from a click, stop it from bubbling to document handler
+  if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
 
-  // If click is outside floating AI
-  if (!container.contains(e.target)) {
-    box.style.display = "none";
-  }
-});
+  const st = window.__tjhpChatState || { open:false };
+  if (st.open) window.__tjhpCloseChat();
+  else window.__tjhpOpenChat();
+};
+
+// Attach outside-click handler ONCE
+if (!window.__tjhpOutsideClickBound) {
+  window.__tjhpOutsideClickBound = true;
+
+  // Use CAPTURE so we see the click early, but we guard against the open click
+  document.addEventListener("click", function(e){
+    const st = window.__tjhpChatState || { open:false, justOpenedAt: 0 };
+    if (!st.open) return;
+
+    // Ignore the click that just opened the chat (and near-simultaneous clicks)
+    if (Date.now() - (st.justOpenedAt || 0) < 250) return;
+
+    const container = document.getElementById("aiChat");
+    const box = document.getElementById("aiChatBox");
+    if (!container || !box) return;
+
+    // If click is outside the floating widget, close it
+    if (!container.contains(e.target)) {
+      window.__tjhpCloseChat();
+    }
+  }, true);
+}
+
+(function(){
+  const box = document.getElementById("aiChatBox");
+  if (!box) return;
+  box.addEventListener("click", function(e){
+    e.stopPropagation();
+  });
+})();
 
 window.__tjhpSendChat = async function(){
   const input = document.getElementById("aiChatInput");
