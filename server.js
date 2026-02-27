@@ -485,67 +485,85 @@ function renderPage(title, content, navHtml="", opts={}) {
   margin-top:8px;
   box-shadow:0 18px 40px rgba(17,24,39,.18);
 ">
-    <!-- Header / Banner -->
-    <div style="margin-bottom:10px;padding:10px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:space-between;gap:10px;">
-      <div class="small" style="color:#1e3a8a;line-height:1.35;">
-        For executive briefs, charts, and deeper analysis, use the full AI Copilot workspace.
+    <style>
+      /* Floating Copilot UI polish */
+      #aiChatBox { overflow: hidden; }
+      #aiChatHeader { flex: 0 0 auto; }
+      #aiChatBody { flex: 1 1 auto; min-height: 0; display:flex; flex-direction:column; }
+      #aiChatMsgs {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        background: #f3f4f6;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: 12px;
+      }
+      #aiChatDock {
+        flex: 0 0 auto;
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid #e5e7eb;
+        background: #fff;
+      }
+      #aiChatInput {
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid #e5e7eb;
+        width: 100%;
+      }
+      #aiChatMsgs .empty-state {
+        color: #6b7280;
+        font-size: 12px;
+        line-height: 1.4;
+        background: rgba(255,255,255,.7);
+        border: 1px dashed #d1d5db;
+        border-radius: 12px;
+        padding: 10px 12px;
+      }
+    </style>
+
+    <div id="aiChatHeader">
+      <div style="margin-bottom:10px;padding:10px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <div class="small" style="color:#1e3a8a;line-height:1.35;">
+          For executive briefs, charts, and deeper analysis, use the full AI Copilot workspace.
+        </div>
+        <a class="btn secondary small" href="/ai-copilot">Open AI Copilot</a>
       </div>
-      <a class="btn secondary small" href="/ai-copilot">Open AI Copilot</a>
+
+      <div class="muted small" style="margin-bottom:8px;">
+        Ask questions about your denials, payments, trends, and what pages do.
+      </div>
+
+      ${floatCopilotUsage.limitReached ? `<div style="margin-bottom:8px;"><span class="badge bad">Limit Reached</span></div>` : ``}
     </div>
 
-    <div class="muted small" style="margin-bottom:8px;">
-      Ask questions about your denials, payments, trends, and what pages do.
-    </div>
-
-    ${floatCopilotUsage.limitReached ? `<div style="margin-bottom:8px;"><span class="badge bad">Limit Reached</span></div>` : ``}
-
-    <!-- Message Area (THIS fills available space) -->
-    <div id="aiChatMsgs" style="
-  flex:1;
-  overflow:auto;
-  padding:12px;
-  background:#f3f4f6;
-  border-radius:12px;
-  margin-bottom:10px;
-"></div>
-
-    <!-- Bottom Input Section (fixed height) -->
-    <div style="
-  border-top:1px solid #e5e7eb;
-  padding-top:10px;
-  display:flex;
-  flex-direction:column;
-  gap:8px;
-">
-      <input id="aiChatInput"
-        placeholder="Ask about your data..."
-        style="
-          padding:10px;
-          border-radius:10px;
-          border:1px solid #e5e7eb;
-          width:100%;
-        "
-      />
-
-      <div id="aiChatSavedNotice" class="small" style="display:none;padding:8px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;">
-        Full report saved to AI Copilot workspace.
-        <a href="/ai-copilot" style="font-weight:800;margin-left:6px;">→ View Full Analysis</a>
+    <div id="aiChatBody">
+      <div id="aiChatMsgs">
+        <div class="empty-state">
+          Start by asking a question above. Your full executive brief will be saved in the AI Copilot tab.
+        </div>
       </div>
 
-      <div class="btnRow">
-        <button id="aiChatSendBtn"
-          class="btn secondary"
-          type="button"
-          onclick="window.__tjhpSendChat(event)"
-          ${floatCopilotUsage.limitReached ? "disabled" : ""}>
-          ${floatCopilotUsage.limitReached ? "Limit Reached" : "Send"}
-        </button>
+      <div id="aiChatDock">
+        <input id="aiChatInput" placeholder="Ask about your data..." />
 
-        <button class="btn secondary"
-          type="button"
-          onclick="window.__tjhpToggleChat(event)">
-          Close
-        </button>
+        <div id="aiChatSavedNotice" class="small" style="display:none;margin-top:8px;padding:8px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;">
+          Full report saved to AI Copilot workspace.
+          <a href="/ai-copilot" style="font-weight:800;margin-left:6px;">→ View Full Analysis</a>
+        </div>
+
+        <div class="btnRow" style="margin-top:10px;">
+          <button id="aiChatSendBtn" class="btn secondary" type="button"
+            onclick="window.__tjhpSendChat(event)"
+            ${floatCopilotUsage.limitReached ? "disabled" : ""}>
+            ${floatCopilotUsage.limitReached ? "Limit Reached" : "Send"}
+          </button>
+
+          <button class="btn secondary" type="button" onclick="window.__tjhpToggleChat(event)">
+            Close
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -564,7 +582,7 @@ window.__tjhpChatState = window.__tjhpChatState || { open: false, justOpenedAt: 
 window.__tjhpOpenChat = function(){
   const box = document.getElementById("aiChatBox");
   if (!box) return;
-  box.style.display = "block";
+  box.style.display = "flex";
   window.__tjhpChatState.open = true;
   window.__tjhpChatState.justOpenedAt = Date.now();
 };
@@ -635,6 +653,8 @@ window.__tjhpSendChat = async function(){
   };
 
   addMsg("You", text);
+  const empty = msgs.querySelector(".empty-state");
+  if (empty) empty.remove();
   input.value = "";
   if (savedNotice) savedNotice.style.display = "none";
 
