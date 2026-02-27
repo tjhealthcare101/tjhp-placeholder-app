@@ -472,15 +472,44 @@ function renderPage(title, content, navHtml="", opts={}) {
   const chatHtml = showChat ? `
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
   <button class="btn" type="button" onclick="window.__tjhpToggleChat()">AI Assistant</button>
-  <div id="aiChatBox" style="display:none;width:340px;height:500px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;margin-top:8px;box-shadow:0 12px 30px rgba(17,24,39,.10);">
+  <div id="aiChatBox" style="
+  display:none;
+  width:380px;
+  max-width:92vw;
+  height:560px;
+  background:#fff;
+  border:1px solid #e5e7eb;
+  border-radius:16px;
+  padding:14px;
+  margin-top:8px;
+  box-shadow:0 18px 40px rgba(17,24,39,.18);
+  display:flex;
+  flex-direction:column;
+">
     <div style="margin-bottom:8px;padding:8px 10px;border-radius:10px;background:#eff6ff;border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:space-between;gap:8px;">
       <div class="small" style="color:#1e3a8a;line-height:1.35;">For executive briefs, charts, and deeper analysis, use the full AI Copilot workspace.</div>
       <a class="btn secondary small" href="/ai-copilot">Open AI Copilot</a>
     </div>
     <div class="muted small" style="margin-bottom:6px;">Ask questions about your denials, payments, trends, and what pages do.</div>
     ${floatCopilotUsage.limitReached ? `<div style="margin-bottom:6px;"><span class="badge bad">Limit Reached</span></div>` : ``}
-    <div id="aiChatMsgs" style="height:300px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px;"></div>
-    <input id="aiChatInput" placeholder="Ask about your data..." style="margin-top:8px;" />
+    <div id="aiChatMsgs" style="
+  flex:1;
+  overflow:auto;
+  border:1px solid #e5e7eb;
+  border-radius:12px;
+  padding:10px;
+  background:#fafafa;
+"></div>
+    <input id="aiChatInput"
+  placeholder="Ask about your data..."
+  style="
+    margin-top:10px;
+    padding:10px;
+    border-radius:10px;
+    border:1px solid #e5e7eb;
+    width:100%;
+  "
+/>
     <div id="aiChatSavedNotice" class="small" style="display:none;margin-top:8px;padding:8px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;">
       Full report saved to AI Copilot workspace.
       <a href="/ai-copilot" style="font-weight:800;margin-left:6px;">→ View Full Analysis</a>
@@ -504,6 +533,20 @@ window.__tjhpToggleChat = function(){
   if (!box) return;
   box.style.display = (box.style.display === "none" || !box.style.display) ? "block" : "none";
 };
+
+document.addEventListener("click", function(e){
+  const box = document.getElementById("aiChatBox");
+  const container = document.getElementById("aiChat");
+  if (!box || !container) return;
+
+  const isOpen = box.style.display === "block";
+  if (!isOpen) return;
+
+  // If click is outside floating AI
+  if (!container.contains(e.target)) {
+    box.style.display = "none";
+  }
+});
 
 window.__tjhpSendChat = async function(){
   const input = document.getElementById("aiChatInput");
@@ -8612,8 +8655,22 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
     <script>
       (function(){
-        const t = document.getElementById("wsThread");
-        if(t){ t.scrollTop = t.scrollHeight; }
+        const thread = document.getElementById("wsThread");
+        const composer = document.getElementById("copilotComposer");
+
+        if (!thread) return;
+
+        // If page loaded with new result (workspace selected)
+        const url = new URL(window.location.href);
+        const isNewResult = url.searchParams.has("workspace");
+
+        if (isNewResult) {
+          // Scroll to top of thread so user sees beginning of brief
+          thread.scrollTop = 0;
+        } else {
+          // Otherwise keep default behavior
+          thread.scrollTop = thread.scrollHeight;
+        }
 
         const layout = document.getElementById("wsLayout");
         const btn = document.getElementById("wsCollapseBtn");
