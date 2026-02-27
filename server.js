@@ -851,6 +851,150 @@ function computeSimpleDenialRateForecast(org_id, rangePreset){
   };
 }
 
+function renderCopilotTiles(){
+  const tiles = [
+    { title:"Executive Revenue Snapshot", desc:"High-level performance overview", prompt:"Executive revenue snapshot for the last 30 days. Include billed, collected, revenue at risk, denial rate, recovery rate, and top risk payer." },
+    { title:"Revenue Risk Drivers", desc:"What is increasing exposure", prompt:"What are the top revenue risk drivers right now? Break down denials, underpayments, and AR aging. Provide top 5 actions to reduce exposure." },
+    { title:"Payer Exposure Overview", desc:"Risk concentration by payer", prompt:"Analyze payer exposure. Which payers drive the most at-risk dollars, denial rate, and underpayments? Provide a ranked list and suggested actions." },
+    { title:"Denial Performance", desc:"Denial trends and appeal health", prompt:"Review denial performance: denial rate trend, top denial reasons, top denial payers, and recommended appeal focus areas." },
+    { title:"Underpayment Recovery", desc:"Negotiation effectiveness", prompt:"Evaluate underpayment recovery: negotiation ROI, underpaid dollars, top underpaying payers, and tactics to improve recovery." },
+    { title:"Operational Health", desc:"Readiness + workflow posture", prompt:"Provide an operational health summary: AI Case Readiness, documentation gaps, and process improvements to speed appeal/negotiation cycles." }
+  ];
+  const tilesB64 = Buffer.from(JSON.stringify(tiles)).toString("base64");
+
+  return `
+  <style>
+    .pl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px;}
+    .pl-tile{border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);cursor:pointer;transition:all .15s ease;}
+    .pl-tile:hover{box-shadow:var(--shadow);}
+    .pl-title{font-weight:900;margin:0 0 4px;font-size:13px;}
+    .pl-desc{color:var(--muted);font-size:12px;margin:0;}
+    @media(max-width:900px){.pl-grid{grid-template-columns:1fr;}}
+  </style>
+
+  <div class="pl-grid" id="copilotTileGrid">
+    ${tiles.map((t,i)=>`
+      <div class="pl-tile" data-i="${i}">
+        <div class="pl-title">${safeStr(t.title)}</div>
+        <div class="pl-desc">${safeStr(t.desc)}</div>
+      </div>
+    `).join("")}
+  </div>
+
+  <script>
+    (function(){
+      const tiles = JSON.parse(atob("${tilesB64}"));
+      const grid = document.getElementById("copilotTileGrid");
+      if(!grid) return;
+      grid.addEventListener("click", (e)=>{
+        const tile = e.target.closest(".pl-tile");
+        if(!tile) return;
+        const idx = Number(tile.getAttribute("data-i")||"0");
+        const t = tiles[idx] || {};
+        const ta = document.getElementById("copilotComposer");
+        if(ta){
+          ta.value = (t.prompt || "");
+          ta.focus();
+        }
+      });
+    })();
+  </script>
+  `;
+}
+
+function renderCopilotBriefMessage(result, brief_id){
+  const r = result || {};
+  const m = r.metrics || {};
+  const totals = m.totals || {};
+  const rates = m.rates || {};
+  const bullets = Array.isArray(r.bullets) ? r.bullets : [];
+  const drivers = Array.isArray(r.disciplineDrivers) ? r.disciplineDrivers : [];
+  const actions = Array.isArray(r.executiveActions) ? r.executiveActions : [];
+  const payers = Array.isArray(r.topPayers) ? r.topPayers : [];
+  const charts = Array.isArray(r.charts) ? r.charts : [];
+
+  const safeBriefId = safeStr(String(brief_id || "brief")).replace(/[^a-zA-Z0-9_-]/g, "_");
+
+  const chartCards = charts.map((c, i) => `
+    <div style="margin-top:12px;">
+      <div style="font-weight:900;margin-bottom:6px;">${safeStr(c.title || ("Chart " + (i+1)))}</div>
+      <div class="ws-chart"><canvas id="wsChart_${safeBriefId}_${i}"></canvas></div>
+    </div>
+  `).join("");
+
+  const chartScripts = charts.map((c, i) => {
+    const labels = JSON.stringify(Array.isArray(c.labels) ? c.labels : []);
+    const datasets = JSON.stringify(Array.isArray(c.datasets) ? c.datasets : []);
+    const type = String(c.type || "bar").replace(/[^a-z]/gi,"") || "bar";
+    return `
+      (function(){
+        const el = document.getElementById("wsChart_${safeBriefId}_${i}");
+        if(!el || typeof Chart === "undefined") return;
+        new Chart(el, { type: "${type}", data: { labels: ${labels}, datasets: ${datasets} }, options: { responsive:true, maintainAspectRatio:false } });
+      })();
+    `;
+  }).join("\n");
+
+  return `
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <div class="ws-msg ws-ai">
+      <div class="ws-who">Copilot <span class="badge ok" style="margin-left:8px;">Executive Brief</span></div>
+
+      <div class="ws-card">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+          <div>
+            <div class="muted" style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;">Executive Copilot Brief</div>
+            <div style="font-size:18px;font-weight:900;margin-top:4px;">Financial Performance Snapshot</div>
+            <div class="muted">KPI highlights, drivers, and recommended actions.</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <a class="btn secondary small" href="/copilot/export?brief_id=${encodeURIComponent(brief_id)}">Export PDF</a>
+          </div>
+        </div>
+
+        <div class="ws-kpis">
+          <div class="ws-kpi"><div class="ws-kpi-l">Total Billed</div><div class="ws-kpi-v">$${Number(totals.billed||0).toLocaleString()}</div></div>
+          <div class="ws-kpi"><div class="ws-kpi-l">Total Collected</div><div class="ws-kpi-v">$${Number(totals.collected||0).toLocaleString()}</div></div>
+          <div class="ws-kpi"><div class="ws-kpi-l">Revenue At Risk</div><div class="ws-kpi-v">$${Number(totals.atRisk||0).toLocaleString()}</div></div>
+          <div class="ws-kpi"><div class="ws-kpi-l">Recovery Rate</div><div class="ws-kpi-v">${Number(rates.recoveryRate||0).toFixed(1)}%</div></div>
+          <div class="ws-kpi"><div class="ws-kpi-l">Denial Rate</div><div class="ws-kpi-v">${Number(rates.denialRate||0).toFixed(1)}%</div></div>
+          <div class="ws-kpi"><div class="ws-kpi-l">AI Case Readiness</div><div class="ws-kpi-v">${Number(r.metrics?.disciplineScore||0).toFixed(0)}/100</div></div>
+        </div>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:900;margin-bottom:6px;">Executive Summary</div>
+          ${bullets.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${bullets.map(b=>`<li>${safeStr(b)}</li>`).join("")}</ul>` : `<div class="muted">No summary available.</div>`}
+        </div>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:900;margin-bottom:6px;">AI Case Readiness Drivers</div>
+          ${drivers.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${drivers.map(d=>`<li>${safeStr(d)}</li>`).join("")}</ul>` : `<div class="muted">No threshold breaches detected.</div>`}
+        </div>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:900;margin-bottom:6px;">Recommended Executive Actions</div>
+          ${actions.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${actions.map(a=>`<li>${safeStr(a)}</li>`).join("")}</ul>` : `<div class="muted">No immediate corrective actions required.</div>`}
+        </div>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:900;margin-bottom:6px;">Top Risk Payers</div>
+          ${payers.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${payers.map(p=>`<li>${safeStr(p.payer)} — $${Math.round(p.risk||0).toLocaleString()} at risk</li>`).join("")}</ul>` : `<div class="muted">No payer risk data available.</div>`}
+        </div>
+
+        ${chartCards}
+
+        <div class="ws-actions">
+          <a class="btn secondary small" href="/actions?tab=denials">Denials</a>
+          <a class="btn secondary small" href="/actions?tab=underpayments">Underpayments</a>
+          <a class="btn secondary small" href="/revenue-intelligence?tab=payers">Payer Intelligence</a>
+        </div>
+      </div>
+    </div>
+
+    <script>(function(){ ${chartScripts} })();</script>
+  `;
+}
+
 function buildCopilotResponse({
   org_id,
   rangePreset,
@@ -1361,7 +1505,7 @@ function getCopilotWorkspaces(org_id){
 
 function getCopilotWorkspace(org_id, workspace_id){
   return readJSON(FILES.copilot_workspaces, [])
-    .find(w => w.org_id === org_id && w.workspace_id === workspace_id);
+    .find(w => w.org_id === org_id && w.workspace_id === workspace_id) || null;
 }
 
 function saveCopilotWorkspace(workspace){
@@ -8259,135 +8403,212 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 // AI COPILOT WORKSPACE
 // ===============================
 if (method === "GET" && pathname === "/ai-copilot") {
-
   const workspace_id = String(parsed.query.workspace || "").trim();
-  let workspace = workspace_id
-    ? getCopilotWorkspace(org.org_id, workspace_id)
-    : null;
 
-  const workspaces = getCopilotWorkspaces(org.org_id);
+  let workspace = workspace_id ? getCopilotWorkspace(org.org_id, workspace_id) : null;
+  const allWorkspaces = getCopilotWorkspaces(org.org_id);
 
-  const conversation = workspace?.messages || [];
+  if (!workspace && allWorkspaces.length && !parsed.query.new) {
+    workspace = allWorkspaces[0];
+  }
 
-  const messagesHtml = conversation.map(m => `
-    <div style="margin-bottom:16px;">
-      <div style="font-weight:800;">${safeStr(m.role === "user" ? "You" : "Copilot")}</div>
-      <div class="card" style="margin-top:6px;">${safeStr(m.content)}</div>
+  const tilesHtml = renderCopilotTiles();
+
+  const thread = (workspace && Array.isArray(workspace.messages)) ? workspace.messages : [];
+  const brief = workspace?.latest_brief || null;
+
+  const threadHtml = `
+    <div class="ws-thread" id="wsThread">
+      ${thread.map(msg => `
+        <div class="ws-msg ${msg.role === "user" ? "ws-user" : "ws-ai"}">
+          <div class="ws-who">${msg.role === "user" ? "You" : "Copilot"}</div>
+          <div class="ws-card">${safeStr(msg.content || "")}</div>
+        </div>
+      `).join("")}
+
+      ${brief ? renderCopilotBriefMessage(brief.result, brief.brief_id) : (workspace ? `<div class="ws-msg ws-ai"><div class="ws-who">Copilot</div><div class="ws-card muted">Pick a prompt tile or ask a question below.</div></div>` : ``)}
     </div>
-  `).join("");
+  `;
+
+  const html = renderPage("AI Copilot", `
+    <style>
+      .ws-layout{display:grid;grid-template-columns:260px 1fr;gap:14px;align-items:stretch;}
+      .ws-side{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:12px;box-shadow:var(--shadow);height:calc(100vh - 170px);overflow:auto;}
+      .ws-main{border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:var(--shadow);height:calc(100vh - 170px);display:flex;flex-direction:column;overflow:hidden;}
+      .ws-topbar{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;}
+      .ws-title{font-weight:900;font-size:16px;margin:0;}
+      .ws-thread{padding:14px;overflow:auto;flex:1;}
+      .ws-msg{margin-bottom:14px;}
+      .ws-who{font-weight:900;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
+      .ws-card{margin-top:6px;border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);}
+      .ws-user .ws-card{background:rgba(99,102,241,.06);}
+      .ws-ai .ws-card{background:rgba(17,24,39,.03);}
+      .ws-composer{padding:12px 14px;border-top:1px solid var(--border);background:var(--card);}
+      .ws-composer textarea{width:100%;min-height:90px;}
+      .ws-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px;}
+      .ws-kpi{border:1px solid var(--border);border-radius:10px;padding:10px;background:#fff;}
+      .ws-kpi-l{font-size:12px;color:var(--muted);}
+      .ws-kpi-v{font-weight:900;margin-top:4px;}
+      .ws-chart{position:relative;height:320px;max-height:320px;width:100%;border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff;}
+      .ws-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
+      .ws-side a{display:block;padding:8px 10px;border-radius:10px;text-decoration:none;font-weight:800;color:var(--text);}
+      .ws-side a:hover{background:rgba(17,24,39,.05);}
+      .ws-side a.active{background:rgba(99,102,241,.10);}
+      @media(max-width:900px){.ws-layout{grid-template-columns:1fr;} .ws-side{height:auto;} .ws-main{height:auto;}}
+    </style>
+
+    <div class="ws-layout">
+      <div class="ws-side">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div style="font-weight:900;">Workspaces</div>
+          <a class="btn secondary small" href="/ai-copilot?new=1">New</a>
+        </div>
+        <div class="hr"></div>
+        ${
+          allWorkspaces.length
+            ? allWorkspaces.map(w => `
+              <a class="${workspace && w.workspace_id===workspace.workspace_id ? "active" : ""}"
+                 href="/ai-copilot?workspace=${encodeURIComponent(w.workspace_id)}">
+                ${safeStr(w.title || "Untitled")}
+                <div class="muted" style="font-size:11px;margin-top:2px;">
+                  ${w.updated_at ? new Date(w.updated_at).toLocaleString() : ""}
+                </div>
+              </a>
+            `).join("")
+            : `<div class="muted">No workspaces yet.</div>`
+        }
+      </div>
+
+      <div class="ws-main">
+        <div class="ws-topbar">
+          <div>
+            <div class="ws-title">AI Copilot</div>
+            <div class="muted" style="font-size:12px;">Chat-style revenue intelligence. Prompts + executive brief stay in the thread.</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            ${workspace?.latest_brief?.brief_id ? `<a class="btn secondary small" href="/copilot/export?brief_id=${encodeURIComponent(workspace.latest_brief.brief_id)}">Export PDF</a>` : ``}
+            <a class="btn secondary small" href="/ai-copilot">Refresh</a>
+          </div>
+        </div>
+
+        ${threadHtml}
+
+        <div class="ws-composer">
+          <div class="muted" style="font-weight:900;font-size:12px;">Prompt Library</div>
+          ${tilesHtml}
+
+          <form method="POST" action="${workspace ? "/ai-copilot/followup" : "/ai-copilot/new"}" style="margin-top:12px;">
+            ${workspace ? `<input type="hidden" name="workspace_id" value="${safeStr(workspace.workspace_id)}" />` : ``}
+            <label style="margin-top:0;">Ask Copilot</label>
+            <textarea id="copilotComposer" name="prompt" required placeholder="Ask for an executive brief, risk drivers, payer analysis, denial trends, underpayment recovery..."></textarea>
+            <div class="btnRow" style="margin-top:10px;">
+              <button class="btn" type="submit">Send</button>
+              <a class="btn secondary" href="/ai-copilot?new=1">New Brief</a>
+              <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence AI</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function(){
+        const t = document.getElementById("wsThread");
+        if(t){ t.scrollTop = t.scrollHeight; }
+      })();
+    </script>
+  `, navUser(), {showChat:true, orgName: org.org_name});
 
   const html = renderPage("AI Copilot Workspace", `
     <h2>AI Revenue Copilot</h2>
     <p class="muted">Interactive revenue intelligence workspace.</p>
 
-    <div style="display:flex;gap:16px;flex-wrap:wrap;">
-
-      <div style="flex:1;min-width:280px;max-width:280px;">
-        <div class="card">
-          <h3>Workspaces</h3>
-          ${workspaces.map(w => `
-            <div style="margin-bottom:8px;">
-              <a href="/ai-copilot?workspace=${safeStr(w.workspace_id)}">
-                ${safeStr(w.title || "Untitled Brief")}
-              </a>
-            </div>
-          `).join("") || '<div class="muted">No workspaces yet.</div>'}
-        </div>
-      </div>
-
-      <div style="flex:3;min-width:400px;">
-
-        ${workspace ? `
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <h3>${safeStr(workspace.title || "Executive Brief")}</h3>
-            <div style="display:flex;gap:8px;">
-              <a class="btn secondary small" href="/ai-copilot">← New Brief</a>
-            </div>
-          </div>
-
-          <div style="margin-top:16px;">
-            ${messagesHtml}
-          </div>
-
-          <div class="card" style="margin-top:16px;">
-            <form method="POST" action="/ai-copilot/followup">
-              <input type="hidden" name="workspace_id" value="${safeStr(workspace.workspace_id)}"/>
-              <label>Ask a follow-up</label>
-              <textarea name="prompt" required style="width:100%;min-height:90px;"></textarea>
-              <div style="margin-top:10px;">
-                <button class="btn">Ask Copilot</button>
-              </div>
-            </form>
-          </div>
-        ` : `
-          <div class="card">
-            <h3>Generate Executive Revenue Brief</h3>
-            <form method="POST" action="/ai-copilot/new">
-              <label>Enter your prompt</label>
-              <textarea name="prompt" required style="width:100%;min-height:120px;"></textarea>
-              <div style="margin-top:12px;">
-                <button class="btn">Generate Brief</button>
-              </div>
-            </form>
-          </div>
-        `}
-
-      </div>
-    </div>
-  `, navUser(), {showChat:true, orgName: org.org_name});
-
-  return send(res, 200, html);
-}
-
 if (method === "POST" && pathname === "/ai-copilot/new") {
-
   const body = await parseBody(req);
   const params = new URLSearchParams(body);
   const prompt = String(params.get("prompt") || "").trim();
   if (!prompt) return redirect(res, "/ai-copilot");
 
+  const limit = getCopilotLimit(org.org_id);
+  const usage = getUsage(org.org_id);
+  const used = Number(usage.copilot_questions_used || 0);
+  const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
+  if (!isUnlimited && used >= limit) return redirect(res, "/account?tab=billing");
+  usage.copilot_questions_used = used + 1;
+  saveUsage(usage);
+
   const workspace_id = uuid();
 
-  // 🔥 Replace this with real AI call
-  const aiResponse = "Executive Summary:\n\n(Generated response placeholder based on your data.)";
+  const result = buildCopilotResponse({
+    org_id: org.org_id,
+    rangePreset: "last30",
+    responseFormat: "executive",
+    question: prompt
+  });
+
+  const briefs = readJSON(FILES.copilot_briefs, []);
+  const brief_id = "BRF-" + Date.now();
+  briefs.push({ brief_id, org_id: org.org_id, created: nowISO(), result });
+  writeJSON(FILES.copilot_briefs, briefs);
 
   const workspace = {
     workspace_id,
     org_id: org.org_id,
-    title: prompt.slice(0,60),
+    title: prompt.slice(0, 60),
     messages: [
       { role: "user", content: prompt },
-      { role: "assistant", content: aiResponse }
+      { role: "assistant", content: "Executive brief generated below." }
     ],
+    latest_brief: { brief_id, result },
     created_at: nowISO(),
     updated_at: nowISO()
   };
-
   saveCopilotWorkspace(workspace);
 
-  return redirect(res, `/ai-copilot?workspace=${workspace_id}`);
+  return redirect(res, `/ai-copilot?workspace=${encodeURIComponent(workspace_id)}`);
 }
 
 if (method === "POST" && pathname === "/ai-copilot/followup") {
-
   const body = await parseBody(req);
   const params = new URLSearchParams(body);
   const workspace_id = String(params.get("workspace_id") || "").trim();
   const prompt = String(params.get("prompt") || "").trim();
 
+  if (!workspace_id || !prompt) return redirect(res, "/ai-copilot");
+
   const workspace = getCopilotWorkspace(org.org_id, workspace_id);
-  if (!workspace || !prompt) return redirect(res, "/ai-copilot");
+  if (!workspace) return redirect(res, "/ai-copilot");
 
-  // 🔥 Replace with real AI context call
-  const aiResponse = "Follow-up response based on prior context.";
+  const limit = getCopilotLimit(org.org_id);
+  const usage = getUsage(org.org_id);
+  const used = Number(usage.copilot_questions_used || 0);
+  const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
+  if (!isUnlimited && used >= limit) return redirect(res, "/account?tab=billing");
+  usage.copilot_questions_used = used + 1;
+  saveUsage(usage);
 
+  workspace.messages = Array.isArray(workspace.messages) ? workspace.messages : [];
   workspace.messages.push({ role: "user", content: prompt });
-  workspace.messages.push({ role: "assistant", content: aiResponse });
-  workspace.updated_at = nowISO();
 
+  const result = buildCopilotResponse({
+    org_id: org.org_id,
+    rangePreset: "last30",
+    responseFormat: "executive",
+    question: prompt
+  });
+
+  const briefs = readJSON(FILES.copilot_briefs, []);
+  const brief_id = "BRF-" + Date.now();
+  briefs.push({ brief_id, org_id: org.org_id, created: nowISO(), result });
+  writeJSON(FILES.copilot_briefs, briefs);
+
+  workspace.latest_brief = { brief_id, result };
+  workspace.messages.push({ role: "assistant", content: "Executive brief generated below." });
+
+  workspace.updated_at = nowISO();
   saveCopilotWorkspace(workspace);
 
-  return redirect(res, `/ai-copilot?workspace=${workspace_id}`);
+  return redirect(res, `/ai-copilot?workspace=${encodeURIComponent(workspace_id)}`);
 }
 
 if (method === "GET" && pathname === "/copilot/export") {
