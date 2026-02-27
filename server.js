@@ -560,7 +560,37 @@ function renderPage(title, content, navHtml="", opts={}) {
       </div>
 
       <div class="muted small" style="margin-bottom:8px;">
-        Ask questions about your denials, payments, trends, and what pages do.
+        Ask questions about your denials, payments, and revenue trends.
+      </div>
+
+      <div style="margin-top:6px;">
+        <span style="
+          font-size:11px;
+          font-weight:700;
+          padding:4px 8px;
+          border-radius:999px;
+          background:${
+            floatCopilotUsage.limitReached
+              ? '#fee2e2'
+              : (!floatCopilotUsage.isUnlimited &&
+                 floatCopilotUsage.limit > 0 &&
+                 floatCopilotUsage.used / floatCopilotUsage.limit >= 0.8)
+                  ? '#fef3c7'
+                  : '#e5e7eb'
+          };
+          color:${
+            floatCopilotUsage.limitReached
+              ? '#991b1b'
+              : (!floatCopilotUsage.isUnlimited &&
+                 floatCopilotUsage.limit > 0 &&
+                 floatCopilotUsage.used / floatCopilotUsage.limit >= 0.8)
+                  ? '#92400e'
+                  : '#374151'
+          };
+        ">
+          AI Usage: ${floatCopilotUsage.used} /
+          ${floatCopilotUsage.isUnlimited ? "Unlimited" : floatCopilotUsage.limit}
+        </span>
       </div>
 
       ${floatCopilotUsage.limitReached ? `<div style="margin-bottom:8px;"><span class="badge bad">Limit Reached</span></div>` : ``}
@@ -569,7 +599,7 @@ function renderPage(title, content, navHtml="", opts={}) {
     <div id="aiChatBody">
       <div id="aiChatMsgs">
         <div class="empty-state">
-          Start by asking a question above. Your full executive brief will be saved in the AI Copilot tab.
+          Ask a question below to generate an executive brief. Your full analysis will be saved in the AI Copilot tab.
         </div>
       </div>
 
