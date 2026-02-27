@@ -1545,10 +1545,20 @@ function saveCopilotWorkspace(workspace){
 
 function getCopilotUsageSnapshot(org_id) {
   const usage = getUsage(org_id);
-  const used = Number(usage.ai_copilot_queries_used ?? usage.copilot_questions_used ?? 0);
-  const limit = Number(usage.ai_copilot_query_limit ?? getCopilotLimit(org_id) ?? 0);
+  const used = Number(
+    usage.ai_copilot_queries_used ??
+    usage.copilot_questions_used ??
+    0
+  );
+
+  let rawLimit = Number(usage.ai_copilot_query_limit);
+  if (!Number.isFinite(rawLimit) || rawLimit <= 0) {
+    rawLimit = Number(getCopilotLimit(org_id) || 0);
+  }
+
+  const limit = rawLimit;
   const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
-  const limitReached = !isUnlimited && used >= limit;
+  const limitReached = !isUnlimited && limit > 0 && used >= limit;
   return { usage, used, limit, isUnlimited, limitReached };
 }
 
@@ -8590,8 +8600,8 @@ if (method === "GET" && pathname === "/ai-copilot") {
     </div>
 
     <div style="margin-top:16px;">
-      <h3>AI Copilot Usage</h3>
-      <div class="kpi-strip" style="margin-top:12px;">
+      <h3 style="text-align:center;margin-bottom:14px;">AI Copilot Usage</h3>
+      <div class="kpi-strip" style="margin-top:12px;justify-items:center;">
         <div class="kpi-card">
           <p class="kpi-value">${formatNumberUI(copilotUsage.used)} / ${copilotUsage.isUnlimited ? "Unlimited" : formatNumberUI(copilotUsage.limit)}</p>
           <p class="kpi-label">AI Copilot Queries Used</p>
