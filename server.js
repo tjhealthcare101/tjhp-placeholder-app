@@ -556,7 +556,7 @@ function renderPage(title, content, navHtml="", opts={}) {
         <div class="small" style="color:#1e3a8a;line-height:1.35;">
           For executive briefs, charts, and deeper analysis, use the full AI Copilot workspace.
         </div>
-        <a class="btn secondary small" href="/ai-copilot">Open AI Copilot</a>
+        <a class="btn secondary small" href="/ai-copilot?from=chat">Open AI Copilot</a>
       </div>
 
       <div class="muted small" style="margin-bottom:8px;">
@@ -564,29 +564,19 @@ function renderPage(title, content, navHtml="", opts={}) {
       </div>
 
       <div style="margin-top:6px;">
-        <span style="
+        <span id="aiChatUsageBadge" style="
           font-size:11px;
           font-weight:700;
           padding:4px 8px;
           border-radius:999px;
           background:${
-            floatCopilotUsage.limitReached
-              ? '#fee2e2'
-              : (!floatCopilotUsage.isUnlimited &&
-                 floatCopilotUsage.limit > 0 &&
-                 floatCopilotUsage.used / floatCopilotUsage.limit >= 0.8)
-                  ? '#fef3c7'
-                  : '#e5e7eb'
+            (!floatCopilotUsage.isUnlimited &&
+             floatCopilotUsage.limit > 0 &&
+             floatCopilotUsage.used / floatCopilotUsage.limit >= 0.8)
+              ? '#fef3c7'
+              : '#e5e7eb'
           };
-          color:${
-            floatCopilotUsage.limitReached
-              ? '#991b1b'
-              : (!floatCopilotUsage.isUnlimited &&
-                 floatCopilotUsage.limit > 0 &&
-                 floatCopilotUsage.used / floatCopilotUsage.limit >= 0.8)
-                  ? '#92400e'
-                  : '#374151'
-          };
+          color:#374151;
         ">
           AI Usage: ${floatCopilotUsage.used} /
           ${floatCopilotUsage.isUnlimited ? "Unlimited" : floatCopilotUsage.limit}
@@ -596,7 +586,6 @@ function renderPage(title, content, navHtml="", opts={}) {
       ${
         floatCopilotUsage.limitReached
           ? `<div style="margin-bottom:8px;">
-              <span class="badge bad">Limit Reached</span>
               <div style="font-size:11px;margin-top:4px;color:#6b7280;">
                 ${getCopilotLimitMessage(CURRENT_SESSION_ORG_ID)?.message || ""}
               </div>
@@ -617,7 +606,7 @@ function renderPage(title, content, navHtml="", opts={}) {
 
         <div id="aiChatSavedNotice" class="small">
           Full report saved to AI Copilot workspace.
-          <a href="/ai-copilot" style="font-weight:800;margin-left:6px;">→ View Full Analysis</a>
+          <a href="/ai-copilot?from=chat" style="font-weight:800;margin-left:6px;">→ View Full Analysis</a>
         </div>
 
         <div class="btnRow">
@@ -735,6 +724,19 @@ window.__tjhpSendChat = async function(){
     });
     const data = await r.json();
     addMsg("AI", (data && data.answer) ? data.answer : "No response.");
+
+    // ===== Real-time usage update =====
+    if (data && typeof data.used === "number") {
+      const usageBadge = document.getElementById("aiChatUsageBadge");
+      if (usageBadge) {
+        const limitText = data.limit !== undefined
+          ? (data.limit >= 999999 ? "Unlimited" : data.limit)
+          : usageBadge.textContent.split("/")[1].trim();
+
+        usageBadge.textContent =
+          "AI Usage: " + data.used + " / " + limitText;
+      }
+    }
     if (data && data.limitReached) {
       sendBtn.disabled = true;
       sendBtn.textContent = "Limit Reached";
@@ -6533,11 +6535,16 @@ if (method === "POST" && pathname === "/ai/chat") {
       ? bullets.slice(0, 2).join(" ")
       : "Executive brief generated and saved to AI Copilot workspace.";
 
+    const updatedSnap = getCopilotUsageSnapshot(org.org_id);
+
     return send(res, 200, JSON.stringify({
       answer: summary,
       savedToWorkspace: true,
       workspace_id: workspace.workspace_id,
       saved_at: workspace.updated_at,
+      used: updatedSnap.used,
+      limit: updatedSnap.limit,
+      limitReached: updatedSnap.limitReached
     }), "application/json");
   }
 
@@ -8842,20 +8849,23 @@ if (method === "GET" && pathname === "/ai-copilot") {
     <script>
       (function(){
         const thread = document.getElementById("wsThread");
-        const composer = document.getElementById("copilotComposer");
-
         if (!thread) return;
 
-        // If page loaded with new result (workspace selected)
         const url = new URL(window.location.href);
-        const isNewResult = url.searchParams.has("workspace");
+        const fromChat = url.searchParams.get("from") === "chat";
 
-        if (isNewResult) {
-          // Scroll to top of thread so user sees beginning of brief
+        if (fromChat) {
           thread.scrollTop = 0;
-        } else {
-          // Otherwise keep default behavior
-          thread.scrollTop = thread.scrollHeight;
+
+          // Remove param so refresh behaves normally
+          url.searchParams.delete("from");
+          const newUrl =
+            url.pathname +
+            (url.searchParams.toString()
+              ? "?" + url.searchParams.toString()
+              : "");
+
+          window.history.replaceState({}, "", newUrl);
         }
 
         const layout = document.getElementById("wsLayout");
