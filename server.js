@@ -1505,7 +1505,7 @@ function getCopilotWorkspaces(org_id){
 
 function getCopilotWorkspace(org_id, workspace_id){
   return readJSON(FILES.copilot_workspaces, [])
-    .find(w => w.org_id === org_id && w.workspace_id === workspace_id);
+    .find(w => w.org_id === org_id && w.workspace_id === workspace_id) || null;
 }
 
 function saveCopilotWorkspace(workspace){
@@ -8426,7 +8426,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
         </div>
       `).join("")}
 
-      ${brief ? renderCopilotBriefMessage(brief.result, brief.brief_id) : (workspace ? `<div class="ws-msg ws-ai"><div class="ws-who">Copilot</div><div class="ws-card muted">Ask a question to generate an executive brief.</div></div>` : ``)}
+      ${brief ? renderCopilotBriefMessage(brief.result, brief.brief_id) : (workspace ? `<div class="ws-msg ws-ai"><div class="ws-who">Copilot</div><div class="ws-card muted">Pick a prompt tile or ask a question below.</div></div>` : ``)}
     </div>
   `;
 
