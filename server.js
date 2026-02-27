@@ -443,6 +443,83 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   user-select: none;
 }
 
+/* ===== Floating AI Copilot Layout ===== */
+.ai-chat-box {
+  position:absolute;
+  bottom:58px;
+  right:0;
+  display:none;
+  width:380px;
+  max-width:92vw;
+  height:560px;
+  background:#fff;
+  border:1px solid #e5e7eb;
+  border-radius:16px;
+  padding:14px;
+  box-shadow:0 18px 40px rgba(17,24,39,.18);
+
+  flex-direction:column;
+  overflow:hidden;
+}
+
+.ai-chat-box.open {
+  display:flex;
+}
+
+#aiChatHeader {
+  flex:0 0 auto;
+}
+
+#aiChatBody {
+  flex:1 1 auto;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+}
+
+#aiChatMsgs {
+  flex:1 1 auto;
+  min-height:0;
+  overflow:auto;
+  background:#f3f4f6;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  padding:12px;
+}
+
+#aiChatDock {
+  flex:0 0 auto;
+  margin-top:10px;
+  padding-top:10px;
+  border-top:1px solid #e5e7eb;
+  background:#fff;
+}
+
+#aiChatInput {
+  padding:12px;
+  border-radius:12px;
+  border:1px solid #e5e7eb;
+  width:100%;
+}
+
+#aiChatMsgs .empty-state {
+  color:#6b7280;
+  font-size:12px;
+  background:rgba(255,255,255,.7);
+  border:1px dashed #d1d5db;
+  border-radius:12px;
+  padding:10px 12px;
+}
+
+#aiChatSavedNotice {
+  display:none;
+  margin-top:8px;
+  padding:8px 10px;
+  border-radius:10px;
+  background:#f8fafc;
+  border:1px solid #e2e8f0;
+}
+
 /* Mobile spacing fix for auth screens */
 @media (max-width: 640px) {
   .card { padding: 16px !important; }
@@ -472,56 +549,7 @@ function renderPage(title, content, navHtml="", opts={}) {
   const chatHtml = showChat ? `
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
   <button class="btn" type="button" onclick="window.__tjhpToggleChat(event)">AI Assistant</button>
-  <div id="aiChatBox" style="
-  display:none;
-  flex-direction:column;
-  width:380px;
-  max-width:92vw;
-  height:560px;
-  background:#fff;
-  border:1px solid #e5e7eb;
-  border-radius:16px;
-  padding:14px;
-  margin-top:8px;
-  box-shadow:0 18px 40px rgba(17,24,39,.18);
-">
-    <style>
-      /* Floating Copilot UI polish */
-      #aiChatBox { overflow: hidden; }
-      #aiChatHeader { flex: 0 0 auto; }
-      #aiChatBody { flex: 1 1 auto; min-height: 0; display:flex; flex-direction:column; }
-      #aiChatMsgs {
-        flex: 1 1 auto;
-        min-height: 0;
-        overflow: auto;
-        background: #f3f4f6;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 12px;
-      }
-      #aiChatDock {
-        flex: 0 0 auto;
-        margin-top: 10px;
-        padding-top: 10px;
-        border-top: 1px solid #e5e7eb;
-        background: #fff;
-      }
-      #aiChatInput {
-        padding: 12px;
-        border-radius: 12px;
-        border: 1px solid #e5e7eb;
-        width: 100%;
-      }
-      #aiChatMsgs .empty-state {
-        color: #6b7280;
-        font-size: 12px;
-        line-height: 1.4;
-        background: rgba(255,255,255,.7);
-        border: 1px dashed #d1d5db;
-        border-radius: 12px;
-        padding: 10px 12px;
-      }
-    </style>
+  <div id="aiChatBox" class="ai-chat-box">
 
     <div id="aiChatHeader">
       <div style="margin-bottom:10px;padding:10px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:space-between;gap:10px;">
@@ -548,12 +576,12 @@ function renderPage(title, content, navHtml="", opts={}) {
       <div id="aiChatDock">
         <input id="aiChatInput" placeholder="Ask about your data..." />
 
-        <div id="aiChatSavedNotice" class="small" style="display:none;margin-top:8px;padding:8px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;">
+        <div id="aiChatSavedNotice" class="small">
           Full report saved to AI Copilot workspace.
           <a href="/ai-copilot" style="font-weight:800;margin-left:6px;">→ View Full Analysis</a>
         </div>
 
-        <div class="btnRow" style="margin-top:10px;">
+        <div class="btnRow">
           <button id="aiChatSendBtn" class="btn secondary" type="button"
             onclick="window.__tjhpSendChat(event)"
             ${floatCopilotUsage.limitReached ? "disabled" : ""}>
@@ -582,7 +610,7 @@ window.__tjhpChatState = window.__tjhpChatState || { open: false, justOpenedAt: 
 window.__tjhpOpenChat = function(){
   const box = document.getElementById("aiChatBox");
   if (!box) return;
-  box.style.display = "flex";
+  box.classList.add("open");
   window.__tjhpChatState.open = true;
   window.__tjhpChatState.justOpenedAt = Date.now();
 };
@@ -590,7 +618,7 @@ window.__tjhpOpenChat = function(){
 window.__tjhpCloseChat = function(){
   const box = document.getElementById("aiChatBox");
   if (!box) return;
-  box.style.display = "none";
+  box.classList.remove("open");
   window.__tjhpChatState.open = false;
 };
 
