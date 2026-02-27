@@ -503,15 +503,20 @@ function renderPage(title, content, navHtml="", opts={}) {
     <div id="aiChatMsgs" style="
   flex:1;
   overflow:auto;
-  border:1px solid #e5e7eb;
-  border-radius:12px;
   padding:12px;
-  background:#fafafa;
+  background:#f3f4f6;
+  border-radius:12px;
   margin-bottom:10px;
 "></div>
 
     <!-- Bottom Input Section (fixed height) -->
-    <div style="display:flex;flex-direction:column;gap:8px;">
+    <div style="
+  border-top:1px solid #e5e7eb;
+  padding-top:10px;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+">
       <input id="aiChatInput"
         placeholder="Ask about your data..."
         style="
