@@ -465,18 +465,28 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 function renderPage(title, content, navHtml="", opts={}) {
   const orgName = (opts && opts.orgName) ? safeStr(opts.orgName) : "";
   const showChat = !!(opts && opts.showChat);
+  const floatCopilotUsage = CURRENT_SESSION_ORG_ID ? getCopilotUsageSnapshot(CURRENT_SESSION_ORG_ID) : { limitReached:false };
   const prefRaw = String((opts && opts.userTheme) || CURRENT_USER_THEME || "light");
   const themePref = (prefRaw === "light" || prefRaw === "dark" || prefRaw === "system") ? prefRaw : "light";
   const startTheme = (themePref === "dark") ? "dark" : "light";
   const chatHtml = showChat ? `
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
   <button class="btn" type="button" onclick="window.__tjhpToggleChat()">AI Assistant</button>
-  <div id="aiChatBox" style="display:none;width:320px;height:420px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;margin-top:8px;box-shadow:0 12px 30px rgba(17,24,39,.10);">
+  <div id="aiChatBox" style="display:none;width:340px;height:500px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px;margin-top:8px;box-shadow:0 12px 30px rgba(17,24,39,.10);">
+    <div style="margin-bottom:8px;padding:8px 10px;border-radius:10px;background:#eff6ff;border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+      <div class="small" style="color:#1e3a8a;line-height:1.35;">For executive briefs, charts, and deeper analysis, use the full AI Copilot workspace.</div>
+      <a class="btn secondary small" href="/ai-copilot">Open AI Copilot</a>
+    </div>
     <div class="muted small" style="margin-bottom:6px;">Ask questions about your denials, payments, trends, and what pages do.</div>
+    ${floatCopilotUsage.limitReached ? `<div style="margin-bottom:6px;"><span class="badge bad">Limit Reached</span></div>` : ``}
     <div id="aiChatMsgs" style="height:300px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px;"></div>
     <input id="aiChatInput" placeholder="Ask about your data..." style="margin-top:8px;" />
+    <div id="aiChatSavedNotice" class="small" style="display:none;margin-top:8px;padding:8px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;">
+      Full report saved to AI Copilot workspace.
+      <a href="/ai-copilot" style="font-weight:800;margin-left:6px;">→ View Full Analysis</a>
+    </div>
     <div class="btnRow" style="margin-top:8px;">
-      <button class="btn secondary" type="button" onclick="window.__tjhpSendChat()">Send</button>
+      <button id="aiChatSendBtn" class="btn secondary" type="button" onclick="window.__tjhpSendChat()" ${floatCopilotUsage.limitReached ? "disabled" : ""}>${floatCopilotUsage.limitReached ? "Limit Reached" : "Send"}</button>
       <button class="btn secondary" type="button" onclick="window.__tjhpToggleChat()">Close</button>
     </div>
   </div>
@@ -498,9 +508,11 @@ window.__tjhpToggleChat = function(){
 window.__tjhpSendChat = async function(){
   const input = document.getElementById("aiChatInput");
   const msgs = document.getElementById("aiChatMsgs");
-  if (!input || !msgs) return;
+  const sendBtn = document.getElementById("aiChatSendBtn");
+  const savedNotice = document.getElementById("aiChatSavedNotice");
+  if (!input || !msgs || !sendBtn) return;
   const text = (input.value || "").trim();
-  if (!text) return;
+  if (!text || sendBtn.disabled) return;
 
   const esc = (s)=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
   const addMsg = (who, t) => {
@@ -513,8 +525,10 @@ window.__tjhpSendChat = async function(){
 
   addMsg("You", text);
   input.value = "";
+  if (savedNotice) savedNotice.style.display = "none";
 
   try{
+    sendBtn.disabled = true;
     const r = await fetch("/ai/chat", {
       method:"POST",
       headers:{ "Content-Type":"application/json" },
@@ -522,8 +536,18 @@ window.__tjhpSendChat = async function(){
     });
     const data = await r.json();
     addMsg("AI", (data && data.answer) ? data.answer : "No response.");
+    if (data && data.limitReached) {
+      sendBtn.disabled = true;
+      sendBtn.textContent = "Limit Reached";
+      return;
+    }
+    sendBtn.disabled = false;
+    sendBtn.textContent = "Send";
+    if (data && data.savedToWorkspace && savedNotice) savedNotice.style.display = "block";
   }catch(e){
     addMsg("AI", "Error contacting assistant. Try again.");
+    sendBtn.disabled = false;
+    sendBtn.textContent = "Send";
   }
 };
 </script>` : "";
@@ -690,10 +714,8 @@ function getAIStatusLabel(){
   const aiDisabled = AI_CIRCUIT.disabledUntil > Date.now();
   let usageLimited = false;
   if (CURRENT_SESSION_ORG_ID) {
-    const usage = getUsage(CURRENT_SESSION_ORG_ID);
-    const limit = Number(getCopilotLimit(CURRENT_SESSION_ORG_ID) || 0);
-    const used = Number(usage.copilot_questions_used || 0);
-    usageLimited = Number.isFinite(limit) && limit > 0 && used >= limit;
+    const snap = getCopilotUsageSnapshot(CURRENT_SESSION_ORG_ID);
+    usageLimited = snap.limitReached;
   }
   if (aiDisabled || usageLimited) {
     return `<span class="badge err">AI Limited</span>`;
@@ -1415,7 +1437,9 @@ function getUsage(org_id) {
       monthly_agent_workspace_edits: 0,
       ai_job_timestamps: [],
       ai_chat_used: 0,
-      copilot_questions_used: 0
+      copilot_questions_used: 0,
+      ai_copilot_queries_used: 0,
+      ai_copilot_query_limit: 0
     };
     usage.push(u);
     writeJSON(FILES.usage, usage);
@@ -1430,11 +1454,16 @@ function getUsage(org_id) {
     u.monthly_agent_workspace_edits = 0;
     u.ai_chat_used = 0;
     u.copilot_questions_used = 0;
+    u.ai_copilot_queries_used = 0;
+    u.ai_copilot_query_limit = 0;
     writeJSON(FILES.usage, usage);
   }
   if (typeof u.monthly_ai_generations_used !== "number") u.monthly_ai_generations_used = 0;
   if (typeof u.monthly_agent_workspace_edits !== "number") u.monthly_agent_workspace_edits = 0;
   if (typeof u.copilot_questions_used !== "number") u.copilot_questions_used = 0;
+  if (typeof u.ai_copilot_queries_used !== "number") u.ai_copilot_queries_used = Number(u.copilot_questions_used || 0);
+  if (typeof u.ai_copilot_query_limit !== "number") u.ai_copilot_query_limit = Number(getCopilotLimit(org_id) || 0);
+  if (u.copilot_questions_used !== u.ai_copilot_queries_used) u.copilot_questions_used = u.ai_copilot_queries_used;
   return u;
 }
 function saveUsage(u) {
@@ -1512,6 +1541,64 @@ function saveCopilotWorkspace(workspace){
   const all = readJSON(FILES.copilot_workspaces, []);
   const keep = all.filter(w => w.workspace_id !== workspace.workspace_id);
   writeJSON(FILES.copilot_workspaces, keep.concat([workspace]));
+}
+
+function getCopilotUsageSnapshot(org_id) {
+  const usage = getUsage(org_id);
+  const used = Number(usage.ai_copilot_queries_used ?? usage.copilot_questions_used ?? 0);
+  const limit = Number(usage.ai_copilot_query_limit ?? getCopilotLimit(org_id) ?? 0);
+  const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
+  const limitReached = !isUnlimited && used >= limit;
+  return { usage, used, limit, isUnlimited, limitReached };
+}
+
+function consumeCopilotQuery(org_id) {
+  const { usage, used, limit, isUnlimited, limitReached } = getCopilotUsageSnapshot(org_id);
+  if (limitReached) {
+    return {
+      ok: false,
+      used,
+      limit,
+      message: "You have reached your AI Copilot limit for this billing cycle. Upgrade your plan to continue.",
+    };
+  }
+
+  const nextUsed = used + 1;
+  usage.copilot_questions_used = nextUsed;
+  usage.ai_copilot_queries_used = nextUsed;
+  usage.ai_copilot_query_limit = Number.isFinite(limit) ? limit : 0;
+  saveUsage(usage);
+  return { ok: true, used: nextUsed, limit, isUnlimited };
+}
+
+function createCopilotWorkspaceFromPrompt(org_id, prompt) {
+  const workspace_id = uuid();
+  const result = buildCopilotResponse({
+    org_id,
+    rangePreset: "last30",
+    responseFormat: "executive",
+    question: prompt,
+  });
+
+  const briefs = readJSON(FILES.copilot_briefs, []);
+  const brief_id = "BRF-" + Date.now();
+  briefs.push({ brief_id, org_id, created: nowISO(), result });
+  writeJSON(FILES.copilot_briefs, briefs);
+
+  const workspace = {
+    workspace_id,
+    org_id,
+    title: prompt.slice(0, 60),
+    messages: [
+      { role: "user", content: prompt, created_at: nowISO() },
+      { role: "assistant", content: "Executive brief generated below.", created_at: nowISO() }
+    ],
+    latest_brief: { brief_id, result },
+    created_at: nowISO(),
+    updated_at: nowISO(),
+  };
+  saveCopilotWorkspace(workspace);
+  return workspace;
 }
 
 function ensureSubscriptionForOrg(org_id) {
@@ -6183,17 +6270,6 @@ if (method === "GET" && pathname === "/file") {
 }
 
 if (method === "POST" && pathname === "/ai/chat") {
-    const usage = getUsage(org.org_id);
-    const limit = getAIChatLimit(org.org_id);
-
-    if ((usage.ai_chat_used || 0) >= limit) {
-      return send(res, 200, JSON.stringify({ answer: "You have reached your AI question limit for your current plan. Please upgrade to continue." }), "application/json");
-    }
-
-    // Count usage (pilot total; monthly resets via month_key rollover)
-    usage.ai_chat_used = (usage.ai_chat_used || 0) + 1;
-    saveUsage(usage);
-
     const body = await parseBody(req);
     let msg = "";
     try {
@@ -6202,42 +6278,28 @@ if (method === "POST" && pathname === "/ai/chat") {
       msg = "";
     }
 
-    const analytics = computeAnalytics(org.org_id);
-    const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id).slice(-20);
-    const paymentsAll = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id).slice(-50);
-
-    const context = {
-      organization: org.org_name,
-      plan: getActivePlanName(org.org_id),
-      analytics,
-      recent_cases: casesAll,
-      recent_payments: paymentsAll
-    };
-
-    // If OPENAI_API_KEY not set, return helpful fallback
-    if (!process.env.OPENAI_API_KEY) {
-      return send(res, 200, JSON.stringify({
-        answer: "AI Assistant is not configured (missing OPENAI_API_KEY). I can only answer once the key is set. Your current recovery rate is " + analytics.recoveryRate + "% with total recovered $" + Number(analytics.totalRecoveredFromDenials||0).toFixed(2) + "."
-      }), "application/json");
+    if (!msg) {
+      return send(res, 200, JSON.stringify({ answer: "Please enter a question to continue." }), "application/json");
     }
 
-    const systemMsg = "You are TJ Healthcare Pro's internal AI assistant. Only answer using the organization's uploaded denial and payment data and computed analytics provided. If asked about unrelated topics, explain you can only answer questions about their uploaded data and what the app does. Do not provide medical advice. Be concise and actionable.";
-    const userMsg = "ORG DATA (JSON):\n" + JSON.stringify(context, null, 2) + "\n\nUSER QUESTION:\n" + msg;
-
-    const aiResult = await requestOpenAIChatCompletion({
-      messages: [
-        { role: "system", content: systemMsg },
-        { role: "user", content: userMsg },
-      ],
-      temperature: 0.2,
-    });
-
-    if (aiResult.aiError || aiResult.aiDisabled) {
-      return send(res, 200, JSON.stringify({ answer: aiResult.message }), "application/json");
+    const consume = consumeCopilotQuery(org.org_id);
+    if (!consume.ok) {
+      return send(res, 200, JSON.stringify({ answer: consume.message, limitReached: true }), "application/json");
     }
 
-    const answer = aiResult?.choices?.[0]?.message?.content || "I couldn't generate an answer right now.";
-    return send(res, 200, JSON.stringify({ answer }), "application/json");
+    const workspace = createCopilotWorkspaceFromPrompt(org.org_id, msg);
+    const brief = workspace.latest_brief?.result || {};
+    const bullets = Array.isArray(brief.bullets) ? brief.bullets : [];
+    const summary = bullets.length
+      ? bullets.slice(0, 2).join(" ")
+      : "Executive brief generated and saved to AI Copilot workspace.";
+
+    return send(res, 200, JSON.stringify({
+      answer: summary,
+      savedToWorkspace: true,
+      workspace_id: workspace.workspace_id,
+      saved_at: workspace.updated_at,
+    }), "application/json");
   }
 
 
@@ -6609,15 +6671,16 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
     const caseCreditsUsed = Number(usage.monthly_case_credits_used || 0);
     const caseCreditsLimit = Number(limits.case_credits_per_month || 0);
-    const copilotQueriesUsed = Number(usage.copilot_questions_used || 0);
-    const copilotQueriesLimit = Number(getCopilotLimit(org.org_id) || 0);
+    const copilotUsage = getCopilotUsageSnapshot(org.org_id);
+    const copilotQueriesUsed = Number(copilotUsage.used || 0);
+    const copilotQueriesLimit = Number(copilotUsage.limit || 0);
     const paymentRowsUsed = Number(usage.monthly_payment_rows_used || 0);
 
     function buildLimitBadge(used, limit){
       const u = Number(used || 0);
       const l = Number(limit || 0);
       if (!Number.isFinite(l) || l <= 0) return "";
-      if (u >= l) return `<span class="badge bad">Limit Reached – Upgrade Required</span>`;
+      if (u >= l) return `<span class="badge bad">Limit Reached</span>`;
       if (u >= Math.ceil(l * 0.8)) return `<span class="badge warn">Approaching Limit</span>`;
       return "";
     }
@@ -8155,6 +8218,7 @@ function renderRevenueAIConsole({ org, parsed }){
       </div>
     </div>
 
+
     <script>
       window.__tjhpLastRI = { prompt:"", style:"exec", charts:[], answer:"", data:null };
       window.__tjhpFillPrompt = function(p){
@@ -8407,6 +8471,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
   let workspace = workspace_id ? getCopilotWorkspace(org.org_id, workspace_id) : null;
   const allWorkspaces = getCopilotWorkspaces(org.org_id);
+  const copilotUsage = getCopilotUsageSnapshot(org.org_id);
 
   if (!workspace && allWorkspaces.length && !parsed.query.new) {
     workspace = allWorkspaces[0];
@@ -8457,6 +8522,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
       .ws-side a{display:block;padding:8px 10px;border-radius:10px;text-decoration:none;font-weight:800;color:var(--text);}
       .ws-side a:hover{background:rgba(17,24,39,.05);}
       .ws-side a.active{background:rgba(99,102,241,.10);}
+      .kpi-strip{display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:16px;margin-top:20px;}
+      .kpi-strip .kpi-card{border-radius:12px;padding:14px 16px;background:var(--card);border:1px solid var(--border);margin:0;}
+      .kpi-strip .kpi-value{margin:0;font-size:28px;font-weight:800;line-height:1.1;}
+      .kpi-strip .kpi-label{margin:6px 0 0;font-size:12px;color:var(--muted);font-weight:600;}
       @media(max-width:900px){.ws-layout{grid-template-columns:1fr;} .ws-side{height:auto;} .ws-main{height:auto;} .ws-layout.ws-collapsed{grid-template-columns:1fr;}}
     </style>
 
@@ -8490,6 +8559,8 @@ if (method === "GET" && pathname === "/ai-copilot") {
           <div>
             <div class="ws-title">AI Copilot</div>
             <div class="muted" style="font-size:12px;">Chat-style revenue intelligence. Prompts + executive brief stay in the thread.</div>
+            ${(!copilotUsage.isUnlimited && copilotUsage.limitReached) ? `<div style="margin-top:6px;"><span class="badge bad">Limit Reached</span></div>` : ``}
+            ${parsed.query.limit ? `<div class="muted" style="margin-top:6px;color:#b91c1c;">You have reached your AI Copilot limit for this billing cycle. Upgrade your plan to continue.</div>` : ``}
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button type="button" class="btn secondary small" id="wsExpandBtn" style="display:none;">☰ Workspaces</button>
@@ -8509,11 +8580,22 @@ if (method === "GET" && pathname === "/ai-copilot") {
             <label style="margin-top:0;">Ask Copilot</label>
             <textarea id="copilotComposer" name="prompt" required placeholder="Ask for an executive brief, risk drivers, payer analysis, denial trends, underpayment recovery..."></textarea>
             <div class="btnRow" style="margin-top:10px;">
-              <button class="btn" type="submit">Send</button>
+              <button class="btn" type="submit" ${copilotUsage.limitReached ? "disabled" : ""}>${copilotUsage.limitReached ? "Limit Reached" : "Send"}</button>
               <a class="btn secondary" href="/ai-copilot?new=1">New Brief</a>
               <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence AI</a>
             </div>
           </form>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;">
+      <h3>AI Copilot Usage</h3>
+      <div class="kpi-strip" style="margin-top:12px;">
+        <div class="kpi-card">
+          <p class="kpi-value">${formatNumberUI(copilotUsage.used)} / ${copilotUsage.isUnlimited ? "Unlimited" : formatNumberUI(copilotUsage.limit)}</p>
+          <p class="kpi-label">AI Copilot Queries Used</p>
+          ${(!copilotUsage.isUnlimited && copilotUsage.limitReached) ? `<span class="badge bad">Limit Reached</span>` : ``}
         </div>
       </div>
     </div>
@@ -8557,43 +8639,13 @@ if (method === "POST" && pathname === "/ai-copilot/new") {
   const prompt = String(params.get("prompt") || "").trim();
   if (!prompt) return redirect(res, "/ai-copilot");
 
-  const limit = getCopilotLimit(org.org_id);
-  const usage = getUsage(org.org_id);
-  const used = Number(usage.copilot_questions_used || 0);
-  const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
-  if (!isUnlimited && used >= limit) return redirect(res, "/account?tab=billing");
-  usage.copilot_questions_used = used + 1;
-  saveUsage(usage);
+  const consume = consumeCopilotQuery(org.org_id);
+  if (!consume.ok) {
+    return redirect(res, "/ai-copilot?limit=1");
+  }
 
-  const workspace_id = uuid();
-
-  const result = buildCopilotResponse({
-    org_id: org.org_id,
-    rangePreset: "last30",
-    responseFormat: "executive",
-    question: prompt
-  });
-
-  const briefs = readJSON(FILES.copilot_briefs, []);
-  const brief_id = "BRF-" + Date.now();
-  briefs.push({ brief_id, org_id: org.org_id, created: nowISO(), result });
-  writeJSON(FILES.copilot_briefs, briefs);
-
-  const workspace = {
-    workspace_id,
-    org_id: org.org_id,
-    title: prompt.slice(0, 60),
-    messages: [
-      { role: "user", content: prompt },
-      { role: "assistant", content: "Executive brief generated below." }
-    ],
-    latest_brief: { brief_id, result },
-    created_at: nowISO(),
-    updated_at: nowISO()
-  };
-  saveCopilotWorkspace(workspace);
-
-  return redirect(res, `/ai-copilot?workspace=${encodeURIComponent(workspace_id)}`);
+  const workspace = createCopilotWorkspaceFromPrompt(org.org_id, prompt);
+  return redirect(res, `/ai-copilot?workspace=${encodeURIComponent(workspace.workspace_id)}`);
 }
 
 if (method === "POST" && pathname === "/ai-copilot/followup") {
@@ -8607,16 +8659,13 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
   const workspace = getCopilotWorkspace(org.org_id, workspace_id);
   if (!workspace) return redirect(res, "/ai-copilot");
 
-  const limit = getCopilotLimit(org.org_id);
-  const usage = getUsage(org.org_id);
-  const used = Number(usage.copilot_questions_used || 0);
-  const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
-  if (!isUnlimited && used >= limit) return redirect(res, "/account?tab=billing");
-  usage.copilot_questions_used = used + 1;
-  saveUsage(usage);
+  const consume = consumeCopilotQuery(org.org_id);
+  if (!consume.ok) {
+    return redirect(res, `/ai-copilot?workspace=${encodeURIComponent(workspace_id)}&limit=1`);
+  }
 
   workspace.messages = Array.isArray(workspace.messages) ? workspace.messages : [];
-  workspace.messages.push({ role: "user", content: prompt });
+  workspace.messages.push({ role: "user", content: prompt, created_at: nowISO() });
 
   const result = buildCopilotResponse({
     org_id: org.org_id,
@@ -8631,7 +8680,7 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
   writeJSON(FILES.copilot_briefs, briefs);
 
   workspace.latest_brief = { brief_id, result };
-  workspace.messages.push({ role: "assistant", content: "Executive brief generated below." });
+  workspace.messages.push({ role: "assistant", content: "Executive brief generated below.", created_at: nowISO() });
 
   workspace.updated_at = nowISO();
   saveCopilotWorkspace(workspace);
@@ -15219,8 +15268,9 @@ function renderTemplateEditor(org, user){
           return p?.ends_at ? new Date(p.ends_at).toLocaleDateString() : "—";
         })();
 
-        const copilotUsed = Number(usage.copilot_questions_used || 0);
-        const copilotLimit = Number(getCopilotLimit(org.org_id) || 0);
+        const copilotUsage = getCopilotUsageSnapshot(org.org_id);
+        const copilotUsed = Number(copilotUsage.used || 0);
+        const copilotLimit = Number(copilotUsage.limit || 0);
 
         const caseUsed = Number(usage.monthly_case_credits_used || 0);
         const caseLimit = Number(limits.case_credits_per_month || 0);
@@ -15238,7 +15288,7 @@ function renderTemplateEditor(org, user){
             <tr><th>Overage Cases</th><td>${safeStr(String(caseOver))}</td></tr>
 
             <tr><th>AI Copilot Queries Used</th><td>${safeStr(String(copilotUsed))}</td></tr>
-            <tr><th>AI Copilot Queries Limit</th><td>${safeStr(String(copilotLimit))}</td></tr>
+            <tr><th>AI Copilot Queries Limit</th><td>${copilotUsage.isUnlimited ? "Unlimited" : safeStr(String(copilotLimit))}</td></tr>
           </table>
 
           <div class="btnRow">
