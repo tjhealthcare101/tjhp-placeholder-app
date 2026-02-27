@@ -593,7 +593,16 @@ function renderPage(title, content, navHtml="", opts={}) {
         </span>
       </div>
 
-      ${floatCopilotUsage.limitReached ? `<div style="margin-bottom:8px;"><span class="badge bad">Limit Reached</span></div>` : ``}
+      ${
+        floatCopilotUsage.limitReached
+          ? `<div style="margin-bottom:8px;">
+              <span class="badge bad">Limit Reached</span>
+              <div style="font-size:11px;margin-top:4px;color:#6b7280;">
+                ${getCopilotLimitMessage(CURRENT_SESSION_ORG_ID)?.message || ""}
+              </div>
+            </div>`
+          : ""
+      }
     </div>
 
     <div id="aiChatBody">
@@ -614,7 +623,8 @@ function renderPage(title, content, navHtml="", opts={}) {
         <div class="btnRow">
           <button id="aiChatSendBtn" class="btn secondary" type="button"
             onclick="window.__tjhpSendChat(event)"
-            ${floatCopilotUsage.limitReached ? "disabled" : ""}>
+            ${floatCopilotUsage.limitReached ? "disabled" : ""}
+            title="${floatCopilotUsage.limitReached ? (getCopilotLimitMessage(CURRENT_SESSION_ORG_ID)?.message || "") : ""}">
             ${floatCopilotUsage.limitReached ? "Limit Reached" : "Send"}
           </button>
 
@@ -1751,14 +1761,44 @@ function getCopilotUsageSnapshot(org_id) {
   return { usage, used, limit, isUnlimited, limitReached };
 }
 
+function getCopilotLimitMessage(org_id) {
+  const snap = getCopilotUsageSnapshot(org_id);
+  if (!snap.limitReached) return null;
+
+  const sub = getSub(org_id);
+  const pilot = getPilot(org_id) || ensurePilot(org_id);
+
+  // Free trial case
+  if (!sub || !sub.plan || (pilot && pilot.status === "active")) {
+    return {
+      type: "trial",
+      message: "Free trial limit reached. Upgrade your plan to continue using AI Copilot."
+    };
+  }
+
+  // Paid plan case (monthly reset)
+  const now = new Date();
+  const nextMonth = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth() + 1,
+    1
+  ));
+
+  return {
+    type: "subscription",
+    message: `Limit reached. Your AI Copilot usage resets on ${nextMonth.toLocaleDateString()}. Upgrade for higher limits.`
+  };
+}
+
 function consumeCopilotQuery(org_id) {
   const { usage, used, limit, isUnlimited, limitReached } = getCopilotUsageSnapshot(org_id);
   if (limitReached) {
+    const limitInfo = getCopilotLimitMessage(org_id);
     return {
       ok: false,
       used,
       limit,
-      message: "You have reached your AI Copilot limit for this billing cycle. Upgrade your plan to continue.",
+      message: limitInfo?.message || "You have reached your AI Copilot limit for this billing cycle. Upgrade your plan to continue.",
     };
   }
 
@@ -8759,7 +8799,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
             <div class="ws-title">AI Copilot</div>
             <div class="muted" style="font-size:12px;">Chat-style revenue intelligence. Prompts + executive brief stay in the thread.</div>
             ${(!copilotUsage.isUnlimited && copilotUsage.limitReached) ? `<div style="margin-top:6px;"><span class="badge bad">Limit Reached</span></div>` : ``}
-            ${parsed.query.limit ? `<div class="muted" style="margin-top:6px;color:#b91c1c;">You have reached your AI Copilot limit for this billing cycle. Upgrade your plan to continue.</div>` : ``}
+            ${parsed.query.limit ? `<div class="muted" style="margin-top:6px;color:#b91c1c;">${getCopilotLimitMessage(org.org_id)?.message || ""}</div>` : ``}
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button type="button" class="btn secondary small" id="wsExpandBtn" style="display:none;">☰ Workspaces</button>
@@ -8779,7 +8819,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
             <label style="margin-top:0;">Ask Copilot</label>
             <textarea id="copilotComposer" name="prompt" required placeholder="Ask for an executive brief, risk drivers, payer analysis, denial trends, underpayment recovery..."></textarea>
             <div class="btnRow" style="margin-top:10px;">
-              <button class="btn" type="submit" ${copilotUsage.limitReached ? "disabled" : ""}>${copilotUsage.limitReached ? "Limit Reached" : "Send"}</button>
+              <button class="btn" type="submit" ${copilotUsage.limitReached ? "disabled" : ""} title="${copilotUsage.limitReached ? (getCopilotLimitMessage(org.org_id)?.message || "") : ""}">${copilotUsage.limitReached ? "Limit Reached" : "Send"}</button>
               <a class="btn secondary" href="/ai-copilot?new=1">New Brief</a>
               <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence AI</a>
             </div>
