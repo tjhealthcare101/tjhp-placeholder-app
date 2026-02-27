@@ -8554,7 +8554,10 @@ if (method === "POST" && pathname === "/ai-copilot/new") {
     workspace_id,
     org_id: org.org_id,
     title: prompt.slice(0, 60),
-    messages: [{ role: "user", content: prompt }],
+    messages: [
+      { role: "user", content: prompt },
+      { role: "assistant", content: "Executive brief generated below." }
+    ],
     latest_brief: { brief_id, result },
     created_at: nowISO(),
     updated_at: nowISO()
