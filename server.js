@@ -90,6 +90,7 @@ const FILES = {
   agent_messages: path.join(DATA_DIR, "agent_messages.json"),
   org_settings: path.join(DATA_DIR, "org_settings.json"),
   copilot_briefs: path.join(DATA_DIR, "copilot_briefs.json"),
+  copilot_workspaces: path.join(DATA_DIR, "copilot_workspaces.json"),
   reimbursement_uploads: path.join(DATA_DIR, "reimbursement_uploads.json"),
   pending_reimbursement_uploads: path.join(DATA_DIR, "pending_reimbursement_uploads.json"),
   template_settings: path.join(DATA_DIR, "template_settings.json"),
@@ -325,6 +326,7 @@ ensureFile(FILES.agent_workspaces, []);
 ensureFile(FILES.agent_messages, []);
 ensureFile(FILES.org_settings, []);
 ensureFile(FILES.copilot_briefs, []);
+ensureFile(FILES.copilot_workspaces, []);
 ensureFile(FILES.reimbursement_uploads, []);
 ensureFile(FILES.pending_reimbursement_uploads, []);
 ensureFile(FILES.template_settings, []);
@@ -1047,7 +1049,7 @@ function navUser() {
     <a href="/claims">Claims Lifecycle</a>
     <a href="/data-management">Data Management</a>
     <a href="/revenue-intelligence">Revenue Intelligence AI</a>
-    <a href="/copilot">AI Copilot</a>
+    <a href="/ai-copilot">AI Copilot</a>
     <a href="/actions">Action Center</a>
     <a href="/report">Reports</a>
     <a href="/account">Account</a>
@@ -1349,6 +1351,23 @@ function getCopilotLimit(org_id) {
   const pilot = getPilot(org_id) || ensurePilot(org_id);
   if (pilot && pilot.status === "active") return 10;
   return 0;
+}
+
+function getCopilotWorkspaces(org_id){
+  return readJSON(FILES.copilot_workspaces, [])
+    .filter(w => w.org_id === org_id)
+    .sort((a,b)=> new Date(b.updated_at||0)-new Date(a.updated_at||0));
+}
+
+function getCopilotWorkspace(org_id, workspace_id){
+  return readJSON(FILES.copilot_workspaces, [])
+    .find(w => w.org_id === org_id && w.workspace_id === workspace_id);
+}
+
+function saveCopilotWorkspace(workspace){
+  const all = readJSON(FILES.copilot_workspaces, []);
+  const keep = all.filter(w => w.workspace_id !== workspace.workspace_id);
+  writeJSON(FILES.copilot_workspaces, keep.concat([workspace]));
 }
 
 function ensureSubscriptionForOrg(org_id) {
@@ -8236,322 +8255,139 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 }
 
 
-// ==============================
-// AI COPILOT PAGE
-// ==============================
-if (method === "GET" && pathname === "/copilot") {
-  const usage = getUsage(org.org_id);
-  const used = Number(usage.copilot_questions_used || 0);
-  const limit = getCopilotLimit(org.org_id);
-  const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
+// ===============================
+// AI COPILOT WORKSPACE
+// ===============================
+if (method === "GET" && pathname === "/ai-copilot") {
 
-  const executiveTiles = `
-<style>
-  .tile-grid {
-    display:grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap:16px;
-  }
-  .tile {
-    background:var(--card);
-    border:1px solid var(--border);
-    border-radius:12px;
-    padding:18px;
-    cursor:pointer;
-    transition:all 0.15s ease;
-  }
-  .tile:hover {
-    box-shadow: var(--shadow);
-  }
-  .tile-title {
-    font-weight:700;
-    margin-bottom:6px;
-  }
-  .tile-sub {
-    font-size:13px;
-    color:var(--muted);
-  }
-  @media (max-width:900px){
-    .tile-grid { grid-template-columns:1fr; }
-  }
-</style>
+  const workspace_id = String(parsed.query.workspace || "").trim();
+  let workspace = workspace_id
+    ? getCopilotWorkspace(org.org_id, workspace_id)
+    : null;
 
-<div class="tile-grid">
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Executive revenue snapshot';">
-    <div class="tile-title">Executive Revenue Snapshot</div>
-    <div class="tile-sub">High-level performance overview</div>
-  </div>
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Revenue risk drivers';">
-    <div class="tile-title">Revenue Risk Drivers</div>
-    <div class="tile-sub">What is increasing exposure</div>
-  </div>
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Payer exposure analysis';">
-    <div class="tile-title">Payer Exposure Overview</div>
-    <div class="tile-sub">Risk concentration by payer</div>
-  </div>
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Denial performance review';">
-    <div class="tile-title">Denial Performance</div>
-    <div class="tile-sub">Denial trends and appeal health</div>
-  </div>
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Underpayment recovery';">
-    <div class="tile-title">Underpayment Recovery</div>
-    <div class="tile-sub">Negotiation effectiveness</div>
-  </div>
-  <div class="tile" onclick="document.getElementById('copilotQuery').value='Operational health summary';">
-    <div class="tile-title">Operational Health</div>
-    <div class="tile-sub">Discipline and recovery posture</div>
-  </div>
-</div>
-`;
+  const workspaces = getCopilotWorkspaces(org.org_id);
 
-  const html = renderPage("AI Copilot", `
-    <style>
-      .copilot-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
-      .copilot-usage{font-size:12px;color:var(--muted);}
-      .copilot-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;}
-      .copilot-panel{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);}
-      .chart-container{position:relative;height:320px;max-height:320px;width:100%;}
-      @media (max-width: 900px){ .copilot-grid{grid-template-columns:1fr;} }
-    </style>
+  const conversation = workspace?.messages || [];
 
-    <div class="copilot-header">
-      <h2>AI Copilot</h2>
-      <div class="copilot-usage">
-        Usage: <strong>${used}</strong> / ${isUnlimited ? "Unlimited" : limit}
-      </div>
+  const messagesHtml = conversation.map(m => `
+    <div style="margin-bottom:16px;">
+      <div style="font-weight:800;">${safeStr(m.role === "user" ? "You" : "Copilot")}</div>
+      <div class="card" style="margin-top:6px;">${safeStr(m.content)}</div>
     </div>
+  `).join("");
 
-    <div class="copilot-grid">
-      <div class="copilot-panel">
-        <div style="font-weight:800;margin-bottom:6px;">Prompt Library</div>
-        ${executiveTiles}
+  const html = renderPage("AI Copilot Workspace", `
+    <h2>AI Revenue Copilot</h2>
+    <p class="muted">Interactive revenue intelligence workspace.</p>
+
+    <div style="display:flex;gap:16px;flex-wrap:wrap;">
+
+      <div style="flex:1;min-width:280px;max-width:280px;">
+        <div class="card">
+          <h3>Workspaces</h3>
+          ${workspaces.map(w => `
+            <div style="margin-bottom:8px;">
+              <a href="/ai-copilot?workspace=${safeStr(w.workspace_id)}">
+                ${safeStr(w.title || "Untitled Brief")}
+              </a>
+            </div>
+          `).join("") || '<div class="muted">No workspaces yet.</div>'}
+        </div>
       </div>
 
-      <div class="copilot-panel">
-        <div style="font-weight:800;margin-bottom:6px;">Ask Copilot</div>
-        <form method="POST" action="/copilot/query" id="copilotForm">
-          <input type="hidden" name="preset" value="last30">
-          <textarea id="copilotQuery" name="query" style="min-height:100px;" placeholder="Ask for an executive summary, risk drivers, or payer analysis..."></textarea>
-          <label>Response Format</label>
-          <select name="format">
-            <option value="executive">Executive Summary</option>
-            <option value="operational">Operational Brief</option>
-            <option value="deep">Deep Analysis</option>
-            <option value="bullets">Bullet Insights</option>
-          </select>
-          <div class="btnRow" style="margin-top:8px;">
-            <button class="btn">Run Copilot</button>
+      <div style="flex:3;min-width:400px;">
+
+        ${workspace ? `
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <h3>${safeStr(workspace.title || "Executive Brief")}</h3>
+            <div style="display:flex;gap:8px;">
+              <a class="btn secondary small" href="/ai-copilot">← New Brief</a>
+            </div>
           </div>
-        </form>
+
+          <div style="margin-top:16px;">
+            ${messagesHtml}
+          </div>
+
+          <div class="card" style="margin-top:16px;">
+            <form method="POST" action="/ai-copilot/followup">
+              <input type="hidden" name="workspace_id" value="${safeStr(workspace.workspace_id)}"/>
+              <label>Ask a follow-up</label>
+              <textarea name="prompt" required style="width:100%;min-height:90px;"></textarea>
+              <div style="margin-top:10px;">
+                <button class="btn">Ask Copilot</button>
+              </div>
+            </form>
+          </div>
+        ` : `
+          <div class="card">
+            <h3>Generate Executive Revenue Brief</h3>
+            <form method="POST" action="/ai-copilot/new">
+              <label>Enter your prompt</label>
+              <textarea name="prompt" required style="width:100%;min-height:120px;"></textarea>
+              <div style="margin-top:12px;">
+                <button class="btn">Generate Brief</button>
+              </div>
+            </form>
+          </div>
+        `}
+
       </div>
     </div>
-
-    <div id="copilotResponse" class="copilot-panel" style="margin-top:14px;">
-      <div class="muted">Run a prompt to generate insights.</div>
-    </div>
-  `, navUser(), {showChat:false, orgName: org.org_name});
+  `, navUser(), {showChat:true, orgName: org.org_name});
 
   return send(res, 200, html);
 }
 
-if (method === "POST" && pathname === "/copilot/query") {
-  const UPGRADE_LINK = "/account?tab=billing";
-  let body = "";
-  req.on("data", c => body += c);
-  req.on("end", async () => {
-    const limit = getCopilotLimit(org.org_id);
-    const usage = getUsage(org.org_id);
-    const used = Number(usage.copilot_questions_used || 0);
-    const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
+if (method === "POST" && pathname === "/ai-copilot/new") {
 
-    if (!isUnlimited && used >= limit) {
-      const html = renderPage("AI Copilot", `
-        <h2>Copilot Limit Reached</h2>
-        <p>You have reached your monthly Copilot question limit.</p>
-        <div style="margin-top:12px;"><a class="btn" href="${UPGRADE_LINK}">Upgrade Plan</a></div>
-      `, navUser(), {showChat:false, orgName: org.org_name});
-      return send(res, 200, html);
-    }
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const prompt = String(params.get("prompt") || "").trim();
+  if (!prompt) return redirect(res, "/ai-copilot");
 
-    const params = new URLSearchParams(body);
-    const question = String(params.get("question") || params.get("query") || "").trim();
-    const responseFormat = String(params.get("format") || "executive");
-    const rangePreset = String(params.get("preset") || "last30");
-    if (!question) {
-      return redirect(res, "/copilot");
-    }
+  const workspace_id = uuid();
 
-    usage.copilot_questions_used = used + 1;
-    saveUsage(usage);
+  // 🔥 Replace this with real AI call
+  const aiResponse = "Executive Summary:\n\n(Generated response placeholder based on your data.)";
 
-    const result = buildCopilotResponse({
-      org_id: org.org_id,
-      rangePreset,
-      responseFormat,
-      question
-    });
+  const workspace = {
+    workspace_id,
+    org_id: org.org_id,
+    title: prompt.slice(0,60),
+    messages: [
+      { role: "user", content: prompt },
+      { role: "assistant", content: aiResponse }
+    ],
+    created_at: nowISO(),
+    updated_at: nowISO()
+  };
 
-    const briefs = readJSON(FILES.copilot_briefs, []);
-    const brief_id = "BRF-" + Date.now();
-    briefs.push({
-      brief_id,
-      org_id: org.org_id,
-      created: nowISO(),
-      result
-    });
-    writeJSON(FILES.copilot_briefs, briefs);
+  saveCopilotWorkspace(workspace);
 
-    const chartCards = (result.charts || []).map((chart, i) => `
-      <div class="copilot-panel" style="margin-top:14px;">
-        <h3>${safeStr(chart.title || `Chart ${i + 1}`)}</h3>
-        <div class="chart-container">
-          <canvas id="chart${i}" width="900"></canvas>
-        </div>
-      </div>
-    `).join("");
+  return redirect(res, `/ai-copilot?workspace=${workspace_id}`);
+}
 
-    const chartScripts = (result.charts || []).map((chart, i) => {
-      const labels = JSON.stringify(Array.isArray(chart.labels) ? chart.labels : []);
-      const datasets = JSON.stringify(Array.isArray(chart.datasets) ? chart.datasets : []);
-      const type = String(chart.type || "bar").replace(/[^a-z]/gi, "") || "bar";
-      return `
-        (function(){
-          const c = document.getElementById('chart${i}');
-          if (!c || typeof Chart === 'undefined') return;
-          new Chart(c, {
-            type: '${type}',
-            data: { labels: ${labels}, datasets: ${datasets} },
-            options: { responsive: true, maintainAspectRatio: false }
-          });
-        })();
-      `;
-    }).join("\n");
+if (method === "POST" && pathname === "/ai-copilot/followup") {
 
-    const disciplineDrivers = Array.isArray(result.disciplineDrivers) ? result.disciplineDrivers : [];
-    const executiveActions = Array.isArray(result.executiveActions) ? result.executiveActions : [];
-    const topPayers = Array.isArray(result.topPayers) ? result.topPayers : [];
-    const disciplineBreakdown = Array.isArray(result.disciplineBreakdown) ? result.disciplineBreakdown : [];
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+  const workspace_id = String(params.get("workspace_id") || "").trim();
+  const prompt = String(params.get("prompt") || "").trim();
 
-    const responseHTML = `
-      <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-      <style>
-        .exec-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);margin-top:14px;}
-        .exec-card h3{margin:0 0 8px;}
-        .chart-container{position:relative;height:320px;max-height:320px;width:100%;}
-      </style>
+  const workspace = getCopilotWorkspace(org.org_id, workspace_id);
+  if (!workspace || !prompt) return redirect(res, "/ai-copilot");
 
-      <div class="copilot-panel" style="padding:18px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
-          <div>
-            <div class="muted" style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;">Executive Copilot Brief</div>
-            <h2 style="margin:6px 0 4px;">Financial Performance Snapshot</h2>
-            <div class="muted">AI-generated executive summary with KPI highlights and recovery focus areas.</div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <a class="btn secondary" href="/copilot/export?brief_id=${encodeURIComponent(brief_id)}">Export PDF</a>
-          </div>
-        </div>
+  // 🔥 Replace with real AI context call
+  const aiResponse = "Follow-up response based on prior context.";
 
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:14px;">
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">Total Billed</div>
-            <div style="font-weight:700;font-size:1.1rem;">$${Number(result.metrics?.totals?.billed || 0).toLocaleString()}</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">Total Collected</div>
-            <div style="font-weight:700;font-size:1.1rem;">$${Number(result.metrics?.totals?.collected || 0).toLocaleString()}</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">Revenue at Risk</div>
-            <div style="font-weight:700;font-size:1.1rem;">$${Number(result.metrics?.totals?.atRisk || 0).toLocaleString()}</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">Recovery Rate</div>
-            <div style="font-weight:700;font-size:1.1rem;">${Number(result.metrics?.rates?.recoveryRate || 0).toLocaleString()}%</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">Denial Rate</div>
-            <div style="font-weight:700;font-size:1.1rem;">${Number(result.metrics?.rates?.denialRate || 0).toLocaleString()}%</div>
-          </div>
-          <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);">
-            <div class="muted small">AI Case Readiness</div>
-            <div style="font-weight:700;font-size:1.1rem;">${Number(result.metrics?.disciplineScore || 0).toLocaleString()}/100</div>
-          </div>
-        </div>
-      </div>
+  workspace.messages.push({ role: "user", content: prompt });
+  workspace.messages.push({ role: "assistant", content: aiResponse });
+  workspace.updated_at = nowISO();
 
-      <div class="copilot-panel" style="margin-top:14px;">
-        <h3 style="margin:0 0 8px;">Executive Summary</h3>
-        <ul style="margin:0;padding-left:18px;display:grid;gap:6px;">
-          ${(result.bullets || []).map(b => `<li>${safeStr(b)}</li>`).join("")}
-        </ul>
-      </div>
+  saveCopilotWorkspace(workspace);
 
-      <div class="exec-card">
-        <h3>AI Case Readiness Drivers</h3>
-        ${
-          (disciplineDrivers && disciplineDrivers.length > 0)
-            ? `<ul>${disciplineDrivers.map(d => `<li>${safeStr(d)}</li>`).join("")}</ul>`
-            : `<div class="muted">No threshold breaches detected.</div>`
-        }
-      </div>
-
-      <div class="exec-card">
-        <h3>Recommended Executive Actions</h3>
-        ${
-          (executiveActions && executiveActions.length > 0)
-            ? `<ul>${executiveActions.map(a => `<li>${safeStr(a)}</li>`).join("")}</ul>`
-            : `<div class="muted">No immediate corrective actions required.</div>`
-        }
-      </div>
-
-      <div class="exec-card">
-        <h3>Top Risk Payers</h3>
-        ${
-          (topPayers && topPayers.length > 0)
-            ? `<ul>${topPayers.map(p => `<li>${safeStr(p.payer)} — $${Math.round(p.risk).toLocaleString()} at risk</li>`).join("")}</ul>`
-            : `<div class="muted">No payer risk data available.</div>`
-        }
-      </div>
-
-      <div class="exec-card">
-        <h3>Operational Score Breakdown</h3>
-        <div class="chart-container">
-          <canvas id="disciplineChart"></canvas>
-        </div>
-      </div>
-
-      ${chartCards}
-
-      <div class="copilot-panel" style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
-        <a class="btn" href="/actions?tab=denials">Denials</a>
-        <a class="btn" href="/actions?tab=underpayments">Underpayments</a>
-        <a class="btn" href="/revenue-intelligence?tab=payers">Payer Intelligence</a>
-      </div>
-
-      <script>
-        (function(){
-          if (typeof Chart === 'undefined') return;
-          new Chart(document.getElementById('disciplineChart'), {
-            type: 'bar',
-            data: {
-              labels: ${JSON.stringify(disciplineBreakdown.map(d=>d.label))},
-              datasets: [{
-                label: 'Score (%)',
-                data: ${JSON.stringify(disciplineBreakdown.map(d=>d.value))}
-              }]
-            },
-            options: { responsive:true, maintainAspectRatio:false }
-          });
-        })();
-        ${chartScripts}
-      </script>
-    `;
-
-    const html = renderPage("AI Copilot Result", responseHTML, navUser(), {showChat:false, orgName: org.org_name});
-    return send(res, 200, html);
-  });
-  return;
+  return redirect(res, `/ai-copilot?workspace=${workspace_id}`);
 }
 
 if (method === "GET" && pathname === "/copilot/export") {
@@ -8563,7 +8399,7 @@ if (method === "GET" && pathname === "/copilot/export") {
     const html = renderPage("Executive Briefing", `
       <h2>Executive Briefing</h2>
       <div class="alert warning">Brief not found.</div>
-      <a class="btn" href="/copilot">Back to Copilot</a>
+      <a class="btn" href="/ai-copilot">Back to Copilot</a>
     `, navUser(), {showChat:false, orgName: org.org_name});
     return send(res, 200, html);
   }
