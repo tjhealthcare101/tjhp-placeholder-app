@@ -8433,9 +8433,9 @@ if (method === "GET" && pathname === "/ai-copilot") {
   const html = renderPage("AI Copilot", `
     <style>
       .ws-layout{display:grid;grid-template-columns:260px 1fr;gap:14px;align-items:stretch;}
-      .ws-layout.ws-collapsed{grid-template-columns:0 1fr;}
+      .ws-layout.ws-collapsed{display:block;}
       .ws-layout.ws-collapsed .ws-side{display:none;}
-      .ws-layout.ws-collapsed .ws-main{width:100%;}
+      .ws-layout.ws-collapsed .ws-main{width:100%;margin:0;}
       .ws-side{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:12px;box-shadow:var(--shadow);height:calc(100vh - 170px);overflow:auto;}
       .ws-main{border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:var(--shadow);min-height:600px;display:flex;flex-direction:column;}
       .ws-topbar{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;}
