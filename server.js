@@ -5378,7 +5378,7 @@ function renderPayerRankingTable(ranks, opts={}){
   const tipRisk = "Estimated dollars not yet recovered (underpaid + patient follow-up remaining).";
 
   return `
-    <div class="executive-panel">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;">
         <h3 style="margin-bottom:12px;">Payer Ranking (A–F) <span class="tooltip" data-tip="${tipGrade}">ⓘ</span></h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -5390,20 +5390,20 @@ function renderPayerRankingTable(ranks, opts={}){
         Top payers are ranked by payer score (0–100) and assigned a grade. Use this to prioritize contracting + follow-up strategy.
       </div>
 
-      <div style="overflow:auto;">
-        <table>
+      <div class="eb-table-wrap">
+        <table class="eb-table">
           <thead>
             <tr>
               <th>Payer</th>
-              <th>Grade <span class="tooltip" data-tip="${tipGrade}">ⓘ</span></th>
-              <th>Score</th>
-              <th>Claims</th>
-              <th>Denial % <span class="tooltip" data-tip="${tipDenial}">ⓘ</span></th>
-              <th>Appeal Recovery % <span class="tooltip" data-tip="${tipRecovery}">ⓘ</span></th>
-              <th>Avg Days to Pay <span class="tooltip" data-tip="${tipDays}">ⓘ</span></th>
-              <th>Collected</th>
-              <th>At Risk <span class="tooltip" data-tip="${tipRisk}">ⓘ</span></th>
-              <th>AI</th>
+              <th class="center">Grade <span class="tooltip" data-tip="${tipGrade}">ⓘ</span></th>
+              <th class="num">Score</th>
+              <th class="num">Claims</th>
+              <th class="num">Denial % <span class="tooltip" data-tip="${tipDenial}">ⓘ</span></th>
+              <th class="num">Appeal Recovery % <span class="tooltip" data-tip="${tipRecovery}">ⓘ</span></th>
+              <th class="num">Avg Days to Pay <span class="tooltip" data-tip="${tipDays}">ⓘ</span></th>
+              <th class="num">Collected</th>
+              <th class="num">At Risk <span class="tooltip" data-tip="${tipRisk}">ⓘ</span></th>
+              <th class="center">AI</th>
             </tr>
           </thead>
           <tbody>
@@ -5416,15 +5416,15 @@ function renderPayerRankingTable(ranks, opts={}){
                         ${safeStr(r.payer)}
                       </a>
                     </td>
-                    <td><span class="badge ${gradeBadgeClass(r.grade)}">${safeStr(r.grade)}</span></td>
-                    <td>${formatNumberUI(r.score)}</td>
-                    <td>${formatNumberUI(r.totalClaims)}</td>
-                    <td>${formatPct(r.denialRate)}</td>
-                    <td>${formatPct(r.recoveryRate)}</td>
-                    <td>${formatNumberUI(Math.round(r.avgDaysToPay||0))}</td>
-                    <td>${formatMoneyUI(r.totalCollected||0)}</td>
-                    <td>${formatMoneyUI(r.totalAtRisk||0)}</td>
-                    <td>
+                    <td class="center"><span class="badge ${gradeBadgeClass(r.grade)}">${safeStr(r.grade)}</span></td>
+                    <td class="num">${formatNumberUI(r.score)}</td>
+                    <td class="num">${formatNumberUI(r.totalClaims)}</td>
+                    <td class="num">${formatPct(r.denialRate)}</td>
+                    <td class="num">${formatPct(r.recoveryRate)}</td>
+                    <td class="num">${formatNumberUI(Math.round(r.avgDaysToPay||0))}</td>
+                    <td class="num">${formatMoneyUI(r.totalCollected||0)}</td>
+                    <td class="num">${formatMoneyUI(r.totalAtRisk||0)}</td>
+                    <td class="center">
                       <a class="btn small"
                          href="/analyze-payer?payer=${encodeURIComponent(r.payer)}">
                          AI Intelligence
@@ -5432,7 +5432,7 @@ function renderPayerRankingTable(ranks, opts={}){
                     </td>
                   </tr>
                 `).join("")
-                : `<tr><td colspan="10" class="muted">No payer data found yet.</td></tr>`
+                : `<tr><td colspan="10" class="muted center">No payer data found yet.</td></tr>`
             }
           </tbody>
         </table>
@@ -8708,12 +8708,19 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       ? Math.max(0, Math.min(100, c > 0 ? (t / c) * 100 : 0))
       : Math.max(0, Math.min(100, (c / t) * 100));
     const status = (invert ? (c <= t) : (c >= t)) ? "On Track" : "Below Target";
+    const healthClass =
+      (invert ? (c <= t) : (c >= t))
+        ? "good"
+        : (invert ? (c <= t*1.2) : (c >= t*0.8))
+          ? "warn"
+          : "bad";
+
     return `
       <div class="eb-kpi">
         <div class="l">${safeStr(label)}</div>
         <div class="v">${formatNumberUI(c)}${label.includes("Days") ? "" : "%"}</div>
         <div class="h">Target: ${formatNumberUI(t)}${label.includes("Days") ? "" : "%"} · <b>${status}</b></div>
-        <div class="eb-bar"><div style="width:${pct}%"></div></div>
+        <div class="eb-bar"><div class="${healthClass}" style="width:${pct}%"></div></div>
       </div>
     `;
   }
@@ -8727,11 +8734,58 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   </div>`;
 
   const top5 = payerRanks.slice(0, 5);
-  const topPayersToReviewHtml = `<div style="margin-top:10px;overflow:auto;"><table class="eb-table"><thead><tr><th>Payer</th><th>Grade</th><th>Score</th><th>At Risk</th><th></th></tr></thead><tbody>
-    ${top5.length ? top5.map(p=>`<tr><td style="font-weight:800;">${safeStr(p.payer)}</td><td><span class="badge ${gradeBadgeClass(p.grade)}">${safeStr(p.grade)}</span></td><td>${formatNumberUI(p.score)}</td><td>${formatMoneyUI(p.totalAtRisk||0)}</td><td style="white-space:nowrap;"><a class="btn small" href="/analyze-payer?payer=${encodeURIComponent(p.payer)}">Analyze</a> <a class="btn secondary small" href="/actions?payer=${encodeURIComponent(p.payer)}">Actions</a></td></tr>`).join("") : `<tr><td colspan="5" class="muted">No payer data yet.</td></tr>`}
-  </tbody></table></div>`;
+  const topPayersToReviewHtml = `
+  <div style="margin-top:10px;">
+    <div class="eb-table-wrap">
+      <table class="eb-table">
+        <thead>
+          <tr>
+            <th>Payer</th>
+            <th class="center">Grade</th>
+            <th class="num">Score</th>
+            <th class="num">At Risk</th>
+            <th class="center">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            top5.length
+              ? top5.map(p => `
+                <tr>
+                  <td style="font-weight:800;">
+                    ${safeStr(p.payer)}
+                  </td>
+                  <td class="center">
+                    <span class="badge ${gradeBadgeClass(p.grade)}">
+                      ${safeStr(p.grade)}
+                    </span>
+                  </td>
+                  <td class="num">${formatNumberUI(p.score)}</td>
+                  <td class="num">${formatMoneyUI(p.totalAtRisk || 0)}</td>
+                  <td class="center" style="white-space:nowrap;">
+                    <a class="btn small" href="/analyze-payer?payer=${encodeURIComponent(p.payer)}">Analyze</a>
+                    <a class="btn secondary small" href="/actions?payer=${encodeURIComponent(p.payer)}">Actions</a>
+                  </td>
+                </tr>
+              `).join("")
+              : `
+                <tr>
+                  <td colspan="5" class="muted center">
+                    No payer data yet.
+                  </td>
+                </tr>
+              `
+          }
+        </tbody>
+      </table>
+    </div>
+  </div>
+`;
   const payerRankingHtml = renderPayerRankingTable(payerRanks, { limit: 10, showAllLink: true });
   const targets = getOrgSettings(org.org_id).recovery_targets || {};
+  const financialScore = Number(m.healthScore || 64);
+  const denialRate = Number(m.denialRate || 0);
+  const ar90 = Number(m.ar90Rate || 0);
   const executiveBrief = `
   <style>
     /* ===== Executive Brief 2.0 (Enterprise Layout) ===== */
@@ -8740,13 +8794,28 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     .eb-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;box-shadow:var(--shadow);}
     .eb-title{font-weight:900;font-size:18px;margin:0;}
     .eb-sub{color:var(--muted);font-size:12px;margin-top:4px;}
-    .eb-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px;}
+    .eb-kpis{
+      display:grid;
+      grid-template-columns:repeat(4,minmax(0,1fr));
+      gap:12px;
+      margin-top:14px;
+    }
     .eb-kpi{border:1px solid var(--border);border-radius:14px;padding:12px;background:rgba(17,24,39,.02);}
     .eb-kpi .l{color:var(--muted);font-size:12px;font-weight:700;}
     .eb-kpi .v{font-size:22px;font-weight:900;margin-top:4px;}
     .eb-kpi .h{color:var(--muted);font-size:11px;margin-top:6px;line-height:1.25;}
     .eb-scoreRow{display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
-    .eb-scoreRing{width:120px;height:120px;border-radius:999px;border:10px solid rgba(17,24,39,.10);display:flex;align-items:center;justify-content:center;flex-direction:column;}
+    .eb-scoreRing{
+      width:120px;
+      height:120px;
+      border-radius:999px;
+      border:10px solid rgba(17,24,39,.15);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      flex-direction:column;
+      background:linear-gradient(145deg, rgba(255,255,255,.8), rgba(17,24,39,.04));
+    }
     .eb-scoreRing .s{font-size:26px;font-weight:900;line-height:1;}
     .eb-scoreRing .g{font-size:12px;color:var(--muted);margin-top:6px;font-weight:800;}
     .eb-scoreText{flex:1;min-width:220px;}
@@ -8764,10 +8833,80 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     .eb-bar{height:10px;border-radius:999px;background:rgba(17,24,39,.08);overflow:hidden;margin-top:8px;}
     .eb-bar > div{height:100%;border-radius:999px;background:rgba(17,24,39,.55);width:0%;}
     .eb-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:11px;font-weight:900;background:#fff;color:var(--text);}
-    .eb-table{width:100%;border-collapse:collapse;font-size:12px;}
-    .eb-table th,.eb-table td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:middle;}
-    .eb-table th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;}
-    .eb-split{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+    .eb-table-wrap{
+      width:100%;
+      overflow-x:auto;
+      border:1px solid var(--border);
+      border-radius:12px;
+    }
+    .eb-table{
+      width:100%;
+      border-collapse:collapse;
+      font-size:13px;
+      min-width:760px;
+    }
+    .eb-table th{
+      text-align:left;
+      font-weight:800;
+      font-size:12px;
+      text-transform:uppercase;
+      letter-spacing:.04em;
+      padding:12px 10px;
+      background:rgba(17,24,39,.04);
+      border-bottom:1px solid var(--border);
+    }
+    .eb-table td{
+      padding:10px;
+      border-bottom:1px solid var(--border);
+    }
+    .eb-table tr:nth-child(even){
+      background:rgba(17,24,39,.02);
+    }
+    .eb-table tr:hover{
+      background:rgba(99,102,241,.06);
+    }
+    .eb-table td.num,
+    .eb-table th.num{
+      text-align:right;
+      font-variant-numeric:tabular-nums;
+    }
+    .eb-table td.center,
+    .eb-table th.center{
+      text-align:center;
+    }
+    .eb-split{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:18px;
+      align-items:start;
+    }
+
+    /* ===== Enterprise Color System ===== */
+    .eb-good { background:rgba(34,197,94,.10); border:1px solid rgba(34,197,94,.35); }
+    .eb-warn { background:rgba(245,158,11,.10); border:1px solid rgba(245,158,11,.35); }
+    .eb-bad  { background:rgba(239,68,68,.10); border:1px solid rgba(239,68,68,.35); }
+
+    .eb-good .v { color:#16a34a; }
+    .eb-warn .v { color:#b45309; }
+    .eb-bad  .v { color:#b91c1c; }
+
+    .eb-scoreRing.good { 
+      border-color:#16a34a;
+      box-shadow:0 0 0 4px rgba(34,197,94,.15);
+    }
+    .eb-scoreRing.warn { 
+      border-color:#f59e0b;
+      box-shadow:0 0 0 4px rgba(245,158,11,.15);
+    }
+    .eb-scoreRing.bad  { 
+      border-color:#ef4444;
+      box-shadow:0 0 0 4px rgba(239,68,68,.15);
+    }
+
+    .eb-bar > div.good { background:#16a34a; }
+    .eb-bar > div.warn { background:#f59e0b; }
+    .eb-bar > div.bad  { background:#ef4444; }
+
     @media(max-width:980px){.eb-hero{grid-template-columns:1fr;} .eb-kpis{grid-template-columns:1fr;} .eb-grid2{grid-template-columns:1fr;} .eb-recovery{grid-template-columns:1fr 1fr;} .eb-targets{grid-template-columns:1fr 1fr;} .eb-split{grid-template-columns:1fr;}}
   </style>
   <div class="eb-wrap">
@@ -8790,9 +8929,10 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
           </div>
         </div>
         <div class="eb-kpis">
-          <div class="eb-kpi"><div class="l">Revenue At Risk</div><div class="v">${formatMoneyUI(Number(m.kpis.revenueAtRisk || 0))}</div><div class="h">Underpaid + patient follow-up remaining.</div></div>
-          <div class="eb-kpi"><div class="l">Denial Rate</div><div class="v">${formatNumberUI(Number(m.denialRate || 0))}%</div><div class="h">Lower is better. Watch payer outliers.</div></div>
-          <div class="eb-kpi"><div class="l">AR 90+ Exposure</div><div class="v">${formatNumberUI(Number(m.ar90Rate || 0))}%</div><div class="h">Receivables at risk beyond 90 days.</div></div>
+          <div class="eb-kpi eb-bad"><div class="l">Revenue At Risk</div><div class="v">${formatMoneyUI(Number(m.kpis.revenueAtRisk || 0))}</div><div class="h">Underpaid + patient follow-up remaining.</div></div>
+          <div class="eb-kpi ${denialRate > 20 ? "eb-bad" : denialRate > 10 ? "eb-warn" : "eb-good"}"><div class="l">Denial Rate</div><div class="v">${formatNumberUI(denialRate)}%</div><div class="h">Lower is better. Watch payer outliers.</div></div>
+          <div class="eb-kpi ${ar90 > 15 ? "eb-bad" : ar90 > 5 ? "eb-warn" : "eb-good"}"><div class="l">AR 90+ Exposure</div><div class="v">${formatNumberUI(ar90)}%</div><div class="h">Receivables at risk beyond 90 days.</div></div>
+          <div class="eb-kpi eb-good"><div class="l">Collected</div><div class="v">${formatMoneyUI(Number(m.kpis.collectedTotal || 0))}</div><div class="h">Posted cash against billed revenue.</div></div>
         </div>
       </div>
       <div class="eb-card">
@@ -8844,6 +8984,30 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   </div>
   <script>
   (function(){
+    function getHealthClass(value, goodThreshold, warnThreshold, invert=false){
+      if (invert){
+        if (value <= goodThreshold) return "good";
+        if (value <= warnThreshold) return "warn";
+        return "bad";
+      } else {
+        if (value >= goodThreshold) return "good";
+        if (value >= warnThreshold) return "warn";
+        return "bad";
+      }
+    }
+
+    // ===== Score Ring Color =====
+    const scoreVal = ${financialScore};
+    const scoreRing = document.getElementById("ebScoreRing");
+
+    if (scoreRing){
+      const scoreClass =
+        scoreVal >= 80 ? "good" :
+        scoreVal >= 60 ? "warn" : "bad";
+
+      scoreRing.classList.add(scoreClass);
+    }
+
     const eb = JSON.parse(atob("${ebChartsB64}"));
     const funnel = eb.funnel || { billed:0, expected:0, paid:0, atRisk:0 };
     const fCtx = document.getElementById("ebFunnel");
