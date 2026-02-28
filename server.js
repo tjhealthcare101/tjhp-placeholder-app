@@ -5378,7 +5378,7 @@ function renderPayerRankingTable(ranks, opts={}){
   const tipRisk = "Estimated dollars not yet recovered (underpaid + patient follow-up remaining).";
 
   return `
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;">
+    <div>
       <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;">
         <h3 style="margin-bottom:12px;">Payer Ranking (A–F) <span class="tooltip" data-tip="${tipGrade}">ⓘ</span></h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -8735,8 +8735,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 
   const top5 = payerRanks.slice(0, 5);
   const topPayersToReviewHtml = `
-  <div style="margin-top:10px;">
-    <div class="eb-table-wrap">
+  <div class="eb-table-wrap">
       <table class="eb-table">
         <thead>
           <tr>
@@ -8770,7 +8769,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
               `).join("")
               : `
                 <tr>
-                  <td colspan="5" class="muted center">
+                  <td colspan="5" style="text-align:center;color:var(--muted);padding:24px 0;">
                     No payer data yet.
                   </td>
                 </tr>
@@ -8779,7 +8778,6 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         </tbody>
       </table>
     </div>
-  </div>
 `;
   const payerRankingHtml = renderPayerRankingTable(payerRanks, { limit: 10, showAllLink: true });
   const targets = getOrgSettings(org.org_id).recovery_targets || {};
@@ -8791,7 +8789,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     /* ===== Executive Brief 2.0 (Enterprise Layout) ===== */
     .eb-wrap{display:flex;flex-direction:column;gap:16px;}
     .eb-hero{display:grid;grid-template-columns:1.2fr .8fr;gap:14px;align-items:stretch;}
-    .eb-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;box-shadow:var(--shadow);}
+    .eb-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;box-shadow:var(--shadow);}
     .eb-title{font-weight:900;font-size:18px;margin:0;}
     .eb-sub{color:var(--muted);font-size:12px;margin-top:4px;}
     .eb-kpis{
@@ -8878,7 +8876,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       display:grid;
       grid-template-columns:1fr 1fr;
       gap:18px;
-      align-items:start;
+      align-items:stretch;
     }
 
     /* ===== Enterprise Color System ===== */
@@ -8962,12 +8960,16 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         <div class="eb-kpi"><div class="l">Negotiations Submitted</div><div class="v">${formatNumberUI(Number(m.negotiationSubmittedCount || 0))}</div><div class="h">Submitted negotiation workspaces.</div></div>
       </div>
     </div>
-    <div class="eb-card">
-      <div class="eb-sectionHead"><h3>Payer Intelligence</h3><div class="muted">Prioritize risk payers, then review rankings.</div></div>
-      <div class="hr"></div>
-      <div class="eb-split">
-        <div><div style="font-weight:900;margin-bottom:8px;">Top Payers to Review</div>${topPayersToReviewHtml}</div>
-        <div><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><div style="font-weight:900;">Payer Ranking (A–F)</div><a class="btn secondary small" href="/revenue-intelligence?tab=payers">View Full Payer Rankings</a></div>${payerRankingHtml}</div>
+    <div class="eb-split">
+      <div class="eb-card">
+        <div class="eb-sectionHead"><h3>Top Payers to Review</h3><div class="muted">Highest-priority payers by current risk and score.</div></div>
+        <div class="hr"></div>
+        ${topPayersToReviewHtml}
+      </div>
+      <div class="eb-card">
+        <div class="eb-sectionHead"><h3>Payer Ranking (A–F)</h3><a class="btn secondary small" href="/revenue-intelligence?tab=payers">View Full Payer Rankings</a></div>
+        <div class="hr"></div>
+        ${payerRankingHtml}
       </div>
     </div>
     <div class="eb-card">
