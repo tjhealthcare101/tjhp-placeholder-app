@@ -5715,6 +5715,19 @@ const server = http.createServer(async (req, res) => {
   // health
   if (method === "GET" && pathname === "/health") return send(res, 200, "ok", "text/plain");
 
+  // ===== AI DEBUG ROUTE =====
+  if (method === "GET" && pathname === "/ai/debug") {
+    return send(res, 200, JSON.stringify({
+      status: "ok",
+      hasKey: !!process.env.OPENAI_API_KEY,
+      keyLength: process.env.OPENAI_API_KEY
+        ? process.env.OPENAI_API_KEY.length
+        : 0,
+      nodeEnv: process.env.NODE_ENV || "not_set",
+      timestamp: new Date().toISOString()
+    }), "application/json");
+  }
+
   // auth
   const sess = getAuth(req);
   CURRENT_SESSION_ORG_ID = (sess && sess.org_id) ? String(sess.org_id) : "";
