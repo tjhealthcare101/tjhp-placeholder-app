@@ -1019,6 +1019,182 @@ function detectCopilotIntent(text){
   return { key:"general", label:"General" };
 }
 
+function normalizePayerKey(v) {
+  return String(v || "").trim().toLowerCase();
+}
+
+function getOrgPayerNames(org_id) {
+  const names = new Set();
+  const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
+
+  billed.forEach(b => {
+    const payer = String((b.payer || "").trim());
+    if (payer) names.add(payer);
+  });
+
+  payments.forEach(p => {
+    const payer = String((p.payer || "").trim());
+    if (payer) names.add(payer);
+  });
+
+  return Array.from(names);
+}
+
+function findPayerCandidates(org_id, payerQuery) {
+  const query = normalizePayerKey(payerQuery);
+  if (!query) return [];
+  return getOrgPayerNames(org_id).filter(name => normalizePayerKey(name).includes(query));
+}
+
+function detectPayerFromPrompt(prompt, org_id) {
+  const text = String(prompt || "").trim();
+  if (!text) return "";
+
+  const explicitPatterns = [
+    /how much did\s+(.+?)\s+pay/i,
+    /total paid by\s+(.+)/i,
+    /what did\s+(.+?)\s+collect/i
+  ];
+
+  for (const re of explicitPatterns) {
+    const m = text.match(re);
+    if (m && m[1]) {
+      const raw = String(m[1] || "").replace(/[?.!,]+$/g, "").trim();
+      if (!raw) continue;
+      const candidates = findPayerCandidates(org_id, raw);
+      const exact = candidates.find(c => normalizePayerKey(c) === normalizePayerKey(raw));
+      if (exact) return exact;
+      if (candidates.length === 1) return candidates[0];
+    }
+  }
+
+  const all = getOrgPayerNames(org_id).sort((a, b) => b.length - a.length);
+  const lower = text.toLowerCase();
+  return all.find(name => lower.includes(name.toLowerCase())) || "";
+}
+
+function computePayerSpecificMetrics(org_id, payerScope, rangePreset = "last30") {
+  const intel = computePayerIntelligence(org_id, payerScope, rangePreset);
+  return {
+    payerScope: payerScope,
+    topPayers: [{ payer: payerScope, risk: round2(intel.totalAtRisk || 0) }],
+    metrics: {
+      totals: {
+        billed: round2(intel.totalBilled || 0),
+        collected: round2(intel.totalCollected || 0),
+        expected: round2(intel.totalBilled || 0),
+        atRisk: round2(intel.totalAtRisk || 0)
+      },
+      rates: {
+        recoveryRate: round2(intel.recoveryRate || 0),
+        denialRate: round2(intel.denialRate || 0),
+        appealSuccessRate: round2(intel.recoveryRate || 0),
+        negotiationROI: 0
+      },
+      disciplineScore: round2(intel.score || 0)
+    },
+    forecast: {
+      currentAtRisk: round2(intel.totalAtRisk || 0),
+      slopePerDay: 0,
+      projected30: round2(intel.totalAtRisk || 0),
+      projected60: round2(intel.totalAtRisk || 0),
+      projected90: round2(intel.totalAtRisk || 0)
+    },
+    denialForecast: {
+      currentRate: round2(intel.denialRate || 0),
+      projected30: round2(intel.denialRate || 0),
+      projected60: round2(intel.denialRate || 0),
+      projected90: round2(intel.denialRate || 0),
+      velocity: "Stable"
+    }
+  };
+}
+
+function aggregatePayerPayments(org_id, payerNames, days = null) {
+  const payerKeys = new Set((Array.isArray(payerNames) ? payerNames : [payerNames]).map(normalizePayerKey));
+  const cutoff = Number.isFinite(days) && days > 0 ? (Date.now() - days * 24 * 60 * 60 * 1000) : null;
+  const payments = readJSON(FILES.payments, []).filter(p => {
+    if (p.org_id !== org_id) return false;
+    if (!payerKeys.has(normalizePayerKey(p.payer))) return false;
+    if (!cutoff) return true;
+    const when = new Date(p.date_paid || p.created_at || nowISO()).getTime();
+    return Number.isFinite(when) && when >= cutoff;
+  });
+
+  return {
+    totalPaid: round2(payments.reduce((sum, p) => sum + num(p.amount_paid), 0)),
+    totalClaims: payments.length
+  };
+}
+
+function tryHandleUIQuestion(message, currentPath = "") {
+  const text = String(message || "").toLowerCase();
+
+  if (/what does this tab do/i.test(text)) {
+    if (currentPath.includes("/revenue-intelligence")) {
+      return "The Revenue Intelligence tab provides executive summaries, payer analysis, forecasts, and performance metrics to help you identify revenue risks and optimization opportunities.";
+    }
+    if (currentPath.includes("/data-management")) {
+      return "The Data Management tab allows you to manage claims, payments, denials, reimbursement logic, and automation templates.";
+    }
+    if (currentPath.includes("/ai-copilot")) {
+      return "The AI Copilot allows you to ask questions about your revenue data and generate executive briefs.";
+    }
+    return "This tab provides revenue management functionality within TJ Healthcare Pro.";
+  }
+
+  return null;
+}
+
+function tryBuildDeterministicPayerAnswer(org_id, message) {
+  const text = String(message || "").trim();
+  const patterns = [
+    /how much did\s+(.+?)\s+pay/i,
+    /total paid by\s+(.+)/i,
+    /what did\s+(.+?)\s+collect/i
+  ];
+
+  let extracted = "";
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m && m[1]) {
+      extracted = String(m[1] || "").replace(/[?.!,]+$/g, "").trim();
+      break;
+    }
+  }
+
+  if (!extracted) return null;
+
+  const candidates = findPayerCandidates(org_id, extracted);
+  const exact = candidates.find(c => normalizePayerKey(c) === normalizePayerKey(extracted));
+  const payerScope = exact || (candidates.length === 1 ? candidates[0] : "");
+
+  if (payerScope) {
+    const intel = computePayerIntelligence(org_id, payerScope, "last30");
+    return {
+      deterministic: true,
+      answer: `${payerScope} has paid ${formatMoneyUI(intel.totalCollected || 0)} across ${Math.round(intel.totalClaims || 0)} claims.\nDenial rate: ${Math.round(intel.denialRate || 0)}%\nAt risk: ${formatMoneyUI(intel.totalAtRisk || 0)}\nAverage days to pay: ${Math.round(intel.avgDaysToPay || 0)}`,
+      payerScope,
+      totalCollected: round2(intel.totalCollected || 0),
+      totalClaims: Math.round(intel.totalClaims || 0),
+      totalAtRisk: round2(intel.totalAtRisk || 0),
+      denialRate: round2(intel.denialRate || 0)
+    };
+  }
+
+  if (candidates.length > 1) {
+    const last30 = aggregatePayerPayments(org_id, candidates, 30);
+    return {
+      deterministic: true,
+      ambiguous: true,
+      answer: `I found multiple ${extracted} entries. Here is total ${extracted} paid over the last 30 days: ${formatMoneyUI(last30.totalPaid)}.\nWould you like:\n• Last 90 days\n• By CPT\n• By location\n• By provider\n• Full payer analysis`
+    };
+  }
+
+  return null;
+}
+
 function computeSimpleAtRiskForecast(org_id, rangePreset){
   const r = rangeFromPreset(rangePreset || "last30");
 
@@ -1237,39 +1413,40 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
 function buildCopilotResponse({
   org_id,
   rangePreset,
-  responseFormat
+  responseFormat,
+  question
 }){
 
   const range = rangeFromPreset(rangePreset || "last30");
-  const dashboard = computeDashboardMetrics(org_id, range.start, range.end, range.preset);
-  const topPayers = Array.isArray(dashboard.payerRiskRanking) ? dashboard.payerRiskRanking : [];
-  const metrics = {
+  const payerScope = detectPayerFromPrompt(question, org_id);
+  const scoped = payerScope ? computePayerSpecificMetrics(org_id, payerScope, rangePreset) : null;
+  const dashboard = payerScope
+    ? null
+    : computeDashboardMetrics(org_id, range.start, range.end, range.preset);
+  const topPayers = scoped ? scoped.topPayers : (Array.isArray(dashboard?.payerRiskRanking) ? dashboard.payerRiskRanking : []);
+  const metrics = scoped ? scoped.metrics : {
     totals: {
-      billed: round2(dashboard.kpis?.totalBilled || 0),
-      collected: round2(dashboard.kpis?.collectedTotal || 0),
-      expected: round2(dashboard.kpis?.allowedTotal || dashboard.kpis?.totalBilled || 0),
-      atRisk: round2(dashboard.kpis?.revenueAtRisk || 0)
+      billed: round2(dashboard?.kpis?.totalBilled || 0),
+      collected: round2(dashboard?.kpis?.collectedTotal || 0),
+      expected: round2(dashboard?.kpis?.allowedTotal || dashboard?.kpis?.totalBilled || 0),
+      atRisk: round2(dashboard?.kpis?.revenueAtRisk || 0)
     },
     rates: {
-      // Use existing dashboard fields
       recoveryRate: round2(
-        dashboard.kpis?.netCollectionRate ??
-        dashboard.kpis?.grossCollectionRate ??
+        dashboard?.kpis?.netCollectionRate ??
+        dashboard?.kpis?.grossCollectionRate ??
         0
       ),
-
-      // These may not exist in legacy return, so default safely
-      denialRate: round2(dashboard.denialRate ?? 0),
-      appealSuccessRate: round2(dashboard.appealSuccessRate ?? 0),
-      negotiationROI: round2(dashboard.negotiationROI ?? 0)
+      denialRate: round2(dashboard?.denialRate ?? 0),
+      appealSuccessRate: round2(dashboard?.appealSuccessRate ?? 0),
+      negotiationROI: round2(dashboard?.negotiationROI ?? 0)
     },
-
     disciplineScore: round2(
-      dashboard.operationalDisciplineScore ?? 0
+      dashboard?.operationalDisciplineScore ?? 0
     )
   };
-  const forecast = computeSimpleAtRiskForecast(org_id, rangePreset);
-  const denialForecast = computeSimpleDenialRateForecast(org_id, rangePreset);
+  const forecast = scoped ? scoped.forecast : computeSimpleAtRiskForecast(org_id, rangePreset);
+  const denialForecast = scoped ? scoped.denialForecast : computeSimpleDenialRateForecast(org_id, rangePreset);
   const format = String(responseFormat || "executive").toLowerCase();
   const disciplineBreakdown = [
     { label: "Denial Rate", value: metrics.rates.denialRate },
@@ -1412,6 +1589,7 @@ function buildCopilotResponse({
     bullets,
     charts,
     metrics,
+    payerScope,
     forecast,
     denialForecast,
     disciplineBreakdown,
@@ -2953,6 +3131,38 @@ function computeDenialTrends(org_id) {
     if (c.status === "DRAFT_READY" || (c.ai && c.ai.draft_text)) {
       byMonth[key].drafts += 1;
     }
+    const cat = (c.ai && c.ai.denial_reason_category) ? c.ai.denial_reason_category : "Unknown";
+    byMonth[key].categories[cat] = (byMonth[key].categories[cat] || 0) + 1;
+  });
+  return byMonth;
+}
+
+function computePayerDenialTrends(org_id, payerScope) {
+  const payerKey = normalizePayerKey(payerScope);
+  if (!payerKey) return {};
+
+  const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  const payerBilledIds = new Set(
+    billed
+      .filter(b => normalizePayerKey(b.payer) === payerKey)
+      .map(b => String(b.billed_id || ""))
+      .filter(Boolean)
+  );
+
+  const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id && payerBilledIds.has(String(c.billed_id || "")));
+  const byMonth = {};
+  cases.forEach(c => {
+    const dtStr = c.created_at;
+    let d;
+    try {
+      d = dtStr ? new Date(dtStr) : new Date();
+    } catch {
+      d = new Date();
+    }
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
+    if (!byMonth[key]) byMonth[key] = { total: 0, drafts: 0, categories: {} };
+    byMonth[key].total += 1;
+    if (c.status === "DRAFT_READY" || (c.ai && c.ai.draft_text)) byMonth[key].drafts += 1;
     const cat = (c.ai && c.ai.denial_reason_category) ? c.ai.denial_reason_category : "Unknown";
     byMonth[key].categories[cat] = (byMonth[key].categories[cat] || 0) + 1;
   });
@@ -6635,13 +6845,16 @@ if (method === "GET" && pathname === "/file") {
 
 if (method === "POST" && pathname === "/ai/chat") {
   const body = await parseBody(req);
-  let msg = "";
+  let payload = {};
 
   try {
-    msg = (JSON.parse(body).message || "").trim();
+    payload = JSON.parse(body || "{}");
   } catch {
-    msg = "";
+    payload = {};
   }
+
+  const msg = String(payload.message || "").trim();
+  const currentPath = String(payload.currentPath || payload.path || req.headers.referer || "");
 
   if (!msg) {
     return send(res, 200, JSON.stringify({
@@ -6649,16 +6862,41 @@ if (method === "POST" && pathname === "/ai/chat") {
     }), "application/json");
   }
 
+  const usageSnap = getCopilotUsageSnapshot(org.org_id);
+
+  const uiAnswer = tryHandleUIQuestion(msg, currentPath);
+  if (uiAnswer) {
+    return send(res, 200, JSON.stringify({
+      answer: uiAnswer,
+      used: usageSnap.used,
+      limit: usageSnap.limit,
+      limitReached: false,
+      deterministic: true
+    }), "application/json");
+  }
+
+  const deterministic = tryBuildDeterministicPayerAnswer(org.org_id, msg);
+  if (deterministic) {
+    return send(res, 200, JSON.stringify({
+      answer: deterministic.answer,
+      used: usageSnap.used,
+      limit: usageSnap.limit,
+      limitReached: false,
+      deterministic: true
+    }), "application/json");
+  }
+
   const consume = consumeCopilotQuery(org.org_id);
   if (!consume.ok) {
     return send(res, 200, JSON.stringify({
       answer: consume.message,
+      used: usageSnap.used,
+      limit: usageSnap.limit,
       limitReached: true
     }), "application/json");
   }
 
   try {
-
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY
     });
@@ -6689,7 +6927,8 @@ if (method === "POST" && pathname === "/ai/chat") {
       savedToWorkspace: false,
       used: updatedSnap.used,
       limit: updatedSnap.limit,
-      limitReached: updatedSnap.limitReached
+      limitReached: updatedSnap.limitReached,
+      deterministic: false
     }), "application/json");
 
   } catch (err) {
@@ -6717,7 +6956,10 @@ if (method === "POST" && pathname === "/ai/chat") {
       return send(res, 200, JSON.stringify({ ok:false, error:"Missing prompt" }), "application/json");
     }
 
-    const denialByMonth = computeDenialTrends(org.org_id);
+    const payerScope = detectPayerFromPrompt(prompt, org.org_id);
+    const denialByMonth = payerScope
+      ? computePayerDenialTrends(org.org_id, payerScope)
+      : computeDenialTrends(org.org_id);
     const payTrend = computePaymentTrends(org.org_id);
 
     const denialMonths = Object.keys(denialByMonth || {}).sort();
