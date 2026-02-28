@@ -1113,8 +1113,20 @@ function findPayerCandidates(org_id, payerQuery) {
 }
 
 function detectPayerFromPrompt(prompt, org_id) {
+  const candidates = detectPayerCandidatesFromPrompt(prompt, org_id);
+
+  if (candidates.length === 1) return candidates[0];
+
+  if (candidates.length > 1) {
+    return ""; // ambiguous
+  }
+
+  return "";
+}
+
+function detectPayerCandidatesFromPrompt(prompt, org_id) {
   const text = String(prompt || "").trim();
-  if (!text) return "";
+  if (!text) return [];
 
   const patterns = [
     /how much did\s+(.+?)\s+pay/i,
@@ -1129,37 +1141,16 @@ function detectPayerFromPrompt(prompt, org_id) {
     /metrics\s+(?:for|of)\s+(.+)/i
   ];
 
-  let extracted = "";
-
   for (const re of patterns) {
     const m = text.match(re);
     if (m && m[1]) {
-      extracted = String(m[1] || "").replace(/[?.!,]+$/g, "").trim();
-      break;
+      const extracted = String(m[1] || "").replace(/[?.!,]+$/g, "").trim();
+      const candidates = findPayerCandidates(org_id, extracted);
+      if (candidates.length) return candidates;
     }
   }
 
-  if (!extracted) return "";
-
-  const candidates = findPayerCandidates(org_id, extracted);
-
-  if (candidates.length === 1) return candidates[0];
-
-  if (candidates.length > 1) {
-    // Only auto-select if highest score is clearly dominant
-    const ranked = candidates.map(name => ({
-      name,
-      score: simpleSimilarity(canonicalizePayer(name), canonicalizePayer(extracted))
-    })).sort((a, b) => b.score - a.score);
-
-    if (ranked.length > 1 && ranked[0].score - ranked[1].score > 0.2) {
-      return ranked[0].name;
-    }
-
-    return ""; // ambiguous
-  }
-
-  return "";
+  return findPayerCandidates(org_id, text);
 }
 
 function computePayerSpecificMetrics(org_id, payerScope, rangePreset = "last30") {
@@ -7023,6 +7014,56 @@ if (method === "POST" && pathname === "/ai/chat") {
     }), "application/json");
   }
 
+  const forcedPayerCandidates = detectPayerCandidatesFromPrompt(msg, org.org_id);
+  if (forcedPayerCandidates.length > 0) {
+    if (forcedPayerCandidates.length > 1) {
+      return send(res, 200, JSON.stringify({
+        answer:
+          `I found multiple possible payer matches for your question:
+` +
+          forcedPayerCandidates.map(c => `- ${c}`).join("\n") +
+          `\n\nPlease reply with the exact payer name.`,
+        used: usageSnap.used,
+        limit: usageSnap.limit,
+        limitReached: false,
+        deterministic: true
+      }), "application/json");
+    }
+
+    const payer = forcedPayerCandidates[0];
+    const intel = computePayerIntelligence(org.org_id, payer, "last30");
+
+    return send(res, 200, JSON.stringify({
+      answer:
+        `${payer} Performance (last 30 days):\n` +
+        `Total Paid: ${formatMoneyUI(intel.totalCollected || 0)}\n` +
+        `Claims: ${Math.round(intel.totalClaims || 0)}\n` +
+        `Denial Rate: ${Math.round(intel.denialRate || 0)}%\n` +
+        `At Risk: ${formatMoneyUI(intel.totalAtRisk || 0)}\n` +
+        `Avg Days to Pay: ${Math.round(intel.avgDaysToPay || 0)}`,
+      used: usageSnap.used,
+      limit: usageSnap.limit,
+      limitReached: false,
+      deterministic: true
+    }), "application/json");
+  }
+
+  // Final guardrail: never let payer-candidate prompts reach OpenAI.
+  if (findPayerCandidates(org.org_id, msg).length > 0) {
+    const fallbackMatches = findPayerCandidates(org.org_id, msg);
+    return send(res, 200, JSON.stringify({
+      answer:
+        `I found payer matches for your question:
+` +
+        fallbackMatches.map(c => `- ${c}`).join("\n") +
+        `\n\nPlease reply with the exact payer name to view internal payer performance.`,
+      used: usageSnap.used,
+      limit: usageSnap.limit,
+      limitReached: false,
+      deterministic: true
+    }), "application/json");
+  }
+
   const consume = consumeCopilotQuery(org.org_id);
   if (!consume.ok) {
     return send(res, 200, JSON.stringify({
@@ -7043,7 +7084,12 @@ if (method === "POST" && pathname === "/ai/chat") {
       messages: [
         {
           role: "system",
-          content: "You are the AI Revenue Intelligence assistant for TJ Healthcare Pro. Answer clearly, professionally, and concisely."
+          content: `You are the AI Revenue Intelligence assistant for TJ Healthcare Pro.
+
+IMPORTANT:
+- Never provide general public insurance information.
+- Only answer using data available inside the application.
+- If data is not available, respond: "No internal data available for this request."`
         },
         {
           role: "user",
