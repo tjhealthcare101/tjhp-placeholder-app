@@ -8776,7 +8776,6 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       </table>
     </div>
 `;
-  const payerRankingHtml = renderPayerRankingTable(payerRanks, { limit: 10, showAllLink: false, compact: true });
   const targets = getOrgSettings(org.org_id).recovery_targets || {};
   const financialScore = Number(m.healthScore || 64);
   const denialRate = Number(m.denialRate || 0);
@@ -8957,22 +8956,15 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         <div class="eb-kpi"><div class="l">Negotiations Submitted</div><div class="v">${formatNumberUI(Number(m.negotiationSubmittedCount || 0))}</div><div class="h">Submitted negotiation workspaces.</div></div>
       </div>
     </div>
-    <div class="eb-split">
-      <div class="eb-card">
-        <div class="eb-sectionHead"><h3>Top Payers to Review</h3><div class="muted">Highest-priority payers by current risk and score.</div></div>
-        <div class="hr"></div>
-        ${topPayersToReviewHtml}
+    <div class="eb-card">
+      <div class="eb-sectionHead">
+        <h3>Top Payers to Review</h3>
+        <a class="btn secondary small" href="/revenue-intelligence?tab=payers">
+          Open Full Payer Hub
+        </a>
       </div>
-      <div class="eb-card">
-        <div class="eb-sectionHead">
-          <h3>Payer Ranking (A–F)</h3>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <a class="btn secondary small" href="/revenue-intelligence?tab=payers">View Full Payer Rankings</a>
-          </div>
-        </div>
-        <div class="hr"></div>
-        ${payerRankingHtml}
-      </div>
+      <div class="hr"></div>
+      ${topPayersToReviewHtml}
     </div>
     <div class="eb-card">
       <div class="eb-sectionHead"><h3>Organization Targets</h3><div class="muted">Targets vs current performance.</div></div>
