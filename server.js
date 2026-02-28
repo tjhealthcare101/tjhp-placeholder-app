@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
+const OpenAI = require("openai");
 
 // ===== Server =====
 const HOST = "0.0.0.0";
@@ -5726,6 +5727,36 @@ const server = http.createServer(async (req, res) => {
       nodeEnv: process.env.NODE_ENV || "not_set",
       timestamp: new Date().toISOString()
     }), "application/json");
+  }
+
+  if (method === "GET" && pathname === "/ai/test") {
+    try {
+
+      if (!process.env.OPENAI_API_KEY) {
+        return send(res, 500, "OPENAI_API_KEY not set");
+      }
+
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY
+      });
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user", content: "Say hello from TJ Healthcare Pro." }
+        ],
+        temperature: 0.2
+      });
+
+      const reply = completion?.choices?.[0]?.message?.content || "No response";
+
+      return send(res, 200, reply, "text/plain");
+
+    } catch (err) {
+      console.error("AI TEST ERROR:", err);
+      return send(res, 500, "AI call failed — check Railway logs");
+    }
   }
 
   // auth
