@@ -6634,42 +6634,71 @@ if (method === "GET" && pathname === "/file") {
 }
 
 if (method === "POST" && pathname === "/ai/chat") {
-    const body = await parseBody(req);
-    let msg = "";
-    try {
-      msg = (JSON.parse(body).message || "").trim();
-    } catch {
-      msg = "";
-    }
+  const body = await parseBody(req);
+  let msg = "";
 
-    if (!msg) {
-      return send(res, 200, JSON.stringify({ answer: "Please enter a question to continue." }), "application/json");
-    }
+  try {
+    msg = (JSON.parse(body).message || "").trim();
+  } catch {
+    msg = "";
+  }
 
-    const consume = consumeCopilotQuery(org.org_id);
-    if (!consume.ok) {
-      return send(res, 200, JSON.stringify({ answer: consume.message, limitReached: true }), "application/json");
-    }
+  if (!msg) {
+    return send(res, 200, JSON.stringify({
+      answer: "Please enter a question to continue."
+    }), "application/json");
+  }
 
-    const workspace = createCopilotWorkspaceFromPrompt(org.org_id, msg);
-    const brief = workspace.latest_brief?.result || {};
-    const bullets = Array.isArray(brief.bullets) ? brief.bullets : [];
-    const summary = bullets.length
-      ? bullets.slice(0, 2).join(" ")
-      : "Executive brief generated and saved to AI Copilot workspace.";
+  const consume = consumeCopilotQuery(org.org_id);
+  if (!consume.ok) {
+    return send(res, 200, JSON.stringify({
+      answer: consume.message,
+      limitReached: true
+    }), "application/json");
+  }
+
+  try {
+
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: "You are the AI Revenue Intelligence assistant for TJ Healthcare Pro. Answer clearly, professionally, and concisely."
+        },
+        {
+          role: "user",
+          content: msg
+        }
+      ],
+      temperature: 0.3
+    });
+
+    const aiReply =
+      completion?.choices?.[0]?.message?.content ||
+      "No response generated.";
 
     const updatedSnap = getCopilotUsageSnapshot(org.org_id);
 
     return send(res, 200, JSON.stringify({
-      answer: summary,
-      savedToWorkspace: true,
-      workspace_id: workspace.workspace_id,
-      saved_at: workspace.updated_at,
+      answer: aiReply,
+      savedToWorkspace: false,
       used: updatedSnap.used,
       limit: updatedSnap.limit,
       limitReached: updatedSnap.limitReached
     }), "application/json");
+
+  } catch (err) {
+    console.error("AI CHAT ERROR:", err);
+    return send(res, 500, JSON.stringify({
+      answer: "AI system error. Please try again."
+    }), "application/json");
   }
+}
 
 
 
