@@ -1023,6 +1023,48 @@ function normalizePayerKey(v) {
   return String(v || "").trim().toLowerCase();
 }
 
+function canonicalizePayer(str) {
+  return String(str || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenize(str) {
+  return canonicalizePayer(str).split(" ").filter(Boolean);
+}
+
+function payerAcronym(str) {
+  const parts = tokenize(str);
+  if (!parts.length) return "";
+  return parts.map(t => t[0]).join("");
+}
+
+function simpleSimilarity(a, b) {
+  if (!a || !b) return 0;
+
+  if (a === b) return 1;
+
+  if (a.includes(b) || b.includes(a)) return 0.8;
+
+  const tokensA = tokenize(a);
+  const tokensB = tokenize(b);
+  const acronymA = payerAcronym(a);
+  const acronymB = payerAcronym(b);
+
+  if (acronymA && acronymB && acronymA === acronymB) return 0.95;
+  if ((acronymA && acronymA === b.replace(/\s+/g, "")) || (acronymB && acronymB === a.replace(/\s+/g, ""))) return 0.9;
+
+  const overlap = tokensA.filter(t => tokensB.includes(t)).length;
+  const tokenScore = overlap / Math.max(tokensA.length, tokensB.length);
+
+  const prefixOverlap = tokensA.filter(t => tokensB.some(x => x.startsWith(t) || t.startsWith(x))).length;
+  const prefixScore = prefixOverlap / Math.max(tokensA.length, tokensB.length);
+
+  return Math.max(tokenScore, prefixScore * 0.9);
+}
+
 function getOrgPayerNames(org_id) {
   const names = new Set();
   const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
@@ -1042,36 +1084,82 @@ function getOrgPayerNames(org_id) {
 }
 
 function findPayerCandidates(org_id, payerQuery) {
-  const query = normalizePayerKey(payerQuery);
+  const all = getOrgPayerNames(org_id);
+  const query = canonicalizePayer(payerQuery);
   if (!query) return [];
-  return getOrgPayerNames(org_id).filter(name => normalizePayerKey(name).includes(query));
+
+  const scored = [];
+
+  for (const name of all) {
+    const canonName = canonicalizePayer(name);
+
+    let score = 0;
+
+    // exact canonical match
+    if (canonName === query) {
+      score = 1;
+    } else {
+      score = simpleSimilarity(canonName, query);
+    }
+
+    if (score > 0.3) {
+      scored.push({ name, score });
+    }
+  }
+
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .map(x => x.name);
 }
 
 function detectPayerFromPrompt(prompt, org_id) {
   const text = String(prompt || "").trim();
   if (!text) return "";
 
-  const explicitPatterns = [
+  const patterns = [
     /how much did\s+(.+?)\s+pay/i,
     /total paid by\s+(.+)/i,
-    /what did\s+(.+?)\s+collect/i
+    /what did\s+(.+?)\s+collect/i,
+    /denial rate\s+(?:for|of)\s+(.+)/i,
+    /at risk\s+(?:for|of)\s+(.+)/i,
+    /claims\s+(?:for|from|by)\s+(.+)/i,
+    /how is\s+(.+?)\s+doing/i,
+    /performance\s+(?:for|of)\s+(.+)/i,
+    /overview\s+(?:for|of)\s+(.+)/i,
+    /metrics\s+(?:for|of)\s+(.+)/i
   ];
 
-  for (const re of explicitPatterns) {
+  let extracted = "";
+
+  for (const re of patterns) {
     const m = text.match(re);
     if (m && m[1]) {
-      const raw = String(m[1] || "").replace(/[?.!,]+$/g, "").trim();
-      if (!raw) continue;
-      const candidates = findPayerCandidates(org_id, raw);
-      const exact = candidates.find(c => normalizePayerKey(c) === normalizePayerKey(raw));
-      if (exact) return exact;
-      if (candidates.length === 1) return candidates[0];
+      extracted = String(m[1] || "").replace(/[?.!,]+$/g, "").trim();
+      break;
     }
   }
 
-  const all = getOrgPayerNames(org_id).sort((a, b) => b.length - a.length);
-  const lower = text.toLowerCase();
-  return all.find(name => lower.includes(name.toLowerCase())) || "";
+  if (!extracted) return "";
+
+  const candidates = findPayerCandidates(org_id, extracted);
+
+  if (candidates.length === 1) return candidates[0];
+
+  if (candidates.length > 1) {
+    // Only auto-select if highest score is clearly dominant
+    const ranked = candidates.map(name => ({
+      name,
+      score: simpleSimilarity(canonicalizePayer(name), canonicalizePayer(extracted))
+    })).sort((a, b) => b.score - a.score);
+
+    if (ranked.length > 1 && ranked[0].score - ranked[1].score > 0.2) {
+      return ranked[0].name;
+    }
+
+    return ""; // ambiguous
+  }
+
+  return "";
 }
 
 function computePayerSpecificMetrics(org_id, payerScope, rangePreset = "last30") {
@@ -1149,10 +1237,30 @@ function tryHandleUIQuestion(message, currentPath = "") {
 
 function tryBuildDeterministicPayerAnswer(org_id, message) {
   const text = String(message || "").trim();
+  const isDenialQ = /denial rate/i.test(text);
+  const isAtRiskQ = /at risk/i.test(text);
+  const isClaimsQ = /how many claims/i.test(text) || /\bclaims\b/i.test(text);
+  const isCollectedQ = /collected/i.test(text) || /total collected/i.test(text);
+  const isPerformanceQ =
+    /how is/i.test(text) ||
+    /performance/i.test(text) ||
+    /overview/i.test(text) ||
+    /metrics/i.test(text) ||
+    /doing/i.test(text);
+
   const patterns = [
     /how much did\s+(.+?)\s+pay/i,
     /total paid by\s+(.+)/i,
-    /what did\s+(.+?)\s+collect/i
+    /what did\s+(.+?)\s+collect/i,
+    /denial rate\s+(?:for|of)\s+(.+)/i,
+    /at risk\s+(?:for|of)\s+(.+)/i,
+    /how many claims\s+(?:for|from|by)\s+(.+)/i,
+    /claims\s+(?:for|from|by)\s+(.+)/i,
+    /(?:total\s+)?collected\s+(?:for|from|by)\s+(.+)/i,
+    /how is\s+(.+?)\s+doing/i,
+    /performance\s+(?:for|of)\s+(.+)/i,
+    /overview\s+(?:for|of)\s+(.+)/i,
+    /metrics\s+(?:for|of)\s+(.+)/i
   ];
 
   let extracted = "";
@@ -1167,11 +1275,38 @@ function tryBuildDeterministicPayerAnswer(org_id, message) {
   if (!extracted) return null;
 
   const candidates = findPayerCandidates(org_id, extracted);
-  const exact = candidates.find(c => normalizePayerKey(c) === normalizePayerKey(extracted));
+  const exact = candidates.find(c => canonicalizePayer(c) === canonicalizePayer(extracted));
   const payerScope = exact || (candidates.length === 1 ? candidates[0] : "");
 
   if (payerScope) {
     const intel = computePayerIntelligence(org_id, payerScope, "last30");
+
+    if (isPerformanceQ) {
+      return {
+        deterministic: true,
+        answer:
+          `${payerScope} Performance (last 30 days):\n` +
+          `Total Paid: ${formatMoneyUI(intel.totalCollected || 0)}\n` +
+          `Claims: ${Math.round(intel.totalClaims || 0)}\n` +
+          `Denial Rate: ${Math.round(intel.denialRate || 0)}%\n` +
+          `At Risk: ${formatMoneyUI(intel.totalAtRisk || 0)}\n` +
+          `Avg Days to Pay: ${Math.round(intel.avgDaysToPay || 0)}`
+      };
+    }
+
+    if (isDenialQ) {
+      return { answer: `${payerScope} denial rate is ${Math.round(intel.denialRate || 0)}% (last 30 days). Claims: ${Math.round(intel.totalClaims || 0)}.`, deterministic: true };
+    }
+    if (isAtRiskQ) {
+      return { answer: `${payerScope} has ${formatMoneyUI(intel.totalAtRisk || 0)} at risk (last 30 days).`, deterministic: true };
+    }
+    if (isClaimsQ) {
+      return { answer: `${payerScope} has ${Math.round(intel.totalClaims || 0)} claims (last 30 days).`, deterministic: true };
+    }
+    if (isCollectedQ) {
+      return { answer: `${payerScope} collected ${formatMoneyUI(intel.totalCollected || 0)} (last 30 days).`, deterministic: true };
+    }
+
     return {
       deterministic: true,
       answer: `${payerScope} has paid ${formatMoneyUI(intel.totalCollected || 0)} across ${Math.round(intel.totalClaims || 0)} claims.\nDenial rate: ${Math.round(intel.denialRate || 0)}%\nAt risk: ${formatMoneyUI(intel.totalAtRisk || 0)}\nAverage days to pay: ${Math.round(intel.avgDaysToPay || 0)}`,
@@ -1183,12 +1318,14 @@ function tryBuildDeterministicPayerAnswer(org_id, message) {
     };
   }
 
-  if (candidates.length > 1) {
-    const last30 = aggregatePayerPayments(org_id, candidates, 30);
+  if (!payerScope && candidates.length > 0) {
     return {
       deterministic: true,
       ambiguous: true,
-      answer: `I found multiple ${extracted} entries. Here is total ${extracted} paid over the last 30 days: ${formatMoneyUI(last30.totalPaid)}.\nWould you like:\n• Last 90 days\n• By CPT\n• By location\n• By provider\n• Full payer analysis`
+      answer:
+        `I found multiple possible matches for "${extracted}":\n` +
+        candidates.map(c => `- ${c}`).join("\n") +
+        `\n\nPlease reply with the exact payer name.`
     };
   }
 
