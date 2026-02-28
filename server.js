@@ -98,6 +98,7 @@ const FILES = {
   revenue_automation_templates: path.join(DATA_DIR, "revenue_automation_templates.json"),
   revenue_template_versions: path.join(DATA_DIR, "revenue_template_versions.json"),
   template_assets: path.join(DATA_DIR, "template_assets.json"),
+  packet_templates: path.join(DATA_DIR, "packet_templates.json"),
 };
 
 // Directory for storing uploaded template files
@@ -334,6 +335,7 @@ ensureFile(FILES.template_versions, []);
 ensureFile(FILES.revenue_automation_templates, []);
 ensureFile(FILES.revenue_template_versions, []);
 ensureFile(FILES.template_assets, []);
+ensureFile(FILES.packet_templates, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -4400,6 +4402,43 @@ function getTemplateAssets(org_id){
     .sort((a,b)=> new Date(b.created_at||0) - new Date(a.created_at||0));
 }
 
+function getPacketTemplates(){
+  return readJSON(FILES.packet_templates, []);
+}
+
+function getPacketTemplate(org_id, type){
+  const all = getPacketTemplates();
+  return all.find(t => t.org_id === org_id && t.type === type) || null;
+}
+
+function savePacketTemplate(org_id, type, data){
+  const all = getPacketTemplates().filter(t => !(t.org_id === org_id && t.type === type));
+  const record = {
+    org_id,
+    type,
+    template_id: uuid(),
+    original_filename: data.original_filename,
+    stored_path: data.stored_path,
+    enabled: data.enabled !== false,
+    uploaded_at: nowISO()
+  };
+  writeJSON(FILES.packet_templates, all.concat([record]));
+  return record;
+}
+
+function removePacketTemplate(org_id, type){
+  const all = getPacketTemplates();
+  const keep = [];
+  for (const t of all){
+    if (t.org_id === org_id && t.type === type){
+      try { if (fs.existsSync(t.stored_path)) fs.rmSync(t.stored_path, { force:true }); } catch {}
+    } else {
+      keep.push(t);
+    }
+  }
+  writeJSON(FILES.packet_templates, keep);
+}
+
 function saveTemplateAsset(asset){
   const all = readJSON(FILES.template_assets, []);
   all.push(asset);
@@ -4452,6 +4491,36 @@ function getTemplatePreviewSample(org_id){
   };
 }
 
+
+function buildPacketHTML({ org_id, type, claim, derived, ws }){
+  const packetType = type === "negotiation" ? "negotiation" : "appeal";
+  const header = "<h3>" + (packetType === "appeal" ? "Appeal Packet" : "Negotiation Packet") + "</h3>";
+  const financial = "<p><strong>Billed:</strong> " + formatMoneyUI(derived?.billedAmount || claim?.amount_billed || 0) + "</p>";
+  const draft = packetType === "appeal"
+    ? (ws?.appeal?.draft_text || ws?.negotiation?.draft_text || "")
+    : (ws?.negotiation?.draft_text || ws?.appeal?.draft_text || "");
+  const narrative = "<p>" + safeStr(draft) + "</p>";
+  return header + financial + narrative;
+}
+
+function applyTemplate(org_id, type, html){
+  const packetType = type === "negotiation" ? "negotiation" : "appeal";
+  const tpl = getPacketTemplate(org_id, packetType);
+  if (!tpl || !tpl.enabled || !tpl.stored_path || !fs.existsSync(tpl.stored_path)) return html;
+
+  const ext = path.extname(String(tpl.original_filename || "")).toLowerCase();
+  const wrapper = fs.readFileSync(tpl.stored_path, "utf8");
+
+  if (ext === ".html" || ext === ".htm") {
+    const idx = wrapper.toLowerCase().indexOf("</body>");
+    if (idx >= 0) return wrapper.slice(0, idx) + html + wrapper.slice(idx);
+    return wrapper + html;
+  }
+
+  if (ext === ".txt") return "<pre>" + safeStr(wrapper) + "</pre>" + html;
+
+  return "<div class='muted'>Template uploaded (" + safeStr(tpl.original_filename) + ") — Standard formatting used for reliability.</div>" + html;
+}
 
 function getRevenueTemplates(org_id){
   return readJSON(FILES.revenue_automation_templates, [])
@@ -13260,67 +13329,9 @@ rowsAdded = toUse;
   }
 
   if (method === "GET" && pathname === "/data-management/revenue-automation") {
-    const templates = getRevenueTemplates(org.org_id);
-    const appealTemplate = templates.find(t => t.type === "appeal")?.content || "";
-    const negotiationTemplate = templates.find(t => t.type === "negotiation")?.content || "";
-
-    const variableList = [
-      "{{claim_number}}",
-      "{{payer}}",
-      "{{dos}}",
-      "{{billed_amount}}",
-      "{{expected_amount}}",
-      "{{paid_amount}}",
-      "{{at_risk_amount}}",
-      "{{provider_name}}"
-    ];
-
-    const html = renderPage("Revenue Automation Settings", `
-      <h2>Revenue Automation Settings</h2>
-      <p class="muted">Configure automation defaults and organization-level packet templates.</p>
-
-      <div class="card">
-        <h3>Template Variables</h3>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;">
-          ${variableList.map(v => `<code style="background:#f3f4f6;padding:6px;border-radius:6px;">${safeStr(v)}</code>`).join("")}
-        </div>
-      </div>
-
-      <div class="card" style="margin-top:20px;">
-        <h3>Default Appeal Template</h3>
-        <form method="POST" action="/data-management/revenue-automation/save">
-          <input type="hidden" name="type" value="appeal"/>
-          <textarea name="content" rows="10" style="width:100%;font-family:monospace;">${safeStr(appealTemplate)}</textarea>
-          <div class="btnRow" style="margin-top:12px;">
-            <button class="btn">Save Appeal Template</button>
-            <button type="button" class="btn secondary" onclick="enhanceTemplate('appeal')">AI Enhance</button>
-            <a class="btn secondary" href="/data-management/revenue-automation/history?type=appeal">Version History</a>
-          </div>
-        </form>
-      </div>
-
-      <div class="card" style="margin-top:20px;">
-        <h3>Default Negotiation Template</h3>
-        <form method="POST" action="/data-management/revenue-automation/save">
-          <input type="hidden" name="type" value="negotiation"/>
-          <textarea name="content" rows="10" style="width:100%;font-family:monospace;">${safeStr(negotiationTemplate)}</textarea>
-          <div class="btnRow" style="margin-top:12px;">
-            <button class="btn">Save Negotiation Template</button>
-            <button type="button" class="btn secondary" onclick="enhanceTemplate('negotiation')">AI Enhance</button>
-            <a class="btn secondary" href="/data-management/revenue-automation/history?type=negotiation">Version History</a>
-          </div>
-        </form>
-      </div>
-
-      <script>
-        function enhanceTemplate(type){
-          alert("AI Enhancement logic placeholder. Connect to AI endpoint here.");
-        }
-      </script>
-    `, navUser(), {showChat:true, orgName: org.org_name});
-
-    return send(res, 200, html);
+    return redirect(res, "/data-management?tab=revenue");
   }
+
 
   if (method === "POST" && pathname === "/data-management/revenue-automation/save") {
     const body = await parseBody(req);
@@ -13389,30 +13400,57 @@ function renderTemplateEditor(org, user){
   const t = getTemplateSettings(org.org_id);
   const practice = getPracticeSettings(org.org_id);
   const rules = getAllowedAmountRules(org.org_id);
+  const appealTpl = getPacketTemplate(org.org_id, "appeal");
+  const negotiationTpl = getPacketTemplate(org.org_id, "negotiation");
   const sample = getTemplatePreviewSample(org.org_id);
   const sampleB64 = Buffer.from(JSON.stringify(sample)).toString("base64");
 
-  const assets = getTemplateAssets(org.org_id);
-  const defaultAppealAsset = assets.find(a => a.is_default && a.template_type === "appeal") || null;
-  const defaultNegotiationAsset = assets.find(a => a.is_default && a.template_type === "negotiation") || null;
+  const uploadCard = (type, label, tpl) => `
+    <div class="tpl-card" style="margin-top:14px;">
+      <div class="tpl-row">
+        <div>
+          <div class="tpl-sub">${label} Template</div>
+          <p class="tpl-muted">Current template: ${tpl ? safeStr(tpl.original_filename) : "None uploaded"}</p>
+        </div>
+        <a class="btn secondary small" href="/packet-template/preview?type=${type}" target="_blank">Preview</a>
+      </div>
 
-  const vars = ["claim_number","billed_id","payer","dos","cpt","dx","amount_billed","amount_paid","expected_insurance","underpaid_amount","denial_reason","provider_name","npi","tin","phone","fax","today"];
-  const chips = vars.map(k => `<button type="button" class="tpl-chip" data-insert="{{${k}}}">{{${k}}}</button>`).join("");
+      <form method="POST" action="/packet-template/upload" enctype="multipart/form-data" style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+        <input type="hidden" name="type" value="${type}"/>
+        <div style="flex:1;min-width:250px;">
+          <label>Upload File</label>
+          <input type="file" name="template_file" accept=".html,.htm,.txt,.docx" required />
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;">
+          <input type="checkbox" name="enabled" ${tpl?.enabled !== false ? "checked" : ""}/> Enabled
+        </label>
+        <button class="btn secondary" type="submit">Replace</button>
+      </form>
+
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+        <form method="POST" action="/packet-template/toggle" style="margin:0;display:inline-block;">
+          <input type="hidden" name="type" value="${type}"/>
+          <input type="hidden" name="enabled" value="${tpl?.enabled === false ? "1" : "0"}"/>
+          <button class="btn secondary small" type="submit">${tpl?.enabled === false ? "Enable" : "Disable"}</button>
+        </form>
+        <form method="POST" action="/packet-template/remove" style="margin:0;display:inline-block;" onsubmit="return confirm('Remove this template?');">
+          <input type="hidden" name="type" value="${type}"/>
+          <button class="btn danger small" type="submit">Remove</button>
+        </form>
+      </div>
+    </div>
+  `;
 
   return `
   <style>
     .tpl-wrap{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;align-items:start;}
     .tpl-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;box-shadow:var(--shadow);}
-    .tpl-chipbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
-    .tpl-chip{border:1px solid var(--border);background:#fff;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:800;cursor:pointer;}
     .tpl-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
     .tpl-textarea{width:100%;min-height:140px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;font-size:13px;outline:none;}
     .tpl-preview{white-space:pre-wrap;font-size:13px;line-height:1.45;border:1px dashed var(--border);border-radius:12px;padding:12px;background:rgba(17,24,39,.03);min-height:120px;}
     .tpl-sub{font-weight:900;margin:0 0 6px;}
     .tpl-muted{color:var(--muted);font-size:12px;margin:0;}
     .tpl-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;}
-    .tpl-badge{display:inline-block;border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-weight:900;font-size:12px;background:#fff;}
-    .tpl-uploadbox{border:1px dashed var(--border);border-radius:14px;padding:12px;background:rgba(17,24,39,.02);}
   </style>
 
   <h2>Revenue Automation & Templates</h2>
@@ -13430,17 +13468,8 @@ function renderTemplateEditor(org, user){
         <label style="flex:1;min-width:260px;"><input type="checkbox" name="auto_draft_underpayments" ${practice.auto_draft_underpayments ? "checked" : ""}/> Auto-draft underpayment letters</label>
       </div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:240px;">
-          <label>Default Follow-up Days</label>
-          <input name="default_follow_up_days" value="${safeStr(String(practice.default_follow_up_days || practice.default_followup_days || 14))}"/>
-        </div>
-        <div style="flex:1;min-width:240px;">
-          <label>Require Confirmation Before Submission</label>
-          <select name="require_confirmation_before_submission">
-            <option value="yes" ${(practice.require_confirmation_before_submission || practice.require_confirmation_before_submitted) ? "selected" : ""}>Yes</option>
-            <option value="no" ${(practice.require_confirmation_before_submission || practice.require_confirmation_before_submitted) ? "" : "selected"}>No</option>
-          </select>
-        </div>
+        <div style="flex:1;min-width:240px;"><label>Default Follow-up Days</label><input name="default_follow_up_days" value="${safeStr(String(practice.default_follow_up_days || practice.default_followup_days || 14))}"/></div>
+        <div style="flex:1;min-width:240px;"><label>Require Confirmation Before Submission</label><select name="require_confirmation_before_submission"><option value="yes" ${(practice.require_confirmation_before_submission || practice.require_confirmation_before_submitted) ? "selected" : ""}>Yes</option><option value="no" ${(practice.require_confirmation_before_submission || practice.require_confirmation_before_submitted) ? "" : "selected"}>No</option></select></div>
       </div>
       <button class="btn">Save Automation Settings</button>
     </form>
@@ -13450,15 +13479,7 @@ function renderTemplateEditor(org, user){
     <h3>Reimbursement Defaults</h3>
     <form method="POST" action="/data-management/allowed-rules/save" style="display:flex;flex-direction:column;gap:12px;max-width:900px;">
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:240px;">
-          <label>Default Method</label>
-          <select name="default_method">
-            <option value="percent_medicare" ${rules.default_method==="percent_medicare"?"selected":""}>% of Medicare</option>
-            <option value="percent_billed" ${rules.default_method==="percent_billed"?"selected":""}>% of Billed</option>
-            <option value="flat" ${rules.default_method==="flat"?"selected":""}>Flat Amount</option>
-            <option value="ucr_multiplier" ${rules.default_method==="ucr_multiplier"?"selected":""}>UCR Multiplier</option>
-          </select>
-        </div>
+        <div style="flex:1;min-width:240px;"><label>Default Method</label><select name="default_method"><option value="percent_medicare" ${rules.default_method==="percent_medicare"?"selected":""}>% of Medicare</option><option value="percent_billed" ${rules.default_method==="percent_billed"?"selected":""}>% of Billed</option><option value="flat" ${rules.default_method==="flat"?"selected":""}>Flat Amount</option><option value="ucr_multiplier" ${rules.default_method==="ucr_multiplier"?"selected":""}>UCR Multiplier</option></select></div>
         <div style="flex:1;min-width:240px;"><label>Default Value</label><input name="default_value" value="${safeStr(String(rules.default_value || ""))}"/></div>
         <div style="flex:1;min-width:240px;"><label>UCR Multiplier</label><input name="ucr_multiplier" value="${safeStr(String(rules.ucr_multiplier || 1))}"/></div>
       </div>
@@ -13473,64 +13494,15 @@ function renderTemplateEditor(org, user){
   <div class="tpl-wrap" style="margin-top:16px;">
     <div>
       <div class="tpl-card">
-        <div class="tpl-row">
-          <div>
-            <div class="tpl-sub">Template Variables</div>
-            <p class="tpl-muted">Click to insert into the active text box.</p>
-          </div>
-          <a class="btn secondary small" href="/data-management/templates/history">Version History</a>
-        </div>
-        <div class="tpl-chipbar" id="tplChipBar">${chips}</div>
+        <h2>Appeals & Negotiation Packet Templates</h2>
+        <p class="muted">Upload your practice’s appeal or negotiation template (optional). TJHP automatically generates packet content and formats it for export.</p>
       </div>
+      ${uploadCard("appeal", "Appeal", appealTpl)}
+      ${uploadCard("negotiation", "Negotiation", negotiationTpl)}
 
       <div class="tpl-card" style="margin-top:14px;">
-        <div class="tpl-row">
-          <div>
-            <div class="tpl-sub">Upload Existing Letterhead Templates</div>
-            <p class="tpl-muted">Upload your current Appeal/Negotiation letter format (DOCX/HTML). We store the original for future AI mapping.</p>
-          </div>
-          <a class="btn secondary small" href="/data-management/templates/assets">Manage Uploads</a>
-        </div>
-
-        <div class="tpl-uploadbox" style="margin-top:10px;">
-          <form method="POST" action="/data-management/templates/upload" enctype="multipart/form-data" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
-            <div style="min-width:220px;">
-              <label>Template Type</label>
-              <select name="template_type">
-                <option value="appeal">Appeal Packet Template</option>
-                <option value="negotiation">Negotiation Packet Template</option>
-              </select>
-            </div>
-            <div style="flex:1;min-width:260px;">
-              <label>Upload File</label>
-              <input type="file" name="template_file" accept=".docx,.html,.htm" required />
-            </div>
-            <button class="btn secondary" type="submit">Upload Template</button>
-          </form>
-
-          <div style="margin-top:10px;">
-            <span class="tpl-badge">Default Appeal:</span>
-            <span class="muted small">${defaultAppealAsset ? safeStr(defaultAppealAsset.original_name) : "None uploaded"}</span>
-            <br/>
-            <span class="tpl-badge">Default Negotiation:</span>
-            <span class="muted small">${defaultNegotiationAsset ? safeStr(defaultNegotiationAsset.original_name) : "None uploaded"}</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="tpl-card" style="margin-top:14px;">
-        <div class="tpl-row">
-          <div class="tpl-sub">Letter & Negotiation Templates (Text Defaults)</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-            <form method="POST" action="/data-management/templates/ai-enhance" style="margin:0;">
-              <button class="btn secondary small" type="submit">AI Enhance Templates</button>
-            </form>
-            <a class="btn secondary small" href="/data-management/templates/generate-sample?type=appeal">Generate Appeal Sample</a>
-            <a class="btn secondary small" href="/data-management/templates/generate-sample?type=negotiation">Generate Negotiation Sample</a>
-          </div>
-        </div>
-
-        <form method="POST" action="/data-management/templates/save" style="margin-top:12px;">
+        <div class="tpl-sub">Default Letter Language Overrides</div>
+        <form method="POST" action="/account/templates" style="margin-top:12px;">
           <div class="tpl-grid2">
             <div><label>Appeal Opening</label><textarea class="tpl-textarea tpl-edit" name="appeal_opening" id="appeal_opening">${safeStr(t.appeal_opening || "")}</textarea></div>
             <div><label>Appeal Footer</label><textarea class="tpl-textarea tpl-edit" name="appeal_footer" id="appeal_footer">${safeStr(t.appeal_footer || "")}</textarea></div>
@@ -13538,11 +13510,7 @@ function renderTemplateEditor(org, user){
             <div><label>Negotiation Footer</label><textarea class="tpl-textarea tpl-edit" name="negotiation_footer" id="negotiation_footer">${safeStr(t.negotiation_footer || "")}</textarea></div>
           </div>
           <div style="margin-top:12px;"><label>Signature Block</label><textarea class="tpl-textarea tpl-edit" style="min-height:90px;" name="signature_block" id="signature_block">${safeStr(t.signature_block || "")}</textarea></div>
-
-          <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;">
-            <button class="btn" type="submit">Save Templates</button>
-            <a class="btn secondary" href="/data-management?tab=reimbursement">Back to Reimbursement Engine</a>
-          </div>
+          <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;"><button class="btn" type="submit">Save Templates</button></div>
         </form>
       </div>
     </div>
@@ -13551,16 +13519,8 @@ function renderTemplateEditor(org, user){
       <div class="tpl-card">
         <div class="tpl-sub">Live Preview</div>
         <p class="tpl-muted">Preview uses a sample claim (or defaults).</p>
-
-        <div style="margin-top:10px;">
-          <label>Appeal Preview</label>
-          <div class="tpl-preview" id="previewAppeal"></div>
-        </div>
-
-        <div style="margin-top:10px;">
-          <label>Negotiation Preview</label>
-          <div class="tpl-preview" id="previewNegotiation"></div>
-        </div>
+        <div style="margin-top:10px;"><label>Appeal Preview</label><div class="tpl-preview" id="previewAppeal"></div></div>
+        <div style="margin-top:10px;"><label>Negotiation Preview</label><div class="tpl-preview" id="previewNegotiation"></div></div>
       </div>
     </div>
   </div>
@@ -13568,74 +13528,26 @@ function renderTemplateEditor(org, user){
   <script>
     (function(){
       const sample = JSON.parse(atob("${sampleB64}"));
-      let activeEl = null;
-
-      document.addEventListener("mousedown", (e)=>{
-        const ta = e.target.closest("textarea.tpl-edit");
-        if (ta) activeEl = ta;
-      }, true);
-      document.addEventListener("focusin", (e)=>{
-        const ta = e.target.closest("textarea.tpl-edit");
-        if (ta) activeEl = ta;
-      });
-
       function applyVars(tpl){
         return String(tpl||"").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (m,k)=>{
           return Object.prototype.hasOwnProperty.call(sample,k) ? String(sample[k] ?? "") : m;
         });
       }
-
       function updatePreviews(){
-        const appeal = [
-          document.getElementById('appeal_opening')?.value||'',
-          '',
-          document.getElementById('signature_block')?.value||'',
-          '',
-          document.getElementById('appeal_footer')?.value||''
-        ].join('\n');
-
-        const nego = [
-          document.getElementById('negotiation_opening')?.value||'',
-          '',
-          document.getElementById('signature_block')?.value||'',
-          '',
-          document.getElementById('negotiation_footer')?.value||''
-        ].join('\n');
-
+        const appeal = [document.getElementById('appeal_opening')?.value||'', '', document.getElementById('signature_block')?.value||'', '', document.getElementById('appeal_footer')?.value||''].join('
+');
+        const nego = [document.getElementById('negotiation_opening')?.value||'', '', document.getElementById('signature_block')?.value||'', '', document.getElementById('negotiation_footer')?.value||''].join('
+');
         const elA = document.getElementById('previewAppeal');
         const elN = document.getElementById('previewNegotiation');
         if (elA) elA.textContent = (applyVars(appeal).trim() || '(empty)');
         if (elN) elN.textContent = (applyVars(nego).trim() || '(empty)');
       }
-
       ["appeal_opening","appeal_footer","negotiation_opening","negotiation_footer","signature_block"].forEach(id=>{
         const el = document.getElementById(id);
         if (!el) return;
         el.addEventListener("input", updatePreviews);
       });
-
-      const chipBar = document.getElementById("tplChipBar");
-      if (chipBar){
-        chipBar.addEventListener("click", (e)=>{
-          const btn = e.target.closest(".tpl-chip");
-          if (!btn) return;
-          const token = btn.getAttribute("data-insert") || "";
-          const el = activeEl || document.getElementById("appeal_opening");
-          if (!el) return;
-
-          const start = el.selectionStart ?? (el.value || "").length;
-          const end = el.selectionEnd ?? start;
-          const text = el.value || "";
-
-          el.value = text.slice(0, start) + token + text.slice(end);
-          el.focus();
-          el.selectionStart = el.selectionEnd = start + token.length;
-          activeEl = el;
-
-          updatePreviews();
-        });
-      }
-
       updatePreviews();
     })();
   </script>
@@ -13643,10 +13555,12 @@ function renderTemplateEditor(org, user){
 }
 
 
+
   if (method === "GET" && pathname === "/data-management") {
     const tab = String(parsed.query.tab || "claims").toLowerCase();
-    const validTabs = ["claims","payments","denials","reimbursement","automation","practice-settings"];
-    const activeTab = validTabs.includes(tab) ? tab : "claims";
+    const validTabs = ["claims","payments","denials","reimbursement","revenue","automation","practice-settings"];
+    const normalizedTab = tab === "automation" ? "revenue" : tab;
+    const activeTab = validTabs.includes(normalizedTab) ? normalizedTab : "claims";
     const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const claimBatches = getClaimBatchHistory(org.org_id);
     const paymentBatches = getPaymentBatchHistory(org.org_id);
@@ -13671,7 +13585,7 @@ function renderTemplateEditor(org, user){
     const denialWithDoc = denialClaims.filter(b => !!(b.denial_doc_attached || b.denial_document || b.denial_file)).length;
 
     function tabBtn(id, label){ return `<a class="btn ${activeTab===id?"":"secondary"}" href="/data-management?tab=${id}">${label}</a>`; }
-    const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">${tabBtn("claims","Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("reimbursement","Reimbursement Engine")}${tabBtn("automation","Revenue Automation & Templates")}</div>`;
+    const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">${tabBtn("claims","Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("reimbursement","Reimbursement Engine")}${tabBtn("revenue","Revenue Automation & Templates")}</div>`;
 
     const uploadPanel = `
       <h3>Upload Panel</h3>
@@ -14185,7 +14099,7 @@ function renderTemplateEditor(org, user){
 `
     const practiceContent = renderTemplateEditor(org, user);
 
-    const section = ({"claims":claimsContent,"payments":paymentsContent,"denials":denialContent,"reimbursement":reimbursementContent,"automation":practiceContent,"practice-settings":practiceContent})[activeTab] || claimsContent;
+    const section = ({"claims":claimsContent,"payments":paymentsContent,"denials":denialContent,"reimbursement":reimbursementContent,"revenue":practiceContent,"automation":practiceContent,"practice-settings":practiceContent})[activeTab] || claimsContent;
 
     const rebuildControls = `<div class="hr"></div><h3>Rebuild / Reprocess Controls</h3><div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;"><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="lifecycle"/><button class="btn secondary" type="submit">Recalculate Lifecycle</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="expected"/><button class="btn secondary" type="submit">Recompute Expected Insurance</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="revenue"/><button class="btn secondary" type="submit">Rebuild Revenue Aggregates</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="denials"/><button class="btn secondary" type="submit">Re-sync Denials</button></form><form method="POST" action="/data-management/rematch-payments"><button class="btn secondary" type="submit">Re-match Payments</button></form></div>`;
 
@@ -14898,6 +14812,125 @@ function renderTemplateEditor(org, user){
     if (schedule_id) saveFeeSchedules(org.org_id, getFeeSchedules(org.org_id).filter(f => String(f.schedule_id)!==schedule_id));
     rebuildOrgDerivedData(org.org_id);
     return redirect(res, "/data-management?tab=reimbursement");
+  }
+
+
+  if (method === "POST" && pathname === "/packet-template/upload") {
+    const contentType = String(req.headers["content-type"] || "");
+    if (!contentType.includes("multipart/form-data")) return redirect(res, "/data-management?tab=revenue");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return redirect(res, "/data-management?tab=revenue");
+
+    const parsedMp = await parseMultipart(req, boundaryMatch[1]);
+    const fields = parsedMp.fields || {};
+    const files = parsedMp.files || [];
+
+    const typeInput = String(fields.type || "appeal").toLowerCase();
+    const type = typeInput === "negotiation" ? "negotiation" : "appeal";
+    const file = files.find(f => f.fieldName === "template_file") || files[0];
+    if (!file) return redirect(res, "/data-management?tab=revenue");
+
+    const ext = path.extname(String(file.filename || "")).toLowerCase();
+    if (![".html", ".htm", ".txt", ".docx"].includes(ext)) {
+      return redirect(res, "/data-management?tab=revenue&err=bad_ext");
+    }
+
+    const dir = path.join(UPLOADS_DIR, org.org_id, "packet_templates", type);
+    ensureDir(dir);
+
+    removePacketTemplate(org.org_id, type);
+
+    const stored = path.join(dir, Date.now() + "_" + path.basename(String(file.filename || "template")));
+    fs.writeFileSync(stored, file.buffer);
+
+    savePacketTemplate(org.org_id, type, {
+      original_filename: file.filename,
+      stored_path: stored,
+      enabled: fields.enabled === "on" || fields.enabled === "1" || fields.enabled === "true"
+    });
+
+    return redirect(res, "/data-management?tab=revenue&ok=template_saved");
+  }
+
+  if (method === "POST" && pathname === "/packet-template/remove") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const type = String(params.get("type") || "appeal").toLowerCase() === "negotiation" ? "negotiation" : "appeal";
+    removePacketTemplate(org.org_id, type);
+    return redirect(res, "/data-management?tab=revenue&ok=template_removed");
+  }
+
+  if (method === "POST" && pathname === "/packet-template/toggle") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const type = String(params.get("type") || "appeal").toLowerCase() === "negotiation" ? "negotiation" : "appeal";
+    const enabled = String(params.get("enabled") || "0") === "1";
+    const tpl = getPacketTemplate(org.org_id, type);
+    if (tpl) {
+      savePacketTemplate(org.org_id, type, {
+        original_filename: tpl.original_filename,
+        stored_path: tpl.stored_path,
+        enabled
+      });
+    }
+    return redirect(res, "/data-management?tab=revenue&ok=template_updated");
+  }
+
+  if (method === "GET" && pathname === "/packet-template/preview") {
+    const type = String(parsed.query.type || "appeal").toLowerCase() === "negotiation" ? "negotiation" : "appeal";
+    const sample = getTemplatePreviewSample(org.org_id);
+    const claim = {
+      org_id: org.org_id,
+      claim_number: sample.claim_number,
+      payer: sample.payer,
+      dos: sample.dos,
+      amount_billed: sample.amount_billed,
+      paid_amount: sample.amount_paid,
+      expected_insurance: sample.expected_insurance
+    };
+
+    const derived = evaluateClaimDerived(claim, buildClaimContext(org.org_id));
+    const html = buildPacketHTML({ org_id: org.org_id, type, claim, derived, ws: null });
+    const finalHTML = applyTemplate(org.org_id, type, html);
+    return send(res, 200, renderPage("Preview", finalHTML, navUser(), { showChat:false, orgName: org.org_name }));
+  }
+
+  if (method === "GET" && pathname === "/packet/export") {
+    const type = String(parsed.query.type || "appeal").toLowerCase() === "negotiation" ? "negotiation" : "appeal";
+    const billed_id = String(parsed.query.billed_id || "").trim();
+    const claim = getBilledById(org.org_id, billed_id);
+    if (!claim) return redirect(res, "/claims?view=all");
+    const derived = evaluateClaimDerived(claim, buildClaimContext(org.org_id));
+    const ws = ensureAgentWorkspace(org.org_id, claim);
+
+    const packet = buildPacketHTML({ org_id: org.org_id, type, claim, derived, ws });
+    const finalHTML = applyTemplate(org.org_id, type, packet);
+
+    const page = renderPage("Packet Export", `
+      <button class="btn" onclick="window.print()">Print / Save PDF</button>
+      <div style="margin-top:12px;">${finalHTML}</div>
+    `, navUser(), { showChat:false, orgName: org.org_name });
+
+    return send(res, 200, page);
+  }
+
+  if (method === "POST" && pathname === "/account/templates") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const next = {
+      appeal_opening: String(params.get("appeal_opening") || ""),
+      appeal_footer: String(params.get("appeal_footer") || ""),
+      negotiation_opening: String(params.get("negotiation_opening") || ""),
+      negotiation_footer: String(params.get("negotiation_footer") || ""),
+      signature_block: String(params.get("signature_block") || "")
+    };
+
+    saveOrgSettings(org.org_id, { letter_defaults: { ...next } });
+    saveTemplateSettings(org.org_id, { org_id: org.org_id, ...next, updated_at: nowISO(), updated_by: user.user_id });
+    savePracticeSettings(org.org_id, { ...next });
+
+    return redirect(res, "/data-management?tab=revenue&ok=saved");
   }
 
   if (method === "POST" && pathname === "/data-management/templates/upload") {
@@ -16546,7 +16579,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
           <input type="hidden" name="tab" value="${safeStr(channel)}" />
           <button class="btn secondary" type="submit">Regenerate AI Draft</button>
         </form>
-        <a class="btn secondary" href="/agent-workspace/export?billed_id=${encodeURIComponent(billed_id)}">Export Packet (Print/PDF)</a>
+        <a class="btn secondary" href="/packet/export?billed_id=${encodeURIComponent(billed_id)}">Export Packet (Print/PDF)</a>
         <form method="POST" action="/agent-workspace/status" style="margin:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
           <input type="hidden" name="tab" value="${safeStr(channel)}" />
@@ -16939,20 +16972,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
   if (method === "GET" && pathname === "/agent-workspace/export") {
     const billed_id = String(parsed.query.billed_id || "").trim();
-    const billedAll = readJSON(FILES.billed, []);
-    const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
-    if (!b) return redirect(res, "/claims?view=all");
-    const claimCtx = buildClaimContext(org.org_id);
-    const d = evaluateClaimDerived(b, claimCtx);
-    const ws = ensureAgentWorkspace(org.org_id, b);
-    ensureWorkspacePacket(ws);
-    ensurePacketSections(ws, b);
-    ws.activity.last_exported_at = nowISO();
-    saveAgentWorkspace(org.org_id, ws);
-    const attachmentRows = (ws.attachments || []).map(a => `<li><a href="/agent-workspace/file?attachment_id=${encodeURIComponent(a.attachment_id)}">${safeStr(a.filename)}</a> (${safeStr(a.kind||"supporting")})</li>`).join("") || `<li>None</li>`;
-    const checklist = [...(ws.packet?.required_appeal||[]), ...(ws.packet?.clinical_support||[]), ...(ws.packet?.contract_policy||[])].map(i => `<li>${safeStr(i.label)}: ${i.status === "present" ? "Present" : "Missing"}</li>`).join("");
-    const html = renderPage("Packet Export", `<h2>Packet Export</h2><p class="muted">Print or save this page as PDF.</p><button class="btn" onclick="window.print()">Print / Save as PDF</button><h3>Claim Snapshot</h3><table><tr><th>Claim #</th><td>${safeStr(b.claim_number||"")}</td></tr><tr><th>Payer</th><td>${safeStr(b.payer||"")}</td></tr><tr><th>DOS</th><td>${safeStr(b.dos||"")}</td></tr><tr><th>Status</th><td>${safeStr(d.lifecycleStage||"")}</td></tr></table><h3>Appeal Packet Sections</h3><pre style="white-space:pre-wrap;border:1px solid var(--border);padding:10px;border-radius:8px;">${safeStr([ws.appeal?.packet_sections?.header, ws.appeal?.packet_sections?.claim_summary, ws.appeal?.packet_sections?.financial_summary, ws.appeal?.packet_sections?.argument, ws.appeal?.packet_sections?.requested_action, ws.appeal?.packet_sections?.attachments_index, ws.appeal?.packet_sections?.signature].filter(Boolean).join("\n\n"))}</pre><h3>Negotiation Packet Sections</h3><pre style="white-space:pre-wrap;border:1px solid var(--border);padding:10px;border-radius:8px;">${safeStr([ws.negotiation?.packet_sections?.header, ws.negotiation?.packet_sections?.claim_summary, ws.negotiation?.packet_sections?.financial_summary, ws.negotiation?.packet_sections?.variance_explanation, ws.negotiation?.packet_sections?.requested_amount ? `Requested Amount: ${ws.negotiation?.packet_sections?.requested_amount}` : "", ws.negotiation?.packet_sections?.requested_action, ws.negotiation?.packet_sections?.attachments_index, ws.negotiation?.packet_sections?.signature].filter(Boolean).join("\n\n"))}</pre><h3>Packet Checklist</h3><p class="muted">Completeness: ${ws.packet?.completeness?.complete || 0}/${ws.packet?.completeness?.total || 0} (${ws.packet?.completeness?.pct || 0}%)</p><ul>${checklist}</ul><h3>Attachments</h3><ul>${attachmentRows}</ul>`, navUser(), {showChat:false, orgName: org.org_name});
-    return send(res, 200, html);
+    const type = String(parsed.query.type || "appeal").toLowerCase() === "negotiation" ? "negotiation" : "appeal";
+    return redirect(res, `/packet/export?billed_id=${encodeURIComponent(billed_id)}&type=${encodeURIComponent(type)}`);
   }
 
   if (method === "GET" && pathname === "/agent-workspace/file") {
