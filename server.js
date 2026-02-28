@@ -8681,6 +8681,42 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     i2: intel2
   };
   const deepDiveB64 = Buffer.from(JSON.stringify(deepDiveData)).toString("base64");
+  const denialByMonth = computeDenialTrends(org.org_id);
+  const payTrend = computePaymentTrends(org.org_id);
+  const ebDenialMonths = Object.keys(denialByMonth || {}).sort();
+  const ebDenialTotals = ebDenialMonths.map(k => Number((denialByMonth && denialByMonth[k] && denialByMonth[k].total) || 0));
+  const ebFunnel = {
+    billed: Number(m?.kpis?.totalBilled || m?.totalBilled || 0),
+    expected: Number(m?.kpis?.expectedInsuranceTotal || m?.expectedInsuranceTotal || m?.totalExpected || 0),
+    paid: Number(m?.kpis?.collectedTotal || m?.collectedTotal || m?.totalCollected || 0),
+    atRisk: Number(m?.kpis?.revenueAtRisk || m?.revenueAtRisk || 0)
+  };
+  const ebChartsB64 = Buffer.from(JSON.stringify({
+    denialLabels: ebDenialMonths,
+    denialTotals: ebDenialTotals,
+    billedSeries: Array.isArray(payTrend?.labels) ? payTrend.labels.map((_, i) => Number((payTrend && payTrend.billed && payTrend.billed[i]) || 0)) : [],
+    expectedSeries: Array.isArray(payTrend?.labels) ? payTrend.labels.map((_, i) => Number((payTrend && payTrend.expected && payTrend.expected[i]) || 0)) : [],
+    paidSeries: Array.isArray(payTrend?.labels) ? payTrend.labels.map((_, i) => Number((payTrend && payTrend.collected && payTrend.collected[i]) || 0)) : [],
+    atRiskSeries: Array.isArray(payTrend?.labels) ? payTrend.labels.map((_, i) => Number((payTrend && payTrend.atRisk && payTrend.atRisk[i]) || 0)) : [],
+    funnel: ebFunnel
+  })).toString("base64");
+
+  function renderTargetBar(label, current, target, invert=false){
+    const c = Number(current || 0);
+    const t = Math.max(1, Number(target || 0));
+    const pct = invert
+      ? Math.max(0, Math.min(100, c > 0 ? (t / c) * 100 : 0))
+      : Math.max(0, Math.min(100, (c / t) * 100));
+    const status = (invert ? (c <= t) : (c >= t)) ? "On Track" : "Below Target";
+    return `
+      <div class="eb-kpi">
+        <div class="l">${safeStr(label)}</div>
+        <div class="v">${formatNumberUI(c)}${label.includes("Days") ? "" : "%"}</div>
+        <div class="h">Target: ${formatNumberUI(t)}${label.includes("Days") ? "" : "%"} · <b>${status}</b></div>
+        <div class="eb-bar"><div style="width:${pct}%"></div></div>
+      </div>
+    `;
+  }
 
   // Revenue Intelligence stays structured. Copilot handles conversational AI.
   const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
@@ -8691,71 +8727,190 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   </div>`;
 
   const top5 = payerRanks.slice(0, 5);
-  const executiveBrief = `<div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
-    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-end;">
-      <div><div style="font-weight:900;font-size:16px;">Executive Brief</div><div class="muted small" style="margin-top:6px;">A fast snapshot of financial performance and what needs attention now.</div></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;"><a class="btn secondary" href="/executive-export">Export Executive PDF</a><a class="btn secondary" href="/dashboard">Revenue Overview</a></div>
-    </div>
-    <div class="hr"></div>
-    <div class="row" style="display:flex;gap:12px;flex-wrap:wrap;">
-      ${renderKpiCard("Financial Health", `${formatNumberUI(m.healthScore||0)}/100`, `Grade: ${safeStr(m.healthGrade||"—")}`, toneForGrade(m.healthGrade))}
-      ${renderKpiCard("Collected", formatMoneyUI(m.kpis.collectedTotal||0), "real cash collected", "good")}
-      ${renderKpiCard("Revenue At Risk", formatMoneyUI(m.kpis.revenueAtRisk||0), "underpaid + patient follow-up remaining", (m.kpis.revenueAtRisk||0) > 0 ? "warn" : "good")}
-      ${renderKpiCard("Denial Rate", `${Number(m.denialRate||0).toFixed(1)}%`, "lower is better", (m.denialRate||0) >= 20 ? "bad" : ((m.denialRate||0) >= 10 ? "warn" : "good"))}
-      ${renderKpiCard("Underpaid Rate", `${Number(m.underpaidRate||0).toFixed(1)}%`, "lower is better", (m.underpaidRate||0) >= 20 ? "bad" : ((m.underpaidRate||0) >= 10 ? "warn" : "good"))}
-      ${renderKpiCard("AR 90+ Exposure", `${Number(m.ar90Rate||0).toFixed(1)}%`, "portion of billed sitting 90+ days", (m.ar90Rate||0) >= 25 ? "bad" : ((m.ar90Rate||0) >= 12 ? "warn" : "good"))}
-    </div>
-    <div class="hr"></div>
-    <div class="ri-panel" style="margin-bottom:12px;">
-      <div style="font-weight:900;font-size:16px;">Recovery Intelligence ${infoIcon("Appeal Success: % of submitted appeals that resulted in approved/partial + payment posted. Negotiation ROI: Recovered cash / requested amount for submitted negotiation workspaces.")}</div>
-      <div class="ri-muted" style="margin-top:4px;">Standardized workspace-based recovery KPIs for executive tracking.</div>
-      <div class="row" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;">
-        ${renderKpiCard("Appeal Success Rate", `${Number(m.appealSuccessRate||0).toFixed(1)}%`, `% of submitted appeals that resulted in approved/partial + payment posted.`, (m.appealSuccessRate||0) >= 60 ? "good" : ((m.appealSuccessRate||0) >= 30 ? "warn" : "bad"))}
-        ${renderKpiCard("Appeals Submitted", formatNumberUI(m.appealSubmittedCount||0), "submitted appeal workspaces", "good")}
-        ${renderKpiCard("Negotiation ROI", `${Number(m.negotiationROI||0).toFixed(1)}%`, "Recovered cash / requested amount for submitted negotiation workspaces.", (m.negotiationROI||0) >= 60 ? "good" : ((m.negotiationROI||0) >= 30 ? "warn" : "bad"))}
-        ${renderKpiCard("Negotiations Submitted", formatNumberUI(m.negotiationSubmittedCount||0), "submitted negotiation workspaces", "good")}
-        ${renderKpiCard("Negotiated Requested", formatMoneyUI(m.negotiatedTotal||0), "submitted negotiation requested amount", "warn")}
-        ${renderKpiCard("Negotiated Recovered", formatMoneyUI(m.recoveredTotal||0), "paid_posted_amount (cash realized)", "good")}
-        ${renderKpiCard("Approved vs Paid", `${Number(m.approvedVsPaidPct||0).toFixed(1)}%`, "Recovered cash compared with approved dollars.", "warn")}
+  const topPayersToReviewHtml = `<div style="margin-top:10px;overflow:auto;"><table class="eb-table"><thead><tr><th>Payer</th><th>Grade</th><th>Score</th><th>At Risk</th><th></th></tr></thead><tbody>
+    ${top5.length ? top5.map(p=>`<tr><td style="font-weight:800;">${safeStr(p.payer)}</td><td><span class="badge ${gradeBadgeClass(p.grade)}">${safeStr(p.grade)}</span></td><td>${formatNumberUI(p.score)}</td><td>${formatMoneyUI(p.totalAtRisk||0)}</td><td style="white-space:nowrap;"><a class="btn small" href="/analyze-payer?payer=${encodeURIComponent(p.payer)}">Analyze</a> <a class="btn secondary small" href="/actions?payer=${encodeURIComponent(p.payer)}">Actions</a></td></tr>`).join("") : `<tr><td colspan="5" class="muted">No payer data yet.</td></tr>`}
+  </tbody></table></div>`;
+  const payerRankingHtml = renderPayerRankingTable(payerRanks, { limit: 10, showAllLink: true });
+  const targets = getOrgSettings(org.org_id).recovery_targets || {};
+  const executiveBrief = `
+  <style>
+    /* ===== Executive Brief 2.0 (Enterprise Layout) ===== */
+    .eb-wrap{display:flex;flex-direction:column;gap:16px;}
+    .eb-hero{display:grid;grid-template-columns:1.2fr .8fr;gap:14px;align-items:stretch;}
+    .eb-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;box-shadow:var(--shadow);}
+    .eb-title{font-weight:900;font-size:18px;margin:0;}
+    .eb-sub{color:var(--muted);font-size:12px;margin-top:4px;}
+    .eb-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px;}
+    .eb-kpi{border:1px solid var(--border);border-radius:14px;padding:12px;background:rgba(17,24,39,.02);}
+    .eb-kpi .l{color:var(--muted);font-size:12px;font-weight:700;}
+    .eb-kpi .v{font-size:22px;font-weight:900;margin-top:4px;}
+    .eb-kpi .h{color:var(--muted);font-size:11px;margin-top:6px;line-height:1.25;}
+    .eb-scoreRow{display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
+    .eb-scoreRing{width:120px;height:120px;border-radius:999px;border:10px solid rgba(17,24,39,.10);display:flex;align-items:center;justify-content:center;flex-direction:column;}
+    .eb-scoreRing .s{font-size:26px;font-weight:900;line-height:1;}
+    .eb-scoreRing .g{font-size:12px;color:var(--muted);margin-top:6px;font-weight:800;}
+    .eb-scoreText{flex:1;min-width:220px;}
+    .eb-insight{margin-top:10px;border:1px solid var(--border);border-radius:14px;padding:12px;background:rgba(99,102,241,.06);}
+    .eb-insight b{font-weight:900;}
+    .eb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+    .eb-chart{border:1px solid var(--border);border-radius:16px;padding:12px;background:rgba(17,24,39,.02);}
+    .eb-chart h4{margin:0 0 8px;font-weight:900;font-size:13px;}
+    .eb-chart canvas{width:100%;height:260px;}
+    .eb-sectionHead{display:flex;justify-content:space-between;gap:10px;align-items:end;flex-wrap:wrap;}
+    .eb-sectionHead h3{margin:0;font-weight:900;font-size:14px;}
+    .eb-sectionHead .muted{font-size:12px;}
+    .eb-recovery{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}
+    .eb-targets{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;}
+    .eb-bar{height:10px;border-radius:999px;background:rgba(17,24,39,.08);overflow:hidden;margin-top:8px;}
+    .eb-bar > div{height:100%;border-radius:999px;background:rgba(17,24,39,.55);width:0%;}
+    .eb-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:11px;font-weight:900;background:#fff;color:var(--text);}
+    .eb-table{width:100%;border-collapse:collapse;font-size:12px;}
+    .eb-table th,.eb-table td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:middle;}
+    .eb-table th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;}
+    .eb-split{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+    @media(max-width:980px){.eb-hero{grid-template-columns:1fr;} .eb-kpis{grid-template-columns:1fr;} .eb-grid2{grid-template-columns:1fr;} .eb-recovery{grid-template-columns:1fr 1fr;} .eb-targets{grid-template-columns:1fr 1fr;} .eb-split{grid-template-columns:1fr;}}
+  </style>
+  <div class="eb-wrap">
+    <div class="eb-hero">
+      <div class="eb-card">
+        <div class="eb-title">Executive Performance Snapshot</div>
+        <div class="eb-sub">A fast, visual view of health, risk, and payer priority.</div>
+        <div class="eb-scoreRow" style="margin-top:12px;">
+          <div class="eb-scoreRing" id="ebScoreRing">
+            <div class="s" id="ebScoreVal">${formatNumberUI(Number(m.healthScore || 64))}/100</div>
+            <div class="g">Grade: ${safeStr(m.healthGrade || "D")}</div>
+          </div>
+          <div class="eb-scoreText">
+            <div class="eb-insight"><b>Executive Insight:</b> <span class="muted">Revenue risk is concentrated at the payer level. Prioritize the top at-risk payers and tighten denial follow-up cadence.</span></div>
+            <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">
+              <span class="eb-pill">Collected: ${formatMoneyUI(Number(m.kpis.collectedTotal || 0))}</span>
+              <span class="eb-pill">At Risk: ${formatMoneyUI(Number(m.kpis.revenueAtRisk || 0))}</span>
+              <span class="eb-pill">Denial Rate: ${formatNumberUI(Number(m.denialRate || 0))}%</span>
+            </div>
+          </div>
+        </div>
+        <div class="eb-kpis">
+          <div class="eb-kpi"><div class="l">Revenue At Risk</div><div class="v">${formatMoneyUI(Number(m.kpis.revenueAtRisk || 0))}</div><div class="h">Underpaid + patient follow-up remaining.</div></div>
+          <div class="eb-kpi"><div class="l">Denial Rate</div><div class="v">${formatNumberUI(Number(m.denialRate || 0))}%</div><div class="h">Lower is better. Watch payer outliers.</div></div>
+          <div class="eb-kpi"><div class="l">AR 90+ Exposure</div><div class="v">${formatNumberUI(Number(m.ar90Rate || 0))}%</div><div class="h">Receivables at risk beyond 90 days.</div></div>
+        </div>
+      </div>
+      <div class="eb-card">
+        <div class="eb-sectionHead"><h3>Executive Actions</h3><div class="muted">One-click pathways.</div></div>
+        <div class="hr"></div>
+        <div style="display:grid;gap:10px;">
+          <a class="btn" href="/executive-export">Export Executive PDF</a>
+          <a class="btn secondary" href="/dashboard">Open Revenue Overview</a>
+          <a class="btn secondary" href="/revenue-intelligence?tab=payers">Open Payer Hub</a>
+          <a class="btn secondary" href="/data-management?tab=revenue">Automation & Templates</a>
+        </div>
+        <div class="hr"></div>
+        <div class="muted small">Tip: Use <b>Payer Hub</b> for follow-up strategy and deep dives by payer.</div>
       </div>
     </div>
-    <div class="ri-panel" style="margin-bottom:12px;">
-      <div style="font-weight:900;font-size:16px;">
-        Organization Targets ${infoIcon("Configured inside Organization Settings. Used for executive comparison.")}
-      </div>
-      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;">
-        <div>
-          <strong>Appeal Target</strong><br/>
-          <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_appeal_success_rate || 60)}%</span>
-        </div>
-        <div>
-          <strong>Negotiation ROI Target</strong><br/>
-          <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_negotiation_roi || 60)}%</span>
-        </div>
-        <div>
-          <strong>Days-to-Pay Target</strong><br/>
-          <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_days_to_pay || 30)}</span>
-        </div>
-        <div>
-          <strong>AR90 Target</strong><br/>
-          <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_ar90_rate || 15)}%</span>
-        </div>
-        <div>
-          <strong>AI Case Readiness Target</strong><br/>
-          <span class="muted small">${formatNumberUI(getOrgSettings(org.org_id).recovery_targets?.target_operational_discipline || 80)}%</span>
-        </div>
+    <div class="eb-grid2">
+      <div class="eb-card eb-chart"><h4>Revenue Flow (Funnel)</h4><canvas id="ebFunnel"></canvas><div class="muted small" style="margin-top:8px;">Billed → Expected → Paid → At Risk</div></div>
+      <div class="eb-card eb-chart"><h4>Denials Trend</h4><canvas id="ebDenials"></canvas><div class="muted small" style="margin-top:8px;">Recent periods based on available claim/payment history.</div></div>
+    </div>
+    <div class="eb-card">
+      <div class="eb-sectionHead"><h3>Recovery Performance</h3><div class="muted">Appeals + negotiations KPIs for executive tracking.</div></div>
+      <div class="hr"></div>
+      <div class="eb-recovery">
+        <div class="eb-kpi"><div class="l">Appeal Success Rate</div><div class="v">${formatNumberUI(Number(m.appealSuccessRate || 0))}%</div><div class="h">Approved/partial + payment posted.</div></div>
+        <div class="eb-kpi"><div class="l">Appeals Submitted</div><div class="v">${formatNumberUI(Number(m.appealSubmittedCount || 0))}</div><div class="h">Submitted appeal workspaces.</div></div>
+        <div class="eb-kpi"><div class="l">Negotiation ROI</div><div class="v">${formatNumberUI(Number(m.negotiationROI || 0))}%</div><div class="h">Recovered cash vs requested amount.</div></div>
+        <div class="eb-kpi"><div class="l">Negotiations Submitted</div><div class="v">${formatNumberUI(Number(m.negotiationSubmittedCount || 0))}</div><div class="h">Submitted negotiation workspaces.</div></div>
       </div>
     </div>
-    <div style="display:flex;gap:12px;flex-wrap:wrap;">
-      <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:rgba(17,24,39,.04);">
-        <div style="font-weight:900;">Top Payers To Review</div><div class="muted small" style="margin-top:6px;">Fast access into AI Payer Intelligence.</div>
-        <div style="margin-top:10px;overflow:auto;"><table><thead><tr><th>Payer</th><th>Grade</th><th>Score</th><th>At Risk</th><th></th></tr></thead><tbody>
-          ${top5.length ? top5.map(p=>`<tr><td style="font-weight:800;">${safeStr(p.payer)}</td><td><span class="badge ${gradeBadgeClass(p.grade)}">${safeStr(p.grade)}</span></td><td>${formatNumberUI(p.score)}</td><td>${formatMoneyUI(p.totalAtRisk||0)}</td><td style="white-space:nowrap;"><a class="btn small" href="/analyze-payer?payer=${encodeURIComponent(p.payer)}">Analyze</a> <a class="btn secondary small" href="/actions?payer=${encodeURIComponent(p.payer)}">Actions</a></td></tr>`).join("") : `<tr><td colspan="5" class="muted">No payer data yet.</td></tr>`}
-        </tbody></table></div>
+    <div class="eb-card">
+      <div class="eb-sectionHead"><h3>Payer Intelligence</h3><div class="muted">Prioritize risk payers, then review rankings.</div></div>
+      <div class="hr"></div>
+      <div class="eb-split">
+        <div><div style="font-weight:900;margin-bottom:8px;">Top Payers to Review</div>${topPayersToReviewHtml}</div>
+        <div><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><div style="font-weight:900;">Payer Ranking (A–F)</div><a class="btn secondary small" href="/revenue-intelligence?tab=payers">View Full Payer Rankings</a></div>${payerRankingHtml}</div>
       </div>
-      <div style="flex:1;min-width:360px;">${renderPayerRankingTable(payerRanks, { limit: 10, showAllLink: true })}</div>
     </div>
-  </div>`;
+    <div class="eb-card">
+      <div class="eb-sectionHead"><h3>Organization Targets</h3><div class="muted">Targets vs current performance.</div></div>
+      <div class="hr"></div>
+      <div class="eb-targets">
+        ${renderTargetBar("Appeal Target", Number(m.appealSuccessRate || 0), Number(targets.target_appeal_success_rate || 60))}
+        ${renderTargetBar("Negotiation ROI Target", Number(m.negotiationROI || 0), Number(targets.target_negotiation_roi || 60))}
+        ${renderTargetBar("Days-to-Pay Target", Number(m.avgDaysToPay || 0), Number(targets.target_days_to_pay || 30), true)}
+        ${renderTargetBar("AR90 Target", Number(m.ar90Rate || 0), Number(targets.target_ar90_rate || 15))}
+        ${renderTargetBar("AI Case Readiness", Number(m.operationalDisciplineScore || 0), Number(targets.target_operational_discipline || 80))}
+      </div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    const eb = JSON.parse(atob("${ebChartsB64}"));
+    const funnel = eb.funnel || { billed:0, expected:0, paid:0, atRisk:0 };
+    const fCtx = document.getElementById("ebFunnel");
+    const dCtx = document.getElementById("ebDenials");
+    function drawSimpleBar(canvas, labels, values){
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width = canvas.parentElement.clientWidth;
+      const h = canvas.height = 260;
+      ctx.clearRect(0,0,w,h);
+      const max = Math.max(...values, 1);
+      const pad = 28;
+      const bw = Math.max(28, Math.floor((w - pad*2) / values.length) - 18);
+      values.forEach((v,i)=>{
+        const x = pad + i*(bw+18);
+        const barH = Math.round((h-60) * (v/max));
+        const y = (h-40) - barH;
+        ctx.fillStyle = "rgba(17,24,39,.55)";
+        ctx.fillRect(x,y,bw,barH);
+        ctx.fillStyle = "rgba(17,24,39,.85)";
+        ctx.font = "12px system-ui";
+        ctx.fillText(labels[i], x, h-18);
+      });
+    }
+    function drawSimpleLine(canvas, labels, values){
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width = canvas.parentElement.clientWidth;
+      const h = canvas.height = 260;
+      ctx.clearRect(0,0,w,h);
+      const max = Math.max(...values, 1);
+      const padX = 28;
+      const padY = 20;
+      const plotW = w - padX*2;
+      const plotH = h - padY*2 - 30;
+      ctx.strokeStyle = "rgba(17,24,39,.22)";
+      ctx.beginPath();
+      ctx.moveTo(padX, padY);
+      ctx.lineTo(padX, padY + plotH);
+      ctx.lineTo(padX + plotW, padY + plotH);
+      ctx.stroke();
+      const step = values.length > 1 ? plotW / (values.length-1) : plotW;
+      ctx.strokeStyle = "rgba(17,24,39,.70)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      values.forEach((v,i)=>{
+        const x = padX + i*step;
+        const y = padY + plotH - ((v/max)*plotH);
+        if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      });
+      ctx.stroke();
+      ctx.fillStyle = "rgba(17,24,39,.85)";
+      ctx.font = "11px system-ui";
+      const show = labels.slice(-4);
+      show.forEach((lab, idx)=>{
+        const x = padX + (plotW/(show.length-1 || 1))*idx;
+        ctx.fillText(lab, x, h-12);
+      });
+    }
+    drawSimpleBar(fCtx, ["Billed","Expected","Paid","At Risk"], [funnel.billed, funnel.expected, funnel.paid, funnel.atRisk]);
+    drawSimpleLine(dCtx, (eb.denialLabels||[]).slice(-12), (eb.denialTotals||[]).slice(-12));
+    window.addEventListener("resize", ()=>{
+      drawSimpleBar(fCtx, ["Billed","Expected","Paid","At Risk"], [funnel.billed, funnel.expected, funnel.paid, funnel.atRisk]);
+      drawSimpleLine(dCtx, (eb.denialLabels||[]).slice(-12), (eb.denialTotals||[]).slice(-12));
+    });
+  })();
+  </script>`;
 
   const content = (
     tab === "payers" ? renderPayerHubTable(payerRanks, q) :
