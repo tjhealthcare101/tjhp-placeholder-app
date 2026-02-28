@@ -5370,6 +5370,8 @@ function renderPayerRankingTable(ranks, opts={}){
   const limit = Number(opts.limit || 10);
   const showAllLink = opts.showAllLink !== false;
   const view = (ranks || []).slice(0, limit);
+  const compact = opts.compact === true;
+  const showHeader = !compact;
 
   const tipGrade = "A–F grade is computed from denial rate, underpaid rate, and days-to-pay (lower is better).";
   const tipDenial = "Denied claims / total claims (lower is better).";
@@ -5379,16 +5381,20 @@ function renderPayerRankingTable(ranks, opts={}){
 
   return `
     <div>
-      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;">
-        <h3 style="margin-bottom:12px;">Payer Ranking (A–F) <span class="tooltip" data-tip="${tipGrade}">ⓘ</span></h3>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          ${showAllLink ? `<a class="btn secondary small" href="/payer-rankings">View Full Payer Rankings</a>` : ``}
-        </div>
-      </div>
+      ${
+        showHeader ? `
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;">
+            <h3 style="margin-bottom:12px;">Payer Ranking (A–F) <span class="tooltip" data-tip="${tipGrade}">ⓘ</span></h3>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              ${showAllLink ? `<a class="btn secondary small" href="/payer-rankings">View Full Payer Rankings</a>` : ``}
+            </div>
+          </div>
 
-      <div class="muted small" style="margin-bottom:10px;">
-        Top payers are ranked by payer score (0–100) and assigned a grade. Use this to prioritize contracting + follow-up strategy.
-      </div>
+          <div class="muted small" style="margin-bottom:10px;">
+            Top payers are ranked by payer score (0–100) and assigned a grade. Use this to prioritize contracting + follow-up strategy.
+          </div>
+        ` : ``
+      }
 
       <div class="eb-table-wrap">
         <table class="eb-table">
@@ -5411,11 +5417,7 @@ function renderPayerRankingTable(ranks, opts={}){
               view.length
                 ? view.map(r => `
                   <tr>
-                    <td>
-                      <a href="/analyze-payer?payer=${encodeURIComponent(r.payer)}" style="font-weight:700;">
-                        ${safeStr(r.payer)}
-                      </a>
-                    </td>
+                    <td><a href="/analyze-payer?payer=${encodeURIComponent(r.payer)}" style="font-weight:700;">${safeStr(r.payer)}</a></td>
                     <td class="center"><span class="badge ${gradeBadgeClass(r.grade)}">${safeStr(r.grade)}</span></td>
                     <td class="num">${formatNumberUI(r.score)}</td>
                     <td class="num">${formatNumberUI(r.totalClaims)}</td>
@@ -5424,15 +5426,10 @@ function renderPayerRankingTable(ranks, opts={}){
                     <td class="num">${formatNumberUI(Math.round(r.avgDaysToPay||0))}</td>
                     <td class="num">${formatMoneyUI(r.totalCollected||0)}</td>
                     <td class="num">${formatMoneyUI(r.totalAtRisk||0)}</td>
-                    <td class="center">
-                      <a class="btn small"
-                         href="/analyze-payer?payer=${encodeURIComponent(r.payer)}">
-                         AI Intelligence
-                      </a>
-                    </td>
+                    <td class="center"><a class="btn small" href="/analyze-payer?payer=${encodeURIComponent(r.payer)}">AI Intelligence</a></td>
                   </tr>
                 `).join("")
-                : `<tr><td colspan="10" class="muted center">No payer data found yet.</td></tr>`
+                : `<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px 0;">No payer data found yet.</td></tr>`
             }
           </tbody>
         </table>
@@ -8779,7 +8776,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       </table>
     </div>
 `;
-  const payerRankingHtml = renderPayerRankingTable(payerRanks, { limit: 10, showAllLink: true });
+  const payerRankingHtml = renderPayerRankingTable(payerRanks, { limit: 10, showAllLink: false, compact: true });
   const targets = getOrgSettings(org.org_id).recovery_targets || {};
   const financialScore = Number(m.healthScore || 64);
   const denialRate = Number(m.denialRate || 0);
@@ -8823,7 +8820,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     .eb-chart{border:1px solid var(--border);border-radius:16px;padding:12px;background:rgba(17,24,39,.02);}
     .eb-chart h4{margin:0 0 8px;font-weight:900;font-size:13px;}
     .eb-chart canvas{width:100%;height:260px;}
-    .eb-sectionHead{display:flex;justify-content:space-between;gap:10px;align-items:end;flex-wrap:wrap;}
+    .eb-sectionHead{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;}
     .eb-sectionHead h3{margin:0;font-weight:900;font-size:14px;}
     .eb-sectionHead .muted{font-size:12px;}
     .eb-recovery{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}
@@ -8967,7 +8964,12 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         ${topPayersToReviewHtml}
       </div>
       <div class="eb-card">
-        <div class="eb-sectionHead"><h3>Payer Ranking (A–F)</h3><a class="btn secondary small" href="/revenue-intelligence?tab=payers">View Full Payer Rankings</a></div>
+        <div class="eb-sectionHead">
+          <h3>Payer Ranking (A–F)</h3>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <a class="btn secondary small" href="/revenue-intelligence?tab=payers">View Full Payer Rankings</a>
+          </div>
+        </div>
         <div class="hr"></div>
         ${payerRankingHtml}
       </div>
