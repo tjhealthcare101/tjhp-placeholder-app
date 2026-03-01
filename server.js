@@ -1019,6 +1019,49 @@ function detectCopilotIntent(text){
   return { key:"general", label:"General" };
 }
 
+function determineBriefType({ question, intentKey, payerScope }) {
+  const q = String(question || "").toLowerCase();
+
+  if (payerScope) return "PAYER_PERFORMANCE";
+
+  if (intentKey === "denials") return "DENIAL_ANALYSIS";
+  if (intentKey === "ar_aging") return "AR_EXPOSURE";
+  if (intentKey === "revenue_at_risk") return "RISK_OVERVIEW";
+  if (intentKey === "forecast") return "FORECAST_REPORT";
+  if (intentKey === "payer_compare") return "PAYER_COMPARISON";
+
+  if (q.includes("denial")) return "DENIAL_ANALYSIS";
+  if (q.includes("ar") || q.includes("aging") || q.includes("90")) return "AR_EXPOSURE";
+  if (q.includes("at risk") || q.includes("risk")) return "RISK_OVERVIEW";
+  if (q.includes("forecast") || q.includes("projection")) return "FORECAST_REPORT";
+  if (q.includes("compare")) return "PAYER_COMPARISON";
+
+  return "EXECUTIVE_SNAPSHOT";
+}
+
+function buildBriefTitle({ briefType, payerScope, question }) {
+  const base = "Financial Performance Snapshot";
+  const payer = payerScope ? String(payerScope) : "";
+
+  switch (briefType) {
+    case "PAYER_PERFORMANCE":
+      return `${payer} Performance Snapshot (Last 30 Days)`;
+    case "PAYER_COMPARISON":
+      return "Payer Comparison Brief (Last 30 Days)";
+    case "DENIAL_ANALYSIS":
+      return "Denial Performance Brief (Last 30 Days)";
+    case "AR_EXPOSURE":
+      return "AR Exposure Brief (Last 30 Days)";
+    case "RISK_OVERVIEW":
+      return "Revenue Risk Drivers Brief (Last 30 Days)";
+    case "FORECAST_REPORT":
+      return "Revenue Forecast Brief (Next 30/60/90 Days)";
+    default:
+      if (question && question.length <= 60) return `${question.trim()} — Snapshot`;
+      return base;
+  }
+}
+
 function normalizePayerKey(v) {
   return String(v || "").trim().toLowerCase();
 }
@@ -1445,6 +1488,72 @@ function renderCopilotTiles(){
   `;
 }
 
+function renderBriefFocusSection(result) {
+  const t = String(result?.briefType || "EXECUTIVE_SNAPSHOT");
+  const m = result?.metrics || {};
+  const totals = m.totals || {};
+  const rates = m.rates || {};
+  const forecast = result?.forecast || {};
+  const denialForecast = result?.denialForecast || {};
+  const payerScope = result?.payerScope || "";
+
+  if (t === "PAYER_PERFORMANCE") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Payer Focus: ${safeStr(payerScope)}</div>
+      <div class="muted small">This brief is scoped to the payer referenced in your question.</div>
+    `;
+  }
+
+  if (t === "DENIAL_ANALYSIS") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Denial Focus</div>
+      <div class="muted small">Denial Rate: ${formatNumberUI(rates.denialRate || 0)}% · Appeal Success: ${formatNumberUI(rates.appealSuccessRate || 0)}%</div>
+      <div class="muted small" style="margin-top:6px;">
+        Forecast (30/60/90): ${formatNumberUI(denialForecast.projected30 || 0)}% / ${formatNumberUI(denialForecast.projected60 || 0)}% / ${formatNumberUI(denialForecast.projected90 || 0)}%
+      </div>
+    `;
+  }
+
+  if (t === "AR_EXPOSURE") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">AR Exposure Focus</div>
+      <div class="muted small">At Risk: ${formatMoneyUI(totals.atRisk || 0)} · Avg Days-to-Pay: ${formatNumberUI(result?.avgDaysToPay || 0)}</div>
+    `;
+  }
+
+  if (t === "RISK_OVERVIEW") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Risk Drivers Focus</div>
+      <div class="muted small">At Risk: ${formatMoneyUI(totals.atRisk || 0)} · Projected 30d: ${formatMoneyUI(forecast.projected30 || 0)}</div>
+    `;
+  }
+
+  if (t === "FORECAST_REPORT") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Forecast Focus</div>
+      <div class="muted small">
+        At Risk now: ${formatMoneyUI(forecast.currentAtRisk || totals.atRisk || 0)} ·
+        30/60/90: ${formatMoneyUI(forecast.projected30 || 0)} / ${formatMoneyUI(forecast.projected60 || 0)} / ${formatMoneyUI(forecast.projected90 || 0)}
+      </div>
+    `;
+  }
+
+  if (t === "PAYER_COMPARISON") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Payer Comparison Focus</div>
+      <div class="muted small">Use this brief to compare payer risk and denial performance.</div>
+    `;
+  }
+
+  return "";
+}
+
 function renderCopilotBriefMessage(result, brief_id, workspace_id){
   const r = result || {};
   const m = r.metrics || {};
@@ -1487,7 +1596,7 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
         <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">
           <div>
             <div class="muted" style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;">Executive Copilot Brief</div>
-            <div style="font-size:18px;font-weight:900;margin-top:4px;">Financial Performance Snapshot</div>
+            <div style="font-size:18px;font-weight:900;margin-top:4px;">${safeStr(r.briefTitle || "Financial Performance Snapshot")}</div>
             <div class="muted">KPI highlights, drivers, and recommended actions.</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -1503,6 +1612,8 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
           <div class="ws-kpi"><div class="ws-kpi-l">Denial Rate</div><div class="ws-kpi-v">${Number(rates.denialRate||0).toFixed(1)}%</div></div>
           <div class="ws-kpi"><div class="ws-kpi-l">AI Case Readiness</div><div class="ws-kpi-v">${Number(r.metrics?.disciplineScore||0).toFixed(0)}/100</div></div>
         </div>
+
+        ${renderBriefFocusSection(r)}
 
         <div style="margin-top:12px;">
           <div style="font-weight:900;margin-bottom:6px;">Executive Summary</div>
@@ -1547,6 +1658,9 @@ function buildCopilotResponse({
 
   const range = rangeFromPreset(rangePreset || "last30");
   const payerScope = detectPayerFromPrompt(question, org_id);
+  const intent = detectCopilotIntent(question);
+  const briefType = determineBriefType({ question, intentKey: intent.key, payerScope });
+  const briefTitle = buildBriefTitle({ briefType, payerScope, question });
   const scoped = payerScope ? computePayerSpecificMetrics(org_id, payerScope, rangePreset) : null;
   const dashboard = payerScope
     ? null
@@ -1714,6 +1828,9 @@ function buildCopilotResponse({
   );
 
   return {
+    briefType,
+    briefTitle,
+    intentKey: intent.key,
     bullets,
     charts,
     metrics,
@@ -2154,7 +2271,7 @@ function createCopilotWorkspaceFromPrompt(org_id, prompt) {
     title: prompt.slice(0, 60),
     messages: [
       { role: "user", content: prompt, created_at: nowISO() },
-      { role: "assistant", content: "Executive brief generated below.", created_at: nowISO() }
+      { role: "assistant", content: buildExecutiveTitle(result), created_at: nowISO() }
     ],
     latest_brief: { brief_id, result },
     created_at: nowISO(),
@@ -2169,6 +2286,7 @@ function createCopilotWorkspaceFromPrompt(org_id, prompt) {
 // ===========================
 function buildExecutiveTitle(result) {
   if (!result) return "Financial Performance Snapshot";
+  if (result.briefTitle) return String(result.briefTitle);
 
   if (result.payerScope) {
     return `${result.payerScope} Performance Snapshot (Last 30 Days)`;
@@ -9747,10 +9865,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
     <div class="ws-layout" id="wsLayout">
       <div class="ws-side">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-          <div style="font-weight:900;">Workspaces</div>
+          <div style="font-weight:900;">Saved Analyses</div>
           <div style="display:flex;gap:6px;align-items:center;">
             <button type="button" class="btn secondary small" id="wsCollapseBtn">Collapse</button>
-            <a class="btn secondary small" href="/ai-copilot?new=1">New</a>
+            <a class="btn secondary small" href="/ai-copilot?new=1">New Analysis</a>
           </div>
         </div>
         <div class="hr"></div>
@@ -9765,7 +9883,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 </div>
               </a>
             `).join("")
-            : `<div class="muted">No workspaces yet.</div>`
+            : `<div class="muted">No saved analyses yet.</div>`
         }
       </div>
 
@@ -9778,7 +9896,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
             ${parsed.query.limit ? `<div class="muted" style="margin-top:6px;color:#b91c1c;">${getCopilotLimitMessage(org.org_id)?.message || ""}</div>` : ``}
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button type="button" class="btn secondary small" id="wsExpandBtn" style="display:none;">☰ Workspaces</button>
+            <button type="button" class="btn secondary small" id="wsExpandBtn" style="display:none;">☰ Saved Analyses</button>
             ${workspace?.workspace_id ? `<a class="btn secondary small" href="/ai-copilot/export?workspace_id=${encodeURIComponent(workspace.workspace_id)}">Export PDF</a>` : ``}
             <a class="btn secondary small" href="/ai-copilot">Refresh</a>
           </div>
@@ -9796,7 +9914,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
             <textarea id="copilotComposer" name="prompt" required placeholder="Ask for an executive brief, risk drivers, payer analysis, denial trends, underpayment recovery..."></textarea>
             <div class="btnRow" style="margin-top:10px;">
               <button class="btn" type="submit" ${copilotUsage.limitReached ? "disabled" : ""} title="${copilotUsage.limitReached ? (getCopilotLimitMessage(org.org_id)?.message || "") : ""}">${copilotUsage.limitReached ? "Limit Reached" : "Send"}</button>
-              <a class="btn secondary" href="/ai-copilot?new=1">New Brief</a>
+              <a class="btn secondary" href="/ai-copilot?new=1">New Analysis</a>
               <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence AI</a>
             </div>
           </form>
@@ -9912,7 +10030,7 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
   writeJSON(FILES.copilot_briefs, briefs);
 
   workspace.latest_brief = { brief_id, result };
-  workspace.messages.push({ role: "assistant", content: "Executive brief generated below.", created_at: nowISO() });
+  workspace.messages.push({ role: "assistant", content: buildExecutiveTitle(result), created_at: nowISO() });
 
   workspace.updated_at = nowISO();
   saveCopilotWorkspace(workspace);
