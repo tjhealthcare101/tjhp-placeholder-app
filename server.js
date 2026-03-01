@@ -5462,16 +5462,18 @@ function evaluateClaimDerived(claim, ctx={}){
   const explicitDenialUpload = denialDocAttached || String(appealCase?.status || "").toLowerCase().includes("denied");
   const hasDenialContext = !!(denialReason || denialDocAttached || appealCase || explicitDenialUpload);
 
-  let lifecycleStage = "Submitted";
+  const expectedAmount = Number(expectedInsurance || 0);
+
+  let lifecycleStage = "Paid";
   if (hasActiveAppealOrNegotiation) {
     lifecycleStage = "In Appeal/Negotiation";
   } else if (submittedFlag && !hasPaymentRecord) {
     lifecycleStage = "Waiting Payment";
-  } else if (hasPaymentRecord && paidAmount <= 0.0001) {
+  } else if (hasPaymentRecord && paidAmount <= 0.0001 && expectedAmount > 0) {
     lifecycleStage = "Denied";
     const settings = getPracticeSettings(claim.org_id);
     if (settings.auto_create_denial_cases === true) ensureDenialCaseForClaim(claim);
-  } else if (hasPaymentRecord && insuranceRemaining > 0.0001) {
+  } else if (hasPaymentRecord && paidAmount > 0 && paidAmount + 0.0001 < expectedAmount) {
     lifecycleStage = "Underpaid";
   } else if (insuranceRemaining <= 0.0001 && patientBalanceRemaining > 0.0001) {
     lifecycleStage = "Patient Follow-Up";
@@ -10807,6 +10809,12 @@ if (method === "GET" && pathname === "/actions") {
     const claimLink = `/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}`;
     const badgeCls = badgeClassForStatus(x.st);
 
+    // ---- FIX: Correct Paid Calculation for Action Center ----
+    const paidAmount =
+      Number(b.paidInsurance || 0) ||
+      Number(b.totalPaid || 0) ||
+      Number((b.payments || []).reduce((sum,p)=>sum + Number(p.amount || 0),0) || 0);
+
     let actionsHtml = '';
     if (x.kind === "denial") {
       actionsHtml = `
@@ -10837,7 +10845,7 @@ if (method === "GET" && pathname === "/actions") {
     return `<tr>
       <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
       <td>${safeStr(b.payer||"")}</td>
-      ${billedPaidCell(b.amount_billed, (b.insurance_paid || b.paid_amount))}
+      ${billedPaidCell(b.amount_billed, paidAmount)}
       <td><span class="badge ${badgeCls}">${safeStr(x.st)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
       <td>${formatMoneyUI(x.atRisk||0)}</td>
       <td>${x.riskScore}</td>
