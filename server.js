@@ -1062,6 +1062,89 @@ function buildBriefTitle({ briefType, payerScope, question }) {
   }
 }
 
+// ===============================
+// EXECUTIVE ACTION ROUTING ENGINE
+// ===============================
+function buildActionUrl(base, params = {}) {
+  const q = Object.entries(params)
+    .filter(([_, v]) => v !== undefined && v !== null && String(v).trim() !== "")
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .join("&");
+  return q ? `${base}${base.includes("?") ? "&" : "?"}${q}` : base;
+}
+
+function determinePrimaryAction(result) {
+  const briefType = String(result?.briefType || "EXECUTIVE_SNAPSHOT");
+  const payerScope = String(result?.payerScope || "");
+  const totals = result?.metrics?.totals || {};
+  const rates = result?.metrics?.rates || {};
+
+  const atRisk = Number(totals.atRisk || 0);
+  const denialRate = Number(rates.denialRate || 0);
+
+  if (briefType === "DENIAL_ANALYSIS" || denialRate >= 20) {
+    return { type: "denials", label: payerScope ? "Review Payer Denials" : "Review Denials", priority: "high" };
+  }
+  if (briefType === "RISK_OVERVIEW" || atRisk >= 25000) {
+    return { type: "underpayments", label: payerScope ? "Review Payer Underpayments" : "Review Underpayments", priority: "high" };
+  }
+  if (briefType === "AR_EXPOSURE") {
+    return { type: "ar", label: "Review AR Aging", priority: "medium" };
+  }
+  if (briefType === "FORECAST_REPORT") {
+    return { type: "forecast", label: "View Forecast", priority: "medium" };
+  }
+  if (briefType === "PAYER_PERFORMANCE" && payerScope) {
+    return { type: "payerHub", label: "Open Payer Hub", priority: "medium" };
+  }
+
+  return { type: "overview", label: "Open Action Center", priority: "normal" };
+}
+
+function buildActionLinks(result, rangePreset = "last30") {
+  const payerScope = String(result?.payerScope || "");
+  const briefType = String(result?.briefType || "EXECUTIVE_SNAPSHOT");
+  const links = [];
+
+  links.push({
+    type: "payerHub",
+    label: "Open Payer Hub",
+    url: buildActionUrl("/revenue-intelligence", { tab: "payers", payer: payerScope || "" })
+  });
+
+  links.push({
+    type: "denials",
+    label: payerScope ? "View Payer Denials" : "View Denials",
+    url: buildActionUrl("/actions", { tab: "denials", payer: payerScope, range: rangePreset })
+  });
+
+  links.push({
+    type: "underpayments",
+    label: payerScope ? "View Payer Underpayments" : "View Underpayments",
+    url: buildActionUrl("/actions", { tab: "underpayments", payer: payerScope, range: rangePreset })
+  });
+
+  links.push({
+    type: "ar",
+    label: "View AR / Aging",
+    url: buildActionUrl("/revenue-intelligence", { tab: "executive", focus: "ar", payer: payerScope, range: rangePreset })
+  });
+
+  links.push({
+    type: "forecast",
+    label: "View Forecast",
+    url: buildActionUrl("/revenue-intelligence", { tab: "forecast", payer: payerScope, range: rangePreset })
+  });
+
+  if (briefType === "PAYER_PERFORMANCE") return links.filter(x => ["payerHub", "denials", "underpayments"].includes(x.type));
+  if (briefType === "DENIAL_ANALYSIS") return links.filter(x => ["denials", "payerHub"].includes(x.type));
+  if (briefType === "AR_EXPOSURE") return links.filter(x => ["ar", "payerHub"].includes(x.type));
+  if (briefType === "RISK_OVERVIEW") return links.filter(x => ["underpayments", "denials", "payerHub"].includes(x.type));
+  if (briefType === "FORECAST_REPORT") return links.filter(x => ["forecast", "payerHub"].includes(x.type));
+
+  return links.filter(x => ["payerHub", "denials", "underpayments"].includes(x.type));
+}
+
 function normalizePayerKey(v) {
   return String(v || "").trim().toLowerCase();
 }
@@ -1555,61 +1638,18 @@ function renderBriefFocusSection(result) {
 }
 
 function renderDynamicActionButtons(result) {
-  const briefType = String(result?.briefType || "");
-  const payerScope = result?.payerScope || "";
+  const links = Array.isArray(result?.actionLinks) ? result.actionLinks : [];
+  const primary = result?.primaryAction?.type || "";
 
-  const buttons = [];
-
-  function btn(label, href) {
-    return `<a class="btn secondary small" href="${href}">${label}</a>`;
-  }
-
-  if (briefType === "PAYER_PERFORMANCE") {
-    if (payerScope) {
-      buttons.push(
-        btn("View Payer Intelligence", `/revenue-intelligence?tab=payers&payer=${encodeURIComponent(payerScope)}`)
-      );
-      buttons.push(
-        btn("View Payer Denials", `/actions?tab=denials&payer=${encodeURIComponent(payerScope)}`)
-      );
-      buttons.push(
-        btn("View Payer Underpayments", `/actions?tab=underpayments&payer=${encodeURIComponent(payerScope)}`)
-      );
-    }
-  }
-
-  if (briefType === "DENIAL_ANALYSIS") {
-    buttons.push(btn("View All Denials", `/actions?tab=denials`));
-    if (payerScope) {
-      buttons.push(
-        btn("View This Payer's Denials", `/actions?tab=denials&payer=${encodeURIComponent(payerScope)}`)
-      );
-    }
-  }
-
-  if (briefType === "AR_EXPOSURE") {
-    buttons.push(btn("View AR Aging", `/revenue-intelligence?tab=ar`));
-    buttons.push(btn("Open Action Center", `/actions`));
-  }
-
-  if (briefType === "RISK_OVERVIEW") {
-    buttons.push(btn("Open Action Center", `/actions`));
-    buttons.push(btn("View Top Payers", `/revenue-intelligence?tab=payers`));
-  }
-
-  if (briefType === "FORECAST_REPORT") {
-    buttons.push(btn("View Forecast Trends", `/revenue-intelligence`));
-  }
-
-  if (briefType === "PAYER_COMPARISON") {
-    buttons.push(btn("Open Payer Hub", `/revenue-intelligence?tab=payers`));
-  }
-
-  if (!buttons.length) return "";
+  if (!links.length) return "";
 
   return `
-    <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">
-      ${buttons.join("")}
+    <div class="ws-actions">
+      ${links.map(l => {
+        const isPrimary = l.type === primary;
+        const cls = isPrimary ? "btn" : "btn secondary";
+        return `<a class="${cls} small" href="${safeStr(l.url)}">${safeStr(l.label)}</a>`;
+      }).join("")}
     </div>
   `;
 }
@@ -1883,6 +1923,9 @@ function buildCopilotResponse({
     (metrics.totals.atRisk > metrics.totals.billed * 0.2 ? 20 : 0)
   );
 
+  const primaryAction = determinePrimaryAction({ briefType, payerScope, metrics, forecast, denialForecast });
+  const actionLinks = buildActionLinks({ briefType, payerScope, metrics }, rangePreset || "last30");
+
   return {
     briefType,
     briefTitle,
@@ -1897,7 +1940,9 @@ function buildCopilotResponse({
     disciplineDrivers,
     executiveActions,
     payerRiskScore,
-    topPayers
+    topPayers,
+    primaryAction,
+    actionLinks
   };
 }
 
@@ -10364,13 +10409,15 @@ function renderClaimFinancialContext(billedClaim, derived){
 if (method === "GET" && pathname === "/actions") {
   const tab = String(parsed.query.tab || "all").toLowerCase(); // all|denials|underpayments|awaiting|followup
   const q = String(parsed.query.q || "").trim().toLowerCase();
-  const payerF = String(parsed.query.payer || "").trim();
+  const payerFilter = String(parsed.query.payer || "").trim();
+  const rangePreset = String(parsed.query.range || "last30").trim();
   const sort = String(parsed.query.sort || "risk_score").trim(); // risk_score|atrisk|payer|dos
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
   const negAll = getNegotiations(org.org_id).map(n => normalizeNegotiation(n));
   const actionCtx = buildClaimContext(org.org_id);
+  const range = rangeFromPreset(rangePreset || "last30");
 
   // helpers
   const caseById = new Map(casesAll.map(c => [c.case_id, c]));
@@ -10409,7 +10456,13 @@ if (method === "GET" && pathname === "/actions") {
     const denialCaseStatus = denialCaseObj ? String(denialCaseObj.status || "") : "";
     const denialOpen = hasDenialCase && !["Closed","Denied"].includes(denialCaseStatus);
 
-    if (payerF && String(b.payer||"") !== payerF) continue;
+    if (payerFilter) {
+      const payerBlob = String(b.payer || b.payer_name || "").toLowerCase();
+      if (!payerBlob.includes(payerFilter.toLowerCase())) continue;
+    }
+    const dt = new Date(b.created_at || b.dos || b.date_paid || nowISO()).getTime();
+    if (dt < range.start.getTime() || dt > range.end.getTime()) continue;
+
     if (q){
       const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
       if (!blob.includes(q)) continue;
@@ -10458,7 +10511,13 @@ if (method === "GET" && pathname === "/actions") {
     if (!["all","followup"].includes(tab)) continue;
     const b = billedAll.find(x => x.billed_id === ws.billed_id);
     if (!b) continue;
-    const derived = evaluateClaimDerived(b, claimCtx);
+    if (payerFilter) {
+      const payerBlob = String(b.payer || b.payer_name || "").toLowerCase();
+      if (!payerBlob.includes(payerFilter.toLowerCase())) continue;
+    }
+    const wsDt = new Date(b.created_at || b.dos || b.date_paid || nowISO()).getTime();
+    if (wsDt < range.start.getTime() || wsDt > range.end.getTime()) continue;
+    const derived = evaluateClaimDerived(b, actionCtx);
     items.push({ b, derived, st: "Follow-Up Needed", kind: "followup_ws", atRisk: Number(derived.atRiskAmount || computeClaimAtRisk(b)), riskScore: computeClaimRiskScore({ ...b, status: "Submitted" }), secondaryStatus: `Due ${ws.follow_up?.due_at || ""}`, tabKey: "followup", ws });
   }
 
@@ -10567,7 +10626,18 @@ if (method === "GET" && pathname === "/actions") {
         <label>Payer</label>
         <select name="payer">
           <option value="">All</option>
-          ${payerOpts.map(p=>`<option value="${safeStr(p)}"${payerF===p?" selected":""}>${safeStr(p)}</option>`).join("")}
+          ${payerOpts.map(p=>`<option value="${safeStr(p)}"${payerFilter===p?" selected":""}>${safeStr(p)}</option>`).join("")}
+        </select>
+      </div>
+      <div style="display:flex;flex-direction:column;">
+        <label>Range</label>
+        <select name="range">
+          <option value="last30"${rangePreset==="last30"?" selected":""}>Last 30 Days</option>
+          <option value="last60"${rangePreset==="last60"?" selected":""}>Last 60 Days</option>
+          <option value="last90"${rangePreset==="last90"?" selected":""}>Last 90 Days</option>
+          <option value="mtd"${rangePreset==="mtd"?" selected":""}>Month to Date</option>
+          <option value="qtd"${rangePreset==="qtd"?" selected":""}>Quarter to Date</option>
+          <option value="ytd"${rangePreset==="ytd"?" selected":""}>Year to Date</option>
         </select>
       </div>
       <div style="display:flex;flex-direction:column;">
@@ -10590,6 +10660,8 @@ if (method === "GET" && pathname === "/actions") {
       <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${total} results (Page ${page}/${totalPages}).</div>
       <div>${sizeSelect}</div>
     </div>
+
+    ${(payerFilter || rangePreset) ? `<div class="muted small" style="margin-bottom:10px;">Filters: ${payerFilter ? `<span class="badge">${safeStr(payerFilter)}</span>` : ""} ${rangePreset ? `<span class="badge">${safeStr(rangePreset)}</span>` : ""}</div>` : ""}
 
     <div id="actionTableSync">
       <div class="scrollSyncTop"><div></div></div>
