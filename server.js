@@ -1161,6 +1161,48 @@ function tokenize(str) {
   return canonicalizePayer(str).split(" ").filter(Boolean);
 }
 
+// ===========================
+// Levenshtein (typo tolerance)
+// ===========================
+function levenshtein(a, b) {
+  a = String(a || "");
+  b = String(b || "");
+  if (a === b) return 0;
+  const alen = a.length, blen = b.length;
+  if (!alen) return blen;
+  if (!blen) return alen;
+
+  const v0 = new Array(blen + 1);
+  const v1 = new Array(blen + 1);
+
+  for (let i = 0; i <= blen; i++) v0[i] = i;
+
+  for (let i = 0; i < alen; i++) {
+    v1[0] = i + 1;
+    for (let j = 0; j < blen; j++) {
+      const cost = a[i] === b[j] ? 0 : 1;
+      v1[j + 1] = Math.min(
+        v1[j] + 1, // insertion
+        v0[j + 1] + 1, // deletion
+        v0[j] + cost // substitution
+      );
+    }
+    for (let j = 0; j <= blen; j++) v0[j] = v1[j];
+  }
+  return v0[blen];
+}
+
+function typoSimilarity(a, b) {
+  a = canonicalizePayer(a).replace(/\s+/g, "");
+  b = canonicalizePayer(b).replace(/\s+/g, "");
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const dist = levenshtein(a, b);
+  const maxLen = Math.max(a.length, b.length);
+  const score = 1 - (dist / maxLen);
+  return Math.max(0, Math.min(1, score));
+}
+
 function payerAcronym(str) {
   const parts = tokenize(str);
   if (!parts.length) return "";
@@ -1188,7 +1230,10 @@ function simpleSimilarity(a, b) {
   const prefixOverlap = tokensA.filter(t => tokensB.some(x => x.startsWith(t) || t.startsWith(x))).length;
   const prefixScore = prefixOverlap / Math.max(tokensA.length, tokensB.length);
 
-  return Math.max(tokenScore, prefixScore * 0.9);
+  // NEW: typo tolerance helps single-word misspellings like "humanna" -> "humana"
+  const typoScore = typoSimilarity(a, b);
+
+  return Math.max(tokenScore, prefixScore * 0.9, typoScore * 0.95);
 }
 
 function getOrgPayerNames(org_id) {
@@ -1228,7 +1273,8 @@ function findPayerCandidates(org_id, payerQuery) {
       score = simpleSimilarity(canonName, query);
     }
 
-    if (score > 0.2) {
+    // slightly more forgiving threshold since we now have typoSimilarity
+    if (score > 0.18) {
       scored.push({ name, score });
     }
   }
@@ -7147,6 +7193,30 @@ const server = http.createServer(async (req, res) => {
 
   if (!isAccessEnabled(org.org_id)) return redirect(res, "/pilot-complete");
 
+  // ===== PAYER DEBUG (SAFE) =====
+  if (method === "GET" && pathname === "/debug/payers") {
+    const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+    const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
+
+    const payerNames = Array.from(new Set([
+      ...billed.map(b => b.payer).filter(Boolean),
+      ...payments.map(p => p.payer).filter(Boolean)
+    ]));
+
+    const testQuery = String(parsed.query.q || "").trim();
+    const matches = testQuery ? findPayerCandidates(org.org_id, testQuery) : [];
+
+    return send(res, 200, JSON.stringify({
+      org_id: org.org_id,
+      total_billed_records: billed.length,
+      total_payment_records: payments.length,
+      payer_count: payerNames.length,
+      payers: payerNames,
+      test_query: testQuery || null,
+      matched_candidates: matches
+    }, null, 2), "application/json");
+  }
+
 
 // ---------- FILE VIEWER (org-scoped) ----------
 // Allows viewing uploaded source files (CSV/PDF/Excel/Word) linked from claim detail pages.
@@ -7399,8 +7469,26 @@ RULES:
 
   const usageAfter = getCopilotUsageSnapshot(org.org_id);
 
+  const metrics = result?.metrics || {};
+  const totals = metrics.totals || {};
+  const rates = metrics.rates || {};
+  const title = result.briefTitle || buildExecutiveTitle(result);
+
+  const preview =
+    `${title}
+
+` +
+    `Total Collected: ${formatMoneyUI(totals.collected || 0)}
+` +
+    `Revenue At Risk: ${formatMoneyUI(totals.atRisk || 0)}
+` +
+    `Denial Rate: ${Number(rates.denialRate || 0).toFixed(1)}%
+
+` +
+    `Full executive brief available below.`;
+
   return send(res, 200, JSON.stringify({
-    answer: `${result.briefTitle || "Executive Brief"} generated below.`,
+    answer: preview,
     workspace_id: workspace.workspace_id,
     savedToWorkspace: true,
     used: usageAfter.used,
