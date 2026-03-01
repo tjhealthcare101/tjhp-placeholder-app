@@ -1765,9 +1765,6 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
             <div style="font-size:18px;font-weight:900;margin-top:4px;">${safeStr(r.briefTitle || "Financial Performance Snapshot")}</div>
             <div class="muted">KPI highlights, drivers, and recommended actions.</div>
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            ${workspace_id ? `<a class="btn secondary small" href="/ai-copilot/export?workspace_id=${encodeURIComponent(workspace_id)}">Export PDF</a>` : `<a class="btn secondary small" href="/copilot/export?brief_id=${encodeURIComponent(brief_id)}">Export PDF</a>`}
-          </div>
         </div>
 
         <div class="ws-kpis">
@@ -1823,32 +1820,42 @@ function buildCopilotResponse({
   const intent = detectCopilotIntent(question);
   const briefType = determineBriefType({ question, intentKey: intent.key, payerScope });
   const briefTitle = buildBriefTitle({ briefType, payerScope, question });
-  const scoped = payerScope ? computePayerSpecificMetrics(org_id, payerScope, rangePreset) : null;
-  const dashboard = payerScope
-    ? null
-    : computeDashboardMetrics(org_id, range.start, range.end, range.preset);
-  const topPayers = scoped ? scoped.topPayers : (Array.isArray(dashboard?.payerRiskRanking) ? dashboard.payerRiskRanking : []);
-  const metrics = scoped ? scoped.metrics : {
-    totals: {
-      billed: round2(dashboard?.kpis?.totalBilled || 0),
-      collected: round2(dashboard?.kpis?.collectedTotal || 0),
-      expected: round2(dashboard?.kpis?.allowedTotal || dashboard?.kpis?.totalBilled || 0),
-      atRisk: round2(dashboard?.kpis?.revenueAtRisk || 0)
-    },
-    rates: {
-      recoveryRate: round2(
-        dashboard?.kpis?.netCollectionRate ??
-        dashboard?.kpis?.grossCollectionRate ??
-        0
-      ),
-      denialRate: round2(dashboard?.denialRate ?? 0),
-      appealSuccessRate: round2(dashboard?.appealSuccessRate ?? 0),
-      negotiationROI: round2(dashboard?.negotiationROI ?? 0)
-    },
-    disciplineScore: round2(
-      dashboard?.operationalDisciplineScore ?? 0
-    )
-  };
+  let dashboard = null;
+  let metrics = null;
+  let topPayers = [];
+  let scoped = null;
+
+  if (payerScope) {
+    scoped = computePayerSpecificMetrics(org_id, payerScope, rangePreset);
+    metrics = scoped.metrics;
+    topPayers = scoped.topPayers;
+  } else {
+    dashboard = computeDashboardMetrics(org_id, range.start, range.end, range.preset);
+    metrics = {
+      totals: {
+        billed: round2(dashboard?.kpis?.totalBilled || 0),
+        collected: round2(dashboard?.kpis?.collectedTotal || 0),
+        expected: round2(dashboard?.kpis?.allowedTotal || dashboard?.kpis?.totalBilled || 0),
+        atRisk: round2(dashboard?.kpis?.revenueAtRisk || 0)
+      },
+      rates: {
+        recoveryRate: round2(
+          dashboard?.kpis?.netCollectionRate ??
+          dashboard?.kpis?.grossCollectionRate ??
+          0
+        ),
+        denialRate: round2(dashboard?.denialRate ?? 0),
+        appealSuccessRate: round2(dashboard?.appealSuccessRate ?? 0),
+        negotiationROI: round2(dashboard?.negotiationROI ?? 0)
+      },
+      disciplineScore: round2(
+        dashboard?.operationalDisciplineScore ?? 0
+      )
+    };
+    topPayers = Array.isArray(dashboard?.payerRiskRanking)
+      ? dashboard.payerRiskRanking
+      : [];
+  }
   const forecast = scoped ? scoped.forecast : computeSimpleAtRiskForecast(org_id, rangePreset);
   const denialForecast = scoped ? scoped.denialForecast : computeSimpleDenialRateForecast(org_id, rangePreset);
   const format = String(responseFormat || "executive").toLowerCase();
