@@ -10010,8 +10010,10 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       </div>
     </div>
   </div>
+  <!-- Load Chart.js if not already loaded -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
   <script>
-  (function(){
+  document.addEventListener("DOMContentLoaded", function(){
     function getHealthClass(value, goodThreshold, warnThreshold, invert=false){
       if (invert){
         if (value <= goodThreshold) return "good";
@@ -10045,7 +10047,13 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     const denialTrendData = (eb.denialTotals||[]).slice(-12);
     const fCtx = document.getElementById("ebFunnel");
     const dCtx = document.getElementById("ebDenials");
-    if (window.Chart && fCtx && dCtx){
+
+    function initCharts(){
+      if (!fCtx || !dCtx || typeof Chart === "undefined") {
+        setTimeout(initCharts, 50);
+        return;
+      }
+
       new Chart(fCtx, {
         type: "bar",
         data: {
@@ -10097,7 +10105,9 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         }
       });
     }
-  })();
+
+    initCharts();
+  });
   </script>`;
 
   const content = (
