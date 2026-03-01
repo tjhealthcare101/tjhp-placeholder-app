@@ -10807,13 +10807,26 @@ if (method === "GET" && pathname === "/actions") {
   const rows = pageItems.map(x=>{
     const b = x.b;
     const claimLink = `/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}`;
-    const badgeCls = badgeClassForStatus(x.st);
+    // ---- FIX: Use centralized financial computation ----
+    const financials = (typeof computeClaimFinancials === "function")
+      ? computeClaimFinancials(b)
+      : (b.financials || {});
 
-    // ---- FIX: Correct Paid Calculation for Action Center ----
-    const paidAmount =
-      Number(b.paidInsurance || 0) ||
-      Number(b.totalPaid || 0) ||
-      Number((b.payments || []).reduce((sum,p)=>sum + Number(p.amount || 0),0) || 0);
+    const paidAmount = Number(financials.paidInsurance || 0);
+    const expectedAmount = Number(financials.expectedInsurance || 0);
+    const atRiskAmount = Number(financials.insuranceRemaining || 0);
+
+    let status = x.st || "Paid";
+    if (x.tabKey === "underpayments") {
+      status = "Paid";
+      if (paidAmount === 0 && expectedAmount > 0) {
+        status = "Denied";
+      }
+      else if (paidAmount > 0 && paidAmount < expectedAmount) {
+        status = "Underpaid";
+      }
+    }
+    const badgeCls = badgeClassForStatus(status);
 
     let actionsHtml = '';
     if (x.kind === "denial") {
@@ -10845,9 +10858,10 @@ if (method === "GET" && pathname === "/actions") {
     return `<tr>
       <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
       <td>${safeStr(b.payer||"")}</td>
-      ${billedPaidCell(b.amount_billed, paidAmount)}
-      <td><span class="badge ${badgeCls}">${safeStr(x.st)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
-      <td>${formatMoneyUI(x.atRisk||0)}</td>
+      <td class="num">${formatMoneyUI(b.amount_billed || 0)}</td>
+      <td class="num">${formatMoneyUI(paidAmount)}</td>
+      <td><span class="badge ${badgeCls}">${safeStr(status)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
+      <td>${formatMoneyUI(x.tabKey === "underpayments" ? atRiskAmount : (x.atRisk || 0))}</td>
       <td>${x.riskScore}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
     </tr>`;
