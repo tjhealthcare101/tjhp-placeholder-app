@@ -10765,6 +10765,7 @@ if (method === "GET" && pathname === "/actions") {
     const denialCaseStatus = denialCaseObj ? String(denialCaseObj.status || "") : "";
     const denialOpen = hasDenialCase && !["Closed","Denied"].includes(denialCaseStatus);
     const opStatus = computeOperationalStatus(b, derived, financials, denialOpen);
+    const paid0 = Number(financials?.paidInsurance || 0) === 0;
 
     if (payerFilter) {
       const payerBlob = String(b.payer || b.payer_name || "").toLowerCase();
@@ -10778,15 +10779,33 @@ if (method === "GET" && pathname === "/actions") {
       if (!blob.includes(q)) continue;
     }
 
-    // Determine action center grouping
+    // Determine action center grouping (PRIORITY ORDER FIXED)
     let group = null;
     let secondaryStatus = "";
-    let kind = null; // denial|negotiation|other
-    if (opStatus === "Denied" || st.startsWith("Appeal") || denialOpen) {
+    let kind = null;
+
+    // 1) If there is an explicit denial/appeal case open, it belongs in Denials buckets
+    if (st.startsWith("Appeal") || denialOpen) {
       const d = denialStageForClaim(b);
       group = d.stage;
       secondaryStatus = d.caseStatus;
       kind = "denial";
+
+    // 2) If PAID = 0, it belongs in Denials UNLESS it is explicitly Awaiting Payment
+    } else if (paid0) {
+      // If there's a denial case and it maps to Awaiting Payment, keep it there
+      const d = denialStageForClaim(b);
+      if (d.stage === "Awaiting Payment") {
+        group = d.stage;
+        secondaryStatus = d.caseStatus;
+        kind = "denial";
+      } else {
+        group = "Denials";
+        secondaryStatus = "Paid $0.00 (treat as denied until posted)";
+        kind = "denial";
+      }
+
+    // 3) Underpaid logic (paid > 0 but not fully resolved)
     } else if (opStatus === "Underpaid") {
       if (financials.expectedInsurance === null) {
         group = "Underpayments";
@@ -10798,9 +10817,12 @@ if (method === "GET" && pathname === "/actions") {
         secondaryStatus = n.negStatus;
         kind = "negotiation";
       }
+
+    // 4) Patient follow-up work
     } else if (st === "Patient Follow-Up") {
       group = "Follow-Up Needed";
       kind = "other";
+
     } else {
       continue;
     }
