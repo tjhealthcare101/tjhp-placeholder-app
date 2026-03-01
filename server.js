@@ -9700,8 +9700,16 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     </div>
 `;
   const targets = getOrgSettings(org.org_id).recovery_targets || {};
-  const financialScore = Number(m.healthScore || 64);
-  // --- Executive Brief: grade fallback (always show A–F) ---
+  // ---- Executive Brief: Data Detection ----
+  const hasData =
+    (m?.kpis?.collectedTotal || 0) > 0 ||
+    (m?.kpis?.revenueAtRisk || 0) > 0 ||
+    (m?.denialRate || 0) > 0;
+
+  // Only compute score if real data exists
+  const financialScore = hasData ? Number(m.healthScore || 64) : null;
+
+  // Grade calculator
   function gradeFromScore(score){
     const s = Number(score || 0);
     if (s >= 90) return "A";
@@ -9711,11 +9719,16 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     return "F";
   }
 
-  const computedGrade = gradeFromScore(financialScore);
+  const computedGrade = financialScore !== null ? gradeFromScore(financialScore) : null;
 
-  // use m.healthGrade ONLY if it looks like A-F; otherwise fallback to computed
-  const rawGrade = (m && typeof m.healthGrade === "string") ? m.healthGrade.trim().toUpperCase() : "";
-  const healthGradeSafe = /^[A-F]$/.test(rawGrade) ? rawGrade : computedGrade;
+  const rawGrade = (m && typeof m.healthGrade === "string")
+    ? m.healthGrade.trim().toUpperCase()
+    : "";
+
+  const healthGradeSafe =
+    financialScore !== null && /^[A-F]$/.test(rawGrade)
+      ? rawGrade
+      : computedGrade;
   const denialRate = Number(m.denialRate || 0);
   const ar90 = Number(m.ar90Rate || 0);
   const collectedTotal = Number(m?.kpis?.collectedTotal || 0);
@@ -9738,8 +9751,14 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     .eb-kpi .l{color:var(--muted);font-size:12px;font-weight:700;}
     .eb-kpi .v{font-size:22px;font-weight:900;margin-top:4px;}
     .eb-kpi .h{color:var(--muted);font-size:11px;margin-top:6px;line-height:1.25;}
-    .eb-scoreRow{display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
+    .eb-scoreRow{
+      display:flex;
+      gap:20px;
+      align-items:flex-start;
+    }
+
     .eb-scoreRing{
+      flex:0 0 140px;
       width:120px;
       height:120px;
       border-radius:999px;
@@ -9752,7 +9771,10 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     }
     .eb-scoreRing .s{font-size:26px;font-weight:900;line-height:1;}
     .eb-scoreRing .g{font-size:12px;color:var(--muted);margin-top:6px;font-weight:800;}
-    .eb-scoreText{flex:1;min-width:220px;}
+    .eb-scoreText{
+      flex:1;
+      min-width:0;
+    }
     .eb-insight{margin-top:10px;border:1px solid var(--border);border-radius:14px;padding:12px;background:rgba(99,102,241,.06);}
     .eb-insight b{font-weight:900;}
     .eb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
@@ -9768,41 +9790,30 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     .eb-bar > div{height:100%;border-radius:999px;background:rgba(17,24,39,.55);width:0%;}
     .eb-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:11px;font-weight:900;background:#fff;color:var(--text);}
 
-    /* Executive Brief Metric Layout Fix (no overflow) */
     .exec-metrics-row{
-      display:flex;
+      display:grid;
+      grid-template-columns: repeat(3, 1fr);
       gap:12px;
-      flex-wrap:wrap;
-      margin-top:12px;
-      align-items:stretch;
-      max-width:100%;
+      margin-top:14px;
     }
 
     .exec-metric{
       background:#f8fafc;
-      padding:10px 14px;
-      border-radius:10px;
+      padding:12px 14px;
+      border-radius:12px;
       border:1px solid rgba(17,24,39,.08);
-      flex: 1 1 170px;
-      min-width:170px;
-      max-width:240px;
-      box-sizing:border-box;
     }
 
     .metric-label{
-      display:block;
       font-size:12px;
-      color:#6b7280;
       font-weight:700;
+      color:#6b7280;
+      margin-bottom:4px;
     }
 
     .metric-value{
-      display:block;
-      font-size:16px;
-      font-weight:800;
-      white-space:nowrap;
-      overflow:hidden;
-      text-overflow:ellipsis;
+      font-size:18px;
+      font-weight:900;
     }
     .eb-table-wrap{
       width:100%;
@@ -9887,25 +9898,29 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         <div class="eb-sub">A fast, visual view of health, risk, and payer priority.</div>
         <div class="eb-scoreRow" style="margin-top:12px;">
             <div class="eb-scoreRing" id="ebScoreRing">
-              <div class="s" id="ebScoreVal">${formatNumberUI(Number(m.healthScore || 64))}/100</div>
-            <div class="g">Grade: ${healthGradeSafe}</div>
-          </div>
+              <div class="s" id="ebScoreVal">
+                ${financialScore !== null ? formatNumberUI(financialScore) + "/100" : "-- / 100"}
+              </div>
+              <div class="g">
+                ${financialScore !== null ? "Grade: " + healthGradeSafe : "No Data"}
+              </div>
+            </div>
           <div class="eb-scoreText">
             <div class="eb-insight"><b>Executive Insight:</b> <span class="muted">Revenue risk is concentrated at the payer level. Prioritize the top at-risk payers and tighten denial follow-up cadence.</span></div>
             <div class="exec-metrics-row">
               <div class="exec-metric">
-                <span class="metric-label">Collected</span>
-                <span class="metric-value">${formatMoneyUI(collectedTotal)}</span>
+                <div class="metric-label">Collected</div>
+                <div class="metric-value">${formatMoneyUI(collectedTotal)}</div>
               </div>
 
               <div class="exec-metric">
-                <span class="metric-label">At Risk</span>
-                <span class="metric-value">${formatMoneyUI(revenueAtRisk)}</span>
+                <div class="metric-label">At Risk</div>
+                <div class="metric-value">${formatMoneyUI(revenueAtRisk)}</div>
               </div>
 
               <div class="exec-metric">
-                <span class="metric-label">Denial Rate</span>
-                <span class="metric-value">${formatNumberUI(denialRate)}%</span>
+                <div class="metric-label">Denial Rate</div>
+                <div class="metric-value">${formatNumberUI(denialRate)}%</div>
               </div>
             </div>
           </div>
@@ -9984,7 +9999,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     const scoreVal = ${financialScore};
     const scoreRing = document.getElementById("ebScoreRing");
 
-    if (scoreRing){
+    if (scoreRing && scoreVal !== null){
       const scoreClass =
         scoreVal >= 80 ? "good" :
         scoreVal >= 60 ? "warn" : "bad";
