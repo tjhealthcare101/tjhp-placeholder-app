@@ -10727,6 +10727,32 @@ if (method === "GET" && pathname === "/actions") {
     if (st === "Payment Received" || st === "Closed" || st === "Denied") return { stage:"Closed", negStatus: st };
     return { stage:"Underpayments", negStatus: st };
   }
+  function computeOperationalStatus(b, derived, financials, denialOpen){
+    const paid = Number(financials?.paidInsurance || 0);
+    const expected = (financials?.expectedInsurance !== null && financials?.expectedInsurance !== undefined)
+      ? Number(financials.expectedInsurance)
+      : null;
+    const billed = Number(b.amount_billed || 0);
+
+    // If we have any denial indicators, treat as Denied when paid is zero
+    const rawStatus = String(derived?.lifecycleStage || b.status || "").toLowerCase();
+    const hasDenialSignal =
+      rawStatus.includes("denied") ||
+      denialOpen ||
+      Boolean(b.denial_case_id) ||
+      Boolean(derived?.hasDenialContext);
+
+    if (paid === 0 && hasDenialSignal) return "Denied";
+
+    // Underpaid logic
+    if (expected !== null && paid > 0 && paid < expected) return "Underpaid";
+    if (expected === null && paid > 0 && paid < billed) return "Underpaid";
+
+    // If paid is zero but no denial signal, treat as awaiting/pending (not Denied)
+    if (paid === 0) return "Awaiting Payment";
+
+    return "Paid";
+  }
 
   // Build actionable items by tab
   const items = [];
@@ -10738,6 +10764,7 @@ if (method === "GET" && pathname === "/actions") {
     const denialCaseObj = hasDenialCase ? caseById.get(b.denial_case_id) : null;
     const denialCaseStatus = denialCaseObj ? String(denialCaseObj.status || "") : "";
     const denialOpen = hasDenialCase && !["Closed","Denied"].includes(denialCaseStatus);
+    const opStatus = computeOperationalStatus(b, derived, financials, denialOpen);
 
     if (payerFilter) {
       const payerBlob = String(b.payer || b.payer_name || "").toLowerCase();
@@ -10755,22 +10782,23 @@ if (method === "GET" && pathname === "/actions") {
     let group = null;
     let secondaryStatus = "";
     let kind = null; // denial|negotiation|other
-    if (st === "Denied" || st.startsWith("Appeal") || denialOpen){
+    if (opStatus === "Denied" || st.startsWith("Appeal") || denialOpen) {
       const d = denialStageForClaim(b);
       group = d.stage;
       secondaryStatus = d.caseStatus;
       kind = "denial";
-    } else if (st === "Underpaid") {
-      const n = negotiationStageForClaim(b);
-      group = n.stage;
-      secondaryStatus = n.negStatus;
-      kind = "negotiation";
-    } else if (financials.expectedInsurance === null) {
-      // Only treat as contract missing if not already Denied
-      group = "Underpayments";
-      secondaryStatus = "Missing reimbursement contract rule";
-      kind = "contract_missing";
-    } else if (st === "Patient Follow-Up"){
+    } else if (opStatus === "Underpaid") {
+      if (financials.expectedInsurance === null) {
+        group = "Underpayments";
+        secondaryStatus = "Missing reimbursement contract rule";
+        kind = "contract_missing";
+      } else {
+        const n = negotiationStageForClaim(b);
+        group = n.stage;
+        secondaryStatus = n.negStatus;
+        kind = "negotiation";
+      }
+    } else if (st === "Patient Follow-Up") {
       group = "Follow-Up Needed";
       kind = "other";
     } else {
@@ -10789,7 +10817,7 @@ if (method === "GET" && pathname === "/actions") {
 
     const atRisk = Number(derived.atRiskAmount || computeClaimAtRisk(b));
     const riskScore = computeClaimRiskScore({ ...b, status: st });
-    items.push({ b, derived, st, kind, atRisk, riskScore, secondaryStatus, tabKey });
+    items.push({ b, derived, st, opStatus, kind, atRisk, riskScore, secondaryStatus, tabKey });
   }
 
   const wsAll = readJSON(FILES.agent_workspaces, []).filter(w => w.org_id === org.org_id);
@@ -10860,22 +10888,7 @@ if (method === "GET" && pathname === "/actions") {
         ? Number(financials.insuranceRemaining)
         : Math.max(0, Number(b.amount_billed || 0) - paidAmount);
 
-    let status = x.st || "Paid";
-    if (x.tabKey === "underpayments") {
-      if (paidAmount === 0) {
-        status = "Denied";
-      }
-      else if (expectedAmount !== null && paidAmount < expectedAmount) {
-        status = "Underpaid";
-      }
-      else if (expectedAmount === null && paidAmount < (b.amount_billed || 0)) {
-        // provisional underpayment without contract
-        status = "Underpaid";
-      }
-      else {
-        status = "Paid";
-      }
-    }
+    const status = x.opStatus || x.st || "Paid";
     let badgeCls = badgeClassForStatus(status);
 
     let actionsHtml = '';
@@ -10897,7 +10910,7 @@ if (method === "GET" && pathname === "/actions") {
     } else {
       const channel = workspaceChannelForClaim(b, x.derived);
 
-      const contractAction = status === "Contract Missing" ? `
+      const contractAction = (expectedAmount === null) ? `
         <a class="btn small" 
            style="background:#f59e0b;color:#111827;font-weight:900;"
            href="/data-management?tab=reimbursement&focus_payer=${encodeURIComponent(b.payer || "")}">
