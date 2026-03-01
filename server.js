@@ -2396,28 +2396,6 @@ function buildExecutiveTitle(result) {
   return "Financial Performance Snapshot";
 }
 
-function formatCopilotWorkspaceResponse(workspace_id, result) {
-  const metrics = result?.metrics || {};
-  const totals = metrics.totals || {};
-  const rates = metrics.rates || {};
-  const actions = Array.isArray(result?.executiveActions) ? result.executiveActions : [];
-  const topAction = actions.length ? `Top Action: ${actions[0]}` : "";
-
-  return `
-<div>
-  <strong>${buildExecutiveTitle(result)}</strong><br/>
-  Collected: ${formatMoneyUI(totals.collected || 0)} · 
-  At Risk: ${formatMoneyUI(totals.atRisk || 0)} · 
-  Denial Rate: ${Number(rates.denialRate || 0).toFixed(1)}%
-  ${topAction ? `<br/>${topAction}` : ""}
-  <br/><br/>
-  <a href="/ai-copilot?workspace=${encodeURIComponent(workspace_id)}">
-    → View Full Executive Analysis
-  </a>
-</div>
-`;
-}
-
 function ensureSubscriptionForOrg(org_id) {
   const subs = readJSON(FILES.subscriptions, []);
   let s = subs.find(x => x.org_id === org_id);
@@ -7393,11 +7371,8 @@ RULES:
 
   workspace.latest_brief = { brief_id, result };
 
-  workspace.messages.push({
-    role: "assistant",
-    content: buildExecutiveTitle(result),
-    created_at: nowISO()
-  });
+  // Do NOT add a separate assistant title message.
+  // The executive brief card will display the title.
 
   workspace.updated_at = nowISO();
   saveCopilotWorkspace(workspace);
@@ -7405,7 +7380,7 @@ RULES:
   const usageAfter = getCopilotUsageSnapshot(org.org_id);
 
   return send(res, 200, JSON.stringify({
-    answer: formatCopilotWorkspaceResponse(workspace.workspace_id, result),
+    answer: `${result.briefTitle || "Executive Brief"} generated below.`,
     workspace_id: workspace.workspace_id,
     savedToWorkspace: true,
     used: usageAfter.used,
