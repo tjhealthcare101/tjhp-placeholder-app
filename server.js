@@ -1228,7 +1228,7 @@ function findPayerCandidates(org_id, payerQuery) {
       score = simpleSimilarity(canonName, query);
     }
 
-    if (score > 0.3) {
+    if (score > 0.2) {
       scored.push({ name, score });
     }
   }
@@ -1239,11 +1239,31 @@ function findPayerCandidates(org_id, payerQuery) {
 }
 
 function detectPayerFromPrompt(prompt, org_id) {
-  const candidates = detectPayerCandidatesFromPrompt(prompt, org_id);
+  const text = String(prompt || "").trim();
+  if (!text) return "";
 
-  if (candidates.length === 1) return candidates[0];
+  const candidates = detectPayerCandidatesFromPrompt(text, org_id);
 
+  // If exactly one strong match, use it
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+
+  // If multiple matches, auto-select highest scoring
   if (candidates.length > 1) {
+    const scored = candidates.map(name => ({
+      name,
+      score: simpleSimilarity(
+        canonicalizePayer(name),
+        canonicalizePayer(text)
+      )
+    })).sort((a, b) => b.score - a.score);
+
+    // If best score is clearly dominant OR very high confidence
+    if (scored[0].score >= 0.6) {
+      return scored[0].name;
+    }
+
     return ""; // ambiguous
   }
 
