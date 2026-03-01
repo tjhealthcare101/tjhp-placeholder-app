@@ -9703,6 +9703,8 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   const financialScore = Number(m.healthScore || 64);
   const denialRate = Number(m.denialRate || 0);
   const ar90 = Number(m.ar90Rate || 0);
+  const collectedTotal = Number(m?.kpis?.collectedTotal || 0);
+  const revenueAtRisk = Number(m?.kpis?.revenueAtRisk || 0);
   const executiveBrief = `
   <style>
     /* ===== Executive Brief 2.0 (Enterprise Layout) ===== */
@@ -9750,6 +9752,29 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     .eb-bar{height:10px;border-radius:999px;background:rgba(17,24,39,.08);overflow:hidden;margin-top:8px;}
     .eb-bar > div{height:100%;border-radius:999px;background:rgba(17,24,39,.55);width:0%;}
     .eb-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:11px;font-weight:900;background:#fff;color:var(--text);}
+
+    /* Executive Brief Metric Layout Fix */
+    .exec-metrics-row {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .exec-metric {
+      background: #f8fafc;
+      padding: 10px 14px;
+      border-radius: 10px;
+      min-width: 140px;
+    }
+    .metric-label {
+      display: block;
+      font-size: 12px;
+      color: #6b7280;
+    }
+    .metric-value {
+      font-size: 16px;
+      font-weight: 700;
+    }
     .eb-table-wrap{
       width:100%;
       overflow-x:auto;
@@ -9838,10 +9863,21 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
           </div>
           <div class="eb-scoreText">
             <div class="eb-insight"><b>Executive Insight:</b> <span class="muted">Revenue risk is concentrated at the payer level. Prioritize the top at-risk payers and tighten denial follow-up cadence.</span></div>
-            <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">
-              <span class="eb-pill">Collected: ${formatMoneyUI(Number(m.kpis.collectedTotal || 0))}</span>
-              <span class="eb-pill">At Risk: ${formatMoneyUI(Number(m.kpis.revenueAtRisk || 0))}</span>
-              <span class="eb-pill">Denial Rate: ${formatNumberUI(Number(m.denialRate || 0))}%</span>
+            <div class="exec-metrics-row">
+              <div class="exec-metric">
+                <span class="metric-label">Collected</span>
+                <span class="metric-value">$${collectedTotal.toLocaleString()}</span>
+              </div>
+
+              <div class="exec-metric">
+                <span class="metric-label">At Risk</span>
+                <span class="metric-value">$${revenueAtRisk.toLocaleString()}</span>
+              </div>
+
+              <div class="exec-metric">
+                <span class="metric-label">Denial Rate</span>
+                <span class="metric-value">${denialRate}%</span>
+              </div>
             </div>
           </div>
         </div>
@@ -9929,69 +9965,49 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 
     const eb = JSON.parse(atob("${ebChartsB64}"));
     const funnel = eb.funnel || { billed:0, expected:0, paid:0, atRisk:0 };
+    const totalBilled = Number(funnel.billed || 0);
+    const totalExpected = Number(funnel.expected || 0);
+    const totalPaid = Number(funnel.paid || 0);
+    const revenueAtRisk = Number(funnel.atRisk || 0);
+    const denialTrendData = (eb.denialTotals||[]).slice(-12);
     const fCtx = document.getElementById("ebFunnel");
     const dCtx = document.getElementById("ebDenials");
-    function drawSimpleBar(canvas, labels, values){
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      const w = canvas.width = canvas.parentElement.clientWidth;
-      const h = canvas.height = 260;
-      ctx.clearRect(0,0,w,h);
-      const max = Math.max(...values, 1);
-      const pad = 28;
-      const bw = Math.max(28, Math.floor((w - pad*2) / values.length) - 18);
-      values.forEach((v,i)=>{
-        const x = pad + i*(bw+18);
-        const barH = Math.round((h-60) * (v/max));
-        const y = (h-40) - barH;
-        ctx.fillStyle = "rgba(17,24,39,.55)";
-        ctx.fillRect(x,y,bw,barH);
-        ctx.fillStyle = "rgba(17,24,39,.85)";
-        ctx.font = "12px system-ui";
-        ctx.fillText(labels[i], x, h-18);
+    if (window.Chart && fCtx && dCtx){
+      new Chart(fCtx, {
+        type: "bar",
+        data: {
+          labels: ["Billed","Expected","Paid","At Risk"],
+          datasets: [{
+            data: [totalBilled, totalExpected, totalPaid, revenueAtRisk],
+            backgroundColor: [
+              "#3b82f6",
+              "#14b8a6",
+              "#22c55e",
+              "#ef4444"
+            ],
+            borderRadius: 6
+          }]
+        },
+        options: { responsive:true, maintainAspectRatio:false }
+      });
+
+      new Chart(dCtx, {
+        type: "line",
+        data: {
+          labels: (eb.denialLabels||[]).slice(-12),
+          datasets: [{
+            label: "Denials",
+            data: denialTrendData,
+            borderColor: "#ef4444",
+            backgroundColor: "rgba(239, 68, 68, 0.15)",
+            fill: true,
+            tension: 0.3,
+            pointBackgroundColor: "#ef4444"
+          }]
+        },
+        options: { responsive:true, maintainAspectRatio:false }
       });
     }
-    function drawSimpleLine(canvas, labels, values){
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      const w = canvas.width = canvas.parentElement.clientWidth;
-      const h = canvas.height = 260;
-      ctx.clearRect(0,0,w,h);
-      const max = Math.max(...values, 1);
-      const padX = 28;
-      const padY = 20;
-      const plotW = w - padX*2;
-      const plotH = h - padY*2 - 30;
-      ctx.strokeStyle = "rgba(17,24,39,.22)";
-      ctx.beginPath();
-      ctx.moveTo(padX, padY);
-      ctx.lineTo(padX, padY + plotH);
-      ctx.lineTo(padX + plotW, padY + plotH);
-      ctx.stroke();
-      const step = values.length > 1 ? plotW / (values.length-1) : plotW;
-      ctx.strokeStyle = "rgba(17,24,39,.70)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      values.forEach((v,i)=>{
-        const x = padX + i*step;
-        const y = padY + plotH - ((v/max)*plotH);
-        if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-      });
-      ctx.stroke();
-      ctx.fillStyle = "rgba(17,24,39,.85)";
-      ctx.font = "11px system-ui";
-      const show = labels.slice(-4);
-      show.forEach((lab, idx)=>{
-        const x = padX + (plotW/(show.length-1 || 1))*idx;
-        ctx.fillText(lab, x, h-12);
-      });
-    }
-    drawSimpleBar(fCtx, ["Billed","Expected","Paid","At Risk"], [funnel.billed, funnel.expected, funnel.paid, funnel.atRisk]);
-    drawSimpleLine(dCtx, (eb.denialLabels||[]).slice(-12), (eb.denialTotals||[]).slice(-12));
-    window.addEventListener("resize", ()=>{
-      drawSimpleBar(fCtx, ["Billed","Expected","Paid","At Risk"], [funnel.billed, funnel.expected, funnel.paid, funnel.atRisk]);
-      drawSimpleLine(dCtx, (eb.denialLabels||[]).slice(-12), (eb.denialTotals||[]).slice(-12));
-    });
   })();
   </script>`;
 
