@@ -5535,6 +5535,16 @@ function computeInsuranceBalance(claim, ctx={}){
   return { expectedInsurance, paidAmount, insuranceWriteOff, insuranceRemaining };
 }
 
+function computeClaimFinancials(claim){
+  const insurance = computeInsuranceBalance(claim);
+  return {
+    expectedInsurance: Number(insurance.expectedInsurance || 0),
+    paidInsurance: Number(insurance.paidAmount || 0),
+    insuranceRemaining: Number(insurance.insuranceRemaining || 0),
+    insuranceWriteOff: Number(insurance.insuranceWriteOff || 0)
+  };
+}
+
 function isResolvedLifecycleStage(stage){
   const s = String(stage || "").trim();
   return ["Resolved", "Write-Off", "Revenue Collected", "Closed", "Contractual"].includes(s);
@@ -10808,9 +10818,7 @@ if (method === "GET" && pathname === "/actions") {
     const b = x.b;
     const claimLink = `/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}`;
     // ---- FIX: Use centralized financial computation ----
-    const financials = (typeof computeClaimFinancials === "function")
-      ? computeClaimFinancials(b)
-      : (b.financials || {});
+    const financials = computeClaimFinancials(b);
 
     const paidAmount = Number(financials.paidInsurance || 0);
     const expectedAmount = Number(financials.expectedInsurance || 0);
