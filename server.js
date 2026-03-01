@@ -10732,6 +10732,7 @@ if (method === "GET" && pathname === "/actions") {
   const items = [];
   for (const b of billedAll){
     const derived = evaluateClaimDerived(b, actionCtx);
+    const financials = computeClaimFinancials(b);
     const st = String(derived.lifecycleStage || b.status || "Pending");
     const hasDenialCase = !!b.denial_case_id && caseById.has(b.denial_case_id);
     const denialCaseObj = hasDenialCase ? caseById.get(b.denial_case_id) : null;
@@ -10759,11 +10760,18 @@ if (method === "GET" && pathname === "/actions") {
       group = d.stage;
       secondaryStatus = d.caseStatus;
       kind = "denial";
-    } else if (st === "Underpaid"){
-      const n = negotiationStageForClaim(b);
-      group = n.stage;
-      secondaryStatus = n.negStatus;
-      kind = "negotiation";
+    } else if (st === "Underpaid" || financials.expectedInsurance === null){
+      if (financials.expectedInsurance === null) {
+        // If no contract, still include claim in queue
+        group = "Underpayments";
+        secondaryStatus = "Missing reimbursement contract rule";
+        kind = "contract_missing";
+      } else {
+        const n = negotiationStageForClaim(b);
+        group = n.stage;
+        secondaryStatus = n.negStatus;
+        kind = "negotiation";
+      }
     } else if (st === "Patient Follow-Up"){
       group = "Follow-Up Needed";
       kind = "other";
@@ -10777,6 +10785,8 @@ if (method === "GET" && pathname === "/actions") {
                    (group === "Awaiting Payment") ? "awaiting" :
                    (group === "Follow-Up Needed") ? "followup" : "closed";
 
+    if (tab === "underpayments" && !(kind === "negotiation" || kind === "contract_missing")) continue;
+    if (tab === "all" && !["denial", "negotiation", "other", "followup_ws", "contract_missing"].includes(kind)) continue;
     if (tab !== "all" && tabKey !== tab) continue;
 
     const atRisk = Number(derived.atRiskAmount || computeClaimAtRisk(b));
