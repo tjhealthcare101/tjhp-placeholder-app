@@ -6142,11 +6142,53 @@ function renderPayerHubTable(payerRanks, qStr=""){
 
 
 function computePayerIntelligence(org_id, payerName, preset="last30"){
+  if (!payerName) {
+    return {
+      payerName: "Unknown",
+      totalClaims: 0,
+      denialRate: 0,
+      recoveryRate: 0,
+      avgDaysToPay: 0,
+      totalUnderpaidDollars: 0,
+      totalDeniedDollars: 0,
+      totalBilled: 0,
+      totalCollected: 0,
+      totalAtRisk: 0,
+      score: 0,
+      grade: gradeFromScore(0),
+      denialReasonsTop: [],
+      cptTop: [],
+      underpaidTrend: Array.from({ length: 8 }, () => 0),
+      meta: { preset, resolvedCount: 0, appealCount: 0, followUpCount: 0 }
+    };
+  }
+
   const claimsAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
   const ctx = buildClaimContext(org_id);
 
-  const payerKey = String(payerName || "").trim().toLowerCase();
-  const claims = claimsAll.filter(b => String(b.payer || "").trim().toLowerCase() === payerKey);
+  const payerKey = canonicalizePayer(payerName);
+  const claims = claimsAll.filter(b => canonicalizePayer(b.payer) === payerKey);
+
+  if (!claims.length) {
+    return {
+      payerName: String(payerName || "").trim() || "Unknown",
+      totalClaims: 0,
+      denialRate: 0,
+      recoveryRate: 0,
+      avgDaysToPay: 0,
+      totalUnderpaidDollars: 0,
+      totalDeniedDollars: 0,
+      totalBilled: 0,
+      totalCollected: 0,
+      totalAtRisk: 0,
+      score: 0,
+      grade: gradeFromScore(0),
+      denialReasonsTop: [],
+      cptTop: [],
+      underpaidTrend: Array.from({ length: 8 }, () => 0),
+      meta: { preset, resolvedCount: 0, appealCount: 0, followUpCount: 0 }
+    };
+  }
 
   const now = Date.now();
   const daysToPayVals = [];
