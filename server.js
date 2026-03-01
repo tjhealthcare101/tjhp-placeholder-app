@@ -1019,6 +1019,132 @@ function detectCopilotIntent(text){
   return { key:"general", label:"General" };
 }
 
+function determineBriefType({ question, intentKey, payerScope }) {
+  const q = String(question || "").toLowerCase();
+
+  if (payerScope) return "PAYER_PERFORMANCE";
+
+  if (intentKey === "denials") return "DENIAL_ANALYSIS";
+  if (intentKey === "ar_aging") return "AR_EXPOSURE";
+  if (intentKey === "revenue_at_risk") return "RISK_OVERVIEW";
+  if (intentKey === "forecast") return "FORECAST_REPORT";
+  if (intentKey === "payer_compare") return "PAYER_COMPARISON";
+
+  if (q.includes("denial")) return "DENIAL_ANALYSIS";
+  if (q.includes("ar") || q.includes("aging") || q.includes("90")) return "AR_EXPOSURE";
+  if (q.includes("at risk") || q.includes("risk")) return "RISK_OVERVIEW";
+  if (q.includes("forecast") || q.includes("projection")) return "FORECAST_REPORT";
+  if (q.includes("compare")) return "PAYER_COMPARISON";
+
+  return "EXECUTIVE_SNAPSHOT";
+}
+
+function buildBriefTitle({ briefType, payerScope, question }) {
+  const base = "Financial Performance Snapshot";
+  const payer = payerScope ? String(payerScope) : "";
+
+  switch (briefType) {
+    case "PAYER_PERFORMANCE":
+      return `${payer} Performance Snapshot (Last 30 Days)`;
+    case "PAYER_COMPARISON":
+      return "Payer Comparison Brief (Last 30 Days)";
+    case "DENIAL_ANALYSIS":
+      return "Denial Performance Brief (Last 30 Days)";
+    case "AR_EXPOSURE":
+      return "AR Exposure Brief (Last 30 Days)";
+    case "RISK_OVERVIEW":
+      return "Revenue Risk Drivers Brief (Last 30 Days)";
+    case "FORECAST_REPORT":
+      return "Revenue Forecast Brief (Next 30/60/90 Days)";
+    default:
+      if (question && question.length <= 60) return `${question.trim()} — Snapshot`;
+      return base;
+  }
+}
+
+// ===============================
+// EXECUTIVE ACTION ROUTING ENGINE
+// ===============================
+function buildActionUrl(base, params = {}) {
+  const q = Object.entries(params)
+    .filter(([_, v]) => v !== undefined && v !== null && String(v).trim() !== "")
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .join("&");
+  return q ? `${base}${base.includes("?") ? "&" : "?"}${q}` : base;
+}
+
+function determinePrimaryAction(result) {
+  const briefType = String(result?.briefType || "EXECUTIVE_SNAPSHOT");
+  const payerScope = String(result?.payerScope || "");
+  const totals = result?.metrics?.totals || {};
+  const rates = result?.metrics?.rates || {};
+
+  const atRisk = Number(totals.atRisk || 0);
+  const denialRate = Number(rates.denialRate || 0);
+
+  if (briefType === "DENIAL_ANALYSIS" || denialRate >= 20) {
+    return { type: "denials", label: payerScope ? "Review Payer Denials" : "Review Denials", priority: "high" };
+  }
+  if (briefType === "RISK_OVERVIEW" || atRisk >= 25000) {
+    return { type: "underpayments", label: payerScope ? "Review Payer Underpayments" : "Review Underpayments", priority: "high" };
+  }
+  if (briefType === "AR_EXPOSURE") {
+    return { type: "ar", label: "Review AR Aging", priority: "medium" };
+  }
+  if (briefType === "FORECAST_REPORT") {
+    return { type: "forecast", label: "View Forecast", priority: "medium" };
+  }
+  if (briefType === "PAYER_PERFORMANCE" && payerScope) {
+    return { type: "payerHub", label: "Open Payer Hub", priority: "medium" };
+  }
+
+  return { type: "overview", label: "Open Action Center", priority: "normal" };
+}
+
+function buildActionLinks(result, rangePreset = "last30") {
+  const payerScope = String(result?.payerScope || "");
+  const briefType = String(result?.briefType || "EXECUTIVE_SNAPSHOT");
+  const links = [];
+
+  links.push({
+    type: "payerHub",
+    label: "Open Payer Hub",
+    url: buildActionUrl("/revenue-intelligence", { tab: "payers", payer: payerScope || "" })
+  });
+
+  links.push({
+    type: "denials",
+    label: payerScope ? "View Payer Denials" : "View Denials",
+    url: buildActionUrl("/actions", { tab: "denials", payer: payerScope, range: rangePreset })
+  });
+
+  links.push({
+    type: "underpayments",
+    label: payerScope ? "View Payer Underpayments" : "View Underpayments",
+    url: buildActionUrl("/actions", { tab: "underpayments", payer: payerScope, range: rangePreset })
+  });
+
+  links.push({
+    type: "ar",
+    label: "View AR / Aging",
+    url: buildActionUrl("/revenue-intelligence", { tab: "executive", focus: "ar", payer: payerScope, range: rangePreset })
+  });
+
+  links.push({
+    type: "forecast",
+    label: "View Forecast",
+    url: buildActionUrl("/revenue-intelligence", { tab: "forecast", payer: payerScope, range: rangePreset })
+  });
+
+  if (briefType === "PAYER_PERFORMANCE") return links.filter(x => ["payerHub", "denials", "underpayments"].includes(x.type));
+  if (briefType === "DENIAL_ANALYSIS") return links.filter(x => ["denials", "payerHub"].includes(x.type));
+  if (briefType === "AR_EXPOSURE") return links.filter(x => ["ar", "payerHub"].includes(x.type));
+  if (briefType === "RISK_OVERVIEW") return links.filter(x => ["underpayments", "denials", "payerHub"].includes(x.type));
+  if (briefType === "FORECAST_REPORT") return links.filter(x => ["forecast", "payerHub"].includes(x.type));
+
+  return links.filter(x => ["payerHub", "denials", "underpayments"].includes(x.type));
+}
+
 function normalizePayerKey(v) {
   return String(v || "").trim().toLowerCase();
 }
@@ -1445,6 +1571,89 @@ function renderCopilotTiles(){
   `;
 }
 
+function renderBriefFocusSection(result) {
+  const t = String(result?.briefType || "EXECUTIVE_SNAPSHOT");
+  const m = result?.metrics || {};
+  const totals = m.totals || {};
+  const rates = m.rates || {};
+  const forecast = result?.forecast || {};
+  const denialForecast = result?.denialForecast || {};
+  const payerScope = result?.payerScope || "";
+
+  if (t === "PAYER_PERFORMANCE") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Payer Focus: ${safeStr(payerScope)}</div>
+      <div class="muted small">This brief is scoped to the payer referenced in your question.</div>
+    `;
+  }
+
+  if (t === "DENIAL_ANALYSIS") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Denial Focus</div>
+      <div class="muted small">Denial Rate: ${formatNumberUI(rates.denialRate || 0)}% · Appeal Success: ${formatNumberUI(rates.appealSuccessRate || 0)}%</div>
+      <div class="muted small" style="margin-top:6px;">
+        Forecast (30/60/90): ${formatNumberUI(denialForecast.projected30 || 0)}% / ${formatNumberUI(denialForecast.projected60 || 0)}% / ${formatNumberUI(denialForecast.projected90 || 0)}%
+      </div>
+    `;
+  }
+
+  if (t === "AR_EXPOSURE") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">AR Exposure Focus</div>
+      <div class="muted small">At Risk: ${formatMoneyUI(totals.atRisk || 0)} · Avg Days-to-Pay: ${formatNumberUI(result?.avgDaysToPay || 0)}</div>
+    `;
+  }
+
+  if (t === "RISK_OVERVIEW") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Risk Drivers Focus</div>
+      <div class="muted small">At Risk: ${formatMoneyUI(totals.atRisk || 0)} · Projected 30d: ${formatMoneyUI(forecast.projected30 || 0)}</div>
+    `;
+  }
+
+  if (t === "FORECAST_REPORT") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Forecast Focus</div>
+      <div class="muted small">
+        At Risk now: ${formatMoneyUI(forecast.currentAtRisk || totals.atRisk || 0)} ·
+        30/60/90: ${formatMoneyUI(forecast.projected30 || 0)} / ${formatMoneyUI(forecast.projected60 || 0)} / ${formatMoneyUI(forecast.projected90 || 0)}
+      </div>
+    `;
+  }
+
+  if (t === "PAYER_COMPARISON") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Payer Comparison Focus</div>
+      <div class="muted small">Use this brief to compare payer risk and denial performance.</div>
+    `;
+  }
+
+  return "";
+}
+
+function renderDynamicActionButtons(result) {
+  const links = Array.isArray(result?.actionLinks) ? result.actionLinks : [];
+  const primary = result?.primaryAction?.type || "";
+
+  if (!links.length) return "";
+
+  return `
+    <div class="ws-actions">
+      ${links.map(l => {
+        const isPrimary = l.type === primary;
+        const cls = isPrimary ? "btn" : "btn secondary";
+        return `<a class="${cls} small" href="${safeStr(l.url)}">${safeStr(l.label)}</a>`;
+      }).join("")}
+    </div>
+  `;
+}
+
 function renderCopilotBriefMessage(result, brief_id, workspace_id){
   const r = result || {};
   const m = r.metrics || {};
@@ -1487,7 +1696,7 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
         <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">
           <div>
             <div class="muted" style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;">Executive Copilot Brief</div>
-            <div style="font-size:18px;font-weight:900;margin-top:4px;">Financial Performance Snapshot</div>
+            <div style="font-size:18px;font-weight:900;margin-top:4px;">${safeStr(r.briefTitle || "Financial Performance Snapshot")}</div>
             <div class="muted">KPI highlights, drivers, and recommended actions.</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -1503,6 +1712,8 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
           <div class="ws-kpi"><div class="ws-kpi-l">Denial Rate</div><div class="ws-kpi-v">${Number(rates.denialRate||0).toFixed(1)}%</div></div>
           <div class="ws-kpi"><div class="ws-kpi-l">AI Case Readiness</div><div class="ws-kpi-v">${Number(r.metrics?.disciplineScore||0).toFixed(0)}/100</div></div>
         </div>
+
+        ${renderBriefFocusSection(r)}
 
         <div style="margin-top:12px;">
           <div style="font-weight:900;margin-bottom:6px;">Executive Summary</div>
@@ -1526,11 +1737,7 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
 
         ${chartCards}
 
-        <div class="ws-actions">
-          <a class="btn secondary small" href="/actions?tab=denials">Denials</a>
-          <a class="btn secondary small" href="/actions?tab=underpayments">Underpayments</a>
-          <a class="btn secondary small" href="/revenue-intelligence?tab=payers">Payer Intelligence</a>
-        </div>
+        ${renderDynamicActionButtons(r)}
       </div>
     </div>
 
@@ -1547,6 +1754,9 @@ function buildCopilotResponse({
 
   const range = rangeFromPreset(rangePreset || "last30");
   const payerScope = detectPayerFromPrompt(question, org_id);
+  const intent = detectCopilotIntent(question);
+  const briefType = determineBriefType({ question, intentKey: intent.key, payerScope });
+  const briefTitle = buildBriefTitle({ briefType, payerScope, question });
   const scoped = payerScope ? computePayerSpecificMetrics(org_id, payerScope, rangePreset) : null;
   const dashboard = payerScope
     ? null
@@ -1713,7 +1923,13 @@ function buildCopilotResponse({
     (metrics.totals.atRisk > metrics.totals.billed * 0.2 ? 20 : 0)
   );
 
+  const primaryAction = determinePrimaryAction({ briefType, payerScope, metrics, forecast, denialForecast });
+  const actionLinks = buildActionLinks({ briefType, payerScope, metrics }, rangePreset || "last30");
+
   return {
+    briefType,
+    briefTitle,
+    intentKey: intent.key,
     bullets,
     charts,
     metrics,
@@ -1724,7 +1940,9 @@ function buildCopilotResponse({
     disciplineDrivers,
     executiveActions,
     payerRiskScore,
-    topPayers
+    topPayers,
+    primaryAction,
+    actionLinks
   };
 }
 
@@ -2154,7 +2372,7 @@ function createCopilotWorkspaceFromPrompt(org_id, prompt) {
     title: prompt.slice(0, 60),
     messages: [
       { role: "user", content: prompt, created_at: nowISO() },
-      { role: "assistant", content: "Executive brief generated below.", created_at: nowISO() }
+      { role: "assistant", content: buildExecutiveTitle(result), created_at: nowISO() }
     ],
     latest_brief: { brief_id, result },
     created_at: nowISO(),
@@ -2164,18 +2382,40 @@ function createCopilotWorkspaceFromPrompt(org_id, prompt) {
   return workspace;
 }
 
+// ===========================
+// Context-Aware Brief Title
+// ===========================
+function buildExecutiveTitle(result) {
+  if (!result) return "Financial Performance Snapshot";
+  if (result.briefTitle) return String(result.briefTitle);
+
+  if (result.payerScope) {
+    return `${result.payerScope} Performance Snapshot (Last 30 Days)`;
+  }
+
+  return "Financial Performance Snapshot";
+}
+
 function formatCopilotWorkspaceResponse(workspace_id, result) {
   const metrics = result?.metrics || {};
   const totals = metrics.totals || {};
   const rates = metrics.rates || {};
   const actions = Array.isArray(result?.executiveActions) ? result.executiveActions : [];
-  const topAction = actions.length ? `\nTop action: ${actions[0]}` : "";
+  const topAction = actions.length ? `Top Action: ${actions[0]}` : "";
 
-  return [
-    "Executive brief generated and saved to AI Copilot workspace.",
-    `Collected: ${formatMoneyUI(totals.collected || 0)} · At Risk: ${formatMoneyUI(totals.atRisk || 0)} · Denial Rate: ${Number(rates.denialRate || 0).toFixed(1)}%${topAction}`,
-    `Open workspace: /ai-copilot?workspace=${encodeURIComponent(workspace_id)}`
-  ].join("\n");
+  return `
+<div>
+  <strong>${buildExecutiveTitle(result)}</strong><br/>
+  Collected: ${formatMoneyUI(totals.collected || 0)} · 
+  At Risk: ${formatMoneyUI(totals.atRisk || 0)} · 
+  Denial Rate: ${Number(rates.denialRate || 0).toFixed(1)}%
+  ${topAction ? `<br/>${topAction}` : ""}
+  <br/><br/>
+  <a href="/ai-copilot?workspace=${encodeURIComponent(workspace_id)}">
+    → View Full Executive Analysis
+  </a>
+</div>
+`;
 }
 
 function ensureSubscriptionForOrg(org_id) {
@@ -7155,7 +7395,7 @@ RULES:
 
   workspace.messages.push({
     role: "assistant",
-    content: "Executive brief generated below.",
+    content: buildExecutiveTitle(result),
     created_at: nowISO()
   });
 
@@ -9726,10 +9966,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
     <div class="ws-layout" id="wsLayout">
       <div class="ws-side">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-          <div style="font-weight:900;">Workspaces</div>
+          <div style="font-weight:900;">Saved Analyses</div>
           <div style="display:flex;gap:6px;align-items:center;">
             <button type="button" class="btn secondary small" id="wsCollapseBtn">Collapse</button>
-            <a class="btn secondary small" href="/ai-copilot?new=1">New</a>
+            <a class="btn secondary small" href="/ai-copilot?new=1">New Analysis</a>
           </div>
         </div>
         <div class="hr"></div>
@@ -9744,7 +9984,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 </div>
               </a>
             `).join("")
-            : `<div class="muted">No workspaces yet.</div>`
+            : `<div class="muted">No saved analyses yet.</div>`
         }
       </div>
 
@@ -9757,7 +9997,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
             ${parsed.query.limit ? `<div class="muted" style="margin-top:6px;color:#b91c1c;">${getCopilotLimitMessage(org.org_id)?.message || ""}</div>` : ``}
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button type="button" class="btn secondary small" id="wsExpandBtn" style="display:none;">☰ Workspaces</button>
+            <button type="button" class="btn secondary small" id="wsExpandBtn" style="display:none;">☰ Saved Analyses</button>
             ${workspace?.workspace_id ? `<a class="btn secondary small" href="/ai-copilot/export?workspace_id=${encodeURIComponent(workspace.workspace_id)}">Export PDF</a>` : ``}
             <a class="btn secondary small" href="/ai-copilot">Refresh</a>
           </div>
@@ -9775,7 +10015,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
             <textarea id="copilotComposer" name="prompt" required placeholder="Ask for an executive brief, risk drivers, payer analysis, denial trends, underpayment recovery..."></textarea>
             <div class="btnRow" style="margin-top:10px;">
               <button class="btn" type="submit" ${copilotUsage.limitReached ? "disabled" : ""} title="${copilotUsage.limitReached ? (getCopilotLimitMessage(org.org_id)?.message || "") : ""}">${copilotUsage.limitReached ? "Limit Reached" : "Send"}</button>
-              <a class="btn secondary" href="/ai-copilot?new=1">New Brief</a>
+              <a class="btn secondary" href="/ai-copilot?new=1">New Analysis</a>
               <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence AI</a>
             </div>
           </form>
@@ -9891,7 +10131,7 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
   writeJSON(FILES.copilot_briefs, briefs);
 
   workspace.latest_brief = { brief_id, result };
-  workspace.messages.push({ role: "assistant", content: "Executive brief generated below.", created_at: nowISO() });
+  workspace.messages.push({ role: "assistant", content: buildExecutiveTitle(result), created_at: nowISO() });
 
   workspace.updated_at = nowISO();
   saveCopilotWorkspace(workspace);
@@ -10169,13 +10409,15 @@ function renderClaimFinancialContext(billedClaim, derived){
 if (method === "GET" && pathname === "/actions") {
   const tab = String(parsed.query.tab || "all").toLowerCase(); // all|denials|underpayments|awaiting|followup
   const q = String(parsed.query.q || "").trim().toLowerCase();
-  const payerF = String(parsed.query.payer || "").trim();
+  const payerFilter = String(parsed.query.payer || "").trim();
+  const rangePreset = String(parsed.query.range || "last30").trim();
   const sort = String(parsed.query.sort || "risk_score").trim(); // risk_score|atrisk|payer|dos
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
   const negAll = getNegotiations(org.org_id).map(n => normalizeNegotiation(n));
   const actionCtx = buildClaimContext(org.org_id);
+  const range = rangeFromPreset(rangePreset || "last30");
 
   // helpers
   const caseById = new Map(casesAll.map(c => [c.case_id, c]));
@@ -10214,7 +10456,13 @@ if (method === "GET" && pathname === "/actions") {
     const denialCaseStatus = denialCaseObj ? String(denialCaseObj.status || "") : "";
     const denialOpen = hasDenialCase && !["Closed","Denied"].includes(denialCaseStatus);
 
-    if (payerF && String(b.payer||"") !== payerF) continue;
+    if (payerFilter) {
+      const payerBlob = String(b.payer || b.payer_name || "").toLowerCase();
+      if (!payerBlob.includes(payerFilter.toLowerCase())) continue;
+    }
+    const dt = new Date(b.created_at || b.dos || b.date_paid || nowISO()).getTime();
+    if (dt < range.start.getTime() || dt > range.end.getTime()) continue;
+
     if (q){
       const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
       if (!blob.includes(q)) continue;
@@ -10263,7 +10511,13 @@ if (method === "GET" && pathname === "/actions") {
     if (!["all","followup"].includes(tab)) continue;
     const b = billedAll.find(x => x.billed_id === ws.billed_id);
     if (!b) continue;
-    const derived = evaluateClaimDerived(b, claimCtx);
+    if (payerFilter) {
+      const payerBlob = String(b.payer || b.payer_name || "").toLowerCase();
+      if (!payerBlob.includes(payerFilter.toLowerCase())) continue;
+    }
+    const wsDt = new Date(b.created_at || b.dos || b.date_paid || nowISO()).getTime();
+    if (wsDt < range.start.getTime() || wsDt > range.end.getTime()) continue;
+    const derived = evaluateClaimDerived(b, actionCtx);
     items.push({ b, derived, st: "Follow-Up Needed", kind: "followup_ws", atRisk: Number(derived.atRiskAmount || computeClaimAtRisk(b)), riskScore: computeClaimRiskScore({ ...b, status: "Submitted" }), secondaryStatus: `Due ${ws.follow_up?.due_at || ""}`, tabKey: "followup", ws });
   }
 
@@ -10372,7 +10626,18 @@ if (method === "GET" && pathname === "/actions") {
         <label>Payer</label>
         <select name="payer">
           <option value="">All</option>
-          ${payerOpts.map(p=>`<option value="${safeStr(p)}"${payerF===p?" selected":""}>${safeStr(p)}</option>`).join("")}
+          ${payerOpts.map(p=>`<option value="${safeStr(p)}"${payerFilter===p?" selected":""}>${safeStr(p)}</option>`).join("")}
+        </select>
+      </div>
+      <div style="display:flex;flex-direction:column;">
+        <label>Range</label>
+        <select name="range">
+          <option value="last30"${rangePreset==="last30"?" selected":""}>Last 30 Days</option>
+          <option value="last60"${rangePreset==="last60"?" selected":""}>Last 60 Days</option>
+          <option value="last90"${rangePreset==="last90"?" selected":""}>Last 90 Days</option>
+          <option value="mtd"${rangePreset==="mtd"?" selected":""}>Month to Date</option>
+          <option value="qtd"${rangePreset==="qtd"?" selected":""}>Quarter to Date</option>
+          <option value="ytd"${rangePreset==="ytd"?" selected":""}>Year to Date</option>
         </select>
       </div>
       <div style="display:flex;flex-direction:column;">
@@ -10395,6 +10660,8 @@ if (method === "GET" && pathname === "/actions") {
       <div class="muted small">Showing ${Math.min(pageSize, pageItems.length)} of ${total} results (Page ${page}/${totalPages}).</div>
       <div>${sizeSelect}</div>
     </div>
+
+    ${(payerFilter || rangePreset) ? `<div class="muted small" style="margin-bottom:10px;">Filters: ${payerFilter ? `<span class="badge">${safeStr(payerFilter)}</span>` : ""} ${rangePreset ? `<span class="badge">${safeStr(rangePreset)}</span>` : ""}</div>` : ""}
 
     <div id="actionTableSync">
       <div class="scrollSyncTop"><div></div></div>
