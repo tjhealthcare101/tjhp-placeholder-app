@@ -10867,9 +10867,10 @@ if (method === "GET" && pathname === "/actions") {
       <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
       <td>${safeStr(b.payer||"")}</td>
       <td class="num">${formatMoneyUI(b.amount_billed || 0)}</td>
+      <td class="num">${formatMoneyUI(expectedAmount)}</td>
       <td class="num">${formatMoneyUI(paidAmount)}</td>
       <td><span class="badge ${badgeCls}">${safeStr(status)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
-      <td>${formatMoneyUI(x.tabKey === "underpayments" ? atRiskAmount : (x.atRisk || 0))}</td>
+      <td>${formatMoneyUI(atRiskAmount)}</td>
       <td>${x.riskScore}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
     </tr>`;
@@ -10944,8 +10945,8 @@ if (method === "GET" && pathname === "/actions") {
       <div class="scrollSyncTop"><div></div></div>
       <div class="scrollSyncBottom tableScrollY">
       <table>
-        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed <span class="tooltip" data-tip="Original submitted claim charge amount.">ⓘ</span></th><th>Paid <span class="tooltip" data-tip="Total payer payment currently posted.">ⓘ</span></th><th>Status / Stage <span class="tooltip" data-tip="Derived from payer response, denial context, and negotiation state.">ⓘ</span></th><th>At Risk <span class="tooltip" data-tip="Estimated collectible dollars not yet recovered.">ⓘ</span></th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Actions</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="8" class="muted">No items in this tab.</td></tr>`}</tbody>
+        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed <span class="tooltip" data-tip="Original submitted claim charge amount.">ⓘ</span></th><th>Expected <span class="tooltip" data-tip="Estimated insurance expected amount after patient responsibility and contract terms.">ⓘ</span></th><th>Paid <span class="tooltip" data-tip="Total payer payment currently posted.">ⓘ</span></th><th>Status / Stage <span class="tooltip" data-tip="Derived from payer response, denial context, and negotiation state.">ⓘ</span></th><th>At Risk <span class="tooltip" data-tip="Estimated collectible dollars not yet recovered.">ⓘ</span></th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Actions</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="9" class="muted">No items in this tab.</td></tr>`}</tbody>
       </table>
     </div>
     </div>
