@@ -401,6 +401,13 @@ textarea{min-height:220px;}
 .badge.bad{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
 .badge.underpaid{border-color:#fdba74;background:#fff7ed;color:#9a3412;}
 .badge.writeoff{border-color:#d1d5db;background:#f3f4f6;color:#374151;}
+/* Contract Missing Badge */
+.badge.contract-missing {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
+  font-weight: 800;
+}
 .footer{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);}
 .error{color:var(--danger);font-weight:900;}
 .small{font-size:12px;}
@@ -5521,26 +5528,42 @@ function computePatientBalance(claim){
 
 function computeInsuranceBalance(claim, ctx={}){
   const claimCtx = (ctx && ctx.paymentsByClaim) ? ctx : buildClaimContext(claim.org_id || "");
-  const expectedInsurance = computeExpectedInsuranceForClaim(claim);
+  const expectedInsuranceRaw = computeExpectedInsuranceForClaim(claim);
+
+  // If no contract rules exist, do not auto-draft expected
+  const hasContract = Boolean(
+    claim.contract_applied ||
+    (claim.contract_rule_id) ||
+    (expectedInsuranceRaw && expectedInsuranceRaw.source === "contract")
+  );
+
+  // If no contract, expected is null
+  const expectedInsurance = hasContract
+    ? num(expectedInsuranceRaw.amount || expectedInsuranceRaw)
+    : null;
   const key = normalizeClaimKey(claim.claim_number || "");
   const paymentRows = key && claimCtx.paymentsByClaim ? (claimCtx.paymentsByClaim[key] || []) : [];
   const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid), 0);
   const paidFromClaim = num(claim.insurance_paid || claim.paid_amount);
   const paidAmount = Math.max(paymentFromRows, paidFromClaim);
   const insuranceWriteOff = num(claim.write_off_amount || claim.contractual_adjustment || claim.write_off || 0);
-  const insuranceRemaining = Math.max(
-    0,
-    expectedInsurance - paidAmount - insuranceWriteOff
-  );
+  const insuranceRemaining =
+    expectedInsurance !== null
+      ? Math.max(0, expectedInsurance - paidAmount - insuranceWriteOff)
+      : null;
   return { expectedInsurance, paidAmount, insuranceWriteOff, insuranceRemaining };
 }
 
 function computeClaimFinancials(claim){
   const insurance = computeInsuranceBalance(claim);
   return {
-    expectedInsurance: Number(insurance.expectedInsurance || 0),
+    expectedInsurance: insurance.expectedInsurance !== null
+      ? Number(insurance.expectedInsurance)
+      : null,
     paidInsurance: Number(insurance.paidAmount || 0),
-    insuranceRemaining: Number(insurance.insuranceRemaining || 0),
+    insuranceRemaining: insurance.insuranceRemaining !== null
+      ? Number(insurance.insuranceRemaining)
+      : null,
     insuranceWriteOff: Number(insurance.insuranceWriteOff || 0)
   };
 }
@@ -10821,20 +10844,31 @@ if (method === "GET" && pathname === "/actions") {
     const financials = computeClaimFinancials(b);
 
     const paidAmount = Number(financials.paidInsurance || 0);
-    const expectedAmount = Number(financials.expectedInsurance || 0);
-    const atRiskAmount = Number(financials.insuranceRemaining || 0);
+    const expectedAmount = financials.expectedInsurance !== null
+      ? Number(financials.expectedInsurance)
+      : null;
+    const atRiskAmount = financials.insuranceRemaining !== null
+      ? Number(financials.insuranceRemaining)
+      : null;
 
     let status = x.st || "Paid";
     if (x.tabKey === "underpayments") {
       status = "Paid";
-      if (paidAmount === 0 && expectedAmount > 0) {
+      if (expectedAmount === null) {
+        status = "Contract Missing";
+      }
+      else if (paidAmount === 0 && expectedAmount > 0) {
         status = "Denied";
       }
-      else if (paidAmount > 0 && paidAmount < expectedAmount) {
+      else if (expectedAmount !== null && paidAmount > 0 && paidAmount < expectedAmount) {
         status = "Underpaid";
       }
     }
-    const badgeCls = badgeClassForStatus(status);
+    let badgeCls = badgeClassForStatus(status);
+
+    if (status === "Contract Missing") {
+      badgeCls = "contract-missing";
+    }
 
     let actionsHtml = '';
     if (x.kind === "denial") {
@@ -10860,6 +10894,12 @@ if (method === "GET" && pathname === "/actions") {
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Follow-Up Write-Off</a>` : ``}
         <a class="btn secondary small" href="${workspacePagePath(b.billed_id, channel)}">AI Workspace</a>
         ${x.kind === "followup_ws" ? `<form method="POST" action="/agent-workspace/followup/escalate" style="display:inline-block;margin:0;"><input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}" /><input type="hidden" name="channel" value="${safeStr(channel)}" /><button class="btn secondary small" type="submit">Escalate</button></form>` : ``}
+        ${status === "Contract Missing" ? `
+          <a class="btn small" style="background:#f59e0b;color:#111827;"
+             href="/data-management?tab=reimbursement&focus_payer=${encodeURIComponent(b.payer || "")}">
+             Add Contract Rule
+          </a>
+        ` : ``}
       `;
     }
 
@@ -10867,10 +10907,14 @@ if (method === "GET" && pathname === "/actions") {
       <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
       <td>${safeStr(b.payer||"")}</td>
       <td class="num">${formatMoneyUI(b.amount_billed || 0)}</td>
-      <td class="num">${formatMoneyUI(expectedAmount)}</td>
+      <td class="num">${expectedAmount !== null ? formatMoneyUI(expectedAmount) : "—"}</td>
       <td class="num">${formatMoneyUI(paidAmount)}</td>
-      <td><span class="badge ${badgeCls}">${safeStr(status)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
-      <td>${formatMoneyUI(atRiskAmount)}</td>
+      <td><span class="badge ${badgeCls}">${safeStr(status)}</span>${status === "Contract Missing" ? `
+    <div class="muted small">
+      No reimbursement rule found. Configure expected rate in Reimbursement Engine.
+    </div>
+  ` : ``}${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
+      <td>${atRiskAmount !== null ? formatMoneyUI(atRiskAmount) : "—"}</td>
       <td>${x.riskScore}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
     </tr>`;
