@@ -9701,6 +9701,21 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 `;
   const targets = getOrgSettings(org.org_id).recovery_targets || {};
   const financialScore = Number(m.healthScore || 64);
+  // --- Executive Brief: grade fallback (always show A–F) ---
+  function gradeFromScore(score){
+    const s = Number(score || 0);
+    if (s >= 90) return "A";
+    if (s >= 80) return "B";
+    if (s >= 70) return "C";
+    if (s >= 60) return "D";
+    return "F";
+  }
+
+  const computedGrade = gradeFromScore(financialScore);
+
+  // use m.healthGrade ONLY if it looks like A-F; otherwise fallback to computed
+  const rawGrade = (m && typeof m.healthGrade === "string") ? m.healthGrade.trim().toUpperCase() : "";
+  const healthGradeSafe = /^[A-F]$/.test(rawGrade) ? rawGrade : computedGrade;
   const denialRate = Number(m.denialRate || 0);
   const ar90 = Number(m.ar90Rate || 0);
   const collectedTotal = Number(m?.kpis?.collectedTotal || 0);
@@ -9753,27 +9768,41 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     .eb-bar > div{height:100%;border-radius:999px;background:rgba(17,24,39,.55);width:0%;}
     .eb-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:11px;font-weight:900;background:#fff;color:var(--text);}
 
-    /* Executive Brief Metric Layout Fix */
-    .exec-metrics-row {
-      display: flex;
-      gap: 18px;
-      flex-wrap: wrap;
-      margin-top: 12px;
+    /* Executive Brief Metric Layout Fix (no overflow) */
+    .exec-metrics-row{
+      display:flex;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-top:12px;
+      align-items:stretch;
+      max-width:100%;
     }
-    .exec-metric {
-      background: #f8fafc;
-      padding: 10px 14px;
-      border-radius: 10px;
-      min-width: 140px;
+
+    .exec-metric{
+      background:#f8fafc;
+      padding:10px 14px;
+      border-radius:10px;
+      border:1px solid rgba(17,24,39,.08);
+      flex: 1 1 170px;
+      min-width:170px;
+      max-width:240px;
+      box-sizing:border-box;
     }
-    .metric-label {
-      display: block;
-      font-size: 12px;
-      color: #6b7280;
+
+    .metric-label{
+      display:block;
+      font-size:12px;
+      color:#6b7280;
+      font-weight:700;
     }
-    .metric-value {
-      font-size: 16px;
-      font-weight: 700;
+
+    .metric-value{
+      display:block;
+      font-size:16px;
+      font-weight:800;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
     }
     .eb-table-wrap{
       width:100%;
@@ -9857,26 +9886,26 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         <div class="eb-title">Executive Performance Snapshot</div>
         <div class="eb-sub">A fast, visual view of health, risk, and payer priority.</div>
         <div class="eb-scoreRow" style="margin-top:12px;">
-          <div class="eb-scoreRing" id="ebScoreRing">
-            <div class="s" id="ebScoreVal">${formatNumberUI(Number(m.healthScore || 64))}/100</div>
-            <div class="g">Grade: ${safeStr(m.healthGrade || "D")}</div>
+            <div class="eb-scoreRing" id="ebScoreRing">
+              <div class="s" id="ebScoreVal">${formatNumberUI(Number(m.healthScore || 64))}/100</div>
+            <div class="g">Grade: ${healthGradeSafe}</div>
           </div>
           <div class="eb-scoreText">
             <div class="eb-insight"><b>Executive Insight:</b> <span class="muted">Revenue risk is concentrated at the payer level. Prioritize the top at-risk payers and tighten denial follow-up cadence.</span></div>
             <div class="exec-metrics-row">
               <div class="exec-metric">
                 <span class="metric-label">Collected</span>
-                <span class="metric-value">$${collectedTotal.toLocaleString()}</span>
+                <span class="metric-value">${formatMoneyUI(collectedTotal)}</span>
               </div>
 
               <div class="exec-metric">
                 <span class="metric-label">At Risk</span>
-                <span class="metric-value">$${revenueAtRisk.toLocaleString()}</span>
+                <span class="metric-value">${formatMoneyUI(revenueAtRisk)}</span>
               </div>
 
               <div class="exec-metric">
                 <span class="metric-label">Denial Rate</span>
-                <span class="metric-value">${denialRate}%</span>
+                <span class="metric-value">${formatNumberUI(denialRate)}%</span>
               </div>
             </div>
           </div>
