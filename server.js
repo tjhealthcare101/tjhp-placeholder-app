@@ -2164,18 +2164,39 @@ function createCopilotWorkspaceFromPrompt(org_id, prompt) {
   return workspace;
 }
 
+// ===========================
+// Context-Aware Brief Title
+// ===========================
+function buildExecutiveTitle(result) {
+  if (!result) return "Financial Performance Snapshot";
+
+  if (result.payerScope) {
+    return `${result.payerScope} Performance Snapshot (Last 30 Days)`;
+  }
+
+  return "Financial Performance Snapshot";
+}
+
 function formatCopilotWorkspaceResponse(workspace_id, result) {
   const metrics = result?.metrics || {};
   const totals = metrics.totals || {};
   const rates = metrics.rates || {};
   const actions = Array.isArray(result?.executiveActions) ? result.executiveActions : [];
-  const topAction = actions.length ? `\nTop action: ${actions[0]}` : "";
+  const topAction = actions.length ? `Top Action: ${actions[0]}` : "";
 
-  return [
-    "Executive brief generated and saved to AI Copilot workspace.",
-    `Collected: ${formatMoneyUI(totals.collected || 0)} · At Risk: ${formatMoneyUI(totals.atRisk || 0)} · Denial Rate: ${Number(rates.denialRate || 0).toFixed(1)}%${topAction}`,
-    `Open workspace: /ai-copilot?workspace=${encodeURIComponent(workspace_id)}`
-  ].join("\n");
+  return `
+<div>
+  <strong>${buildExecutiveTitle(result)}</strong><br/>
+  Collected: ${formatMoneyUI(totals.collected || 0)} · 
+  At Risk: ${formatMoneyUI(totals.atRisk || 0)} · 
+  Denial Rate: ${Number(rates.denialRate || 0).toFixed(1)}%
+  ${topAction ? `<br/>${topAction}` : ""}
+  <br/><br/>
+  <a href="/ai-copilot?workspace=${encodeURIComponent(workspace_id)}">
+    → View Full Executive Analysis
+  </a>
+</div>
+`;
 }
 
 function ensureSubscriptionForOrg(org_id) {
@@ -7155,7 +7176,7 @@ RULES:
 
   workspace.messages.push({
     role: "assistant",
-    content: "Executive brief generated below.",
+    content: buildExecutiveTitle(result),
     created_at: nowISO()
   });
 
