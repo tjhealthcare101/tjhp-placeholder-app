@@ -10760,18 +10760,16 @@ if (method === "GET" && pathname === "/actions") {
       group = d.stage;
       secondaryStatus = d.caseStatus;
       kind = "denial";
-    } else if (st === "Underpaid" || financials.expectedInsurance === null){
-      if (financials.expectedInsurance === null) {
-        // If no contract, still include claim in queue
-        group = "Underpayments";
-        secondaryStatus = "Missing reimbursement contract rule";
-        kind = "contract_missing";
-      } else {
-        const n = negotiationStageForClaim(b);
-        group = n.stage;
-        secondaryStatus = n.negStatus;
-        kind = "negotiation";
-      }
+    } else if (st === "Underpaid") {
+      const n = negotiationStageForClaim(b);
+      group = n.stage;
+      secondaryStatus = n.negStatus;
+      kind = "negotiation";
+    } else if (financials.expectedInsurance === null) {
+      // Only treat as contract missing if not already Denied
+      group = "Underpayments";
+      secondaryStatus = "Missing reimbursement contract rule";
+      kind = "contract_missing";
     } else if (st === "Patient Follow-Up"){
       group = "Follow-Up Needed";
       kind = "other";
