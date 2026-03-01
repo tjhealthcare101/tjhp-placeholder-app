@@ -1554,6 +1554,66 @@ function renderBriefFocusSection(result) {
   return "";
 }
 
+function renderDynamicActionButtons(result) {
+  const briefType = String(result?.briefType || "");
+  const payerScope = result?.payerScope || "";
+
+  const buttons = [];
+
+  function btn(label, href) {
+    return `<a class="btn secondary small" href="${href}">${label}</a>`;
+  }
+
+  if (briefType === "PAYER_PERFORMANCE") {
+    if (payerScope) {
+      buttons.push(
+        btn("View Payer Intelligence", `/revenue-intelligence?tab=payers&payer=${encodeURIComponent(payerScope)}`)
+      );
+      buttons.push(
+        btn("View Payer Denials", `/actions?tab=denials&payer=${encodeURIComponent(payerScope)}`)
+      );
+      buttons.push(
+        btn("View Payer Underpayments", `/actions?tab=underpayments&payer=${encodeURIComponent(payerScope)}`)
+      );
+    }
+  }
+
+  if (briefType === "DENIAL_ANALYSIS") {
+    buttons.push(btn("View All Denials", `/actions?tab=denials`));
+    if (payerScope) {
+      buttons.push(
+        btn("View This Payer's Denials", `/actions?tab=denials&payer=${encodeURIComponent(payerScope)}`)
+      );
+    }
+  }
+
+  if (briefType === "AR_EXPOSURE") {
+    buttons.push(btn("View AR Aging", `/revenue-intelligence?tab=ar`));
+    buttons.push(btn("Open Action Center", `/actions`));
+  }
+
+  if (briefType === "RISK_OVERVIEW") {
+    buttons.push(btn("Open Action Center", `/actions`));
+    buttons.push(btn("View Top Payers", `/revenue-intelligence?tab=payers`));
+  }
+
+  if (briefType === "FORECAST_REPORT") {
+    buttons.push(btn("View Forecast Trends", `/revenue-intelligence`));
+  }
+
+  if (briefType === "PAYER_COMPARISON") {
+    buttons.push(btn("Open Payer Hub", `/revenue-intelligence?tab=payers`));
+  }
+
+  if (!buttons.length) return "";
+
+  return `
+    <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">
+      ${buttons.join("")}
+    </div>
+  `;
+}
+
 function renderCopilotBriefMessage(result, brief_id, workspace_id){
   const r = result || {};
   const m = r.metrics || {};
@@ -1637,11 +1697,7 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
 
         ${chartCards}
 
-        <div class="ws-actions">
-          <a class="btn secondary small" href="/actions?tab=denials">Denials</a>
-          <a class="btn secondary small" href="/actions?tab=underpayments">Underpayments</a>
-          <a class="btn secondary small" href="/revenue-intelligence?tab=payers">Payer Intelligence</a>
-        </div>
+        ${renderDynamicActionButtons(r)}
       </div>
     </div>
 
