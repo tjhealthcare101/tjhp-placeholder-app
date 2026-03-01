@@ -2164,6 +2164,20 @@ function createCopilotWorkspaceFromPrompt(org_id, prompt) {
   return workspace;
 }
 
+function formatCopilotWorkspaceResponse(workspace_id, result) {
+  const metrics = result?.metrics || {};
+  const totals = metrics.totals || {};
+  const rates = metrics.rates || {};
+  const actions = Array.isArray(result?.executiveActions) ? result.executiveActions : [];
+  const topAction = actions.length ? `\nTop action: ${actions[0]}` : "";
+
+  return [
+    "Executive brief generated and saved to AI Copilot workspace.",
+    `Collected: ${formatMoneyUI(totals.collected || 0)} · At Risk: ${formatMoneyUI(totals.atRisk || 0)} · Denial Rate: ${Number(rates.denialRate || 0).toFixed(1)}%${topAction}`,
+    `Open workspace: /ai-copilot?workspace=${encodeURIComponent(workspace_id)}`
+  ].join("\n");
+}
+
 function ensureSubscriptionForOrg(org_id) {
   const subs = readJSON(FILES.subscriptions, []);
   let s = subs.find(x => x.org_id === org_id);
@@ -6974,12 +6988,7 @@ if (method === "GET" && pathname === "/file") {
 if (method === "POST" && pathname === "/ai/chat") {
   const body = await parseBody(req);
   let payload = {};
-
-  try {
-    payload = JSON.parse(body || "{}");
-  } catch {
-    payload = {};
-  }
+  try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
 
   const msg = String(payload.message || "").trim();
   const currentPath = String(payload.currentPath || payload.path || req.headers.referer || "");
@@ -6990,136 +6999,180 @@ if (method === "POST" && pathname === "/ai/chat") {
     }), "application/json");
   }
 
-  const usageSnap = getCopilotUsageSnapshot(org.org_id);
+  // ===== Snapshot BEFORE consumption
+  const usageBefore = getCopilotUsageSnapshot(org.org_id);
 
-  const uiAnswer = tryHandleUIQuestion(msg, currentPath);
-  if (uiAnswer) {
-    return send(res, 200, JSON.stringify({
-      answer: uiAnswer,
-      used: usageSnap.used,
-      limit: usageSnap.limit,
-      limitReached: false,
-      deterministic: true
-    }), "application/json");
-  }
-
-  const deterministic = tryBuildDeterministicPayerAnswer(org.org_id, msg);
-  if (deterministic) {
-    return send(res, 200, JSON.stringify({
-      answer: deterministic.answer,
-      used: usageSnap.used,
-      limit: usageSnap.limit,
-      limitReached: false,
-      deterministic: true
-    }), "application/json");
-  }
-
-  const forcedPayerCandidates = detectPayerCandidatesFromPrompt(msg, org.org_id);
-  if (forcedPayerCandidates.length > 0) {
-    if (forcedPayerCandidates.length > 1) {
-      return send(res, 200, JSON.stringify({
-        answer:
-          `I found multiple possible payer matches for your question:
-` +
-          forcedPayerCandidates.map(c => `- ${c}`).join("\n") +
-          `\n\nPlease reply with the exact payer name.`,
-        used: usageSnap.used,
-        limit: usageSnap.limit,
-        limitReached: false,
-        deterministic: true
-      }), "application/json");
-    }
-
-    const payer = forcedPayerCandidates[0];
-    const intel = computePayerIntelligence(org.org_id, payer, "last30");
-
-    return send(res, 200, JSON.stringify({
-      answer:
-        `${payer} Performance (last 30 days):\n` +
-        `Total Paid: ${formatMoneyUI(intel.totalCollected || 0)}\n` +
-        `Claims: ${Math.round(intel.totalClaims || 0)}\n` +
-        `Denial Rate: ${Math.round(intel.denialRate || 0)}%\n` +
-        `At Risk: ${formatMoneyUI(intel.totalAtRisk || 0)}\n` +
-        `Avg Days to Pay: ${Math.round(intel.avgDaysToPay || 0)}`,
-      used: usageSnap.used,
-      limit: usageSnap.limit,
-      limitReached: false,
-      deterministic: true
-    }), "application/json");
-  }
-
-  // Final guardrail: never let payer-candidate prompts reach OpenAI.
-  if (findPayerCandidates(org.org_id, msg).length > 0) {
-    const fallbackMatches = findPayerCandidates(org.org_id, msg);
-    return send(res, 200, JSON.stringify({
-      answer:
-        `I found payer matches for your question:
-` +
-        fallbackMatches.map(c => `- ${c}`).join("\n") +
-        `\n\nPlease reply with the exact payer name to view internal payer performance.`,
-      used: usageSnap.used,
-      limit: usageSnap.limit,
-      limitReached: false,
-      deterministic: true
-    }), "application/json");
-  }
-
+  // ===== Validate + consume credit
   const consume = consumeCopilotQuery(org.org_id);
   if (!consume.ok) {
     return send(res, 200, JSON.stringify({
       answer: consume.message,
-      used: usageSnap.used,
-      limit: usageSnap.limit,
+      used: usageBefore.used,
+      limit: usageBefore.limit,
       limitReached: true
     }), "application/json");
   }
 
-  try {
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY
+  // ===== Always create workspace FIRST
+  const workspace = {
+    workspace_id: uuid(),
+    org_id: org.org_id,
+    title: msg.slice(0, 60),
+    messages: [
+      { role: "user", content: msg, created_at: nowISO() }
+    ],
+    latest_brief: null,
+    created_at: nowISO(),
+    updated_at: nowISO(),
+  };
+
+  saveCopilotWorkspace(workspace);
+
+  // ===== Deterministic payer detection
+  let result = null;
+  const deterministic = tryBuildDeterministicPayerAnswer(org.org_id, msg);
+
+  if (deterministic) {
+    result = buildCopilotResponse({
+      org_id: org.org_id,
+      rangePreset: "last30",
+      responseFormat: "executive",
+      question: msg
     });
+  } else {
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: `You are the AI Revenue Intelligence assistant for TJ Healthcare Pro.
+    // ===== Force payer matching guardrail
+    const payerMatches = detectPayerCandidatesFromPrompt(msg, org.org_id);
+    if (payerMatches.length > 0) {
 
-IMPORTANT:
-- Never provide general public insurance information.
-- Only answer using data available inside the application.
-- If data is not available, respond: "No internal data available for this request."`
-        },
-        {
-          role: "user",
-          content: msg
-        }
-      ],
-      temperature: 0.3
-    });
+      if (payerMatches.length > 1) {
+        workspace.messages.push({
+          role: "assistant",
+          content:
+            `Multiple payer matches found:
+` +
+            payerMatches.map(p => `- ${p}`).join("\n") +
+            `\n\nReply with the exact payer name.`,
+          created_at: nowISO()
+        });
 
-    const aiReply =
-      completion?.choices?.[0]?.message?.content ||
-      "No response generated.";
+        workspace.updated_at = nowISO();
+        saveCopilotWorkspace(workspace);
 
-    const updatedSnap = getCopilotUsageSnapshot(org.org_id);
+        const usageAfter = getCopilotUsageSnapshot(org.org_id);
 
-    return send(res, 200, JSON.stringify({
-      answer: aiReply,
-      savedToWorkspace: false,
-      used: updatedSnap.used,
-      limit: updatedSnap.limit,
-      limitReached: updatedSnap.limitReached,
-      deterministic: false
-    }), "application/json");
+        return send(res, 200, JSON.stringify({
+          answer: workspace.messages[1].content,
+          workspace_id: workspace.workspace_id,
+          used: usageAfter.used,
+          limit: usageAfter.limit,
+          limitReached: usageAfter.limitReached,
+          deterministic: true
+        }), "application/json");
+      }
 
-  } catch (err) {
-    console.error("AI CHAT ERROR:", err);
-    return send(res, 500, JSON.stringify({
-      answer: "AI system error. Please try again."
-    }), "application/json");
+      result = buildCopilotResponse({
+        org_id: org.org_id,
+        rangePreset: "last30",
+        responseFormat: "executive",
+        question: msg
+      });
+
+    } else {
+
+      // ===== OpenAI fallback (internal only)
+      try {
+        const openai = new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY
+        });
+
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "system",
+              content: `
+You are the AI Revenue Intelligence assistant for TJ Healthcare Pro.
+
+RULES:
+- Only answer using internal application data.
+- Never provide public insurance industry information.
+- If data is not available internally, say:
+  "No internal data available for this request."
+`
+            },
+            { role: "user", content: msg }
+          ],
+          temperature: 0.3
+        });
+
+        const aiReply = completion?.choices?.[0]?.message?.content || 
+                        "No internal data available for this request.";
+
+        workspace.messages.push({
+          role: "assistant",
+          content: aiReply,
+          created_at: nowISO()
+        });
+
+        workspace.updated_at = nowISO();
+        saveCopilotWorkspace(workspace);
+
+        const usageAfter = getCopilotUsageSnapshot(org.org_id);
+
+        return send(res, 200, JSON.stringify({
+          answer: aiReply,
+          workspace_id: workspace.workspace_id,
+          used: usageAfter.used,
+          limit: usageAfter.limit,
+          limitReached: usageAfter.limitReached,
+          deterministic: false
+        }), "application/json");
+
+      } catch (err) {
+        console.error("AI CHAT ERROR:", err);
+        return send(res, 500, JSON.stringify({
+          answer: "AI system error. Please try again."
+        }), "application/json");
+      }
+    }
   }
+
+  // ===== Save Brief (Unified Path)
+  const briefs = readJSON(FILES.copilot_briefs, []);
+  const brief_id = "BRF-" + Date.now();
+
+  briefs.push({
+    brief_id,
+    org_id: org.org_id,
+    created: nowISO(),
+    result
+  });
+
+  writeJSON(FILES.copilot_briefs, briefs);
+
+  workspace.latest_brief = { brief_id, result };
+
+  workspace.messages.push({
+    role: "assistant",
+    content: "Executive brief generated below.",
+    created_at: nowISO()
+  });
+
+  workspace.updated_at = nowISO();
+  saveCopilotWorkspace(workspace);
+
+  const usageAfter = getCopilotUsageSnapshot(org.org_id);
+
+  return send(res, 200, JSON.stringify({
+    answer: formatCopilotWorkspaceResponse(workspace.workspace_id, result),
+    workspace_id: workspace.workspace_id,
+    savedToWorkspace: true,
+    used: usageAfter.used,
+    limit: usageAfter.limit,
+    limitReached: usageAfter.limitReached,
+    deterministic: true
+  }), "application/json");
 }
 
 
