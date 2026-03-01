@@ -10857,28 +10857,28 @@ if (method === "GET" && pathname === "/actions") {
     const expectedAmount = financials.expectedInsurance !== null
       ? Number(financials.expectedInsurance)
       : null;
-    const atRiskAmount = financials.insuranceRemaining !== null
-      ? Number(financials.insuranceRemaining)
-      : null;
+    const atRiskAmount =
+      financials.insuranceRemaining !== null
+        ? Number(financials.insuranceRemaining)
+        : Math.max(0, Number(b.amount_billed || 0) - paidAmount);
 
     let status = x.st || "Paid";
     if (x.tabKey === "underpayments") {
-      status = "Paid";
-      if (expectedAmount === null) {
-        status = "Contract Missing";
-      }
-      else if (paidAmount === 0 && expectedAmount > 0) {
+      if (paidAmount === 0) {
         status = "Denied";
       }
-      else if (expectedAmount !== null && paidAmount > 0 && paidAmount < expectedAmount) {
+      else if (expectedAmount !== null && paidAmount < expectedAmount) {
         status = "Underpaid";
+      }
+      else if (expectedAmount === null && paidAmount < (b.amount_billed || 0)) {
+        // provisional underpayment without contract
+        status = "Underpaid";
+      }
+      else {
+        status = "Paid";
       }
     }
     let badgeCls = badgeClassForStatus(status);
-
-    if (status === "Contract Missing") {
-      badgeCls = "contract-missing";
-    }
 
     let actionsHtml = '';
     if (x.kind === "denial") {
@@ -10898,17 +10898,31 @@ if (method === "GET" && pathname === "/actions") {
       `;
     } else {
       const channel = workspaceChannelForClaim(b, x.derived);
+
+      const contractAction = status === "Contract Missing" ? `
+        <a class="btn small" 
+           style="background:#f59e0b;color:#111827;font-weight:900;"
+           href="/data-management?tab=reimbursement&focus_payer=${encodeURIComponent(b.payer || "")}">
+           Add Contract Rule
+        </a>
+      ` : ``;
+
       actionsHtml = `
+        ${contractAction}
         <a class="btn secondary small" href="${claimLink}">Open Claim</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
-        ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Follow-Up Write-Off</a>` : ``}
-        <a class="btn secondary small" href="${workspacePagePath(b.billed_id, channel)}">AI Workspace</a>
-        ${x.kind === "followup_ws" ? `<form method="POST" action="/agent-workspace/followup/escalate" style="display:inline-block;margin:0;"><input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}" /><input type="hidden" name="channel" value="${safeStr(channel)}" /><button class="btn secondary small" type="submit">Escalate</button></form>` : ``}
-        ${status === "Contract Missing" ? `
-          <a class="btn small" style="background:#f59e0b;color:#111827;"
-             href="/data-management?tab=reimbursement&focus_payer=${encodeURIComponent(b.payer || "")}">
-             Add Contract Rule
+        ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `
+          <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">
+            Patient Follow-Up Write-Off
           </a>
+        ` : ``}
+        <a class="btn secondary small" href="${workspacePagePath(b.billed_id, channel)}">AI Workspace</a>
+        ${x.kind === "followup_ws" ? `
+          <form method="POST" action="/agent-workspace/followup/escalate" style="display:inline-block;margin:0;">
+            <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}" />
+            <input type="hidden" name="channel" value="${safeStr(channel)}" />
+            <button class="btn secondary small" type="submit">Escalate</button>
+          </form>
         ` : ``}
       `;
     }
@@ -10917,13 +10931,23 @@ if (method === "GET" && pathname === "/actions") {
       <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
       <td>${safeStr(b.payer||"")}</td>
       <td class="num">${formatMoneyUI(b.amount_billed || 0)}</td>
-      <td class="num">${expectedAmount !== null ? formatMoneyUI(expectedAmount) : "—"}</td>
+      <td class="num">
+        ${
+          expectedAmount !== null
+            ? formatMoneyUI(expectedAmount)
+            : `
+              —
+              <div class="muted small">
+                No reimbursement rule found.
+                <a href="/data-management?tab=reimbursement&focus_payer=${encodeURIComponent(b.payer || "")}">
+                  Add Contract Rule
+                </a>
+              </div>
+            `
+        }
+      </td>
       <td class="num">${formatMoneyUI(paidAmount)}</td>
-      <td><span class="badge ${badgeCls}">${safeStr(status)}</span>${status === "Contract Missing" ? `
-    <div class="muted small">
-      No reimbursement rule found. Configure expected rate in Reimbursement Engine.
-    </div>
-  ` : ``}${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
+      <td><span class="badge ${badgeCls}">${safeStr(status)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
       <td>${atRiskAmount !== null ? formatMoneyUI(atRiskAmount) : "—"}</td>
       <td>${x.riskScore}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
