@@ -10727,32 +10727,38 @@ if (method === "GET" && pathname === "/actions") {
     if (st === "Payment Received" || st === "Closed" || st === "Denied") return { stage:"Closed", negStatus: st };
     return { stage:"Underpayments", negStatus: st };
   }
-  function computeOperationalStatus(b, derived, financials, denialOpen){
-    const paid = Number(financials?.paidInsurance || 0);
-    const expected = (financials?.expectedInsurance !== null && financials?.expectedInsurance !== undefined)
+  function computeOperationalStatus(b, derived, financials, denialOpen) {
+  const paid = Number(financials?.paidInsurance || 0);
+
+  const expected =
+    (financials?.expectedInsurance !== null && financials?.expectedInsurance !== undefined)
       ? Number(financials.expectedInsurance)
       : null;
-    const billed = Number(b.amount_billed || 0);
 
-    // If we have any denial indicators, treat as Denied when paid is zero
-    const rawStatus = String(derived?.lifecycleStage || b.status || "").toLowerCase();
-    const hasDenialSignal =
-      rawStatus.includes("denied") ||
-      denialOpen ||
-      Boolean(b.denial_case_id) ||
-      Boolean(derived?.hasDenialContext);
+  const billed = Number(b.amount_billed || 0);
 
-    if (paid === 0 && hasDenialSignal) return "Denied";
+  const rawStatus = String(derived?.lifecycleStage || b.status || "").toLowerCase();
 
-    // Underpaid logic
-    if (expected !== null && paid > 0 && paid < expected) return "Underpaid";
-    if (expected === null && paid > 0 && paid < billed) return "Underpaid";
+  // Awaiting Payment ONLY when explicitly approved / pending payment.
+  // Prefer denial case status when available (most reliable).
+  const denialCaseStatus = denialOpen ? "open" : ""; // just a hint; used below via rawStatus keywords
+  const hasApprovalSignal =
+    rawStatus.includes("approved") ||
+    rawStatus.includes("pending payment") ||
+    rawStatus.includes("awaiting payment");
 
-    // If paid is zero but no denial signal, treat as awaiting/pending (not Denied)
-    if (paid === 0) return "Awaiting Payment";
+  // 1) Awaiting Payment only if explicitly approved and paid is still 0
+  if (paid === 0 && hasApprovalSignal) return "Awaiting Payment";
 
-    return "Paid";
-  }
+  // 2) Paid = 0 defaults to Denied
+  if (paid === 0) return "Denied";
+
+  // 3) Underpaid
+  if (expected !== null && paid < expected) return "Underpaid";
+  if (expected === null && paid < billed) return "Underpaid";
+
+  return "Paid";
+}
 
   // Build actionable items by tab
   const items = [];
