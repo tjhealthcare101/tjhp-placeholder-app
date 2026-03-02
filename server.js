@@ -9350,6 +9350,81 @@ function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){
         </div>
       </div>
 
+      <div style="margin-top:18px;border:1px solid var(--border);border-radius:14px;padding:18px;background:var(--card);">
+        <div style="font-weight:900;font-size:15px;margin-bottom:10px;">
+          Executive Board Analysis
+        </div>
+        <div id="deepDiveNarrative" style="line-height:1.7;font-size:14px;"></div>
+      </div>
+
+      <script>
+        (function(){
+          const dd = JSON.parse(atob("${deepDiveB64}"));
+          const i1 = dd.i1 || null;
+          const i2 = dd.i2 || null;
+          if (!i1 || !i2) return;
+
+          const name1 = dd.p1;
+          const name2 = dd.p2;
+
+          const score1 = Number(i1.score || 0);
+          const score2 = Number(i2.score || 0);
+
+          const denial1 = Number(i1.denialRate || 0);
+          const denial2 = Number(i2.denialRate || 0);
+
+          const underpaid1 = Number(i1.underpaidExposure || 0);
+          const underpaid2 = Number(i2.underpaidExposure || 0);
+
+          const atRisk1 = Number(i1.totalAtRisk || 0);
+          const atRisk2 = Number(i2.totalAtRisk || 0);
+
+          const billed1 = Number(i1.totalBilled || 0);
+          const billed2 = Number(i2.totalBilled || 0);
+
+          let narrative = "";
+
+          // Overall score comparison
+          const scoreDiff = Math.abs(score1 - score2);
+          if (score1 > score2) {
+            narrative += "<b>" + name1 + "</b> outperforms " + name2 + " by " + scoreDiff + " score points. ";
+          } else if (score2 > score1) {
+            narrative += "<b>" + name2 + "</b> outperforms " + name1 + " by " + scoreDiff + " score points. ";
+          } else {
+            narrative += "Both payers are performing at equivalent overall score levels. ";
+          }
+
+          // At-risk delta
+          const riskDelta = Math.abs(atRisk1 - atRisk2);
+          if (riskDelta > 0) {
+            const higherRiskPayer = atRisk1 > atRisk2 ? name1 : name2;
+            narrative += "<br><br><b>" + higherRiskPayer + "</b> carries $" + riskDelta.toLocaleString() + " more total at-risk exposure.";
+          }
+
+          // Denial leverage opportunity
+          const higherDenial = denial1 > denial2 ? {name:name1, rate:denial1, billed:billed1} :
+                               denial2 > denial1 ? {name:name2, rate:denial2, billed:billed2} : null;
+
+          if (higherDenial) {
+            const improvementTarget = 0.03; // 3% reduction scenario
+            const potentialRecovery = higherDenial.billed * improvementTarget;
+            narrative += "<br><br>If " + higherDenial.name + " reduces denial rate by 3%, estimated annual recovery impact is approximately $" + Math.round(potentialRecovery).toLocaleString() + ".";
+          }
+
+          // Underpayment leverage
+          const underpaidDelta = Math.abs(underpaid1 - underpaid2);
+          if (underpaidDelta > 0) {
+            const higherUnderpaid = underpaid1 > underpaid2 ? name1 : name2;
+            narrative += "<br><br>" + higherUnderpaid + " has materially higher underpayment exposure, suggesting contract variance review is warranted.";
+          }
+
+          // Strategic recommendation
+          narrative += "<br><br><b>Strategic Recommendation:</b> Prioritize denial prevention workflows, tighten contract enforcement thresholds, and evaluate renegotiation leverage with the higher-risk payer.";
+
+          document.getElementById("deepDiveNarrative").innerHTML = narrative;
+        })();
+      </script>
+
       <script>
         (function(){
           const dd = JSON.parse(atob("${deepDiveB64}"));
