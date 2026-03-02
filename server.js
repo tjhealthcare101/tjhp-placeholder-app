@@ -9352,53 +9352,69 @@ function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){
 
       <script>
         (function(){
-          if (!window.Chart) return;
           const dd = JSON.parse(atob("${deepDiveB64}"));
           const i1 = dd.i1 || null;
           const i2 = dd.i2 || null;
-          if (!i1 || !i2) return;
 
-          const labels = [i1.payerName, i2.payerName];
-
-          // Score bars: score, denialRate, avgDaysToPay (invert for visual "higher better" on days)
-          const scoreData = [Number(i1.score||0), Number(i2.score||0)];
-          const denialData = [Number(i1.denialRate||0), Number(i2.denialRate||0)];
-          const daysData = [Math.max(0, 100 - Math.min(100,(Number(i1.avgDaysToPay||0)/60)*100)),
-                            Math.max(0, 100 - Math.min(100,(Number(i2.avgDaysToPay||0)/60)*100))];
-
-          new Chart(document.getElementById("riCompareBars"), {
-            type:"bar",
-            data:{
-              labels,
-              datasets:[
-                { label:"Score (0–100)", data:scoreData },
-                { label:"Denial Rate % (lower better)", data:denialData },
-                { label:"Days-to-Pay Score (higher better)", data:daysData }
-              ]
-            },
-            options:{ responsive:true, maintainAspectRatio:false }
-          });
-
-          const denied = [Number(i1.totalDeniedDollars||0), Number(i2.totalDeniedDollars||0)];
-          const underpaid = [Number(i1.totalUnderpaidDollars||0), Number(i2.totalUnderpaidDollars||0)];
-          const atRisk = [Number(i1.totalAtRisk||0), Number(i2.totalAtRisk||0)];
-
-          new Chart(document.getElementById("riExposureBars"), {
-            type:"bar",
-            data:{
-              labels,
-              datasets:[
-                { label:"Denied $ (est.)", data:denied },
-                { label:"Underpaid $ (est.)", data:underpaid },
-                { label:"At Risk $ (total)", data:atRisk }
-              ]
-            },
-            options:{
-              responsive:true,
-              maintainAspectRatio:false,
-              scales:{ y:{ ticks:{ callback:(v)=> (window.moneyFmt ? window.moneyFmt(v) : v) } } }
+          function initDeepDiveCharts(){
+            if (typeof Chart === "undefined") {
+              setTimeout(initDeepDiveCharts, 50);
+              return;
             }
-          });
+            if (!i1 || !i2) return;
+
+            const ctx1 = document.getElementById("riCompareBars");
+            const ctx2 = document.getElementById("riExposureBars");
+            if (!ctx1 || !ctx2) return;
+
+            const labels = [i1.payerName, i2.payerName];
+
+            // Score bars: score, denialRate, avgDaysToPay (invert for visual "higher better" on days)
+            const scoreData = [Number(i1.score||0), Number(i2.score||0)];
+            const denialData = [Number(i1.denialRate||0), Number(i2.denialRate||0)];
+            const daysData = [Math.max(0, 100 - Math.min(100,(Number(i1.avgDaysToPay||0)/60)*100)),
+                              Math.max(0, 100 - Math.min(100,(Number(i2.avgDaysToPay||0)/60)*100))];
+
+            new Chart(ctx1, {
+              type:"bar",
+              data:{
+                labels,
+                datasets:[
+                  { label:"Score (0–100)", data:scoreData },
+                  { label:"Denial Rate % (lower better)", data:denialData },
+                  { label:"Days-to-Pay Score (higher better)", data:daysData }
+                ]
+              },
+              options:{ responsive:true, maintainAspectRatio:false }
+            });
+
+            const denied = [Number(i1.totalDeniedDollars||0), Number(i2.totalDeniedDollars||0)];
+            const underpaid = [Number(i1.totalUnderpaidDollars||0), Number(i2.totalUnderpaidDollars||0)];
+            const atRisk = [Number(i1.totalAtRisk||0), Number(i2.totalAtRisk||0)];
+
+            new Chart(ctx2, {
+              type:"bar",
+              data:{
+                labels,
+                datasets:[
+                  { label:"Denied $ (est.)", data:denied },
+                  { label:"Underpaid $ (est.)", data:underpaid },
+                  { label:"At Risk $ (total)", data:atRisk }
+                ]
+              },
+              options:{
+                responsive:true,
+                maintainAspectRatio:false,
+                scales:{ y:{ ticks:{ callback:(v)=> (window.moneyFmt ? window.moneyFmt(v) : v) } } }
+              }
+            });
+          }
+
+          if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", initDeepDiveCharts);
+          } else {
+            initDeepDiveCharts();
+          }
         })();
       </script>
     </div>
@@ -10210,6 +10226,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       .ri-divider { height:1px; background: var(--border); margin: 12px 0; }
       .chart-container { position:relative; height:320px; max-height:320px; width:100%; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
     <div class="ri-header">
       <div>
         <h2 style="margin:0;">Revenue Intelligence AI</h2>
