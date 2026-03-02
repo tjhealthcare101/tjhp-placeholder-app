@@ -9252,10 +9252,55 @@ function renderForecastTab(org, m, forecastB64){
   `;
 }
 
-function renderDeepDiveTab(org, payerRanks, m, deepDiveB64){
-  const dd = JSON.parse(Buffer.from(String(deepDiveB64 || ""), "base64").toString("utf8") || "{}");
-  const opts = (payerRanks||[]).map(p=>`<option value="${safeStr(p.payer)}" ${String(dd.p1||"") === String(p.payer) ? "selected" : ""}>${safeStr(p.payer)}</option>`).join("");
-  const opts2 = (payerRanks||[]).map(p=>`<option value="${safeStr(p.payer)}" ${String(dd.p2||"") === String(p.payer) ? "selected" : ""}>${safeStr(p.payer)}</option>`).join("");
+function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){
+  p1 = String(p1 || "");
+  p2 = String(p2 || "");
+  const payerOptionsHtml = selected => (payerRanks||[])
+    .map(p=>`<option value="${safeStr(p.payer)}" ${String(selected||"") === String(p.payer) ? "selected" : ""}>${safeStr(p.payer)}</option>`)
+    .join("");
+  if (!p1 || !p2) {
+    return `
+      <div class="executive-panel">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+          <div>
+            <h3 style="margin:0;">Deep Dive Analytics ${infoIcon("Compare two payers side-by-side. Uses live payer intelligence metrics (A–F) and exposure dollars.")}</h3>
+            <div class="muted small" style="margin-top:6px;">Enterprise-style payer comparison and decision support.</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <a class="btn secondary small" href="/payer-rankings">Payer Rankings</a>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <form method="GET" action="/revenue-intelligence" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;">
+          <input type="hidden" name="tab" value="deep-dive" />
+
+          <div>
+            <label>Payer 1</label>
+            <select name="p1">
+              ${payerOptionsHtml(p1)}
+            </select>
+          </div>
+
+          <div>
+            <label>Payer 2</label>
+            <select name="p2">
+              ${payerOptionsHtml(p2)}
+            </select>
+          </div>
+
+          <div>
+            <button class="btn" type="submit">Compare</button>
+          </div>
+        </form>
+
+        <div class="hr"></div>
+
+        <div class="muted">Select two payers to compare.</div>
+      </div>
+    `;
+  }
   return `
     <div class="executive-panel">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;">
@@ -9270,17 +9315,23 @@ function renderDeepDiveTab(org, payerRanks, m, deepDiveB64){
 
       <div class="hr"></div>
 
-      <form method="GET" action="/revenue-intelligence" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
-        <input type="hidden" name="tab" value="deep-dive"/>
-        <div style="min-width:240px;">
+      <form method="GET" action="/revenue-intelligence" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;">
+        <input type="hidden" name="tab" value="deep-dive" />
+        <div>
           <label>Payer 1</label>
-          <select name="p1" required>${opts}</select>
+          <select name="p1">
+            ${payerOptionsHtml(p1)}
+          </select>
         </div>
-        <div style="min-width:240px;">
+        <div>
           <label>Payer 2</label>
-          <select name="p2" required>${opts2}</select>
+          <select name="p2">
+            ${payerOptionsHtml(p2)}
+          </select>
         </div>
-        <button class="btn secondary" type="submit">Compare</button>
+        <div>
+          <button class="btn" type="submit">Compare</button>
+        </div>
       </form>
 
       <div class="hr"></div>
@@ -9620,18 +9671,15 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   const forecastData = buildForecastFromMetrics(m);
   const forecastB64 = Buffer.from(JSON.stringify(forecastData)).toString("base64");
 
-  const p1 = String(parsed.query.p1 || "").trim();
-  const p2 = String(parsed.query.p2 || "").trim();
-  const payerOpts = payerRanks.map(x=>x.payer);
-  const defaultP1 = p1 || (payerOpts[0] || "");
-  const defaultP2 = p2 || (payerOpts[1] || payerOpts[0] || "");
+  const p1 = parsed.query.p1 || "";
+  const p2 = parsed.query.p2 || "";
 
-  const intel1 = defaultP1 ? computePayerIntelligence(org.org_id, defaultP1, "last30") : null;
-  const intel2 = defaultP2 ? computePayerIntelligence(org.org_id, defaultP2, "last30") : null;
+  const intel1 = p1 ? computePayerIntelligence(org.org_id, p1, "last30") : null;
+  const intel2 = p2 ? computePayerIntelligence(org.org_id, p2, "last30") : null;
 
   const deepDiveData = {
-    p1: defaultP1,
-    p2: defaultP2,
+    p1,
+    p2,
     i1: intel1,
     i2: intel2
   };
@@ -10148,7 +10196,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   const content = (
     tab === "payers" ? renderPayerHubTable(payerRanks, q) :
     tab === "forecast" ? renderForecastTab(org, m, forecastB64) :
-    tab === "deep-dive" ? renderDeepDiveTab(org, payerRanks, m, deepDiveB64) :
+    tab === "deep-dive" ? renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2) :
     tab === "ask-ai" ? renderRevenueAIConsole({ org, parsed }) :
     executiveBrief
   );
