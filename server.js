@@ -2035,7 +2035,7 @@ function navUser() {
     <a href="/dashboard">Revenue Overview</a>
     <a href="/claims">Claims Lifecycle</a>
     <a href="/data-management">Data Management</a>
-    <a href="/revenue-intelligence">Revenue Intelligence AI</a>
+    <a href="/revenue-intelligence">Revenue Intelligence Command Center</a>
     <a href="/ai-copilot">AI Copilot</a>
     <a href="/actions">Action Center</a>
     <a href="/report">Reports</a>
@@ -6362,7 +6362,7 @@ function badgeClassForStatus(st){
 
 
 
-// ===== Revenue Intelligence AI: Saved Queries + Query History =====
+// ===== Revenue Intelligence Command Center: Saved Queries + Query History =====
 function getAIQueries(org_id){
   return readJSON(FILES.ai_queries, []).filter(q => q.org_id === org_id);
 }
@@ -7996,11 +7996,12 @@ if (method === "GET" && pathname === "/weekly-summary") {
     }
 
     const topRiskPayer = (m.payerRiskRanking || [])[0];
+    const overviewTargets = getOrgSettings(org.org_id).recovery_targets || {};
 
     const html = renderPage("Revenue Overview", `
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
-          <h2 style="margin-bottom:4px;">Revenue Overview <span class="tooltip" data-tip="Live financial summary generated from your uploaded billed claims, payments, denials, and negotiations.">ⓘ</span></h2>
+          <h2 style="margin-bottom:4px;">Revenue Overview <span class="tooltip" data-tip="Operational revenue health dashboard.">ⓘ</span></h2>
           <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)}</p>
           ${planBadge}
         </div>
@@ -8063,7 +8064,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.revenueAtRisk)}</p><p class="kpi-label">Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Outstanding revenue from denied, underpaid, or unpaid claims.</span></span></p><div class="kpi-delta">—</div></div>
         <div class="kpi-card"><p class="kpi-value">${Number(m.denialRate||0).toFixed(1)}%</p><p class="kpi-label">Denial Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed claims that were denied by payers.</span></span></p><div class="kpi-delta">—</div></div>
         <div class="kpi-card"><p class="kpi-value">${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p><p class="kpi-label">Recovery Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed revenue successfully collected.</span></span></p><div class="kpi-delta">—</div></div>
-        <div class="kpi-card"><p class="kpi-value">${Number(m.operationalDisciplineScore||0).toFixed(0)}/100</p><p class="kpi-label">AI Case Readiness <span class="tooltip">ⓘ<span class="tooltiptext">Measures whether AI appeal and negotiation workspaces include required documentation before submission.</span></span></p><div class="kpi-delta">—</div></div>
+        
       </div>
 
       <div class="exec-card">
@@ -8075,14 +8076,35 @@ if (method === "GET" && pathname === "/weekly-summary") {
               <span class="badge ${gradeBadgeClass(m.healthGrade)}" style="margin-left:8px;">${safeStr(m.healthGrade || "—")}</span>
             </div>
             <div class="muted small" style="margin-top:6px;">This is your high-level revenue health indicator.</div>
-            <div style="margin-top:10px;">
-              <a class="btn secondary small" href="#advancedBreakdown" onclick="document.getElementById('advancedBreakdown').open=true;">View Breakdown</a>
-            </div>
           </div>
           <div style="min-width:320px;flex:1;">
             <div class="chart-container" style="height:260px;max-height:260px;">
               <canvas id="healthScoreDonut"></canvas>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="exec-card">
+        <h3>Operational Breakdown</h3>
+        <div class="muted small" style="margin-bottom:10px;">
+          Quick manager-level visibility into payout drivers.
+        </div>
+
+        <div class="kpi-strip" style="margin-top:0;">
+          <div class="kpi-card">
+            <p class="kpi-value">${formatNumberUI(m.subscores?.collection_efficiency || 0)}</p>
+            <p class="kpi-label">Collection Efficiency</p>
+          </div>
+
+          <div class="kpi-card">
+            <p class="kpi-value">${formatNumberUI(m.subscores?.denial_risk || 0)}</p>
+            <p class="kpi-label">Denial Risk Score</p>
+          </div>
+
+          <div class="kpi-card">
+            <p class="kpi-value">${formatNumberUI(m.subscores?.ar_aging || 0)}</p>
+            <p class="kpi-label">AR Aging Score</p>
           </div>
         </div>
       </div>
@@ -8097,7 +8119,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           $${Math.round(topRiskPayer.risk || 0).toLocaleString()} at risk · ${Number(topRiskPayer.riskRate||0).toFixed(1)}% exposure
         </div>
         <div style="margin-top:8px;">
-          <a class="btn small" href="/revenue-intelligence?tab=payers">Analyze in Revenue Intelligence</a>
+          <a class="btn small" href="/revenue-intelligence?tab=payers">Analyze in Command Center</a>
         </div>
       </div>
       ` : ""}
@@ -8116,55 +8138,23 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
       </div>
 
-      <details id="advancedBreakdown" class="executive-panel">
-        <summary style="font-weight:700;cursor:pointer;">View Advanced Financial Breakdown</summary>
-
-        <div style="margin-top:14px;">
-          <h3 style="margin-bottom:12px;">Practice Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, and AR aging. Higher is better.">ⓘ</span></h3>
-          <div>
-            <div style="font-size:32px;font-weight:900;line-height:1;">${formatNumberUI(m.healthScore || 0)} / 100 <span class="badge ${gradeBadgeClass(m.healthGrade)}">${safeStr(m.healthGrade || "—")}</span></div>
-            <div class="muted" style="margin-top:6px;">Range: ${safeStr(rangeLabel)}</div>
-            <div class="muted small" style="margin-top:8px;">Calculated from weighted metrics across payout performance and receivables risk.</div>
-          </div>
-          <div class="kpi-strip" style="margin-top:12px;">
-            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.collection_efficiency || 0)}</p><p class="kpi-label">Collection Efficiency</p></div>
-            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.denial_risk || 0)}</p><p class="kpi-label">Denial Risk</p></div>
-            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.ar_aging || 0)}</p><p class="kpi-label">AR Aging</p></div>
-            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.subscores?.operational_discipline || 0)}</p><p class="kpi-label">AI Case Readiness <span class="tooltip">ⓘ<span class="tooltiptext">Higher score indicates appeals and negotiations are properly documented before submission.</span></span></p></div>
-          </div>
-          <div class="muted small" style="margin-top:6px;">
-            AI Case Readiness sample: ${formatNumberUI(m.operationalDisciplineSample || 0)} workspace(s) in range · Ready docs rate: ${Number(m.operationalDisciplineRate||0).toFixed(1)}%
-          </div>
-        </div>
-
-        <div style="margin-top:16px;">
-          <h4 style="margin-bottom:12px;">AR Aging Breakdown <span class="tooltip" data-tip="Outstanding balances grouped by claim age in days. 90+ days is highest risk.">ⓘ</span></h4>
-          <div class="kpi-strip" style="margin-top:0;">
-            <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["0-30"]||0)}</p><p class="kpi-label">0-30 Days</p></div>
-            <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["31-60"]||0)}</p><p class="kpi-label">31-60 Days</p></div>
-            <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["61-90"]||0)}</p><p class="kpi-label">61-90 Days</p></div>
-            <div class="kpi-card"><p class="kpi-value">${fmtMoney((m.arBuckets||{})["90+"]||0)}</p><p class="kpi-label">90+ Days</p></div>
-          </div>
-        </div>
-
-        <div style="margin-top:16px;">
-          <h3 style="margin-bottom:12px;">Recovery Intelligence</h3>
-          <div class="kpi-strip" style="margin-top:0;">
-            <div class="kpi-card"><p class="kpi-value">${Number(m.appealSuccessRate||0).toFixed(1)}%</p><p class="kpi-label">Appeal Success Rate ${infoIcon("% of submitted appeals that resulted in approved/partial + payment posted.")}</p></div>
-            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.appealSubmittedCount||0)}</p><p class="kpi-label">Appeals Submitted</p></div>
-            <div class="kpi-card"><p class="kpi-value">${Number(m.negotiationROI||0).toFixed(1)}%</p><p class="kpi-label">Negotiation ROI ${infoIcon("Recovered cash / requested amount for submitted negotiation workspaces.")}</p></div>
-            <div class="kpi-card"><p class="kpi-value">${formatNumberUI(m.negotiationSubmittedCount||0)}</p><p class="kpi-label">Negotiations Submitted</p></div>
-            <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.negotiatedTotal||0)}</p><p class="kpi-label">Negotiated Requested</p></div>
-            <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.recoveredTotal||0)}</p><p class="kpi-label">Negotiated Recovered</p></div>
-            <div class="kpi-card"><p class="kpi-value">${Number(m.approvedVsPaidPct||0).toFixed(1)}%</p><p class="kpi-label">Approved vs Paid</p></div>
-          </div>
-        </div>
-      </details>
+      
 
       <div class="btnRow" style="margin-top:14px;">
         <a class="btn" href="/claims">Open Claims Lifecycle</a>
         <a class="btn secondary" href="/actions?tab=denials">Review Denials</a>
         <a class="btn secondary" href="/executive-export">Export Executive Brief</a>
+      </div>
+
+      <div class="exec-card">
+        <h3>Organization Targets</h3>
+        <div class="muted small">Operational targets vs current performance.</div>
+        <div class="kpi-strip" style="margin-top:10px;">
+          <div class="kpi-card"><p class="kpi-value">${Number(m.appealSuccessRate || 0).toFixed(1)}%</p><p class="kpi-label">Appeal Target (${Number(overviewTargets.target_appeal_success_rate || 60).toFixed(0)}%)</p></div>
+          <div class="kpi-card"><p class="kpi-value">${Number(m.negotiationROI || 0).toFixed(1)}%</p><p class="kpi-label">Negotiation ROI Target (${Number(overviewTargets.target_negotiation_roi || 60).toFixed(0)}%)</p></div>
+          <div class="kpi-card"><p class="kpi-value">${Number(m.avgDaysToPay || 0).toFixed(0)}</p><p class="kpi-label">Days-to-Pay Target (${Number(overviewTargets.target_days_to_pay || 30).toFixed(0)})</p></div>
+          <div class="kpi-card"><p class="kpi-value">${Number(m.ar90Rate || 0).toFixed(1)}%</p><p class="kpi-label">AR90 Target (${Number(overviewTargets.target_ar90_rate || 15).toFixed(0)}%)</p></div>
+        </div>
       </div>
 
       <div class="hr"></div>
@@ -9821,7 +9811,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 
   // Revenue Intelligence stays structured. Copilot handles conversational AI.
   const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-    ${tabLink("/revenue-intelligence", tab, "executive", "Executive Brief", "CEO-style summary of revenue health, risk, and priority payers.")}
+    ${tabLink("/revenue-intelligence", tab, "executive", "Executive Strategy", "CEO-style summary of revenue health, risk, and priority payers.")}
     ${tabLink("/revenue-intelligence", tab, "payers", "Payer Hub", "Search payers, see grades, and open AI Payer Intelligence instantly.")}
     ${tabLink("/revenue-intelligence", tab, "forecast", "Forecast", "Projections for collections, denials, and AR aging trends.")}
     ${tabLink("/revenue-intelligence", tab, "deep-dive", "Deep Dive", "Compare payers, CPT drivers, and time windows.")}
@@ -9907,10 +9897,30 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   const ar90 = Number(m.ar90Rate || 0);
   const collectedTotal = Number(m?.kpis?.collectedTotal || 0);
   const revenueAtRisk = Number(m?.kpis?.revenueAtRisk || 0);
+  const topRiskPayers = (payerRanks || []).slice(0, 3);
+  const topRiskTotal = topRiskPayers.reduce((sum, p) => sum + Number(p.totalAtRisk || 0), 0);
+  const allRiskTotal = (payerRanks || []).reduce((sum, p) => sum + Number(p.totalAtRisk || 0), 0);
+  const riskConcentrationPct = allRiskTotal > 0 ? Math.round((topRiskTotal / allRiskTotal) * 100) : 0;
+  const highestExposurePayer = topRiskPayers[0] || null;
+  const denialPriorityThreshold = Number(targets.target_denial_rate || 12);
+  const highestAtRiskPayer = highestExposurePayer ? `${highestExposurePayer.payer} (${formatMoneyUI(highestExposurePayer.totalAtRisk || 0)} at risk)` : "No payer risk available";
+  const missingContractClaims = Math.max(0, Number(m.statusCounts?.Underpaid || 0) + Number(m.statusCounts?.Appeal || 0));
+  const executiveWeeklyPriorities = [
+    `Prioritize ${highestAtRiskPayer}.`,
+    missingContractClaims > 0
+      ? `${formatNumberUI(missingContractClaims)} claims appear to be missing contract validation; route to reimbursement review.`
+      : "No claims are currently flagged as missing contract validation.",
+    denialRate > denialPriorityThreshold
+      ? `Denial rate is ${formatNumberUI(denialRate)}%, above ${formatNumberUI(denialPriorityThreshold)}% threshold — launch denial root-cause sprint.`
+      : `Denial rate is ${formatNumberUI(denialRate)}%, within ${formatNumberUI(denialPriorityThreshold)}% threshold.`
+  ];
   const executiveBrief = `
   <style>
     /* ===== Executive Brief 2.0 (Enterprise Layout) ===== */
     .eb-wrap{display:flex;flex-direction:column;gap:16px;}
+    .strategy-header{border-left:6px solid #4338ca;background:rgba(67,56,202,.08);padding:14px 16px;border-radius:12px;}
+    .strategy-header h2{margin:0;font-size:22px;}
+    .executive-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 16px;}
     .eb-hero{display:grid;grid-template-columns:1.2fr .8fr;gap:14px;align-items:stretch;}
     .eb-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;box-shadow:var(--shadow);}
     .eb-title{font-weight:900;font-size:18px;margin:0;}
@@ -10095,6 +10105,10 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     @media(max-width:980px){.eb-hero{grid-template-columns:1fr;} .eb-kpis{grid-template-columns:1fr;} .eb-grid2{grid-template-columns:1fr;} .eb-recovery{grid-template-columns:1fr 1fr;} .eb-targets{grid-template-columns:1fr 1fr;} .eb-split{grid-template-columns:1fr;}}
   </style>
   <div class="eb-wrap">
+    <div class="strategy-header">
+      <h2>Executive Strategy Layer</h2>
+      <div class="muted">Strategic decision support and revenue risk prioritization.</div>
+    </div>
     <div class="eb-hero">
       <div class="eb-card">
         <div class="eb-title">Executive Performance Snapshot</div>
@@ -10126,6 +10140,10 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
                 <div class="metric-value">${formatNumberUI(denialRate)}%</div>
               </div>
             </div>
+            <div class="executive-card" style="margin-top:10px;">
+              <h4>This Week’s Revenue Priority</h4>
+              <ul id="weeklyPriorityList">${executiveWeeklyPriorities.map(item => `<li>${safeStr(item)}</li>`).join("")}</ul>
+            </div>
           </div>
         </div>
         <div class="eb-kpis">
@@ -10146,6 +10164,14 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         </div>
         <div class="hr"></div>
         <div class="muted small">Tip: Use <b>Payer Hub</b> for follow-up strategy and deep dives by payer.</div>
+      </div>
+    </div>
+    <div class="executive-card">
+      <h4>Revenue Risk Concentration</h4>
+      <div id="riskConcentrationPanel">
+        Revenue risk is ${riskConcentrationPct}% concentrated in ${topRiskPayers.length} payers.<br/>
+        Top exposure: ${safeStr(highestExposurePayer?.payer || "N/A")} – ${formatMoneyUI(highestExposurePayer?.totalAtRisk || 0)}.<br/>
+        Top payer concentration dollars: ${formatMoneyUI(topRiskTotal)}.
       </div>
     </div>
     <div class="eb-grid2">
@@ -10171,6 +10197,18 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       </div>
       <div class="hr"></div>
       ${topPayersToReviewHtml}
+    </div>
+    <div class="eb-card">
+      <div class="eb-sectionHead"><h3>Exposure Breakdown</h3><div class="muted">Denied vs underpaid vs at-risk concentration by payer.</div></div>
+      <div class="hr"></div>
+      <div class="eb-table-wrap">
+        <table class="eb-table">
+          <thead><tr><th>Payer</th><th>At Risk</th><th>Denied</th><th>Underpaid</th></tr></thead>
+          <tbody>
+            ${(payerRanks || []).slice(0,8).map(p=>`<tr><td>${safeStr(p.payer)}</td><td>${formatMoneyUI(p.totalAtRisk||0)}</td><td>${formatNumberUI(p.deniedClaims||0)}</td><td>${formatNumberUI(p.underpaidClaims||0)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No exposure data available.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
     </div>
     <div class="eb-card">
       <div class="eb-sectionHead"><h3>Organization Targets</h3><div class="muted">Targets vs current performance.</div></div>
@@ -10292,7 +10330,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     executiveBrief
   );
 
-  const html = renderPage("Revenue Intelligence AI", `
+  const html = renderPage("Revenue Intelligence Command Center", `
     <style>
       .ri-header { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:flex-end; }
       .ri-sub { margin-top:6px; }
@@ -10304,8 +10342,8 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
     <div class="ri-header">
       <div>
-        <h2 style="margin:0;">Revenue Intelligence AI</h2>
-        <div class="muted ri-sub">Enterprise command center for payer intelligence, forecasting, deep dives, and AI reporting.</div>
+        <h2 style="margin:0;">Revenue Intelligence Command Center</h2>
+        <div class="muted ri-sub">Strategic revenue intelligence, payer analytics, forecasting, and executive decision support.</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <a class="btn secondary" href="/executive-export">Export Executive PDF</a>
@@ -10438,7 +10476,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
             <div class="btnRow" style="margin-top:10px;">
               <button class="btn" type="submit" ${copilotUsage.limitReached ? "disabled" : ""} title="${copilotUsage.limitReached ? (getCopilotLimitMessage(org.org_id)?.message || "") : ""}">${copilotUsage.limitReached ? "Limit Reached" : "Send"}</button>
               <a class="btn secondary" href="/ai-copilot?new=1">New Analysis</a>
-              <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence AI</a>
+              <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence Command Center</a>
             </div>
           </form>
         </div>
