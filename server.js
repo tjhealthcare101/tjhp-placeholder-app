@@ -100,6 +100,7 @@ const FILES = {
   revenue_template_versions: path.join(DATA_DIR, "revenue_template_versions.json"),
   template_assets: path.join(DATA_DIR, "template_assets.json"),
   packet_templates: path.join(DATA_DIR, "packet_templates.json"),
+  workspace_outcomes: path.join(DATA_DIR, "workspace_outcomes.json"),
 };
 
 // Directory for storing uploaded template files
@@ -337,6 +338,7 @@ ensureFile(FILES.revenue_automation_templates, []);
 ensureFile(FILES.revenue_template_versions, []);
 ensureFile(FILES.template_assets, []);
 ensureFile(FILES.packet_templates, []);
+ensureFile(FILES.workspace_outcomes, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -4557,6 +4559,169 @@ function detectEobEraForClaim(org_id, claim, ws){
   return hasWorkspaceEob || hasPacketEob || hasClaimDenialDoc || hasIngestEob;
 }
 
+
+
+function normalizeDenialReasonKey(v){
+  return String(v || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "unknown";
+}
+
+function extractPacketFeatures({ argumentText, requestedActionText, attachmentsState, hasContract, hasDenialLetter, hasEob, hasClaimForm, hasMedicalRecords, hasPolicyCitation, hasContractCitation }){
+  const aText = String(argumentText || "").trim();
+  const rText = String(requestedActionText || "").trim();
+  const at = attachmentsState || {};
+  const denial = typeof hasDenialLetter === "boolean" ? hasDenialLetter : !!at.hasDenialLetter;
+  const eob = typeof hasEob === "boolean" ? hasEob : !!at.hasEob;
+  const claimForm = typeof hasClaimForm === "boolean" ? hasClaimForm : !!at.hasClaimForm;
+  const med = typeof hasMedicalRecords === "boolean" ? hasMedicalRecords : !!at.hasMedicalRecords;
+  const policy = typeof hasPolicyCitation === "boolean" ? hasPolicyCitation : /policy|benefit|coverage|guideline|lcd|ncd|cpt|icd/i.test(aText + " " + rText);
+  const contractCite = typeof hasContractCitation === "boolean" ? hasContractCitation : /contract|fee schedule|allowed amount|reimbursement|participating|agreement/i.test(aText + " " + rText);
+  const argumentLength = aText.length;
+  const requestedActionLength = rText.length;
+  const hasClearAsk = requestedActionLength > 40;
+  let completenessScore = 0;
+  completenessScore += denial ? 20 : 0;
+  completenessScore += eob ? 20 : 0;
+  completenessScore += claimForm ? 15 : 0;
+  completenessScore += med ? 10 : 0;
+  completenessScore += policy ? 10 : 0;
+  completenessScore += contractCite ? 10 : 0;
+  completenessScore += argumentLength >= 200 ? 10 : 0;
+  completenessScore += hasClearAsk ? 5 : 0;
+  completenessScore = Math.max(0, Math.min(100, completenessScore));
+  return {
+    hasDenialLetter: denial,
+    hasEob: eob,
+    hasClaimForm: claimForm,
+    hasMedicalRecords: med,
+    hasPolicyCitation: policy,
+    hasContractCitation: contractCite,
+    argumentLength,
+    requestedActionLength,
+    hasClearAsk,
+    completenessScore,
+    hasContract: !!hasContract,
+  };
+}
+
+function loadWorkspaceOutcomes(org_id){
+  return readJSON(FILES.workspace_outcomes, []).filter(r => r && r.org_id === org_id);
+}
+
+function saveWorkspaceOutcome(record){
+  const all = readJSON(FILES.workspace_outcomes, []);
+  all.push({ ...record, created_at: record.created_at || nowISO() });
+  writeJSON(FILES.workspace_outcomes, all);
+}
+
+function computeHistoricalBaselines(org_id, payer, stageType, denialReasonKey){
+  const rows = loadWorkspaceOutcomes(org_id).filter(r =>
+    String(r.payer || "").trim().toLowerCase() === String(payer || "").trim().toLowerCase() &&
+    String(r.stage_type || "") === String(stageType || "")
+  );
+  const drk = normalizeDenialReasonKey(denialReasonKey);
+  let scoped = rows.filter(r => normalizeDenialReasonKey(r.denial_reason) === drk);
+  if (scoped.length < 3) scoped = rows;
+  if (!scoped.length) return null;
+  const successSet = new Set(["approved","partial","paid_in_full"]);
+  const successRows = scoped.filter(r => successSet.has(String(r.outcome_status || "")));
+  const successRate = scoped.length ? (successRows.length / scoped.length) : 0;
+  const recoveredPcts = successRows
+    .map(r => {
+      const req = num(r.requested_amount);
+      const rec = num(r.recovered_amount);
+      return req > 0 ? (rec / req) : null;
+    })
+    .filter(v => v != null && isFinite(v));
+  const avgRecoveredPct = recoveredPcts.length ? recoveredPcts.reduce((s,v)=>s+v,0) / recoveredPcts.length : null;
+  const dayVals = scoped.map(r => Number(r.days_to_payment)).filter(v => Number.isFinite(v) && v >= 0);
+  const avgDaysToPayment = dayVals.length ? dayVals.reduce((s,v)=>s+v,0) / dayVals.length : null;
+  return { n: scoped.length, successRate, avgRecoveredPct, avgDaysToPayment };
+}
+
+function computeStrategySuccessByProfile(org_id, payer, stageType, denialReasonKey){
+  const rows = loadWorkspaceOutcomes(org_id).filter(r =>
+    String(r.payer || "").trim().toLowerCase() === String(payer || "").trim().toLowerCase() &&
+    String(r.stage_type || "") === String(stageType || "")
+  );
+  const drk = normalizeDenialReasonKey(denialReasonKey);
+  const scoped = rows.filter(r => normalizeDenialReasonKey(r.denial_reason) === drk);
+  const useRows = scoped.length >= 3 ? scoped : rows;
+  const successSet = new Set(["approved","partial","paid_in_full"]);
+  const by = {};
+  for (const r of useRows){
+    const profile = String(r.strategy_profile_used || "Auto") || "Auto";
+    if (!by[profile]) by[profile] = { n: 0, s: 0 };
+    by[profile].n += 1;
+    if (successSet.has(String(r.outcome_status || ""))) by[profile].s += 1;
+  }
+  let best = null;
+  for (const [k,v] of Object.entries(by)){
+    if (v.n < 2) continue;
+    const rate = v.s / v.n;
+    if (!best || rate > best.rate || (rate === best.rate && v.n > best.n)) best = { profile:k, rate, n:v.n };
+  }
+  return best;
+}
+
+function computeDeterministicScore(inputs){
+  const stageType = String(inputs.stageType || "appeal");
+  const requestedAmount = Math.max(0, num(inputs.requestedAmount || 0));
+  const atRiskAmount = Math.max(0, num(inputs.atRiskAmount || 0));
+  const strategyProfile = String(inputs.strategyProfile || "Auto");
+  const f = inputs.packetFeatures || {};
+  const baselines = inputs.baselines;
+  let probability = 55;
+  let confidence = "Low";
+  if (baselines && baselines.n >= 5){ probability = num(baselines.successRate) * 100; confidence = "High"; }
+  else if (baselines && baselines.n >= 3){ probability = num(baselines.successRate) * 100; confidence = "Medium"; }
+
+  if (f.hasDenialLetter) probability += 10;
+  if (f.hasEob) probability += 10;
+  if (f.hasClaimForm) probability += 5;
+  if (f.hasContractCitation) probability += 8;
+  if (f.hasPolicyCitation) probability += 6;
+  if (f.hasMedicalRecords) probability += 5;
+  if (stageType === "appeal" && !f.hasDenialLetter) probability -= 15;
+  if (stageType === "appeal" && !f.hasEob) probability -= 12;
+  if (!f.hasClaimForm) probability -= 10;
+  if (!inputs.hasContractRule && strategyProfile === "Contractual") probability -= 12;
+
+  const effective = strategyProfile === "Auto" ? "Auto" : strategyProfile;
+  const appealGood = ["Regulatory","Contractual","Clinical"];
+  const negotiationGood = ["Contractual","Collaborative"];
+  if ((stageType === "appeal" && appealGood.includes(effective)) || (stageType === "negotiation" && negotiationGood.includes(effective))) probability += 6;
+  if (num(f.argumentLength) < 200) probability -= 8;
+  if (!f.hasClearAsk) probability -= 8;
+
+  probability = Math.max(5, Math.min(95, Math.round(probability)));
+
+  let estRecovery = 0;
+  if (baselines && Number.isFinite(num(baselines.avgRecoveredPct)) && num(baselines.avgRecoveredPct) > 0) {
+    estRecovery = requestedAmount * num(baselines.avgRecoveredPct);
+  } else {
+    estRecovery = Math.min(atRiskAmount || requestedAmount, requestedAmount || atRiskAmount) * (probability / 100);
+  }
+
+  const alerts = [];
+  if (stageType === "appeal" && !f.hasDenialLetter) alerts.push("Missing Denial Letter for appeal packet.");
+  if (stageType === "appeal" && !f.hasEob) alerts.push("Missing EOB/ERA for appeal packet.");
+  if (!f.hasClaimForm) alerts.push("Missing claim form/itemized bill.");
+  if (!inputs.hasContractRule) alerts.push("Contract rule missing — add contract rule in Reimbursement Engine");
+  if (num(f.argumentLength) < 200) alerts.push("Argument narrative is short; add clinical/contract rationale.");
+  if (!f.hasClearAsk) alerts.push("Requested action is unclear; include a specific ask.");
+  if (!inputs.hasContractRule && strategyProfile === "Contractual") alerts.push("Contractual strategy selected but no contract rule found.");
+
+  let strategyRecommended = "Collaborative";
+  if (inputs.strategyHistoryBest && inputs.strategyHistoryBest.profile) strategyRecommended = inputs.strategyHistoryBest.profile;
+  else if (stageType === "appeal") {
+    const dr = String(inputs.denialReasonKey || "").toLowerCase();
+    strategyRecommended = (dr.includes("timely") || dr.includes("medical_necessity") || dr.includes("medical necessity")) ? "Regulatory" : "Contractual";
+  } else {
+    strategyRecommended = inputs.hasContractRule ? "Contractual" : "Collaborative";
+  }
+
+  return { probability, confidence, estRecovery, alerts, strategyRecommended };
+}
 function renderWorkspaceTabs(billed_id, activeTab){
   const mk = (key, label) => `<a class="btn ${activeTab===key?"":"secondary"}" href="${workspacePagePath(billed_id, key)}">${label}</a>`;
   return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px;">${mk("appeal","Appeal Draft")}${mk("negotiation","Negotiation Draft")}${mk("packet","Packet Builder")}${mk("activity","Activity")}</div>`;
@@ -18374,24 +18539,55 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const isNegotiation = pathname === "/ai-negotiation" || String(parsed.query.tab || "") === "negotiation";
     const channel = isNegotiation ? "negotiation" : "appeal";
     const pageTitle = isNegotiation ? "AI Negotiation Packet" : "AI Appeal Packet";
-    const templates = getAgentTemplates(org.org_id).filter(t => t.type === channel);
-    const templateOptions = templates.map(t => `<option value="${safeStr(t.template_id || "")}" ${String((ws[channel] || {}).template_id || "") === String(t.template_id || "") ? "selected" : ""}>${safeStr(t.name || t.template_id || "Template")}</option>`).join("");
+    const packetSections = (ws[channel] || {}).packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
     const readyCheck = canMarkReady(ws, channel);
+    ws[channel] = ws[channel] || {};
+    ws[channel].strategy_profile = ["Auto","Clinical","Contractual","Regulatory","Collaborative"].includes(String(ws[channel].strategy_profile||"")) ? ws[channel].strategy_profile : "Auto";
+    const packetFeatures = extractPacketFeatures({
+      argumentText: channel === "negotiation" ? packetSections.variance_explanation : packetSections.argument,
+      requestedActionText: packetSections.requested_action,
+      attachmentsState: {
+        hasDenialLetter: packetHasKey(ws, "denial_letter"),
+        hasEob: packetHasKey(ws, "eob_era"),
+        hasClaimForm: packetHasKey(ws, "claim_form"),
+        hasMedicalRecords: packetHasKey(ws, "medical_records")
+      },
+      hasContract: !!findContractForClaim(org.org_id, b)
+    });
+    const hasContractRule = !!findContractForClaim(org.org_id, b);
+    const denialReasonKey = normalizeDenialReasonKey(ws.outcome?.denial_reason || b.denial_reason || b.issue_reason || "");
+    const baseline = computeHistoricalBaselines(org.org_id, b.payer || "", channel, denialReasonKey);
+    const bestStrategy = computeStrategySuccessByProfile(org.org_id, b.payer || "", channel, denialReasonKey);
+    const requestedAmountForScore = channel === "negotiation" ? num(packetSections.requested_amount || ws.negotiation?.requested_amount || d.underpaidAmount || 0) : num(d.atRiskAmount || d.underpaidAmount || 0);
+    const score = computeDeterministicScore({
+      stageType: channel,
+      billedAmount: num(d.billedAmount),
+      paidAmount: num(d.paidAmount),
+      atRiskAmount: num(d.atRiskAmount),
+      requestedAmount: requestedAmountForScore,
+      payer: b.payer || "",
+      denialReasonKey,
+      hasContractRule,
+      strategyProfile: ws[channel].strategy_profile || "Auto",
+      packetFeatures,
+      baselines: baseline,
+      strategyHistoryBest: bestStrategy
+    });
     const missingLabelMap = { denial_letter: "Denial Letter", eob_era: "EOB/ERA", claim_form: "Claim Form / Itemized Bill" };
     const missingKindMap = { denial_letter: "denial", eob_era: "eob", claim_form: "supporting" };
     const sectionDescriptions = packetSectionDescriptions(channel);
-    const packetSections = (ws[channel] || {}).packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
     const mainKey = packetNarrativeKey(channel);
     const sectionsHtml = Object.keys(packetSections).map(key => {
+      const fieldId = `packet-${key}`;
       const inputHtml = (channel === "negotiation" && key === "requested_amount")
-        ? `<input name="value" value="${safeStr(packetSections[key] || ws.negotiation?.requested_amount || d.underpaidAmount || "")}" />`
-        : `<textarea name="value" style="min-height:120px;">${safeStr(packetSections[key] || "")}</textarea>`;
+        ? `<input id="${safeStr(fieldId)}" name="value" value="${safeStr(packetSections[key] || ws.negotiation?.requested_amount || d.underpaidAmount || "")}" />`
+        : `<textarea id="${safeStr(fieldId)}" name="value" style="min-height:120px;">${safeStr(packetSections[key] || "")}</textarea>`;
       return `<details ${key===mainKey?"open":""} style="margin:8px 0;border:1px solid var(--border);border-radius:10px;padding:10px;"><summary style="font-weight:800;cursor:pointer;">${safeStr(key.replace(/_/g," "))} <span class="muted small">ⓘ ${safeStr(sectionDescriptions[key]||"")}</span></summary><form method="POST" action="/agent-workspace/save" style="margin-top:8px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="draft_type" value="${safeStr(channel)}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><input type="hidden" name="section_key" value="${safeStr(key)}" />${inputHtml}<button class="btn secondary small" type="submit">Save Section</button></form></details>`;
     }).join("\n");
     const checklist = requiredPacketKeysForChannel(channel).map(key => ({ key, label: missingLabelMap[key] || key, present: packetHasKey(ws, key) }));
     const checklistHtml = checklist.map(i => `<li>${i.present ? "☑" : "☐"} ${safeStr(i.label)}</li>`).join("");
     const missingDocsText = readyCheck.missing.map(k => missingLabelMap[k] || k).join(", ");
-    const missingFormsHtml = readyCheck.missing.map(key => `<form method="POST" action="/agent-workspace/upload" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="packet_key" value="${safeStr(key)}" /><input type="hidden" name="kind" value="${safeStr(missingKindMap[key] || "supporting")}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><span class="small" style="min-width:190px;">Upload ${safeStr(missingLabelMap[key] || key)}</span><input type="file" name="files" /><button class="btn secondary small" type="submit">Upload</button></form>`).join("");
+    const missingFormsHtml = readyCheck.missing.map(key => `<form method="POST" action="/agent-workspace/upload" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="packet_key" value="${safeStr(key)}" /><input type="hidden" name="kind" value="${safeStr(missingKindMap[key] || "supporting")}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><span class="small" style="min-width:190px;">Upload ${safeStr(missingLabelMap[key] || key)}</span><input class="attachment-file-input" type="file" name="files" /><button class="btn secondary small" type="submit">Upload</button></form>`).join("");
     const errs = Array.isArray(parsed.query.err) ? parsed.query.err : [parsed.query.err];
     const hasMissingErr = errs.includes("missing_required");
     const msgs = getAgentMessages(org.org_id, billed_id).slice(-12).map(m => `<li><strong>${safeStr(m.role || "agent")}</strong> [${safeStr(m.channel || "general")}]: ${safeStr(m.content || "")}</li>`).join("") || `<li class="muted">No messages yet.</li>`;
@@ -18401,6 +18597,19 @@ if (method === "GET" && pathname === "/agent-workspace") {
       <h2>${pageTitle}</h2>
 
       ${orgSnapshot}
+
+      <h3>AI Recovery Intelligence</h3>
+      <div id="recovery-intelligence" style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);margin-bottom:12px;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <div><div class="muted small">Success Probability</div><div id="ai-probability" style="font-size:28px;font-weight:900;">${formatNumberUI(score.probability)}%</div></div>
+          <div><div class="muted small">Estimated Recovery</div><div id="ai-est-recovery" style="font-size:28px;font-weight:900;">${formatMoneyUI(score.estRecovery)}</div></div>
+          <div><div class="muted small">Confidence</div><div id="ai-confidence" class="badge">${safeStr(score.confidence)}</div></div>
+          <div><div class="muted small">Recommended Strategy</div><div id="ai-strategy-recommended" style="font-weight:800;">${safeStr(score.strategyRecommended)}</div></div>
+        </div>
+        <div style="margin-top:10px;"><strong>Packet Quality Alerts</strong><ul id="ai-alerts">${(score.alerts.length?score.alerts:["No major alerts."]).map(a=>`<li>${safeStr(a)}</li>`).join("")}</ul></div>
+        ${!hasContractRule ? `<div style="margin-top:8px;"><a class="btn small" href="/data-management?tab=reimbursement">Add Contract Rule</a></div>` : ``}
+        <details style="margin-top:8px;"><summary style="cursor:pointer;font-weight:700;">Why this score?</summary><div class="muted small">Deterministic scoring uses packet completeness, strategy fit, and historical payer/stage outcomes.</div></details>
+      </div>
 
       <h3>1) Packet Overview</h3>
       <table>
@@ -18416,18 +18625,25 @@ if (method === "GET" && pathname === "/agent-workspace") {
       <h3>2) Required Docs Checklist</h3>
       ${(hasMissingErr && !readyCheck.ok) ? `<p class="warn">Cannot mark ready — missing required items: ${safeStr(missingDocsText)}</p>` : ""}
       <ul>${checklistHtml}</ul>
+      <div id="ai-attachment-checklist" style="display:flex;gap:12px;flex-wrap:wrap;">
+        <label><input type="checkbox" id="att-denial" ${packetHasKey(ws, "denial_letter")?"checked":""}/> Denial Letter uploaded</label>
+        <label><input type="checkbox" id="att-eob" ${packetHasKey(ws, "eob_era")?"checked":""}/> EOB/ERA uploaded</label>
+        <label><input type="checkbox" id="att-claim" ${packetHasKey(ws, "claim_form")?"checked":""}/> Claim form uploaded</label>
+        <label><input type="checkbox" id="att-med" ${packetHasKey(ws, "medical_records")?"checked":""}/> Medical records uploaded</label>
+      </div>
       ${!readyCheck.ok ? `<div>${missingFormsHtml}</div>` : `<p class="small muted">All required items are present.</p>`}
 
-      <h3>3) Template Selection</h3>
-      <form method="POST" action="/agent-workspace/template">
+      <h3>3) Strategy Profile</h3>
+      <form method="POST" action="/agent-workspace/strategy">
         <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
         <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
         <input type="hidden" name="tab" value="${safeStr(channel)}" />
-        <select name="template_id"><option value="">Default Rules</option>${templateOptions}</select>
-        <button class="btn secondary" type="submit">Save Template</button>
+        <select name="strategy_profile" id="strategy-profile">${["Auto","Clinical","Contractual","Regulatory","Collaborative"].map(v=>`<option value="${v}" ${String(ws[channel]?.strategy_profile||"Auto")===v?"selected":""}>${v}</option>`).join("")}</select>
+        <button class="btn secondary" type="submit">Save Strategy</button>
       </form>
 
       <h3>4) AI Packet Builder <span class="small muted">Version ${versionNumber}</span> <a class="btn secondary small" href="/agent-workspace/history?billed_id=${encodeURIComponent(billed_id)}&channel=${encodeURIComponent(channel)}">View History</a></h3>
+      <form method="POST" action="/agent-workspace/save-all" style="margin:8px 0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="draft_type" value="${safeStr(channel)}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><button class="btn" type="submit">Save All Changes</button></form>
       ${sectionsHtml}
 
       <details>
@@ -18490,6 +18706,116 @@ if (method === "GET" && pathname === "/agent-workspace") {
           <button class="btn secondary" type="submit">Mark Ready</button>
         </form>
       </div>
+
+      <script>
+      (function(){
+        const stageType = ${JSON.stringify(channel)};
+        const hasContractRule = ${hasContractRule ? 'true' : 'false'};
+        const requestedAmountSeed = ${JSON.stringify(requestedAmountForScore)};
+        const atRiskSeed = ${JSON.stringify(num(d.atRiskAmount))};
+        const baseline = ${JSON.stringify(baseline || null)};
+        function num(v){ var n=Number(v||0); return isFinite(n)?n:0; }
+        function extractFeatures(){
+          const argumentEl = document.getElementById(stageType === 'negotiation' ? 'packet-variance_explanation' : 'packet-argument');
+          const reqEl = document.getElementById('packet-requested_action');
+          const a=(argumentEl && argumentEl.value || '').trim();
+          const r=(reqEl && reqEl.value || '').trim();
+          const hasDenialLetter = !!(document.getElementById('att-denial') && document.getElementById('att-denial').checked);
+          const hasEob = !!(document.getElementById('att-eob') && document.getElementById('att-eob').checked);
+          const hasClaimForm = !!(document.getElementById('att-claim') && document.getElementById('att-claim').checked);
+          const hasMedicalRecords = !!(document.getElementById('att-med') && document.getElementById('att-med').checked);
+          const hasPolicyCitation = /policy|benefit|coverage|guideline|lcd|ncd|cpt|icd/i.test(a+' '+r);
+          const hasContractCitation = /contract|fee schedule|allowed amount|reimbursement|participating|agreement/i.test(a+' '+r);
+          let completenessScore = 0;
+          completenessScore += hasDenialLetter ? 20 : 0;
+          completenessScore += hasEob ? 20 : 0;
+          completenessScore += hasClaimForm ? 15 : 0;
+          completenessScore += hasMedicalRecords ? 10 : 0;
+          completenessScore += hasPolicyCitation ? 10 : 0;
+          completenessScore += hasContractCitation ? 10 : 0;
+          completenessScore += a.length >= 200 ? 10 : 0;
+          completenessScore += r.length > 40 ? 5 : 0;
+          return { hasDenialLetter, hasEob, hasClaimForm, hasMedicalRecords, hasPolicyCitation, hasContractCitation, argumentLength:a.length, requestedActionLength:r.length, hasClearAsk:r.length>40, completenessScore };
+        }
+        function compute(){
+          const f = extractFeatures();
+          const strategyEl = document.getElementById('strategy-profile');
+          const strategy = strategyEl ? strategyEl.value : 'Auto';
+          let p = 55; let conf='Low';
+          if (baseline && baseline.n >= 5){ p = num(baseline.successRate) * 100; conf='High'; }
+          else if (baseline && baseline.n >= 3){ p = num(baseline.successRate) * 100; conf='Medium'; }
+          if (f.hasDenialLetter) p += 10;
+          if (f.hasEob) p += 10;
+          if (f.hasClaimForm) p += 5;
+          if (f.hasContractCitation) p += 8;
+          if (f.hasPolicyCitation) p += 6;
+          if (f.hasMedicalRecords) p += 5;
+          if (stageType === 'appeal' && !f.hasDenialLetter) p -= 15;
+          if (stageType === 'appeal' && !f.hasEob) p -= 12;
+          if (!f.hasClaimForm) p -= 10;
+          if (!hasContractRule && strategy === 'Contractual') p -= 12;
+          if ((stageType === 'appeal' && ['Regulatory','Contractual','Clinical'].includes(strategy)) || (stageType === 'negotiation' && ['Contractual','Collaborative'].includes(strategy))) p += 6;
+          if (f.argumentLength < 200) p -= 8;
+          if (!f.hasClearAsk) p -= 8;
+          p = Math.max(5, Math.min(95, Math.round(p)));
+          // 🔥 Live requested amount recalculation
+          let liveRequestedAmount = requestedAmountSeed;
+          if (stageType === 'negotiation') {
+            const reqAmountInput = document.getElementById('packet-requested_amount');
+            if (reqAmountInput) {
+              const parsed = Number(String(reqAmountInput.value || '').replace(/[^0-9.-]+/g,''));
+              if (!isNaN(parsed) && parsed > 0) {
+                liveRequestedAmount = parsed;
+              }
+            }
+          }
+
+          // Fallback logic remains intact
+          const avgRecoveredPct = baseline && num(baseline.avgRecoveredPct) > 0
+            ? num(baseline.avgRecoveredPct)
+            : null;
+
+          const est = avgRecoveredPct
+            ? (num(liveRequestedAmount) * avgRecoveredPct)
+            : (
+                Math.min(
+                  num(atRiskSeed) || num(liveRequestedAmount),
+                  num(liveRequestedAmount) || num(atRiskSeed)
+                ) * (p / 100)
+              );
+          const alerts = [];
+          if (stageType === 'appeal' && !f.hasDenialLetter) alerts.push('Missing Denial Letter for appeal packet.');
+          if (stageType === 'appeal' && !f.hasEob) alerts.push('Missing EOB/ERA for appeal packet.');
+          if (!f.hasClaimForm) alerts.push('Missing claim form/itemized bill.');
+          if (!hasContractRule) alerts.push('Contract rule missing — add contract rule in Reimbursement Engine');
+          if (f.argumentLength < 200) alerts.push('Argument narrative is short; add clinical/contract rationale.');
+          if (!f.hasClearAsk) alerts.push('Requested action is unclear; include a specific ask.');
+          if (!hasContractRule && strategy === 'Contractual') alerts.push('Contractual strategy selected but no contract rule found.');
+          const pEl = document.getElementById('ai-probability'); if (pEl) pEl.textContent = p + '%';
+          const cEl = document.getElementById('ai-confidence'); if (cEl) cEl.textContent = conf;
+          const eEl = document.getElementById('ai-est-recovery'); if (eEl) eEl.textContent = new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(est||0);
+          const aEl = document.getElementById('ai-alerts'); if (aEl) aEl.innerHTML = (alerts.length?alerts:['No major alerts.']).map(x => '<li>'+x.replace(/</g,'&lt;')+'</li>').join('');
+        }
+        [
+          'packet-argument',
+          'packet-variance_explanation',
+          'packet-requested_action',
+          'packet-requested_amount',
+          'strategy-profile',
+          'att-denial',
+          'att-eob',
+          'att-claim',
+          'att-med'
+        ].forEach(id=>{
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.addEventListener('input', compute);
+          el.addEventListener('change', compute);
+        });
+        document.querySelectorAll('.attachment-file-input').forEach(el=> el.addEventListener('change', compute));
+        compute();
+      })();
+      </script>
     `, navUser(), {showChat:true, orgName: org.org_name});
 
     return send(res, 200, html);
@@ -18537,6 +18863,49 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const usage = getUsage(org.org_id);
       usage.monthly_ai_generations_used = Number(usage.monthly_ai_generations_used || 0) + 1;
       saveUsage(usage);
+      return redirect(res, `${workspacePagePath(billed_id, tab)}`);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/agent-workspace/strategy") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const billed_id = String(params.get("billed_id") || "").trim();
+      const draft_type = String(params.get("draft_type") || "").trim();
+      const tab = String(params.get("tab") || draft_type || "packet").trim();
+      const strategy_profile = String(params.get("strategy_profile") || "Auto").trim();
+      const billedAll = readJSON(FILES.billed, []);
+      const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (!b || !["appeal","negotiation"].includes(draft_type)) return redirect(res, "/claims?view=all");
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      const valid = ["Auto","Clinical","Contractual","Regulatory","Collaborative"];
+      const next = valid.includes(strategy_profile) ? strategy_profile : "Auto";
+      ws[draft_type] = { ...(ws[draft_type] || {}), strategy_profile: next, updated_at: nowISO() };
+      saveAgentWorkspace(org.org_id, ws);
+      return redirect(res, `${workspacePagePath(billed_id, tab)}`);
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/agent-workspace/save-all") {
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const billed_id = String(params.get("billed_id") || "").trim();
+      const draft_type = String(params.get("draft_type") || "").trim();
+      const tab = String(params.get("tab") || draft_type || "packet").trim();
+      const billedAll = readJSON(FILES.billed, []);
+      const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
+      if (!b || !["appeal","negotiation"].includes(draft_type)) return redirect(res, "/claims?view=all");
+      const ws = ensureAgentWorkspace(org.org_id, b);
+      ws.follow_up.last_touched_at = nowISO();
+      ws.status = "edited";
+      saveAgentWorkspace(org.org_id, ws);
+      addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: draft_type, content: "All workspace changes saved." });
       return redirect(res, `${workspacePagePath(billed_id, tab)}`);
     });
     return;
@@ -18704,6 +19073,44 @@ if (method === "GET" && pathname === "/agent-workspace") {
       }
       ws.follow_up.last_touched_at = nowISO();
       saveAgentWorkspace(org.org_id, ws);
+
+      const contractRule = !!findContractForClaim(org.org_id, b);
+      const chSections = (ws[channel] || {}).packet_sections || {};
+      const packetFeatures = extractPacketFeatures({
+        argumentText: channel === "negotiation" ? chSections.variance_explanation : chSections.argument,
+        requestedActionText: chSections.requested_action,
+        attachmentsState: {
+          hasDenialLetter: packetHasKey(ws, "denial_letter"),
+          hasEob: packetHasKey(ws, "eob_era"),
+          hasClaimForm: packetHasKey(ws, "claim_form"),
+          hasMedicalRecords: packetHasKey(ws, "medical_records")
+        },
+        hasContract: contractRule
+      });
+      const submittedAt = ws.submission?.submitted_at ? new Date(ws.submission.submitted_at).getTime() : null;
+      const responseAt = ws.outcome?.response_received_at ? new Date(ws.outcome.response_received_at).getTime() : null;
+      const daysToPayment = (submittedAt && responseAt && responseAt >= submittedAt) ? Math.round((responseAt - submittedAt) / (1000*60*60*24)) : null;
+      const requestedAmount = channel === "appeal"
+        ? num(d.atRiskAmount || d.underpaidAmount || b.amount_billed)
+        : num(chSections.requested_amount || ws.negotiation?.requested_amount || d.underpaidAmount || 0);
+      const recoveredAmount = num(ws.outcome?.paid_posted_amount || ws.outcome?.approved_amount || 0);
+      const rawStatus = String(ws.outcome?.outcome_status || "none");
+      const statusMap = { approved:"approved", partially_approved:"partial", denied:"denied", closed:"no_change", none:"no_change", needs_info:"no_change" };
+      saveWorkspaceOutcome({
+        org_id: org.org_id,
+        billed_id,
+        payer: b.payer || "",
+        cpt_codes: [getClaimProcedureCode(b)].filter(Boolean),
+        denial_reason: normalizeDenialReasonKey(ws.outcome?.denial_reason || b.denial_reason || b.issue_reason || ""),
+        stage_type: channel,
+        strategy_profile_used: String(ws[channel]?.strategy_profile || "Auto"),
+        packet_features: packetFeatures,
+        requested_amount: requestedAmount,
+        recovered_amount: recoveredAmount,
+        days_to_payment: daysToPayment,
+        outcome_status: statusMap[rawStatus] || "no_change"
+      });
+
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: "Outcome updated." });
       return redirect(res, workspacePagePath(billed_id, channel));
     });
