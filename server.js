@@ -9171,6 +9171,27 @@ if (method === "GET" && pathname === "/claims") {
 // ==============================
 
 function renderForecastTab(org, m, forecastB64){
+  const fc = JSON.parse(Buffer.from(String(forecastB64 || ""), "base64").toString("utf8") || "{}");
+  const historicalPeriods = Array.isArray(fc?.labels) ? fc.labels.length : 0;
+  let forecastConfidence = "Low";
+
+  if (historicalPeriods >= 6) forecastConfidence = "High";
+  else if (historicalPeriods >= 3) forecastConfidence = "Medium";
+
+  if (historicalPeriods < 3) {
+    return `
+      <div class="executive-panel">
+        <h3>Forecast Unavailable</h3>
+        <div class="muted" style="margin-top:6px;">
+          At least 3 reporting periods are required to generate a reliable projection.
+        </div>
+        <div class="muted small" style="margin-top:6px;">
+          Upload additional claim and payment periods to activate the Forecast Engine.
+        </div>
+      </div>
+    `;
+  }
+
   return `
     <div class="executive-panel">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;">
@@ -9198,6 +9219,12 @@ function renderForecastTab(org, m, forecastB64){
 
       <div class="hr"></div>
 
+      <div style="margin-bottom:10px;">
+        <span class="badge ${forecastConfidence === "High" ? "ok" : forecastConfidence === "Medium" ? "warn" : "bad"}">
+          Forecast Confidence: ${forecastConfidence}
+        </span>
+      </div>
+
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
           <div style="font-weight:900;margin-bottom:6px;">Collections Forecast ${infoIcon("Historical collected vs forecasted collected for the next horizon points.")}</div>
@@ -9212,6 +9239,11 @@ function renderForecastTab(org, m, forecastB64){
           <div class="hr"></div>
           <div class="chart-container trend" style="height:320px;max-height:320px;"><canvas id="riForecastAtRisk"></canvas></div>
         </div>
+      </div>
+
+      <div class="exec-card" style="margin-top:18px;">
+        <h3>Executive Forecast Interpretation</h3>
+        <div id="forecastNarrative" class="muted" style="margin-top:8px;line-height:1.6;"></div>
       </div>
 
       <script>
@@ -9271,6 +9303,83 @@ function renderForecastTab(org, m, forecastB64){
             },
             options: baseOpts
           });
+        })();
+      </script>
+
+      <script>
+        (function(){
+          const fc = JSON.parse(atob("${forecastB64}"));
+
+          // ===== Projection Calculations =====
+
+          const histCollected = (fc.hist && fc.hist.collected) ? fc.hist.collected : [];
+          const forecastCollected = (fc.fcst && fc.fcst.collected) ? fc.fcst.collected : [];
+          const histAtRisk = (fc.hist && fc.hist.atRisk) ? fc.hist.atRisk : [];
+          const forecastAtRisk = (fc.fcst && fc.fcst.atRisk) ? fc.fcst.atRisk : [];
+
+          // Sum projected next horizon
+          const projectedCollected = forecastCollected.reduce((sum,v)=> sum + Number(v||0),0);
+          const projectedAtRisk = forecastAtRisk.reduce((sum,v)=> sum + Number(v||0),0);
+
+          // 60-Day Cash Delta (vs recent historical avg)
+          let historicalAvg = 0;
+          if (histCollected.length > 0) {
+            historicalAvg = histCollected.reduce((s,v)=>s+Number(v||0),0) / histCollected.length;
+          }
+
+          const projectedAvg = forecastCollected.length > 0
+            ? forecastCollected.reduce((s,v)=>s+Number(v||0),0) / forecastCollected.length
+            : 0;
+
+          const sixtyDayDelta = (projectedAvg - historicalAvg) * 2; // approximate 60-day shift
+
+          // ===== Scenario Modeling =====
+
+          const denialRate = ${Number(m.denialRate || 0)};
+          const currentAtRisk = ${Number(m?.kpis?.revenueAtRisk || 0)};
+
+          // Expected = baseline forecast
+          const expectedScenario = projectedCollected;
+
+          // Best Case = denial improves by 5%
+          const bestCaseRecoveryLift = currentAtRisk * 0.05;
+          const bestScenario = projectedCollected + bestCaseRecoveryLift;
+
+          // Stress Case = denial worsens by 5%
+          const stressImpact = currentAtRisk * 0.05;
+          const stressScenario = Math.max(0, projectedCollected - stressImpact);
+
+          let narrative = "";
+
+          narrative += "Projected collections over the forecast horizon: $"
+            + projectedCollected.toLocaleString() + ". ";
+
+          if (sixtyDayDelta > 0) {
+            narrative += "60-day cash acceleration estimated at +$"
+              + Math.round(sixtyDayDelta).toLocaleString() + ". ";
+          } else {
+            narrative += "60-day cash deceleration estimated at $"
+              + Math.round(sixtyDayDelta).toLocaleString() + ". ";
+          }
+
+          narrative += "\n\nScenario Modeling:\n";
+
+          narrative += "• Best Case (5% denial improvement): $"
+            + Math.round(bestScenario).toLocaleString() + ".\n";
+
+          narrative += "• Expected Case: $"
+            + Math.round(expectedScenario).toLocaleString() + ".\n";
+
+          narrative += "• Stress Case (5% denial deterioration): $"
+            + Math.round(stressScenario).toLocaleString() + ".\n";
+
+          if (denialRate > 20) {
+            narrative += "\nDenial pressure remains elevated and is the primary forecast risk driver.";
+          } else {
+            narrative += "\nDenial pressure is stable; forecast primarily influenced by volume trend.";
+          }
+
+          document.getElementById("forecastNarrative").innerText = narrative;
         })();
       </script>
     </div>
