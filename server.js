@@ -6030,15 +6030,42 @@ function safePct(n){
 
 function computeAllPayerRankings(org_id){
   const claimsAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+  const claimCtx = buildClaimContext(org_id);
   const payers = Array.from(new Set(
     claimsAll.map(b => String(b.payer || "").trim()).filter(Boolean)
   )).sort((a,b)=>a.localeCompare(b));
 
   const rows = payers.map(p => {
+    const payerStats = claimsAll.reduce((acc, claim) => {
+      const claimPayer = String(claim.payer || "").trim();
+      if (claimPayer !== p) return acc;
+
+      const derived = evaluateClaimDerived(claim, claimCtx);
+      if (derived.lifecycleStage === "Denied") {
+        acc.deniedClaims += 1;
+        acc.deniedExposure += Math.max(
+          0,
+          (derived.expectedInsurance ?? claim.amount_billed) - derived.paidAmount
+        );
+      }
+
+      if (derived.lifecycleStage === "Underpaid") {
+        acc.underpaidClaims += 1;
+        acc.underpaidExposure += Math.max(0, derived.underpaidAmount);
+      }
+
+      return acc;
+    }, { deniedClaims: 0, underpaidClaims: 0, deniedExposure: 0, underpaidExposure: 0 });
+
     const intel = computePayerIntelligence(org_id, p, "last30");
     return {
       payer: intel.payerName,
       totalClaims: intel.totalClaims,
+      totalAtRisk: Number(intel.totalAtRisk || 0),
+      deniedClaims: payerStats.deniedClaims || 0,
+      underpaidClaims: payerStats.underpaidClaims || 0,
+      deniedExposure: payerStats.deniedExposure || 0,
+      underpaidExposure: payerStats.underpaidExposure || 0,
       score: Number(intel.score || 0),
       grade: intel.grade,
       denialRate: safePct(intel.denialRate),
@@ -6046,7 +6073,6 @@ function computeAllPayerRankings(org_id){
       avgDaysToPay: safePct(intel.avgDaysToPay),
       totalBilled: Number(intel.totalBilled || 0),
       totalCollected: Number(intel.totalCollected || 0),
-      totalAtRisk: Number(intel.totalAtRisk || 0),
     };
   });
 
@@ -10156,10 +10182,17 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
           </div>
         </div>
         <div class="eb-kpis">
-          <div class="eb-kpi eb-bad"><div class="l">Revenue At Risk</div><div class="v">${formatMoneyUI(Number(m.kpis.revenueAtRisk || 0))}</div><div class="h">Underpaid + patient follow-up remaining.</div></div>
-          <div class="eb-kpi ${denialRate > 20 ? "eb-bad" : denialRate > 10 ? "eb-warn" : "eb-good"}"><div class="l">Denial Rate</div><div class="v">${formatNumberUI(denialRate)}%</div><div class="h">Lower is better. Watch payer outliers.</div></div>
-          <div class="eb-kpi ${ar90 > 15 ? "eb-bad" : ar90 > 5 ? "eb-warn" : "eb-good"}"><div class="l">AR 90+ Exposure</div><div class="v">${formatNumberUI(ar90)}%</div><div class="h">Receivables at risk beyond 90 days.</div></div>
-          <div class="eb-kpi eb-good"><div class="l">Collected</div><div class="v">${formatMoneyUI(Number(m.kpis.collectedTotal || 0))}</div><div class="h">Posted cash against billed revenue.</div></div>
+          <div class="eb-kpi ${ar90 > 15 ? "eb-bad" : ar90 > 5 ? "eb-warn" : "eb-good"}">
+            <div class="l">AR 90+ Exposure</div>
+            <div class="v">${formatNumberUI(ar90)}%</div>
+            <div class="h">Receivables at risk beyond 90 days.</div>
+          </div>
+
+          <div class="eb-kpi">
+            <div class="l">Underpayment Exposure</div>
+            <div class="v">${formatMoneyUI(m.kpis.totalUnderpaid || 0)}</div>
+            <div class="h">Total unresolved underpaid balances.</div>
+          </div>
         </div>
       </div>
       <div class="eb-card">
@@ -10214,13 +10247,13 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         <table class="eb-table">
           <thead><tr><th>Payer</th><th>At Risk</th><th>Denied</th><th>Underpaid</th></tr></thead>
           <tbody>
-            ${(payerRanks || []).slice(0,8).map(p=>`<tr><td>${safeStr(p.payer)}</td><td>${formatMoneyUI(p.totalAtRisk||0)}</td><td>${formatNumberUI(p.deniedClaims||0)}</td><td>${formatNumberUI(p.underpaidClaims||0)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No exposure data available.</td></tr>`}
+            ${(payerRanks || []).slice(0,8).map(p=>`<tr><td>${safeStr(p.payer)}</td><td>${formatMoneyUI(p.totalAtRisk||0)}</td><td>${formatMoneyUI(p.deniedExposure||0)}</td><td>${formatMoneyUI(p.underpaidExposure||0)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No exposure data available.</td></tr>`}
           </tbody>
         </table>
       </div>
     </div>
     <div class="eb-card">
-      <div class="eb-sectionHead"><h3>Organization Targets</h3><div class="muted">Targets vs current performance.</div></div>
+      <div class="eb-sectionHead"><h3>Organization Targets</h3><a class="btn secondary small" href="/account?tab=targets">Edit Targets</a><div class="muted">Targets vs current performance.</div></div>
       <div class="hr"></div>
       <div class="eb-targets">
         ${renderTargetBar("Appeal Target", Number(m.appealSuccessRate || 0), Number(targets.target_appeal_success_rate || 60))}
@@ -17191,6 +17224,7 @@ function renderTemplateEditor(org, user){
         ${tabBtn("billing","Plan & Billing")}
         ${tabBtn("integrations","Integrations","Enterprise placeholder; not yet operable.")}
         ${tabBtn("security","Security","Account password and security mode placeholders.")}
+        ${tabBtn("targets","Targets","Configure executive revenue performance targets.")}
       </div>
     `;
 
@@ -17322,6 +17356,32 @@ function renderTemplateEditor(org, user){
         `;
       }
       if (tab === "integrations") return `<h3>Integrations</h3><p class="muted">Placeholder tab for enterprise integrations roadmap.</p>`;
+      if (tab === "targets") {
+        const settings = getOrgSettings(org.org_id);
+        const targets = settings.recovery_targets || {};
+
+        return `
+          <h3>Revenue Performance Targets</h3>
+          <form method="POST" action="/account/update-targets" style="display:flex;flex-direction:column;gap:10px;max-width:560px;">
+            <label>Appeal Success Target (%)</label>
+            <input type="number" step="0.01" name="target_appeal_success_rate" value="${safeStr(String(targets.target_appeal_success_rate || 60))}" />
+
+            <label>Negotiation ROI Target (%)</label>
+            <input type="number" step="0.01" name="target_negotiation_roi" value="${safeStr(String(targets.target_negotiation_roi || 60))}" />
+
+            <label>Days-to-Pay Target</label>
+            <input type="number" step="1" name="target_days_to_pay" value="${safeStr(String(targets.target_days_to_pay || 30))}" />
+
+            <label>AR90 Target (%)</label>
+            <input type="number" step="0.01" name="target_ar90_rate" value="${safeStr(String(targets.target_ar90_rate || 15))}" />
+
+            <label>AI Case Readiness Target (%)</label>
+            <input type="number" step="0.01" name="target_operational_discipline" value="${safeStr(String(targets.target_operational_discipline || 80))}" />
+
+            <div class="btnRow"><button class="btn" type="submit">Save Targets</button></div>
+          </form>
+        `;
+      }
       if (tab === "security") return `
         <h3>Security</h3>
         <form method="POST" action="/account/password">
@@ -17494,6 +17554,24 @@ function renderTemplateEditor(org, user){
       auditLog({ actor:"user", action:"update_org_name", org_id: org.org_id, user_id: user.user_id });
     }
     return redirect(res, "/account?tab=org");
+  }
+
+  if (method === "POST" && pathname === "/account/update-targets") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const settings = getOrgSettings(org.org_id);
+
+    settings.recovery_targets = {
+      target_appeal_success_rate: Number(params.get("target_appeal_success_rate") || 60),
+      target_negotiation_roi: Number(params.get("target_negotiation_roi") || 60),
+      target_days_to_pay: Number(params.get("target_days_to_pay") || 30),
+      target_ar90_rate: Number(params.get("target_ar90_rate") || 15),
+      target_operational_discipline: Number(params.get("target_operational_discipline") || 80),
+    };
+
+    saveOrgSettings(org.org_id, settings);
+
+    return redirect(res, "/revenue-intelligence");
   }
 
 if (method === "POST" && pathname === "/account/preferences") {
