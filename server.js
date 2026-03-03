@@ -5447,6 +5447,15 @@ function evaluateClaimDerived(claim, ctx={}){
   const paidAmount = insurance.paidAmount;
   const insuranceWriteOff = insurance.insuranceWriteOff;
   const insuranceRemaining = insurance.insuranceRemaining;
+  // expectedInsurance is null when no contract rule exists (UI should show "—")
+  // but lifecycle + risk math still needs a fallback to avoid "0 expected" breaking denials.
+  const expectedForLifecycle = (expectedInsurance !== null && expectedInsurance !== undefined)
+    ? Number(expectedInsurance)
+    : Number(billedAmount || 0);
+
+  const remainingForLifecycle = (insuranceRemaining !== null && insuranceRemaining !== undefined)
+    ? Number(insuranceRemaining)
+    : Math.max(0, expectedForLifecycle - Number(paidAmount || 0) - Number(insuranceWriteOff || 0));
   const patientWriteOff = patient.patientWriteOff;
   const patientBalanceRemaining = patient.patientBalanceRemaining;
 
@@ -5469,7 +5478,7 @@ function evaluateClaimDerived(claim, ctx={}){
   const explicitDenialUpload = denialDocAttached || String(appealCase?.status || "").toLowerCase().includes("denied");
   const hasDenialContext = !!(denialReason || denialDocAttached || appealCase || explicitDenialUpload);
 
-  const expectedAmount = Number(expectedInsurance || 0);
+  const expectedAmount = expectedForLifecycle;
 
   let lifecycleStage = "Paid";
   if (hasActiveAppealOrNegotiation) {
@@ -5482,9 +5491,9 @@ function evaluateClaimDerived(claim, ctx={}){
     if (settings.auto_create_denial_cases === true) ensureDenialCaseForClaim(claim);
   } else if (hasPaymentRecord && paidAmount > 0 && paidAmount + 0.0001 < expectedAmount) {
     lifecycleStage = "Underpaid";
-  } else if (insuranceRemaining <= 0.0001 && patientBalanceRemaining > 0.0001) {
+  } else if (remainingForLifecycle <= 0.0001 && patientBalanceRemaining > 0.0001) {
     lifecycleStage = "Patient Follow-Up";
-  } else if (insuranceRemaining <= 0.0001 && patientBalanceRemaining <= 0.0001) {
+  } else if (remainingForLifecycle <= 0.0001 && patientBalanceRemaining <= 0.0001) {
     lifecycleStage = "Resolved";
   } else if (!submittedFlag) {
     lifecycleStage = "Submitted";
@@ -5493,11 +5502,11 @@ function evaluateClaimDerived(claim, ctx={}){
   }
 
   let atRiskAmount = 0;
-  if (lifecycleStage === "Denied") atRiskAmount = Math.max(0, (expectedInsurance || billedAmount) - paidAmount);
-  else if (lifecycleStage === "Underpaid") atRiskAmount = insuranceRemaining;
-  else if (lifecycleStage === "Waiting Payment" || lifecycleStage === "Submitted") atRiskAmount = Math.max(0, (expectedInsurance || billedAmount) - paidAmount);
+  if (lifecycleStage === "Denied") atRiskAmount = Math.max(0, expectedForLifecycle - paidAmount);
+  else if (lifecycleStage === "Underpaid") atRiskAmount = Math.max(0, remainingForLifecycle);
+  else if (lifecycleStage === "Waiting Payment" || lifecycleStage === "Submitted") atRiskAmount = Math.max(0, expectedForLifecycle - paidAmount);
   else if (lifecycleStage === "Patient Follow-Up") atRiskAmount = patientBalanceRemaining;
-  else if (lifecycleStage === "In Appeal/Negotiation") atRiskAmount = insuranceRemaining + patientBalanceRemaining;
+  else if (lifecycleStage === "In Appeal/Negotiation") atRiskAmount = Math.max(0, remainingForLifecycle) + patientBalanceRemaining;
 
   return {
     lifecycleStage,
@@ -5506,7 +5515,7 @@ function evaluateClaimDerived(claim, ctx={}){
     paidAmount,
     billedAmount,
     allowedAmount,
-    underpaidAmount: Math.max(0, insuranceRemaining),
+    underpaidAmount: Math.max(0, remainingForLifecycle),
     patientBalanceRemaining,
     insuranceWriteOff,
     patientWriteOff,
@@ -5763,8 +5772,8 @@ function rebuildOrgDerivedData(org_id, opts={}){
   for (const b of billedAll) {
     if (b.org_id !== org_id) continue;
     const d = evaluateClaimDerived(b, ctx);
-    b.expected_insurance = num(d.expectedInsurance);
-    b.underpaid_amount = Math.max(0, num(d.expectedInsurance) - num(d.paidAmount));
+    b.expected_insurance = (d.expectedInsurance == null) ? "" : num(d.expectedInsurance);
+    b.underpaid_amount = Math.max(0, num(d.underpaidAmount));
     b.lifecycle_stage = d.lifecycleStage;
     b.status = d.lifecycleStage;
     if (settings.autodraft && ["Denied","Underpaid"].includes(String(d.lifecycleStage || ""))) autoDraftWorkspaceForClaim(org_id, b, d, ctx);
