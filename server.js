@@ -101,6 +101,7 @@ const FILES = {
   template_assets: path.join(DATA_DIR, "template_assets.json"),
   packet_templates: path.join(DATA_DIR, "packet_templates.json"),
   workspace_outcomes: path.join(DATA_DIR, "workspace_outcomes.json"),
+  agent_tasks: path.join(DATA_DIR, "agent_tasks.json"),
 };
 
 // Directory for storing uploaded template files
@@ -339,6 +340,7 @@ ensureFile(FILES.revenue_template_versions, []);
 ensureFile(FILES.template_assets, []);
 ensureFile(FILES.packet_templates, []);
 ensureFile(FILES.workspace_outcomes, []);
+ensureFile(FILES.agent_tasks, []);
 
 // ===== Admin password =====
 function adminHash() {
@@ -4613,6 +4615,289 @@ function saveWorkspaceOutcome(record){
   writeJSON(FILES.workspace_outcomes, all);
 }
 
+function computePayerBehaviorIntelligence(org_id, payer){
+  const rows = readJSON(FILES.workspace_outcomes, []).filter(r =>
+    r &&
+    r.org_id === org_id &&
+    String(r.payer || "").trim().toLowerCase() === String(payer || "").trim().toLowerCase()
+  );
+
+  if (!rows.length) return null;
+
+  const successSet = new Set(["approved", "partial", "paid_in_full"]);
+  const appealRows = rows.filter(r => String(r.stage_type || "") === "appeal");
+  const negotiationRows = rows.filter(r => String(r.stage_type || "") === "negotiation");
+  const appealSuccesses = appealRows.filter(r => successSet.has(String(r.outcome_status || "")));
+  const negotiationSuccesses = negotiationRows.filter(r => successSet.has(String(r.outcome_status || "")));
+
+  const appealSuccessRate = appealRows.length ? (appealSuccesses.length / appealRows.length) : 0;
+  const negotiationSuccessRate = negotiationRows.length ? (negotiationSuccesses.length / negotiationRows.length) : 0;
+
+  const allSuccesses = rows.filter(r => successSet.has(String(r.outcome_status || "")));
+  const avgRecoveredPct = allSuccesses.length
+    ? allSuccesses.reduce((sum, r) => {
+        const req = num(r.requested_amount);
+        const rec = num(r.recovered_amount);
+        return sum + (req > 0 ? (rec / req) : 0);
+      }, 0) / allSuccesses.length
+    : 0;
+
+  const dayVals = rows.map(r => Number(r.days_to_payment)).filter(v => Number.isFinite(v) && v >= 0);
+  const avgDays = dayVals.length ? (dayVals.reduce((sum, v) => sum + v, 0) / dayVals.length) : null;
+
+  const strategyCounts = {};
+  const strategySuccess = {};
+  const strategyDays = {};
+  rows.forEach(r => {
+    const k = String(r.strategy_profile_used || "Auto") || "Auto";
+    strategyCounts[k] = (strategyCounts[k] || 0) + 1;
+    if (!strategySuccess[k]) strategySuccess[k] = { n: 0, s: 0 };
+    strategySuccess[k].n += 1;
+    if (successSet.has(String(r.outcome_status || ""))) strategySuccess[k].s += 1;
+    const d = Number(r.days_to_payment);
+    if (Number.isFinite(d) && d >= 0) {
+      if (!strategyDays[k]) strategyDays[k] = [];
+      strategyDays[k].push(d);
+    }
+  });
+  const bestStrategy = Object.entries(strategyCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || "Auto";
+
+  const strategySuccessRates = {};
+  for (const [k,v] of Object.entries(strategySuccess)) strategySuccessRates[k] = v.n ? (v.s / v.n) : 0;
+  const avgDaysByStrategy = {};
+  for (const [k,vals] of Object.entries(strategyDays)) avgDaysByStrategy[k] = vals.length ? (vals.reduce((a,b)=>a+b,0) / vals.length) : null;
+  const fastestStrategy = Object.entries(avgDaysByStrategy)
+    .filter(([,v]) => Number.isFinite(v) && v >= 0)
+    .sort((a,b)=>a[1]-b[1])[0]?.[0] || bestStrategy;
+
+  const denialReasons = {};
+  rows.forEach(r => {
+    const k = String(r.denial_reason || "unknown") || "unknown";
+    denialReasons[k] = (denialReasons[k] || 0) + 1;
+  });
+  const mostCommonDenial = Object.entries(denialReasons).sort((a,b)=>b[1]-a[1])[0]?.[0] || "unknown";
+
+  return {
+    total_cases: rows.length,
+    appeal_success_rate: appealSuccessRate,
+    negotiation_success_rate: negotiationSuccessRate,
+    avg_days_to_payment: avgDays,
+    avg_recovered_pct: avgRecoveredPct,
+    best_strategy: bestStrategy,
+    fastest_strategy: fastestStrategy,
+    most_common_denial_reason: mostCommonDenial,
+    strategy_success_rates: strategySuccessRates,
+    denial_reason_patterns: denialReasons,
+    avg_days_by_strategy: avgDaysByStrategy
+  };
+}
+
+function computeRecoveryTimeline({ payer, strategy_profile, historicalOutcomes=[] }={}){
+  const rows = (historicalOutcomes || []).filter(r =>
+    String(r.payer || '').trim().toLowerCase() === String(payer || '').trim().toLowerCase() &&
+    (!strategy_profile || strategy_profile === 'Auto' || String(r.strategy_profile_used || 'Auto') === String(strategy_profile))
+  );
+  const dayVals = rows.map(r => Number(r.days_to_payment)).filter(v => Number.isFinite(v) && v >= 0);
+  const estimatedDays = dayVals.length ? (dayVals.reduce((s,v)=>s+v,0) / dayVals.length) : null;
+  const within30 = dayVals.length ? (dayVals.filter(v => v <= 30).length / dayVals.length) : 0;
+  const within60 = dayVals.length ? (dayVals.filter(v => v <= 60).length / dayVals.length) : 0;
+  return {
+    estimated_days_to_payment: estimatedDays,
+    probability_payment_30_days: within30,
+    probability_payment_60_days: within60
+  };
+}
+function getAgentTasks(org_id){
+  return readJSON(FILES.agent_tasks, []).filter(t => !org_id || t.org_id === org_id);
+}
+
+function saveAgentTasks(all){
+  writeJSON(FILES.agent_tasks, Array.isArray(all) ? all : []);
+}
+
+function upsertAgentTask(task){
+  const all = readJSON(FILES.agent_tasks, []);
+  const now = nowISO();
+  const ix = all.findIndex(t => t.org_id === task.org_id && t.billed_id === task.billed_id && t.stage_type === task.stage_type && String(t.status || '') !== 'closed');
+  if (ix >= 0) {
+    all[ix] = { ...all[ix], ...task, updated_at: now };
+    writeJSON(FILES.agent_tasks, all);
+    return all[ix];
+  }
+  const rec = {
+    task_id: task.task_id || uuid(),
+    org_id: task.org_id,
+    billed_id: task.billed_id,
+    stage_type: task.stage_type,
+    status: task.status || 'queued',
+    priority: Number(task.priority || 0),
+    created_at: now,
+    updated_at: now,
+    last_run_at: task.last_run_at || null,
+    notes: String(task.notes || ''),
+    missing_docs: Array.isArray(task.missing_docs) ? task.missing_docs : [],
+    next_actions: Array.isArray(task.next_actions) ? task.next_actions : [],
+    recommended_next_step: String(task.recommended_next_step || ""),
+    risk_level: String(task.risk_level || "MEDIUM"),
+    estimated_value: Number(task.estimated_value || 0)
+  };
+  all.push(rec);
+  writeJSON(FILES.agent_tasks, all);
+  return rec;
+}
+
+function markTask(task_id, patch){
+  const all = readJSON(FILES.agent_tasks, []);
+  const ix = all.findIndex(t => t.task_id === task_id);
+  if (ix < 0) return null;
+  all[ix] = { ...all[ix], ...(patch || {}), updated_at: nowISO() };
+  writeJSON(FILES.agent_tasks, all);
+  return all[ix];
+}
+
+function computeMissingDocsForWorkspace(ws, stageType){
+  const required = stageType === 'negotiation' ? ['eob_era', 'claim_form'] : ['denial_letter', 'eob_era', 'claim_form'];
+  return required.filter(k => !packetHasKey(ws, k));
+}
+
+function computeNextActions(stageType, hasContractRule, missingDocs, score){
+  const actions = [];
+  const miss = Array.isArray(missingDocs) ? missingDocs : [];
+  if (miss.includes('eob_era')) actions.push('Upload EOB/ERA');
+  if (miss.includes('denial_letter')) actions.push('Upload Denial Letter');
+  if (miss.includes('claim_form')) actions.push('Upload Claim Form / Itemized Bill');
+  if (!hasContractRule) actions.push('Add Contract Rule');
+  if (Number(score?.probability || 0) < 60) actions.push('Review argument length');
+  actions.push('Submit via portal/fax/mail');
+  actions.push('Set follow-up due date (default +14 days)');
+  return Array.from(new Set(actions));
+}
+
+function shouldLockPacket(ws, stageType){
+  const channel = stageType === 'negotiation' ? 'negotiation' : 'appeal';
+  const ch = ws?.[channel] || {};
+  if (ch.auto_generated === true && ch.user_modified === true) return true;
+  return false;
+}
+
+function enqueueRecoveryTasksForOrg(org_id){
+  if (!org_id) return 0;
+  const billedAll = readJSON(FILES.billed, []);
+  const ctx = buildClaimContext(org_id);
+  let n = 0;
+  for (const claim of billedAll) {
+    if (claim.org_id !== org_id) continue;
+    const d = evaluateClaimDerived(claim, ctx);
+    if (!['Denied','Underpaid'].includes(String(d.lifecycleStage || ''))) continue;
+    const stage_type = d.lifecycleStage === 'Denied' ? 'appeal' : 'negotiation';
+    const base = stage_type === 'appeal' ? 90 : 80;
+    const prio = base + Math.min(10, Math.floor(num(d.atRiskAmount || d.underpaidAmount || 0) / 1000));
+    upsertAgentTask({ org_id, billed_id: claim.billed_id, stage_type, status: 'queued', priority: prio, notes: 'Enqueued from lifecycle detection' });
+    n += 1;
+  }
+  return n;
+}
+
+function runRecoveryAgentTick(org_id){
+  if (!org_id) return 0;
+  const all = readJSON(FILES.agent_tasks, []);
+  const openStates = new Set(['queued','running','waiting_docs','ready_for_review']);
+  const work = all
+    .filter(t => t.org_id === org_id && openStates.has(String(t.status || '')))
+    .sort((a,b) => Number(b.priority || 0) - Number(a.priority || 0))
+    .slice(0, 10);
+  if (!work.length) return 0;
+
+  const billedAll = readJSON(FILES.billed, []);
+  const ctx = buildClaimContext(org_id);
+  let processed = 0;
+
+  for (const task of work) {
+    const stageType = task.stage_type === 'negotiation' ? 'negotiation' : 'appeal';
+    const claim = billedAll.find(b => b.org_id === org_id && b.billed_id === task.billed_id);
+    if (!claim) { markTask(task.task_id, { status: 'closed', notes: 'Claim not found' }); continue; }
+
+    markTask(task.task_id, { status: 'running', last_run_at: nowISO() });
+    const d = evaluateClaimDerived(claim, ctx);
+    const ws = ensureAgentWorkspace(org_id, claim);
+    ensurePacketSections(ws, claim);
+
+    if (!ws[stageType]?.auto_generated && !shouldLockPacket(ws, stageType)) {
+      autoDraftWorkspaceForClaim(org_id, claim, d, ctx);
+      ws[stageType] = ws[stageType] || {};
+      ws[stageType].auto_generated = true;
+      ws[stageType].generated_at = nowISO();
+    }
+
+    const denialReasonKey = normalizeDenialReasonKey(ws.outcome?.denial_reason || claim.denial_reason || claim.issue_reason || '');
+    const hasContractRule = !!findContractForClaim(org_id, claim);
+    const baseline = computeHistoricalBaselines(org_id, claim.payer || '', stageType, denialReasonKey);
+    const bestStrategy = computeStrategySuccessByProfile(org_id, claim.payer || '', stageType, denialReasonKey);
+    const payerIntel = computePayerBehaviorIntelligence(org_id, claim.payer || '');
+    const packetSections = ws[stageType]?.packet_sections || (stageType === 'negotiation' ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
+    const packetFeatures = extractPacketFeatures({
+      argumentText: stageType === 'negotiation' ? packetSections.variance_explanation : packetSections.argument,
+      requestedActionText: packetSections.requested_action,
+      attachmentsState: {
+        hasDenialLetter: packetHasKey(ws, 'denial_letter'),
+        hasEob: packetHasKey(ws, 'eob_era'),
+        hasClaimForm: packetHasKey(ws, 'claim_form'),
+        hasMedicalRecords: packetHasKey(ws, 'medical_records')
+      },
+      hasContract: hasContractRule
+    });
+    const score = computeDeterministicScore({
+      stageType,
+      billedAmount: num(d.billedAmount),
+      paidAmount: num(d.paidAmount),
+      atRiskAmount: num(d.atRiskAmount),
+      requestedAmount: stageType === 'negotiation' ? num(packetSections.requested_amount || d.underpaidAmount || 0) : num(d.atRiskAmount || d.underpaidAmount || 0),
+      payer: claim.payer || '',
+      denialReasonKey,
+      hasContractRule,
+      strategyProfile: ws[stageType]?.strategy_profile || 'Auto',
+      packetFeatures,
+      baselines: baseline,
+      strategyHistoryBest: bestStrategy,
+      payerIntel,
+      argumentText: stageType === 'negotiation' ? packetSections.variance_explanation : packetSections.argument
+    });
+    const timeline = computeRecoveryTimeline({ payer: claim.payer || '', strategy_profile: ws[stageType]?.strategy_profile || 'Auto', historicalOutcomes: loadWorkspaceOutcomes(org_id) });
+
+    ws[stageType] = ws[stageType] || {};
+    if (String(ws[stageType].strategy_profile || 'Auto') === 'Auto' && score.strategyRecommended) ws[stageType].strategy_profile = score.strategyRecommended;
+
+    const missingDocs = computeMissingDocsForWorkspace(ws, stageType);
+    const nextActions = computeNextActions(stageType, hasContractRule, missingDocs, score);
+    const nextStatus = missingDocs.length ? 'waiting_docs' : 'ready_for_review';
+    const riskLevel = num(score.probability) < 45 ? 'HIGH' : (num(score.probability) < 70 ? 'MEDIUM' : 'LOW');
+
+    saveAgentWorkspace(org_id, ws);
+    markTask(task.task_id, {
+      missing_docs: missingDocs,
+      next_actions: nextActions,
+      recommended_next_step: nextActions[0] || 'Review packet and proceed',
+      risk_level: riskLevel,
+      estimated_value: Number(num(score.estRecovery)),
+      status: nextStatus,
+      last_run_at: nowISO(),
+      notes: `Probability ${Math.round(num(score.probability))}% | Est ${formatMoneyUI(num(score.estRecovery))} | Timeline ${formatNumberUI(num(timeline.estimated_days_to_payment || 0),1)} days`
+    });
+
+    addAgentMessage(org_id, {
+      message_id: uuid(),
+      workspace_id: ws.workspace_id,
+      billed_id: claim.billed_id,
+      role: 'agent',
+      channel: stageType,
+      content: `AI Agent updated workspace: status ${nextStatus}, probability ${Math.round(num(score.probability))}%, est recovery ${formatMoneyUI(num(score.estRecovery))}, missing docs: ${missingDocs.join(', ') || 'none'}.`,
+      created_at: nowISO()
+    });
+    processed += 1;
+  }
+  return processed;
+}
+
 function computeHistoricalBaselines(org_id, payer, stageType, denialReasonKey){
   const rows = loadWorkspaceOutcomes(org_id).filter(r =>
     String(r.payer || "").trim().toLowerCase() === String(payer || "").trim().toLowerCase() &&
@@ -4670,6 +4955,9 @@ function computeDeterministicScore(inputs){
   const strategyProfile = String(inputs.strategyProfile || "Auto");
   const f = inputs.packetFeatures || {};
   const baselines = inputs.baselines;
+  const argumentText = String(inputs.argumentText || "");
+  const strategySuccessRates = inputs.payerIntel?.strategy_success_rates || {};
+
   let probability = 55;
   let confidence = "Low";
   if (baselines && baselines.n >= 5){ probability = num(baselines.successRate) * 100; confidence = "High"; }
@@ -4692,6 +4980,19 @@ function computeDeterministicScore(inputs){
   if ((stageType === "appeal" && appealGood.includes(effective)) || (stageType === "negotiation" && negotiationGood.includes(effective))) probability += 6;
   if (num(f.argumentLength) < 200) probability -= 8;
   if (!f.hasClearAsk) probability -= 8;
+
+  // Phase 2: argument quality signals
+  const hasMedicalNecessity = /medical necessity|clinically appropriate|clinical indication/i.test(argumentText);
+  const hasContractRef = /contract|fee schedule|allowed amount|reimbursement|agreement/i.test(argumentText);
+  const hasCodeMention = /CPT|ICD|HCPCS/i.test(argumentText);
+  let argument_quality_score = 40;
+  argument_quality_score += hasMedicalNecessity ? 15 : 0;
+  argument_quality_score += hasContractRef ? 15 : 0;
+  argument_quality_score += hasCodeMention ? 10 : 0;
+  argument_quality_score += num(f.completenessScore || 0) * 0.2;
+  argument_quality_score = Math.max(0, Math.min(100, Math.round(argument_quality_score)));
+  if (argument_quality_score >= 75) probability += 4;
+  else if (argument_quality_score < 45) probability -= 6;
 
   probability = Math.max(5, Math.min(95, Math.round(probability)));
 
@@ -4720,8 +5021,27 @@ function computeDeterministicScore(inputs){
     strategyRecommended = inputs.hasContractRule ? "Contractual" : "Collaborative";
   }
 
-  return { probability, confidence, estRecovery, alerts, strategyRecommended };
+  if (inputs.payerIntel && inputs.payerIntel.best_strategy) {
+    strategyRecommended = String(inputs.payerIntel.best_strategy);
+  }
+
+  // Phase 2 smart strategy switching
+  let strategySwitchSuggestion = "";
+  if (probability < 50 && strategySuccessRates && Object.keys(strategySuccessRates).length) {
+    const current = String(strategyProfile || 'Auto');
+    const currentRate = num(strategySuccessRates[current]);
+    const better = Object.entries(strategySuccessRates)
+      .sort((a,b)=>num(b[1])-num(a[1]))
+      .find(([k,v]) => k !== current && num(v) > currentRate + 0.05);
+    if (better) {
+      strategyRecommended = better[0];
+      strategySwitchSuggestion = `Switch from ${current} → ${better[0]}`;
+    }
+  }
+
+  return { probability, confidence, estRecovery, alerts, strategyRecommended, argument_quality_score, strategySwitchSuggestion };
 }
+
 function renderWorkspaceTabs(billed_id, activeTab){
   const mk = (key, label) => `<a class="btn ${activeTab===key?"":"secondary"}" href="${workspacePagePath(billed_id, key)}">${label}</a>`;
   return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px;">${mk("appeal","Appeal Draft")}${mk("negotiation","Negotiation Draft")}${mk("packet","Packet Builder")}${mk("activity","Activity")}</div>`;
@@ -4897,6 +5217,21 @@ ${financials}
 
 Sincerely,
 ${signature}`);
+  }
+  if (type === "negotiation") {
+    const variance = Number(derived?.underpaidAmount || 0);
+    const negotiationNarrative = `Based on the contracted reimbursement terms between the provider and ${claim?.payer || "the payer"}, the payment posted for this claim does not align with the expected allowed amount.
+
+Billed amount: ${formatMoneyUI(derived?.billedAmount || 0)}
+Expected allowed: ${formatMoneyUI(derived?.expectedInsurance || 0)}
+Paid amount: ${formatMoneyUI(derived?.paidAmount || 0)}
+
+This creates a variance of ${formatMoneyUI(variance)}.
+
+We respectfully request review and adjustment of the allowed amount in accordance with the provider agreement and applicable reimbursement methodology.
+
+Please reprocess the claim and issue corrected payment.`;
+    return applyChannelDefaults(negotiationNarrative);
   }
   const rulesDraft = agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile: orgRecord, practiceSettings: getPracticeSettings(org_id), orgSettings });
   return applyChannelDefaults(rulesDraft);
@@ -5928,6 +6263,71 @@ function getUnmatchedPayments(org_id, billed){
   return payments.filter(p => !findBilledByClaim(org_id, billed, p.claim_number));
 }
 
+function runAIRecoveryEngine(org_id){
+  if (!org_id) return;
+  const billedAll = readJSON(FILES.billed, []);
+  const ctx = buildClaimContext(org_id);
+
+  for (const claim of billedAll) {
+    if (claim.org_id !== org_id) continue;
+    const d = evaluateClaimDerived(claim, ctx);
+
+    if (d.lifecycleStage === "Denied") {
+      const ws = ensureAgentWorkspace(org_id, claim);
+      if (ws.appeal?.auto_generated || shouldLockPacket(ws, "appeal")) continue;
+      if (!ws.appeal || !ws.appeal.draft_text) {
+        autoDraftWorkspaceForClaim(org_id, claim, d, ctx);
+        const wsUpdated = ensureAgentWorkspace(org_id, claim);
+        wsUpdated.appeal = wsUpdated.appeal || {};
+        wsUpdated.appeal.auto_generated = true;
+        wsUpdated.appeal.generated_at = nowISO();
+        if (!wsUpdated.appeal.strategy_profile || wsUpdated.appeal.strategy_profile === "Auto") {
+          wsUpdated.appeal.strategy_profile = "Regulatory";
+        }
+        saveAgentWorkspace(org_id, wsUpdated);
+        addAgentMessage(org_id, {
+          message_id: uuid(),
+          workspace_id: wsUpdated.workspace_id,
+          billed_id: claim.billed_id,
+          role: "agent",
+          channel: "appeal",
+          content: "AI automatically generated appeal packet based on denial detection.",
+          created_at: nowISO()
+        });
+      }
+    }
+
+    if (d.lifecycleStage === "Underpaid") {
+      const ws = ensureAgentWorkspace(org_id, claim);
+      if (ws.negotiation?.auto_generated || shouldLockPacket(ws, "negotiation")) continue;
+      if (!ws.negotiation || !ws.negotiation.draft_text) {
+        autoDraftWorkspaceForClaim(org_id, claim, d, ctx);
+        const wsUpdated = ensureAgentWorkspace(org_id, claim);
+        wsUpdated.negotiation = wsUpdated.negotiation || {};
+        wsUpdated.negotiation.auto_generated = true;
+        wsUpdated.negotiation.generated_at = nowISO();
+        wsUpdated.negotiation.packet_sections = wsUpdated.negotiation.packet_sections || defaultNegotiationPacketSections();
+        if (!wsUpdated.negotiation.packet_sections.requested_amount) {
+          wsUpdated.negotiation.packet_sections.requested_amount = String(Number(d.underpaidAmount || 0));
+        }
+        if (!wsUpdated.negotiation.strategy_profile || wsUpdated.negotiation.strategy_profile === "Auto") {
+          wsUpdated.negotiation.strategy_profile = "Contractual";
+        }
+        saveAgentWorkspace(org_id, wsUpdated);
+        addAgentMessage(org_id, {
+          message_id: uuid(),
+          workspace_id: wsUpdated.workspace_id,
+          billed_id: claim.billed_id,
+          role: "agent",
+          channel: "negotiation",
+          content: "AI automatically generated negotiation packet based on underpayment detection.",
+          created_at: nowISO()
+        });
+      }
+    }
+  }
+}
+
 function rebuildOrgDerivedData(org_id, opts={}){
   const settings = { resyncDenials: false, autodraft: false, ...opts };
   recalculateContractsForOrg(org_id);
@@ -5946,6 +6346,9 @@ function rebuildOrgDerivedData(org_id, opts={}){
     changed = true;
   }
   if (changed) writeJSON(FILES.billed, billedAll);
+  runAIRecoveryEngine(org_id);
+  enqueueRecoveryTasksForOrg(org_id);
+  runRecoveryAgentTick(org_id);
 
   const subsAll = readJSON(FILES.billed_submissions, []);
   const orgClaims = billedAll.filter(b => b.org_id === org_id);
@@ -18539,10 +18942,17 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const isNegotiation = pathname === "/ai-negotiation" || String(parsed.query.tab || "") === "negotiation";
     const channel = isNegotiation ? "negotiation" : "appeal";
     const pageTitle = isNegotiation ? "AI Negotiation Packet" : "AI Appeal Packet";
+    ws[channel] = ws[channel] || {};
+    let strategyChanged = false;
+    ws[channel].strategy_profile = ["Auto","Clinical","Contractual","Regulatory","Collaborative"].includes(String(ws[channel].strategy_profile||"")) ? ws[channel].strategy_profile : "Auto";
+    if (!ws[channel].strategy_profile || ws[channel].strategy_profile === "Auto") {
+      if (channel === "appeal") ws[channel].strategy_profile = "Regulatory";
+      if (channel === "negotiation") ws[channel].strategy_profile = "Contractual";
+      strategyChanged = true;
+    }
+    if (strategyChanged) saveAgentWorkspace(org.org_id, ws);
     const packetSections = (ws[channel] || {}).packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
     const readyCheck = canMarkReady(ws, channel);
-    ws[channel] = ws[channel] || {};
-    ws[channel].strategy_profile = ["Auto","Clinical","Contractual","Regulatory","Collaborative"].includes(String(ws[channel].strategy_profile||"")) ? ws[channel].strategy_profile : "Auto";
     const packetFeatures = extractPacketFeatures({
       argumentText: channel === "negotiation" ? packetSections.variance_explanation : packetSections.argument,
       requestedActionText: packetSections.requested_action,
@@ -18558,6 +18968,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const denialReasonKey = normalizeDenialReasonKey(ws.outcome?.denial_reason || b.denial_reason || b.issue_reason || "");
     const baseline = computeHistoricalBaselines(org.org_id, b.payer || "", channel, denialReasonKey);
     const bestStrategy = computeStrategySuccessByProfile(org.org_id, b.payer || "", channel, denialReasonKey);
+    const payerIntel = computePayerBehaviorIntelligence(org.org_id, b.payer || "");
+    const taskForWorkspace = getAgentTasks(org.org_id).find(t => t.billed_id === billed_id && t.stage_type === channel && String(t.status || "") !== "closed") || null;
     const requestedAmountForScore = channel === "negotiation" ? num(packetSections.requested_amount || ws.negotiation?.requested_amount || d.underpaidAmount || 0) : num(d.atRiskAmount || d.underpaidAmount || 0);
     const score = computeDeterministicScore({
       stageType: channel,
@@ -18571,8 +18983,11 @@ if (method === "GET" && pathname === "/agent-workspace") {
       strategyProfile: ws[channel].strategy_profile || "Auto",
       packetFeatures,
       baselines: baseline,
-      strategyHistoryBest: bestStrategy
+      strategyHistoryBest: bestStrategy,
+      payerIntel,
+      argumentText: channel === "negotiation" ? packetSections.variance_explanation : packetSections.argument
     });
+    const recoveryTimeline = computeRecoveryTimeline({ payer: b.payer || "", strategy_profile: ws[channel].strategy_profile || "Auto", historicalOutcomes: loadWorkspaceOutcomes(org.org_id) });
     const missingLabelMap = { denial_letter: "Denial Letter", eob_era: "EOB/ERA", claim_form: "Claim Form / Itemized Bill" };
     const missingKindMap = { denial_letter: "denial", eob_era: "eob", claim_form: "supporting" };
     const sectionDescriptions = packetSectionDescriptions(channel);
@@ -18598,6 +19013,39 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
       ${orgSnapshot}
 
+      <h3>Payer Behavior Intelligence</h3>
+      <div class="exec-card" style="margin-bottom:12px;">
+        <div><b>Payer:</b> ${safeStr(b.payer || "")}</div>
+        <div><b>Historical Cases:</b> ${formatNumberUI(payerIntel?.total_cases || 0)}</div>
+        <div><b>Success Rate:</b> ${formatNumberUI((num(channel === "negotiation" ? payerIntel?.negotiation_success_rate : payerIntel?.appeal_success_rate) * 100),1)}%</div>
+        <div><b>Average Recovery:</b> ${formatNumberUI((num(payerIntel?.avg_recovered_pct) * 100),1)}%</div>
+        <div><b>Avg Days to Payment:</b> ${formatNumberUI(payerIntel?.avg_days_to_payment || 0)}</div>
+        <div><b>Best Strategy Historically:</b> ${safeStr(payerIntel?.best_strategy || "Auto")}</div>
+        <div><b>Fastest Strategy:</b> ${safeStr(payerIntel?.fastest_strategy || "Auto")}</div>
+        <div><b>Most Common Denial Reason:</b> ${safeStr(payerIntel?.most_common_denial_reason || "unknown")}</div>
+        <div><b>Strategy Success Rates:</b> ${safeStr(Object.entries(payerIntel?.strategy_success_rates || {}).map(([k,v])=>`${k}: ${formatNumberUI(num(v)*100,1)}%`).join(" | ") || "N/A")}</div>
+        <div><b>Denial Reason Patterns:</b> ${safeStr(Object.entries(payerIntel?.denial_reason_patterns || {}).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k} (${v})`).join(", ") || "N/A")}</div>
+      </div>
+
+      ${taskForWorkspace ? `
+      <h3>Agent Status</h3>
+      <div class="exec-card" style="margin-bottom:12px;border-left:4px solid #4f46e5;">
+        <div><strong>AI Agent Status:</strong> ${safeStr(String(taskForWorkspace.status || "queued").replace(/_/g," "))}</div>
+        <div><strong>Missing:</strong> ${safeStr((taskForWorkspace.missing_docs || []).join(", ") || "None")}</div>
+        <div><strong>Priority:</strong> ${safeStr(taskForWorkspace.risk_level || "MEDIUM")}</div>
+        <div><strong>Estimated Recovery:</strong> ${formatMoneyUI(num(taskForWorkspace.estimated_value || score.estRecovery || 0))}</div>
+        <div><strong>Recommended Next Step:</strong> ${safeStr(taskForWorkspace.recommended_next_step || (taskForWorkspace.next_actions || [])[0] || "Review packet")}</div>
+        <div style="margin-top:6px;"><strong>Next Actions:</strong>
+          <ol style="margin:6px 0 0 18px;">${(taskForWorkspace.next_actions || []).map(a=>`<li>${safeStr(a)}</li>`).join("") || "<li>Review packet and proceed.</li>"}</ol>
+        </div>
+        <div class="btnRow" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+          <a class="btn secondary small" href="#ai-attachment-checklist">Upload Missing Docs</a>
+          ${!hasContractRule ? `<a class="btn secondary small" href="/data-management?tab=reimbursement">Add Contract Rule</a>` : ``}
+          <a class="btn secondary small" href="#submission-followup">Mark Submitted</a>
+        </div>
+      </div>
+      ` : ``}
+
       <h3>AI Recovery Intelligence</h3>
       <div id="recovery-intelligence" style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);margin-bottom:12px;">
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -18606,6 +19054,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
           <div><div class="muted small">Confidence</div><div id="ai-confidence" class="badge">${safeStr(score.confidence)}</div></div>
           <div><div class="muted small">Recommended Strategy</div><div id="ai-strategy-recommended" style="font-weight:800;">${safeStr(score.strategyRecommended)}</div></div>
         </div>
+        ${score.strategySwitchSuggestion ? `<div class="warn small" style="margin-top:8px;">${safeStr(score.strategySwitchSuggestion)}</div>` : ``}
+        <div style="margin-top:8px;"><strong>Recovery Timeline Estimate</strong><div class="small muted">Est days: ${formatNumberUI(recoveryTimeline.estimated_days_to_payment || 0,1)} | 30-day payment probability: ${formatNumberUI(num(recoveryTimeline.probability_payment_30_days)*100,1)}% | 60-day payment probability: ${formatNumberUI(num(recoveryTimeline.probability_payment_60_days)*100,1)}%</div></div>
+        <div style="margin-top:8px;"><strong>Argument Strength Meter</strong><div style="height:10px;background:#e5e7eb;border-radius:999px;overflow:hidden;"><div style="height:10px;width:${Math.max(0,Math.min(100,num(score.argument_quality_score)))}%;background:#4f46e5;"></div></div><div class="small muted">Score: ${formatNumberUI(score.argument_quality_score || 0)} / 100</div></div>
         <div style="margin-top:10px;"><strong>Packet Quality Alerts</strong><ul id="ai-alerts">${(score.alerts.length?score.alerts:["No major alerts."]).map(a=>`<li>${safeStr(a)}</li>`).join("")}</ul></div>
         ${!hasContractRule ? `<div style="margin-top:8px;"><a class="btn small" href="/data-management?tab=reimbursement">Add Contract Rule</a></div>` : ``}
         <details style="margin-top:8px;"><summary style="cursor:pointer;font-weight:700;">Why this score?</summary><div class="muted small">Deterministic scoring uses packet completeness, strategy fit, and historical payer/stage outcomes.</div></details>
@@ -18642,11 +19093,20 @@ if (method === "GET" && pathname === "/agent-workspace") {
         <button class="btn secondary" type="submit">Save Strategy</button>
       </form>
 
+      ${ws[channel]?.auto_generated ? `
+      <div style="border:1px solid var(--border);padding:10px;border-radius:10px;background:#eef2ff;margin-bottom:12px;">
+        <strong>AI Recovery Packet Generated</strong>
+        <div class="muted small">
+          This packet was automatically created by the AI Recovery Engine based on claim lifecycle detection.
+        </div>
+      </div>
+      ` : ``}
+
       <h3>4) AI Packet Builder <span class="small muted">Version ${versionNumber}</span> <a class="btn secondary small" href="/agent-workspace/history?billed_id=${encodeURIComponent(billed_id)}&channel=${encodeURIComponent(channel)}">View History</a></h3>
       <form method="POST" action="/agent-workspace/save-all" style="margin:8px 0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="draft_type" value="${safeStr(channel)}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><button class="btn" type="submit">Save All Changes</button></form>
       ${sectionsHtml}
 
-      <details>
+      <details id="submission-followup">
         <summary style="font-weight:800;cursor:pointer;">5) Submission & Follow-Up ${infoIcon("Track where and when the packet was submitted, plus follow-up due date.")}</summary>
         <form method="POST" action="/agent-workspace/submission" style="margin-top:8px;">
           <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
@@ -18883,7 +19343,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const ws = ensureAgentWorkspace(org.org_id, b);
       const valid = ["Auto","Clinical","Contractual","Regulatory","Collaborative"];
       const next = valid.includes(strategy_profile) ? strategy_profile : "Auto";
-      ws[draft_type] = { ...(ws[draft_type] || {}), strategy_profile: next, updated_at: nowISO() };
+      ws[draft_type] = { ...(ws[draft_type] || {}), strategy_profile: next, updated_at: nowISO(), user_modified: true };
       saveAgentWorkspace(org.org_id, ws);
       return redirect(res, `${workspacePagePath(billed_id, tab)}`);
     });
@@ -18903,6 +19363,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
       if (!b || !["appeal","negotiation"].includes(draft_type)) return redirect(res, "/claims?view=all");
       const ws = ensureAgentWorkspace(org.org_id, b);
       ws.follow_up.last_touched_at = nowISO();
+      ws[draft_type] = ws[draft_type] || {};
+      ws[draft_type].user_modified = true;
       ws.status = "edited";
       saveAgentWorkspace(org.org_id, ws);
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: draft_type, content: "All workspace changes saved." });
@@ -18956,6 +19418,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
         ws.appeal.packet_sections[key] = section_key ? value : draft_text;
         ws.appeal.draft_text = ws.appeal.packet_sections.argument || "";
         ws.appeal.updated_at = ts;
+        ws.appeal.user_modified = true;
         ws.appeal.version = Number(ws.appeal?.version || 0) + 1;
         pushWorkspaceHistorySnapshot(ws, "appeal", user.user_id);
       } else if (draft_type === "negotiation") {
@@ -18964,6 +19427,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
         ws.negotiation.draft_text = ws.negotiation.packet_sections.variance_explanation || "";
         ws.negotiation.requested_amount = num(ws.negotiation.packet_sections.requested_amount || ws.negotiation?.requested_amount || 0);
         ws.negotiation.updated_at = ts;
+        ws.negotiation.user_modified = true;
         ws.negotiation.version = Number(ws.negotiation?.version || 0) + 1;
         pushWorkspaceHistorySnapshot(ws, "negotiation", user.user_id);
       } else if (draft_type === "lmn") {
@@ -19028,6 +19492,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
       };
       ws.status = "submitted";
       saveAgentWorkspace(org.org_id, ws);
+      const submittedTask = getAgentTasks(org.org_id).find(t => t.billed_id === billed_id && t.stage_type === channel && String(t.status || "") !== "closed");
+      if (submittedTask) markTask(submittedTask.task_id, { status: "submitted", notes: `Submitted ${channel} packet; follow-up due ${followDate || "n/a"}` });
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: "Marked submitted + set follow-up." });
       return redirect(res, workspacePagePath(billed_id, channel));
     });
@@ -19111,6 +19577,13 @@ if (method === "GET" && pathname === "/agent-workspace") {
         outcome_status: statusMap[rawStatus] || "no_change"
       });
 
+      const outcomeTask = getAgentTasks(org.org_id).find(t => t.billed_id === billed_id && t.stage_type === channel && String(t.status || "") !== "closed");
+      if (outcomeTask) {
+        markTask(outcomeTask.task_id, {
+          status: "closed",
+          notes: `Outcome ${statusMap[rawStatus] || "no_change"}; recovered ${formatMoneyUI(recoveredAmount)}`
+        });
+      }
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: "Outcome updated." });
       return redirect(res, workspacePagePath(billed_id, channel));
     });
@@ -19227,8 +19700,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
       if (content && ["appeal","negotiation"].includes(channel)) {
         const ts = nowISO();
         ensurePacketSections(ws, b);
-        if (channel === "appeal") { ws.appeal.packet_sections.argument = applyAgentInstructionToDraft(ws.appeal?.packet_sections?.argument || ws.appeal?.draft_text || "", content, channel); ws.appeal.draft_text = ws.appeal.packet_sections.argument; ws.appeal.updated_at = ts; ws.appeal.version = Number(ws.appeal?.version || 0) + 1; pushWorkspaceHistorySnapshot(ws, "appeal", user.user_id); }
-        if (channel === "negotiation") { ws.negotiation.packet_sections.variance_explanation = applyAgentInstructionToDraft(ws.negotiation?.packet_sections?.variance_explanation || ws.negotiation?.draft_text || "", content, channel); ws.negotiation.draft_text = ws.negotiation.packet_sections.variance_explanation; ws.negotiation.updated_at = ts; ws.negotiation.version = Number(ws.negotiation?.version || 0) + 1; pushWorkspaceHistorySnapshot(ws, "negotiation", user.user_id); }
+        if (channel === "appeal") { ws.appeal.packet_sections.argument = applyAgentInstructionToDraft(ws.appeal?.packet_sections?.argument || ws.appeal?.draft_text || "", content, channel); ws.appeal.draft_text = ws.appeal.packet_sections.argument; ws.appeal.updated_at = ts; ws.appeal.user_modified = true; ws.appeal.version = Number(ws.appeal?.version || 0) + 1; pushWorkspaceHistorySnapshot(ws, "appeal", user.user_id); }
+        if (channel === "negotiation") { ws.negotiation.packet_sections.variance_explanation = applyAgentInstructionToDraft(ws.negotiation?.packet_sections?.variance_explanation || ws.negotiation?.draft_text || "", content, channel); ws.negotiation.draft_text = ws.negotiation.packet_sections.variance_explanation; ws.negotiation.updated_at = ts; ws.negotiation.user_modified = true; ws.negotiation.version = Number(ws.negotiation?.version || 0) + 1; pushWorkspaceHistorySnapshot(ws, "negotiation", user.user_id); }
         ws.follow_up.last_touched_at = ts;
         ws.status = "edited";
         saveAgentWorkspace(org.org_id, ws);
@@ -19475,10 +19948,60 @@ if (method === "GET" && pathname === "/claim-detail") {
   return send(res, 200, html);
 }
 
+  if (method === "GET" && pathname === "/recovery-command-center") {
+    const tasks = getAgentTasks(org.org_id);
+    const openTasks = tasks.filter(t => ["queued","running","waiting_docs","ready_for_review","submitted","followup_due"].includes(String(t.status || "")));
+    const byPayer = {};
+    const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+    for (const t of openTasks) {
+      const claim = billedAll.find(b => b.billed_id === t.billed_id);
+      const payer = String(claim?.payer || "Unknown");
+      byPayer[payer] = (byPayer[payer] || 0) + 1;
+    }
+    const topPayers = Object.entries(byPayer).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    const atRisk = openTasks.reduce((s,t)=>s+num(t.estimated_value || 0),0);
+    const dist = {
+      high: openTasks.filter(t => String(t.risk_level || "").toUpperCase() === "HIGH").length,
+      medium: openTasks.filter(t => String(t.risk_level || "").toUpperCase() === "MEDIUM").length,
+      low: openTasks.filter(t => String(t.risk_level || "").toUpperCase() === "LOW").length,
+    };
+    const rows = openTasks.slice(0,200).map(t => `<tr><td>${safeStr(t.stage_type)}</td><td>${safeStr(t.status)}</td><td>${formatNumberUI(t.priority || 0)}</td><td>${safeStr(t.risk_level || "MEDIUM")}</td><td>${formatMoneyUI(num(t.estimated_value || 0))}</td><td>${safeStr(t.recommended_next_step || (t.next_actions||[])[0] || "Review")}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No active tasks.</td></tr>`;
+    const payerRows = topPayers.map(([payer,count])=>`<li>${safeStr(payer)} — ${formatNumberUI(count)}</li>`).join("") || `<li class="muted">No payer concentration yet.</li>`;
+    const html = renderPage("Recovery Command Center", `
+      <h2>Recovery Command Center</h2>
+      <div class="row">
+        <div class="col"><div class="kpi-card"><h4>Active Recovery Tasks</h4><p>${formatNumberUI(openTasks.length)}</p></div></div>
+        <div class="col"><div class="kpi-card"><h4>Total At-Risk $</h4><p>${formatMoneyUI(atRisk)}</p></div></div>
+        <div class="col"><div class="kpi-card"><h4>Agent Queue</h4><p>${formatNumberUI(tasks.filter(t=>String(t.status||"") === "queued").length)}</p></div></div>
+      </div>
+      <h3>Success Probability Distribution</h3>
+      <p class="small muted">HIGH: ${formatNumberUI(dist.high)} | MEDIUM: ${formatNumberUI(dist.medium)} | LOW: ${formatNumberUI(dist.low)}</p>
+      <h3>Top Payers Causing Denials</h3>
+      <ul>${payerRows}</ul>
+      <h3>Active Task Queue</h3>
+      <table><tr><th>Stage</th><th>Status</th><th>Priority</th><th>Risk</th><th>Estimated Value</th><th>Next Step</th></tr>${rows}</table>
+    `, navUser(), {showChat:true, orgName: org.org_name});
+    return send(res, 200, html);
+  }
+
+
 
 // fallback
   return redirect(res, "/dashboard");
 });
+
+setInterval(() => {
+  try {
+    const orgs = readJSON(FILES.orgs, []);
+    for (const org of orgs) {
+      if (!org?.org_id) continue;
+      const hasOpen = getAgentTasks(org.org_id).some(t => ["queued","running","waiting_docs","ready_for_review"].includes(String(t.status || "")));
+      if (hasOpen) runRecoveryAgentTick(org.org_id);
+    }
+  } catch (e) {
+    console.error("Recovery agent tick error:", e?.message || e);
+  }
+}, 60_000);
 
 server.listen(PORT, HOST, () => {
   console.log(`TJHP server listening on ${HOST}:${PORT}`);
