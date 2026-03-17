@@ -102,6 +102,7 @@ const FILES = {
   packet_templates: path.join(DATA_DIR, "packet_templates.json"),
   workspace_outcomes: path.join(DATA_DIR, "workspace_outcomes.json"),
   agent_tasks: path.join(DATA_DIR, "agent_tasks.json"),
+  admin_announcements: path.join(DATA_DIR, "admin_announcements.json"),
 };
 
 // Directory for storing uploaded template files
@@ -341,6 +342,58 @@ ensureFile(FILES.template_assets, []);
 ensureFile(FILES.packet_templates, []);
 ensureFile(FILES.workspace_outcomes, []);
 ensureFile(FILES.agent_tasks, []);
+ensureFile(FILES.admin_announcements, []);
+
+function getAnnouncements() {
+  return readJSON(FILES.admin_announcements, []);
+}
+
+function saveAnnouncements(list) {
+  writeJSON(FILES.admin_announcements, Array.isArray(list) ? list : []);
+}
+
+function getActiveAnnouncements() {
+  return readJSON(FILES.admin_announcements, [])
+    .filter(a => a && a.status === "active");
+}
+
+function renderAnnouncementBanner() {
+  const list = getActiveAnnouncements().filter(a => a.display === "banner");
+  if (!list.length) return "";
+
+  return `
+    <div style="background:#111827;color:#fff;padding:10px 16px;text-align:center;font-weight:600;">
+      ${list.map(a => safeStr(a.title)).join(" • ")}
+    </div>
+  `;
+}
+
+function renderAnnouncementPopup() {
+  const list = getActiveAnnouncements().filter(a => a.display === "popup");
+  if (!list.length) return "";
+
+  const a = list[0];
+
+  return `
+    <div id="adminPopup" style="
+      position:fixed;
+      top:50%;
+      left:50%;
+      transform:translate(-50%,-50%);
+      background:#fff;
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:20px;
+      z-index:9999;
+      max-width:400px;
+      box-shadow:0 20px 60px rgba(0,0,0,0.2);
+    ">
+      <h3>${safeStr(a.title)}</h3>
+      <p>${safeStr(a.message)}</p>
+      <button onclick="document.getElementById('adminPopup').remove()" class="btn">Close</button>
+    </div>
+  `;
+}
 
 // ===== Admin password =====
 function adminHash() {
@@ -788,6 +841,9 @@ window.__tjhpSendChat = async function(){
 <style>${css}</style>
 </head>
 <body data-theme="${startTheme}" data-theme-pref="${themePref}">
+  ${renderAnnouncementBanner()}
+  ${renderTrialBanner(CURRENT_SESSION_ORG_ID)}
+  ${renderAnnouncementPopup()}
   <div class="wrap">
     <div class="topbar">
       <div class="brand">
@@ -2264,7 +2320,8 @@ function getUsage(org_id) {
       ai_chat_used: 0,
       copilot_questions_used: 0,
       ai_copilot_queries_used: 0,
-      ai_copilot_query_limit: 0
+      ai_copilot_query_limit: 0,
+      claims_processed: 0
     };
     usage.push(u);
     writeJSON(FILES.usage, usage);
@@ -2281,6 +2338,7 @@ function getUsage(org_id) {
     u.copilot_questions_used = 0;
     u.ai_copilot_queries_used = 0;
     u.ai_copilot_query_limit = 0;
+    u.claims_processed = 0;
     writeJSON(FILES.usage, usage);
   }
   if (typeof u.monthly_ai_generations_used !== "number") u.monthly_ai_generations_used = 0;
@@ -2289,6 +2347,7 @@ function getUsage(org_id) {
   if (typeof u.ai_copilot_queries_used !== "number") u.ai_copilot_queries_used = Number(u.copilot_questions_used || 0);
   if (typeof u.ai_copilot_query_limit !== "number") u.ai_copilot_query_limit = Number(getCopilotLimit(org_id) || 0);
   if (u.copilot_questions_used !== u.ai_copilot_queries_used) u.copilot_questions_used = u.ai_copilot_queries_used;
+  if (typeof u.claims_processed !== "number") u.claims_processed = Number(u.monthly_case_credits_used || u.pilot_cases_used || 0);
   return u;
 }
 function saveUsage(u) {
@@ -2321,6 +2380,120 @@ Object.keys(PLAN_CONFIG).forEach(plan => {
     PLAN_CONFIG[plan].copilot_limit = 50;
   }
 });
+
+function getPlanConfig(plan) {
+  const plans = {
+    starter: { ai_generations: 20, claims_limit: 50, features: ["basic"] },
+    growth: { ai_generations: 100, claims_limit: 250, features: ["analytics", "negotiation"] },
+    pro: { ai_generations: 500, claims_limit: 1000, features: ["analytics", "negotiation", "ai_workspace"] },
+    enterprise: { ai_generations: 999999, claims_limit: 999999, features: ["all"] }
+  };
+  return plans[String(plan || "starter").toLowerCase()] || plans.starter;
+}
+
+function checkUsageLimits(org_id) {
+  const usage = getUsage(org_id);
+  const sub = getSub(org_id);
+  const plan = String((sub && sub.plan) || "starter").toLowerCase();
+  const config = getPlanConfig(plan);
+  const aiUsed = Number(usage?.monthly_ai_generations_used || 0);
+  const claimsUsed = Number(usage?.claims_processed || usage?.monthly_case_credits_used || 0);
+
+  return {
+    aiExceeded: aiUsed >= config.ai_generations,
+    claimsExceeded: claimsUsed >= config.claims_limit,
+    plan,
+    config,
+    usage
+  };
+}
+
+function renderUpgradePrompt(limitType) {
+  return `
+    <div style="
+      border:1px solid #f59e0b;
+      background:#fffbeb;
+      padding:14px;
+      border-radius:10px;
+      margin:12px 0;
+    ">
+      <strong>Upgrade Required</strong>
+      <div class="small muted">
+        You've reached your ${safeStr(limitType)} limit. Upgrade your plan to continue.
+      </div>
+      <div style="margin-top:8px;">
+        <a href="/plans" class="btn">Upgrade Plan</a>
+      </div>
+    </div>
+  `;
+}
+
+
+function hasFeatureAccess(org_id, feature) {
+  if (!org_id || !feature) return false;
+  const sub = getSub(org_id);
+  const plan = String((sub && sub.plan) || "starter").toLowerCase();
+  const config = getPlanConfig(plan);
+
+  if (config.features.includes("all")) return true;
+  return config.features.includes(String(feature));
+}
+
+function renderFeatureLocked(featureName) {
+  return `
+    <div style="
+      border:1px solid #e11d48;
+      background:#fff1f2;
+      padding:14px;
+      border-radius:10px;
+      margin:12px 0;
+    ">
+      <strong>${safeStr(featureName)} Locked</strong>
+      <div class="small muted">
+        Upgrade your plan to unlock this feature.
+      </div>
+      <div style="margin-top:8px;">
+        <a href="/plans" class="btn">Upgrade Plan</a>
+      </div>
+    </div>
+  `;
+}
+
+function getTrialStatus(org_id) {
+  if (!org_id) return { active: false, daysLeft: 0 };
+  const pilot = getPilot(org_id);
+  if (!pilot || pilot.status !== "active") {
+    return { active: false, daysLeft: 0 };
+  }
+
+  const endRaw = pilot.ends_at || pilot.end_date || addDaysISO(pilot.started_at || pilot.created_at || nowISO(), PILOT_DAYS);
+  const end = new Date(endRaw);
+  const now = new Date();
+  const diff = Math.ceil((end - now) / (1000 * 60 * 60 * 24));
+
+  return {
+    active: true,
+    daysLeft: Math.max(0, Number.isFinite(diff) ? diff : 0)
+  };
+}
+
+function renderTrialBanner(org_id) {
+  const trial = getTrialStatus(org_id);
+  if (!trial.active) return "";
+
+  return `
+    <div style="
+      background:#f59e0b;
+      color:#111;
+      padding:10px 16px;
+      text-align:center;
+      font-weight:700;
+    ">
+      Free Trial: ${trial.daysLeft} day(s) remaining
+      <a href="/plans" style="margin-left:10px;text-decoration:underline;">Upgrade Now</a>
+    </div>
+  `;
+}
 
 function getActivePlanName(org_id) {
   const sub = getSub(org_id);
@@ -7502,9 +7675,89 @@ const server = http.createServer(async (req, res) => {
 
 
   // ---------- ADMIN ROUTES ----------
-  if (pathname.startsWith("/admin/")) {
+  if (pathname.startsWith("/admin/") || pathname.startsWith("/admin-control-center")) {
     const isAdmin = sess && sess.role === "admin";
     if (!isAdmin && pathname !== "/admin/login") return redirect(res, "/admin/login");
+
+    if (method === "GET" && pathname === "/admin-control-center") {
+      const announcements = getAnnouncements();
+
+      const rows = announcements.map(a => `
+        <tr>
+          <td>${safeStr(a.title)}</td>
+          <td>${safeStr(a.type)}</td>
+          <td>${safeStr(a.status)}</td>
+          <td>${safeStr(a.created_at)}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="4" class="muted">No announcements yet.</td></tr>`;
+
+      const html = renderPage("Admin Control Center", `
+        <h2>Admin Control Center</h2>
+
+        <h3>Create Announcement</h3>
+        <form method="POST" action="/admin-control-center/create">
+          <label>Title</label>
+          <input name="title" required />
+
+          <label>Message</label>
+          <textarea name="message" required></textarea>
+
+          <label>Type</label>
+          <select name="type">
+            <option value="announcement">Announcement</option>
+            <option value="promotion">Promotion</option>
+            <option value="feature">New Feature</option>
+            <option value="webinar">Webinar</option>
+          </select>
+
+          <label>Display</label>
+          <select name="display">
+            <option value="banner">Banner</option>
+            <option value="popup">Popup</option>
+          </select>
+
+          <button class="btn">Create</button>
+        </form>
+
+        <div class="hr"></div>
+
+        <h3>All Announcements</h3>
+        <table>
+          <tr>
+            <th>Title</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Created</th>
+          </tr>
+          ${rows}
+        </table>
+      `, navAdmin(), { showChat: false, orgName: "" });
+
+      return send(res, 200, html);
+    }
+
+    if (method === "POST" && pathname === "/admin-control-center/create") {
+      let body = "";
+      req.on("data", c => body += c);
+      req.on("end", () => {
+        const params = new URLSearchParams(body);
+        const all = getAnnouncements();
+
+        all.push({
+          id: uuid(),
+          title: String(params.get("title") || ""),
+          message: String(params.get("message") || ""),
+          type: String(params.get("type") || "announcement"),
+          display: String(params.get("display") || "banner"),
+          status: "active",
+          created_at: nowISO()
+        });
+
+        saveAnnouncements(all);
+        return redirect(res, "/admin-control-center");
+      });
+      return;
+    }
 
     // Reworked admin dashboard
     if (method === "GET" && pathname === "/admin/dashboard") {
@@ -7573,6 +7826,29 @@ const server = http.createServer(async (req, res) => {
           <td>${att}</td>
         </tr>`;
       }).join("");
+      const adminControlCenterHtml = `
+        <div class="hr"></div>
+
+        <h3 style="margin-top:20px;">Admin Control Center</h3>
+
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:260px;border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);">
+            <h4>Announcements</h4>
+            <div class="muted small">Send banners, popups, promotions, and updates to users.</div>
+            <div style="margin-top:10px;">
+              <a class="btn" href="/admin-control-center">Manage</a>
+            </div>
+          </div>
+
+          <div style="flex:1;min-width:260px;border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);">
+            <h4>Plan Controls</h4>
+            <div class="muted small">Adjust plan limits, AI usage, and feature access.</div>
+            <div style="margin-top:10px;">
+              <a class="btn secondary" href="/admin-control-center">Configure</a>
+            </div>
+          </div>
+        </div>
+      `;
       const html = renderPage("Admin Dashboard", `
         <h2>Admin Dashboard</h2>
         <section>
@@ -7585,6 +7861,7 @@ const server = http.createServer(async (req, res) => {
         <div class="chart-placeholder">Donut chart will render here: Active ${statusCounts['active']||0}, Suspended ${statusCounts['suspended']||0}, Terminated ${statusCounts['terminated']||0}</div>
         <h3>Total Case Activity</h3>
         <div class="chart-placeholder">Case activity charts will be displayed when data is available.</div>
+        ${adminControlCenterHtml}
         <h3>Admin Alerts</h3>
         ${alertsHtml}
         <h3>Recent Organisation Activity</h3>
@@ -8561,6 +8838,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const copilotQueriesUsed = Number(copilotUsage.used || 0);
     const copilotQueriesLimit = Number(copilotUsage.limit || 0);
     const paymentRowsUsed = Number(usage.monthly_payment_rows_used || 0);
+    const usageLimits = checkUsageLimits(org.org_id);
+    const dashboardUpgradePrompts = `
+      ${usageLimits.aiExceeded ? renderUpgradePrompt("AI usage") : ""}
+      ${usageLimits.claimsExceeded ? renderUpgradePrompt("claim processing") : ""}
+    `;
 
     function buildLimitBadge(used, limit){
       const u = Number(used || 0);
@@ -8761,6 +9043,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </div>
 
       <div class="hr"></div>
+
+      ${dashboardUpgradePrompts}
 
       <h3>Plan Usage <span class="tooltip">ⓘ<span class="tooltiptext">Your current monthly usage relative to your plan limits.</span></span></h3>
 
@@ -13602,6 +13886,13 @@ const statusCell = (() => {
   }
 
   if (method === "POST" && pathname === "/billed/upload") {
+    const claimsUsageLimits = checkUsageLimits(org.org_id);
+    if (claimsUsageLimits.claimsExceeded) {
+      return send(res, 200, renderPage("Limit Reached", `
+        ${renderUpgradePrompt("claim processing")}
+      `, navUser(), { showChat: true, orgName: org.org_name }));
+    }
+
     const contentType = req.headers["content-type"] || "";
     if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain");
     const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
@@ -14253,6 +14544,13 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
       return send(res, 403, html);
     }
 
+    const claimsUsageLimits = checkUsageLimits(org.org_id);
+    if (claimsUsageLimits.claimsExceeded) {
+      return send(res, 200, renderPage("Limit Reached", `
+        ${renderUpgradePrompt("claim processing")}
+      `, navUser(), { showChat: true, orgName: org.org_name }));
+    }
+
     const contentType = req.headers["content-type"] || "";
     if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain");
     const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
@@ -14309,6 +14607,9 @@ if (method === "POST" && pathname === "/billed/mark-paid") {
       } else {
         pilotConsumeCase(org.org_id);
       }
+      const usageAfterCase = getUsage(org.org_id);
+      usageAfterCase.claims_processed = Number(usageAfterCase.claims_processed || 0) + 1;
+      saveUsage(usageAfterCase);
       // Create unique case ID and directory
       const cid = uuid();
       const caseDir = path.join(UPLOADS_DIR, org.org_id, cid);
@@ -18912,6 +19213,11 @@ else if (type === "payers") {
   if (method === "GET" && pathname === "/negotiation-workspace") {
     const billed_id = String(parsed.query.billed_id || "").trim();
     if (!billed_id) return redirect(res, "/claims?view=all");
+    if (!hasFeatureAccess(org.org_id, "negotiation")) {
+      return send(res, 200, renderPage("Upgrade Required", `
+        ${renderFeatureLocked("Negotiation Tools")}
+      `, navUser(), { showChat: true, orgName: org.org_name }));
+    }
     return redirect(res, workspacePagePath(billed_id, "negotiation"));
   }
 
@@ -18924,6 +19230,20 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
   if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation")) {
     const billed_id = String(parsed.query.billed_id || "").trim();
+    const isNegotiation = pathname === "/ai-negotiation" || String(parsed.query.tab || "") === "negotiation";
+
+    if (!hasFeatureAccess(org.org_id, "ai_workspace")) {
+      return send(res, 200, renderPage("Upgrade Required", `
+        ${renderFeatureLocked("AI Workspace")}
+      `, navUser(), { showChat: true, orgName: org.org_name }));
+    }
+
+    if (isNegotiation && !hasFeatureAccess(org.org_id, "negotiation")) {
+      return send(res, 200, renderPage("Upgrade Required", `
+        ${renderFeatureLocked("Negotiation Tools")}
+      `, navUser(), { showChat: true, orgName: org.org_name }));
+    }
+
     const billedAll = readJSON(FILES.billed, []);
     const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
     if (!billed_id || !b) return redirect(res, "/claims?view=all");
@@ -18939,7 +19259,6 @@ if (method === "GET" && pathname === "/agent-workspace") {
     ws.activity.last_opened_at = nowISO();
     saveAgentWorkspace(org.org_id, ws);
 
-    const isNegotiation = pathname === "/ai-negotiation" || String(parsed.query.tab || "") === "negotiation";
     const channel = isNegotiation ? "negotiation" : "appeal";
     const pageTitle = isNegotiation ? "AI Negotiation Packet" : "AI Appeal Packet";
     ws[channel] = ws[channel] || {};
@@ -19289,9 +19608,20 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const billed_id = String(params.get("billed_id") || "").trim();
       const draft_type = String(params.get("draft_type") || "").trim();
       const tab = String(params.get("tab") || draft_type || "packet").trim();
+      const usageLimits = checkUsageLimits(org.org_id);
+      if (usageLimits.aiExceeded) {
+        return send(res, 200, renderPage("Limit Reached", `
+          ${renderUpgradePrompt("AI usage")}
+        `, navUser(), { showChat: true, orgName: org.org_name }));
+      }
       const billedAll = readJSON(FILES.billed, []);
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
       if (!b || !["appeal","negotiation","lmn"].includes(draft_type)) return redirect(res, "/claims?view=all");
+      if (draft_type === "negotiation" && !hasFeatureAccess(org.org_id, "negotiation")) {
+        return send(res, 200, renderPage("Upgrade Required", `
+          ${renderFeatureLocked("Negotiation Tools")}
+        `, navUser(), { showChat: true, orgName: org.org_name }));
+      }
       const claimCtx = buildClaimContext(org.org_id);
       const d = evaluateClaimDerived(b, claimCtx);
       const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id);
