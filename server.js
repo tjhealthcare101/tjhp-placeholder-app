@@ -103,6 +103,7 @@ const FILES = {
   workspace_outcomes: path.join(DATA_DIR, "workspace_outcomes.json"),
   agent_tasks: path.join(DATA_DIR, "agent_tasks.json"),
   admin_announcements: path.join(DATA_DIR, "admin_announcements.json"),
+  plan_settings: path.join(DATA_DIR, "plan_settings.json"),
 };
 
 // Directory for storing uploaded template files
@@ -343,6 +344,7 @@ ensureFile(FILES.packet_templates, []);
 ensureFile(FILES.workspace_outcomes, []);
 ensureFile(FILES.agent_tasks, []);
 ensureFile(FILES.admin_announcements, []);
+ensureFile(FILES.plan_settings, {});
 
 function getAnnouncements() {
   return readJSON(FILES.admin_announcements, []);
@@ -350,6 +352,14 @@ function getAnnouncements() {
 
 function saveAnnouncements(list) {
   writeJSON(FILES.admin_announcements, Array.isArray(list) ? list : []);
+}
+
+function getPlanSettings() {
+  return readJSON(FILES.plan_settings, {});
+}
+
+function savePlanSettings(settings) {
+  writeJSON(FILES.plan_settings, settings || {});
 }
 
 function getActiveAnnouncements() {
@@ -362,8 +372,18 @@ function renderAnnouncementBanner() {
   if (!list.length) return "";
 
   return `
-    <div style="background:#111827;color:#fff;padding:10px 16px;text-align:center;font-weight:600;">
-      ${list.map(a => safeStr(a.title)).join(" • ")}
+    <div style="
+      background:#111827;
+      color:#fff;
+      padding:10px 16px;
+      text-align:center;
+      font-weight:600;
+    ">
+      ${list.map(a => `
+        <div>
+          <strong>${safeStr(a.title)}</strong> — ${safeStr(a.message)}
+        </div>
+      `).join("")}
     </div>
   `;
 }
@@ -390,8 +410,16 @@ function renderAnnouncementPopup() {
     ">
       <h3>${safeStr(a.title)}</h3>
       <p>${safeStr(a.message)}</p>
-      <button onclick="document.getElementById('adminPopup').remove()" class="btn">Close</button>
+      <button onclick="document.getElementById('adminPopup').remove(); localStorage.setItem('hideAdminPopup','1');" class="btn">Close</button>
     </div>
+    <script>
+      (function(){
+        if(localStorage.getItem('hideAdminPopup') === '1'){
+          const el = document.getElementById('adminPopup');
+          if(el) el.remove();
+        }
+      })();
+    </script>
   `;
 }
 
@@ -613,6 +641,11 @@ function renderPage(title, content, navHtml="", opts={}) {
   const prefRaw = String((opts && opts.userTheme) || CURRENT_USER_THEME || "light");
   const themePref = (prefRaw === "light" || prefRaw === "dark" || prefRaw === "system") ? prefRaw : "light";
   const startTheme = (themePref === "dark") ? "dark" : "light";
+  const resetSessionUiState = (title === "Login" || title === "Sign In") ? `
+<script>
+  localStorage.removeItem("hideTrialBanner");
+  localStorage.removeItem("hideAdminPopup");
+</script>` : "";
   const chatHtml = showChat ? `
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
   <button class="btn" type="button" onclick="window.__tjhpToggleChat(event)">AI Assistant</button>
@@ -841,9 +874,9 @@ window.__tjhpSendChat = async function(){
 <style>${css}</style>
 </head>
 <body data-theme="${startTheme}" data-theme-pref="${themePref}">
-  ${renderAnnouncementBanner()}
-  ${renderTrialBanner(CURRENT_SESSION_ORG_ID)}
-  ${renderAnnouncementPopup()}
+  ${(title !== "Sign In" && title !== "Login") ? renderAnnouncementBanner() : ""}
+  ${(title !== "Login" && title !== "Sign In") ? renderTrialBanner(CURRENT_SESSION_ORG_ID) : ""}
+  ${(title !== "Sign In" && title !== "Login") ? renderAnnouncementPopup() : ""}
   <div class="wrap">
     <div class="topbar">
       <div class="brand">
@@ -862,6 +895,7 @@ window.__tjhpSendChat = async function(){
   </div>
 
 ${chatHtml}
+${resetSessionUiState}
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
@@ -2382,13 +2416,16 @@ Object.keys(PLAN_CONFIG).forEach(plan => {
 });
 
 function getPlanConfig(plan) {
-  const plans = {
+  const defaults = {
     starter: { ai_generations: 20, claims_limit: 50, features: ["basic"] },
-    growth: { ai_generations: 100, claims_limit: 250, features: ["analytics", "negotiation"] },
-    pro: { ai_generations: 500, claims_limit: 1000, features: ["analytics", "negotiation", "ai_workspace"] },
+    growth: { ai_generations: 100, claims_limit: 250, features: ["analytics","negotiation"] },
+    pro: { ai_generations: 500, claims_limit: 1000, features: ["analytics","negotiation","ai_workspace"] },
     enterprise: { ai_generations: 999999, claims_limit: 999999, features: ["all"] }
   };
-  return plans[String(plan || "starter").toLowerCase()] || plans.starter;
+
+  const key = String(plan || "starter").toLowerCase();
+  const saved = getPlanSettings();
+  return saved[key] || defaults[key] || defaults.starter;
 }
 
 function checkUsageLimits(org_id) {
@@ -2482,16 +2519,36 @@ function renderTrialBanner(org_id) {
   if (!trial.active) return "";
 
   return `
-    <div style="
+    <div id="trialBanner" style="
       background:#f59e0b;
       color:#111;
       padding:10px 16px;
       text-align:center;
       font-weight:700;
+      position:relative;
+      transition:all 0.2s ease;
     ">
       Free Trial: ${trial.daysLeft} day(s) remaining
       <a href="/plans" style="margin-left:10px;text-decoration:underline;">Upgrade Now</a>
+
+      <span onclick="document.getElementById('trialBanner').remove(); localStorage.setItem('hideTrialBanner','1');"
+        style="
+          position:absolute;
+          right:12px;
+          top:8px;
+          cursor:pointer;
+          font-weight:900;
+        ">✕</span>
     </div>
+
+    <script>
+      (function(){
+        if(localStorage.getItem('hideTrialBanner') === '1'){
+          const el = document.getElementById('trialBanner');
+          if(el) el.remove();
+        }
+      })();
+    </script>
   `;
 }
 
@@ -7688,8 +7745,16 @@ const server = http.createServer(async (req, res) => {
           <td>${safeStr(a.type)}</td>
           <td>${safeStr(a.status)}</td>
           <td>${safeStr(a.created_at)}</td>
+          <td>
+            <form method="POST" action="/admin-control-center/toggle">
+              <input type="hidden" name="id" value="${a.id}" />
+              <button class="btn small">
+                ${a.status === "active" ? "Disable" : "Enable"}
+              </button>
+            </form>
+          </td>
         </tr>
-      `).join("") || `<tr><td colspan="4" class="muted">No announcements yet.</td></tr>`;
+      `).join("") || `<tr><td colspan="5" class="muted">No announcements yet.</td></tr>`;
 
       const html = renderPage("Admin Control Center", `
         <h2>Admin Control Center</h2>
@@ -7728,12 +7793,33 @@ const server = http.createServer(async (req, res) => {
             <th>Type</th>
             <th>Status</th>
             <th>Created</th>
+            <th>Actions</th>
           </tr>
           ${rows}
         </table>
       `, navAdmin(), { showChat: false, orgName: "" });
 
       return send(res, 200, html);
+    }
+
+    if (method === "POST" && pathname === "/admin-control-center/toggle") {
+      let body = "";
+      req.on("data", c => body += c);
+      req.on("end", () => {
+        const params = new URLSearchParams(body);
+        const id = params.get("id");
+
+        const list = getAnnouncements().map(a => {
+          if (a.id === id) {
+            a.status = a.status === "active" ? "inactive" : "active";
+          }
+          return a;
+        });
+
+        saveAnnouncements(list);
+        return redirect(res, "/admin-control-center");
+      });
+      return;
     }
 
     if (method === "POST" && pathname === "/admin-control-center/create") {
@@ -7757,6 +7843,121 @@ const server = http.createServer(async (req, res) => {
         return redirect(res, "/admin-control-center");
       });
       return;
+    }
+
+    if (method === "POST" && pathname === "/admin/plan-controls/save") {
+      let body = "";
+      req.on("data", c => body += c);
+      req.on("end", () => {
+        const params = new URLSearchParams(body);
+
+        const settings = {
+          starter: {
+            ai_generations: Number(params.get("starter_ai") || 20),
+            claims_limit: Number(params.get("starter_claims") || 50),
+            features: [
+              params.get("starter_feature_negotiation") ? "negotiation" : null,
+              params.get("starter_feature_ai_workspace") ? "ai_workspace" : null
+            ].filter(Boolean)
+          },
+          growth: {
+            ai_generations: Number(params.get("growth_ai") || 100),
+            claims_limit: Number(params.get("growth_claims") || 250),
+            features: [
+              params.get("growth_feature_negotiation") ? "negotiation" : null,
+              params.get("growth_feature_ai_workspace") ? "ai_workspace" : null
+            ].filter(Boolean)
+          },
+          pro: {
+            ai_generations: Number(params.get("pro_ai") || 500),
+            claims_limit: Number(params.get("pro_claims") || 1000),
+            features: [
+              params.get("pro_feature_negotiation") ? "negotiation" : null,
+              params.get("pro_feature_ai_workspace") ? "ai_workspace" : null
+            ].filter(Boolean)
+          },
+          enterprise: {
+            ai_generations: Number(params.get("enterprise_ai") || 999999),
+            claims_limit: Number(params.get("enterprise_claims") || 999999),
+            features: [
+              params.get("enterprise_feature_negotiation") ? "negotiation" : null,
+              params.get("enterprise_feature_ai_workspace") ? "ai_workspace" : null
+            ].filter(Boolean)
+          }
+        };
+
+        savePlanSettings(settings);
+        return redirect(res, "/admin/plan-controls");
+      });
+      return;
+    }
+
+    if (method === "GET" && pathname === "/admin/plan-controls") {
+      const starterConfig = getPlanConfig("starter");
+      const growthConfig = getPlanConfig("growth");
+      const proConfig = getPlanConfig("pro");
+      const enterpriseConfig = getPlanConfig("enterprise");
+
+      const html = renderPage("Plan Controls", `
+        <h2>Plan Controls</h2>
+
+        <div class="muted">Adjust limits and features per plan</div>
+
+        <form method="POST" action="/admin/plan-controls/save">
+
+          <h3>Starter Plan</h3>
+          <input name="starter_ai" placeholder="AI Limit" value="${Number(starterConfig.ai_generations || 20)}"/>
+          <input name="starter_claims" placeholder="Claims Limit" value="${Number(starterConfig.claims_limit || 50)}"/>
+          <label>
+            <input type="checkbox" name="starter_feature_negotiation" ${starterConfig.features?.includes("negotiation") ? "checked" : ""} />
+            Enable Negotiation
+          </label>
+          <label>
+            <input type="checkbox" name="starter_feature_ai_workspace" ${starterConfig.features?.includes("ai_workspace") ? "checked" : ""} />
+            Enable AI Workspace
+          </label>
+
+          <h3>Growth Plan</h3>
+          <input name="growth_ai" value="${Number(growthConfig.ai_generations || 100)}"/>
+          <input name="growth_claims" value="${Number(growthConfig.claims_limit || 250)}"/>
+          <label>
+            <input type="checkbox" name="growth_feature_negotiation" ${growthConfig.features?.includes("negotiation") ? "checked" : ""} />
+            Enable Negotiation
+          </label>
+          <label>
+            <input type="checkbox" name="growth_feature_ai_workspace" ${growthConfig.features?.includes("ai_workspace") ? "checked" : ""} />
+            Enable AI Workspace
+          </label>
+
+          <h3>Pro Plan</h3>
+          <input name="pro_ai" value="${Number(proConfig.ai_generations || 500)}"/>
+          <input name="pro_claims" value="${Number(proConfig.claims_limit || 1000)}"/>
+          <label>
+            <input type="checkbox" name="pro_feature_negotiation" ${proConfig.features?.includes("negotiation") ? "checked" : ""} />
+            Enable Negotiation
+          </label>
+          <label>
+            <input type="checkbox" name="pro_feature_ai_workspace" ${proConfig.features?.includes("ai_workspace") ? "checked" : ""} />
+            Enable AI Workspace
+          </label>
+
+          <h3>Enterprise Plan</h3>
+          <input name="enterprise_ai" value="${Number(enterpriseConfig.ai_generations || 999999)}"/>
+          <input name="enterprise_claims" value="${Number(enterpriseConfig.claims_limit || 999999)}"/>
+          <label>
+            <input type="checkbox" name="enterprise_feature_negotiation" ${enterpriseConfig.features?.includes("negotiation") ? "checked" : ""} />
+            Enable Negotiation
+          </label>
+          <label>
+            <input type="checkbox" name="enterprise_feature_ai_workspace" ${enterpriseConfig.features?.includes("ai_workspace") ? "checked" : ""} />
+            Enable AI Workspace
+          </label>
+
+          <button class="btn">Save</button>
+        </form>
+      `, navAdmin());
+
+      return send(res, 200, html);
     }
 
     // Reworked admin dashboard
@@ -7844,7 +8045,7 @@ const server = http.createServer(async (req, res) => {
             <h4>Plan Controls</h4>
             <div class="muted small">Adjust plan limits, AI usage, and feature access.</div>
             <div style="margin-top:10px;">
-              <a class="btn secondary" href="/admin-control-center">Configure</a>
+              <a class="btn secondary" href="/admin/plan-controls">Configure</a>
             </div>
           </div>
         </div>
