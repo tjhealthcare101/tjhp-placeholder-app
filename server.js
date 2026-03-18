@@ -367,28 +367,70 @@ function getActiveAnnouncements() {
     .filter(a => a && a.status === "active");
 }
 
-function renderAnnouncementBanner() {
+function renderAnnouncementBanner(org_id, title, isAdmin=false) {
+  if (isAdmin || title === "Login" || title === "Sign In") return "";
+
   const list = getActiveAnnouncements().filter(a => a.display === "banner");
   if (!list.length) return "";
 
   return `
-    <div style="
+    <div id="announcementTicker" style="
       background:#111827;
       color:#fff;
-      padding:10px 16px;
-      text-align:center;
+      overflow:hidden;
+      white-space:nowrap;
+      position:relative;
+      padding:10px 0;
       font-weight:600;
     ">
-      ${list.map(a => `
-        <div>
-          <strong>${safeStr(a.title)}</strong> — ${safeStr(a.message)}
-        </div>
-      `).join("")}
+
+      <div style="
+        display:inline-block;
+        padding-left:100%;
+        animation:tickerScroll 20s linear infinite;
+      ">
+        ${list.map(a => `
+          <span style="margin-right:40px;">
+            <strong>${safeStr(a.title)}</strong> — ${safeStr(a.message)}
+          </span>
+        `).join("")}
+      </div>
+
+      <span onclick="
+        document.getElementById('announcementTicker').remove();
+        localStorage.setItem('hideAnnouncementBanner','1');
+      "
+      style="
+        position:absolute;
+        right:12px;
+        top:6px;
+        cursor:pointer;
+        font-weight:900;
+      ">✕</span>
+
     </div>
+
+    <style>
+      @keyframes tickerScroll {
+        0% { transform: translateX(0%); }
+        100% { transform: translateX(-100%); }
+      }
+    </style>
+
+    <script>
+      (function(){
+        if(localStorage.getItem('hideAnnouncementBanner') === '1'){
+          const el = document.getElementById('announcementTicker');
+          if(el) el.remove();
+        }
+      })();
+    </script>
   `;
 }
 
-function renderAnnouncementPopup() {
+function renderAnnouncementPopup(isAdmin=false, title="") {
+  if (isAdmin || title === "Login" || title === "Sign In") return "";
+
   const list = getActiveAnnouncements().filter(a => a.display === "popup");
   if (!list.length) return "";
 
@@ -499,6 +541,7 @@ textarea{min-height:220px;}
 table{width:100%;border-collapse:collapse;font-size:13px;}
 th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;}
 .center{text-align:center}
+.hidden{display:none;}
 
 /* Tooltip system */
 .tooltip{display:inline-block;cursor:help;color:var(--muted);}
@@ -636,6 +679,7 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
  */
 function renderPage(title, content, navHtml="", opts={}) {
   const orgName = (opts && opts.orgName) ? safeStr(opts.orgName) : "";
+  const isAdminPage = navHtml && navHtml.includes("/admin");
   const showChat = !!(opts && opts.showChat);
   const floatCopilotUsage = CURRENT_SESSION_ORG_ID ? getCopilotUsageSnapshot(CURRENT_SESSION_ORG_ID) : { limitReached:false };
   const prefRaw = String((opts && opts.userTheme) || CURRENT_USER_THEME || "light");
@@ -645,6 +689,7 @@ function renderPage(title, content, navHtml="", opts={}) {
 <script>
   localStorage.removeItem("hideTrialBanner");
   localStorage.removeItem("hideAdminPopup");
+  localStorage.removeItem("hideAnnouncementBanner");
 </script>` : "";
   const chatHtml = showChat ? `
 <div id="aiChat" style="position:fixed;bottom:18px;right:18px;z-index:9999;">
@@ -874,9 +919,9 @@ window.__tjhpSendChat = async function(){
 <style>${css}</style>
 </head>
 <body data-theme="${startTheme}" data-theme-pref="${themePref}">
-  ${(title !== "Sign In" && title !== "Login") ? renderAnnouncementBanner() : ""}
+  ${renderAnnouncementBanner(CURRENT_SESSION_ORG_ID, title, isAdminPage)}
   ${(title !== "Login" && title !== "Sign In") ? renderTrialBanner(CURRENT_SESSION_ORG_ID) : ""}
-  ${(title !== "Sign In" && title !== "Login") ? renderAnnouncementPopup() : ""}
+  ${renderAnnouncementPopup(isAdminPage, title)}
   <div class="wrap">
     <div class="topbar">
       <div class="brand">
@@ -7740,18 +7785,27 @@ const server = http.createServer(async (req, res) => {
       const announcements = getAnnouncements();
 
       const rows = announcements.map(a => `
-        <tr>
-          <td>${safeStr(a.title)}</td>
+        <tr onclick="this.nextElementSibling.classList.toggle('hidden')" style="cursor:pointer;">
+          <td>
+            <strong>${safeStr(a.title)}</strong>
+            <div class="small muted">${safeStr(a.message)}</div>
+          </td>
           <td>${safeStr(a.type)}</td>
           <td>${safeStr(a.status)}</td>
           <td>${safeStr(a.created_at)}</td>
           <td>
-            <form method="POST" action="/admin-control-center/toggle">
+            <form method="POST" action="/admin-control-center/toggle" onclick="event.stopPropagation();">
               <input type="hidden" name="id" value="${a.id}" />
               <button class="btn small">
                 ${a.status === "active" ? "Disable" : "Enable"}
               </button>
             </form>
+          </td>
+        </tr>
+
+        <tr class="hidden">
+          <td colspan="5" style="background:#f9fafb;padding:12px;">
+            ${safeStr(a.message)}
           </td>
         </tr>
       `).join("") || `<tr><td colspan="5" class="muted">No announcements yet.</td></tr>`;
