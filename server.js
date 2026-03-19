@@ -362,6 +362,18 @@ function savePlanSettings(settings) {
   writeJSON(FILES.plan_settings, settings || {});
 }
 
+function collectPlanFeatures(params, prefix) {
+  return [
+    params.get(`${prefix}_feature_negotiation`) ? "negotiation" : null,
+    params.get(`${prefix}_feature_ai_workspace`) ? "ai_workspace" : null,
+    params.get(`${prefix}_feature_copilot`) ? "copilot" : null,
+    params.get(`${prefix}_feature_executive_export`) ? "executive_export" : null,
+    params.get(`${prefix}_feature_payer_intelligence`) ? "payer_intelligence" : null,
+    params.get(`${prefix}_feature_auto_drafts`) ? "auto_drafts" : null
+  ].filter(Boolean);
+}
+
+
 function getActiveAnnouncements() {
   return readJSON(FILES.admin_announcements, [])
     .filter(a => a && a.status === "active");
@@ -2462,15 +2474,34 @@ Object.keys(PLAN_CONFIG).forEach(plan => {
 
 function getPlanConfig(plan) {
   const defaults = {
-    starter: { ai_generations: 20, claims_limit: 50, features: ["basic"] },
-    growth: { ai_generations: 100, claims_limit: 250, features: ["analytics","negotiation"] },
-    pro: { ai_generations: 500, claims_limit: 1000, features: ["analytics","negotiation","ai_workspace"] },
-    enterprise: { ai_generations: 999999, claims_limit: 999999, features: ["all"] }
+    starter: { ai_generations: 20, claims_limit: 50, payment_limits: 10, features: ["basic"] },
+    growth: { ai_generations: 100, claims_limit: 250, payment_limits: 50, features: ["negotiation"] },
+    pro: {
+      ai_generations: 500,
+      claims_limit: 1000,
+      payment_limits: 150,
+      features: [
+        "negotiation",
+        "ai_workspace",
+        "copilot",
+        "executive_export",
+        "payer_intelligence",
+        "auto_drafts"
+      ]
+    },
+    enterprise: { ai_generations: 999999, claims_limit: 999999, payment_limits: 999999, features: ["all"] }
   };
 
   const key = String(plan || "starter").toLowerCase();
   const saved = getPlanSettings();
-  return saved[key] || defaults[key] || defaults.starter;
+  const merged = {
+    ...defaults.starter,
+    ...(defaults[key] || {}),
+    ...(saved[key] || {})
+  };
+  const fallbackFeatures = Array.isArray((defaults[key] || {}).features) ? (defaults[key] || {}).features : defaults.starter.features;
+  merged.features = Array.isArray(saved[key]?.features) ? saved[key].features : fallbackFeatures;
+  return merged;
 }
 
 function checkUsageLimits(org_id) {
@@ -7909,34 +7940,26 @@ const server = http.createServer(async (req, res) => {
           starter: {
             ai_generations: Number(params.get("starter_ai") || 20),
             claims_limit: Number(params.get("starter_claims") || 50),
-            features: [
-              params.get("starter_feature_negotiation") ? "negotiation" : null,
-              params.get("starter_feature_ai_workspace") ? "ai_workspace" : null
-            ].filter(Boolean)
+            payment_limits: Number(params.get("starter_payments") || 10),
+            features: collectPlanFeatures(params, "starter")
           },
           growth: {
             ai_generations: Number(params.get("growth_ai") || 100),
             claims_limit: Number(params.get("growth_claims") || 250),
-            features: [
-              params.get("growth_feature_negotiation") ? "negotiation" : null,
-              params.get("growth_feature_ai_workspace") ? "ai_workspace" : null
-            ].filter(Boolean)
+            payment_limits: Number(params.get("growth_payments") || 50),
+            features: collectPlanFeatures(params, "growth")
           },
           pro: {
             ai_generations: Number(params.get("pro_ai") || 500),
             claims_limit: Number(params.get("pro_claims") || 1000),
-            features: [
-              params.get("pro_feature_negotiation") ? "negotiation" : null,
-              params.get("pro_feature_ai_workspace") ? "ai_workspace" : null
-            ].filter(Boolean)
+            payment_limits: Number(params.get("pro_payments") || 150),
+            features: collectPlanFeatures(params, "pro")
           },
           enterprise: {
             ai_generations: Number(params.get("enterprise_ai") || 999999),
             claims_limit: Number(params.get("enterprise_claims") || 999999),
-            features: [
-              params.get("enterprise_feature_negotiation") ? "negotiation" : null,
-              params.get("enterprise_feature_ai_workspace") ? "ai_workspace" : null
-            ].filter(Boolean)
+            payment_limits: Number(params.get("enterprise_payments") || 999999),
+            features: collectPlanFeatures(params, "enterprise")
           }
         };
 
@@ -7951,61 +7974,62 @@ const server = http.createServer(async (req, res) => {
       const growthConfig = getPlanConfig("growth");
       const proConfig = getPlanConfig("pro");
       const enterpriseConfig = getPlanConfig("enterprise");
+      const renderPlanControls = (planKey, planLabel, config, defaults) => `
+        <section class="card" style="padding:16px;margin:14px 0;display:grid;gap:14px;">
+          <div>
+            <h3 style="margin:0;">${planLabel} Plan</h3>
+            <div class="muted small">Keep the controls simple up front, but powerful under the hood.</div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
+            <div>
+              <label>AI Limit</label>
+              <input name="${planKey}_ai" value="${Number(config.ai_generations || defaults.ai_generations)}" />
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+            <div style="border:1px solid var(--border);border-radius:12px;padding:12px;">
+              <div style="font-weight:900;color:#1d4ed8;margin-bottom:8px;">🟦 AI FEATURES</div>
+              <label style="display:block;margin:8px 0;"><input type="checkbox" name="${planKey}_feature_ai_workspace" ${config.features?.includes("ai_workspace") ? "checked" : ""} /> AI Workspace</label>
+              <label style="display:block;margin:8px 0;"><input type="checkbox" name="${planKey}_feature_auto_drafts" ${config.features?.includes("auto_drafts") ? "checked" : ""} /> Auto Drafts</label>
+            </div>
+
+            <div style="border:1px solid var(--border);border-radius:12px;padding:12px;">
+              <div style="font-weight:900;color:#15803d;margin-bottom:8px;">🟩 ANALYTICS</div>
+              <label style="display:block;margin:8px 0;"><input type="checkbox" name="${planKey}_feature_copilot" ${config.features?.includes("copilot") ? "checked" : ""} /> Enable AI Copilot</label>
+              <label style="display:block;margin:8px 0;"><input type="checkbox" name="${planKey}_feature_payer_intelligence" ${config.features?.includes("payer_intelligence") ? "checked" : ""} /> Enable Payer Intelligence</label>
+              <label style="display:block;margin:8px 0;"><input type="checkbox" name="${planKey}_feature_executive_export" ${config.features?.includes("executive_export") ? "checked" : ""} /> Enable Executive Export</label>
+            </div>
+
+            <div style="border:1px solid var(--border);border-radius:12px;padding:12px;">
+              <div style="font-weight:900;color:#a16207;margin-bottom:8px;">🟨 OPERATIONS</div>
+              <label style="display:block;margin:8px 0;"><input type="checkbox" name="${planKey}_feature_negotiation" ${config.features?.includes("negotiation") ? "checked" : ""} /> Negotiation</label>
+              <div style="display:grid;gap:10px;margin-top:10px;">
+                <div>
+                  <label>Claim Limits</label>
+                  <input name="${planKey}_claims" value="${Number(config.claims_limit || defaults.claims_limit)}" />
+                </div>
+                <div>
+                  <label>Payment Limits</label>
+                  <input name="${planKey}_payments" value="${Number(config.payment_limits || defaults.payment_limits)}" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      `;
 
       const html = renderPage("Plan Controls", `
         <h2>Plan Controls</h2>
 
-        <div class="muted">Adjust limits and features per plan</div>
+        <div class="muted">Adjust limits and feature access by plan.</div>
 
         <form method="POST" action="/admin/plan-controls/save">
-
-          <h3>Starter Plan</h3>
-          <input name="starter_ai" placeholder="AI Limit" value="${Number(starterConfig.ai_generations || 20)}"/>
-          <input name="starter_claims" placeholder="Claims Limit" value="${Number(starterConfig.claims_limit || 50)}"/>
-          <label>
-            <input type="checkbox" name="starter_feature_negotiation" ${starterConfig.features?.includes("negotiation") ? "checked" : ""} />
-            Enable Negotiation
-          </label>
-          <label>
-            <input type="checkbox" name="starter_feature_ai_workspace" ${starterConfig.features?.includes("ai_workspace") ? "checked" : ""} />
-            Enable AI Workspace
-          </label>
-
-          <h3>Growth Plan</h3>
-          <input name="growth_ai" value="${Number(growthConfig.ai_generations || 100)}"/>
-          <input name="growth_claims" value="${Number(growthConfig.claims_limit || 250)}"/>
-          <label>
-            <input type="checkbox" name="growth_feature_negotiation" ${growthConfig.features?.includes("negotiation") ? "checked" : ""} />
-            Enable Negotiation
-          </label>
-          <label>
-            <input type="checkbox" name="growth_feature_ai_workspace" ${growthConfig.features?.includes("ai_workspace") ? "checked" : ""} />
-            Enable AI Workspace
-          </label>
-
-          <h3>Pro Plan</h3>
-          <input name="pro_ai" value="${Number(proConfig.ai_generations || 500)}"/>
-          <input name="pro_claims" value="${Number(proConfig.claims_limit || 1000)}"/>
-          <label>
-            <input type="checkbox" name="pro_feature_negotiation" ${proConfig.features?.includes("negotiation") ? "checked" : ""} />
-            Enable Negotiation
-          </label>
-          <label>
-            <input type="checkbox" name="pro_feature_ai_workspace" ${proConfig.features?.includes("ai_workspace") ? "checked" : ""} />
-            Enable AI Workspace
-          </label>
-
-          <h3>Enterprise Plan</h3>
-          <input name="enterprise_ai" value="${Number(enterpriseConfig.ai_generations || 999999)}"/>
-          <input name="enterprise_claims" value="${Number(enterpriseConfig.claims_limit || 999999)}"/>
-          <label>
-            <input type="checkbox" name="enterprise_feature_negotiation" ${enterpriseConfig.features?.includes("negotiation") ? "checked" : ""} />
-            Enable Negotiation
-          </label>
-          <label>
-            <input type="checkbox" name="enterprise_feature_ai_workspace" ${enterpriseConfig.features?.includes("ai_workspace") ? "checked" : ""} />
-            Enable AI Workspace
-          </label>
+          ${renderPlanControls("starter", "Starter", starterConfig, { ai_generations: 20, claims_limit: 50, payment_limits: 10 })}
+          ${renderPlanControls("growth", "Growth", growthConfig, { ai_generations: 100, claims_limit: 250, payment_limits: 50 })}
+          ${renderPlanControls("pro", "Pro", proConfig, { ai_generations: 500, claims_limit: 1000, payment_limits: 150 })}
+          ${renderPlanControls("enterprise", "Enterprise", enterpriseConfig, { ai_generations: 999999, claims_limit: 999999, payment_limits: 999999 })}
 
           <button class="btn">Save</button>
         </form>
@@ -9407,6 +9431,9 @@ if (method === "GET" && pathname === "/payer-rankings") {
 }
 
 if (method === "GET" && pathname === "/executive-export") {
+  if (!hasFeatureAccess(org.org_id, "executive_export")) {
+    return send(res, 403, renderPage("Executive Export", renderFeatureLocked("Executive Export"), navUser(), {showChat:true, orgName: org.org_name}));
+  }
   const preset = (parsed.query.range || "last30").toLowerCase();
   const customStart = parseDateOnly(parsed.query.start || "");
   const customEnd = parseDateOnly(parsed.query.end || "");
@@ -11619,6 +11646,9 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 // AI COPILOT WORKSPACE
 // ===============================
 if (method === "GET" && pathname === "/ai-copilot") {
+  if (!hasFeatureAccess(org.org_id, "copilot")) {
+    return send(res, 403, renderPage("AI Copilot", renderFeatureLocked("AI Copilot"), navUser(), {showChat:true, orgName: org.org_name}));
+  }
   const workspace_id = String(parsed.query.workspace || "").trim();
 
   let workspace = workspace_id ? getCopilotWorkspace(org.org_id, workspace_id) : null;
@@ -11803,6 +11833,9 @@ if (method === "GET" && pathname === "/ai-copilot") {
 }
 
 if (method === "POST" && pathname === "/ai-copilot/new") {
+  if (!hasFeatureAccess(org.org_id, "copilot")) {
+    return redirect(res, "/ai-copilot");
+  }
   const body = await parseBody(req);
   const params = new URLSearchParams(body);
   const prompt = String(params.get("prompt") || "").trim();
@@ -11818,6 +11851,9 @@ if (method === "POST" && pathname === "/ai-copilot/new") {
 }
 
 if (method === "POST" && pathname === "/ai-copilot/followup") {
+  if (!hasFeatureAccess(org.org_id, "copilot")) {
+    return redirect(res, "/ai-copilot");
+  }
   const body = await parseBody(req);
   const params = new URLSearchParams(body);
   const workspace_id = String(params.get("workspace_id") || "").trim();
@@ -11858,6 +11894,9 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
 }
 
 if (method === "GET" && pathname === "/ai-copilot/export") {
+  if (!hasFeatureAccess(org.org_id, "copilot")) {
+    return send(res, 403, renderPage("AI Copilot", renderFeatureLocked("AI Copilot"), navUser(), {showChat:true, orgName: org.org_name}));
+  }
   const workspace_id = String(parsed.query.workspace_id || "").trim();
   if (!workspace_id) return redirect(res, "/ai-copilot");
 
@@ -19331,6 +19370,9 @@ else if (type === "payers") {
 
   // AI Analyze Payer route
   if (method === "GET" && pathname === "/analyze-payer") {
+    if (!hasFeatureAccess(org.org_id, "payer_intelligence")) {
+      return send(res, 403, renderPage("Payer Intelligence", renderFeatureLocked("Payer Intelligence"), navUser(), {showChat:true, orgName: org.org_name}));
+    }
     const payer = (parsed.query.payer || "").trim();
     const data = computePayerIntelligence(org.org_id, payer, String(parsed.query.preset || "last30"));
     const gradeTone = toneForGrade(data.grade);
