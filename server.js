@@ -927,6 +927,7 @@ window.__tjhpSendChat = async function(){
 
   return `<!doctype html>
 <html><head>
+<meta charset="UTF-8">
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>${safeStr(title)}</title>
@@ -2414,6 +2415,7 @@ function renderLoginPage(contentHtml, pageTitle = "Login | TJ Healthcare Pro") {
   return `
     <html>
     <head>
+      <meta charset="UTF-8">
       <title>${pageTitle}</title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <style>
@@ -7715,6 +7717,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, `
       <html>
       <head>
+        <meta charset="UTF-8">
         <title>TJ Healthcare Pro</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         ${renderPublicStyles()}
@@ -7754,19 +7757,70 @@ const server = http.createServer(async (req, res) => {
           </div>
         </div>
 
-        <div class="section center light">
-          <div class="container">
-            <p style="font-weight:600;">Used by healthcare teams recovering thousands in revenue</p>
+        <div class="section light center">
+          <div class="container" style="max-width:800px;">
+            <h2>You’re losing revenue every single day</h2>
+            <p style="margin-top:15px;">
+              Claims are being denied. Payments are coming in lower than expected.  
+              And most practices don’t even realize how much money is slipping through the cracks.
+            </p>
+
+            <p style="margin-top:15px;font-weight:600;">
+              Every missed appeal = lost revenue you’ll never recover.
+            </p>
+          </div>
+        </div>
+
+        <div class="section center">
+          <div class="container grid-3">
+            <div class="card">
+              <h3>Denied Claims Piling Up</h3>
+              <p>You don’t have time to chase every denial.</p>
+            </div>
+
+            <div class="card">
+              <h3>Underpayments Going Unnoticed</h3>
+              <p>Payers quietly pay less — and it adds up fast.</p>
+            </div>
+
+            <div class="card">
+              <h3>Manual Work Slowing You Down</h3>
+              <p>Your team is overwhelmed and missing opportunities.</p>
+            </div>
           </div>
         </div>
 
         <div class="section light center">
-          <div class="container">
-            <h2>You’re losing revenue every day</h2>
-            <p style="max-width:600px;margin:auto;">
-              Denials, underpayments, and missed opportunities are costing your practice thousands.
-              TJ Healthcare Pro detects and recovers it automatically.
+          <div class="container" style="max-width:800px;">
+            <h2>What if you could recover that revenue automatically?</h2>
+            <p style="margin-top:15px;">
+              TJ Healthcare Pro uses AI to scan your data, identify revenue loss,
+              and generate the exact actions needed to recover it.
             </p>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="container grid-4">
+            <div class="card">
+              <h3>Recover More Revenue</h3>
+              <p>Stop leaving money on the table.</p>
+            </div>
+
+            <div class="card">
+              <h3>Save Hours of Work</h3>
+              <p>Automate what used to take days.</p>
+            </div>
+
+            <div class="card">
+              <h3>Know Where You’re Losing Money</h3>
+              <p>Get clear, actionable insights instantly.</p>
+            </div>
+
+            <div class="card">
+              <h3>Act Faster</h3>
+              <p>Respond to issues before they grow.</p>
+            </div>
           </div>
         </div>
 
@@ -7789,8 +7843,11 @@ const server = http.createServer(async (req, res) => {
         </div>
 
         <div class="section center">
-          <div class="container">
-            <h2>Start recovering revenue today</h2>
+          <div class="container" style="max-width:700px;">
+            <h2>Stop losing revenue. Start recovering it today.</h2>
+            <p style="margin:15px 0;">
+              Join practices using AI to identify and recover hidden revenue.
+            </p>
             <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
           </div>
         </div>
@@ -7805,6 +7862,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, `
       <html>
       <head>
+        <meta charset="UTF-8">
         <title>See How It Works | TJ Healthcare Pro</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         ${renderPublicStyles()}
@@ -7851,6 +7909,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, `
       <html>
       <head>
+        <meta charset="UTF-8">
         <title>Pricing | TJ Healthcare Pro</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         ${renderPublicStyles()}
@@ -7870,9 +7929,9 @@ const server = http.createServer(async (req, res) => {
                   <h3>${p.price}/mo</h3>
                   <p>AI tools, claims analysis, revenue insights.</p>
                   <ul style="text-align:left;margin:15px 0;color:#555;">
-                    <li>✔ AI claim analysis</li>
-                    <li>✔ Revenue insights</li>
-                    <li>✔ Action recommendations</li>
+                    <li>&#10003; AI claim analysis</li>
+                    <li>&#10003; Revenue insights</li>
+                    <li>&#10003; Action recommendations</li>
                   </ul>
                   <p style="font-size:12px;color:#777;">Cancel anytime</p>
                   <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
@@ -7892,6 +7951,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, `
       <html>
       <head>
+        <meta charset="UTF-8">
         <title>About | TJ Healthcare Pro</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         ${renderPublicStyles()}
@@ -8769,6 +8829,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, `
         <html>
         <head>
+          <meta charset="UTF-8">
           <title>Analytics | Admin</title>
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <style>
@@ -16415,7 +16476,7 @@ if (method === "POST" && pathname === "/draft-template") {
 
     if (fmt === "doc") {
       // Serve a simple Word-compatible HTML document
-      const htmlDoc = `<!doctype html><html><head><meta charset="utf-8"/><title>Appeal Packet</title></head>
+      const htmlDoc = `<!doctype html><html><head><meta charset="UTF-8"><meta charset="utf-8"/><title>Appeal Packet</title></head>
         <body><pre style="white-space:pre-wrap;font-family:Arial, sans-serif;">${safeStr(packet)}</pre></body></html>`;
       res.writeHead(200, {
         "Content-Type": "application/msword",
