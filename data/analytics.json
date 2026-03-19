@@ -1,0 +1,11 @@
+{
+  "leads": 0,
+  "signups": 0,
+  "revenue": 0,
+  "subscriptions": {
+    "starter": 0,
+    "growth": 0,
+    "pro": 0,
+    "enterprise": 0
+  }
+}

@@ -104,6 +104,7 @@ const FILES = {
   agent_tasks: path.join(DATA_DIR, "agent_tasks.json"),
   admin_announcements: path.join(DATA_DIR, "admin_announcements.json"),
   plan_settings: path.join(DATA_DIR, "plan_settings.json"),
+  analytics: path.join(DATA_DIR, "analytics.json"),
 };
 
 // Directory for storing uploaded template files
@@ -345,6 +346,7 @@ ensureFile(FILES.workspace_outcomes, []);
 ensureFile(FILES.agent_tasks, []);
 ensureFile(FILES.admin_announcements, []);
 ensureFile(FILES.plan_settings, {});
+ensureFile(FILES.analytics, { leads: 0, signups: 0, revenue: 0, subscriptions: { starter: 0, growth: 0, pro: 0, enterprise: 0 } });
 
 function getAnnouncements() {
   return readJSON(FILES.admin_announcements, []);
@@ -2178,6 +2180,185 @@ function buildCopilotResponse({
 }
 
 
+function renderPublicStyles() {
+  return `
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    color: #111;
+    background: #ffffff;
+  }
+
+  .container {
+    max-width: 1100px;
+    margin: auto;
+    padding: 0 20px;
+  }
+
+  .section {
+    padding: 80px 0;
+  }
+
+  .light {
+    background: linear-gradient(to bottom, #f8fafc, #f1f5f9);
+  }
+
+  h1 {
+    font-size: 48px;
+    line-height: 1.2;
+    margin-bottom: 20px;
+  }
+
+  h2 {
+    font-size: 32px;
+    margin-bottom: 16px;
+  }
+
+  p {
+    color: #555;
+    font-size: 16px;
+  }
+
+  .btn-primary {
+    background: #2563eb;
+    color: white;
+    padding: 12px 20px;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: 600;
+    display: inline-block;
+  }
+
+  .btn-primary:hover {
+    opacity: 0.9;
+  }
+
+  .btn-secondary {
+    border: 1px solid #ddd;
+    padding: 12px 20px;
+    border-radius: 8px;
+    text-decoration: none;
+    color: #111;
+    display: inline-block;
+  }
+
+  .btn-secondary:hover {
+    background: #f5f5f5;
+  }
+
+  .card {
+    border: 1px solid #eee;
+    border-radius: 12px;
+    padding: 24px;
+    background: white;
+    transition: all 0.2s ease;
+  }
+
+  .card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+  }
+
+  .grid-4 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px;
+  }
+
+  .grid-3 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 20px;
+  }
+
+  .center {
+    text-align: center;
+  }
+
+  @media (max-width: 800px) {
+    h1 { font-size: 38px; }
+  }
+
+  .mobile-sticky-cta {
+    display: none;
+  }
+
+  @media (max-width: 768px) {
+    .section {
+      padding: 50px 0;
+    }
+
+    h1 {
+      font-size: 28px;
+    }
+
+    h2 {
+      font-size: 24px;
+    }
+
+    p {
+      font-size: 15px;
+    }
+
+    .container {
+      padding: 0 16px;
+    }
+
+    body {
+      padding-bottom: 84px;
+    }
+
+    .mobile-sticky-cta {
+      display: flex;
+    }
+  }
+
+  @media (max-width: 640px) {
+    h1 { font-size: 32px; }
+  }
+</style>`;
+}
+
+function renderPublicNavbar() {
+  return `
+    <div style="border-bottom:1px solid #eee;">
+      <div class="container" style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;gap:16px;flex-wrap:wrap;">
+        <div style="font-weight:800;font-size:20px;">TJ Healthcare Pro</div>
+
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:14px;justify-content:flex-end;">
+          <a href="/">Home</a>
+          <a href="/how-it-works">See How It Works</a>
+          <a href="/pricing">Plans</a>
+          <a href="/about">About</a>
+          <a href="/login">Login</a>
+          <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderStickyMobileCta() {
+  return `
+    <div class="mobile-sticky-cta" style="
+      position:fixed;
+      bottom:0;
+      left:0;
+      right:0;
+      background:white;
+      border-top:1px solid #eee;
+      padding:10px;
+      justify-content:center;
+      z-index:999;
+    ">
+      <a href="/login" class="btn-primary" style="width:90%;text-align:center;">
+        Start Free Trial — No Risk
+      </a>
+    </div>
+  `;
+}
+
 function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
@@ -2196,13 +2377,68 @@ function navUser() {
   `;
 }
 function navAdmin() {
-  return `<a href="/admin/dashboard">Admin</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/analytics">Analytics</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
 
 // ===== Models helpers =====
 function getOrg(org_id) {
   return readJSON(FILES.orgs, []).find(o => o.org_id === org_id);
 }
+
+function getAnalyticsStore() {
+  return readJSON(FILES.analytics, {
+    leads: 0,
+    signups: 0,
+    revenue: 0,
+    subscriptions: {
+      starter: 0,
+      growth: 0,
+      pro: 0,
+      enterprise: 0
+    }
+  });
+}
+function saveAnalyticsStore(store) {
+  const subscriptions = {
+    starter: Number(store?.subscriptions?.starter || 0),
+    growth: Number(store?.subscriptions?.growth || 0),
+    pro: Number(store?.subscriptions?.pro || 0),
+    enterprise: Number(store?.subscriptions?.enterprise || 0),
+  };
+  writeJSON(FILES.analytics, {
+    leads: Number(store?.leads || 0),
+    signups: Number(store?.signups || 0),
+    revenue: Number(store?.revenue || 0),
+    subscriptions,
+  });
+}
+function trackAnalyticsLead() {
+  const analytics = getAnalyticsStore();
+  analytics.leads = Number(analytics.leads || 0) + 1;
+  saveAnalyticsStore(analytics);
+}
+function trackAnalyticsSignup() {
+  const analytics = getAnalyticsStore();
+  analytics.signups = Number(analytics.signups || 0) + 1;
+  saveAnalyticsStore(analytics);
+}
+function trackAnalyticsSubscription(plan) {
+  const analytics = getAnalyticsStore();
+  const key = String(plan || "").toLowerCase();
+  const priceMap = {
+    starter: 249,
+    growth: 599,
+    pro: 1200,
+    enterprise: 2000
+  };
+  if (!analytics.subscriptions || typeof analytics.subscriptions !== "object") {
+    analytics.subscriptions = { starter: 0, growth: 0, pro: 0, enterprise: 0 };
+  }
+  analytics.subscriptions[key] = Number(analytics.subscriptions[key] || 0) + 1;
+  analytics.revenue = Number(analytics.revenue || 0) + Number(priceMap[key] || 0);
+  saveAnalyticsStore(analytics);
+}
+
 function orgSettingsDefaults(org_id) {
   return {
     org_id,
@@ -2815,6 +3051,21 @@ function applyPlanToSubscription(sub, planName) {
   sub.ai_chat_limit = cfg.ai_chat_limit;
   sub.status = "active";
   sub.updated_at = nowISO();
+
+  const users = readJSON(FILES.users, []);
+  let changed = false;
+  users.forEach(user => {
+    if (user.org_id === sub.org_id) {
+      user.plan = key;
+      user.subscription_status = "active";
+      if (typeof user.stripe_customer_id !== "string") user.stripe_customer_id = "";
+      if (typeof user.stripe_subscription_id !== "string") user.stripe_subscription_id = "";
+      changed = true;
+    }
+  });
+  if (changed) writeJSON(FILES.users, users);
+
+  trackAnalyticsSubscription(key);
 }
 
 // ===== Account status =====
@@ -7388,6 +7639,212 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (method === "GET" && pathname === "/") {
+    return send(res, 200, `
+      <html>
+      <head>
+        <title>TJ Healthcare Pro</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        ${renderPublicStyles()}
+      </head>
+      <body>
+        ${renderPublicNavbar()}
+
+        <div class="section center">
+          <div class="container">
+            <div style="max-width:700px;margin:auto;">
+              <h1>Recover Lost Revenue Automatically with AI</h1>
+              <p style="font-size:18px;">
+                Identify denied claims and underpayments instantly — and recover revenue without adding staff.
+              </p>
+            </div>
+
+            <div style="margin-top:20px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+              <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
+              <a href="/how-it-works" class="btn-secondary" style="margin-left:10px;">Watch Demo</a>
+            </div>
+
+            <p style="margin-top:20px;font-size:14px;color:#777;">
+              Helping practices recover revenue faster with AI-driven insights
+            </p>
+
+            <div style="
+              margin-top:40px;
+              border-radius:16px;
+              padding:60px;
+              background: linear-gradient(135deg, #2563eb, #1e40af);
+              color:white;
+              box-shadow:0 20px 60px rgba(0,0,0,0.2);
+            ">
+              <h3 style="margin-bottom:10px;">Live Revenue Intelligence Dashboard</h3>
+              <p style="color:#e0e7ff;">AI is actively identifying lost revenue opportunities</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="section center light">
+          <div class="container">
+            <p style="font-weight:600;">Used by healthcare teams recovering thousands in revenue</p>
+          </div>
+        </div>
+
+        <div class="section light center">
+          <div class="container">
+            <h2>You’re losing revenue every day</h2>
+            <p style="max-width:600px;margin:auto;">
+              Denials, underpayments, and missed opportunities are costing your practice thousands.
+              TJ Healthcare Pro detects and recovers it automatically.
+            </p>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="container grid-4">
+            <div class="card"><h3>📄 Automatic Appeal Packets</h3><p>Generate complete appeal packets in seconds.</p></div>
+            <div class="card"><h3>💰 Underpayment Detection</h3><p>Automatically detect underpaid claims.</p></div>
+            <div class="card"><h3>🧠 AI Revenue Intelligence</h3><p>Get real-time insights into revenue loss.</p></div>
+            <div class="card"><h3>📊 Payer Insights</h3><p>Identify high-risk payers and trends.</p></div>
+          </div>
+        </div>
+
+        <div class="section light center">
+          <div class="container">
+            <h2>Trusted by growing practices</h2>
+            <p style="color:#666;">
+              Built for real healthcare workflows — designed to reduce denials and increase collections.
+            </p>
+          </div>
+        </div>
+
+        <div class="section center">
+          <div class="container">
+            <h2>Start recovering revenue today</h2>
+            <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
+          </div>
+        </div>
+
+        ${renderStickyMobileCta()}
+      </body>
+      </html>
+    `);
+  }
+
+  if (method === "GET" && pathname === "/how-it-works") {
+    return send(res, 200, `
+      <html>
+      <head>
+        <title>See How It Works | TJ Healthcare Pro</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        ${renderPublicStyles()}
+      </head>
+      <body>
+        ${renderPublicNavbar()}
+
+        <div class="section center">
+          <div class="container">
+            <h1>See How It Works</h1>
+
+            <div style="margin:40px 0;">
+              <div style="height:360px;background:#eee;border-radius:12px;display:flex;align-items:center;justify-content:center;">
+                Demo Video
+              </div>
+            </div>
+
+            <div class="grid-3">
+              <div class="card"><h3>1. Upload Data</h3><p>Upload billing files in seconds.</p></div>
+              <div class="card"><h3>2. AI Analysis</h3><p>We identify revenue loss instantly.</p></div>
+              <div class="card"><h3>3. Recover Revenue</h3><p>Get actions and appeal packets.</p></div>
+            </div>
+
+            <div style="margin-top:40px;">
+              <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
+            </div>
+          </div>
+        </div>
+
+        ${renderStickyMobileCta()}
+      </body>
+      </html>
+    `);
+  }
+
+  if (method === "GET" && pathname === "/pricing") {
+    const plans = [
+      {name:"Starter",price:"$249"},
+      {name:"Growth",price:"$599",highlight:true},
+      {name:"Pro",price:"$1200"},
+      {name:"Enterprise",price:"$2000"}
+    ];
+
+    return send(res, 200, `
+      <html>
+      <head>
+        <title>Pricing | TJ Healthcare Pro</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        ${renderPublicStyles()}
+      </head>
+      <body>
+        ${renderPublicNavbar()}
+
+        <div class="section center">
+          <div class="container">
+            <h1>Plans & Pricing</h1>
+
+            <div class="grid-4" style="margin-top:40px;">
+              ${plans.map(p => `
+                <div class="card" style="${p.highlight ? 'border:2px solid #2563eb;' : ''}">
+                  ${p.highlight ? '<div style="color:#2563eb;font-weight:700;">Most Popular</div>' : ''}
+                  <h2>${p.name}</h2>
+                  <h3>${p.price}/mo</h3>
+                  <p>AI tools, claims analysis, revenue insights.</p>
+                  <ul style="text-align:left;margin:15px 0;color:#555;">
+                    <li>✔ AI claim analysis</li>
+                    <li>✔ Revenue insights</li>
+                    <li>✔ Action recommendations</li>
+                  </ul>
+                  <p style="font-size:12px;color:#777;">Cancel anytime</p>
+                  <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        </div>
+
+        ${renderStickyMobileCta()}
+      </body>
+      </html>
+    `);
+  }
+
+  if (method === "GET" && pathname === "/about") {
+    return send(res, 200, `
+      <html>
+      <head>
+        <title>About | TJ Healthcare Pro</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        ${renderPublicStyles()}
+      </head>
+      <body>
+        ${renderPublicNavbar()}
+
+        <div class="section">
+          <div class="container">
+            <h1>About TJ Healthcare Pro</h1>
+            <p>
+              TJ Healthcare Pro is an AI-powered revenue intelligence platform built to help small medical practices recover lost revenue.
+            </p>
+            <p>
+              We simplify billing complexity, reduce administrative burden, and empower practices with actionable insights.
+            </p>
+          </div>
+        </div>
+
+        ${renderStickyMobileCta()}
+      </body>
+      </html>
+    `);
+  }
+
   // auth
   const sess = getAuth(req);
   CURRENT_SESSION_ORG_ID = (sess && sess.org_id) ? String(sess.org_id) : "";
@@ -7516,10 +7973,15 @@ const server = http.createServer(async (req, res) => {
       org_id,
       email,
       password_hash: bcrypt.hashSync(p1, 10),
+      plan: "",
+      stripe_customer_id: "",
+      stripe_subscription_id: "",
+      subscription_status: "inactive",
       created_at: nowISO(),
       last_login_at: nowISO(),
     });
     writeJSON(FILES.users, users);
+    trackAnalyticsSignup();
 
     ensurePilot(org_id);
     getUsage(org_id);
@@ -7532,6 +7994,14 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/login") {
+    const analytics = readJSON(FILES.analytics, {
+      leads: 0,
+      signups: 0,
+      revenue: 0,
+      subscriptions: { starter: 0, growth: 0, pro: 0, enterprise: 0 }
+    });
+    analytics.leads = (analytics.leads || 0) + 1;
+    writeJSON(FILES.analytics, analytics);
     const html = renderPage("Login", `
       <h2>Sign In</h2>
       <p class="muted">Access your organization’s claim review and analytics workspace.</p>
@@ -7804,6 +8274,11 @@ const server = http.createServer(async (req, res) => {
 
     writeJSON(FILES.subscriptions, subs);
     return send(res, 200, "OK", "text/plain");
+  }
+
+
+  if (method === "POST" && pathname === "/webhook/stripe") {
+    return send(res, 200, "ok", "text/plain");
   }
 
 
@@ -8150,6 +8625,91 @@ const server = http.createServer(async (req, res) => {
         </table>
       `, navAdmin());
       return send(res, 200, html);
+    }
+
+    if (method === "GET" && pathname === "/admin/analytics") {
+      const users = readJSON(FILES.users, []);
+      const analytics = readJSON(FILES.analytics, {
+        leads: 0,
+        signups: 0,
+        revenue: 0,
+        subscriptions: {
+          starter: 0,
+          growth: 0,
+          pro: 0,
+          enterprise: 0
+        }
+      });
+
+      const totalUsers = users.length;
+      const totalLeads = analytics.leads || 0;
+      const totalRevenue = analytics.revenue || 0;
+      const plans = analytics.subscriptions || {};
+      const activeSubscriptions = Object.values(plans).reduce((a,b) => a + b, 0);
+
+      return send(res, 200, `
+        <html>
+        <head>
+          <title>Analytics | Admin</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { font-family: sans-serif; margin:0; background:#f8fafc; }
+            .container { max-width:1100px; margin:auto; padding:20px; }
+            .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:20px; }
+            .card {
+              background:white;
+              padding:20px;
+              border-radius:12px;
+              box-shadow:0 5px 20px rgba(0,0,0,0.05);
+            }
+            h1 { margin-bottom:20px; }
+            h2 { margin-top:40px; }
+            .metric { font-size:28px; font-weight:700; }
+            .label { color:#666; font-size:14px; }
+          </style>
+        </head>
+        <body>
+          ${navAdmin()}
+
+          <div class="container">
+            <h1>Analytics Dashboard</h1>
+
+            <div class="grid">
+              <div class="card">
+                <div class="metric">${totalLeads}</div>
+                <div class="label">Total Leads</div>
+              </div>
+
+              <div class="card">
+                <div class="metric">${totalUsers}</div>
+                <div class="label">Total Users</div>
+              </div>
+
+              <div class="card">
+                <div class="metric">$${totalRevenue}</div>
+                <div class="label">Total Revenue</div>
+              </div>
+
+              <div class="card">
+                <div class="metric">${activeSubscriptions}</div>
+                <div class="label">Active Subscriptions</div>
+              </div>
+            </div>
+
+            <h2>Plan Breakdown</h2>
+
+            <div class="grid">
+              ${Object.entries(plans).map(([k,v]) => `
+                <div class="card">
+                  <div class="metric">${v}</div>
+                  <div class="label">${k}</div>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        </body>
+        </html>
+      `);
     }
 
     // Enhanced Organisations page
