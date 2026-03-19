@@ -2362,6 +2362,78 @@ function renderStickyMobileCta() {
 function navPublic() {
   return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
 }
+
+function renderLoginPage(contentHtml, pageTitle = "Login | TJ Healthcare Pro") {
+  const topBar = `
+    <div style="padding:20px;display:flex;justify-content:space-between;align-items:center;">
+      <a href="/" style="text-decoration:none;font-size:20px;color:#111;">
+        <span style="font-weight:800;">TJ</span> Healthcare Pro
+      </a>
+      <a href="/" style="font-size:14px;color:#555;text-decoration:none;">
+        ← Back to Home
+      </a>
+    </div>
+  `;
+
+  const layout = `
+    <div style="
+      min-height:100vh;
+      display:flex;
+      flex-direction:column;
+      background:#f8fafc;
+    ">
+
+      ${topBar}
+
+      <div style="
+        flex:1;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        padding:20px;
+      ">
+
+        <div style="
+          width:100%;
+          max-width:420px;
+          background:white;
+          padding:30px;
+          border-radius:12px;
+          box-shadow:0 10px 40px rgba(0,0,0,0.08);
+        ">
+
+          <!-- LOGIN CONTENT HERE -->
+
+        </div>
+
+      </div>
+
+    </div>
+  `;
+
+  return `
+    <html>
+    <head>
+      <title>${pageTitle}</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        input:focus {
+          outline: none;
+          border: 1px solid #2563eb !important;
+          box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
+        }
+
+        button:hover {
+          background: #1e40af !important;
+        }
+      </style>
+    </head>
+    <body>
+      ${layout.replace("<!-- LOGIN CONTENT HERE -->", contentHtml)}
+    </body>
+    </html>
+  `;
+}
 function navUser() {
   return `
     <a href="/dashboard">Revenue Overview</a>
@@ -8002,24 +8074,68 @@ const server = http.createServer(async (req, res) => {
     });
     analytics.leads = (analytics.leads || 0) + 1;
     writeJSON(FILES.analytics, analytics);
-    const html = renderPage("Login", `
-      <h2>Sign In</h2>
-      <p class="muted">Access your organization’s claim review and analytics workspace.</p>
+
+    const formHtml = `
+      <h2 style="margin-bottom:10px;">Sign In</h2>
+      <p style="color:#666;font-size:14px;margin-bottom:20px;">
+        Access your revenue intelligence dashboard
+      </p>
+
       <form method="POST" action="/login">
         <label>Email</label>
-        <input name="email" type="email" required />
+        <input name="email" type="email" required style="
+          width:100%;
+          padding:10px;
+          margin:8px 0 16px;
+          border:1px solid #ddd;
+          border-radius:6px;
+          box-sizing:border-box;
+        " />
+
         <label>Password</label>
-        <input name="password" type="password" required />
-        <div class="btnRow">
-          <button class="btn" type="submit">Sign In</button>
-          <a class="btn secondary" href="/signup">Create Account</a>
-        </div>
+        <input name="password" type="password" required style="
+          width:100%;
+          padding:10px;
+          margin:8px 0 16px;
+          border:1px solid #ddd;
+          border-radius:6px;
+          box-sizing:border-box;
+        " />
+
+        <button type="submit" style="
+          width:100%;
+          padding:12px;
+          background:#2563eb;
+          color:white;
+          border:none;
+          border-radius:8px;
+          font-weight:600;
+          margin-top:10px;
+          cursor:pointer;
+          transition:background 0.2s ease;
+        ">
+          Sign In
+        </button>
       </form>
-      <div class="btnRow">
-        <a class="btn secondary" href="/forgot-password">Forgot password?</a>
+
+      <div style="margin-top:20px;text-align:center;">
+        <a href="/signup" style="font-size:14px;color:#2563eb;text-decoration:none;">
+          Create Account
+        </a>
       </div>
-    `, navPublic());
-    return send(res, 200, html);
+
+      <div style="margin-top:10px;text-align:center;">
+        <a href="#" style="font-size:13px;color:#777;text-decoration:none;">
+          Forgot password?
+        </a>
+      </div>
+
+      <p style="margin-top:20px;font-size:12px;color:#777;text-align:center;">
+        Secure login • HIPAA-conscious design
+      </p>
+    `;
+
+    return send(res, 200, renderLoginPage(formHtml));
   }
 
   if (method === "POST" && pathname === "/login") {
@@ -8030,12 +8146,15 @@ const server = http.createServer(async (req, res) => {
 
     const user = getUserByEmail(email);
     if (!user || !bcrypt.compareSync(pass, user.password_hash)) {
-      const html = renderPage("Login", `
-        <h2>Sign In</h2>
-        <p class="error">The email or password you entered is incorrect.</p>
-        <div class="btnRow"><a class="btn secondary" href="/login">Try again</a></div>
-      `, navPublic());
-      return send(res, 401, html);
+      const errorHtml = `
+        <h2 style="margin-bottom:10px;">Sign In</h2>
+        <p style="color:red;font-size:14px;margin-bottom:20px;">
+          Incorrect email or password
+        </p>
+        <a href="/login" style="color:#2563eb;">Try again</a>
+      `;
+
+      return send(res, 401, renderLoginPage(errorHtml, "Login Error"));
     }
 
     const org = getOrg(user.org_id);
