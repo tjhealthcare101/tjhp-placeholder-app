@@ -7727,21 +7727,24 @@ const server = http.createServer(async (req, res) => {
 
         <div class="section center">
           <div class="container">
-            <div style="max-width:700px;margin:auto;">
-              <h1>Recover Lost Revenue Automatically with AI</h1>
+            <div style="max-width:760px;margin:auto;">
+              <h1>Recover Lost Insurance Revenue Automatically</h1>
               <p style="font-size:18px;">
-                Identify denied claims and underpayments instantly — and recover revenue without adding staff.
+                TJ Healthcare Pro uses AI to identify denied claims, underpayments, and revenue at risk -
+                then generates appeal and negotiation packets so your practice can recover lost payments.
+              </p>
+              <p style="margin-top:10px;font-size:14px;color:#666;">
+                No EHR integration required - works with exported billing files
+              </p>
+              <p style="margin-top:20px;font-size:14px;color:#777;">
+                Helping practices recover revenue faster with AI-driven insights
               </p>
             </div>
 
             <div style="margin-top:20px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-              <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
-              <a href="/how-it-works" class="btn-secondary" style="margin-left:10px;">Watch Demo</a>
+              <a href="/login" class="btn-primary">Start Free Trial - No Risk</a>
+              <a href="/how-it-works" class="btn-secondary">Watch Demo</a>
             </div>
-
-            <p style="margin-top:20px;font-size:14px;color:#777;">
-              Helping practices recover revenue faster with AI-driven insights
-            </p>
 
             <div style="
               margin-top:40px;
@@ -7759,43 +7762,35 @@ const server = http.createServer(async (req, res) => {
 
         <div class="section light center">
           <div class="container" style="max-width:800px;">
-            <h2>You’re losing revenue every single day</h2>
+            <h2>You're losing revenue every day - whether you realize it or not</h2>
             <p style="margin-top:15px;">
-              Claims are being denied. Payments are coming in lower than expected.  
-              And most practices don’t even realize how much money is slipping through the cracks.
-            </p>
-
-            <p style="margin-top:15px;font-weight:600;">
-              Every missed appeal = lost revenue you’ll never recover.
+              Insurance denials and underpayments happen every day - but most teams don't have the time or tools to catch them.
             </p>
           </div>
         </div>
 
         <div class="section center">
-          <div class="container grid-3">
+          <div class="container grid-4">
             <div class="card">
-              <h3>Denied Claims Piling Up</h3>
-              <p>You don’t have time to chase every denial.</p>
+              <h3>Denied Claims Go Unappealed</h3>
             </div>
-
             <div class="card">
-              <h3>Underpayments Going Unnoticed</h3>
-              <p>Payers quietly pay less — and it adds up fast.</p>
+              <h3>Insurance Underpayments Go Unnoticed</h3>
             </div>
-
             <div class="card">
-              <h3>Manual Work Slowing You Down</h3>
-              <p>Your team is overwhelmed and missing opportunities.</p>
+              <h3>Staff Don't Have Time</h3>
+            </div>
+            <div class="card">
+              <h3>Revenue Leakage Adds Up</h3>
             </div>
           </div>
         </div>
 
         <div class="section light center">
           <div class="container" style="max-width:800px;">
-            <h2>What if you could recover that revenue automatically?</h2>
+            <h2>AI identifies and recovers revenue automatically</h2>
             <p style="margin-top:15px;">
-              TJ Healthcare Pro uses AI to scan your data, identify revenue loss,
-              and generate the exact actions needed to recover it.
+              TJ Healthcare Pro analyzes your billing data to detect revenue loss and generates the exact appeal and negotiation packets needed to recover it.
             </p>
           </div>
         </div>
@@ -7813,42 +7808,68 @@ const server = http.createServer(async (req, res) => {
             </div>
 
             <div class="card">
-              <h3>Know Where You’re Losing Money</h3>
+              <h3>Know Where You're Losing Money</h3>
               <p>Get clear, actionable insights instantly.</p>
             </div>
 
             <div class="card">
               <h3>Act Faster</h3>
-              <p>Respond to issues before they grow.</p>
+              <p>Fix revenue issues before they grow.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="section center">
+          <div class="container" style="max-width:960px;">
+            <h2>How It Works</h2>
+            <div class="grid-3" style="margin-top:20px;">
+              <div class="card">
+                <h3>1. Upload Billing Data</h3>
+                <p>Upload exported billing or claims data from your system.</p>
+              </div>
+              <div class="card">
+                <h3>2. AI Detects Revenue Loss</h3>
+                <p>Identify denied claims, underpayments, and revenue at risk.</p>
+              </div>
+              <div class="card">
+                <h3>3. Generate Recovery Packets</h3>
+                <p>Automatically create appeal and negotiation packets.</p>
+              </div>
             </div>
           </div>
         </div>
 
         <div class="section">
           <div class="container grid-4">
-            <div class="card"><h3>📄 Automatic Appeal Packets</h3><p>Generate complete appeal packets in seconds.</p></div>
-            <div class="card"><h3>💰 Underpayment Detection</h3><p>Automatically detect underpaid claims.</p></div>
-            <div class="card"><h3>🧠 AI Revenue Intelligence</h3><p>Get real-time insights into revenue loss.</p></div>
-            <div class="card"><h3>📊 Payer Insights</h3><p>Identify high-risk payers and trends.</p></div>
+            <div class="card"><h3>Automatic Appeal Packets</h3><p>Generate structured appeal packets instantly.</p></div>
+            <div class="card"><h3>Underpayment Negotiation Packets</h3><p>Identify and recover underpaid claims.</p></div>
+            <div class="card"><h3>Revenue Recovery Intelligence</h3><p>See exactly where you're losing money.</p></div>
+            <div class="card"><h3>Payer Insights</h3><p>Understand payer behavior and trends.</p></div>
           </div>
         </div>
 
         <div class="section light center">
-          <div class="container">
-            <h2>Trusted by growing practices</h2>
-            <p style="color:#666;">
-              Built for real healthcare workflows — designed to reduce denials and increase collections.
-            </p>
+          <div class="container" style="max-width:960px;">
+            <h2>Built for secure, practical adoption</h2>
+            <div class="grid-4" style="margin-top:20px;">
+              <div class="card"><h3>No EHR Integration Required</h3><p>Start with exported billing data instead of a full system connection.</p></div>
+              <div class="card"><h3>Works with Exported Billing Files</h3><p>Use the files your team already pulls from current workflows.</p></div>
+              <div class="card"><h3>Secure and HIPAA-aware Infrastructure</h3><p>Designed for healthcare data handling and operational safeguards.</p></div>
+              <div class="card"><h3>Built Specifically for Medical Practices</h3><p>Focused on revenue recovery workflows used by real provider teams.</p></div>
+            </div>
           </div>
         </div>
 
         <div class="section center">
           <div class="container" style="max-width:700px;">
-            <h2>Stop losing revenue. Start recovering it today.</h2>
+            <h2>Stop losing revenue. Start recovering it.</h2>
             <p style="margin:15px 0;">
-              Join practices using AI to identify and recover hidden revenue.
+              Join practices using AI to identify and recover hidden insurance revenue.
             </p>
-            <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
+            <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+              <a href="/login" class="btn-primary">Start Free Trial - No Risk</a>
+              <a href="/how-it-works" class="btn-secondary">Watch Demo</a>
+            </div>
           </div>
         </div>
 
