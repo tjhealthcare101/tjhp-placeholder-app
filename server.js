@@ -8196,6 +8196,10 @@ const server = http.createServer(async (req, res) => {
               quantity: 1
             }
           ],
+          metadata: {
+            plan: plan
+          },
+          customer_email: (sess && sess.email) ? sess.email : undefined,
           success_url: "https://app.tjhealthpro.com/success",
           cancel_url: "https://app.tjhealthpro.com/pricing"
         });
@@ -8864,6 +8868,64 @@ const server = http.createServer(async (req, res) => {
 
     writeJSON(FILES.subscriptions, subs);
     return send(res, 200, "OK", "text/plain");
+  }
+
+
+  if (method === "POST" && pathname === "/stripe-webhook") {
+    let body = "";
+
+    req.on("data", chunk => body += chunk);
+
+    req.on("end", async () => {
+      const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+      const sig = req.headers["stripe-signature"];
+
+      let event;
+
+      try {
+        event = stripe.webhooks.constructEvent(
+          body,
+          sig,
+          process.env.STRIPE_WEBHOOK_SECRET
+        );
+      } catch (err) {
+        console.error("WEBHOOK SIGNATURE ERROR:", err.message);
+        return send(res, 400, "Webhook Error");
+      }
+
+      // ✅ HANDLE SUCCESSFUL CHECKOUT
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object;
+
+        const email = session.customer_details?.email || session.customer_email;
+        const plan = (session.metadata?.plan || "starter").toLowerCase();
+
+        console.log("PAYMENT SUCCESS:", email, plan);
+
+        const users = readJSON(FILES.users, []);
+        const user = users.find(
+          u => (u.email || "").toLowerCase() === (email || "").toLowerCase()
+        );
+
+        if (user) {
+          const sub = ensureSubscriptionForOrg(user.org_id);
+
+          // 🔥 Save Stripe IDs for billing portal later
+          sub.stripe_customer_id = session.customer;
+          sub.stripe_subscription_id = session.subscription;
+
+          applyPlanToSubscription(sub, plan);
+
+          console.log("✅ PLAN ACTIVATED:", plan);
+        } else {
+          console.warn("⚠️ USER NOT FOUND FOR EMAIL:", email);
+        }
+      }
+
+      return send(res, 200, JSON.stringify({ received: true }), "application/json");
+    });
+
+    return;
   }
 
 
