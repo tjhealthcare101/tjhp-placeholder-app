@@ -8161,10 +8161,18 @@ const server = http.createServer(async (req, res) => {
     let body = "";
     req.on("data", chunk => body += chunk);
     req.on("end", async () => {
-      const { plan } = JSON.parse(body || "{}");
-
       try {
-        const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+        const { plan } = JSON.parse(body || "{}");
+
+        console.log("Creating checkout session for plan:", plan);
+
+        const stripeKey = process.env.STRIPE_SECRET_KEY;
+        if (!stripeKey) {
+          console.error("Missing STRIPE_SECRET_KEY");
+          return send(res, 500, JSON.stringify({ error: "Missing Stripe key" }), "application/json");
+        }
+
+        const stripe = require("stripe")(stripeKey);
 
         const priceMap = {
           starter: "price_1TCtm5LpgIqLdJKsHVUiixiT",
@@ -8174,8 +8182,11 @@ const server = http.createServer(async (req, res) => {
         };
 
         if (!priceMap[plan]) {
+          console.error("Invalid plan:", plan);
           return send(res, 400, JSON.stringify({ error: "Invalid plan" }), "application/json");
         }
+
+        console.log("Using price ID:", priceMap[plan]);
 
         const session = await stripe.checkout.sessions.create({
           mode: "subscription",
@@ -8189,10 +8200,12 @@ const server = http.createServer(async (req, res) => {
           cancel_url: "https://app.tjhealthpro.com/pricing"
         });
 
+        console.log("Stripe session created:", session.id);
+
         return send(res, 200, JSON.stringify({ url: session.url }), "application/json");
       } catch (err) {
-        console.error("STRIPE ERROR:", err);
-        return send(res, 500, JSON.stringify({ error: "Checkout failed" }), "application/json");
+        console.error("STRIPE FULL ERROR:", err);
+        return send(res, 500, JSON.stringify({ error: err.message || "Checkout failed" }), "application/json");
       }
     });
     return;
