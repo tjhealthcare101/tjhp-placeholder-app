@@ -8455,7 +8455,7 @@ const server = http.createServer(async (req, res) => {
   </div>
 
   <div style="margin-top:15px;text-align:center;">
-    <a href="/admin/login" style="font-size:12px;color:#999;text-decoration:none;">
+    <a href="/admin/login" style="font-size:11px;color:#aaa;text-decoration:none;">
       Owner access
     </a>
   </div>
@@ -8590,8 +8590,14 @@ const server = http.createServer(async (req, res) => {
       </div>
 
       <div style="margin-top:10px;text-align:center;">
-        <a href="#" style="font-size:13px;color:#777;text-decoration:none;">
+        <a href="/forgot-password" style="font-size:13px;color:#777;text-decoration:none;">
           Forgot password?
+        </a>
+      </div>
+
+      <div style="margin-top:15px;text-align:center;">
+        <a href="/admin/login" style="font-size:11px;color:#aaa;text-decoration:none;">
+          Owner access
         </a>
       </div>
 
