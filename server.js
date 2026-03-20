@@ -8073,10 +8073,10 @@ const server = http.createServer(async (req, res) => {
                     </div>
 
                     <div class="pricing-card-bottom">
-                      <a href="/login" class="btn-primary pricing-primary-btn">
+                      <a href="/checkout?plan=${p.name.toLowerCase()}" class="btn-primary pricing-primary-btn">
                         Start Now
                       </a>
-                      <a href="/login" class="pricing-secondary-link">
+                      <a href="/checkout?plan=${p.name.toLowerCase()}" class="pricing-secondary-link">
                         Start free trial
                       </a>
                       <p class="pricing-trust">
@@ -8091,6 +8091,161 @@ const server = http.createServer(async (req, res) => {
         </div>
 
         ${renderStickyMobileCta()}
+      </body>
+      </html>
+    `);
+  }
+
+  if (method === "GET" && pathname === "/checkout") {
+    const plan = String(parsed.query.plan || "starter").toLowerCase();
+
+    return send(res, 200, `
+      <html>
+      <head>
+        <title>Checkout | TJ Healthcare Pro</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        ${renderPublicStyles()}
+      </head>
+      <body>
+        ${renderPublicNavbar()}
+
+        <div class="section center">
+          <div class="container" style="max-width:500px;">
+            <h1>Complete Your Subscription</h1>
+
+            <p style="margin:10px 0;">
+              You selected the <strong>${plan}</strong> plan.
+            </p>
+
+            <div style="
+              margin-top:20px;
+              padding:20px;
+              border:1px solid #eee;
+              border-radius:12px;
+              background:white;
+            ">
+              <button onclick="startCheckout('${plan}')" class="btn-primary" style="width:100%;">
+                Proceed to Secure Payment
+              </button>
+
+              <p style="font-size:12px;color:#777;margin-top:10px;">
+                Secure payment powered by Stripe
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <script>
+          async function startCheckout(plan) {
+            const res = await fetch("/create-checkout-session", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ plan })
+            });
+
+            const data = await res.json();
+            if (!res.ok || !data.url) {
+              alert(data.error || "Unable to start checkout right now.");
+              return;
+            }
+            window.location.href = data.url;
+          }
+        </script>
+
+      </body>
+      </html>
+    `);
+  }
+
+  if (method === "POST" && pathname === "/create-checkout-session") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", async () => {
+      const { plan } = JSON.parse(body || "{}");
+
+      try {
+        const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
+        const priceMap = {
+          starter: "price_1TCtm5LpgIqLdJKsHVUiixiT",
+          growth: "price_1TCtmyLpgIqLdJKsTdEYSkAr",
+          pro: "price_1TCtnXLpgIqLdJKsS6yNBZuq",
+          enterprise: "price_1TCto2LpgIqLdJKs5XFblcS1"
+        };
+
+        if (!priceMap[plan]) {
+          return send(res, 400, JSON.stringify({ error: "Invalid plan" }), "application/json");
+        }
+
+        const session = await stripe.checkout.sessions.create({
+          mode: "subscription",
+          line_items: [
+            {
+              price: priceMap[plan],
+              quantity: 1
+            }
+          ],
+          success_url: "https://app.tjhealthpro.com/success",
+          cancel_url: "https://app.tjhealthpro.com/pricing"
+        });
+
+        return send(res, 200, JSON.stringify({ url: session.url }), "application/json");
+      } catch (err) {
+        console.error("STRIPE ERROR:", err);
+        return send(res, 500, JSON.stringify({ error: "Checkout failed" }), "application/json");
+      }
+    });
+    return;
+  }
+
+  if (method === "GET" && pathname === "/success") {
+    return send(res, 200, `
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Success | TJ Healthcare Pro</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        ${renderPublicStyles()}
+      </head>
+      <body>
+        ${renderPublicNavbar()}
+
+        <div class="section center">
+          <div class="container" style="max-width:600px;">
+            
+            <div style="
+              background:white;
+              padding:40px;
+              border-radius:16px;
+              box-shadow:0 10px 40px rgba(0,0,0,0.08);
+            ">
+              
+              <h1 style="margin-bottom:10px;">🎉 You're All Set!</h1>
+
+              <p style="margin:15px 0;color:#555;">
+                Your subscription has been activated successfully.
+              </p>
+
+              <p style="margin:15px 0;color:#555;">
+                You can now start identifying denied claims, underpayments, 
+                and recovering lost revenue with AI.
+              </p>
+
+              <div style="margin-top:25px;">
+                <a href="/login" class="btn-primary" style="width:100%;text-align:center;">
+                  Go to Dashboard
+                </a>
+              </div>
+
+              <p style="margin-top:15px;font-size:12px;color:#777;">
+                Need help getting started? You'll be guided after login.
+              </p>
+
+            </div>
+
+          </div>
+        </div>
+
       </body>
       </html>
     `);
