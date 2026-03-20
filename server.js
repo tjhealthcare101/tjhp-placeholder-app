@@ -2202,7 +2202,16 @@ function renderPublicStyles() {
   }
 
   .card {
-    min-height: 320px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 360px;
+
+    border: 1px solid #eee;
+    border-radius: 12px;
+    padding: 24px;
+    background: white;
+    transition: all 0.2s ease;
   }
 
   .light {
@@ -2252,17 +2261,18 @@ function renderPublicStyles() {
     background: #f5f5f5;
   }
 
-  .card {
-    border: 1px solid #eee;
-    border-radius: 12px;
-    padding: 24px;
-    background: white;
-    transition: all 0.2s ease;
-  }
-
   .card:hover {
     transform: translateY(-4px);
     box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+  }
+
+  .card h2,
+  .card h3 {
+    text-align: center;
+  }
+
+  .card p {
+    text-align: center;
   }
 
   .grid-4 {
@@ -7972,31 +7982,44 @@ const server = http.createServer(async (req, res) => {
 
                 return `
                   <div class="card" style="${p.highlight ? 'border:2px solid #2563eb;' : ''}">
-                    ${p.highlight ? '<div style="color:#2563eb;font-weight:700;">Most Popular</div>' : ''}
-                    <h2>${p.name}</h2>
-                    <h3>${p.price}/mo</h3>
-                    <p style="color:#666;font-size:14px;margin-bottom:10px;">
-                      ${
-                        p.name === "Starter" ? "Best for small practices" :
-                        p.name === "Growth" ? "Best for growing teams" :
-                        p.name === "Pro" ? "Advanced analytics & scale" :
-                        "Unlimited access & enterprise workflows"
-                      }
-                    </p>
-                    <div style="margin:15px 0;text-align:left;font-size:14px;">
-                      <p><strong>AI Packets:</strong> ${packets}</p>
-                      <p><strong>Claims Analyzed:</strong> ${claims}</p>
-                      <p style="margin-top:10px;color:#666;">Includes:</p>
-                      <ul style="margin:5px 0 0 15px;">
-                        <li>Denial detection</li>
-                        <li>Underpayment analysis</li>
-                        <li>Revenue insights</li>
-                      </ul>
+                    <div>
+                      ${p.highlight ? '<div style="background:#2563eb;color:white;padding:4px 10px;border-radius:6px;display:inline-block;font-size:12px;margin-bottom:10px;">Most Popular</div>' : ''}
+                      <h2>${p.name}</h2>
+                      <h3>${p.price}/mo</h3>
+                      <p style="color:#666;font-size:14px;margin-bottom:10px;">
+                        ${
+                          p.name === "Starter" ? "Best for small practices" :
+                          p.name === "Growth" ? "Best for growing teams" :
+                          p.name === "Pro" ? "Advanced analytics & scale" :
+                          "Unlimited access & enterprise workflows"
+                        }
+                      </p>
+                      <div style="margin:20px 0;text-align:left;font-size:14px;line-height:1.6;">
+                        <div style="margin-bottom:8px;">
+                          &#10003; <strong>${packets}</strong> AI Packets / month
+                        </div>
+                        <div style="margin-bottom:8px;">
+                          &#10003; <strong>${claims}</strong> Claims analyzed
+                        </div>
+                        <hr style="margin:15px 0;border:none;border-top:1px solid #eee;">
+                        <div style="margin-top:12px;color:#666;">
+                          Includes:
+                        </div>
+                        <div style="margin-left:10px;">
+                          <div>&#10003; Denial detection</div>
+                          <div>&#10003; Underpayment analysis</div>
+                          <div>&#10003; Revenue insights</div>
+                        </div>
+                      </div>
                     </div>
-                    <p style="font-size:12px;color:#777;">Cancel anytime</p>
-                    <a href="/login" class="btn-primary" style="display:block;margin-top:10px;">
-                      Start Free Trial - No Risk
-                    </a>
+                    <div>
+                      <a href="/login" class="btn-primary" style="display:block;margin-top:20px;width:100%;text-align:center;">
+                        Start Free Trial - No Credit Card Required
+                      </a>
+                      <p style="font-size:12px;color:#777;margin-top:8px;">
+                        No commitment • Cancel anytime
+                      </p>
+                    </div>
                   </div>
                 `;
               }).join("")}
