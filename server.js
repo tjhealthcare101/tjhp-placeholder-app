@@ -2201,6 +2201,10 @@ function renderPublicStyles() {
     padding: 80px 0;
   }
 
+  .card {
+    min-height: 320px;
+  }
+
   .light {
     background: linear-gradient(to bottom, #f8fafc, #f1f5f9);
   }
@@ -2275,6 +2279,12 @@ function renderPublicStyles() {
 
   .center {
     text-align: center;
+  }
+
+  @media (max-width: 900px) {
+    .section .container {
+      grid-template-columns: 1fr !important;
+    }
   }
 
   @media (max-width: 800px) {
@@ -7733,38 +7743,41 @@ const server = http.createServer(async (req, res) => {
       <body>
         ${renderPublicNavbar()}
 
-        <div class="section center">
-          <div class="container">
-            <div style="max-width:760px;margin:auto;">
+        <div class="section">
+          <div class="container" style="display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center;">
+            <div>
               <h1>Recover Lost Insurance Revenue Automatically</h1>
-              <p style="font-size:18px;">
-                TJ Healthcare Pro uses AI to identify denied claims, underpayments, and revenue at risk -
-                then generates appeal and negotiation packets so your practice can recover lost payments.
+
+              <p style="font-size:18px;margin-top:10px;">
+                Identify denied claims, underpayments, and revenue at risk -
+                then generate appeal and negotiation packets instantly.
               </p>
-              <p style="margin-top:10px;font-size:14px;color:#666;">
+
+              <p style="margin-top:10px;color:#666;">
                 No EHR integration required - works with exported billing files
               </p>
-              <p style="margin-top:20px;font-size:14px;color:#777;">
+
+              <div style="margin-top:20px;">
+                <a href="/login" class="btn-primary">Start Free Trial - No Risk</a>
+                <a href="/how-it-works" class="btn-secondary" style="margin-left:10px;">Watch Demo</a>
+              </div>
+
+              <p style="margin-top:15px;font-size:13px;color:#777;">
                 Helping practices recover revenue faster with AI-driven insights
               </p>
             </div>
 
-            <div style="margin-top:20px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-              <a href="/login" class="btn-primary">Start Free Trial - No Risk</a>
-              <a href="/how-it-works" class="btn-secondary">Watch Demo</a>
-            </div>
-
-            <div style="margin-top:40px;text-align:center;">
-              <img 
-                src="https://images.unsplash.com/photo-1588776814546-ec7eafc7c7c5?auto=format&fit=crop&w=1200&q=80"
+            <div style="position:relative;">
+              <img
+                src="https://images.unsplash.com/photo-1588776814546-ec7eafc7c7c5?auto=format&fit=crop&w=900&q=80"
                 alt="Healthcare billing and revenue recovery"
-                style="
-                  width:100%;
-                  max-width:900px;
-                  border-radius:16px;
-                  box-shadow:0 20px 60px rgba(0,0,0,0.15);
-                "
+                style="width:100%;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.15);"
               />
+
+              <div style="position:absolute;bottom:20px;left:20px;background:white;padding:12px 16px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.2);font-size:14px;">
+                <strong>$4,320</strong><br/>
+                Revenue identified
+              </div>
             </div>
           </div>
         </div>
@@ -7953,23 +7966,40 @@ const server = http.createServer(async (req, res) => {
             <h1>Plans & Pricing</h1>
 
             <div class="grid-4" style="margin-top:40px;">
-              ${plans.map(p => `
-                <div class="card" style="${p.highlight ? 'border:2px solid #2563eb;' : ''}">
-                  ${p.highlight ? '<div style="color:#2563eb;font-weight:700;">Most Popular</div>' : ''}
-                  <h2>${p.name}</h2>
-                  <h3>${p.price}/mo</h3>
-                  <p>AI tools, claims analysis, revenue insights.</p>
-                  <ul style="text-align:left;margin:15px 0;color:#555;">
-                    <li>&#10003; AI claim analysis</li>
-                    <li>&#10003; Revenue insights</li>
-                    <li>&#10003; Action recommendations</li>
-                    <li>&#10003; AI packets: ${p.ai_packets}</li>
-                    <li>&#10003; Claims analyzed: ${p.claims_limit}</li>
-                  </ul>
-                  <p style="font-size:12px;color:#777;">Cancel anytime</p>
-                  <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
-                </div>
-              `).join("")}
+              ${plans.map(p => {
+                const packets = p.ai_packets === 999999 ? "Unlimited" : p.ai_packets;
+                const claims = p.claims_limit === 999999 ? "Unlimited" : p.claims_limit;
+
+                return `
+                  <div class="card" style="${p.highlight ? 'border:2px solid #2563eb;' : ''}">
+                    ${p.highlight ? '<div style="color:#2563eb;font-weight:700;">Most Popular</div>' : ''}
+                    <h2>${p.name}</h2>
+                    <h3>${p.price}/mo</h3>
+                    <p style="color:#666;font-size:14px;margin-bottom:10px;">
+                      ${
+                        p.name === "Starter" ? "Best for small practices" :
+                        p.name === "Growth" ? "Best for growing teams" :
+                        p.name === "Pro" ? "Advanced analytics & scale" :
+                        "Unlimited access & enterprise workflows"
+                      }
+                    </p>
+                    <div style="margin:15px 0;text-align:left;font-size:14px;">
+                      <p><strong>AI Packets:</strong> ${packets}</p>
+                      <p><strong>Claims Analyzed:</strong> ${claims}</p>
+                      <p style="margin-top:10px;color:#666;">Includes:</p>
+                      <ul style="margin:5px 0 0 15px;">
+                        <li>Denial detection</li>
+                        <li>Underpayment analysis</li>
+                        <li>Revenue insights</li>
+                      </ul>
+                    </div>
+                    <p style="font-size:12px;color:#777;">Cancel anytime</p>
+                    <a href="/login" class="btn-primary" style="display:block;margin-top:10px;">
+                      Start Free Trial - No Risk
+                    </a>
+                  </div>
+                `;
+              }).join("")}
             </div>
           </div>
         </div>
