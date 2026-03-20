@@ -1,0 +1,6 @@
+{
+  "starter": { "price": 249, "ai_packets": 20, "claims_limit": 50 },
+  "growth": { "price": 599, "ai_packets": 100, "claims_limit": 250 },
+  "pro": { "price": 1200, "ai_packets": 500, "claims_limit": 1000 },
+  "enterprise": { "price": 2000, "ai_packets": 999999, "claims_limit": 999999 }
+}

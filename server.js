@@ -2766,19 +2766,27 @@ function auditLog(entry) {
 
 // ===== Plans (Pricing + Limits) =====
 // Pricing (for partner summary / UI display): Starter $249, Growth $599, Pro $1200, Enterprise $2000
-const PLAN_CONFIG = {
-  starter:   { price_monthly: 249, ai_chat_limit: 50,  copilot_limit: 50,  case_credits_per_month: 50,  payment_tracking_credits_per_month: 10 },
-  growth:    { price_monthly: 599, ai_chat_limit: 150, copilot_limit: 150, case_credits_per_month: 150, payment_tracking_credits_per_month: 50 },
-  pro:       { price_monthly: 1200, ai_chat_limit: 400, copilot_limit: 400, case_credits_per_month: 400, payment_tracking_credits_per_month: 150 },
-  enterprise:{ price_monthly: 2000, ai_chat_limit: 999999, copilot_limit: 999999, case_credits_per_month: 999999, payment_tracking_credits_per_month: 999999 },
+function getPlanConfigData() {
+  return readJSON("./data/plans.json", {});
+}
+
+function savePlanConfigData(data) {
+  writeJSON("./data/plans.json", data || {});
+}
+
+const PLAN_RUNTIME_DEFAULTS = {
+  starter: { ai_chat_limit: 50, copilot_limit: 50, case_credits_per_month: 50, payment_tracking_credits_per_month: 10 },
+  growth: { ai_chat_limit: 150, copilot_limit: 150, case_credits_per_month: 150, payment_tracking_credits_per_month: 50 },
+  pro: { ai_chat_limit: 400, copilot_limit: 400, case_credits_per_month: 400, payment_tracking_credits_per_month: 150 },
+  enterprise: { ai_chat_limit: 999999, copilot_limit: 999999, case_credits_per_month: 999999, payment_tracking_credits_per_month: 999999 },
 };
 
-if (!PLAN_CONFIG.pro) {
-  console.error("PLAN_CONFIG not defined before Copilot module.");
+if (!PLAN_RUNTIME_DEFAULTS.pro) {
+  console.error("PLAN_RUNTIME_DEFAULTS not defined before Copilot module.");
 }
-Object.keys(PLAN_CONFIG).forEach(plan => {
-  if (!PLAN_CONFIG[plan].copilot_limit) {
-    PLAN_CONFIG[plan].copilot_limit = 50;
+Object.keys(PLAN_RUNTIME_DEFAULTS).forEach(plan => {
+  if (!PLAN_RUNTIME_DEFAULTS[plan].copilot_limit) {
+    PLAN_RUNTIME_DEFAULTS[plan].copilot_limit = 50;
   }
 });
 
@@ -2948,7 +2956,7 @@ function getAIChatLimit(org_id) {
   const sub = getSub(org_id);
   if (sub && sub.status === "active") {
     const plan = (sub.plan || "starter").toLowerCase();
-    return (PLAN_CONFIG[plan]?.ai_chat_limit) ?? 50;
+    return (PLAN_RUNTIME_DEFAULTS[plan]?.ai_chat_limit) ?? 50;
   }
   // Pilot = 10 total questions for the 14-day trial
   const pilot = getPilot(org_id) || ensurePilot(org_id);
@@ -2960,7 +2968,7 @@ function getCopilotLimit(org_id) {
   const sub = getSub(org_id);
   if (sub && sub.status === "active") {
     const plan = (sub.plan || "starter").toLowerCase();
-    return (PLAN_CONFIG[plan]?.copilot_limit) ?? 50;
+    return (PLAN_RUNTIME_DEFAULTS[plan]?.copilot_limit) ?? 50;
   }
   const pilot = getPilot(org_id) || ensurePilot(org_id);
   if (pilot && pilot.status === "active") return 10;
@@ -3118,7 +3126,7 @@ function ensureSubscriptionForOrg(org_id) {
 
 function applyPlanToSubscription(sub, planName) {
   const key = (planName || "").toLowerCase();
-  const cfg = PLAN_CONFIG[key] || PLAN_CONFIG.starter;
+  const cfg = PLAN_RUNTIME_DEFAULTS[key] || PLAN_RUNTIME_DEFAULTS.starter;
   sub.plan = key;
   sub.case_credits_per_month = cfg.case_credits_per_month;
   sub.payment_tracking_credits_per_month = cfg.payment_tracking_credits_per_month;
@@ -7746,16 +7754,17 @@ const server = http.createServer(async (req, res) => {
               <a href="/how-it-works" class="btn-secondary">Watch Demo</a>
             </div>
 
-            <div style="
-              margin-top:40px;
-              border-radius:16px;
-              padding:60px;
-              background: linear-gradient(135deg, #2563eb, #1e40af);
-              color:white;
-              box-shadow:0 20px 60px rgba(0,0,0,0.2);
-            ">
-              <h3 style="margin-bottom:10px;">Live Revenue Intelligence Dashboard</h3>
-              <p style="color:#e0e7ff;">AI is actively identifying lost revenue opportunities</p>
+            <div style="margin-top:40px;text-align:center;">
+              <img 
+                src="https://images.unsplash.com/photo-1588776814546-ec7eafc7c7c5?auto=format&fit=crop&w=1200&q=80"
+                alt="Healthcare billing and revenue recovery"
+                style="
+                  width:100%;
+                  max-width:900px;
+                  border-radius:16px;
+                  box-shadow:0 20px 60px rgba(0,0,0,0.15);
+                "
+              />
             </div>
           </div>
         </div>
@@ -7920,12 +7929,13 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/pricing") {
-    const plans = [
-      {name:"Starter",price:"$249"},
-      {name:"Growth",price:"$599",highlight:true},
-      {name:"Pro",price:"$1200"},
-      {name:"Enterprise",price:"$2000"}
-    ];
+    const plans = Object.entries(getPlanConfigData()).map(([key, val]) => ({
+      name: key.charAt(0).toUpperCase() + key.slice(1),
+      price: `$${val.price}`,
+      ai_packets: val.ai_packets,
+      claims_limit: val.claims_limit,
+      highlight: key === "growth"
+    }));
 
     return send(res, 200, `
       <html>
@@ -7953,6 +7963,8 @@ const server = http.createServer(async (req, res) => {
                     <li>&#10003; AI claim analysis</li>
                     <li>&#10003; Revenue insights</li>
                     <li>&#10003; Action recommendations</li>
+                    <li>&#10003; AI packets: ${p.ai_packets}</li>
+                    <li>&#10003; Claims analyzed: ${p.claims_limit}</li>
                   </ul>
                   <p style="font-size:12px;color:#777;">Cancel anytime</p>
                   <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
@@ -8605,6 +8617,28 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (method === "POST" && pathname === "/admin/update-plan") {
+      let body = "";
+      req.on("data", c => body += c);
+      req.on("end", () => {
+        const params = new URLSearchParams(body);
+        const current = getPlanConfigData();
+        const next = { ...current };
+        ["starter", "growth", "pro", "enterprise"].forEach(planKey => {
+          const prev = current[planKey] || {};
+          next[planKey] = {
+            ...prev,
+            price: Number(params.get(`${planKey}_price`) || prev.price || 0),
+            ai_packets: Number(params.get(`${planKey}_ai_packets`) || prev.ai_packets || 0),
+            claims_limit: Number(params.get(`${planKey}_claims_limit`) || prev.claims_limit || 0),
+          };
+        });
+        savePlanConfigData(next);
+        return redirect(res, "/admin/plan-controls");
+      });
+      return;
+    }
+
     if (method === "POST" && pathname === "/admin/plan-controls/save") {
       let body = "";
       req.on("data", c => body += c);
@@ -8649,6 +8683,7 @@ const server = http.createServer(async (req, res) => {
       const growthConfig = getPlanConfig("growth");
       const proConfig = getPlanConfig("pro");
       const enterpriseConfig = getPlanConfig("enterprise");
+      const publicPlans = getPlanConfigData();
       const renderPlanControls = (planKey, planLabel, config, defaults) => `
         <section class="card" style="padding:16px;margin:14px 0;display:grid;gap:14px;">
           <div>
@@ -8698,7 +8733,7 @@ const server = http.createServer(async (req, res) => {
       const html = renderPage("Plan Controls", `
         <h2>Plan Controls</h2>
 
-        <div class="muted">Adjust limits and feature access by plan.</div>
+        <div class="muted">Adjust limits, feature access, and public pricing by plan.</div>
 
         <form method="POST" action="/admin/plan-controls/save">
           ${renderPlanControls("starter", "Starter", starterConfig, { ai_generations: 20, claims_limit: 50, payment_limits: 10 })}
@@ -8706,7 +8741,33 @@ const server = http.createServer(async (req, res) => {
           ${renderPlanControls("pro", "Pro", proConfig, { ai_generations: 500, claims_limit: 1000, payment_limits: 150 })}
           ${renderPlanControls("enterprise", "Enterprise", enterpriseConfig, { ai_generations: 999999, claims_limit: 999999, payment_limits: 999999 })}
 
-          <button class="btn">Save</button>
+          <button class="btn">Save Internal Limits</button>
+        </form>
+
+        <div class="hr"></div>
+        <h3>Public Pricing Config</h3>
+        <div class="muted">This updates <code>data/plans.json</code> and controls the pricing page display.</div>
+        <form method="POST" action="/admin/update-plan" style="display:grid;gap:14px;margin-top:14px;">
+          ${Object.entries(publicPlans).map(([planKey, plan]) => `
+            <section class="card" style="padding:16px;display:grid;gap:12px;">
+              <div style="font-weight:800;">${planKey.charAt(0).toUpperCase() + planKey.slice(1)}</div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+                <div>
+                  <label>Price</label>
+                  <input name="${planKey}_price" value="${Number(plan.price || 0)}" />
+                </div>
+                <div>
+                  <label>AI Packets</label>
+                  <input name="${planKey}_ai_packets" value="${Number(plan.ai_packets || 0)}" />
+                </div>
+                <div>
+                  <label>Claims Limit</label>
+                  <input name="${planKey}_claims_limit" value="${Number(plan.claims_limit || 0)}" />
+                </div>
+              </div>
+            </section>
+          `).join("")}
+          <button class="btn">Save Public Pricing</button>
         </form>
       `, navAdmin());
 
