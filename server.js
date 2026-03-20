@@ -2393,6 +2393,15 @@ function renderPublicStyles() {
     }
   }
 
+  #companyMenu a {
+    text-decoration:none;
+    font-size:14px;
+  }
+
+  #companyMenu a:hover {
+    color:#2563eb;
+  }
+
   @media (max-width: 640px) {
     h1 { font-size: 32px; }
   }
@@ -2409,7 +2418,64 @@ function renderPublicNavbar() {
           <a href="/">Home</a>
           <a href="/how-it-works">See How It Works</a>
           <a href="/pricing">Plans</a>
-          <a href="/about">About</a>
+          <div style="position:relative;">
+            <span style="cursor:pointer;" onmouseenter="showCompanyMenu()" onmouseleave="hideCompanyMenu()">
+              Company
+            </span>
+
+            <div id="companyMenu" style="
+              display:none;
+              position:absolute;
+              top:40px;
+              left:0;
+              background:white;
+              border-radius:16px;
+              padding:30px;
+              width:560px;
+              box-shadow:0 30px 80px rgba(0,0,0,0.12);
+              z-index:999;
+            " onmouseenter="showCompanyMenu()" onmouseleave="hideCompanyMenu()">
+
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:30px;">
+
+                <div>
+                  <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">About</div>
+                  <a href="/about" style="display:block;margin-bottom:8px;color:#111;">About TJ Healthcare Pro</a>
+                  <a href="#" style="display:block;color:#111;">Why TJ Healthcare Pro</a>
+                </div>
+
+                <div>
+                  <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">Join Us</div>
+                  <a href="#" style="display:block;margin-bottom:8px;color:#111;">Careers</a>
+                  <a href="#" style="display:block;color:#111;">Culture</a>
+                </div>
+
+                <div>
+                  <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">Contact</div>
+                  <a href="#" style="display:block;margin-bottom:8px;color:#111;">Contact Us</a>
+                  <a href="#" style="display:block;color:#111;">Support</a>
+                </div>
+
+              </div>
+            </div>
+
+            <script>
+            let menuTimeout;
+
+            function showCompanyMenu(){
+              clearTimeout(menuTimeout);
+              const el = document.getElementById("companyMenu");
+              if(el) el.style.display = "block";
+            }
+
+            function hideCompanyMenu(){
+              menuTimeout = setTimeout(() => {
+                const el = document.getElementById("companyMenu");
+                if(el) el.style.display = "none";
+              }, 150);
+            }
+            </script>
+          </div>
           <a href="/login">Login</a>
           <a href="/signup" class="btn-primary">Start Free Trial — No Credit Card Required</a>
         </div>
