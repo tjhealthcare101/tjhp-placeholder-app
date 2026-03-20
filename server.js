@@ -2411,7 +2411,7 @@ function renderPublicNavbar() {
           <a href="/pricing">Plans</a>
           <a href="/about">About</a>
           <a href="/login">Login</a>
-          <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
+          <a href="/signup" class="btn-primary">Start Free Trial — No Credit Card Required</a>
         </div>
       </div>
     </div>
@@ -2431,8 +2431,8 @@ function renderStickyMobileCta() {
       justify-content:center;
       z-index:999;
     ">
-      <a href="/login" class="btn-primary" style="width:90%;text-align:center;">
-        Start Free Trial — No Risk
+      <a href="/signup" class="btn-primary" style="width:90%;text-align:center;">
+        Start Free Trial — No Credit Card Required
       </a>
     </div>
   `;
@@ -8076,7 +8076,7 @@ const server = http.createServer(async (req, res) => {
                       <a href="/checkout?plan=${p.name.toLowerCase()}" class="btn-primary pricing-primary-btn">
                         Start Now
                       </a>
-                      <a href="/checkout?plan=${p.name.toLowerCase()}" class="pricing-secondary-link">
+                      <a href="/signup" class="pricing-secondary-link">
                         Start free trial
                       </a>
                       <p class="pricing-trust">
