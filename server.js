@@ -2529,7 +2529,7 @@ function navUser() {
   `;
 }
 function navAdmin() {
-  return `<a href="/admin/dashboard">Admin</a><a href="/admin/analytics">Analytics</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/analytics">Analytics</a><a href="/admin/revenue">Revenue</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
 
 // ===== Models helpers =====
@@ -8216,12 +8216,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/success") {
+    const sess = getAuth(req);
+    let plan = "Starter";
+
+    if (sess && sess.org_id) {
+      const sub = getSub(sess.org_id);
+      if (sub && sub.plan) {
+        plan = String(sub.plan).toUpperCase();
+      }
+    }
+
     return send(res, 200, `
       <html>
       <head>
         <meta charset="UTF-8">
         <title>Success | TJ Healthcare Pro</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         ${renderPublicStyles()}
       </head>
       <body>
@@ -8229,43 +8238,44 @@ const server = http.createServer(async (req, res) => {
 
         <div class="section center">
           <div class="container" style="max-width:600px;">
-            
-            <div style="
-              background:white;
-              padding:40px;
-              border-radius:16px;
-              box-shadow:0 10px 40px rgba(0,0,0,0.08);
-            ">
-              
-              <h1 style="margin-bottom:10px;">🎉 You're All Set!</h1>
+            <h1>🎉 You're All Set</h1>
+            <p>Your subscription is now active.</p>
 
-              <p style="margin:15px 0;color:#555;">
-                Your subscription has been activated successfully.
-              </p>
-
-              <p style="margin:15px 0;color:#555;">
-                You can now start identifying denied claims, underpayments, 
-                and recovering lost revenue with AI.
-              </p>
-
-              <div style="margin-top:25px;">
-                <a href="/login" class="btn-primary" style="width:100%;text-align:center;">
-                  Go to Dashboard
-                </a>
-              </div>
-
-              <p style="margin-top:15px;font-size:12px;color:#777;">
-                Need help getting started? You'll be guided after login.
-              </p>
-
+            <div style="margin-top:20px;padding:20px;border:1px solid #eee;border-radius:12px;">
+              <strong>Active Plan:</strong> ${safeStr(plan)}
             </div>
 
+            <div style="margin-top:30px;">
+              <a href="/dashboard" class="btn-primary">Go to Dashboard</a>
+            </div>
           </div>
         </div>
-
       </body>
       </html>
     `);
+  }
+
+  if (method === "GET" && pathname === "/billing-portal") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+
+    const sub = getSub(sess.org_id);
+    if (!sub || !sub.stripe_customer_id) {
+      return send(res, 400, "No billing account found");
+    }
+
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return send(res, 500, "Stripe billing is not configured");
+    }
+
+    const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
+    const portalSession = await stripe.billingPortal.sessions.create({
+      customer: sub.stripe_customer_id,
+      return_url: "https://app.tjhealthpro.com/dashboard"
+    });
+
+    return redirect(res, portalSession.url);
   }
 
   if (method === "GET" && pathname === "/about") {
@@ -8872,12 +8882,13 @@ const server = http.createServer(async (req, res) => {
 
 
   if (method === "POST" && pathname === "/stripe-webhook") {
-    let body = "";
+    const chunks = [];
 
-    req.on("data", chunk => body += chunk);
+    req.on("data", chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
 
     req.on("end", async () => {
       const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+      const body = Buffer.concat(chunks);
       const sig = req.headers["stripe-signature"];
 
       let event;
@@ -8889,7 +8900,7 @@ const server = http.createServer(async (req, res) => {
           process.env.STRIPE_WEBHOOK_SECRET
         );
       } catch (err) {
-        console.error("WEBHOOK SIGNATURE ERROR:", err.message);
+        console.error("❌ WEBHOOK SIGNATURE ERROR:", err.message);
         return send(res, 400, "Webhook Error");
       }
 
@@ -8910,11 +8921,19 @@ const server = http.createServer(async (req, res) => {
         if (user) {
           const sub = ensureSubscriptionForOrg(user.org_id);
 
-          // 🔥 Save Stripe IDs for billing portal later
+          // 🔥 SAVE STRIPE IDS (CRITICAL)
           sub.stripe_customer_id = session.customer;
           sub.stripe_subscription_id = session.subscription;
 
           applyPlanToSubscription(sub, plan);
+          const subscriptions = readJSON(FILES.subscriptions, []);
+          const subIndex = subscriptions.findIndex(existing => existing.org_id === user.org_id);
+          if (subIndex >= 0) {
+            subscriptions[subIndex] = { ...subscriptions[subIndex], ...sub };
+          } else {
+            subscriptions.push(sub);
+          }
+          writeJSON(FILES.subscriptions, subscriptions);
 
           console.log("✅ PLAN ACTIVATED:", plan);
         } else {
@@ -9212,6 +9231,60 @@ const server = http.createServer(async (req, res) => {
       `, navAdmin());
 
       return send(res, 200, html);
+    }
+
+    if (method === "GET" && pathname === "/admin/revenue") {
+      if (!process.env.STRIPE_SECRET_KEY) {
+        const html = renderPage("Revenue Dashboard", `
+          <h2>Revenue Dashboard</h2>
+          <div class="alert">Stripe billing is not configured.</div>
+        `, navAdmin());
+        return send(res, 500, html);
+      }
+
+      const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
+      const customers = await stripe.customers.list({ limit: 100 });
+      const subscriptions = await stripe.subscriptions.list({ limit: 100 });
+
+      const totalSubs = subscriptions.data.length;
+
+      const revenue = subscriptions.data.reduce((sum, s) => {
+        return sum + Number(s?.plan?.amount || 0);
+      }, 0) / 100;
+
+      return send(res, 200, `
+        <html>
+        <head>
+          <title>Revenue Dashboard</title>
+          ${renderPublicStyles()}
+        </head>
+        <body>
+          ${navAdmin()}
+
+          <div class="container">
+            <h1>Revenue Dashboard</h1>
+
+            <div class="grid-3">
+              <div class="card">
+                <h3>Total Customers</h3>
+                <p>${customers.data.length}</p>
+              </div>
+
+              <div class="card">
+                <h3>Active Subscriptions</h3>
+                <p>${totalSubs}</p>
+              </div>
+
+              <div class="card">
+                <h3>Monthly Revenue</h3>
+                <p>$${revenue}</p>
+              </div>
+            </div>
+          </div>
+        </body>
+        </html>
+      `);
     }
 
     // Reworked admin dashboard
@@ -19885,6 +19958,7 @@ function renderTemplateEditor(org, user){
 
           <div class="btnRow">
             <a class="btn secondary" href="/account?tab=billing">Refresh</a>
+            <a href="/billing-portal" class="btn secondary btn-secondary">Manage Subscription</a>
             <a class="btn" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Subscription</a>
           </div>
         `;
