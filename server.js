@@ -2439,7 +2439,7 @@ function renderStickyMobileCta() {
 }
 
 function navPublic() {
-  return `<a href="/login">Login</a><a href="/signup">Create Account</a><a href="/admin/login">Owner</a>`;
+  return `<a href="/login">Login</a><a href="/signup">Create Account</a>`;
 }
 
 function renderLoginPage(contentHtml, pageTitle = "Login | TJ Healthcare Pro") {
@@ -8301,21 +8301,53 @@ const server = http.createServer(async (req, res) => {
 
   // ---------- PUBLIC: Admin login ----------
   if (method === "GET" && pathname === "/admin/login") {
-    const html = renderPage("Owner Login", `
-      <h2>Owner Login</h2>
-      <p class="muted">This area is for the system owner only.</p>
-      <form method="POST" action="/admin/login">
-        <label>Email</label>
-        <input name="email" type="email" required />
-        <label>Password</label>
-        <input name="password" type="password" required />
-        <div class="btnRow">
-          <button class="btn" type="submit">Sign In</button>
-          <a class="btn secondary" href="/login">Back</a>
-        </div>
-      </form>
-    `, navPublic());
-    return send(res, 200, html);
+    const adminHtml = `
+  <h2 style="margin-bottom:10px;">Owner Login</h2>
+  <p style="color:#666;font-size:14px;margin-bottom:20px;">
+    Restricted system access
+  </p>
+
+  <form method="POST" action="/admin/login">
+    <label>Email</label>
+    <input name="email" type="email" required style="
+      width:100%;
+      padding:10px;
+      margin:8px 0 16px;
+      border:1px solid #ddd;
+      border-radius:6px;
+    " />
+
+    <label>Password</label>
+    <input name="password" type="password" required style="
+      width:100%;
+      padding:10px;
+      margin:8px 0 16px;
+      border:1px solid #ddd;
+      border-radius:6px;
+    " />
+
+    <button type="submit" style="
+      width:100%;
+      padding:12px;
+      background:#111;
+      color:white;
+      border:none;
+      border-radius:8px;
+      font-weight:600;
+      cursor:pointer;
+    ">
+      Sign In
+    </button>
+  </form>
+
+  <div style="margin-top:20px;text-align:center;">
+    <a href="/login" style="font-size:14px;color:#2563eb;text-decoration:none;">
+      Back to user login
+    </a>
+  </div>
+`;
+
+    return send(res, 200, renderLoginPage(adminHtml, "Owner Login"));
   }
 
   if (method === "POST" && pathname === "/admin/login") {
@@ -8351,29 +8383,85 @@ const server = http.createServer(async (req, res) => {
 
   // ---------- PUBLIC: Signup/Login/Reset ----------
   if (method === "GET" && pathname === "/signup") {
-    const html = renderPage("Create Account", `
-      <h2>Create Account</h2>
-      <p class="muted">Secure, organization-based access to an AI revenue analytics workspace.</p>
-      <form method="POST" action="/signup">
-        <label>Work Email</label>
-        <input name="email" type="email" required />
-        <label>Password (8+ characters)</label>
-        <input name="password" type="password" required />
-        <label>Confirm Password</label>
-        <input name="password2" type="password" required />
-        <label>Organization Name</label>
-        <input name="org_name" type="text" required />
-        <label style="display:flex;gap:10px;align-items:flex-start;margin-top:12px;">
-          <input type="checkbox" name="ack" required style="width:auto;margin:0;margin-top:2px;">
-          <span class="muted">I understand this system does not access EMRs or payer portals and does not submit appeals automatically.</span>
-        </label>
-        <div class="btnRow">
-          <button class="btn" type="submit">Create Account</button>
-          <a class="btn secondary" href="/login">Sign In</a>
-        </div>
-      </form>
-    `, navPublic());
-    return send(res, 200, html);
+    const signupHtml = `
+  <h2 style="margin-bottom:10px;">Create Account</h2>
+  <p style="color:#666;font-size:14px;margin-bottom:20px;">
+    Start your free trial — no credit card required
+  </p>
+
+  <form method="POST" action="/signup">
+
+  <label>Work Email</label>
+  <input name="email" type="email" required style="
+    width:100%;
+    padding:10px;
+    margin:8px 0 16px;
+    border:1px solid #ddd;
+    border-radius:6px;
+  " />
+
+  <label>Password (8+ characters)</label>
+  <input name="password" type="password" required style="
+    width:100%;
+    padding:10px;
+    margin:8px 0 16px;
+    border:1px solid #ddd;
+    border-radius:6px;
+  " />
+
+  <label>Confirm Password</label>
+  <input name="password2" type="password" required style="
+    width:100%;
+    padding:10px;
+    margin:8px 0 16px;
+    border:1px solid #ddd;
+    border-radius:6px;
+  " />
+
+  <label>Organization Name</label>
+  <input name="org_name" type="text" required style="
+    width:100%;
+    padding:10px;
+    margin:8px 0 16px;
+    border:1px solid #ddd;
+    border-radius:6px;
+  " />
+
+  <label style="display:flex;gap:10px;margin-top:10px;font-size:13px;color:#666;">
+    <input type="checkbox" name="ack" required>
+    I understand this system does not access EMRs or payer portals
+  </label>
+
+  <button type="submit" style="
+    width:100%;
+    padding:12px;
+    background:#2563eb;
+    color:white;
+    border:none;
+    border-radius:8px;
+    font-weight:600;
+    margin-top:15px;
+    cursor:pointer;
+  ">
+    Create Account
+  </button>
+
+</form>
+
+  <div style="margin-top:20px;text-align:center;">
+    <a href="/login" style="font-size:14px;color:#2563eb;text-decoration:none;">
+      Already have an account? Sign in
+    </a>
+  </div>
+
+  <div style="margin-top:15px;text-align:center;">
+    <a href="/admin/login" style="font-size:12px;color:#999;text-decoration:none;">
+      Owner access
+    </a>
+  </div>
+`;
+
+    return send(res, 200, renderLoginPage(signupHtml, "Create Account"));
   }
 
   if (method === "POST" && pathname === "/signup") {
