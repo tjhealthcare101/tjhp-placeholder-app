@@ -8058,7 +8058,7 @@ const server = http.createServer(async (req, res) => {
                           &#10003; <strong>${packets}</strong> AI Packets / month
                         </div>
                         <div style="margin-bottom:8px;">
-                          &#10003; <strong>${claims}</strong> Claims analyzed
+                          &#10003; <strong>${claims}</strong> Case Credits
                         </div>
                         <hr style="margin:15px 0;border:none;border-top:1px solid #eee;">
                         <div style="margin-top:12px;color:#666;">
@@ -19958,8 +19958,14 @@ function renderTemplateEditor(org, user){
 
           <div class="btnRow">
             <a class="btn secondary" href="/account?tab=billing">Refresh</a>
-            <a href="/billing-portal" class="btn secondary btn-secondary">Manage Subscription</a>
-            <a class="btn" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Upgrade / Manage Subscription</a>
+
+            <a href="/billing-portal" class="btn secondary">
+              Manage Subscription
+            </a>
+
+            <a href="/pricing" class="btn">
+              Upgrade Plan
+            </a>
           </div>
         `;
       }
@@ -20605,7 +20611,7 @@ else if (type === "payers") {
         <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li>
       </ul>
       <div class="btnRow">
-        <a class="btn" href="${safeStr(process.env.SHOPIFY_UPGRADE_URL || "https://tjhealthpro.com")}">Continue Monthly Access (via Shopify)</a>
+        <a class="btn" href="/pricing">Continue Monthly Access</a>
         <a class="btn secondary" href="/exports">Download Exports</a>
         <a class="btn secondary" href="/logout">Logout</a>
       </div>
