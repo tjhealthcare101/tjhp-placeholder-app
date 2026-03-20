@@ -2275,6 +2275,64 @@ function renderPublicStyles() {
     text-align: center;
   }
 
+  .pricing-card {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 420px;
+  }
+
+  .pricing-card-top {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .pricing-card-details {
+    margin: 20px 0;
+    text-align: left;
+    font-size: 14px;
+    line-height: 1.6;
+    width: 100%;
+  }
+
+  .pricing-card-bottom {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .pricing-primary-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 48px;
+    text-align: center;
+    font-weight: 700;
+  }
+
+  .pricing-secondary-link {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #2563eb;
+    text-decoration: none;
+    font-weight: 600;
+  }
+
+  .pricing-secondary-link:hover {
+    text-decoration: underline;
+  }
+
+  .pricing-trust {
+    font-size: 12px;
+    color: #777;
+    margin-top: 8px;
+    text-align: center;
+  }
+
   .grid-4 {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -7981,8 +8039,8 @@ const server = http.createServer(async (req, res) => {
                 const claims = p.claims_limit === 999999 ? "Unlimited" : p.claims_limit;
 
                 return `
-                  <div class="card" style="${p.highlight ? 'border:2px solid #2563eb;' : ''}">
-                    <div>
+                  <div class="card pricing-card" style="${p.highlight ? 'border:2px solid #2563eb;' : ''}">
+                    <div class="pricing-card-top">
                       ${p.highlight ? '<div style="background:#2563eb;color:white;padding:4px 10px;border-radius:6px;display:inline-block;font-size:12px;margin-bottom:10px;">Most Popular</div>' : ''}
                       <h2>${p.name}</h2>
                       <h3>${p.price}/mo</h3>
@@ -7994,7 +8052,8 @@ const server = http.createServer(async (req, res) => {
                           "Unlimited access & enterprise workflows"
                         }
                       </p>
-                      <div style="margin:20px 0;text-align:left;font-size:14px;line-height:1.6;">
+
+                      <div class="pricing-card-details">
                         <div style="margin-bottom:8px;">
                           &#10003; <strong>${packets}</strong> AI Packets / month
                         </div>
@@ -8012,11 +8071,15 @@ const server = http.createServer(async (req, res) => {
                         </div>
                       </div>
                     </div>
-                    <div>
-                      <a href="/login" class="btn-primary" style="display:block;margin-top:20px;width:100%;text-align:center;">
-                        Start Free Trial - No Credit Card Required
+
+                    <div class="pricing-card-bottom">
+                      <a href="/login" class="btn-primary pricing-primary-btn">
+                        Start Now
                       </a>
-                      <p style="font-size:12px;color:#777;margin-top:8px;">
+                      <a href="/login" class="pricing-secondary-link">
+                        Start free trial
+                      </a>
+                      <p class="pricing-trust">
                         No commitment • Cancel anytime
                       </p>
                     </div>
