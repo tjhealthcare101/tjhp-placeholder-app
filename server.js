@@ -376,6 +376,12 @@ function saveJobs(jobs) {
   writeJSON("./data/jobs.json", jobs || []);
 }
 
+function getJobTitle(job_id) {
+  const jobs = getJobs();
+  const job = jobs.find(j => String(j.job_id || j.id || "") === String(job_id));
+  return job ? job.title : "Unknown";
+}
+
 function collectPlanFeatures(params, prefix) {
   return [
     params.get(`${prefix}_feature_negotiation`) ? "negotiation" : null,
@@ -7838,6 +7844,14 @@ const server = http.createServer(async (req, res) => {
   const pathname = parsed.pathname;
   const method = req.method;
 
+  if (pathname.startsWith("/uploads/")) {
+    const filePath = path.join(__dirname, pathname);
+    if (fs.existsSync(filePath)) {
+      fs.createReadStream(filePath).pipe(res);
+      return;
+    }
+  }
+
   // health
   if (method === "GET" && pathname === "/health") return send(res, 200, "ok", "text/plain");
 
@@ -8661,7 +8675,7 @@ const server = http.createServer(async (req, res) => {
 
   if (method === "GET" && pathname === "/apply") {
     const job_id = String(parsed.query.job_id || "");
-    const jobs = readJSON(FILES.jobs || "./data/jobs.json", []);
+    const jobs = getJobs();
     const job = jobs.find(j => String(j.job_id || "") === job_id) || {};
 
     return send(res, 200, `
@@ -8738,7 +8752,7 @@ const server = http.createServer(async (req, res) => {
       const filename = `${uuid()}_${path.basename(file.filename || "resume")}`;
       const storedPath = path.join(UPLOADS_DIR, filename);
       fs.writeFileSync(storedPath, file.content);
-      resumePath = `./uploads/${filename}`;
+      resumePath = `/uploads/${filename}`;
     }
 
     const app = {
@@ -8758,7 +8772,10 @@ const server = http.createServer(async (req, res) => {
 
     return send(res, 200, `
       <html>
-      <head>${renderPublicStyles()}</head>
+      <head>
+        <meta charset="UTF-8">
+        ${renderPublicStyles()}
+      </head>
       <body>
         ${renderPublicNavbar()}
         <div class="section center">
@@ -9849,9 +9866,16 @@ const server = http.createServer(async (req, res) => {
         <h3>Current Jobs</h3>
 
         ${jobs.map(j => `
-          <div class="card">
-            <strong>${safeStr(j.title)}</strong>
-            <p>${safeStr(j.description)}</p>
+          <div class="card" style="margin-bottom:10px;">
+            <strong>${safeStr(j.title)}</strong><br/>
+            <span class="muted">${safeStr(j.description)}</span><br/>
+
+            <div style="margin-top:10px;">
+              <form method="POST" action="/admin/jobs/delete" style="display:inline;">
+                <input type="hidden" name="job_id" value="${safeStr(j.job_id || j.id || "")}"/>
+                <button class="btn secondary small" type="submit">Delete</button>
+              </form>
+            </div>
           </div>
         `).join("")}
 
@@ -9882,36 +9906,55 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (method === "POST" && pathname === "/admin/jobs/delete") {
+      const body = await parseBody(req);
+      const params = new URLSearchParams(body);
+      const job_id = String(params.get("job_id") || "");
+
+      let jobs = getJobs();
+      jobs = jobs.filter(j => String(j.job_id || j.id || "") !== job_id);
+
+      saveJobs(jobs);
+
+      return redirect(res, "/admin/jobs");
+    }
+
     if (method === "GET" && pathname === "/admin/applications") {
-      const jobs = getJobs();
-      const jobMap = new Map(jobs.map(job => [String(job.job_id || job.id || ""), job]));
       const apps = readJSON(FILES.applications || "./data/applications.json", []);
 
-      const rows = apps.map(a => {
-        const linkedJob = jobMap.get(String(a.job_id || ""));
-        const jobLabel = linkedJob ? (linkedJob.title || a.job_id || "") : (a.job_id || a.job_title || "");
-        const status = String(a.status || "applied");
-        return `
-          <tr>
-            <td>${safeStr(a.name || "")}</td>
-            <td>${safeStr(a.email || "")}</td>
-            <td>${safeStr(jobLabel)}</td>
-            <td>${safeStr(status)}</td>
-            <td>
-              <form method="POST" action="/admin/applications/update">
-                <input type="hidden" name="application_id" value="${safeStr(a.application_id || a.id || "")}" />
-                <select name="status">
-                  <option ${status === "applied" ? "selected" : ""}>applied</option>
-                  <option ${status === "interview" ? "selected" : ""}>interview</option>
-                  <option ${status === "hired" ? "selected" : ""}>hired</option>
-                  <option ${status === "rejected" ? "selected" : ""}>rejected</option>
-                </select>
-                <button class="btn small">Update</button>
-              </form>
-            </td>
-          </tr>
-        `;
-      }).join("");
+      const rows = apps.map(a => `
+        <tr>
+          <td>${safeStr(a.name || "")}</td>
+          <td>${safeStr(a.email || "")}</td>
+          <td>${safeStr(getJobTitle(a.job_id))}</td>
+          <td>
+            <span class="badge">${safeStr(a.status)}</span>
+          </td>
+          <td style="max-width:250px;">
+            ${safeStr(a.message || "No response")}
+          </td>
+          <td>
+            ${
+              a.resume
+                ? `<a href="${safeStr(a.resume)}" target="_blank" class="btn secondary small">View CV</a>`
+                : "No file"
+            }
+          </td>
+          <td>
+            <form method="POST" action="/admin/applications/update">
+              <input type="hidden" name="application_id" value="${safeStr(a.application_id || a.id || "")}" />
+
+              <select name="status">
+                ${["applied", "reviewing", "interview", "hired", "rejected"].map(s => `
+                  <option value="${s}" ${a.status === s ? "selected" : ""}>${s}</option>
+                `).join("")}
+              </select>
+
+              <button class="btn small">Update</button>
+            </form>
+          </td>
+        </tr>
+      `).join("");
 
       return send(res, 200, renderPage("Applications Pipeline", `
         <h2>Applications Pipeline</h2>
@@ -9923,9 +9966,11 @@ const server = http.createServer(async (req, res) => {
             <th>Email</th>
             <th>Job</th>
             <th>Status</th>
+            <th>Response</th>
+            <th>Resume</th>
             <th>Action</th>
           </tr>
-          ${rows || "<tr><td colspan='5'>No applications yet</td></tr>"}
+          ${rows || "<tr><td colspan='7'>No applications yet</td></tr>"}
         </table>
       `, navAdmin(), { showChat: false, orgName: "" }));
     }
