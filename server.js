@@ -2418,6 +2418,27 @@ function renderPublicStyles() {
 </style>`;
 }
 
+function renderCompanyMenuScript() {
+  return `
+    <script>
+    let menuTimeout;
+
+    function showCompanyMenu(){
+      clearTimeout(menuTimeout);
+      const el = document.getElementById("companyMenu");
+      if(el) el.style.display = "block";
+    }
+
+    function hideCompanyMenu(){
+      menuTimeout = setTimeout(() => {
+        const el = document.getElementById("companyMenu");
+        if(el) el.style.display = "none";
+      }, 150);
+    }
+    </script>
+  `;
+}
+
 function renderPublicNavbar() {
   return `
     <div style="border-bottom:1px solid #eee;">
@@ -2469,22 +2490,7 @@ function renderPublicNavbar() {
               </div>
             </div>
 
-            <script>
-            let menuTimeout;
-
-            function showCompanyMenu(){
-              clearTimeout(menuTimeout);
-              const el = document.getElementById("companyMenu");
-              if(el) el.style.display = "block";
-            }
-
-            function hideCompanyMenu(){
-              menuTimeout = setTimeout(() => {
-                const el = document.getElementById("companyMenu");
-                if(el) el.style.display = "none";
-              }, 150);
-            }
-            </script>
+            ${renderCompanyMenuScript()}
           </div>
           <a href="/login">Login</a>
           <a href="/signup" class="btn-primary">Start Free Trial — No Credit Card Required</a>
