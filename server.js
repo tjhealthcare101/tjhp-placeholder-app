@@ -106,6 +106,7 @@ const FILES = {
   plan_settings: path.join(DATA_DIR, "plan_settings.json"),
   analytics: path.join(DATA_DIR, "analytics.json"),
   jobs: path.join(DATA_DIR, "jobs.json"),
+  applications: path.join(DATA_DIR, "applications.json"),
 };
 
 // Directory for storing uploaded template files
@@ -349,6 +350,7 @@ ensureFile(FILES.admin_announcements, []);
 ensureFile(FILES.plan_settings, {});
 ensureFile(FILES.analytics, { leads: 0, signups: 0, revenue: 0, subscriptions: { starter: 0, growth: 0, pro: 0, enterprise: 0 } });
 ensureFile(FILES.jobs, []);
+ensureFile(FILES.applications, []);
 
 function getAnnouncements() {
   return readJSON(FILES.admin_announcements, []);
@@ -8657,6 +8659,51 @@ const server = http.createServer(async (req, res) => {
     `);
   }
 
+  if (method === "POST" && pathname === "/apply") {
+    const contentType = req.headers["content-type"] || "";
+    if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain");
+    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+    if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
+
+    try {
+      const { fields, files } = await parseMultipart(req, boundaryMatch[1]);
+      const applications = readJSON(FILES.applications, []);
+      const resumeFile = files.find(file => file.fieldName === "resume");
+      let resumeFilename = "";
+
+      if (resumeFile) {
+        const applicationsDir = path.join(UPLOADS_DIR, "applications");
+        ensureDir(applicationsDir);
+        resumeFilename = `${Date.now()}_${(resumeFile.filename || "resume").replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+        fs.writeFileSync(path.join(applicationsDir, resumeFilename), resumeFile.buffer);
+      }
+
+      const newApp = {
+        id: Date.now(),
+        job_title: fields.job_title || "",
+        name: fields.name || "",
+        email: fields.email || "",
+        resume: resumeFilename,
+        created_at: new Date().toISOString()
+      };
+
+      applications.push(newApp);
+      writeJSON(FILES.applications, applications);
+
+      return send(res, 200, `
+        <html>
+          <body style="font-family:sans-serif;text-align:center;padding:50px;">
+            <h2>Application Submitted ✅</h2>
+            <p>We’ll review your application and get back to you.</p>
+            <a href="/careers">Back to Careers</a>
+          </body>
+        </html>
+      `);
+    } catch (err) {
+      return send(res, 500, "Upload failed", "text/plain");
+    }
+  }
+
   if (method === "GET" && pathname === "/careers") {
     const jobs = getJobs();
 
@@ -8674,23 +8721,107 @@ const server = http.createServer(async (req, res) => {
         <div class="container" style="max-width:800px;">
           <h1>Join TJ Healthcare Pro</h1>
           <p>We’re building the future of healthcare revenue intelligence.</p>
+          <p style="margin-top:15px;font-size:18px;max-width:700px;margin-left:auto;margin-right:auto;">
+            We’re building a new standard for healthcare revenue intelligence — helping medical practices
+            recover lost revenue, reduce administrative burden, and make better operational decisions.
+          </p>
+          <p style="margin-top:10px;color:#666;max-width:700px;margin-left:auto;margin-right:auto;">
+            We’re looking for people who want to build real solutions in healthcare — not just tools.
+          </p>
+        </div>
+      </div>
 
+      <div class="section light center">
+        <div class="container grid-3" style="max-width:900px;margin:auto;">
+          <div class="card">
+            <h3>Real Impact</h3>
+            <p>Your work directly impacts healthcare practices and real revenue outcomes.</p>
+          </div>
+          <div class="card">
+            <h3>Build From Ground Up</h3>
+            <p>Be part of building systems, workflows, and AI solutions from day one.</p>
+          </div>
+          <div class="card">
+            <h3>Flexible & Remote</h3>
+            <p>Work remotely with flexibility while contributing to meaningful work.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="section center">
+        <div class="container" style="max-width:800px;">
           <div style="margin-top:30px;text-align:left;">
             ${jobs.length === 0 ? `
               <p>No open positions right now.</p>
-            ` : jobs.map(j => `
+            ` : jobs.map(job => `
               <div class="card" style="margin-bottom:20px;">
-                <h3>${safeStr(j.title)}</h3>
-                <p>${safeStr(j.description)}</p>
-                <p style="font-size:12px;color:#777;">Location: ${safeStr(j.location || "Remote")}</p>
-                <button class="btn-primary">Apply</button>
+                <h3>${safeStr(job.title)}</h3>
+                <p>${safeStr(job.description)}</p>
+                <p style="font-size:12px;color:#777;">Location: ${safeStr(job.location || "Remote")}</p>
+                <button onclick="openApplyModal(${JSON.stringify(String(job.title || ""))})" 
+                  class="btn-primary" 
+                  style="width:100%;margin-top:15px;">
+                  Apply
+                </button>
               </div>
             `).join("")}
           </div>
         </div>
       </div>
 
+      <div id="applyModal" style="
+        display:none;
+        position:fixed;
+        top:0;
+        left:0;
+        right:0;
+        bottom:0;
+        background:rgba(0,0,0,0.5);
+        justify-content:center;
+        align-items:center;
+        z-index:1000;
+      ">
+        <div style="
+          background:white;
+          padding:30px;
+          border-radius:16px;
+          width:100%;
+          max-width:500px;
+        ">
+          <h3 id="applyTitle">Apply</h3>
+          <form method="POST" action="/apply" enctype="multipart/form-data">
+            <input type="hidden" name="job_title" id="jobTitleInput" />
+
+            <label>Name</label>
+            <input name="name" required style="width:100%;margin-bottom:12px;padding:10px;border:1px solid #ddd;border-radius:6px;" />
+
+            <label>Email</label>
+            <input type="email" name="email" required style="width:100%;margin-bottom:12px;padding:10px;border:1px solid #ddd;border-radius:6px;" />
+
+            <label>Resume</label>
+            <input type="file" name="resume" required style="margin-bottom:16px;" />
+
+            <div style="display:flex;gap:10px;">
+              <button type="submit" class="btn-primary">Submit Application</button>
+              <button type="button" onclick="closeApplyModal()" class="btn-secondary">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
       ${renderStickyMobileCta()}
+
+      <script>
+      function openApplyModal(jobTitle){
+        document.getElementById("applyModal").style.display = "flex";
+        document.getElementById("applyTitle").innerText = "Apply for " + jobTitle;
+        document.getElementById("jobTitleInput").value = jobTitle;
+      }
+
+      function closeApplyModal(){
+        document.getElementById("applyModal").style.display = "none";
+      }
+      </script>
     </body>
     </html>
     `);
