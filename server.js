@@ -8694,6 +8694,25 @@ const server = http.createServer(async (req, res) => {
     </div>
   </div>
 
+  <div class="section center light">
+    <div class="container" style="max-width:700px;">
+
+      <h2>Ready to Build With Us?</h2>
+
+      <p style="margin-top:15px;">
+        If you’re looking to make a real impact in healthcare and help build something meaningful,
+        explore our open roles and apply today.
+      </p>
+
+      <div style="margin-top:20px;">
+        <a href="/careers" class="btn-primary">
+          View Open Positions
+        </a>
+      </div>
+
+    </div>
+  </div>
+
   ${renderStickyMobileCta()}
 
 </body>
