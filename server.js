@@ -2620,7 +2620,7 @@ function navUser() {
   `;
 }
 function navAdmin() {
-  return `<a href="/admin/dashboard">Admin</a><a href="/admin/analytics">Analytics</a><a href="/admin/revenue">Revenue</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/analytics">Analytics</a><a href="/admin/revenue">Revenue</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
 
 // ===== Models helpers =====
@@ -8722,25 +8722,130 @@ const server = http.createServer(async (req, res) => {
 
   if (method === "GET" && pathname === "/contact") {
     return send(res, 200, `
-    <html>
-    <head>${renderPublicStyles()}</head>
-    <body>
-      ${renderPublicNavbar()}
-      <div class="section center">
-        <div class="container" style="max-width:500px;">
-          <h1>Contact Us</h1>
-          <form>
-            <input placeholder="Name" />
-            <input placeholder="Email" />
-            <textarea placeholder="Message"></textarea>
-            <button class="btn-primary">Send</button>
+<html>
+<head>
+  <meta charset="UTF-8">
+  ${renderPublicStyles()}
+</head>
+<body>
+  ${renderPublicNavbar()}
+
+  <div class="section center">
+    <div class="container" style="max-width:900px;">
+
+      <h1>Contact Us</h1>
+
+      ${parsed.query.sent ? `<div class="alert" style="background:#ecfdf3;border-color:#86efac;color:#166534;margin-bottom:20px;">Message sent!</div>` : ""}
+
+      <p style="margin-top:10px;font-size:18px;">
+        Have a question, partnership idea, or need support?
+      </p>
+
+      <p class="muted" style="margin-bottom:30px;">
+        Send us a message and our team will get back to you as soon as possible.
+      </p>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:30px;align-items:start;">
+
+        <div>
+          <div class="card">
+            <h3>Reach Us Directly</h3>
+
+            <p class="muted">We typically respond within 24 hours.</p>
+
+            <div style="margin-top:15px;">
+              <strong>Email</strong>
+              <p class="muted">support@tjhealthcarepro.com</p>
+            </div>
+
+            <div style="margin-top:15px;">
+              <strong>For Business / Partnerships</strong>
+              <p class="muted">partners@tjhealthcarepro.com</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <form method="POST" action="/contact">
+
+            <label>Name</label>
+            <input name="name" required style="width:100%;margin-bottom:12px;" />
+
+            <label>Email</label>
+            <input name="email" type="email" required style="width:100%;margin-bottom:12px;" />
+
+            <label>Message</label>
+            <textarea name="message" required style="width:100%;min-height:120px;margin-bottom:15px;"></textarea>
+
+            <button class="btn-primary" style="width:100%;" type="submit">
+              Send Message
+            </button>
+
           </form>
         </div>
+
       </div>
-      ${renderStickyMobileCta()}
-    </body>
-    </html>
-    `);
+
+    </div>
+  </div>
+
+  ${renderStickyMobileCta()}
+
+</body>
+</html>
+`);
+  }
+
+  if (method === "POST" && pathname === "/contact") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const msg = {
+      message_id: uuid(),
+      name: String(params.get("name") || ""),
+      email: String(params.get("email") || ""),
+      message: String(params.get("message") || ""),
+      status: "new",
+      created_at: nowISO()
+    };
+
+    if (!msg.name || !msg.message) {
+      return send(res, 400, "Missing required fields", "text/plain");
+    }
+
+    if (!msg.email.includes("@")) {
+      return send(res, 400, "Invalid email", "text/plain");
+    }
+
+    const msgs = readJSON("./data/contact_messages.json", []);
+    msgs.push(msg);
+    writeJSON("./data/contact_messages.json", msgs);
+
+    if (process.env.RESEND_API_KEY && process.env.CONTACT_EMAIL_TO) {
+      try {
+        await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            from: process.env.CONTACT_EMAIL_FROM || "TJ Healthcare <noreply@tjhealthcarepro.com>",
+            to: [process.env.CONTACT_EMAIL_TO],
+            subject: "New Contact Form Message",
+            html: `
+              <p><strong>Name:</strong> ${safeStr(msg.name)}</p>
+              <p><strong>Email:</strong> ${safeStr(msg.email)}</p>
+              <p><strong>Message:</strong><br/>${safeStr(msg.message)}</p>
+            `
+          })
+        });
+      } catch (err) {
+        console.error("Failed to send contact email notification", err);
+      }
+    }
+
+    return redirect(res, "/contact?sent=1");
   }
 
   if (method === "GET" && pathname === "/support") {
@@ -10078,6 +10183,65 @@ const server = http.createServer(async (req, res) => {
       }
 
       return redirect(res, "/admin/applications");
+    }
+
+    if (method === "GET" && pathname === "/admin/contact-messages") {
+      const msgs = readJSON("./data/contact_messages.json", []);
+
+      const rows = msgs.slice().reverse().map(m => `
+        <tr>
+          <td>${safeStr(m.name)}</td>
+          <td><a href="mailto:${safeStr(m.email)}">${safeStr(m.email)}</a></td>
+          <td style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${safeStr(m.message)}</td>
+          <td>${safeStr(m.status)}</td>
+          <td>${safeStr(m.created_at ? new Date(m.created_at).toLocaleString() : "-")}</td>
+          <td>
+            <form method="POST" action="/admin/contact-messages/update">
+              <input type="hidden" name="message_id" value="${safeStr(m.message_id)}" />
+              <select name="status">
+                <option ${m.status==="new"?"selected":""}>new</option>
+                <option ${m.status==="replied"?"selected":""}>replied</option>
+                <option ${m.status==="closed"?"selected":""}>closed</option>
+              </select>
+              <button class="btn small">Update</button>
+            </form>
+          </td>
+        </tr>
+      `).join("");
+
+      return send(res, 200, renderPage("Contact Messages", `
+        <h2>Contact Messages</h2>
+
+        <table>
+          <tr>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Message</th>
+            <th>Status</th>
+            <th>Date</th>
+            <th>Action</th>
+          </tr>
+          ${rows || "<tr><td colspan='6'>No messages</td></tr>"}
+        </table>
+      `, navAdmin(), { showChat: false, orgName: "" }));
+    }
+
+    if (method === "POST" && pathname === "/admin/contact-messages/update") {
+      const body = await parseBody(req);
+      const params = new URLSearchParams(body);
+
+      const id = String(params.get("message_id") || "");
+      const status = String(params.get("status") || "new");
+
+      const msgs = readJSON("./data/contact_messages.json", []);
+      const idx = msgs.findIndex(m => String(m.message_id || "") === id);
+
+      if (idx >= 0) {
+        msgs[idx].status = status;
+        writeJSON("./data/contact_messages.json", msgs);
+      }
+
+      return redirect(res, "/admin/contact-messages");
     }
 
     if (method === "GET" && pathname === "/admin/dashboard") {
