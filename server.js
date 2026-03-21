@@ -2491,9 +2491,8 @@ function renderPublicNavbar() {
                 </div>
 
                 <div>
-                  <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">Support</div>
-                  <a href="/contact" style="display:block;margin-bottom:8px;color:#111;">Contact</a>
-                  <a href="/support" style="display:block;color:#111;">Support</a>
+                  <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">Contact</div>
+                  <a href="/contact" style="display:block;color:#111;">Contact Us</a>
                 </div>
 
               </div>
@@ -8754,13 +8753,10 @@ const server = http.createServer(async (req, res) => {
             <p class="muted">We typically respond within 24 hours.</p>
 
             <div style="margin-top:15px;">
-              <strong>Email</strong>
-              <p class="muted">support@tjhealthcarepro.com</p>
-            </div>
-
-            <div style="margin-top:15px;">
-              <strong>For Business / Partnerships</strong>
-              <p class="muted">partners@tjhealthcarepro.com</p>
+              <strong>Direct Contact</strong>
+              <p class="muted">
+                Use the form to reach our team directly. We respond within 24 hours.
+              </p>
             </div>
           </div>
         </div>
@@ -8769,17 +8765,21 @@ const server = http.createServer(async (req, res) => {
           <form method="POST" action="/contact">
 
             <label>Name</label>
-            <input name="name" required style="width:100%;margin-bottom:12px;" />
+            <input name="name" required style="width:100%;margin-bottom:12px;padding:10px;border-radius:8px;border:1px solid #ddd;" />
 
             <label>Email</label>
-            <input name="email" type="email" required style="width:100%;margin-bottom:12px;" />
+            <input name="email" type="email" required style="width:100%;margin-bottom:12px;padding:10px;border-radius:8px;border:1px solid #ddd;" />
 
             <label>Message</label>
-            <textarea name="message" required style="width:100%;min-height:120px;margin-bottom:15px;"></textarea>
+            <textarea name="message" required style="width:100%;min-height:120px;margin-bottom:15px;padding:10px;border-radius:8px;border:1px solid #ddd;"></textarea>
 
             <button class="btn-primary" style="width:100%;" type="submit">
               Send Message
             </button>
+
+            <p class="muted" style="font-size:13px;margin-top:10px;">
+              Your message is securely sent to our team. No spam. No sharing.
+            </p>
 
           </form>
         </div>
