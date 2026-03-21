@@ -2619,7 +2619,7 @@ function navUser() {
   `;
 }
 function navAdmin() {
-  return `<a href="/admin/dashboard">Admin</a><a href="/admin/analytics">Analytics</a><a href="/admin/revenue">Revenue</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/insights">Insights</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
 
 // ===== Models helpers =====
@@ -9979,58 +9979,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, html);
     }
 
-    if (method === "GET" && pathname === "/admin/revenue") {
-      if (!process.env.STRIPE_SECRET_KEY) {
-        const html = renderPage("Revenue Dashboard", `
-          <h2>Revenue Dashboard</h2>
-          <div class="alert">Stripe billing is not configured.</div>
-        `, navAdmin());
-        return send(res, 500, html);
-      }
-
-      const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-
-      const customers = await stripe.customers.list({ limit: 100 });
-      const subscriptions = await stripe.subscriptions.list({ limit: 100 });
-
-      const totalSubs = subscriptions.data.length;
-
-      const revenue = subscriptions.data.reduce((sum, s) => {
-        return sum + Number(s?.plan?.amount || 0);
-      }, 0) / 100;
-
-      return send(res, 200, `
-        <html>
-        <head>
-          <title>Revenue Dashboard</title>
-          ${renderPublicStyles()}
-        </head>
-        <body>
-          ${navAdmin()}
-
-          <div class="container">
-            <h1>Revenue Dashboard</h1>
-
-            <div class="grid-3">
-              <div class="card">
-                <h3>Total Customers</h3>
-                <p>${customers.data.length}</p>
-              </div>
-
-              <div class="card">
-                <h3>Active Subscriptions</h3>
-                <p>${totalSubs}</p>
-              </div>
-
-              <div class="card">
-                <h3>Monthly Revenue</h3>
-                <p>$${revenue}</p>
-              </div>
-            </div>
-          </div>
-        </body>
-        </html>
-      `);
+    if (pathname === "/admin/analytics" || pathname === "/admin/revenue") {
+      return redirect(res, "/admin/insights");
     }
 
     // Reworked admin dashboard
@@ -10357,90 +10307,83 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, html);
     }
 
-    if (method === "GET" && pathname === "/admin/analytics") {
+    if (method === "GET" && pathname === "/admin/insights") {
       const users = readJSON(FILES.users, []);
-      const analytics = readJSON(FILES.analytics, {
-        leads: 0,
-        signups: 0,
-        revenue: 0,
-        subscriptions: {
-          starter: 0,
-          growth: 0,
-          pro: 0,
-          enterprise: 0
-        }
-      });
+      const orgs = readJSON(FILES.orgs, []);
+      const subs = readJSON(FILES.subscriptions, []);
+      const apps = readJSON(FILES.applications, []);
+      const analytics = getAnalyticsStore();
 
       const totalUsers = users.length;
-      const totalLeads = analytics.leads || 0;
+      const totalOrgs = orgs.length;
+      const activeSubs = subs.filter(s => s.status === "active").length;
+      const totalApps = apps.length;
       const totalRevenue = analytics.revenue || 0;
-      const plans = analytics.subscriptions || {};
-      const activeSubscriptions = Object.values(plans).reduce((a,b) => a + b, 0);
+      const totalLeads = analytics.leads || 0;
+      const recentActivityRows = apps.slice(-5).reverse().map(a => `
+        <tr>
+          <td>${safeStr(a.name)}</td>
+          <td>${safeStr(a.email)}</td>
+          <td>${safeStr(a.status)}</td>
+        </tr>
+      `).join("");
 
-      return send(res, 200, `
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <title>Analytics | Admin</title>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            body { font-family: sans-serif; margin:0; background:#f8fafc; }
-            .container { max-width:1100px; margin:auto; padding:20px; }
-            .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:20px; }
-            .card {
-              background:white;
-              padding:20px;
-              border-radius:12px;
-              box-shadow:0 5px 20px rgba(0,0,0,0.05);
-            }
-            h1 { margin-bottom:20px; }
-            h2 { margin-top:40px; }
-            .metric { font-size:28px; font-weight:700; }
-            .label { color:#666; font-size:14px; }
-          </style>
-        </head>
-        <body>
-          ${navAdmin()}
+      return send(res, 200, renderPage("Insights Dashboard", `
+        <h2>Insights Dashboard</h2>
+        <p class="muted">High-level business, hiring, and growth metrics.</p>
 
-          <div class="container">
-            <h1>Analytics Dashboard</h1>
-
-            <div class="grid">
-              <div class="card">
-                <div class="metric">${totalLeads}</div>
-                <div class="label">Total Leads</div>
-              </div>
-
-              <div class="card">
-                <div class="metric">${totalUsers}</div>
-                <div class="label">Total Users</div>
-              </div>
-
-              <div class="card">
-                <div class="metric">$${totalRevenue}</div>
-                <div class="label">Total Revenue</div>
-              </div>
-
-              <div class="card">
-                <div class="metric">${activeSubscriptions}</div>
-                <div class="label">Active Subscriptions</div>
-              </div>
+        <div class="row">
+          <div class="col">
+            <div class="kpi-card">
+              <h4>Total Users</h4>
+              <p>${totalUsers}</p>
             </div>
 
-            <h2>Plan Breakdown</h2>
+            <div class="kpi-card">
+              <h4>Total Organizations</h4>
+              <p>${totalOrgs}</p>
+            </div>
 
-            <div class="grid">
-              ${Object.entries(plans).map(([k,v]) => `
-                <div class="card">
-                  <div class="metric">${v}</div>
-                  <div class="label">${k}</div>
-                </div>
-              `).join("")}
+            <div class="kpi-card">
+              <h4>Total Leads</h4>
+              <p>${totalLeads}</p>
             </div>
           </div>
-        </body>
-        </html>
-      `);
+
+          <div class="col">
+            <div class="kpi-card">
+              <h4>Active Subscriptions</h4>
+              <p>${activeSubs}</p>
+            </div>
+
+            <div class="kpi-card">
+              <h4>Total Applications</h4>
+              <p>${totalApps}</p>
+            </div>
+
+            <div class="kpi-card">
+              <h4>Total Revenue</h4>
+              <p>$${totalRevenue}</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <h3>Recent Activity</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${recentActivityRows || '<tr><td colspan="3" class="muted">No recent activity</td></tr>'}
+          </tbody>
+        </table>
+      `, navAdmin(), { showChat:false, orgName:"" }));
     }
 
     // Enhanced Organisations page
