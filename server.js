@@ -2493,7 +2493,7 @@ function renderPublicNavbar() {
             ${renderCompanyMenuScript()}
           </div>
           <a href="/login">Login</a>
-          <a href="/signup" class="btn-primary">Start Free Trial — No Credit Card Required</a>
+          <a href="/signup" class="btn-primary">Start Free Trial - No Credit Card Required</a>
         </div>
       </div>
     </div>
@@ -2514,7 +2514,7 @@ function renderStickyMobileCta() {
       z-index:999;
     ">
       <a href="/signup" class="btn-primary" style="width:90%;text-align:center;">
-        Start Free Trial — No Credit Card Required
+        Start Free Trial - No Credit Card Required
       </a>
     </div>
   `;
@@ -8464,7 +8464,7 @@ const server = http.createServer(async (req, res) => {
           <p style="margin:15px 0;">
             This isn’t theory — it’s built from real operational challenges and real financial impact.
           </p>
-          <a href="/signup" class="btn-primary">Start Free Trial — No Credit Card Required</a>
+          <a href="/signup" class="btn-primary">Start Free Trial - No Credit Card Required</a>
         </div>
       </div>
 
@@ -8479,16 +8479,123 @@ const server = http.createServer(async (req, res) => {
   if (method === "GET" && pathname === "/why") {
     return send(res, 200, `
     <html>
-    <head>${renderPublicStyles()}</head>
+    <head>
+      <meta charset="UTF-8">
+      <title>Our Why | TJ Healthcare Pro</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      ${renderPublicStyles()}
+    </head>
     <body>
       ${renderPublicNavbar()}
+
+      <!-- HERO -->
       <div class="section center">
-        <div class="container" style="max-width:700px;">
-          <h1>Why TJ Healthcare Pro</h1>
-          <p>We built this platform to solve one problem: lost healthcare revenue.</p>
+        <div class="container" style="max-width:800px;">
+          <h1>Our Why</h1>
+          <p style="margin-top:15px;font-size:18px;">
+            Healthcare practices are losing revenue every day — and most don’t even realize it.
+          </p>
         </div>
       </div>
+
+      <!-- PROBLEM -->
+      <div class="section light center">
+        <div class="container" style="max-width:800px;">
+          <h2>The Problem We Saw</h2>
+          <p style="margin-top:15px;">
+            Denied claims go unappealed. Underpayments go unnoticed.  
+            Teams are overwhelmed, and revenue loss becomes normal.
+          </p>
+
+          <p style="margin-top:15px;font-weight:600;">
+            Not because people don’t care — but because systems aren’t built to support them.
+          </p>
+        </div>
+      </div>
+
+      <!-- EXPERIENCE -->
+      <div class="section center">
+        <div class="container" style="max-width:800px;">
+          <h2>Built from Real Healthcare Operations</h2>
+          <p style="margin-top:15px;">
+            TJ Healthcare Pro was built from firsthand experience working inside healthcare operations — 
+            where reimbursement pressure, staffing limitations, and time constraints are constant.
+          </p>
+
+          <p style="margin-top:15px;">
+            Through structured workflows and disciplined processes, we’ve seen what works — 
+            and what fails — when it comes to recovering lost revenue.
+          </p>
+
+          <p style="margin-top:15px;">
+            In one case, these approaches supported efforts that helped recover 
+            <strong>over $2 million in previously denied claims</strong>.
+          </p>
+        </div>
+      </div>
+
+      <!-- SOLUTION -->
+      <div class="section light center">
+        <div class="container" style="max-width:800px;">
+          <h2>Why We Built TJ Healthcare Pro</h2>
+          <p style="margin-top:15px;">
+            We didn’t build this to replace teams.
+          </p>
+
+          <p style="margin-top:10px;">
+            We built it to give them clarity, structure, and support — using AI in a way that is 
+            practical, compliant, and aligned with real workflows.
+          </p>
+
+          <p style="margin-top:15px;">
+            Not more tools. Not more noise.
+          </p>
+
+          <p style="margin-top:10px;font-weight:600;">
+            Just better decisions, better processes, and better outcomes.
+          </p>
+        </div>
+      </div>
+
+      <!-- DIFFERENTIATION -->
+      <div class="section center">
+        <div class="container grid-3">
+
+          <div class="card">
+            <h3>Compliance First</h3>
+            <p>Designed to support workflows without introducing unnecessary risk.</p>
+          </div>
+
+          <div class="card">
+            <h3>Built for Reality</h3>
+            <p>Created from real healthcare operational experience — not theory.</p>
+          </div>
+
+          <div class="card">
+            <h3>AI with Purpose</h3>
+            <p>Used to enhance clarity and efficiency — not replace human decision-making.</p>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- CTA -->
+      <div class="section center light">
+        <div class="container" style="max-width:700px;">
+          <h2>Start Recovering What You're Losing</h2>
+          <p style="margin:15px 0;">
+            See what your current process is missing — and take control of your revenue.
+          </p>
+
+          <a href="/signup" class="btn-primary">
+            Start Free Trial - No Credit Card Required
+          </a>
+        </div>
+      </div>
+
       ${renderStickyMobileCta()}
+      ${renderCompanyMenuScript()}
+
     </body>
     </html>
     `);
