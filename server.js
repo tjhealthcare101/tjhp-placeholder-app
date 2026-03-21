@@ -105,6 +105,7 @@ const FILES = {
   admin_announcements: path.join(DATA_DIR, "admin_announcements.json"),
   plan_settings: path.join(DATA_DIR, "plan_settings.json"),
   analytics: path.join(DATA_DIR, "analytics.json"),
+  jobs: path.join(DATA_DIR, "jobs.json"),
 };
 
 // Directory for storing uploaded template files
@@ -347,6 +348,7 @@ ensureFile(FILES.agent_tasks, []);
 ensureFile(FILES.admin_announcements, []);
 ensureFile(FILES.plan_settings, {});
 ensureFile(FILES.analytics, { leads: 0, signups: 0, revenue: 0, subscriptions: { starter: 0, growth: 0, pro: 0, enterprise: 0 } });
+ensureFile(FILES.jobs, []);
 
 function getAnnouncements() {
   return readJSON(FILES.admin_announcements, []);
@@ -362,6 +364,14 @@ function getPlanSettings() {
 
 function savePlanSettings(settings) {
   writeJSON(FILES.plan_settings, settings || {});
+}
+
+function getJobs() {
+  return readJSON("./data/jobs.json", []);
+}
+
+function saveJobs(jobs) {
+  writeJSON("./data/jobs.json", jobs || []);
 }
 
 function collectPlanFeatures(params, prefix) {
@@ -2440,20 +2450,20 @@ function renderPublicNavbar() {
 
                 <div>
                   <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">About</div>
-                  <a href="/about" style="display:block;margin-bottom:8px;color:#111;">About TJ Healthcare Pro</a>
-                  <a href="#" style="display:block;color:#111;">Why TJ Healthcare Pro</a>
+                  <a href="/about" style="display:block;margin-bottom:8px;color:#111;">About</a>
+                  <a href="/why" style="display:block;color:#111;">Why</a>
                 </div>
 
                 <div>
-                  <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">Join Us</div>
-                  <a href="#" style="display:block;margin-bottom:8px;color:#111;">Careers</a>
-                  <a href="#" style="display:block;color:#111;">Culture</a>
+                  <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">Careers</div>
+                  <a href="/careers" style="display:block;margin-bottom:8px;color:#111;">Careers</a>
+                  <a href="/culture" style="display:block;color:#111;">Culture</a>
                 </div>
 
                 <div>
-                  <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">Contact</div>
-                  <a href="#" style="display:block;margin-bottom:8px;color:#111;">Contact Us</a>
-                  <a href="#" style="display:block;color:#111;">Support</a>
+                  <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">Support</div>
+                  <a href="/contact" style="display:block;margin-bottom:8px;color:#111;">Contact</a>
+                  <a href="/support" style="display:block;color:#111;">Support</a>
                 </div>
 
               </div>
@@ -2595,7 +2605,7 @@ function navUser() {
   `;
 }
 function navAdmin() {
-  return `<a href="/admin/dashboard">Admin</a><a href="/admin/analytics">Analytics</a><a href="/admin/revenue">Revenue</a><a href="/admin/orgs">Organizations</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/analytics">Analytics</a><a href="/admin/revenue">Revenue</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
 
 // ===== Models helpers =====
@@ -8374,6 +8384,122 @@ const server = http.createServer(async (req, res) => {
     `);
   }
 
+  if (method === "GET" && pathname === "/why") {
+    return send(res, 200, `
+    <html>
+    <head>${renderPublicStyles()}</head>
+    <body>
+      ${renderPublicNavbar()}
+      <div class="section center">
+        <div class="container" style="max-width:700px;">
+          <h1>Why TJ Healthcare Pro</h1>
+          <p>We built this platform to solve one problem: lost healthcare revenue.</p>
+        </div>
+      </div>
+      ${renderStickyMobileCta()}
+    </body>
+    </html>
+    `);
+  }
+
+  if (method === "GET" && pathname === "/culture") {
+    return send(res, 200, `
+    <html>
+    <head>${renderPublicStyles()}</head>
+    <body>
+      ${renderPublicNavbar()}
+      <div class="section center">
+        <div class="container">
+          <h1>Our Culture</h1>
+          <p>We value innovation, ownership, and impact.</p>
+        </div>
+      </div>
+      ${renderStickyMobileCta()}
+    </body>
+    </html>
+    `);
+  }
+
+  if (method === "GET" && pathname === "/contact") {
+    return send(res, 200, `
+    <html>
+    <head>${renderPublicStyles()}</head>
+    <body>
+      ${renderPublicNavbar()}
+      <div class="section center">
+        <div class="container" style="max-width:500px;">
+          <h1>Contact Us</h1>
+          <form>
+            <input placeholder="Name" />
+            <input placeholder="Email" />
+            <textarea placeholder="Message"></textarea>
+            <button class="btn-primary">Send</button>
+          </form>
+        </div>
+      </div>
+      ${renderStickyMobileCta()}
+    </body>
+    </html>
+    `);
+  }
+
+  if (method === "GET" && pathname === "/support") {
+    return send(res, 200, `
+    <html>
+    <head>${renderPublicStyles()}</head>
+    <body>
+      ${renderPublicNavbar()}
+      <div class="section center">
+        <div class="container">
+          <h1>Support</h1>
+          <p>Email us or use the platform chat for help.</p>
+        </div>
+      </div>
+      ${renderStickyMobileCta()}
+    </body>
+    </html>
+    `);
+  }
+
+  if (method === "GET" && pathname === "/careers") {
+    const jobs = getJobs();
+
+    return send(res, 200, `
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>Careers | TJ Healthcare Pro</title>
+      ${renderPublicStyles()}
+    </head>
+    <body>
+      ${renderPublicNavbar()}
+
+      <div class="section center">
+        <div class="container" style="max-width:800px;">
+          <h1>Join TJ Healthcare Pro</h1>
+          <p>We’re building the future of healthcare revenue intelligence.</p>
+
+          <div style="margin-top:30px;text-align:left;">
+            ${jobs.length === 0 ? `
+              <p>No open positions right now.</p>
+            ` : jobs.map(j => `
+              <div class="card" style="margin-bottom:20px;">
+                <h3>${safeStr(j.title)}</h3>
+                <p>${safeStr(j.description)}</p>
+                <p style="font-size:12px;color:#777;">Location: ${safeStr(j.location || "Remote")}</p>
+                <button class="btn-primary">Apply</button>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      </div>
+
+      ${renderStickyMobileCta()}
+    </body>
+    </html>
+    `);
+  }
+
   // auth
   const sess = getAuth(req);
   CURRENT_SESSION_ORG_ID = (sess && sess.org_id) ? String(sess.org_id) : "";
@@ -9354,6 +9480,62 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Reworked admin dashboard
+    if (method === "GET" && pathname === "/admin/jobs") {
+      const jobs = getJobs();
+
+      return send(res, 200, renderPage("Job Manager", `
+        <h2>Manage Jobs</h2>
+
+        <form method="POST" action="/admin/jobs">
+          <label>Title</label>
+          <input name="title" required />
+
+          <label>Description</label>
+          <textarea name="description" required></textarea>
+
+          <label>Location</label>
+          <input name="location" />
+
+          <button class="btn">Add Job</button>
+        </form>
+
+        <div class="hr"></div>
+
+        <h3>Current Jobs</h3>
+
+        ${jobs.map(j => `
+          <div class="card">
+            <strong>${safeStr(j.title)}</strong>
+            <p>${safeStr(j.description)}</p>
+          </div>
+        `).join("")}
+
+      `, navAdmin()));
+    }
+
+    if (method === "POST" && pathname === "/admin/jobs") {
+      let body = "";
+      req.on("data", c => body += c);
+      req.on("end", () => {
+        const params = new URLSearchParams(body);
+
+        const jobs = getJobs();
+
+        jobs.push({
+          id: uuid(),
+          title: params.get("title"),
+          description: params.get("description"),
+          location: params.get("location"),
+          created_at: nowISO()
+        });
+
+        saveJobs(jobs);
+
+        return redirect(res, "/admin/jobs");
+      });
+      return;
+    }
+
     if (method === "GET" && pathname === "/admin/dashboard") {
       const orgs = readJSON(FILES.orgs, []);
       const users = readJSON(FILES.users, []);
