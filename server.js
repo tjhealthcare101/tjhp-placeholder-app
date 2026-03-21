@@ -8661,56 +8661,93 @@ const server = http.createServer(async (req, res) => {
 
   if (method === "GET" && pathname === "/apply") {
     const job_id = String(parsed.query.job_id || "");
-    const jobs = getJobs();
-    const job = jobs.find(j => String(j.job_id || j.id || "") === job_id);
-    const jobTitle = job ? safeStr(job.title || "") : "";
+    const jobs = readJSON(FILES.jobs || "./data/jobs.json", []);
+    const job = jobs.find(j => String(j.job_id || "") === job_id) || {};
 
     return send(res, 200, `
       <html>
-      <head>${renderPublicStyles()}</head>
+      <head>
+        ${renderPublicStyles()}
+      </head>
       <body>
         ${renderPublicNavbar()}
 
         <div class="section center">
-          <div class="container" style="max-width:600px;">
+          <div class="container" style="max-width:700px;">
             <h1>Apply Now</h1>
-            ${jobTitle ? `<p class="muted" style="margin-bottom:18px;">Position: <strong>${jobTitle}</strong></p>` : ""}
+            <p style="margin-bottom:25px;">
+              Position: <strong>${safeStr(job.title || "Role")}</strong>
+            </p>
 
-            <form method="POST" action="/apply">
-              <input type="hidden" name="job_id" value="${safeStr(job_id)}" />
+            <div class="card" style="padding:30px;text-align:left;">
+              <form method="POST" action="/apply" enctype="multipart/form-data">
+                <input type="hidden" name="job_id" value="${safeStr(job_id)}" />
 
-              <label>Full Name</label>
-              <input name="name" required />
+                <label>Full Name</label>
+                <input name="name" required style="width:100%;margin-bottom:15px;" />
 
-              <label>Email</label>
-              <input name="email" type="email" required />
+                <label>Email</label>
+                <input name="email" type="email" required style="width:100%;margin-bottom:15px;" />
 
-              <label>Why are you a good fit?</label>
-              <textarea name="message" style="min-height:120px;"></textarea>
+                <label>Why are you a good fit?</label>
+                <textarea name="message" style="width:100%;min-height:120px;margin-bottom:15px;"></textarea>
 
-              <button class="btn-primary" type="submit" style="margin-top:15px;">
-                Submit Application
-              </button>
-            </form>
+                <label>Upload Resume / CV</label>
+                <input type="file" name="resume" accept=".pdf,.doc,.docx" style="margin-bottom:20px;" />
+
+                <button class="btn-primary" type="submit" style="width:100%;">
+                  Submit Application
+                </button>
+              </form>
+            </div>
           </div>
         </div>
 
-        ${renderStickyMobileCta()}
       </body>
       </html>
     `);
   }
 
   if (method === "POST" && pathname === "/apply") {
-    const body = await parseBody(req);
-    const params = new URLSearchParams(body);
+    const contentType = String(req.headers["content-type"] || "");
+    const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+    if (!boundaryMatch) {
+      return send(res, 400, "Missing multipart boundary", "text/plain");
+    }
+
+    const parsedForm = await parseMultipart(req, boundaryMatch[1] || boundaryMatch[2]);
+    const groupedFiles = {};
+    for (const uploaded of parsedForm.files || []) {
+      if (!groupedFiles[uploaded.fieldName]) groupedFiles[uploaded.fieldName] = [];
+      groupedFiles[uploaded.fieldName].push({
+        filename: uploaded.filename,
+        mime: uploaded.mime,
+        content: uploaded.buffer,
+      });
+    }
+
+    const form = {
+      fields: parsedForm.fields || {},
+      files: groupedFiles,
+    };
+
+    const file = form.files?.resume?.[0];
+    let resumePath = "";
+
+    if (file) {
+      const filename = `${uuid()}_${path.basename(file.filename || "resume")}`;
+      const storedPath = path.join(UPLOADS_DIR, filename);
+      fs.writeFileSync(storedPath, file.content);
+      resumePath = `./uploads/${filename}`;
+    }
 
     const app = {
       application_id: uuid(),
-      job_id: String(params.get("job_id") || ""),
-      name: String(params.get("name") || "").trim(),
-      email: String(params.get("email") || "").trim(),
-      message: String(params.get("message") || "").trim(),
+      job_id: String(form.fields.job_id || ""),
+      name: String(form.fields.name || "").trim(),
+      email: String(form.fields.email || "").trim(),
+      message: String(form.fields.message || "").trim(),
+      resume: resumePath,
       status: "applied",
       created_at: nowISO()
     };
@@ -8726,9 +8763,8 @@ const server = http.createServer(async (req, res) => {
         ${renderPublicNavbar()}
         <div class="section center">
           <h2>Application Submitted ✅</h2>
-          <p>We’ll review and get back to you.</p>
+          <p>We’ll review your application and get back to you.</p>
         </div>
-        ${renderStickyMobileCta()}
       </body>
       </html>
     `);
