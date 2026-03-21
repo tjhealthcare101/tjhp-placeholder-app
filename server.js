@@ -8356,31 +8356,117 @@ const server = http.createServer(async (req, res) => {
 
   if (method === "GET" && pathname === "/about") {
     return send(res, 200, `
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>About | TJ Healthcare Pro</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        ${renderPublicStyles()}
-      </head>
-      <body>
-        ${renderPublicNavbar()}
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>About | TJ Healthcare Pro</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      ${renderPublicStyles()}
+    </head>
+    <body>
+      ${renderPublicNavbar()}
 
-        <div class="section">
-          <div class="container">
-            <h1>About TJ Healthcare Pro</h1>
-            <p>
-              TJ Healthcare Pro is an AI-powered revenue intelligence platform built to help small medical practices recover lost revenue.
+      <!-- HERO -->
+      <div class="section center">
+        <div class="container" style="max-width:800px;">
+          <h1>About TJ Healthcare Pro</h1>
+          <p style="margin-top:15px;">
+            TJ Healthcare Pro is an AI-powered revenue intelligence platform built to help medical practices 
+            recover lost revenue and improve operational clarity.
+          </p>
+        </div>
+      </div>
+
+      <!-- MISSION -->
+      <div class="section light center">
+        <div class="container" style="max-width:800px;">
+          <h2>Our Mission</h2>
+          <p style="margin-top:15px;">
+            To help healthcare organizations reduce administrative burden, improve decision clarity, 
+            and recover revenue using a disciplined, compliance-first approach — powered by practical AI.
+          </p>
+        </div>
+      </div>
+
+      <!-- FOUNDER SECTION -->
+      <div class="section">
+        <div class="container" style="
+          display:grid;
+          grid-template-columns:1fr 1fr;
+          gap:40px;
+          align-items:center;
+        ">
+
+          <!-- IMAGE -->
+          <div style="text-align:center;">
+            <img 
+              src="/Course_Thumbnail.webp"
+              alt="Tyquon Jordan"
+              style="
+                width:100%;
+                max-width:350px;
+                border-radius:16px;
+                box-shadow:0 20px 60px rgba(0,0,0,0.15);
+              "
+            />
+          </div>
+
+          <!-- TEXT -->
+          <div>
+            <h2>Tyquon Jordan, DHA</h2>
+            <p style="font-weight:600;color:#2563eb;">Founder</p>
+
+            <p style="margin-top:15px;">
+              Tyquon holds a Doctorate in Healthcare Administration with hands-on experience across private 
+              medical practices and academic medical centers.
             </p>
+
             <p>
-              We simplify billing complexity, reduce administrative burden, and empower practices with actionable insights.
+              His work has focused on improving operational efficiency, coordination, and workflow design 
+              in environments where time, staffing, and reimbursement pressures are constant.
+            </p>
+
+            <p>
+              Through structured appeal workflows and operational oversight, he has supported initiatives 
+              that helped a private medical practice recover over <strong>$2 million</strong> in previously 
+              denied claims.
+            </p>
+
+            <p>
+              Tyquon has led and supported initiatives in revenue cycle management, claim denials and appeals, 
+              provider scheduling, and workflow optimization — with a focus on reducing rework and administrative burden.
+            </p>
+
+            <p>
+              His recent work centers on applying AI in a practical, compliant way — helping organizations 
+              improve decision-making and efficiency without introducing unnecessary tools or complexity.
+            </p>
+
+            <p>
+              He founded TJ Healthcare Pro to help practices bring clarity and discipline to complex 
+              operational decisions through a compliance-first, AI-assisted approach grounded in real-world experience.
             </p>
           </div>
-        </div>
 
-        ${renderStickyMobileCta()}
-      </body>
-      </html>
+        </div>
+      </div>
+
+      <!-- CLOSING CTA -->
+      <div class="section center light">
+        <div class="container" style="max-width:700px;">
+          <h2>Built from real healthcare experience</h2>
+          <p style="margin:15px 0;">
+            This isn’t theory — it’s built from real operational challenges and real financial impact.
+          </p>
+          <a href="/signup" class="btn-primary">Start Free Trial — No Credit Card Required</a>
+        </div>
+      </div>
+
+      ${renderStickyMobileCta()}
+      ${renderCompanyMenuScript()}
+
+    </body>
+    </html>
     `);
   }
 
