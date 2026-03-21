@@ -2614,7 +2614,7 @@ function navUser() {
   `;
 }
 function navAdmin() {
-  return `<a href="/admin/dashboard">Admin</a><a href="/admin/analytics">Analytics</a><a href="/admin/revenue">Revenue</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/analytics">Analytics</a><a href="/admin/revenue">Revenue</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
 
 // ===== Models helpers =====
@@ -8659,49 +8659,79 @@ const server = http.createServer(async (req, res) => {
     `);
   }
 
+  if (method === "GET" && pathname === "/apply") {
+    const job_id = String(parsed.query.job_id || "");
+    const jobs = getJobs();
+    const job = jobs.find(j => String(j.job_id || j.id || "") === job_id);
+    const jobTitle = job ? safeStr(job.title || "") : "";
+
+    return send(res, 200, `
+      <html>
+      <head>${renderPublicStyles()}</head>
+      <body>
+        ${renderPublicNavbar()}
+
+        <div class="section center">
+          <div class="container" style="max-width:600px;">
+            <h1>Apply Now</h1>
+            ${jobTitle ? `<p class="muted" style="margin-bottom:18px;">Position: <strong>${jobTitle}</strong></p>` : ""}
+
+            <form method="POST" action="/apply">
+              <input type="hidden" name="job_id" value="${safeStr(job_id)}" />
+
+              <label>Full Name</label>
+              <input name="name" required />
+
+              <label>Email</label>
+              <input name="email" type="email" required />
+
+              <label>Why are you a good fit?</label>
+              <textarea name="message" style="min-height:120px;"></textarea>
+
+              <button class="btn-primary" type="submit" style="margin-top:15px;">
+                Submit Application
+              </button>
+            </form>
+          </div>
+        </div>
+
+        ${renderStickyMobileCta()}
+      </body>
+      </html>
+    `);
+  }
+
   if (method === "POST" && pathname === "/apply") {
-    const contentType = req.headers["content-type"] || "";
-    if (!contentType.includes("multipart/form-data")) return send(res, 400, "Invalid upload", "text/plain");
-    const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
-    if (!boundaryMatch) return send(res, 400, "Missing boundary", "text/plain");
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
 
-    try {
-      const { fields, files } = await parseMultipart(req, boundaryMatch[1]);
-      const applications = readJSON(FILES.applications, []);
-      const resumeFile = files.find(file => file.fieldName === "resume");
-      let resumeFilename = "";
+    const app = {
+      application_id: uuid(),
+      job_id: String(params.get("job_id") || ""),
+      name: String(params.get("name") || "").trim(),
+      email: String(params.get("email") || "").trim(),
+      message: String(params.get("message") || "").trim(),
+      status: "applied",
+      created_at: nowISO()
+    };
 
-      if (resumeFile) {
-        const applicationsDir = path.join(UPLOADS_DIR, "applications");
-        ensureDir(applicationsDir);
-        resumeFilename = `${Date.now()}_${(resumeFile.filename || "resume").replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-        fs.writeFileSync(path.join(applicationsDir, resumeFilename), resumeFile.buffer);
-      }
+    const apps = readJSON(FILES.applications || "./data/applications.json", []);
+    apps.push(app);
+    writeJSON(FILES.applications || "./data/applications.json", apps);
 
-      const newApp = {
-        id: Date.now(),
-        job_title: fields.job_title || "",
-        name: fields.name || "",
-        email: fields.email || "",
-        resume: resumeFilename,
-        created_at: new Date().toISOString()
-      };
-
-      applications.push(newApp);
-      writeJSON(FILES.applications, applications);
-
-      return send(res, 200, `
-        <html>
-          <body style="font-family:sans-serif;text-align:center;padding:50px;">
-            <h2>Application Submitted ✅</h2>
-            <p>We’ll review your application and get back to you.</p>
-            <a href="/careers">Back to Careers</a>
-          </body>
-        </html>
-      `);
-    } catch (err) {
-      return send(res, 500, "Upload failed", "text/plain");
-    }
+    return send(res, 200, `
+      <html>
+      <head>${renderPublicStyles()}</head>
+      <body>
+        ${renderPublicNavbar()}
+        <div class="section center">
+          <h2>Application Submitted ✅</h2>
+          <p>We’ll review and get back to you.</p>
+        </div>
+        ${renderStickyMobileCta()}
+      </body>
+      </html>
+    `);
   }
 
   if (method === "GET" && pathname === "/careers") {
@@ -8758,9 +8788,7 @@ const server = http.createServer(async (req, res) => {
                 <h3>${safeStr(job.title)}</h3>
                 <p>${safeStr(job.description)}</p>
                 <p style="font-size:12px;color:#777;">Location: ${safeStr(job.location || "Remote")}</p>
-                <button onclick="openApplyModal(${JSON.stringify(String(job.title || ""))})" 
-                  class="btn-primary" 
-                  style="width:100%;margin-top:15px;">
+                <button onclick="applyJob('${safeStr(String(job.job_id || job.id || ""))}')" class="btn-primary" style="width:100%;margin-top:15px;">
                   Apply
                 </button>
               </div>
@@ -8769,57 +8797,11 @@ const server = http.createServer(async (req, res) => {
         </div>
       </div>
 
-      <div id="applyModal" style="
-        display:none;
-        position:fixed;
-        top:0;
-        left:0;
-        right:0;
-        bottom:0;
-        background:rgba(0,0,0,0.5);
-        justify-content:center;
-        align-items:center;
-        z-index:1000;
-      ">
-        <div style="
-          background:white;
-          padding:30px;
-          border-radius:16px;
-          width:100%;
-          max-width:500px;
-        ">
-          <h3 id="applyTitle">Apply</h3>
-          <form method="POST" action="/apply" enctype="multipart/form-data">
-            <input type="hidden" name="job_title" id="jobTitleInput" />
-
-            <label>Name</label>
-            <input name="name" required style="width:100%;margin-bottom:12px;padding:10px;border:1px solid #ddd;border-radius:6px;" />
-
-            <label>Email</label>
-            <input type="email" name="email" required style="width:100%;margin-bottom:12px;padding:10px;border:1px solid #ddd;border-radius:6px;" />
-
-            <label>Resume</label>
-            <input type="file" name="resume" required style="margin-bottom:16px;" />
-
-            <div style="display:flex;gap:10px;">
-              <button type="submit" class="btn-primary">Submit Application</button>
-              <button type="button" onclick="closeApplyModal()" class="btn-secondary">Cancel</button>
-            </div>
-          </form>
-        </div>
-      </div>
-
       ${renderStickyMobileCta()}
 
       <script>
-      function openApplyModal(jobTitle){
-        document.getElementById("applyModal").style.display = "flex";
-        document.getElementById("applyTitle").innerText = "Apply for " + jobTitle;
-        document.getElementById("jobTitleInput").value = jobTitle;
-      }
-
-      function closeApplyModal(){
-        document.getElementById("applyModal").style.display = "none";
+      function applyJob(jobId) {
+        window.location.href = "/apply?job_id=" + encodeURIComponent(jobId);
       }
       </script>
     </body>
@@ -9850,6 +9832,7 @@ const server = http.createServer(async (req, res) => {
 
         jobs.push({
           id: uuid(),
+          job_id: uuid(),
           title: params.get("title"),
           description: params.get("description"),
           location: params.get("location"),
@@ -9861,6 +9844,72 @@ const server = http.createServer(async (req, res) => {
         return redirect(res, "/admin/jobs");
       });
       return;
+    }
+
+    if (method === "GET" && pathname === "/admin/applications") {
+      const jobs = getJobs();
+      const jobMap = new Map(jobs.map(job => [String(job.job_id || job.id || ""), job]));
+      const apps = readJSON(FILES.applications || "./data/applications.json", []);
+
+      const rows = apps.map(a => {
+        const linkedJob = jobMap.get(String(a.job_id || ""));
+        const jobLabel = linkedJob ? (linkedJob.title || a.job_id || "") : (a.job_id || a.job_title || "");
+        const status = String(a.status || "applied");
+        return `
+          <tr>
+            <td>${safeStr(a.name || "")}</td>
+            <td>${safeStr(a.email || "")}</td>
+            <td>${safeStr(jobLabel)}</td>
+            <td>${safeStr(status)}</td>
+            <td>
+              <form method="POST" action="/admin/applications/update">
+                <input type="hidden" name="application_id" value="${safeStr(a.application_id || a.id || "")}" />
+                <select name="status">
+                  <option ${status === "applied" ? "selected" : ""}>applied</option>
+                  <option ${status === "interview" ? "selected" : ""}>interview</option>
+                  <option ${status === "hired" ? "selected" : ""}>hired</option>
+                  <option ${status === "rejected" ? "selected" : ""}>rejected</option>
+                </select>
+                <button class="btn small">Update</button>
+              </form>
+            </td>
+          </tr>
+        `;
+      }).join("");
+
+      return send(res, 200, renderPage("Applications Pipeline", `
+        <h2>Applications Pipeline</h2>
+        <p class="muted">Track candidate progress from applied to hired.</p>
+
+        <table>
+          <tr>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Job</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+          ${rows || "<tr><td colspan='5'>No applications yet</td></tr>"}
+        </table>
+      `, navAdmin(), { showChat: false, orgName: "" }));
+    }
+
+    if (method === "POST" && pathname === "/admin/applications/update") {
+      const body = await parseBody(req);
+      const params = new URLSearchParams(body);
+
+      const apps = readJSON(FILES.applications || "./data/applications.json", []);
+      const applicationId = String(params.get("application_id") || "");
+      const nextStatus = String(params.get("status") || "applied");
+      const idx = apps.findIndex(a => String(a.application_id || a.id || "") === applicationId);
+
+      if (idx >= 0) {
+        apps[idx].application_id = apps[idx].application_id || apps[idx].id || applicationId;
+        apps[idx].status = nextStatus;
+        writeJSON(FILES.applications || "./data/applications.json", apps);
+      }
+
+      return redirect(res, "/admin/applications");
     }
 
     if (method === "GET" && pathname === "/admin/dashboard") {
