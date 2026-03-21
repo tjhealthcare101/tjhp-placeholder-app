@@ -8616,20 +8616,89 @@ const server = http.createServer(async (req, res) => {
 
   if (method === "GET" && pathname === "/culture") {
     return send(res, 200, `
-    <html>
-    <head>${renderPublicStyles()}</head>
-    <body>
-      ${renderPublicNavbar()}
-      <div class="section center">
-        <div class="container">
-          <h1>Our Culture</h1>
-          <p>We value innovation, ownership, and impact.</p>
-        </div>
+<html>
+<head>
+  <meta charset="UTF-8">
+  ${renderPublicStyles()}
+</head>
+<body>
+  ${renderPublicNavbar()}
+
+  <div class="section center">
+    <div class="container" style="max-width:900px;">
+
+      <h1>Our Culture</h1>
+
+      <p style="margin-top:15px;font-size:18px;">
+        We’re building more than a platform — we’re building a team focused on impact, ownership, and real results.
+      </p>
+
+      <p style="margin-top:10px;">
+        At TJ Healthcare Pro, we operate with urgency, clarity, and accountability. We value people who take initiative,
+        solve problems, and care about outcomes — not just activity.
+      </p>
+
+    </div>
+  </div>
+
+  <div class="section light">
+    <div class="container" style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;">
+
+      <div class="card">
+        <h3>Ownership</h3>
+        <p>You take responsibility for results, not just tasks. We trust our team to make decisions and execute.</p>
       </div>
-      ${renderStickyMobileCta()}
-    </body>
-    </html>
-    `);
+
+      <div class="card">
+        <h3>Real Impact</h3>
+        <p>Your work directly affects healthcare practices, revenue outcomes, and operational performance.</p>
+      </div>
+
+      <div class="card">
+        <h3>Build, Don’t Maintain</h3>
+        <p>We’re early — which means you’re building systems, not just maintaining them.</p>
+      </div>
+
+      <div class="card">
+        <h3>Speed + Execution</h3>
+        <p>We move fast, test ideas, and iterate quickly. Progress matters more than perfection.</p>
+      </div>
+
+      <div class="card">
+        <h3>High Standards</h3>
+        <p>We care about quality, clarity, and doing things the right way — especially in healthcare.</p>
+      </div>
+
+      <div class="card">
+        <h3>Flexible & Remote</h3>
+        <p>We focus on results — not where you work from. Flexibility with accountability.</p>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="section center">
+    <div class="container" style="max-width:700px;">
+
+      <h2>Who We’re Looking For</h2>
+
+      <p style="margin-top:15px;">
+        We’re looking for builders — people who want to create, improve, and solve real problems in healthcare.
+      </p>
+
+      <p style="margin-top:10px;">
+        If you’re someone who takes initiative, learns quickly, and wants to be part of something growing,
+        you’ll fit right in.
+      </p>
+
+    </div>
+  </div>
+
+  ${renderStickyMobileCta()}
+
+</body>
+</html>
+`);
   }
 
   if (method === "GET" && pathname === "/contact") {
@@ -8803,12 +8872,11 @@ const server = http.createServer(async (req, res) => {
       <div class="section center">
         <div class="container" style="max-width:800px;">
           <h1>Join TJ Healthcare Pro</h1>
-          <p>We’re building the future of healthcare revenue intelligence.</p>
           <p style="margin-top:15px;font-size:18px;max-width:700px;margin-left:auto;margin-right:auto;">
             We’re building a new standard for healthcare revenue intelligence — helping medical practices
             recover lost revenue, reduce administrative burden, and make better operational decisions.
           </p>
-          <p style="margin-top:10px;color:#666;max-width:700px;margin-left:auto;margin-right:auto;">
+          <p style="margin-top:10px;">
             We’re looking for people who want to build real solutions in healthcare — not just tools.
           </p>
         </div>
