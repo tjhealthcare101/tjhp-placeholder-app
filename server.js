@@ -415,7 +415,7 @@ function renderAnnouncementBanner(org_id, title, isAdmin=false) {
       ">
         ${list.map(a => `
           <span style="margin-right:40px;">
-            <strong>${safeStr(a.title)}</strong> — ${safeStr(a.message)}
+            <strong>${safeStr(a.title)}</strong> - ${safeStr(a.message)}
           </span>
         `).join("")}
       </div>
@@ -1228,7 +1228,7 @@ function buildBriefTitle({ briefType, payerScope, question }) {
     case "FORECAST_REPORT":
       return "Revenue Forecast Brief (Next 30/60/90 Days)";
     default:
-      if (question && question.length <= 60) return `${question.trim()} — Snapshot`;
+      if (question && question.length <= 60) return `${question.trim()} - Snapshot`;
       return base;
   }
 }
@@ -1966,7 +1966,7 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
 
         <div style="margin-top:12px;">
           <div style="font-weight:900;margin-bottom:6px;">Top Risk Payers</div>
-          ${payers.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${payers.map(p=>`<li>${safeStr(p.payer)} — $${Math.round(p.risk||0).toLocaleString()} at risk</li>`).join("")}</ul>` : `<div class="muted">No payer risk data available.</div>`}
+          ${payers.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${payers.map(p=>`<li>${safeStr(p.payer)} - $${Math.round(p.risk||0).toLocaleString()} at risk</li>`).join("")}</ul>` : `<div class="muted">No payer risk data available.</div>`}
         </div>
 
         ${chartCards}
@@ -2212,16 +2212,17 @@ function renderPublicStyles() {
   }
 
   .card {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    min-height: 360px;
-
     border: 1px solid #eee;
     border-radius: 12px;
     padding: 24px;
     background: white;
     transition: all 0.2s ease;
+
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 10px;
+    min-height: auto;
   }
 
   .light {
@@ -2278,11 +2279,11 @@ function renderPublicStyles() {
 
   .card h2,
   .card h3 {
-    text-align: center;
+    margin-bottom: 6px;
   }
 
   .card p {
-    text-align: center;
+    margin-bottom: 6px;
   }
 
   .pricing-card {
@@ -3876,7 +3877,7 @@ function appealPacketDefaults(orgLike) {
     submitted_at: null,
     exported_at: null,
     lmn_text:
-`LETTER OF MEDICAL NECESSITY (TEMPLATE — DE‑IDENTIFIED)
+`LETTER OF MEDICAL NECESSITY (TEMPLATE - DE‑IDENTIFIED)
 Patient Name: ____________________
 DOB: ____/____/______
 Member ID: ____________________
@@ -3917,7 +3918,7 @@ Administrative Items:
 [ ] CPT/HCPCS codes + ICD‑10 codes
 [ ] Provider NPI, Tax ID, address
 [ ] Appeal / reconsideration form (payer-specific, if required)
-[ ] Interaction log (dates/times/rep names — no patient identifiers)
+[ ] Interaction log (dates/times/rep names - no patient identifiers)
 
 Supporting Documents:
 [ ] Clinical guidelines or peer‑reviewed literature
@@ -4258,7 +4259,7 @@ function buildRecoveryStrategies(a) {
 
   const topPayer = payers[0];
   if (topPayer && topPayer.count >= 5 && topPayer.wins === 0) {
-    tips.push(`Target payer friction: ${topPayer.payer} shows volume but no denial wins recorded—validate required forms, medical necessity language, and appeal routing.`);
+    tips.push(`Target payer friction: ${topPayer.payer} shows volume but no denial wins recorded-validate required forms, medical necessity language, and appeal routing.`);
   }
 
   if (!tips.length) tips.push("Keep consistency: continue documenting denial reasons, standardizing appeal templates, and tracking paid amounts to strengthen payer trend analytics.");
@@ -4835,7 +4836,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
     )
     : 0;
 
-  const healthGrade = hasFinancialData ? gradeFromScore(healthScore) : "—";
+  const healthGrade = hasFinancialData ? gradeFromScore(healthScore) : "-";
 
   const recov = computeRecoveryIntelligence(org_id, start, end);
 
@@ -5806,7 +5807,7 @@ function computeDeterministicScore(inputs){
   if (stageType === "appeal" && !f.hasDenialLetter) alerts.push("Missing Denial Letter for appeal packet.");
   if (stageType === "appeal" && !f.hasEob) alerts.push("Missing EOB/ERA for appeal packet.");
   if (!f.hasClaimForm) alerts.push("Missing claim form/itemized bill.");
-  if (!inputs.hasContractRule) alerts.push("Contract rule missing — add contract rule in Reimbursement Engine");
+  if (!inputs.hasContractRule) alerts.push("Contract rule missing - add contract rule in Reimbursement Engine");
   if (num(f.argumentLength) < 200) alerts.push("Argument narrative is short; add clinical/contract rationale.");
   if (!f.hasClearAsk) alerts.push("Requested action is unclear; include a specific ask.");
   if (!inputs.hasContractRule && strategyProfile === "Contractual") alerts.push("Contractual strategy selected but no contract rule found.");
@@ -6075,7 +6076,7 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
     ws.appeal.packet_sections = {
       ...defaultAppealPacketSections(),
       ...(ws.appeal.packet_sections || {}),
-      header: ws.appeal.packet_sections?.header || `${safeStr(getOrg(org_id)?.org_name || "Practice")} — ${nowISO().slice(0,10)} — Claim #${claim?.claim_number || "N/A"}`,
+      header: ws.appeal.packet_sections?.header || `${safeStr(getOrg(org_id)?.org_name || "Practice")} - ${nowISO().slice(0,10)} - Claim #${claim?.claim_number || "N/A"}`,
       claim_summary: ws.appeal.packet_sections?.claim_summary || `Claim #${claim?.claim_number || "N/A"} | Payer: ${claim?.payer || "Unknown"} | DOS: ${claim?.dos || "N/A"}`,
       financial_summary: financialSummaryFromClaim(currentDerived, claim),
       argument: narrative,
@@ -6091,7 +6092,7 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
     ws.negotiation.packet_sections = {
       ...defaultNegotiationPacketSections(),
       ...(ws.negotiation.packet_sections || {}),
-      header: ws.negotiation.packet_sections?.header || `${safeStr(getOrg(org_id)?.org_name || "Practice")} — ${nowISO().slice(0,10)} — Claim #${claim?.claim_number || "N/A"}`,
+      header: ws.negotiation.packet_sections?.header || `${safeStr(getOrg(org_id)?.org_name || "Practice")} - ${nowISO().slice(0,10)} - Claim #${claim?.claim_number || "N/A"}`,
       claim_summary: ws.negotiation.packet_sections?.claim_summary || `Claim #${claim?.claim_number || "N/A"} | Payer: ${claim?.payer || "Unknown"} | DOS: ${claim?.dos || "N/A"}`,
       financial_summary: financialSummaryFromClaim(currentDerived, claim),
       variance_explanation: narrative,
@@ -6469,7 +6470,7 @@ function applyTemplate(org_id, type, html){
 
   if (ext === ".txt") return "<pre>" + safeStr(wrapper) + "</pre>" + html;
 
-  return "<div class='muted'>Template uploaded (" + safeStr(tpl.original_filename) + ") — Standard formatting used for reliability.</div>" + html;
+  return "<div class='muted'>Template uploaded (" + safeStr(tpl.original_filename) + ") - Standard formatting used for reliability.</div>" + html;
 }
 
 function getRevenueTemplates(org_id){
@@ -6746,7 +6747,7 @@ function evaluateClaimDerived(claim, ctx={}){
   const paidAmount = insurance.paidAmount;
   const insuranceWriteOff = insurance.insuranceWriteOff;
   const insuranceRemaining = insurance.insuranceRemaining;
-  // expectedInsurance is null when no contract rule exists (UI should show "—")
+  // expectedInsurance is null when no contract rule exists (UI should show "-")
   // but lifecycle + risk math still needs a fallback to avoid "0 expected" breaking denials.
   const expectedForLifecycle = (expectedInsurance !== null && expectedInsurance !== undefined)
     ? Number(expectedInsurance)
@@ -7877,7 +7878,7 @@ const server = http.createServer(async (req, res) => {
 
     } catch (err) {
       console.error("AI TEST ERROR:", err);
-      return send(res, 500, "AI call failed — check Railway logs");
+      return send(res, 500, "AI call failed - check Railway logs");
     }
   }
 
@@ -8080,7 +8081,7 @@ const server = http.createServer(async (req, res) => {
             </div>
 
             <div style="margin-top:40px;">
-              <a href="/login" class="btn-primary">Start Free Trial — No Risk</a>
+              <a href="/login" class="btn-primary">Start Free Trial - No Risk</a>
             </div>
           </div>
         </div>
@@ -8389,7 +8390,7 @@ const server = http.createServer(async (req, res) => {
           <h2>Our Mission</h2>
           <p style="margin-top:15px;">
             To help healthcare organizations reduce administrative burden, improve decision clarity, 
-            and recover revenue using a disciplined, compliance-first approach — powered by practical AI.
+            and recover revenue using a disciplined, compliance-first approach - powered by practical AI.
           </p>
         </div>
       </div>
@@ -8440,11 +8441,11 @@ const server = http.createServer(async (req, res) => {
 
             <p>
               Tyquon has led and supported initiatives in revenue cycle management, claim denials and appeals, 
-              provider scheduling, and workflow optimization — with a focus on reducing rework and administrative burden.
+              provider scheduling, and workflow optimization - with a focus on reducing rework and administrative burden.
             </p>
 
             <p>
-              His recent work centers on applying AI in a practical, compliant way — helping organizations 
+              His recent work centers on applying AI in a practical, compliant way - helping organizations 
               improve decision-making and efficiency without introducing unnecessary tools or complexity.
             </p>
 
@@ -8462,7 +8463,7 @@ const server = http.createServer(async (req, res) => {
         <div class="container" style="max-width:700px;">
           <h2>Built from real healthcare experience</h2>
           <p style="margin:15px 0;">
-            This isn’t theory — it’s built from real operational challenges and real financial impact.
+            This isn’t theory - it’s built from real operational challenges and real financial impact.
           </p>
           <a href="/signup" class="btn-primary">Start Free Trial - No Credit Card Required</a>
         </div>
@@ -8493,7 +8494,7 @@ const server = http.createServer(async (req, res) => {
         <div class="container" style="max-width:800px;">
           <h1>Our Why</h1>
           <p style="margin-top:15px;font-size:18px;">
-            Healthcare practices are losing revenue every day — and most don’t even realize it.
+            Healthcare practices are losing revenue every day - and most don’t even realize it.
           </p>
         </div>
       </div>
@@ -8508,7 +8509,7 @@ const server = http.createServer(async (req, res) => {
           </p>
 
           <p style="margin-top:15px;font-weight:600;">
-            Not because people don’t care — but because systems aren’t built to support them.
+            Not because people don’t care - but because systems aren’t built to support them.
           </p>
         </div>
       </div>
@@ -8518,19 +8519,15 @@ const server = http.createServer(async (req, res) => {
         <div class="container" style="max-width:800px;">
           <h2>Built from Real Healthcare Operations</h2>
           <p style="margin-top:15px;">
-            TJ Healthcare Pro was built from firsthand experience working inside healthcare operations — 
+            TJ Healthcare Pro was built from firsthand experience working inside healthcare operations - 
             where reimbursement pressure, staffing limitations, and time constraints are constant.
           </p>
 
           <p style="margin-top:15px;">
-            Through structured workflows and disciplined processes, we’ve seen what works — 
-            and what fails — when it comes to recovering lost revenue.
+            Through structured workflows and disciplined processes, we’ve seen what works - 
+            and what fails - when it comes to recovering lost revenue.
           </p>
 
-          <p style="margin-top:15px;">
-            In one case, these approaches supported efforts that helped recover 
-            <strong>over $2 million in previously denied claims</strong>.
-          </p>
         </div>
       </div>
 
@@ -8543,7 +8540,7 @@ const server = http.createServer(async (req, res) => {
           </p>
 
           <p style="margin-top:10px;">
-            We built it to give them clarity, structure, and support — using AI in a way that is 
+            We built it to give them clarity, structure, and support - using AI in a way that is 
             practical, compliant, and aligned with real workflows.
           </p>
 
@@ -8559,7 +8556,7 @@ const server = http.createServer(async (req, res) => {
 
       <!-- DIFFERENTIATION -->
       <div class="section center">
-        <div class="container grid-3">
+        <div class="container grid-3" style="max-width:900px;margin:auto;">
 
           <div class="card">
             <h3>Compliance First</h3>
@@ -8568,12 +8565,12 @@ const server = http.createServer(async (req, res) => {
 
           <div class="card">
             <h3>Built for Reality</h3>
-            <p>Created from real healthcare operational experience — not theory.</p>
+            <p>Created from real healthcare operational experience - not theory.</p>
           </div>
 
           <div class="card">
             <h3>AI with Purpose</h3>
-            <p>Used to enhance clarity and efficiency — not replace human decision-making.</p>
+            <p>Used to enhance clarity and efficiency - not replace human decision-making.</p>
           </div>
 
         </div>
@@ -8584,7 +8581,7 @@ const server = http.createServer(async (req, res) => {
         <div class="container" style="max-width:700px;">
           <h2>Start Recovering What You're Losing</h2>
           <p style="margin:15px 0;">
-            See what your current process is missing — and take control of your revenue.
+            See what your current process is missing - and take control of your revenue.
           </p>
 
           <a href="/signup" class="btn-primary">
@@ -8791,7 +8788,7 @@ const server = http.createServer(async (req, res) => {
     const signupHtml = `
   <h2 style="margin-bottom:10px;">Create Account</h2>
   <p style="color:#666;font-size:14px;margin-bottom:20px;">
-    Start your free trial — no credit card required
+    Start your free trial - no credit card required
   </p>
 
   <form method="POST" action="/signup">
@@ -9797,7 +9794,7 @@ const server = http.createServer(async (req, res) => {
           <td><a href="/admin/org?org_id=${encodeURIComponent(org.org_id)}">${safeStr(org.org_name)}</a></td>
           <td>${plan}</td>
           <td>${safeStr(org.account_status || 'active')}</td>
-          <td>${last ? new Date(last).toLocaleDateString() : "—"}</td>
+          <td>${last ? new Date(last).toLocaleDateString() : "-"}</td>
           <td>${att}</td>
         </tr>`;
       }).join("");
@@ -10027,7 +10024,7 @@ const server = http.createServer(async (req, res) => {
         }
         const pathOnly = `/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(usr.email)}`;
         const full = APP_BASE_URL ? `${APP_BASE_URL}${pathOnly}` : pathOnly;
-        return `<li class="muted small">${safeStr(usr.email)} — <a href="${safeStr(full)}">Reset Link</a></li>`;
+        return `<li class="muted small">${safeStr(usr.email)} - <a href="${safeStr(full)}">Reset Link</a></li>`;
       }).join("");
 
       const html = renderPage("Org Detail", `
@@ -10039,11 +10036,11 @@ const server = http.createServer(async (req, res) => {
               <tr><th>Status</th><td>${safeStr(org.account_status || "active")}</td></tr>
               <tr><th>Plan</th><td>${plan}</td></tr>
               <tr><th>Pilot ends</th><td>${new Date(pilot.ends_at).toLocaleDateString()}</td></tr>
-              <tr><th>Deletion date</th><td>${pilot.retention_delete_at ? new Date(pilot.retention_delete_at).toLocaleDateString() : "—"}</td></tr>
+              <tr><th>Deletion date</th><td>${pilot.retention_delete_at ? new Date(pilot.retention_delete_at).toLocaleDateString() : "-"}</td></tr>
               <tr><th>Pilot cases used</th><td>${usage.pilot_cases_used || 0}/${PILOT_LIMITS.max_cases_total}</td></tr>
               <tr><th>Pilot payment rows</th><td>${usage.pilot_payment_rows_used || 0}/${PILOT_LIMITS.payment_records_included}</td></tr>
               <tr><th>Drafts generated</th><td>${a.drafts}</td></tr>
-              <tr><th>Avg draft time</th><td>${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "—"}</td></tr>
+              <tr><th>Avg draft time</th><td>${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "-"}</td></tr>
             </table>
 
             <h3>Actions</h3>
@@ -10090,7 +10087,7 @@ const server = http.createServer(async (req, res) => {
 
           <div class="col">
             <h3>Users</h3>
-            <ul class="muted">${users.map(x => `<li>${safeStr(x.email)}</li>`).join("") || "<li>—</li>"}</ul>
+            <ul class="muted">${users.map(x => `<li>${safeStr(x.email)}</li>`).join("") || "<li>-</li>"}</ul>
 
             <div class="hr"></div>
             <h3>Force Password Reset (v1 display)</h3>
@@ -10682,7 +10679,7 @@ Next steps:
   if (method === "GET" && pathname === "/lock") {
     const html = renderPage("Starting", `
       <h2 class="center">Free Trial Started</h2>
-      <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid — and surface patterns that are easy to miss when data lives in different places.</p>
+      <p class="center">We’re preparing your secure workspace to help you track what was billed, denied, appealed, and paid - and surface patterns that are easy to miss when data lives in different places.</p>
       <p class="muted center">You’ll be guided to the next step automatically.</p>
       <div class="center"><span class="badge warn">Initializing</span></div>
       <script>setTimeout(()=>{window.location.href="/dashboard";}, ${LOCK_SCREEN_MS});
@@ -10745,7 +10742,7 @@ if (method === "GET" && pathname === "/executive") {
       <div class="col">
         <h3>Risk Score</h3>
         <div class="badge ${r.cls}">
-          Risk: ${r.label} — ${score}/100
+          Risk: ${r.label} - ${score}/100
         </div>
 
         <div class="hr"></div>
@@ -11007,9 +11004,9 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </div>
 
       <div class="kpi-strip">
-        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.revenueAtRisk)}</p><p class="kpi-label">Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Outstanding revenue from denied, underpaid, or unpaid claims.</span></span></p><div class="kpi-delta">—</div></div>
-        <div class="kpi-card"><p class="kpi-value">${Number(m.denialRate||0).toFixed(1)}%</p><p class="kpi-label">Denial Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed claims that were denied by payers.</span></span></p><div class="kpi-delta">—</div></div>
-        <div class="kpi-card"><p class="kpi-value">${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p><p class="kpi-label">Recovery Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed revenue successfully collected.</span></span></p><div class="kpi-delta">—</div></div>
+        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.revenueAtRisk)}</p><p class="kpi-label">Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Outstanding revenue from denied, underpaid, or unpaid claims.</span></span></p><div class="kpi-delta">-</div></div>
+        <div class="kpi-card"><p class="kpi-value">${Number(m.denialRate||0).toFixed(1)}%</p><p class="kpi-label">Denial Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed claims that were denied by payers.</span></span></p><div class="kpi-delta">-</div></div>
+        <div class="kpi-card"><p class="kpi-value">${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p><p class="kpi-label">Recovery Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed revenue successfully collected.</span></span></p><div class="kpi-delta">-</div></div>
         
       </div>
 
@@ -11019,7 +11016,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <h3 style="margin:0 0 6px;">Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, AR aging, and AI Case Readiness. Higher is better.">ⓘ</span></h3>
             <div style="font-size:28px;font-weight:900;line-height:1;">
               ${formatNumberUI(m.healthScore || 0)} / 100
-              <span class="badge ${gradeBadgeClass(m.healthGrade)}" style="margin-left:8px;">${safeStr(m.healthGrade || "—")}</span>
+              <span class="badge ${gradeBadgeClass(m.healthGrade)}" style="margin-left:8px;">${safeStr(m.healthGrade || "-")}</span>
             </div>
             <div class="muted small" style="margin-top:6px;">This is your high-level revenue health indicator.</div>
           </div>
@@ -11270,7 +11267,7 @@ if (method === "GET" && pathname === "/executive-export") {
           <div style="font-weight:800;">Practice Financial Health</div>
           <div style="font-size:28px;font-weight:900;margin-top:6px;">
             ${formatNumberUI(m.healthScore || 0)} / 100
-            <span class="badge ${gradeBadgeClass(m.healthGrade)}" style="margin-left:10px;">${safeStr(m.healthGrade || "—")}</span>
+            <span class="badge ${gradeBadgeClass(m.healthGrade)}" style="margin-left:10px;">${safeStr(m.healthGrade || "-")}</span>
           </div>
           <div class="muted small">Weighted score: collection rate, denial %, underpaid %, days-to-pay, AR aging (90+).</div>
         </div>
@@ -11647,7 +11644,7 @@ if (method === "GET" && pathname === "/claims") {
   // ===== Shared header (always) =====
   let body = `
     <h2>Claims Lifecycle <span class="tooltip" data-tip="Operational hub for billed batches, payment batches, denials, appeals, negotiations, and all claims.">ⓘ</span></h2>
-    <p class="muted">Everything that happens to claims — billed, denied, appealed, paid, and negotiated — in one place.</p>
+    <p class="muted">Everything that happens to claims - billed, denied, appealed, paid, and negotiated - in one place.</p>
     <div class="muted small">Select a tab below to manage a specific stage.</div>
     ${pipelineHtml}
     ${subTabs}
@@ -11683,7 +11680,7 @@ if (method === "GET" && pathname === "/claims") {
 
         return `<tr>
           <td><a href="/billed?submission_id=${encodeURIComponent(s.submission_id)}">${safeStr(s.original_filename || "batch")}</a></td>
-          <td class="muted small">${s.uploaded_at ? new Date(s.uploaded_at).toLocaleDateString() : "—"}</td>
+          <td class="muted small">${s.uploaded_at ? new Date(s.uploaded_at).toLocaleDateString() : "-"}</td>
           <td>${totalClaims}</td>
           <td>${paidCount}</td>
           <td>${deniedCount}</td>
@@ -11740,7 +11737,7 @@ if (method === "GET" && pathname === "/claims") {
         <td>${safeStr(x.source_file)}</td>
         <td>${x.count}</td>
         <td>${formatMoneyUI(x.totalPaid||0)}</td>
-        <td>${x.latest ? new Date(x.latest).toLocaleDateString() : "—"}</td>
+        <td>${x.latest ? new Date(x.latest).toLocaleDateString() : "-"}</td>
         <td><a href="/payment-batch-detail?file=${encodeURIComponent(x.source_file)}">Open</a></td>
       </tr>
     `).join("");
@@ -11796,7 +11793,7 @@ if (method === "GET" && pathname === "/claims") {
 
     const rows = pageItems.map(c=>{
       const linked = billedOrg.find(b => b.denial_case_id === c.case_id) || null;
-      const claimLink = linked ? `<a href="/claim-detail?billed_id=${encodeURIComponent(linked.billed_id)}">${safeStr(linked.claim_number||"")}</a>` : `<span class="muted small">—</span>`;
+      const claimLink = linked ? `<a href="/claim-detail?billed_id=${encodeURIComponent(linked.billed_id)}">${safeStr(linked.claim_number||"")}</a>` : `<span class="muted small">-</span>`;
       const payer = linked ? (linked.payer || "") : "";
       const dos = linked ? (linked.dos || "") : "";
       const billedAmt = linked ? num(linked.amount_billed) : 0;
@@ -11874,7 +11871,7 @@ if (method === "GET" && pathname === "/claims") {
         <td>${formatMoneyUI(n.requested_amount||0)}</td>
         <td>${formatMoneyUI(n.approved_amount||0)}</td>
         <td>${formatMoneyUI(n.collected_amount||0)}</td>
-        <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
+        <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "-"}</td>
         <td><a href="/negotiation-detail?negotiation_id=${encodeURIComponent(n.negotiation_id)}">Open Negotiation</a>${linked.billed_id ? ` • <a href="${workspacePagePath(linked.billed_id, "negotiation")}">AI Workspace</a>` : ``}</td>
       </tr>
     `;}).join("");
@@ -11995,7 +11992,7 @@ if (method === "GET" && pathname === "/claims") {
         <td>${formatMoneyUI(atRisk||0)}</td>
         <td>${riskScore}</td>
         <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
-        <td class="muted small">${b.submission_id ? `<a href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">Batch</a>` : "—"}</td>
+        <td class="muted small">${b.submission_id ? `<a href="/billed?submission_id=${encodeURIComponent(b.submission_id)}">Batch</a>` : "-"}</td>
       </tr>`;
     }).join("");
 
@@ -12971,7 +12968,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       ? `${formatNumberUI(missingContractClaims)} claims appear to be missing contract validation; route to reimbursement review.`
       : "No claims are currently flagged as missing contract validation.",
     denialRate > denialPriorityThreshold
-      ? `Denial rate is ${formatNumberUI(denialRate)}%, above ${formatNumberUI(denialPriorityThreshold)}% threshold — launch denial root-cause sprint.`
+      ? `Denial rate is ${formatNumberUI(denialRate)}%, above ${formatNumberUI(denialPriorityThreshold)}% threshold - launch denial root-cause sprint.`
       : `Denial rate is ${formatNumberUI(denialRate)}%, within ${formatNumberUI(denialPriorityThreshold)}% threshold.`
   ];
   const executiveBrief = `
@@ -13773,7 +13770,7 @@ if (method === "GET" && pathname === "/ai-copilot/export") {
         <div style="margin-top:12px;"><div style="font-weight:900;margin-bottom:6px;">Executive Summary</div>${bullets.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${bullets.map(b=>`<li>${safeStr(b)}</li>`).join("")}</ul>` : `<div class="muted">No summary available.</div>`}</div>
         <div style="margin-top:12px;"><div style="font-weight:900;margin-bottom:6px;">AI Case Readiness Drivers</div>${drivers.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${drivers.map(d=>`<li>${safeStr(d)}</li>`).join("")}</ul>` : `<div class="muted">No threshold breaches detected.</div>`}</div>
         <div style="margin-top:12px;"><div style="font-weight:900;margin-bottom:6px;">Recommended Executive Actions</div>${actions.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${actions.map(a=>`<li>${safeStr(a)}</li>`).join("")}</ul>` : `<div class="muted">No immediate corrective actions required.</div>`}</div>
-        <div style="margin-top:12px;"><div style="font-weight:900;margin-bottom:6px;">Top Risk Payers</div>${payers.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${payers.map(p=>`<li>${safeStr(p.payer)} — $${Math.round(p.risk||0).toLocaleString()} at risk</li>`).join("")}</ul>` : `<div class="muted">No payer risk data available.</div>`}</div>
+        <div style="margin-top:12px;"><div style="font-weight:900;margin-bottom:6px;">Top Risk Payers</div>${payers.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${payers.map(p=>`<li>${safeStr(p.payer)} - $${Math.round(p.risk||0).toLocaleString()} at risk</li>`).join("")}</ul>` : `<div class="muted">No payer risk data available.</div>`}</div>
 
         ${chartCards}
       </div>` : `<div class="pdf-section"><div class="muted">No executive brief generated yet for this workspace.</div></div>`}
@@ -13924,9 +13921,9 @@ function renderClaimFinancialContext(billedClaim, derived){
       <div style="font-weight:800;margin-bottom:8px;">Claim Financial Context</div>
       <table>
         <tbody>
-          <tr><th>Claim #</th><td>${safeStr(b.claim_number || "—")}</td></tr>
-          <tr><th>Payer</th><td>${safeStr(b.payer || "—")}</td></tr>
-          <tr><th>Status</th><td>${safeStr(d.lifecycleStage || "—")}</td></tr>
+          <tr><th>Claim #</th><td>${safeStr(b.claim_number || "-")}</td></tr>
+          <tr><th>Payer</th><td>${safeStr(b.payer || "-")}</td></tr>
+          <tr><th>Status</th><td>${safeStr(d.lifecycleStage || "-")}</td></tr>
           <tr><th>Amount Billed</th><td>${formatMoneyUI(num(d.billedAmount))}</td></tr>
           <tr><th>Expected Insurance</th><td>${formatMoneyUI(expected)}</td></tr>
           <tr><th>Insurance Paid / Collected</th><td>${formatMoneyUI(paid)}</td></tr>
@@ -14232,7 +14229,7 @@ if (method === "GET" && pathname === "/actions") {
           expectedAmount !== null
             ? formatMoneyUI(expectedAmount)
             : `
-              —
+              -
               <div class="muted small">
                 No reimbursement rule found.
                 <a href="/data-management?tab=reimbursement&focus_payer=${encodeURIComponent(b.payer || "")}">
@@ -14244,7 +14241,7 @@ if (method === "GET" && pathname === "/actions") {
       </td>
       <td class="num">${formatMoneyUI(paidAmount)}</td>
       <td><span class="badge ${badgeCls}">${safeStr(status)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
-      <td>${atRiskAmount !== null ? formatMoneyUI(atRiskAmount) : "—"}</td>
+      <td>${atRiskAmount !== null ? formatMoneyUI(atRiskAmount) : "-"}</td>
       <td>${x.riskScore}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
     </tr>`;
@@ -14635,7 +14632,7 @@ if (method === "GET" && pathname === "/payment-batch-detail") {
 
   const html = renderPage("Payment Batch Detail", `
     <h2>Payment Batch Detail</h2>
-    <p class="muted"><strong>File:</strong> ${safeStr(safeFile)} · <strong>Records:</strong> ${totalRecords} · <strong>Total Paid:</strong> ${formatMoneyUI(totalPaid)} · <strong>Uploaded:</strong> ${uploadedAt ? new Date(uploadedAt).toLocaleDateString() : "—"}</p>
+    <p class="muted"><strong>File:</strong> ${safeStr(safeFile)} · <strong>Records:</strong> ${totalRecords} · <strong>Total Paid:</strong> ${formatMoneyUI(totalPaid)} · <strong>Uploaded:</strong> ${uploadedAt ? new Date(uploadedAt).toLocaleDateString() : "-"}</p>
 
     <div class="btnRow">
       <a class="btn secondary" href="/upload-payments">Back to Upload Payments</a>
@@ -14784,7 +14781,7 @@ if (method === "GET" && pathname === "/upload-denials") {
 
     const claimLink = linked
       ? `<a href="/claim-detail?billed_id=${encodeURIComponent(linked.billed_id)}">${safeStr(claimNo)}</a>`
-      : `<span class="muted small">—</span>`;
+      : `<span class="muted small">-</span>`;
 
     const openAppeal = `<a href="/appeal-detail?case_id=${encodeURIComponent(c.case_id)}">Open</a>`;
 
@@ -14886,7 +14883,7 @@ if (method === "GET" && pathname === "/upload-negotiations") {
         <td>${formatMoneyUI(n.requested_amount||0)}</td>
         <td>${formatMoneyUI(n.approved_amount||0)}</td>
         <td>${formatMoneyUI(n.collected_amount||0)}</td>
-        <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
+        <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "-"}</td>
       </tr>
     `).join("");
 
@@ -14894,7 +14891,7 @@ if (method === "GET" && pathname === "/upload-negotiations") {
     .filter(b => String(b.status||"") === "Underpaid")
     .slice(0, 150);
 
-  const options = underpaidClaims.map(b => `<option value="${safeStr(b.billed_id)}">${safeStr(b.claim_number)} — ${safeStr(b.payer||"")}</option>`).join("");
+  const options = underpaidClaims.map(b => `<option value="${safeStr(b.billed_id)}">${safeStr(b.claim_number)} - ${safeStr(b.payer||"")}</option>`).join("");
 
   const html = renderPage("Upload Negotiations", `
     <h2>Negotiations</h2>
@@ -15049,7 +15046,7 @@ if (method === "GET" && pathname === "/negotiation-detail") {
       <tr><th>Requested</th><td>${formatMoneyUI(n.requested_amount||0)}</td></tr>
       <tr><th>Approved</th><td>${formatMoneyUI(n.approved_amount||0)}</td></tr>
       <tr><th>Collected</th><td>${formatMoneyUI(n.collected_amount||0)}</td></tr>
-      <tr><th>Updated</th><td>${n.updated_at ? new Date(n.updated_at).toLocaleString() : "—"}</td></tr>
+      <tr><th>Updated</th><td>${n.updated_at ? new Date(n.updated_at).toLocaleString() : "-"}</td></tr>
     </table>
 
 
@@ -15496,7 +15493,7 @@ if (method === "POST" && pathname === "/negotiations/upload") {
           return `
             <tr>
               <td><a href="/billed?submission_id=${encodeURIComponent(s.submission_id)}">${safeStr(s.original_filename || "billed_upload")}</a></td>
-              <td class="muted small">${s.uploaded_at ? new Date(s.uploaded_at).toLocaleDateString() : "—"}</td>
+              <td class="muted small">${s.uploaded_at ? new Date(s.uploaded_at).toLocaleDateString() : "-"}</td>
               <td>${totalClaims}</td>
               <td>${paidCount}</td>
               <td>${deniedCount}</td>
@@ -15827,7 +15824,7 @@ const statusCell = (() => {
 
     const html = renderPage("Billed Submission", `
       <h2>Billed Claims Submission</h2>
-      <p class="muted"><strong>File:</strong> ${safeStr(sub.original_filename || "billed_upload")} · <strong>Uploaded:</strong> ${sub.uploaded_at ? new Date(sub.uploaded_at).toLocaleString() : "—"} · <strong>Total claims:</strong> ${allInSub.length}</p>
+      <p class="muted"><strong>File:</strong> ${safeStr(sub.original_filename || "billed_upload")} · <strong>Uploaded:</strong> ${sub.uploaded_at ? new Date(sub.uploaded_at).toLocaleString() : "-"} · <strong>Total claims:</strong> ${allInSub.length}</p>
 
       <div class="hr"></div>
       <h3>Submission Financial Summary <span class="tooltip">ⓘ<span class="tooltiptext">Snapshot of billed revenue, collected revenue, and revenue at risk for this submission batch.</span></span></h3>
@@ -16850,7 +16847,7 @@ if (method === "GET" && pathname === "/appeal-detail") {
 
   const atts = Array.isArray(c.appeal_attachments) ? c.appeal_attachments : [];
   const listCat = (cat) => atts.filter(a => String(a.category||"general") === cat)
-    .map(a => `<li>${safeStr(a.filename)} <span class="muted small">(expires: ${safeStr(a.expires_at ? new Date(a.expires_at).toLocaleString() : "—")})</span></li>`).join("") || `<li class="muted small">None uploaded.</li>`;
+    .map(a => `<li>${safeStr(a.filename)} <span class="muted small">(expires: ${safeStr(a.expires_at ? new Date(a.expires_at).toLocaleString() : "-")})</span></li>`).join("") || `<li class="muted small">None uploaded.</li>`;
 
   const html = renderPage("Appeal Detail", `
     <h2>Appeal Detail</h2>
@@ -16956,7 +16953,7 @@ if (method === "GET" && pathname === "/appeal-detail") {
       <input name="authorization_number" value="${safeStr(priorAuth)}" placeholder="Authorization # (no patient identifiers)" />
 
       <label>Call Logs (dates, times, rep names; no patient identifiers)</label>
-      <textarea name="contact_log" style="min-height:140px;" placeholder="e.g., 02/10 2:15pm — Rep: J. Smith — Ref#: 12345">${safeStr(callLogs)}</textarea>
+      <textarea name="contact_log" style="min-height:140px;" placeholder="e.g., 02/10 2:15pm - Rep: J. Smith - Ref#: 12345">${safeStr(callLogs)}</textarea>
 
       <label>Letter of Medical Necessity (LMN)</label>
       <textarea name="lmn_text" style="min-height:220px;">${safeStr(lmnText)}</textarea>
@@ -17278,7 +17275,7 @@ if (method === "POST" && pathname === "/appeal/action") {
         (c.appeal_attachments && c.appeal_attachments.length)
           ? `<ul class="muted small">${
               c.appeal_attachments.map(a => {
-                const exp = a.expires_at ? new Date(a.expires_at).toLocaleString() : "—";
+                const exp = a.expires_at ? new Date(a.expires_at).toLocaleString() : "-";
                 return `<li>${safeStr(a.filename)} <span class="muted">(expires: ${safeStr(exp)})</span></li>`;
               }).join("")
             }</ul>`
@@ -18100,7 +18097,7 @@ rowsAdded = toUse;
       <p class="muted">Your file was uploaded successfully.</p>
       <ul class="muted">
         <li><strong>File:</strong> ${safeStr(f.filename)}</li>
-        <li><strong>Rows processed:</strong> ${isCSV ? rowsAdded : "File stored (not parsed — upload CSV for analytics extraction)"}</li>
+        <li><strong>Rows processed:</strong> ${isCSV ? rowsAdded : "File stored (not parsed - upload CSV for analytics extraction)"}</li>
       </ul>
       <div class="btnRow">
         <a class="btn" href="/payment-batch-detail?file=${encodeURIComponent(path.basename(stored))}">View Payment Batch</a>
@@ -18405,7 +18402,7 @@ function renderTemplateEditor(org, user){
       <div class="hr"></div>
       <h3>Batches</h3>
       <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded By</th><th>Uploaded At</th><th>Claim Count</th><th>Total Billed</th><th></th></tr></thead><tbody>
-      ${claimBatches.map(batch=>`<tr><td><a href="/batch-detail?upload_id=${encodeURIComponent(batch.upload_id)}">${safeStr(batch.filename)}</a></td><td>${safeStr(batch.uploaded_by || "")}</td><td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "—"}</td><td>${batch.claim_count}</td><td>${formatMoneyUI(batch.total_billed||0)}</td><td><form method="POST" action="/batch-delete" onsubmit="return confirm('Are you sure you want to permanently delete this batch and all associated claims?');"><input type="hidden" name="upload_id" value="${safeStr(batch.upload_id || "")}"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="6" class="muted">No batches.</td></tr>'}
+      ${claimBatches.map(batch=>`<tr><td><a href="/batch-detail?upload_id=${encodeURIComponent(batch.upload_id)}">${safeStr(batch.filename)}</a></td><td>${safeStr(batch.uploaded_by || "")}</td><td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "-"}</td><td>${batch.claim_count}</td><td>${formatMoneyUI(batch.total_billed||0)}</td><td><form method="POST" action="/batch-delete" onsubmit="return confirm('Are you sure you want to permanently delete this batch and all associated claims?');"><input type="hidden" name="upload_id" value="${safeStr(batch.upload_id || "")}"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="6" class="muted">No batches.</td></tr>'}
       </tbody></table></div>
       <h3>Integrity Metrics</h3>
       <div class="row"><div class="col"><div class="kpi-card"><h4>Missing payer</h4><p>${claimIntegrity.missingPayer}</p></div></div><div class="col"><div class="kpi-card"><h4>Missing submission_id</h4><p>${claimIntegrity.missingSubmission}</p></div></div><div class="col"><div class="kpi-card"><h4>Billed = 0</h4><p>${claimIntegrity.zeroBilled}</p></div></div><div class="col"><div class="kpi-card"><h4>Missing expected insurance</h4><p>${claimIntegrity.missingExpected}</p></div></div></div>
@@ -18417,7 +18414,7 @@ function renderTemplateEditor(org, user){
       <div class="hr"></div>
       <h3>Payments Batch History</h3>
       <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded</th><th>Rows</th><th>Total Paid</th><th>Matched %</th><th>Actions</th></tr></thead><tbody>
-      ${paymentBatches.map(p=>{const matchedPct=p.row_count?Math.round(((p.row_count-unmatchedPayments.filter(u=>u.source_file===p.source_file).length)/p.row_count)*100):0;return `<tr><td>${safeStr(p.source_file)}</td><td>${p.uploaded_at?new Date(p.uploaded_at).toLocaleString():"—"}</td><td>${p.row_count}</td><td>${formatMoneyUI(p.total_paid)}</td><td>${matchedPct}%</td><td style="white-space:nowrap;"><form method="POST" action="/data-management/rematch-payments" style="display:inline-block;"><button class="btn secondary small" type="submit">Re-match</button></form><form method="POST" action="/payment-batch-delete" onsubmit="return confirm('Are you sure you want to permanently delete this payment batch? This cannot be undone.');" style="display:inline-block;margin-left:6px;"><input type="hidden" name="source_file" value="${safeStr(p.source_file)}" /><button class="btn danger small" type="submit">Delete</button></form></td></tr>`;}).join("") || '<tr><td colspan="6" class="muted">No payment batches.</td></tr>'}
+      ${paymentBatches.map(p=>{const matchedPct=p.row_count?Math.round(((p.row_count-unmatchedPayments.filter(u=>u.source_file===p.source_file).length)/p.row_count)*100):0;return `<tr><td>${safeStr(p.source_file)}</td><td>${p.uploaded_at?new Date(p.uploaded_at).toLocaleString():"-"}</td><td>${p.row_count}</td><td>${formatMoneyUI(p.total_paid)}</td><td>${matchedPct}%</td><td style="white-space:nowrap;"><form method="POST" action="/data-management/rematch-payments" style="display:inline-block;"><button class="btn secondary small" type="submit">Re-match</button></form><form method="POST" action="/payment-batch-delete" onsubmit="return confirm('Are you sure you want to permanently delete this payment batch? This cannot be undone.');" style="display:inline-block;margin-left:6px;"><input type="hidden" name="source_file" value="${safeStr(p.source_file)}" /><button class="btn danger small" type="submit">Delete</button></form></td></tr>`;}).join("") || '<tr><td colspan="6" class="muted">No payment batches.</td></tr>'}
       </tbody></table></div>
       <h3>Unmatched Payments</h3>
       <div style="overflow:auto;"><table><thead><tr><th>Claim Number</th><th>Payer</th><th>Paid</th><th>Source</th><th>Reason</th></tr></thead><tbody>
@@ -18431,7 +18428,7 @@ function renderTemplateEditor(org, user){
       <div class="hr"></div>
       <h3>History</h3>
       <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded</th><th>Detected Claim</th><th>Linked Claim</th><th>Status</th><th></th></tr></thead><tbody>
-      ${ingests.filter(i=>i.category==="denials").map(i=>`<tr><td>${safeStr(i.original_filename||"")}</td><td>${i.uploaded_at?new Date(i.uploaded_at).toLocaleString():"—"}</td><td>${safeStr(i.detected_claim_number||"")}</td><td>${safeStr(i.linked_claim_number||"")}</td><td>${safeStr(i.status||"")}</td><td><form method="POST" action="/data-management/ingest/delete"><input type="hidden" name="ingest_id" value="${safeStr(i.ingest_id)}"/><input type="hidden" name="tab" value="denials"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="6" class="muted">No denial docs.</td></tr>'}
+      ${ingests.filter(i=>i.category==="denials").map(i=>`<tr><td>${safeStr(i.original_filename||"")}</td><td>${i.uploaded_at?new Date(i.uploaded_at).toLocaleString():"-"}</td><td>${safeStr(i.detected_claim_number||"")}</td><td>${safeStr(i.linked_claim_number||"")}</td><td>${safeStr(i.status||"")}</td><td><form method="POST" action="/data-management/ingest/delete"><input type="hidden" name="ingest_id" value="${safeStr(i.ingest_id)}"/><input type="hidden" name="tab" value="denials"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="6" class="muted">No denial docs.</td></tr>'}
       </tbody></table></div>
       <div class="row"><div class="col"><div class="kpi-card"><h4>Total denied claims</h4><p>${denialClaims.length}</p></div></div><div class="col"><div class="kpi-card"><h4>Denied claims with doc</h4><p>${denialWithDoc}</p></div></div><div class="col"><div class="kpi-card"><h4>Denied missing doc</h4><p>${Math.max(0,denialClaims.length-denialWithDoc)}</p></div></div></div>
       <form method="POST" action="/data-management/reprocess-denials"><button class="btn secondary" type="submit">Reprocess Denials</button></form>
@@ -18528,7 +18525,7 @@ function renderTemplateEditor(org, user){
                     Number(c.expected_value ?? c.allowed_amount ?? 0)
                   )
                 }</td>
-                <td>${c.effective_date ? new Date(c.effective_date).toLocaleDateString() : "—"}</td>
+                <td>${c.effective_date ? new Date(c.effective_date).toLocaleDateString() : "-"}</td>
                 <td>${countClaimsImpacted(org.org_id, c)}</td>
                 <td style="white-space:nowrap;">
                   <details>
@@ -18591,7 +18588,7 @@ function renderTemplateEditor(org, user){
         <button class="btn" type="submit">Upload Schedule</button>
       </form>
       <div style="overflow:auto;"><table><thead><tr><th>Type</th><th>Payer</th><th>Year</th><th>Locality</th><th>Uploaded</th><th>Preview</th><th></th></tr></thead><tbody>
-      ${feeSchedules.map(f=>`<tr><td>${safeStr(f.schedule_type||"")}</td><td>${safeStr(f.payer_name||"—")}</td><td>${safeStr(String(f.year||""))}</td><td>${safeStr(f.locality||"—")}</td><td>${f.uploaded_at?new Date(f.uploaded_at).toLocaleString():"—"}</td><td>${safeStr((f.rows||[]).slice(0,1).map(r=>`${r.procedure_code}:${r.amount}`).join(", ")||"—")}</td><td><form method="POST" action="/data-management/fee-schedules/delete"><input type="hidden" name="schedule_id" value="${safeStr(f.schedule_id)}"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="7" class="muted">No schedules</td></tr>'}
+      ${feeSchedules.map(f=>`<tr><td>${safeStr(f.schedule_type||"")}</td><td>${safeStr(f.payer_name||"-")}</td><td>${safeStr(String(f.year||""))}</td><td>${safeStr(f.locality||"-")}</td><td>${f.uploaded_at?new Date(f.uploaded_at).toLocaleString():"-"}</td><td>${safeStr((f.rows||[]).slice(0,1).map(r=>`${r.procedure_code}:${r.amount}`).join(", ")||"-")}</td><td><form method="POST" action="/data-management/fee-schedules/delete"><input type="hidden" name="schedule_id" value="${safeStr(f.schedule_id)}"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="7" class="muted">No schedules</td></tr>'}
       </tbody></table></div>
     `;
 
@@ -18639,7 +18636,7 @@ function renderTemplateEditor(org, user){
           uploads.length
             ? uploads.map(u => `
               <tr>
-                <td>${u.created_at ? new Date(u.created_at).toLocaleString() : "—"}</td>
+                <td>${u.created_at ? new Date(u.created_at).toLocaleString() : "-"}</td>
                 <td>${safeStr(u.created_by || "")}</td>
                 <td>${formatNumberUI(u.contracts_added || 0)}</td>
                 <td>${formatNumberUI(u.fee_schedules_added || 0)}</td>
@@ -18781,7 +18778,7 @@ function renderTemplateEditor(org, user){
             <td>${safeStr(c.diagnosis_code || "")}</td>
             <td>${safeStr(c.reimbursement_model || "")}</td>
             <td>${formatMoneyUI(Number(c.expected_value ?? 0))}</td>
-            <td>${c.effective_date ? new Date(c.effective_date).toLocaleDateString() : "—"}</td>
+            <td>${c.effective_date ? new Date(c.effective_date).toLocaleDateString() : "-"}</td>
             <td>${countClaimsImpacted(org.org_id, c)}</td>
             <td style="white-space:nowrap;">
               <form method="GET" action="/data-management/contracts/history" style="display:inline;">
@@ -18922,7 +18919,7 @@ function renderTemplateEditor(org, user){
       <table>
         <tr><th>File name</th><td>${safeStr(batch.file_name || "")}</td></tr>
         <tr><th>Uploaded by</th><td>${safeStr(batch.uploaded_by || "")}</td></tr>
-        <tr><th>Uploaded at</th><td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "—"}</td></tr>
+        <tr><th>Uploaded at</th><td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "-"}</td></tr>
         <tr><th>Claim count</th><td>${num(batch.claim_count)}</td></tr>
         <tr><th>Total billed</th><td>${formatMoneyUI(batch.total_billed || 0)}</td></tr>
       </table>
@@ -19328,7 +19325,7 @@ function renderTemplateEditor(org, user){
           }
         }
 
-        // AI validation (rule-based MVP) — block on issues
+        // AI validation (rule-based MVP) - block on issues
         if (typeof validateContractBatch === "function") {
           const v = validateContractBatch(org.org_id, stagedContracts);
           if (!v.valid) {
@@ -19411,7 +19408,7 @@ function renderTemplateEditor(org, user){
 
     const previewTable = previewRows.length
       ? `<div class="card"><h3>Preview (First 20 rows)</h3><div style="overflow:auto;"><table><thead><tr><th>Type</th><th>File</th><th>Payer</th><th>Code</th><th>Expected</th></tr></thead><tbody>${
-          previewRows.map(r=>`<tr><td>${safeStr(r.type)}</td><td>${safeStr(r.file||"")}</td><td>${safeStr(r.payer||"—")}</td><td>${safeStr(r.code||"")}</td><td>${safeStr(String(r.expected||""))}</td></tr>`).join("")
+          previewRows.map(r=>`<tr><td>${safeStr(r.type)}</td><td>${safeStr(r.file||"")}</td><td>${safeStr(r.payer||"-")}</td><td>${safeStr(r.code||"")}</td><td>${safeStr(String(r.expected||""))}</td></tr>`).join("")
         }</tbody></table></div></div>`
       : "";
 
@@ -19794,7 +19791,7 @@ function renderTemplateEditor(org, user){
       <tr>
         <td>${safeStr(a.template_type)}</td>
         <td>${safeStr(a.original_name)}</td>
-        <td>${a.created_at ? new Date(a.created_at).toLocaleString() : "—"}</td>
+        <td>${a.created_at ? new Date(a.created_at).toLocaleString() : "-"}</td>
         <td>${a.is_default ? `<span class="badge ok">Default</span>` : ``}</td>
         <td style="white-space:nowrap;">
           <a class="btn secondary small" href="/data-management/templates/assets/download?asset_id=${encodeURIComponent(a.asset_id)}">Download</a>
@@ -20007,7 +20004,7 @@ function renderTemplateEditor(org, user){
     const versions = listTemplateVersions(org.org_id).slice(0, 50);
     const rows = versions.length ? versions.map(v => `
       <tr>
-        <td>${v.created_at ? new Date(v.created_at).toLocaleString() : "—"}</td>
+        <td>${v.created_at ? new Date(v.created_at).toLocaleString() : "-"}</td>
         <td>${safeStr(v.created_by || "")}</td>
         <td>${safeStr(v.reason || "")}</td>
         <td style="white-space:nowrap;">
@@ -20283,7 +20280,7 @@ function renderTemplateEditor(org, user){
     `;
 
     const planName = (sub && sub.status === "active") ? "Monthly" : (pilot && pilot.status === "active" ? "Free Trial" : "Expired");
-    const planEnds = (sub && sub.status === "active") ? "—" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "—");
+    const planEnds = (sub && sub.status === "active") ? "-" : (pilot?.ends_at ? new Date(pilot.ends_at).toLocaleDateString() : "-");
     const themeSelection = (user.theme === "light" || user.theme === "dark") ? user.theme : "light";
 
     const section = (() => {
@@ -20298,7 +20295,7 @@ function renderTemplateEditor(org, user){
           ${errBanner}
           <h3>Organization Settings</h3>
           <p class="muted">Set organization identity, letter defaults, contract/allowed rules, workflows, KPI targets, and enterprise placeholders in one place.</p>
-          <p class="muted">Last updated: ${safeStr(orgSettings.updated_at ? new Date(orgSettings.updated_at).toLocaleString() : "—")}</p>
+          <p class="muted">Last updated: ${safeStr(orgSettings.updated_at ? new Date(orgSettings.updated_at).toLocaleString() : "-")}</p>
           <form method="POST" action="/account/org-settings/save" style="margin-top:10px;display:flex;flex-direction:column;gap:10px;">
             <details open class="card" style="padding:0;">
               <summary style="padding:12px 14px;font-weight:800;cursor:pointer;">1) Organization Identity</summary>
@@ -20377,7 +20374,7 @@ function renderTemplateEditor(org, user){
         const planName = getActivePlanName(org.org_id);
         const planEnds = (() => {
           const p = getPilot(org.org_id) || ensurePilot(org.org_id);
-          return p?.ends_at ? new Date(p.ends_at).toLocaleDateString() : "—";
+          return p?.ends_at ? new Date(p.ends_at).toLocaleDateString() : "-";
         })();
 
         const copilotUsage = getCopilotUsageSnapshot(org.org_id);
@@ -20693,7 +20690,7 @@ if (method === "POST" && pathname === "/account/password") {
 
 
  
-  // Report export (CSV) — used by Payment Detail Report
+  // Report export (CSV) - used by Payment Detail Report
   if (method === "GET" && pathname === "/report/export") {
     const start = parsed.query.start || "";
     const end = parsed.query.end || "";
@@ -20984,21 +20981,21 @@ if (method === "POST" && pathname === "/account/password") {
       const a2 = computeAnalytics(org.org_id);
       body += `
         <h3>Average Days to Payment <span class="tooltip">ⓘ<span class="tooltiptext">Average days from denial date (or billed date) to payment date for paid billed claims.</span></span></h3>
-        <div class="kpi-card"><h4>Avg Days to Payment <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Indicates faster revenue recovery.</span></span></h4><p>${a2.avgDaysToPayment !== null ? a2.avgDaysToPayment + " days" : "—"}</p></div>
+        <div class="kpi-card"><h4>Avg Days to Payment <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Indicates faster revenue recovery.</span></span></h4><p>${a2.avgDaysToPayment !== null ? a2.avgDaysToPayment + " days" : "-"}</p></div>
       `;
     }
     else if (type === "kpi_denial_turnaround") {
       const a2 = computeAnalytics(org.org_id);
       body += `
         <h3>Denial Turnaround Time <span class="tooltip">ⓘ<span class="tooltiptext">Average days between denial date and denial case creation (work start).</span></span></h3>
-        <div class="kpi-card"><h4>Avg Denial Turnaround <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Measures how quickly denials enter the appeal workflow.</span></span></h4><p>${a2.avgDenialTurnaround !== null ? a2.avgDenialTurnaround + " days" : "—"}</p></div>
+        <div class="kpi-card"><h4>Avg Denial Turnaround <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Measures how quickly denials enter the appeal workflow.</span></span></h4><p>${a2.avgDenialTurnaround !== null ? a2.avgDenialTurnaround + " days" : "-"}</p></div>
       `;
     }
     else if (type === "kpi_resolution_time") {
       const a2 = computeAnalytics(org.org_id);
       body += `
         <h3>Time to Resolution <span class="tooltip">ⓘ<span class="tooltiptext">Average days between billed date and payment date for paid billed claims.</span></span></h3>
-        <div class="kpi-card"><h4>Avg Time to Resolution <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Measures billing-to-cash cycle time.</span></span></h4><p>${a2.avgTimeToResolution !== null ? a2.avgTimeToResolution + " days" : "—"}</p></div>
+        <div class="kpi-card"><h4>Avg Time to Resolution <span class="tooltip">ⓘ<span class="tooltiptext">Lower is better. Measures billing-to-cash cycle time.</span></span></h4><p>${a2.avgTimeToResolution !== null ? a2.avgTimeToResolution + " days" : "-"}</p></div>
       `;
     }
     else if (type === "kpi_denial_aging") {
@@ -21055,7 +21052,7 @@ else if (type === "payers") {
       </p>
       <ul class="muted">
         <li>Trial end date: ${new Date(p2.ends_at).toLocaleDateString()}</li>
-        <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "—"}</li>
+        <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "-"}</li>
       </ul>
       <div class="btnRow">
         <a class="btn" href="/pricing">Continue Monthly Access</a>
@@ -21188,7 +21185,7 @@ else if (type === "payers") {
       : `<div class="muted small">No denial reasons found yet.</div>`;
 
     const cptList = (data.cptTop.length)
-      ? `<ul>${data.cptTop.map(r => `<li>${safeStr(r.label)} — ${formatMoneyUI(r.value)}</li>`).join("")}</ul>`
+      ? `<ul>${data.cptTop.map(r => `<li>${safeStr(r.label)} - ${formatMoneyUI(r.value)}</li>`).join("")}</ul>`
       : `<div class="muted small">No CPT underpayment drivers found yet.</div>`;
 
     const actionsPanel = `
@@ -21479,7 +21476,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       </table>
 
       <h3>2) Required Docs Checklist</h3>
-      ${(hasMissingErr && !readyCheck.ok) ? `<p class="warn">Cannot mark ready — missing required items: ${safeStr(missingDocsText)}</p>` : ""}
+      ${(hasMissingErr && !readyCheck.ok) ? `<p class="warn">Cannot mark ready - missing required items: ${safeStr(missingDocsText)}</p>` : ""}
       <ul>${checklistHtml}</ul>
       <div id="ai-attachment-checklist" style="display:flex;gap:12px;flex-wrap:wrap;">
         <label><input type="checkbox" id="att-denial" ${packetHasKey(ws, "denial_letter")?"checked":""}/> Denial Letter uploaded</label>
@@ -21523,7 +21520,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
           <label>Notes</label><textarea name="notes" style="min-height:70px;">${safeStr(ws.submission?.notes || "")}</textarea>
           <button class="btn secondary" type="submit">Mark Submitted</button>
         </form>
-        <p class="small muted">Status: ${safeStr(ws.submission?.status || "draft")} | Submitted: ${safeStr(ws.submission?.submitted_at || "—")} | Due: ${safeStr(ws.follow_up?.due_at || "—")}</p>
+        <p class="small muted">Status: ${safeStr(ws.submission?.status || "draft")} | Submitted: ${safeStr(ws.submission?.submitted_at || "-")} | Due: ${safeStr(ws.follow_up?.due_at || "-")}</p>
       </details>
 
       <details>
@@ -21652,7 +21649,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
           if (stageType === 'appeal' && !f.hasDenialLetter) alerts.push('Missing Denial Letter for appeal packet.');
           if (stageType === 'appeal' && !f.hasEob) alerts.push('Missing EOB/ERA for appeal packet.');
           if (!f.hasClaimForm) alerts.push('Missing claim form/itemized bill.');
-          if (!hasContractRule) alerts.push('Contract rule missing — add contract rule in Reimbursement Engine');
+          if (!hasContractRule) alerts.push('Contract rule missing - add contract rule in Reimbursement Engine');
           if (f.argumentLength < 200) alerts.push('Argument narrative is short; add clinical/contract rationale.');
           if (!f.hasClearAsk) alerts.push('Requested action is unclear; include a specific ask.');
           if (!hasContractRule && strategy === 'Contractual') alerts.push('Contractual strategy selected but no contract rule found.');
@@ -22088,7 +22085,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       if (status === "ready_for_review") {
         const check = canMarkReady(ws, channel);
         if (!check.ok && override_missing !== "on") {
-          addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel: "general", content: `Cannot mark ready — missing: ${check.missing.join(", ")}`, created_at: nowISO() });
+          addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel: "general", content: `Cannot mark ready - missing: ${check.missing.join(", ")}`, created_at: nowISO() });
           return redirect(res, `${workspacePagePath(billed_id, channel)}&err=missing_required`);
         }
       }
@@ -22250,7 +22247,7 @@ if (method === "GET" && pathname === "/claim-detail") {
                <td>${formatMoneyUI(n.requested_amount)}</td>
                <td>${formatMoneyUI(n.approved_amount)}</td>
                <td>${formatMoneyUI(n.collected_amount)}</td>
-               <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "—"}</td>
+               <td>${n.updated_at ? new Date(n.updated_at).toLocaleDateString() : "-"}</td>
              </tr>
            `).join("")
          }</tbody>
@@ -22275,8 +22272,8 @@ if (method === "GET" && pathname === "/claim-detail") {
   const appealPacketSummary = appealCase
     ? `
       <ul class="muted">
-        <li>Submitted At: ${safeStr(appealCase.appeal_packet?.submitted_at || "—")}</li>
-        <li>Exported At: ${safeStr(appealCase.appeal_packet?.exported_at || "—")}</li>
+        <li>Submitted At: ${safeStr(appealCase.appeal_packet?.submitted_at || "-")}</li>
+        <li>Exported At: ${safeStr(appealCase.appeal_packet?.exported_at || "-")}</li>
         <li>Attachments: ${(appealCase.appeal_packet?.attachments || appealCase.appeal_attachments || []).length}</li>
       </ul>
       <a class="btn secondary" href="/appeal-detail?case_id=${encodeURIComponent(appealCase.case_id)}">Open Appeal Workspace</a>
@@ -22286,8 +22283,8 @@ if (method === "GET" && pathname === "/claim-detail") {
   const negotiationPacketSummary = latestNegotiation
     ? `
       <ul class="muted">
-        <li>Submitted At: ${safeStr(latestNegotiation.negotiation_packet?.submitted_at || "—")}</li>
-        <li>Exported At: ${safeStr(latestNegotiation.negotiation_packet?.exported_at || "—")}</li>
+        <li>Submitted At: ${safeStr(latestNegotiation.negotiation_packet?.submitted_at || "-")}</li>
+        <li>Exported At: ${safeStr(latestNegotiation.negotiation_packet?.exported_at || "-")}</li>
         <li>Attachments: ${(latestNegotiation.negotiation_packet?.attachments || latestNegotiation.documents || []).length}</li>
       </ul>
       <a class="btn secondary" href="/negotiation-detail?negotiation_id=${encodeURIComponent(latestNegotiation.negotiation_id)}">Open Negotiation Workspace</a>
@@ -22304,7 +22301,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       <tr><th>Date Of Service</th><td>${safeStr(b.dos || "")}</td></tr>
       <tr><th>Network Information <span class="tooltip" data-tip="To change network status, go to Data Management.">ⓘ</span></th><td><span class="badge ${networkBadge}">${safeStr(networkStatus)}</span></td></tr>
       <tr><th>Status</th><td><span class="badge ${badgeClassForStatus(derivedStatus)}">${safeStr(derivedStatus)}</span></td></tr>
-      <tr><th>Current Round <span class="tooltip" data-tip="Rounds track each payer submission cycle. Round 1 is the first submission; later rounds represent follow-up appeals/negotiations.">ⓘ</span></th><td>${currentRound || "—"}</td></tr>
+      <tr><th>Current Round <span class="tooltip" data-tip="Rounds track each payer submission cycle. Round 1 is the first submission; later rounds represent follow-up appeals/negotiations.">ⓘ</span></th><td>${currentRound || "-"}</td></tr>
     </table>
 
     <div class="hr"></div>
@@ -22382,7 +22379,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       low: openTasks.filter(t => String(t.risk_level || "").toUpperCase() === "LOW").length,
     };
     const rows = openTasks.slice(0,200).map(t => `<tr><td>${safeStr(t.stage_type)}</td><td>${safeStr(t.status)}</td><td>${formatNumberUI(t.priority || 0)}</td><td>${safeStr(t.risk_level || "MEDIUM")}</td><td>${formatMoneyUI(num(t.estimated_value || 0))}</td><td>${safeStr(t.recommended_next_step || (t.next_actions||[])[0] || "Review")}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No active tasks.</td></tr>`;
-    const payerRows = topPayers.map(([payer,count])=>`<li>${safeStr(payer)} — ${formatNumberUI(count)}</li>`).join("") || `<li class="muted">No payer concentration yet.</li>`;
+    const payerRows = topPayers.map(([payer,count])=>`<li>${safeStr(payer)} - ${formatNumberUI(count)}</li>`).join("") || `<li class="muted">No payer concentration yet.</li>`;
     const html = renderPage("Recovery Command Center", `
       <h2>Recovery Command Center</h2>
       <div class="row">
