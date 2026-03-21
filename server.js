@@ -9979,7 +9979,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, html);
     }
 
-    if (pathname === "/admin/analytics" || pathname === "/admin/revenue") {
+    if (method === "GET" && (pathname === "/admin/analytics" || pathname === "/admin/revenue")) {
       return redirect(res, "/admin/insights");
     }
 
@@ -10318,57 +10318,96 @@ const server = http.createServer(async (req, res) => {
       const totalOrgs = orgs.length;
       const activeSubs = subs.filter(s => s.status === "active").length;
       const totalApps = apps.length;
-      const totalRevenue = analytics.revenue || 0;
-      const totalLeads = analytics.leads || 0;
-      const recentActivityRows = apps.slice(-5).reverse().map(a => `
-        <tr>
-          <td>${safeStr(a.name)}</td>
-          <td>${safeStr(a.email)}</td>
-          <td>${safeStr(a.status)}</td>
-        </tr>
-      `).join("");
+      const totalRevenue = Number(analytics.revenue || 0);
+      const totalLeads = Number(analytics.leads || 0);
+      const leadToUserRatio = totalLeads > 0 ? (totalUsers / totalLeads) * 100 : 0;
+      const userToSubscriptionRatio = totalUsers > 0 ? (activeSubs / totalUsers) * 100 : 0;
+      const revenuePotential = Math.max(0, (totalLeads * 250) - totalRevenue);
+      // Future enhancement: replace internal revenue metric with live Stripe MRR/ARR/churn metrics
+      const executiveMessage = activeSubs === 0
+        ? "You are still in early traction mode. Focus on converting leads into active subscriptions."
+        : (totalUsers > 0 && (activeSubs / totalUsers) < 0.2)
+          ? "User adoption is growing faster than paid conversion. Focus on onboarding and conversion levers."
+          : "The platform is showing healthy movement across growth and monetization metrics.";
+
+      const recentApplications = apps
+        .slice()
+        .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+        .slice(0, 5);
+      const recentActivityRows = recentApplications.map(a => {
+        const submittedAt = a.created_at ? new Date(a.created_at).toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }) : "-";
+        return `
+          <tr>
+            <td>${safeStr(a.name || "-")}</td>
+            <td>${safeStr(a.email || "-")}</td>
+            <td>${safeStr(a.status || "New")}</td>
+            <td>${safeStr(submittedAt)}</td>
+          </tr>
+        `;
+      }).join("");
+
+      const growthLabels = JSON.stringify(["Leads", "Users", "Organizations", "Subscriptions", "Applications"]);
+      const growthValues = JSON.stringify([totalLeads, totalUsers, totalOrgs, activeSubs, totalApps]);
+      const revenueLabels = JSON.stringify(["Revenue", "Remaining Potential"]);
+      const revenueValues = JSON.stringify([totalRevenue, revenuePotential]);
 
       return send(res, 200, renderPage("Insights Dashboard", `
         <h2>Insights Dashboard</h2>
-        <p class="muted">High-level business, hiring, and growth metrics.</p>
+        <p class="muted">High-level business, hiring, and growth metrics for TJ Healthcare Pro.</p>
+
+        <div class="row">
+          <div class="col" style="flex:1 1 100%;min-width:100%;">
+            <section>
+              <div class="kpi-card"><h4>Total Leads</h4><p>${totalLeads.toLocaleString()}</p><div class="muted small">Top of funnel</div></div>
+              <div class="kpi-card"><h4>Total Users</h4><p>${totalUsers.toLocaleString()}</p></div>
+              <div class="kpi-card"><h4>Total Organizations</h4><p>${totalOrgs.toLocaleString()}</p></div>
+              <div class="kpi-card"><h4>Active Subscriptions</h4><p>${activeSubs.toLocaleString()}</p></div>
+              <div class="kpi-card"><h4>Total Applications</h4><p>${totalApps.toLocaleString()}</p></div>
+              <div class="kpi-card"><h4>Total Revenue</h4><p>${formatMoneyUI(totalRevenue)}</p><div class="muted small">Internal tracked revenue</div></div>
+            </section>
+          </div>
+        </div>
+
+        <h3>Business Snapshot</h3>
+        <div class="row">
+          <div class="kpi-card" style="width:220px;text-align:left;">
+            <div class="muted small">Lead to User Ratio</div>
+            <p style="margin:8px 0 0;font-size:28px;font-weight:800;">${leadToUserRatio.toFixed(1)}%</p>
+            <div class="muted small">Measures how effectively top-of-funnel interest is converting into user accounts.</div>
+          </div>
+          <div class="kpi-card" style="width:220px;text-align:left;">
+            <div class="muted small">User to Subscription Ratio</div>
+            <p style="margin:8px 0 0;font-size:28px;font-weight:800;">${userToSubscriptionRatio.toFixed(1)}%</p>
+            <div class="muted small">Shows how many active users have converted into paying subscription relationships.</div>
+          </div>
+          <div class="kpi-card" style="width:220px;text-align:left;">
+            <div class="muted small">Application Activity</div>
+            <p style="margin:8px 0 0;font-size:28px;font-weight:800;">${totalApps.toLocaleString()}</p>
+            <div class="muted small">Hiring interest across active roles</div>
+          </div>
+        </div>
 
         <div class="row">
           <div class="col">
-            <div class="kpi-card">
-              <h4>Total Users</h4>
-              <p>${totalUsers}</p>
-            </div>
-
-            <div class="kpi-card">
-              <h4>Total Organizations</h4>
-              <p>${totalOrgs}</p>
-            </div>
-
-            <div class="kpi-card">
-              <h4>Total Leads</h4>
-              <p>${totalLeads}</p>
+            <h3>Growth Overview</h3>
+            <div style="border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);box-shadow:var(--shadow);">
+              <div class="muted small" style="margin-bottom:10px;">Internal comparison of the current funnel, user base, and hiring momentum.</div>
+              <div style="position:relative;min-height:240px;"><canvas id="adminInsightsGrowthChart"></canvas></div>
             </div>
           </div>
-
           <div class="col">
-            <div class="kpi-card">
-              <h4>Active Subscriptions</h4>
-              <p>${activeSubs}</p>
-            </div>
-
-            <div class="kpi-card">
-              <h4>Total Applications</h4>
-              <p>${totalApps}</p>
-            </div>
-
-            <div class="kpi-card">
-              <h4>Total Revenue</h4>
-              <p>$${totalRevenue}</p>
+            <h3>Revenue Summary</h3>
+            <div style="border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);box-shadow:var(--shadow);">
+              <div class="muted small" style="margin-bottom:10px;">Internal revenue tracked today vs. simple remaining potential estimate.</div>
+              <div style="position:relative;min-height:240px;"><canvas id="adminInsightsRevenueChart"></canvas></div>
             </div>
           </div>
         </div>
 
-        <div class="hr"></div>
+        <h3>Executive View</h3>
+        <div style="border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);box-shadow:var(--shadow);margin-bottom:14px;">
+          <p class="muted">${safeStr(executiveMessage)}</p>
+        </div>
 
         <h3>Recent Activity</h3>
         <table>
@@ -10377,12 +10416,84 @@ const server = http.createServer(async (req, res) => {
               <th>Name</th>
               <th>Email</th>
               <th>Status</th>
+              <th>Submitted</th>
             </tr>
           </thead>
           <tbody>
-            ${recentActivityRows || '<tr><td colspan="3" class="muted">No recent activity</td></tr>'}
+            ${recentActivityRows || '<tr><td colspan="4" class="muted">No recent applications yet.</td></tr>'}
           </tbody>
         </table>
+        <script>
+          (function(){
+            function initInsightsCharts(){
+              const growthEl = document.getElementById("adminInsightsGrowthChart");
+              if (growthEl && window.Chart && !growthEl.dataset.chartReady) {
+                growthEl.dataset.chartReady = "true";
+                new Chart(growthEl, {
+                  type: "bar",
+                  data: {
+                    labels: ${growthLabels},
+                    datasets: [{
+                      label: "Count",
+                      data: ${growthValues},
+                      backgroundColor: ["#0f766e", "#2563eb", "#7c3aed", "#059669", "#ea580c"],
+                      borderRadius: 8,
+                      maxBarThickness: 48
+                    }]
+                  },
+                  options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+                  }
+                });
+              }
+
+              const revenueEl = document.getElementById("adminInsightsRevenueChart");
+              if (revenueEl && window.Chart && !revenueEl.dataset.chartReady) {
+                revenueEl.dataset.chartReady = "true";
+                new Chart(revenueEl, {
+                  type: "doughnut",
+                  data: {
+                    labels: ${revenueLabels},
+                    datasets: [{
+                      data: ${revenueValues},
+                      backgroundColor: ["#0f766e", "#dbeafe"],
+                      borderWidth: 0
+                    }]
+                  },
+                  options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: "bottom" } },
+                    cutout: "68%"
+                  }
+                });
+              }
+            }
+
+            function ensureInsightsCharts(){
+              if (window.Chart) {
+                initInsightsCharts();
+                return;
+              }
+              const existing = document.querySelector('script[data-admin-insights-chartjs="true"]');
+              if (existing) {
+                existing.addEventListener("load", initInsightsCharts, { once:true });
+                return;
+              }
+              const script = document.createElement("script");
+              script.src = "https://cdn.jsdelivr.net/npm/chart.js";
+              script.dataset.adminInsightsChartjs = "true";
+              script.onload = initInsightsCharts;
+              document.head.appendChild(script);
+            }
+
+            if (document.readyState === "complete") ensureInsightsCharts();
+            else window.addEventListener("load", ensureInsightsCharts, { once:true });
+          })();
+        </script>
       `, navAdmin(), { showChat:false, orgName:"" }));
     }
 
