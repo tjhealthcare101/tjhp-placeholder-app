@@ -3027,7 +3027,7 @@ function renderUpgradePrompt(limitType) {
         You've reached your ${safeStr(limitType)} limit. Upgrade your plan to continue.
       </div>
       <div style="margin-top:8px;">
-        <a href="/plans" class="btn">Upgrade Plan</a>
+        <a href="/plans" class="btn-primary">Upgrade Plan</a>
       </div>
     </div>
   `;
@@ -3058,7 +3058,7 @@ function renderFeatureLocked(featureName) {
         Upgrade your plan to unlock this feature.
       </div>
       <div style="margin-top:8px;">
-        <a href="/plans" class="btn">Upgrade Plan</a>
+        <a href="/plans" class="btn-primary">Upgrade Plan</a>
       </div>
     </div>
   `;
@@ -3097,7 +3097,7 @@ function renderTrialBanner(org_id) {
       transition:all 0.2s ease;
     ">
       Free Trial: ${trial.daysLeft} day(s) remaining
-      <a href="/plans" style="margin-left:10px;text-decoration:underline;">Upgrade Now</a>
+      <a href="/plans" style="margin-left:10px;color:white;font-weight:600;">Upgrade Now</a>
 
       <span onclick="document.getElementById('trialBanner').remove(); localStorage.setItem('hideTrialBanner','1');"
         style="
@@ -14005,14 +14005,25 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 // AI COPILOT WORKSPACE
 // ===============================
 if (method === "GET" && pathname === "/ai-copilot") {
-  if (!hasFeatureAccess(org.org_id, "copilot")) {
-    return send(res, 403, renderPage("AI Copilot", renderFeatureLocked("AI Copilot"), navUser(), {showChat:true, orgName: org.org_name}));
+  const copilotUsage = getCopilotUsageSnapshot(org.org_id);
+
+  if (!copilotUsage.hasAccess) {
+    return send(res, 200, renderPage("AI Copilot", `
+    <div class="card" style="border:1px solid #e11d48;background:#fff1f2;">
+      <h3>AI Copilot Limit Reached</h3>
+      <p class="muted">
+        ${copilotUsage.limits?.mode === "pilot"
+          ? "You’ve used all 10 trial AI Copilot queries. Upgrade to continue."
+          : "You’ve reached your AI Copilot limit for this billing cycle."}
+      </p>
+      <a href="/plans" class="btn-primary">Upgrade Plan</a>
+    </div>
+  `, navUser(), {showChat:true, orgName: org.org_name}));
   }
   const workspace_id = String(parsed.query.workspace || "").trim();
 
   let workspace = workspace_id ? getCopilotWorkspace(org.org_id, workspace_id) : null;
   const allWorkspaces = getCopilotWorkspaces(org.org_id);
-  const copilotUsage = getCopilotUsageSnapshot(org.org_id);
 
   if (!workspace && allWorkspaces.length && !parsed.query.new) {
     workspace = allWorkspaces[0];
@@ -14098,28 +14109,20 @@ if (method === "GET" && pathname === "/ai-copilot") {
       <div class="ws-main">
         <div class="ws-topbar">
           <div>
-            <div class="ws-title">${copilotUsage.limitReached ? "AI Copilot Locked" : (copilotUsage.limits?.mode === "pilot" ? "AI Copilot (Trial Mode)" : "AI Copilot")}</div>
+            <div class="ws-title">${copilotUsage.limits?.mode === "pilot" ? "AI Copilot (Trial Mode)" : "AI Copilot"}</div>
             <div class="muted" style="font-size:12px;">Chat-style revenue intelligence. Prompts + executive brief stay in the thread.</div>
             ${(!copilotUsage.isUnlimited ? `
               <div class="alert warn" style="
                 margin-top:8px;
-                border:1px solid ${copilotUsage.limitReached ? "#e11d48" : "#f59e0b"};
-                background:${copilotUsage.limitReached ? "#fff1f2" : "#fffbeb"};
-                color:${copilotUsage.limitReached ? "#9f1239" : "#92400e"};
+                border:1px solid #f59e0b;
+                background:#fffbeb;
+                color:#92400e;
                 padding:10px 12px;
                 border-radius:10px;
               ">
-                ${
-                  copilotUsage.limitReached
-                    ? (copilotUsage.limits?.mode === "pilot"
-                        ? "You’ve used all 10 trial AI Copilot queries. Upgrade for more access."
-                        : "You’ve reached your AI Copilot limit for this cycle.")
-                    : `You have <strong>${formatNumberUI(copilotUsage.remaining)}</strong> of <strong>${formatNumberUI(copilotUsage.limit)}</strong> AI queries remaining.`
-                }
+                You have <strong>${formatNumberUI(copilotUsage.remaining)}</strong> of <strong>${formatNumberUI(copilotUsage.limit)}</strong> AI queries remaining.
               </div>
             ` : ``)}
-            ${(!copilotUsage.isUnlimited && copilotUsage.limitReached) ? `<div style="margin-top:6px;"><span class="badge bad">Limit Reached</span></div>` : ``}
-            ${parsed.query.limit ? `<div class="muted" style="margin-top:6px;color:#b91c1c;">${getCopilotLimitMessage(org.org_id)?.message || ""}</div>` : ``}
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button type="button" class="btn secondary small" id="wsExpandBtn" style="display:none;">☰ Saved Analyses</button>
@@ -21006,7 +21009,7 @@ function renderTemplateEditor(org, user){
               Manage Subscription
             </a>
 
-            <a href="/pricing" class="btn">
+            <a href="/plans" class="btn-primary">
               Upgrade Plan
             </a>
           </div>
@@ -21654,7 +21657,7 @@ else if (type === "payers") {
         <li>Scheduled deletion date: ${p2.retention_delete_at ? new Date(p2.retention_delete_at).toLocaleDateString() : "-"}</li>
       </ul>
       <div class="btnRow">
-        <a class="btn" href="/pricing">Continue Monthly Access</a>
+        <a class="btn-primary" href="/plans">Continue Monthly Access</a>
         <a class="btn secondary" href="/exports">Download Exports</a>
         <a class="btn secondary" href="/logout">Logout</a>
       </div>
