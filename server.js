@@ -9160,26 +9160,26 @@ const server = http.createServer(async (req, res) => {
 
     const signupHtml = `
     <h2 style="margin-bottom:10px;">Create Account</h2>
-    <p style="color:#666;font-size:14px;margin-bottom:20px;">
-      Start your free trial - no credit card required
+    <p class="muted" style="margin-bottom:20px;">
+      Start your free trial — no credit card required
     </p>
 
     <form method="POST" action="/signup">
 
       <label>Work Email</label>
-      <input name="email" type="email" required style="width:100%;margin-bottom:12px;" />
+      <input name="email" type="email" required class="input"/>
 
       <label>Password (8+ characters)</label>
-      <input name="password" type="password" required style="width:100%;margin-bottom:12px;" />
+      <input name="password" type="password" required class="input"/>
 
       <label>Confirm Password</label>
-      <input name="confirm_password" type="password" required style="width:100%;margin-bottom:12px;" />
+      <input name="confirm_password" type="password" required class="input"/>
 
       <label>Organization Name</label>
-      <input name="org_name" required style="width:100%;margin-bottom:12px;" />
+      <input name="org_name" required class="input"/>
 
       <label>What best describes you?</label>
-      <select name="role" required style="width:100%;margin-bottom:16px;">
+      <select name="role" required class="input">
         <option value="">Select one</option>
         <option value="owner">Practice Owner</option>
         <option value="manager">Office Manager</option>
@@ -9188,24 +9188,35 @@ const server = http.createServer(async (req, res) => {
         <option value="other">Other</option>
       </select>
 
-      <label style="display:flex;gap:8px;align-items:center;margin-top:10px;">
+      <label style="display:flex;gap:8px;margin-top:12px;">
         <input type="checkbox" name="ack" required />
         <span class="muted small">
           I understand this system does not access EMRs or payer portals
         </span>
       </label>
 
-      <button class="btn-primary" style="width:100%;margin-top:14px;">
-        Create Account
+      <button type="submit" class="btn-primary" style="width:100%;margin-top:14px;">
+        Start Free Trial
       </button>
 
     </form>
 
-    <div style="margin-top:15px;text-align:center;">
+    <div style="margin-top:18px;text-align:center;">
       <a href="/login" class="muted small">
         Already have an account? Sign in
       </a>
     </div>
+
+    <style>
+    .input {
+      width:100%;
+      padding:10px;
+      margin:6px 0 14px;
+      border:1px solid #ddd;
+      border-radius:6px;
+      box-sizing:border-box;
+    }
+    </style>
   `;
 
     return send(res, 200, renderLoginPage(signupHtml, "Create Account"));
@@ -9302,7 +9313,91 @@ const server = http.createServer(async (req, res) => {
 
     setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400);
 
-    return redirect(res, "/dashboard");
+    return redirect(res, "/welcome");
+  }
+
+  if (method === "GET" && pathname === "/welcome") {
+    const userSession = getSession(req);
+    let orgName = "";
+
+    if (userSession && userSession.org_id) {
+      const org = getOrg(userSession.org_id);
+      if (org && org.org_name) {
+        orgName = org.org_name;
+      }
+    }
+
+    return send(res, 200, renderPage("Welcome", `
+      <div style="max-width:900px;margin:auto;">
+        <h1 style="text-align:center;">Welcome to TJ Healthcare Pro 🎉</h1>
+        <p class="muted" style="text-align:center;margin-bottom:30px;">
+          Your free trial has started. Here’s how to get the most out of the platform.
+        </p>
+
+        <div class="card" style="margin-bottom:20px;">
+          <h3>📊 Revenue Overview</h3>
+          <p class="muted">
+            Get a snapshot of your financial performance, key metrics, and overall revenue health.
+          </p>
+        </div>
+
+        <div class="card" style="margin-bottom:20px;">
+          <h3>📄 Claims Lifecycle</h3>
+          <p class="muted">
+            Track claims from submission to payment. Identify delays, denials, and bottlenecks.
+          </p>
+        </div>
+
+        <div class="card" style="margin-bottom:20px;">
+          <h3>📂 Data Management</h3>
+          <p class="muted">
+            Upload billing data, claims, and payments. This is your starting point.
+          </p>
+          <a href="/data-management" class="btn-primary" style="margin-top:10px;display:inline-block;">Upload Data</a>
+        </div>
+
+        <div class="card" style="margin-bottom:20px;">
+          <h3>📈 Revenue Intelligence Command Center</h3>
+          <p class="muted">
+            Advanced analytics, payer trends, and strategic insights to improve revenue performance.
+          </p>
+        </div>
+
+        <div class="card" style="margin-bottom:20px;">
+          <h3>🧠 AI Copilot</h3>
+          <p class="muted">
+            Ask questions and get real-time revenue insights. You have limited trial uses.
+          </p>
+          <a href="/ai-copilot" class="btn-primary" style="margin-top:10px;display:inline-block;">Try AI Copilot</a>
+        </div>
+
+        <div class="card" style="margin-bottom:20px;">
+          <h3>⚡ Action Center</h3>
+          <p class="muted">
+            See denials, underpayments, and actionable opportunities to recover revenue.
+          </p>
+          <a href="/actions" class="btn-primary" style="margin-top:10px;display:inline-block;">View Actions</a>
+        </div>
+
+        <div class="card" style="margin-bottom:20px;">
+          <h3>📊 Reports</h3>
+          <p class="muted">
+            Generate reports and export insights for your team or leadership.
+          </p>
+        </div>
+
+        <div class="card" style="margin-bottom:20px;">
+          <h3>⚙️ Account</h3>
+          <p class="muted">
+            Manage billing, usage, and plan details. Track your AI Copilot usage here.
+          </p>
+        </div>
+
+        <div style="text-align:center;margin-top:30px;">
+          <a href="/dashboard" class="btn-primary">Go to Dashboard</a>
+        </div>
+      </div>
+    `, navUser(), { showChat:true, orgName }));
   }
 
   if (method === "GET" && pathname === "/login") {
