@@ -9317,84 +9317,97 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/welcome") {
-    const userSession = getSession(req);
-    let orgName = "";
-
-    if (userSession && userSession.org_id) {
-      const org = getOrg(userSession.org_id);
-      if (org && org.org_name) {
-        orgName = org.org_name;
-      }
+    const sess = getAuth(req);
+    if (!sess || sess.role !== "user" || !sess.org_id) {
+      return redirect(res, "/login");
     }
 
+    const org = getOrg(sess.org_id);
+    const orgName = (org && org.org_name) ? org.org_name : "";
+
     return send(res, 200, renderPage("Welcome", `
-      <div style="max-width:900px;margin:auto;">
-        <h1 style="text-align:center;">Welcome to TJ Healthcare Pro 🎉</h1>
-        <p class="muted" style="text-align:center;margin-bottom:30px;">
+      <div style="max-width:980px;margin:auto;">
+        <h1 style="text-align:center;margin-bottom:8px;">Welcome to TJ Healthcare Pro 🎉</h1>
+        <p class="muted" style="text-align:center;margin-bottom:28px;">
           Your free trial has started. Here’s how to get the most out of the platform.
         </p>
 
-        <div class="card" style="margin-bottom:20px;">
-          <h3>📊 Revenue Overview</h3>
-          <p class="muted">
-            Get a snapshot of your financial performance, key metrics, and overall revenue health.
-          </p>
+        <div class="row">
+          <div class="col">
+            <div class="card" style="margin-bottom:16px;">
+              <h3>Revenue Overview</h3>
+              <p class="muted">See your high-level revenue performance, key financial KPIs, and where revenue may be slipping.</p>
+              <p class="small muted">Includes summary views that help you quickly understand overall practice revenue health.</p>
+            </div>
+
+            <div class="card" style="margin-bottom:16px;">
+              <h3>Claims Lifecycle</h3>
+              <p class="muted">Track claims from submission through denial, underpayment, appeal, and payment resolution.</p>
+              <p class="small muted">Use this area to understand where claims are getting stuck and where recovery opportunities exist.</p>
+            </div>
+
+            <div class="card" style="margin-bottom:16px;">
+              <h3>Data Management</h3>
+              <p class="muted">This is where you upload your billing, payment, and supporting data.</p>
+              <p class="small muted">Start here first so the rest of the platform has data to analyze.</p>
+              <div class="btnRow">
+                <a href="/data-management" class="btn">Upload Data</a>
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom:16px;">
+              <h3>Revenue Intelligence Command Center</h3>
+              <p class="muted">Review deeper analytics, payer behavior, revenue trends, forecasting, and executive-level insights.</p>
+              <p class="small muted">This area is built to help you understand where money is being lost and what patterns are developing.</p>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card" style="margin-bottom:16px;">
+              <h3>AI Copilot</h3>
+              <p class="muted">Ask natural-language questions about your data and get structured revenue intelligence insights.</p>
+              <p class="small muted">Your trial includes limited AI Copilot usage so you can test the feature before upgrading.</p>
+              <div class="btnRow">
+                <a href="/ai-copilot" class="btn">Open AI Copilot</a>
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom:16px;">
+              <h3>Action Center</h3>
+              <p class="muted">Focus on what needs attention now, including denials, underpayments, and recovery opportunities.</p>
+              <p class="small muted">This is your task-oriented area for resolving the items that are hurting revenue.</p>
+              <div class="btnRow">
+                <a href="/actions" class="btn">Open Action Center</a>
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom:16px;">
+              <h3>Reports</h3>
+              <p class="muted">Generate summaries and structured outputs you can review internally or share with leadership.</p>
+              <p class="small muted">Useful for recurring review, operations, and executive discussions.</p>
+            </div>
+
+            <div class="card" style="margin-bottom:16px;">
+              <h3>Account</h3>
+              <p class="muted">Manage plan details, trial status, billing info, and platform usage.</p>
+              <p class="small muted">This is also where users can monitor trial access and future subscription needs.</p>
+            </div>
+          </div>
         </div>
 
-        <div class="card" style="margin-bottom:20px;">
-          <h3>📄 Claims Lifecycle</h3>
-          <p class="muted">
-            Track claims from submission to payment. Identify delays, denials, and bottlenecks.
-          </p>
+        <div class="card" style="margin-top:10px;">
+          <h3>Recommended First Steps</h3>
+          <ol class="muted" style="padding-left:18px;line-height:1.7;">
+            <li>Upload your billing and payment data in <strong>Data Management</strong>.</li>
+            <li>Review your financial summary in <strong>Revenue Overview</strong>.</li>
+            <li>Use <strong>Action Center</strong> to see immediate revenue recovery opportunities.</li>
+            <li>Try <strong>AI Copilot</strong> for quick insights and guided analysis.</li>
+            <li>Explore the <strong>Revenue Intelligence Command Center</strong> for deeper trends and payer analysis.</li>
+          </ol>
         </div>
 
-        <div class="card" style="margin-bottom:20px;">
-          <h3>📂 Data Management</h3>
-          <p class="muted">
-            Upload billing data, claims, and payments. This is your starting point.
-          </p>
-          <a href="/data-management" class="btn-primary" style="margin-top:10px;display:inline-block;">Upload Data</a>
-        </div>
-
-        <div class="card" style="margin-bottom:20px;">
-          <h3>📈 Revenue Intelligence Command Center</h3>
-          <p class="muted">
-            Advanced analytics, payer trends, and strategic insights to improve revenue performance.
-          </p>
-        </div>
-
-        <div class="card" style="margin-bottom:20px;">
-          <h3>🧠 AI Copilot</h3>
-          <p class="muted">
-            Ask questions and get real-time revenue insights. You have limited trial uses.
-          </p>
-          <a href="/ai-copilot" class="btn-primary" style="margin-top:10px;display:inline-block;">Try AI Copilot</a>
-        </div>
-
-        <div class="card" style="margin-bottom:20px;">
-          <h3>⚡ Action Center</h3>
-          <p class="muted">
-            See denials, underpayments, and actionable opportunities to recover revenue.
-          </p>
-          <a href="/actions" class="btn-primary" style="margin-top:10px;display:inline-block;">View Actions</a>
-        </div>
-
-        <div class="card" style="margin-bottom:20px;">
-          <h3>📊 Reports</h3>
-          <p class="muted">
-            Generate reports and export insights for your team or leadership.
-          </p>
-        </div>
-
-        <div class="card" style="margin-bottom:20px;">
-          <h3>⚙️ Account</h3>
-          <p class="muted">
-            Manage billing, usage, and plan details. Track your AI Copilot usage here.
-          </p>
-        </div>
-
-        <div style="text-align:center;margin-top:30px;">
-          <a href="/dashboard" class="btn-primary">Go to Dashboard</a>
+        <div style="text-align:center;margin-top:24px;">
+          <a href="/dashboard" class="btn">Go to Dashboard</a>
         </div>
       </div>
     `, navUser(), { showChat:true, orgName }));
