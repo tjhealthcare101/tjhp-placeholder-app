@@ -9155,127 +9155,119 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, "/admin/dashboard");
   }
 
-  // ---------- PUBLIC: Signup/Login/Reset ----------
+  // ---------- PUBLIC: Signup ----------
   if (method === "GET" && pathname === "/signup") {
+
     const signupHtml = `
-  <h2 style="margin-bottom:10px;">Create Account</h2>
-  <p style="color:#666;font-size:14px;margin-bottom:20px;">
-    Start your free trial - no credit card required
-  </p>
+    <h2 style="margin-bottom:10px;">Create Account</h2>
+    <p style="color:#666;font-size:14px;margin-bottom:20px;">
+      Start your free trial - no credit card required
+    </p>
 
-  <form method="POST" action="/signup">
+    <form method="POST" action="/signup">
 
-  <label>Work Email</label>
-  <input name="email" type="email" required style="
-    width:100%;
-    padding:10px;
-    margin:8px 0 16px;
-    border:1px solid #ddd;
-    border-radius:6px;
-  " />
+      <label>Work Email</label>
+      <input name="email" type="email" required style="width:100%;margin-bottom:12px;" />
 
-  <label>Password (8+ characters)</label>
-  <input name="password" type="password" required style="
-    width:100%;
-    padding:10px;
-    margin:8px 0 16px;
-    border:1px solid #ddd;
-    border-radius:6px;
-  " />
+      <label>Password (8+ characters)</label>
+      <input name="password" type="password" required style="width:100%;margin-bottom:12px;" />
 
-  <label>Confirm Password</label>
-  <input name="password2" type="password" required style="
-    width:100%;
-    padding:10px;
-    margin:8px 0 16px;
-    border:1px solid #ddd;
-    border-radius:6px;
-  " />
+      <label>Confirm Password</label>
+      <input name="confirm_password" type="password" required style="width:100%;margin-bottom:12px;" />
 
-  <label>Organization Name</label>
-  <input name="org_name" type="text" required style="
-    width:100%;
-    padding:10px;
-    margin:8px 0 16px;
-    border:1px solid #ddd;
-    border-radius:6px;
-  " />
+      <label>Organization Name</label>
+      <input name="org_name" required style="width:100%;margin-bottom:12px;" />
 
-  <label style="display:flex;gap:10px;margin-top:10px;font-size:13px;color:#666;">
-    <input type="checkbox" name="ack" required>
-    I understand this system does not access EMRs or payer portals
-  </label>
+      <label>What best describes you?</label>
+      <select name="role" required style="width:100%;margin-bottom:16px;">
+        <option value="">Select one</option>
+        <option value="owner">Practice Owner</option>
+        <option value="manager">Office Manager</option>
+        <option value="billing">Billing / Revenue Cycle</option>
+        <option value="physician">Physician</option>
+        <option value="other">Other</option>
+      </select>
 
-  <button type="submit" style="
-    width:100%;
-    padding:12px;
-    background:#2563eb;
-    color:white;
-    border:none;
-    border-radius:8px;
-    font-weight:600;
-    margin-top:15px;
-    cursor:pointer;
-  ">
-    Create Account
-  </button>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:10px;">
+        <input type="checkbox" name="ack" required />
+        <span class="muted small">
+          I understand this system does not access EMRs or payer portals
+        </span>
+      </label>
 
-</form>
+      <button class="btn-primary" style="width:100%;margin-top:14px;">
+        Create Account
+      </button>
 
-  <div style="margin-top:20px;text-align:center;">
-    <a href="/login" style="font-size:14px;color:#2563eb;text-decoration:none;">
-      Already have an account? Sign in
-    </a>
-  </div>
+    </form>
 
-  <div style="margin-top:15px;text-align:center;">
-    <a href="/admin/login" style="font-size:11px;color:#aaa;text-decoration:none;">
-      Owner access
-    </a>
-  </div>
-`;
+    <div style="margin-top:15px;text-align:center;">
+      <a href="/login" class="muted small">
+        Already have an account? Sign in
+      </a>
+    </div>
+  `;
 
     return send(res, 200, renderLoginPage(signupHtml, "Create Account"));
   }
 
+
+  // ---------- POST SIGNUP ----------
   if (method === "POST" && pathname === "/signup") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
 
-    const email = (params.get("email") || "").trim().toLowerCase();
-    const p1 = params.get("password") || "";
-    const p2 = params.get("password2") || "";
-    const orgName = (params.get("org_name") || "").trim();
+    const email = String(params.get("email") || "").toLowerCase().trim();
+    const password = String(params.get("password") || "");
+    const confirm = String(params.get("confirm_password") || "");
+    const org_name = String(params.get("org_name") || "").trim();
+    const role = String(params.get("role") || "unknown");
     const ack = params.get("ack");
 
-    if (!email || p1.length < 8 || p1 !== p2 || !orgName || !ack) {
-      const html = renderPage("Create Account", `
-        <h2>Create Account</h2>
-        <p class="error">Please complete all fields, confirm password, and accept the acknowledgement.</p>
-        <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
-      `, navPublic());
-      return send(res, 400, html);
+    // VALIDATION (restored UI)
+    if (!email || !password || !org_name || !ack) {
+      return send(res, 400, renderPage("Create Account", `
+      <h2>Create Account</h2>
+      <p class="error">Please complete all required fields.</p>
+      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
+    `, navPublic()));
+    }
+
+    if (password.length < 8) {
+      return send(res, 400, renderPage("Create Account", `
+      <h2>Create Account</h2>
+      <p class="error">Password must be at least 8 characters.</p>
+      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
+    `, navPublic()));
+    }
+
+    if (password !== confirm) {
+      return send(res, 400, renderPage("Create Account", `
+      <h2>Create Account</h2>
+      <p class="error">Passwords do not match.</p>
+      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
+    `, navPublic()));
     }
 
     const users = readJSON(FILES.users, []);
     if (users.find(u => (u.email || "").toLowerCase() === email)) {
-      const html = renderPage("Create Account", `
-        <h2>Create Account</h2>
-        <p class="error">An account with this email already exists.</p>
-        <div class="btnRow"><a class="btn" href="/login">Sign In</a></div>
-      `, navPublic());
-      return send(res, 400, html);
+      return send(res, 400, renderPage("Create Account", `
+      <h2>Create Account</h2>
+      <p class="error">An account with this email already exists.</p>
+      <div class="btnRow"><a class="btn" href="/login">Sign In</a></div>
+    `, navPublic()));
     }
 
-    const orgs = readJSON(FILES.orgs, []);
     const org_id = uuid();
+
+    const orgs = readJSON(FILES.orgs, []);
     orgs.push({
       ...ORG_PROFILE_DEFAULTS,
       org_id,
-      org_name: orgName,
-      legal_name: orgName,
+      org_name,
+      legal_name: org_name,
       created_at: nowISO(),
-      account_status:"active"
+      account_status: "active"
     });
     writeJSON(FILES.orgs, orgs);
 
@@ -9283,7 +9275,8 @@ const server = http.createServer(async (req, res) => {
       user_id: uuid(),
       org_id,
       email,
-      password_hash: bcrypt.hashSync(p1, 10),
+      password_hash: bcrypt.hashSync(password, 10),
+      role,
       plan: "",
       stripe_customer_id: "",
       stripe_subscription_id: "",
@@ -9292,16 +9285,24 @@ const server = http.createServer(async (req, res) => {
       last_login_at: nowISO(),
     });
     writeJSON(FILES.users, users);
+
     trackAnalyticsSignup();
 
+    // 🔥 START FREE TRIAL (CRITICAL)
     ensurePilot(org_id);
     getUsage(org_id);
 
     const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000;
-    const token = makeSession({ role:"user", user_id: users[users.length-1].user_id, org_id, exp });
+    const token = makeSession({
+      role:"user",
+      user_id: users[users.length-1].user_id,
+      org_id,
+      exp
+    });
+
     setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400);
 
-    return redirect(res, "/lock");
+    return redirect(res, "/dashboard");
   }
 
   if (method === "GET" && pathname === "/login") {
