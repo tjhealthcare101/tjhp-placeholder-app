@@ -9337,19 +9337,16 @@ const server = http.createServer(async (req, res) => {
             <div class="card" style="margin-bottom:16px;">
               <h3>Revenue Overview</h3>
               <p class="muted">See your high-level revenue performance, key financial KPIs, and where revenue may be slipping.</p>
-              <p class="small muted">Includes summary views that help you quickly understand overall practice revenue health.</p>
             </div>
 
             <div class="card" style="margin-bottom:16px;">
               <h3>Claims Lifecycle</h3>
               <p class="muted">Track claims from submission through denial, underpayment, appeal, and payment resolution.</p>
-              <p class="small muted">Use this area to understand where claims are getting stuck and where recovery opportunities exist.</p>
             </div>
 
             <div class="card" style="margin-bottom:16px;">
               <h3>Data Management</h3>
-              <p class="muted">This is where you upload your billing, payment, and supporting data.</p>
-              <p class="small muted">Start here first so the rest of the platform has data to analyze.</p>
+              <p class="muted">Upload your billing and payment data. This is your starting point.</p>
               <div class="btnRow">
                 <a href="/data-management" class="btn">Upload Data</a>
               </div>
@@ -9357,25 +9354,23 @@ const server = http.createServer(async (req, res) => {
 
             <div class="card" style="margin-bottom:16px;">
               <h3>Revenue Intelligence Command Center</h3>
-              <p class="muted">Review deeper analytics, payer behavior, revenue trends, forecasting, and executive-level insights.</p>
-              <p class="small muted">This area is built to help you understand where money is being lost and what patterns are developing.</p>
+              <p class="muted">Advanced analytics, payer trends, and revenue insights.</p>
             </div>
           </div>
 
           <div class="col">
             <div class="card" style="margin-bottom:16px;">
               <h3>AI Copilot</h3>
-              <p class="muted">Ask natural-language questions about your data and get structured revenue intelligence insights.</p>
-              <p class="small muted">Your trial includes limited AI Copilot usage so you can test the feature before upgrading.</p>
+              <p class="muted">Ask questions and get real-time revenue insights. Trial includes limited usage.</p>
               <div class="btnRow">
                 <a href="/ai-copilot" class="btn">Open AI Copilot</a>
               </div>
             </div>
 
             <div class="card" style="margin-bottom:16px;">
-              <h3>Action Center</h3>
-              <p class="muted">Focus on what needs attention now, including denials, underpayments, and recovery opportunities.</p>
-              <p class="small muted">This is your task-oriented area for resolving the items that are hurting revenue.</p>
+              <h3>Action Center (AI Workspace)</h3>
+              <p class="muted">Generate appeal letters, negotiation strategies, and revenue recovery workflows.</p>
+              <p class="small muted">This is where you actively fix denied or underpaid claims using AI.</p>
               <div class="btnRow">
                 <a href="/actions" class="btn">Open Action Center</a>
               </div>
@@ -9383,14 +9378,13 @@ const server = http.createServer(async (req, res) => {
 
             <div class="card" style="margin-bottom:16px;">
               <h3>Reports</h3>
-              <p class="muted">Generate summaries and structured outputs you can review internally or share with leadership.</p>
-              <p class="small muted">Useful for recurring review, operations, and executive discussions.</p>
+              <p class="muted">Generate summaries and export insights for your team or leadership.</p>
             </div>
 
             <div class="card" style="margin-bottom:16px;">
               <h3>Account</h3>
-              <p class="muted">Manage plan details, trial status, billing info, and platform usage.</p>
-              <p class="small muted">This is also where users can monitor trial access and future subscription needs.</p>
+              <p class="muted">Manage billing, usage, and plan details.</p>
+              <p class="small muted">Visit the Help tab anytime for guidance.</p>
             </div>
           </div>
         </div>
@@ -9398,11 +9392,11 @@ const server = http.createServer(async (req, res) => {
         <div class="card" style="margin-top:10px;">
           <h3>Recommended First Steps</h3>
           <ol class="muted" style="padding-left:18px;line-height:1.7;">
-            <li>Upload your billing and payment data in <strong>Data Management</strong>.</li>
-            <li>Review your financial summary in <strong>Revenue Overview</strong>.</li>
-            <li>Use <strong>Action Center</strong> to see immediate revenue recovery opportunities.</li>
-            <li>Try <strong>AI Copilot</strong> for quick insights and guided analysis.</li>
-            <li>Explore the <strong>Revenue Intelligence Command Center</strong> for deeper trends and payer analysis.</li>
+            <li>Upload data in <strong>Data Management</strong></li>
+            <li>Review <strong>Revenue Overview</strong></li>
+            <li>Fix issues in <strong>Action Center</strong></li>
+            <li>Use <strong>AI Copilot</strong> for insights</li>
+            <li>Explore <strong>Revenue Intelligence</strong></li>
           </ol>
         </div>
 
@@ -20984,6 +20978,7 @@ function renderTemplateEditor(org, user){
         ${tabBtn("profile","Profile")}
         ${tabBtn("org","Organization Settings","Canonical source for identity, defaults, and workflow rules.")}
         ${tabBtn("billing","Plan & Billing")}
+        ${tabBtn("help","Help")}
         ${tabBtn("integrations","Integrations","Enterprise placeholder; not yet operable.")}
         ${tabBtn("security","Security","Account password and security mode placeholders.")}
         ${tabBtn("targets","Targets","Configure executive revenue performance targets.")}
@@ -20995,6 +20990,41 @@ function renderTemplateEditor(org, user){
     const themeSelection = (user.theme === "light" || user.theme === "dark") ? user.theme : "light";
 
     const section = (() => {
+      if (tab === "help") {
+        return `
+          <h2>Help & Getting Started</h2>
+          <p class="muted">Here’s how to use TJ Healthcare Pro effectively.</p>
+
+          <div class="card" style="margin-bottom:16px;">
+            <h3>Step 1: Upload Data</h3>
+            <p class="muted">Go to Data Management and upload your billing and payment files.</p>
+          </div>
+
+          <div class="card" style="margin-bottom:16px;">
+            <h3>Step 2: Review Revenue</h3>
+            <p class="muted">Use Revenue Overview to understand financial performance.</p>
+          </div>
+
+          <div class="card" style="margin-bottom:16px;">
+            <h3>Step 3: Fix Issues</h3>
+            <p class="muted">Use Action Center to generate appeals and negotiation strategies.</p>
+          </div>
+
+          <div class="card" style="margin-bottom:16px;">
+            <h3>Step 4: Use AI Copilot</h3>
+            <p class="muted">Ask questions about denials, payers, and revenue trends.</p>
+          </div>
+
+          <div class="card">
+            <h3>Need Help?</h3>
+            <p class="muted">Reach out to our team and we’ll assist you.</p>
+            <div class="btnRow">
+              <a href="/contact" class="btn-primary">Contact Support</a>
+            </div>
+          </div>
+        `;
+      }
+
       if (tab === "org") {
         const identity = orgSettings.identity || {};
         const letter = getLetterDefaults(orgSettings);
