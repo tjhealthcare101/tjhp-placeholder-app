@@ -7938,7 +7938,7 @@ const server = http.createServer(async (req, res) => {
               </p>
 
               <div style="margin-top:20px;">
-                <a href="/login" class="btn-primary">Start Free Trial - No Risk</a>
+                <a href="/signup" class="btn-primary">Start Free Trial - No Credit Card Required</a>
                 <a href="/how-it-works" class="btn-secondary" style="margin-left:10px;">Watch Demo</a>
               </div>
 
@@ -8069,7 +8069,7 @@ const server = http.createServer(async (req, res) => {
               Join practices using AI to identify and recover hidden insurance revenue.
             </p>
             <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-              <a href="/login" class="btn-primary">Start Free Trial - No Risk</a>
+              <a href="/signup" class="btn-primary">Start Free Trial - No Credit Card Required</a>
               <a href="/how-it-works" class="btn-secondary">Watch Demo</a>
             </div>
           </div>
@@ -8110,7 +8110,7 @@ const server = http.createServer(async (req, res) => {
             </div>
 
             <div style="margin-top:40px;">
-              <a href="/login" class="btn-primary">Start Free Trial - No Risk</a>
+              <a href="/signup" class="btn-primary">Start Free Trial - No Credit Card Required</a>
             </div>
           </div>
         </div>
