@@ -1767,31 +1767,23 @@ function computeSimpleDenialRateForecast(org_id, rangePreset){
 
 function renderCopilotTiles(){
   const tiles = [
-    { title:"Executive Revenue Snapshot", desc:"High-level performance overview", prompt:"Executive revenue snapshot for the last 30 days. Include billed, collected, revenue at risk, denial rate, recovery rate, and top risk payer." },
-    { title:"Revenue Risk Drivers", desc:"What is increasing exposure", prompt:"What are the top revenue risk drivers right now? Break down denials, underpayments, and AR aging. Provide top 5 actions to reduce exposure." },
-    { title:"Payer Exposure Overview", desc:"Risk concentration by payer", prompt:"Analyze payer exposure. Which payers drive the most at-risk dollars, denial rate, and underpayments? Provide a ranked list and suggested actions." },
-    { title:"Denial Performance", desc:"Denial trends and appeal health", prompt:"Review denial performance: denial rate trend, top denial reasons, top denial payers, and recommended appeal focus areas." },
-    { title:"Underpayment Recovery", desc:"Negotiation effectiveness", prompt:"Evaluate underpayment recovery: negotiation ROI, underpaid dollars, top underpaying payers, and tactics to improve recovery." },
-    { title:"Operational Health", desc:"Readiness + workflow posture", prompt:"Provide an operational health summary: AI Case Readiness, documentation gaps, and process improvements to speed appeal/negotiation cycles." }
+    { title:"Executive Revenue Snapshot", subtitle:"High-level performance overview", prompt:"Executive revenue snapshot for the last 30 days. Include billed, collected, revenue at risk, denial rate, recovery rate, and top risk payer." },
+    { title:"Revenue Risk Drivers", subtitle:"What is increasing exposure", prompt:"What are the top revenue risk drivers right now? Break down denials, underpayments, and AR aging. Provide top 5 actions to reduce exposure." },
+    { title:"Payer Exposure Overview", subtitle:"Risk concentration by payer", prompt:"Analyze payer exposure. Which payers drive the most at-risk dollars, denial rate, and underpayments? Provide a ranked list and suggested actions." },
+    { title:"Denial Performance", subtitle:"Denial trends and appeal health", prompt:"Review denial performance: denial rate trend, top denial reasons, top denial payers, and recommended appeal focus areas." },
+    { title:"Underpayment Recovery", subtitle:"Negotiation effectiveness", prompt:"Evaluate underpayment recovery: negotiation ROI, underpaid dollars, top underpaying payers, and tactics to improve recovery." },
+    { title:"Operational Health", subtitle:"Readiness + workflow posture", prompt:"Provide an operational health summary: AI Case Readiness, documentation gaps, and process improvements to speed appeal/negotiation cycles." }
   ];
+
   const tilesB64 = Buffer.from(JSON.stringify(tiles)).toString("base64");
 
   return `
-  <style>
-    .pl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px;}
-    .pl-tile{border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);cursor:pointer;transition:all .15s ease;}
-    .pl-tile:hover{box-shadow:var(--shadow);}
-    .pl-title{font-weight:900;margin:0 0 4px;font-size:13px;}
-    .pl-desc{color:var(--muted);font-size:12px;margin:0;}
-    @media(max-width:900px){.pl-grid{grid-template-columns:1fr;}}
-  </style>
-
-  <div class="pl-grid" id="copilotTileGrid">
+  <div class="tile-grid" id="copilotTileGrid">
     ${tiles.map((t,i)=>`
-      <div class="pl-tile" data-i="${i}">
-        <div class="pl-title">${safeStr(t.title)}</div>
-        <div class="pl-desc">${safeStr(t.desc)}</div>
-      </div>
+      <button type="button" class="tile" data-i="${i}">
+        <div class="tile-title">${safeStr(t.title)}</div>
+        <div class="tile-sub">${safeStr(t.subtitle)}</div>
+      </button>
     `).join("")}
   </div>
 
@@ -1800,22 +1792,26 @@ function renderCopilotTiles(){
       const tiles = JSON.parse(atob("${tilesB64}"));
       const grid = document.getElementById("copilotTileGrid");
       if(!grid) return;
+
       grid.addEventListener("click", (e)=>{
-        const tile = e.target.closest(".pl-tile");
+        const tile = e.target.closest(".tile");
         if(!tile) return;
+
         const idx = Number(tile.getAttribute("data-i")||"0");
         const t = tiles[idx] || {};
-        const ta = document.getElementById("copilotComposer");
-        if(ta){
-          ta.value = (t.prompt || "");
-          ta.focus();
-        }
+
+        const textarea = document.getElementById("copilotComposer");
+        if(!textarea) return;
+
+        textarea.value = t.prompt || "";
+
+        const form = textarea.closest("form");
+        if(form) form.submit();
       });
     })();
   </script>
   `;
 }
-
 function renderBriefFocusSection(result) {
   const t = String(result?.briefType || "EXECUTIVE_SNAPSHOT");
   const m = result?.metrics || {};
