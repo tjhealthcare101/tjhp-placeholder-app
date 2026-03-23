@@ -1806,7 +1806,11 @@ function renderCopilotTiles(){
         textarea.value = t.prompt || "";
 
         const form = textarea.closest("form");
-        if(form) form.submit();
+        if(form){
+          if(typeof window.__tjhpCopilotBeforeSubmit === "function") window.__tjhpCopilotBeforeSubmit(form);
+          if (typeof form.requestSubmit === "function") form.requestSubmit();
+          else form.submit();
+        }
       });
     })();
   </script>
@@ -1953,25 +1957,25 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
 
         ${renderBriefFocusSection(r)}
 
-        <div style="margin-top:12px;">
-          <div style="font-weight:900;margin-bottom:6px;">Executive Summary</div>
-          ${bullets.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${bullets.map(b=>`<li>${safeStr(b)}</li>`).join("")}</ul>` : `<div class="muted">No summary available.</div>`}
-        </div>
+        <section class="ws-brief-section">
+          <div class="ws-section-title">Executive Summary</div>
+          ${bullets.length ? `<ul class="ws-list">${bullets.map(b=>`<li>${safeStr(b)}</li>`).join("")}</ul>` : `<div class="muted">No summary available.</div>`}
+        </section>
 
-        <div style="margin-top:12px;">
-          <div style="font-weight:900;margin-bottom:6px;">AI Case Readiness Drivers</div>
-          ${drivers.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${drivers.map(d=>`<li>${safeStr(d)}</li>`).join("")}</ul>` : `<div class="muted">No threshold breaches detected.</div>`}
-        </div>
+        <section class="ws-brief-section">
+          <div class="ws-section-title">AI Case Readiness Drivers</div>
+          ${drivers.length ? `<ul class="ws-list">${drivers.map(d=>`<li>${safeStr(d)}</li>`).join("")}</ul>` : `<div class="muted">No threshold breaches detected.</div>`}
+        </section>
 
-        <div style="margin-top:12px;">
-          <div style="font-weight:900;margin-bottom:6px;">Recommended Executive Actions</div>
-          ${actions.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${actions.map(a=>`<li>${safeStr(a)}</li>`).join("")}</ul>` : `<div class="muted">No immediate corrective actions required.</div>`}
-        </div>
+        <section class="ws-brief-section">
+          <div class="ws-section-title">Recommended Executive Actions</div>
+          ${actions.length ? `<ul class="ws-list">${actions.map(a=>`<li>${safeStr(a)}</li>`).join("")}</ul>` : `<div class="muted">No immediate corrective actions required.</div>`}
+        </section>
 
-        <div style="margin-top:12px;">
-          <div style="font-weight:900;margin-bottom:6px;">Top Risk Payers</div>
-          ${payers.length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px;">${payers.map(p=>`<li>${safeStr(p.payer)} - $${Math.round(p.risk||0).toLocaleString()} at risk</li>`).join("")}</ul>` : `<div class="muted">No payer risk data available.</div>`}
-        </div>
+        <section class="ws-brief-section">
+          <div class="ws-section-title">Top Risk Payers</div>
+          ${payers.length ? `<ul class="ws-list">${payers.map(p=>`<li>${safeStr(p.payer)} - $${Math.round(p.risk||0).toLocaleString()} at risk</li>`).join("")}</ul>` : `<div class="muted">No payer risk data available.</div>`}
+        </section>
 
         ${chartCards}
 
@@ -14127,8 +14131,20 @@ if (method === "GET" && pathname === "/ai-copilot") {
   const thread = (workspace && Array.isArray(workspace.messages)) ? workspace.messages : [];
   const brief = workspace?.latest_brief || null;
 
+  const hasSavedAnalyses = allWorkspaces.length > 0;
+  const emptyStateHtml = (!workspace && !hasSavedAnalyses) ? `
+    <div class="ws-empty-state">
+      <div class="ws-empty-icon">✨</div>
+      <div>
+        <h3>Start your first AI analysis</h3>
+        <p>Ask Copilot for an executive brief, risk review, or payer analysis. You can also start with one of the suggested prompt tiles below and it will auto-submit for you.</p>
+      </div>
+    </div>
+  ` : ``;
+
   const threadHtml = `
     <div class="ws-thread" id="wsThread">
+      ${emptyStateHtml}
       ${thread.map(msg => `
         <div class="ws-msg ${msg.role === "user" ? "ws-user" : "ws-ai"}">
           <div class="ws-who">${msg.role === "user" ? "You" : "Copilot"}</div>
@@ -14142,82 +14158,127 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
   const html = renderPage("AI Copilot", `
     <style>
-      .ws-layout{display:grid;grid-template-columns:260px 1fr;gap:14px;align-items:stretch;}
+      .page-shell:has(#wsLayout), .page-shell #wsLayout{max-width:none;}
+      .ws-layout{display:grid;grid-template-columns:minmax(250px,290px) minmax(0,1fr);gap:20px;align-items:stretch;max-width:1480px;margin:0 auto;}
       .ws-layout.ws-collapsed{display:block;}
-      .ws-layout.ws-collapsed .ws-side{display:none;}
+      .ws-layout.ws-collapsed .ws-sidebar{display:none;}
       .ws-layout.ws-collapsed .ws-main{width:100%;margin:0;}
-      .ws-side{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:12px;box-shadow:var(--shadow);height:calc(100vh - 170px);overflow:auto;}
-      .ws-main{border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:var(--shadow);min-height:600px;display:flex;flex-direction:column;}
-      .ws-topbar{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;}
-      .ws-title{font-weight:900;font-size:16px;margin:0;}
-      .ws-thread{padding:14px;flex:1;overflow-y:auto;max-height:65vh;}
-      .ws-msg{margin-bottom:14px;}
-      .ws-who{font-weight:900;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
-      .ws-card{margin-top:6px;border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);}
-      .ws-user .ws-card{background:rgba(99,102,241,.06);}
-      .ws-ai .ws-card{background:rgba(17,24,39,.03);}
-      .ws-composer{padding:12px 14px;border-top:1px solid var(--border);background:var(--card);}
-      .ws-composer textarea{width:100%;min-height:90px;}
-      .ws-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px;}
-      .ws-kpi{border:1px solid var(--border);border-radius:10px;padding:10px;background:#fff;}
-      .ws-kpi-l{font-size:12px;color:var(--muted);}
-      .ws-kpi-v{font-weight:900;margin-top:4px;}
-      .ws-chart{position:relative;height:320px;max-height:320px;width:100%;border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff;}
-      .ws-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
-      .ws-side a{display:block;padding:8px 10px;border-radius:10px;text-decoration:none;font-weight:800;color:var(--text);}
-      .ws-side a:hover{background:rgba(17,24,39,.05);}
-      .ws-side a.active{background:rgba(99,102,241,.10);}
+      .ws-sidebar{border:1px solid rgba(148,163,184,.22);border-radius:18px;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));padding:16px;box-shadow:0 16px 40px rgba(15,23,42,.07);height:calc(100vh - 156px);overflow:auto;position:sticky;top:92px;}
+      .ws-sidebar-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;}
+      .ws-sidebar-title{font-weight:900;font-size:15px;letter-spacing:-.01em;}
+      .ws-sidebar-sub{font-size:12px;color:var(--muted);margin-top:4px;}
+      .ws-sidebar-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;}
+      .ws-sidebar-list{display:grid;gap:8px;}
+      .ws-main{border:1px solid rgba(148,163,184,.2);border-radius:18px;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.95));box-shadow:0 20px 48px rgba(15,23,42,.08);min-height:680px;display:flex;flex-direction:column;overflow:hidden;}
+      .ws-topbar{padding:18px 20px;border-bottom:1px solid rgba(148,163,184,.18);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:flex-start;background:linear-gradient(180deg, rgba(255,255,255,.92), rgba(248,250,252,.88));} 
+      .ws-title{font-weight:900;font-size:20px;line-height:1.1;margin:0;letter-spacing:-.02em;}
+      .ws-subtitle{font-size:13px;color:var(--muted);margin-top:6px;max-width:760px;}
+      .ws-usage-banner{margin-top:12px;border:1px solid rgba(99,102,241,.18);background:linear-gradient(135deg, rgba(99,102,241,.08), rgba(255,255,255,.95));color:#312e81;padding:12px 14px;border-radius:16px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;}
+      .ws-usage-banner.limit{border-color:rgba(239,68,68,.24);background:linear-gradient(135deg, rgba(254,226,226,.92), rgba(255,255,255,.96));color:#991b1b;}
+      .ws-usage-banner strong{font-weight:900;}
+      .ws-topbar-actions,.ws-composer-actions,.ws-usage-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+      .ws-thread{padding:22px;flex:1;overflow-y:auto;max-height:68vh;background:linear-gradient(180deg, rgba(248,250,252,.55), rgba(255,255,255,.2));display:flex;flex-direction:column;gap:16px;}
+      .ws-msg{display:flex;flex-direction:column;max-width:min(100%, 880px);margin:0;}
+      .ws-msg.ws-user{align-self:flex-end;align-items:flex-end;}
+      .ws-msg.ws-ai{align-self:stretch;}
+      .ws-who{font-weight:900;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px;}
+      .ws-user .ws-who{color:#4338ca;}
+      .ws-card{border:1px solid rgba(148,163,184,.18);border-radius:16px;padding:16px 18px;background:rgba(255,255,255,.98);box-shadow:0 14px 30px rgba(15,23,42,.05);line-height:1.6;}
+      .ws-user .ws-card{background:linear-gradient(135deg, rgba(79,70,229,.96), rgba(99,102,241,.92));color:#fff;border-color:rgba(79,70,229,.7);box-shadow:0 18px 38px rgba(79,70,229,.22);max-width:min(100%, 720px);}
+      .ws-ai .ws-card{background:rgba(255,255,255,.98);}
+      .ws-empty-state{display:flex;gap:14px;align-items:flex-start;padding:18px;border:1px dashed rgba(148,163,184,.4);border-radius:18px;background:rgba(255,255,255,.78);color:var(--text);}
+      .ws-empty-icon{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;background:rgba(99,102,241,.1);font-size:22px;flex:none;}
+      .ws-empty-state h3{margin:0 0 6px;font-size:22px;letter-spacing:-.02em;}
+      .ws-empty-state p{margin:0;color:var(--muted);max-width:720px;line-height:1.65;}
+      .ws-composer{padding:18px 20px;border-top:1px solid rgba(148,163,184,.18);background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));} 
+      .ws-composer-shell{border:1px solid rgba(148,163,184,.2);border-radius:18px;padding:16px;background:rgba(255,255,255,.95);box-shadow:0 16px 32px rgba(15,23,42,.05);transition:box-shadow .18s ease,border-color .18s ease,opacity .18s ease;}
+      .ws-composer-shell.is-loading{opacity:.78;box-shadow:0 18px 36px rgba(99,102,241,.12);border-color:rgba(99,102,241,.28);}
+      .ws-composer-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;}
+      .ws-section-kicker{font-weight:900;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;}
+      .ws-section-heading{font-size:16px;font-weight:900;letter-spacing:-.01em;}
+      .ws-section-copy{font-size:13px;color:var(--muted);margin-top:4px;}
+      .tile-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;}
+      .tile{appearance:none;border:1px solid rgba(148,163,184,.18);border-radius:16px;padding:16px;text-align:left;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.92));box-shadow:0 10px 24px rgba(15,23,42,.04);cursor:pointer;display:flex;flex-direction:column;justify-content:space-between;gap:10px;min-height:126px;transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease;}
+      .tile:hover{transform:translateY(-2px);box-shadow:0 16px 32px rgba(15,23,42,.08);border-color:rgba(99,102,241,.28);}
+      .tile:focus-visible{outline:2px solid rgba(99,102,241,.35);outline-offset:2px;}
+      .tile-title{font-weight:900;font-size:15px;line-height:1.35;letter-spacing:-.01em;color:var(--text);}
+      .tile-sub{font-size:12px;line-height:1.55;color:var(--muted);}
+      .ws-composer-form{margin-top:16px;}
+      .ws-composer-form label{display:block;margin:0 0 8px;font-weight:800;}
+      .ws-composer textarea{width:100%;min-height:132px;padding:14px 16px;border-radius:16px;border:1px solid rgba(148,163,184,.22);background:#fff;resize:vertical;line-height:1.55;font-size:14px;box-shadow:inset 0 1px 2px rgba(15,23,42,.03);}
+      .ws-composer textarea::placeholder{color:#94a3b8;}
+      .ws-composer textarea:focus{outline:none;border-color:rgba(99,102,241,.36);box-shadow:0 0 0 4px rgba(99,102,241,.08);}
+      .ws-composer-hint{margin-top:8px;font-size:12px;color:var(--muted);}
+      .ws-composer-actions{margin-top:14px;}
+      .ws-composer .btn,.ws-topbar .btn,.ws-sidebar .btn{border-radius:12px;}
+      .ws-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:16px;}
+      .ws-kpi{border:1px solid rgba(148,163,184,.2);border-radius:14px;padding:14px;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.95));}
+      .ws-kpi-l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:800;}
+      .ws-kpi-v{font-weight:900;margin-top:8px;font-size:20px;letter-spacing:-.02em;}
+      .ws-brief-section{margin-top:16px;padding-top:2px;}
+      .ws-section-title{font-weight:900;margin-bottom:8px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#0f172a;}
+      .ws-list{margin:0;padding-left:18px;display:grid;gap:8px;line-height:1.6;}
+      .ws-list li::marker{color:#6366f1;}
+      .ws-chart{position:relative;height:320px;max-height:320px;width:100%;border:1px solid rgba(148,163,184,.22);border-radius:16px;padding:12px;background:#fff;box-shadow:0 12px 24px rgba(15,23,42,.04);}
+      .ws-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;}
+      .ws-sidebar-link{display:block;padding:12px 12px;border-radius:14px;text-decoration:none;font-weight:800;color:var(--text);border:1px solid transparent;background:transparent;transition:background .16s ease,border-color .16s ease,transform .16s ease,box-shadow .16s ease;}
+      .ws-sidebar-link:hover{background:rgba(255,255,255,.92);border-color:rgba(148,163,184,.18);transform:translateY(-1px);box-shadow:0 10px 22px rgba(15,23,42,.05);}
+      .ws-sidebar-link.active{background:linear-gradient(135deg, rgba(99,102,241,.14), rgba(255,255,255,.96));border-color:rgba(99,102,241,.25);box-shadow:0 14px 28px rgba(99,102,241,.12);}
+      .ws-sidebar-link-title{display:block;line-height:1.35;}
+      .ws-sidebar-link-time{font-size:11px;margin-top:6px;color:var(--muted);font-weight:700;}
       .kpi-strip{display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:16px;margin-top:20px;}
-      .kpi-strip .kpi-card{border-radius:12px;padding:14px 16px;background:var(--card);border:1px solid var(--border);margin:0;}
+      .kpi-strip .kpi-card{border-radius:16px;padding:16px 18px;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.95));border:1px solid rgba(148,163,184,.2);margin:0;box-shadow:0 12px 28px rgba(15,23,42,.05);}
       .kpi-strip .kpi-value{margin:0;font-size:28px;font-weight:800;line-height:1.1;}
-      .kpi-strip .kpi-label{margin:6px 0 0;font-size:12px;color:var(--muted);font-weight:600;}
-      @media(max-width:900px){.ws-layout{grid-template-columns:1fr;} .ws-side{height:auto;} .ws-main{height:auto;} .ws-layout.ws-collapsed{grid-template-columns:1fr;}}
+      .kpi-strip .kpi-label{margin:6px 0 0;font-size:12px;color:var(--muted);font-weight:700;}
+      @media(max-width:1100px){.tile-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.ws-layout{grid-template-columns:240px minmax(0,1fr);}}
+      @media(max-width:900px){.ws-layout{grid-template-columns:1fr;gap:14px;} .ws-sidebar{position:static;height:auto;} .ws-main{min-height:auto;} .ws-layout.ws-collapsed{grid-template-columns:1fr;} .ws-thread{max-height:none;padding:18px;} .ws-composer,.ws-topbar{padding:16px;} .ws-topbar-actions,.ws-composer-actions,.ws-sidebar-actions,.ws-usage-actions{width:100%;} .ws-topbar-actions .btn,.ws-composer-actions .btn,.ws-sidebar-actions .btn{flex:1 1 auto;justify-content:center;} }
+      @media(max-width:700px){.tile-grid{grid-template-columns:1fr;} .ws-msg{max-width:100%;} .ws-card{padding:14px;} .ws-empty-state{padding:16px;} .ws-composer textarea{min-height:120px;} }
     </style>
 
     <div class="ws-layout" id="wsLayout">
-      <div class="ws-side">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-          <div style="font-weight:900;">Saved Analyses</div>
-          <div style="display:flex;gap:6px;align-items:center;">
+      <div class="ws-sidebar">
+        <div class="ws-sidebar-header">
+          <div>
+            <div class="ws-sidebar-title">Saved Analyses</div>
+            <div class="ws-sidebar-sub">Return to prior executive briefs, follow-ups, and exports.</div>
+          </div>
+          <div class="ws-sidebar-actions">
             <button type="button" class="btn secondary small" id="wsCollapseBtn">Collapse</button>
             <a class="btn secondary small" href="/ai-copilot?new=1">New Analysis</a>
           </div>
         </div>
-        <div class="hr"></div>
+        <div class="ws-sidebar-list">
         ${
           allWorkspaces.length
             ? allWorkspaces.map(w => `
-              <a class="${workspace && w.workspace_id===workspace.workspace_id ? "active" : ""}"
+              <a class="ws-sidebar-link ${workspace && w.workspace_id===workspace.workspace_id ? "active" : ""}"
                  href="/ai-copilot?workspace=${encodeURIComponent(w.workspace_id)}">
-                ${safeStr(w.title || "Untitled")}
-                <div class="muted" style="font-size:11px;margin-top:2px;">
+                <span class="ws-sidebar-link-title">${safeStr(w.title || "Untitled")}</span>
+                <div class="ws-sidebar-link-time">
                   ${w.updated_at ? new Date(w.updated_at).toLocaleString() : ""}
                 </div>
               </a>
             `).join("")
             : `<div class="muted">No saved analyses yet.</div>`
         }
+        </div>
       </div>
 
       <div class="ws-main">
         <div class="ws-topbar">
           <div>
             <div class="ws-title">${copilotUsage.limits?.mode === "pilot" ? "AI Copilot (Trial Mode)" : "AI Copilot"}</div>
-            <div class="muted" style="font-size:12px;">Chat-style revenue intelligence. Prompts + executive brief stay in the thread.</div>
+            <div class="ws-subtitle">Chat-style revenue intelligence with a saved workspace model. Prompt library, conversation thread, executive brief, exports, and usage tracking all stay intact.</div>
             ${(!copilotUsage.isUnlimited ? `
-              <div class="alert warn" style="
-                margin-top:8px;
-                border:1px solid #f59e0b;
-                background:#fffbeb;
-                color:#92400e;
-                padding:10px 12px;
-                border-radius:10px;
-              ">
-                You have used ${formatNumberUI(copilotUsage.used)} of ${formatNumberUI(copilotUsage.limit)} AI queries (${formatNumberUI(copilotUsage.remaining)} remaining)
+              <div class="ws-usage-banner ${copilotUsage.limitReached ? "limit" : ""}">
+                <div><strong>AI Copilot Trial Usage:</strong> ${formatNumberUI(copilotUsage.used)} of ${formatNumberUI(copilotUsage.limit)} used · ${formatNumberUI(copilotUsage.remaining)} remaining</div>
+                <div class="ws-usage-actions">
+                  ${copilotUsage.limitReached ? `<a class="btn" href="/plans">Upgrade</a>` : ``}
+                </div>
               </div>
             ` : ``)}
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <div class="ws-topbar-actions">
             <button type="button" class="btn secondary small" id="wsExpandBtn" style="display:none;">☰ Saved Analyses</button>
             ${workspace?.workspace_id ? `<a class="btn secondary small" href="/ai-copilot/export?workspace_id=${encodeURIComponent(workspace.workspace_id)}">Export PDF</a>` : ``}
             <a class="btn secondary small" href="/ai-copilot">Refresh</a>
@@ -14227,19 +14288,28 @@ if (method === "GET" && pathname === "/ai-copilot") {
         ${threadHtml}
 
         <div class="ws-composer">
-          <div class="muted" style="font-weight:900;font-size:12px;">Prompt Library</div>
-          ${tilesHtml}
-
-          <form method="POST" action="${workspace ? "/ai-copilot/followup" : "/ai-copilot/new"}" style="margin-top:12px;">
-            ${workspace ? `<input type="hidden" name="workspace_id" value="${safeStr(workspace.workspace_id)}" />` : ``}
-            <label style="margin-top:0;">Ask Copilot</label>
-            <textarea id="copilotComposer" name="prompt" required placeholder="Ask for an executive brief, risk drivers, payer analysis, denial trends, underpayment recovery..."></textarea>
-            <div class="btnRow" style="margin-top:10px;">
-              <button class="btn" type="submit" ${!copilotUsage.hasAccess ? "disabled" : ""} title="${!copilotUsage.hasAccess ? (getCopilotLimitMessage(org.org_id)?.message || "") : ""}">${!copilotUsage.hasAccess ? "Limit Reached" : "Send"}</button>
-              <a class="btn secondary" href="/ai-copilot?new=1">New Analysis</a>
-              <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence Command Center</a>
+          <div class="ws-composer-shell" id="wsComposerShell">
+            <div class="ws-composer-head">
+              <div>
+                <div class="ws-section-kicker">Prompt Library</div>
+                <div class="ws-section-heading">Start with a guided analysis</div>
+                <div class="ws-section-copy">Choose a premium prompt template or write your own question below.</div>
+              </div>
             </div>
-          </form>
+            ${tilesHtml}
+
+            <form method="POST" action="${workspace ? "/ai-copilot/followup" : "/ai-copilot/new"}" class="ws-composer-form" id="copilotComposerForm">
+              ${workspace ? `<input type="hidden" name="workspace_id" value="${safeStr(workspace.workspace_id)}" />` : ``}
+              <label for="copilotComposer">Ask Copilot</label>
+              <textarea id="copilotComposer" name="prompt" required placeholder="Ask for an executive brief, risk drivers, payer analysis, denial trends, underpayment recovery..."></textarea>
+              <div class="ws-composer-hint">Press Enter to send or Shift+Enter for a new line</div>
+              <div class="ws-composer-actions">
+                <button class="btn" id="copilotSendBtn" type="submit" ${!copilotUsage.hasAccess ? "disabled" : ""} title="${!copilotUsage.hasAccess ? (getCopilotLimitMessage(org.org_id)?.message || "") : ""}">${!copilotUsage.hasAccess ? "Limit Reached" : "Send"}</button>
+                <a class="btn secondary" href="/ai-copilot?new=1">New Analysis</a>
+                <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence</a>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
     </div>
@@ -14259,15 +14329,12 @@ if (method === "GET" && pathname === "/ai-copilot") {
     <script>
       (function(){
         const thread = document.getElementById("wsThread");
-        if (!thread) return;
-
         const url = new URL(window.location.href);
         const fromChat = url.searchParams.get("from") === "chat";
 
-        if (fromChat) {
+        if (thread && fromChat) {
           thread.scrollTop = 0;
 
-          // Remove param so refresh behaves normally
           url.searchParams.delete("from");
           const newUrl =
             url.pathname +
@@ -14281,9 +14348,8 @@ if (method === "GET" && pathname === "/ai-copilot") {
         const layout = document.getElementById("wsLayout");
         const btn = document.getElementById("wsCollapseBtn");
         const floatBtn = document.getElementById("wsExpandBtn");
-        if(!layout || !btn || !floatBtn) return;
-
         function setCollapsed(v){
+          if(!layout || !btn || !floatBtn) return;
           if(v){
             layout.classList.add("ws-collapsed");
             localStorage.setItem("tjhp_copilot_sidebar_collapsed","1");
@@ -14295,11 +14361,52 @@ if (method === "GET" && pathname === "/ai-copilot") {
           }
         }
 
-        const init = localStorage.getItem("tjhp_copilot_sidebar_collapsed") === "1";
-        setCollapsed(init);
+        if(layout && btn && floatBtn){
+          const init = localStorage.getItem("tjhp_copilot_sidebar_collapsed") === "1";
+          setCollapsed(init);
+          btn.onclick = function(){ setCollapsed(!layout.classList.contains("ws-collapsed")); };
+          floatBtn.onclick = function(){ setCollapsed(false); };
+        }
 
-        btn.onclick = function(){ setCollapsed(!layout.classList.contains("ws-collapsed")); };
-        floatBtn.onclick = function(){ setCollapsed(false); };
+        const form = document.getElementById("copilotComposerForm");
+        const textarea = document.getElementById("copilotComposer");
+        const sendBtn = document.getElementById("copilotSendBtn");
+        const composerShell = document.getElementById("wsComposerShell");
+        let isSubmitting = false;
+
+        window.__tjhpCopilotBeforeSubmit = function(activeForm){
+          const targetForm = activeForm || form;
+          if(!targetForm || isSubmitting) return false;
+          isSubmitting = true;
+          if(composerShell) composerShell.classList.add("is-loading");
+          if(sendBtn){
+            sendBtn.disabled = true;
+            sendBtn.textContent = "Thinking...";
+          }
+          targetForm.dataset.submitting = "1";
+          return true;
+        };
+
+        if(form){
+          form.addEventListener("submit", function(e){
+            if(isSubmitting || form.dataset.submitting === "1"){
+              e.preventDefault();
+              return;
+            }
+            if(window.__tjhpCopilotBeforeSubmit(form) === false){
+              e.preventDefault();
+            }
+          });
+        }
+
+        if(textarea && form){
+          textarea.addEventListener("keydown", function(e){
+            if(e.key !== "Enter" || e.shiftKey) return;
+            e.preventDefault();
+            if(typeof form.requestSubmit === "function") form.requestSubmit();
+            else form.submit();
+          });
+        }
       })();
     </script>
   `, navUser(), {showChat:true, orgName: org.org_name});
