@@ -2914,13 +2914,21 @@ function getUsage(org_id) {
   }
   if (typeof u.monthly_ai_generations_used !== "number") u.monthly_ai_generations_used = 0;
   if (typeof u.monthly_agent_workspace_edits !== "number") u.monthly_agent_workspace_edits = 0;
-  if (typeof u.copilot_used !== "number") u.copilot_used = Number(u.ai_copilot_queries_used ?? u.copilot_questions_used ?? 0);
-  if (typeof u.copilot_questions_used !== "number") u.copilot_questions_used = Number(u.copilot_used || 0);
-  if (typeof u.ai_copilot_queries_used !== "number") u.ai_copilot_queries_used = Number(u.copilot_used || u.copilot_questions_used || 0);
-  const canonicalCopilotUsed = Number(u.copilot_used || u.ai_copilot_queries_used || u.copilot_questions_used || 0);
-  u.copilot_used = canonicalCopilotUsed;
-  u.copilot_questions_used = canonicalCopilotUsed;
-  u.ai_copilot_queries_used = canonicalCopilotUsed;
+
+  // 🔥 CANONICAL COPILOT USAGE (single source of truth)
+  if (typeof u.copilot_used !== "number") {
+    u.copilot_used = Number(
+      u.copilot_used ??
+      u.ai_copilot_queries_used ??
+      u.copilot_questions_used ??
+      0
+    );
+  }
+
+  // force ALL legacy fields to match
+  u.ai_copilot_queries_used = u.copilot_used;
+  u.copilot_questions_used = u.copilot_used;
+  writeJSON(FILES.usage, usage);
   if (typeof u.ai_copilot_query_limit !== "number") u.ai_copilot_query_limit = Number(getCopilotLimit(org_id) || 0);
   if (typeof u.claims_processed !== "number") u.claims_processed = Number(u.monthly_case_credits_used || u.pilot_cases_used || 0);
   return u;
@@ -3169,12 +3177,7 @@ function saveCopilotWorkspace(workspace){
 function getCopilotUsageSnapshot(org_id) {
   const usage = getUsage(org_id);
   const limits = getLimitProfile(org_id);
-  const used = Number(
-    usage.copilot_used ??
-    usage.ai_copilot_queries_used ??
-    usage.copilot_questions_used ??
-    0
-  );
+  const used = Number(usage.copilot_used || 0);
 
   let limit = limits.mode === "pilot"
     ? 10
@@ -3221,24 +3224,27 @@ function getCopilotLimitMessage(org_id) {
 }
 
 function consumeCopilotQuery(org_id) {
-  const { usage, used, limit, isUnlimited, hasAccess, limitReached } = getCopilotUsageSnapshot(org_id);
+  const { usage, used, limit, hasAccess } = getCopilotUsageSnapshot(org_id);
+
   if (!hasAccess) {
     const limitInfo = getCopilotLimitMessage(org_id);
     return {
       ok: false,
       used,
       limit,
-      message: limitInfo?.message || "You have reached your AI Copilot limit for this billing cycle. Upgrade your plan to continue.",
+      message: limitInfo?.message || "AI Copilot limit reached."
     };
   }
 
-  const nextUsed = Number(usage.copilot_used || 0) + 1;
+  const nextUsed = used + 1;
+
   usage.copilot_used = nextUsed;
-  usage.copilot_questions_used = nextUsed;
   usage.ai_copilot_queries_used = nextUsed;
-  usage.ai_copilot_query_limit = Number.isFinite(limit) ? limit : 0;
+  usage.copilot_questions_used = nextUsed;
+
   saveUsage(usage);
-  return { ok: true, used: nextUsed, limit, isUnlimited };
+
+  return { ok: true, used: nextUsed, limit };
 }
 
 function createCopilotWorkspaceFromPrompt(org_id, prompt) {
@@ -11576,7 +11582,6 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const caseCreditsUsed = Number(usage.monthly_case_credits_used || 0);
     const caseCreditsLimit = Number(limits.case_credits_per_month || 0);
     const copilotUsage = getCopilotUsageSnapshot(org.org_id);
-    const copilotQueriesUsed = Number(copilotUsage.used || 0);
     const copilotQueriesLimit = Number(copilotUsage.limit || 0);
     const paymentRowsUsed = Number(usage.monthly_payment_rows_used || 0);
     const usageLimits = checkUsageLimits(org.org_id);
@@ -11797,9 +11802,9 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
 
         <div class="kpi-card">
-          <p class="kpi-value">${formatNumberUI(copilotQueriesUsed)} / ${copilotQueriesLimit || 0}</p>
+          <p class="kpi-value">${formatNumberUI(copilotUsage.used)} / ${copilotQueriesLimit || 0}</p>
           <p class="kpi-label">AI Copilot Queries</p>
-          ${buildLimitBadge(copilotQueriesUsed, copilotQueriesLimit)}
+          ${buildLimitBadge(copilotUsage.used, copilotQueriesLimit)}
         </div>
 
         <div class="kpi-card">
@@ -14110,19 +14115,8 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 if (method === "GET" && pathname === "/ai-copilot") {
   const copilotUsage = getCopilotUsageSnapshot(org.org_id);
 
-  if (!copilotUsage.hasAccess) {
-    return send(res, 200, renderPage("AI Copilot", `
-    <div class="card" style="border:1px solid #e11d48;background:#fff1f2;">
-      <h3>AI Copilot Limit Reached</h3>
-      <p class="muted">
-        ${copilotUsage.limits?.mode === "pilot"
-          ? "You’ve used all 10 trial AI Copilot queries. Upgrade to continue."
-          : "You’ve reached your AI Copilot limit for this billing cycle."}
-      </p>
-      <a href="/plans" class="btn-primary">Upgrade Plan</a>
-    </div>
-  `, navUser(), {showChat:true, orgName: org.org_name}));
-  }
+  // ❌ DO NOT BLOCK PAGE
+  // Just let UI + button handle limit
   const workspace_id = String(parsed.query.workspace || "").trim();
 
   let workspace = workspace_id ? getCopilotWorkspace(org.org_id, workspace_id) : null;
@@ -14223,7 +14217,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 padding:10px 12px;
                 border-radius:10px;
               ">
-                You have <strong>${formatNumberUI(copilotUsage.remaining)}</strong> of <strong>${formatNumberUI(copilotUsage.limit)}</strong> AI queries remaining.
+                You have used ${formatNumberUI(copilotUsage.used)} of ${formatNumberUI(copilotUsage.limit)} AI queries (${formatNumberUI(copilotUsage.remaining)} remaining)
               </div>
             ` : ``)}
           </div>
@@ -14320,15 +14314,19 @@ if (method === "POST" && pathname === "/ai-copilot/new") {
   if (!hasFeatureAccess(org.org_id, "copilot")) {
     return redirect(res, "/ai-copilot");
   }
+
+  const usageCheck = consumeCopilotQuery(org.org_id);
+
+  if (!usageCheck.ok) {
+    return redirect(res, "/ai-copilot?limit=1");
+  }
+
+  console.log("COPILOT USED:", usageCheck.used);
+
   const body = await parseBody(req);
   const params = new URLSearchParams(body);
   const prompt = String(params.get("prompt") || "").trim();
   if (!prompt) return redirect(res, "/ai-copilot");
-
-  const consume = consumeCopilotQuery(org.org_id);
-  if (!consume.ok) {
-    return redirect(res, "/ai-copilot?limit=1");
-  }
 
   const workspace = createCopilotWorkspaceFromPrompt(org.org_id, prompt);
   return redirect(res, `/ai-copilot?workspace=${encodeURIComponent(workspace.workspace_id)}`);
@@ -14338,6 +14336,15 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
   if (!hasFeatureAccess(org.org_id, "copilot")) {
     return redirect(res, "/ai-copilot");
   }
+
+  const usageCheck = consumeCopilotQuery(org.org_id);
+
+  if (!usageCheck.ok) {
+    return redirect(res, "/ai-copilot?limit=1");
+  }
+
+  console.log("COPILOT USED:", usageCheck.used);
+
   const body = await parseBody(req);
   const params = new URLSearchParams(body);
   const workspace_id = String(params.get("workspace_id") || "").trim();
@@ -14347,11 +14354,6 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
 
   const workspace = getCopilotWorkspace(org.org_id, workspace_id);
   if (!workspace) return redirect(res, "/ai-copilot");
-
-  const consume = consumeCopilotQuery(org.org_id);
-  if (!consume.ok) {
-    return redirect(res, `/ai-copilot?workspace=${encodeURIComponent(workspace_id)}&limit=1`);
-  }
 
   workspace.messages = Array.isArray(workspace.messages) ? workspace.messages : [];
   workspace.messages.push({ role: "user", content: prompt, created_at: nowISO() });
@@ -21119,7 +21121,6 @@ function renderTemplateEditor(org, user){
         })();
 
         const copilotUsage = getCopilotUsageSnapshot(org.org_id);
-        const copilotUsed = Number(copilotUsage.used || 0);
         const copilotLimit = Number(copilotUsage.limit || 0);
 
         const caseUsed = Number(usage.monthly_case_credits_used || 0);
@@ -21137,7 +21138,7 @@ function renderTemplateEditor(org, user){
             <tr><th>Case Credits Limit</th><td>${safeStr(String(caseLimit))}</td></tr>
             <tr><th>Overage Cases</th><td>${safeStr(String(caseOver))}</td></tr>
 
-            <tr><th>AI Copilot Queries Used</th><td>${safeStr(String(copilotUsed))}</td></tr>
+            <tr><th>AI Copilot Queries Used</th><td>${safeStr(String(copilotUsage.used))}</td></tr>
             <tr><th>AI Copilot Queries Limit</th><td>${copilotUsage.isUnlimited ? "Unlimited" : safeStr(String(copilotLimit))}</td></tr>
           </table>
 
