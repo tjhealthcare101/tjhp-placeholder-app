@@ -22611,7 +22611,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel: draft_type, content: "Draft generated.", created_at: ts });
       const usage = getUsage(org.org_id);
       usage.monthly_ai_generations_used = Number(usage.monthly_ai_generations_used || 0) + 1;
-      if (draft_type === "negotiation") {
+      // ✅ Count BOTH appeal + negotiation usage
+      if (["appeal", "negotiation"].includes(draft_type)) {
         usage.ai_workspace_used = Number(usage.ai_workspace_used || 0) + 1;
       }
       saveUsage(usage);
