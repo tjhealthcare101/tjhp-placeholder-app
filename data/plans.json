@@ -1,6 +1,6 @@
 {
-  "starter": { "price": 249, "ai_packets": 20, "claims_limit": 50 },
-  "growth": { "price": 599, "ai_packets": 100, "claims_limit": 250 },
-  "pro": { "price": 1200, "ai_packets": 500, "claims_limit": 1000 },
-  "enterprise": { "price": 2000, "ai_packets": 999999, "claims_limit": 999999 }
+  "starter": { "price": 249, "ai_packets": 20, "claims_limit": 50, "copilot_limit": 50, "workspace_limit": 20 },
+  "growth": { "price": 599, "ai_packets": 100, "claims_limit": 250, "copilot_limit": 150, "workspace_limit": 75 },
+  "pro": { "price": 1200, "ai_packets": 500, "claims_limit": 1000, "copilot_limit": 400, "workspace_limit": 200 },
+  "enterprise": { "price": 2000, "ai_packets": 999999, "claims_limit": 999999, "copilot_limit": 999999, "workspace_limit": 999999 }
 }
