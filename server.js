@@ -2885,6 +2885,7 @@ function getUsage(org_id) {
       monthly_payment_credits_used: 0,
       monthly_ai_generations_used: 0,
       monthly_agent_workspace_edits: 0,
+      ai_workspace_used: 0,
       ai_job_timestamps: [],
       ai_chat_used: 0,
       copilot_used: 0,
@@ -2914,6 +2915,7 @@ function getUsage(org_id) {
   }
   if (typeof u.monthly_ai_generations_used !== "number") u.monthly_ai_generations_used = 0;
   if (typeof u.monthly_agent_workspace_edits !== "number") u.monthly_agent_workspace_edits = 0;
+  if (typeof u.ai_workspace_used !== "number") u.ai_workspace_used = 0;
 
   // 🔥 CANONICAL COPILOT USAGE (single source of truth)
   if (typeof u.copilot_used !== "number") {
@@ -2957,10 +2959,10 @@ function savePlanConfigData(data) {
 }
 
 const PLAN_RUNTIME_DEFAULTS = {
-  starter: { ai_chat_limit: 50, copilot_limit: 50, case_credits_per_month: 50, payment_tracking_credits_per_month: 10 },
-  growth: { ai_chat_limit: 150, copilot_limit: 150, case_credits_per_month: 150, payment_tracking_credits_per_month: 50 },
-  pro: { ai_chat_limit: 400, copilot_limit: 400, case_credits_per_month: 400, payment_tracking_credits_per_month: 150 },
-  enterprise: { ai_chat_limit: 999999, copilot_limit: 999999, case_credits_per_month: 999999, payment_tracking_credits_per_month: 999999 },
+  starter: { ai_chat_limit: 50, copilot_limit: 50, workspace_limit: 20, case_credits_per_month: 50, payment_tracking_credits_per_month: 10 },
+  growth: { ai_chat_limit: 150, copilot_limit: 150, workspace_limit: 75, case_credits_per_month: 150, payment_tracking_credits_per_month: 50 },
+  pro: { ai_chat_limit: 400, copilot_limit: 400, workspace_limit: 200, case_credits_per_month: 400, payment_tracking_credits_per_month: 150 },
+  enterprise: { ai_chat_limit: 999999, copilot_limit: 999999, workspace_limit: 999999, case_credits_per_month: 999999, payment_tracking_credits_per_month: 999999 },
 };
 
 if (!PLAN_RUNTIME_DEFAULTS.pro) {
@@ -2969,6 +2971,9 @@ if (!PLAN_RUNTIME_DEFAULTS.pro) {
 Object.keys(PLAN_RUNTIME_DEFAULTS).forEach(plan => {
   if (!PLAN_RUNTIME_DEFAULTS[plan].copilot_limit) {
     PLAN_RUNTIME_DEFAULTS[plan].copilot_limit = 50;
+  }
+  if (!PLAN_RUNTIME_DEFAULTS[plan].workspace_limit) {
+    PLAN_RUNTIME_DEFAULTS[plan].workspace_limit = 50;
   }
 });
 
@@ -3303,6 +3308,8 @@ function ensureSubscriptionForOrg(org_id) {
       customer_email: "",
       case_credits_per_month: MONTHLY_DEFAULTS.case_credits_per_month,
       payment_tracking_credits_per_month: MONTHLY_DEFAULTS.payment_tracking_credits_per_month,
+      copilot_limit: PLAN_RUNTIME_DEFAULTS.starter.copilot_limit,
+      workspace_limit: PLAN_RUNTIME_DEFAULTS.starter.workspace_limit,
       updated_at: nowISO()
     };
     subs.push(s);
@@ -3318,6 +3325,8 @@ function applyPlanToSubscription(sub, planName) {
   sub.case_credits_per_month = cfg.case_credits_per_month;
   sub.payment_tracking_credits_per_month = cfg.payment_tracking_credits_per_month;
   sub.ai_chat_limit = cfg.ai_chat_limit;
+  sub.copilot_limit = cfg.copilot_limit;
+  sub.workspace_limit = cfg.workspace_limit;
   sub.status = "active";
   sub.updated_at = nowISO();
 
@@ -3414,9 +3423,10 @@ function getLimitProfile(org_id) {
   if (sub && sub.status === "active") {
     return {
       mode: "monthly",
+      copilot_limit: sub.copilot_limit || 150,
+      workspace_limit: sub.workspace_limit || 50,
       case_credits_per_month: sub.case_credits_per_month || MONTHLY_DEFAULTS.case_credits_per_month,
       payment_tracking_credits_per_month: sub.payment_tracking_credits_per_month || MONTHLY_DEFAULTS.payment_tracking_credits_per_month,
-      copilot_limit: sub.copilot_limit || getCopilotLimit(org_id),
       max_files_per_case: MONTHLY_DEFAULTS.max_files_per_case,
       max_file_size_mb: MONTHLY_DEFAULTS.max_file_size_mb,
       max_ai_jobs_per_hour: MONTHLY_DEFAULTS.max_ai_jobs_per_hour,
@@ -3425,7 +3435,12 @@ function getLimitProfile(org_id) {
       payment_records_per_credit: MONTHLY_DEFAULTS.payment_records_per_credit,
     };
   }
-  return { mode:"pilot", ...PILOT_LIMITS };
+  return {
+    mode: "pilot",
+    copilot_limit: 10,
+    workspace_limit: 5,
+    ...PILOT_LIMITS
+  };
 }
 
 function countOrgCases(org_id) {
@@ -22159,11 +22174,25 @@ if (method === "GET" && pathname === "/agent-workspace") {
   if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation")) {
     const billed_id = String(parsed.query.billed_id || "").trim();
     const isNegotiation = pathname === "/ai-negotiation" || String(parsed.query.tab || "") === "negotiation";
+    const usage = getUsage(org.org_id);
+    const limits = getLimitProfile(org.org_id);
+    const used = Number(usage.ai_workspace_used || 0);
+    const limit = limits.workspace_limit;
+    const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
+    const hasAccess = isUnlimited || used < limit;
 
-    if (!hasFeatureAccess(org.org_id, "ai_workspace")) {
-      return send(res, 200, renderPage("Upgrade Required", `
-        ${renderFeatureLocked("AI Workspace")}
-      `, navUser(), { showChat: true, orgName: org.org_name }));
+    if (!hasAccess) {
+      return send(res, 200, renderPage("AI Workspace", `
+        <div class="card" style="border:1px solid #e11d48;background:#fff1f2;">
+          <h3>AI Workspace Limit Reached</h3>
+          <p class="muted">
+            ${limits.mode === "pilot"
+              ? "You’ve used all trial AI workspace cases. Upgrade to continue."
+              : "You’ve reached your plan limit for AI workspace usage."}
+          </p>
+          <a href="/plans" class="btn-primary">Upgrade Plan</a>
+        </div>
+      `, navUser(), { showChat:true, orgName: org.org_name }));
     }
 
     if (isNegotiation && !hasFeatureAccess(org.org_id, "negotiation")) {
@@ -22257,6 +22286,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
     const html = renderPage(pageTitle, `
       <h2>${pageTitle}</h2>
+      <div class="alert warn">
+        You have used ${formatNumberUI(used)} of ${isUnlimited ? "Unlimited" : formatNumberUI(limit)} AI workspace cases
+      </div>
 
       ${orgSnapshot}
 
@@ -22580,6 +22612,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel: draft_type, content: "Draft generated.", created_at: ts });
       const usage = getUsage(org.org_id);
       usage.monthly_ai_generations_used = Number(usage.monthly_ai_generations_used || 0) + 1;
+      if (["appeal", "negotiation"].includes(draft_type)) {
+        usage.ai_workspace_used = Number(usage.ai_workspace_used || 0) + 1;
+      }
       saveUsage(usage);
       return redirect(res, `${workspacePagePath(billed_id, tab)}`);
     });
