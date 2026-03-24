@@ -22156,11 +22156,7 @@ else if (type === "payers") {
   if (method === "GET" && pathname === "/negotiation-workspace") {
     const billed_id = String(parsed.query.billed_id || "").trim();
     if (!billed_id) return redirect(res, "/claims?view=all");
-    if (!hasFeatureAccess(org.org_id, "negotiation")) {
-      return send(res, 200, renderPage("Upgrade Required", `
-        ${renderFeatureLocked("Negotiation Tools")}
-      `, navUser(), { showChat: true, orgName: org.org_name }));
-    }
+    // allow access, enforce limits inside workspace instead
     return redirect(res, workspacePagePath(billed_id, "negotiation"));
   }
 
@@ -22177,28 +22173,31 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const usage = getUsage(org.org_id);
     const limits = getLimitProfile(org.org_id);
     const used = Number(usage.ai_workspace_used || 0);
-    const limit = limits.workspace_limit;
+    const limit = Number(
+      limits.workspace_limit ??
+      (limits.mode === "pilot" ? 5 : Infinity)
+    );
     const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
+    const remaining = isUnlimited ? Infinity : Math.max(0, limit - used);
     const hasAccess = isUnlimited || used < limit;
-
-    if (!hasAccess) {
-      return send(res, 200, renderPage("AI Workspace", `
-        <div class="card" style="border:1px solid #e11d48;background:#fff1f2;">
-          <h3>AI Workspace Limit Reached</h3>
-          <p class="muted">
-            ${limits.mode === "pilot"
-              ? "You’ve used all trial AI workspace cases. Upgrade to continue."
-              : "You’ve reached your plan limit for AI workspace usage."}
-          </p>
-          <a href="/plans" class="btn-primary">Upgrade Plan</a>
+    let workspaceBanner = "";
+    if (isNegotiation && !isUnlimited) {
+      workspaceBanner = `
+        <div class="alert warn" style="
+          margin-bottom:16px;
+          border:1px solid ${hasAccess ? "#f59e0b" : "#e11d48"};
+          background:${hasAccess ? "#fffbeb" : "#fff1f2"};
+          color:${hasAccess ? "#92400e" : "#9f1239"};
+        ">
+          ${
+            hasAccess
+              ? `You have used ${used} of ${limit} AI workspace cases (${remaining} remaining)`
+              : (limits.mode === "pilot"
+                  ? "You’ve used all trial negotiation cases. Upgrade to continue."
+                  : "You’ve reached your negotiation limit.")
+          }
         </div>
-      `, navUser(), { showChat:true, orgName: org.org_name }));
-    }
-
-    if (isNegotiation && !hasFeatureAccess(org.org_id, "negotiation")) {
-      return send(res, 200, renderPage("Upgrade Required", `
-        ${renderFeatureLocked("Negotiation Tools")}
-      `, navUser(), { showChat: true, orgName: org.org_name }));
+      `;
     }
 
     const billedAll = readJSON(FILES.billed, []);
@@ -22286,9 +22285,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
     const html = renderPage(pageTitle, `
       <h2>${pageTitle}</h2>
-      <div class="alert warn">
-        You have used ${formatNumberUI(used)} of ${isUnlimited ? "Unlimited" : formatNumberUI(limit)} AI workspace cases
-      </div>
+      ${workspaceBanner}
 
       ${orgSnapshot}
 
@@ -22434,7 +22431,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
           <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
           <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
           <input type="hidden" name="tab" value="${safeStr(channel)}" />
-          <button class="btn secondary" type="submit">Regenerate AI Draft</button>
+          <button class="btn secondary" type="submit" ${channel === "negotiation" && !hasAccess ? "disabled" : ""}>
+            ${channel === "negotiation" ? (hasAccess ? "Generate Negotiation" : "Limit Reached") : "Regenerate AI Draft"}
+          </button>
         </form>
         <a class="btn secondary" href="/packet/export?billed_id=${encodeURIComponent(billed_id)}">Export Packet (Print/PDF)</a>
         <form method="POST" action="/agent-workspace/status" style="margin:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -22612,6 +22611,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "agent", channel: draft_type, content: "Draft generated.", created_at: ts });
       const usage = getUsage(org.org_id);
       usage.monthly_ai_generations_used = Number(usage.monthly_ai_generations_used || 0) + 1;
+      // ✅ Count BOTH appeal + negotiation usage
       if (["appeal", "negotiation"].includes(draft_type)) {
         usage.ai_workspace_used = Number(usage.ai_workspace_used || 0) + 1;
       }
