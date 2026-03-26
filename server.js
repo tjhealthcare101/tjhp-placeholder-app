@@ -15028,6 +15028,7 @@ if (method === "GET" && pathname === "/actions") {
       actionsHtml = `
         ${contractAction}
         <a class="btn secondary small" href="${claimLink}">Open Claim</a>
+        <a class="btn secondary small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Open AI Workspace</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `
           <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">
