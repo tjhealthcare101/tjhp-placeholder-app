@@ -15035,7 +15035,6 @@ if (method === "GET" && pathname === "/actions") {
             Patient Follow-Up Write-Off
           </a>
         ` : ``}
-        <a class="btn secondary small" href="${workspacePagePath(b.billed_id, channel)}">AI Workspace</a>
         ${x.kind === "followup_ws" ? `
           <form method="POST" action="/agent-workspace/followup/escalate" style="display:inline-block;margin:0;">
             <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}" />
