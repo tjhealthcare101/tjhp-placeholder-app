@@ -14492,6 +14492,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
               ${workspace ? `<input type="hidden" name="workspace_id" value="${safeStr(workspace.workspace_id)}" />` : ``}
               <label for="copilotInput">Ask Copilot</label>
               <textarea id="copilotInput" name="prompt" required placeholder="Ask Copilot..." style="width:100%;min-height:90px;border:1px solid var(--border);border-radius:10px;padding:10px;"></textarea>
+              <button type="submit" id="hiddenSubmitBtn" style="display:none;"></button>
               <div style="display:flex;justify-content:flex-end;margin-top:6px;">
                 <button id="copilotSendBtn" class="btn primary" type="button" ${!copilotUsage.hasAccess ? "disabled" : ""} title="${!copilotUsage.hasAccess ? (getCopilotLimitMessage(org.org_id)?.message || "") : ""}">${!copilotUsage.hasAccess ? "Limit Reached" : "➤"}</button>
               </div>
@@ -14576,14 +14577,14 @@ if (method === "GET" && pathname === "/ai-copilot") {
           if(btnSend) btnSend.disabled = true;
           if(composerShell) composerShell.classList.add("is-loading");
 
-          // 🔑 CRITICAL: use native form submit (restores full backend behavior)
-          if(typeof form.requestSubmit === "function"){
-            form.requestSubmit();
-          } else {
-            form.submit();
+          // 🔥 FIX: always trigger real submit
+          const hiddenBtn = document.getElementById("hiddenSubmitBtn");
+          if(hiddenBtn){
+            hiddenBtn.click();
           }
         }
 
+        // ✅ FIX: Enter key submit
         if(input){
           input.addEventListener("keydown", function(e){
             if (e.key === "Enter" && !e.shiftKey){
@@ -14593,16 +14594,25 @@ if (method === "GET" && pathname === "/ai-copilot") {
           });
         }
 
+        // ✅ FIX: Button click submit
         if(btnSend){
-          btnSend.addEventListener("click", runCopilot);
+          btnSend.addEventListener("click", function(e){
+            e.preventDefault();
+            runCopilot();
+          });
         }
 
+        // ✅ FIX: Prompt tiles autofill
         document.querySelectorAll("[data-prompt]").forEach(el => {
           el.addEventListener("click", function(){
             const txt = this.getAttribute("data-prompt");
             if(!txt || !input) return;
+
             input.value = txt;
+
+            // move cursor to end (UX polish)
             input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
           });
         });
       })();
