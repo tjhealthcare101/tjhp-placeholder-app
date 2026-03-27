@@ -14601,17 +14601,14 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
               const data = await res.json();
 
-              // 🔥 THIS IS THE KEY
               if (data && data.workspace_id) {
-                window.location.href = "/ai-copilot?workspace_id=" + encodeURIComponent(data.workspace_id);
+                window.location.href = `/ai-copilot?workspace_id=${encodeURIComponent(data.workspace_id)}`;
                 return;
               }
 
-              // fallback (never break UX)
-              form.submit();
-
+              alert("Analysis generated but workspace not found.");
             } catch (e) {
-              form.submit();
+              alert("Something went wrong. Try again.");
             }
           }
 
