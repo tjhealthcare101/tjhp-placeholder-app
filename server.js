@@ -14568,7 +14568,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
         const form = document.getElementById("copilotComposerForm");
         const composerShell = document.getElementById("wsComposerShell");
 
-        function submitCopilot(){
+        async function submitCopilot(){
           if(!input || !form) return;
 
           const prompt = (input.value || "").trim();
@@ -14577,13 +14577,65 @@ if (method === "GET" && pathname === "/ai-copilot") {
           if(btnSend) btnSend.disabled = true;
           if(composerShell) composerShell.classList.add("is-loading");
 
-          const hiddenBtn = document.getElementById("hiddenSubmitBtn");
-          if(hiddenBtn){
-            hiddenBtn.click();
+          try {
+            // Use the SAME intelligence endpoint pattern the working floating AI uses
+            const res = await fetch("/intelligence/query", {
+              method: "POST",
+              headers: { "Content-Type":"application/json" },
+              body: JSON.stringify({
+                prompt,
+                style: "exec",
+                save: "1",
+                save_name: prompt.slice(0, 48)
+              })
+            });
+
+            const data = await res.json();
+
+            // If the shared intelligence flow returns a saved workspace, go there
+            if (data && data.workspace_id) {
+              window.location.href = "/ai-copilot?workspace_id=" + encodeURIComponent(data.workspace_id);
+              return;
+            }
+
+            // If it returns usable HTML/answer but no workspace id, show it inline and fall back to existing form route
+            if (data && (data.html || data.answer)) {
+              if (output) {
+                output.innerHTML =
+                  '<div style="margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--card);">' +
+                  (data.html || ('<div>' + String(data.answer || "").replace(/</g,"&lt;").replace(/>/g,"&gt;") + '</div>')) +
+                  '</div>';
+              }
+
+              const hiddenBtn = document.getElementById("hiddenSubmitBtn");
+              if (hiddenBtn) {
+                hiddenBtn.click();
+                return;
+              }
+
+              form.submit();
+              return;
+            }
+
+            // Final fallback to existing Copilot form flow
+            const hiddenBtn = document.getElementById("hiddenSubmitBtn");
+            if (hiddenBtn) {
+              hiddenBtn.click();
+              return;
+            }
+
+            form.submit();
+          } catch (e) {
+            // Never break Copilot tab if intelligence fetch fails
+            const hiddenBtn = document.getElementById("hiddenSubmitBtn");
+            if (hiddenBtn) {
+              hiddenBtn.click();
+              return;
+            }
+            form.submit();
           }
         }
 
-        // ✅ FIX: Enter key submit
         if(input){
           input.addEventListener("keydown", function(e){
             if (e.key === "Enter" && !e.shiftKey){
@@ -14593,7 +14645,6 @@ if (method === "GET" && pathname === "/ai-copilot") {
           });
         }
 
-        // ✅ FIX: Button click submit
         if(btnSend){
           btnSend.addEventListener("click", function(e){
             e.preventDefault();
@@ -14601,15 +14652,12 @@ if (method === "GET" && pathname === "/ai-copilot") {
           });
         }
 
-        // ✅ FIX: Prompt tiles autofill
         document.querySelectorAll("[data-prompt]").forEach(el => {
           el.addEventListener("click", function(){
             const txt = this.getAttribute("data-prompt");
             if(!txt || !input) return;
 
             input.value = txt;
-
-            // 🔥 AUTO RUN immediately (no second click needed)
             submitCopilot();
           });
         });
