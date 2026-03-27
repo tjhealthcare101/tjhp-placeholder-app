@@ -11407,6 +11407,56 @@ Keep it concise and factual.
       `;
       }
 
+      let actionsButtonsHtml = `
+  <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+    <a class="btn secondary small" href="/actions?filter=denied">View Denied Claims</a>
+    <a class="btn secondary small" href="/actions?filter=underpaid">View Underpaid Claims</a>
+    <a class="btn secondary small" href="/actions">Open Action Center</a>
+  </div>
+`;
+
+      if (intent === "payer" && topPayer && topPayer.payer) {
+        actionsButtonsHtml = `
+    <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+      <a class="btn secondary small" href="/actions?payer=${encodeURIComponent(topPayer.payer)}">View ${escapeHtml(topPayer.payer)} Claims</a>
+      <a class="btn secondary small" href="/actions?filter=underpaid&payer=${encodeURIComponent(topPayer.payer)}">View ${escapeHtml(topPayer.payer)} Underpaid</a>
+      <a class="btn secondary small" href="/actions">Open Action Center</a>
+    </div>
+  `;
+      }
+
+      if (intent === "denial") {
+        actionsButtonsHtml = `
+    <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+      <a class="btn secondary small" href="/actions?filter=denied">View Denied Claims</a>
+      <a class="btn secondary small" href="/actions?filter=denied&sort=at_risk_desc">Highest Risk Denials</a>
+      <a class="btn secondary small" href="/actions">Open Action Center</a>
+    </div>
+  `;
+      }
+
+      if (intent === "underpayment") {
+        actionsButtonsHtml = `
+    <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+      <a class="btn secondary small" href="/actions?filter=underpaid">View Underpaid Claims</a>
+      <a class="btn secondary small" href="/actions?filter=underpaid&sort=at_risk_desc">Highest Recovery Opportunities</a>
+      <a class="btn secondary small" href="/actions">Open Action Center</a>
+    </div>
+  `;
+      }
+
+      if (intent === "ar") {
+        actionsButtonsHtml = `
+    <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+      <a class="btn secondary small" href="/actions?filter=aging_60_plus">View 60+ Day AR</a>
+      <a class="btn secondary small" href="/actions?filter=aging_90_plus">View 90+ Day AR</a>
+      <a class="btn secondary small" href="/actions">Open Action Center</a>
+    </div>
+  `;
+      }
+
+      summaryHtml += actionsButtonsHtml;
+
       html = `<div class="card" style="padding:14px;">${summaryHtml}</div>`;
       answer = [
         "Executive Summary",
