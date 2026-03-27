@@ -14568,16 +14568,15 @@ if (method === "GET" && pathname === "/ai-copilot") {
         const form = document.getElementById("copilotComposerForm");
         const composerShell = document.getElementById("wsComposerShell");
 
-        function runCopilot(){
+        function submitCopilot(){
           if(!input || !form) return;
 
           const prompt = (input.value || "").trim();
-          if (!prompt) return;
+          if(!prompt) return;
 
           if(btnSend) btnSend.disabled = true;
           if(composerShell) composerShell.classList.add("is-loading");
 
-          // 🔥 FIX: always trigger real submit
           const hiddenBtn = document.getElementById("hiddenSubmitBtn");
           if(hiddenBtn){
             hiddenBtn.click();
@@ -14589,7 +14588,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
           input.addEventListener("keydown", function(e){
             if (e.key === "Enter" && !e.shiftKey){
               e.preventDefault();
-              runCopilot();
+              submitCopilot();
             }
           });
         }
@@ -14598,7 +14597,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
         if(btnSend){
           btnSend.addEventListener("click", function(e){
             e.preventDefault();
-            runCopilot();
+            submitCopilot();
           });
         }
 
@@ -14610,9 +14609,8 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
             input.value = txt;
 
-            // move cursor to end (UX polish)
-            input.focus();
-            input.setSelectionRange(input.value.length, input.value.length);
+            // 🔥 AUTO RUN immediately (no second click needed)
+            submitCopilot();
           });
         });
       })();
