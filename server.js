@@ -11229,124 +11229,208 @@ RULES:
   // ---------- Revenue Intelligence (AI) Query Endpoint ----------
   if (method === "POST" && pathname === "/intelligence/query") {
     const body = await parseBody(req);
-    let payload = {};
-    try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+    let params = {};
+    try { params = typeof body === "string" ? JSON.parse(body || "{}") : (body || {}); } catch { params = {}; }
 
-    const prompt = String(payload.prompt || "").trim();
-    const style = String(payload.style || "exec").trim();
-    const save = String(payload.save || "") === "1";
-    const saveName = String(payload.save_name || "").trim();
+    const rawPrompt = String(params.prompt || "").trim();
+    const prompt = rawPrompt.toLowerCase();
+    const style = String(params.style || "exec").trim();
+    const save = String(params.save || "") === "1";
+    const saveName = String(params.save_name || "").trim();
 
-    if (!prompt) {
+    if (!rawPrompt) {
       return send(res, 200, JSON.stringify({ ok:false, error:"Missing prompt" }), "application/json");
     }
 
-    const payerScope = detectPayerFromPrompt(prompt, org.org_id);
-    const denialByMonth = payerScope
-      ? computePayerDenialTrends(org.org_id, payerScope)
-      : computeDenialTrends(org.org_id);
-    const payTrend = computePaymentTrends(org.org_id);
+    const r = rangeFromPreset("last30");
+    const m = computeDashboardMetrics(org.org_id, r.start, r.end, "last30");
+    const payerRanks = computeAllPayerRankings(org.org_id);
 
-    const denialMonths = Object.keys(denialByMonth || {}).sort();
-    const denialTotals = denialMonths.map(k => Number(denialByMonth[k]?.total || 0));
-    const draftTotals = denialMonths.map(k => Number(denialByMonth[k]?.drafts || 0));
+    let intent = "general";
+    if (prompt.includes("payer")) intent = "payer";
+    if (prompt.includes("denial")) intent = "denial";
+    if (prompt.includes("ar") || prompt.includes("aging")) intent = "ar";
+    if (prompt.includes("underpayment") || prompt.includes("underpaid")) intent = "underpayment";
 
-    const payMonths = Object.keys(payTrend.byMonth || {}).sort();
-    const payTotals = payMonths.map(k => Number(payTrend.byMonth[k]?.total || 0));
-
-    const r30 = rangeFromPreset("last30");
-    const dash30 = computeDashboardMetrics(org.org_id, r30.start, r30.end, "last30");
-    const payerTop = (dash30.payerTop || []).slice(0, 10);
-    const payerLabels = payerTop.map(x=>x.payer);
-    const payerUnderpaid = payerTop.map(x=>Number(x.underpaid||0));
-
-    const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
-    const now = Date.now();
-    const aging = { "0-30":0, "31-60":0, "61-90":0, "90+":0 };
-    billedAll.filter(b => String(b.status||"Pending") !== "Paid").forEach(b=>{
-      const dt = new Date(b.denied_at || b.created_at || b.dos || nowISO()).getTime();
-      const days = Math.max(0, (now - dt) / (1000*60*60*24));
-      if (days > 90) aging["90+"]++;
-      else if (days > 60) aging["61-90"]++;
-      else if (days > 30) aging["31-60"]++;
-      else aging["0-30"]++;
-    });
-
-    const negs = getNegotiations(org.org_id);
-    const negApproved = negs.filter(n => n.status === "Approved (Pending Payment)" || n.status === "Payment Received");
-    const negPaid = negs.filter(n => n.status === "Payment Received");
-    const negApprovedTotal = negApproved.reduce((s,n)=> s + num(n.approved_amount), 0);
-    const negCollectedTotal = negPaid.reduce((s,n)=> s + num(n.collected_amount), 0);
-    const negSuccessRate = negApproved.length ? ((negPaid.length / negApproved.length) * 100) : 0;
-
-    const charts = (Array.isArray(payload.charts) && payload.charts.length) ? payload.charts : pickChartsForPrompt(prompt);
-
-    const analytics = computeAnalytics(org.org_id);
-
-    const styleMap = {
-      exec: "Write an executive summary and a short action plan (3-5 bullets).",
-      narrative: "Write a concise narrative analysis (2-4 short paragraphs) with practical recommendations.",
-      bullets: "Write bullet insights (8-12 bullets) with clear takeaways.",
-      technical: "Write a technical breakdown (structured sections) focusing on metrics, definitions, and what to check next."
-    };
-    const styleInstr = styleMap[style] || styleMap.exec;
-
+    let summaryHtml = "";
     let answer = "";
-    if (!process.env.OPENAI_API_KEY) {
-      answer =
-`(AI not configured: missing OPENAI_API_KEY)
+    let html = "";
 
-Snapshot:
-- Recovery rate: ${analytics.recoveryRate}%
-- Projected lost revenue: ${formatMoneyUI(analytics.projectedLostRevenue||0)}
-- Underpaid (last 30 days): ${formatMoneyUI(dash30.kpis.underpaidAmt||0)}
-- Aging 60+: ${Number(analytics.aging?.over60||0)}
-- Negotiation success: ${negSuccessRate.toFixed(1)}%
-
-Question:
-${prompt}
-
-Next steps:
-- Upload payments if missing and re-run this insight.
-- Review top underpaid payer and highest at-risk claims in Action Center.`;
+    if (!payerRanks || payerRanks.length === 0) {
+      html = `
+      <div style="font-weight:800;font-size:16px;margin-bottom:6px;">No Data Available</div>
+      <div class="muted">Upload billed claims and payments to generate insights.</div>
+      <div style="margin-top:10px;">
+        <a href="/upload-billed" class="btn primary">Upload Billed Claims</a>
+        <a href="/upload-payments" class="btn secondary">Upload Payments</a>
+      </div>
+    `;
+      answer = "No data available. Upload billed claims and payments to generate insights.";
     } else {
-      const systemMsg = "You are TJ Healthcare Pro's Revenue Intelligence assistant. Only use the provided organization analytics and uploaded data. Be accurate, concise, and operational. Do not invent numbers. Do not provide medical advice.";
-      const context = {
-        organization: org.org_name,
-        plan: getActivePlanName(org.org_id),
-        response_style: style,
-        question: prompt,
-        analytics,
-        dashboard_last30: dash30,
-        trends: { denialMonths, denialTotals, draftTotals, payMonths, payTotals, payerLabels, payerUnderpaid, aging },
-        negotiations: { total: negs.length, approved_total: negApprovedTotal, collected_total: negCollectedTotal, success_rate: Number(negSuccessRate.toFixed(1)) }
-      };
-      const userMsg = styleInstr + "\n\nORG DATA (JSON):\n" + JSON.stringify(context, null, 2);
+      const topPayer = payerRanks[0] || {};
+      const totalBilled = Number(m?.kpis?.totalBilled || m?.totalBilled || 0);
+      const totalCollected = Number(m?.kpis?.collectedTotal || m?.totalCollected || 0);
+      const totalAtRisk = Number(m?.kpis?.revenueAtRisk || m?.totalAtRisk || 0);
 
-      const aiResult = await requestOpenAIChatCompletion({
-        messages: [
-          { role: "system", content: systemMsg },
-          { role: "user", content: userMsg },
-        ],
-        temperature: 0.2,
-      });
+      summaryHtml += `
+      <div style="font-weight:900;font-size:16px;margin-bottom:8px;">Executive Summary</div>
+      <div style="margin-bottom:10px;">
+        Revenue performance shows ${
+          totalCollected > 0 ? "active collections with measurable payer variance." : "limited activity due to low data volume."
+        }
+      </div>
+    `;
 
-      if (aiResult.aiError || aiResult.aiDisabled) {
-        return send(res, 200, JSON.stringify({ ok: false, answer: aiResult.message, charts, data: null }), "application/json");
+      summaryHtml += `
+      <div style="font-weight:900;margin-top:10px;">Top Driver</div>
+      <div class="muted">
+        ${escapeHtml(topPayer.payer || "N/A")} is currently the highest impact payer with a score of ${formatNumberUI(topPayer.score || 0)}.
+      </div>
+    `;
+
+      summaryHtml += `
+      <div style="font-weight:900;margin-top:10px;">Key Metrics</div>
+      <ul style="margin:6px 0 0 18px;">
+        <li>Total Billed: ${formatMoneyUI(totalBilled)}</li>
+        <li>Total Collected: ${formatMoneyUI(totalCollected)}</li>
+        <li>Total At Risk: ${formatMoneyUI(totalAtRisk)}</li>
+      </ul>
+    `;
+
+      if (intent === "payer") {
+        summaryHtml += `
+        <div style="font-weight:900;margin-top:10px;">Payer Insight</div>
+        <div class="muted">
+          Focus on ${escapeHtml(topPayer.payer || "top payer")} due to high impact on revenue performance and variability.
+        </div>
+      `;
       }
 
-      answer = aiResult?.choices?.[0]?.message?.content || "I couldn't generate an answer right now.";
+      if (intent === "denial") {
+        summaryHtml += `
+        <div style="font-weight:900;margin-top:10px;">Denial Insight</div>
+        <div class="muted">
+          Denials are contributing to revenue leakage. Review authorization workflows and coding accuracy.
+        </div>
+      `;
+      }
+
+      if (intent === "underpayment") {
+        summaryHtml += `
+        <div style="font-weight:900;margin-top:10px;">Underpayment Insight</div>
+        <div class="muted">
+          Underpayments indicate contract misalignment or payer processing inconsistencies.
+        </div>
+      `;
+      }
+
+      if (intent === "ar") {
+        summaryHtml += `
+        <div style="font-weight:900;margin-top:10px;">AR Insight</div>
+        <div class="muted">
+          Monitor aging buckets closely to prevent escalation into denial or write-off categories.
+        </div>
+      `;
+      }
+
+      summaryHtml += `
+      <div style="font-weight:900;margin-top:10px;">Recommended Actions</div>
+      <ul style="margin:6px 0 0 18px;">
+        <li>Prioritize follow-up on highest at-risk payer claims</li>
+        <li>Review denial patterns and root causes</li>
+        <li>Validate reimbursement rules for top payers</li>
+      </ul>
+    `;
+
+      summaryHtml += `
+      <div style="margin-top:12px;font-size:12px;opacity:.7;">
+        Confidence: ${payerRanks.length > 5 ? "High (data-backed)" : "Limited data"}
+      </div>
+    `;
+
+      let aiExplanation = "";
+
+      if (process.env.OPENAI_API_KEY && payerRanks && payerRanks.length > 0) {
+        try {
+          const aiFacts = {
+            totalBilled,
+            totalCollected,
+            totalAtRisk,
+            topPayer: topPayer.payer || "N/A",
+            topPayerScore: Number(topPayer.score || 0),
+            intent
+          };
+
+          const aiPrompt = `
+You are a healthcare revenue cycle analytics assistant.
+
+STRICT RULES:
+- ONLY use the data provided below
+- DO NOT make up numbers
+- DO NOT infer missing data
+- DO NOT generalize beyond the data
+- If data is limited, say so
+
+DATA:
+${JSON.stringify(aiFacts, null, 2)}
+
+TASK:
+Write a short executive explanation (2-3 sentences max) explaining what this means operationally.
+Focus on:
+- revenue risk
+- payer impact
+- what should be looked at next
+
+Keep it concise and factual.
+`;
+
+          const aiResult = await requestOpenAIChatCompletion({
+            messages: [
+              { role: "system", content: "You are a precise, data-bound healthcare revenue analyst." },
+              { role: "user", content: aiPrompt }
+            ],
+            temperature: 0.1
+          });
+
+          if (!aiResult.aiError && !aiResult.aiDisabled) {
+            aiExplanation = aiResult?.choices?.[0]?.message?.content || "";
+          }
+        } catch (e) {
+          aiExplanation = "";
+        }
+      }
+
+      if (aiExplanation) {
+        summaryHtml += `
+        <div style="font-weight:900;margin-top:10px;">AI Insight</div>
+        <div class="muted">${escapeHtml(aiExplanation)}</div>
+      `;
+      }
+
+      html = `<div class="card" style="padding:14px;">${summaryHtml}</div>`;
+      answer = [
+        "Executive Summary",
+        totalCollected > 0
+          ? "Revenue performance shows active collections with measurable payer variance."
+          : "Revenue performance shows limited activity due to low data volume.",
+        `Top Driver: ${topPayer.payer || "N/A"} (score ${formatNumberUI(topPayer.score || 0)})`,
+        `Total Billed: ${formatMoneyUI(totalBilled)}`,
+        `Total Collected: ${formatMoneyUI(totalCollected)}`,
+        `Total At Risk: ${formatMoneyUI(totalAtRisk)}`
+      ].join("\n");
     }
 
-    const queryRec = { query_id: uuid(), org_id: org.org_id, prompt, style, charts, answer, created_at: nowISO() };
+    const charts = [];
+    const dataOut = null;
+    const queryRec = { query_id: uuid(), org_id: org.org_id, prompt: rawPrompt, style, charts, answer, created_at: nowISO() };
     saveAIQuery(queryRec);
 
     if (save) {
       const savedRec = {
         saved_id: uuid(),
         org_id: org.org_id,
-        name: saveName || prompt.slice(0, 48),
-        prompt,
+        name: saveName || rawPrompt.slice(0, 48),
+        prompt: rawPrompt,
         style,
         charts,
         created_by: user.user_id,
@@ -11356,18 +11440,7 @@ Next steps:
       saveSavedQuery(savedRec);
     }
 
-    const dataOut = {
-      denialMonths, denialTotals, draftTotals,
-      payMonths, payTotals,
-      payerLabels, payerUnderpaid,
-      agingLabels: Object.keys(aging),
-      agingCounts: Object.values(aging),
-      negotiationApprovedTotal: negApprovedTotal,
-      negotiationCollectedTotal: negCollectedTotal,
-      negotiationSuccessRate: Number(negSuccessRate.toFixed(1))
-    };
-
-    return send(res, 200, JSON.stringify({ ok:true, answer, charts, data: dataOut }), "application/json");
+    return send(res, 200, JSON.stringify({ ok:true, answer, html, charts, data: dataOut }), "application/json");
   }
 
   if (method === "POST" && pathname === "/intelligence/saved/delete") {
@@ -14444,49 +14517,20 @@ if (method === "GET" && pathname === "/ai-copilot") {
         const form = document.getElementById("copilotComposerForm");
         const composerShell = document.getElementById("wsComposerShell");
 
-        async function runCopilot(){
-          if(!input || !btnSend || !form) return;
+        function runCopilot(){
+          if(!input || !form) return;
 
           const prompt = (input.value || "").trim();
           if (!prompt) return;
-          if(btnSend.disabled) return;
 
-          btnSend.disabled = true;
+          if(btnSend) btnSend.disabled = true;
           if(composerShell) composerShell.classList.add("is-loading");
-          btnSend.textContent = "Thinking...";
 
-          try{
-            // 🔑 IMPORTANT: use EXISTING form action (restores usage tracking)
-            const formData = new FormData();
-            formData.append("prompt", prompt);
-
-            const ws = form.querySelector('input[name="workspace_id"]');
-            if(ws && ws.value){
-              formData.append("workspace_id", ws.value);
-            }
-
-            const action = form.getAttribute("action") || "/ai-copilot/new";
-
-            const res = await fetch(action, {
-              method: "POST",
-              body: formData
-            });
-
-            // Redirect behavior preserved (server controls response)
-            if(res.redirected){
-              window.location.href = res.url;
-              return;
-            }
-
-            // fallback (in case no redirect)
-            window.location.reload();
-
-          }catch(e){
-            alert("Something went wrong. Try again.");
-          }finally{
-            btnSend.disabled = false;
-            if(composerShell) composerShell.classList.remove("is-loading");
-            btnSend.textContent = "➤";
+          // 🔑 CRITICAL: use native form submit (restores full backend behavior)
+          if(typeof form.requestSubmit === "function"){
+            form.requestSubmit();
+          } else {
+            form.submit();
           }
         }
 
@@ -14502,6 +14546,15 @@ if (method === "GET" && pathname === "/ai-copilot") {
         if(btnSend){
           btnSend.addEventListener("click", runCopilot);
         }
+
+        document.querySelectorAll("[data-prompt]").forEach(el => {
+          el.addEventListener("click", function(){
+            const txt = this.getAttribute("data-prompt");
+            if(!txt || !input) return;
+            input.value = txt;
+            input.focus();
+          });
+        });
       })();
     </script>
   `, navUser(), {showChat:true, orgName: org.org_name});
