@@ -305,6 +305,9 @@ function getAuth(req) {
   const cookies = parseCookies(req);
   return verifySession(cookies.tjhp_session);
 }
+function getSession(req) {
+  return getAuth(req);
+}
 
 // ===== Init storage =====
 ensureDir(DATA_DIR);
@@ -1787,7 +1790,7 @@ function renderCopilotTiles(){
   const tilesB64 = Buffer.from(JSON.stringify(tiles)).toString("base64");
 
   return `
-  <div class="tile-grid" id="copilotTileGrid">
+  <div class="tile-grid" id="copilotTileGrid" data-tiles="${tilesB64}">
     ${tiles.map((t,i)=>`
       <button type="button" class="tile" data-i="${i}">
         <div class="tile-title">${safeStr(t.title)}</div>
@@ -1795,34 +1798,6 @@ function renderCopilotTiles(){
       </button>
     `).join("")}
   </div>
-
-  <script>
-    (function(){
-      const tiles = JSON.parse(atob("${tilesB64}"));
-      const grid = document.getElementById("copilotTileGrid");
-      if(!grid) return;
-
-      grid.addEventListener("click", (e)=>{
-        const tile = e.target.closest(".tile");
-        if(!tile) return;
-
-        const idx = Number(tile.getAttribute("data-i")||"0");
-        const t = tiles[idx] || {};
-
-        const textarea = document.getElementById("copilotComposer");
-        if(!textarea) return;
-
-        textarea.value = t.prompt || "";
-
-        const form = textarea.closest("form");
-        if(form){
-          if(typeof window.__tjhpCopilotBeforeSubmit === "function") window.__tjhpCopilotBeforeSubmit(form);
-          if (typeof form.requestSubmit === "function") form.requestSubmit();
-          else form.submit();
-        }
-      });
-    })();
-  </script>
   `;
 }
 function renderBriefFocusSection(result) {
@@ -14512,6 +14487,60 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence</a>
               </div>
             </form>
+            <script>
+              (function(){
+                if (window.__tjhpMainCopilotBound) return;
+                window.__tjhpMainCopilotBound = true;
+
+                const form = document.getElementById("copilotComposerForm");
+                const input = document.getElementById("copilotInput");
+                const btn = document.getElementById("copilotSendBtn");
+                const grid = document.getElementById("copilotTileGrid");
+
+                if (!form || !input) return;
+
+                function submitMainCopilot() {
+                  const prompt = String(input.value || "").trim();
+                  if (!prompt) return;
+                  if (btn) btn.disabled = true;
+                  if (typeof form.requestSubmit === "function") form.requestSubmit();
+                  else form.submit();
+                }
+
+                input.addEventListener("keydown", function(e){
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submitMainCopilot();
+                  }
+                });
+
+                if (btn) {
+                  btn.addEventListener("click", function(e){
+                    e.preventDefault();
+                    submitMainCopilot();
+                  });
+                }
+
+                if (grid) {
+                  grid.addEventListener("click", function(e){
+                    const tile = e.target.closest(".tile");
+                    if (!tile) return;
+
+                    const idx = Number(tile.getAttribute("data-i") || "0");
+                    let tiles = [];
+                    try {
+                      tiles = JSON.parse(atob(grid.getAttribute("data-tiles") || "W10="));
+                    } catch (_) {}
+
+                    const selected = tiles[idx];
+                    if (!selected || !selected.prompt) return;
+
+                    input.value = selected.prompt;
+                    submitMainCopilot();
+                  });
+                }
+              })();
+            </script>
           </div>
         </div>
       </div>
@@ -14571,77 +14600,6 @@ if (method === "GET" && pathname === "/ai-copilot") {
           floatBtn.onclick = function(){ setCollapsed(false); };
         }
 
-        document.addEventListener("DOMContentLoaded", function(){
-
-          const input = document.getElementById("copilotInput");
-          const btnSend = document.getElementById("copilotSendBtn");
-          const form = document.getElementById("copilotComposerForm");
-          const composerShell = document.getElementById("wsComposerShell");
-
-          async function submitCopilot(){
-            if(!input || !form) return;
-
-            const prompt = (input.value || "").trim();
-            if(!prompt) return;
-
-            if(btnSend) btnSend.disabled = true;
-            if(composerShell) composerShell.classList.add("is-loading");
-
-            try {
-              const res = await fetch("/intelligence/query", {
-                method: "POST",
-                headers: { "Content-Type":"application/json" },
-                body: JSON.stringify({
-                  prompt,
-                  style: "exec",
-                  save: "1",
-                  save_name: prompt.slice(0, 48)
-                })
-              });
-
-              const data = await res.json();
-
-              if (data && data.workspace_id) {
-                window.location.href = `/ai-copilot?workspace_id=${encodeURIComponent(data.workspace_id)}`;
-                return;
-              }
-
-              alert("Analysis generated but workspace not found.");
-            } catch (e) {
-              alert("Something went wrong. Try again.");
-            }
-          }
-
-          // ✅ ENTER KEY
-          if(input){
-            input.addEventListener("keydown", function(e){
-              if(e.key === "Enter" && !e.shiftKey){
-                e.preventDefault();
-                submitCopilot();
-              }
-            });
-          }
-
-          // ✅ BUTTON CLICK
-          if(btnSend){
-            btnSend.addEventListener("click", function(e){
-              e.preventDefault();
-              submitCopilot();
-            });
-          }
-
-          // ✅ PROMPT TILES (AUTO RUN)
-          document.querySelectorAll("[data-prompt]").forEach(el => {
-            el.addEventListener("click", function(){
-              const txt = this.getAttribute("data-prompt");
-              if(!txt || !input) return;
-
-              input.value = txt;
-              submitCopilot();
-            });
-          });
-
-        });
       })();
     </script>
   `, navUser(), {showChat:true, orgName: org.org_name});
