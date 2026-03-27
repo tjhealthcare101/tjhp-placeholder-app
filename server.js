@@ -13505,6 +13505,12 @@ if (method === "GET" && pathname === "/intelligence") {
 if (method === "GET" && pathname === "/revenue-intelligence") {
   const tab = String(parsed.query.tab || "executive").toLowerCase();
   const q = String(parsed.query.q || "");
+  const trialStatus = getTrialStatus(org.org_id);
+  const isFreeTrial = !!trialStatus.active;
+  const sub = getSub(org.org_id);
+  const hasActivePlan = !!(sub && sub.status === "active" && sub.plan);
+  const payerLocked =
+    !isFreeTrial && !hasActivePlan;
   const preset = (parsed.query.range || "last30").toLowerCase();
   const r = rangeFromPreset(preset);
   const m = computeDashboardMetrics(org.org_id, r.start, r.end, preset);
@@ -13572,7 +13578,17 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   // Revenue Intelligence stays structured. Copilot handles conversational AI.
   const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
     ${tabLink("/revenue-intelligence", tab, "executive", "Executive Strategy", "CEO-style summary of revenue health, risk, and priority payers.")}
-    ${tabLink("/revenue-intelligence", tab, "payers", "Payer Hub", "Search payers, see grades, and open AI Payer Intelligence instantly.")}
+    ${
+      payerLocked
+        ? `<span
+            aria-disabled="true"
+            title="Upgrade your plan to unlock payer analytics and insights."
+            style="text-decoration:none;display:inline-flex;gap:8px;align-items:center;padding:8px 12px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-weight:900;font-size:12px;opacity:.5;cursor:not-allowed;"
+          >
+            Payer Hub 🔒 ${infoIcon("Upgrade your plan to unlock payer analytics and insights.")}
+          </span>`
+        : tabLink("/revenue-intelligence", tab, "payers", "Payer Hub", "Search payers, see grades, and open AI Payer Intelligence instantly.")
+    }
     ${tabLink("/revenue-intelligence", tab, "forecast", "Forecast", "Projections for collections, denials, and AR aging trends.")}
     ${tabLink("/revenue-intelligence", tab, "deep-dive", "Deep Dive", "Compare payers, CPT drivers, and time windows.")}
   </div>`;
@@ -14089,8 +14105,43 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   });
   </script>`;
 
+  const payerHubHtml = `
+    <div class="card" style="position:relative; overflow:hidden;">
+      ${payerLocked ? `
+        <div style="
+          position:absolute;
+          inset:0;
+          backdrop-filter: blur(6px);
+          background: rgba(255,255,255,0.65);
+          z-index:5;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          flex-direction:column;
+          text-align:center;
+          padding:24px;
+          border-radius:12px;
+        ">
+          <div style="font-weight:800; font-size:18px; margin-bottom:8px;">
+            Payer Intelligence Locked
+          </div>
+          <div style="opacity:.7; margin-bottom:12px;">
+            Upgrade your plan to unlock payer analytics and insights.
+          </div>
+          <a href="/account?tab=billing" class="btn-primary">
+            Upgrade Plan
+          </a>
+        </div>
+      ` : ``}
+
+      <div class="${payerLocked ? "blur-lock" : ""}" style="${payerLocked ? "pointer-events:none; user-select:none;" : ""}">
+        ${renderPayerHubTable(payerRanks, q)}
+      </div>
+    </div>
+  `;
+
   const content = (
-    tab === "payers" ? renderPayerHubTable(payerRanks, q) :
+    tab === "payers" ? payerHubHtml :
     tab === "forecast" ? renderForecastTab(org, m, forecastB64) :
     tab === "deep-dive" ? renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2) :
     tab === "ask-ai" ? renderRevenueAIConsole({ org, parsed }) :
@@ -14105,6 +14156,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       .ri-muted { color: var(--muted); font-size:12px; }
       .ri-divider { height:1px; background: var(--border); margin: 12px 0; }
       .chart-container { position:relative; height:320px; max-height:320px; width:100%; }
+      .blur-lock { filter: blur(4px); pointer-events: none; user-select: none; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
     <div class="ri-header">
