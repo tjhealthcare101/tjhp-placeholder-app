@@ -6,6 +6,19 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const OpenAI = require("openai");
 
+function safeStr(s) {
+  return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]));
+}
+
+function escapeHtml(str){
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 // ===== Server =====
 const HOST = "0.0.0.0";
 const PORT = process.env.PORT || 8080;
@@ -135,19 +148,6 @@ function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true
 function ensureFile(p, defaultVal) { if (!fs.existsSync(p)) fs.writeFileSync(p, JSON.stringify(defaultVal, null, 2)); }
 function readJSON(p, fallback) { ensureFile(p, fallback); return JSON.parse(fs.readFileSync(p, "utf8") || JSON.stringify(fallback)); }
 function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); }
-
-function safeStr(s) {
-  return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]));
-}
-
-function escapeHtml(str){
-  return String(str || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
 
 const ORG_PROFILE_DEFAULTS = {
   legal_name: "",
