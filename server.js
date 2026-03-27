@@ -14367,11 +14367,14 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
             <form method="POST" action="${workspace ? "/ai-copilot/followup" : "/ai-copilot/new"}" class="ws-composer-form" id="copilotComposerForm">
               ${workspace ? `<input type="hidden" name="workspace_id" value="${safeStr(workspace.workspace_id)}" />` : ``}
-              <label for="copilotComposer">Ask Copilot</label>
-              <textarea id="copilotComposer" name="prompt" required placeholder="Ask for an executive brief, risk drivers, payer analysis, denial trends, underpayment recovery..."></textarea>
+              <label for="copilotInput">Ask Copilot</label>
+              <textarea id="copilotInput" name="prompt" required placeholder="Ask Copilot..." style="width:100%;min-height:90px;border:1px solid var(--border);border-radius:10px;padding:10px;"></textarea>
+              <div style="display:flex;justify-content:flex-end;margin-top:6px;">
+                <button id="copilotSendBtn" class="btn primary" type="button" ${!copilotUsage.hasAccess ? "disabled" : ""} title="${!copilotUsage.hasAccess ? (getCopilotLimitMessage(org.org_id)?.message || "") : ""}">${!copilotUsage.hasAccess ? "Limit Reached" : "➤"}</button>
+              </div>
               <div class="ws-composer-hint">Press Enter to send or Shift+Enter for a new line</div>
+              <div id="copilotOutput"></div>
               <div class="ws-composer-actions">
-                <button class="btn" id="copilotSendBtn" type="submit" ${!copilotUsage.hasAccess ? "disabled" : ""} title="${!copilotUsage.hasAccess ? (getCopilotLimitMessage(org.org_id)?.message || "") : ""}">${!copilotUsage.hasAccess ? "Limit Reached" : "Send"}</button>
                 <a class="btn secondary" href="/ai-copilot?new=1">New Analysis</a>
                 <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence</a>
               </div>
@@ -14435,44 +14438,69 @@ if (method === "GET" && pathname === "/ai-copilot") {
           floatBtn.onclick = function(){ setCollapsed(false); };
         }
 
+        const input = document.getElementById("copilotInput");
+        const btnSend = document.getElementById("copilotSendBtn");
+        const output = document.getElementById("copilotOutput");
         const form = document.getElementById("copilotComposerForm");
-        const textarea = document.getElementById("copilotComposer");
-        const sendBtn = document.getElementById("copilotSendBtn");
         const composerShell = document.getElementById("wsComposerShell");
-        let isSubmitting = false;
 
-        window.__tjhpCopilotBeforeSubmit = function(activeForm){
-          const targetForm = activeForm || form;
-          if(!targetForm || isSubmitting) return false;
-          isSubmitting = true;
+        async function runCopilot(){
+          if(!input || !btnSend || !form) return;
+
+          const prompt = (input.value || "").trim();
+          if (!prompt) return;
+          if(btnSend.disabled) return;
+
+          btnSend.disabled = true;
           if(composerShell) composerShell.classList.add("is-loading");
-          if(sendBtn){
-            sendBtn.disabled = true;
-            sendBtn.textContent = "Thinking...";
-          }
-          targetForm.dataset.submitting = "1";
-          return true;
-        };
+          btnSend.textContent = "Thinking...";
 
-        if(form){
-          form.addEventListener("submit", function(e){
-            if(isSubmitting || form.dataset.submitting === "1"){
-              e.preventDefault();
+          try{
+            // 🔑 IMPORTANT: use EXISTING form action (restores usage tracking)
+            const formData = new FormData();
+            formData.append("prompt", prompt);
+
+            const ws = form.querySelector('input[name="workspace_id"]');
+            if(ws && ws.value){
+              formData.append("workspace_id", ws.value);
+            }
+
+            const action = form.getAttribute("action") || "/ai-copilot/new";
+
+            const res = await fetch(action, {
+              method: "POST",
+              body: formData
+            });
+
+            // Redirect behavior preserved (server controls response)
+            if(res.redirected){
+              window.location.href = res.url;
               return;
             }
-            if(window.__tjhpCopilotBeforeSubmit(form) === false){
+
+            // fallback (in case no redirect)
+            window.location.reload();
+
+          }catch(e){
+            alert("Something went wrong. Try again.");
+          }finally{
+            btnSend.disabled = false;
+            if(composerShell) composerShell.classList.remove("is-loading");
+            btnSend.textContent = "➤";
+          }
+        }
+
+        if(input){
+          input.addEventListener("keydown", function(e){
+            if (e.key === "Enter" && !e.shiftKey){
               e.preventDefault();
+              runCopilot();
             }
           });
         }
 
-        if(textarea && form){
-          textarea.addEventListener("keydown", function(e){
-            if(e.key !== "Enter" || e.shiftKey) return;
-            e.preventDefault();
-            if(typeof form.requestSubmit === "function") form.requestSubmit();
-            else form.submit();
-          });
+        if(btnSend){
+          btnSend.addEventListener("click", runCopilot);
         }
       })();
     </script>
