@@ -14496,46 +14496,42 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 const input = document.getElementById("copilotInput");
                 const btn = document.getElementById("copilotSendBtn");
                 const grid = document.getElementById("copilotTileGrid");
-                const hiddenBtn = document.getElementById("hiddenSubmitBtn");
                 const composerShell = document.getElementById("wsComposerShell");
 
                 if (!form || !input) return;
 
-                function submitMainCopilot() {
-                  const prompt = String(input.value || "").trim();
-                  if (!prompt) return;
-                  if (btn && btn.disabled) return;
-
+                function setLoading(){
                   if (btn) {
                     btn.disabled = true;
                     btn.textContent = "Thinking...";
                   }
                   if (composerShell) composerShell.classList.add("is-loading");
+                }
 
-                  if (hiddenBtn) {
-                    hiddenBtn.click();
-                  } else if (typeof form.requestSubmit === "function") {
-                    form.requestSubmit();
-                  } else {
-                    form.submit();
-                  }
+                function submitMainCopilot() {
+                  const prompt = String(input.value || "").trim();
+                  if (!prompt) return;
+
+                  setLoading();
+
+                  form.submit();
                 }
 
                 input.addEventListener("keydown", function(e){
-                  if (e.key === "Enter" && !e.shiftKey) {
+                  if (e.key === "Enter" && !e.shiftKey){
                     e.preventDefault();
                     submitMainCopilot();
                   }
                 });
 
-                if (btn) {
+                if (btn){
                   btn.addEventListener("click", function(e){
                     e.preventDefault();
                     submitMainCopilot();
                   });
                 }
 
-                if (grid) {
+                if (grid){
                   grid.addEventListener("click", function(e){
                     const tile = e.target.closest(".tile");
                     if (!tile) return;
@@ -14543,7 +14539,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     let tiles = [];
                     try {
                       tiles = JSON.parse(atob(grid.getAttribute("data-tiles") || "W10="));
-                    } catch (_) {}
+                    } catch {}
 
                     const idx = Number(tile.getAttribute("data-i") || "0");
                     const selected = tiles[idx];
@@ -14551,7 +14547,6 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                     input.value = selected.prompt;
                     input.focus();
-                    input.setSelectionRange(input.value.length, input.value.length);
                     submitMainCopilot();
                   });
                 }
