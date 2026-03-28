@@ -14489,9 +14489,6 @@ if (method === "GET" && pathname === "/ai-copilot") {
             </form>
             <script>
               (function(){
-                if (window.__tjhpMainCopilotBound) return;
-                window.__tjhpMainCopilotBound = true;
-
                 const form = document.getElementById("copilotComposerForm");
                 const input = document.getElementById("copilotInput");
                 const btn = document.getElementById("copilotSendBtn");
