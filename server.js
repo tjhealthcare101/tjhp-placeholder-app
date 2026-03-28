@@ -14496,20 +14496,25 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 const input = document.getElementById("copilotInput");
                 const btn = document.getElementById("copilotSendBtn");
                 const grid = document.getElementById("copilotTileGrid");
+                const hiddenBtn = document.getElementById("hiddenSubmitBtn");
+                const composerShell = document.getElementById("wsComposerShell");
 
                 if (!form || !input) return;
 
                 function submitMainCopilot() {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
+                  if (btn && btn.disabled) return;
 
-                  if (btn) btn.disabled = true;
+                  if (btn) {
+                    btn.disabled = true;
+                    btn.textContent = "Thinking...";
+                  }
+                  if (composerShell) composerShell.classList.add("is-loading");
 
-                  // ✅ KEY FIX: USE EXISTING FORM ROUTE (same as floating AI backend flow)
-                  const hiddenField = form.querySelector('[name="prompt"]');
-                  if (hiddenField) hiddenField.value = prompt;
-
-                  if (typeof form.requestSubmit === "function") {
+                  if (hiddenBtn) {
+                    hiddenBtn.click();
+                  } else if (typeof form.requestSubmit === "function") {
                     form.requestSubmit();
                   } else {
                     form.submit();
@@ -14535,16 +14540,18 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     const tile = e.target.closest(".tile");
                     if (!tile) return;
 
-                    const idx = Number(tile.getAttribute("data-i") || "0");
                     let tiles = [];
                     try {
                       tiles = JSON.parse(atob(grid.getAttribute("data-tiles") || "W10="));
                     } catch (_) {}
 
+                    const idx = Number(tile.getAttribute("data-i") || "0");
                     const selected = tiles[idx];
                     if (!selected || !selected.prompt) return;
 
                     input.value = selected.prompt;
+                    input.focus();
+                    input.setSelectionRange(input.value.length, input.value.length);
                     submitMainCopilot();
                   });
                 }
