@@ -14508,36 +14508,14 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   if (composerShell) composerShell.classList.add("is-loading");
                 }
 
-                async function submitMainCopilot() {
+                function submitMainCopilot() {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
 
                   setLoading();
 
-                  try {
-                    const res = await fetch("/intelligence/query", {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json"
-                      },
-                      body: JSON.stringify({
-                        prompt,
-                        style: "exec",
-                        save: "1",
-                        save_name: prompt.slice(0, 48)
-                      })
-                    });
-
-                    const data = await res.json();
-                    if (data && data.workspace_id) {
-                      window.location.href = "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id);
-                      return;
-                    }
-
-                    alert("Analysis generated but failed to load.");
-                  } catch (e) {
-                    alert("Something went wrong.");
-                  }
+                  // 🔥 ALWAYS use your working backend flow
+                  form.submit();
                 }
 
                 input.addEventListener("keydown", function(e){
