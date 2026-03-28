@@ -14521,7 +14521,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                     // 🔥 ALWAYS FALL BACK TO STANDARD FLOW IF NO WORKSPACE_ID
                     if (data && data.workspace_id) {
-                      window.location.href = "/ai-copilot?workspace_id=" + encodeURIComponent(data.workspace_id);
+                      window.location.href = "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id);
                       return;
                     }
 
