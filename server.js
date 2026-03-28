@@ -14502,9 +14502,16 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 function submitMainCopilot() {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
+
                   if (btn) btn.disabled = true;
-                  if (typeof form.requestSubmit === "function") form.requestSubmit();
-                  else form.submit();
+
+                  // 🔥 FORCE REAL SUBMIT (this fixes everything)
+                  const hiddenBtn = document.getElementById("hiddenSubmitBtn");
+                  if (hiddenBtn) {
+                    hiddenBtn.click();
+                  } else {
+                    form.submit();
+                  }
                 }
 
                 input.addEventListener("keydown", function(e){
