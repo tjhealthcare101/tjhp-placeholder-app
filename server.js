@@ -14499,41 +14499,20 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                 if (!form || !input) return;
 
-                async function submitMainCopilot() {
+                function submitMainCopilot() {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
 
                   if (btn) btn.disabled = true;
 
-                  try {
-                    const res = await fetch("/intelligence/query", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        prompt,
-                        style: "exec",
-                        save: "1",
-                        save_name: prompt.slice(0, 48)
-                      })
-                    });
+                  // ✅ KEY FIX: USE EXISTING FORM ROUTE (same as floating AI backend flow)
+                  const hiddenField = form.querySelector('[name="prompt"]');
+                  if (hiddenField) hiddenField.value = prompt;
 
-                    const data = await res.json();
-
-                    // 🔥 ALWAYS FALL BACK TO STANDARD FLOW IF NO WORKSPACE_ID
-                    if (data && data.workspace_id) {
-                      window.location.href = "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id);
-                      return;
-                    }
-
-                    // fallback to original copilot flow (this is KEY)
-                    const hiddenBtn = document.getElementById("hiddenSubmitBtn");
-                    if (hiddenBtn) {
-                      hiddenBtn.click();
-                    } else {
-                      form.submit();
-                    }
-                  } catch (err) {
-                    alert("Something went wrong.");
+                  if (typeof form.requestSubmit === "function") {
+                    form.requestSubmit();
+                  } else {
+                    form.submit();
                   }
                 }
 
