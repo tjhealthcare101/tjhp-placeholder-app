@@ -11474,7 +11474,12 @@ Keep it concise and factual.
       saveSavedQuery(savedRec);
     }
 
-    return send(res, 200, JSON.stringify({ ok:true, answer, html, charts, data: dataOut }), "application/json");
+    const workspace = createCopilotWorkspaceFromPrompt(org.org_id, rawPrompt);
+
+    return send(res, 200, JSON.stringify({
+      ok: true,
+      workspace_id: workspace.workspace_id
+    }), "application/json");
   }
 
   if (method === "POST" && pathname === "/intelligence/saved/delete") {
@@ -14291,9 +14296,13 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
   // ❌ DO NOT BLOCK PAGE
   // Just let UI + button handle limit
-  const workspace_id = String(parsed.query.workspace || "").trim();
+  // 🔥 FIX: accept BOTH workspace + workspace_id
+  let workspace_id = String(parsed.query.workspace_id || parsed.query.workspace || "").trim();
 
-  let workspace = workspace_id ? getCopilotWorkspace(org.org_id, workspace_id) : null;
+  let workspace = null;
+  if (workspace_id) {
+    workspace = getCopilotWorkspace(org.org_id, workspace_id);
+  }
   const allWorkspaces = getCopilotWorkspaces(org.org_id);
 
   if (!workspace && allWorkspaces.length && !parsed.query.new) {
@@ -14505,7 +14514,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   if (composerShell) composerShell.classList.add("is-loading");
                 }
 
-                function submitMainCopilot() {
+                async function submitMainCopilot() {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
 
@@ -14516,12 +14525,38 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   }
                   if (composerShell) composerShell.classList.add("is-loading");
 
-                  // 🔥 THIS IS THE REAL FIX
-                  // Use SAME route as backend expects
-                  if (typeof form.requestSubmit === "function") {
-                    form.requestSubmit();
-                  } else {
-                    form.submit();
+                  try {
+                    // 🔥 CALL SAME ENGINE AS FLOAT AI (THIS IS THE FIX)
+                    const res = await fetch("/intelligence/query", {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json"
+                      },
+                      body: JSON.stringify({
+                        prompt,
+                        style: "exec",
+                        save: "1",
+                        save_name: prompt.slice(0, 60)
+                      })
+                    });
+
+                    const data = await res.json();
+
+                    if (data && data.workspace_id) {
+                      // 🔥 REDIRECT TO COPILOT WITH WORKSPACE
+                      window.location.href = "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id);
+                      return;
+                    }
+
+                    alert("Analysis generated but failed to load.");
+                  } catch (e) {
+                    alert("Error generating analysis.");
+                  } finally {
+                    if (btn) {
+                      btn.disabled = false;
+                      btn.textContent = "➤";
+                    }
+                    if (composerShell) composerShell.classList.remove("is-loading");
                   }
                 }
 
