@@ -14499,18 +14499,41 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                 if (!form || !input) return;
 
-                function submitMainCopilot() {
+                async function submitMainCopilot() {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
 
                   if (btn) btn.disabled = true;
 
-                  // 🔥 FORCE REAL SUBMIT (this fixes everything)
-                  const hiddenBtn = document.getElementById("hiddenSubmitBtn");
-                  if (hiddenBtn) {
-                    hiddenBtn.click();
-                  } else {
-                    form.submit();
+                  try {
+                    const res = await fetch("/intelligence/query", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        prompt,
+                        style: "exec",
+                        save: "1",
+                        save_name: prompt.slice(0, 48)
+                      })
+                    });
+
+                    const data = await res.json();
+
+                    // 🔥 ALWAYS FALL BACK TO STANDARD FLOW IF NO WORKSPACE_ID
+                    if (data && data.workspace_id) {
+                      window.location.href = "/ai-copilot?workspace_id=" + encodeURIComponent(data.workspace_id);
+                      return;
+                    }
+
+                    // fallback to original copilot flow (this is KEY)
+                    const hiddenBtn = document.getElementById("hiddenSubmitBtn");
+                    if (hiddenBtn) {
+                      hiddenBtn.click();
+                    } else {
+                      form.submit();
+                    }
+                  } catch (err) {
+                    alert("Something went wrong.");
                   }
                 }
 
