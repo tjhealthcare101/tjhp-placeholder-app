@@ -14512,10 +14512,20 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
 
-                  setLoading();
+                  // UI feedback
+                  if (btn) {
+                    btn.disabled = true;
+                    btn.textContent = "Thinking...";
+                  }
+                  if (composerShell) composerShell.classList.add("is-loading");
 
-                  // 🔥 ALWAYS use your working backend flow
-                  form.submit();
+                  // 🔥 THIS IS THE REAL FIX
+                  // Use SAME route as backend expects
+                  if (typeof form.requestSubmit === "function") {
+                    form.requestSubmit();
+                  } else {
+                    form.submit();
+                  }
                 }
 
                 input.addEventListener("keydown", function(e){
@@ -14544,9 +14554,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                     const idx = Number(tile.getAttribute("data-i") || "0");
                     const selected = tiles[idx];
-                    if (!selected || !selected.prompt) return;
+                    const txt = selected && selected.prompt ? selected.prompt : "";
+                    if (!txt) return;
 
-                    input.value = selected.prompt;
+                    input.value = txt;
                     input.focus();
                     submitMainCopilot();
                   });
