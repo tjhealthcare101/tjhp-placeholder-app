@@ -9122,6 +9122,34 @@ const server = http.createServer(async (req, res) => {
 
   // auth
   const sess = getAuth(req);
+
+  // 🔥 SIMULATION ROUTE (REAL FINAL FIX)
+  if (method === "POST" && pathname === "/admin/simulate-plan") {
+    console.log("SIMULATION HIT");
+
+    if (!sess) {
+      return redirect(res, "/admin/login");
+    }
+
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const simulatedSession = {
+      ...sess,
+      role: "user",
+      simulating: true,
+      simulated_plan: params.get("plan")
+    };
+
+    console.log("SIM SESSION:", simulatedSession);
+
+    setSession(res, simulatedSession);
+
+    return send(res, 302, "", "text/plain", {
+      "Location": "/ai-copilot"
+    });
+  }
+
   CURRENT_SESSION_ORG_ID = (sess && sess.org_id) ? String(sess.org_id) : "";
   CURRENT_SIMULATION = (sess && sess.simulating)
     ? { plan: String(sess.simulated_plan || "") }
@@ -10564,10 +10592,10 @@ const server = http.createServer(async (req, res) => {
         <div class="card" style="padding:16px;margin-top:16px;">
           <h3>🧪 Plan Simulator</h3>
 
-          <form method="POST" action="/admin/simulate-plan">
+          <form id="simulateForm">
             <div>
               <label>Select Plan</label>
-              <select name="plan">
+              <select name="plan" id="simPlan">
                 <option value="starter">Starter</option>
                 <option value="growth">Growth</option>
                 <option value="pro">Pro</option>
@@ -10575,10 +10603,26 @@ const server = http.createServer(async (req, res) => {
               </select>
             </div>
 
-            <button type="submit" class="btn primary" style="margin-top:8px;">
+            <button type="button" class="btn primary" style="margin-top:8px;" onclick="runSimulation()">
               Enable Simulation
             </button>
           </form>
+
+          <script>
+          function runSimulation(){
+            console.log("FORCED SUBMIT");
+
+            const form = document.getElementById("simulateForm");
+            const formData = new FormData(form);
+
+            fetch("/admin/simulate-plan", {
+              method: "POST",
+              body: formData
+            }).then(() => {
+              window.location.href = "/ai-copilot";
+            });
+          }
+          </script>
 
           ${sess.simulating && sess.simulated_plan ? `<div style="margin-top:10px;font-weight:700;">🔥 Active Simulation: ${safeStr(String(sess.simulated_plan).charAt(0).toUpperCase() + String(sess.simulated_plan).slice(1))}</div>` : ``}
 
