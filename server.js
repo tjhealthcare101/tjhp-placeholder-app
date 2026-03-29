@@ -152,7 +152,7 @@ function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); 
 function getSystemSettings(){
   return readJSON(SYSTEM_SETTINGS_PATH, {
     maintenance_mode: false,
-    maintenance_message: "We’re currently performing maintenance. Please check back shortly."
+    maintenance_message: "We&#39;re currently performing maintenance. Please check back shortly."
   });
 }
 function saveSystemSettings(s){
@@ -989,6 +989,12 @@ window.__tjhpSendChat = async function(){
       font-weight:600;
     ">
       🧪 SIMULATION MODE: ${safeStr(CURRENT_SIMULATION.plan.toUpperCase())}
+      <select onchange="location.href='/admin/simulate-plan?plan='+this.value" style="margin-left:10px;">
+        <option value="starter" ${CURRENT_SIMULATION.plan === "starter" ? "selected" : ""}>Starter</option>
+        <option value="growth" ${CURRENT_SIMULATION.plan === "growth" ? "selected" : ""}>Growth</option>
+        <option value="pro" ${CURRENT_SIMULATION.plan === "pro" ? "selected" : ""}>Pro</option>
+        <option value="enterprise" ${CURRENT_SIMULATION.plan === "enterprise" ? "selected" : ""}>Enterprise</option>
+      </select>
       <a href="/admin/stop-simulation" style="color:#4af;margin-left:10px;">Exit</a>
     </div>
   ` : ``}
@@ -9139,7 +9145,9 @@ const server = http.createServer(async (req, res) => {
         <head><title>Maintenance</title></head>
         <body style="font-family:sans-serif;text-align:center;padding:80px;">
           <h1>🚧 Maintenance Mode</h1>
-          <p>${safeStr(system.maintenance_message)}</p>
+          <p style="font-size:16px;color:#555;">
+            ${String(system.maintenance_message || "We&#39;re currently performing maintenance. Please check back shortly.")}
+          </p>
         </body>
       </html>
     `);
@@ -9903,13 +9911,21 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, "/admin/dashboard");
     }
 
-    if (method === "POST" && pathname === "/admin/simulate-plan") {
-      const body = await parseBody(req);
+    if ((method === "POST" || method === "GET") && pathname === "/admin/simulate-plan") {
+      const body = method === "POST"
+        ? await parseBody(req)
+        : `plan=${encodeURIComponent(String(parsed.query.plan || ""))}`;
       const params = new URLSearchParams(body);
-      sess.simulating = true;
-      sess.simulated_plan = params.get("plan");
-      setSession(res, sess);
-      return redirect(res, "/ai-copilot");
+      const user = getUserById(sess.user_id);
+      const simulatedSession = {
+        ...sess,
+        role: "user",
+        org_id: user?.org_id || sess.org_id,
+        simulating: true,
+        simulated_plan: params.get("plan")
+      };
+      setSession(res, simulatedSession);
+      return redirect(res, method === "GET" ? (req.headers.referer || "/admin/dashboard") : "/ai-copilot");
     }
 
     if (method === "GET" && pathname === "/admin/stop-simulation") {
