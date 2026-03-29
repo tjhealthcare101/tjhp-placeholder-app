@@ -69,6 +69,7 @@ const PAYMENT_RECORDS_PER_CREDIT = 1000;
 const BASE_DIR = __dirname;
 const DATA_DIR = path.join(BASE_DIR, "data");
 const UPLOADS_DIR = path.join(BASE_DIR, "uploads");
+const SYSTEM_SETTINGS_PATH = path.join(DATA_DIR, "system_settings.json");
 
 const FILES = {
   orgs: path.join(DATA_DIR, "orgs.json"),
@@ -148,6 +149,15 @@ function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true
 function ensureFile(p, defaultVal) { if (!fs.existsSync(p)) fs.writeFileSync(p, JSON.stringify(defaultVal, null, 2)); }
 function readJSON(p, fallback) { ensureFile(p, fallback); return JSON.parse(fs.readFileSync(p, "utf8") || JSON.stringify(fallback)); }
 function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); }
+function getSystemSettings(){
+  return readJSON(SYSTEM_SETTINGS_PATH, {
+    maintenance_mode: false,
+    maintenance_message: "We’re currently performing maintenance. Please check back shortly."
+  });
+}
+function saveSystemSettings(s){
+  writeJSON(SYSTEM_SETTINGS_PATH, s);
+}
 
 const ORG_PROFILE_DEFAULTS = {
   legal_name: "",
@@ -307,6 +317,11 @@ function getAuth(req) {
 }
 function getSession(req) {
   return getAuth(req);
+}
+
+function setSession(res, payload) {
+  const token = makeSession(payload);
+  setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400);
 }
 
 // ===== Init storage =====
@@ -519,6 +534,7 @@ function adminHash() {
 // ===== UI =====
 let CURRENT_USER_THEME = "light";
 let CURRENT_SESSION_ORG_ID = "";
+let CURRENT_IMPERSONATION = null;
 
 const css = `
 
@@ -964,6 +980,18 @@ window.__tjhpSendChat = async function(){
 <style>${css}</style>
 </head>
 <body data-theme="${startTheme}" data-theme-pref="${themePref}">
+  ${CURRENT_IMPERSONATION ? `
+    <div style="
+      background:#111;
+      color:#fff;
+      padding:10px;
+      text-align:center;
+      font-weight:600;
+    ">
+      🔥 IMPERSONATING (${safeStr(CURRENT_IMPERSONATION.plan)})
+      <a href="/admin/stop-impersonation" style="color:#4af;margin-left:10px;">Stop</a>
+    </div>
+  ` : ``}
   ${renderAnnouncementBanner(CURRENT_SESSION_ORG_ID, title, isAdminPage)}
   ${(title !== "Login" && title !== "Sign In") ? renderTrialBanner(CURRENT_SESSION_ORG_ID) : ""}
   ${renderAnnouncementPopup(isAdminPage, title)}
@@ -9074,7 +9102,29 @@ const server = http.createServer(async (req, res) => {
   // auth
   const sess = getAuth(req);
   CURRENT_SESSION_ORG_ID = (sess && sess.org_id) ? String(sess.org_id) : "";
+  CURRENT_IMPERSONATION = (sess && sess.impersonating)
+    ? { plan: String(sess.impersonated_plan || "") }
+    : null;
   if (sess && sess.org_id) cleanupIfExpired(sess.org_id);
+
+  const system = getSystemSettings();
+  const isAdmin = sess && sess.role === "admin";
+  if (
+    system.maintenance_mode &&
+    !isAdmin &&
+    pathname !== "/login" &&
+    !pathname.startsWith("/admin")
+  ){
+    return send(res, 200, `
+      <html>
+        <head><title>Maintenance</title></head>
+        <body style="font-family:sans-serif;text-align:center;padding:80px;">
+          <h1>🚧 Maintenance Mode</h1>
+          <p>${safeStr(system.maintenance_message)}</p>
+        </body>
+      </html>
+    `);
+  }
 
   // ---------- PUBLIC: Admin login ----------
   if (method === "GET" && pathname === "/admin/login") {
@@ -9824,6 +9874,34 @@ const server = http.createServer(async (req, res) => {
     const isAdmin = sess && sess.role === "admin";
     if (!isAdmin && pathname !== "/admin/login") return redirect(res, "/admin/login");
 
+    if (method === "POST" && pathname === "/admin/toggle-maintenance") {
+      const body = await parseBody(req);
+      const params = new URLSearchParams(body);
+      const systemSettings = getSystemSettings();
+      systemSettings.maintenance_mode = params.get("mode") === "on";
+      systemSettings.maintenance_message = params.get("message") || systemSettings.maintenance_message;
+      saveSystemSettings(systemSettings);
+      return redirect(res, "/admin/dashboard");
+    }
+
+    if (method === "POST" && pathname === "/admin/impersonate") {
+      const body = await parseBody(req);
+      const params = new URLSearchParams(body);
+      sess.impersonating = true;
+      sess.impersonated_org_id = params.get("org_id");
+      sess.impersonated_plan = params.get("plan");
+      setSession(res, sess);
+      return redirect(res, "/ai-copilot");
+    }
+
+    if (method === "GET" && pathname === "/admin/stop-impersonation") {
+      delete sess.impersonating;
+      delete sess.impersonated_org_id;
+      delete sess.impersonated_plan;
+      setSession(res, sess);
+      return redirect(res, "/admin/dashboard");
+    }
+
     if (method === "GET" && pathname === "/admin-control-center") {
       const announcements = getAnnouncements();
 
@@ -10321,6 +10399,7 @@ const server = http.createServer(async (req, res) => {
       const subs = readJSON(FILES.subscriptions, []);
       const casesData = readJSON(FILES.cases, []);
       const payments = readJSON(FILES.payments, []);
+      const systemSettings = getSystemSettings();
       // counts
       const totalOrgs = orgs.length;
       const totalUsers = users.length;
@@ -10423,6 +10502,48 @@ const server = http.createServer(async (req, res) => {
           <thead><tr><th>Name</th><th>Plan</th><th>Status</th><th>Last Activity</th><th>Attention</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
+
+        <div class="card" style="padding:16px;margin-top:16px;">
+          <h3>⚙️ Maintenance Mode</h3>
+
+          <form method="POST" action="/admin/toggle-maintenance">
+            <label>
+              <input type="checkbox" name="mode" ${systemSettings.maintenance_mode ? "checked" : ""}>
+              Enable Maintenance Mode
+            </label>
+
+            <div style="margin-top:8px;">
+              <textarea name="message" style="width:100%;padding:8px;">${safeStr(systemSettings.maintenance_message)}</textarea>
+            </div>
+
+            <button class="btn primary" style="margin-top:8px;">Save</button>
+          </form>
+        </div>
+
+        <div class="card" style="padding:16px;margin-top:16px;">
+          <h3>🧪 Impersonate User</h3>
+
+          <form method="POST" action="/admin/impersonate">
+            <div>
+              <label>Org ID</label>
+              <input name="org_id" style="width:100%;padding:6px;" required />
+            </div>
+
+            <div style="margin-top:8px;">
+              <label>Plan</label>
+              <select name="plan">
+                <option value="starter">Starter</option>
+                <option value="growth">Growth</option>
+                <option value="pro">Pro</option>
+                <option value="enterprise">Enterprise</option>
+              </select>
+            </div>
+
+            <button class="btn primary" style="margin-top:8px;">Login as User</button>
+          </form>
+
+          <a href="/admin/stop-impersonation" class="btn secondary" style="margin-top:8px;">Stop Impersonation</a>
+        </div>
       `, navAdmin());
       return send(res, 200, html);
     }
@@ -10885,8 +11006,14 @@ const server = http.createServer(async (req, res) => {
   const user = getUserById(sess.user_id);
   if (!user) return redirect(res, "/login");
 
-  const org = getOrg(user.org_id);
+  const orgId = sess.impersonating
+    ? sess.impersonated_org_id
+    : user.org_id;
+  const org = getOrg(orgId);
   if (!org) return redirect(res, "/login");
+  const plan = sess.impersonating
+    ? sess.impersonated_plan
+    : getOrgPlan(org.org_id);
   CURRENT_USER_THEME = (user.theme === "light" || user.theme === "dark") ? user.theme : "light";
 
   cleanupIfExpired(org.org_id);
