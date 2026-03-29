@@ -9157,10 +9157,8 @@ const server = http.createServer(async (req, res) => {
 
     setSession(res, simulatedSession);
 
-    return redirect(
-      res,
-      method === "GET" ? (req.headers.referer || "/admin/dashboard") : "/ai-copilot"
-    );
+    res.writeHead(302, { Location: "/ai-copilot" });
+    return res.end();
   }
 
   CURRENT_SESSION_ORG_ID = (sess && sess.org_id) ? String(sess.org_id) : "";
@@ -10575,7 +10573,7 @@ const server = http.createServer(async (req, res) => {
         <div class="card" style="padding:16px;margin-top:16px;">
           <h3>🧪 Plan Simulator</h3>
 
-          <form method="POST" action="/admin/simulate-plan">
+          <form id="simulateForm" method="POST" action="/admin/simulate-plan">
             <div>
               <label>Select Plan</label>
               <select name="plan">
@@ -10585,11 +10583,20 @@ const server = http.createServer(async (req, res) => {
                 <option value="enterprise">Enterprise</option>
               </select>
             </div>
-
-            <button type="submit" class="btn primary" style="margin-top:8px;">
-              Enable Simulation
-            </button>
           </form>
+
+          <button class="btn primary" style="margin-top:8px;" onclick="submitSimulation()">
+            Enable Simulation
+          </button>
+
+          <script>
+          function submitSimulation(){
+            console.log("FORCE SUBMIT TRIGGERED");
+
+            const form = document.getElementById("simulateForm");
+            if (form) form.submit();
+          }
+          </script>
 
           ${sess.simulating && sess.simulated_plan ? `<div style="margin-top:10px;font-weight:700;">🔥 Active Simulation: ${safeStr(String(sess.simulated_plan).charAt(0).toUpperCase() + String(sess.simulated_plan).slice(1))}</div>` : ``}
 
