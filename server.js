@@ -9123,23 +9123,26 @@ const server = http.createServer(async (req, res) => {
   // auth
   const sess = getAuth(req);
 
-  // 🔥 SIMULATION ROUTE (REAL FINAL FIX)
-  if (method === "POST" && pathname === "/admin/simulate-plan") {
+  // 🔥 SIMULATION ROUTE (GLOBAL — BEFORE ADMIN BLOCK)
+  if ((method === "POST" || method === "GET") && pathname === "/admin/simulate-plan") {
     console.log("SIMULATION HIT");
 
-    if (!sess) {
+    if (!sess || sess.role !== "admin") {
       return redirect(res, "/admin/login");
     }
 
-    const body = await parseBody(req);
+    const body = method === "POST"
+      ? await parseBody(req)
+      : `plan=${encodeURIComponent(String(parsed.query.plan || ""))}`;
+
     const params = new URLSearchParams(body);
-
     const user = getUserById(sess.user_id);
-
     if (!user) {
       console.log("NO VALID USER");
       return redirect(res, "/admin/dashboard");
     }
+
+    const selectedPlan = String(params.get("plan") || "starter").toLowerCase();
 
     const simulatedSession = {
       ...sess,
@@ -9147,16 +9150,17 @@ const server = http.createServer(async (req, res) => {
       user_id: user.user_id,
       org_id: user.org_id,
       simulating: true,
-      simulated_plan: params.get("plan")
+      simulated_plan: selectedPlan
     };
 
     console.log("SIM SESSION:", simulatedSession);
 
     setSession(res, simulatedSession);
 
-    return send(res, 302, "", "text/plain", {
-      "Location": "/ai-copilot"
-    });
+    return redirect(
+      res,
+      method === "GET" ? (req.headers.referer || "/admin/dashboard") : "/ai-copilot"
+    );
   }
 
   CURRENT_SESSION_ORG_ID = (sess && sess.org_id) ? String(sess.org_id) : "";
@@ -9928,36 +9932,6 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, "ok", "text/plain");
   }
 
-  // 🔥 SIMULATION ROUTE (GLOBAL — BEFORE ADMIN BLOCK)
-  if (method === "POST" && pathname === "/admin/simulate-plan") {
-    console.log("SIMULATION HIT");
-
-    const body = await parseBody(req);
-    const params = new URLSearchParams(body);
-
-    const user = getUserById(sess?.user_id);
-
-    if (!user) {
-      return redirect(res, "/admin/dashboard");
-    }
-
-    const simulatedSession = {
-      ...sess,
-      role: "user",
-      user_id: user.user_id,
-      org_id: user.org_id,
-      simulating: true,
-      simulated_plan: params.get("plan")
-    };
-
-    setSession(res, simulatedSession);
-
-    // 🔥 HARD redirect
-    res.statusCode = 302;
-    res.setHeader("Location", "/ai-copilot");
-    return res.end();
-  }
-
   // ---------- ADMIN ROUTES ----------
   if (pathname.startsWith("/admin/") || pathname.startsWith("/admin-control-center")) {
     const isAdmin = sess && sess.role === "admin";
@@ -10601,10 +10575,10 @@ const server = http.createServer(async (req, res) => {
         <div class="card" style="padding:16px;margin-top:16px;">
           <h3>🧪 Plan Simulator</h3>
 
-          <form id="simulateForm">
+          <form method="POST" action="/admin/simulate-plan">
             <div>
               <label>Select Plan</label>
-              <select name="plan" id="simPlan">
+              <select name="plan">
                 <option value="starter">Starter</option>
                 <option value="growth">Growth</option>
                 <option value="pro">Pro</option>
@@ -10612,26 +10586,10 @@ const server = http.createServer(async (req, res) => {
               </select>
             </div>
 
-            <button type="button" class="btn primary" style="margin-top:8px;" onclick="runSimulation()">
+            <button type="submit" class="btn primary" style="margin-top:8px;">
               Enable Simulation
             </button>
           </form>
-
-          <script>
-          function runSimulation(){
-            console.log("FORCED SUBMIT");
-
-            const form = document.getElementById("simulateForm");
-            const formData = new FormData(form);
-
-            fetch("/admin/simulate-plan", {
-              method: "POST",
-              body: formData
-            }).then(() => {
-              window.location.href = "/ai-copilot";
-            });
-          }
-          </script>
 
           ${sess.simulating && sess.simulated_plan ? `<div style="margin-top:10px;font-weight:700;">🔥 Active Simulation: ${safeStr(String(sess.simulated_plan).charAt(0).toUpperCase() + String(sess.simulated_plan).slice(1))}</div>` : ``}
 
