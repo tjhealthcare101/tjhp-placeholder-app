@@ -11039,9 +11039,10 @@ const server = http.createServer(async (req, res) => {
   const orgId = user.org_id;
   const org = getOrg(orgId);
   if (!org) return redirect(res, "/login");
+  const sub = getSub(org.org_id);
   const plan = sess.simulating
     ? sess.simulated_plan
-    : getOrgPlan(org.org_id);
+    : String((sub && sub.plan) || "starter").toLowerCase();
   CURRENT_USER_THEME = (user.theme === "light" || user.theme === "dark") ? user.theme : "light";
 
   cleanupIfExpired(org.org_id);
