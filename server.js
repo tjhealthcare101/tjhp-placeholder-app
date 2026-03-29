@@ -14518,7 +14518,28 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
 
-                  // UI feedback
+                  // 🔥 1. Add user message instantly
+                  const thread = document.getElementById("wsThread");
+                  if (thread) {
+                    thread.insertAdjacentHTML("beforeend", \`
+                      <div class="ws-msg ws-user">
+                        <div class="ws-who">You</div>
+                        <div>\${prompt}</div>
+                      </div>
+                    \`);
+
+                    // 🔥 2. Add thinking message
+                    thread.insertAdjacentHTML("beforeend", \`
+                      <div class="ws-msg ws-ai" id="thinkingMsg">
+                        <div class="ws-who">Copilot</div>
+                        <div class="muted">Thinking...</div>
+                      </div>
+                    \`);
+
+                    thread.scrollTop = thread.scrollHeight;
+                  }
+
+                  // 🔥 UI loading state
                   if (btn) {
                     btn.disabled = true;
                     btn.textContent = "Thinking...";
@@ -14526,7 +14547,6 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   if (composerShell) composerShell.classList.add("is-loading");
 
                   try {
-                    // 🔥 CALL SAME ENGINE AS FLOAT AI (THIS IS THE FIX)
                     const res = await fetch("/intelligence/query", {
                       method: "POST",
                       headers: {
@@ -14543,14 +14563,19 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     const data = await res.json();
 
                     if (data && data.workspace_id) {
-                      // 🔥 REDIRECT TO COPILOT WITH WORKSPACE
-                      window.location.href = "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id);
+                      // 🔥 small delay for UX (feels smoother)
+                      setTimeout(() => {
+                        window.location.href = "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id);
+                      }, 400);
                       return;
                     }
 
-                    alert("Analysis generated but failed to load.");
+                    // fallback
+                    const thinking = document.getElementById("thinkingMsg");
+                    if (thinking) thinking.innerHTML = \`<div class="ws-who">Copilot</div><div>Error loading analysis.</div>\`;
                   } catch (e) {
-                    alert("Error generating analysis.");
+                    const thinking = document.getElementById("thinkingMsg");
+                    if (thinking) thinking.innerHTML = \`<div class="ws-who">Copilot</div><div>Error occurred.</div>\`;
                   } finally {
                     if (btn) {
                       btn.disabled = false;
