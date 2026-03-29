@@ -14598,6 +14598,35 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                         if (newThread && currentThread) {
                           currentThread.innerHTML = newThread.innerHTML;
+
+                          // 🔥 FIX: re-run charts after DOM injection
+                          setTimeout(() => {
+                            try {
+                              if (window.Chart) {
+                                document.querySelectorAll("canvas").forEach((canvas) => {
+                                  const ctx = canvas.getContext("2d");
+
+                                  // destroy existing chart instance if exists
+                                  if (canvas._chartInstance) {
+                                    canvas._chartInstance.destroy();
+                                  }
+
+                                  // re-trigger chart creation if your app stores config
+                                  if (canvas.dataset && canvas.dataset.chart) {
+                                    const config = JSON.parse(canvas.dataset.chart);
+                                    canvas._chartInstance = new Chart(ctx, config);
+                                  }
+                                });
+                              }
+
+                              // 🔥 fallback: re-run any global chart init function if you have one
+                              if (typeof window.renderCharts === "function") {
+                                window.renderCharts();
+                              }
+                            } catch (err) {
+                              console.error("Chart re-render error:", err);
+                            }
+                          }, 50);
                         }
                       } catch (err) {
                         if (thinkingEl) {
