@@ -9891,6 +9891,35 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, "ok", "text/plain");
   }
 
+  // 🔥 SIMULATION ROUTE (GLOBAL — BEFORE ADMIN BLOCK)
+  if (method === "POST" && pathname === "/admin/simulate-plan") {
+    console.log("SIMULATION HIT");
+
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const user = getUserById(sess?.user_id);
+
+    if (!user) {
+      return redirect(res, "/admin/dashboard");
+    }
+
+    const simulatedSession = {
+      ...sess,
+      role: "user",
+      user_id: user.user_id,
+      org_id: user.org_id,
+      simulating: true,
+      simulated_plan: params.get("plan")
+    };
+
+    setSession(res, simulatedSession);
+
+    // 🔥 HARD redirect
+    res.statusCode = 302;
+    res.setHeader("Location", "/ai-copilot");
+    return res.end();
+  }
 
   // ---------- ADMIN ROUTES ----------
   if (pathname.startsWith("/admin/") || pathname.startsWith("/admin-control-center")) {
@@ -9905,30 +9934,6 @@ const server = http.createServer(async (req, res) => {
       systemSettings.maintenance_message = params.get("message") || systemSettings.maintenance_message;
       saveSystemSettings(systemSettings);
       return redirect(res, "/admin/dashboard");
-    }
-
-    if (method === "POST" && pathname === "/admin/simulate-plan") {
-      const body = await parseBody(req);
-      const params = new URLSearchParams(body);
-
-      const user = getUserById(sess.user_id);
-
-      if (!user) {
-        return redirect(res, "/admin/dashboard");
-      }
-
-      const simulatedSession = {
-        ...sess,
-        role: "user",
-        user_id: user.user_id,
-        org_id: user.org_id,
-        simulating: true,
-        simulated_plan: params.get("plan")
-      };
-
-      setSession(res, simulatedSession);
-
-      return redirect(res, "/ai-copilot");
     }
 
     if (method === "GET" && pathname === "/admin/stop-simulation") {
