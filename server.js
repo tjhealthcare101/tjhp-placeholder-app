@@ -14576,10 +14576,22 @@ if (method === "GET" && pathname === "/ai-copilot") {
                       \`;
                     }
 
+                    // 🔥 PHASE 3: NO REDIRECT — RENDER FULL RESPONSE INLINE
                     if (data && data.workspace_id) {
-                      setTimeout(() => {
-                        window.location.href = "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id);
-                      }, 700); // slightly longer so preview is visible
+
+                      // OPTIONAL: update URL without reload
+                      window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id));
+
+                      // Replace thinking message with FULL response
+                      if (thinkingEl) {
+                        thinkingEl.innerHTML = \`
+                          <div class="ws-who">Copilot</div>
+                          <div>
+                            \${data.answer || "Analysis complete."}
+                          </div>
+                        \`;
+                      }
+
                       return;
                     }
 
