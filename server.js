@@ -534,7 +534,7 @@ function adminHash() {
 // ===== UI =====
 let CURRENT_USER_THEME = "light";
 let CURRENT_SESSION_ORG_ID = "";
-let CURRENT_IMPERSONATION = null;
+let CURRENT_SIMULATION = null;
 
 const css = `
 
@@ -980,7 +980,7 @@ window.__tjhpSendChat = async function(){
 <style>${css}</style>
 </head>
 <body data-theme="${startTheme}" data-theme-pref="${themePref}">
-  ${CURRENT_IMPERSONATION ? `
+  ${CURRENT_SIMULATION ? `
     <div style="
       background:#111;
       color:#fff;
@@ -988,8 +988,8 @@ window.__tjhpSendChat = async function(){
       text-align:center;
       font-weight:600;
     ">
-      🔥 IMPERSONATING (${safeStr(CURRENT_IMPERSONATION.plan)})
-      <a href="/admin/stop-impersonation" style="color:#4af;margin-left:10px;">Stop</a>
+      🧪 SIMULATION MODE: ${safeStr(CURRENT_SIMULATION.plan.toUpperCase())}
+      <a href="/admin/stop-simulation" style="color:#4af;margin-left:10px;">Exit</a>
     </div>
   ` : ``}
   ${renderAnnouncementBanner(CURRENT_SESSION_ORG_ID, title, isAdminPage)}
@@ -3054,6 +3054,21 @@ function renderUpgradePrompt(limitType) {
       </div>
     </div>
   `;
+}
+
+function getUpgradeMessage(plan, type){
+  if (type === "copilot") {
+    return "Upgrade your plan to unlock more AI Copilot analyses.";
+  }
+  if (type === "ai_packets") {
+    return "Upgrade to generate more AI appeal & negotiation packets.";
+  }
+  return "Upgrade your plan to unlock more capabilities.";
+}
+
+function canGeneratePacket(org_id) {
+  const usageLimits = checkUsageLimits(org_id);
+  return !usageLimits.aiExceeded;
 }
 
 
@@ -8239,6 +8254,10 @@ const server = http.createServer(async (req, res) => {
     `);
   }
 
+  if (method === "GET" && pathname === "/upgrade") {
+    return redirect(res, "/pricing");
+  }
+
   if (method === "GET" && pathname === "/checkout") {
     const plan = String(parsed.query.plan || "starter").toLowerCase();
 
@@ -9102,8 +9121,8 @@ const server = http.createServer(async (req, res) => {
   // auth
   const sess = getAuth(req);
   CURRENT_SESSION_ORG_ID = (sess && sess.org_id) ? String(sess.org_id) : "";
-  CURRENT_IMPERSONATION = (sess && sess.impersonating)
-    ? { plan: String(sess.impersonated_plan || "") }
+  CURRENT_SIMULATION = (sess && sess.simulating)
+    ? { plan: String(sess.simulated_plan || "") }
     : null;
   if (sess && sess.org_id) cleanupIfExpired(sess.org_id);
 
@@ -9884,20 +9903,18 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, "/admin/dashboard");
     }
 
-    if (method === "POST" && pathname === "/admin/impersonate") {
+    if (method === "POST" && pathname === "/admin/simulate-plan") {
       const body = await parseBody(req);
       const params = new URLSearchParams(body);
-      sess.impersonating = true;
-      sess.impersonated_org_id = params.get("org_id");
-      sess.impersonated_plan = params.get("plan");
+      sess.simulating = true;
+      sess.simulated_plan = params.get("plan");
       setSession(res, sess);
       return redirect(res, "/ai-copilot");
     }
 
-    if (method === "GET" && pathname === "/admin/stop-impersonation") {
-      delete sess.impersonating;
-      delete sess.impersonated_org_id;
-      delete sess.impersonated_plan;
+    if (method === "GET" && pathname === "/admin/stop-simulation") {
+      delete sess.simulating;
+      delete sess.simulated_plan;
       setSession(res, sess);
       return redirect(res, "/admin/dashboard");
     }
@@ -10521,16 +10538,11 @@ const server = http.createServer(async (req, res) => {
         </div>
 
         <div class="card" style="padding:16px;margin-top:16px;">
-          <h3>🧪 Impersonate User</h3>
+          <h3>🧪 Plan Simulator</h3>
 
-          <form method="POST" action="/admin/impersonate">
+          <form method="POST" action="/admin/simulate-plan">
             <div>
-              <label>Org ID</label>
-              <input name="org_id" style="width:100%;padding:6px;" required />
-            </div>
-
-            <div style="margin-top:8px;">
-              <label>Plan</label>
+              <label>Select Plan</label>
               <select name="plan">
                 <option value="starter">Starter</option>
                 <option value="growth">Growth</option>
@@ -10539,10 +10551,16 @@ const server = http.createServer(async (req, res) => {
               </select>
             </div>
 
-            <button class="btn primary" style="margin-top:8px;">Login as User</button>
+            <button class="btn primary" style="margin-top:8px;">
+              Enable Simulation
+            </button>
           </form>
 
-          <a href="/admin/stop-impersonation" class="btn secondary" style="margin-top:8px;">Stop Impersonation</a>
+          ${sess.simulating && sess.simulated_plan ? `<div style="margin-top:10px;font-weight:700;">🔥 Active Simulation: ${safeStr(String(sess.simulated_plan).charAt(0).toUpperCase() + String(sess.simulated_plan).slice(1))}</div>` : ``}
+
+          <a href="/admin/stop-simulation" class="btn secondary" style="margin-top:8px;">
+            Stop Simulation
+          </a>
         </div>
       `, navAdmin());
       return send(res, 200, html);
@@ -11006,13 +11024,11 @@ const server = http.createServer(async (req, res) => {
   const user = getUserById(sess.user_id);
   if (!user) return redirect(res, "/login");
 
-  const orgId = sess.impersonating
-    ? sess.impersonated_org_id
-    : user.org_id;
+  const orgId = user.org_id;
   const org = getOrg(orgId);
   if (!org) return redirect(res, "/login");
-  const plan = sess.impersonating
-    ? sess.impersonated_plan
+  const plan = sess.simulating
+    ? sess.simulated_plan
     : getOrgPlan(org.org_id);
   CURRENT_USER_THEME = (user.theme === "light" || user.theme === "dark") ? user.theme : "light";
 
@@ -11355,7 +11371,8 @@ RULES:
     if (!usageCheck.ok) {
       return send(res, 200, JSON.stringify({
         ok: false,
-        error: "limit_reached"
+        error: "limit_reached",
+        message: getUpgradeMessage(plan, "copilot")
       }), "application/json");
     }
 
@@ -14593,6 +14610,12 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 </div>
               </div>
             ` : ``)}
+            ${(!copilotUsage.isUnlimited && copilotUsage.hasAccess && Number(copilotUsage.remaining) <= 3) ? `
+              <div style="background:#fff3cd;padding:10px;border-radius:8px;margin-top:10px;">
+                ⚠️ You have ${formatNumberUI(copilotUsage.remaining)} AI Copilot analyses remaining.
+                <a href="/upgrade" style="margin-left:10px;">Upgrade</a>
+              </div>
+            ` : ``}
           </div>
           <div class="ws-topbar-actions">
             <button type="button" class="btn secondary small" id="wsExpandBtn" style="display:none;">☰ Saved Analyses</button>
@@ -14638,6 +14661,42 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 const composerShell = document.getElementById("wsComposerShell");
 
                 if (!form || !input) return;
+
+                function showUpgradeModal(message){
+                  const modal = document.createElement("div");
+                  modal.innerHTML = \`
+                    <div style="
+                      position:fixed;
+                      top:0;left:0;
+                      width:100%;height:100%;
+                      background:rgba(0,0,0,0.6);
+                      display:flex;
+                      align-items:center;
+                      justify-content:center;
+                      z-index:9999;
+                    ">
+                      <div style="
+                        background:#fff;
+                        padding:24px;
+                        border-radius:12px;
+                        max-width:400px;
+                        text-align:center;
+                      ">
+                        <h3>⚠️ Limit Reached</h3>
+                        <p>\${message || "Upgrade your plan to continue."}</p>
+                        <div style="margin-top:12px;">
+                          <a href="/upgrade" class="btn primary">Upgrade</a>
+                        </div>
+                        <button class="btn secondary" style="margin-top:8px;">
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                  \`;
+                  const closeBtn = modal.querySelector("button");
+                  if (closeBtn) closeBtn.addEventListener("click", () => modal.remove());
+                  document.body.appendChild(modal);
+                }
 
                 function setLoading(){
                   if (btn) {
@@ -14698,6 +14757,33 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     });
 
                     const data = await res.json();
+                    // 🔥 HANDLE LIMIT WITHOUT BREAKING UI
+                    if (data && data.error === "limit_reached") {
+
+                      if (thinkingEl) {
+                        thinkingEl.innerHTML = \`
+                          <div class="ws-who">Copilot</div>
+                          <div style="margin-top:6px;">
+                            ⚠️ You’ve reached your AI Copilot limit.
+                          </div>
+                          <div class="muted" style="margin-top:6px;">
+                            \${data.message || "Upgrade your plan to continue."}
+                          </div>
+                          <div style="margin-top:10px;">
+                            <a class="btn primary" href="/upgrade">Upgrade Plan</a>
+                          </div>
+                        \`;
+                      }
+                      showUpgradeModal(data.message);
+
+                      if (btn) {
+                        btn.disabled = false;
+                        btn.textContent = "➤";
+                      }
+                      if (composerShell) composerShell.classList.remove("is-loading");
+
+                      return;
+                    }
 
                     // 🔥 PHASE 2: SHOW PREVIEW BEFORE REDIRECT
                     if (thinkingEl) {
@@ -23052,6 +23138,15 @@ if (method === "GET" && pathname === "/agent-workspace") {
       if (draft_type === "negotiation" && !hasFeatureAccess(org.org_id, "negotiation")) {
         return send(res, 200, renderPage("Upgrade Required", `
           ${renderFeatureLocked("Negotiation Tools")}
+        `, navUser(), { showChat: true, orgName: org.org_name }));
+      }
+      if (["appeal", "negotiation"].includes(draft_type) && !canGeneratePacket(org.org_id)) {
+        return send(res, 200, renderPage("AI Packet Limit Reached", `
+          <div style="padding:30px;text-align:center;">
+            <h3>AI Packet Limit Reached</h3>
+            <p>${getUpgradeMessage(plan, "ai_packets")}</p>
+            <a href="/upgrade" class="btn primary">Upgrade</a>
+          </div>
         `, navUser(), { showChat: true, orgName: org.org_name }));
       }
       const claimCtx = buildClaimContext(org.org_id);
