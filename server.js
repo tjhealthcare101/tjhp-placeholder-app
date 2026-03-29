@@ -1899,22 +1899,21 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
   const chartCards = charts.map((c, i) => `
     <div style="margin-top:12px;">
       <div style="font-weight:900;margin-bottom:6px;">${safeStr(c.title || ("Chart " + (i+1)))}</div>
-      <div class="ws-chart"><canvas id="wsChart_${safeBriefId}_${i}"></canvas></div>
+      <div class="ws-chart">
+        <canvas 
+          id="wsChart_${safeBriefId}_${i}" 
+          data-chart='${JSON.stringify({
+            type: c.type || "bar",
+            data: {
+              labels: c.labels || [],
+              datasets: c.datasets || []
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+          }).replace(/'/g, "&#39;")}'
+        ></canvas>
+      </div>
     </div>
   `).join("");
-
-  const chartScripts = charts.map((c, i) => {
-    const labels = JSON.stringify(Array.isArray(c.labels) ? c.labels : []);
-    const datasets = JSON.stringify(Array.isArray(c.datasets) ? c.datasets : []);
-    const type = String(c.type || "bar").replace(/[^a-z]/gi,"") || "bar";
-    return `
-      (function(){
-        const el = document.getElementById("wsChart_${safeBriefId}_${i}");
-        if(!el || typeof Chart === "undefined") return;
-        new Chart(el, { type: "${type}", data: { labels: ${labels}, datasets: ${datasets} }, options: { responsive:true, maintainAspectRatio:false } });
-      })();
-    `;
-  }).join("\n");
 
   return `
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -1967,7 +1966,6 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
       </div>
     </div>
 
-    <script>(function(){ ${chartScripts} })();</script>
   `;
 }
 
@@ -14599,32 +14597,30 @@ if (method === "GET" && pathname === "/ai-copilot") {
                         if (newThread && currentThread) {
                           currentThread.innerHTML = newThread.innerHTML;
 
-                          // 🔥 FIX: re-run charts after DOM injection
                           setTimeout(() => {
                             try {
                               if (window.Chart) {
-                                document.querySelectorAll("canvas").forEach((canvas) => {
+                                document.querySelectorAll("canvas[data-chart]").forEach((canvas) => {
                                   const ctx = canvas.getContext("2d");
 
-                                  // destroy existing chart instance if exists
                                   if (canvas._chartInstance) {
                                     canvas._chartInstance.destroy();
                                   }
 
-                                  // re-trigger chart creation if your app stores config
-                                  if (canvas.dataset && canvas.dataset.chart) {
-                                    const config = JSON.parse(canvas.dataset.chart);
-                                    canvas._chartInstance = new Chart(ctx, config);
-                                  }
+                                  const raw = canvas.getAttribute("data-chart");
+
+                                  // 🔥 FIX: decode HTML entities back to valid JSON
+                                  const decoded = raw
+                                    .replace(/&quot;/g, '"')
+                                    .replace(/&#39;/g, "'")
+                                    .replace(/&amp;/g, '&');
+
+                                  const config = JSON.parse(decoded);
+                                  canvas._chartInstance = new Chart(ctx, config);
                                 });
                               }
-
-                              // 🔥 fallback: re-run any global chart init function if you have one
-                              if (typeof window.renderCharts === "function") {
-                                window.renderCharts();
-                              }
                             } catch (err) {
-                              console.error("Chart re-render error:", err);
+                              console.error("Chart init error:", err);
                             }
                           }, 50);
                         }
