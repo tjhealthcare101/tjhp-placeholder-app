@@ -14584,12 +14584,37 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                       // Replace thinking message with FULL response
                       if (thinkingEl) {
-                        thinkingEl.innerHTML = \`
-                          <div class="ws-who">Copilot</div>
-                          <div>
-                            \${data.answer || "Analysis complete."}
-                          </div>
-                        \`;
+                        const fullText = data.answer || "Analysis complete.";
+
+                        function typeWriter(el, text, speed = 10) {
+                          let i = 0;
+                          el.innerHTML = \`<div class="ws-who">Copilot</div><div id="typingBody"></div>\`;
+                          const body = el.querySelector("#typingBody");
+
+                          function type() {
+                            if (i < text.length) {
+                              body.innerHTML += text.charAt(i);
+                              i++;
+                              setTimeout(type, speed);
+                            }
+                          }
+
+                          type();
+                        }
+
+                        // 🔥 typing effect
+                        typeWriter(thinkingEl, fullText);
+
+                        // 🔥 add smart actions after typing
+                        setTimeout(() => {
+                          thinkingEl.insertAdjacentHTML("beforeend", \`
+                            <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+                              <a class="btn secondary small" href="/actions?filter=underpaid">View Underpaid</a>
+                              <a class="btn secondary small" href="/actions?filter=denied">View Denials</a>
+                              <a class="btn secondary small" href="/actions">Open Action Center</a>
+                            </div>
+                          \`);
+                        }, 1200);
                       }
 
                       return;
