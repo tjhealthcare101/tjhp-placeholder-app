@@ -9134,9 +9134,18 @@ const server = http.createServer(async (req, res) => {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
 
+    const user = getUserById(sess.user_id);
+
+    if (!user) {
+      console.log("NO VALID USER");
+      return redirect(res, "/admin/dashboard");
+    }
+
     const simulatedSession = {
       ...sess,
       role: "user",
+      user_id: user.user_id,
+      org_id: user.org_id,
       simulating: true,
       simulated_plan: params.get("plan")
     };
