@@ -315,10 +315,6 @@ function getAuth(req) {
   const cookies = parseCookies(req);
   return verifySession(cookies.tjhp_session);
 }
-function getSession(req) {
-  return getAuth(req);
-}
-
 function setSession(res, payload) {
   const token = makeSession(payload);
   setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400);
