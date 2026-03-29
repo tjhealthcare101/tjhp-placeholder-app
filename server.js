@@ -10570,7 +10570,7 @@ const server = http.createServer(async (req, res) => {
               </select>
             </div>
 
-            <button class="btn primary" style="margin-top:8px;">
+            <button type="submit" class="btn primary" style="margin-top:8px;">
               Enable Simulation
             </button>
           </form>
