@@ -14518,8 +14518,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
 
-                  // 🔥 1. Add user message instantly
+                  // 1) Add user + thinking messages
                   const thread = document.getElementById("wsThread");
+                  let thinkingEl = null;
+
                   if (thread) {
                     thread.insertAdjacentHTML("beforeend", \`
                       <div class="ws-msg ws-user">
@@ -14528,7 +14530,6 @@ if (method === "GET" && pathname === "/ai-copilot") {
                       </div>
                     \`);
 
-                    // 🔥 2. Add thinking message
                     thread.insertAdjacentHTML("beforeend", \`
                       <div class="ws-msg ws-ai" id="thinkingMsg">
                         <div class="ws-who">Copilot</div>
@@ -14537,9 +14538,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     \`);
 
                     thread.scrollTop = thread.scrollHeight;
+                    thinkingEl = document.getElementById("thinkingMsg");
                   }
 
-                  // 🔥 UI loading state
+                  // UI loading
                   if (btn) {
                     btn.disabled = true;
                     btn.textContent = "Thinking...";
@@ -14562,20 +14564,33 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                     const data = await res.json();
 
+                    // 🔥 PHASE 2: SHOW PREVIEW BEFORE REDIRECT
+                    if (thinkingEl) {
+                      const preview = (data && data.answer)
+                        ? data.answer.slice(0, 180) + "..."
+                        : "Analyzing revenue performance...";
+
+                      thinkingEl.innerHTML = \`
+                        <div class="ws-who">Copilot</div>
+                        <div>\${preview}</div>
+                      \`;
+                    }
+
                     if (data && data.workspace_id) {
-                      // 🔥 small delay for UX (feels smoother)
                       setTimeout(() => {
                         window.location.href = "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id);
-                      }, 400);
+                      }, 700); // slightly longer so preview is visible
                       return;
                     }
 
-                    // fallback
-                    const thinking = document.getElementById("thinkingMsg");
-                    if (thinking) thinking.innerHTML = \`<div class="ws-who">Copilot</div><div>Error loading analysis.</div>\`;
+                    if (thinkingEl) {
+                      thinkingEl.innerHTML = \`<div class="ws-who">Copilot</div><div>Error loading analysis.</div>\`;
+                    }
+
                   } catch (e) {
-                    const thinking = document.getElementById("thinkingMsg");
-                    if (thinking) thinking.innerHTML = \`<div class="ws-who">Copilot</div><div>Error occurred.</div>\`;
+                    if (thinkingEl) {
+                      thinkingEl.innerHTML = \`<div class="ws-who">Copilot</div><div>Error occurred.</div>\`;
+                    }
                   } finally {
                     if (btn) {
                       btn.disabled = false;
