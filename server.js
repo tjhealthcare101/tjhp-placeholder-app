@@ -11224,6 +11224,14 @@ RULES:
       return send(res, 200, JSON.stringify({ ok:false, error:"Missing prompt" }), "application/json");
     }
 
+    const usageCheck = consumeCopilotQuery(org.org_id);
+    if (!usageCheck.ok) {
+      return send(res, 200, JSON.stringify({
+        ok: false,
+        error: "limit_reached"
+      }), "application/json");
+    }
+
     const r = rangeFromPreset("last30");
     const m = computeDashboardMetrics(org.org_id, r.start, r.end, "last30");
     const payerRanks = computeAllPayerRankings(org.org_id);
@@ -14515,6 +14523,8 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 async function submitMainCopilot() {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
+                  // clear input immediately (ChatGPT behavior)
+                  input.value = "";
 
                   // 1) Add user + thinking messages
                   const thread = document.getElementById("wsThread");
@@ -14596,6 +14606,19 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                         if (newThread && currentThread) {
                           currentThread.innerHTML = newThread.innerHTML;
+                          // 🔥 AUTO SCROLL TO TOP OF NEW ANALYSIS
+                          setTimeout(() => {
+                            const thread = document.getElementById("wsThread");
+                            if (thread) {
+                              thread.scrollTop = 0;
+                            }
+
+                            // optional: scroll page to analysis
+                            const firstCard = document.querySelector(".ws-card");
+                            if (firstCard) {
+                              firstCard.scrollIntoView({ behavior: "smooth", block: "start" });
+                            }
+                          }, 50);
 
                           setTimeout(() => {
                             try {
