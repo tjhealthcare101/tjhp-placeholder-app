@@ -9142,7 +9142,7 @@ const server = http.createServer(async (req, res) => {
         <body style="font-family:sans-serif;text-align:center;padding:80px;">
           <h1>🚧 Maintenance Mode</h1>
           <p style="font-size:16px;color:#555;">
-            ${String(system.maintenance_message || "We&#39;re currently performing maintenance. Please check back shortly.")}
+            ${safeStr(system.maintenance_message || "We&#39;re currently performing maintenance. Please check back shortly.").replace(/&#39;/g, "'")}
           </p>
         </body>
       </html>
@@ -9911,17 +9911,27 @@ const server = http.createServer(async (req, res) => {
       const body = method === "POST"
         ? await parseBody(req)
         : `plan=${encodeURIComponent(String(parsed.query.plan || ""))}`;
+
       const params = new URLSearchParams(body);
+
       const user = getUserById(sess.user_id);
+
+      if (!user) {
+        return redirect(res, "/admin/dashboard");
+      }
+
       const simulatedSession = {
         ...sess,
         role: "user",
-        org_id: user?.org_id || sess.org_id,
+        user_id: user.user_id,
+        org_id: user.org_id,
         simulating: true,
         simulated_plan: params.get("plan")
       };
+
       setSession(res, simulatedSession);
-      return redirect(res, method === "GET" ? (req.headers.referer || "/admin/dashboard") : "/ai-copilot");
+
+      return redirect(res, "/ai-copilot");
     }
 
     if (method === "GET" && pathname === "/admin/stop-simulation") {
