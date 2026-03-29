@@ -10594,7 +10594,16 @@ const server = http.createServer(async (req, res) => {
             console.log("FORCE SUBMIT TRIGGERED");
 
             const form = document.getElementById("simulateForm");
-            if (form) form.submit();
+            const formData = new FormData(form);
+
+            fetch("/admin/simulate-plan", {
+              method: "POST",
+              body: formData
+            })
+            .then(() => {
+              // 🔥 FORCE NAVIGATION AFTER SESSION IS SET
+              window.location.href = "/ai-copilot";
+            });
           }
           </script>
 
