@@ -9907,11 +9907,8 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, "/admin/dashboard");
     }
 
-    if ((method === "POST" || method === "GET") && pathname === "/admin/simulate-plan") {
-      const body = method === "POST"
-        ? await parseBody(req)
-        : `plan=${encodeURIComponent(String(parsed.query.plan || ""))}`;
-
+    if (method === "POST" && pathname === "/admin/simulate-plan") {
+      const body = await parseBody(req);
       const params = new URLSearchParams(body);
 
       const user = getUserById(sess.user_id);
