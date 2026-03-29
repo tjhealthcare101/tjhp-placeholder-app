@@ -14576,45 +14576,33 @@ if (method === "GET" && pathname === "/ai-copilot") {
                       \`;
                     }
 
-                    // 🔥 PHASE 3: NO REDIRECT — RENDER FULL RESPONSE INLINE
+                    // 🔥 PHASE 3+4: NO REDIRECT — REFRESH THREAD INLINE
                     if (data && data.workspace_id) {
 
-                      // OPTIONAL: update URL without reload
-                      window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id));
+                      const workspaceId = data.workspace_id;
 
-                      // Replace thinking message with FULL response
-                      if (thinkingEl) {
-                        const fullText = data.answer || "Analysis complete.";
+                      // update URL
+                      window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
 
-                        function typeWriter(el, text, speed = 10) {
-                          let i = 0;
-                          el.innerHTML = \`<div class="ws-who">Copilot</div><div id="typingBody"></div>\`;
-                          const body = el.querySelector("#typingBody");
+                      try {
+                        // 🔥 FETCH FULL WORKSPACE CONTENT
+                        const res2 = await fetch("/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
+                        const html = await res2.text();
 
-                          function type() {
-                            if (i < text.length) {
-                              body.innerHTML += text.charAt(i);
-                              i++;
-                              setTimeout(type, speed);
-                            }
-                          }
+                        // 🔥 Extract ONLY the thread content (IMPORTANT)
+                        const temp = document.createElement("div");
+                        temp.innerHTML = html;
 
-                          type();
+                        const newThread = temp.querySelector("#wsThread");
+                        const currentThread = document.getElementById("wsThread");
+
+                        if (newThread && currentThread) {
+                          currentThread.innerHTML = newThread.innerHTML;
                         }
-
-                        // 🔥 typing effect
-                        typeWriter(thinkingEl, fullText);
-
-                        // 🔥 add smart actions after typing
-                        setTimeout(() => {
-                          thinkingEl.insertAdjacentHTML("beforeend", \`
-                            <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-                              <a class="btn secondary small" href="/actions?filter=underpaid">View Underpaid</a>
-                              <a class="btn secondary small" href="/actions?filter=denied">View Denials</a>
-                              <a class="btn secondary small" href="/actions">Open Action Center</a>
-                            </div>
-                          \`);
-                        }, 1200);
+                      } catch (err) {
+                        if (thinkingEl) {
+                          thinkingEl.innerHTML = '<div class="ws-who">Copilot</div><div>' + (data.answer || "Analysis complete.") + '</div>';
+                        }
                       }
 
                       return;
