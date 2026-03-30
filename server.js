@@ -6297,6 +6297,7 @@ function savePayerContracts(org_id, contracts){
   const all = readJSON(FILES.payer_contracts, []);
   const keep = all.filter(x => x.org_id !== org_id);
   writeJSON(FILES.payer_contracts, keep.concat((contracts || []).map(c => ({ ...c, org_id }))));
+  recalculateContractsForOrg(org_id);
 }
 
 
