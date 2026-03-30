@@ -6696,6 +6696,17 @@ function lookupFeeScheduleAmount(org_id, claim){
 function computeExpectedInsuranceForClaim(claim){
   const billed = num(claim.amount_billed);
   const patientResp = num(claim.patient_responsibility);
+  const contractRules = getPayerContracts(claim.org_id || "");
+  const match = contractRules.find(r =>
+    String(r.payer_name).toLowerCase().trim() === String(claim.payer).toLowerCase().trim() &&
+    String(r.procedure_code).trim() === String(claim.cpt_code || claim.procedure_code || "").trim()
+  );
+
+  const expected = match ? Number(match.allowed_amount || match.expected_value || 0) : 0;
+  if (match && expected > 0) {
+    return Math.max(0, expected - patientResp);
+  }
+
   const contract = claim?.org_id ? findContractForClaim(claim.org_id, claim) : null;
   if (contract && String(contract.network_status || "").toLowerCase().includes("in")) {
     return Math.max(0, num(contractExpectedAmount(contract, billed)) - patientResp);
@@ -7078,8 +7089,14 @@ function recalculateContractsForOrg(org_id){
   let changed = false;
   for (const b of billedAll) {
     if (b.org_id !== org_id) continue;
-    const contract = findContractForClaim(org_id, b);
-    b.network_status = contract ? String(contract.network_status || "In Network") : "Out of Network";
+    const contractRules = getPayerContracts(org_id);
+    const match = contractRules.find(r =>
+      String(r.payer_name).toLowerCase().trim() === String(b.payer).toLowerCase().trim() &&
+      String(r.procedure_code).trim() === String(b.cpt_code || b.procedure_code || "").trim()
+    );
+    const network = match ? match.network_status : "Unknown";
+    const contract = match || findContractForClaim(org_id, b);
+    b.network_status = String(network || contract?.network_status || "Unknown");
     if (!contract) continue;
 
     const billedAmt = num(b.amount_billed);
@@ -10594,7 +10611,16 @@ const server = http.createServer(async (req, res) => {
             console.log("FORCE SUBMIT TRIGGERED");
 
             const form = document.getElementById("simulateForm");
-            if (form) form.submit();
+            const formData = new FormData(form);
+
+            fetch("/admin/simulate-plan", {
+              method: "POST",
+              body: formData
+            })
+            .then(() => {
+              // 🔥 FORCE NAVIGATION AFTER SESSION IS SET
+              window.location.href = "/ai-copilot";
+            });
           }
           </script>
 
@@ -23722,7 +23748,8 @@ if (method === "GET" && pathname === "/claim-detail") {
   const suggested = suggestedNextActionForClaim(b);
   const derivedStatus = String(d.lifecycleStage || b.status || "Pending");
 
-  const networkStatus = String(b.network_status || "Out of Network");
+  const detailContract = findContractForClaim(org.org_id, b);
+  const networkStatus = String(b.network_status || detailContract?.network_status || "Unknown");
   const networkBadge = networkStatus === "In Network" ? "ok" : "writeoff";
   const varianceStyle = variance > 0.0001 ? 'style="color:#d97706;font-weight:900;"' : 'style="color:#166534;font-weight:900;"';
   const currentRound = appealCase ? Number(appealCase.current_round || appealCase.round || 1) : 0;
