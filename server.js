@@ -7047,29 +7047,36 @@ function gradeFromScore(score){
 }
 
 function findContractForClaim(org_id, b){
-  const payer = String(b.payer || "").trim().toLowerCase();
-  const proc = getClaimProcedureCode(b);
-  const dx = getClaimDiagnosisCode(b);
-  if (!payer || !proc) return null;
   const contracts = getPayerContracts(org_id);
+
+  const payer = String(b.payer || "").trim().toLowerCase();
+  const proc = normalizeCode(String(b.cpt_code || b.procedure_code || ""));
+  const dx = normalizeCode(String(b.diagnosis_code || ""));
+
+  if (!payer || !proc) return null;
+
+  // 🔥 1. Exact match (payer + CPT + diagnosis)
   const exactDx = contracts.find(c =>
     String(c.payer_name || "").trim().toLowerCase() === payer &&
-    normalizeCode(c.procedure_code) === proc &&
+    normalizeCode(c.procedure_code || "") === proc &&
     normalizeCode(c.diagnosis_code || "") === dx
   );
   if (exactDx) return exactDx;
+
+  // 🔥 2. CPT match (no diagnosis)
   const cptMatch = contracts.find(c =>
     String(c.payer_name || "").trim().toLowerCase() === payer &&
-    normalizeCode(c.procedure_code) === proc &&
+    normalizeCode(c.procedure_code || "") === proc &&
     !normalizeCode(c.diagnosis_code || "")
   );
   if (cptMatch) return cptMatch;
+
+  // 🔥 3. fallback (payer only)
   return contracts.find(c =>
     String(c.payer_name || "").trim().toLowerCase() === payer &&
     !normalizeCode(c.procedure_code || "")
   ) || null;
 }
-
 function contractExpectedAmount(contract, billedAmount){
   if (!contract) return null;
   const model = String(contract.reimbursement_model || "fixed_amount");
