@@ -6696,6 +6696,21 @@ function lookupFeeScheduleAmount(org_id, claim){
 function computeExpectedInsuranceForClaim(claim){
   const billed = num(claim.amount_billed);
   const patientResp = num(claim.patient_responsibility);
+  const contractRules = claim?.org_id ? getPayerContracts(claim.org_id) : [];
+  const match = contractRules.find(r =>
+    String(r.payer_name).toLowerCase().trim() === String(claim.payer).toLowerCase().trim() &&
+    String(r.procedure_code).trim() === String(claim.cpt_code).trim()
+  );
+  const expected = match ? Number(match.allowed_amount || match.expected_value || 0) : 0;
+  if (match) {
+    claim.network_status = match ? match.network_status : "Unknown";
+    if (String(match.network_status || "").toLowerCase().includes("in")) {
+      return Math.max(0, expected - patientResp);
+    }
+  } else {
+    claim.network_status = "Unknown";
+  }
+
   const contract = claim?.org_id ? findContractForClaim(claim.org_id, claim) : null;
   if (contract && String(contract.network_status || "").toLowerCase().includes("in")) {
     return Math.max(0, num(contractExpectedAmount(contract, billed)) - patientResp);
