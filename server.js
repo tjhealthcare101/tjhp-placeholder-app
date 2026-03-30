@@ -7090,21 +7090,29 @@ function recalculateContractsForOrg(org_id){
   let changed = false;
   for (const b of billedAll) {
     if (b.org_id !== org_id) continue;
-    const contractRules = getPayerContracts(org_id);
-    const match = contractRules.find(r =>
-      String(r.payer_name).toLowerCase().trim() === String(b.payer).toLowerCase().trim() &&
-      String(r.procedure_code).trim() === String(b.cpt_code || b.procedure_code || "").trim()
-    );
-    const network = match ? match.network_status : "Unknown";
-    const contract = match || findContractForClaim(org_id, b);
-    b.network_status = String(network || contract?.network_status || "Unknown");
-    if (!contract) continue;
+    const contract = findContractForClaim(org_id, b);
+
+    if (!contract) {
+      b.expected_insurance = "";
+      b.underpaid_amount = 0;
+      b.network_status = "Unknown";
+      changed = true;
+      continue;
+    }
 
     const billedAmt = num(b.amount_billed);
     const expectedAmount = contractExpectedAmount(contract, billedAmt);
-    const expectedInsurance = computeExpectedInsuranceForClaim(b);
+
+    const expectedInsurance = Math.max(
+      0,
+      num(expectedAmount) - num(b.patient_responsibility)
+    );
+
     const paid = num(b.insurance_paid || b.paid_amount);
+
     const underpaid = Math.max(0, expectedInsurance - paid);
+
+    b.network_status = contract.network_status || "Unknown";
 
     b.contract_reimbursement_model = contract.reimbursement_model;
     b.contract_expected_value = num(contract.expected_value);
