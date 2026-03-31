@@ -6293,16 +6293,60 @@ function getPayerContracts(org_id){
   return readJSON(FILES.payer_contracts, []).filter(x => x.org_id === org_id);
 }
 
+function normalizeContractText(v){
+  return String(v || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeNetworkStatus(v){
+  const raw = String(v || "").trim().toLowerCase();
+  if (raw.includes("out")) return "Out of Network";
+  return "In Network";
+}
+
+function getContractProcedureCode(x){
+  return normalizeCode(x?.procedure_code || x?.cpt_code || x?.cpt || x?.proc_code || x?.code || "");
+}
+
+function contractMatchesClaim(contract, claim){
+  if (!contract || !claim) return false;
+
+  const contractPayer = normalizeContractText(contract.payer_name || contract.payer || "");
+  const claimPayer = normalizeContractText(claim.payer || "");
+  const contractProc = getContractProcedureCode(contract);
+  const claimProc = getClaimProcedureCode(claim);
+  const contractDx = getClaimDiagnosisCode(contract);
+  const claimDx = getClaimDiagnosisCode(claim);
+
+  if (!contractPayer || !claimPayer) return false;
+  if (!contractProc || !claimProc) return false;
+  if (contractProc !== claimProc) return false;
+
+  const payerMatch =
+    contractPayer === claimPayer ||
+    contractPayer.startsWith(claimPayer) ||
+    claimPayer.startsWith(contractPayer);
+
+  if (!payerMatch) return false;
+
+  if (contractDx && claimDx && contractDx !== claimDx) return false;
+
+  return true;
+}
+
 function normalizeContract(c){
   const contract = c || {};
   return {
     ...contract,
+    contract_id: contract.contract_id || uuid(),
     payer_name: String(contract.payer_name || contract.payer || "").trim(),
-    procedure_code: String(contract.procedure_code || contract.cpt || contract.code || "").trim(),
+    procedure_code: getContractProcedureCode(contract),
     diagnosis_code: String(contract.diagnosis_code || "").trim(),
     expected_value: Number(contract.expected_value || contract.allowed_amount || 0),
     reimbursement_model: String(contract.reimbursement_model || "fixed_amount").trim() || "fixed_amount",
-    network_status: String(contract.network_status || "In Network").trim() || "In Network"
+    network_status: normalizeNetworkStatus(contract.network_status || "In Network")
   };
 }
 
@@ -6310,7 +6354,7 @@ function savePayerContracts(org_id, contracts){
   const all = readJSON(FILES.payer_contracts, []);
   const keep = all.filter(x => x.org_id !== org_id);
   writeJSON(FILES.payer_contracts, keep.concat(
-    (contracts || []).map(c => normalizeContract({ ...c, org_id }))
+    (contracts || []).map(c => ({ ...c, org_id }))
   ));
   recalculateContractsForOrg(org_id);
 }
@@ -6342,10 +6386,8 @@ function saveContractVersion(org_id, contract) {
 
 function countClaimsImpacted(org_id, contract) {
   const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
-  return billed.filter(b =>
-    String(b.payer || "").trim() === String(contract.payer_name || "").trim() &&
-    String(b.procedure_code || "").trim() === String(contract.procedure_code || "").trim()
-  ).length;
+  const normalizedContract = normalizeContract(contract);
+  return billed.filter(b => contractMatchesClaim(normalizedContract, b)).length;
 }
 
 function getPracticeSettings(org_id){
@@ -6712,20 +6754,15 @@ function lookupFeeScheduleAmount(org_id, claim){
 function computeExpectedInsuranceForClaim(claim){
   const billed = num(claim.amount_billed);
   const patientResp = num(claim.patient_responsibility);
-  const contractRules = getPayerContracts(claim.org_id || "");
-  const match = contractRules.find(r =>
-    String(r.payer_name).toLowerCase().trim() === String(claim.payer).toLowerCase().trim() &&
-    String(r.procedure_code).trim() === String(claim.cpt_code || claim.procedure_code || "").trim()
-  );
-
-  const expected = match ? Number(match.allowed_amount || match.expected_value || 0) : 0;
-  if (match && expected > 0) {
-    return Math.max(0, expected - patientResp);
-  }
-
   const contract = claim?.org_id ? findContractForClaim(claim.org_id, claim) : null;
-  if (contract && String(contract.network_status || "").toLowerCase().includes("in")) {
-    return Math.max(0, num(contractExpectedAmount(contract, billed)) - patientResp);
+  if (contract) {
+    const expectedAmount = contractExpectedAmount(contract, billed);
+    return {
+      amount: Math.max(0, num(expectedAmount) - patientResp),
+      source: "contract",
+      contract_id: contract.contract_id || "",
+      network_status: String(contract.network_status || "Unknown")
+    };
   }
   const rules = getAllowedAmountRules(claim.org_id || "");
   const payer = String(claim.payer || "").trim().toLowerCase();
@@ -6744,7 +6781,10 @@ function computeExpectedInsuranceForClaim(claim){
   else if (method === "percent_billed") allowed = billed * (value / 100);
   else if (method === "fixed_fee" || method === "flat") allowed = value;
   else if (method === "ucr_multiplier") allowed = billed * ucr;
-  return Math.max(0, allowed - patientResp);
+  return {
+    amount: Math.max(0, allowed - patientResp),
+    source: "rules"
+  };
 }
 
 function getClaimBatches(org_id){
@@ -6934,18 +6974,8 @@ function computePatientBalance(claim){
 function computeInsuranceBalance(claim, ctx={}){
   const claimCtx = (ctx && ctx.paymentsByClaim) ? ctx : buildClaimContext(claim.org_id || "");
   const expectedInsuranceRaw = computeExpectedInsuranceForClaim(claim);
-
-  // If no contract rules exist, do not auto-draft expected
-  const hasContract = Boolean(
-    claim.contract_applied ||
-    (claim.contract_rule_id) ||
-    (expectedInsuranceRaw && expectedInsuranceRaw.source === "contract")
-  );
-
-  // If no contract, expected is null
-  const expectedInsurance = hasContract
-    ? num(expectedInsuranceRaw.amount || expectedInsuranceRaw)
-    : null;
+  const hasContract = Boolean(expectedInsuranceRaw && expectedInsuranceRaw.source === "contract");
+  const expectedInsurance = hasContract ? num(expectedInsuranceRaw.amount) : null;
   const key = normalizeClaimKey(claim.claim_number || "");
   const paymentRows = key && claimCtx.paymentsByClaim ? (claimCtx.paymentsByClaim[key] || []) : [];
   const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid), 0);
@@ -7062,15 +7092,32 @@ function gradeFromScore(score){
 }
 
 function findContractForClaim(org_id, b){
-  const contracts = getPayerContracts(org_id);
+  const contracts = getPayerContracts(org_id).map(normalizeContract);
+  let best = null;
+  let bestScore = -1;
 
-  const payer = String(b.payer || "").toLowerCase().trim();
-  const proc = String(b.cpt_code || b.procedure_code || "").trim();
+  for (const c of contracts) {
+    if (!contractMatchesClaim(c, b)) continue;
 
-  return contracts.find(c =>
-    String(c.payer_name || "").toLowerCase().includes(payer) &&
-    String(c.procedure_code || "").trim() === proc
-  ) || null;
+    let score = 0;
+    const contractPayer = normalizeContractText(c.payer_name);
+    const claimPayer = normalizeContractText(b.payer || "");
+    const contractDx = getClaimDiagnosisCode(c);
+    const claimDx = getClaimDiagnosisCode(b);
+
+    if (contractPayer === claimPayer) score += 100;
+    else score += 60;
+
+    if (contractDx && claimDx && contractDx === claimDx) score += 10;
+    if (c.effective_date) score += 1;
+
+    if (score > bestScore) {
+      best = c;
+      bestScore = score;
+    }
+  }
+
+  return best || null;
 }
 function contractExpectedAmount(contract, billedAmount){
   if (!contract) return null;
@@ -7093,38 +7140,39 @@ function recalculateContractsForOrg(org_id){
   for (const b of billedAll) {
     if (b.org_id !== org_id) continue;
     const contract = findContractForClaim(org_id, b);
+    console.log({
+      claim: b.claim_number,
+      payer: b.payer,
+      cpt: getClaimProcedureCode(b),
+      matchedContract: contract?.contract_id || null
+    });
 
     if (!contract) {
       b.expected_insurance = "";
       b.underpaid_amount = 0;
       b.network_status = "Unknown";
       b.contract_applied = false;
+      b.contract_rule_id = "";
+      b.contract_expected_amount = 0;
+      b.contract_expected_value = 0;
+      b.contract_reimbursement_model = "";
       changed = true;
       continue;
     }
 
     const billedAmt = num(b.amount_billed);
-    const expectedAmount = contractExpectedAmount(contract, billedAmt);
-    const safeExpected = expectedAmount || billedAmt;
-
-    const expectedInsurance = Math.max(
-      0,
-      num(safeExpected) - num(b.patient_responsibility)
-    );
+    const expectedAmount = num(contractExpectedAmount(contract, billedAmt));
+    const expectedInsurance = Math.max(0, expectedAmount - num(b.patient_responsibility));
 
     const paid = num(b.insurance_paid || b.paid_amount);
-
-    const underpaid = Math.max(
-      0,
-      (expectedInsurance || billedAmt) - paid
-    );
+    const underpaid = Math.max(0, expectedInsurance - paid);
 
     b.network_status = String(contract.network_status || "Unknown");
     b.contract_applied = true;
-
+    b.contract_rule_id = String(contract.contract_id || "");
     b.contract_reimbursement_model = contract.reimbursement_model;
     b.contract_expected_value = num(contract.expected_value);
-    b.contract_expected_amount = num(expectedAmount);
+    b.contract_expected_amount = expectedAmount;
     b.expected_insurance = expectedInsurance;
     b.underpaid_amount = underpaid;
     b.status = classifyClaimStatusWithContract(b);
@@ -16195,9 +16243,10 @@ if (method === "POST" && pathname === "/payment-batch/delete") {
       const billedAmt = num(b.amount_billed);
       const allowed = num(b.allowed_amount);
       const patientResp = num(b.patient_responsibility);
-      const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
-        ? num(b.expected_insurance)
-        : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+      const expectedInsurance = (() => {
+        const fin = computeClaimFinancials(b);
+        return fin.expectedInsurance != null ? num(fin.expectedInsurance) : Math.max(0, (allowed > 0 ? allowed : billedAmt) - patientResp);
+      })();
 
       const underpaid = Math.max(0, expectedInsurance - newPaid);
       b.underpaid_amount = underpaid;
@@ -16487,7 +16536,10 @@ if (method === "GET" && pathname === "/negotiation-detail") {
   const applyHelp = `When a negotiation is approved, you can track approved vs collected. You may apply collected funds to the claim (manual control) even if approval differs from payment timing.`;
   const packetDraft = String(n.packet_draft || "");
   const expected = b
-    ? ((b.expected_insurance != null && String(b.expected_insurance).trim() !== "") ? num(b.expected_insurance) : Math.max(0, num(b.amount_billed) - num(b.patient_responsibility)))
+    ? (() => {
+        const fin = computeClaimFinancials(b);
+        return fin.expectedInsurance != null ? num(fin.expectedInsurance) : 0;
+      })()
     : num(n.amount_billed || 0);
   const variance = Math.max(0, expected - num(n.amount_paid || 0));
 
@@ -16708,9 +16760,10 @@ if (apply && rec.billed_id) {
         // recompute expected
         const allowed = num(b.allowed_amount);
         const patientResp = num(b.patient_responsibility);
-        const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
-          ? num(b.expected_insurance)
-          : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+        const expectedInsurance = (() => {
+          const fin = computeClaimFinancials(b);
+          return fin.expectedInsurance != null ? num(fin.expectedInsurance) : Math.max(0, (allowed > 0 ? allowed : billedAmt) - patientResp);
+        })();
 
         const underpaid = Math.max(0, expectedInsurance - newPaid);
         b.underpaid_amount = underpaid;
@@ -17214,9 +17267,10 @@ const statusCell = (() => {
   const patientResp = Number(b.patient_responsibility || 0);
   const patientCollected = Number(b.patient_collected || 0);
 
-  const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
-  ? Number(b.expected_insurance)
-  : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+  const expectedInsurance = (() => {
+    const fin = computeClaimFinancials(b);
+    return fin.expectedInsurance != null ? Number(fin.expectedInsurance) : Math.max(0, (allowed > 0 ? allowed : billedAmt) - patientResp);
+  })();
 
   const underpaid = Math.max(0, expectedInsurance - paidAmt);
   const contractualWriteOff = Math.max(0, billedAmt - (allowed || 0));
@@ -18617,9 +18671,10 @@ if (method === "POST" && pathname === "/appeal/action") {
         const billedAmt = num(b.amount_billed);
         const allowed = num(b.allowed_amount);
         const patientResp = num(b.patient_responsibility);
-        const expectedInsurance = (b.expected_insurance != null && String(b.expected_insurance).trim() !== "")
-          ? num(b.expected_insurance)
-          : computeExpectedInsurance((allowed > 0 ? allowed : billedAmt), patientResp);
+        const expectedInsurance = (() => {
+          const fin = computeClaimFinancials(b);
+          return fin.expectedInsurance != null ? num(fin.expectedInsurance) : Math.max(0, (allowed > 0 ? allowed : billedAmt) - patientResp);
+        })();
 
         const underpaid = Math.max(0, expectedInsurance - newPaid);
         b.underpaid_amount = underpaid;
@@ -20756,16 +20811,24 @@ function renderTemplateEditor(org, user){
           }
 
           // Duplicate check against existing + staged
+          const normalizedCandidate = normalizeContract({
+            payer_name: payer,
+            procedure_code: cpt,
+            diagnosis_code: dx,
+            effective_date: effective,
+            network_status: String(row.network_status || "In Network").trim() || "In Network",
+            reimbursement_model: String(row.reimbursement_model || "fixed_amount").trim() || "fixed_amount",
+            expected_value: num(row.allowed_amount)
+          });
+
           const dup = existingContracts.find(c =>
-            String(c.payer_name||"") === payer &&
-            String(c.procedure_code||"") === cpt &&
-            String(c.diagnosis_code||"") === dx &&
-            String(c.effective_date||"") === effective
+            contractMatchesClaim(normalizeContract(c), normalizedCandidate) &&
+            String(c.diagnosis_code || "").trim() === dx &&
+            String(c.effective_date || "").trim() === effective
           ) || stagedContracts.find(c =>
-            c.payer_name === payer &&
-            c.procedure_code === cpt &&
-            (c.diagnosis_code||"") === dx &&
-            (c.effective_date||"") === effective
+            contractMatchesClaim(normalizeContract(c), normalizedCandidate) &&
+            String(c.diagnosis_code || "").trim() === dx &&
+            String(c.effective_date || "").trim() === effective
           );
 
           if (dup) { duplicatesSkipped++; continue; }
@@ -20773,7 +20836,7 @@ function renderTemplateEditor(org, user){
           const reimbursement_model = String(row.reimbursement_model || "fixed_amount").trim() || "fixed_amount";
           const expected_value = num(row.allowed_amount);
 
-          const contract = {
+          const contract = normalizeContract({
             contract_id: uuid(),
             org_id: org.org_id,
             upload_batch_id,
@@ -20785,7 +20848,7 @@ function renderTemplateEditor(org, user){
             expected_value,
             effective_date: effective,
             updated_at: nowISO()
-          };
+          });
 
           stagedContracts.push(contract);
           contractsAdded++;
@@ -20954,13 +21017,10 @@ function renderTemplateEditor(org, user){
       for (const c of pending.stagedContracts) {
         const normalizedC = normalizeContract(c);
         contracts.push(normalizedC);
-        if (typeof saveContractVersion === "function") saveContractVersion(org.org_id, c);
+        if (typeof saveContractVersion === "function") saveContractVersion(org.org_id, normalizedC);
 
         // Detect affected claims
-        const matches = billed.filter(b =>
-          String(b.payer || "").trim().toLowerCase() === String(normalizedC.payer_name || "").trim().toLowerCase() &&
-          String(b.cpt_code || b.procedure_code || "").trim() === String(normalizedC.procedure_code || "").trim()
-        );
+        const matches = billed.filter(b => contractMatchesClaim(normalizedC, b));
 
         matches.forEach(m => {
           if (m && m.billed_id) {
