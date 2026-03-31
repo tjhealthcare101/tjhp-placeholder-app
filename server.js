@@ -6331,10 +6331,11 @@ function contractMatchesClaim(contract, claim){
 
   if (!payerMatch) return false;
 
-  // Only enforce DX match if BOTH are present and neither is prefix-compatible
-  if (contractDx && claimDx) {
-    if (!claimDx.startsWith(contractDx) && !contractDx.startsWith(claimDx)) return false;
-  }
+  // 🔥 DX is optional — do NOT block match.
+  // Real-world billing systems rarely match on DX strictly, so DX is a scoring signal only.
+  // if (contractDx && claimDx) {
+  //   if (!claimDx.startsWith(contractDx) && !contractDx.startsWith(claimDx)) return false;
+  // }
 
   return true;
 }
