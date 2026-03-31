@@ -6293,10 +6293,25 @@ function getPayerContracts(org_id){
   return readJSON(FILES.payer_contracts, []).filter(x => x.org_id === org_id);
 }
 
+function normalizeContract(c){
+  const contract = c || {};
+  return {
+    ...contract,
+    payer_name: String(contract.payer_name || contract.payer || "").trim(),
+    procedure_code: String(contract.procedure_code || contract.cpt || contract.code || "").trim(),
+    diagnosis_code: String(contract.diagnosis_code || "").trim(),
+    expected_value: Number(contract.expected_value || contract.allowed_amount || 0),
+    reimbursement_model: String(contract.reimbursement_model || "fixed_amount").trim() || "fixed_amount",
+    network_status: String(contract.network_status || "In Network").trim() || "In Network"
+  };
+}
+
 function savePayerContracts(org_id, contracts){
   const all = readJSON(FILES.payer_contracts, []);
   const keep = all.filter(x => x.org_id !== org_id);
-  writeJSON(FILES.payer_contracts, keep.concat((contracts || []).map(c => ({ ...c, org_id }))));
+  writeJSON(FILES.payer_contracts, keep.concat(
+    (contracts || []).map(c => normalizeContract({ ...c, org_id }))
+  ));
   recalculateContractsForOrg(org_id);
 }
 
@@ -7049,32 +7064,12 @@ function gradeFromScore(score){
 function findContractForClaim(org_id, b){
   const contracts = getPayerContracts(org_id);
 
-  const payer = String(b.payer || "").trim().toLowerCase();
-  const proc = normalizeCode(String(b.cpt_code || b.procedure_code || ""));
-  const dx = normalizeCode(String(b.diagnosis_code || ""));
+  const payer = String(b.payer || "").toLowerCase().trim();
+  const proc = String(b.cpt_code || b.procedure_code || "").trim();
 
-  if (!payer || !proc) return null;
-
-  // 🔥 1. Exact match (payer + CPT + diagnosis)
-  const exactDx = contracts.find(c =>
-    String(c.payer_name || "").trim().toLowerCase() === payer &&
-    normalizeCode(c.procedure_code || "") === proc &&
-    normalizeCode(c.diagnosis_code || "") === dx
-  );
-  if (exactDx) return exactDx;
-
-  // 🔥 2. CPT match (no diagnosis)
-  const cptMatch = contracts.find(c =>
-    String(c.payer_name || "").trim().toLowerCase() === payer &&
-    normalizeCode(c.procedure_code || "") === proc &&
-    !normalizeCode(c.diagnosis_code || "")
-  );
-  if (cptMatch) return cptMatch;
-
-  // 🔥 3. fallback (payer only)
   return contracts.find(c =>
-    String(c.payer_name || "").trim().toLowerCase() === payer &&
-    !normalizeCode(c.procedure_code || "")
+    String(c.payer_name || "").toLowerCase().includes(payer) &&
+    String(c.procedure_code || "").trim() === proc
   ) || null;
 }
 function contractExpectedAmount(contract, billedAmount){
@@ -7103,23 +7098,29 @@ function recalculateContractsForOrg(org_id){
       b.expected_insurance = "";
       b.underpaid_amount = 0;
       b.network_status = "Unknown";
+      b.contract_applied = false;
       changed = true;
       continue;
     }
 
     const billedAmt = num(b.amount_billed);
     const expectedAmount = contractExpectedAmount(contract, billedAmt);
+    const safeExpected = expectedAmount || billedAmt;
 
     const expectedInsurance = Math.max(
       0,
-      num(expectedAmount) - num(b.patient_responsibility)
+      num(safeExpected) - num(b.patient_responsibility)
     );
 
     const paid = num(b.insurance_paid || b.paid_amount);
 
-    const underpaid = Math.max(0, expectedInsurance - paid);
+    const underpaid = Math.max(
+      0,
+      (expectedInsurance || billedAmt) - paid
+    );
 
-    b.network_status = contract.network_status || "Unknown";
+    b.network_status = String(contract.network_status || "Unknown");
+    b.contract_applied = true;
 
     b.contract_reimbursement_model = contract.reimbursement_model;
     b.contract_expected_value = num(contract.expected_value);
@@ -20951,13 +20952,14 @@ function renderTemplateEditor(org, user){
         .filter(b => b.org_id === org.org_id);
 
       for (const c of pending.stagedContracts) {
-        contracts.push(c);
+        const normalizedC = normalizeContract(c);
+        contracts.push(normalizedC);
         if (typeof saveContractVersion === "function") saveContractVersion(org.org_id, c);
 
         // Detect affected claims
         const matches = billed.filter(b =>
-          String(b.payer || "").trim() === String(c.payer_name || "").trim() &&
-          String(b.procedure_code || "").trim() === String(c.procedure_code || "").trim()
+          String(b.payer || "").trim().toLowerCase() === String(normalizedC.payer_name || "").trim().toLowerCase() &&
+          String(b.cpt_code || b.procedure_code || "").trim() === String(normalizedC.procedure_code || "").trim()
         );
 
         matches.forEach(m => {
@@ -20967,6 +20969,7 @@ function renderTemplateEditor(org, user){
         });
       }
       savePayerContracts(org.org_id, contracts);
+      recalculateContractsForOrg(org.org_id);
     }
 
     // Commit fee schedules
