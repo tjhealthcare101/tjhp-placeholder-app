@@ -6808,7 +6808,18 @@ function normalizeCode(v){
 }
 
 function getClaimProcedureCode(b){
-  return normalizeCode(b.procedure_code || b.cpt_code || b.cpt || b.proc_code || b.code || "");
+  return normalizeCode(
+    b.procedure_code ||
+    b.cpt_code ||
+    b.cpt ||
+    b.proc_code ||
+    b.code ||
+    b.hcpcs ||
+    b.service_code ||
+    b.billing_code ||
+    b.primary_procedure ||
+    ""
+  );
 }
 
 function getClaimDiagnosisCode(b){
@@ -7149,7 +7160,10 @@ function recalculateContractsForOrg(org_id){
     console.log({
       claim: b.claim_number,
       payer: b.payer,
-      cpt: getClaimProcedureCode(b),
+      rawProcedure: b.procedure_code,
+      rawCpt: b.cpt_code,
+      rawCode: b.code,
+      finalCpt: getClaimProcedureCode(b),
       matchedContract: contract?.contract_id || null
     });
 
