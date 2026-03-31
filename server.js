@@ -7156,16 +7156,43 @@ function recalculateContractsForOrg(org_id){
   let changed = false;
   for (const b of billedAll) {
     if (b.org_id !== org_id) continue;
+    const contracts = getPayerContracts(org_id).map(normalizeContract);
     const contract = findContractForClaim(org_id, b);
-    console.log({
+
+    console.log("CLAIM DEBUG", {
       claim: b.claim_number,
       payer: b.payer,
       rawProcedure: b.procedure_code,
       rawCpt: b.cpt_code,
       rawCode: b.code,
+      rawHcpcs: b.hcpcs,
+      rawServiceCode: b.service_code,
+      rawBillingCode: b.billing_code,
+      rawPrimaryProcedure: b.primary_procedure,
+      rawDx: b.diagnosis_code,
+      rawIcd10: b.icd10,
+      rawIcd10Code: b.icd10_code,
+      rawDxCode: b.dx_code,
       finalCpt: getClaimProcedureCode(b),
+      finalDx: getClaimDiagnosisCode(b),
       matchedContract: contract?.contract_id || null
     });
+
+    for (const c of contracts) {
+      console.log("CONTRACT CANDIDATE", {
+        contract_id: c.contract_id,
+        payer: c.payer_name,
+        proc: c.procedure_code,
+        dx: c.diagnosis_code,
+        payerNorm: normalizeContractText(c.payer_name),
+        claimPayerNorm: normalizeContractText(b.payer || ""),
+        contractProc: getContractProcedureCode(c),
+        claimProc: getClaimProcedureCode(b),
+        contractDx: getClaimDiagnosisCode(c),
+        claimDx: getClaimDiagnosisCode(b),
+        matches: contractMatchesClaim(c, b)
+      });
+    }
 
     if (!contract) {
       b.expected_insurance = "";
