@@ -6331,7 +6331,10 @@ function contractMatchesClaim(contract, claim){
 
   if (!payerMatch) return false;
 
-  if (contractDx && claimDx && contractDx !== claimDx) return false;
+  // Only enforce DX match if BOTH are present and neither is prefix-compatible
+  if (contractDx && claimDx) {
+    if (!claimDx.startsWith(contractDx) && !contractDx.startsWith(claimDx)) return false;
+  }
 
   return true;
 }
@@ -6798,7 +6801,10 @@ function saveClaimBatches(org_id, batches){
 }
 
 function normalizeCode(v){
-  return String(v || "").trim().toUpperCase();
+  return String(v || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, ""); // removes - . spaces
 }
 
 function getClaimProcedureCode(b){
