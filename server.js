@@ -6300,21 +6300,49 @@ function normalizeContractText(v){
     .replace(/\s+/g, " ");
 }
 
+function getClaimPayerText(claim){
+  return normalizeContractText(
+    claim?.payer ||
+    claim?.payer_name ||
+    claim?.insurance_payer ||
+    claim?.primary_payer ||
+    claim?.plan_name ||
+    ""
+  );
+}
+
 function normalizeNetworkStatus(v){
   const raw = String(v || "").trim().toLowerCase();
   if (raw.includes("out")) return "Out of Network";
   return "In Network";
 }
 
+function normalizeProcedureCode(v){
+  const raw = String(v || "").trim().toUpperCase();
+  const m = raw.match(/\d{5}/);
+  return m ? m[0] : raw.replace(/[^A-Z0-9]/g, "");
+}
+
+function normalizeDiagnosisCode(v){
+  return String(v || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
 function getContractProcedureCode(x){
-  return normalizeCode(x?.procedure_code || x?.cpt_code || x?.cpt || x?.proc_code || x?.code || "");
+  return normalizeProcedureCode(
+    x?.procedure_code ||
+    x?.cpt_code ||
+    x?.cpt ||
+    x?.proc_code ||
+    x?.code ||
+    ""
+  );
 }
 
 function contractMatchesClaim(contract, claim){
   if (!contract || !claim) return false;
 
   const contractPayer = normalizeContractText(contract.payer_name || contract.payer || "");
-  const claimPayer = normalizeContractText(claim.payer || "");
+  const claimPayer = getClaimPayerText(claim);
 
   const contractProc = getContractProcedureCode(contract);
   const claimProc = getClaimProcedureCode(claim);
@@ -6326,11 +6354,17 @@ function contractMatchesClaim(contract, claim){
   // CPT must match EXACTLY
   if (contractProc !== claimProc) return false;
 
+  const compactContractPayer = contractPayer.replace(/[^a-z0-9]/g, "");
+  const compactClaimPayer = claimPayer.replace(/[^a-z0-9]/g, "");
+
   // Payer match (flexible but controlled)
   const payerMatch =
     contractPayer === claimPayer ||
     contractPayer.includes(claimPayer) ||
-    claimPayer.includes(contractPayer);
+    claimPayer.includes(contractPayer) ||
+    compactContractPayer === compactClaimPayer ||
+    compactContractPayer.includes(compactClaimPayer) ||
+    compactClaimPayer.includes(compactContractPayer);
 
   if (!payerMatch) return false;
 
@@ -6800,16 +6834,11 @@ function saveClaimBatches(org_id, batches){
 }
 
 function normalizeCode(v){
-  const raw = String(v || "").trim().toUpperCase();
-
-  // 🔥 Extract ONLY the first valid CPT (5 digits)
-  const match = raw.match(/\d{5}/);
-
-  return match ? match[0] : "";
+  return String(v || "").trim().toUpperCase();
 }
 
 function getClaimProcedureCode(b){
-  return normalizeCode(
+  return normalizeProcedureCode(
     b.procedure_code ||
     b.cpt_code ||
     b.cpt ||
@@ -6819,12 +6848,21 @@ function getClaimProcedureCode(b){
     b.service_code ||
     b.billing_code ||
     b.primary_procedure ||
+    b?.line_items?.[0]?.code ||
+    b?.services?.[0]?.cpt ||
+    b?.procedures?.[0]?.code ||
     ""
   );
 }
 
 function getClaimDiagnosisCode(b){
-  return normalizeCode(b.diagnosis_code || b.icd10 || b.icd10_code || b.dx_code || "");
+  return normalizeDiagnosisCode(
+    b.diagnosis_code ||
+    b.icd10 ||
+    b.icd10_code ||
+    b.dx_code ||
+    ""
+  );
 }
 
 function normalizeClaimKey(v){
