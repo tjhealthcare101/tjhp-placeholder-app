@@ -6311,33 +6311,25 @@ function getContractProcedureCode(x){
 }
 
 function contractMatchesClaim(contract, claim){
-  if (!contract || !claim) return false;
-
-  const contractPayer = normalizeContractText(contract.payer_name || contract.payer || "");
-  const claimPayer = normalizeContractText(claim.payer || "");
   const contractProc = getContractProcedureCode(contract);
   const claimProc = getClaimProcedureCode(claim);
-  const contractDx = getClaimDiagnosisCode(contract);
-  const claimDx = getClaimDiagnosisCode(claim);
+  const contractPayer = normalizeContractText(contract.payer_name || contract.payer || "");
+  const claimPayer = normalizeContractText(claim.payer || "");
 
-  if (!contractPayer || !claimPayer) return false;
-  if (!contractProc || !claimProc) return false;
-  if (contractProc !== claimProc) return false;
+  console.log("MATCH TEST", {
+    contractProc,
+    claimProc,
+    contractPayer,
+    claimPayer
+  });
 
-  const payerMatch =
-    contractPayer === claimPayer ||
-    contractPayer.startsWith(claimPayer) ||
-    claimPayer.startsWith(contractPayer);
+  // 🔥 TEMP: only match on CPT
+  if (contractProc && claimProc && contractProc === claimProc) {
+    console.log("MATCH SUCCESS (CPT ONLY)");
+    return true;
+  }
 
-  if (!payerMatch) return false;
-
-  // 🔥 DX is optional — do NOT block match.
-  // Real-world billing systems rarely match on DX strictly, so DX is a scoring signal only.
-  // if (contractDx && claimDx) {
-  //   if (!claimDx.startsWith(contractDx) && !contractDx.startsWith(claimDx)) return false;
-  // }
-
-  return true;
+  return false;
 }
 
 function normalizeContract(c){
@@ -6802,10 +6794,12 @@ function saveClaimBatches(org_id, batches){
 }
 
 function normalizeCode(v){
-  return String(v || "")
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, ""); // removes - . spaces
+  const raw = String(v || "").trim().toUpperCase();
+
+  // 🔥 Extract ONLY the first valid CPT (5 digits)
+  const match = raw.match(/\d{5}/);
+
+  return match ? match[0] : "";
 }
 
 function getClaimProcedureCode(b){
