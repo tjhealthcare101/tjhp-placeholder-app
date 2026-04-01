@@ -6502,8 +6502,10 @@ function contractMatchesClaim(contract, claim){
   if (!contractPayer || !claimPayer) return false;
   if (!contractProc || !claimProc) return false;
 
-  // CPT must match EXACTLY
-  if (contractProc !== claimProc) return false;
+  const normalizedContractProc = normalizeProcedureCode(contractProc);
+  const normalizedClaimProc = normalizeProcedureCode(claimProc);
+  if (!normalizedContractProc || !normalizedClaimProc) return false;
+  if (normalizedContractProc !== normalizedClaimProc) return false;
 
   const compactContractPayer = contractPayer.replace(/[^a-z0-9]/g, "");
   const compactClaimPayer = claimPayer.replace(/[^a-z0-9]/g, "");
@@ -6535,6 +6537,178 @@ function normalizeContract(c){
     reimbursement_model: String(contract.reimbursement_model || "fixed_amount").trim() || "fixed_amount",
     network_status: normalizeNetworkStatus(contract.network_status || "In Network")
   };
+}
+
+// Flexible field picker (handles messy CSV headers)
+function pickFirst(row, names){
+  const keys = Object.keys(row || {});
+
+  // exact match first
+  for (const name of names) {
+    const found = keys.find(k => String(k || "").trim().toLowerCase() === name.toLowerCase());
+    if (found && row[found] != null && String(row[found]).trim() !== "") {
+      return String(row[found]).trim();
+    }
+  }
+
+  // fallback: partial match
+  for (const name of names) {
+    const found = keys.find(k => String(k || "").trim().toLowerCase().includes(name.toLowerCase()));
+    if (found && row[found] != null && String(row[found]).trim() !== "") {
+      return String(row[found]).trim();
+    }
+  }
+
+  return "";
+}
+
+// normalize ANY contract row correctly
+function mapContractUploadRow(row){
+  const payer = pickFirst(row, [
+    "payer_name", "payer", "insurance", "insurance_name",
+    "carrier", "plan", "plan_name"
+  ]);
+
+  const procedure_code = pickFirst(row, [
+    "procedure_code", "cpt", "cpt_code",
+    "proc_code", "hcpcs", "code",
+    "service_code", "billing_code"
+  ]);
+
+  const diagnosis_code = pickFirst(row, [
+    "diagnosis_code", "dx", "dx_code",
+    "icd10", "icd10_code"
+  ]);
+
+  const effective_date_raw = pickFirst(row, [
+    "effective_date", "effective", "contract_effective_date"
+  ]);
+  const effective_date = effective_date_raw
+    ? new Date(effective_date_raw).toISOString().split("T")[0]
+    : "";
+
+  const network_status = pickFirst(row, [
+    "network_status", "network", "in_network", "participation_status"
+  ]) || "In Network";
+
+  const reimbursement_model = pickFirst(row, [
+    "reimbursement_model", "model", "payment_model"
+  ]) || "fixed_amount";
+
+  const expected_raw = pickFirst(row, [
+    "allowed_amount", "expected_value", "expected",
+    "rate", "amount", "fee"
+  ]);
+
+  return normalizeContract({
+    payer_name: payer,
+    procedure_code,
+    diagnosis_code,
+    effective_date,
+    network_status,
+    reimbursement_model,
+    expected_value: num(expected_raw)
+  });
+}
+
+// TRUE CONTRACT KEY (NOT claim matcher)
+function contractRowKey(c){
+  return [
+    normalizeContractText(c.payer_name || c.payer || ""),
+    getContractProcedureCode(c),
+    normalizeCode(c.diagnosis_code || ""),
+    String(c.effective_date || "").trim(),
+    normalizeNetworkStatus(c.network_status || "In Network")
+  ].join("|");
+}
+
+function detectFlexibleContractRow(row){
+  if (!row || typeof row !== "object") return false;
+
+  const keys = Object.keys(row).map(k => String(k).toLowerCase());
+
+  const hasPayer = keys.some(k =>
+    /(payer|insurance|carrier|plan)/i.test(k)
+  );
+
+  const hasProcedure = keys.some(k =>
+    /(cpt|procedure|proc|hcpcs|code|service)/i.test(k)
+  );
+
+  const hasRate = keys.some(k =>
+    /(allowed|expected|rate|amount|fee)/i.test(k)
+  );
+
+  return hasPayer && hasProcedure && hasRate;
+}
+
+function detectReimbursementUploadTypeFlexible(file, parsed){
+  const rows = parsed?.rows || [];
+
+  if (!rows.length) return "unknown";
+
+  // NEW FLEXIBLE DETECTION
+  if (detectFlexibleContractRow(rows[0])) {
+    return "contract";
+  }
+
+  // fallback (existing logic)
+  const first = rows[0];
+
+  if (first.procedure_code && first.amount) return "fee_schedule";
+
+  return "unknown";
+}
+
+function extractTextFromBuffer(buffer, filename){
+  const ext = String(filename || "").toLowerCase();
+
+  try {
+    if (ext.endsWith(".pdf")) {
+      // lightweight fallback (no external lib)
+      return buffer.toString("utf8");
+    }
+
+    if (ext.endsWith(".doc") || ext.endsWith(".docx")) {
+      return buffer.toString("utf8");
+    }
+  } catch (e){
+    console.log("Document parse error:", e);
+  }
+
+  return "";
+}
+
+function parseContractFromText(text){
+  if (!text) return [];
+
+  const lines = text.split("\n");
+  const contracts = [];
+
+  for (const line of lines){
+    const cptMatch = line.match(/\b\d{5}\b/);
+    if (!cptMatch) continue;
+
+    const cpt = cptMatch[0];
+
+    const payerMatch = line.match(/(aetna|cigna|bcbs|blue cross|united|uhc)/i);
+    const payer = payerMatch ? payerMatch[0] : "";
+
+    const amountMatch = line.match(/\$?\d+(\.\d{1,2})?/);
+    const amount = amountMatch ? amountMatch[0].replace("$","") : "";
+
+    if (!payer || !amount) continue;
+
+    contracts.push(normalizeContract({
+      payer_name: payer,
+      procedure_code: cpt,
+      expected_value: num(amount),
+      network_status: "In Network",
+      reimbursement_model: "fixed_amount"
+    }));
+  }
+
+  return contracts;
 }
 
 function savePayerContracts(org_id, contracts){
@@ -7285,11 +7459,17 @@ function findContractForClaim(org_id, b){
     const contractDx = getClaimDiagnosisCode(c);
     const claimDx = claim.claim_diagnosis_code_normalized || "";
 
+    // payer match weight
     if (contractPayer === claimPayer) score += 100;
     else score += 60;
 
-    if (contractDx && claimDx && contractDx === claimDx) score += 10;
-    if (c.effective_date) score += 1;
+    // CPT match (already required)
+
+    // REMOVE EFFECTIVE DATE IMPACT
+    // DO NOT SCORE OR FILTER ON IT
+
+    // Optional: keep DX small weight
+    if (contractDx && claimDx && contractDx === claimDx) score += 5;
 
     if (score > bestScore) {
       best = c;
@@ -21019,8 +21199,34 @@ function renderTemplateEditor(org, user){
 
     for (const f of docs) {
       const ext = String(f.filename || "").toLowerCase();
+
+      if (ext.endsWith(".pdf") || ext.endsWith(".doc") || ext.endsWith(".docx")) {
+        const text = extractTextFromBuffer(f.buffer, f.filename);
+        const extractedContracts = parseContractFromText(text);
+
+        for (const c of extractedContracts){
+          const candidateKey = contractRowKey(c);
+          const dup =
+            existingContracts.some(x => contractRowKey(normalizeContract(x)) === candidateKey) ||
+            stagedContracts.some(x => contractRowKey(normalizeContract(x)) === candidateKey);
+
+          if (dup) continue;
+
+          stagedContracts.push({
+            ...c,
+            org_id: org.org_id,
+            upload_batch_id,
+            updated_at: nowISO()
+          });
+
+          contractsAdded++;
+        }
+
+        continue;
+      }
+
       if (!ext.endsWith(".csv")) {
-        warnings.push(`${f.filename} → Unsupported file type (CSV required).`);
+        warnings.push(`${f.filename} → Unsupported file type (CSV, PDF, DOC, DOCX supported).`);
         continue;
       }
 
@@ -21031,10 +21237,7 @@ function renderTemplateEditor(org, user){
         continue;
       }
 
-      // Use your detection helper if present:
-      const kind = (typeof detectReimbursementUploadType === "function")
-        ? detectReimbursementUploadType(f, parsed)
-        : ((rows[0].payer_name && rows[0].procedure_code) ? "contract" : ((rows[0].procedure_code && rows[0].amount) ? "fee_schedule" : "unknown"));
+      const kind = detectReimbursementUploadTypeFlexible(f, parsed);
 
       // =========================
       // CONTRACT FILE
@@ -21042,72 +21245,42 @@ function renderTemplateEditor(org, user){
       if (kind === "contract") {
         // Build contracts, validate, and stage
         for (const row of rows) {
-          const payer = String(row.payer_name || "").trim();
-          const cpt = String(row.procedure_code || "").trim();
-          const dx = String(row.diagnosis_code || "").trim();
-          const effective = String(row.effective_date || "").trim();
+          const mapped = mapContractUploadRow(row);
 
-          if (!payer || !cpt) {
-            issues.push(`${f.filename} → Missing payer_name or procedure_code on a row.`);
+          // validation
+          if (!mapped.payer_name || !mapped.procedure_code) {
+            issues.push(`${f.filename} → Missing payer or CPT`);
             continue;
           }
 
-          // Duplicate check against existing + staged.
-          // Match on normalized payer, procedure code, diagnosis code and effective date.
-          const normalizedCandidate = normalizeContract({
-            payer_name: payer,
-            procedure_code: cpt,
-            diagnosis_code: dx,
-            effective_date: effective,
-            network_status: String(row.network_status || "In Network").trim() || "In Network",
-            reimbursement_model: String(row.reimbursement_model || "fixed_amount").trim() || "fixed_amount",
-            expected_value: num(row.allowed_amount)
-          });
+          // duplicate detection (FIXED)
+          const candidateKey = contractRowKey(mapped);
+          const dup =
+            existingContracts.some(c => contractRowKey(normalizeContract(c)) === candidateKey) ||
+            stagedContracts.some(c => contractRowKey(normalizeContract(c)) === candidateKey);
 
-          const dup = existingContracts.some(c => {
-            const ne = normalizeContract(c);
-            return (
-              normalizeContractText(ne.payer_name) === normalizeContractText(normalizedCandidate.payer_name) &&
-              getContractProcedureCode(ne) === getContractProcedureCode(normalizedCandidate) &&
-              String(ne.diagnosis_code || "").trim() === String(dx) &&
-              String(ne.effective_date || "").trim() === String(effective)
-            );
-          }) || stagedContracts.some(c => {
-            const ne = normalizeContract(c);
-            return (
-              normalizeContractText(ne.payer_name) === normalizeContractText(normalizedCandidate.payer_name) &&
-              getContractProcedureCode(ne) === getContractProcedureCode(normalizedCandidate) &&
-              String(ne.diagnosis_code || "").trim() === String(dx) &&
-              String(ne.effective_date || "").trim() === String(effective)
-            );
-          });
           if (dup) {
             duplicatesSkipped++;
             continue;
           }
 
-          const reimbursement_model = String(row.reimbursement_model || "fixed_amount").trim() || "fixed_amount";
-          const expected_value = num(row.allowed_amount);
-
-          const contract = normalizeContract({
-            contract_id: uuid(),
+          // add clean contract
+          stagedContracts.push({
+            ...mapped,
             org_id: org.org_id,
             upload_batch_id,
-            payer_name: payer,
-            network_status: String(row.network_status || "In Network").trim() || "In Network",
-            procedure_code: cpt,
-            diagnosis_code: dx,
-            reimbursement_model,
-            expected_value,
-            effective_date: effective,
             updated_at: nowISO()
           });
-
-          stagedContracts.push(contract);
           contractsAdded++;
 
           if (previewRows.length < 20) {
-            previewRows.push({ type:"Contract", payer, code:cpt, expected: expected_value, file: f.filename });
+            previewRows.push({
+              type:"Contract",
+              payer: mapped.payer_name,
+              code: mapped.procedure_code,
+              expected: mapped.expected_value,
+              file: f.filename
+            });
           }
         }
 
