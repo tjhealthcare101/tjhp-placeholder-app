@@ -6311,25 +6311,31 @@ function getContractProcedureCode(x){
 }
 
 function contractMatchesClaim(contract, claim){
-  const contractProc = getContractProcedureCode(contract);
-  const claimProc = getClaimProcedureCode(claim);
+  if (!contract || !claim) return false;
+
   const contractPayer = normalizeContractText(contract.payer_name || contract.payer || "");
   const claimPayer = normalizeContractText(claim.payer || "");
 
-  console.log("MATCH TEST", {
-    contractProc,
-    claimProc,
-    contractPayer,
-    claimPayer
-  });
+  const contractProc = getContractProcedureCode(contract);
+  const claimProc = getClaimProcedureCode(claim);
 
-  // 🔥 TEMP: only match on CPT
-  if (contractProc && claimProc && contractProc === claimProc) {
-    console.log("MATCH SUCCESS (CPT ONLY)");
-    return true;
-  }
+  // Must have both
+  if (!contractPayer || !claimPayer) return false;
+  if (!contractProc || !claimProc) return false;
 
-  return false;
+  // CPT must match EXACTLY
+  if (contractProc !== claimProc) return false;
+
+  // Payer match (flexible but controlled)
+  const payerMatch =
+    contractPayer === claimPayer ||
+    contractPayer.includes(claimPayer) ||
+    claimPayer.includes(contractPayer);
+
+  if (!payerMatch) return false;
+
+  // 🔥 DO NOT USE DX FOR MATCHING
+  return true;
 }
 
 function normalizeContract(c){
@@ -20852,7 +20858,8 @@ function renderTemplateEditor(org, user){
             continue;
           }
 
-          // Duplicate check against existing + staged
+          // Duplicate check against existing + staged.
+          // Match on normalized payer, procedure code, diagnosis code and effective date.
           const normalizedCandidate = normalizeContract({
             payer_name: payer,
             procedure_code: cpt,
@@ -20863,17 +20870,27 @@ function renderTemplateEditor(org, user){
             expected_value: num(row.allowed_amount)
           });
 
-          const dup = existingContracts.find(c =>
-            contractMatchesClaim(normalizeContract(c), normalizedCandidate) &&
-            String(c.diagnosis_code || "").trim() === dx &&
-            String(c.effective_date || "").trim() === effective
-          ) || stagedContracts.find(c =>
-            contractMatchesClaim(normalizeContract(c), normalizedCandidate) &&
-            String(c.diagnosis_code || "").trim() === dx &&
-            String(c.effective_date || "").trim() === effective
-          );
-
-          if (dup) { duplicatesSkipped++; continue; }
+          const dup = existingContracts.some(c => {
+            const ne = normalizeContract(c);
+            return (
+              normalizeContractText(ne.payer_name) === normalizeContractText(normalizedCandidate.payer_name) &&
+              getContractProcedureCode(ne) === getContractProcedureCode(normalizedCandidate) &&
+              String(ne.diagnosis_code || "").trim() === String(dx) &&
+              String(ne.effective_date || "").trim() === String(effective)
+            );
+          }) || stagedContracts.some(c => {
+            const ne = normalizeContract(c);
+            return (
+              normalizeContractText(ne.payer_name) === normalizeContractText(normalizedCandidate.payer_name) &&
+              getContractProcedureCode(ne) === getContractProcedureCode(normalizedCandidate) &&
+              String(ne.diagnosis_code || "").trim() === String(dx) &&
+              String(ne.effective_date || "").trim() === String(effective)
+            );
+          });
+          if (dup) {
+            duplicatesSkipped++;
+            continue;
+          }
 
           const reimbursement_model = String(row.reimbursement_model || "fixed_amount").trim() || "fixed_amount";
           const expected_value = num(row.allowed_amount);
