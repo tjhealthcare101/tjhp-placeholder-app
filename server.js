@@ -6300,6 +6300,81 @@ function normalizeContractText(v){
     .replace(/\s+/g, " ");
 }
 
+function deepCollectStrings(value, out = [], seen = new Set()){
+  if (value == null) return out;
+  if (typeof value === "string" || typeof value === "number") {
+    out.push(String(value));
+    return out;
+  }
+  if (typeof value !== "object") return out;
+  if (seen.has(value)) return out;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) deepCollectStrings(item, out, seen);
+    return out;
+  }
+
+  for (const [k, v] of Object.entries(value)) {
+    out.push(String(k));
+    deepCollectStrings(v, out, seen);
+  }
+  return out;
+}
+
+function deepFindFirstMatchingValue(obj, tests = []){
+  if (!obj || typeof obj !== "object") return "";
+  const queue = [obj];
+  const seen = new Set();
+
+  while (queue.length) {
+    const cur = queue.shift();
+    if (!cur || typeof cur !== "object" || seen.has(cur)) continue;
+    seen.add(cur);
+
+    if (Array.isArray(cur)) {
+      for (const item of cur) queue.push(item);
+      continue;
+    }
+
+    for (const [key, value] of Object.entries(cur)) {
+      const keyStr = String(key || "").toLowerCase();
+      const valStr = value == null ? "" : String(value).trim();
+
+      for (const test of tests) {
+        if (test(keyStr, valStr, value)) return valStr;
+      }
+
+      if (value && typeof value === "object") queue.push(value);
+    }
+  }
+
+  return "";
+}
+
+function deepFindClaimProcedureValue(claim){
+  const allStrings = deepCollectStrings(claim);
+
+  for (const str of allStrings) {
+    const match = String(str).match(/\b\d{5}\b/);
+    if (match) return match[0];
+  }
+
+  return "";
+}
+
+function deepFindClaimPayerValue(claim){
+  return deepFindFirstMatchingValue(claim, [
+    (k, v) => /(payer|insurance|carrier|plan)/i.test(k) && !!v && !/\d{5}/.test(v)
+  ]);
+}
+
+function deepFindClaimDiagnosisValue(claim){
+  return deepFindFirstMatchingValue(claim, [
+    (k, v) => /(dx|diagnosis|icd)/i.test(k) && !!v
+  ]);
+}
+
 function getRawClaimPayerValue(claim){
   return (
     claim?.payer ||
@@ -6310,6 +6385,7 @@ function getRawClaimPayerValue(claim){
     claim?.plan ||
     claim?.carrier ||
     claim?.insurance_name ||
+    deepFindClaimPayerValue(claim) ||
     ""
   );
 }
@@ -6359,6 +6435,7 @@ function getRawClaimProcedureValue(claim){
     claim?.line_items?.[0]?.code ||
     claim?.services?.[0]?.cpt ||
     claim?.procedures?.[0]?.code ||
+    deepFindClaimProcedureValue(claim) ||
     ""
   );
 }
@@ -6373,6 +6450,7 @@ function getRawClaimDiagnosisValue(claim){
     claim?.icd10 ||
     claim?.icd10_code ||
     claim?.dx_code ||
+    deepFindClaimDiagnosisValue(claim) ||
     ""
   );
 }
@@ -6383,6 +6461,9 @@ function getClaimDiagnosisCode(claim){
 
 function stampCanonicalClaimFields(claim){
   if (!claim || typeof claim !== "object") return claim;
+  claim.claim_payer_raw = getRawClaimPayerValue(claim);
+  claim.claim_procedure_code_raw = getRawClaimProcedureValue(claim);
+  claim.claim_diagnosis_code_raw = getRawClaimDiagnosisValue(claim);
   claim.claim_payer_normalized = getClaimPayerText(claim);
   claim.claim_procedure_code_normalized = getClaimProcedureCode(claim);
   claim.claim_diagnosis_code_normalized = getClaimDiagnosisCode(claim);
@@ -6398,11 +6479,26 @@ function contractMatchesClaim(contract, claim){
     getClaimPayerText(claim);
 
   const contractProc = getContractProcedureCode(contract);
-  const claimProc =
+  let claimProc =
     claim.claim_procedure_code_normalized ||
     getClaimProcedureCode(claim);
 
-  // Must have both
+  // 🔥 FINAL SAFETY: extract CPT again if needed
+  if (!claimProc) {
+    const allStrings = deepCollectStrings(claim);
+    for (const str of allStrings) {
+      const match = String(str).match(/\d{5}/);
+      if (match) {
+        claimProc = match[0];
+        break;
+      }
+    }
+  }
+
+  if (!claimProc) return false;
+
+  // If still missing → THEN fail
+  if (!claimPayer || !claimProc) return false;
   if (!contractPayer || !claimPayer) return false;
   if (!contractProc || !claimProc) return false;
 
@@ -7230,6 +7326,9 @@ function recalculateContractsForOrg(org_id){
     console.log("CLAIM DEBUG", {
       claim: b.claim_number,
       payer: b.payer,
+      claim_payer_raw: b.claim_payer_raw,
+      claim_procedure_code_raw: b.claim_procedure_code_raw,
+      claim_diagnosis_code_raw: b.claim_diagnosis_code_raw,
       rawProcedure: b.procedure_code,
       rawCpt: b.cpt_code,
       rawCode: b.code,
@@ -21166,7 +21265,8 @@ function renderTemplateEditor(org, user){
     if (pending.stagedContracts && pending.stagedContracts.length) {
       const contracts = getPayerContracts(org.org_id);
       const billed = readJSON(FILES.billed, [])
-        .filter(b => b.org_id === org.org_id);
+        .filter(b => b.org_id === org.org_id)
+        .map(b => stampCanonicalClaimFields({ ...b }));
 
       for (const c of pending.stagedContracts) {
         const normalizedC = normalizeContract(c);
@@ -21174,7 +21274,10 @@ function renderTemplateEditor(org, user){
         if (typeof saveContractVersion === "function") saveContractVersion(org.org_id, normalizedC);
 
         // Detect affected claims
-        const matches = billed.filter(b => contractMatchesClaim(normalizedC, b));
+        const matches = billed.filter(b => {
+          const stamped = stampCanonicalClaimFields({ ...b });
+          return contractMatchesClaim(normalizedC, stamped);
+        });
 
         matches.forEach(m => {
           if (m && m.billed_id) {
