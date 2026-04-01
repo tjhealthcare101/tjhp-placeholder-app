@@ -6300,15 +6300,22 @@ function normalizeContractText(v){
     .replace(/\s+/g, " ");
 }
 
-function getClaimPayerText(claim){
-  return normalizeContractText(
+function getRawClaimPayerValue(claim){
+  return (
     claim?.payer ||
     claim?.payer_name ||
     claim?.insurance_payer ||
     claim?.primary_payer ||
     claim?.plan_name ||
+    claim?.plan ||
+    claim?.carrier ||
+    claim?.insurance_name ||
     ""
   );
+}
+
+function getClaimPayerText(claim){
+  return normalizeContractText(getRawClaimPayerValue(claim));
 }
 
 function normalizeNetworkStatus(v){
@@ -6338,14 +6345,62 @@ function getContractProcedureCode(x){
   );
 }
 
+function getRawClaimProcedureValue(claim){
+  return (
+    claim?.procedure_code ||
+    claim?.cpt_code ||
+    claim?.cpt ||
+    claim?.proc_code ||
+    claim?.code ||
+    claim?.hcpcs ||
+    claim?.service_code ||
+    claim?.billing_code ||
+    claim?.primary_procedure ||
+    claim?.line_items?.[0]?.code ||
+    claim?.services?.[0]?.cpt ||
+    claim?.procedures?.[0]?.code ||
+    ""
+  );
+}
+
+function getClaimProcedureCode(claim){
+  return normalizeProcedureCode(getRawClaimProcedureValue(claim));
+}
+
+function getRawClaimDiagnosisValue(claim){
+  return (
+    claim?.diagnosis_code ||
+    claim?.icd10 ||
+    claim?.icd10_code ||
+    claim?.dx_code ||
+    ""
+  );
+}
+
+function getClaimDiagnosisCode(claim){
+  return normalizeDiagnosisCode(getRawClaimDiagnosisValue(claim));
+}
+
+function stampCanonicalClaimFields(claim){
+  if (!claim || typeof claim !== "object") return claim;
+  claim.claim_payer_normalized = getClaimPayerText(claim);
+  claim.claim_procedure_code_normalized = getClaimProcedureCode(claim);
+  claim.claim_diagnosis_code_normalized = getClaimDiagnosisCode(claim);
+  return claim;
+}
+
 function contractMatchesClaim(contract, claim){
   if (!contract || !claim) return false;
 
   const contractPayer = normalizeContractText(contract.payer_name || contract.payer || "");
-  const claimPayer = getClaimPayerText(claim);
+  const claimPayer =
+    claim.claim_payer_normalized ||
+    getClaimPayerText(claim);
 
   const contractProc = getContractProcedureCode(contract);
-  const claimProc = getClaimProcedureCode(claim);
+  const claimProc =
+    claim.claim_procedure_code_normalized ||
+    getClaimProcedureCode(claim);
 
   // Must have both
   if (!contractPayer || !claimPayer) return false;
@@ -6837,34 +6892,6 @@ function normalizeCode(v){
   return String(v || "").trim().toUpperCase();
 }
 
-function getClaimProcedureCode(b){
-  return normalizeProcedureCode(
-    b.procedure_code ||
-    b.cpt_code ||
-    b.cpt ||
-    b.proc_code ||
-    b.code ||
-    b.hcpcs ||
-    b.service_code ||
-    b.billing_code ||
-    b.primary_procedure ||
-    b?.line_items?.[0]?.code ||
-    b?.services?.[0]?.cpt ||
-    b?.procedures?.[0]?.code ||
-    ""
-  );
-}
-
-function getClaimDiagnosisCode(b){
-  return normalizeDiagnosisCode(
-    b.diagnosis_code ||
-    b.icd10 ||
-    b.icd10_code ||
-    b.dx_code ||
-    ""
-  );
-}
-
 function normalizeClaimKey(v){
   return String(v || "").replace(/[^0-9]/g, "");
 }
@@ -7148,18 +7175,19 @@ function gradeFromScore(score){
 }
 
 function findContractForClaim(org_id, b){
+  const claim = stampCanonicalClaimFields({ ...b });
   const contracts = getPayerContracts(org_id).map(normalizeContract);
   let best = null;
   let bestScore = -1;
 
   for (const c of contracts) {
-    if (!contractMatchesClaim(c, b)) continue;
+    if (!contractMatchesClaim(c, claim)) continue;
 
     let score = 0;
     const contractPayer = normalizeContractText(c.payer_name);
-    const claimPayer = normalizeContractText(b.payer || "");
+    const claimPayer = claim.claim_payer_normalized || "";
     const contractDx = getClaimDiagnosisCode(c);
-    const claimDx = getClaimDiagnosisCode(b);
+    const claimDx = claim.claim_diagnosis_code_normalized || "";
 
     if (contractPayer === claimPayer) score += 100;
     else score += 60;
@@ -7195,6 +7223,7 @@ function recalculateContractsForOrg(org_id){
   let changed = false;
   for (const b of billedAll) {
     if (b.org_id !== org_id) continue;
+    stampCanonicalClaimFields(b);
     const contracts = getPayerContracts(org_id).map(normalizeContract);
     const contract = findContractForClaim(org_id, b);
 
@@ -7212,6 +7241,9 @@ function recalculateContractsForOrg(org_id){
       rawIcd10: b.icd10,
       rawIcd10Code: b.icd10_code,
       rawDxCode: b.dx_code,
+      canonicalPayer: b.claim_payer_normalized,
+      canonicalCpt: b.claim_procedure_code_normalized,
+      canonicalDx: b.claim_diagnosis_code_normalized,
       finalCpt: getClaimProcedureCode(b),
       finalDx: getClaimDiagnosisCode(b),
       matchedContract: contract?.contract_id || null
@@ -7224,11 +7256,11 @@ function recalculateContractsForOrg(org_id){
         proc: c.procedure_code,
         dx: c.diagnosis_code,
         payerNorm: normalizeContractText(c.payer_name),
-        claimPayerNorm: normalizeContractText(b.payer || ""),
+        claimPayerNorm: b.claim_payer_normalized || normalizeContractText(b.payer || ""),
         contractProc: getContractProcedureCode(c),
-        claimProc: getClaimProcedureCode(b),
+        claimProc: b.claim_procedure_code_normalized || getClaimProcedureCode(b),
         contractDx: getClaimDiagnosisCode(c),
-        claimDx: getClaimDiagnosisCode(b),
+        claimDx: b.claim_diagnosis_code_normalized || getClaimDiagnosisCode(b),
         matches: contractMatchesClaim(c, b)
       });
     }
@@ -7264,6 +7296,31 @@ function recalculateContractsForOrg(org_id){
     b.status = classifyClaimStatusWithContract(b);
     changed = true;
   }
+  if (changed) writeJSON(FILES.billed, billedAll);
+}
+
+function backfillCanonicalClaimFieldsForOrg(org_id){
+  const billedAll = readJSON(FILES.billed, []);
+  let changed = false;
+
+  for (const b of billedAll) {
+    if (b.org_id !== org_id) continue;
+
+    const beforePayer = b.claim_payer_normalized || "";
+    const beforeProc = b.claim_procedure_code_normalized || "";
+    const beforeDx = b.claim_diagnosis_code_normalized || "";
+
+    stampCanonicalClaimFields(b);
+
+    if (
+      beforePayer !== (b.claim_payer_normalized || "") ||
+      beforeProc !== (b.claim_procedure_code_normalized || "") ||
+      beforeDx !== (b.claim_diagnosis_code_normalized || "")
+    ) {
+      changed = true;
+    }
+  }
+
   if (changed) writeJSON(FILES.billed, billedAll);
 }
 
@@ -21126,6 +21183,7 @@ function renderTemplateEditor(org, user){
         });
       }
       savePayerContracts(org.org_id, contracts);
+      backfillCanonicalClaimFieldsForOrg(org.org_id);
       recalculateContractsForOrg(org.org_id);
     }
 
