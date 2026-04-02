@@ -7627,7 +7627,9 @@ function recalculateContractsForOrg(org_id){
     b.status = classifyClaimStatusWithContract(b);
     changed = true;
   }
-  if (changed) writeJSON(FILES.billed, billedAll);
+  if (changed) {
+    writeJSON(FILES.billed, billedAll);
+  }
 }
 
 function backfillCanonicalClaimFieldsForOrg(org_id){
