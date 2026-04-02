@@ -24272,6 +24272,9 @@ if (method === "GET" && pathname === "/claim-detail") {
   const billedAll = readJSON(FILES.billed, []);
   const paymentsAll = readJSON(FILES.payments, []);
 
+  // 🔥 FORCE CONTRACT RECALCULATION
+  recalculateContractsForOrg(org.org_id);
+
   function normalizeClaimNum(x) {
     return String(x || "").replace(/[^0-9]/g, "");
   }
