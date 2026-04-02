@@ -6603,6 +6603,42 @@ function pickFirst(row, names){
   return "";
 }
 
+function extractCPTFromAnyField(value){
+  if (!value) return "";
+
+  const str = String(value);
+  const match = str.match(/\b\d{5}\b/);
+  return match ? match[0] : "";
+}
+
+function mapBilledClaimRow(row){
+  const claim_number = pickFirst(row, [
+    "claim_number", "claim id", "id"
+  ]);
+
+  const payer = pickFirst(row, [
+    "payer", "insurance", "carrier", "plan"
+  ]);
+
+  const procedure_raw =
+    pickFirst(row, ["procedure_code", "cpt", "code", "service"]) ||
+    pickFirst(row, ["description", "procedure", "details"]) ||
+    JSON.stringify(row);
+
+  const procedure_code = extractCPTFromAnyField(procedure_raw);
+
+  const amount_billed = num(
+    pickFirst(row, ["amount", "billed", "charge"])
+  );
+
+  return {
+    claim_number,
+    payer,
+    procedure_code,
+    amount_billed
+  };
+}
+
 // normalize ANY contract row correctly
 function mapContractUploadRow(row){
   const payer = pickFirst(row, [
@@ -21083,24 +21119,23 @@ function renderTemplateEditor(org, user){
           let totalBilledForBatch = 0;
 
           for (const row of rows) {
-            const rawClaimNumber = pickField(row, ["claim", "claim#", "claim number", "claimnumber", "clm"]);
-            const claim_number = normalizeClaimKey(rawClaimNumber);
+            const mapped = mapBilledClaimRow(row);
+            const claim_number = normalizeClaimKey(mapped.claim_number);
             if (!claim_number) continue;
-
-            const billedAmount = num(pickField(row, ["billed","amount billed","charge"]));
 
             billedAll.push({
               billed_id: uuid(),
               org_id: org.org_id,
               claim_number,
-              payer: String(pickField(row, ["payer","insurance","carrier"]) || "").trim(),
-              amount_billed: billedAmount,
+              payer: String(mapped.payer || "").trim(),
+              procedure_code: mapped.procedure_code,
+              amount_billed: mapped.amount_billed,
               patient_responsibility: num(pickField(row, ["patient_resp","patient responsibility","copay","coinsurance"])),
               upload_id: uploadId,
               created_at: nowISO()
             });
 
-            totalBilledForBatch += billedAmount;
+            totalBilledForBatch += mapped.amount_billed;
             insertedClaims += 1;
           }
 
