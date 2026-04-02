@@ -7553,6 +7553,7 @@ function recalculateContractsForOrg(org_id){
     const contracts = getPayerContracts(org_id).map(normalizeContract);
     const contract = findContractForClaim(org_id, b);
 
+    console.log("========== CLAIM DEBUG ==========");
     console.log("CLAIM DEBUG", {
       claim: b.claim_number,
       payer: b.payer,
@@ -7578,6 +7579,7 @@ function recalculateContractsForOrg(org_id){
       matchedContract: contract?.contract_id || null
     });
 
+    console.log("========== CONTRACT CANDIDATES ==========");
     for (const c of contracts) {
       console.log("CONTRACT CANDIDATE", {
         contract_id: c.contract_id,
