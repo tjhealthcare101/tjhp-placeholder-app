@@ -7514,9 +7514,7 @@ function findContractForClaim(org_id, b){
   const contracts = getPayerContracts(org_id).map(normalizeContract);
 
   // 🔥 DEBUG ONLY FOR PROBLEM CLAIM
-  if (String(claim.claim_number) === "1004"){
-    debugClaimAndContracts(org_id, claim, contracts);
-  }
+  debugClaimAndContracts(org_id, claim, contracts);
 
   let best = null;
 
