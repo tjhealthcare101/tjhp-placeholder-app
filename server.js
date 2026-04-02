@@ -24268,6 +24268,11 @@ if (method === "GET" && pathname === "/agent-workspace") {
     return;
   }
 
+  if (method === "GET" && pathname === "/recalculate-test") {
+    recalculateContractsForOrg(org.org_id);
+    return send(res, 200, "Recalc ran", "text/plain");
+  }
+
   // --------- CLAIM DETAIL VIEW ----------
  
 if (method === "GET" && pathname === "/claim-detail") {
