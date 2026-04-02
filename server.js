@@ -5928,9 +5928,12 @@ function storeWorkspaceUpload(org_id, file){
 
 function claimFinancialSnapshot(derived, claim){
   const underpaidAmount = Math.max(0, Number(derived?.underpaidAmount || 0));
+  const expectedInsuranceText = (derived?.expectedInsurance != null && derived?.expectedInsurance !== "")
+    ? formatMoneyUI(derived.expectedInsurance)
+    : "Not Available (No Contract Match)";
   return [
     `Billed: ${formatMoneyUI(derived?.billedAmount || claim?.amount_billed || 0)}`,
-    `Expected Insurance: ${formatMoneyUI(derived?.expectedInsurance || claim?.expected_insurance || 0)}`,
+    `Expected Insurance: ${expectedInsuranceText}`,
     `Paid by Payer: ${formatMoneyUI(derived?.paidAmount || claim?.paid_amount || 0)}`,
     `Underpaid Amount: ${formatMoneyUI(underpaidAmount)}`,
     `Patient Follow-Up Remaining: ${formatMoneyUI(derived?.patientBalanceRemaining || 0)}`,
@@ -6444,6 +6447,30 @@ function getClaimProcedureCode(claim){
   return normalizeProcedureCode(getRawClaimProcedureValue(claim));
 }
 
+function getBestClaimCPT(claim){
+  const candidates = [
+    claim?.claim_procedure_code_normalized,
+    getClaimProcedureCode(claim),
+    claim?.procedure_code,
+    claim?.cpt_code,
+    claim?.code,
+    claim?.service_code
+  ];
+
+  for (const c of candidates){
+    const norm = normalizeProcedureCode(c);
+    if (norm) return norm;
+  }
+
+  const allStrings = deepCollectStrings(claim);
+  for (const str of allStrings){
+    const match = String(str).match(/\b\d{5}\b/);
+    if (match) return match[0];
+  }
+
+  return "";
+}
+
 function getRawClaimDiagnosisValue(claim){
   return (
     claim?.diagnosis_code ||
@@ -6505,88 +6532,38 @@ function debugClaimAndContracts(org_id, claim, contracts){
 function contractMatchesClaim(contract, claim){
   if (!contract || !claim) return false;
 
-  const contractPayer = normalizeContractText(contract.payer_name || contract.payer || "");
-  const claimPayer =
-    claim.claim_payer_normalized ||
-    getClaimPayerText(claim);
+  const contractPayer = contract.payer_name || contract.payer;
+  const claimPayer = getClaimPayerText(claim);
+  const contractProc = normalizeProcedureCode(contract.procedure_code);
+  const claimProc = getBestClaimCPT(claim);
 
-  const contractProc = getContractProcedureCode(contract);
-  let claimProc =
-    claim.claim_procedure_code_normalized ||
-    getClaimProcedureCode(claim);
+  if (!payerMatch(contractPayer, claimPayer)) return false;
+  if (!cptMatch(contractProc, claimProc)) return false;
 
-  // 🔥 FINAL SAFETY: extract CPT again if needed
-  if (!claimProc) {
-    const allStrings = deepCollectStrings(claim);
-    for (const str of allStrings) {
-      const match = String(str).match(/\d{5}/);
-      if (match) {
-        claimProc = match[0];
-        break;
-      }
-    }
-  }
-
-  if (!claimProc) return false;
-
-  // If still missing → THEN fail
-  if (!claimPayer || !claimProc) return false;
-  if (!contractPayer || !claimPayer) return false;
-  if (!contractProc || !claimProc) return false;
-
-  const normalizedContractProc = normalizeProcedureCode(contractProc);
-  const normalizedClaimProc = normalizeProcedureCode(claimProc);
-  if (!normalizedContractProc || !normalizedClaimProc) return false;
-  if (normalizedContractProc !== normalizedClaimProc) return false;
-
-  const compactContractPayer = contractPayer.replace(/[^a-z0-9]/g, "");
-  const compactClaimPayer = claimPayer.replace(/[^a-z0-9]/g, "");
-
-  // Payer match (flexible but controlled)
-  const payerMatch =
-    contractPayer === claimPayer ||
-    contractPayer.includes(claimPayer) ||
-    claimPayer.includes(contractPayer) ||
-    compactContractPayer === compactClaimPayer ||
-    compactContractPayer.includes(compactClaimPayer) ||
-    compactClaimPayer.includes(compactContractPayer);
-
-  if (!payerMatch) return false;
-
-  // 🔥 DO NOT USE DX FOR MATCHING
   return true;
 }
 
 function safeMatchContract(contract, claim){
+  return contractMatchesClaim(contract, claim);
+}
 
-  const contractProc = normalizeProcedureCode(getContractProcedureCode(contract));
+function cptMatch(contractCpt, claimCpt){
+  if (!contractCpt || !claimCpt) return false;
+  if (contractCpt === claimCpt) return true;
 
-  let claimProc =
-    claim.claim_procedure_code_normalized ||
-    getClaimProcedureCode(claim);
-
-  // 🔥 FINAL brute-force fallback
-  if (!claimProc){
-    const allStrings = deepCollectStrings(claim);
-    for (const str of allStrings){
-      const match = String(str).match(/\d{5}/);
-      if (match){
-        claimProc = match[0];
-        break;
-      }
-    }
-  }
-
-  claimProc = normalizeProcedureCode(claimProc);
-
-  if (!contractProc || !claimProc) return false;
-
-  // 🔥 ONLY CPT required (TEMP FORCE MATCH)
-  if (contractProc === claimProc){
-    return true;
-  }
-
+  const contractPrefix = contractCpt.slice(0, 3);
+  const claimPrefix = claimCpt.slice(0, 3);
+  if (contractPrefix === claimPrefix) return true;
   return false;
+}
+
+function payerMatch(contractPayer, claimPayer){
+  if (!contractPayer || !claimPayer) return false;
+
+  const c = String(contractPayer).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const p = String(claimPayer).toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  return c === p || c.includes(p) || p.includes(c);
 }
 
 function normalizeContract(c){
@@ -6743,36 +6720,73 @@ function extractTextFromBuffer(buffer, filename){
   return "";
 }
 
-function parseContractFromText(text){
-  if (!text) return [];
+function extractContractSignalsFromText(text){
+  const src = String(text || "");
+  const compact = src.replace(/\r/g, "\n");
+  const lines = compact.split("\n").map(x => x.trim()).filter(Boolean);
 
-  const lines = text.split("\n");
-  const contracts = [];
+  const payerPattern = /\b(aetna|cigna|bcbs|blue\s*cross(?:\s*blue\s*shield)?|anthem|united(?:\s*healthcare)?|uhc|humana|medicare|medicaid|tricare|kaiser)\b/i;
+  const cptPattern = /\b\d{5}\b/g;
+  const amountPattern = /\$?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?/g;
 
-  for (const line of lines){
-    const cptMatch = line.match(/\b\d{5}\b/);
-    if (!cptMatch) continue;
+  const detectedPayers = [];
+  for (const line of lines) {
+    const payerMatch = line.match(payerPattern);
+    if (payerMatch && payerMatch[0]) detectedPayers.push(String(payerMatch[0]).trim());
+  }
+  const fallbackPayer = detectedPayers[0] || "";
 
-    const cpt = cptMatch[0];
+  const rows = [];
+  for (const line of lines) {
+    const cpts = Array.from(line.matchAll(cptPattern)).map(m => m[0]);
+    const amounts = Array.from(line.matchAll(amountPattern))
+      .map(m => m[0])
+      .map(v => num(String(v).replace(/\$/g, "").replace(/,/g, "")))
+      .filter(v => v > 0);
+    if (!cpts.length || !amounts.length) continue;
 
-    const payerMatch = line.match(/(aetna|cigna|bcbs|blue cross|united|uhc)/i);
-    const payer = payerMatch ? payerMatch[0] : "";
+    const payerMatch = line.match(payerPattern);
+    const payerName = payerMatch ? String(payerMatch[0]).trim() : fallbackPayer;
+    if (!payerName) continue;
 
-    const amountMatch = line.match(/\$?\d+(\.\d{1,2})?/);
-    const amount = amountMatch ? amountMatch[0].replace("$","") : "";
-
-    if (!payer || !amount) continue;
-
-    contracts.push(normalizeContract({
-      payer_name: payer,
-      procedure_code: cpt,
-      expected_value: num(amount),
-      network_status: "In Network",
-      reimbursement_model: "fixed_amount"
-    }));
+    for (const cpt of cpts) {
+      rows.push({ payer_name: payerName, procedure_code: cpt, expected_value: amounts[0] });
+    }
   }
 
-  return contracts;
+  // File-level fallback: pair discovered CPTs with discovered amounts + payer.
+  if (!rows.length && fallbackPayer) {
+    const allCpts = Array.from(compact.matchAll(cptPattern)).map(m => m[0]);
+    const allAmounts = Array.from(compact.matchAll(amountPattern))
+      .map(m => num(String(m[0]).replace(/\$/g, "").replace(/,/g, "")))
+      .filter(v => v > 0);
+    const limit = Math.min(allCpts.length, allAmounts.length);
+    for (let i = 0; i < limit; i++) {
+      rows.push({ payer_name: fallbackPayer, procedure_code: allCpts[i], expected_value: allAmounts[i] });
+    }
+  }
+
+  return rows;
+}
+
+function parseContractFromText(text){
+  if (!text) return [];
+  const extracted = extractContractSignalsFromText(text);
+  const dedup = new Map();
+
+  for (const row of extracted){
+    const normalized = normalizeContract({
+      payer_name: row.payer_name,
+      procedure_code: row.procedure_code,
+      expected_value: row.expected_value,
+      network_status: "In Network",
+      reimbursement_model: "fixed_amount"
+    });
+    const key = contractRowKey(normalized);
+    if (!dedup.has(key)) dedup.set(key, normalized);
+  }
+
+  return Array.from(dedup.values());
 }
 
 function savePayerContracts(org_id, contracts){
@@ -7519,9 +7533,7 @@ function findContractForClaim(org_id, b){
   let best = null;
 
   for (const c of contracts){
-
-    // 🔥 USE SAFE MATCHER (TEMP)
-    if (!safeMatchContract(c, claim)) continue;
+    if (!contractMatchesClaim(c, claim)) continue;
 
     best = c;
     break; // first match wins (for now)
@@ -15903,7 +15915,10 @@ function renderClaimFinancialContext(billedClaim, derived){
   const b = billedClaim || {};
   const d = derived || {};
   const patient = computePatientBalance(b);
-  const expected = num(d.expectedInsurance);
+  const expected = (d.expectedInsurance != null) ? num(d.expectedInsurance) : null;
+  const expectedDisplay = expected !== null
+    ? formatMoneyUI(expected)
+    : "Not Available (No Contract Match)";
   const paid = num(d.paidAmount);
   const writeOff = num(d.insuranceWriteOff);
   const payerRemaining = Math.max(0, num(d.underpaidAmount));
@@ -15919,7 +15934,7 @@ function renderClaimFinancialContext(billedClaim, derived){
           <tr><th>Payer</th><td>${safeStr(b.payer || "-")}</td></tr>
           <tr><th>Status</th><td>${safeStr(d.lifecycleStage || "-")}</td></tr>
           <tr><th>Amount Billed</th><td>${formatMoneyUI(num(d.billedAmount))}</td></tr>
-          <tr><th>Expected Insurance</th><td>${formatMoneyUI(expected)}</td></tr>
+          <tr><th>Expected Insurance</th><td>${expectedDisplay}</td></tr>
           <tr><th>Insurance Paid / Collected</th><td>${formatMoneyUI(paid)}</td></tr>
           <tr><th>Insurance Remaining</th><td>${formatMoneyUI(payerRemaining)}</td></tr>
           <tr><th>Patient Responsibility</th><td>${formatMoneyUI(patient.patientResp)}</td></tr>
@@ -24310,10 +24325,13 @@ if (method === "GET" && pathname === "/claim-detail") {
 
   const billedAmount = num(d.billedAmount);
   const paidAmount = num(d.paidAmount);
-  const expectedInsurancePayment = num(d.expectedInsurance);
+  const expectedInsurancePayment = (d.expectedInsurance != null) ? num(d.expectedInsurance) : null;
+  const expectedInsuranceDisplay = expectedInsurancePayment !== null
+    ? formatMoneyUI(expectedInsurancePayment)
+    : "Not Available (No Contract Match)";
   const insuranceRemaining = num(d.underpaidAmount);
   const patient = computePatientBalance(b);
-  const variance = expectedInsurancePayment - paidAmount;
+  const variance = (expectedInsurancePayment !== null ? expectedInsurancePayment : 0) - paidAmount;
   const riskScore = computeClaimRiskScore(b);
   const riskBand = claimRiskBand(riskScore);
   const atRisk = num(d.atRiskAmount);
@@ -24399,7 +24417,7 @@ if (method === "GET" && pathname === "/claim-detail") {
     <table>
       <tr><th>Billed</th><td>${formatMoneyUI(billedAmount)}</td></tr>
       <tr><th>Paid (Insurance)</th><td>${formatMoneyUI(paidAmount)}</td></tr>
-      <tr><th>Expected Insurance</th><td>${formatMoneyUI(expectedInsurancePayment)}</td></tr>
+      <tr><th>Expected Insurance</th><td>${expectedInsuranceDisplay}</td></tr>
       <tr><th>Insurance Remaining</th><td>${formatMoneyUI(insuranceRemaining)}</td></tr>
       <tr><th>Insurance Write-Off</th><td>${formatMoneyUI(num(d.insuranceWriteOff))}</td></tr>
       <tr><th>Patient Responsibility</th><td>${formatMoneyUI(patient.patientResp)}</td></tr>
