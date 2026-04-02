@@ -6470,6 +6470,38 @@ function stampCanonicalClaimFields(claim){
   return claim;
 }
 
+function debugClaimAndContracts(org_id, claim, contracts){
+
+  console.log("========== CLAIM DEBUG ==========");
+  console.log("CLAIM NUMBER:", claim.claim_number);
+
+  console.log("RAW CLAIM OBJECT:", JSON.stringify(claim, null, 2));
+
+  console.log("CANONICAL FIELDS:");
+  console.log({
+    payer_raw: claim.claim_payer_raw,
+    payer_normalized: claim.claim_payer_normalized,
+    cpt_raw: claim.claim_procedure_code_raw,
+    cpt_normalized: claim.claim_procedure_code_normalized,
+    dx_raw: claim.claim_diagnosis_code_raw,
+    dx_normalized: claim.claim_diagnosis_code_normalized
+  });
+
+  console.log("========== CONTRACTS ==========");
+
+  for (const c of contracts){
+    console.log({
+      contract_id: c.contract_id,
+      payer: c.payer_name,
+      cpt: c.procedure_code,
+      normalized_cpt: normalizeProcedureCode(c.procedure_code),
+      expected: c.expected_value
+    });
+  }
+
+  console.log("================================");
+}
+
 function contractMatchesClaim(contract, claim){
   if (!contract || !claim) return false;
 
@@ -6523,6 +6555,38 @@ function contractMatchesClaim(contract, claim){
 
   // 🔥 DO NOT USE DX FOR MATCHING
   return true;
+}
+
+function safeMatchContract(contract, claim){
+
+  const contractProc = normalizeProcedureCode(getContractProcedureCode(contract));
+
+  let claimProc =
+    claim.claim_procedure_code_normalized ||
+    getClaimProcedureCode(claim);
+
+  // 🔥 FINAL brute-force fallback
+  if (!claimProc){
+    const allStrings = deepCollectStrings(claim);
+    for (const str of allStrings){
+      const match = String(str).match(/\d{5}/);
+      if (match){
+        claimProc = match[0];
+        break;
+      }
+    }
+  }
+
+  claimProc = normalizeProcedureCode(claimProc);
+
+  if (!contractProc || !claimProc) return false;
+
+  // 🔥 ONLY CPT required (TEMP FORCE MATCH)
+  if (contractProc === claimProc){
+    return true;
+  }
+
+  return false;
 }
 
 function normalizeContract(c){
@@ -7445,36 +7509,24 @@ function gradeFromScore(score){
 }
 
 function findContractForClaim(org_id, b){
+
   const claim = stampCanonicalClaimFields({ ...b });
   const contracts = getPayerContracts(org_id).map(normalizeContract);
+
+  // 🔥 DEBUG ONLY FOR PROBLEM CLAIM
+  if (String(claim.claim_number) === "1004"){
+    debugClaimAndContracts(org_id, claim, contracts);
+  }
+
   let best = null;
-  let bestScore = -1;
 
-  for (const c of contracts) {
-    if (!contractMatchesClaim(c, claim)) continue;
+  for (const c of contracts){
 
-    let score = 0;
-    const contractPayer = normalizeContractText(c.payer_name);
-    const claimPayer = claim.claim_payer_normalized || "";
-    const contractDx = getClaimDiagnosisCode(c);
-    const claimDx = claim.claim_diagnosis_code_normalized || "";
+    // 🔥 USE SAFE MATCHER (TEMP)
+    if (!safeMatchContract(c, claim)) continue;
 
-    // payer match weight
-    if (contractPayer === claimPayer) score += 100;
-    else score += 60;
-
-    // CPT match (already required)
-
-    // REMOVE EFFECTIVE DATE IMPACT
-    // DO NOT SCORE OR FILTER ON IT
-
-    // Optional: keep DX small weight
-    if (contractDx && claimDx && contractDx === claimDx) score += 5;
-
-    if (score > bestScore) {
-      best = c;
-      bestScore = score;
-    }
+    best = c;
+    break; // first match wins (for now)
   }
 
   return best || null;
