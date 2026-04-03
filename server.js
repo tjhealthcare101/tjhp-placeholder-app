@@ -5357,6 +5357,11 @@ ${letterDefaults.negotiation_footer}`;
   return ws;
 }
 
+function ensureWorkspaceRounds(ws, channel){
+  ws[channel] = ws[channel] || {};
+  ws[channel].round = Number(ws[channel].round || 1);
+}
+
 
 function defaultWorkspacePacket(){
   return {
@@ -6301,6 +6306,97 @@ function workspaceEnhancedCompleteness(ws, channel){
     docs,
     sectionKey
   };
+}
+
+function computeWorkspaceQuickScore(ws, claim, derived, channel){
+  const completeness = workspaceEnhancedCompleteness(ws, channel);
+  const hasEOB = packetHasKey(ws, "eob_era");
+  const hasClaim = packetHasKey(ws, "claim_form");
+  const hasDenial = packetHasKey(ws, "denial_letter");
+
+  let score = 50;
+
+  if (hasEOB) score += 10;
+  if (hasClaim) score += 10;
+  if (channel === "appeal" && hasDenial) score += 10;
+
+  score += Math.round((completeness.pct || 0) * 0.2);
+
+  score = Math.max(10, Math.min(95, score));
+
+  const estimatedRecovery = Math.round((derived?.underpaidAmount || derived?.atRiskAmount || 0) * (score / 100));
+
+  return {
+    probability: score,
+    estimatedRecovery
+  };
+}
+
+function renderWorkspaceIntelligence(ws, claim, derived, channel){
+  const score = computeWorkspaceQuickScore(ws, claim, derived, channel);
+
+  return `
+    <div class="ws-panel">
+      <h3>Recovery Intelligence</h3>
+      <div class="ws-score">
+        <div class="ws-score-num">${score.probability}%</div>
+        <div class="ws-score-sub">Success Probability</div>
+      </div>
+      <div style="margin-top:10px;">
+        <div class="muted small">Estimated Recovery</div>
+        <div style="font-weight:900;font-size:18px;">
+          ${formatMoneyUI(score.estimatedRecovery)}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSubmissionPanel(ws, claim, channel){
+  const submission = ws.submission || {};
+
+  return `
+    <div class="ws-panel">
+      <h3>Submission Tracking</h3>
+
+      <div class="ws-chip-row">
+        <span class="ws-chip ${submission.status === "submitted" ? "ok" : "warn"}">
+          ${submission.status || "Draft"}
+        </span>
+        <span class="ws-chip">Round ${ws[channel]?.round || 1}</span>
+      </div>
+
+      ${submission.status === "submitted" ? `
+        <div class="ws-callout ok" style="margin-top:10px;">
+          Submitted via ${safeStr(submission.method || "N/A")}
+          <br/>
+          Follow-up: ${safeStr(submission.follow_up_date || "Not set")}
+          <br/>
+          Submitted: ${safeStr(submission.submitted_at || "")}
+        </div>
+      ` : ``}
+
+      <form method="POST" action="/ai-workspace/submit" style="margin-top:10px;">
+        <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
+        <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+
+        <label class="small">Method</label>
+        <select name="method">
+          <option>Portal</option>
+          <option>Fax</option>
+          <option>Mail</option>
+          <option>Phone</option>
+        </select>
+
+        <label class="small">Follow-up Date</label>
+        <input type="date" name="follow_up_date"/>
+
+        <button class="btn secondary" style="margin-top:8px;">
+          Mark Submitted
+        </button>
+      </form>
+    </div>
+  `;
 }
 
 function renderPacketReadinessSummary(ws, channel){
@@ -23847,7 +23943,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
           <div class="ws-quick-actions">
             <a class="btn secondary" href="/claims">Back to Claims</a>
             <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(claim.billed_id)}">Claim Detail</a>
-            <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">Export Preview</a>
+            <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">
+              Download / Print Packet
+            </a>
           </div>
         </div>
 
@@ -23856,7 +23954,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
         <div class="ws-layout">
           <div class="ws-side">
+            ${renderWorkspaceIntelligence(ws, claim, derived, channel)}
             ${renderPacketReadinessSummary(ws, channel)}
+            ${renderSubmissionPanel(ws, claim, channel)}
             ${renderPacketMissingChecklist(ws, claim, derived, channel, claim.billed_id)}
             ${renderInlineAiSuggestions(channel, claim, derived, ws)}
             ${renderOrgSettingsSnapshotPanel(sess.org_id)}
@@ -23904,6 +24004,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const ws = ensureAgentWorkspace(sess.org_id, claim);
     ensureWorkspacePacket(ws);
     ensurePacketSections(ws, claim);
+    ensureWorkspaceRounds(ws, channel);
 
     pushWorkspaceHistorySnapshot(ws, channel, sess.email || sess.user_id || "user");
 
@@ -23956,6 +24057,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const ws = ensureAgentWorkspace(sess.org_id, claim);
     ensureWorkspacePacket(ws);
     ensurePacketSections(ws, claim);
+    ensureWorkspaceRounds(ws, channel);
 
     const stored = storeWorkspaceUpload(sess.org_id, file);
     const attachment = {
@@ -23994,6 +24096,38 @@ if (method === "GET" && pathname === "/agent-workspace") {
       : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}&uploaded=1`;
 
     return redirect(res, back);
+  }
+
+  if (method === "POST" && pathname === "/ai-workspace/submit") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const billed_id = params.get("billed_id");
+    const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return send(res, 404, "Claim not found");
+
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    ensureWorkspacePacket(ws);
+    ensurePacketSections(ws, claim);
+    ensureWorkspaceRounds(ws, channel);
+
+    ws.submission = {
+      status: "submitted",
+      method: params.get("method"),
+      follow_up_date: params.get("follow_up_date"),
+      submitted_at: nowISO()
+    };
+
+    ws[channel].round = Number(ws[channel].round || 1) + 1;
+
+    saveAgentWorkspace(sess.org_id, ws);
+
+    return redirect(res, `/ai-${channel}?billed_id=${billed_id}`);
   }
 
   if (method === "GET" && pathname === "/ai-workspace/export") {
