@@ -5,6 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const OpenAI = require("openai");
+const PDFDocument = require("pdfkit");
 
 function safeStr(s) {
   return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]));
@@ -725,7 +726,7 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 /* ===== AI WORKSPACE LIVE PACKET PREVIEW ===== */
 .ws-layout{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}
 .ws-side{position:sticky;top:84px;display:flex;flex-direction:column;gap:14px}
-.ws-panel{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:14px;box-shadow:var(--shadow)}
+.ws-panel{border:1px solid var(--border);border-radius:16px;background:var(--card);padding:14px;box-shadow:var(--shadow)}
 .ws-panel h3{margin:0 0 8px;font-size:14px}
 .ws-panel .hint{font-size:12px;color:var(--muted);line-height:1.45}
 .ws-chip-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
@@ -734,7 +735,7 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .ws-chip.warn{background:#fffbeb;border-color:#fde68a;color:#92400e}
 .ws-chip.err{background:#fef2f2;border-color:#fecaca;color:#991b1b}
 .ws-main{display:flex;flex-direction:column;gap:14px}
-.ws-banner{border:1px solid var(--border);border-radius:14px;padding:14px;background:linear-gradient(180deg,rgba(17,24,39,.03),rgba(17,24,39,.01))}
+.ws-banner{background:linear-gradient(135deg,#eef2ff,#f8fafc);border:1px solid #e0e7ff;border-radius:14px;padding:14px}
 .ws-banner-title{font-size:18px;font-weight:900}
 .ws-banner-sub{font-size:13px;color:var(--muted);margin-top:4px}
 .ws-quick-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
@@ -749,16 +750,17 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .ws-preview-top{padding:16px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
 .ws-preview-top .title{font-size:18px;font-weight:900}
 .ws-preview-top .sub{font-size:12px;color:var(--muted);margin-top:4px}
-.ws-preview-body{padding:24px;background:#f8fafc}
-.ws-letter{max-width:900px;margin:0 auto;background:#fff;border:1px solid var(--border);border-radius:18px;padding:30px;box-shadow:0 12px 30px rgba(17,24,39,.05)}
-.ws-letterhead{border-bottom:1px solid var(--border);padding-bottom:14px;margin-bottom:18px}
+.ws-preview-body{padding:30px;background:#f3f4f6}
+.ws-letter{max-width:850px;margin:0 auto;background:#fff;border-radius:20px;padding:40px;box-shadow:0 20px 50px rgba(0,0,0,.08)}
+.ws-letterhead{border-bottom:2px solid #e5e7eb;padding-bottom:18px;margin-bottom:24px}
 .ws-meta-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0 18px}
-.ws-meta-card{border:1px solid var(--border);border-radius:12px;background:#fafafa;padding:12px}
+.ws-meta-card{background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:12px}
 .ws-meta-card .k{font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .ws-meta-card .v{font-size:14px;font-weight:800;margin-top:4px}
-.ws-section-card{border:1px solid var(--border);border-radius:14px;padding:14px;background:#fff;margin:12px 0}
+.ws-section-card{border:1px solid #e5e7eb;border-radius:16px;padding:18px;background:#fff;margin:20px 0;box-shadow:0 4px 12px rgba(0,0,0,.04);transition:all .2s ease}
+.ws-section-card:hover{border-color:#c7d2fe;box-shadow:0 8px 20px rgba(79,70,229,.08)}
 .ws-section-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}
-.ws-section-title{font-size:13px;font-weight:900}
+.ws-section-title{font-size:15px;font-weight:900;letter-spacing:.02em;margin-bottom:6px}
 .ws-section-actions{display:flex;gap:8px;flex-wrap:wrap}
 .ws-section-body{font-size:14px;line-height:1.65;white-space:pre-wrap}
 .ws-edit-form{margin-top:8px}
@@ -6533,6 +6535,115 @@ function renderEditablePacketSection(opts){
   `;
 }
 
+function renderSignatureSection(opts){
+  const billed_id = String(opts.billed_id || "");
+  const channel = String(opts.channel || "appeal");
+  const value = String(opts.value || "");
+  const signatureImage = String(opts.signature_image || "");
+  const exportMode = !!opts.exportMode;
+
+  if (exportMode){
+    return `
+      <div class="ws-section-card">
+        <div class="ws-section-head"><div class="ws-section-title">Signature</div></div>
+        <div class="ws-section-body">
+          ${
+            signatureImage
+              ? `<img src="${safeStr(signatureImage)}" style="max-height:80px;"/>`
+              : safeStr(value || "—")
+          }
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="ws-section-card">
+      <div class="ws-section-head">
+        <div class="ws-section-title">Signature</div>
+      </div>
+
+      <div class="muted small" style="margin-bottom:10px;">
+        Type your name or draw your signature.
+      </div>
+
+      <form method="POST" action="/ai-workspace/save-preview">
+        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+        <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+        <input type="hidden" name="section_key" value="signature"/>
+
+        <input
+          name="value"
+          placeholder="Type your name..."
+          value="${safeStr(value)}"
+          style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);"
+        />
+
+        <button class="btn secondary" style="margin-top:8px;">Save Typed Signature</button>
+      </form>
+
+      <div style="margin-top:14px;">
+        <canvas id="sigCanvas" width="800" height="240" style="width:100%;height:120px;border:1px dashed #d1d5db;border-radius:12px;"></canvas>
+
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button type="button" class="btn secondary" onclick="clearSig()">Clear</button>
+          <button type="button" class="btn" onclick="saveSig('${safeStr(billed_id)}','${safeStr(channel)}')">Save Drawing</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function(){
+        const canvas = document.getElementById("sigCanvas");
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        let drawing = false;
+
+        canvas.addEventListener("mousedown", () => {
+          drawing = true;
+          ctx.beginPath();
+        });
+        canvas.addEventListener("mouseup", () => {
+          drawing = false;
+          ctx.beginPath();
+        });
+        canvas.addEventListener("mouseleave", () => {
+          drawing = false;
+          ctx.beginPath();
+        });
+        canvas.addEventListener("mousemove", draw);
+
+        function draw(e){
+          if(!drawing) return;
+          ctx.lineWidth = 2;
+          ctx.lineCap = "round";
+          ctx.strokeStyle = "#111827";
+
+          const rect = canvas.getBoundingClientRect();
+          ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+        }
+
+        window.clearSig = function clearSig(){
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.beginPath();
+        };
+
+        window.saveSig = function saveSig(billed_id, channel){
+          const data = canvas.toDataURL();
+          fetch("/ai-workspace/save-signature", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({ billed_id, channel, data })
+          }).then(() => location.reload());
+        };
+      })();
+    </script>
+  `;
+}
+
 function renderWorkspacePreview(opts){
   const org_id = opts.org_id;
   const claim = opts.claim || {};
@@ -6579,6 +6690,7 @@ function renderWorkspacePreview(opts){
           <div class="ws-letterhead">
             <div style="font-size:22px;font-weight:900;">${safeStr(channel === "appeal" ? "Appeal Letter Packet" : "Negotiation Letter Packet")}</div>
             <div class="muted" style="margin-top:6px;">Formatted packet preview for payer-facing export.</div>
+            <div style="font-size:12px;color:#6b7280;margin-top:6px;">Generated by TJ Healthcare Pro • Revenue Intelligence System</div>
           </div>
 
           ${!ready.ok ? `<div class="ws-callout warn">Missing required documents before final review: ${ready.missing.map(workspaceDocLabel).join(", ")}.</div>` : ``}
@@ -6602,7 +6714,13 @@ function renderWorkspacePreview(opts){
 
           ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_action", title:"Requested Action", value: packetSections.requested_action, description: sectionDescriptions.requested_action, exportMode })}
           ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"attachments_index", title:"Attachments Index", value: packetSections.attachments_index || buildAttachmentsIndex(ws), description: sectionDescriptions.attachments_index, exportMode })}
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"signature", title:"Signature", value: packetSections.signature, description: sectionDescriptions.signature, compact:true, exportMode })}
+          ${renderSignatureSection({
+            billed_id: claim.billed_id,
+            channel,
+            value: packetSections.signature,
+            signature_image: ws.signature_image,
+            exportMode
+          })}
         </div>
       </div>
     </div>
@@ -7559,6 +7677,96 @@ function buildPacketHTML({ org_id, type, claim, derived, ws }){
   `;
 
   return applyTemplate(org_id, channel, wrapped);
+}
+
+function buildPacketPDF({ claim, derived, ws, channel, res }) {
+  const doc = new PDFDocument({ margin: 50 });
+  const filename = `${channel}_${(claim.claim_number || claim.billed_id || "packet").replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+  doc.pipe(res);
+
+  doc
+    .fontSize(18)
+    .font("Helvetica-Bold")
+    .fillColor("black")
+    .text(channel === "appeal" ? "Appeal Packet" : "Negotiation Packet");
+
+  doc.moveDown(0.5);
+
+  doc
+    .fontSize(10)
+    .font("Helvetica")
+    .fillColor("gray")
+    .text("Generated by TJ Healthcare Pro");
+
+  doc.moveDown();
+
+  doc
+    .fontSize(12)
+    .fillColor("black")
+    .text(`Claim #: ${claim.claim_number || "N/A"}`)
+    .text(`Payer: ${claim.payer || "Unknown"}`)
+    .text(`Date of Service: ${claim.dos || "N/A"}`);
+
+  doc.moveDown();
+
+  doc
+    .text(`Billed: ${formatMoneyUI(derived.billedAmount || claim.amount_billed || 0)}`)
+    .text(`Expected: ${formatMoneyUI(derived.expectedInsurance || 0)}`)
+    .text(`Paid: ${formatMoneyUI(derived.paidAmount || claim.insurance_paid || claim.paid_amount || 0)}`);
+
+  function addSection(title, content) {
+    doc
+      .moveDown()
+      .font("Helvetica-Bold")
+      .fontSize(13)
+      .fillColor("black")
+      .text(title);
+
+    doc
+      .moveDown(0.3)
+      .font("Helvetica")
+      .fontSize(11)
+      .fillColor("black")
+      .text(content || "—", { lineGap: 3 });
+  }
+
+  const sections = ws[channel]?.packet_sections || {};
+
+  addSection("Header", sections.header);
+  addSection("Claim Summary", sections.claim_summary);
+  addSection("Financial Summary", sections.financial_summary);
+
+  if (channel === "appeal") {
+    addSection("Appeal Narrative", sections.argument);
+  } else {
+    addSection("Variance Explanation", sections.variance_explanation);
+    addSection("Requested Amount", sections.requested_amount);
+  }
+
+  addSection("Requested Action", sections.requested_action);
+  addSection("Attachments Index", sections.attachments_index);
+
+  doc.moveDown();
+
+  if (ws.signature_image) {
+    try {
+      const base64 = String(ws.signature_image).replace(/^data:image\/\w+;base64,/, "");
+      const imgBuffer = Buffer.from(base64, "base64");
+      doc.image(imgBuffer, { fit: [200, 80] });
+    } catch (_e) {
+      doc.font("Helvetica").fontSize(11).text("Signature could not be rendered");
+    }
+  } else {
+    doc.font("Helvetica").fontSize(11).text(sections.signature || "—");
+  }
+
+  doc.moveDown();
+  doc.font("Helvetica").fontSize(11).text("Sincerely,");
+  doc.end();
 }
 
 function applyTemplate(org_id, type, html){
@@ -23944,7 +24152,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
             <a class="btn secondary" href="/claims">Back to Claims</a>
             <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(claim.billed_id)}">Claim Detail</a>
             <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">
-              Download / Print Packet
+              Download PDF
             </a>
           </div>
         </div>
@@ -24032,6 +24240,34 @@ if (method === "GET" && pathname === "/agent-workspace") {
       : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}&saved=1`;
 
     return redirect(res, back);
+  }
+
+  if (method === "POST" && pathname === "/ai-workspace/save-signature") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+    if (!isAccessEnabled(sess.org_id)) return send(res, 403, "Access disabled");
+
+    let body = "";
+    req.on("data", c => body += c);
+    req.on("end", () => {
+      const data = JSON.parse(body || "{}");
+      const billed_id = String(data.billed_id || "").trim();
+      const channel = String(data.channel || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+
+      const claim = getBilledById(sess.org_id, billed_id);
+      if (!claim) return send(res, 404, "Claim not found");
+
+      const ws = ensureAgentWorkspace(sess.org_id, claim);
+      ensurePacketSections(ws, claim);
+      ws[channel] = ws[channel] || {};
+      ws[channel].packet_sections = ws[channel].packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
+      ws.signature_image = String(data.data || "");
+      ws[channel].updated_at = nowISO();
+
+      saveAgentWorkspace(sess.org_id, ws);
+      return send(res, 200, "ok");
+    });
+    return;
   }
 
   if (method === "POST" && pathname === "/ai-workspace/upload") {
@@ -24144,22 +24380,13 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const ws = ensureAgentWorkspace(sess.org_id, claim);
     ensureWorkspacePacket(ws);
     ensurePacketSections(ws, claim);
-
-    const html = buildPacketHTML({
-      org_id: sess.org_id,
-      type: channel,
+    return buildPacketPDF({
       claim,
       derived,
-      ws
+      ws,
+      channel,
+      res
     });
-
-    const filename = `${channel}_${String(claim.claim_number || claim.billed_id || "packet").replace(/[^a-zA-Z0-9_-]/g, "_")}.html`;
-
-    res.writeHead(200, {
-      "Content-Type": "text/html; charset=utf-8",
-      "Content-Disposition": `inline; filename="${filename}"`
-    });
-    return res.end(html);
   }
 
   if (method === "POST" && pathname === "/agent-workspace/generate") {
