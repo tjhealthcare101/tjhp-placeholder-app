@@ -722,6 +722,78 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   .btn { width: 100%; }
 }
 
+/* ===== AI WORKSPACE LIVE PACKET PREVIEW ===== */
+.ws-layout{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}
+.ws-side{position:sticky;top:84px;display:flex;flex-direction:column;gap:14px}
+.ws-panel{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:14px;box-shadow:var(--shadow)}
+.ws-panel h3{margin:0 0 8px;font-size:14px}
+.ws-panel .hint{font-size:12px;color:var(--muted);line-height:1.45}
+.ws-chip-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.ws-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid var(--border);background:#fff}
+.ws-chip.ok{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
+.ws-chip.warn{background:#fffbeb;border-color:#fde68a;color:#92400e}
+.ws-chip.err{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+.ws-main{display:flex;flex-direction:column;gap:14px}
+.ws-banner{border:1px solid var(--border);border-radius:14px;padding:14px;background:linear-gradient(180deg,rgba(17,24,39,.03),rgba(17,24,39,.01))}
+.ws-banner-title{font-size:18px;font-weight:900}
+.ws-banner-sub{font-size:13px;color:var(--muted);margin-top:4px}
+.ws-quick-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.ws-doc-list{display:flex;flex-direction:column;gap:10px}
+.ws-doc-item{border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff}
+.ws-doc-item-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.ws-doc-name{font-weight:800;font-size:13px}
+.ws-doc-meta{font-size:12px;color:var(--muted);margin-top:4px}
+.ws-upload-form{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.ws-upload-form input[type="file"]{max-width:100%}
+.ws-preview-shell{border:1px solid var(--border);border-radius:18px;background:var(--card);box-shadow:var(--shadow);overflow:hidden}
+.ws-preview-top{padding:16px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.ws-preview-top .title{font-size:18px;font-weight:900}
+.ws-preview-top .sub{font-size:12px;color:var(--muted);margin-top:4px}
+.ws-preview-body{padding:24px;background:#f8fafc}
+.ws-letter{max-width:900px;margin:0 auto;background:#fff;border:1px solid var(--border);border-radius:18px;padding:30px;box-shadow:0 12px 30px rgba(17,24,39,.05)}
+.ws-letterhead{border-bottom:1px solid var(--border);padding-bottom:14px;margin-bottom:18px}
+.ws-meta-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0 18px}
+.ws-meta-card{border:1px solid var(--border);border-radius:12px;background:#fafafa;padding:12px}
+.ws-meta-card .k{font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.ws-meta-card .v{font-size:14px;font-weight:800;margin-top:4px}
+.ws-section-card{border:1px solid var(--border);border-radius:14px;padding:14px;background:#fff;margin:12px 0}
+.ws-section-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}
+.ws-section-title{font-size:13px;font-weight:900}
+.ws-section-actions{display:flex;gap:8px;flex-wrap:wrap}
+.ws-section-body{font-size:14px;line-height:1.65;white-space:pre-wrap}
+.ws-edit-form{margin-top:8px}
+.ws-edit-form textarea{min-height:140px;background:#fff}
+.ws-edit-form.compact textarea{min-height:90px}
+.ws-inline-save{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;flex-wrap:wrap}
+.ws-callout{border-radius:14px;padding:12px 14px;margin:10px 0;font-size:13px;line-height:1.5}
+.ws-callout.warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e}
+.ws-callout.err{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}
+.ws-callout.ok{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46}
+.ws-suggest-list{display:flex;flex-direction:column;gap:10px}
+.ws-suggest{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px}
+.ws-suggest-title{font-size:12px;font-weight:900}
+.ws-suggest-copy{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.45}
+.ws-export-note{font-size:12px;color:var(--muted);margin-top:8px}
+.ws-attachment-index{background:#fafafa;border:1px dashed var(--border);border-radius:12px;padding:12px;font-size:13px;white-space:pre-wrap}
+.ws-score{display:flex;align-items:center;gap:10px}
+.ws-score-num{font-size:28px;font-weight:900}
+.ws-score-sub{font-size:12px;color:var(--muted)}
+.packet-export body,.packet-export{background:#fff !important}
+.packet-export .ws-preview-body{background:#fff !important;padding:0}
+.packet-export .ws-letter{box-shadow:none !important;border:none !important;border-radius:0 !important;max-width:none !important;padding:0 !important}
+.packet-export .ws-section-card{break-inside:avoid;page-break-inside:avoid}
+@media (max-width: 980px){
+  .ws-layout{grid-template-columns:1fr}
+  .ws-side{position:static}
+}
+@media print{
+  .ws-layout{display:block}
+  .ws-side,.ws-quick-actions,.ws-section-actions,.ws-edit-form,.topbar,.footer,.nav,.btnRow,.btn{display:none !important}
+  .ws-preview-shell,.ws-letter,.ws-section-card{box-shadow:none !important}
+  .ws-preview-body{padding:0 !important;background:#fff !important}
+  .ws-letter{border:none !important;padding:0 !important}
+}
+
 /* Print styling */
 @media print {
   .nav, .btn, .btnRow, form { display:none !important; }
@@ -6116,8 +6188,329 @@ function financialSummaryFromClaim(derived, claim){
 }
 
 function buildAttachmentsIndex(ws){
-  const names = (ws?.attachments || []).map(a => `- ${a.filename} (${a.kind || "supporting"})`);
-  return names.length ? names.join("\n") : "- No attachments uploaded yet. Add EOB/ERA, claim form, medical records, and contract references as available.";
+  const attachments = Array.isArray(ws?.attachments) ? ws.attachments : [];
+  if (!attachments.length) {
+    return [
+      "- No supporting documents uploaded yet.",
+      "- Upload EOB / ERA",
+      "- Upload claim form / itemized bill",
+      "- Upload denial letter for appeals",
+      "- Add contract excerpt or payer policy when available"
+    ].join("\n");
+  }
+
+  return attachments.map(a => {
+    const label = workspaceDocLabel(a.doc_key || a.kind || "attachment");
+    return `- ${label}: ${a.filename || "attachment"}`;
+  }).join("\n");
+}
+
+function workspaceDocLabel(key){
+  const labels = {
+    denial_letter: "Denial Letter",
+    eob_era: "EOB / ERA",
+    claim_form: "Claim Form / Itemized Bill",
+    lmn: "Letter of Medical Necessity",
+    office_notes: "Office / Operative Notes",
+    labs_imaging: "Labs / Imaging",
+    contract_excerpt: "Contract Excerpt / Allowed Rule",
+    payer_policy: "Payer Policy Citation",
+    medical_records: "Medical Records"
+  };
+  return labels[key] || key;
+}
+
+function workspaceRequiredDocConfig(channel){
+  const base = [
+    { key:"eob_era", label:"EOB / ERA", required:true },
+    { key:"claim_form", label:"Claim Form / Itemized Bill", required:true },
+    { key:"contract_excerpt", label:"Contract Excerpt / Allowed Rule", required:false },
+    { key:"payer_policy", label:"Payer Policy Citation", required:false },
+    { key:"lmn", label:"Letter of Medical Necessity", required:false },
+    { key:"office_notes", label:"Office / Operative Notes", required:false },
+    { key:"labs_imaging", label:"Labs / Imaging", required:false }
+  ];
+  if (channel === "appeal") base.unshift({ key:"denial_letter", label:"Denial Letter", required:true });
+  return base;
+}
+
+function workspaceFindAttachmentByPacketKey(ws, key){
+  const item = getWorkspacePacketItem(ws, key);
+  if (item && item.attachment_id) {
+    const found = (ws.attachments || []).find(a => String(a.attachment_id || "") === String(item.attachment_id || ""));
+    if (found) return found;
+  }
+  return null;
+}
+
+function workspaceUpsertPacketItem(ws, key, patch){
+  ensureWorkspacePacket(ws);
+  const groups = ["required_appeal","clinical_support","contract_policy"];
+  for (const g of groups){
+    const arr = ws.packet[g] || [];
+    const idx = arr.findIndex(x => x.key === key);
+    if (idx >= 0){
+      arr[idx] = { ...arr[idx], ...(patch || {}) };
+      ws.packet[g] = arr;
+      ws.packet.completeness = computePacketCompleteness(ws);
+      return arr[idx];
+    }
+  }
+  return null;
+}
+
+function workspaceAttachmentKindForDocKey(key){
+  const map = {
+    denial_letter: "denial_letter",
+    eob_era: "eob",
+    claim_form: "claim_form",
+    lmn: "lmn",
+    office_notes: "medical_records",
+    labs_imaging: "medical_records",
+    contract_excerpt: "contract",
+    payer_policy: "policy",
+    medical_records: "medical_records"
+  };
+  return map[key] || "supporting";
+}
+
+function workspaceEnhancedCompleteness(ws, channel){
+  ensureWorkspacePacket(ws);
+  ensurePacketSections(ws);
+  const docs = workspaceRequiredDocConfig(channel);
+  const totalRequired = docs.filter(d => d.required).length;
+  const haveRequired = docs.filter(d => d.required && packetHasKey(ws, d.key)).length;
+
+  const sectionKey = packetNarrativeKey(channel);
+  const sections = channel === "negotiation"
+    ? ["header","claim_summary","financial_summary","variance_explanation","requested_amount","requested_action","attachments_index","signature"]
+    : ["header","claim_summary","financial_summary","argument","requested_action","attachments_index","signature"];
+
+  const packetSections = ws[channel]?.packet_sections || {};
+  const filledSections = sections.filter(k => String(packetSections[k] || "").trim()).length;
+
+  const total = totalRequired + sections.length;
+  const complete = haveRequired + filledSections;
+  const pct = total ? Math.round((complete / total) * 100) : 0;
+
+  return {
+    total,
+    complete,
+    pct,
+    requiredMissing: docs.filter(d => d.required && !packetHasKey(ws, d.key)),
+    docs,
+    sectionKey
+  };
+}
+
+function renderPacketReadinessSummary(ws, channel){
+  const enhanced = workspaceEnhancedCompleteness(ws, channel);
+  const ready = canMarkReady(ws, channel);
+  const tone = ready.ok ? "ok" : "warn";
+  return `
+    <div class="ws-panel">
+      <h3>Packet Readiness</h3>
+      <div class="ws-score">
+        <div class="ws-score-num">${enhanced.pct}%</div>
+        <div class="ws-score-sub">${enhanced.complete} of ${enhanced.total} preview elements completed</div>
+      </div>
+      <div class="ws-chip-row">
+        <span class="ws-chip ${tone}">${ready.ok ? "Ready for Review" : "Missing Required Items"}</span>
+        <span class="ws-chip">${channel === "appeal" ? "Appeal Packet" : "Negotiation Packet"}</span>
+      </div>
+      ${
+        ready.ok
+          ? `<div class="ws-callout ok" style="margin-top:10px;">This packet has the required documents for review. Export will match the live preview.</div>`
+          : `<div class="ws-callout warn" style="margin-top:10px;">Missing required documents: ${ready.missing.map(workspaceDocLabel).join(", ")}.</div>`
+      }
+    </div>
+  `;
+}
+
+function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
+  const docs = workspaceRequiredDocConfig(channel);
+  return `
+    <div class="ws-panel">
+      <h3>Documents & Missing Items</h3>
+      <div class="ws-doc-list">
+        ${docs.map(doc => {
+          const present = packetHasKey(ws, doc.key);
+          const attachment = workspaceFindAttachmentByPacketKey(ws, doc.key);
+          return `
+            <div class="ws-doc-item">
+              <div class="ws-doc-item-top">
+                <div>
+                  <div class="ws-doc-name">${safeStr(doc.label)} ${doc.required ? `<span class="badge warn" style="margin-left:6px;">Required</span>` : ``}</div>
+                  <div class="ws-doc-meta">${present ? `Uploaded: ${safeStr(attachment?.filename || "Attached")}` : "Not uploaded yet"}</div>
+                </div>
+                <div>${present ? `<span class="badge ok">Present</span>` : `<span class="badge err">Missing</span>`}</div>
+              </div>
+              <form class="ws-upload-form" method="POST" action="/ai-workspace/upload" enctype="multipart/form-data">
+                <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+                <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+                <input type="hidden" name="doc_key" value="${safeStr(doc.key)}"/>
+                <input type="file" name="file" required />
+                <button class="btn secondary" type="submit">${present ? "Replace" : "Upload"}</button>
+              </form>
+            </div>
+          `;
+        }).join("")}
+      </div>
+      <div class="hint" style="margin-top:10px;">Users should not guess what to do. Keep required docs green before review/export.</div>
+    </div>
+  `;
+}
+
+function renderInlineAiSuggestions(channel, claim, derived, ws){
+  const suggestions = [];
+  const sections = ws?.[channel]?.packet_sections || {};
+  const narrativeKey = packetNarrativeKey(channel);
+  const narrative = String(sections[narrativeKey] || "").trim();
+
+  if (!packetHasKey(ws, "eob_era")) suggestions.push({ title:"Upload the EOB / ERA", text:"The packet is missing the payer payment detail that supports the financial variance." });
+  if (channel === "appeal" && !packetHasKey(ws, "denial_letter")) suggestions.push({ title:"Upload the denial letter", text:"Appeal packets should include the denial reason source document before submission." });
+  if (!packetHasKey(ws, "claim_form")) suggestions.push({ title:"Upload the claim form or itemized bill", text:"This helps anchor the billed amount and procedure details in the packet." });
+  if (channel === "negotiation" && !String(sections.requested_amount || "").trim()) suggestions.push({ title:"Add the requested amount", text:`Set a clear requested reimbursement amount. Current underpaid estimate: ${formatMoneyUI(derived?.underpaidAmount || 0)}.` });
+  if (!String(sections.requested_action || "").trim()) suggestions.push({ title:"Add a specific requested action", text:"State exactly what you want the payer to do: reprocess, reverse denial, or remit corrected payment." });
+  if (narrative.length < 220) suggestions.push({ title:"Strengthen the core narrative", text:"The argument is short. Add clinical, policy, or contract support so the letter reads like a professional packet." });
+  if (channel === "negotiation" && !packetHasKey(ws, "contract_excerpt")) suggestions.push({ title:"Add contract support", text:"Negotiation packets are stronger when they reference the reimbursement methodology or allowed amount rule." });
+
+  if (!suggestions.length) {
+    suggestions.push({ title:"Packet looks strong", text:"Required documents are present and the narrative is populated. Finalize and export when ready." });
+  }
+
+  return `
+    <div class="ws-panel">
+      <h3>AI Suggestions</h3>
+      <div class="ws-suggest-list">
+        ${suggestions.map(s => `
+          <div class="ws-suggest">
+            <div class="ws-suggest-title">${safeStr(s.title)}</div>
+            <div class="ws-suggest-copy">${safeStr(s.text)}</div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderEditablePacketSection(opts){
+  const billed_id = String(opts.billed_id || "");
+  const channel = String(opts.channel || "appeal");
+  const section_key = String(opts.section_key || "");
+  const title = String(opts.title || section_key);
+  const value = String(opts.value || "");
+  const description = String(opts.description || "");
+  const compact = !!opts.compact;
+  const exportMode = !!opts.exportMode;
+
+  if (exportMode){
+    return `
+      <div class="ws-section-card">
+        <div class="ws-section-head"><div class="ws-section-title">${safeStr(title)}</div></div>
+        ${description ? `<div class="muted small" style="margin-bottom:8px;">${safeStr(description)}</div>` : ``}
+        <div class="ws-section-body">${safeStr(value || "—")}</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="ws-section-card">
+      <div class="ws-section-head">
+        <div class="ws-section-title">${safeStr(title)}</div>
+        <div class="ws-section-actions">
+          <span class="badge">${safeStr(section_key)}</span>
+        </div>
+      </div>
+      ${description ? `<div class="muted small" style="margin-bottom:8px;">${safeStr(description)}</div>` : ``}
+      <div class="ws-section-body">${safeStr(value || "—")}</div>
+      <form class="ws-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview">
+        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+        <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+        <input type="hidden" name="section_key" value="${safeStr(section_key)}"/>
+        <textarea name="value">${escapeHtml(value)}</textarea>
+        <div class="ws-inline-save">
+          <button class="btn secondary" type="submit">Save Section</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function renderWorkspacePreview(opts){
+  const org_id = opts.org_id;
+  const claim = opts.claim || {};
+  const derived = opts.derived || {};
+  const ws = opts.ws || {};
+  const channel = opts.channel === "negotiation" ? "negotiation" : "appeal";
+  const exportMode = !!opts.exportMode;
+
+  ensureWorkspacePacket(ws);
+  ensurePacketSections(ws, claim);
+
+  const packetSections = ws[channel]?.packet_sections || {};
+  const title = channel === "appeal" ? "Appeal Packet Preview" : "Negotiation Packet Preview";
+  const enhanced = workspaceEnhancedCompleteness(ws, channel);
+  const ready = canMarkReady(ws, channel);
+
+  const sectionDescriptions = packetSectionDescriptions(channel);
+
+  const topMeta = `
+    <div class="ws-meta-grid">
+      <div class="ws-meta-card"><div class="k">Claim Number</div><div class="v">${safeStr(claim.claim_number || "N/A")}</div></div>
+      <div class="ws-meta-card"><div class="k">Payer</div><div class="v">${safeStr(claim.payer || "Unknown")}</div></div>
+      <div class="ws-meta-card"><div class="k">Date of Service</div><div class="v">${safeStr(claim.dos || "N/A")}</div></div>
+      <div class="ws-meta-card"><div class="k">Lifecycle Stage</div><div class="v">${safeStr(derived.lifecycleStage || claim.status || "Pending")}</div></div>
+      <div class="ws-meta-card"><div class="k">Billed</div><div class="v">${formatMoneyUI(derived.billedAmount || claim.amount_billed || 0)}</div></div>
+      <div class="ws-meta-card"><div class="k">${channel === "appeal" ? "Expected Insurance" : "Underpaid Amount"}</div><div class="v">${channel === "appeal" ? formatMoneyUI(derived.expectedInsurance || 0) : formatMoneyUI(derived.underpaidAmount || 0)}</div></div>
+    </div>
+  `;
+
+  return `
+    <div class="ws-preview-shell ${exportMode ? "packet-export" : ""}">
+      <div class="ws-preview-top">
+        <div>
+          <div class="title">${safeStr(title)}</div>
+          <div class="sub">Live formatted packet preview. Export should match this view exactly.</div>
+        </div>
+        <div class="ws-chip-row">
+          <span class="ws-chip ${ready.ok ? "ok" : "warn"}">${ready.ok ? "Ready for Review" : "Needs Documents"}</span>
+          <span class="ws-chip">${enhanced.pct}% complete</span>
+        </div>
+      </div>
+      <div class="ws-preview-body">
+        <div class="ws-letter">
+          <div class="ws-letterhead">
+            <div style="font-size:22px;font-weight:900;">${safeStr(channel === "appeal" ? "Appeal Letter Packet" : "Negotiation Letter Packet")}</div>
+            <div class="muted" style="margin-top:6px;">Formatted packet preview for payer-facing export.</div>
+          </div>
+
+          ${!ready.ok ? `<div class="ws-callout warn">Missing required documents before final review: ${ready.missing.map(workspaceDocLabel).join(", ")}.</div>` : ``}
+          ${topMeta}
+
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"header", title:"Header", value: packetSections.header, description: sectionDescriptions.header, compact:true, exportMode })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"claim_summary", title:"Claim Summary", value: packetSections.claim_summary, description: sectionDescriptions.claim_summary, compact:true, exportMode })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"financial_summary", title:"Financial Summary", value: packetSections.financial_summary, description: sectionDescriptions.financial_summary, exportMode })}
+
+          ${
+            channel === "appeal"
+              ? renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"argument", title:"Appeal Narrative", value: packetSections.argument, description: sectionDescriptions.argument, exportMode })
+              : renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"variance_explanation", title:"Variance Explanation", value: packetSections.variance_explanation, description: sectionDescriptions.variance_explanation, exportMode })
+          }
+
+          ${
+            channel === "negotiation"
+              ? renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_amount", title:"Requested Amount", value: packetSections.requested_amount, description: sectionDescriptions.requested_amount, compact:true, exportMode })
+              : ""
+          }
+
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_action", title:"Requested Action", value: packetSections.requested_action, description: sectionDescriptions.requested_action, exportMode })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"attachments_index", title:"Attachments Index", value: packetSections.attachments_index || buildAttachmentsIndex(ws), description: sectionDescriptions.attachments_index, exportMode })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"signature", title:"Signature", value: packetSections.signature, description: sectionDescriptions.signature, compact:true, exportMode })}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
@@ -7046,14 +7439,30 @@ function getTemplatePreviewSample(org_id){
 
 
 function buildPacketHTML({ org_id, type, claim, derived, ws }){
-  const packetType = type === "negotiation" ? "negotiation" : "appeal";
-  const header = "<h3>" + (packetType === "appeal" ? "Appeal Packet" : "Negotiation Packet") + "</h3>";
-  const financial = "<p><strong>Billed:</strong> " + formatMoneyUI(derived?.billedAmount || claim?.amount_billed || 0) + "</p>";
-  const draft = packetType === "appeal"
-    ? (ws?.appeal?.draft_text || ws?.negotiation?.draft_text || "")
-    : (ws?.negotiation?.draft_text || ws?.appeal?.draft_text || "");
-  const narrative = "<p>" + safeStr(draft) + "</p>";
-  return header + financial + narrative;
+  const channel = type === "negotiation" ? "negotiation" : "appeal";
+  const previewHtml = renderWorkspacePreview({
+    org_id,
+    claim,
+    derived,
+    ws,
+    channel,
+    exportMode: true
+  });
+
+  const wrapped = `
+    <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>${safeStr(channel === "appeal" ? "Appeal Packet" : "Negotiation Packet")}</title>
+        <style>${css}</style>
+      </head>
+      <body class="packet-export">
+        ${previewHtml}
+      </body>
+    </html>
+  `;
+
+  return applyTemplate(org_id, channel, wrapped);
 }
 
 function applyTemplate(org_id, type, html){
@@ -21757,8 +22166,7 @@ function renderTemplateEditor(org, user){
 
     const derived = evaluateClaimDerived(claim, buildClaimContext(org.org_id));
     const html = buildPacketHTML({ org_id: org.org_id, type, claim, derived, ws: null });
-    const finalHTML = applyTemplate(org.org_id, type, html);
-    return send(res, 200, renderPage("Preview", finalHTML, navUser(), { showChat:false, orgName: org.org_name }));
+    return send(res, 200, renderPage("Preview", html, navUser(), { showChat:false, orgName: org.org_name }));
   }
 
   if (method === "GET" && pathname === "/packet/export") {
@@ -21770,11 +22178,9 @@ function renderTemplateEditor(org, user){
     const ws = ensureAgentWorkspace(org.org_id, claim);
 
     const packet = buildPacketHTML({ org_id: org.org_id, type, claim, derived, ws });
-    const finalHTML = applyTemplate(org.org_id, type, packet);
-
     const page = renderPage("Packet Export", `
       <button class="btn" onclick="window.print()">Print / Save PDF</button>
-      <div style="margin-top:12px;">${finalHTML}</div>
+      <div style="margin-top:12px;">${packet}</div>
     `, navUser(), { showChat:false, orgName: org.org_name });
 
     return send(res, 200, page);
@@ -23410,395 +23816,216 @@ if (method === "GET" && pathname === "/agent-workspace") {
   }
 
   if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation")) {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+    if (!isAccessEnabled(sess.org_id)) return send(res, 403, "Access disabled");
+
     const billed_id = String(parsed.query.billed_id || "").trim();
-    const isNegotiation = pathname === "/ai-negotiation" || String(parsed.query.tab || "") === "negotiation";
-    const usage = getUsage(org.org_id);
-    const limits = getLimitProfile(org.org_id);
-    const used = Number(usage.ai_workspace_used || 0);
-    const limit = Number(
-      limits.workspace_limit ??
-      (limits.mode === "pilot" ? 5 : Infinity)
-    );
-    const isUnlimited = !Number.isFinite(limit) || limit >= 999999;
-    const remaining = isUnlimited ? Infinity : Math.max(0, limit - used);
-    const hasAccess = isUnlimited || used < limit;
-    let workspaceBanner = "";
-    if (isNegotiation && !isUnlimited) {
-      workspaceBanner = `
-        <div class="alert warn" style="
-          margin-bottom:16px;
-          border:1px solid ${hasAccess ? "#f59e0b" : "#e11d48"};
-          background:${hasAccess ? "#fffbeb" : "#fff1f2"};
-          color:${hasAccess ? "#92400e" : "#9f1239"};
-        ">
-          ${
-            hasAccess
-              ? `You have used ${used} of ${limit} AI workspace cases (${remaining} remaining)`
-              : (limits.mode === "pilot"
-                  ? "You’ve used all trial negotiation cases. Upgrade to continue."
-                  : "You’ve reached your negotiation limit.")
-          }
-        </div>
-      `;
-    }
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return send(res, 404, renderPage("Not Found", `<h2>Claim not found</h2>`, navUser(), { showChat:true, orgName: getOrg(sess.org_id)?.org_name || "" }));
 
-    const billedAll = readJSON(FILES.billed, []);
-    const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
-    if (!billed_id || !b) return redirect(res, "/claims?view=all");
-    const claimCtx = buildClaimContext(org.org_id);
-    const d = evaluateClaimDerived(b, claimCtx);
-    autoDraftWorkspaceForClaim(org.org_id, b, d, claimCtx);
-    const ws = ensureAgentWorkspace(org.org_id, b);
+    const ctx = buildClaimContext(sess.org_id);
+    const derived = evaluateClaimDerived(claim, ctx);
+    autoDraftWorkspaceForClaim(sess.org_id, claim, derived, ctx);
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
     ensureWorkspacePacket(ws);
-    ensurePacketSections(ws, b);
+    ensurePacketSections(ws, claim);
 
-    const orgSnapshot = renderOrgSettingsSnapshotPanel(org.org_id);
     ws.activity = ws.activity || {};
     ws.activity.last_opened_at = nowISO();
-    saveAgentWorkspace(org.org_id, ws);
+    saveAgentWorkspace(sess.org_id, ws);
 
-    const channel = isNegotiation ? "negotiation" : "appeal";
-    const pageTitle = isNegotiation ? "AI Negotiation Packet" : "AI Appeal Packet";
+    const channel = pathname === "/ai-negotiation" ? "negotiation" : "appeal";
+    const savedMsg = parsed.query.saved ? `<div class="ws-callout ok">Section saved. The live preview has been updated.</div>` : ``;
+    const uploadedMsg = parsed.query.uploaded ? `<div class="ws-callout ok">Document uploaded and linked into the packet preview.</div>` : ``;
+
+    const pageContent = `
+      <div class="ws-main">
+        <div class="ws-banner">
+          <div class="ws-banner-title">${channel === "appeal" ? "Appeal Workspace" : "Negotiation Workspace"}</div>
+          <div class="ws-banner-sub">Edit directly from the packet preview, upload missing documents from the sidebar, and export a clean letter that matches this preview.</div>
+          <div class="ws-quick-actions">
+            <a class="btn secondary" href="/claims">Back to Claims</a>
+            <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(claim.billed_id)}">Claim Detail</a>
+            <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">Export Preview</a>
+          </div>
+        </div>
+
+        ${savedMsg}
+        ${uploadedMsg}
+
+        <div class="ws-layout">
+          <div class="ws-side">
+            ${renderPacketReadinessSummary(ws, channel)}
+            ${renderPacketMissingChecklist(ws, claim, derived, channel, claim.billed_id)}
+            ${renderInlineAiSuggestions(channel, claim, derived, ws)}
+            ${renderOrgSettingsSnapshotPanel(sess.org_id)}
+          </div>
+
+          <div class="ws-main">
+            ${renderWorkspacePreview({
+              org_id: sess.org_id,
+              claim,
+              derived,
+              ws,
+              channel,
+              exportMode: false
+            })}
+          </div>
+        </div>
+      </div>
+    `;
+
+    return send(res, 200, renderPage(
+      channel === "appeal" ? "AI Appeal Workspace" : "AI Negotiation Workspace",
+      pageContent,
+      navUser(),
+      { showChat:true, orgName: getOrg(sess.org_id)?.org_name || "" }
+    ));
+  }
+
+  if (method === "POST" && pathname === "/ai-workspace/save-preview") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+    if (!isAccessEnabled(sess.org_id)) return send(res, 403, "Access disabled");
+
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const billed_id = String(params.get("billed_id") || "").trim();
+    const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const section_key = String(params.get("section_key") || "").trim();
+    const value = String(params.get("value") || "");
+
+    if (!billed_id || !section_key) return send(res, 400, "Missing billed_id or section_key");
+
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return send(res, 404, "Claim not found");
+
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    ensureWorkspacePacket(ws);
+    ensurePacketSections(ws, claim);
+
+    pushWorkspaceHistorySnapshot(ws, channel, sess.email || sess.user_id || "user");
+
     ws[channel] = ws[channel] || {};
-    let strategyChanged = false;
-    ws[channel].strategy_profile = ["Auto","Clinical","Contractual","Regulatory","Collaborative"].includes(String(ws[channel].strategy_profile||"")) ? ws[channel].strategy_profile : "Auto";
-    if (!ws[channel].strategy_profile || ws[channel].strategy_profile === "Auto") {
-      if (channel === "appeal") ws[channel].strategy_profile = "Regulatory";
-      if (channel === "negotiation") ws[channel].strategy_profile = "Contractual";
-      strategyChanged = true;
+    ws[channel].packet_sections = ws[channel].packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
+    ws[channel].packet_sections[section_key] = value;
+    ws[channel].updated_at = nowISO();
+    ws[channel].version = Number(ws[channel].version || 0) + 1;
+    ws[channel].user_modified = true;
+
+    if (channel === "appeal" && section_key === "argument") ws[channel].draft_text = value;
+    if (channel === "negotiation" && section_key === "variance_explanation") ws[channel].draft_text = value;
+    if (channel === "negotiation" && section_key === "requested_amount") ws[channel].requested_amount = num(value);
+
+    ws.appeal.packet_sections = ws.appeal.packet_sections || defaultAppealPacketSections();
+    ws.negotiation.packet_sections = ws.negotiation.packet_sections || defaultNegotiationPacketSections();
+    ws.appeal.packet_sections.attachments_index = buildAttachmentsIndex(ws);
+    ws.negotiation.packet_sections.attachments_index = buildAttachmentsIndex(ws);
+
+    saveAgentWorkspace(sess.org_id, ws);
+    incrementWorkspaceEditsUsage(sess.org_id);
+
+    const back = channel === "negotiation"
+      ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}&saved=1`
+      : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}&saved=1`;
+
+    return redirect(res, back);
+  }
+
+  if (method === "POST" && pathname === "/ai-workspace/upload") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+    if (!isAccessEnabled(sess.org_id)) return send(res, 403, "Access disabled");
+
+    const contentType = req.headers["content-type"] || "";
+    const m = contentType.match(/boundary=(.+)$/);
+    if (!m) return send(res, 400, "Expected multipart form data");
+
+    const { files, fields } = await parseMultipart(req, m[1]);
+    const billed_id = String(fields.billed_id || "").trim();
+    const channel = String(fields.channel || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const doc_key = String(fields.doc_key || "").trim();
+    const file = (files || [])[0];
+
+    if (!billed_id || !doc_key || !file) return send(res, 400, "Missing billed_id, doc_key, or file");
+
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return send(res, 404, "Claim not found");
+
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    ensureWorkspacePacket(ws);
+    ensurePacketSections(ws, claim);
+
+    const stored = storeWorkspaceUpload(sess.org_id, file);
+    const attachment = {
+      attachment_id: uuid(),
+      filename: stored.filename,
+      stored_path: stored.stored_path,
+      kind: workspaceAttachmentKindForDocKey(doc_key),
+      uploaded_at: nowISO(),
+      doc_key
+    };
+
+    ws.attachments = Array.isArray(ws.attachments) ? ws.attachments : [];
+    ws.attachments.push(attachment);
+
+    workspaceUpsertPacketItem(ws, doc_key, {
+      status: "present",
+      attachment_id: attachment.attachment_id,
+      updated_at: nowISO()
+    });
+
+    if (doc_key === "lmn") {
+      ws.packet.clinical_support = (ws.packet.clinical_support || []).map(item =>
+        item.key === "lmn" ? { ...item, lmn_text: ws.appeal?.packet_sections?.argument || item.lmn_text || "" } : item
+      );
     }
-    if (strategyChanged) saveAgentWorkspace(org.org_id, ws);
-    const packetSections = (ws[channel] || {}).packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
-    const readyCheck = canMarkReady(ws, channel);
-    const packetFeatures = extractPacketFeatures({
-      argumentText: channel === "negotiation" ? packetSections.variance_explanation : packetSections.argument,
-      requestedActionText: packetSections.requested_action,
-      attachmentsState: {
-        hasDenialLetter: packetHasKey(ws, "denial_letter"),
-        hasEob: packetHasKey(ws, "eob_era"),
-        hasClaimForm: packetHasKey(ws, "claim_form"),
-        hasMedicalRecords: packetHasKey(ws, "medical_records")
-      },
-      hasContract: !!findContractForClaim(org.org_id, b)
+
+    ws.appeal.packet_sections = ws.appeal.packet_sections || defaultAppealPacketSections();
+    ws.negotiation.packet_sections = ws.negotiation.packet_sections || defaultNegotiationPacketSections();
+    ws.appeal.packet_sections.attachments_index = buildAttachmentsIndex(ws);
+    ws.negotiation.packet_sections.attachments_index = buildAttachmentsIndex(ws);
+
+    saveAgentWorkspace(sess.org_id, ws);
+
+    const back = channel === "negotiation"
+      ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}&uploaded=1`
+      : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}&uploaded=1`;
+
+    return redirect(res, back);
+  }
+
+  if (method === "GET" && pathname === "/ai-workspace/export") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+
+    const billed_id = String(parsed.query.billed_id || "").trim();
+    const channel = String(parsed.query.channel || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return send(res, 404, "Claim not found");
+
+    const ctx = buildClaimContext(sess.org_id);
+    const derived = evaluateClaimDerived(claim, ctx);
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    ensureWorkspacePacket(ws);
+    ensurePacketSections(ws, claim);
+
+    const html = buildPacketHTML({
+      org_id: sess.org_id,
+      type: channel,
+      claim,
+      derived,
+      ws
     });
-    const hasContractRule = !!findContractForClaim(org.org_id, b);
-    const denialReasonKey = normalizeDenialReasonKey(ws.outcome?.denial_reason || b.denial_reason || b.issue_reason || "");
-    const baseline = computeHistoricalBaselines(org.org_id, b.payer || "", channel, denialReasonKey);
-    const bestStrategy = computeStrategySuccessByProfile(org.org_id, b.payer || "", channel, denialReasonKey);
-    const payerIntel = computePayerBehaviorIntelligence(org.org_id, b.payer || "");
-    const taskForWorkspace = getAgentTasks(org.org_id).find(t => t.billed_id === billed_id && t.stage_type === channel && String(t.status || "") !== "closed") || null;
-    const requestedAmountForScore = channel === "negotiation" ? num(packetSections.requested_amount || ws.negotiation?.requested_amount || d.underpaidAmount || 0) : num(d.atRiskAmount || d.underpaidAmount || 0);
-    const score = computeDeterministicScore({
-      stageType: channel,
-      billedAmount: num(d.billedAmount),
-      paidAmount: num(d.paidAmount),
-      atRiskAmount: num(d.atRiskAmount),
-      requestedAmount: requestedAmountForScore,
-      payer: b.payer || "",
-      denialReasonKey,
-      hasContractRule,
-      strategyProfile: ws[channel].strategy_profile || "Auto",
-      packetFeatures,
-      baselines: baseline,
-      strategyHistoryBest: bestStrategy,
-      payerIntel,
-      argumentText: channel === "negotiation" ? packetSections.variance_explanation : packetSections.argument
+
+    const filename = `${channel}_${String(claim.claim_number || claim.billed_id || "packet").replace(/[^a-zA-Z0-9_-]/g, "_")}.html`;
+
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Disposition": `inline; filename="${filename}"`
     });
-    const recoveryTimeline = computeRecoveryTimeline({ payer: b.payer || "", strategy_profile: ws[channel].strategy_profile || "Auto", historicalOutcomes: loadWorkspaceOutcomes(org.org_id) });
-    const missingLabelMap = { denial_letter: "Denial Letter", eob_era: "EOB/ERA", claim_form: "Claim Form / Itemized Bill" };
-    const missingKindMap = { denial_letter: "denial", eob_era: "eob", claim_form: "supporting" };
-    const sectionDescriptions = packetSectionDescriptions(channel);
-    const mainKey = packetNarrativeKey(channel);
-    const sectionsHtml = Object.keys(packetSections).map(key => {
-      const fieldId = `packet-${key}`;
-      const inputHtml = (channel === "negotiation" && key === "requested_amount")
-        ? `<input id="${safeStr(fieldId)}" name="value" value="${safeStr(packetSections[key] || ws.negotiation?.requested_amount || d.underpaidAmount || "")}" />`
-        : `<textarea id="${safeStr(fieldId)}" name="value" style="min-height:120px;">${safeStr(packetSections[key] || "")}</textarea>`;
-      return `<details ${key===mainKey?"open":""} style="margin:8px 0;border:1px solid var(--border);border-radius:10px;padding:10px;"><summary style="font-weight:800;cursor:pointer;">${safeStr(key.replace(/_/g," "))} <span class="muted small">ⓘ ${safeStr(sectionDescriptions[key]||"")}</span></summary><form method="POST" action="/agent-workspace/save" style="margin-top:8px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="draft_type" value="${safeStr(channel)}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><input type="hidden" name="section_key" value="${safeStr(key)}" />${inputHtml}<button class="btn secondary small" type="submit">Save Section</button></form></details>`;
-    }).join("\n");
-    const checklist = requiredPacketKeysForChannel(channel).map(key => ({ key, label: missingLabelMap[key] || key, present: packetHasKey(ws, key) }));
-    const checklistHtml = checklist.map(i => `<li>${i.present ? "☑" : "☐"} ${safeStr(i.label)}</li>`).join("");
-    const missingDocsText = readyCheck.missing.map(k => missingLabelMap[k] || k).join(", ");
-    const missingFormsHtml = readyCheck.missing.map(key => `<form method="POST" action="/agent-workspace/upload" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="packet_key" value="${safeStr(key)}" /><input type="hidden" name="kind" value="${safeStr(missingKindMap[key] || "supporting")}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><span class="small" style="min-width:190px;">Upload ${safeStr(missingLabelMap[key] || key)}</span><input class="attachment-file-input" type="file" name="files" /><button class="btn secondary small" type="submit">Upload</button></form>`).join("");
-    const errs = Array.isArray(parsed.query.err) ? parsed.query.err : [parsed.query.err];
-    const hasMissingErr = errs.includes("missing_required");
-    const msgs = getAgentMessages(org.org_id, billed_id).slice(-12).map(m => `<li><strong>${safeStr(m.role || "agent")}</strong> [${safeStr(m.channel || "general")}]: ${safeStr(m.content || "")}</li>`).join("") || `<li class="muted">No messages yet.</li>`;
-    const versionNumber = Number(ws[channel]?.version || 0);
-
-    const html = renderPage(pageTitle, `
-      <h2>${pageTitle}</h2>
-      ${workspaceBanner}
-
-      ${orgSnapshot}
-
-      <h3>Payer Behavior Intelligence</h3>
-      <div class="exec-card" style="margin-bottom:12px;">
-        <div><b>Payer:</b> ${safeStr(b.payer || "")}</div>
-        <div><b>Historical Cases:</b> ${formatNumberUI(payerIntel?.total_cases || 0)}</div>
-        <div><b>Success Rate:</b> ${formatNumberUI((num(channel === "negotiation" ? payerIntel?.negotiation_success_rate : payerIntel?.appeal_success_rate) * 100),1)}%</div>
-        <div><b>Average Recovery:</b> ${formatNumberUI((num(payerIntel?.avg_recovered_pct) * 100),1)}%</div>
-        <div><b>Avg Days to Payment:</b> ${formatNumberUI(payerIntel?.avg_days_to_payment || 0)}</div>
-        <div><b>Best Strategy Historically:</b> ${safeStr(payerIntel?.best_strategy || "Auto")}</div>
-        <div><b>Fastest Strategy:</b> ${safeStr(payerIntel?.fastest_strategy || "Auto")}</div>
-        <div><b>Most Common Denial Reason:</b> ${safeStr(payerIntel?.most_common_denial_reason || "unknown")}</div>
-        <div><b>Strategy Success Rates:</b> ${safeStr(Object.entries(payerIntel?.strategy_success_rates || {}).map(([k,v])=>`${k}: ${formatNumberUI(num(v)*100,1)}%`).join(" | ") || "N/A")}</div>
-        <div><b>Denial Reason Patterns:</b> ${safeStr(Object.entries(payerIntel?.denial_reason_patterns || {}).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k} (${v})`).join(", ") || "N/A")}</div>
-      </div>
-
-      ${taskForWorkspace ? `
-      <h3>Agent Status</h3>
-      <div class="exec-card" style="margin-bottom:12px;border-left:4px solid #4f46e5;">
-        <div><strong>AI Agent Status:</strong> ${safeStr(String(taskForWorkspace.status || "queued").replace(/_/g," "))}</div>
-        <div><strong>Missing:</strong> ${safeStr((taskForWorkspace.missing_docs || []).join(", ") || "None")}</div>
-        <div><strong>Priority:</strong> ${safeStr(taskForWorkspace.risk_level || "MEDIUM")}</div>
-        <div><strong>Estimated Recovery:</strong> ${formatMoneyUI(num(taskForWorkspace.estimated_value || score.estRecovery || 0))}</div>
-        <div><strong>Recommended Next Step:</strong> ${safeStr(taskForWorkspace.recommended_next_step || (taskForWorkspace.next_actions || [])[0] || "Review packet")}</div>
-        <div style="margin-top:6px;"><strong>Next Actions:</strong>
-          <ol style="margin:6px 0 0 18px;">${(taskForWorkspace.next_actions || []).map(a=>`<li>${safeStr(a)}</li>`).join("") || "<li>Review packet and proceed.</li>"}</ol>
-        </div>
-        <div class="btnRow" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
-          <a class="btn secondary small" href="#ai-attachment-checklist">Upload Missing Docs</a>
-          ${!hasContractRule ? `<a class="btn secondary small" href="/data-management?tab=reimbursement">Add Contract Rule</a>` : ``}
-          <a class="btn secondary small" href="#submission-followup">Mark Submitted</a>
-        </div>
-      </div>
-      ` : ``}
-
-      <h3>AI Recovery Intelligence</h3>
-      <div id="recovery-intelligence" style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);margin-bottom:12px;">
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <div><div class="muted small">Success Probability</div><div id="ai-probability" style="font-size:28px;font-weight:900;">${formatNumberUI(score.probability)}%</div></div>
-          <div><div class="muted small">Estimated Recovery</div><div id="ai-est-recovery" style="font-size:28px;font-weight:900;">${formatMoneyUI(score.estRecovery)}</div></div>
-          <div><div class="muted small">Confidence</div><div id="ai-confidence" class="badge">${safeStr(score.confidence)}</div></div>
-          <div><div class="muted small">Recommended Strategy</div><div id="ai-strategy-recommended" style="font-weight:800;">${safeStr(score.strategyRecommended)}</div></div>
-        </div>
-        ${score.strategySwitchSuggestion ? `<div class="warn small" style="margin-top:8px;">${safeStr(score.strategySwitchSuggestion)}</div>` : ``}
-        <div style="margin-top:8px;"><strong>Recovery Timeline Estimate</strong><div class="small muted">Est days: ${formatNumberUI(recoveryTimeline.estimated_days_to_payment || 0,1)} | 30-day payment probability: ${formatNumberUI(num(recoveryTimeline.probability_payment_30_days)*100,1)}% | 60-day payment probability: ${formatNumberUI(num(recoveryTimeline.probability_payment_60_days)*100,1)}%</div></div>
-        <div style="margin-top:8px;"><strong>Argument Strength Meter</strong><div style="height:10px;background:#e5e7eb;border-radius:999px;overflow:hidden;"><div style="height:10px;width:${Math.max(0,Math.min(100,num(score.argument_quality_score)))}%;background:#4f46e5;"></div></div><div class="small muted">Score: ${formatNumberUI(score.argument_quality_score || 0)} / 100</div></div>
-        <div style="margin-top:10px;"><strong>Packet Quality Alerts</strong><ul id="ai-alerts">${(score.alerts.length?score.alerts:["No major alerts."]).map(a=>`<li>${safeStr(a)}</li>`).join("")}</ul></div>
-        ${!hasContractRule ? `<div style="margin-top:8px;"><a class="btn small" href="/data-management?tab=reimbursement">Add Contract Rule</a></div>` : ``}
-        <details style="margin-top:8px;"><summary style="cursor:pointer;font-weight:700;">Why this score?</summary><div class="muted small">Deterministic scoring uses packet completeness, strategy fit, and historical payer/stage outcomes.</div></details>
-      </div>
-
-      <h3>1) Packet Overview</h3>
-      <table>
-        <tr><th>Claim #</th><td>${safeStr(b.claim_number || "")}</td></tr>
-        <tr><th>Payer</th><td>${safeStr(b.payer || "")}</td></tr>
-        <tr><th>Status</th><td>${safeStr(d.lifecycleStage || b.status || "Pending")}</td></tr>
-        <tr><th>Billed</th><td>${formatMoneyUI(num(d.billedAmount))}</td></tr>
-        <tr><th>Expected</th><td>${formatMoneyUI(num(d.expectedInsurance))}</td></tr>
-        <tr><th>Paid</th><td>${formatMoneyUI(num(d.paidAmount))}</td></tr>
-        <tr><th>At Risk</th><td>${formatMoneyUI(num(d.atRiskAmount))}</td></tr>
-      </table>
-
-      <h3>2) Required Docs Checklist</h3>
-      ${(hasMissingErr && !readyCheck.ok) ? `<p class="warn">Cannot mark ready - missing required items: ${safeStr(missingDocsText)}</p>` : ""}
-      <ul>${checklistHtml}</ul>
-      <div id="ai-attachment-checklist" style="display:flex;gap:12px;flex-wrap:wrap;">
-        <label><input type="checkbox" id="att-denial" ${packetHasKey(ws, "denial_letter")?"checked":""}/> Denial Letter uploaded</label>
-        <label><input type="checkbox" id="att-eob" ${packetHasKey(ws, "eob_era")?"checked":""}/> EOB/ERA uploaded</label>
-        <label><input type="checkbox" id="att-claim" ${packetHasKey(ws, "claim_form")?"checked":""}/> Claim form uploaded</label>
-        <label><input type="checkbox" id="att-med" ${packetHasKey(ws, "medical_records")?"checked":""}/> Medical records uploaded</label>
-      </div>
-      ${!readyCheck.ok ? `<div>${missingFormsHtml}</div>` : `<p class="small muted">All required items are present.</p>`}
-
-      <h3>3) Strategy Profile</h3>
-      <form method="POST" action="/agent-workspace/strategy">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
-        <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
-        <input type="hidden" name="tab" value="${safeStr(channel)}" />
-        <select name="strategy_profile" id="strategy-profile">${["Auto","Clinical","Contractual","Regulatory","Collaborative"].map(v=>`<option value="${v}" ${String(ws[channel]?.strategy_profile||"Auto")===v?"selected":""}>${v}</option>`).join("")}</select>
-        <button class="btn secondary" type="submit">Save Strategy</button>
-      </form>
-
-      ${ws[channel]?.auto_generated ? `
-      <div style="border:1px solid var(--border);padding:10px;border-radius:10px;background:#eef2ff;margin-bottom:12px;">
-        <strong>AI Recovery Packet Generated</strong>
-        <div class="muted small">
-          This packet was automatically created by the AI Recovery Engine based on claim lifecycle detection.
-        </div>
-      </div>
-      ` : ``}
-
-      <h3>4) AI Packet Builder <span class="small muted">Version ${versionNumber}</span> <a class="btn secondary small" href="/agent-workspace/history?billed_id=${encodeURIComponent(billed_id)}&channel=${encodeURIComponent(channel)}">View History</a></h3>
-      <form method="POST" action="/agent-workspace/save-all" style="margin:8px 0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="draft_type" value="${safeStr(channel)}" /><input type="hidden" name="tab" value="${safeStr(channel)}" /><button class="btn" type="submit">Save All Changes</button></form>
-      ${sectionsHtml}
-
-      <details id="submission-followup">
-        <summary style="font-weight:800;cursor:pointer;">5) Submission & Follow-Up ${infoIcon("Track where and when the packet was submitted, plus follow-up due date.")}</summary>
-        <form method="POST" action="/agent-workspace/submission" style="margin-top:8px;">
-          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
-          <input type="hidden" name="channel" value="${safeStr(channel)}" />
-          <label>Submitted To</label><input name="submitted_to" value="${safeStr(ws.submission?.submitted_to || "")}" />
-          <label>Method</label><select name="submission_method"><option value="portal" ${ws.submission?.submission_method==="portal"?"selected":""}>Portal</option><option value="fax" ${ws.submission?.submission_method==="fax"?"selected":""}>Fax</option><option value="mail" ${ws.submission?.submission_method==="mail"?"selected":""}>Mail</option><option value="phone" ${ws.submission?.submission_method==="phone"?"selected":""}>Phone</option></select>
-          <label>Confirmation #</label><input name="confirmation_number" value="${safeStr(ws.submission?.confirmation_number || "")}" />
-          <label>Follow-Up Date</label><input type="date" name="follow_up_date" value="${safeStr(String(ws.submission?.follow_up_date || "").slice(0,10))}" />
-          <label>Notes</label><textarea name="notes" style="min-height:70px;">${safeStr(ws.submission?.notes || "")}</textarea>
-          <button class="btn secondary" type="submit">Mark Submitted</button>
-        </form>
-        <p class="small muted">Status: ${safeStr(ws.submission?.status || "draft")} | Submitted: ${safeStr(ws.submission?.submitted_at || "-")} | Due: ${safeStr(ws.follow_up?.due_at || "-")}</p>
-      </details>
-
-      <details>
-        <summary style="font-weight:800;cursor:pointer;">6) Outcome / Payer Response ${infoIcon("Record payer response and any posted payment updates.")}</summary>
-        <form method="POST" action="/agent-workspace/outcome" style="margin-top:8px;">
-          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
-          <input type="hidden" name="channel" value="${safeStr(channel)}" />
-          <label>Outcome Status</label><select name="outcome_status">${["none","approved","partially_approved","denied","needs_info","closed"].map(v=>`<option value="${v}" ${ws.outcome?.outcome_status===v?"selected":""}>${safeStr(v.replace(/_/g," "))}</option>`).join("")}</select>
-          <label>Response Received At</label><input type="date" name="response_received_at" value="${safeStr(String(ws.outcome?.response_received_at || "").slice(0,10))}" />
-          <label>Approved Amount</label><input name="approved_amount" value="${safeStr(ws.outcome?.approved_amount || 0)}" />
-          <label>Paid Posted Amount</label><input name="paid_posted_amount" value="${safeStr(ws.outcome?.paid_posted_amount || 0)}" />
-          <label>Denial Reason</label><input name="denial_reason" value="${safeStr(ws.outcome?.denial_reason || "")}" />
-          <label>Adjustment Notes</label><textarea name="adjustment_notes" style="min-height:70px;">${safeStr(ws.outcome?.adjustment_notes || "")}</textarea>
-          <label>Final Status</label><input name="final_status" value="${safeStr(ws.outcome?.final_status || "")}" />
-          <button class="btn secondary" type="submit">Save Outcome</button>
-        </form>
-      </details>
-
-      <details>
-        <summary style="font-weight:800;cursor:pointer;">7) Agent Chat</summary>
-        <form method="POST" action="/agent-workspace/chat">
-          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
-          <input type="hidden" name="channel" value="${safeStr(channel)}" />
-          <input type="hidden" name="tab" value="${safeStr(channel)}" />
-          <textarea name="content" style="min-height:80px;" placeholder="Ask agent for deterministic edits..."></textarea>
-          <button class="btn secondary" type="submit">Apply Edit + Log Message</button>
-        </form>
-        <ul>${msgs}</ul>
-      </details>
-
-      <h3>8) Actions</h3>
-      <div class="btnRow" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <form method="POST" action="/agent-workspace/generate" style="margin:0;">
-          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
-          <input type="hidden" name="draft_type" value="${safeStr(channel)}" />
-          <input type="hidden" name="tab" value="${safeStr(channel)}" />
-          <button class="btn secondary" type="submit" ${channel === "negotiation" && !hasAccess ? "disabled" : ""}>
-            ${channel === "negotiation" ? (hasAccess ? "Generate Negotiation" : "Limit Reached") : "Regenerate AI Draft"}
-          </button>
-        </form>
-        <a class="btn secondary" href="/packet/export?billed_id=${encodeURIComponent(billed_id)}">Export Packet (Print/PDF)</a>
-        <form method="POST" action="/agent-workspace/status" style="margin:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
-          <input type="hidden" name="tab" value="${safeStr(channel)}" />
-          <input type="hidden" name="status" value="ready_for_review" />
-          <label style="display:flex;gap:8px;align-items:center;"><input type="checkbox" name="override_missing" /> Override missing required docs</label>
-          <button class="btn secondary" type="submit">Mark Ready</button>
-        </form>
-      </div>
-
-      <script>
-      (function(){
-        const stageType = ${JSON.stringify(channel)};
-        const hasContractRule = ${hasContractRule ? 'true' : 'false'};
-        const requestedAmountSeed = ${JSON.stringify(requestedAmountForScore)};
-        const atRiskSeed = ${JSON.stringify(num(d.atRiskAmount))};
-        const baseline = ${JSON.stringify(baseline || null)};
-        function num(v){ var n=Number(v||0); return isFinite(n)?n:0; }
-        function extractFeatures(){
-          const argumentEl = document.getElementById(stageType === 'negotiation' ? 'packet-variance_explanation' : 'packet-argument');
-          const reqEl = document.getElementById('packet-requested_action');
-          const a=(argumentEl && argumentEl.value || '').trim();
-          const r=(reqEl && reqEl.value || '').trim();
-          const hasDenialLetter = !!(document.getElementById('att-denial') && document.getElementById('att-denial').checked);
-          const hasEob = !!(document.getElementById('att-eob') && document.getElementById('att-eob').checked);
-          const hasClaimForm = !!(document.getElementById('att-claim') && document.getElementById('att-claim').checked);
-          const hasMedicalRecords = !!(document.getElementById('att-med') && document.getElementById('att-med').checked);
-          const hasPolicyCitation = /policy|benefit|coverage|guideline|lcd|ncd|cpt|icd/i.test(a+' '+r);
-          const hasContractCitation = /contract|fee schedule|allowed amount|reimbursement|participating|agreement/i.test(a+' '+r);
-          let completenessScore = 0;
-          completenessScore += hasDenialLetter ? 20 : 0;
-          completenessScore += hasEob ? 20 : 0;
-          completenessScore += hasClaimForm ? 15 : 0;
-          completenessScore += hasMedicalRecords ? 10 : 0;
-          completenessScore += hasPolicyCitation ? 10 : 0;
-          completenessScore += hasContractCitation ? 10 : 0;
-          completenessScore += a.length >= 200 ? 10 : 0;
-          completenessScore += r.length > 40 ? 5 : 0;
-          return { hasDenialLetter, hasEob, hasClaimForm, hasMedicalRecords, hasPolicyCitation, hasContractCitation, argumentLength:a.length, requestedActionLength:r.length, hasClearAsk:r.length>40, completenessScore };
-        }
-        function compute(){
-          const f = extractFeatures();
-          const strategyEl = document.getElementById('strategy-profile');
-          const strategy = strategyEl ? strategyEl.value : 'Auto';
-          let p = 55; let conf='Low';
-          if (baseline && baseline.n >= 5){ p = num(baseline.successRate) * 100; conf='High'; }
-          else if (baseline && baseline.n >= 3){ p = num(baseline.successRate) * 100; conf='Medium'; }
-          if (f.hasDenialLetter) p += 10;
-          if (f.hasEob) p += 10;
-          if (f.hasClaimForm) p += 5;
-          if (f.hasContractCitation) p += 8;
-          if (f.hasPolicyCitation) p += 6;
-          if (f.hasMedicalRecords) p += 5;
-          if (stageType === 'appeal' && !f.hasDenialLetter) p -= 15;
-          if (stageType === 'appeal' && !f.hasEob) p -= 12;
-          if (!f.hasClaimForm) p -= 10;
-          if (!hasContractRule && strategy === 'Contractual') p -= 12;
-          if ((stageType === 'appeal' && ['Regulatory','Contractual','Clinical'].includes(strategy)) || (stageType === 'negotiation' && ['Contractual','Collaborative'].includes(strategy))) p += 6;
-          if (f.argumentLength < 200) p -= 8;
-          if (!f.hasClearAsk) p -= 8;
-          p = Math.max(5, Math.min(95, Math.round(p)));
-          // 🔥 Live requested amount recalculation
-          let liveRequestedAmount = requestedAmountSeed;
-          if (stageType === 'negotiation') {
-            const reqAmountInput = document.getElementById('packet-requested_amount');
-            if (reqAmountInput) {
-              const parsed = Number(String(reqAmountInput.value || '').replace(/[^0-9.-]+/g,''));
-              if (!isNaN(parsed) && parsed > 0) {
-                liveRequestedAmount = parsed;
-              }
-            }
-          }
-
-          // Fallback logic remains intact
-          const avgRecoveredPct = baseline && num(baseline.avgRecoveredPct) > 0
-            ? num(baseline.avgRecoveredPct)
-            : null;
-
-          const est = avgRecoveredPct
-            ? (num(liveRequestedAmount) * avgRecoveredPct)
-            : (
-                Math.min(
-                  num(atRiskSeed) || num(liveRequestedAmount),
-                  num(liveRequestedAmount) || num(atRiskSeed)
-                ) * (p / 100)
-              );
-          const alerts = [];
-          if (stageType === 'appeal' && !f.hasDenialLetter) alerts.push('Missing Denial Letter for appeal packet.');
-          if (stageType === 'appeal' && !f.hasEob) alerts.push('Missing EOB/ERA for appeal packet.');
-          if (!f.hasClaimForm) alerts.push('Missing claim form/itemized bill.');
-          if (!hasContractRule) alerts.push('Contract rule missing - add contract rule in Reimbursement Engine');
-          if (f.argumentLength < 200) alerts.push('Argument narrative is short; add clinical/contract rationale.');
-          if (!f.hasClearAsk) alerts.push('Requested action is unclear; include a specific ask.');
-          if (!hasContractRule && strategy === 'Contractual') alerts.push('Contractual strategy selected but no contract rule found.');
-          const pEl = document.getElementById('ai-probability'); if (pEl) pEl.textContent = p + '%';
-          const cEl = document.getElementById('ai-confidence'); if (cEl) cEl.textContent = conf;
-          const eEl = document.getElementById('ai-est-recovery'); if (eEl) eEl.textContent = new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(est||0);
-          const aEl = document.getElementById('ai-alerts'); if (aEl) aEl.innerHTML = (alerts.length?alerts:['No major alerts.']).map(x => '<li>'+x.replace(/</g,'&lt;')+'</li>').join('');
-        }
-        [
-          'packet-argument',
-          'packet-variance_explanation',
-          'packet-requested_action',
-          'packet-requested_amount',
-          'strategy-profile',
-          'att-denial',
-          'att-eob',
-          'att-claim',
-          'att-med'
-        ].forEach(id=>{
-          const el = document.getElementById(id);
-          if (!el) return;
-          el.addEventListener('input', compute);
-          el.addEventListener('change', compute);
-        });
-        document.querySelectorAll('.attachment-file-input').forEach(el=> el.addEventListener('change', compute));
-        compute();
-      })();
-      </script>
-    `, navUser(), {showChat:true, orgName: org.org_name});
-
-    return send(res, 200, html);
+    return res.end(html);
   }
 
   if (method === "POST" && pathname === "/agent-workspace/generate") {
