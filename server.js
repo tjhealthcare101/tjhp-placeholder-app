@@ -6196,19 +6196,28 @@ function financialSummaryFromClaim(derived, claim){
 
 function buildAttachmentsIndex(ws){
   const attachments = Array.isArray(ws?.attachments) ? ws.attachments : [];
+
   if (!attachments.length) {
-    return [
-      "- No supporting documents uploaded yet.",
-      "- Upload EOB / ERA",
-      "- Upload claim form / itemized bill",
-      "- Upload denial letter for appeals",
-      "- Add contract excerpt or payer policy when available"
-    ].join("\n");
+    return "No supporting documents uploaded.";
   }
 
-  return attachments.map(a => {
-    const label = workspaceDocLabel(a.doc_key || a.kind || "attachment");
-    return `- ${label}: ${a.filename || "attachment"}`;
+  const order = [
+    "denial_letter",
+    "eob_era",
+    "claim_form",
+    "contract_excerpt",
+    "payer_policy",
+    "lmn",
+    "office_notes",
+    "labs_imaging"
+  ];
+
+  const sorted = attachments.sort((a,b)=>{
+    return order.indexOf(a.doc_key) - order.indexOf(b.doc_key);
+  });
+
+  return sorted.map(a=>{
+    return `- ${workspaceDocLabel(a.doc_key)}: ${a.filename}`;
   }).join("\n");
 }
 
@@ -6713,7 +6722,7 @@ function renderWorkspacePreview(opts){
           }
 
           ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_action", title:"Requested Action", value: packetSections.requested_action, description: sectionDescriptions.requested_action, exportMode })}
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"attachments_index", title:"Attachments Index", value: packetSections.attachments_index || buildAttachmentsIndex(ws), description: sectionDescriptions.attachments_index, exportMode })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"attachments_index", title:"Attachments Index", value: buildAttachmentsIndex(ws), description: sectionDescriptions.attachments_index, exportMode })}
           ${renderSignatureSection({
             billed_id: claim.billed_id,
             channel,
@@ -7680,13 +7689,47 @@ function buildPacketHTML({ org_id, type, claim, derived, ws }){
 }
 
 function buildPacketPDF({ claim, derived, ws, channel, res }) {
-  const doc = new PDFDocument({ margin: 50 });
+  const doc = new PDFDocument({ margin: 50, bufferPages: true });
   const filename = `${channel}_${(claim.claim_number || claim.billed_id || "packet").replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
+  const orgSettings = getOrgSettings(claim.org_id) || {};
+  const identity = orgSettings.identity || {};
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
 
   doc.pipe(res);
+
+  // ===== PROVIDER HEADER =====
+
+  if (orgSettings.logo_path && fs.existsSync(orgSettings.logo_path)) {
+    try {
+      doc.image(orgSettings.logo_path, 50, 40, { width: 120 });
+    } catch(e){}
+  }
+
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(14)
+    .text(identity.legal_name || "Your Practice", 200, 40);
+
+  doc
+    .font("Helvetica")
+    .fontSize(10)
+    .text(`NPI: ${identity.npi || "N/A"}`, 200, 60)
+    .text(`TIN: ${identity.tax_id || "N/A"}`, 200, 75)
+    .text(identity.address || "", 200, 90)
+    .text(identity.phone || "", 200, 105);
+
+  doc
+    .fontSize(10)
+    .font("Helvetica")
+    .fillColor("black")
+    .text(`Date: ${new Date().toLocaleDateString()}`, { align: "right" });
+
+  doc.moveDown(3);
+  doc.moveDown();
+  doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+  doc.moveDown();
 
   doc
     .fontSize(18)
@@ -7719,15 +7762,23 @@ function buildPacketPDF({ claim, derived, ws, channel, res }) {
     .text(`Paid: ${formatMoneyUI(derived.paidAmount || claim.insurance_paid || claim.paid_amount || 0)}`);
 
   function addSection(title, content) {
-    doc
-      .moveDown()
-      .font("Helvetica-Bold")
-      .fontSize(13)
-      .fillColor("black")
-      .text(title);
+    doc.moveDown();
 
     doc
-      .moveDown(0.3)
+      .font("Helvetica-Bold")
+      .fontSize(13)
+      .text(title);
+
+    doc.moveDown(0.2);
+
+    doc
+      .moveTo(50, doc.y)
+      .lineTo(550, doc.y)
+      .stroke();
+
+    doc.moveDown(0.5);
+
+    doc
       .font("Helvetica")
       .fontSize(11)
       .fillColor("black")
@@ -7750,6 +7801,67 @@ function buildPacketPDF({ claim, derived, ws, channel, res }) {
   addSection("Requested Action", sections.requested_action);
   addSection("Attachments Index", sections.attachments_index);
 
+  // ===== ATTACHMENTS (REAL FILES) =====
+  const attachments = Array.isArray(ws.attachments) ? ws.attachments : [];
+
+  if (attachments.length) {
+    doc.addPage();
+
+    doc
+      .fontSize(16)
+      .font("Helvetica-Bold")
+      .text("Supporting Documents");
+
+    doc.moveDown();
+
+    const order = [
+      "denial_letter",
+      "eob_era",
+      "claim_form",
+      "contract_excerpt",
+      "payer_policy",
+      "lmn",
+      "office_notes",
+      "labs_imaging"
+    ];
+
+    const sorted = attachments.sort((a,b)=>{
+      return order.indexOf(a.doc_key) - order.indexOf(b.doc_key);
+    });
+
+    sorted.forEach(att => {
+      doc.moveDown();
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(12)
+        .text(workspaceDocLabel(att.doc_key));
+
+      doc.moveDown(0.3);
+
+      try {
+        if (att.stored_path && fs.existsSync(att.stored_path)) {
+
+          const ext = path.extname(att.filename || "").toLowerCase();
+
+          if ([".png",".jpg",".jpeg"].includes(ext)) {
+            doc.image(att.stored_path, { fit:[450,300] });
+          } else {
+            doc
+              .font("Helvetica")
+              .fontSize(10)
+              .text(`Attached file: ${att.filename}`);
+          }
+
+        } else {
+          doc.text(`File missing: ${att.filename}`);
+        }
+      } catch (e) {
+        doc.text(`Could not render: ${att.filename}`);
+      }
+    });
+  }
+
   doc.moveDown();
 
   if (ws.signature_image) {
@@ -7766,6 +7878,23 @@ function buildPacketPDF({ claim, derived, ws, channel, res }) {
 
   doc.moveDown();
   doc.font("Helvetica").fontSize(11).text("Sincerely,");
+
+  const range = doc.bufferedPageRange();
+
+  for (let i = range.start; i < range.start + range.count; i++) {
+    doc.switchToPage(i);
+
+    doc
+      .fontSize(9)
+      .fillColor("gray")
+      .text(
+        `Page ${i + 1} of ${range.count}`,
+        50,
+        doc.page.height - 50,
+        { align: "center", width: doc.page.width - 100 }
+      );
+  }
+
   doc.end();
 }
 
@@ -12443,6 +12572,19 @@ const server = http.createServer(async (req, res) => {
 // ---------- FILE VIEWER (org-scoped) ----------
 // Allows viewing uploaded source files (CSV/PDF/Excel/Word) linked from claim detail pages.
 if (method === "GET" && pathname === "/file") {
+  const filePath = String(parsed.query.path || "");
+
+  if (filePath) {
+    if (!fs.existsSync(filePath)) {
+      return send(res, 404, "File not found");
+    }
+
+    const stream = fs.createReadStream(filePath);
+    res.writeHead(200);
+    stream.pipe(res);
+    return;
+  }
+
   const name = String(parsed.query.name || "").trim();
   if (!name) return redirect(res, "/dashboard");
 
@@ -23098,6 +23240,7 @@ function renderTemplateEditor(org, user){
       }
 
       if (tab === "org") {
+        const settings = orgSettings;
         const identity = orgSettings.identity || {};
         const letter = getLetterDefaults(orgSettings);
         const allowed = getAllowedRulesFromSettings(orgSettings);
@@ -23181,6 +23324,23 @@ function renderTemplateEditor(org, user){
 
             <div class="btnRow"><button class="btn" type="submit">Save Organization Settings</button></div>
           </form>
+          <div style="margin-top:12px;">
+            <label>Organization Logo</label>
+
+            ${
+              (settings && settings.logo_path && fs.existsSync(settings.logo_path))
+                ? `<div style="margin:8px 0;">
+                    <img src="/file?path=${encodeURIComponent(settings.logo_path)}" 
+                         style="max-height:60px;border-radius:8px;border:1px solid #e5e7eb;padding:6px;background:#fff;" />
+                  </div>`
+                : `<div class="muted small">No logo uploaded</div>`
+            }
+
+            <form method="POST" action="/org/upload-logo" enctype="multipart/form-data">
+              <input type="file" name="file" accept="image/*"/>
+              <button class="btn secondary">Upload Logo</button>
+            </form>
+          </div>
         `;
       }
       if (tab === "billing") {
@@ -23442,6 +23602,28 @@ function renderTemplateEditor(org, user){
     saveOrgSettings(org.org_id, settings);
 
     return redirect(res, "/revenue-intelligence");
+  }
+
+  if (method === "POST" && pathname === "/org/upload-logo") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+
+    const contentType = req.headers["content-type"] || "";
+    const m = contentType.match(/boundary=(.+)$/);
+    if (!m) return send(res, 400, "Expected multipart form data");
+
+    const { files } = await parseMultipart(req, m[1]);
+    const file = (files || [])[0];
+    if (!file) return send(res, 400, "No file uploaded");
+
+    const stored = storeWorkspaceUpload(sess.org_id, file);
+
+    const settings = getOrgSettings(sess.org_id) || {};
+    settings.logo_path = stored.stored_path;
+
+    saveOrgSettings(sess.org_id, settings);
+
+    return redirect(res, "/account?tab=org&logo=uploaded");
   }
 
 if (method === "POST" && pathname === "/account/preferences") {
