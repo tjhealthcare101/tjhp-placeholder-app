@@ -5,7 +5,8 @@ const path = require("path");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const OpenAI = require("openai");
-const PDFDocument = require("pdfkit");
+const PDFKitDocument = require("pdfkit");
+const { PDFDocument } = require("pdf-lib");
 
 function safeStr(s) {
   return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]));
@@ -729,6 +730,8 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .ws-panel{border:1px solid var(--border);border-radius:16px;background:var(--card);padding:14px;box-shadow:var(--shadow)}
 .ws-panel h3{margin:0 0 8px;font-size:14px}
 .ws-panel .hint{font-size:12px;color:var(--muted);line-height:1.45}
+details summary{list-style:none}
+details summary::-webkit-details-marker{display:none}
 .ws-chip-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .ws-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid var(--border);background:#fff}
 .ws-chip.ok{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
@@ -6437,8 +6440,10 @@ function renderPacketReadinessSummary(ws, channel){
 function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
   const docs = workspaceRequiredDocConfig(channel);
   return `
-    <div class="ws-panel">
-      <h3>Documents & Missing Items</h3>
+    <details class="ws-panel" open>
+      <summary style="cursor:pointer;font-weight:900;">
+        Documents & Missing Items
+      </summary>
       <div class="ws-doc-list">
         ${docs.map(doc => {
           const present = packetHasKey(ws, doc.key);
@@ -6464,7 +6469,7 @@ function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
         }).join("")}
       </div>
       <div class="hint" style="margin-top:10px;">Users should not guess what to do. Keep required docs green before review/export.</div>
-    </div>
+    </details>
   `;
 }
 
@@ -7688,14 +7693,18 @@ function buildPacketHTML({ org_id, type, claim, derived, ws }){
   return applyTemplate(org_id, channel, wrapped);
 }
 
-function buildPacketPDF({ claim, derived, ws, channel, res }) {
-  const doc = new PDFDocument({ margin: 50, bufferPages: true });
+function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
+  const doc = docOverride || new PDFKitDocument({ margin: 50, bufferPages: true });
   const filename = `${channel}_${(claim.claim_number || claim.billed_id || "packet").replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
 
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  if (!docOverride) {
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  }
 
-  doc.pipe(res);
+  if (!docOverride) {
+    doc.pipe(res);
+  }
 
   // ===== LETTER LAYOUT =====
 
@@ -7721,9 +7730,12 @@ function buildPacketPDF({ claim, derived, ws, channel, res }) {
   doc
     .font("Helvetica")
     .fontSize(10)
-    .text(identity.legal_name || "Your Practice", 350, 40, { align: "right" })
-    .text(`NPI: ${identity.npi || ""}`, { align: "right" })
-    .text(`TIN: ${identity.tax_id || ""}`, { align: "right" })
+    .text(identity.legal_name || "Your Practice", 350, 40, { align: "right" });
+
+  if (identity.npi) doc.text(`NPI: ${identity.npi}`, { align: "right" });
+  if (identity.tax_id) doc.text(`TIN: ${identity.tax_id}`, { align: "right" });
+
+  doc
     .text(identity.address || "", { align: "right" })
     .text(identity.phone || "", { align: "right" });
 
@@ -7786,12 +7798,14 @@ Billed Amount: ${formatMoneyUI(derived.billedAmount || 0)}
 Expected Reimbursement: ${formatMoneyUI(derived.expectedInsurance || 0)}
 Amount Paid: ${formatMoneyUI(derived.paidAmount || 0)}
 
+Variance: ${formatMoneyUI((derived.expectedInsurance || 0) - (derived.paidAmount || 0))}
+
 The reimbursement received does not align with the expected amount based on applicable reimbursement policies and/or contractual agreements.`
   );
 
   // Narrative
   if (channel === "appeal") {
-    paragraph(sections.argument);
+    paragraph((sections.argument || "").split("Claim Financial Snapshot")[0]);
   } else {
     paragraph(sections.variance_explanation);
   }
@@ -7835,7 +7849,7 @@ The reimbursement received does not align with the expected amount based on appl
   // =========================
   const attachments = Array.isArray(ws.attachments) ? ws.attachments : [];
 
-  if (attachments.length) {
+  if (attachments.length && !docOverride) {
     doc.addPage();
 
     doc
@@ -7906,6 +7920,103 @@ The reimbursement received does not align with the expected amount based on appl
   }
 
   doc.end();
+}
+
+async function buildMergedPacketPDF({ claim, derived, ws, channel, res }) {
+  const buffers = [];
+  const doc = new PDFKitDocument({ margin: 50, bufferPages: true });
+  doc.on("data", chunk => buffers.push(chunk));
+
+  await new Promise((resolve) => {
+    doc.on("end", resolve);
+
+    buildPacketPDF({
+      claim,
+      derived,
+      ws,
+      channel,
+      res: {
+        setHeader(){},
+        write(){},
+        end(){}
+      },
+      docOverride: doc
+    });
+  });
+
+  const letterBuffer = Buffer.concat(buffers);
+  const mergedPdf = await PDFDocument.create();
+
+  const letterDoc = await PDFDocument.load(letterBuffer);
+  const letterPages = await mergedPdf.copyPages(letterDoc, letterDoc.getPageIndices());
+  letterPages.forEach(page => mergedPdf.addPage(page));
+
+  const attachments = Array.isArray(ws?.attachments) ? ws.attachments.slice() : [];
+  const order = [
+    "denial_letter",
+    "eob_era",
+    "claim_form",
+    "contract_excerpt",
+    "payer_policy",
+    "lmn",
+    "office_notes",
+    "labs_imaging"
+  ];
+  const orderIndex = (key) => {
+    const idx = order.indexOf(key);
+    return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+  };
+
+  const sorted = attachments.sort((a, b) => orderIndex(a.doc_key) - orderIndex(b.doc_key));
+
+  for (const att of sorted) {
+    try {
+      if (!att?.stored_path) continue;
+      const storedPath = path.isAbsolute(att.stored_path)
+        ? att.stored_path
+        : path.join(process.cwd(), att.stored_path);
+      if (!fs.existsSync(storedPath)) continue;
+
+      const ext = path.extname(String(att.filename || storedPath)).toLowerCase();
+
+      if (ext === ".pdf") {
+        const pdfBytes = fs.readFileSync(storedPath);
+        const extDoc = await PDFDocument.load(pdfBytes);
+        const pages = await mergedPdf.copyPages(extDoc, extDoc.getPageIndices());
+        pages.forEach(page => mergedPdf.addPage(page));
+      } else if ([".png", ".jpg", ".jpeg"].includes(ext)) {
+        const imgBytes = fs.readFileSync(storedPath);
+        const img = ext === ".png"
+          ? await mergedPdf.embedPng(imgBytes)
+          : await mergedPdf.embedJpg(imgBytes);
+        const page = mergedPdf.addPage();
+        const { width, height } = page.getSize();
+        const maxWidth = width - 100;
+        const maxHeight = height - 100;
+        const scale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
+        const drawWidth = img.width * scale;
+        const drawHeight = img.height * scale;
+        page.drawImage(img, {
+          x: (width - drawWidth) / 2,
+          y: (height - drawHeight) / 2,
+          width: drawWidth,
+          height: drawHeight
+        });
+      }
+    } catch (e) {
+      console.log("Attachment merge error:", e);
+    }
+  }
+
+  const finalBytes = await mergedPdf.save();
+  const filename = `${channel}_${(claim.claim_number || claim.billed_id || "packet").replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
+
+  res.writeHead(200, {
+    "Content-Type": "application/pdf",
+    "Content-Disposition": `attachment; filename="${filename}"`
+  });
+
+  return res.end(Buffer.from(finalBytes));
 }
 
 function applyTemplate(org_id, type, html){
@@ -24572,7 +24683,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const ws = ensureAgentWorkspace(sess.org_id, claim);
     ensureWorkspacePacket(ws);
     ensurePacketSections(ws, claim);
-    return buildPacketPDF({
+    return buildMergedPacketPDF({
       claim,
       derived,
       ws,
