@@ -6439,10 +6439,12 @@ function renderPacketReadinessSummary(ws, channel){
 
 function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
   const docs = workspaceRequiredDocConfig(channel);
+  const hasMissing = docs.some(d => d.required && !packetHasKey(ws, d.key));
   return `
-    <details class="ws-panel" open>
-      <summary style="cursor:pointer;font-weight:900;">
-        Documents & Missing Items
+    <details class="ws-panel" ${hasMissing ? "open" : ""}>
+      <summary style="cursor:pointer;font-weight:900;display:flex;justify-content:space-between;">
+        <span>Documents & Missing Items</span>
+        ${hasMissing ? `<span style="color:#dc2626;font-size:12px;">⚠ Missing Required</span>` : `<span style="color:#16a34a;font-size:12px;">✓ Complete</span>`}
       </summary>
       <div class="ws-doc-list">
         ${docs.map(doc => {
@@ -6470,6 +6472,22 @@ function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
       </div>
       <div class="hint" style="margin-top:10px;">Users should not guess what to do. Keep required docs green before review/export.</div>
     </details>
+  `;
+}
+
+function renderInlineAIAssist(billed_id, channel){
+  return `
+    <div class="ws-panel">
+      <h3>AI Assist</h3>
+      <form method="POST" action="/ai-workspace/ai-edit">
+        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
+        <input type="hidden" name="channel" value="${safeStr(channel)}" />
+
+        <textarea name="prompt" placeholder="e.g. Make this stronger for medical necessity or rewrite for appeal approval"></textarea>
+
+        <button class="btn">Apply AI Update</button>
+      </form>
+    </div>
   `;
 }
 
@@ -7695,6 +7713,7 @@ function buildPacketHTML({ org_id, type, claim, derived, ws }){
 
 function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   const doc = docOverride || new PDFKitDocument({ margin: 50, bufferPages: true });
+  doc.page.margins = { top: 50, bottom: 50, left: 50, right: 50 };
   const filename = `${channel}_${(claim.claim_number || claim.billed_id || "packet").replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
 
   if (!docOverride) {
@@ -7780,8 +7799,11 @@ function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   // ----- BODY (REAL LETTER FLOW) -----
 
   function paragraph(text){
-    doc.text(text || "", {
-      width: 500,
+    doc
+      .font("Helvetica")
+      .fontSize(11)
+      .text(text || "", {
+      width: doc.page.width - 100,
       align: "left",
       lineGap: 4
     });
@@ -7886,7 +7908,10 @@ The reimbursement received does not align with the expected amount based on appl
 
       if ([".png",".jpg",".jpeg"].includes(ext)) {
         try {
-          doc.image(att.stored_path, { fit:[450,300] });
+          doc.image(att.stored_path, {
+            fit: [doc.page.width - 100, 300],
+            align: "center"
+          });
         } catch(e){
           doc.text(att.filename);
         }
@@ -24466,6 +24491,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
         <div class="ws-layout">
           <div class="ws-side">
             ${renderWorkspaceIntelligence(ws, claim, derived, channel)}
+            ${renderInlineAIAssist(claim.billed_id, channel)}
             ${renderPacketReadinessSummary(ws, channel)}
             ${renderSubmissionPanel(ws, claim, channel)}
             ${renderPacketMissingChecklist(ws, claim, derived, channel, claim.billed_id)}
@@ -24667,6 +24693,64 @@ if (method === "GET" && pathname === "/agent-workspace") {
     saveAgentWorkspace(sess.org_id, ws);
 
     return redirect(res, `/ai-${channel}?billed_id=${billed_id}`);
+  }
+
+  if (method === "POST" && pathname === "/ai-workspace/ai-edit") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+    if (!isAccessEnabled(sess.org_id)) return send(res, 403, "Access disabled");
+
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const billed_id = String(params.get("billed_id") || "").trim();
+    const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const prompt = String(params.get("prompt") || "").trim();
+
+    if (!billed_id || !prompt) return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
+
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return send(res, 404, "Claim not found");
+
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    ensurePacketSections(ws, claim);
+
+    const current = ws[channel]?.packet_sections || {};
+    const sourceText = String(current.argument || current.variance_explanation || "").trim();
+    if (!sourceText) return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
+
+    try {
+      const ai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY
+      });
+
+      const completion = await ai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role:"system", content:"You are rewriting healthcare appeal letters." },
+          { role:"user", content: `Rewrite this:\n\n${sourceText}\n\nInstruction: ${prompt}` }
+        ]
+      });
+
+      const output = String(completion?.choices?.[0]?.message?.content || "").trim();
+      if (!output) return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
+
+      if (channel === "appeal") {
+        ws.appeal.packet_sections = ws.appeal.packet_sections || defaultAppealPacketSections();
+        ws.appeal.packet_sections.argument = output;
+        ws.appeal.draft_text = output;
+      } else {
+        ws.negotiation.packet_sections = ws.negotiation.packet_sections || defaultNegotiationPacketSections();
+        ws.negotiation.packet_sections.variance_explanation = output;
+        ws.negotiation.draft_text = output;
+      }
+
+      saveAgentWorkspace(sess.org_id, ws);
+    } catch (e) {
+      console.error("AI WORKSPACE INLINE EDIT ERROR:", e);
+    }
+
+    return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
   }
 
   if (method === "GET" && pathname === "/ai-workspace/export") {
