@@ -10,6 +10,7 @@
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "openai": "^4.0.0",
+    "pdfkit": "^0.17.2",
     "stripe": "^18.0.0"
   },
   "keywords": [],
