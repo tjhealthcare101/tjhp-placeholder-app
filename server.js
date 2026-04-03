@@ -780,9 +780,57 @@ details summary::-webkit-details-marker{display:none}
 .ws-suggest-copy{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.45}
 .ws-export-note{font-size:12px;color:var(--muted);margin-top:8px}
 .ws-attachment-index{background:#fafafa;border:1px dashed var(--border);border-radius:12px;padding:12px;font-size:13px;white-space:pre-wrap}
-.ws-score{display:flex;align-items:center;gap:10px}
-.ws-score-num{font-size:28px;font-weight:900}
-.ws-score-sub{font-size:12px;color:var(--muted)}
+/* ===== RECOVERY INTELLIGENCE UPGRADE ===== */
+
+.ws-intel-card{
+  border-radius:18px;
+  padding:16px;
+  background:linear-gradient(135deg,#111827,#1f2937);
+  color:#fff;
+  box-shadow:0 12px 30px rgba(0,0,0,.2);
+}
+
+.ws-intel-header{
+  font-size:12px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  opacity:.7;
+}
+
+.ws-intel-main{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-top:8px;
+}
+
+.ws-intel-score{
+  font-size:36px;
+  font-weight:900;
+}
+
+.ws-intel-label{
+  font-size:12px;
+  opacity:.7;
+}
+
+.ws-intel-sub{
+  margin-top:12px;
+  font-size:14px;
+}
+
+.ws-intel-bar{
+  height:6px;
+  border-radius:6px;
+  background:#374151;
+  margin-top:10px;
+  overflow:hidden;
+}
+
+.ws-intel-bar-fill{
+  height:100%;
+  background:linear-gradient(90deg,#22c55e,#4ade80);
+}
 .packet-export body,.packet-export{background:#fff !important}
 .packet-export .ws-preview-body{background:#fff !important;padding:0}
 .packet-export .ws-letter{box-shadow:none !important;border:none !important;border-radius:0 !important;max-width:none !important;padding:0 !important}
@@ -6349,19 +6397,71 @@ function computeWorkspaceQuickScore(ws, claim, derived, channel){
 function renderWorkspaceIntelligence(ws, claim, derived, channel){
   const score = computeWorkspaceQuickScore(ws, claim, derived, channel);
 
+  const riskLevel =
+    score.probability >= 80 ? "High Confidence" :
+    score.probability >= 60 ? "Moderate Confidence" :
+    "Low Confidence";
+
+  const drivers = [];
+
+  if (!packetHasKey(ws,"eob_era")) drivers.push("Missing EOB");
+  if (!packetHasKey(ws,"claim_form")) drivers.push("Missing claim form");
+  if (channel === "appeal" && !packetHasKey(ws,"denial_letter")) drivers.push("Missing denial");
+
+  const driverText = drivers.length
+    ? `Risk Factors: ${drivers.join(", ")}`
+    : "All required documents present";
+
+  const actionSignal =
+    score.probability >= 80 ? "Proceed to Submission" :
+    score.probability >= 60 ? "Review Before Submitting" :
+    "Improve Packet Before Submission";
+
+  const barColor =
+    score.probability >= 80 ? "#22c55e" :
+    score.probability >= 60 ? "#f59e0b" :
+    "#ef4444";
+
   return `
-    <div class="ws-panel">
-      <h3>Recovery Intelligence</h3>
-      <div class="ws-score">
-        <div class="ws-score-num">${score.probability}%</div>
-        <div class="ws-score-sub">Success Probability</div>
-      </div>
-      <div style="margin-top:10px;">
-        <div class="muted small">Estimated Recovery</div>
-        <div style="font-weight:900;font-size:18px;">
-          ${formatMoneyUI(score.estimatedRecovery)}
+    <div class="ws-intel-card">
+
+      <div class="ws-intel-header">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span>📊</span>
+          <span>Revenue Intelligence</span>
         </div>
       </div>
+
+      <div class="ws-intel-main">
+        <div>
+          <div class="ws-intel-score">${score.probability}%</div>
+          <div class="ws-intel-label">Success Probability</div>
+        </div>
+
+        <div style="text-align:right;">
+          <div style="font-size:18px;font-weight:900;">
+            ${formatMoneyUI(score.estimatedRecovery)}
+          </div>
+          <div class="ws-intel-label">Estimated Recovery</div>
+        </div>
+      </div>
+
+      <div class="ws-intel-bar">
+        <div class="ws-intel-bar-fill" style="width:${score.probability}%;background:${barColor};"></div>
+      </div>
+
+      <div class="ws-intel-sub">
+        ${riskLevel}
+      </div>
+
+      <div class="ws-intel-sub" style="opacity:.8;">
+        ${driverText}
+      </div>
+
+      <div style="margin-top:10px;font-weight:700;">
+        ${actionSignal}
+      </div>
+
     </div>
   `;
 }
