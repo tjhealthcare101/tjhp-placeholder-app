@@ -2761,39 +2761,27 @@ function navUser() {
 
 function renderActionCenter(org_id) {
   return `
-    <div style="margin-bottom:10px;">
-      <a class="btn" href="/actions">Open Action Center</a>
+    <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);">
+      <iframe
+        title="Action Center"
+        src="/actions"
+        style="width:100%;min-height:1200px;border:0;"
+        loading="lazy"
+      ></iframe>
     </div>
-    <details>
-      <summary class="muted small" style="cursor:pointer;">Backup embedded view</summary>
-      <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);margin-top:8px;">
-        <iframe
-          title="Action Center"
-          src="/actions"
-          style="width:100%;min-height:1200px;border:0;"
-          loading="lazy"
-        ></iframe>
-      </div>
-    </details>
   `;
 }
 
 function renderRevenueIntelligence(org_id) {
   return `
-    <div style="margin-bottom:10px;">
-      <a class="btn" href="/revenue-intelligence">Open Revenue Intelligence</a>
+    <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);">
+      <iframe
+        title="Revenue Intelligence Command Center"
+        src="/revenue-intelligence"
+        style="width:100%;min-height:1300px;border:0;"
+        loading="lazy"
+      ></iframe>
     </div>
-    <details>
-      <summary class="muted small" style="cursor:pointer;">Backup embedded view</summary>
-      <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);margin-top:8px;">
-        <iframe
-          title="Revenue Intelligence Command Center"
-          src="/revenue-intelligence"
-          style="width:100%;min-height:1300px;border:0;"
-          loading="lazy"
-        ></iframe>
-      </div>
-    </details>
   `;
 }
 function navAdmin() {
@@ -13609,7 +13597,17 @@ if (method === "GET" && pathname === "/overview") {
     </div>
 
     <h3>🔥 Today’s Priority</h3>
-    ${priorityHtml || `<p class="muted">No denied or underpaid claims in scope.</p>`}
+    ${priorityHtml || `
+      <p class="muted">
+        No denied or underpaid claims yet.
+      </p>
+
+      <div class="card" style="margin-top:10px;">
+        <b>Start by uploading your claims data</b>
+        <div class="muted">We’ll automatically identify revenue at risk</div>
+        <a class="btn" href="/data">Upload Data</a>
+      </div>
+    `}
     <div style="margin-top:10px;">
       <a href="/recover" class="btn secondary">View All Claims</a>
     </div>
