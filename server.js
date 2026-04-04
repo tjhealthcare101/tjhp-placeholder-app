@@ -2743,16 +2743,57 @@ function renderLoginPage(contentHtml, pageTitle = "Login | TJ Healthcare Pro") {
 }
 function navUser() {
   return `
-    <a href="/dashboard">Revenue Overview</a>
-    <a href="/claims">Claims Lifecycle</a>
-    <a href="/data-management">Data Management</a>
-    <a href="/revenue-intelligence">Revenue Intelligence Command Center</a>
-    <a href="/ai-copilot">AI Copilot</a>
-    <a href="/actions">Action Center</a>
-    <a href="/report">Reports</a>
+    <a href="/overview">Overview</a>
+    <a href="/recover">Recover Revenue</a>
+    <a href="/intelligence">Intelligence</a>
+    <a href="/data">Data</a>
     <a href="/account">Account</a>
+    <div style="font-size:10px;opacity:.5;margin-top:4px;">
+      Advanced:
+      <a href="/actions">Action Center</a>
+      <a href="/ai-copilot">AI Copilot</a>
+      <a href="/report">Reports</a>
+    </div>
     ${getAIStatusLabel()}
     <a href="/logout">Logout</a>
+  `;
+}
+
+function renderActionCenter(org_id) {
+  return `
+    <div style="margin-bottom:10px;">
+      <a class="btn" href="/actions">Open Action Center</a>
+    </div>
+    <details>
+      <summary class="muted small" style="cursor:pointer;">Backup embedded view</summary>
+      <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);margin-top:8px;">
+        <iframe
+          title="Action Center"
+          src="/actions"
+          style="width:100%;min-height:1200px;border:0;"
+          loading="lazy"
+        ></iframe>
+      </div>
+    </details>
+  `;
+}
+
+function renderRevenueIntelligence(org_id) {
+  return `
+    <div style="margin-bottom:10px;">
+      <a class="btn" href="/revenue-intelligence">Open Revenue Intelligence</a>
+    </div>
+    <details>
+      <summary class="muted small" style="cursor:pointer;">Backup embedded view</summary>
+      <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);margin-top:8px;">
+        <iframe
+          title="Revenue Intelligence Command Center"
+          src="/revenue-intelligence"
+          style="width:100%;min-height:1300px;border:0;"
+          loading="lazy"
+        ></iframe>
+      </div>
+    </details>
   `;
 }
 function navAdmin() {
@@ -13534,6 +13575,68 @@ if (method === "GET" && pathname === "/weekly-summary") {
   `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
   return send(res, 200, html);
 }
+
+if (method === "GET" && pathname === "/overview") {
+  const metrics = computeDashboardMetrics(org.org_id);
+  const claimCtx = buildClaimContext(org.org_id);
+  const claims = readJSON(FILES.billed, [])
+    .filter(c => c.org_id === org.org_id)
+    .map(c => ({ claim: c, derived: evaluateClaimDerived(c, claimCtx) }));
+
+  const atRiskClaims = claims
+    .filter(({ derived }) => ["Denied", "Underpaid"].includes(String(derived.lifecycleStage || "")))
+    .sort((a, b) => num(b.derived.atRiskAmount || 0) - num(a.derived.atRiskAmount || 0))
+    .slice(0, 5);
+
+  const totalAtRisk = atRiskClaims.reduce((s, row) => s + num(row.derived.atRiskAmount || 0), 0);
+
+  const priorityHtml = atRiskClaims.map(({ claim, derived }) => `
+    <div class="card" style="margin:8px 0;border-left:4px solid #ef4444;">
+      <b>Claim #${safeStr(claim.claim_number || "N/A")}</b>
+      <div>${safeStr(claim.payer || "Unknown Payer")}</div>
+      <div>$${formatMoneyUI(derived.atRiskAmount || 0)}</div>
+      <a class="btn" href="/ai-appeal?billed_id=${encodeURIComponent(claim.billed_id || "")}">Start Recovery</a>
+    </div>
+  `).join("");
+
+  const html = renderPage("Overview", `
+    <h2>💰 Revenue Overview</h2>
+
+    <div class="card" style="background:#ecfdf5;">
+      <b>We found $${formatMoneyUI(totalAtRisk)} at risk</b>
+      <div>${atRiskClaims.length} high priority claims</div>
+      <div class="muted">AI identified immediate revenue recovery opportunities</div>
+    </div>
+
+    <h3>🔥 Today’s Priority</h3>
+    ${priorityHtml || `<p class="muted">No denied or underpaid claims in scope.</p>`}
+    <div style="margin-top:10px;">
+      <a href="/recover" class="btn secondary">View All Claims</a>
+    </div>
+
+    <h3>📊 Metrics</h3>
+    <div class="kpi-strip" style="margin-top:10px;">
+      <div class="kpi-card"><p class="kpi-value">${formatMoneyUI(metrics.kpis?.totalBilled || 0)}</p><p class="kpi-label">Total Billed</p></div>
+      <div class="kpi-card"><p class="kpi-value">${formatMoneyUI(metrics.kpis?.collectedTotal || 0)}</p><p class="kpi-label">Collected</p></div>
+      <div class="kpi-card"><p class="kpi-value">${formatMoneyUI(metrics.kpis?.revenueAtRisk || 0)}</p><p class="kpi-label">Revenue At Risk</p></div>
+      <div class="kpi-card"><p class="kpi-value">${Number(metrics.denialRate || 0).toFixed(1)}%</p><p class="kpi-label">Denial Rate</p></div>
+    </div>
+  `, navUser(), { showChat:true, orgName: org.org_name });
+  return send(res, 200, html);
+}
+
+if (method === "GET" && pathname === "/recover") {
+  return send(res, 200, renderPage("Recover Revenue", `
+    <h2>Recover Revenue</h2>
+
+    <div class="card" style="margin-bottom:10px;">
+      <b>Take action on denied and underpaid claims</b>
+      <div class="muted">This is where revenue is recovered</div>
+    </div>
+
+    ${renderActionCenter(org.org_id)}
+  `, navUser(), { showChat:true, orgName: org.org_name }));
+}
   // dashboard with empty-state previews and tooltips
   if (method === "GET" && (pathname === "/" || pathname === "/dashboard" || pathname === "/revenue-overview")) {
 
@@ -15516,11 +15619,18 @@ function renderRevenueAIConsole({ org, parsed }){
 }
 
 if (method === "GET" && pathname === "/intelligence") {
-  const tabRaw = String(parsed.query.tab || "ask-ai").toLowerCase();
-  const tab = ["executive", "payers", "forecast", "deep-dive", "ask-ai"].includes(tabRaw) ? tabRaw : "ask-ai";
-  const q = String(parsed.query.q || "");
-  const extra = new URLSearchParams({ tab, ...(q ? { q } : {}) }).toString();
-  return redirect(res, `/revenue-intelligence?${extra}`);
+  return send(res, 200, renderPage("Revenue Intelligence", `
+    <h2>Revenue Intelligence Command Center</h2>
+    ${renderRevenueIntelligence(org.org_id)}
+  `, navUser(), { showChat:true, orgName: org.org_name }));
+}
+
+if (method === "GET" && pathname === "/action-center") {
+  return redirect(res, "/actions");
+}
+
+if (method === "GET" && pathname === "/data") {
+  return redirect(res, "/data-management");
 }
 
 if (method === "GET" && pathname === "/revenue-intelligence") {
