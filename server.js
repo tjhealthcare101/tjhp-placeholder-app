@@ -726,12 +726,15 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 
 /* ===== AI WORKSPACE LIVE PACKET PREVIEW ===== */
 .ws-layout{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}
-.ws-side{position:sticky;top:84px;display:flex;flex-direction:column;gap:14px}
-.ws-panel{border:1px solid var(--border);border-radius:16px;background:var(--card);padding:14px;box-shadow:var(--shadow)}
-.ws-panel h3{margin:0 0 8px;font-size:14px}
+.workspace-left{position:sticky;top:80px;height:calc(100vh - 100px);overflow-y:auto;padding-right:8px;display:flex;flex-direction:column;gap:14px}
+.workspace-right{overflow-y:auto;height:calc(100vh - 100px);padding-right:12px}
+.ws-panel{background:#fff;border-radius:14px;padding:14px;margin-bottom:16px;box-shadow:0 6px 18px rgba(0,0,0,.06);border:1px solid var(--border)}
+.ws-panel h3{margin:0 0 6px;font-size:13px;opacity:.8}
 .ws-panel .hint{font-size:12px;color:var(--muted);line-height:1.45}
 details summary{list-style:none}
 details summary::-webkit-details-marker{display:none}
+.ws-docs summary{cursor:pointer;font-weight:700;padding:8px 0;display:flex;justify-content:space-between;gap:8px;align-items:center}
+.ws-docs[open]{margin-top:8px}
 .ws-chip-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .ws-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid var(--border);background:#fff}
 .ws-chip.ok{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
@@ -749,19 +752,20 @@ details summary::-webkit-details-marker{display:none}
 .ws-doc-meta{font-size:12px;color:var(--muted);margin-top:4px}
 .ws-upload-form{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .ws-upload-form input[type="file"]{max-width:100%}
+.packet-preview{background:#fff;border-radius:18px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
 .ws-preview-shell{border:1px solid var(--border);border-radius:18px;background:var(--card);box-shadow:var(--shadow);overflow:hidden}
 .ws-preview-top{padding:16px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
 .ws-preview-top .title{font-size:18px;font-weight:900}
 .ws-preview-top .sub{font-size:12px;color:var(--muted);margin-top:4px}
 .ws-preview-body{padding:30px;background:#f3f4f6}
-.ws-letter{max-width:850px;margin:0 auto;background:#fff;border-radius:20px;padding:40px;box-shadow:0 20px 50px rgba(0,0,0,.08)}
+.ws-letter{max-width:850px;margin:0 auto;background:#fff;border-radius:20px;padding:48px;line-height:1.6;font-size:14px;box-shadow:0 20px 50px rgba(0,0,0,.08)}
 .ws-letterhead{border-bottom:2px solid #e5e7eb;padding-bottom:18px;margin-bottom:24px}
 .ws-meta-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0 18px}
 .ws-meta-card{background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:12px}
 .ws-meta-card .k{font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .ws-meta-card .v{font-size:14px;font-weight:800;margin-top:4px}
-.ws-section-card{border:1px solid #e5e7eb;border-radius:16px;padding:18px;background:#fff;margin:20px 0;box-shadow:0 4px 12px rgba(0,0,0,.04);transition:all .2s ease}
-.ws-section-card:hover{border-color:#c7d2fe;box-shadow:0 8px 20px rgba(79,70,229,.08)}
+.ws-section-card{border:none;border-radius:0;padding:18px 0;background:#fff;margin:16px 0;box-shadow:none;border-bottom:1px solid #eee;transition:all .2s ease}
+.ws-section-card:hover{border-color:transparent;box-shadow:none}
 .ws-section-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}
 .ws-section-title{font-size:15px;font-weight:900;letter-spacing:.02em;margin-bottom:6px}
 .ws-section-actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -837,11 +841,11 @@ details summary::-webkit-details-marker{display:none}
 .packet-export .ws-section-card{break-inside:avoid;page-break-inside:avoid}
 @media (max-width: 980px){
   .ws-layout{grid-template-columns:1fr}
-  .ws-side{position:static}
+  .workspace-left,.workspace-right{position:static;height:auto;overflow:visible;padding-right:0}
 }
 @media print{
   .ws-layout{display:block}
-  .ws-side,.ws-quick-actions,.ws-section-actions,.ws-edit-form,.topbar,.footer,.nav,.btnRow,.btn{display:none !important}
+  .workspace-left,.ws-quick-actions,.ws-section-actions,.ws-edit-form,.topbar,.footer,.nav,.btnRow,.btn{display:none !important}
   .ws-preview-shell,.ws-letter,.ws-section-card{box-shadow:none !important}
   .ws-preview-body{padding:0 !important;background:#fff !important}
   .ws-letter{border:none !important;padding:0 !important}
@@ -6537,14 +6541,70 @@ function renderPacketReadinessSummary(ws, channel){
   `;
 }
 
+function renderWorkflowPanel(ws, claim, channel){
+  const submission = ws.submission || {};
+  const enhanced = workspaceEnhancedCompleteness(ws, channel);
+  const ready = canMarkReady(ws, channel);
+  const tone = ready.ok ? "ok" : "warn";
+
+  return `
+    <div class="ws-panel">
+      <h3>⚙️ Workflow</h3>
+      <div class="ws-score">
+        <div class="ws-score-num">${enhanced.pct}%</div>
+        <div class="ws-score-sub">${enhanced.complete} of ${enhanced.total} preview elements completed</div>
+      </div>
+      <div class="ws-chip-row">
+        <span class="ws-chip ${tone}">${ready.ok ? "Ready for Review" : "Missing Required Items"}</span>
+        <span class="ws-chip ${submission.status === "submitted" ? "ok" : "warn"}">${submission.status || "Draft"}</span>
+      </div>
+      ${
+        ready.ok
+          ? `<div class="ws-callout ok" style="margin-top:10px;">Packet is ready for review and export.</div>`
+          : `<div class="ws-callout warn" style="margin-top:10px;">Missing required documents: ${ready.missing.map(workspaceDocLabel).join(", ")}.</div>`
+      }
+
+      ${submission.status === "submitted" ? `
+        <div class="ws-callout ok" style="margin-top:10px;">
+          Submitted via ${safeStr(submission.method || "N/A")}
+          <br/>
+          Follow-up: ${safeStr(submission.follow_up_date || "Not set")}
+          <br/>
+          Submitted: ${safeStr(submission.submitted_at || "")}
+        </div>
+      ` : ``}
+
+      <form method="POST" action="/ai-workspace/submit" style="margin-top:10px;">
+        <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
+        <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+
+        <label class="small">Method</label>
+        <select name="method">
+          <option>Portal</option>
+          <option>Fax</option>
+          <option>Mail</option>
+          <option>Phone</option>
+        </select>
+
+        <label class="small">Follow-up Date</label>
+        <input type="date" name="follow_up_date"/>
+
+        <button class="btn secondary" style="margin-top:8px;">
+          Mark Submitted
+        </button>
+      </form>
+    </div>
+  `;
+}
+
 function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
   const docs = workspaceRequiredDocConfig(channel);
   const hasMissing = docs.some(d => d.required && !packetHasKey(ws, d.key));
   return `
-    <details class="ws-panel" ${hasMissing ? "open" : ""}>
-      <summary style="cursor:pointer;font-weight:900;display:flex;justify-content:space-between;">
-        <span>Documents & Missing Items</span>
-        ${hasMissing ? `<span style="color:#dc2626;font-size:12px;">⚠ Missing Required</span>` : `<span style="color:#16a34a;font-size:12px;">✓ Complete</span>`}
+    <details class="ws-panel ws-docs">
+      <summary>
+        <span>📄 Documents & Missing Items</span>
+        ${hasMissing ? `<span class="badge warn">⚠ Missing Required</span>` : `<span class="badge ok">✓ Complete</span>`}
       </summary>
       <div class="ws-doc-list">
         ${docs.map(doc => {
@@ -6578,10 +6638,17 @@ function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
 function renderInlineAIAssist(billed_id, channel){
   return `
     <div class="ws-panel">
-      <h3>AI Assist</h3>
+      <h3>🤖 AI Assist</h3>
       <form method="POST" action="/ai-workspace/ai-edit">
         <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
         <input type="hidden" name="channel" value="${safeStr(channel)}" />
+
+        <div class="hint" style="margin-bottom:8px;">
+          Ask AI to improve this packet:
+          <br/>• strengthen medical necessity
+          <br/>• add contract language
+          <br/>• rewrite for approval
+        </div>
 
         <textarea name="prompt" placeholder="e.g. Make this stronger for medical necessity or rewrite for appeal approval"></textarea>
 
@@ -6806,7 +6873,7 @@ function renderWorkspacePreview(opts){
   `;
 
   return `
-    <div class="ws-preview-shell ${exportMode ? "packet-export" : ""}">
+    <div class="ws-preview-shell packet-preview ${exportMode ? "packet-export" : ""}">
       <div class="ws-preview-top">
         <div>
           <div class="title">${safeStr(title)}</div>
@@ -24589,17 +24656,15 @@ if (method === "GET" && pathname === "/agent-workspace") {
         ${uploadedMsg}
 
         <div class="ws-layout">
-          <div class="ws-side">
+          <div class="ws-side workspace-left">
+            <div class="hint" style="margin-bottom:8px;">Workspace Tools</div>
             ${renderWorkspaceIntelligence(ws, claim, derived, channel)}
             ${renderInlineAIAssist(claim.billed_id, channel)}
-            ${renderPacketReadinessSummary(ws, channel)}
-            ${renderSubmissionPanel(ws, claim, channel)}
             ${renderPacketMissingChecklist(ws, claim, derived, channel, claim.billed_id)}
-            ${renderInlineAiSuggestions(channel, claim, derived, ws)}
-            ${renderOrgSettingsSnapshotPanel(sess.org_id)}
+            ${renderWorkflowPanel(ws, claim, channel)}
           </div>
 
-          <div class="ws-main">
+          <div class="ws-main workspace-right">
             ${renderWorkspacePreview({
               org_id: sess.org_id,
               claim,
