@@ -726,7 +726,7 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 
 /* ===== AI WORKSPACE LIVE PACKET PREVIEW ===== */
 .ws-layout{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}
-.workspace-left{position:sticky;top:80px;max-height:calc(100vh - 100px);overflow-y:auto;padding-right:8px;display:flex;flex-direction:column;gap:14px}
+.workspace-left{position:sticky;top:80px;height:auto;max-height:none;overflow:visible;padding-right:8px;display:flex;flex-direction:column;gap:14px}
 .workspace-right{height:auto;overflow:visible;padding-right:12px}
 .ws-panel{background:#fff;border-radius:14px;padding:14px;margin-bottom:16px;box-shadow:0 6px 18px rgba(0,0,0,.06);border:1px solid var(--border)}
 .ws-panel h3{margin:0 0 6px;font-size:13px;opacity:.8}
@@ -7888,6 +7888,7 @@ function buildPacketHTML({ org_id, type, claim, derived, ws }){
 function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   const doc = docOverride || new PDFKitDocument({ margin: 50, bufferPages: true });
   doc.page.margins = { top: 50, bottom: 50, left: 50, right: 50 };
+  const CONTENT_WIDTH = doc.page.width - 100;
   const filename = `${channel}_${(claim.claim_number || claim.billed_id || "packet").replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
 
   if (!docOverride) {
@@ -7923,7 +7924,7 @@ function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   doc
     .font("Helvetica")
     .fontSize(10)
-    .text(identity.legal_name || "Your Practice", 350, 40, { align: "right" });
+    .text(identity.legal_name || "Your Practice", { align: "right" });
 
   if (identity.npi) doc.text(`NPI: ${identity.npi}`, { align: "right" });
   if (identity.tax_id) doc.text(`TIN: ${identity.tax_id}`, { align: "right" });
@@ -7933,13 +7934,13 @@ function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
     .text(identity.phone || "", { align: "right" });
 
   // ----- Move below header -----
-  doc.moveDown(4);
+  doc.moveDown(3);
 
   // ----- Date -----
   doc
     .font("Helvetica")
     .fontSize(11)
-    .text(`Date: ${new Date().toLocaleDateString()}`);
+    .text(`Date: ${new Date().toLocaleDateString()}`, { width: CONTENT_WIDTH, align: "right" });
 
   doc.moveDown(2);
 
@@ -7977,10 +7978,10 @@ function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
       .font("Helvetica")
       .fontSize(11)
       .text(text || "", {
-      width: doc.page.width - 100,
-      align: "left",
-      lineGap: 4
-    });
+        width: CONTENT_WIDTH,
+        align: "left",
+        lineGap: 4
+      });
     doc.moveDown(1);
   }
 
@@ -8019,7 +8020,8 @@ The reimbursement received does not align with the expected amount based on appl
   doc.moveDown();
 
   doc.text(
-    "We respectfully request a full review and reprocessing of this claim in accordance with applicable reimbursement policies, guidelines, and/or contractual obligations."
+    "We respectfully request a full review and reprocessing of this claim in accordance with applicable reimbursement policies, guidelines, and/or contractual obligations.",
+    { width: CONTENT_WIDTH, align: "left" }
   );
 
   doc.moveDown(2);
@@ -8032,13 +8034,13 @@ The reimbursement received does not align with the expected amount based on appl
       doc.image(imgBuffer, { fit: [200, 80] });
     } catch(e){}
   } else {
-    doc.text(sections.signature || "");
+    doc.text(sections.signature || "", { width: CONTENT_WIDTH, align: "left" });
   }
 
   doc.moveDown();
 
-  doc.text("Sincerely,");
-  doc.text(identity.legal_name || "Your Practice");
+  doc.text("Sincerely,", { width: CONTENT_WIDTH, align: "left" });
+  doc.text(identity.legal_name || "Your Practice", { width: CONTENT_WIDTH, align: "left" });
 
   // =========================
   // 🔥 ATTACHMENTS PAGE
