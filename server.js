@@ -787,11 +787,12 @@ details summary::-webkit-details-marker{display:none}
 /* ===== RECOVERY INTELLIGENCE UPGRADE ===== */
 
 .ws-intel-card{
-  border-radius:18px;
+  border-radius:16px;
   padding:16px;
-  background:linear-gradient(135deg,#111827,#1f2937);
-  color:#fff;
-  box-shadow:0 12px 30px rgba(0,0,0,.2);
+  background:#ffffff;
+  border:1px solid #e5e7eb;
+  box-shadow:0 8px 24px rgba(0,0,0,.06);
+  color:#111827;
 }
 
 .ws-intel-header{
@@ -826,7 +827,7 @@ details summary::-webkit-details-marker{display:none}
 .ws-intel-bar{
   height:6px;
   border-radius:6px;
-  background:#374151;
+  background:#e5e7eb;
   margin-top:10px;
   overflow:hidden;
 }
@@ -6421,11 +6422,6 @@ function renderWorkspaceIntelligence(ws, claim, derived, channel){
     score.probability >= 60 ? "Review Before Submitting" :
     "Improve Packet Before Submission";
 
-  const barColor =
-    score.probability >= 80 ? "#22c55e" :
-    score.probability >= 60 ? "#f59e0b" :
-    "#ef4444";
-
   return `
     <div class="ws-intel-card">
 
@@ -6451,7 +6447,7 @@ function renderWorkspaceIntelligence(ws, claim, derived, channel){
       </div>
 
       <div class="ws-intel-bar">
-        <div class="ws-intel-bar-fill" style="width:${score.probability}%;background:${barColor};"></div>
+        <div class="ws-intel-bar-fill" style="width:${score.probability}%;"></div>
       </div>
 
       <div class="ws-intel-sub">
@@ -6786,7 +6782,7 @@ function renderSignatureSection(opts){
 
         <div style="display:flex;gap:8px;margin-top:8px;">
           <button type="button" class="btn secondary" onclick="clearSig()">Clear</button>
-          <button type="button" class="btn" onclick="saveSig('${safeStr(billed_id)}','${safeStr(channel)}')">Save Drawing</button>
+          <button type="button" class="btn" onclick="saveSig()">Save Drawing</button>
         </div>
       </div>
     </div>
@@ -6812,17 +6808,25 @@ function renderSignatureSection(opts){
         });
         canvas.addEventListener("mousemove", draw);
 
+        function getCanvasPos(canvas, evt) {
+          const rect = canvas.getBoundingClientRect();
+          return {
+            x: (evt.clientX - rect.left) * (canvas.width / rect.width),
+            y: (evt.clientY - rect.top) * (canvas.height / rect.height)
+          };
+        }
+
         function draw(e){
           if(!drawing) return;
           ctx.lineWidth = 2;
           ctx.lineCap = "round";
           ctx.strokeStyle = "#111827";
 
-          const rect = canvas.getBoundingClientRect();
-          ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+          const pos = getCanvasPos(canvas, e);
+          ctx.lineTo(pos.x, pos.y);
           ctx.stroke();
           ctx.beginPath();
-          ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+          ctx.moveTo(pos.x, pos.y);
         }
 
         window.clearSig = function clearSig(){
@@ -6830,12 +6834,13 @@ function renderSignatureSection(opts){
           ctx.beginPath();
         };
 
-        window.saveSig = function saveSig(billed_id, channel){
-          const data = canvas.toDataURL();
-          fetch("/ai-workspace/save-signature", {
+        window.saveSig = function saveSig(){
+          fetch("/org/save-signature", {
             method:"POST",
             headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({ billed_id, channel, data })
+            body: JSON.stringify({
+              signature: canvas.toDataURL()
+            })
           }).then(() => location.reload());
         };
       })();
@@ -6848,6 +6853,8 @@ function renderWorkspacePreview(opts){
   const claim = opts.claim || {};
   const derived = opts.derived || {};
   const ws = opts.ws || {};
+  const orgSettings = getOrgSettings(org_id) || {};
+  const savedSignature = String(orgSettings.signature_image || "");
   const channel = opts.channel === "negotiation" ? "negotiation" : "appeal";
   const exportMode = !!opts.exportMode;
 
@@ -6917,7 +6924,7 @@ function renderWorkspacePreview(opts){
             billed_id: claim.billed_id,
             channel,
             value: packetSections.signature,
-            signature_image: ws.signature_image,
+            signature_image: ws.signature_image || savedSignature,
             exportMode
           })}
         </div>
@@ -23937,6 +23944,21 @@ function renderTemplateEditor(org, user){
     saveOrgSettings(sess.org_id, settings);
 
     return redirect(res, "/account?tab=org&logo=uploaded");
+  }
+
+  if (method === "POST" && pathname === "/org/save-signature") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return send(res, 403, "Unauthorized");
+
+    const body = await parseBody(req);
+    const data = JSON.parse(body || "{}");
+
+    const settings = getOrgSettings(sess.org_id) || {};
+    settings.signature_image = String(data.signature || "");
+
+    saveOrgSettings(sess.org_id, settings);
+
+    return send(res, 200, "OK");
   }
 
 if (method === "POST" && pathname === "/account/preferences") {
