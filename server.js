@@ -726,8 +726,8 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 
 /* ===== AI WORKSPACE LIVE PACKET PREVIEW ===== */
 .ws-layout{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}
-.workspace-left{position:sticky;top:80px;height:calc(100vh - 100px);overflow-y:auto;padding-right:8px;display:flex;flex-direction:column;gap:14px}
-.workspace-right{overflow-y:auto;height:calc(100vh - 100px);padding-right:12px}
+.workspace-left{position:sticky;top:80px;max-height:calc(100vh - 100px);overflow-y:auto;padding-right:8px;display:flex;flex-direction:column;gap:14px}
+.workspace-right{height:auto;overflow:visible;padding-right:12px}
 .ws-panel{background:#fff;border-radius:14px;padding:14px;margin-bottom:16px;box-shadow:0 6px 18px rgba(0,0,0,.06);border:1px solid var(--border)}
 .ws-panel h3{margin:0 0 6px;font-size:13px;opacity:.8}
 .ws-panel .hint{font-size:12px;color:var(--muted);line-height:1.45}
