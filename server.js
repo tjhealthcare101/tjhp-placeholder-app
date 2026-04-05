@@ -6541,6 +6541,7 @@ function renderWorkflowPanel(ws, claim, channel){
   const submission = ws.submission || {};
   const enhanced = workspaceEnhancedCompleteness(ws, channel);
   const ready = canMarkReady(ws, channel);
+  const isSubmitted = submission.status === "submitted";
   const tone = ready.ok ? "ok" : "warn";
 
   return `
@@ -6551,11 +6552,13 @@ function renderWorkflowPanel(ws, claim, channel){
         <div class="ws-score-sub">${enhanced.complete} of ${enhanced.total} preview elements completed</div>
       </div>
       <div class="ws-chip-row">
-        <span class="ws-chip ${tone}">${ready.ok ? "Ready for Review" : "Missing Required Items"}</span>
+        <span class="ws-chip ${isSubmitted ? "ok" : tone}">${isSubmitted ? "Submitted" : (ready.ok ? "Ready for Review" : "Missing Required Items")}</span>
         <span class="ws-chip ${submission.status === "submitted" ? "ok" : "warn"}">${submission.status || "Draft"}</span>
       </div>
       ${
-        ready.ok
+        isSubmitted
+          ? ``
+          : ready.ok
           ? `<div class="ws-callout ok" style="margin-top:10px;">Packet is ready for review and export.</div>`
           : `<div class="ws-callout warn" style="margin-top:10px;">Missing required documents: ${ready.missing.map(workspaceDocLabel).join(", ")}.</div>`
       }
@@ -17238,6 +17241,7 @@ if (method === "GET" && pathname === "/actions") {
 
   // Build actionable items by tab
   const items = [];
+  const now = new Date();
   for (const b of billedAll){
     const derived = evaluateClaimDerived(b, actionCtx);
     const financials = computeClaimFinancials(b);
@@ -17260,6 +17264,14 @@ if (method === "GET" && pathname === "/actions") {
       const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
       if (!blob.includes(q)) continue;
     }
+
+    const followUpDue = b.follow_up_date ? new Date(b.follow_up_date) : null;
+    const isSubmittedClaim = String(b.submission_status || "").toLowerCase() === "submitted";
+    const isAwaitingPaymentClaim = isSubmittedClaim && String(derived.lifecycleStage || b.lifecycleStage || "") !== "Paid";
+    const isFollowupNeededClaim = isSubmittedClaim && followUpDue && !Number.isNaN(followUpDue.getTime()) && followUpDue <= now;
+
+    if (tab === "awaiting" && !isAwaitingPaymentClaim) continue;
+    if (tab === "followup" && !isFollowupNeededClaim) continue;
 
     // Determine action center grouping (PRIORITY ORDER FIXED)
     let group = null;
@@ -17309,6 +17321,16 @@ if (method === "GET" && pathname === "/actions") {
       continue;
     }
 
+    if (isFollowupNeededClaim) {
+      group = "Follow-Up Needed";
+      kind = "other";
+      secondaryStatus = secondaryStatus || `Follow-up due ${b.follow_up_date}`;
+    } else if (isAwaitingPaymentClaim) {
+      group = "Awaiting Payment";
+      kind = "other";
+      secondaryStatus = secondaryStatus || "Submitted and awaiting payment posting";
+    }
+
     // map group to tab key
     const tabKey = (group === "Denials") ? "denials" :
                    (group === "Underpayments") ? "underpayments" :
@@ -17321,7 +17343,7 @@ if (method === "GET" && pathname === "/actions") {
 
     const atRisk = Number(derived.atRiskAmount || computeClaimAtRisk(b));
     const riskScore = computeClaimRiskScore({ ...b, status: st });
-    items.push({ b, derived, st, opStatus, kind, atRisk, riskScore, secondaryStatus, tabKey });
+    items.push({ b, derived, st, opStatus, kind, atRisk, riskScore, secondaryStatus, tabKey, isSubmittedClaim, isFollowupNeededClaim });
   }
 
   const wsAll = readJSON(FILES.agent_workspaces, []).filter(w => w.org_id === org.org_id);
@@ -17391,6 +17413,12 @@ if (method === "GET" && pathname === "/actions") {
       financials.insuranceRemaining !== null
         ? Number(financials.insuranceRemaining)
         : Math.max(0, Number(b.amount_billed || 0) - paidAmount);
+    const submittedAtMs = b.submitted_at ? new Date(b.submitted_at).getTime() : NaN;
+    const daysSinceSubmission = Number.isFinite(submittedAtMs)
+      ? Math.max(0, Math.floor((Date.now() - submittedAtMs) / (24 * 60 * 60 * 1000)))
+      : null;
+    const daysSinceSubmissionText = daysSinceSubmission === null ? "-" : `${daysSinceSubmission} day${daysSinceSubmission === 1 ? "" : "s"}`;
+    const rowStyle = x.isFollowupNeededClaim ? ` style="background:#fff7ed;"` : "";
 
     const status = x.opStatus || x.st || "Paid";
     let badgeCls = badgeClassForStatus(status);
@@ -17442,7 +17470,7 @@ if (method === "GET" && pathname === "/actions") {
       `;
     }
 
-    return `<tr>
+    return `<tr${rowStyle}>
       <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
       <td>${safeStr(b.payer||"")}</td>
       <td class="num">${formatMoneyUI(b.amount_billed || 0)}</td>
@@ -17462,9 +17490,14 @@ if (method === "GET" && pathname === "/actions") {
         }
       </td>
       <td class="num">${formatMoneyUI(paidAmount)}</td>
-      <td><span class="badge ${badgeCls}">${safeStr(status)}</span>${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}</td>
+      <td>
+        <span class="badge ${badgeCls}">${safeStr(status)}</span>
+        ${x.isSubmittedClaim ? `<span class="badge ok" style="margin-left:6px;">Submitted</span>` : `<span class="badge" style="margin-left:6px;">Draft</span>`}
+        ${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}
+      </td>
       <td>${atRiskAmount !== null ? formatMoneyUI(atRiskAmount) : "-"}</td>
       <td>${x.riskScore}</td>
+      <td>${safeStr(daysSinceSubmissionText)}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
     </tr>`;
   }).join("\n");
@@ -17538,8 +17571,8 @@ if (method === "GET" && pathname === "/actions") {
       <div class="scrollSyncTop"><div></div></div>
       <div class="scrollSyncBottom tableScrollY">
       <table>
-        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed <span class="tooltip" data-tip="Original submitted claim charge amount.">ⓘ</span></th><th>Expected <span class="tooltip" data-tip="Estimated insurance expected amount after patient responsibility and contract terms.">ⓘ</span></th><th>Paid <span class="tooltip" data-tip="Total payer payment currently posted.">ⓘ</span></th><th>Status / Stage <span class="tooltip" data-tip="Derived from payer response, denial context, and negotiation state.">ⓘ</span></th><th>At Risk <span class="tooltip" data-tip="Estimated collectible dollars not yet recovered.">ⓘ</span></th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Actions</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="9" class="muted">No items in this tab.</td></tr>`}</tbody>
+        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed <span class="tooltip" data-tip="Original submitted claim charge amount.">ⓘ</span></th><th>Expected <span class="tooltip" data-tip="Estimated insurance expected amount after patient responsibility and contract terms.">ⓘ</span></th><th>Paid <span class="tooltip" data-tip="Total payer payment currently posted.">ⓘ</span></th><th>Status / Stage <span class="tooltip" data-tip="Derived from payer response, denial context, and negotiation state.">ⓘ</span></th><th>At Risk <span class="tooltip" data-tip="Estimated collectible dollars not yet recovered.">ⓘ</span></th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Days Since Submission</th><th>Actions</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="10" class="muted">No items in this tab.</td></tr>`}</tbody>
       </table>
     </div>
     </div>
@@ -24661,6 +24694,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const channel = pathname === "/ai-negotiation" ? "negotiation" : "appeal";
     const savedMsg = parsed.query.saved ? `<div class="ws-callout ok">Section saved. The live preview has been updated.</div>` : ``;
     const uploadedMsg = parsed.query.uploaded ? `<div class="ws-callout ok">Document uploaded and linked into the packet preview.</div>` : ``;
+    const submittedMsg = parsed.query.submitted
+      ? `<div class="ws-callout ok">Marked as submitted and moved to tracking workflow.</div>`
+      : ``;
 
     const pageContent = `
       <div class="ws-main">
@@ -24678,6 +24714,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
         ${savedMsg}
         ${uploadedMsg}
+        ${submittedMsg}
 
         <div class="ws-layout">
           <div class="ws-side workspace-left">
@@ -24859,8 +24896,10 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
 
-    const billed_id = params.get("billed_id");
+    const billed_id = String(params.get("billed_id") || "").trim();
     const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const submissionMethod = String(params.get("method") || "").trim();
+    const follow_up_date = String(params.get("follow_up_date") || "").trim();
 
     const claim = getBilledById(sess.org_id, billed_id);
     if (!claim) return send(res, 404, "Claim not found");
@@ -24872,8 +24911,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
     ws.submission = {
       status: "submitted",
-      method: params.get("method"),
-      follow_up_date: params.get("follow_up_date"),
+      method: submissionMethod,
+      follow_up_date,
       submitted_at: nowISO()
     };
 
@@ -24881,7 +24920,19 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
     saveAgentWorkspace(sess.org_id, ws);
 
-    return redirect(res, `/ai-${channel}?billed_id=${billed_id}`);
+    const claims = readJSON(FILES.billed, []);
+    const idx = claims.findIndex(c => c.org_id === sess.org_id && c.billed_id === billed_id);
+    if (idx >= 0) {
+      claims[idx].submission_status = "submitted";
+      claims[idx].submission_method = submissionMethod;
+      claims[idx].follow_up_date = follow_up_date || "";
+      claims[idx].submitted_at = nowISO();
+      claims[idx].current_round = (Number(claims[idx].current_round || 0) || 0) + 1;
+      claims[idx].last_submission_type = channel;
+      writeJSON(FILES.billed, claims);
+    }
+
+    return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&submitted=1`);
   }
 
   if (method === "POST" && pathname === "/ai-workspace/ai-edit") {
@@ -25541,7 +25592,20 @@ if (method === "GET" && pathname === "/claim-detail") {
   const networkStatus = String(b.network_status || detailContract?.network_status || "Unknown");
   const networkBadge = networkStatus === "In Network" ? "ok" : "writeoff";
   const varianceStyle = variance > 0.0001 ? 'style="color:#d97706;font-weight:900;"' : 'style="color:#166534;font-weight:900;"';
-  const currentRound = appealCase ? Number(appealCase.current_round || appealCase.round || 1) : 0;
+  const currentRound = Number(b.current_round || appealCase?.current_round || appealCase?.round || 0) || 0;
+  const submissionTypeRaw = String(b.last_submission_type || "").trim().toLowerCase();
+  const submissionTypeLabel = submissionTypeRaw
+    ? submissionTypeRaw.charAt(0).toUpperCase() + submissionTypeRaw.slice(1)
+    : "";
+  const currentRoundDisplay = currentRound > 0
+    ? `Round ${currentRound}${submissionTypeLabel ? ` (${submissionTypeLabel})` : ""}`
+    : "-";
+  const submittedAtText = safeStr(b.submitted_at || "-");
+  const submittedAtMs = b.submitted_at ? new Date(b.submitted_at).getTime() : NaN;
+  const daysSinceSubmission = Number.isFinite(submittedAtMs)
+    ? Math.max(0, Math.floor((Date.now() - submittedAtMs) / (24 * 60 * 60 * 1000)))
+    : null;
+  const daysSinceSubmissionText = daysSinceSubmission === null ? "-" : `${daysSinceSubmission} day${daysSinceSubmission === 1 ? "" : "s"}`;
 
   const negHistoryHtml = negHistory.length
     ? `<table>
@@ -25608,7 +25672,9 @@ if (method === "GET" && pathname === "/claim-detail") {
       <tr><th>Date Of Service</th><td>${safeStr(b.dos || "")}</td></tr>
       <tr><th>Network Information <span class="tooltip" data-tip="To change network status, go to Data Management.">ⓘ</span></th><td><span class="badge ${networkBadge}">${safeStr(networkStatus)}</span></td></tr>
       <tr><th>Status</th><td><span class="badge ${badgeClassForStatus(derivedStatus)}">${safeStr(derivedStatus)}</span></td></tr>
-      <tr><th>Current Round <span class="tooltip" data-tip="Rounds track each payer submission cycle. Round 1 is the first submission; later rounds represent follow-up appeals/negotiations.">ⓘ</span></th><td>${currentRound || "-"}</td></tr>
+      <tr><th>Current Round <span class="tooltip" data-tip="Rounds track each payer submission cycle. Round 1 is the first submission; later rounds represent follow-up appeals/negotiations.">ⓘ</span></th><td>${safeStr(currentRoundDisplay)}</td></tr>
+      <tr><th>Last Submitted</th><td>${submittedAtText}</td></tr>
+      <tr><th>Days Since Submission</th><td>${safeStr(daysSinceSubmissionText)}</td></tr>
     </table>
 
     <div class="hr"></div>
@@ -25638,7 +25704,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       ${suggested === "Negotiate" ? `<a class="btn secondary" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Open AI Workspace</a>` : ``}
       ${suggested === "Adjust Patient Responsibility" ? `<a class="btn secondary" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Perform Suggested Action</a>` : ``}
       ${suggested === "Review Claim" ? `<a class="btn secondary" href="/claims?view=all&q=${encodeURIComponent(b.claim_number || "")}">Perform Suggested Action</a>` : ``}
-      <a class="btn secondary" href="${workspacePagePath(b.billed_id, workspaceChannelForClaim(b, d))}">Open AI Workspace</a>
+      ${(suggested === "Appeal" || suggested === "Negotiate") ? `` : `<a class="btn secondary" href="${workspacePagePath(b.billed_id, workspaceChannelForClaim(b, d))}">Open AI Workspace</a>`}
       <a class="btn secondary" href="/actions?q=${encodeURIComponent(b.claim_number || "")}">View In Action Center</a>
     </div>
 
