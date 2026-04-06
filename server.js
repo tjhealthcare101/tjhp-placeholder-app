@@ -14221,6 +14221,7 @@ if (method === "GET" && pathname === "/claims") {
 
   // Sub-tabs: billed | payments | denials | negotiations | all
   const view = String(parsed.query.view || "pipeline").toLowerCase();
+  const selectedStage = String(parsed.query.stage || "").trim();
   const reimbursementBatch = String(parsed.query.reimbursement_batch || "").trim();
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
@@ -14328,6 +14329,18 @@ if (method === "GET" && pathname === "/claims") {
     if (stage === "Resolved" || stage === "Revenue Collected" || stage === "Write-Off") return "Resolved";
     return "Follow-Up Needed";
   }
+
+  function normalizeStageFilter(raw){
+    const s = String(raw || "").trim();
+    if (!s) return "";
+    if (["Denied", "Underpaid", "In Appeal/Negotiation", "Awaiting Payment", "Follow-Up Needed", "Resolved"].includes(s)) return s;
+    if (s === "Submitted" || s === "Waiting Payment") return "Awaiting Payment";
+    if (s === "Patient Follow-Up") return "Follow-Up Needed";
+    if (s === "Write-Off" || s === "Revenue Collected") return "Resolved";
+    return "";
+  }
+
+  const selectedSimpleStage = normalizeStageFilter(selectedStage);
 
   function renderClaimsPipeline(billedItems, claimContext){
     const PIPELINE_COLUMNS = [
@@ -14452,6 +14465,7 @@ if (method === "GET" && pathname === "/claims") {
     return `
       <form method="GET" action="/claims" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
         <input type="hidden" name="view" value="table"/>
+        ${selectedSimpleStage ? `<input type="hidden" name="stage" value="${safeStr(selectedSimpleStage)}"/>` : ``}
         <div>
           <label class="small muted">Search</label><br/>
           <input name="q" placeholder="Claim #, payer..." value="${safeStr(String(parsed.query.q || ""))}" />
@@ -14475,18 +14489,28 @@ if (method === "GET" && pathname === "/claims") {
   }
 
   if (view === "pipeline" || view === "table") {
+    const stageParam = selectedSimpleStage ? `&stage=${encodeURIComponent(selectedSimpleStage)}` : "";
+    const stageBanner = selectedSimpleStage ? `
+      <div class="muted small" style="margin-bottom:10px;">
+        Viewing: <strong>${safeStr(selectedSimpleStage)}</strong>
+        · <a href="/claims?view=${encodeURIComponent(view)}">Clear</a>
+      </div>
+    ` : "";
+    const pipelineItems = selectedSimpleStage
+      ? billedAll.filter(b => toSimplePipelineStage(b) === selectedSimpleStage)
+      : billedAll;
     const toggle = `
       <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <a class="btn ${view==="pipeline"?"":"secondary"}" href="/claims?view=pipeline">Pipeline View</a>
-        <a class="btn ${view==="table"?"":"secondary"}" href="/claims?view=table">Table View</a>
+        <a class="btn ${view==="pipeline"?"":"secondary"}" href="/claims?view=pipeline${stageParam}">Pipeline View</a>
+        <a class="btn ${view==="table"?"":"secondary"}" href="/claims?view=table${stageParam}">Table View</a>
       </div>
     `;
 
     let mainContent = "";
     if (view === "pipeline") {
-      mainContent = renderClaimsPipeline(billedAll, claimCtx);
+      mainContent = renderClaimsPipeline(pipelineItems, claimCtx);
     } else {
-      mainContent = renderClaimsTable(billedAll, claimCtx);
+      mainContent = renderClaimsTable(pipelineItems, claimCtx);
     }
 
     return send(res, 200, renderPage(
@@ -14497,6 +14521,7 @@ if (method === "GET" && pathname === "/claims") {
           <div class="muted small">Total Revenue at Risk</div>
           <div style="font-size:22px;font-weight:900;">${formatMoneyUI(totalAtRiskAll)}</div>
         </div>
+        ${stageBanner}
         ${toggle}
         ${mainContent}
       `,
@@ -14546,15 +14571,9 @@ if (method === "GET" && pathname === "/claims") {
   }
 
   const stageToClaimsHref = (stage) => {
-    if (stage === "Waiting Payment") return "/claims?view=all&status=Waiting%20Payment";
-    if (stage === "Denied") return "/claims?view=denials";
-    if (stage === "Underpaid") return "/claims?view=all&status=Underpaid";
-    if (stage === "In Appeal/Negotiation") return "/claims?view=all&status=In%20Appeal%2FNegotiation";
-    if (stage === "Patient Follow-Up") return "/claims?view=all&status=Patient%20Follow-Up";
-    if (stage === "Submitted") return "/claims?view=all&status=Submitted";
-    if (stage === "Write-Off") return "/claims?view=all&status=Contractual";
-    if (stage === "Resolved" || stage === "Revenue Collected") return "/claims?view=all&status=Resolved";
-    return "/claims?view=all";
+    const simple = normalizeStageFilter(stage);
+    if (!simple) return "/claims?view=pipeline";
+    return `/claims?view=pipeline&stage=${encodeURIComponent(simple)}`;
   };
 
   const pipelineHtml = `
