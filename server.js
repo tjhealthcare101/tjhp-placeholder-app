@@ -14488,73 +14488,6 @@ if (method === "GET" && pathname === "/claims") {
     `;
   }
 
-  if (view === "pipeline" || view === "table" || view === "lifecycle") {
-    const stageParam = selectedSimpleStage ? `&stage=${encodeURIComponent(selectedSimpleStage)}` : "";
-    const stageBanner = selectedSimpleStage ? `
-      <div class="muted small" style="margin-bottom:10px;">
-        Viewing: <strong>${safeStr(selectedSimpleStage)}</strong>
-        · <a href="/claims">Clear</a>
-      </div>
-    ` : "";
-    const pipelineItems = selectedSimpleStage
-      ? billedAll.filter(b => toSimplePipelineStage(b) === selectedSimpleStage)
-      : billedAll;
-    const toggle = `
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <a class="btn ${view==="pipeline"?"":"secondary"}" href="/claims?view=pipeline${stageParam}">Pipeline View</a>
-        <a class="btn ${view==="table"?"":"secondary"}" href="/claims?view=table${stageParam}">Table View</a>
-      </div>
-    `;
-
-    let mainContent = "";
-    if (view === "lifecycle") {
-      return send(res, 200, renderPage(
-        "Claims Lifecycle",
-        `
-      <h2>Claims Lifecycle</h2>
-
-      <div class="kpi-card">
-        <div class="muted small">Total Revenue at Risk</div>
-        <div style="font-size:22px;font-weight:900;">
-          ${formatMoneyUI(totalAtRiskAll)}
-        </div>
-      </div>
-
-      <div class="muted small" style="margin-bottom:10px;">
-        Click any stage to view and work those claims.
-      </div>
-
-      ${pipelineHtml}
-
-    `,
-        navUser(),
-        { showChat: true, orgName: org.org_name }
-      ));
-    }
-
-    if (view === "pipeline") {
-      mainContent = renderClaimsPipeline(pipelineItems, claimCtx);
-    } else {
-      mainContent = renderClaimsTable(pipelineItems, claimCtx);
-    }
-
-    return send(res, 200, renderPage(
-      "Claims Lifecycle",
-      `
-        <h2>Claims Lifecycle</h2>
-        <div class="kpi-card">
-          <div class="muted small">Total Revenue at Risk</div>
-          <div style="font-size:22px;font-weight:900;">${formatMoneyUI(totalAtRiskAll)}</div>
-        </div>
-        ${stageBanner}
-        ${toggle}
-        ${mainContent}
-      `,
-      navUser(),
-      { showChat:true, orgName: org.org_name }
-    ));
-  }
-
   const pipelineAgg = {};
   for (const stage of PIPE_ORDER) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
   const pipelineBaseStages = PIPE_ORDER.filter(s => s !== "Revenue Collected");
@@ -14633,6 +14566,74 @@ if (method === "GET" && pathname === "/claims") {
       </div>
     </div>
   `;
+
+  if (view === "pipeline" || view === "table" || view === "lifecycle") {
+    const stageParam = selectedSimpleStage ? `&stage=${encodeURIComponent(selectedSimpleStage)}` : "";
+    const stageBanner = selectedSimpleStage ? `
+      <div class="muted small" style="margin-bottom:10px;">
+        Viewing: <strong>${safeStr(selectedSimpleStage)}</strong>
+        · <a href="/claims">Clear</a>
+      </div>
+    ` : "";
+    const pipelineItems = selectedSimpleStage
+      ? billedAll.filter(b => toSimplePipelineStage(b) === selectedSimpleStage)
+      : billedAll;
+    const toggle = `
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <a class="btn ${view==="pipeline"?"":"secondary"}" href="/claims?view=pipeline${stageParam}">Pipeline View</a>
+        <a class="btn ${view==="table"?"":"secondary"}" href="/claims?view=table${stageParam}">Table View</a>
+      </div>
+    `;
+
+    let mainContent = "";
+    if (view === "lifecycle") {
+      return send(res, 200, renderPage(
+        "Claims Lifecycle",
+        `
+      <h2>Claims Lifecycle</h2>
+
+      <div class="kpi-card">
+        <div class="muted small">Total Revenue at Risk</div>
+        <div style="font-size:22px;font-weight:900;">
+          ${formatMoneyUI(totalAtRiskAll)}
+        </div>
+      </div>
+
+      <div class="muted small" style="margin-bottom:10px;">
+        Click any stage to view and work those claims.
+      </div>
+
+      ${pipelineHtml}
+
+    `,
+        navUser(),
+        { showChat: true, orgName: org.org_name }
+      ));
+    }
+
+    if (view === "pipeline") {
+      mainContent = renderClaimsPipeline(pipelineItems, claimCtx);
+    } else {
+      mainContent = renderClaimsTable(pipelineItems, claimCtx);
+    }
+
+    return send(res, 200, renderPage(
+      "Claims Lifecycle",
+      `
+        <h2>Claims Lifecycle</h2>
+        <div class="kpi-card">
+          <div class="muted small">Total Revenue at Risk</div>
+          <div style="font-size:22px;font-weight:900;">${formatMoneyUI(totalAtRiskAll)}</div>
+        </div>
+        ${stageBanner}
+        ${toggle}
+        ${mainContent}
+      `,
+      navUser(),
+      { showChat:true, orgName: org.org_name }
+    ));
+  }
+
   // Data helpers for dynamic snapshots
   const paymentsOrg = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
   const denialCasesOrg = readJSON(FILES.cases, []).filter(c => c.org_id === org.org_id && String(c.case_type||"denial").toLowerCase() !== "underpayment");
