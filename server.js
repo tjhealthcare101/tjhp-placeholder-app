@@ -14220,7 +14220,7 @@ if (method === "GET" && pathname === "/executive-export") {
 if (method === "GET" && pathname === "/claims") {
 
   // Sub-tabs: billed | payments | denials | negotiations | all
-  const view = String(parsed.query.view || "pipeline").toLowerCase();
+  const view = String(parsed.query.view || "lifecycle").toLowerCase();
   const selectedStage = String(parsed.query.stage || "").trim();
   const reimbursementBatch = String(parsed.query.reimbursement_batch || "").trim();
 
@@ -14488,12 +14488,12 @@ if (method === "GET" && pathname === "/claims") {
     `;
   }
 
-  if (view === "pipeline" || view === "table") {
+  if (view === "pipeline" || view === "table" || view === "lifecycle") {
     const stageParam = selectedSimpleStage ? `&stage=${encodeURIComponent(selectedSimpleStage)}` : "";
     const stageBanner = selectedSimpleStage ? `
       <div class="muted small" style="margin-bottom:10px;">
         Viewing: <strong>${safeStr(selectedSimpleStage)}</strong>
-        · <a href="/claims?view=${encodeURIComponent(view)}">Clear</a>
+        · <a href="/claims">Clear</a>
       </div>
     ` : "";
     const pipelineItems = selectedSimpleStage
@@ -14507,6 +14507,31 @@ if (method === "GET" && pathname === "/claims") {
     `;
 
     let mainContent = "";
+    if (view === "lifecycle") {
+      return send(res, 200, renderPage(
+        "Claims Lifecycle",
+        `
+      <h2>Claims Lifecycle</h2>
+
+      <div class="kpi-card">
+        <div class="muted small">Total Revenue at Risk</div>
+        <div style="font-size:22px;font-weight:900;">
+          ${formatMoneyUI(totalAtRiskAll)}
+        </div>
+      </div>
+
+      <div class="muted small" style="margin-bottom:10px;">
+        Click any stage to view and work those claims.
+      </div>
+
+      ${pipelineHtml}
+
+    `,
+        navUser(),
+        { showChat: true, orgName: org.org_name }
+      ));
+    }
+
     if (view === "pipeline") {
       mainContent = renderClaimsPipeline(pipelineItems, claimCtx);
     } else {
@@ -14572,7 +14597,7 @@ if (method === "GET" && pathname === "/claims") {
 
   const stageToClaimsHref = (stage) => {
     const simple = normalizeStageFilter(stage);
-    if (!simple) return "/claims?view=pipeline";
+    if (!simple) return "/claims";
     return `/claims?view=pipeline&stage=${encodeURIComponent(simple)}`;
   };
 
