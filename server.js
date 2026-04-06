@@ -666,6 +666,7 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   border:1px solid #e5e7eb;
 }
 .pipeline-card:hover{
+  transform:translateY(-3px);
   box-shadow:0 10px 20px rgba(0,0,0,.08);
 }
 .pipeline-card-title{
@@ -14397,7 +14398,12 @@ if (method === "GET" && pathname === "/claims") {
       return `hsl(${hue}, 75%, 38%)`;
     }
 
-    const cols = PIPELINE_COLUMNS.map(col => {
+    const cols = PIPELINE_COLUMNS
+      .filter(col => {
+        if (!selectedSimpleStage) return true;
+        return col === selectedSimpleStage;
+      })
+      .map(col => {
       const claims = (grouped[col] || []).slice().sort((a,b)=> computeClaimRiskScore(b) - computeClaimRiskScore(a));
       const totalAtRisk = claims.reduce((sum, b) => {
         const d = evaluateClaimDerived(b, claimContext);
@@ -14405,8 +14411,9 @@ if (method === "GET" && pathname === "/claims") {
       }, 0);
 
       const colClass = col === "Denied" ? "denied" : (col === "Follow-Up Needed" ? "followup" : (col === "Resolved" ? "resolved" : ""));
+      const isLargestRiskCol = totalAtRisk === maxColumnRisk && totalAtRisk > 0;
       return `
-        <div class="pipeline-column ${colClass}">
+        <div class="pipeline-column ${colClass}" style="${isLargestRiskCol ? `border:2px solid #ef4444;` : ``}">
           <div class="pipeline-col-header">${col}</div>
           <div class="pipeline-col-value" style="color:${colorForAtRisk(totalAtRisk)};">${formatMoneyUI(totalAtRisk)} AT RISK</div>
           <div class="pipeline-col-sub">${claims.length} claims</div>
@@ -14569,6 +14576,27 @@ if (method === "GET" && pathname === "/claims") {
 
   if (view === "pipeline" || view === "table" || view === "lifecycle") {
     const stageParam = selectedSimpleStage ? `&stage=${encodeURIComponent(selectedSimpleStage)}` : "";
+    const now = new Date();
+    const timestamp = `
+      <div class="muted small" style="margin-bottom:8px;">
+        Updated: ${now.toLocaleString()} · Auto-updates when new data is uploaded
+      </div>
+    `;
+    const topClaim = billedAll
+      .slice()
+      .sort((a,b)=> computeClaimRiskScore(b) - computeClaimRiskScore(a))[0];
+    const nextActionBanner = topClaim ? `
+      <div class="insight-card" style="border-left:4px solid #ef4444;">
+        <strong>Top Priority:</strong> Claim #${safeStr(topClaim.claim_number)}
+        · ${safeStr(topClaim.payer)}
+        · ${formatMoneyUI(evaluateClaimDerived(topClaim, claimCtx).atRiskAmount)}
+        at risk
+        <br/>
+        <a class="btn small" href="/claim-detail?billed_id=${encodeURIComponent(topClaim.billed_id)}">
+          Work This Claim →
+        </a>
+      </div>
+    ` : "";
     const stageBanner = selectedSimpleStage ? `
       <div class="muted small" style="margin-bottom:10px;">
         Viewing: <strong>${safeStr(selectedSimpleStage)}</strong>
@@ -14591,6 +14619,7 @@ if (method === "GET" && pathname === "/claims") {
         "Claims Lifecycle",
         `
       <h2>Claims Lifecycle</h2>
+      ${timestamp}
 
       <div class="kpi-card">
         <div class="muted small">Total Revenue at Risk</div>
@@ -14598,6 +14627,7 @@ if (method === "GET" && pathname === "/claims") {
           ${formatMoneyUI(totalAtRiskAll)}
         </div>
       </div>
+      ${nextActionBanner}
 
       <div class="muted small" style="margin-bottom:10px;">
         Click any stage to view and work those claims.
@@ -14621,10 +14651,12 @@ if (method === "GET" && pathname === "/claims") {
       "Claims Lifecycle",
       `
         <h2>Claims Lifecycle</h2>
+        ${timestamp}
         <div class="kpi-card">
           <div class="muted small">Total Revenue at Risk</div>
           <div style="font-size:22px;font-weight:900;">${formatMoneyUI(totalAtRiskAll)}</div>
         </div>
+        ${nextActionBanner}
         ${stageBanner}
         ${toggle}
         ${mainContent}
