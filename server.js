@@ -14331,6 +14331,15 @@ if (method === "GET" && pathname === "/claims") {
     return "Follow-Up Needed";
   }
 
+  function mapStageToActionTab(stage){
+    const s = String(stage || "");
+    if (s === "Denied") return "denials";
+    if (s === "Underpaid") return "underpayments";
+    if (s === "Follow-Up Needed") return "followup";
+    if (s === "Awaiting Payment") return "awaiting";
+    return "all";
+  }
+
   function normalizeStageFilter(raw){
     const s = String(raw || "").trim();
     if (!s) return "";
@@ -14368,7 +14377,7 @@ if (method === "GET" && pathname === "/claims") {
       const baseDate = b.submitted_at || b.submitted_date || b.created_at || "";
       const daysOpen = daysSince(baseDate);
       const dayLabel = (b.submitted_at || b.submitted_date) ? "days since submission" : "days in system";
-      const wsHref = workspacePagePath(b.billed_id, workspaceChannelForClaim(b, d));
+      const actionTab = mapStageToActionTab(toSimplePipelineStage(b));
       return `
         <div class="pipeline-card" onclick="window.location='/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}'">
           <div class="pipeline-card-title">#${safeStr(b.claim_number || "")}</div>
@@ -14377,8 +14386,9 @@ if (method === "GET" && pathname === "/claims") {
           <div class="pipeline-card-sub">${formatMoneyUI(atRisk)} at risk</div>
           <div class="pipeline-card-sub"><span class="badge ${badgeClassForStatus(status)}">${safeStr(status)}</span></div>
           ${isTopRisk ? `<div class="pipeline-risk-badge">🔥 Highest Risk</div>` : ``}
-          <div style="margin-top:8px;">
-            <a class="btn secondary small" href="${wsHref}" onclick="event.stopPropagation();">Open AI Workspace</a>
+          <div style="margin-top:8px;display:flex;gap:6px;">
+            <a class="btn small" href="/actions?tab=${actionTab}&claim=${encodeURIComponent(b.billed_id)}" onclick="event.stopPropagation();">⚡ Work</a>
+            <a class="btn small secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}" onclick="event.stopPropagation();">View</a>
           </div>
         </div>
       `;
@@ -14448,9 +14458,40 @@ if (method === "GET" && pathname === "/claims") {
       .map(b => {
         const d = evaluateClaimDerived(b, claimContext);
         const st = String(d.lifecycleStage || b.status || "Pending");
+        const stage = toSimplePipelineStage(b);
         const paidAmt = Number(d.paidAmount || 0);
         const atRisk = Number(d.atRiskAmount || 0);
-        const aiHref = `/ai-${workspaceChannelForClaim(b, d)}?billed_id=${encodeURIComponent(b.billed_id)}`;
+        let actionButtons = `
+          <a class="btn small secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">
+            View
+          </a>
+        `;
+
+        if (stage === "Denied") {
+          actionButtons = `
+            <a class="btn small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">
+              Appeal Workspace
+            </a>
+            ${actionButtons}
+          `;
+        }
+        else if (stage === "Underpaid") {
+          actionButtons = `
+            <a class="btn small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">
+              Negotiation Workspace
+            </a>
+            ${actionButtons}
+          `;
+        }
+        else if (stage === "Follow-Up Needed" || stage === "Awaiting Payment") {
+          const actionTab = mapStageToActionTab(stage);
+          actionButtons = `
+            <a class="btn small" href="/actions?tab=${actionTab}&claim=${encodeURIComponent(b.billed_id)}">
+              Go to Action Center
+            </a>
+            ${actionButtons}
+          `;
+        }
         return `
           <tr>
             <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
@@ -14460,9 +14501,8 @@ if (method === "GET" && pathname === "/claims") {
             <td>${formatMoneyUI(paidAmt)}</td>
             <td>${formatMoneyUI(atRisk)}</td>
             <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
-            <td style="white-space:nowrap;">
-              <a class="btn small secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">Open</a>
-              <a class="btn small secondary" href="${aiHref}">AI</a>
+            <td style="white-space:nowrap;display:flex;gap:6px;flex-wrap:wrap;">
+              ${actionButtons}
             </td>
           </tr>
         `;
@@ -14538,7 +14578,7 @@ if (method === "GET" && pathname === "/claims") {
   const stageToClaimsHref = (stage) => {
     const simple = normalizeStageFilter(stage);
     if (!simple) return "/claims";
-    return `/claims?view=pipeline&stage=${encodeURIComponent(simple)}`;
+    return `/claims?view=table&stage=${encodeURIComponent(simple)}`;
   };
 
   const pipelineHtml = `
@@ -14598,9 +14638,9 @@ if (method === "GET" && pathname === "/claims") {
       </div>
     ` : "";
     const stageBanner = selectedSimpleStage ? `
-      <div class="muted small" style="margin-bottom:10px;">
+      <div class="insight-card" style="border-left:4px solid #6366f1;">
         Viewing: <strong>${safeStr(selectedSimpleStage)}</strong>
-        · <a href="/claims">Clear</a>
+        · <a href="/claims">Back to Lifecycle</a>
       </div>
     ` : "";
     const pipelineItems = selectedSimpleStage
@@ -17506,6 +17546,7 @@ function renderClaimFinancialContext(billedClaim, derived){
 }
 
 if (method === "GET" && pathname === "/actions") {
+  const selectedClaimId = String(parsed.query.claim || "").trim();
   const tabRaw = String(parsed.query.tab || "all").toLowerCase();
   const tab = (tabRaw === "awaiting" || tabRaw === "followup") ? "postsubmission" : tabRaw; // all|denials|underpayments|postsubmission
   const postSubFilter = String(parsed.query.postsub || "all").toLowerCase(); // all|awaiting|followup
@@ -17751,6 +17792,12 @@ if (method === "GET" && pathname === "/actions") {
   ` : ``;
 
   const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer||"").trim()).filter(Boolean))).sort();
+  const selectedClaim = selectedClaimId ? billedAll.find(c => String(c.billed_id) === selectedClaimId) : null;
+  const claimBanner = selectedClaimId ? `
+    <div class="insight-card" style="border-left:4px solid #6366f1;">
+      Working Claim: <strong>#${safeStr((selectedClaim && selectedClaim.claim_number) || selectedClaimId)}</strong>
+    </div>
+  ` : ``;
 
   const rows = pageItems.map(x=>{
     const b = x.b;
@@ -17772,7 +17819,12 @@ if (method === "GET" && pathname === "/actions") {
       : null;
     const daysSinceSubmissionText = daysSinceSubmission === null ? "-" : `${daysSinceSubmission} day${daysSinceSubmission === 1 ? "" : "s"}`;
     const followUpDateText = x.followUpDate ? safeStr(String(x.followUpDate)) : "-";
-    const rowStyle = x.isFollowupNeededClaim ? ` style="background:#fff7ed;"` : "";
+    const rowStyles = [];
+    if (x.isFollowupNeededClaim) rowStyles.push("background:#fff7ed;");
+    if (selectedClaimId && String(b.billed_id) === selectedClaimId) {
+      rowStyles.push("background:#eef2ff;border-left:4px solid #6366f1;");
+    }
+    const rowStyleAttr = rowStyles.length ? ` style="${rowStyles.join("")}"` : "";
 
     const status = x.opStatus || x.st || "Paid";
     let badgeCls = badgeClassForStatus(status);
@@ -17824,7 +17876,7 @@ if (method === "GET" && pathname === "/actions") {
       `;
     }
 
-    return `<tr${rowStyle}>
+    return `<tr data-claim="${safeStr(String(b.billed_id || ""))}"${rowStyleAttr}>
       <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
       <td>${safeStr(b.payer||"")}</td>
       <td class="num">${formatMoneyUI(b.amount_billed || 0)}</td>
@@ -17867,6 +17919,16 @@ if (method === "GET" && pathname === "/actions") {
     </select>
   `;
   const nav = buildPageNav("/actions", { ...parsed.query, tab, pageSize:String(pageSize) }, page, totalPages);
+  const scrollScript = selectedClaimId ? `
+    <script>
+      setTimeout(() => {
+        const row = document.querySelector('[data-claim="${safeStr(selectedClaimId)}"]');
+        if (row) {
+          row.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 300);
+    </script>
+  ` : "";
 
   const html = renderPage("Action Center", `
     <h2>Action Center <span class="tooltip" data-tip="This page prevents revenue leakage by surfacing what needs action. Use tabs to work denials and underpayments by risk score.">ⓘ</span></h2>
@@ -17923,6 +17985,7 @@ if (method === "GET" && pathname === "/actions") {
     </div>
 
     ${(payerFilter || rangePreset || (tab === "postsubmission" && postSubFilter !== "all")) ? `<div class="muted small" style="margin-bottom:10px;">Filters: ${payerFilter ? `<span class="badge">${safeStr(payerFilter)}</span>` : ""} ${rangePreset ? `<span class="badge">${safeStr(rangePreset)}</span>` : ""} ${(tab === "postsubmission" && postSubFilter !== "all") ? `<span class="badge">${safeStr(postSubFilter)}</span>` : ""}</div>` : ""}
+    ${claimBanner}
 
     <div id="actionTableSync">
       <div class="scrollSyncTop"><div></div></div>
@@ -17934,6 +17997,7 @@ if (method === "GET" && pathname === "/actions") {
     </div>
     </div>
     <script>window.__syncScrollBars && window.__syncScrollBars("actionTableSync");</script>
+    ${scrollScript}
     ${nav}
   `, navUser(), {showChat:true, orgName: org.org_name});
 
