@@ -14242,8 +14242,12 @@ if (method === "GET" && pathname === "/executive-export") {
 if (method === "GET" && pathname === "/claims") {
 
   // Sub-tabs: billed | payments | denials | negotiations | all
-  const view = String(parsed.query.view || "lifecycle").toLowerCase();
+  let view = String(parsed.query.view || "lifecycle").toLowerCase();
   const selectedStage = String(parsed.query.stage || "").trim();
+
+  if (parsed.query.stage) {
+    view = "table";
+  }
   const reimbursementBatch = String(parsed.query.reimbursement_batch || "").trim();
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
@@ -14604,7 +14608,7 @@ if (method === "GET" && pathname === "/claims") {
 
   const pipelineHtml = `
     <div class="insight-card" style="margin-top:14px;">
-      <h3>Claims Lifecycle Pipeline <span class="tooltip" data-tip="Pipeline view of all claims. Denied/Underpaid only appear after payer response.">ⓘ</span></h3>
+      <h3>Claims Lifecycle Stages <span class="tooltip" data-tip="Stage view of all claims. Denied/Underpaid only appear after payer response.">ⓘ</span></h3>
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         ${PIPE_ORDER.map(stage => {
           const d = pipelineAgg[stage] || { count:0, billed:0, atRisk:0 };
@@ -14635,8 +14639,7 @@ if (method === "GET" && pathname === "/claims") {
     </div>
   `;
 
-  if (view === "pipeline" || view === "table" || view === "lifecycle") {
-    const stageParam = selectedSimpleStage ? `&stage=${encodeURIComponent(selectedSimpleStage)}` : "";
+  if (view === "table" || view === "lifecycle") {
     const now = new Date();
     const timestamp = `
       <div class="muted small" style="margin-bottom:8px;">
@@ -14668,9 +14671,8 @@ if (method === "GET" && pathname === "/claims") {
       ? billedAll.filter(b => toSimplePipelineStage(b) === selectedSimpleStage)
       : billedAll;
     const toggle = `
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <a class="btn ${view==="pipeline"?"":"secondary"}" href="/claims?view=pipeline${stageParam}">Pipeline View</a>
-        <a class="btn ${view==="table"?"":"secondary"}" href="/claims?view=table${stageParam}">Table View</a>
+      <div style="margin-bottom:12px;">
+        <span class="badge">Table View</span>
       </div>
     `;
 
@@ -14702,11 +14704,7 @@ if (method === "GET" && pathname === "/claims") {
       ));
     }
 
-    if (view === "pipeline") {
-      mainContent = renderClaimsPipeline(pipelineItems, claimCtx);
-    } else {
-      mainContent = renderClaimsTable(pipelineItems, claimCtx);
-    }
+    mainContent = renderClaimsTable(pipelineItems, claimCtx);
 
     return send(res, 200, renderPage(
       "Claims Lifecycle",
