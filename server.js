@@ -608,7 +608,7 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 
 /* Chart and KPI placeholders */
 .chart-placeholder{height:200px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;margin-bottom:10px;}
-.kpi-card{display:inline-block;margin:10px;padding:15px;border:1px solid var(--border);border-radius:8px;width:200px;text-align:center;background:#fff;box-shadow:var(--shadow);}
+.kpi-card{display:inline-block;margin:10px;padding:15px;border:1px solid var(--border);border-radius:8px;width:200px;text-align:center;background:#fff;box-shadow:var(--shadow);margin-bottom:16px;}
 .alert{background:#ffeded;border:1px solid #ffb0b0;padding:10px;margin:5px 0;border-radius:6px;font-size:13px;}
 .attention{background-color:#fff8e1;}
 
@@ -646,6 +646,11 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   font-size:13px;
   margin-bottom:8px;
 }
+.pipeline-col-value{
+  font-size:16px;
+  font-weight:900;
+  line-height:1.2;
+}
 .pipeline-col-sub{
   font-size:11px;
   color:#6b7280;
@@ -678,8 +683,8 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   background:#111827;
   color:#fff;
   border-radius:999px;
-  padding:2px 8px;
-  font-size:10px;
+  padding:2px 6px;
+  font-size:9px;
   font-weight:900;
   letter-spacing:.2px;
 }
@@ -14222,6 +14227,10 @@ if (method === "GET" && pathname === "/claims") {
   const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
   const claimCtx = buildClaimContext(org.org_id);
   const executiveRevenue = computeExecutiveRevenueMetrics(org.org_id);
+  const totalAtRiskAll = billedAll.reduce((sum, b) => {
+    const d = evaluateClaimDerived(b, claimCtx);
+    return sum + Number(d.atRiskAmount || 0);
+  }, 0);
 
   // Snapshot counts across all claims (simple, fast)
   const counts = billedAll.reduce((acc,b)=>{
@@ -14361,6 +14370,20 @@ if (method === "GET" && pathname === "/claims") {
       `;
     }
 
+    const maxColumnRisk = Math.max(1, ...PIPELINE_COLUMNS.map(col => {
+      const claims = grouped[col] || [];
+      return claims.reduce((sum, claim) => {
+        const d = evaluateClaimDerived(claim, claimContext);
+        return sum + Number(d.atRiskAmount || 0);
+      }, 0);
+    }));
+
+    function colorForAtRisk(atRisk){
+      const ratio = Math.max(0, Math.min(1, Number(atRisk || 0) / maxColumnRisk));
+      const hue = Math.round(120 - (ratio * 120)); // green -> red as risk grows
+      return `hsl(${hue}, 75%, 38%)`;
+    }
+
     const cols = PIPELINE_COLUMNS.map(col => {
       const claims = (grouped[col] || []).slice().sort((a,b)=> computeClaimRiskScore(b) - computeClaimRiskScore(a));
       const totalAtRisk = claims.reduce((sum, b) => {
@@ -14372,7 +14395,8 @@ if (method === "GET" && pathname === "/claims") {
       return `
         <div class="pipeline-column ${colClass}">
           <div class="pipeline-col-header">${col}</div>
-          <div class="pipeline-col-sub">${claims.length} claims • ${formatMoneyUI(totalAtRisk)}</div>
+          <div class="pipeline-col-value" style="color:${colorForAtRisk(totalAtRisk)};">${formatMoneyUI(totalAtRisk)} AT RISK</div>
+          <div class="pipeline-col-sub">${claims.length} claims</div>
           ${claims.map((b, idx) => renderCard(b, idx === 0 && claims.length > 0)).join("") || `<div class="muted small">No claims</div>`}
         </div>
       `;
@@ -14382,7 +14406,23 @@ if (method === "GET" && pathname === "/claims") {
   }
 
   function renderClaimsTable(billedItems, claimContext){
-    const rows = billedItems
+    const q = String(parsed.query.q || "").trim().toLowerCase();
+    const payer = String(parsed.query.payer || "").trim().toLowerCase();
+    const payerOptions = Array.from(new Set(
+      billedItems
+        .map(b => String(b.payer || "").trim())
+        .filter(Boolean)
+    )).sort((a,b)=> a.localeCompare(b));
+    const filteredItems = billedItems.filter(b => {
+      const claimNum = String(b.claim_number || "").toLowerCase();
+      const payerName = String(b.payer || "").toLowerCase();
+      const statusName = String((evaluateClaimDerived(b, claimContext).lifecycleStage || b.status || "")).toLowerCase();
+      const queryMatch = !q || claimNum.includes(q) || payerName.includes(q) || statusName.includes(q);
+      const payerMatch = !payer || payerName === payer;
+      return queryMatch && payerMatch;
+    });
+
+    const rows = filteredItems
       .slice()
       .sort((a,b)=> computeClaimRiskScore(b) - computeClaimRiskScore(a))
       .map(b => {
@@ -14390,6 +14430,7 @@ if (method === "GET" && pathname === "/claims") {
         const st = String(d.lifecycleStage || b.status || "Pending");
         const paidAmt = Number(d.paidAmount || 0);
         const atRisk = Number(d.atRiskAmount || 0);
+        const aiHref = `/ai-${workspaceChannelForClaim(b, d)}?billed_id=${encodeURIComponent(b.billed_id)}`;
         return `
           <tr>
             <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
@@ -14399,16 +14440,35 @@ if (method === "GET" && pathname === "/claims") {
             <td>${formatMoneyUI(paidAmt)}</td>
             <td>${formatMoneyUI(atRisk)}</td>
             <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
+            <td style="white-space:nowrap;">
+              <a class="btn small secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">Open</a>
+              <a class="btn small secondary" href="${aiHref}">AI</a>
+            </td>
           </tr>
         `;
       })
       .join("");
 
     return `
+      <form method="GET" action="/claims" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
+        <input type="hidden" name="view" value="table"/>
+        <div>
+          <label class="small muted">Search</label><br/>
+          <input name="q" placeholder="Claim #, payer..." value="${safeStr(String(parsed.query.q || ""))}" />
+        </div>
+        <div>
+          <label class="small muted">Payer</label><br/>
+          <select name="payer">
+            <option value="">All</option>
+            ${payerOptions.map(p => `<option value="${safeStr(p)}" ${String(parsed.query.payer || "") === p ? "selected" : ""}>${safeStr(p)}</option>`).join("")}
+          </select>
+        </div>
+        <button class="btn secondary" type="submit">Apply</button>
+      </form>
       <div style="overflow:auto;">
         <table>
-          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Status</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="7" class="muted">No claims found.</td></tr>`}</tbody>
+          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="8" class="muted">No claims found.</td></tr>`}</tbody>
         </table>
       </div>
     `;
@@ -14433,6 +14493,10 @@ if (method === "GET" && pathname === "/claims") {
       "Claims Lifecycle",
       `
         <h2>Claims Lifecycle</h2>
+        <div class="kpi-card">
+          <div class="muted small">Total Revenue at Risk</div>
+          <div style="font-size:22px;font-weight:900;">${formatMoneyUI(totalAtRiskAll)}</div>
+        </div>
         ${toggle}
         ${mainContent}
       `,
