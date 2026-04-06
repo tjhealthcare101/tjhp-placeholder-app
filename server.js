@@ -6534,6 +6534,8 @@ function renderWorkspaceIntelligence(ws, claim, derived, channel){
 
 function renderSubmissionPanel(ws, claim, channel){
   const submission = ws.submission || {};
+  const currentRound = Number(ws[channel]?.round || 1) || 1;
+  const previousSubmission = ws.submission || {};
 
   return `
     <div class="ws-panel">
@@ -6543,8 +6545,16 @@ function renderSubmissionPanel(ws, claim, channel){
         <span class="ws-chip ${submission.status === "submitted" ? "ok" : "warn"}">
           ${submission.status || "Draft"}
         </span>
-        <span class="ws-chip">Round ${ws[channel]?.round || 1}</span>
+        <span class="ws-chip">Round ${currentRound}</span>
       </div>
+
+      ${previousSubmission.submitted_at ? `
+        <div class="insight-card" style="margin-top:10px;">
+          <strong>Previous Submission</strong><br/>
+          Submitted: ${safeStr(previousSubmission.submitted_at || "-")}<br/>
+          Follow-up: ${safeStr(previousSubmission.follow_up_date || "-")}
+        </div>
+      ` : ``}
 
       ${submission.status === "submitted" ? `
         <div class="ws-callout ok" style="margin-top:10px;">
@@ -6572,7 +6582,7 @@ function renderSubmissionPanel(ws, claim, channel){
         <input type="date" name="follow_up_date"/>
 
         <button class="btn secondary" style="margin-top:8px;">
-          Mark Submitted
+          Submit Round ${currentRound}
         </button>
       </form>
     </div>
@@ -6605,6 +6615,8 @@ function renderPacketReadinessSummary(ws, channel){
 
 function renderWorkflowPanel(ws, claim, channel){
   const submission = ws.submission || {};
+  const currentRound = Number(ws[channel]?.round || 1) || 1;
+  const previousSubmission = ws.submission || {};
   const enhanced = workspaceEnhancedCompleteness(ws, channel);
   const ready = canMarkReady(ws, channel);
   const isSubmitted = submission.status === "submitted";
@@ -6620,6 +6632,7 @@ function renderWorkflowPanel(ws, claim, channel){
       <div class="ws-chip-row">
         <span class="ws-chip ${isSubmitted ? "ok" : tone}">${isSubmitted ? "Submitted" : (ready.ok ? "Ready for Review" : "Missing Required Items")}</span>
         <span class="ws-chip ${submission.status === "submitted" ? "ok" : "warn"}">${submission.status || "Draft"}</span>
+        <span class="ws-chip">Round ${currentRound}</span>
       </div>
       ${
         isSubmitted
@@ -6639,6 +6652,14 @@ function renderWorkflowPanel(ws, claim, channel){
         </div>
       ` : ``}
 
+      ${previousSubmission.submitted_at ? `
+        <div class="insight-card" style="margin-top:10px;">
+          <strong>Previous Submission</strong><br/>
+          Submitted: ${safeStr(previousSubmission.submitted_at || "-")}<br/>
+          Follow-up: ${safeStr(previousSubmission.follow_up_date || "-")}
+        </div>
+      ` : ``}
+
       <form method="POST" action="/ai-workspace/submit" style="margin-top:10px;">
         <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
         <input type="hidden" name="channel" value="${safeStr(channel)}"/>
@@ -6655,7 +6676,7 @@ function renderWorkflowPanel(ws, claim, channel){
         <input type="date" name="follow_up_date"/>
 
         <button class="btn secondary" style="margin-top:8px;">
-          Mark Submitted
+          Submit Round ${currentRound}
         </button>
       </form>
     </div>
@@ -25113,6 +25134,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     saveAgentWorkspace(sess.org_id, ws);
 
     const channel = pathname === "/ai-negotiation" ? "negotiation" : "appeal";
+    const currentRound = Number(ws[channel]?.round || 1) || 1;
     const savedMsg = parsed.query.saved ? `<div class="ws-callout ok">Section saved. The live preview has been updated.</div>` : ``;
     const uploadedMsg = parsed.query.uploaded ? `<div class="ws-callout ok">Document uploaded and linked into the packet preview.</div>` : ``;
     const submittedMsg = parsed.query.submitted
@@ -25122,7 +25144,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const pageContent = `
       <div class="ws-main">
         <div class="ws-banner">
-          <div class="ws-banner-title">${channel === "appeal" ? "Appeal Workspace" : "Negotiation Workspace"}</div>
+          <div class="ws-banner-title">${channel === "appeal" ? `Round ${currentRound} (Appeal)` : `Round ${currentRound} (Negotiation)`}</div>
           <div class="ws-banner-sub">Edit directly from the packet preview, upload missing documents from the sidebar, and export a clean letter that matches this preview.</div>
           <div class="ws-quick-actions">
             <a class="btn secondary" href="/claims">Back to Claims</a>
@@ -25330,12 +25352,22 @@ if (method === "GET" && pathname === "/agent-workspace") {
     ensurePacketSections(ws, claim);
     ensureWorkspaceRounds(ws, channel);
 
+    const submittedAt = nowISO();
+
     ws.submission = {
       status: "submitted",
       method: submissionMethod,
       follow_up_date,
-      submitted_at: nowISO()
+      submitted_at: submittedAt
     };
+    ws.history = Array.isArray(ws.history) ? ws.history : [];
+    ws.history.push({
+      round: Number(ws[channel]?.round || 1) || 1,
+      channel,
+      submitted_at: submittedAt,
+      method: submissionMethod,
+      follow_up_date
+    });
 
     ws[channel].round = Number(ws[channel].round || 1) + 1;
 
@@ -25347,13 +25379,14 @@ if (method === "GET" && pathname === "/agent-workspace") {
       claims[idx].submission_status = "submitted";
       claims[idx].submission_method = submissionMethod;
       claims[idx].follow_up_date = follow_up_date || "";
-      claims[idx].submitted_at = nowISO();
+      claims[idx].submitted_at = submittedAt;
+      claims[idx].last_submission_date = submittedAt;
       claims[idx].current_round = (Number(claims[idx].current_round || 0) || 0) + 1;
       claims[idx].last_submission_type = channel;
       writeJSON(FILES.billed, claims);
     }
 
-    return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&submitted=1`);
+    return redirect(res, `/claim-detail?billed_id=${encodeURIComponent(billed_id)}&submitted=1`);
   }
 
   if (method === "POST" && pathname === "/ai-workspace/ai-edit") {
@@ -25964,6 +25997,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
 if (method === "GET" && pathname === "/claim-detail") {
 
   const billed_id = (parsed.query.billed_id || "").trim();
+  const submitted = String(parsed.query.submitted || "").trim();
   const billedAll = readJSON(FILES.billed, []);
   const paymentsAll = readJSON(FILES.payments, []);
 
@@ -25992,7 +26026,6 @@ if (method === "GET" && pathname === "/claim-detail") {
   const negHistory = getNegotiationsByBilled(org.org_id, b.billed_id)
     .map(n => normalizeNegotiation(n))
     .sort((a,b)=> new Date(b.updated_at||b.created_at||0).getTime() - new Date(a.updated_at||a.created_at||0).getTime());
-  const latestNegotiation = negHistory[0] || null;
 
   const billedAmount = num(d.billedAmount);
   const paidAmount = num(d.paidAmount);
@@ -26021,12 +26054,52 @@ if (method === "GET" && pathname === "/claim-detail") {
   const currentRoundDisplay = currentRound > 0
     ? `Round ${currentRound}${submissionTypeLabel ? ` (${submissionTypeLabel})` : ""}`
     : "-";
-  const submittedAtText = safeStr(b.submitted_at || "-");
-  const submittedAtMs = b.submitted_at ? new Date(b.submitted_at).getTime() : NaN;
+  const lastSubmissionDateRaw = b.last_submission_date || b.submitted_at || "";
+  const submittedAtText = safeStr(lastSubmissionDateRaw || "-");
+  const submittedAtMs = lastSubmissionDateRaw ? new Date(lastSubmissionDateRaw).getTime() : NaN;
   const daysSinceSubmission = Number.isFinite(submittedAtMs)
     ? Math.max(0, Math.floor((Date.now() - submittedAtMs) / (24 * 60 * 60 * 1000)))
     : null;
   const daysSinceSubmissionText = daysSinceSubmission === null ? "-" : `${daysSinceSubmission} day${daysSinceSubmission === 1 ? "" : "s"}`;
+  const submittedDisplayDate = Number.isFinite(submittedAtMs)
+    ? new Date(submittedAtMs).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+    : "-";
+  const followUpRaw = String(b.follow_up_date || "").trim();
+  const followUpMs = followUpRaw ? new Date(followUpRaw).getTime() : NaN;
+  const followUpDisplayDate = Number.isFinite(followUpMs)
+    ? new Date(followUpMs).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+    : safeStr(followUpRaw || "-");
+  const submitBanner = submitted ? `
+    <div class="insight-card" style="border-left:4px solid #10b981;">
+      ✅ Packet submitted successfully
+    </div>
+  ` : "";
+  const negotiationSummary = (submissionTypeRaw === "negotiation") ? `
+    <div class="card">
+      <h3>Negotiation Packet Summary</h3>
+      <div>Status: <span class="badge ok">Submitted</span></div>
+      <div>Round: ${currentRound || 1}</div>
+      <div>Submitted: ${safeStr(submittedDisplayDate)}</div>
+      <div>Follow-up Date: ${safeStr(followUpDisplayDate)}</div>
+      <div class="btnRow" style="margin-top:10px;">
+        <a class="btn small secondary" href="/packet/export?billed_id=${encodeURIComponent(b.billed_id)}&type=negotiation">View Packet</a>
+        <a class="btn small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Continue Negotiation</a>
+      </div>
+    </div>
+  ` : "";
+  const appealSummary = (submissionTypeRaw === "appeal") ? `
+    <div class="card">
+      <h3>Appeal Packet Summary</h3>
+      <div>Status: <span class="badge ok">Submitted</span></div>
+      <div>Round: ${currentRound || 1}</div>
+      <div>Submitted: ${safeStr(submittedDisplayDate)}</div>
+      <div>Follow-up Date: ${safeStr(followUpDisplayDate)}</div>
+      <div class="btnRow" style="margin-top:10px;">
+        <a class="btn small secondary" href="/packet/export?billed_id=${encodeURIComponent(b.billed_id)}&type=appeal">View Packet</a>
+        <a class="btn small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Continue Appeal</a>
+      </div>
+    </div>
+  ` : "";
 
   const negHistoryHtml = negHistory.length
     ? `<table>
@@ -26061,30 +26134,9 @@ if (method === "GET" && pathname === "/claim-detail") {
          </tbody>
        </table>`;
 
-  const appealPacketSummary = appealCase
-    ? `
-      <ul class="muted">
-        <li>Submitted At: ${safeStr(appealCase.appeal_packet?.submitted_at || "-")}</li>
-        <li>Exported At: ${safeStr(appealCase.appeal_packet?.exported_at || "-")}</li>
-        <li>Attachments: ${(appealCase.appeal_packet?.attachments || appealCase.appeal_attachments || []).length}</li>
-      </ul>
-      <a class="btn secondary" href="/appeal-detail?case_id=${encodeURIComponent(appealCase.case_id)}">Open Appeal Workspace</a>
-    `
-    : `<p class="muted">No appeal packet linked to this claim.</p>`;
-
-  const negotiationPacketSummary = latestNegotiation
-    ? `
-      <ul class="muted">
-        <li>Submitted At: ${safeStr(latestNegotiation.negotiation_packet?.submitted_at || "-")}</li>
-        <li>Exported At: ${safeStr(latestNegotiation.negotiation_packet?.exported_at || "-")}</li>
-        <li>Attachments: ${(latestNegotiation.negotiation_packet?.attachments || latestNegotiation.documents || []).length}</li>
-      </ul>
-      <a class="btn secondary" href="/negotiation-detail?negotiation_id=${encodeURIComponent(latestNegotiation.negotiation_id)}">Open Negotiation Workspace</a>
-    `
-    : `<p class="muted">No negotiation packet linked to this claim.</p>`;
-
   const html = renderPage("Claim Detail", `
     <h2>Claim Detail</h2>
+    ${submitBanner}
 
     <h3>Claim Overview</h3>
     <table>
@@ -26131,11 +26183,11 @@ if (method === "GET" && pathname === "/claim-detail") {
 
     <div class="hr"></div>
     <h3>Appeal Packet Summary</h3>
-    ${appealPacketSummary}
+    ${appealSummary}
 
     <div class="hr"></div>
     <h3>Negotiation Packet Summary</h3>
-    ${negotiationPacketSummary}
+    ${negotiationSummary}
 
     <div class="hr"></div>
     <h3>Payment History</h3>
