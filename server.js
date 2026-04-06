@@ -624,6 +624,66 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .scrollSyncTop > div{height:1px;}
 .tableScrollY{max-height:460px;overflow:auto;}
 
+/* ===== CLAIMS PIPELINE ===== */
+.pipeline-board{
+  display:flex;
+  gap:16px;
+  overflow-x:auto;
+  padding:12px 4px;
+}
+.pipeline-column{
+  min-width:260px;
+  background:#f8fafc;
+  border-radius:14px;
+  padding:10px;
+  border:1px solid #e5e7eb;
+}
+.pipeline-column.denied{border-color:#fecaca;background:#fff1f2;}
+.pipeline-column.followup{border-color:#fed7aa;background:#fff7ed;}
+.pipeline-column.resolved{border-color:#bbf7d0;background:#f0fdf4;}
+.pipeline-col-header{
+  font-weight:900;
+  font-size:13px;
+  margin-bottom:8px;
+}
+.pipeline-col-sub{
+  font-size:11px;
+  color:#6b7280;
+  margin-bottom:10px;
+}
+.pipeline-card{
+  background:#fff;
+  border-radius:10px;
+  padding:10px;
+  margin-bottom:10px;
+  box-shadow:0 6px 14px rgba(0,0,0,.06);
+  cursor:pointer;
+  border:1px solid #e5e7eb;
+}
+.pipeline-card:hover{
+  box-shadow:0 10px 20px rgba(0,0,0,.08);
+}
+.pipeline-card-title{
+  font-weight:900;
+  font-size:13px;
+}
+.pipeline-card-sub{
+  font-size:12px;
+  color:#6b7280;
+  margin-top:4px;
+}
+.pipeline-risk-badge{
+  display:inline-block;
+  margin-top:6px;
+  background:#111827;
+  color:#fff;
+  border-radius:999px;
+  padding:2px 8px;
+  font-size:10px;
+  font-weight:900;
+  letter-spacing:.2px;
+}
+
 /* ===== AUTH UI PATCH ===== */
 .password-wrap { position: relative; }
 .password-wrap input { padding-right: 48px; }
@@ -14155,7 +14215,7 @@ if (method === "GET" && pathname === "/executive-export") {
 if (method === "GET" && pathname === "/claims") {
 
   // Sub-tabs: billed | payments | denials | negotiations | all
-  const view = String(parsed.query.view || "billed").toLowerCase();
+  const view = String(parsed.query.view || "pipeline").toLowerCase();
   const reimbursementBatch = String(parsed.query.reimbursement_batch || "").trim();
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
@@ -14247,6 +14307,138 @@ if (method === "GET" && pathname === "/claims") {
 
     const submitted = !!(b.submission_id || b.submitted_at || b.submitted_date || b.submitted_to_payer);
     return submitted ? "Waiting Payment" : "Submitted";
+  }
+
+  function toSimplePipelineStage(b){
+    const stage = String(toPipelineStage(b) || "");
+    if (stage === "Denied") return "Denied";
+    if (stage === "Underpaid") return "Underpaid";
+    if (stage === "In Appeal/Negotiation") return "In Appeal/Negotiation";
+    if (stage === "Waiting Payment" || stage === "Submitted") return "Awaiting Payment";
+    if (stage === "Patient Follow-Up") return "Follow-Up Needed";
+    if (stage === "Resolved" || stage === "Revenue Collected" || stage === "Write-Off") return "Resolved";
+    return "Follow-Up Needed";
+  }
+
+  function renderClaimsPipeline(billedItems, claimContext){
+    const PIPELINE_COLUMNS = [
+      "Denied",
+      "Underpaid",
+      "In Appeal/Negotiation",
+      "Awaiting Payment",
+      "Follow-Up Needed",
+      "Resolved"
+    ];
+
+    const grouped = {};
+    PIPELINE_COLUMNS.forEach(col => { grouped[col] = []; });
+
+    billedItems.forEach(b => {
+      const stage = toSimplePipelineStage(b);
+      if (grouped[stage]) grouped[stage].push(b);
+    });
+
+    function renderCard(b, isTopRisk = false){
+      const d = evaluateClaimDerived(b, claimContext);
+      const atRisk = Number(d.atRiskAmount || 0);
+      const status = String(d.lifecycleStage || b.status || "Pending");
+      const baseDate = b.submitted_at || b.submitted_date || b.created_at || "";
+      const daysOpen = daysSince(baseDate);
+      const dayLabel = (b.submitted_at || b.submitted_date) ? "days since submission" : "days in system";
+      const wsHref = workspacePagePath(b.billed_id, workspaceChannelForClaim(b, d));
+      return `
+        <div class="pipeline-card" onclick="window.location='/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}'">
+          <div class="pipeline-card-title">#${safeStr(b.claim_number || "")}</div>
+          <div class="pipeline-card-sub">${safeStr(b.payer || "")}</div>
+          <div class="pipeline-card-sub">${daysOpen} ${dayLabel}</div>
+          <div class="pipeline-card-sub">${formatMoneyUI(atRisk)} at risk</div>
+          <div class="pipeline-card-sub"><span class="badge ${badgeClassForStatus(status)}">${safeStr(status)}</span></div>
+          ${isTopRisk ? `<div class="pipeline-risk-badge">🔥 Highest Risk</div>` : ``}
+          <div style="margin-top:8px;">
+            <a class="btn secondary small" href="${wsHref}" onclick="event.stopPropagation();">Open AI Workspace</a>
+          </div>
+        </div>
+      `;
+    }
+
+    const cols = PIPELINE_COLUMNS.map(col => {
+      const claims = (grouped[col] || []).slice().sort((a,b)=> computeClaimRiskScore(b) - computeClaimRiskScore(a));
+      const totalAtRisk = claims.reduce((sum, b) => {
+        const d = evaluateClaimDerived(b, claimContext);
+        return sum + Number(d.atRiskAmount || 0);
+      }, 0);
+
+      const colClass = col === "Denied" ? "denied" : (col === "Follow-Up Needed" ? "followup" : (col === "Resolved" ? "resolved" : ""));
+      return `
+        <div class="pipeline-column ${colClass}">
+          <div class="pipeline-col-header">${col}</div>
+          <div class="pipeline-col-sub">${claims.length} claims • ${formatMoneyUI(totalAtRisk)}</div>
+          ${claims.map((b, idx) => renderCard(b, idx === 0 && claims.length > 0)).join("") || `<div class="muted small">No claims</div>`}
+        </div>
+      `;
+    }).join("");
+
+    return `<div class="pipeline-board">${cols}</div>`;
+  }
+
+  function renderClaimsTable(billedItems, claimContext){
+    const rows = billedItems
+      .slice()
+      .sort((a,b)=> computeClaimRiskScore(b) - computeClaimRiskScore(a))
+      .map(b => {
+        const d = evaluateClaimDerived(b, claimContext);
+        const st = String(d.lifecycleStage || b.status || "Pending");
+        const paidAmt = Number(d.paidAmount || 0);
+        const atRisk = Number(d.atRiskAmount || 0);
+        return `
+          <tr>
+            <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
+            <td>${safeStr(b.dos || "")}</td>
+            <td>${safeStr(b.payer || "")}</td>
+            <td>${formatMoneyUI(b.amount_billed || 0)}</td>
+            <td>${formatMoneyUI(paidAmt)}</td>
+            <td>${formatMoneyUI(atRisk)}</td>
+            <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    return `
+      <div style="overflow:auto;">
+        <table>
+          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Status</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="7" class="muted">No claims found.</td></tr>`}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  if (view === "pipeline" || view === "table") {
+    const toggle = `
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <a class="btn ${view==="pipeline"?"":"secondary"}" href="/claims?view=pipeline">Pipeline View</a>
+        <a class="btn ${view==="table"?"":"secondary"}" href="/claims?view=table">Table View</a>
+      </div>
+    `;
+
+    let mainContent = "";
+    if (view === "pipeline") {
+      mainContent = renderClaimsPipeline(billedAll, claimCtx);
+    } else {
+      mainContent = renderClaimsTable(billedAll, claimCtx);
+    }
+
+    return send(res, 200, renderPage(
+      "Claims Lifecycle",
+      `
+        <h2>Claims Lifecycle</h2>
+        ${toggle}
+        ${mainContent}
+      `,
+      navUser(),
+      { showChat:true, orgName: org.org_name }
+    ));
   }
 
   const pipelineAgg = {};
