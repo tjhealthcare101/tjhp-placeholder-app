@@ -14228,6 +14228,11 @@ if (method === "GET" && pathname === "/claims") {
   function toPipelineStage(b){
     const d = evaluateClaimDerived(b, claimCtx);
     if (PIPE_ORDER.includes(d.lifecycleStage)) return d.lifecycleStage;
+    const submissionStatus = String(b.submission_status || "").toLowerCase();
+    const lastSubmissionType = String(b.last_submission_type || "").toLowerCase();
+    if (submissionStatus === "submitted" && (lastSubmissionType === "appeal" || lastSubmissionType === "negotiation")) {
+      return "In Appeal/Negotiation";
+    }
     const paid = num(d.paidAmount);
     const expected = num(d.expectedInsurance || 0);
     const hasPayment = !!d.hasPaymentResponse;
@@ -17168,7 +17173,9 @@ function renderClaimFinancialContext(billedClaim, derived){
 }
 
 if (method === "GET" && pathname === "/actions") {
-  const tab = String(parsed.query.tab || "all").toLowerCase(); // all|denials|underpayments|awaiting|followup
+  const tabRaw = String(parsed.query.tab || "all").toLowerCase();
+  const tab = (tabRaw === "awaiting" || tabRaw === "followup") ? "postsubmission" : tabRaw; // all|denials|underpayments|postsubmission
+  const postSubFilter = String(parsed.query.postsub || "all").toLowerCase(); // all|awaiting|followup
   const q = String(parsed.query.q || "").trim().toLowerCase();
   const payerFilter = String(parsed.query.payer || "").trim();
   const rangePreset = String(parsed.query.range || "last30").trim();
@@ -17269,9 +17276,12 @@ if (method === "GET" && pathname === "/actions") {
     const isSubmittedClaim = String(b.submission_status || "").toLowerCase() === "submitted";
     const isAwaitingPaymentClaim = isSubmittedClaim && String(derived.lifecycleStage || b.lifecycleStage || "") !== "Paid";
     const isFollowupNeededClaim = isSubmittedClaim && followUpDue && !Number.isNaN(followUpDue.getTime()) && followUpDue <= now;
+    const postSubmissionStatus = isFollowupNeededClaim ? "Follow-Up Needed" : (isAwaitingPaymentClaim ? "Awaiting Payment" : "");
+    const isPostSubmissionClaim = !!postSubmissionStatus;
 
-    if (tab === "awaiting" && !isAwaitingPaymentClaim) continue;
-    if (tab === "followup" && !isFollowupNeededClaim) continue;
+    if (tab === "postsubmission" && !isPostSubmissionClaim) continue;
+    if (tab === "postsubmission" && postSubFilter === "awaiting" && postSubmissionStatus !== "Awaiting Payment") continue;
+    if (tab === "postsubmission" && postSubFilter === "followup" && postSubmissionStatus !== "Follow-Up Needed") continue;
 
     // Determine action center grouping (PRIORITY ORDER FIXED)
     let group = null;
@@ -17314,7 +17324,7 @@ if (method === "GET" && pathname === "/actions") {
 
     // 4) Patient follow-up work
     } else if (st === "Patient Follow-Up") {
-      group = "Follow-Up Needed";
+      group = "Post-Submission";
       kind = "other";
 
     } else {
@@ -17322,11 +17332,11 @@ if (method === "GET" && pathname === "/actions") {
     }
 
     if (isFollowupNeededClaim) {
-      group = "Follow-Up Needed";
+      group = "Post-Submission";
       kind = "other";
       secondaryStatus = secondaryStatus || `Follow-up due ${b.follow_up_date}`;
     } else if (isAwaitingPaymentClaim) {
-      group = "Awaiting Payment";
+      group = "Post-Submission";
       kind = "other";
       secondaryStatus = secondaryStatus || "Submitted and awaiting payment posting";
     }
@@ -17334,8 +17344,7 @@ if (method === "GET" && pathname === "/actions") {
     // map group to tab key
     const tabKey = (group === "Denials") ? "denials" :
                    (group === "Underpayments") ? "underpayments" :
-                   (group === "Awaiting Payment") ? "awaiting" :
-                   (group === "Follow-Up Needed") ? "followup" : "closed";
+                   (group === "Post-Submission") ? "postsubmission" : "closed";
 
     if (tab === "underpayments" && !(kind === "negotiation" || kind === "contract_missing")) continue;
     if (tab === "all" && !["denial", "negotiation", "other", "followup_ws", "contract_missing"].includes(kind)) continue;
@@ -17343,7 +17352,7 @@ if (method === "GET" && pathname === "/actions") {
 
     const atRisk = Number(derived.atRiskAmount || computeClaimAtRisk(b));
     const riskScore = computeClaimRiskScore({ ...b, status: st });
-    items.push({ b, derived, st, opStatus, kind, atRisk, riskScore, secondaryStatus, tabKey, isSubmittedClaim, isFollowupNeededClaim });
+    items.push({ b, derived, st, opStatus, kind, atRisk, riskScore, secondaryStatus, tabKey, isSubmittedClaim, isFollowupNeededClaim, postSubmissionStatus, followUpDate: b.follow_up_date || "" });
   }
 
   const wsAll = readJSON(FILES.agent_workspaces, []).filter(w => w.org_id === org.org_id);
@@ -17352,7 +17361,7 @@ if (method === "GET" && pathname === "/actions") {
     ensurePacketSections(ws);
     const dueAt = ws.follow_up?.due_at ? new Date(ws.follow_up.due_at).getTime() : NaN;
     if (String(ws.status || "") !== "submitted" || !isFinite(dueAt) || dueAt > dueSoon) continue;
-    if (!["all","followup"].includes(tab)) continue;
+    if (!["all","postsubmission"].includes(tab)) continue;
     const b = billedAll.find(x => x.billed_id === ws.billed_id);
     if (!b) continue;
     if (payerFilter) {
@@ -17362,7 +17371,7 @@ if (method === "GET" && pathname === "/actions") {
     const wsDt = new Date(b.created_at || b.dos || b.date_paid || nowISO()).getTime();
     if (wsDt < range.start.getTime() || wsDt > range.end.getTime()) continue;
     const derived = evaluateClaimDerived(b, actionCtx);
-    items.push({ b, derived, st: "Follow-Up Needed", kind: "followup_ws", atRisk: Number(derived.atRiskAmount || computeClaimAtRisk(b)), riskScore: computeClaimRiskScore({ ...b, status: "Submitted" }), secondaryStatus: `Due ${ws.follow_up?.due_at || ""}`, tabKey: "followup", ws });
+    items.push({ b, derived, st: "Follow-Up Needed", kind: "followup_ws", atRisk: Number(derived.atRiskAmount || computeClaimAtRisk(b)), riskScore: computeClaimRiskScore({ ...b, status: "Submitted" }), secondaryStatus: `Due ${ws.follow_up?.due_at || ""}`, tabKey: "postsubmission", ws, postSubmissionStatus: "Follow-Up Needed", followUpDate: ws.follow_up?.due_at || "" });
   }
 
   // Sorting
@@ -17392,10 +17401,21 @@ if (method === "GET" && pathname === "/actions") {
       ${tabBtn("all","All At Risk","All denials, underpayments, follow-ups, and awaiting payment work in one queue.")}
       ${tabBtn("denials","Denials","Denied claims that need an appeal packet or appeal follow-up.")}
       ${tabBtn("underpayments","Underpayments","Underpaid claims that need negotiation work or follow-up.")}
-      ${tabBtn("awaiting","Awaiting Payment","Approved disputes waiting for payment posting.")}
-      ${tabBtn("followup","Follow-Up Needed","Submitted appeals/negotiations requiring follow-up actions.")}
+      ${tabBtn("postsubmission","Post-Submission","Submitted claims grouped by post-submission status: Awaiting Payment or Follow-Up Needed.")}
     </div>
   `;
+  const postSubFilterBtn = (key, label) => {
+    const active = postSubFilter === key;
+    const qs = new URLSearchParams({ ...parsed.query, tab: "postsubmission", postsub: key, page: "1" }).toString();
+    return `<a href="/actions?${qs}" style="text-decoration:none;display:inline-flex;gap:6px;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid #e5e7eb;background:${active ? "#111827" : "#fff"};color:${active ? "#fff" : "#111827"};font-weight:800;font-size:12px;">${label}</a>`;
+  };
+  const postSubFilters = (tab === "postsubmission") ? `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+      ${postSubFilterBtn("all","All")}
+      ${postSubFilterBtn("awaiting","Awaiting Payment")}
+      ${postSubFilterBtn("followup","Follow-Up Needed")}
+    </div>
+  ` : ``;
 
   const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer||"").trim()).filter(Boolean))).sort();
 
@@ -17418,6 +17438,7 @@ if (method === "GET" && pathname === "/actions") {
       ? Math.max(0, Math.floor((Date.now() - submittedAtMs) / (24 * 60 * 60 * 1000)))
       : null;
     const daysSinceSubmissionText = daysSinceSubmission === null ? "-" : `${daysSinceSubmission} day${daysSinceSubmission === 1 ? "" : "s"}`;
+    const followUpDateText = x.followUpDate ? safeStr(String(x.followUpDate)) : "-";
     const rowStyle = x.isFollowupNeededClaim ? ` style="background:#fff7ed;"` : "";
 
     const status = x.opStatus || x.st || "Paid";
@@ -17492,11 +17513,12 @@ if (method === "GET" && pathname === "/actions") {
       <td class="num">${formatMoneyUI(paidAmount)}</td>
       <td>
         <span class="badge ${badgeCls}">${safeStr(status)}</span>
-        ${x.isSubmittedClaim ? `<span class="badge ok" style="margin-left:6px;">Submitted</span>` : `<span class="badge" style="margin-left:6px;">Draft</span>`}
+        ${x.isSubmittedClaim ? `<span class="badge ok" style="margin-left:6px;">Submitted${x.postSubmissionStatus ? ` (${safeStr(x.postSubmissionStatus)})` : ""}</span>` : `<span class="badge" style="margin-left:6px;">Draft</span>`}
         ${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}
       </td>
       <td>${atRiskAmount !== null ? formatMoneyUI(atRiskAmount) : "-"}</td>
       <td>${x.riskScore}</td>
+      <td>${followUpDateText}</td>
       <td>${safeStr(daysSinceSubmissionText)}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
     </tr>`;
@@ -17517,11 +17539,13 @@ if (method === "GET" && pathname === "/actions") {
     <h2>Action Center <span class="tooltip" data-tip="This page prevents revenue leakage by surfacing what needs action. Use tabs to work denials and underpayments by risk score.">ⓘ</span></h2>
     <p class="muted">Work items are sorted by risk score and revenue at risk so nothing slips through the cracks.</p>
     ${tabs}
+    ${postSubFilters}
 
     <div class="hr"></div>
 
     <form method="GET" action="/actions" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
       <input type="hidden" name="tab" value="${safeStr(tab)}"/>
+      ${tab === "postsubmission" ? `<input type="hidden" name="postsub" value="${safeStr(postSubFilter)}"/>` : ``}
       <div style="display:flex;flex-direction:column;min-width:220px;">
         <label>Search</label>
         <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, DOS..." />
@@ -17555,7 +17579,7 @@ if (method === "GET" && pathname === "/actions") {
       </div>
       <div>
         <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
-        <a class="btn secondary" href="/actions?tab=${encodeURIComponent(tab)}" style="margin-top:1.6em;">Reset</a>
+        <a class="btn secondary" href="/actions?tab=${encodeURIComponent(tab)}${tab === "postsubmission" ? `&postsub=${encodeURIComponent(postSubFilter)}` : ""}" style="margin-top:1.6em;">Reset</a>
       </div>
     </form>
 
@@ -17565,14 +17589,14 @@ if (method === "GET" && pathname === "/actions") {
       <div>${sizeSelect}</div>
     </div>
 
-    ${(payerFilter || rangePreset) ? `<div class="muted small" style="margin-bottom:10px;">Filters: ${payerFilter ? `<span class="badge">${safeStr(payerFilter)}</span>` : ""} ${rangePreset ? `<span class="badge">${safeStr(rangePreset)}</span>` : ""}</div>` : ""}
+    ${(payerFilter || rangePreset || (tab === "postsubmission" && postSubFilter !== "all")) ? `<div class="muted small" style="margin-bottom:10px;">Filters: ${payerFilter ? `<span class="badge">${safeStr(payerFilter)}</span>` : ""} ${rangePreset ? `<span class="badge">${safeStr(rangePreset)}</span>` : ""} ${(tab === "postsubmission" && postSubFilter !== "all") ? `<span class="badge">${safeStr(postSubFilter)}</span>` : ""}</div>` : ""}
 
     <div id="actionTableSync">
       <div class="scrollSyncTop"><div></div></div>
       <div class="scrollSyncBottom tableScrollY">
       <table>
-        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed <span class="tooltip" data-tip="Original submitted claim charge amount.">ⓘ</span></th><th>Expected <span class="tooltip" data-tip="Estimated insurance expected amount after patient responsibility and contract terms.">ⓘ</span></th><th>Paid <span class="tooltip" data-tip="Total payer payment currently posted.">ⓘ</span></th><th>Status / Stage <span class="tooltip" data-tip="Derived from payer response, denial context, and negotiation state.">ⓘ</span></th><th>At Risk <span class="tooltip" data-tip="Estimated collectible dollars not yet recovered.">ⓘ</span></th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Days Since Submission</th><th>Actions</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="10" class="muted">No items in this tab.</td></tr>`}</tbody>
+        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed <span class="tooltip" data-tip="Original submitted claim charge amount.">ⓘ</span></th><th>Expected <span class="tooltip" data-tip="Estimated insurance expected amount after patient responsibility and contract terms.">ⓘ</span></th><th>Paid <span class="tooltip" data-tip="Total payer payment currently posted.">ⓘ</span></th><th>Status / Stage <span class="tooltip" data-tip="Derived from payer response, denial context, and negotiation state.">ⓘ</span></th><th>At Risk <span class="tooltip" data-tip="Estimated collectible dollars not yet recovered.">ⓘ</span></th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Follow-Up Date</th><th>Days Since Submission</th><th>Actions</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="11" class="muted">No items in this tab.</td></tr>`}</tbody>
       </table>
     </div>
     </div>
@@ -25398,14 +25422,14 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
       const billedAll = readJSON(FILES.billed, []);
       const b = billedAll.find(x => x.billed_id === billed_id && x.org_id === org.org_id);
-      if (!b) return redirect(res, "/actions?tab=followup");
+      if (!b) return redirect(res, "/actions?tab=postsubmission");
       const ws = ensureAgentWorkspace(org.org_id, b);
       ensurePacketSections(ws, b);
       ws.follow_up.escalation_level = Number(ws.follow_up.escalation_level || 0) + 1;
       ws.follow_up.last_touched_at = nowISO();
       saveAgentWorkspace(org.org_id, ws);
       addAgentMessage(org.org_id, { message_id: uuid(), workspace_id: ws.workspace_id, billed_id, role: "user", channel: "general", content: "Follow-up escalated" });
-      return redirect(res, "/actions?tab=followup");
+      return redirect(res, "/actions?tab=postsubmission");
     });
     return;
   }
