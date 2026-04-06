@@ -598,6 +598,10 @@ textarea{min-height:220px;}
 .small{font-size:12px;}
 table{width:100%;border-collapse:collapse;font-size:13px;}
 th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;}
+.claims-table tbody tr:hover{background:#f9fafb;}
+.claims-table tbody tr.high-risk{background:#fef2f2;border-left:4px solid #ef4444;}
+.claims-actions{display:flex;flex-direction:column;gap:4px;}
+.claims-actions .muted.small{opacity:.75;}
 .center{text-align:center}
 .hidden{display:none;}
 
@@ -14484,41 +14488,21 @@ if (method === "GET" && pathname === "/claims") {
         const d = evaluateClaimDerived(b, claimContext);
         const st = String(d.lifecycleStage || b.status || "Pending");
         const stage = toSimplePipelineStage(b);
+        const suggested = suggestedNextActionForClaim(b);
+        const followUp = String(b.follow_up_date || "").trim();
+        const riskScore = computeClaimRiskScore(b);
+        const isHighRisk = riskScore >= 80;
+        let actionLabel = "";
+        if (stage === "Denied") actionLabel = "Needs Appeal";
+        else if (stage === "Underpaid") actionLabel = "Needs Negotiation";
+        else if (stage === "Follow-Up Needed") actionLabel = "Needs Follow-Up";
+        else if (stage === "Awaiting Payment") actionLabel = "Monitor Payment";
+        if (!actionLabel) actionLabel = String((suggested && suggested.label) || suggested || "").trim();
+        if (!actionLabel) actionLabel = "No immediate action";
         const paidAmt = Number(d.paidAmount || 0);
         const atRisk = Number(d.atRiskAmount || 0);
-        let actionButtons = `
-          <a class="btn small secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">
-            View
-          </a>
-        `;
-
-        if (stage === "Denied") {
-          actionButtons = `
-            <a class="btn small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">
-              Appeal Workspace
-            </a>
-            ${actionButtons}
-          `;
-        }
-        else if (stage === "Underpaid") {
-          actionButtons = `
-            <a class="btn small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">
-              Negotiation Workspace
-            </a>
-            ${actionButtons}
-          `;
-        }
-        else if (stage === "Follow-Up Needed" || stage === "Awaiting Payment") {
-          const actionTab = mapStageToActionTab(stage);
-          actionButtons = `
-            <a class="btn small" href="/actions?tab=${actionTab}&claim=${encodeURIComponent(b.billed_id)}">
-              Go to Action Center
-            </a>
-            ${actionButtons}
-          `;
-        }
         return `
-          <tr>
+          <tr class="${isHighRisk ? "high-risk" : ""}">
             <td><a href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">${safeStr(b.claim_number || "")}</a></td>
             <td>${safeStr(b.dos || "")}</td>
             <td>${safeStr(b.payer || "")}</td>
@@ -14526,8 +14510,56 @@ if (method === "GET" && pathname === "/claims") {
             <td>${formatMoneyUI(paidAmt)}</td>
             <td>${formatMoneyUI(atRisk)}</td>
             <td><span class="badge ${badgeClassForStatus(st)}">${safeStr(st)}</span></td>
-            <td style="white-space:nowrap;display:flex;gap:6px;flex-wrap:wrap;">
-              ${actionButtons}
+            <td style="white-space:nowrap;">
+              <div class="claims-actions">
+                <div class="muted small">
+                  👉 ${safeStr(actionLabel)}
+                </div>
+
+                <div class="muted small">
+                  📅 Follow-up: ${safeStr(followUp || "Not set")}
+                </div>
+
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+                  ${
+                    stage === "Denied"
+                      ? `<a class="btn small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">
+                           Appeal Workspace
+                         </a>`
+                      : ""
+                  }
+
+                  ${
+                    stage === "Underpaid"
+                      ? `<a class="btn small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">
+                           Negotiation Workspace
+                         </a>`
+                      : ""
+                  }
+
+                  ${
+                    stage === "Follow-Up Needed" || stage === "Awaiting Payment"
+                      ? `<a class="btn small" href="/actions?tab=${mapStageToActionTab(stage)}&claim=${encodeURIComponent(b.billed_id)}">
+                           Set Follow-Up
+                         </a>`
+                      : ""
+                  }
+
+                  <a class="btn small secondary" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">
+                    Write Off
+                  </a>
+
+                  <a class="btn small secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">
+                    View
+                  </a>
+                </div>
+
+                ${
+                  isHighRisk
+                    ? `<div class="badge warn">🔥 Highest Risk</div>`
+                    : ""
+                }
+              </div>
             </td>
           </tr>
         `;
@@ -14552,7 +14584,7 @@ if (method === "GET" && pathname === "/claims") {
         <button class="btn secondary" type="submit">Apply</button>
       </form>
       <div style="overflow:auto;">
-        <table>
+        <table class="claims-table">
           <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="8" class="muted">No claims found.</td></tr>`}</tbody>
         </table>
