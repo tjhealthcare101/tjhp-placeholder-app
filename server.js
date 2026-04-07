@@ -6813,6 +6813,16 @@ function renderInlineAIAssist(billed_id, channel){
           <br/>• rewrite for approval
         </div>
 
+        <div style="margin-bottom:8px;">
+          <div class="small muted">Quick Improvements:</div>
+
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+            <button type="submit" class="btn small" name="preset" value="improve">Improve Argument</button>
+            <button type="submit" class="btn small" name="preset" value="contract">Add Contract Language</button>
+            <button type="submit" class="btn small" name="preset" value="justify">Strengthen Justification</button>
+          </div>
+        </div>
+
         <textarea name="prompt" placeholder="e.g. Make this stronger for medical necessity or rewrite for appeal approval"></textarea>
 
         <button class="btn">Apply AI Update</button>
@@ -25502,7 +25512,18 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
     const billed_id = String(params.get("billed_id") || "").trim();
     const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
-    const prompt = String(params.get("prompt") || "").trim();
+    let prompt = String(params.get("prompt") || "").trim();
+    const preset = String(params.get("preset") || "").trim();
+
+    if (preset && !prompt) {
+      if (preset === "improve") {
+        prompt = "Make this argument stronger and more persuasive for approval";
+      } else if (preset === "contract") {
+        prompt = "Add contract-based justification and strengthen reimbursement argument";
+      } else if (preset === "justify") {
+        prompt = "Strengthen justification using medical necessity and payer logic";
+      }
+    }
 
     if (!billed_id || !prompt) return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
 
