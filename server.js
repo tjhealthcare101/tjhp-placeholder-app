@@ -5895,6 +5895,71 @@ function runRecoveryAgentTick(org_id){
     const d = evaluateClaimDerived(claim, ctx);
     const ws = ensureAgentWorkspace(org_id, claim);
     ensurePacketSections(ws, claim);
+    const eobText = `
+Paid: ${formatMoneyUI(d.paidAmount)}
+Expected: ${d.expectedInsurance != null ? formatMoneyUI(d.expectedInsurance) : "Not Available"}
+Variance: ${formatMoneyUI(d.underpaidAmount)}
+
+Payer reimbursement does not align with expected contract terms.
+`.trim();
+    if (!String(ws?.negotiation?.packet_sections?.eob_era || "").trim()) {
+      ws.negotiation.packet_sections.eob_era = eobText;
+    }
+    if (!String(ws?.appeal?.packet_sections?.eob_era || "").trim()) {
+      ws.appeal.packet_sections.eob_era = eobText;
+    }
+
+    const billed = formatMoneyUI(d.billedAmount);
+    const expected = d.expectedInsurance != null ? formatMoneyUI(d.expectedInsurance) : "Not Available";
+    const paid = formatMoneyUI(d.paidAmount);
+    const variance = formatMoneyUI(d.underpaidAmount);
+    const reasoningText = `
+Based on the contracted reimbursement terms between the provider and ${claim.payer || "the payer"}, 
+the payment posted for this claim does not align with the expected allowed amount.
+
+Billed amount: ${billed}  
+Expected allowed: ${expected}  
+Paid amount: ${paid}  
+
+This results in a variance of ${variance}. We respectfully request 
+review and adjustment in accordance with the payer agreement.
+`.trim();
+    if (!String(ws?.negotiation?.packet_sections?.variance_explanation || "").trim()) {
+      ws.negotiation.packet_sections.variance_explanation = reasoningText;
+    }
+    if (!String(ws?.appeal?.packet_sections?.argument || "").trim()) {
+      ws.appeal.packet_sections.argument = reasoningText;
+    }
+
+    const actionText = `
+- Recalculate reimbursement per contract terms  
+- Remit corrected payment and ERA  
+- Confirm adjustment timeline  
+`.trim();
+    if (!String(ws?.negotiation?.packet_sections?.requested_action || "").trim()) {
+      ws.negotiation.packet_sections.requested_action = actionText;
+    }
+    if (!String(ws?.appeal?.packet_sections?.requested_action || "").trim()) {
+      ws.appeal.packet_sections.requested_action = actionText;
+    }
+
+    const contract = findContractForClaim(org_id, claim);
+    let contractText = "";
+    if (contract) {
+      if (contract.allowed_percent) {
+        contractText = `Allowed: ${contract.allowed_percent}% of billed`;
+      } else if (contract.allowed_amount) {
+        contractText = `Allowed: $${contract.allowed_amount}`;
+      } else {
+        contractText = "Contract found (details available)";
+      }
+    }
+    if (contract && !String(ws?.negotiation?.packet_sections?.contract_excerpt || "").trim()) {
+      ws.negotiation.packet_sections.contract_excerpt = contractText;
+    }
+    if (contract && !String(ws?.appeal?.packet_sections?.contract_excerpt || "").trim()) {
+      ws.appeal.packet_sections.contract_excerpt = contractText;
+    }
 
     if (!ws[stageType]?.auto_generated && !shouldLockPacket(ws, stageType)) {
       autoDraftWorkspaceForClaim(org_id, claim, d, ctx);
@@ -5904,7 +5969,7 @@ function runRecoveryAgentTick(org_id){
     }
 
     const denialReasonKey = normalizeDenialReasonKey(ws.outcome?.denial_reason || claim.denial_reason || claim.issue_reason || '');
-    const hasContractRule = !!findContractForClaim(org_id, claim);
+    const hasContractRule = !!contract;
     const baseline = computeHistoricalBaselines(org_id, claim.payer || '', stageType, denialReasonKey);
     const bestStrategy = computeStrategySuccessByProfile(org_id, claim.payer || '', stageType, denialReasonKey);
     const payerIntel = computePayerBehaviorIntelligence(org_id, claim.payer || '');
@@ -6690,6 +6755,9 @@ function renderWorkflowPanel(ws, claim, channel){
 function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
   const docs = workspaceRequiredDocConfig(channel);
   const hasMissing = docs.some(d => d.required && !packetHasKey(ws, d.key));
+  const contract = (ws?.org_id || claim?.org_id)
+    ? findContractForClaim(ws?.org_id || claim?.org_id, claim || {})
+    : null;
   return `
     <details class="ws-panel ws-docs">
       <summary>
@@ -6698,14 +6766,19 @@ function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
       </summary>
       <div class="ws-doc-list">
         ${docs.map(doc => {
-          const present = packetHasKey(ws, doc.key);
+          const isAutoContract = doc.key === "contract_excerpt" && !!contract;
+          const isAutoEob = doc.key === "eob_era" && (
+            !!ws?.negotiation?.packet_sections?.eob_era ||
+            !!ws?.appeal?.packet_sections?.eob_era
+          );
+          const present = packetHasKey(ws, doc.key) || isAutoContract || isAutoEob;
           const attachment = workspaceFindAttachmentByPacketKey(ws, doc.key);
           return `
             <div class="ws-doc-item">
               <div class="ws-doc-item-top">
                 <div>
-                  <div class="ws-doc-name">${safeStr(doc.label)} ${doc.required ? `<span class="badge warn" style="margin-left:6px;">Required</span>` : ``}</div>
-                  <div class="ws-doc-meta">${present ? `Uploaded: ${safeStr(attachment?.filename || "Attached")}` : "Not uploaded yet"}</div>
+                  <div class="ws-doc-name">${safeStr(doc.label)} ${doc.required ? `<span class="badge warn" style="margin-left:6px;">Required</span>` : ``}${isAutoContract || isAutoEob ? `<span class="badge ok" style="margin-left:6px;">Auto-filled</span>` : ""}</div>
+                  <div class="ws-doc-meta">${isAutoContract && !attachment ? "Auto-filled from contract terms" : (isAutoEob && !attachment ? "Auto-filled from claim payment data" : (present ? `Uploaded: ${safeStr(attachment?.filename || "Attached")}` : "Not uploaded yet"))}</div>
                 </div>
                 <div>${present ? `<span class="badge ok">Present</span>` : `<span class="badge err">Missing</span>`}</div>
               </div>
