@@ -21,6 +21,33 @@ function escapeHtml(str){
     .replace(/'/g, "&#039;");
 }
 
+function simpleDiff(before, after){
+  const beforeWords = String(before || "").split(/\s+/);
+  const afterWords = String(after || "").split(/\s+/);
+
+  const beforeSet = new Set(beforeWords);
+  const afterSet = new Set(afterWords);
+
+  const highlightedAfter = afterWords.map(w => {
+    if (!beforeSet.has(w)) {
+      return `<span style="background:#dcfce7;">${w}</span>`;
+    }
+    return w;
+  }).join(" ");
+
+  const highlightedBefore = beforeWords.map(w => {
+    if (!afterSet.has(w)) {
+      return `<span style="background:#fee2e2;">${w}</span>`;
+    }
+    return w;
+  }).join(" ");
+
+  return {
+    before: highlightedBefore,
+    after: highlightedAfter
+  };
+}
+
 // ===== Server =====
 const HOST = "0.0.0.0";
 const PORT = process.env.PORT || 8080;
@@ -25253,6 +25280,54 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const submittedMsg = parsed.query.submitted
       ? `<div class="ws-callout ok">Marked as submitted and moved to tracking workflow.</div>`
       : ``;
+    const appliedMsg = parsed.query.applied
+      ? `<div class="ws-callout ok">Changes applied successfully</div>`
+      : ``;
+    const preview = ws?.[channel]?.preview_diff;
+    const diffUI = preview ? `
+      <div class="ws-panel" style="border:1px solid #6366f1;">
+        <h3>AI Improvement Preview</h3>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          
+          <div style="flex:1;min-width:280px;">
+            <div class="small muted">Before</div>
+            <div style="background:#f9fafb;padding:10px;border-radius:8px;font-size:13px;white-space:pre-wrap;">
+              ${(() => {
+                const diff = simpleDiff(preview.before, preview.after);
+                return diff.before;
+              })()}
+            </div>
+          </div>
+
+          <div style="flex:1;min-width:280px;">
+            <div class="small muted">After</div>
+            <div style="background:#ecfdf5;padding:10px;border-radius:8px;font-size:13px;white-space:pre-wrap;">
+              ${(() => {
+                const diff = simpleDiff(preview.before, preview.after);
+                return diff.after;
+              })()}
+            </div>
+          </div>
+
+        </div>
+
+        <div class="btnRow" style="margin-top:10px;">
+          <form method="POST" action="/ai-workspace/apply-diff">
+            <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
+            <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+            <button class="btn">Apply Changes</button>
+          </form>
+
+          <form method="POST" action="/ai-workspace/cancel-diff">
+            <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
+            <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+            <button class="btn secondary">Cancel</button>
+          </form>
+        </div>
+
+      </div>
+    ` : "";
 
     const pageContent = `
       <div class="ws-main">
@@ -25271,6 +25346,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
         ${savedMsg}
         ${uploadedMsg}
         ${submittedMsg}
+        ${appliedMsg}
+        ${diffUI}
 
         <div class="ws-layout">
           <div class="ws-side workspace-left">
@@ -25550,23 +25627,69 @@ if (method === "GET" && pathname === "/agent-workspace") {
         ]
       });
 
-      const output = String(completion?.choices?.[0]?.message?.content || "").trim();
-      if (!output) return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
+      const improvedText = String(completion.choices?.[0]?.message?.content || "").trim();
 
-      if (channel === "appeal") {
-        ws.appeal.packet_sections = ws.appeal.packet_sections || defaultAppealPacketSections();
-        ws.appeal.packet_sections.argument = output;
-        ws.appeal.draft_text = output;
-      } else {
-        ws.negotiation.packet_sections = ws.negotiation.packet_sections || defaultNegotiationPacketSections();
-        ws.negotiation.packet_sections.variance_explanation = output;
-        ws.negotiation.draft_text = output;
-      }
+      ws[channel] = ws[channel] || {};
+      ws[channel].preview_diff = {
+        before: sourceText,
+        after: improvedText
+      };
 
       saveAgentWorkspace(sess.org_id, ws);
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1`);
     } catch (e) {
-      console.error("AI WORKSPACE INLINE EDIT ERROR:", e);
+      console.error(e);
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
     }
+  }
+
+  // APPLY DIFF
+  if (method === "POST" && pathname === "/ai-workspace/apply-diff") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const billed_id = String(params.get("billed_id") || "").trim();
+    const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return redirect(res, "/claims");
+
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    ensurePacketSections(ws, claim);
+
+    const preview = ws?.[channel]?.preview_diff;
+    if (preview?.after) {
+      const key = channel === "negotiation" ? "variance_explanation" : "argument";
+      ws[channel].packet_sections[key] = preview.after;
+    }
+
+    delete ws[channel].preview_diff;
+    saveAgentWorkspace(sess.org_id, ws);
+
+    return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&applied=1`);
+  }
+
+  // CANCEL DIFF
+  if (method === "POST" && pathname === "/ai-workspace/cancel-diff") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const billed_id = String(params.get("billed_id") || "").trim();
+    const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return redirect(res, "/claims");
+
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+
+    delete ws[channel].preview_diff;
+    saveAgentWorkspace(sess.org_id, ws);
 
     return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
   }
