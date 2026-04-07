@@ -647,6 +647,9 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .dropzone{display:flex;align-items:center;justify-content:center;border:2px dashed var(--border);border-radius:8px;height:150px;cursor:pointer;background:#fafafa;color:var(--muted);margin-bottom:10px;transition:background 0.2s ease;}
 .dropzone.dragover{background:#e5e7eb;}
 .insight-card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:14px;box-shadow:var(--shadow);margin-bottom:14px;}
+.flow-bridge{background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);}
+.flow-bridge-title{font-weight:800;}
+.flow-bridge-body{color:var(--muted);}
 .skeleton{position:relative;overflow:hidden;background:#f3f4f6;border-radius:10px;min-height:180px;}
 .skeleton::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.6),rgba(255,255,255,0));animation:shimmer 1.4s infinite;}
 @keyframes shimmer{100%{transform:translateX(100%);}}
@@ -5610,6 +5613,56 @@ function workspacePagePath(billed_id, tab){
   const t = String(tab || "").trim();
   if (t === "negotiation") return `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}`;
   return `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}`;
+}
+
+function flowStageActionMeta(stage){
+  const s = String(stage || "").trim();
+  if (s === "Denied") {
+    return {
+      label: "Take Action",
+      href: "/actions?tab=denials",
+      helper: "Open denied claims in Action Center"
+    };
+  }
+  if (s === "Underpaid") {
+    return {
+      label: "Take Action",
+      href: "/actions?tab=underpayments",
+      helper: "Open underpaid claims in Action Center"
+    };
+  }
+  if (s === "Follow-Up Needed") {
+    return {
+      label: "Review Follow-Ups",
+      href: "/actions?tab=followup",
+      helper: "Open follow-up queue"
+    };
+  }
+  if (s === "Awaiting Payment") {
+    return {
+      label: "Monitor Payment",
+      href: "/actions?tab=payments",
+      helper: "Open payment monitoring queue"
+    };
+  }
+  return {
+    label: "Open Action Center",
+    href: "/actions",
+    helper: "Review claims requiring work"
+  };
+}
+
+function renderFlowBridgeCard(title, body, primaryHref, primaryLabel, secondaryHref="", secondaryLabel=""){
+  return `
+    <div class="insight-card flow-bridge" style="margin-top:10px;">
+      <div class="flow-bridge-title" style="font-weight:800;">${safeStr(title || "")}</div>
+      <div class="flow-bridge-body muted" style="margin-top:6px;">${safeStr(body || "")}</div>
+      <div class="btnRow" style="margin-top:10px;">
+        <a class="btn" href="${safeStr(primaryHref || "#")}">${safeStr(primaryLabel || "Open")}</a>
+        ${secondaryHref ? `<a class="btn secondary" href="${safeStr(secondaryHref)}">${safeStr(secondaryLabel || "Back")}</a>` : ``}
+      </div>
+    </div>
+  `;
 }
 
 
@@ -13944,6 +13997,28 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
     const topRiskPayer = (m.payerRiskRanking || [])[0];
     const overviewTargets = getOrgSettings(org.org_id).recovery_targets || {};
+    const dashboardClaims = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+    const dashboardCtx = buildClaimContext(org.org_id);
+    const todaysPriorities = dashboardClaims.reduce((acc, b) => {
+      const simpleStage = toSimplePipelineStage(b);
+      const derived = evaluateClaimDerived(b, dashboardCtx);
+      const atRisk = num(derived.atRiskAmount);
+      if (simpleStage === "Denied") {
+        acc.denied.count += 1;
+        acc.denied.amount += atRisk;
+      } else if (simpleStage === "Underpaid") {
+        acc.underpaid.count += 1;
+        acc.underpaid.amount += atRisk;
+      } else if (simpleStage === "Follow-Up Needed") {
+        acc.followup.count += 1;
+        acc.followup.amount += atRisk;
+      }
+      return acc;
+    }, {
+      denied: { count: 0, amount: 0 },
+      underpaid: { count: 0, amount: 0 },
+      followup: { count: 0, amount: 0 }
+    });
 
     const html = renderPage("Revenue Overview", `
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
@@ -14005,6 +14080,21 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="muted" style="margin-top:4px;">
           Denial Rate: ${Number(m.denialRate||0).toFixed(1)}% · Recovery Rate: ${Number(m.kpis.netCollectionRate||0).toFixed(1)}%
         </div>
+      </div>
+
+      <div class="insight-card" style="margin-bottom:16px;">
+        <h3 style="margin:0 0 10px;">Revenue at Risk</h3>
+        <div class="muted">Review the claims driving your at-risk dollars, then move directly into the Action Center to recover revenue.</div>
+        <div class="btnRow" style="margin-top:10px;">
+          <a class="btn" href="/claims?view=lifecycle">Review Claims Lifecycle</a>
+          <a class="btn secondary" href="/actions">Open Action Center</a>
+        </div>
+        <div class="hr"></div>
+        <h4 style="margin:0 0 8px;">Today’s Priorities</h4>
+        <div class="muted small">Denied claims needing appeal: <strong>${formatNumberUI(todaysPriorities.denied.count)}</strong> · ${formatMoneyUI(todaysPriorities.denied.amount)}</div>
+        <div class="muted small">Underpaid claims needing negotiation: <strong>${formatNumberUI(todaysPriorities.underpaid.count)}</strong> · ${formatMoneyUI(todaysPriorities.underpaid.amount)}</div>
+        <div class="muted small">Claims needing follow-up: <strong>${formatNumberUI(todaysPriorities.followup.count)}</strong> · ${formatMoneyUI(todaysPriorities.followup.amount)}</div>
+        <div class="muted small" style="margin-top:10px;">Start in Claims Lifecycle to see where claims are stuck, then move into Action Center to work them.</div>
       </div>
 
       <div class="kpi-strip">
@@ -14526,7 +14616,7 @@ if (method === "GET" && pathname === "/claims") {
           <div class="pipeline-card-sub"><span class="badge ${badgeClassForStatus(status)}">${safeStr(status)}</span></div>
           ${isTopRisk ? `<div class="pipeline-risk-badge">🔥 Highest Risk</div>` : ``}
           <div style="margin-top:8px;display:flex;gap:6px;">
-            <a class="btn small" href="/actions?tab=${actionTab}&claim=${encodeURIComponent(b.billed_id)}" onclick="event.stopPropagation();">⚡ Work</a>
+            <a class="btn small" href="/actions?tab=${actionTab}&claim=${encodeURIComponent(b.billed_id)}" onclick="event.stopPropagation();">Open Action Center</a>
             <a class="btn small secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}" onclick="event.stopPropagation();">View</a>
           </div>
         </div>
@@ -14650,14 +14740,10 @@ if (method === "GET" && pathname === "/claims") {
                   ${
                     stage === "Follow-Up Needed" || stage === "Awaiting Payment"
                       ? `<a class="btn small" href="/actions?tab=${mapStageToActionTab(stage)}&claim=${encodeURIComponent(b.billed_id)}">
-                           Set Follow-Up
+                           Go to Action Center
                          </a>`
                       : ""
                   }
-
-                  <a class="btn small secondary" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">
-                    Write Off
-                  </a>
 
                   <a class="btn small secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">
                     View
@@ -14799,7 +14885,7 @@ if (method === "GET" && pathname === "/claims") {
         at risk
         <br/>
         <a class="btn small" href="/claim-detail?billed_id=${encodeURIComponent(topClaim.billed_id)}">
-          Work This Claim →
+          Open Claim Detail →
         </a>
       </div>
     ` : "";
@@ -14809,6 +14895,20 @@ if (method === "GET" && pathname === "/claims") {
         · <a href="/claims">Back to Lifecycle</a>
       </div>
     ` : "";
+    const stageActionMeta = selectedSimpleStage ? flowStageActionMeta(selectedSimpleStage) : null;
+    const stageFlowBridge = selectedSimpleStage
+      ? renderFlowBridgeCard(
+          "Next Step",
+          stageActionMeta.helper,
+          stageActionMeta.href,
+          stageActionMeta.label,
+          "/claims?view=lifecycle",
+          "Back to Lifecycle"
+        )
+      : "";
+    const stageFilteredNote = selectedSimpleStage
+      ? `<div class="muted small" style="margin:8px 0 10px;">These claims are filtered from the lifecycle stage you selected.</div>`
+      : "";
     const pipelineItems = selectedSimpleStage
       ? billedAll.filter(b => toSimplePipelineStage(b) === selectedSimpleStage)
       : billedAll;
@@ -14835,7 +14935,7 @@ if (method === "GET" && pathname === "/claims") {
       ${nextActionBanner}
 
       <div class="muted small" style="margin-bottom:10px;">
-        Click any stage to view and work those claims.
+        Click a stage to drill into those claims, then move them into the Action Center or workspace.
       </div>
 
       ${pipelineHtml}
@@ -14859,7 +14959,9 @@ if (method === "GET" && pathname === "/claims") {
         </div>
         ${nextActionBanner}
         ${stageBanner}
+        ${stageFlowBridge}
         ${toggle}
+        ${stageFilteredNote}
         ${mainContent}
       `,
       navUser(),
@@ -17709,8 +17811,8 @@ function renderClaimFinancialContext(billedClaim, derived){
 if (method === "GET" && pathname === "/actions") {
   const selectedClaimId = String(parsed.query.claim || "").trim();
   const tabRaw = String(parsed.query.tab || "all").toLowerCase();
-  const tab = (tabRaw === "awaiting" || tabRaw === "followup") ? "postsubmission" : tabRaw; // all|denials|underpayments|postsubmission
-  const postSubFilter = String(parsed.query.postsub || "all").toLowerCase(); // all|awaiting|followup
+  const tab = (tabRaw === "awaiting" || tabRaw === "followup" || tabRaw === "payments") ? "postsubmission" : tabRaw; // all|denials|underpayments|postsubmission
+  const postSubFilter = String(parsed.query.postsub || (tabRaw === "followup" ? "followup" : (tabRaw === "awaiting" || tabRaw === "payments" ? "awaiting" : "all"))).toLowerCase(); // all|awaiting|followup
   const q = String(parsed.query.q || "").trim().toLowerCase();
   const payerFilter = String(parsed.query.payer || "").trim();
   const rangePreset = String(parsed.query.range || "last30").trim();
@@ -17994,14 +18096,14 @@ if (method === "GET" && pathname === "/actions") {
     if (x.kind === "denial") {
       actionsHtml = `
         <a class="btn secondary small" href="${claimLink}">Open Claim</a>
-        <a class="btn secondary small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Open AI Workspace</a>
+        <a class="btn secondary small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Appeal Workspace</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Follow-Up Write-Off</a>` : ``}
       `;
     } else if (x.kind === "negotiation") {
       actionsHtml = `
-        <a class="btn secondary small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Open AI Workspace</a>
+        <a class="btn secondary small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Negotiation Workspace</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Follow-Up Write-Off</a>` : ``}
@@ -18020,7 +18122,7 @@ if (method === "GET" && pathname === "/actions") {
       actionsHtml = `
         ${contractAction}
         <a class="btn secondary small" href="${claimLink}">Open Claim</a>
-        <a class="btn secondary small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Open AI Workspace</a>
+        <a class="btn secondary small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Negotiation Workspace</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `
           <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">
@@ -18093,7 +18195,11 @@ if (method === "GET" && pathname === "/actions") {
 
   const html = renderPage("Action Center", `
     <h2>Action Center <span class="tooltip" data-tip="This page prevents revenue leakage by surfacing what needs action. Use tabs to work denials and underpayments by risk score.">ⓘ</span></h2>
-    <p class="muted">Work items are sorted by risk score and revenue at risk so nothing slips through the cracks.</p>
+    <p class="muted">Claims are sorted by risk score and revenue at risk so nothing slips through the cracks.</p>
+    <div class="insight-card" style="margin-top:10px;">
+      <h3 style="margin:0 0 6px;">Work Queue</h3>
+      <div class="muted small">Start with the highest-priority claims below. Open a workspace when a claim needs an appeal or negotiation packet.</div>
+    </div>
     ${tabs}
     ${postSubFilters}
 
@@ -18864,7 +18970,7 @@ if (method === "GET" && pathname === "/negotiation-detail") {
 
   const html = renderPage("Negotiation Detail", `
     <h2>Negotiation Detail</h2>
-    <a class="btn secondary" href="/ai-negotiation?billed_id=${encodeURIComponent(n.billed_id)}">Open AI Workspace</a>
+    <a class="btn secondary" href="/ai-negotiation?billed_id=${encodeURIComponent(n.billed_id)}">Open Negotiation Workspace</a>
     <p class="muted">${safeStr(applyHelp)}</p>
 
     <div class="hr"></div>
@@ -20694,7 +20800,7 @@ if (method === "GET" && pathname === "/appeal-detail") {
 
   const html = renderPage("Appeal Detail", `
     <h2>Appeal Detail</h2>
-    <a class="btn secondary" href="/ai-appeal?billed_id=${encodeURIComponent(linked?.billed_id || "")}">Open AI Workspace</a>
+    <a class="btn secondary" href="/ai-appeal?billed_id=${encodeURIComponent(linked?.billed_id || "")}">Open Appeal Workspace</a>
     <p class="muted">Denial appeal workflow. Edit the appeal letter, get AI suggestions, upload attachments, and track submission/approval.</p>
 
     <div class="hr"></div>
@@ -25336,12 +25442,18 @@ if (method === "GET" && pathname === "/agent-workspace") {
           <div class="ws-banner-sub">Edit directly from the packet preview, upload missing documents from the sidebar, and export a clean letter that matches this preview.</div>
           <div class="ws-quick-actions">
             <a class="btn secondary" href="/claims">Back to Claims</a>
-            <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(claim.billed_id)}">Claim Detail</a>
+            <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(claim.billed_id)}">Open Claim Detail</a>
             <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">
               Download PDF
             </a>
           </div>
         </div>
+        ${renderFlowBridgeCard(
+          "What happens next",
+          "After submission, you’ll be taken to Claim Detail where you can track the round, follow-up date, and packet history.",
+          `/claim-detail?billed_id=${encodeURIComponent(claim.billed_id)}`,
+          "Open Claim Detail"
+        )}
 
         ${savedMsg}
         ${uploadedMsg}
@@ -26287,6 +26399,23 @@ if (method === "GET" && pathname === "/claim-detail") {
   const riskBand = claimRiskBand(riskScore);
   const atRisk = num(d.atRiskAmount);
   const suggested = suggestedNextActionForClaim(b);
+  const nextStepBody = suggested === "Appeal"
+    ? "This claim should move into an appeal workflow."
+    : suggested === "Negotiate"
+      ? "This claim should move into a negotiation workflow."
+      : suggested === "Review Claim"
+        ? "Review this claim in the Claims Lifecycle and Action Center."
+        : "Use the Action Center to continue working this claim.";
+  const nextStepPrimaryHref = suggested === "Appeal"
+    ? `/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}`
+    : suggested === "Negotiate"
+      ? `/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}`
+      : `/actions?q=${encodeURIComponent(b.claim_number || "")}`;
+  const nextStepPrimaryLabel = suggested === "Appeal"
+    ? "Open Appeal Workspace"
+    : suggested === "Negotiate"
+      ? "Open Negotiation Workspace"
+      : "Open Action Center";
   const derivedStatus = String(d.lifecycleStage || b.status || "Pending");
 
   const detailContract = findContractForClaim(org.org_id, b);
@@ -26330,7 +26459,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       <div>Follow-up Date: ${safeStr(followUpDisplayDate)}</div>
       <div class="btnRow" style="margin-top:10px;">
         <a class="btn small secondary" href="/packet/export?billed_id=${encodeURIComponent(b.billed_id)}&type=negotiation">View Packet</a>
-        <a class="btn small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Continue Negotiation</a>
+        <a class="btn small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Open Negotiation Workspace</a>
       </div>
     </div>
   ` : "";
@@ -26343,7 +26472,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       <div>Follow-up Date: ${safeStr(followUpDisplayDate)}</div>
       <div class="btnRow" style="margin-top:10px;">
         <a class="btn small secondary" href="/packet/export?billed_id=${encodeURIComponent(b.billed_id)}&type=appeal">View Packet</a>
-        <a class="btn small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Continue Appeal</a>
+        <a class="btn small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Open Appeal Workspace</a>
       </div>
     </div>
   ` : "";
@@ -26419,14 +26548,31 @@ if (method === "GET" && pathname === "/claim-detail") {
       <tr><th>At Risk $</th><td>${formatMoneyUI(atRisk)}</td></tr>
       <tr><th>Suggested Next Action</th><td>${safeStr(suggested)}</td></tr>
     </table>
+    ${renderFlowBridgeCard(
+      "Next Step",
+      nextStepBody,
+      nextStepPrimaryHref,
+      nextStepPrimaryLabel,
+      `/claims?view=table&q=${encodeURIComponent(b.claim_number || "")}`,
+      "View In Claims Lifecycle"
+    )}
     <div class="btnRow">
-      ${suggested === "Appeal" ? `<a class="btn secondary" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Open AI Workspace</a>` : ``}
-      ${suggested === "Negotiate" ? `<a class="btn secondary" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Open AI Workspace</a>` : ``}
+      ${suggested === "Appeal" ? `<a class="btn secondary" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Open Appeal Workspace</a>` : ``}
+      ${suggested === "Negotiate" ? `<a class="btn secondary" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Open Negotiation Workspace</a>` : ``}
       ${suggested === "Adjust Patient Responsibility" ? `<a class="btn secondary" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Perform Suggested Action</a>` : ``}
-      ${suggested === "Review Claim" ? `<a class="btn secondary" href="/claims?view=all&q=${encodeURIComponent(b.claim_number || "")}">Perform Suggested Action</a>` : ``}
-      ${(suggested === "Appeal" || suggested === "Negotiate") ? `` : `<a class="btn secondary" href="${workspacePagePath(b.billed_id, workspaceChannelForClaim(b, d))}">Open AI Workspace</a>`}
+      ${suggested === "Review Claim" ? `<a class="btn secondary" href="/claims?view=all&q=${encodeURIComponent(b.claim_number || "")}">View In Claims Lifecycle</a>` : ``}
+      ${(suggested === "Appeal" || suggested === "Negotiate") ? `` : `<a class="btn secondary" href="${workspacePagePath(b.billed_id, workspaceChannelForClaim(b, d))}">${workspaceChannelForClaim(b, d) === "negotiation" ? "Open Negotiation Workspace" : "Open Appeal Workspace"}</a>`}
       <a class="btn secondary" href="/actions?q=${encodeURIComponent(b.claim_number || "")}">View In Action Center</a>
     </div>
+
+    <div class="hr"></div>
+    <h3>Recovery Timeline</h3>
+    <table>
+      <tr><th>Submitted</th><td>${safeStr(b.submitted_at || b.last_submission_date || "-")}</td></tr>
+      <tr><th>Current Round</th><td>${safeStr(currentRoundDisplay)}</td></tr>
+      <tr><th>Follow-up Date</th><td>${safeStr(followUpDisplayDate)}</td></tr>
+      <tr><th>Last Submission Type</th><td>${safeStr(submissionTypeLabel || "-")}</td></tr>
+    </table>
 
     <div class="hr"></div>
     <h3>Appeal Packet Summary</h3>
