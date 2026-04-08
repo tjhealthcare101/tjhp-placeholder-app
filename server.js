@@ -8,6 +8,14 @@ const OpenAI = require("openai");
 const PDFKitDocument = require("pdfkit");
 const { PDFDocument } = require("pdf-lib");
 
+const DEBUG_MODE = process.env.DEBUG_MODE === "true";
+
+function debugLog(...args) {
+  if (DEBUG_MODE) {
+    console.log(...args);
+  }
+}
+
 function safeStr(s) {
   return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]));
 }
