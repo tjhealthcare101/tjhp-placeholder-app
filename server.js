@@ -11444,86 +11444,79 @@ const server = http.createServer(async (req, res) => {
     const org = getOrg(sess.org_id);
     const orgName = (org && org.org_name) ? org.org_name : "";
 
-    return send(res, 200, renderPage("Welcome", `
-      <div style="max-width:980px;margin:auto;">
-        <h1 style="text-align:center;margin-bottom:8px;">Welcome to TJ Healthcare Pro 🎉</h1>
-        <p class="muted" style="text-align:center;margin-bottom:28px;">
-          Your free trial has started. Here’s how to get the most out of the platform.
-        </p>
+    const html = renderPage("Welcome", `
 
-        <div class="row">
-          <div class="col">
-            <div class="card" style="margin-bottom:16px;">
-              <h3>Revenue Overview</h3>
-              <p class="muted">See your high-level revenue performance, key financial KPIs, and where revenue may be slipping.</p>
-            </div>
+<div style="max-width:900px;margin:0 auto;">
 
-            <div class="card" style="margin-bottom:16px;">
-              <h3>Claims Lifecycle</h3>
-              <p class="muted">Track claims from submission through denial, underpayment, appeal, and payment resolution.</p>
-            </div>
+  <!-- 🔥 VALUE HEADER -->
+  <div style="text-align:center;margin-bottom:28px;">
+    <h1 style="margin-bottom:8px;">Welcome — Let’s Recover Your Lost Revenue</h1>
+    <p class="muted" style="font-size:15px;">
+      Most practices lose revenue through denied and underpaid claims.
+      Upload your data and we’ll show you exactly where — and how to recover it.
+    </p>
+  </div>
 
-            <div class="card" style="margin-bottom:16px;">
-              <h3>Data Management</h3>
-              <p class="muted">Upload your billing and payment data. This is your starting point.</p>
-              <div class="btnRow">
-                <a href="/data-management" class="btn">Upload Data</a>
-              </div>
-            </div>
+  <!-- 💰 PRIMARY ACTION -->
+  <div class="insight-card" style="padding:22px;margin-bottom:18px;">
+    <h3 style="margin-bottom:6px;">Step 1: Upload Your Data</h3>
 
-            <div class="card" style="margin-bottom:16px;">
-              <h3>Revenue Intelligence Command Center</h3>
-              <p class="muted">Advanced analytics, payer trends, and revenue insights.</p>
-            </div>
-          </div>
+    <p class="muted small" style="margin-bottom:10px;">
+      To get started, upload:
+    </p>
 
-          <div class="col">
-            <div class="card" style="margin-bottom:16px;">
-              <h3>AI Copilot</h3>
-              <p class="muted">Ask questions and get real-time revenue insights. Trial includes limited usage.</p>
-              <div class="btnRow">
-                <a href="/ai-copilot" class="btn">Open AI Copilot</a>
-              </div>
-            </div>
+    <ul style="margin:0 0 14px 18px;font-size:13px;">
+      <li>Billing data (claims submitted)</li>
+      <li>Payment data (what you were paid)</li>
+      <li>Contract data (expected reimbursement rules)</li>
+    </ul>
 
-            <div class="card" style="margin-bottom:16px;">
-              <h3>Action Center (AI Workspace)</h3>
-              <p class="muted">Generate appeal letters, negotiation strategies, and revenue recovery workflows.</p>
-              <p class="small muted">This is where you actively fix denied or underpaid claims using AI.</p>
-              <div class="btnRow">
-                <a href="/actions" class="btn">Open Action Center</a>
-              </div>
-            </div>
+    <p class="muted small" style="margin-bottom:14px;">
+      We’ll analyze everything and highlight revenue at risk within minutes.
+    </p>
 
-            <div class="card" style="margin-bottom:16px;">
-              <h3>Reports</h3>
-              <p class="muted">Generate summaries and export insights for your team or leadership.</p>
-            </div>
+    <a href="/upload-billed" class="btn" style="font-size:14px;">
+      Upload Data
+    </a>
+  </div>
 
-            <div class="card" style="margin-bottom:16px;">
-              <h3>Account</h3>
-              <p class="muted">Manage billing, usage, and plan details.</p>
-              <p class="small muted">Visit the Help tab anytime for guidance.</p>
-            </div>
-          </div>
-        </div>
+  <!-- 🧠 HOW IT WORKS -->
+  <div class="insight-card" style="padding:18px;margin-bottom:18px;">
+    <h3 style="margin-bottom:6px;">How it works</h3>
 
-        <div class="card" style="margin-top:10px;">
-          <h3>Recommended First Steps</h3>
-          <ol class="muted" style="padding-left:18px;line-height:1.7;">
-            <li>Upload data in <strong>Data Management</strong></li>
-            <li>Review <strong>Revenue Overview</strong></li>
-            <li>Fix issues in <strong>Action Center</strong></li>
-            <li>Use <strong>AI Copilot</strong> for insights</li>
-            <li>Explore <strong>Revenue Intelligence</strong></li>
-          </ol>
-        </div>
+    <ol style="margin:0 0 10px 18px;font-size:13px;">
+      <li>Upload your billing, payment, and contract data</li>
+      <li>We identify denied and underpaid claims</li>
+      <li>You fix them using AI-powered workflows</li>
+      <li>Track recovery and revenue improvement</li>
+    </ol>
+  </div>
 
-        <div style="text-align:center;margin-top:24px;">
-          <a href="/dashboard" class="btn">Go to Dashboard</a>
-        </div>
-      </div>
-    `, navUser(), { showChat:true, orgName }));
+  <!-- 🔍 FEATURES (DE-EMPHASIZED) -->
+  <div class="insight-card" style="padding:18px;margin-bottom:18px;">
+    <h3 style="margin-bottom:6px;">What you’ll be able to do</h3>
+
+    <ul style="margin:0 0 10px 18px;font-size:13px;">
+      <li>Identify where revenue is slipping (Overview)</li>
+      <li>Track claims from submission to resolution (Claims Lifecycle)</li>
+      <li>Fix denied and underpaid claims (Action Center)</li>
+      <li>Generate appeal and negotiation packets with AI</li>
+      <li>Get insights and answers using AI Copilot</li>
+    </ul>
+  </div>
+
+  <!-- ⚠️ SECONDARY NAV -->
+  <div style="text-align:center;margin-top:10px;">
+    <a href="/dashboard" class="muted small" style="text-decoration:none;">
+      Skip for now → Go to Dashboard
+    </a>
+  </div>
+
+</div>
+
+`, navUser(), { showChat: true, orgName: org.org_name });
+
+    return send(res, 200, html);
   }
 
   if (method === "GET" && pathname === "/login") {
