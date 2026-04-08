@@ -16,6 +16,11 @@ function debugLog(...args) {
   }
 }
 
+if (!DEBUG_MODE) {
+  console.log = function () {};
+  console.warn = function () {};
+}
+
 function safeStr(s) {
   return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;" }[c]));
 }
@@ -7576,35 +7581,13 @@ function stampCanonicalClaimFields(claim){
 }
 
 function debugClaimAndContracts(org_id, claim, contracts){
-
-  console.log("========== CLAIM DEBUG ==========");
-  console.log("CLAIM NUMBER:", claim.claim_number);
-
-  console.log("RAW CLAIM OBJECT:", JSON.stringify(claim, null, 2));
-
-  console.log("CANONICAL FIELDS:");
-  console.log({
-    payer_raw: claim.claim_payer_raw,
-    payer_normalized: claim.claim_payer_normalized,
-    cpt_raw: claim.claim_procedure_code_raw,
-    cpt_normalized: claim.claim_procedure_code_normalized,
-    dx_raw: claim.claim_diagnosis_code_raw,
-    dx_normalized: claim.claim_diagnosis_code_normalized
+  debugLog("Claim processed:", {
+    org_id,
+    claim_number: claim?.claim_number,
+    payer: claim?.payer || claim?.claim_payer_normalized || "",
+    billed: claim?.amount_billed || claim?.billed_amount || "",
+    contract_candidates: Array.isArray(contracts) ? contracts.length : 0
   });
-
-  console.log("========== CONTRACTS ==========");
-
-  for (const c of contracts){
-    console.log({
-      contract_id: c.contract_id,
-      payer: c.payer_name,
-      cpt: c.procedure_code,
-      normalized_cpt: normalizeProcedureCode(c.procedure_code),
-      expected: c.expected_value
-    });
-  }
-
-  console.log("================================");
 }
 
 function contractMatchesClaim(contract, claim){
@@ -7828,7 +7811,7 @@ function extractTextFromBuffer(buffer, filename){
       return buffer.toString("utf8");
     }
   } catch (e){
-    console.log("Document parse error:", e);
+    console.error("Document parse error:", e);
   }
 
   return "";
@@ -8470,7 +8453,7 @@ async function buildMergedPacketPDF({ claim, derived, ws, channel, res }) {
         });
       }
     } catch (e) {
-      console.log("Attachment merge error:", e);
+      console.error("Attachment merge error:", e);
     }
   }
 
@@ -9030,8 +9013,7 @@ function recalculateContractsForOrg(org_id){
     const contracts = getPayerContracts(org_id).map(normalizeContract);
     const contract = findContractForClaim(org_id, b);
 
-    console.log("========== CLAIM DEBUG ==========");
-    console.log("CLAIM DEBUG", {
+    debugLog("Claim processed:", {
       claim: b.claim_number,
       payer: b.payer,
       claim_payer_raw: b.claim_payer_raw,
@@ -9055,23 +9037,10 @@ function recalculateContractsForOrg(org_id){
       finalDx: getClaimDiagnosisCode(b),
       matchedContract: contract?.contract_id || null
     });
-
-    console.log("========== CONTRACT CANDIDATES ==========");
-    for (const c of contracts) {
-      console.log("CONTRACT CANDIDATE", {
-        contract_id: c.contract_id,
-        payer: c.payer_name,
-        proc: c.procedure_code,
-        dx: c.diagnosis_code,
-        payerNorm: normalizeContractText(c.payer_name),
-        claimPayerNorm: b.claim_payer_normalized || normalizeContractText(b.payer || ""),
-        contractProc: getContractProcedureCode(c),
-        claimProc: b.claim_procedure_code_normalized || getClaimProcedureCode(b),
-        contractDx: getClaimDiagnosisCode(c),
-        claimDx: b.claim_diagnosis_code_normalized || getClaimDiagnosisCode(b),
-        matches: contractMatchesClaim(c, b)
-      });
-    }
+    debugLog("Contract candidates evaluated:", {
+      claim_number: b?.claim_number,
+      count: contracts.length
+    });
 
     if (!contract) {
       b.expected_insurance = "";
@@ -10363,7 +10332,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const { plan } = JSON.parse(body || "{}");
 
-        console.log("Creating checkout session for plan:", plan);
+        debugLog("Creating checkout session for plan:", plan);
 
         const stripeKey = process.env.STRIPE_SECRET_KEY;
         if (!stripeKey) {
@@ -10385,7 +10354,7 @@ const server = http.createServer(async (req, res) => {
           return send(res, 400, JSON.stringify({ error: "Invalid plan" }), "application/json");
         }
 
-        console.log("Using price ID:", priceMap[plan]);
+        debugLog("Using price ID:", priceMap[plan]);
 
         const session = await stripe.checkout.sessions.create({
           mode: "subscription",
@@ -10403,7 +10372,7 @@ const server = http.createServer(async (req, res) => {
           cancel_url: "https://app.tjhealthpro.com/pricing"
         });
 
-        console.log("Stripe session created:", session.id);
+        debugLog("Stripe session created:", session.id);
 
         return send(res, 200, JSON.stringify({ url: session.url }), "application/json");
       } catch (err) {
@@ -11160,7 +11129,7 @@ const server = http.createServer(async (req, res) => {
 
   // 🔥 SIMULATION ROUTE (GLOBAL — BEFORE ADMIN BLOCK)
   if ((method === "POST" || method === "GET") && pathname === "/admin/simulate-plan") {
-    console.log("SIMULATION HIT");
+    debugLog("SIMULATION HIT");
 
     if (!sess || sess.role !== "admin") {
       return redirect(res, "/admin/login");
@@ -11173,7 +11142,7 @@ const server = http.createServer(async (req, res) => {
     const params = new URLSearchParams(body);
     const user = getUserById(sess.user_id);
     if (!user) {
-      console.log("NO VALID USER");
+      debugLog("NO VALID USER");
       return redirect(res, "/admin/dashboard");
     }
 
@@ -11188,7 +11157,7 @@ const server = http.createServer(async (req, res) => {
       simulated_plan: selectedPlan
     };
 
-    console.log("SIM SESSION:", simulatedSession);
+    debugLog("SIM SESSION:", simulatedSession);
 
     setSession(res, simulatedSession);
 
@@ -11924,7 +11893,7 @@ const server = http.createServer(async (req, res) => {
         const email = session.customer_details?.email || session.customer_email;
         const plan = (session.metadata?.plan || "starter").toLowerCase();
 
-        console.log("PAYMENT SUCCESS:", email, plan);
+        debugLog("PAYMENT SUCCESS:", email, plan);
 
         const users = readJSON(FILES.users, []);
         const user = users.find(
@@ -11948,7 +11917,7 @@ const server = http.createServer(async (req, res) => {
           }
           writeJSON(FILES.subscriptions, subscriptions);
 
-          console.log("✅ PLAN ACTIVATED:", plan);
+          debugLog("PLAN ACTIVATED:", plan);
         } else {
           console.warn("⚠️ USER NOT FOUND FOR EMAIL:", email);
         }
@@ -12626,7 +12595,7 @@ const server = http.createServer(async (req, res) => {
 
           <script>
           function submitSimulation(){
-            console.log("FORCE SUBMIT TRIGGERED");
+            debugLog("FORCE SUBMIT TRIGGERED");
 
             const form = document.getElementById("simulateForm");
             const formData = new FormData(form);
@@ -17485,7 +17454,7 @@ if (method === "POST" && pathname === "/ai-copilot/new") {
     return redirect(res, "/ai-copilot?limit=1");
   }
 
-  console.log("COPILOT USED:", usageCheck.used);
+  debugLog("COPILOT USED:", usageCheck.used);
 
   const body = await parseBody(req);
   const params = new URLSearchParams(body);
@@ -17507,7 +17476,7 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
     return redirect(res, "/ai-copilot?limit=1");
   }
 
-  console.log("COPILOT USED:", usageCheck.used);
+  debugLog("COPILOT USED:", usageCheck.used);
 
   const body = await parseBody(req);
   const params = new URLSearchParams(body);
@@ -26664,5 +26633,5 @@ setInterval(() => {
 }, 60_000);
 
 server.listen(PORT, HOST, () => {
-  console.log(`TJHP server listening on ${HOST}:${PORT}`);
+  debugLog(`TJHP server listening on ${HOST}:${PORT}`);
 });  
