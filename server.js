@@ -13977,9 +13977,29 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const dashboardClaims = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const dashboardCtx = buildClaimContext(org.org_id);
     const todaysPriorities = dashboardClaims.reduce((acc, b) => {
-      const simpleStage = toSimplePipelineStage(b);
+
+      let simpleStage = "Unknown";
+
+      try {
+        if (typeof toSimplePipelineStage === "function") {
+          simpleStage = toSimplePipelineStage(b);
+        } else {
+          // fallback logic if function not available
+          const status = String(b.status || "").toLowerCase();
+
+          if (status.includes("denied")) simpleStage = "Denied";
+          else if (status.includes("underpaid")) simpleStage = "Underpaid";
+          else if (status.includes("follow")) simpleStage = "Follow-Up Needed";
+          else if (status.includes("payment")) simpleStage = "Awaiting Payment";
+          else simpleStage = "Submitted";
+        }
+      } catch (e) {
+        simpleStage = "Submitted";
+      }
+
       const derived = evaluateClaimDerived(b, dashboardCtx);
       const atRisk = num(derived.atRiskAmount);
+
       if (simpleStage === "Denied") {
         acc.denied.count += 1;
         acc.denied.amount += atRisk;
@@ -13990,7 +14010,9 @@ if (method === "GET" && pathname === "/weekly-summary") {
         acc.followup.count += 1;
         acc.followup.amount += atRisk;
       }
+
       return acc;
+
     }, {
       denied: { count: 0, amount: 0 },
       underpaid: { count: 0, amount: 0 },
