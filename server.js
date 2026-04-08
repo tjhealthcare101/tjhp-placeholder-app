@@ -6239,7 +6239,7 @@ function computeDeterministicScore(inputs){
   if (stageType === "appeal" && !f.hasDenialLetter) alerts.push("Missing Denial Letter for appeal packet.");
   if (stageType === "appeal" && !f.hasEob) alerts.push("Missing EOB/ERA for appeal packet.");
   if (!f.hasClaimForm) alerts.push("Missing claim form/itemized bill.");
-  if (!inputs.hasContractRule) alerts.push("Contract rule missing - add contract rule in Reimbursement Engine");
+  if (!inputs.hasContractRule) alerts.push("Contract rule missing - add contract rule in Reimbursement Contracts");
   if (num(f.argumentLength) < 200) alerts.push("Argument narrative is short; add clinical/contract rationale.");
   if (!f.hasClearAsk) alerts.push("Requested action is unclear; include a specific ask.");
   if (!inputs.hasContractRule && strategyProfile === "Contractual") alerts.push("Contractual strategy selected but no contract rule found.");
@@ -22326,7 +22326,7 @@ function renderTemplateEditor(org, user){
     const denialWithDoc = denialClaims.filter(b => !!(b.denial_doc_attached || b.denial_document || b.denial_file)).length;
 
     function tabBtn(id, label){ return `<a class="btn ${activeTab===id?"":"secondary"}" href="/data-management?tab=${id}">${label}</a>`; }
-    const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">${tabBtn("claims","Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("reimbursement","Reimbursement Engine")}${tabBtn("revenue","Revenue Automation & Templates")}</div>`;
+    const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">${tabBtn("claims","Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("reimbursement","Reimbursement Contracts")}${tabBtn("revenue","Revenue Automation & Templates")}</div>`;
 
     const uploadPanel = `
       <h3>Upload Panel</h3>
@@ -22496,7 +22496,7 @@ function renderTemplateEditor(org, user){
                   </form>
                 </td>
               </tr>
-            `).join("") || '<tr><td colspan="9" class="muted">No contracts configured.</td></tr>'}
+            `).join("") || '<tr><td colspan="9" class="muted">No reimbursement rules yet. Upload contracts or add a rule manually to get started.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -22535,7 +22535,8 @@ function renderTemplateEditor(org, user){
     `;
 
     const reimbursementContent = `
-<h2>Reimbursement Engine</h2>
+<h2>Reimbursement Contracts</h2>
+<p class="muted">Define how your claims should be reimbursed and how expected amounts are calculated.</p>
 
 <div class="card" style="margin-bottom:16px;">
   <h3>
@@ -22545,7 +22546,7 @@ function renderTemplateEditor(org, user){
         Calculation Order:
         1. Payer Contract (Highest Priority)
         2. Fee Schedule
-        3. Default Allowed Logic (Fallback)
+        3. Default Reimbursement Rule (Fallback)
       </span>
     </span>
   </h3>
@@ -22554,6 +22555,32 @@ function renderTemplateEditor(org, user){
     underpayment detection, revenue at risk,
     and negotiation automation.
   </p>
+</div>
+
+<div class="card" style="margin-bottom:16px;">
+  <h3>Upload Reimbursement Data</h3>
+
+  <p class="muted small" style="margin-bottom:10px;">
+    Upload payer contracts and fee schedules. The system will automatically detect and apply them.
+  </p>
+
+  <ul class="muted small" style="margin-bottom:12px;padding-left:18px;">
+    <li>Contracts</li>
+    <li>Fee schedules</li>
+    <li>Mixed CSV files (auto-detected)</li>
+  </ul>
+
+  <form method="POST" action="/data-management/reimbursement/upload" enctype="multipart/form-data">
+    <input type="file" name="reimbursement_files" id="reimbursement-files" multiple accept=".csv" required />
+    <div class="dropzone" id="reimbursement-dropzone" style="margin-top:8px;">
+      Drag & drop reimbursement CSV files here
+    </div>
+    <p class="muted small" id="reimbursement-file-hints"></p>
+
+    <div class="btnRow">
+      <button class="btn">Upload Files</button>
+    </div>
+  </form>
 </div>
 
 <div class="card" style="margin-top:14px;">
@@ -22600,101 +22627,69 @@ function renderTemplateEditor(org, user){
   </div>
 </div>
 
-<!-- ============================= -->
-<!-- PAYER CONTRACTS SECTION -->
-<!-- ============================= -->
-
-<details class="card" open>
+<details class="card" open style="margin-top:16px;">
   <summary style="font-weight:800;font-size:16px;cursor:pointer;">
-    Payer Contracts
-    <span class="tooltip">ⓘ
-      <span class="tooltiptext">
-        Upload or manually define payer reimbursement rules.
-        Overrides fee schedules and fallback logic.
-      </span>
-    </span>
+    Manual Contract Rule Entry
   </summary>
 
-  <!-- Bulk Upload -->
-  <div style="margin-top:16px;">
-    <h4>Bulk Upload Contracts</h4>
-    <form method="POST" action="/data-management/reimbursement/upload" enctype="multipart/form-data">
-      <input type="file" name="reimbursement_files" id="reimbursement-files" multiple accept=".csv" required />
-      <div class="dropzone" id="reimbursement-dropzone" style="margin-top:8px;">
-        Drag & drop reimbursement CSV files here (contracts + fee schedules supported)
+  <p class="muted small" style="margin-top:10px;">
+    Use this for exceptions or when a contract is not available as a file.
+  </p>
+
+  <form method="POST" action="/data-management/contracts/add" style="display:flex;flex-direction:column;gap:14px; margin-top:10px;">
+    <div class="row">
+      <div class="col">
+        <label>Payer Name</label>
+        <input name="payer_name" placeholder="Aetna" required />
       </div>
-      <p class="muted small" id="reimbursement-file-hints"></p>
-      <p class="muted small">
-        CSV Columns: payer_name, network_status, procedure_code,
-        diagnosis_code, reimbursement_model, allowed_amount, effective_date
-      </p>
-      <div class="btnRow">
-        <button class="btn secondary">Upload Reimbursement Files</button>
+      <div class="col">
+        <label>Network Status</label>
+        <select name="network_status">
+          <option>In Network</option>
+          <option>Out of Network</option>
+        </select>
       </div>
-    </form>
-  </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label>CPT Code</label>
+        <input name="procedure_code" placeholder="99213" required />
+      </div>
+      <div class="col">
+        <label>Diagnosis Code (Optional)</label>
+        <input name="diagnosis_code" placeholder="Optional" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label>Reimbursement Model</label>
+        <select name="reimbursement_model">
+          <option value="fixed_amount">Fixed Amount</option>
+          <option value="percent_of_charge">Percent of Charge</option>
+        </select>
+      </div>
+      <div class="col">
+        <label>Expected Amount / %</label>
+        <input name="allowed_amount" required />
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label>Effective Date</label>
+        <input type="date" name="effective_date" />
+      </div>
+    </div>
+
+    <div class="btnRow">
+      <button class="btn">Add Contract Rule</button>
+    </div>
+  </form>
 
   <div class="hr"></div>
 
-  <!-- Manual Entry -->
-  <div>
-    <h4>Manual Contract Rule Entry</h4>
-    <form method="POST" action="/data-management/contracts/add" style="display:flex;flex-direction:column;gap:14px;">
-      <div class="row">
-        <div class="col">
-          <label>Payer Name</label>
-          <input name="payer_name" placeholder="Aetna" required />
-        </div>
-        <div class="col">
-          <label>Network Status</label>
-          <select name="network_status">
-            <option>In Network</option>
-            <option>Out of Network</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="row">
-        <div class="col">
-          <label>CPT Code</label>
-          <input name="procedure_code" placeholder="99213" required />
-        </div>
-        <div class="col">
-          <label>Diagnosis Code (Optional)</label>
-          <input name="diagnosis_code" placeholder="Optional" />
-        </div>
-      </div>
-
-      <div class="row">
-        <div class="col">
-          <label>Reimbursement Model</label>
-          <select name="reimbursement_model">
-            <option value="fixed_amount">Fixed Amount</option>
-            <option value="percent_of_charge">Percent of Charge</option>
-          </select>
-        </div>
-        <div class="col">
-          <label>Expected Amount / %</label>
-          <input name="allowed_amount" required />
-        </div>
-      </div>
-
-      <div class="row">
-        <div class="col">
-          <label>Effective Date</label>
-          <input type="date" name="effective_date" />
-        </div>
-      </div>
-
-      <div class="btnRow">
-        <button class="btn">Add Contract Rule</button>
-      </div>
-    </form>
-  </div>
-
-  <div class="hr"></div>
-
-  <!-- Existing Rules Table -->
   <h4>Existing Contract Rules</h4>
   <div style="overflow:auto;">
     <table>
@@ -22735,48 +22730,27 @@ function renderTemplateEditor(org, user){
               </form>
             </td>
           </tr>
-        `).join("") || '<tr><td colspan="9" class="muted">No contracts configured.</td></tr>'}
+        `).join("") || '<tr><td colspan="9" class="muted">No reimbursement rules yet. Upload contracts or add a rule manually to get started.</td></tr>'}
       </tbody>
     </table>
   </div>
-
 </details>
-
-<!-- ============================= -->
-<!-- FEE SCHEDULES -->
-<!-- ============================= -->
 
 <details class="card" style="margin-top:16px;">
   <summary style="font-weight:800;font-size:16px;cursor:pointer;">
-    Fee Schedules
+    Default Reimbursement Rule (Fallback)
   </summary>
 
-  <form method="POST" action="/data-management/reimbursement/upload"
-        enctype="multipart/form-data" style="margin-top:12px;">
-    <input type="file" name="reimbursement_files" id="reimbursement-files-mirror" multiple accept=".csv" />
-    <div class="dropzone" style="margin-top:8px;">
-      Drag & drop multiple fee schedule CSV files here
-    </div>
-    <div class="btnRow">
-      <button class="btn secondary">Upload Fee Schedules</button>
-    </div>
-  </form>
-</details>
-
-<!-- ============================= -->
-<!-- DEFAULT LOGIC -->
-<!-- ============================= -->
-
-<details class="card" style="margin-top:16px;">
-  <summary style="font-weight:800;font-size:16px;cursor:pointer;">
-    Default Allowed Logic
-  </summary>
+  <p class="muted small" style="margin-top:10px;">
+    Used when no contract is found for a claim.
+    This determines how expected reimbursement is estimated.
+  </p>
 
   <form method="POST" action="/data-management/allowed-rules/save"
         style="margin-top:12px;">
     <div class="row">
       <div class="col">
-        <label>Default Method</label>
+        <label>Fallback Method</label>
         <select name="default_method">
           <option value="percent_medicare">% of Medicare</option>
           <option value="percent_billed">% of Billed</option>
@@ -22801,7 +22775,6 @@ function renderTemplateEditor(org, user){
   const input = document.getElementById('reimbursement-files');
   const dropzone = document.getElementById('reimbursement-dropzone');
   const hints = document.getElementById('reimbursement-file-hints');
-  const mirror = document.getElementById('reimbursement-files-mirror');
   if (!input || !dropzone || !hints) return;
 
   const detectType = (fileName) => {
@@ -22814,9 +22787,6 @@ function renderTemplateEditor(org, user){
   const renderHints = () => {
     const lines = [...(input.files || [])].map(f => (f.name + ' → ' + detectType(f.name)));
     hints.innerHTML = lines.join('<br/>') || 'Tip: drop mixed reimbursement CSVs here; the server auto-sorts contract vs fee schedule files.';
-    if (mirror) {
-      try { mirror.files = input.files; } catch (e) {}
-    }
   };
 
   ['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, e => {
@@ -22842,9 +22812,7 @@ function renderTemplateEditor(org, user){
 
     const section = ({"claims":claimsContent,"payments":paymentsContent,"denials":denialContent,"reimbursement":reimbursementContent,"revenue":practiceContent,"automation":practiceContent,"practice-settings":practiceContent})[activeTab] || claimsContent;
 
-    const rebuildControls = `<div class="hr"></div><h3>Rebuild / Reprocess Controls</h3><div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;"><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="lifecycle"/><button class="btn secondary" type="submit">Recalculate Lifecycle</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="expected"/><button class="btn secondary" type="submit">Recompute Expected Insurance</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="revenue"/><button class="btn secondary" type="submit">Rebuild Revenue Aggregates</button></form><form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="denials"/><button class="btn secondary" type="submit">Re-sync Denials</button></form><form method="POST" action="/data-management/rematch-payments"><button class="btn secondary" type="submit">Re-match Payments</button></form></div>`;
-
-    const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Central revenue configuration + ingestion center.</p>${tabs}${section}${rebuildControls}<script>(function(){const dz=document.getElementById('dm-drop');const inp=document.getElementById('dm-files');const list=document.getElementById('dm-filelist');if(!dz||!inp||!list)return;const upd=()=>{const tab='${safeStr(activeTab)}';const suggested=(f)=>{const n=(f.name||'').toLowerCase();if(tab==='claims'&&(n.endsWith('.csv')||n.endsWith('.xls')||n.endsWith('.xlsx'))) return 'Claims';if(tab==='payments') return 'Payments';if(tab==='denials') return 'Denials';if(tab==='reimbursement') return 'Reimbursement';return 'Claims';};const lines=[...inp.files].map(f=>(f.name+' • '+f.name.split('.').pop().toUpperCase()+' • suggested: '+suggested(f)));list.innerHTML=lines.join('<br/>')||'No files selected';};dz.addEventListener('click',()=>inp.click());['dragenter','dragover'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{if(e.dataTransfer.files?.length){inp.files=e.dataTransfer.files;upd();}});inp.addEventListener('change',upd);})();</script>`, navUser(), {showChat:true, orgName: org.org_name});
+    const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Define how your claims should be reimbursed and how expected amounts are calculated.</p>${tabs}${section}<script>(function(){const dz=document.getElementById('dm-drop');const inp=document.getElementById('dm-files');const list=document.getElementById('dm-filelist');if(!dz||!inp||!list)return;const upd=()=>{const tab='${safeStr(activeTab)}';const suggested=(f)=>{const n=(f.name||'').toLowerCase();if(tab==='claims'&&(n.endsWith('.csv')||n.endsWith('.xls')||n.endsWith('.xlsx'))) return 'Claims';if(tab==='payments') return 'Payments';if(tab==='denials') return 'Denials';if(tab==='reimbursement') return 'Reimbursement';return 'Claims';};const lines=[...inp.files].map(f=>(f.name+' • '+f.name.split('.').pop().toUpperCase()+' • suggested: '+suggested(f)));list.innerHTML=lines.join('<br/>')||'No files selected';};dz.addEventListener('click',()=>inp.click());['dragenter','dragover'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{if(e.dataTransfer.files?.length){inp.files=e.dataTransfer.files;upd();}});inp.addEventListener('change',upd);})();</script>`, navUser(), {showChat:true, orgName: org.org_name});
     return send(res, 200, html);
   }
 
@@ -23502,7 +23470,7 @@ function renderTemplateEditor(org, user){
       </div>
 
       <div class="btnRow" style="margin-top:16px;">
-        <a class="btn" href="/data-management?tab=reimbursement">Back to Reimbursement Engine</a>
+        <a class="btn" href="/data-management?tab=reimbursement">Back to Reimbursement Contracts</a>
 
         <a class="btn secondary"
            href="/claims?view=all&reimbursement_batch=${encodeURIComponent(safeStr(pending.upload_batch_id))}">
