@@ -163,6 +163,7 @@ const FILES = {
   analytics: path.join(DATA_DIR, "analytics.json"),
   jobs: path.join(DATA_DIR, "jobs.json"),
   applications: path.join(DATA_DIR, "applications.json"),
+  website_content: path.join(DATA_DIR, "website_content.json"),
 };
 
 // Directory for storing uploaded template files
@@ -2704,6 +2705,8 @@ function renderCompanyMenuScript() {
 }
 
 function renderPublicNavbar() {
+  const content = getWebsiteContent();
+  const links = content.company_links || {};
   return `
     <div style="border-bottom:1px solid #eee;">
       <div class="container" style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;gap:16px;flex-wrap:wrap;">
@@ -2735,19 +2738,19 @@ function renderPublicNavbar() {
 
                 <div>
                   <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">About</div>
-                  <a href="/about" style="display:block;margin-bottom:8px;color:#111;">About</a>
-                  <a href="/why" style="display:block;color:#111;">Why</a>
+                  <a href="${safeStr(links.about_href || "/about")}" style="display:block;margin-bottom:8px;color:#111;">About</a>
+                  <a href="${safeStr(links.why_href || "/why")}" style="display:block;color:#111;">Why</a>
                 </div>
 
                 <div>
                   <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">Careers</div>
-                  <a href="/careers" style="display:block;margin-bottom:8px;color:#111;">Careers</a>
-                  <a href="/culture" style="display:block;color:#111;">Culture</a>
+                  <a href="${safeStr(links.careers_href || "/careers")}" style="display:block;margin-bottom:8px;color:#111;">Careers</a>
+                  <a href="${safeStr(links.culture_href || "/culture")}" style="display:block;color:#111;">Culture</a>
                 </div>
 
                 <div>
                   <div style="font-weight:700;font-size:14px;margin-bottom:12px;color:#555;">Contact</div>
-                  <a href="/contact" style="display:block;color:#111;">Contact Us</a>
+                  <a href="${safeStr(links.contact_href || "/contact")}" style="display:block;color:#111;">Contact Us</a>
                 </div>
 
               </div>
@@ -2874,7 +2877,7 @@ function navUser() {
   `;
 }
 function navAdmin() {
-  return `<a href="/admin/dashboard">Admin</a><a href="/admin/insights">Insights</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/website-content">Website Content</a><a href="/admin/insights">Insights</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
 
 // ===== Models helpers =====
@@ -3211,6 +3214,85 @@ function getPlanConfigData() {
 
 function savePlanConfigData(data) {
   writeJSON("./data/plans.json", data || {});
+}
+
+function getDefaultWebsiteContent() {
+  return {
+    homepage: {
+      hero_title: "Recover Lost Insurance Revenue Automatically",
+      hero_subtitle: "Identify denied claims, underpayments, and revenue at risk — then generate appeal and negotiation packets instantly.",
+      primary_cta_text: "Start Free Trial - No Credit Card Required",
+      primary_cta_href: "/signup",
+      secondary_cta_text: "Watch Demo",
+      secondary_cta_href: "/demo",
+      hero_media_url: "",
+    },
+    pricing: {
+      heading: "Plans & Pricing",
+      plans: {
+        starter: { price: "$249/mo", features: ["Denial detection", "Underpayment analysis", "Revenue insights"] },
+        growth: { price: "$599/mo", features: ["Denial detection", "Underpayment analysis", "Revenue insights"] },
+        pro: { price: "$1200/mo", features: ["Denial detection", "Underpayment analysis", "Revenue insights"] },
+        enterprise: { price: "$2000/mo", features: ["Denial detection", "Underpayment analysis", "Revenue insights"] },
+      },
+    },
+    about: {
+      founder_name: "Tyquon Jordan, DHA",
+      founder_title: "Founder",
+      founder_image_url: "",
+      founder_bio: "Founder bio here...",
+    },
+    company_links: {
+      about_href: "/about",
+      why_href: "/why",
+      careers_href: "/careers",
+      culture_href: "/culture",
+      contact_href: "/contact",
+    },
+    demo: {
+      video_url: "",
+    },
+    testimonials: [
+      {
+        name: "Dr. Smith",
+        role: "Family Practice Owner",
+        quote: "We identified $32,000 in missed revenue in the first 30 days.",
+      },
+    ],
+  };
+}
+
+function getWebsiteContent() {
+  const content = readJSON(FILES.website_content, null);
+  if (!content) {
+    const defaults = getDefaultWebsiteContent();
+    writeJSON(FILES.website_content, defaults);
+    return defaults;
+  }
+
+  // Ensure new keys are present if file exists from older schema versions.
+  const merged = {
+    ...getDefaultWebsiteContent(),
+    ...content,
+    homepage: { ...getDefaultWebsiteContent().homepage, ...(content.homepage || {}) },
+    pricing: {
+      ...getDefaultWebsiteContent().pricing,
+      ...(content.pricing || {}),
+      plans: {
+        ...getDefaultWebsiteContent().pricing.plans,
+        ...((content.pricing && content.pricing.plans) || {}),
+      },
+    },
+    about: { ...getDefaultWebsiteContent().about, ...(content.about || {}) },
+    company_links: { ...getDefaultWebsiteContent().company_links, ...(content.company_links || {}) },
+    demo: { ...getDefaultWebsiteContent().demo, ...(content.demo || {}) },
+    testimonials: Array.isArray(content.testimonials) ? content.testimonials : [],
+  };
+  return merged;
+}
+
+function saveWebsiteContent(content) {
+  writeJSON(FILES.website_content, content);
 }
 
 const PLAN_RUNTIME_DEFAULTS = {
@@ -9964,6 +10046,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/") {
+    const c = getWebsiteContent();
+    const testimonials = c.testimonials || [];
     return send(res, 200, `
       <html>
       <head>
@@ -9978,11 +10062,10 @@ const server = http.createServer(async (req, res) => {
         <div class="section">
           <div class="container" style="display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center;">
             <div>
-              <h1>Recover Lost Insurance Revenue Automatically</h1>
+              <h1>${safeStr(c.homepage.hero_title)}</h1>
 
               <p style="font-size:18px;margin-top:10px;">
-                Identify denied claims, underpayments, and revenue at risk -
-                then generate appeal and negotiation packets instantly.
+                ${safeStr(c.homepage.hero_subtitle)}
               </p>
 
               <p style="margin-top:10px;color:#666;">
@@ -9990,8 +10073,8 @@ const server = http.createServer(async (req, res) => {
               </p>
 
               <div style="margin-top:20px;">
-                <a href="/signup" class="btn-primary">Start Free Trial - No Credit Card Required</a>
-                <a href="/how-it-works" class="btn-secondary" style="margin-left:10px;">Watch Demo</a>
+                <a href="${safeStr(c.homepage.primary_cta_href)}" class="btn-primary">${safeStr(c.homepage.primary_cta_text)}</a>
+                <a href="${safeStr(c.homepage.secondary_cta_href || "/how-it-works")}" class="btn-secondary" style="margin-left:10px;">${safeStr(c.homepage.secondary_cta_text || "Watch Demo")}</a>
               </div>
 
               <p style="margin-top:15px;font-size:13px;color:#777;">
@@ -10000,11 +10083,14 @@ const server = http.createServer(async (req, res) => {
             </div>
 
             <div style="position:relative;">
-              <img
-                src="https://images.unsplash.com/photo-1588776814546-ec7eafc7c7c5?auto=format&fit=crop&w=900&q=80"
-                alt="Healthcare billing and revenue recovery"
-                style="width:100%;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.15);"
-              />
+              ${c.homepage.hero_media_url
+                ? `<img src="${safeStr(c.homepage.hero_media_url)}" alt="Homepage hero media" style="width:100%;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.15);" />`
+                : `<img
+                    src="https://images.unsplash.com/photo-1588776814546-ec7eafc7c7c5?auto=format&fit=crop&w=900&q=80"
+                    alt="Healthcare billing and revenue recovery"
+                    style="width:100%;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.15);"
+                  />`
+              }
 
               <div style="position:absolute;bottom:20px;left:20px;background:white;padding:12px 16px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.2);font-size:14px;">
                 <strong>$4,320</strong><br/>
@@ -10102,6 +10188,29 @@ const server = http.createServer(async (req, res) => {
           </div>
         </div>
 
+        ${testimonials.length > 0 ? `
+        <div class="section light center">
+          <div class="container" style="max-width:900px;">
+            <h2>What Practices Are Saying</h2>
+
+            <div class="grid-3" style="margin-top:30px;">
+              ${testimonials.map(t => `
+                <div class="card" style="text-align:left;">
+                  <div class="muted small" style="font-weight:700;margin-bottom:8px;">💰 RESULTS</div>
+                  <p style="font-style:italic;">"${safeStr(t.quote)}"</p>
+                  <div style="margin-top:15px;font-weight:600;">
+                    ${safeStr(t.name)}
+                  </div>
+                  <div class="muted small">
+                    ${safeStr(t.role)}
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        </div>
+        ` : ""}
+
         <div class="section light center">
           <div class="container" style="max-width:960px;">
             <h2>Built for secure, practical adoption</h2>
@@ -10134,6 +10243,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/how-it-works") {
+    const c = getWebsiteContent();
     return send(res, 200, `
       <html>
       <head>
@@ -10150,9 +10260,10 @@ const server = http.createServer(async (req, res) => {
             <h1>See How It Works</h1>
 
             <div style="margin:40px 0;">
-              <div style="height:360px;background:#eee;border-radius:12px;display:flex;align-items:center;justify-content:center;">
-                Demo Video
-              </div>
+              ${c.demo.video_url
+                ? `<iframe src="${safeStr(c.demo.video_url)}" title="Demo video" style="width:100%;height:420px;border:0;border-radius:12px;"></iframe>`
+                : `<div style="height:360px;background:#eee;border-radius:12px;display:flex;align-items:center;justify-content:center;">Demo Video</div>`
+              }
             </div>
 
             <div class="grid-3">
@@ -10174,9 +10285,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/pricing") {
+    const c = getWebsiteContent();
     const plans = Object.entries(getPlanConfigData()).map(([key, val]) => ({
       name: key.charAt(0).toUpperCase() + key.slice(1),
-      price: `$${val.price}`,
+      price: safeStr(c.pricing?.plans?.[key]?.price || `$${val.price}/mo`),
       ai_packets: val.ai_packets,
       claims_limit: val.claims_limit,
       highlight: key === "growth"
@@ -10195,10 +10307,11 @@ const server = http.createServer(async (req, res) => {
 
         <div class="section center">
           <div class="container">
-            <h1>Plans & Pricing</h1>
+            <h1>${safeStr(c.pricing.heading)}</h1>
 
             <div class="grid-4" style="margin-top:40px;">
               ${plans.map(p => {
+                const key = String(p.name || "").toLowerCase();
                 const packets = p.ai_packets === 999999 ? "Unlimited" : p.ai_packets;
                 const claims = p.claims_limit === 999999 ? "Unlimited" : p.claims_limit;
 
@@ -10207,7 +10320,7 @@ const server = http.createServer(async (req, res) => {
                     <div class="pricing-card-top">
                       ${p.highlight ? '<div style="background:#2563eb;color:white;padding:4px 10px;border-radius:6px;display:inline-block;font-size:12px;margin-bottom:10px;">Most Popular</div>' : ''}
                       <h2>${p.name}</h2>
-                      <h3>${p.price}/mo</h3>
+                      <h3>${p.price}</h3>
                       <p style="color:#666;font-size:14px;margin-bottom:10px;">
                         ${
                           p.name === "Starter" ? "Best for small practices" :
@@ -10229,9 +10342,7 @@ const server = http.createServer(async (req, res) => {
                           Includes:
                         </div>
                         <div style="margin-left:10px;">
-                          <div>&#10003; Denial detection</div>
-                          <div>&#10003; Underpayment analysis</div>
-                          <div>&#10003; Revenue insights</div>
+                          ${(c.pricing?.plans?.[key]?.features || []).map(f => `<div>✓ ${safeStr(f)}</div>`).join("")}
                         </div>
                       </div>
                     </div>
@@ -10262,6 +10373,10 @@ const server = http.createServer(async (req, res) => {
 
   if (method === "GET" && pathname === "/upgrade") {
     return redirect(res, "/pricing");
+  }
+
+  if (method === "GET" && pathname === "/demo") {
+    return redirect(res, "/how-it-works");
   }
 
   if (method === "GET" && pathname === "/checkout") {
@@ -10447,6 +10562,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/about") {
+    const c = getWebsiteContent();
     return send(res, 200, `
     <html>
     <head>
@@ -10483,63 +10599,16 @@ const server = http.createServer(async (req, res) => {
       <!-- FOUNDER SECTION -->
       <div class="section">
         <div class="container" style="
-          display:grid;
-          grid-template-columns:1fr 1fr;
-          gap:40px;
-          align-items:center;
+          max-width:800px;
+          text-align:center;
         ">
-
-          <!-- IMAGE -->
-          <div style="text-align:center;">
-            <img 
-              src="/Course_Thumbnail.webp"
-              alt="Tyquon Jordan"
-              style="
-                width:100%;
-                max-width:350px;
-                border-radius:16px;
-                box-shadow:0 20px 60px rgba(0,0,0,0.15);
-              "
-            />
-          </div>
-
-          <!-- TEXT -->
-          <div>
-            <h2>Tyquon Jordan, DHA</h2>
-            <p style="font-weight:600;color:#2563eb;">Founder</p>
-
-            <p style="margin-top:15px;">
-              Tyquon holds a Doctorate in Healthcare Administration with hands-on experience across private 
-              medical practices and academic medical centers.
-            </p>
-
-            <p>
-              His work has focused on improving operational efficiency, coordination, and workflow design 
-              in environments where time, staffing, and reimbursement pressures are constant.
-            </p>
-
-            <p>
-              Through structured appeal workflows and operational oversight, he has supported initiatives 
-              that helped a private medical practice recover over <strong>$2 million</strong> in previously 
-              denied claims.
-            </p>
-
-            <p>
-              Tyquon has led and supported initiatives in revenue cycle management, claim denials and appeals, 
-              provider scheduling, and workflow optimization - with a focus on reducing rework and administrative burden.
-            </p>
-
-            <p>
-              His recent work centers on applying AI in a practical, compliant way - helping organizations 
-              improve decision-making and efficiency without introducing unnecessary tools or complexity.
-            </p>
-
-            <p>
-              He founded TJ Healthcare Pro to help practices bring clarity and discipline to complex 
-              operational decisions through a compliance-first, AI-assisted approach grounded in real-world experience.
-            </p>
-          </div>
-
+          ${c.about.founder_image_url
+            ? `<img src="${safeStr(c.about.founder_image_url)}" alt="${safeStr(c.about.founder_name)}" style="max-width:300px;width:100%;border-radius:16px;" />`
+            : `<div class="card" style="height:300px;display:flex;align-items:center;justify-content:center;">Founder Image</div>`
+          }
+          <h2 style="margin-top:20px;">${safeStr(c.about.founder_name)}</h2>
+          <p style="font-weight:600;color:#2563eb;">${safeStr(c.about.founder_title)}</p>
+          <p style="white-space:pre-wrap;text-align:left;margin-top:15px;">${safeStr(c.about.founder_bio)}</p>
         </div>
       </div>
 
@@ -12222,6 +12291,203 @@ const server = http.createServer(async (req, res) => {
       `, navAdmin());
 
       return send(res, 200, html);
+    }
+
+    if (method === "GET" && pathname === "/admin/website-content") {
+      const content = getWebsiteContent();
+      const saved = parsed.query.saved === "1";
+      const html = renderPage("Website Content", `
+        <h2>Website Content</h2>
+        ${saved ? '<div class="card" style="background:#ecfdf5;border-color:#10b981;color:#065f46;">Website content updated successfully</div>' : ''}
+
+        <div class="card">
+          <h3>Homepage</h3>
+          <form method="POST" action="/admin/website/save-homepage">
+            <label>Hero Title</label>
+            <input name="hero_title" value="${safeStr(content.homepage.hero_title)}" />
+            <label>Hero Subtitle</label>
+            <input name="hero_subtitle" value="${safeStr(content.homepage.hero_subtitle)}" />
+            <label>Primary CTA Text</label>
+            <input name="primary_cta_text" value="${safeStr(content.homepage.primary_cta_text)}" />
+            <label>Primary CTA Href</label>
+            <input name="primary_cta_href" value="${safeStr(content.homepage.primary_cta_href)}" />
+            <label>Secondary CTA Text</label>
+            <input name="secondary_cta_text" value="${safeStr(content.homepage.secondary_cta_text)}" />
+            <label>Secondary CTA Href</label>
+            <input name="secondary_cta_href" value="${safeStr(content.homepage.secondary_cta_href)}" />
+            <label>Hero Media URL</label>
+            <input name="hero_media_url" value="${safeStr(content.homepage.hero_media_url)}" />
+            <button class="btn">Save</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3>Pricing</h3>
+          <form method="POST" action="/admin/website/save-pricing">
+            <label>Heading</label>
+            <input name="heading" value="${safeStr(content.pricing.heading)}" />
+            <label>Starter Price</label>
+            <input name="starter_price" value="${safeStr(content.pricing.plans.starter.price)}" />
+            <label>Growth Price</label>
+            <input name="growth_price" value="${safeStr(content.pricing.plans.growth.price)}" />
+            <label>Pro Price</label>
+            <input name="pro_price" value="${safeStr(content.pricing.plans.pro.price)}" />
+            <label>Enterprise Price</label>
+            <input name="enterprise_price" value="${safeStr(content.pricing.plans.enterprise.price)}" />
+            <button class="btn">Save</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3>About</h3>
+          <form method="POST" action="/admin/website/save-about">
+            <label>Founder Name</label>
+            <input name="founder_name" value="${safeStr(content.about.founder_name)}" />
+            <label>Founder Title</label>
+            <input name="founder_title" value="${safeStr(content.about.founder_title)}" />
+            <label>Founder Image URL</label>
+            <input name="founder_image_url" value="${safeStr(content.about.founder_image_url)}" />
+            <label>Founder Bio</label>
+            <textarea name="founder_bio">${safeStr(content.about.founder_bio)}</textarea>
+            <button class="btn">Save</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3>Company Links</h3>
+          <form method="POST" action="/admin/website/save-company-links">
+            <label>About URL</label>
+            <input name="about_href" value="${safeStr(content.company_links.about_href)}" />
+            <label>Why URL</label>
+            <input name="why_href" value="${safeStr(content.company_links.why_href)}" />
+            <label>Careers URL</label>
+            <input name="careers_href" value="${safeStr(content.company_links.careers_href)}" />
+            <label>Culture URL</label>
+            <input name="culture_href" value="${safeStr(content.company_links.culture_href)}" />
+            <label>Contact URL</label>
+            <input name="contact_href" value="${safeStr(content.company_links.contact_href)}" />
+            <button class="btn">Save</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3>Demo</h3>
+          <form method="POST" action="/admin/website/save-demo">
+            <label>Demo Video URL (embed link)</label>
+            <input name="video_url" value="${safeStr(content.demo.video_url)}" />
+            <button class="btn">Save</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3>Testimonials</h3>
+
+          <p class="muted small">
+            Add testimonials to display on the homepage. Leave empty to hide the section.
+          </p>
+
+          <form method="POST" action="/admin/website/save-testimonials">
+            <textarea name="testimonials" placeholder="Enter one testimonial per line. Format: Name | Role | Quote&#10;Example: Dr. Smith | Family Practice Owner | We identified $32,000 in missed revenue in the first 30 days." style="min-height:120px;">${(content.testimonials || []).map(t => `${safeStr(t.name)} | ${safeStr(t.role)} | ${safeStr(t.quote)}`).join("\n")}</textarea>
+            <button class="btn">Save Testimonials</button>
+          </form>
+        </div>
+      `, navAdmin());
+      return send(res, 200, html);
+    }
+
+    if (method === "POST" && pathname === "/admin/website/save-homepage") {
+      const body = await parseBody(req);
+      const p = new URLSearchParams(body);
+      const content = getWebsiteContent();
+
+      content.homepage.hero_title = p.get("hero_title") || "";
+      content.homepage.hero_subtitle = p.get("hero_subtitle") || "";
+      content.homepage.primary_cta_text = p.get("primary_cta_text") || "";
+      content.homepage.primary_cta_href = p.get("primary_cta_href") || "";
+      content.homepage.secondary_cta_text = p.get("secondary_cta_text") || "";
+      content.homepage.secondary_cta_href = p.get("secondary_cta_href") || "";
+      content.homepage.hero_media_url = p.get("hero_media_url") || "";
+
+      saveWebsiteContent(content);
+      return redirect(res, "/admin/website-content?saved=1");
+    }
+
+    if (method === "POST" && pathname === "/admin/website/save-pricing") {
+      const body = await parseBody(req);
+      const p = new URLSearchParams(body);
+      const content = getWebsiteContent();
+
+      content.pricing.heading = p.get("heading") || "";
+      content.pricing.plans.starter.price = p.get("starter_price") || "";
+      content.pricing.plans.growth.price = p.get("growth_price") || "";
+      content.pricing.plans.pro.price = p.get("pro_price") || "";
+      content.pricing.plans.enterprise.price = p.get("enterprise_price") || "";
+
+      saveWebsiteContent(content);
+      return redirect(res, "/admin/website-content?saved=1");
+    }
+
+    if (method === "POST" && pathname === "/admin/website/save-about") {
+      const body = await parseBody(req);
+      const p = new URLSearchParams(body);
+      const content = getWebsiteContent();
+
+      content.about.founder_name = p.get("founder_name") || "";
+      content.about.founder_title = p.get("founder_title") || "";
+      content.about.founder_image_url = p.get("founder_image_url") || "";
+      content.about.founder_bio = p.get("founder_bio") || "";
+
+      saveWebsiteContent(content);
+      return redirect(res, "/admin/website-content?saved=1");
+    }
+
+    if (method === "POST" && pathname === "/admin/website/save-company-links") {
+      const body = await parseBody(req);
+      const p = new URLSearchParams(body);
+      const content = getWebsiteContent();
+
+      content.company_links.about_href = p.get("about_href") || "";
+      content.company_links.why_href = p.get("why_href") || "";
+      content.company_links.careers_href = p.get("careers_href") || "";
+      content.company_links.culture_href = p.get("culture_href") || "";
+      content.company_links.contact_href = p.get("contact_href") || "";
+
+      saveWebsiteContent(content);
+      return redirect(res, "/admin/website-content?saved=1");
+    }
+
+    if (method === "POST" && pathname === "/admin/website/save-demo") {
+      const body = await parseBody(req);
+      const p = new URLSearchParams(body);
+      const content = getWebsiteContent();
+
+      content.demo.video_url = p.get("video_url") || "";
+
+      saveWebsiteContent(content);
+      return redirect(res, "/admin/website-content?saved=1");
+    }
+
+    if (method === "POST" && pathname === "/admin/website/save-testimonials") {
+      const body = await parseBody(req);
+      const p = new URLSearchParams(body);
+      const content = getWebsiteContent();
+
+      const raw = String(p.get("testimonials") || "").trim();
+
+      const parsedTestimonials = raw
+        .split("\n")
+        .map(line => line.split("|").map(x => x.trim()))
+        .filter(parts => parts.length >= 3)
+        .map(parts => ({
+          name: parts[0],
+          role: parts[1],
+          quote: parts.slice(2).join(" | ")
+        }));
+
+      content.testimonials = parsedTestimonials;
+      saveWebsiteContent(content);
+
+      return redirect(res, "/admin/website-content?saved=1");
     }
 
     if (method === "GET" && (pathname === "/admin/analytics" || pathname === "/admin/revenue")) {
