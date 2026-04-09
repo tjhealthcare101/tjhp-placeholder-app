@@ -11234,7 +11234,9 @@ const server = http.createServer(async (req, res) => {
   if ((method === "POST" || method === "GET") && pathname === "/admin/simulate-plan") {
     debugLog("SIMULATION HIT");
 
-    if (!sess || sess.role !== "admin") {
+    const isSimulating = Boolean(sess && sess.simulating);
+
+    if (!sess || (!isSimulating && sess.role !== "admin")) {
       return redirect(res, "/admin/login");
     }
 
