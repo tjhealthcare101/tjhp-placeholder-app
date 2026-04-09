@@ -13367,9 +13367,9 @@ const server = http.createServer(async (req, res) => {
   if (!sess || sess.role !== "user") return redirect(res, "/login");
 
   const user = getUserById(sess.user_id);
-  if (!user) return redirect(res, "/login");
+  if (!user && !sess.simulating) return redirect(res, "/login");
 
-  const orgId = user.org_id;
+  const orgId = sess.simulating ? sess.org_id : user.org_id;
   const org = getOrg(orgId);
   if (!org) return redirect(res, "/login");
   const sub = getSub(org.org_id);
