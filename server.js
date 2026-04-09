@@ -320,7 +320,11 @@ function send(res, status, body, type="text/html") {
 }
 
 function redirect(res, location) {
-  res.writeHead(302, { Location: location });
+  const existingHeaders = res.getHeaders ? res.getHeaders() : {};
+  res.writeHead(302, {
+    ...existingHeaders,
+    Location: location
+  });
   res.end();
 }
 
