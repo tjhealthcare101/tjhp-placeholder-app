@@ -2877,7 +2877,7 @@ function navUser() {
   `;
 }
 function navAdmin() {
-  return `<a href="/admin/dashboard">Admin</a><a href="/admin/website-content">Website Content</a><a href="/admin/insights">Insights</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/simulation">Simulation</a><a href="/admin/website-content">Website Content</a><a href="/admin/insights">Insights</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
 
 // ===== Models helpers =====
@@ -3123,6 +3123,14 @@ function ensurePilot(org_id) {
 }
 function getSub(org_id) {
   return readJSON(FILES.subscriptions, []).find(s => s.org_id === org_id);
+}
+function getEffectivePlan(org_id, sess) {
+  if (sess && sess.simulating && sess.simulated_plan) {
+    return String(sess.simulated_plan).toLowerCase();
+  }
+
+  const sub = getSub(org_id);
+  return String((sub && sub.plan) || "starter").toLowerCase();
 }
 function currentMonthKey() {
   const d = new Date();
@@ -3401,8 +3409,10 @@ function canGeneratePacket(org_id) {
 
 function hasFeatureAccess(org_id, feature) {
   if (!org_id || !feature) return false;
-  const sub = getSub(org_id);
-  const plan = String((sub && sub.plan) || "starter").toLowerCase();
+  const sess = CURRENT_SIMULATION
+    ? { simulating:true, simulated_plan: CURRENT_SIMULATION.plan }
+    : null;
+  const plan = getEffectivePlan(org_id, sess);
   const config = getPlanConfig(plan);
 
   if (config.features.includes("all")) return true;
@@ -3492,26 +3502,19 @@ function getActivePlanName(org_id) {
 }
 
 function getAIChatLimit(org_id) {
-  const sub = getSub(org_id);
-  if (sub && sub.status === "active") {
-    const plan = (sub.plan || "starter").toLowerCase();
-    return (PLAN_RUNTIME_DEFAULTS[plan]?.ai_chat_limit) ?? 50;
-  }
-  // Pilot = 10 total questions for the 14-day trial
-  const pilot = getPilot(org_id) || ensurePilot(org_id);
-  if (pilot && pilot.status === "active") return 10;
-  return 0;
+  const sess = CURRENT_SIMULATION
+    ? { simulating:true, simulated_plan: CURRENT_SIMULATION.plan }
+    : null;
+  const plan = getEffectivePlan(org_id, sess);
+  return (PLAN_RUNTIME_DEFAULTS[plan]?.ai_chat_limit) ?? 50;
 }
 
 function getCopilotLimit(org_id) {
-  const sub = getSub(org_id);
-  if (sub && sub.status === "active") {
-    const plan = (sub.plan || "starter").toLowerCase();
-    return (PLAN_RUNTIME_DEFAULTS[plan]?.copilot_limit) ?? 50;
-  }
-  const pilot = getPilot(org_id) || ensurePilot(org_id);
-  if (pilot && pilot.status === "active") return 10;
-  return 0;
+  const sess = CURRENT_SIMULATION
+    ? { simulating:true, simulated_plan: CURRENT_SIMULATION.plan }
+    : null;
+  const plan = getEffectivePlan(org_id, sess);
+  return (PLAN_RUNTIME_DEFAULTS[plan]?.copilot_limit) ?? 50;
 }
 
 function getCopilotWorkspaces(org_id){
@@ -3730,6 +3733,7 @@ function isAccessEnabled(org_id) {
   const sub = getSub(org_id);
   if (sub && sub.status === "active") return true;
 
+  // Pilot = 10 total questions for the 14-day trial
   const pilot = getPilot(org_id) || ensurePilot(org_id);
   if (new Date(pilot.ends_at).getTime() < Date.now() && pilot.status !== "complete") {
     markPilotComplete(org_id);
@@ -3771,6 +3775,31 @@ function cleanupIfExpired(org_id) {
 
 // ===== Limits =====
 function getLimitProfile(org_id) {
+  const sess = CURRENT_SIMULATION
+    ? { simulating:true, simulated_plan: CURRENT_SIMULATION.plan }
+    : null;
+
+  const simulatedPlan = getEffectivePlan(org_id, sess);
+
+  // 🔥 SIMULATION MODE
+  if (sess && sess.simulating) {
+    const cfg = PLAN_RUNTIME_DEFAULTS[simulatedPlan] || PLAN_RUNTIME_DEFAULTS.starter;
+    return {
+      mode: "monthly",
+      copilot_limit: cfg.copilot_limit,
+      workspace_limit: cfg.workspace_limit,
+      case_credits_per_month: cfg.case_credits_per_month,
+      payment_tracking_credits_per_month: cfg.payment_tracking_credits_per_month,
+      max_files_per_case: MONTHLY_DEFAULTS.max_files_per_case,
+      max_file_size_mb: MONTHLY_DEFAULTS.max_file_size_mb,
+      max_ai_jobs_per_hour: MONTHLY_DEFAULTS.max_ai_jobs_per_hour,
+      max_concurrent_analyzing: MONTHLY_DEFAULTS.max_concurrent_analyzing,
+      overage_price_per_case: MONTHLY_DEFAULTS.overage_price_per_case,
+      payment_records_per_credit: MONTHLY_DEFAULTS.payment_records_per_credit,
+    };
+  }
+
+  // ✅ REAL LOGIC (unchanged)
   const sub = getSub(org_id);
   if (sub && sub.status === "active") {
     return {
@@ -3787,6 +3816,7 @@ function getLimitProfile(org_id) {
       payment_records_per_credit: MONTHLY_DEFAULTS.payment_records_per_credit,
     };
   }
+
   return {
     mode: "pilot",
     copilot_limit: 10,
@@ -11999,7 +12029,12 @@ const server = http.createServer(async (req, res) => {
   // ---------- ADMIN ROUTES ----------
   if (pathname.startsWith("/admin/") || pathname.startsWith("/admin-control-center")) {
     const isAdmin = sess && sess.role === "admin";
-    if (!isAdmin && pathname !== "/admin/login") return redirect(res, "/admin/login");
+    const isSimulatedAdminSession = Boolean(sess && sess.simulating);
+    const isSimulationControlRoute =
+      pathname === "/admin/simulation" || pathname === "/admin/stop-simulation";
+    if (!isAdmin && !(isSimulationControlRoute && isSimulatedAdminSession) && pathname !== "/admin/login") {
+      return redirect(res, "/admin/login");
+    }
 
     if (method === "POST" && pathname === "/admin/toggle-maintenance") {
       const body = await parseBody(req);
@@ -12012,10 +12047,48 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (method === "GET" && pathname === "/admin/stop-simulation") {
-      delete sess.simulating;
-      delete sess.simulated_plan;
-      setSession(res, sess);
-      return redirect(res, "/admin/dashboard");
+      const cleanedSession = { ...(sess || {}) };
+      delete cleanedSession.simulating;
+      delete cleanedSession.simulated_plan;
+      cleanedSession.role = "admin";
+      setSession(res, cleanedSession);
+      return redirect(res, "/admin/simulation");
+    }
+
+    if (method === "GET" && pathname === "/admin/simulation") {
+      const simulating = Boolean(sess && sess.simulating && sess.simulated_plan);
+      const activePlan = simulating
+        ? String(sess.simulated_plan || "starter").toLowerCase()
+        : "starter";
+      const simulationBadge = simulating
+        ? `<div class="card" style="border:1px solid #22c55e;background:#ecfdf5;color:#14532d;padding:12px;font-weight:700;margin-bottom:12px;">Simulation Active: ${safeStr(activePlan.toUpperCase())}</div>`
+        : `<div class="card" style="border:1px solid #e5e7eb;background:#f9fafb;color:#374151;padding:12px;font-weight:700;margin-bottom:12px;">Simulation Inactive</div>`;
+      return send(res, 200, renderPage("Plan Simulation", `
+        <h2>Plan Simulation</h2>
+        <p class="muted">Use this to experience the app as a user on a selected plan without logging in again.</p>
+        ${simulationBadge}
+
+        <div class="card" style="padding:16px;">
+          <form method="POST" action="/admin/simulate-plan">
+            <label for="simPlanSelect">Select Plan</label>
+            <select id="simPlanSelect" name="plan">
+              <option value="starter" ${activePlan === "starter" ? "selected" : ""}>Starter</option>
+              <option value="growth" ${activePlan === "growth" ? "selected" : ""}>Growth</option>
+              <option value="pro" ${activePlan === "pro" ? "selected" : ""}>Pro</option>
+              <option value="enterprise" ${activePlan === "enterprise" ? "selected" : ""}>Enterprise</option>
+            </select>
+            <div style="margin-top:10px;">
+              <button class="btn primary" type="submit">Start Simulation</button>
+            </div>
+          </form>
+          <p class="small muted" style="margin-top:10px;">Starting simulation will redirect you into the app with the selected plan.</p>
+          ${simulating ? `
+            <div style="margin-top:8px;">
+              <a href="/admin/stop-simulation" class="btn secondary">Stop Simulation</a>
+            </div>
+          ` : ``}
+        </div>
+      `, navAdmin()));
     }
 
     if (method === "GET" && pathname === "/admin-control-center") {
