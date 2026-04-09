@@ -13364,7 +13364,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ---------- USER PROTECTED ROUTES ----------
-  if (!sess || sess.role !== "user") return redirect(res, "/login");
+  if (!sess || (sess.role !== "user" && !sess.simulating)) {
+    return redirect(res, "/login");
+  }
 
   const user = getUserById(sess.user_id);
   if (!user && !sess.simulating) return redirect(res, "/login");
