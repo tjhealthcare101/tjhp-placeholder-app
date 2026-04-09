@@ -1229,13 +1229,17 @@ window.__tjhpSendChat = async function(){
       font-weight:600;
     ">
       🧪 SIMULATION MODE: ${safeStr(CURRENT_SIMULATION.plan.toUpperCase())}
+
       <select onchange="location.href='/admin/simulate-plan?plan='+this.value" style="margin-left:10px;">
         <option value="starter" ${CURRENT_SIMULATION.plan === "starter" ? "selected" : ""}>Starter</option>
         <option value="growth" ${CURRENT_SIMULATION.plan === "growth" ? "selected" : ""}>Growth</option>
         <option value="pro" ${CURRENT_SIMULATION.plan === "pro" ? "selected" : ""}>Pro</option>
         <option value="enterprise" ${CURRENT_SIMULATION.plan === "enterprise" ? "selected" : ""}>Enterprise</option>
       </select>
-      <a href="/admin/stop-simulation" style="color:#4af;margin-left:10px;">Exit</a>
+
+      <a href="/admin/stop-simulation" style="color:#4af;margin-left:10px;">
+        Exit
+      </a>
     </div>
   ` : ``}
   ${renderAnnouncementBanner(CURRENT_SESSION_ORG_ID, title, isAdminPage)}
@@ -11239,29 +11243,24 @@ const server = http.createServer(async (req, res) => {
       : `plan=${encodeURIComponent(String(parsed.query.plan || ""))}`;
 
     const params = new URLSearchParams(body);
-    const user = getUserById(sess.user_id);
-    if (!user) {
-      debugLog("NO VALID USER");
-      return redirect(res, "/admin/dashboard");
-    }
-
-    const selectedPlan = String(params.get("plan") || "starter").toLowerCase();
+    const allowedPlans = new Set(["starter", "growth", "pro", "enterprise"]);
+    const selectedPlanRaw = String(params.get("plan") || "starter").toLowerCase();
+    const selectedPlan = allowedPlans.has(selectedPlanRaw) ? selectedPlanRaw : "starter";
 
     const simulatedSession = {
       ...sess,
       role: "user",
-      user_id: user.user_id,
-      org_id: user.org_id,
+      user_id: sess.user_id,
+      org_id: sess.org_id,
       simulating: true,
-      simulated_plan: selectedPlan
+      simulated_plan: selectedPlan,
     };
 
     debugLog("SIM SESSION:", simulatedSession);
 
     setSession(res, simulatedSession);
 
-    res.writeHead(302, { Location: "/ai-copilot" });
-    return res.end();
+    return redirect(res, "/dashboard");
   }
 
   CURRENT_SESSION_ORG_ID = (sess && sess.org_id) ? String(sess.org_id) : "";
@@ -12906,49 +12905,6 @@ const server = http.createServer(async (req, res) => {
           </form>
         </div>
 
-        <div class="card" style="padding:16px;margin-top:16px;">
-          <h3>🧪 Plan Simulator</h3>
-
-          <form id="simulateForm" method="POST" action="/admin/simulate-plan">
-            <div>
-              <label>Select Plan</label>
-              <select name="plan">
-                <option value="starter">Starter</option>
-                <option value="growth">Growth</option>
-                <option value="pro">Pro</option>
-                <option value="enterprise">Enterprise</option>
-              </select>
-            </div>
-          </form>
-
-          <button class="btn primary" style="margin-top:8px;" onclick="submitSimulation()">
-            Enable Simulation
-          </button>
-
-          <script>
-          function submitSimulation(){
-            debugLog("FORCE SUBMIT TRIGGERED");
-
-            const form = document.getElementById("simulateForm");
-            const formData = new FormData(form);
-
-            fetch("/admin/simulate-plan", {
-              method: "POST",
-              body: formData
-            })
-            .then(() => {
-              // 🔥 FORCE NAVIGATION AFTER SESSION IS SET
-              window.location.href = "/ai-copilot";
-            });
-          }
-          </script>
-
-          ${sess.simulating && sess.simulated_plan ? `<div style="margin-top:10px;font-weight:700;">🔥 Active Simulation: ${safeStr(String(sess.simulated_plan).charAt(0).toUpperCase() + String(sess.simulated_plan).slice(1))}</div>` : ``}
-
-          <a href="/admin/stop-simulation" class="btn secondary" style="margin-top:8px;">
-            Stop Simulation
-          </a>
-        </div>
       `, navAdmin());
       return send(res, 200, html);
     }
