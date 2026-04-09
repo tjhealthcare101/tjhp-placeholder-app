@@ -11257,62 +11257,53 @@ const server = http.createServer(async (req, res) => {
     const allUsers = readJSON(FILES.users, []);
     const allOrgs = readJSON(FILES.orgs, []);
 
-    // allow optional org_id/user_id from query/body in the future
-    const reqOrgId = String(params.get("org_id") || parsed.query.org_id || "").trim();
-    const reqUserId = String(params.get("user_id") || parsed.query.user_id || "").trim();
+    const allowIdOverride = !isSimulating && sess && sess.role === "admin";
+    const reqOrgId = allowIdOverride ? String(params.get("org_id") || parsed.query.org_id || "").trim() : "";
+    const reqUserId = allowIdOverride ? String(params.get("user_id") || parsed.query.user_id || "").trim() : "";
+    let targetUserId = String(reqUserId || sess.user_id || "").trim();
+    let targetOrgId  = String(reqOrgId  || sess.org_id  || "").trim();
 
-    let targetUserId = String(sess.user_id || reqUserId || "").trim();
-    let targetOrgId  = String(sess.org_id  || reqOrgId  || "").trim();
+    const norm = v => String(v == null ? "" : v).trim();
+    const findUser = id => allUsers.find(u => norm(u.user_id) === norm(id) || norm(u.id) === norm(id)) || null;
+    const findOrg  = id => allOrgs.find(o => norm(o.org_id) === norm(id) || norm(o.id) === norm(id)) || null;
 
-    // If we have a user but no org, derive org from that user
-    if (!targetOrgId && targetUserId) {
-      const u = allUsers.find(x => String(x.user_id) === String(targetUserId));
-      if (u && u.org_id) targetOrgId = String(u.org_id);
+    debugLog("[SIM] paths", { users: FILES.users, orgs: FILES.orgs, cwd: process.cwd(), dirname: __dirname });
+    debugLog("[SIM] counts", { users: allUsers.length, orgs: allOrgs.length });
+    debugLog("[SIM] chosen ids pre", { targetOrgId, targetUserId, reqOrgId, reqUserId });
+
+    let simOrg = (targetOrgId ? findOrg(targetOrgId) : null) || (targetOrgId ? getOrg(targetOrgId) : null);
+    let simUser = (targetUserId ? findUser(targetUserId) : null) || (targetUserId ? getUserById(targetUserId) : null);
+
+    let usedEphemeralOrg = false;
+    let usedEphemeralUser = false;
+
+    if (!simOrg) {
+      const oid = norm(targetOrgId) || "SIMULATION_ORG";
+      simOrg = { org_id: oid, org_name: "Simulation Org", legal_name: "Simulation Org", account_status: "active", created_at: nowISO() };
+      targetOrgId = oid;
+      usedEphemeralOrg = true;
+      console.error("[SIM] EPHEMERAL org:", oid);
     }
 
-    // If we still have no org, prefer the first real user (best default)
-    if (!targetOrgId) {
-      const u0 = allUsers[0];
-      if (u0 && u0.org_id) {
-        targetOrgId = String(u0.org_id);
-        if (!targetUserId && u0.user_id) targetUserId = String(u0.user_id);
-      } else {
-        const o0 = allOrgs[0];
-        if (o0 && o0.org_id) targetOrgId = String(o0.org_id);
-      }
+    if (!simUser) {
+      const uid = norm(targetUserId) || ("SIM-USER-" + uuid());
+      simUser = { user_id: uid, org_id: simOrg.org_id, email: `simulation+${Date.now()}@local`, role: "simulation", theme: "light", created_at: nowISO(), last_login_at: nowISO() };
+      targetUserId = uid;
+      usedEphemeralUser = true;
+      console.error("[SIM] EPHEMERAL user:", uid);
     }
 
-    // If we have an org but no user, pick a user from that org (or any user)
-    if (!targetUserId) {
-      const u = allUsers.find(x => String(x.org_id) === String(targetOrgId)) || allUsers[0];
-      if (u && u.user_id) targetUserId = String(u.user_id);
-    }
-
-    const targetOrg = targetOrgId ? getOrg(targetOrgId) : null;
-    const targetUser = targetUserId ? getUserById(targetUserId) : null;
-
-    if (!targetOrg || !targetUser) {
-      const html = renderPage("Plan Simulation", `
-        <h2>Plan Simulation</h2>
-        <p class="error">
-          Simulation requires at least one real user + organization.
-          Create a user account (Signup) and ensure an org exists, then retry.
-        </p>
-        <div class="btnRow">
-          <a class="btn secondary" href="/admin/orgs">Organizations</a>
-          <a class="btn secondary" href="/admin/simulation">Back</a>
-        </div>
-      `, navAdmin());
-      return send(res, 400, html);
-    }
+    debugLog("[SIM] final", { targetOrgId, targetUserId, usedEphemeralOrg, usedEphemeralUser });
 
     const simulatedSession = {
       ...sess,
       role: "user",
-      user_id: targetUser.user_id,
-      org_id: targetOrg.org_id,
+      user_id: simUser.user_id,
+      org_id: simOrg.org_id,
       simulating: true,
       simulated_plan: selectedPlan,
+      ...(usedEphemeralUser ? { sim_user: simUser } : {}),
+      ...(usedEphemeralOrg ? { sim_org: simOrg } : {})
     };
 
     debugLog("SIM SESSION:", simulatedSession);
@@ -13425,17 +13416,24 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, "/login");
   }
 
-  const user = getUserById(sess.user_id);
+  let user = getUserById(sess.user_id);
+  if (!user && sess.simulating && sess.sim_user && typeof sess.sim_user === "object") {
+    user = sess.sim_user;
+  }
   if (!user && !sess.simulating) return redirect(res, "/login");
 
   const orgId = sess.simulating ? sess.org_id : user.org_id;
-  const org = getOrg(orgId);
+
+  let org = getOrg(orgId);
+  if (!org && sess.simulating && sess.sim_org && typeof sess.sim_org === "object") {
+    org = sess.sim_org;
+  }
   if (!org) return redirect(res, "/login");
   const sub = getSub(org.org_id);
   const plan = sess.simulating
     ? sess.simulated_plan
     : String((sub && sub.plan) || "starter").toLowerCase();
-  CURRENT_USER_THEME = (user.theme === "light" || user.theme === "dark") ? user.theme : "light";
+  CURRENT_USER_THEME = (user && (user.theme === "light" || user.theme === "dark")) ? user.theme : "light";
 
   cleanupIfExpired(org.org_id);
 
