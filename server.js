@@ -3430,10 +3430,41 @@ function getDefaultWebsiteContent() {
     pricing: {
       heading: "Plans & Pricing",
       plans: {
-        starter: { price: "$249/mo", features: ["Denial detection", "Underpayment analysis", "Revenue insights"] },
-        growth: { price: "$599/mo", features: ["Denial detection", "Underpayment analysis", "Revenue insights"] },
-        pro: { price: "$1200/mo", features: ["Denial detection", "Underpayment analysis", "Revenue insights"] },
-        enterprise: { price: "$2000/mo", features: ["Denial detection", "Underpayment analysis", "Revenue insights"] },
+        starter: {
+          price: "$249/mo",
+          description: "Best for small practices",
+          features: [
+            "Core denial detection",
+            "Basic revenue insights"
+          ]
+        },
+        growth: {
+          price: "$599/mo",
+          description: "Best for growing teams",
+          features: [
+            "Everything in Starter",
+            "Increased processing capacity",
+            "Faster case handling"
+          ]
+        },
+        pro: {
+          price: "$1200/mo",
+          description: "Advanced analytics & scale",
+          features: [
+            "Everything in Growth",
+            "Advanced analytics & insights",
+            "Built for high-volume practices"
+          ]
+        },
+        enterprise: {
+          price: "$2000/mo",
+          description: "Unlimited access & enterprise workflows",
+          features: [
+            "Everything in Pro",
+            "Unlimited workflows",
+            "Enterprise-level usage"
+          ]
+        },
       },
     },
     about: {
@@ -3515,6 +3546,22 @@ function getWebsiteContent() {
       plans: {
         ...getDefaultWebsiteContent().pricing.plans,
         ...((content.pricing && content.pricing.plans) || {}),
+        starter: {
+          ...getDefaultWebsiteContent().pricing.plans.starter,
+          ...(((content.pricing && content.pricing.plans) || {}).starter || {}),
+        },
+        growth: {
+          ...getDefaultWebsiteContent().pricing.plans.growth,
+          ...(((content.pricing && content.pricing.plans) || {}).growth || {}),
+        },
+        pro: {
+          ...getDefaultWebsiteContent().pricing.plans.pro,
+          ...(((content.pricing && content.pricing.plans) || {}).pro || {}),
+        },
+        enterprise: {
+          ...getDefaultWebsiteContent().pricing.plans.enterprise,
+          ...(((content.pricing && content.pricing.plans) || {}).enterprise || {}),
+        },
       },
     },
     about: { ...getDefaultWebsiteContent().about, ...(content.about || {}) },
@@ -10681,6 +10728,21 @@ const server = http.createServer(async (req, res) => {
                 const key = String(p.name || "").toLowerCase();
                 const packets = p.ai_packets === 999999 ? "Unlimited" : p.ai_packets;
                 const claims = p.claims_limit === 999999 ? "Unlimited" : p.claims_limit;
+                const planContent = c.pricing?.plans?.[key] || {};
+                const planDescription = planContent.description || (
+                  p.name === "Starter" ? "Best for small practices" :
+                  p.name === "Growth" ? "Best for growing teams" :
+                  p.name === "Pro" ? "Advanced analytics & scale" :
+                  "Unlimited access & enterprise workflows"
+                );
+                const planFeatures = Array.isArray(planContent.features) && planContent.features.length
+                  ? planContent.features
+                  : (
+                    p.name === "Starter" ? ["Core denial & underpayment detection", "Basic revenue insights"] :
+                    p.name === "Growth" ? ["Everything in Starter", "Increased processing capacity", "Faster case handling"] :
+                    p.name === "Pro" ? ["Everything in Growth", "Advanced analytics & insights", "Built for high-volume practices"] :
+                    ["Everything in Pro", "Unlimited workflows", "Enterprise-level usage"]
+                  );
 
                 return `
                   <div class="card pricing-card" style="${p.highlight ? 'border:2px solid #2563eb;' : ''}">
@@ -10689,12 +10751,7 @@ const server = http.createServer(async (req, res) => {
                       <h2>${p.name}</h2>
                       <h3>${p.price}</h3>
                       <p style="color:#666;font-size:14px;margin-bottom:10px;">
-                        ${
-                          p.name === "Starter" ? "Best for small practices" :
-                          p.name === "Growth" ? "Best for growing teams" :
-                          p.name === "Pro" ? "Advanced analytics & scale" :
-                          "Unlimited access & enterprise workflows"
-                        }
+                        ${safeStr(planDescription)}
                       </p>
 
                       <div class="pricing-card-details">
@@ -10705,11 +10762,8 @@ const server = http.createServer(async (req, res) => {
                           &#10003; <strong>${claims}</strong> Case Credits
                         </div>
                         <hr style="margin:15px 0;border:none;border-top:1px solid #eee;">
-                        <div style="margin-top:12px;color:#666;">
-                          Includes:
-                        </div>
-                        <div style="margin-left:10px;">
-                          ${(c.pricing?.plans?.[key]?.features || []).map(f => `<div>✓ ${safeStr(f)}</div>`).join("")}
+                        <div style="margin-top:12px;color:#444;font-size:14px;">
+                          ${planFeatures.map(f => `✓ ${safeStr(f)}`).join("<br/>")}
                         </div>
                       </div>
                     </div>
@@ -13109,15 +13163,31 @@ ${(content.demo.steps || []).map(s =>
 
               <label>Starter Price</label>
               <input name="starter_price" value="${safeStr(content.pricing.plans.starter.price)}" />
+              <label>Starter Description</label>
+              <input name="starter_description" value="${safeStr(content.pricing.plans.starter.description || "")}" />
+              <label>Starter Features (one per line)</label>
+              <textarea name="starter_features">${(content.pricing.plans.starter.features || []).map(safeStr).join("\n")}</textarea>
 
               <label>Growth Price</label>
               <input name="growth_price" value="${safeStr(content.pricing.plans.growth.price)}" />
+              <label>Growth Description</label>
+              <input name="growth_description" value="${safeStr(content.pricing.plans.growth.description || "")}" />
+              <label>Growth Features (one per line)</label>
+              <textarea name="growth_features">${(content.pricing.plans.growth.features || []).map(safeStr).join("\n")}</textarea>
 
               <label>Pro Price</label>
               <input name="pro_price" value="${safeStr(content.pricing.plans.pro.price)}" />
+              <label>Pro Description</label>
+              <input name="pro_description" value="${safeStr(content.pricing.plans.pro.description || "")}" />
+              <label>Pro Features (one per line)</label>
+              <textarea name="pro_features">${(content.pricing.plans.pro.features || []).map(safeStr).join("\n")}</textarea>
 
               <label>Enterprise Price</label>
               <input name="enterprise_price" value="${safeStr(content.pricing.plans.enterprise.price)}" />
+              <label>Enterprise Description</label>
+              <input name="enterprise_description" value="${safeStr(content.pricing.plans.enterprise.description || "")}" />
+              <label>Enterprise Features (one per line)</label>
+              <textarea name="enterprise_features">${(content.pricing.plans.enterprise.features || []).map(safeStr).join("\n")}</textarea>
               <button class="btn">Save Pricing</button>
             </div>
 
@@ -13326,12 +13396,25 @@ ${(content.demo.steps || []).map(s =>
       const body = await parseBody(req);
       const p = new URLSearchParams(body);
       const content = getWebsiteContent();
+      const parseList = (txt) =>
+        String(txt || "")
+          .split("\n")
+          .map(x => x.trim())
+          .filter(Boolean);
 
       content.pricing.heading = p.get("heading") || "";
       content.pricing.plans.starter.price = p.get("starter_price") || "";
+      content.pricing.plans.starter.description = p.get("starter_description") || "";
+      content.pricing.plans.starter.features = parseList(p.get("starter_features"));
       content.pricing.plans.growth.price = p.get("growth_price") || "";
+      content.pricing.plans.growth.description = p.get("growth_description") || "";
+      content.pricing.plans.growth.features = parseList(p.get("growth_features"));
       content.pricing.plans.pro.price = p.get("pro_price") || "";
+      content.pricing.plans.pro.description = p.get("pro_description") || "";
+      content.pricing.plans.pro.features = parseList(p.get("pro_features"));
       content.pricing.plans.enterprise.price = p.get("enterprise_price") || "";
+      content.pricing.plans.enterprise.description = p.get("enterprise_description") || "";
+      content.pricing.plans.enterprise.features = parseList(p.get("enterprise_features"));
 
       saveWebsiteContent(content);
       return redirect(res, "/admin/website-content?saved=1");
