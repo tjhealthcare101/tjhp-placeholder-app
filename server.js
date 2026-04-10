@@ -2673,8 +2673,8 @@ function renderPublicStyles() {
   }
 
   .section-sub {
-    margin-top: 0;
-    margin-bottom: 24px;
+    margin: 10px auto 30px auto;
+    max-width: 600px;
   }
 
   @media (max-width: 900px) {
@@ -10248,7 +10248,7 @@ const server = http.createServer(async (req, res) => {
         </div>
 
         <div class="section light">
-          <div class="container">
+          <div class="container center">
             <h2>${safeStr(c.homepage.problem.title)}</h2>
             <p class="section-sub">${safeStr(c.homepage.problem.subtitle)}</p>
 
@@ -10264,7 +10264,7 @@ const server = http.createServer(async (req, res) => {
         </div>
 
         <div class="section">
-          <div class="container">
+          <div class="container center">
             <h2>How It Works</h2>
 
             <div class="grid-3">
@@ -10282,12 +10282,13 @@ const server = http.createServer(async (req, res) => {
           <div class="container center">
             <h2>${safeStr(c.homepage.testimonial.title || "What Practices Are Saying")}</h2>
 
-            <div style="color:#f59e0b;font-size:20px;margin:10px 0;">
-              ${"★".repeat(Number(c.homepage.testimonial.stars || 5))}
-            </div>
-
             <div class="testimonial">
               <p>"${safeStr(c.homepage.testimonial.quote)}"</p>
+
+              <div style="color:#f59e0b;font-size:20px;margin:12px 0;">
+                ${"★".repeat(Number(c.homepage.testimonial.stars || 5))}
+              </div>
+
               <strong>${safeStr(c.homepage.testimonial.author)}</strong>
               <div>${safeStr(c.homepage.testimonial.role)}</div>
             </div>
