@@ -10643,10 +10643,26 @@ const server = http.createServer(async (req, res) => {
       }
 
       // ✅ ACTIVATE SUBSCRIPTION
-      let sub = ensureSubscriptionForOrg(user.org_id);
+      let sub = getSub(user.org_id);
+      if (!sub) {
+        sub = ensureSubscriptionForOrg(user.org_id);
+      }
+      if (sub.plan !== plan || sub.status !== "active") {
+        sub.plan = plan;
+        sub.status = "active";
+      }
       sub.customer_email = email || sub.customer_email || "";
       sub.stripe_customer_id = stripeCustomerId || sub.stripe_customer_id || "";
       sub.stripe_subscription_id = stripeSubscriptionId || sub.stripe_subscription_id || "";
+
+      const users = readJSON(FILES.users, []);
+      const uIdx = users.findIndex(u => u.user_id === user.user_id);
+      if (uIdx >= 0) {
+        users[uIdx].stripe_customer_id = stripeCustomerId || users[uIdx].stripe_customer_id || "";
+        users[uIdx].stripe_subscription_id = stripeSubscriptionId || users[uIdx].stripe_subscription_id || "";
+        writeJSON(FILES.users, users);
+        user = users[uIdx];
+      }
       applyPlanToSubscription(sub, plan);
 
       const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000;
@@ -14532,12 +14548,26 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div style="
           background:#ecfdf5;
           border:1px solid #10b981;
-          padding:12px;
-          border-radius:10px;
-          margin-bottom:12px;
-          font-weight:700;
+          padding:16px;
+          border-radius:12px;
+          margin-bottom:16px;
         ">
-          🎉 Welcome to TJ Healthcare Pro — Your ${safeStr(selectedPlan)} plan is now active.
+          <h3 style="margin-bottom:8px;">
+            🎉 Welcome to TJ Healthcare Pro
+          </h3>
+
+          <p style="margin-bottom:10px;">
+            Your <strong>${safeStr(selectedPlan)}</strong> plan is now active.
+          </p>
+
+          <div style="margin-top:10px;">
+            <strong>Get Started:</strong>
+            <ul style="margin-top:8px;">
+              <li>Upload your first claims file</li>
+              <li>Review denied & underpaid claims</li>
+              <li>Use AI Copilot to analyze revenue</li>
+            </ul>
+          </div>
         </div>
       ` : ""}
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
