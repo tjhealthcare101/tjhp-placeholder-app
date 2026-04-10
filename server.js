@@ -10390,9 +10390,9 @@ const server = http.createServer(async (req, res) => {
                     </div>
 
                     <div class="pricing-card-bottom">
-                      <a href="/checkout?plan=${p.name.toLowerCase()}" class="btn-primary pricing-primary-btn">
+                      <button type="button" class="btn-primary pricing-primary-btn" onclick="startCheckout('${key}')">
                         Start Now
-                      </a>
+                      </button>
                       <a href="/signup" class="pricing-secondary-link">
                         Start free trial
                       </a>
@@ -10406,6 +10406,31 @@ const server = http.createServer(async (req, res) => {
             </div>
           </div>
         </div>
+
+        <script>
+          async function startCheckout(plan) {
+            try {
+              const res = await fetch("/create-checkout-session", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/x-www-form-urlencoded"
+                },
+                body: "plan=" + encodeURIComponent(plan)
+              });
+
+              const data = await res.json();
+
+              if (data.url) {
+                window.location.href = data.url;
+              } else {
+                alert("Failed to start checkout");
+              }
+            } catch (err) {
+              console.error(err);
+              alert("Checkout error");
+            }
+          }
+        </script>
 
         ${renderStickyMobileCta()}
       </body>
@@ -10553,27 +10578,182 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/post-checkout") {
-    const sess = getAuth(req);
-    if (!sess) return redirect(res, "/login");
-
     const sessionId = parsed.query.session_id;
     if (!sessionId) return redirect(res, "/dashboard");
 
     try {
       const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
       const stripeSession = await stripe.checkout.sessions.retrieve(sessionId);
-
+      let email = String(
+        stripeSession.customer_email ||
+        stripeSession.customer_details?.email ||
+        ""
+      ).toLowerCase().trim();
+      if (!email) {
+        console.error("Stripe session missing email");
+        return send(res, 400, renderPage("Error", `
+          <h2>Something went wrong</h2>
+          <p>We could not retrieve your email from the payment session.</p>
+          <p>Please contact support or try again.</p>
+        `, navPublic()));
+      }
+      const stripeCustomerId = stripeSession.customer || "";
+      const stripeSubscriptionId = stripeSession.subscription || "";
       const plan = stripeSession.metadata?.plan || "starter";
+      let user = getUserByEmail(email);
+
+      if (!user) {
+        return send(res, 200, renderPage("Create Account", `
+          <h2>Create Your Account</h2>
+          <p>Finish setting up your account to access your dashboard.</p>
+
+          <form method="POST" action="/complete-signup">
+            <input type="hidden" name="email" value="${safeStr(email)}" />
+            <label>Password</label>
+            <input type="password" name="password" required />
+
+            <button type="submit">Create Account</button>
+          </form>
+        `, navPublic()));
+      }
+
+      if (!user.org_id) {
+        const org_id = uuid();
+        const orgs = readJSON(FILES.orgs, []);
+        const orgName = (email && email.includes("@"))
+          ? email.split("@")[0]
+          : "New Organization";
+        orgs.push({
+          ...ORG_PROFILE_DEFAULTS,
+          org_id,
+          org_name: orgName,
+          legal_name: orgName,
+          created_at: nowISO(),
+          account_status: "active"
+        });
+        writeJSON(FILES.orgs, orgs);
+
+        user.org_id = org_id;
+        const users = readJSON(FILES.users, []);
+        const idx = users.findIndex(u => u.user_id === user.user_id);
+        if (idx >= 0) {
+          users[idx].org_id = org_id;
+          writeJSON(FILES.users, users);
+        }
+      }
 
       // ✅ ACTIVATE SUBSCRIPTION
-      let sub = ensureSubscriptionForOrg(sess.org_id);
+      let sub = getSub(user.org_id);
+      if (!sub) {
+        sub = ensureSubscriptionForOrg(user.org_id);
+      }
+      if (sub.plan !== plan || sub.status !== "active") {
+        sub.plan = plan;
+        sub.status = "active";
+      }
+      sub.customer_email = email || sub.customer_email || "";
+      sub.stripe_customer_id = stripeCustomerId || sub.stripe_customer_id || "";
+      sub.stripe_subscription_id = stripeSubscriptionId || sub.stripe_subscription_id || "";
+
+      const users = readJSON(FILES.users, []);
+      const uIdx = users.findIndex(u => u.user_id === user.user_id);
+      if (uIdx >= 0) {
+        users[uIdx].stripe_customer_id = stripeCustomerId || users[uIdx].stripe_customer_id || "";
+        users[uIdx].stripe_subscription_id = stripeSubscriptionId || users[uIdx].stripe_subscription_id || "";
+        writeJSON(FILES.users, users);
+        user = users[uIdx];
+      }
       applyPlanToSubscription(sub, plan);
+
+      const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000;
+      setSession(res, {
+        role: "user",
+        user_id: user.user_id,
+        org_id: user.org_id,
+        exp
+      });
 
       return redirect(res, `/dashboard?welcome=1&plan=${encodeURIComponent(plan)}`);
     } catch (err) {
       console.error("Stripe post-checkout error:", err);
       return redirect(res, "/dashboard");
     }
+  }
+
+  if (method === "POST" && pathname === "/complete-signup") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const email = String(params.get("email") || "").toLowerCase().trim();
+    const password = String(params.get("password") || "");
+
+    if (!email || !password || password.length < 8) {
+      return send(res, 400, renderPage("Create Account", `
+        <h2>Create Your Account</h2>
+        <p class="error">Please provide a valid email and a password with at least 8 characters.</p>
+      `, navPublic()));
+    }
+
+    let user = getUserByEmail(email);
+    const subs = readJSON(FILES.subscriptions, []);
+    const existingSub = subs.find(s => (s.customer_email || "").toLowerCase() === email);
+    const stripeCustomerId = existingSub?.stripe_customer_id || "";
+    const stripeSubscriptionId = existingSub?.stripe_subscription_id || "";
+
+    if (!user) {
+      const orgs = readJSON(FILES.orgs, []);
+      const users = readJSON(FILES.users, []);
+
+      const org_id = existingSub?.org_id || uuid();
+      if (!orgs.find(o => o.org_id === org_id)) {
+        const orgName = email.split("@")[0] || "New Organization";
+        orgs.push({
+          ...ORG_PROFILE_DEFAULTS,
+          org_id,
+          org_name: orgName,
+          legal_name: orgName,
+          created_at: nowISO(),
+          account_status: "active"
+        });
+      }
+
+      user = {
+        user_id: uuid(),
+        org_id,
+        email,
+        password_hash: bcrypt.hashSync(password, 10),
+        role: "owner",
+        plan: existingSub?.plan || "",
+        stripe_customer_id: stripeCustomerId,
+        stripe_subscription_id: stripeSubscriptionId,
+        subscription_status: existingSub?.status || "active",
+        created_at: nowISO(),
+        last_login_at: nowISO(),
+      };
+
+      users.push(user);
+      writeJSON(FILES.users, users);
+      writeJSON(FILES.orgs, orgs);
+    } else {
+      const users = readJSON(FILES.users, []);
+      const idx = users.findIndex(u => u.user_id === user.user_id);
+      if (idx >= 0) {
+        users[idx].password_hash = bcrypt.hashSync(password, 10);
+        users[idx].last_login_at = nowISO();
+        users[idx].stripe_customer_id = stripeCustomerId || users[idx].stripe_customer_id || "";
+        users[idx].stripe_subscription_id = stripeSubscriptionId || users[idx].stripe_subscription_id || "";
+        writeJSON(FILES.users, users);
+        user = users[idx];
+      }
+    }
+
+    const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000;
+    setSession(res, {
+      role: "user",
+      user_id: user.user_id,
+      org_id: user.org_id,
+      exp
+    });
+    return redirect(res, "/dashboard?welcome=1");
   }
 
   if (method === "GET" && pathname === "/billing-portal") {
@@ -14373,12 +14553,26 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div style="
           background:#ecfdf5;
           border:1px solid #10b981;
-          padding:12px;
-          border-radius:10px;
-          margin-bottom:12px;
-          font-weight:700;
+          padding:16px;
+          border-radius:12px;
+          margin-bottom:16px;
         ">
-          🎉 Welcome to TJ Healthcare Pro — Your ${safeStr(selectedPlan)} plan is now active.
+          <h3 style="margin-bottom:8px;">
+            🎉 Welcome to TJ Healthcare Pro
+          </h3>
+
+          <p style="margin-bottom:10px;">
+            Your <strong>${safeStr(selectedPlan)}</strong> plan is now active.
+          </p>
+
+          <div style="margin-top:10px;">
+            <strong>Get Started:</strong>
+            <ul style="margin-top:8px;">
+              <li>Upload your first claims file</li>
+              <li>Review denied & underpaid claims</li>
+              <li>Use AI Copilot to analyze revenue</li>
+            </ul>
+          </div>
         </div>
       ` : ""}
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
