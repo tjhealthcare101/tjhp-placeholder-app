@@ -2487,22 +2487,8 @@ function renderPublicStyles() {
     padding: 80px 0;
   }
 
-  .card {
-    border: 1px solid #eee;
-    border-radius: 12px;
-    padding: 24px;
-    background: white;
-    transition: all 0.2s ease;
-
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
-    gap: 10px;
-    min-height: auto;
-  }
-
-  .light {
-    background: linear-gradient(to bottom, #f8fafc, #f1f5f9);
+  .section.light {
+    background: #f8fafc;
   }
 
   h1 {
@@ -2519,6 +2505,25 @@ function renderPublicStyles() {
   p {
     color: #555;
     font-size: 16px;
+  }
+
+  .hero-inner {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    align-items: center;
+  }
+
+  .hero-sub {
+    margin-top: 16px;
+    font-size: 18px;
+    color: #555;
+  }
+
+  .hero-actions {
+    margin-top: 24px;
+    display: flex;
+    gap: 12px;
   }
 
   .btn-primary {
@@ -2548,9 +2553,22 @@ function renderPublicStyles() {
     background: #f5f5f5;
   }
 
+  .btn-primary.large {
+    display: inline-block;
+    margin-top: 12px;
+  }
+
+  .card {
+    background: white;
+    padding: 24px;
+    border-radius: 16px;
+    border: 1px solid #eee;
+    transition: 0.2s;
+  }
+
   .card:hover {
     transform: translateY(-4px);
-    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
   }
 
   .card h2,
@@ -2622,13 +2640,13 @@ function renderPublicStyles() {
 
   .grid-4 {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(4, 1fr);
     gap: 20px;
   }
 
   .grid-3 {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: repeat(3, 1fr);
     gap: 20px;
   }
 
@@ -2636,9 +2654,40 @@ function renderPublicStyles() {
     text-align: center;
   }
 
+  .testimonial {
+    max-width: 700px;
+    margin: auto;
+    text-align: center;
+    font-size: 18px;
+  }
+
+  .placeholder-box {
+    background: #eee;
+    padding: 80px;
+    border-radius: 12px;
+    text-align: center;
+  }
+
+  .section-sub {
+    margin-top: 0;
+    margin-bottom: 24px;
+  }
+
   @media (max-width: 900px) {
-    .section .container {
-      grid-template-columns: 1fr !important;
+    .hero-inner {
+      grid-template-columns: 1fr;
+    }
+
+    .grid-4 {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .grid-3 {
+      grid-template-columns: 1fr;
+    }
+
+    .hero h1 {
+      font-size: 32px;
     }
   }
 
@@ -3239,13 +3288,47 @@ function savePlanConfigData(data) {
 function getDefaultWebsiteContent() {
   return {
     homepage: {
-      hero_title: "Recover Lost Insurance Revenue Automatically",
-      hero_subtitle: "Identify denied claims, underpayments, and revenue at risk — then generate appeal and negotiation packets instantly.",
-      primary_cta_text: "Start Free Trial - No Credit Card Required",
-      primary_cta_href: "/signup",
-      secondary_cta_text: "Watch Demo",
-      secondary_cta_href: "/demo",
-      hero_media_url: "",
+      hero: {
+        title: "Recover Lost Insurance Revenue Automatically",
+        subtitle: "Identify denied claims, underpayments, and revenue at risk — then generate appeal and negotiation packets instantly.",
+        primary_cta_text: "Start Free Trial",
+        primary_cta_href: "/signup",
+        secondary_cta_text: "Watch Demo",
+        secondary_cta_href: "/how-it-works",
+        hero_media_url: "",
+      },
+      problem: {
+        title: "You're losing revenue every day",
+        subtitle: "Denied claims and underpayments happen daily — most teams don't catch them."
+      },
+      features: [
+        { title: "Recover More Revenue", desc: "Stop leaving money on the table." },
+        { title: "Save Hours of Work", desc: "Automate what used to take days." },
+        { title: "Know Where You're Losing Money", desc: "Clear insights instantly." },
+        { title: "Act Faster", desc: "Fix issues before they grow." }
+      ],
+      steps: [
+        { title: "Upload Billing Data", desc: "Upload exported billing files." },
+        { title: "AI Detects Revenue Loss", desc: "Find denied & underpaid claims." },
+        { title: "Generate Recovery Packets", desc: "Create appeal packets instantly." }
+      ],
+      testimonial: {
+        quote: "We identified $32,000 in missed revenue in the first 30 days.",
+        author: "Dr. Smith",
+        role: "Family Practice Owner"
+      },
+      trust: [
+        "No EHR Integration Required",
+        "Works with Exported Billing Files",
+        "Secure and HIPAA-aware",
+        "Built for Medical Practices"
+      ],
+      final_cta: {
+        title: "Stop losing revenue. Start recovering it.",
+        subtitle: "Join practices using AI to recover hidden revenue.",
+        button_text: "Start Free Trial",
+        button_href: "/signup"
+      }
     },
     pricing: {
       heading: "Plans & Pricing",
@@ -3291,10 +3374,31 @@ function getWebsiteContent() {
   }
 
   // Ensure new keys are present if file exists from older schema versions.
+  const defaults = getDefaultWebsiteContent();
+  const homepageContent = content.homepage || {};
+  const legacyHero = {
+    title: homepageContent.hero_title || "",
+    subtitle: homepageContent.hero_subtitle || "",
+    primary_cta_text: homepageContent.primary_cta_text || "",
+    primary_cta_href: homepageContent.primary_cta_href || "",
+    secondary_cta_text: homepageContent.secondary_cta_text || "",
+    secondary_cta_href: homepageContent.secondary_cta_href || "",
+    hero_media_url: homepageContent.hero_media_url || "",
+  };
   const merged = {
     ...getDefaultWebsiteContent(),
     ...content,
-    homepage: { ...getDefaultWebsiteContent().homepage, ...(content.homepage || {}) },
+    homepage: {
+      ...defaults.homepage,
+      ...homepageContent,
+      hero: { ...defaults.homepage.hero, ...legacyHero, ...((homepageContent && homepageContent.hero) || {}) },
+      problem: { ...defaults.homepage.problem, ...((homepageContent && homepageContent.problem) || {}) },
+      features: Array.isArray(homepageContent.features) ? homepageContent.features : defaults.homepage.features,
+      steps: Array.isArray(homepageContent.steps) ? homepageContent.steps : defaults.homepage.steps,
+      testimonial: { ...defaults.homepage.testimonial, ...((homepageContent && homepageContent.testimonial) || {}) },
+      trust: Array.isArray(homepageContent.trust) ? homepageContent.trust : defaults.homepage.trust,
+      final_cta: { ...defaults.homepage.final_cta, ...((homepageContent && homepageContent.final_cta) || {}) },
+    },
     pricing: {
       ...getDefaultWebsiteContent().pricing,
       ...(content.pricing || {}),
@@ -10089,7 +10193,6 @@ const server = http.createServer(async (req, res) => {
 
   if (method === "GET" && pathname === "/") {
     const c = getWebsiteContent();
-    const testimonials = c.testimonials || [];
     return send(res, 200, `
       <html>
       <head>
@@ -10101,180 +10204,96 @@ const server = http.createServer(async (req, res) => {
       <body>
         ${renderPublicNavbar()}
 
-        <div class="section">
-          <div class="container" style="display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center;">
-            <div>
-              <h1>${safeStr(c.homepage.hero_title)}</h1>
+        <div class="hero">
+          <div class="container hero-inner">
 
-              <p style="font-size:18px;margin-top:10px;">
-                ${safeStr(c.homepage.hero_subtitle)}
+            <div class="hero-left">
+              <h1>${safeStr(c.homepage.hero.title)}</h1>
+
+              <p class="hero-sub">
+                ${safeStr(c.homepage.hero.subtitle)}
               </p>
 
-              <p style="margin-top:10px;color:#666;">
-                No EHR integration required - works with exported billing files
-              </p>
+              <div class="hero-actions">
+                <a href="${safeStr(c.homepage.hero.primary_cta_href)}" class="btn-primary">
+                  ${safeStr(c.homepage.hero.primary_cta_text)}
+                </a>
 
-              <div style="margin-top:20px;">
-                <a href="${safeStr(c.homepage.primary_cta_href)}" class="btn-primary">${safeStr(c.homepage.primary_cta_text)}</a>
-                <a href="${safeStr(c.homepage.secondary_cta_href || "/how-it-works")}" class="btn-secondary" style="margin-left:10px;">${safeStr(c.homepage.secondary_cta_text || "Watch Demo")}</a>
+                <a href="${safeStr(c.homepage.hero.secondary_cta_href)}" class="btn-secondary">
+                  ${safeStr(c.homepage.hero.secondary_cta_text)}
+                </a>
               </div>
-
-              <p style="margin-top:15px;font-size:13px;color:#777;">
-                Helping practices recover revenue faster with AI-driven insights
-              </p>
             </div>
 
-            <div style="position:relative;">
-              ${c.homepage.hero_media_url
-                ? `<img src="${safeStr(c.homepage.hero_media_url)}" alt="Homepage hero media" style="width:100%;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.15);" />`
-                : `<img
-                    src="https://images.unsplash.com/photo-1588776814546-ec7eafc7c7c5?auto=format&fit=crop&w=900&q=80"
-                    alt="Healthcare billing and revenue recovery"
-                    style="width:100%;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.15);"
-                  />`
+            <div class="hero-right">
+              ${c.homepage.hero.hero_media_url
+                ? `<img src="${safeStr(c.homepage.hero.hero_media_url)}" />`
+                : `<div class="placeholder-box">Add Hero Image</div>`
               }
-
-              <div style="position:absolute;bottom:20px;left:20px;background:white;padding:12px 16px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.2);font-size:14px;">
-                <strong>$4,320</strong><br/>
-                Revenue identified
-              </div>
             </div>
+
           </div>
         </div>
 
-        <div class="section light center">
-          <div class="container" style="max-width:800px;">
-            <h2>You're losing revenue every day - whether you realize it or not</h2>
-            <p style="margin-top:15px;">
-              Insurance denials and underpayments happen every day - but most teams don't have the time or tools to catch them.
-            </p>
-          </div>
-        </div>
+        <div class="section light">
+          <div class="container">
+            <h2>${safeStr(c.homepage.problem.title)}</h2>
+            <p class="section-sub">${safeStr(c.homepage.problem.subtitle)}</p>
 
-        <div class="section center">
-          <div class="container grid-4">
-            <div class="card">
-              <h3>Denied Claims Go Unappealed</h3>
-            </div>
-            <div class="card">
-              <h3>Insurance Underpayments Go Unnoticed</h3>
-            </div>
-            <div class="card">
-              <h3>Staff Don't Have Time</h3>
-            </div>
-            <div class="card">
-              <h3>Revenue Leakage Adds Up</h3>
-            </div>
-          </div>
-        </div>
-
-        <div class="section light center">
-          <div class="container" style="max-width:800px;">
-            <h2>AI identifies and recovers revenue automatically</h2>
-            <p style="margin-top:15px;">
-              TJ Healthcare Pro analyzes your billing data to detect revenue loss and generates the exact appeal and negotiation packets needed to recover it.
-            </p>
-          </div>
-        </div>
-
-        <div class="section">
-          <div class="container grid-4">
-            <div class="card">
-              <h3>Recover More Revenue</h3>
-              <p>Stop leaving money on the table.</p>
-            </div>
-
-            <div class="card">
-              <h3>Save Hours of Work</h3>
-              <p>Automate what used to take days.</p>
-            </div>
-
-            <div class="card">
-              <h3>Know Where You're Losing Money</h3>
-              <p>Get clear, actionable insights instantly.</p>
-            </div>
-
-            <div class="card">
-              <h3>Act Faster</h3>
-              <p>Fix revenue issues before they grow.</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="section center">
-          <div class="container" style="max-width:960px;">
-            <h2>How It Works</h2>
-            <div class="grid-3" style="margin-top:20px;">
-              <div class="card">
-                <h3>1. Upload Billing Data</h3>
-                <p>Upload exported billing or claims data from your system.</p>
-              </div>
-              <div class="card">
-                <h3>2. AI Detects Revenue Loss</h3>
-                <p>Identify denied claims, underpayments, and revenue at risk.</p>
-              </div>
-              <div class="card">
-                <h3>3. Generate Recovery Packets</h3>
-                <p>Automatically create appeal and negotiation packets.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="section">
-          <div class="container grid-4">
-            <div class="card"><h3>Automatic Appeal Packets</h3><p>Generate structured appeal packets instantly.</p></div>
-            <div class="card"><h3>Underpayment Negotiation Packets</h3><p>Identify and recover underpaid claims.</p></div>
-            <div class="card"><h3>Revenue Recovery Intelligence</h3><p>See exactly where you're losing money.</p></div>
-            <div class="card"><h3>Payer Insights</h3><p>Understand payer behavior and trends.</p></div>
-          </div>
-        </div>
-
-        ${testimonials.length > 0 ? `
-        <div class="section light center">
-          <div class="container" style="max-width:900px;">
-            <h2>What Practices Are Saying</h2>
-
-            <div class="grid-3" style="margin-top:30px;">
-              ${testimonials.map(t => `
-                <div class="card" style="text-align:left;">
-                  <div class="muted small" style="font-weight:700;margin-bottom:8px;">💰 RESULTS</div>
-                  <p style="font-style:italic;">"${safeStr(t.quote)}"</p>
-                  <div style="margin-top:15px;font-weight:600;">
-                    ${safeStr(t.name)}
-                  </div>
-                  <div class="muted small">
-                    ${safeStr(t.role)}
-                  </div>
+            <div class="grid-4">
+              ${c.homepage.features.map(f => `
+                <div class="card">
+                  <h3>${safeStr(f.title)}</h3>
+                  <p>${safeStr(f.desc)}</p>
                 </div>
               `).join("")}
             </div>
           </div>
         </div>
-        ` : ""}
 
-        <div class="section light center">
-          <div class="container" style="max-width:960px;">
-            <h2>Built for secure, practical adoption</h2>
-            <div class="grid-4" style="margin-top:20px;">
-              <div class="card"><h3>No EHR Integration Required</h3><p>Start with exported billing data instead of a full system connection.</p></div>
-              <div class="card"><h3>Works with Exported Billing Files</h3><p>Use the files your team already pulls from current workflows.</p></div>
-              <div class="card"><h3>Secure and HIPAA-aware Infrastructure</h3><p>Designed for healthcare data handling and operational safeguards.</p></div>
-              <div class="card"><h3>Built Specifically for Medical Practices</h3><p>Focused on revenue recovery workflows used by real provider teams.</p></div>
+        <div class="section">
+          <div class="container">
+            <h2>How It Works</h2>
+
+            <div class="grid-3">
+              ${c.homepage.steps.map((s, i) => `
+                <div class="card">
+                  <h3>${i + 1}. ${safeStr(s.title)}</h3>
+                  <p>${safeStr(s.desc)}</p>
+                </div>
+              `).join("")}
             </div>
           </div>
         </div>
 
-        <div class="section center">
-          <div class="container" style="max-width:700px;">
-            <h2>Stop losing revenue. Start recovering it.</h2>
-            <p style="margin:15px 0;">
-              Join practices using AI to identify and recover hidden insurance revenue.
-            </p>
-            <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-              <a href="/signup" class="btn-primary">Start Free Trial - No Credit Card Required</a>
-              <a href="/how-it-works" class="btn-secondary">Watch Demo</a>
+        <div class="section light">
+          <div class="container">
+            <div class="testimonial">
+              <p>"${safeStr(c.homepage.testimonial.quote)}"</p>
+              <strong>${safeStr(c.homepage.testimonial.author)}</strong>
+              <div>${safeStr(c.homepage.testimonial.role)}</div>
             </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="container grid-4">
+            ${c.homepage.trust.map(t => `
+              <div class="card center">
+                ${safeStr(t)}
+              </div>
+            `).join("")}
+          </div>
+        </div>
+
+        <div class="section light center">
+          <div class="container">
+            <h2>${safeStr(c.homepage.final_cta.title)}</h2>
+            <p>${safeStr(c.homepage.final_cta.subtitle)}</p>
+
+            <a href="${safeStr(c.homepage.final_cta.button_href)}" class="btn-primary large">
+              ${safeStr(c.homepage.final_cta.button_text)}
+            </a>
           </div>
         </div>
 
@@ -12616,20 +12635,57 @@ const server = http.createServer(async (req, res) => {
         <div class="card">
           <h3>Homepage</h3>
           <form method="POST" action="/admin/website/save-homepage">
+            <h4>Hero</h4>
             <label>Hero Title</label>
-            <input name="hero_title" value="${safeStr(content.homepage.hero_title)}" />
+            <input name="hero_title" value="${safeStr(content.homepage.hero.title)}" />
             <label>Hero Subtitle</label>
-            <input name="hero_subtitle" value="${safeStr(content.homepage.hero_subtitle)}" />
+            <input name="hero_subtitle" value="${safeStr(content.homepage.hero.subtitle)}" />
             <label>Primary CTA Text</label>
-            <input name="primary_cta_text" value="${safeStr(content.homepage.primary_cta_text)}" />
+            <input name="primary_cta_text" value="${safeStr(content.homepage.hero.primary_cta_text)}" />
             <label>Primary CTA Href</label>
-            <input name="primary_cta_href" value="${safeStr(content.homepage.primary_cta_href)}" />
+            <input name="primary_cta_href" value="${safeStr(content.homepage.hero.primary_cta_href)}" />
             <label>Secondary CTA Text</label>
-            <input name="secondary_cta_text" value="${safeStr(content.homepage.secondary_cta_text)}" />
+            <input name="secondary_cta_text" value="${safeStr(content.homepage.hero.secondary_cta_text)}" />
             <label>Secondary CTA Href</label>
-            <input name="secondary_cta_href" value="${safeStr(content.homepage.secondary_cta_href)}" />
+            <input name="secondary_cta_href" value="${safeStr(content.homepage.hero.secondary_cta_href)}" />
             <label>Hero Media URL</label>
-            <input name="hero_media_url" value="${safeStr(content.homepage.hero_media_url)}" />
+            <input name="hero_media_url" value="${safeStr(content.homepage.hero.hero_media_url)}" />
+
+            <h4>Problem</h4>
+            <label>Problem Title</label>
+            <input name="problem_title" value="${safeStr(content.homepage.problem.title)}" />
+            <label>Problem Subtitle</label>
+            <input name="problem_subtitle" value="${safeStr(content.homepage.problem.subtitle)}" />
+
+            <h4>Features</h4>
+            <label>Features (one per line: Title | Description)</label>
+            <textarea name="features">${(content.homepage.features || []).map(f => `${safeStr(f.title)} | ${safeStr(f.desc)}`).join("\n")}</textarea>
+
+            <h4>How It Works Steps</h4>
+            <label>Steps (one per line: Title | Description)</label>
+            <textarea name="steps">${(content.homepage.steps || []).map(s => `${safeStr(s.title)} | ${safeStr(s.desc)}`).join("\n")}</textarea>
+
+            <h4>Testimonial</h4>
+            <label>Quote</label>
+            <input name="testimonial_quote" value="${safeStr(content.homepage.testimonial.quote)}" />
+            <label>Author</label>
+            <input name="testimonial_author" value="${safeStr(content.homepage.testimonial.author)}" />
+            <label>Role</label>
+            <input name="testimonial_role" value="${safeStr(content.homepage.testimonial.role)}" />
+
+            <h4>Trust Items</h4>
+            <label>Trust points (one per line)</label>
+            <textarea name="trust">${(content.homepage.trust || []).map(t => safeStr(t)).join("\n")}</textarea>
+
+            <h4>Final CTA</h4>
+            <label>Final CTA Title</label>
+            <input name="final_cta_title" value="${safeStr(content.homepage.final_cta.title)}" />
+            <label>Final CTA Subtitle</label>
+            <input name="final_cta_subtitle" value="${safeStr(content.homepage.final_cta.subtitle)}" />
+            <label>Final CTA Button Text</label>
+            <input name="final_cta_button_text" value="${safeStr(content.homepage.final_cta.button_text)}" />
+            <label>Final CTA Button Href</label>
+            <input name="final_cta_button_href" value="${safeStr(content.homepage.final_cta.button_href)}" />
             <button class="btn">Save</button>
           </form>
         </div>
@@ -12712,14 +12768,47 @@ const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const p = new URLSearchParams(body);
       const content = getWebsiteContent();
+      const parsePairs = (txt) => String(txt || "")
+        .split("\n")
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map(line => {
+          const [title, ...rest] = line.split("|");
+          return { title: (title || "").trim(), desc: rest.join("|").trim() };
+        })
+        .filter(item => item.title || item.desc);
+      const parseLines = (txt) => String(txt || "")
+        .split("\n")
+        .map(line => line.trim())
+        .filter(Boolean);
 
-      content.homepage.hero_title = p.get("hero_title") || "";
-      content.homepage.hero_subtitle = p.get("hero_subtitle") || "";
-      content.homepage.primary_cta_text = p.get("primary_cta_text") || "";
-      content.homepage.primary_cta_href = p.get("primary_cta_href") || "";
-      content.homepage.secondary_cta_text = p.get("secondary_cta_text") || "";
-      content.homepage.secondary_cta_href = p.get("secondary_cta_href") || "";
-      content.homepage.hero_media_url = p.get("hero_media_url") || "";
+      content.homepage.hero = {
+        title: p.get("hero_title") || "",
+        subtitle: p.get("hero_subtitle") || "",
+        primary_cta_text: p.get("primary_cta_text") || "",
+        primary_cta_href: p.get("primary_cta_href") || "",
+        secondary_cta_text: p.get("secondary_cta_text") || "",
+        secondary_cta_href: p.get("secondary_cta_href") || "",
+        hero_media_url: p.get("hero_media_url") || "",
+      };
+      content.homepage.problem = {
+        title: p.get("problem_title") || "",
+        subtitle: p.get("problem_subtitle") || "",
+      };
+      content.homepage.features = parsePairs(p.get("features"));
+      content.homepage.steps = parsePairs(p.get("steps"));
+      content.homepage.testimonial = {
+        quote: p.get("testimonial_quote") || "",
+        author: p.get("testimonial_author") || "",
+        role: p.get("testimonial_role") || "",
+      };
+      content.homepage.trust = parseLines(p.get("trust"));
+      content.homepage.final_cta = {
+        title: p.get("final_cta_title") || "",
+        subtitle: p.get("final_cta_subtitle") || "",
+        button_text: p.get("final_cta_button_text") || "",
+        button_href: p.get("final_cta_button_href") || "",
+      };
 
       saveWebsiteContent(content);
       return redirect(res, "/admin/website-content?saved=1");
