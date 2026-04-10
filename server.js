@@ -10584,7 +10584,21 @@ const server = http.createServer(async (req, res) => {
     try {
       const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
       const stripeSession = await stripe.checkout.sessions.retrieve(sessionId);
-      const email = String(stripeSession.customer_email || stripeSession.customer_details?.email || "").toLowerCase().trim();
+      let email = String(
+        stripeSession.customer_email ||
+        stripeSession.customer_details?.email ||
+        ""
+      ).toLowerCase().trim();
+      if (!email) {
+        console.error("Stripe session missing email");
+        return send(res, 400, renderPage("Error", `
+          <h2>Something went wrong</h2>
+          <p>We could not retrieve your email from the payment session.</p>
+          <p>Please contact support or try again.</p>
+        `, navPublic()));
+      }
+      const stripeCustomerId = stripeSession.customer || "";
+      const stripeSubscriptionId = stripeSession.subscription || "";
       const plan = stripeSession.metadata?.plan || "starter";
       let user = getUserByEmail(email);
 
@@ -10603,9 +10617,36 @@ const server = http.createServer(async (req, res) => {
         `, navPublic()));
       }
 
+      if (!user.org_id) {
+        const org_id = uuid();
+        const orgs = readJSON(FILES.orgs, []);
+        const orgName = (email && email.includes("@"))
+          ? email.split("@")[0]
+          : "New Organization";
+        orgs.push({
+          ...ORG_PROFILE_DEFAULTS,
+          org_id,
+          org_name: orgName,
+          legal_name: orgName,
+          created_at: nowISO(),
+          account_status: "active"
+        });
+        writeJSON(FILES.orgs, orgs);
+
+        user.org_id = org_id;
+        const users = readJSON(FILES.users, []);
+        const idx = users.findIndex(u => u.user_id === user.user_id);
+        if (idx >= 0) {
+          users[idx].org_id = org_id;
+          writeJSON(FILES.users, users);
+        }
+      }
+
       // ✅ ACTIVATE SUBSCRIPTION
       let sub = ensureSubscriptionForOrg(user.org_id);
       sub.customer_email = email || sub.customer_email || "";
+      sub.stripe_customer_id = stripeCustomerId || sub.stripe_customer_id || "";
+      sub.stripe_subscription_id = stripeSubscriptionId || sub.stripe_subscription_id || "";
       applyPlanToSubscription(sub, plan);
 
       const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000;
