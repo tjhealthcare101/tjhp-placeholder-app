@@ -10479,6 +10479,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "POST" && pathname === "/create-checkout-session") {
+    const sess = getAuth(req);
     let body = "";
     req.on("data", chunk => body += chunk);
     req.on("end", async () => {
@@ -10518,11 +10519,13 @@ const server = http.createServer(async (req, res) => {
             }
           ],
           metadata: {
-            plan: plan
+            plan: plan,
+            org_id: sess?.org_id || ""
           },
-          customer_email: (sess && sess.email) ? sess.email : undefined,
-          success_url: "https://app.tjhealthpro.com/success",
-          cancel_url: "https://app.tjhealthpro.com/pricing"
+          customer_email: sess?.email || undefined,
+
+          success_url: `${APP_BASE_URL}/post-checkout?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${APP_BASE_URL}/pricing`
         });
 
         debugLog("Stripe session created:", session.id);
@@ -10536,44 +10539,28 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (method === "GET" && pathname === "/success") {
+  if (method === "GET" && pathname === "/post-checkout") {
     const sess = getAuth(req);
-    let plan = "Starter";
+    if (!sess) return redirect(res, "/login");
 
-    if (sess && sess.org_id) {
-      const sub = getSub(sess.org_id);
-      if (sub && sub.plan) {
-        plan = String(sub.plan).toUpperCase();
-      }
+    const sessionId = parsed.query.session_id;
+    if (!sessionId) return redirect(res, "/dashboard");
+
+    try {
+      const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+      const stripeSession = await stripe.checkout.sessions.retrieve(sessionId);
+
+      const plan = stripeSession.metadata?.plan || "starter";
+
+      // ✅ ACTIVATE SUBSCRIPTION
+      let sub = ensureSubscriptionForOrg(sess.org_id);
+      applyPlanToSubscription(sub, plan);
+
+      return redirect(res, `/dashboard?welcome=1&plan=${encodeURIComponent(plan)}`);
+    } catch (err) {
+      console.error("Stripe post-checkout error:", err);
+      return redirect(res, "/dashboard");
     }
-
-    return send(res, 200, `
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>Success | TJ Healthcare Pro</title>
-        ${renderPublicStyles()}
-      </head>
-      <body>
-        ${renderPublicNavbar()}
-
-        <div class="section center">
-          <div class="container" style="max-width:600px;">
-            <h1>🎉 You're All Set</h1>
-            <p>Your subscription is now active.</p>
-
-            <div style="margin-top:20px;padding:20px;border:1px solid #eee;border-radius:12px;">
-              <strong>Active Plan:</strong> ${safeStr(plan)}
-            </div>
-
-            <div style="margin-top:30px;">
-              <a href="/dashboard" class="btn-primary">Go to Dashboard</a>
-            </div>
-          </div>
-        </div>
-      </body>
-      </html>
-    `);
   }
 
   if (method === "GET" && pathname === "/billing-portal") {
@@ -14193,6 +14180,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
 }
   // dashboard with empty-state previews and tooltips
   if (method === "GET" && (pathname === "/" || pathname === "/dashboard" || pathname === "/revenue-overview")) {
+    const showWelcome = parsed.query.welcome === "1";
+    const selectedPlan = parsed.query.plan || "";
 
     const limits = getLimitProfile(org.org_id);
     const usage = getUsage(org.org_id);
@@ -14367,6 +14356,18 @@ if (method === "GET" && pathname === "/weekly-summary") {
     });
 
     const html = renderPage("Revenue Overview", `
+      ${showWelcome ? `
+        <div style="
+          background:#ecfdf5;
+          border:1px solid #10b981;
+          padding:12px;
+          border-radius:10px;
+          margin-bottom:12px;
+          font-weight:700;
+        ">
+          🎉 Welcome to TJ Healthcare Pro — Your ${safeStr(selectedPlan)} plan is now active.
+        </div>
+      ` : ""}
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
           <h2 style="margin-bottom:4px;">Revenue Overview <span class="tooltip" data-tip="Operational revenue health dashboard.">ⓘ</span></h2>
