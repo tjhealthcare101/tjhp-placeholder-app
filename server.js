@@ -10390,9 +10390,9 @@ const server = http.createServer(async (req, res) => {
                     </div>
 
                     <div class="pricing-card-bottom">
-                      <a href="/checkout?plan=${p.name.toLowerCase()}" class="btn-primary pricing-primary-btn">
+                      <button type="button" class="btn-primary pricing-primary-btn" onclick="startCheckout('${key}')">
                         Start Now
-                      </a>
+                      </button>
                       <a href="/signup" class="pricing-secondary-link">
                         Start free trial
                       </a>
@@ -10406,6 +10406,31 @@ const server = http.createServer(async (req, res) => {
             </div>
           </div>
         </div>
+
+        <script>
+          async function startCheckout(plan) {
+            try {
+              const res = await fetch("/create-checkout-session", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/x-www-form-urlencoded"
+                },
+                body: "plan=" + encodeURIComponent(plan)
+              });
+
+              const data = await res.json();
+
+              if (data.url) {
+                window.location.href = data.url;
+              } else {
+                alert("Failed to start checkout");
+              }
+            } catch (err) {
+              console.error(err);
+              alert("Checkout error");
+            }
+          }
+        </script>
 
         ${renderStickyMobileCta()}
       </body>
@@ -10553,27 +10578,120 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/post-checkout") {
-    const sess = getAuth(req);
-    if (!sess) return redirect(res, "/login");
-
     const sessionId = parsed.query.session_id;
     if (!sessionId) return redirect(res, "/dashboard");
 
     try {
       const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
       const stripeSession = await stripe.checkout.sessions.retrieve(sessionId);
-
+      const email = String(stripeSession.customer_email || stripeSession.customer_details?.email || "").toLowerCase().trim();
       const plan = stripeSession.metadata?.plan || "starter";
+      let user = getUserByEmail(email);
+
+      if (!user) {
+        return send(res, 200, renderPage("Create Account", `
+          <h2>Create Your Account</h2>
+          <p>Finish setting up your account to access your dashboard.</p>
+
+          <form method="POST" action="/complete-signup">
+            <input type="hidden" name="email" value="${safeStr(email)}" />
+            <label>Password</label>
+            <input type="password" name="password" required />
+
+            <button type="submit">Create Account</button>
+          </form>
+        `, navPublic()));
+      }
 
       // ✅ ACTIVATE SUBSCRIPTION
-      let sub = ensureSubscriptionForOrg(sess.org_id);
+      let sub = ensureSubscriptionForOrg(user.org_id);
+      sub.customer_email = email || sub.customer_email || "";
       applyPlanToSubscription(sub, plan);
+
+      const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000;
+      setSession(res, {
+        role: "user",
+        user_id: user.user_id,
+        org_id: user.org_id,
+        exp
+      });
 
       return redirect(res, `/dashboard?welcome=1&plan=${encodeURIComponent(plan)}`);
     } catch (err) {
       console.error("Stripe post-checkout error:", err);
       return redirect(res, "/dashboard");
     }
+  }
+
+  if (method === "POST" && pathname === "/complete-signup") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const email = String(params.get("email") || "").toLowerCase().trim();
+    const password = String(params.get("password") || "");
+
+    if (!email || !password || password.length < 8) {
+      return send(res, 400, renderPage("Create Account", `
+        <h2>Create Your Account</h2>
+        <p class="error">Please provide a valid email and a password with at least 8 characters.</p>
+      `, navPublic()));
+    }
+
+    let user = getUserByEmail(email);
+    if (!user) {
+      const subs = readJSON(FILES.subscriptions, []);
+      const existingSub = subs.find(s => (s.customer_email || "").toLowerCase() === email);
+      const orgs = readJSON(FILES.orgs, []);
+      const users = readJSON(FILES.users, []);
+
+      const org_id = existingSub?.org_id || uuid();
+      if (!orgs.find(o => o.org_id === org_id)) {
+        const orgName = email.split("@")[0] || "New Organization";
+        orgs.push({
+          ...ORG_PROFILE_DEFAULTS,
+          org_id,
+          org_name: orgName,
+          legal_name: orgName,
+          created_at: nowISO(),
+          account_status: "active"
+        });
+      }
+
+      user = {
+        user_id: uuid(),
+        org_id,
+        email,
+        password_hash: bcrypt.hashSync(password, 10),
+        role: "owner",
+        plan: existingSub?.plan || "",
+        stripe_customer_id: existingSub?.stripe_customer_id || "",
+        stripe_subscription_id: existingSub?.stripe_subscription_id || "",
+        subscription_status: existingSub?.status || "active",
+        created_at: nowISO(),
+        last_login_at: nowISO(),
+      };
+
+      users.push(user);
+      writeJSON(FILES.users, users);
+      writeJSON(FILES.orgs, orgs);
+    } else {
+      const users = readJSON(FILES.users, []);
+      const idx = users.findIndex(u => u.user_id === user.user_id);
+      if (idx >= 0) {
+        users[idx].password_hash = bcrypt.hashSync(password, 10);
+        users[idx].last_login_at = nowISO();
+        writeJSON(FILES.users, users);
+        user = users[idx];
+      }
+    }
+
+    const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000;
+    setSession(res, {
+      role: "user",
+      user_id: user.user_id,
+      org_id: user.org_id,
+      exp
+    });
+    return redirect(res, "/dashboard?welcome=1");
   }
 
   if (method === "GET" && pathname === "/billing-portal") {
