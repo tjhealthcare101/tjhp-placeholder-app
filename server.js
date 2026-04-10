@@ -2568,6 +2568,9 @@ function renderPublicStyles() {
     border-radius: 16px;
     border: 1px solid #eee;
     transition: 0.2s;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
   }
 
   .card:hover {
@@ -2582,6 +2585,7 @@ function renderPublicStyles() {
 
   .card p {
     margin-bottom: 6px;
+    font-style: italic;
   }
 
   .pricing-card {
@@ -2651,7 +2655,7 @@ function renderPublicStyles() {
   .grid-3 {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
+    gap: 24px;
   }
 
   .center {
@@ -3316,13 +3320,15 @@ function getDefaultWebsiteContent() {
         { title: "AI Detects Revenue Loss", desc: "Find denied & underpaid claims." },
         { title: "Generate Recovery Packets", desc: "Create appeal packets instantly." }
       ],
-      testimonial: {
-        title: "What Practices Are Saying",
-        stars: 5,
-        quote: "We identified $32,000 in missed revenue in the first 30 days.",
-        author: "Dr. Smith",
-        role: "Family Practice Owner"
-      },
+      testimonials: [
+        {
+          quote: "We identified $32,000 in missed revenue in the first 30 days.",
+          author: "Dr. Smith",
+          role: "Family Practice Owner",
+          stars: 5
+        }
+      ],
+      testimonial_title: "What Practices Are Saying",
       trust_title: "Built for secure, practical adoption",
       trust: [
         "No EHR Integration Required",
@@ -3402,7 +3408,10 @@ function getWebsiteContent() {
       problem: { ...defaults.homepage.problem, ...((homepageContent && homepageContent.problem) || {}) },
       features: Array.isArray(homepageContent.features) ? homepageContent.features : defaults.homepage.features,
       steps: Array.isArray(homepageContent.steps) ? homepageContent.steps : defaults.homepage.steps,
-      testimonial: { ...defaults.homepage.testimonial, ...((homepageContent && homepageContent.testimonial) || {}) },
+      testimonials: Array.isArray(homepageContent.testimonials)
+        ? homepageContent.testimonials
+        : (homepageContent.testimonial ? [{ ...defaults.homepage.testimonials[0], ...homepageContent.testimonial }] : defaults.homepage.testimonials),
+      testimonial_title: homepageContent.testimonial_title || (homepageContent.testimonial && homepageContent.testimonial.title) || defaults.homepage.testimonial_title,
       trust: Array.isArray(homepageContent.trust) ? homepageContent.trust : defaults.homepage.trust,
       final_cta: { ...defaults.homepage.final_cta, ...((homepageContent && homepageContent.final_cta) || {}) },
     },
@@ -10278,22 +10287,28 @@ const server = http.createServer(async (req, res) => {
           </div>
         </div>
 
+        ${(c.homepage.testimonials && c.homepage.testimonials.length > 0) ? `
         <div class="section light">
           <div class="container center">
-            <h2>${safeStr(c.homepage.testimonial.title || "What Practices Are Saying")}</h2>
+            <h2>${safeStr(c.homepage.testimonial_title || "What Practices Are Saying")}</h2>
 
-            <div class="testimonial">
-              <p>"${safeStr(c.homepage.testimonial.quote)}"</p>
+            <div class="grid-3">
+              ${(c.homepage.testimonials || []).map(t => `
+                <div class="card center">
+                  <p>"${safeStr(t.quote)}"</p>
 
-              <div style="color:#f59e0b;font-size:20px;margin:12px 0;">
-                ${"★".repeat(Number(c.homepage.testimonial.stars || 5))}
-              </div>
+                  <div style="color:#f59e0b;font-size:18px;margin:10px 0;">
+                    ${"★".repeat(Math.min(Number(t.stars || 5), 5))}
+                  </div>
 
-              <strong>${safeStr(c.homepage.testimonial.author)}</strong>
-              <div>${safeStr(c.homepage.testimonial.role)}</div>
+                  <strong>${safeStr(t.author)}</strong>
+                  <div>${safeStr(t.role)}</div>
+                </div>
+              `).join("")}
             </div>
           </div>
         </div>
+        ` : ""}
 
         <div class="section">
           <div class="container center">
@@ -12727,21 +12742,16 @@ const server = http.createServer(async (req, res) => {
 
               <hr/>
 
-              <h4>Testimonial</h4>
+              <h4>Testimonials</h4>
               <label>Section Title</label>
-              <input name="testimonial_title" value="${safeStr(content.homepage.testimonial.title || "")}" />
+              <input name="testimonial_title" value="${safeStr(content.homepage.testimonial_title || "")}" />
 
-              <label>Star Rating (1–5)</label>
-              <input name="testimonial_stars" value="${safeStr(content.homepage.testimonial.stars || "5")}" />
-
-              <label>Quote</label>
-              <input name="testimonial_quote" value="${safeStr(content.homepage.testimonial.quote)}" />
-
-              <label>Author</label>
-              <input name="testimonial_author" value="${safeStr(content.homepage.testimonial.author)}" />
-
-              <label>Role</label>
-              <input name="testimonial_role" value="${safeStr(content.homepage.testimonial.role)}" />
+              <label>Testimonials (one per line: Name | Role | Stars | Quote)</label>
+              <textarea name="testimonials">
+${(content.homepage.testimonials || []).map(t =>
+  `${safeStr(t.author)} | ${safeStr(t.role)} | ${safeStr(t.stars || 5)} | ${safeStr(t.quote)}`
+).join("\n")}
+</textarea>
 
               <hr/>
 
@@ -12876,18 +12886,6 @@ const server = http.createServer(async (req, res) => {
           </form>
         </div>
 
-        <div class="card">
-          <h3>Testimonials</h3>
-
-          <p class="muted small">
-            Add testimonials to display on the homepage. Leave empty to hide the section.
-          </p>
-
-          <form method="POST" action="/admin/website/save-testimonials">
-            <textarea name="testimonials" placeholder="Enter one testimonial per line. Format: Name | Role | Quote&#10;Example: Dr. Smith | Family Practice Owner | We identified $32,000 in missed revenue in the first 30 days." style="min-height:120px;">${(content.testimonials || []).map(t => `${safeStr(t.name)} | ${safeStr(t.role)} | ${safeStr(t.quote)}`).join("\n")}</textarea>
-            <button class="btn">Save Testimonials</button>
-          </form>
-        </div>
       `, navAdmin());
       return send(res, 200, html);
     }
@@ -12908,6 +12906,20 @@ const server = http.createServer(async (req, res) => {
         .split("\n")
         .map(line => line.trim())
         .filter(Boolean);
+      const parseTestimonials = (txt) =>
+        String(txt || "")
+          .split("\n")
+          .map(line => line.trim())
+          .filter(Boolean)
+          .map(line => {
+            const [author, role, stars, ...quoteParts] = line.split("|");
+            return {
+              author: (author || "").trim(),
+              role: (role || "").trim(),
+              stars: Number((stars || "5").trim()),
+              quote: quoteParts.join("|").trim()
+            };
+          });
       const applyHomepageFields = (source) => {
         const getValue = (key) => (source && source[key] != null ? String(source[key]) : "");
 
@@ -12926,13 +12938,8 @@ const server = http.createServer(async (req, res) => {
         };
         content.homepage.features = parsePairs(getValue("features"));
         content.homepage.steps = parsePairs(getValue("steps"));
-        content.homepage.testimonial = {
-          title: getValue("testimonial_title"),
-          stars: Number(getValue("testimonial_stars") || 5),
-          quote: getValue("testimonial_quote"),
-          author: getValue("testimonial_author"),
-          role: getValue("testimonial_role"),
-        };
+        content.homepage.testimonials = parseTestimonials(getValue("testimonials"));
+        content.homepage.testimonial_title = getValue("testimonial_title");
         content.homepage.trust_title = getValue("trust_title");
         content.homepage.trust = parseLines(getValue("trust"));
         content.homepage.final_cta = {
