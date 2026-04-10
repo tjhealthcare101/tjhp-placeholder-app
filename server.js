@@ -10420,14 +10420,19 @@ const server = http.createServer(async (req, res) => {
 
               const data = await res.json();
 
+              console.log("Checkout response:", data);
+
               if (data.url) {
                 window.location.href = data.url;
+              } else if (data.error) {
+                alert("Checkout error: " + data.error);
               } else {
                 alert("Failed to start checkout");
               }
+
             } catch (err) {
-              console.error(err);
-              alert("Checkout error");
+              console.error("Checkout fetch error:", err);
+              alert("Network error starting checkout");
             }
           }
         </script>
