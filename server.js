@@ -2507,6 +2507,10 @@ function renderPublicStyles() {
     font-size: 16px;
   }
 
+  .hero {
+    padding-top: 40px;
+  }
+
   .hero-inner {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -3313,10 +3317,13 @@ function getDefaultWebsiteContent() {
         { title: "Generate Recovery Packets", desc: "Create appeal packets instantly." }
       ],
       testimonial: {
+        title: "What Practices Are Saying",
+        stars: 5,
         quote: "We identified $32,000 in missed revenue in the first 30 days.",
         author: "Dr. Smith",
         role: "Family Practice Owner"
       },
+      trust_title: "Built for secure, practical adoption",
       trust: [
         "No EHR Integration Required",
         "Works with Exported Billing Files",
@@ -10272,7 +10279,13 @@ const server = http.createServer(async (req, res) => {
         </div>
 
         <div class="section light">
-          <div class="container">
+          <div class="container center">
+            <h2>${safeStr(c.homepage.testimonial.title || "What Practices Are Saying")}</h2>
+
+            <div style="color:#f59e0b;font-size:20px;margin:10px 0;">
+              ${"★".repeat(Number(c.homepage.testimonial.stars || 5))}
+            </div>
+
             <div class="testimonial">
               <p>"${safeStr(c.homepage.testimonial.quote)}"</p>
               <strong>${safeStr(c.homepage.testimonial.author)}</strong>
@@ -10282,12 +10295,14 @@ const server = http.createServer(async (req, res) => {
         </div>
 
         <div class="section">
-          <div class="container grid-4">
-            ${c.homepage.trust.map(t => `
-              <div class="card center">
-                ${safeStr(t)}
-              </div>
-            `).join("")}
+          <div class="container center">
+            <h2>${safeStr(c.homepage.trust_title || "Built for secure, practical adoption")}</h2>
+
+            <div class="grid-4">
+              ${c.homepage.trust.map(t => `
+                <div class="card center">${safeStr(t)}</div>
+              `).join("")}
+            </div>
           </div>
         </div>
 
@@ -12640,59 +12655,101 @@ const server = http.createServer(async (req, res) => {
         <div class="card">
           <h3>Homepage</h3>
           <form method="POST" action="/admin/website/save-homepage" enctype="multipart/form-data">
-            <h4>Hero</h4>
-            <label>Hero Title</label>
-            <input name="hero_title" value="${safeStr(content.homepage.hero.title)}" />
-            <label>Hero Subtitle</label>
-            <input name="hero_subtitle" value="${safeStr(content.homepage.hero.subtitle)}" />
-            <label>Primary CTA Text</label>
-            <input name="primary_cta_text" value="${safeStr(content.homepage.hero.primary_cta_text)}" />
-            <label>Primary CTA Href</label>
-            <input name="primary_cta_href" value="${safeStr(content.homepage.hero.primary_cta_href)}" />
-            <label>Secondary CTA Text</label>
-            <input name="secondary_cta_text" value="${safeStr(content.homepage.hero.secondary_cta_text)}" />
-            <label>Secondary CTA Href</label>
-            <input name="secondary_cta_href" value="${safeStr(content.homepage.hero.secondary_cta_href)}" />
-            <label>Hero Image Upload</label>
-            <input type="file" name="hero_image" accept="image/*" />
-            <label>OR Hero Image URL</label>
-            <input name="hero_media_url" value="${safeStr(content.homepage.hero.hero_media_url)}" />
+            <style>
+              details {
+                margin-bottom: 16px;
+                border: 1px solid #eee;
+                border-radius: 10px;
+                padding: 10px;
+                background: #fafafa;
+              }
 
-            <h4>Problem</h4>
-            <label>Problem Title</label>
-            <input name="problem_title" value="${safeStr(content.homepage.problem.title)}" />
-            <label>Problem Subtitle</label>
-            <input name="problem_subtitle" value="${safeStr(content.homepage.problem.subtitle)}" />
+              summary {
+                cursor: pointer;
+                font-weight: 700;
+              }
+            </style>
 
-            <h4>Features</h4>
-            <label>Features (one per line: Title | Description)</label>
-            <textarea name="features">${(content.homepage.features || []).map(f => `${safeStr(f.title)} | ${safeStr(f.desc)}`).join("\n")}</textarea>
+            <details open>
+              <summary><strong>Hero</strong></summary>
+              <label>Hero Title</label>
+              <input name="hero_title" value="${safeStr(content.homepage.hero.title)}" />
+              <label>Hero Subtitle</label>
+              <input name="hero_subtitle" value="${safeStr(content.homepage.hero.subtitle)}" />
+              <label>Primary CTA Text</label>
+              <input name="primary_cta_text" value="${safeStr(content.homepage.hero.primary_cta_text)}" />
+              <label>Primary CTA Href</label>
+              <input name="primary_cta_href" value="${safeStr(content.homepage.hero.primary_cta_href)}" />
+              <label>Secondary CTA Text</label>
+              <input name="secondary_cta_text" value="${safeStr(content.homepage.hero.secondary_cta_text)}" />
+              <label>Secondary CTA Href</label>
+              <input name="secondary_cta_href" value="${safeStr(content.homepage.hero.secondary_cta_href)}" />
+              <label>Hero Image Upload</label>
+              <input type="file" name="hero_image" accept="image/*" />
+              ${content.homepage.hero.hero_media_url ? `
+                <div style="margin:10px 0;">
+                  <img src="${safeStr(content.homepage.hero.hero_media_url)}"
+                       style="max-width:200px;border-radius:8px;border:1px solid #eee;" />
+                </div>
+              ` : ""}
+              <label>OR Hero Image URL</label>
+              <input name="hero_media_url" value="${safeStr(content.homepage.hero.hero_media_url)}" />
+            </details>
 
-            <h4>How It Works Steps</h4>
-            <label>Steps (one per line: Title | Description)</label>
-            <textarea name="steps">${(content.homepage.steps || []).map(s => `${safeStr(s.title)} | ${safeStr(s.desc)}`).join("\n")}</textarea>
+            <details>
+              <summary><strong>Problem Section</strong></summary>
+              <label>Problem Title</label>
+              <input name="problem_title" value="${safeStr(content.homepage.problem.title)}" />
+              <label>Problem Subtitle</label>
+              <input name="problem_subtitle" value="${safeStr(content.homepage.problem.subtitle)}" />
+            </details>
 
-            <h4>Testimonial</h4>
-            <label>Quote</label>
-            <input name="testimonial_quote" value="${safeStr(content.homepage.testimonial.quote)}" />
-            <label>Author</label>
-            <input name="testimonial_author" value="${safeStr(content.homepage.testimonial.author)}" />
-            <label>Role</label>
-            <input name="testimonial_role" value="${safeStr(content.homepage.testimonial.role)}" />
+            <details>
+              <summary><strong>Features</strong></summary>
+              <label>Features (one per line: Title | Description)</label>
+              <textarea name="features">${(content.homepage.features || []).map(f => `${safeStr(f.title)} | ${safeStr(f.desc)}`).join("\n")}</textarea>
+            </details>
 
-            <h4>Trust Items</h4>
-            <label>Trust points (one per line)</label>
-            <textarea name="trust">${(content.homepage.trust || []).map(t => safeStr(t)).join("\n")}</textarea>
+            <details>
+              <summary><strong>How It Works</strong></summary>
+              <label>Steps (one per line: Title | Description)</label>
+              <textarea name="steps">${(content.homepage.steps || []).map(s => `${safeStr(s.title)} | ${safeStr(s.desc)}`).join("\n")}</textarea>
+            </details>
 
-            <h4>Final CTA</h4>
-            <label>Final CTA Title</label>
-            <input name="final_cta_title" value="${safeStr(content.homepage.final_cta.title)}" />
-            <label>Final CTA Subtitle</label>
-            <input name="final_cta_subtitle" value="${safeStr(content.homepage.final_cta.subtitle)}" />
-            <label>Final CTA Button Text</label>
-            <input name="final_cta_button_text" value="${safeStr(content.homepage.final_cta.button_text)}" />
-            <label>Final CTA Button Href</label>
-            <input name="final_cta_button_href" value="${safeStr(content.homepage.final_cta.button_href)}" />
+            <details>
+              <summary><strong>Testimonial</strong></summary>
+              <label>Testimonial Section Title</label>
+              <input name="testimonial_title" value="${safeStr(content.homepage.testimonial.title || "")}" />
+              <label>Star Rating (1–5)</label>
+              <input name="testimonial_stars" value="${safeStr(content.homepage.testimonial.stars || "5")}" />
+              <label>Quote</label>
+              <input name="testimonial_quote" value="${safeStr(content.homepage.testimonial.quote)}" />
+              <label>Author</label>
+              <input name="testimonial_author" value="${safeStr(content.homepage.testimonial.author)}" />
+              <label>Role</label>
+              <input name="testimonial_role" value="${safeStr(content.homepage.testimonial.role)}" />
+            </details>
+
+            <details>
+              <summary><strong>Trust Section</strong></summary>
+              <label>Trust Section Title</label>
+              <input name="trust_title" value="${safeStr(content.homepage.trust_title || "")}" />
+              <label>Trust points (one per line)</label>
+              <textarea name="trust">${(content.homepage.trust || []).map(t => safeStr(t)).join("\n")}</textarea>
+            </details>
+
+            <details>
+              <summary><strong>Final CTA</strong></summary>
+              <label>Final CTA Title</label>
+              <input name="final_cta_title" value="${safeStr(content.homepage.final_cta.title)}" />
+              <label>Final CTA Subtitle</label>
+              <input name="final_cta_subtitle" value="${safeStr(content.homepage.final_cta.subtitle)}" />
+              <label>Final CTA Button Text</label>
+              <input name="final_cta_button_text" value="${safeStr(content.homepage.final_cta.button_text)}" />
+              <label>Final CTA Button Href</label>
+              <input name="final_cta_button_href" value="${safeStr(content.homepage.final_cta.button_href)}" />
+            </details>
+
             <button class="btn">Save</button>
           </form>
         </div>
@@ -12806,10 +12863,13 @@ const server = http.createServer(async (req, res) => {
         content.homepage.features = parsePairs(getValue("features"));
         content.homepage.steps = parsePairs(getValue("steps"));
         content.homepage.testimonial = {
+          title: getValue("testimonial_title"),
+          stars: Number(getValue("testimonial_stars") || 5),
           quote: getValue("testimonial_quote"),
           author: getValue("testimonial_author"),
           role: getValue("testimonial_role"),
         };
+        content.homepage.trust_title = getValue("trust_title");
         content.homepage.trust = parseLines(getValue("trust"));
         content.homepage.final_cta = {
           title: getValue("final_cta_title"),
