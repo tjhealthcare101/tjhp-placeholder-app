@@ -2721,6 +2721,17 @@ function renderPublicStyles() {
     text-align: center;
   }
 
+  .hero-right img:hover,
+  .testimonial-slider img:hover,
+  [onclick="openDemoModal()"] img:hover {
+    transform: scale(1.02);
+    transition: 0.2s ease;
+  }
+
+  [onclick="openDemoModal()"] {
+    cursor: pointer;
+  }
+
   .section-sub {
     margin: 10px auto 30px auto;
     max-width: 600px;
@@ -2782,6 +2793,14 @@ function renderPublicStyles() {
     }
   }
 
+
+
+  .nav-active {
+    color: #2563eb;
+    font-weight: 700;
+    border-bottom: 2px solid #2563eb;
+  }
+
   #companyMenu a {
     text-decoration:none;
     font-size:14px;
@@ -2818,7 +2837,7 @@ function renderCompanyMenuScript() {
   `;
 }
 
-function renderPublicNavbar() {
+function renderPublicNavbar(pathname = "") {
   const content = getWebsiteContent();
   const links = content.company_links || {};
   return `
@@ -2827,13 +2846,13 @@ function renderPublicNavbar() {
         <div style="font-weight:800;font-size:20px;">TJ Healthcare Pro</div>
 
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:14px;justify-content:flex-end;">
-          <a href="/">Home</a>
-          <a href="/how-it-works">See How It Works</a>
-          <a href="/pricing">Plans</a>
+          <a href="/" class="${pathname === "/" ? "nav-active" : ""}">Home</a>
+          <a href="/how-it-works" class="${pathname === "/how-it-works" ? "nav-active" : ""}">See How It Works</a>
+          <a href="/pricing" class="${pathname === "/pricing" ? "nav-active" : ""}">Plans</a>
           <div style="position:relative;">
-            <span style="cursor:pointer;" onmouseenter="showCompanyMenu()" onmouseleave="hideCompanyMenu()">
+            <a href="/company" class="${pathname === "/company" ? "nav-active" : ""}" style="cursor:pointer;text-decoration:none;color:inherit;" onmouseenter="showCompanyMenu()" onmouseleave="hideCompanyMenu()">
               Company
-            </span>
+            </a>
 
             <div id="companyMenu" style="
               display:none;
@@ -2872,7 +2891,7 @@ function renderPublicNavbar() {
 
             ${renderCompanyMenuScript()}
           </div>
-          <a href="/login">Login</a>
+          <a href="/login" class="${pathname === "/login" ? "nav-active" : ""}">Login</a>
           <a href="/signup" class="btn-primary">Start Free Trial - No Credit Card Required</a>
         </div>
       </div>
@@ -3414,6 +3433,7 @@ function getDefaultWebsiteContent() {
       title: "See How It Works",
       subtitle: "See how TJ Healthcare identifies and recovers lost insurance revenue in minutes — without changing your workflow.",
       video_url: "",
+      cover_image_url: "",
       steps: [
         { title: "Upload Data", desc: "Upload billing files in seconds." },
         { title: "AI Analysis", desc: "We identify revenue loss instantly." },
@@ -10277,7 +10297,7 @@ const server = http.createServer(async (req, res) => {
         ${renderPublicStyles()}
       </head>
       <body>
-        ${renderPublicNavbar()}
+        ${renderPublicNavbar(pathname)}
 
         <div class="hero">
           <div class="container hero-inner">
@@ -10463,7 +10483,7 @@ const server = http.createServer(async (req, res) => {
         ${renderPublicStyles()}
       </head>
       <body>
-        ${renderPublicNavbar()}
+        ${renderPublicNavbar(pathname)}
 
         <div class="section center">
           <div class="container">
@@ -10473,10 +10493,34 @@ const server = http.createServer(async (req, res) => {
             </p>
 
             <div style="margin:40px 0;">
-              ${c.demo.video_url
-                ? `<iframe src="${safeStr(c.demo.video_url)}" style="width:100%;height:420px;border-radius:12px;"></iframe>`
-                : `<div class="placeholder-box">Demo Video</div>`
-              }
+              ${c.demo.video_url ? `
+                <div style="position:relative;cursor:pointer;" onclick="openDemoModal()">
+                  ${c.demo.cover_image_url ? `
+                    <img src="${safeStr(c.demo.cover_image_url)}"
+                      style="width:100%;height:420px;object-fit:cover;border-radius:12px;" />
+
+                    <div style="
+                      position:absolute;
+                      top:50%;
+                      left:50%;
+                      transform:translate(-50%,-50%);
+                      background:rgba(0,0,0,0.6);
+                      color:white;
+                      padding:14px 18px;
+                      border-radius:50%;
+                      font-size:20px;
+                    ">▶</div>
+                  ` : `
+                    <iframe src="${safeStr(c.demo.video_url)}"
+                      style="width:100%;height:420px;border-radius:12px;"></iframe>
+                  `}
+                </div>
+              ` : c.demo.cover_image_url ? `
+                <img src="${safeStr(c.demo.cover_image_url)}"
+                  style="width:100%;height:420px;object-fit:cover;border-radius:12px;" />
+              ` : `
+                <div class="placeholder-box">Demo Video</div>
+              `}
             </div>
 
             <div class="grid-3" style="margin-top:30px;">
@@ -10519,6 +10563,69 @@ const server = http.createServer(async (req, res) => {
         </div>
 
         ${renderStickyMobileCta()}
+
+        <div id="demoModal" style="
+          display:none;
+          position:fixed;
+          top:0;
+          left:0;
+          width:100%;
+          height:100%;
+          background:rgba(0,0,0,0.8);
+          justify-content:center;
+          align-items:center;
+          z-index:9999;
+        ">
+
+          <div style="position:relative;width:80%;max-width:900px;">
+            <iframe id="demoVideoFrame"
+              src=""
+              style="width:100%;height:500px;border-radius:12px;"
+              allowfullscreen>
+            </iframe>
+
+            <button onclick="closeDemoModal()" style="
+              position:absolute;
+              top:-40px;
+              right:0;
+              background:white;
+              border:none;
+              padding:6px 10px;
+              cursor:pointer;
+              border-radius:6px;
+            ">✕</button>
+          </div>
+        </div>
+
+        <script>
+        function openDemoModal() {
+          const modal = document.getElementById("demoModal");
+          const frame = document.getElementById("demoVideoFrame");
+
+          if (!modal || !frame) return;
+
+          frame.src = "${safeStr(c.demo.video_url)}";
+          modal.style.display = "flex";
+        }
+
+        function closeDemoModal() {
+          const modal = document.getElementById("demoModal");
+          const frame = document.getElementById("demoVideoFrame");
+
+          if (!modal || !frame) return;
+
+          modal.style.display = "none";
+          frame.src = "";
+        }
+
+        // close when clicking background
+        document.addEventListener("click", function(e) {
+          const modal = document.getElementById("demoModal");
+          if (e.target === modal) {
+            closeDemoModal();
+          }
+        });
+        </script>
       </body>
       </html>
     `);
@@ -10543,7 +10650,7 @@ const server = http.createServer(async (req, res) => {
         ${renderPublicStyles()}
       </head>
       <body>
-        ${renderPublicNavbar()}
+        ${renderPublicNavbar(pathname)}
 
         <div class="section center">
           <div class="container">
@@ -10660,7 +10767,7 @@ const server = http.createServer(async (req, res) => {
         ${renderPublicStyles()}
       </head>
       <body>
-        ${renderPublicNavbar()}
+        ${renderPublicNavbar(pathname)}
 
         <div class="section center">
           <div class="container" style="max-width:500px;">
@@ -10999,7 +11106,7 @@ const server = http.createServer(async (req, res) => {
       ${renderPublicStyles()}
     </head>
     <body>
-      ${renderPublicNavbar()}
+      ${renderPublicNavbar(pathname)}
 
       <!-- HERO -->
       <div class="section center">
@@ -11068,7 +11175,7 @@ const server = http.createServer(async (req, res) => {
       ${renderPublicStyles()}
     </head>
     <body>
-      ${renderPublicNavbar()}
+      ${renderPublicNavbar(pathname)}
 
       <!-- HERO -->
       <div class="section center">
@@ -11187,7 +11294,7 @@ const server = http.createServer(async (req, res) => {
   ${renderPublicStyles()}
 </head>
 <body>
-  ${renderPublicNavbar()}
+  ${renderPublicNavbar(pathname)}
 
   <div class="section center">
     <div class="container" style="max-width:900px;">
@@ -11293,7 +11400,7 @@ const server = http.createServer(async (req, res) => {
   ${renderPublicStyles()}
 </head>
 <body>
-  ${renderPublicNavbar()}
+  ${renderPublicNavbar(pathname)}
 
   <div class="section center">
     <div class="container" style="max-width:900px;">
@@ -11419,7 +11526,7 @@ const server = http.createServer(async (req, res) => {
     <html>
     <head>${renderPublicStyles()}</head>
     <body>
-      ${renderPublicNavbar()}
+      ${renderPublicNavbar(pathname)}
       <div class="section center">
         <div class="container">
           <h1>Support</h1>
@@ -11443,7 +11550,7 @@ const server = http.createServer(async (req, res) => {
         ${renderPublicStyles()}
       </head>
       <body>
-        ${renderPublicNavbar()}
+        ${renderPublicNavbar(pathname)}
 
         <div class="section center">
           <div class="container" style="max-width:700px;">
@@ -11536,7 +11643,7 @@ const server = http.createServer(async (req, res) => {
         ${renderPublicStyles()}
       </head>
       <body>
-        ${renderPublicNavbar()}
+        ${renderPublicNavbar(pathname)}
         <div class="section center">
           <h2>Application Submitted ✅</h2>
           <p>We’ll review your application and get back to you.</p>
@@ -11557,7 +11664,7 @@ const server = http.createServer(async (req, res) => {
       ${renderPublicStyles()}
     </head>
     <body>
-      ${renderPublicNavbar()}
+      ${renderPublicNavbar(pathname)}
 
       <div class="section center">
         <div class="container" style="max-width:800px;">
@@ -12928,7 +13035,7 @@ ${(content.homepage.testimonials || []).map(t =>
           </details>
         </form>
 
-        <form method="POST" action="/admin/website/save-demo">
+        <form method="POST" action="/admin/website/save-demo" enctype="multipart/form-data">
           <details>
             <summary><strong>See How It Works / Demo</strong></summary>
 
@@ -12941,6 +13048,17 @@ ${(content.homepage.testimonials || []).map(t =>
 
               <label>Demo Video URL</label>
               <input name="video_url" value="${safeStr(content.demo.video_url)}" />
+
+              <label>Cover Image Upload</label>
+              <input type="file" name="demo_cover_image" accept="image/*" />
+
+              ${content.demo.cover_image_url ? `
+                <img src="${safeStr(content.demo.cover_image_url)}"
+                     style="max-width:200px;margin:10px 0;border-radius:8px;" />
+              ` : ""}
+
+              <label>OR Cover Image URL</label>
+              <input name="demo_cover_image_url" value="${safeStr(content.demo.cover_image_url || "")}" />
 
               <label>Steps (one per line: Title | Description)</label>
               <textarea name="demo_steps">
@@ -13229,10 +13347,8 @@ ${(content.demo.steps || []).map(s =>
     }
 
     if (method === "POST" && pathname === "/admin/website/save-demo") {
-      const body = await parseBody(req);
-      const p = new URLSearchParams(body);
+      const contentType = req.headers["content-type"] || "";
       const content = getWebsiteContent();
-      const getValue = (name) => p.get(name) || "";
       const parsePairs = (txt) =>
         String(txt || "")
           .split("\n")
@@ -13245,13 +13361,84 @@ ${(content.demo.steps || []).map(s =>
               desc: rest.join("|").trim()
             };
           });
+      const applyDemoFields = (source) => {
+        const getValue = (name) => (source && source[name] != null ? String(source[name]) : "");
+        content.demo.title = getValue("demo_title");
+        content.demo.subtitle = getValue("demo_subtitle");
+        content.demo.video_url = getValue("video_url");
+        content.demo.cover_image_url = getValue("demo_cover_image_url");
+        content.demo.steps = parsePairs(getValue("demo_steps"));
+        content.demo.cta_text = getValue("demo_cta_text");
+        content.demo.cta_href = getValue("demo_cta_href");
+      };
 
-      content.demo.title = getValue("demo_title");
-      content.demo.subtitle = getValue("demo_subtitle");
-      content.demo.video_url = getValue("video_url");
-      content.demo.steps = parsePairs(getValue("demo_steps"));
-      content.demo.cta_text = getValue("demo_cta_text");
-      content.demo.cta_href = getValue("demo_cta_href");
+      if (contentType.includes("multipart/form-data")) {
+        const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+        const boundary = (boundaryMatch && (boundaryMatch[1] || boundaryMatch[2])) || "";
+        if (!boundary) {
+          return redirect(res, "/admin/website-content?saved=1");
+        }
+
+        let raw = Buffer.alloc(0);
+        req.on("data", (chunk) => {
+          raw = Buffer.concat([raw, chunk]);
+        });
+
+        req.on("end", () => {
+          const parts = raw.toString("binary").split(`--${boundary}`);
+          const fields = {};
+          let uploadedFile = "";
+
+          parts.forEach((part) => {
+            if (!part.includes("Content-Disposition")) return;
+            const nameMatch = part.match(/name="([^"]+)"/);
+            if (!nameMatch) return;
+            const fieldName = nameMatch[1];
+            const splitIndex = part.indexOf("\r\n\r\n");
+            if (splitIndex === -1) return;
+
+            if (part.includes("filename=")) {
+              const filenameMatch = part.match(/filename="([^"]*)"/);
+              const originalName = filenameMatch ? filenameMatch[1] : "";
+              if (!originalName || fieldName !== "demo_cover_image") return;
+
+              const fileData = part.slice(splitIndex + 4);
+              if (!fileData) return;
+
+              const clean = fileData.slice(0, -2);
+              const originalExt = path.extname(originalName).toLowerCase();
+              const safeExt = [".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(originalExt) ? originalExt : ".png";
+              const filename = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}${safeExt}`;
+              const filePath = path.join(UPLOADS_DIR, filename);
+
+              fs.writeFileSync(filePath, Buffer.from(clean, "binary"));
+              uploadedFile = `/uploads/${filename}`;
+            } else {
+              const value = part.slice(splitIndex + 4);
+              if (value != null) {
+                fields[fieldName] = value.trim();
+              }
+            }
+          });
+
+          if (uploadedFile) {
+            fields.demo_cover_image_url = uploadedFile;
+          }
+
+          applyDemoFields(fields);
+          saveWebsiteContent(content);
+          return redirect(res, "/admin/website-content?saved=1");
+        });
+        return;
+      }
+
+      const body = await parseBody(req);
+      const p = new URLSearchParams(body);
+      const fields = {};
+      for (const [key, value] of p.entries()) {
+        fields[key] = value;
+      }
+      applyDemoFields(fields);
 
       saveWebsiteContent(content);
       return redirect(res, "/admin/website-content?saved=1");
