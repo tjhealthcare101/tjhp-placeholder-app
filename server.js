@@ -10694,9 +10694,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     let user = getUserByEmail(email);
+    const subs = readJSON(FILES.subscriptions, []);
+    const existingSub = subs.find(s => (s.customer_email || "").toLowerCase() === email);
+    const stripeCustomerId = existingSub?.stripe_customer_id || "";
+    const stripeSubscriptionId = existingSub?.stripe_subscription_id || "";
+
     if (!user) {
-      const subs = readJSON(FILES.subscriptions, []);
-      const existingSub = subs.find(s => (s.customer_email || "").toLowerCase() === email);
       const orgs = readJSON(FILES.orgs, []);
       const users = readJSON(FILES.users, []);
 
@@ -10720,8 +10723,8 @@ const server = http.createServer(async (req, res) => {
         password_hash: bcrypt.hashSync(password, 10),
         role: "owner",
         plan: existingSub?.plan || "",
-        stripe_customer_id: existingSub?.stripe_customer_id || "",
-        stripe_subscription_id: existingSub?.stripe_subscription_id || "",
+        stripe_customer_id: stripeCustomerId,
+        stripe_subscription_id: stripeSubscriptionId,
         subscription_status: existingSub?.status || "active",
         created_at: nowISO(),
         last_login_at: nowISO(),
@@ -10736,6 +10739,8 @@ const server = http.createServer(async (req, res) => {
       if (idx >= 0) {
         users[idx].password_hash = bcrypt.hashSync(password, 10);
         users[idx].last_login_at = nowISO();
+        users[idx].stripe_customer_id = stripeCustomerId || users[idx].stripe_customer_id || "";
+        users[idx].stripe_subscription_id = stripeSubscriptionId || users[idx].stripe_subscription_id || "";
         writeJSON(FILES.users, users);
         user = users[idx];
       }
