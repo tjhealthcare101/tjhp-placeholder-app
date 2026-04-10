@@ -10518,7 +10518,13 @@ const server = http.createServer(async (req, res) => {
     req.on("data", chunk => body += chunk);
     req.on("end", async () => {
       try {
-        const { plan } = JSON.parse(body || "{}");
+        const ct=String(req.headers["content-type"]||"").toLowerCase();
+        const isJ=ct.includes("application/json")||String(body||"").trim()[0]==="{";
+        let plan="";
+        try{ plan=isJ?JSON.parse(body||"{}").plan:new URLSearchParams(body||"").get("plan"); }
+        catch(_){ try{ plan=JSON.parse(body||"{}").plan; }catch{} if(!plan) plan=new URLSearchParams(body||"").get("plan"); }
+        plan=String(plan||"").toLowerCase().trim();
+        debugLog("[checkout] ct", ct, "plan", plan);
 
         debugLog("Creating checkout session for plan:", plan);
 
