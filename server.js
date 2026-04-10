@@ -12652,139 +12652,211 @@ const server = http.createServer(async (req, res) => {
         <h2>Website Content</h2>
         ${saved ? '<div class="card" style="background:#ecfdf5;border-color:#10b981;color:#065f46;">Website content updated successfully</div>' : ''}
 
-        <div class="card">
-          <h3>Homepage</h3>
-          <form method="POST" action="/admin/website/save-homepage" enctype="multipart/form-data">
-            <style>
-              details {
-                margin-bottom: 16px;
-                border: 1px solid #eee;
-                border-radius: 10px;
-                padding: 10px;
-                background: #fafafa;
-              }
+        <form method="POST" action="/admin/website/save-homepage" enctype="multipart/form-data">
+          <style>
+            details {
+              margin-bottom: 16px;
+              border-radius: 10px;
+              background: #fafafa;
+              padding: 12px;
+            }
 
-              summary {
-                cursor: pointer;
-                font-weight: 700;
-              }
-            </style>
+            summary {
+              cursor: pointer;
+              font-size: 16px;
+              font-weight: 700;
+            }
+          </style>
 
-            <details open>
-              <summary><strong>Hero</strong></summary>
+          <details>
+            <summary><strong>Homepage</strong></summary>
+
+            <div class="card">
+
+              <h4>Hero</h4>
               <label>Hero Title</label>
               <input name="hero_title" value="${safeStr(content.homepage.hero.title)}" />
+
               <label>Hero Subtitle</label>
               <input name="hero_subtitle" value="${safeStr(content.homepage.hero.subtitle)}" />
+
               <label>Primary CTA Text</label>
               <input name="primary_cta_text" value="${safeStr(content.homepage.hero.primary_cta_text)}" />
+
               <label>Primary CTA Href</label>
               <input name="primary_cta_href" value="${safeStr(content.homepage.hero.primary_cta_href)}" />
+
               <label>Secondary CTA Text</label>
               <input name="secondary_cta_text" value="${safeStr(content.homepage.hero.secondary_cta_text)}" />
+
               <label>Secondary CTA Href</label>
               <input name="secondary_cta_href" value="${safeStr(content.homepage.hero.secondary_cta_href)}" />
+
               <label>Hero Image Upload</label>
               <input type="file" name="hero_image" accept="image/*" />
-              ${content.homepage.hero.hero_media_url ? `
-                <div style="margin:10px 0;">
-                  <img src="${safeStr(content.homepage.hero.hero_media_url)}"
-                       style="max-width:200px;border-radius:8px;border:1px solid #eee;" />
-                </div>
-              ` : ""}
-              <label>OR Hero Image URL</label>
-              <input name="hero_media_url" value="${safeStr(content.homepage.hero.hero_media_url)}" />
-            </details>
 
-            <details>
-              <summary><strong>Problem Section</strong></summary>
+              ${content.homepage.hero.hero_media_url ? `
+                <img src="${safeStr(content.homepage.hero.hero_media_url)}"
+                     style="max-width:200px;margin:10px 0;border-radius:8px;" />
+              ` : ""}
+
+              <label>OR Image URL</label>
+              <input name="hero_media_url" value="${safeStr(content.homepage.hero.hero_media_url)}" />
+
+              <hr/>
+
+              <h4>Problem Section</h4>
               <label>Problem Title</label>
               <input name="problem_title" value="${safeStr(content.homepage.problem.title)}" />
+
               <label>Problem Subtitle</label>
               <input name="problem_subtitle" value="${safeStr(content.homepage.problem.subtitle)}" />
-            </details>
 
-            <details>
-              <summary><strong>Features</strong></summary>
+              <hr/>
+
+              <h4>Features</h4>
               <label>Features (one per line: Title | Description)</label>
               <textarea name="features">${(content.homepage.features || []).map(f => `${safeStr(f.title)} | ${safeStr(f.desc)}`).join("\n")}</textarea>
-            </details>
 
-            <details>
-              <summary><strong>How It Works</strong></summary>
+              <hr/>
+
+              <h4>How It Works</h4>
               <label>Steps (one per line: Title | Description)</label>
               <textarea name="steps">${(content.homepage.steps || []).map(s => `${safeStr(s.title)} | ${safeStr(s.desc)}`).join("\n")}</textarea>
-            </details>
 
-            <details>
-              <summary><strong>Testimonial</strong></summary>
-              <label>Testimonial Section Title</label>
+              <hr/>
+
+              <h4>Testimonial</h4>
+              <label>Section Title</label>
               <input name="testimonial_title" value="${safeStr(content.homepage.testimonial.title || "")}" />
+
               <label>Star Rating (1–5)</label>
               <input name="testimonial_stars" value="${safeStr(content.homepage.testimonial.stars || "5")}" />
+
               <label>Quote</label>
               <input name="testimonial_quote" value="${safeStr(content.homepage.testimonial.quote)}" />
+
               <label>Author</label>
               <input name="testimonial_author" value="${safeStr(content.homepage.testimonial.author)}" />
+
               <label>Role</label>
               <input name="testimonial_role" value="${safeStr(content.homepage.testimonial.role)}" />
-            </details>
 
-            <details>
-              <summary><strong>Trust Section</strong></summary>
-              <label>Trust Section Title</label>
+              <hr/>
+
+              <h4>Trust Section</h4>
+              <label>Section Title</label>
               <input name="trust_title" value="${safeStr(content.homepage.trust_title || "")}" />
-              <label>Trust points (one per line)</label>
+
+              <label>Items (one per line)</label>
               <textarea name="trust">${(content.homepage.trust || []).map(t => safeStr(t)).join("\n")}</textarea>
-            </details>
 
-            <details>
-              <summary><strong>Final CTA</strong></summary>
-              <label>Final CTA Title</label>
+              <hr/>
+
+              <h4>Final CTA</h4>
+              <label>Title</label>
               <input name="final_cta_title" value="${safeStr(content.homepage.final_cta.title)}" />
-              <label>Final CTA Subtitle</label>
+
+              <label>Subtitle</label>
               <input name="final_cta_subtitle" value="${safeStr(content.homepage.final_cta.subtitle)}" />
-              <label>Final CTA Button Text</label>
+
+              <label>Button Text</label>
               <input name="final_cta_button_text" value="${safeStr(content.homepage.final_cta.button_text)}" />
-              <label>Final CTA Button Href</label>
+
+              <label>Button Href</label>
               <input name="final_cta_button_href" value="${safeStr(content.homepage.final_cta.button_href)}" />
-            </details>
 
-            <button class="btn">Save</button>
-          </form>
-        </div>
+              <br/><br/>
+              <button class="btn">Save Homepage</button>
 
-        <div class="card">
-          <h3>Pricing</h3>
-          <form method="POST" action="/admin/website/save-pricing">
-            <label>Heading</label>
-            <input name="heading" value="${safeStr(content.pricing.heading)}" />
-            <label>Starter Price</label>
-            <input name="starter_price" value="${safeStr(content.pricing.plans.starter.price)}" />
-            <label>Growth Price</label>
-            <input name="growth_price" value="${safeStr(content.pricing.plans.growth.price)}" />
-            <label>Pro Price</label>
-            <input name="pro_price" value="${safeStr(content.pricing.plans.pro.price)}" />
-            <label>Enterprise Price</label>
-            <input name="enterprise_price" value="${safeStr(content.pricing.plans.enterprise.price)}" />
-            <button class="btn">Save</button>
-          </form>
-        </div>
+            </div>
 
-        <div class="card">
-          <h3>About</h3>
-          <form method="POST" action="/admin/website/save-about">
-            <label>Founder Name</label>
-            <input name="founder_name" value="${safeStr(content.about.founder_name)}" />
-            <label>Founder Title</label>
-            <input name="founder_title" value="${safeStr(content.about.founder_title)}" />
-            <label>Founder Image URL</label>
-            <input name="founder_image_url" value="${safeStr(content.about.founder_image_url)}" />
-            <label>Founder Bio</label>
-            <textarea name="founder_bio">${safeStr(content.about.founder_bio)}</textarea>
-            <button class="btn">Save</button>
-          </form>
-        </div>
+          </details>
+        </form>
+
+        <form method="POST" action="/admin/website/save-demo">
+          <details>
+            <summary><strong>See How It Works / Demo</strong></summary>
+
+            <div class="card">
+              <label>Demo Video URL</label>
+              <input name="video_url" value="${safeStr(content.demo.video_url)}" />
+              <button class="btn">Save Demo</button>
+            </div>
+
+          </details>
+        </form>
+
+        <form method="POST" action="/admin/website/save-pricing">
+          <details>
+            <summary><strong>Pricing</strong></summary>
+
+            <div class="card">
+              <label>Heading</label>
+              <input name="heading" value="${safeStr(content.pricing.heading)}" />
+
+              <label>Starter Price</label>
+              <input name="starter_price" value="${safeStr(content.pricing.plans.starter.price)}" />
+
+              <label>Growth Price</label>
+              <input name="growth_price" value="${safeStr(content.pricing.plans.growth.price)}" />
+
+              <label>Pro Price</label>
+              <input name="pro_price" value="${safeStr(content.pricing.plans.pro.price)}" />
+
+              <label>Enterprise Price</label>
+              <input name="enterprise_price" value="${safeStr(content.pricing.plans.enterprise.price)}" />
+              <button class="btn">Save Pricing</button>
+            </div>
+
+          </details>
+        </form>
+
+        <form method="POST" action="/admin/website/save-about">
+          <details>
+            <summary><strong>Company</strong></summary>
+
+            <div class="card">
+
+              <details>
+                <summary>About</summary>
+
+                <label>Founder Name</label>
+                <input name="founder_name" value="${safeStr(content.about.founder_name)}" />
+
+                <label>Founder Title</label>
+                <input name="founder_title" value="${safeStr(content.about.founder_title)}" />
+
+                <label>Founder Bio</label>
+                <textarea name="founder_bio">${safeStr(content.about.founder_bio)}</textarea>
+                <input type="hidden" name="founder_image_url" value="${safeStr(content.about.founder_image_url)}" />
+              </details>
+
+              <details>
+                <summary>Why</summary>
+                <p class="muted">Add content fields here later if needed</p>
+              </details>
+
+              <details>
+                <summary>Careers</summary>
+                <p class="muted">Add careers CMS later</p>
+              </details>
+
+              <details>
+                <summary>Culture</summary>
+                <p class="muted">Add culture CMS later</p>
+              </details>
+
+              <details>
+                <summary>Contact</summary>
+                <p class="muted">Add contact CMS later</p>
+              </details>
+
+              <button class="btn">Save Company</button>
+            </div>
+
+          </details>
+        </form>
 
         <div class="card">
           <h3>Company Links</h3>
@@ -12799,15 +12871,6 @@ const server = http.createServer(async (req, res) => {
             <input name="culture_href" value="${safeStr(content.company_links.culture_href)}" />
             <label>Contact URL</label>
             <input name="contact_href" value="${safeStr(content.company_links.contact_href)}" />
-            <button class="btn">Save</button>
-          </form>
-        </div>
-
-        <div class="card">
-          <h3>Demo</h3>
-          <form method="POST" action="/admin/website/save-demo">
-            <label>Demo Video URL (embed link)</label>
-            <input name="video_url" value="${safeStr(content.demo.video_url)}" />
             <button class="btn">Save</button>
           </form>
         </div>
