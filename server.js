@@ -10140,8 +10140,13 @@ const server = http.createServer(async (req, res) => {
   if (pathname.startsWith("/uploads/")) {
     const filePath = path.join(__dirname, pathname);
     if (fs.existsSync(filePath)) {
-      fs.createReadStream(filePath).pipe(res);
-      return;
+      const ext = path.extname(filePath).toLowerCase();
+      let type = "application/octet-stream";
+      if (ext === ".png") type = "image/png";
+      if (ext === ".jpg" || ext === ".jpeg") type = "image/jpeg";
+      if (ext === ".webp") type = "image/webp";
+      if (ext === ".gif") type = "image/gif";
+      return send(res, 200, fs.readFileSync(filePath), type);
     }
   }
 
@@ -12634,7 +12639,7 @@ const server = http.createServer(async (req, res) => {
 
         <div class="card">
           <h3>Homepage</h3>
-          <form method="POST" action="/admin/website/save-homepage">
+          <form method="POST" action="/admin/website/save-homepage" enctype="multipart/form-data">
             <h4>Hero</h4>
             <label>Hero Title</label>
             <input name="hero_title" value="${safeStr(content.homepage.hero.title)}" />
@@ -12648,7 +12653,9 @@ const server = http.createServer(async (req, res) => {
             <input name="secondary_cta_text" value="${safeStr(content.homepage.hero.secondary_cta_text)}" />
             <label>Secondary CTA Href</label>
             <input name="secondary_cta_href" value="${safeStr(content.homepage.hero.secondary_cta_href)}" />
-            <label>Hero Media URL</label>
+            <label>Hero Image Upload</label>
+            <input type="file" name="hero_image" accept="image/*" />
+            <label>OR Hero Image URL</label>
             <input name="hero_media_url" value="${safeStr(content.homepage.hero.hero_media_url)}" />
 
             <h4>Problem</h4>
@@ -12765,8 +12772,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (method === "POST" && pathname === "/admin/website/save-homepage") {
-      const body = await parseBody(req);
-      const p = new URLSearchParams(body);
+      const contentType = req.headers["content-type"] || "";
       const content = getWebsiteContent();
       const parsePairs = (txt) => String(txt || "")
         .split("\n")
@@ -12781,34 +12787,104 @@ const server = http.createServer(async (req, res) => {
         .split("\n")
         .map(line => line.trim())
         .filter(Boolean);
+      const applyHomepageFields = (source) => {
+        const getValue = (key) => (source && source[key] != null ? String(source[key]) : "");
 
-      content.homepage.hero = {
-        title: p.get("hero_title") || "",
-        subtitle: p.get("hero_subtitle") || "",
-        primary_cta_text: p.get("primary_cta_text") || "",
-        primary_cta_href: p.get("primary_cta_href") || "",
-        secondary_cta_text: p.get("secondary_cta_text") || "",
-        secondary_cta_href: p.get("secondary_cta_href") || "",
-        hero_media_url: p.get("hero_media_url") || "",
+        content.homepage.hero = {
+          title: getValue("hero_title"),
+          subtitle: getValue("hero_subtitle"),
+          primary_cta_text: getValue("primary_cta_text"),
+          primary_cta_href: getValue("primary_cta_href"),
+          secondary_cta_text: getValue("secondary_cta_text"),
+          secondary_cta_href: getValue("secondary_cta_href"),
+          hero_media_url: getValue("hero_media_url"),
+        };
+        content.homepage.problem = {
+          title: getValue("problem_title"),
+          subtitle: getValue("problem_subtitle"),
+        };
+        content.homepage.features = parsePairs(getValue("features"));
+        content.homepage.steps = parsePairs(getValue("steps"));
+        content.homepage.testimonial = {
+          quote: getValue("testimonial_quote"),
+          author: getValue("testimonial_author"),
+          role: getValue("testimonial_role"),
+        };
+        content.homepage.trust = parseLines(getValue("trust"));
+        content.homepage.final_cta = {
+          title: getValue("final_cta_title"),
+          subtitle: getValue("final_cta_subtitle"),
+          button_text: getValue("final_cta_button_text"),
+          button_href: getValue("final_cta_button_href"),
+        };
       };
-      content.homepage.problem = {
-        title: p.get("problem_title") || "",
-        subtitle: p.get("problem_subtitle") || "",
-      };
-      content.homepage.features = parsePairs(p.get("features"));
-      content.homepage.steps = parsePairs(p.get("steps"));
-      content.homepage.testimonial = {
-        quote: p.get("testimonial_quote") || "",
-        author: p.get("testimonial_author") || "",
-        role: p.get("testimonial_role") || "",
-      };
-      content.homepage.trust = parseLines(p.get("trust"));
-      content.homepage.final_cta = {
-        title: p.get("final_cta_title") || "",
-        subtitle: p.get("final_cta_subtitle") || "",
-        button_text: p.get("final_cta_button_text") || "",
-        button_href: p.get("final_cta_button_href") || "",
-      };
+
+      if (contentType.includes("multipart/form-data")) {
+        const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+        const boundary = (boundaryMatch && (boundaryMatch[1] || boundaryMatch[2])) || "";
+        if (!boundary) {
+          return redirect(res, "/admin/website-content?saved=1");
+        }
+        let raw = Buffer.alloc(0);
+
+        req.on("data", (chunk) => {
+          raw = Buffer.concat([raw, chunk]);
+        });
+
+        req.on("end", () => {
+          const parts = raw.toString("binary").split(`--${boundary}`);
+          const fields = {};
+          let uploadedFile = "";
+
+          parts.forEach((part) => {
+            if (!part.includes("Content-Disposition")) return;
+            const nameMatch = part.match(/name="([^"]+)"/);
+            if (!nameMatch) return;
+            const fieldName = nameMatch[1];
+            const splitIndex = part.indexOf("\r\n\r\n");
+            if (splitIndex === -1) return;
+
+            if (part.includes("filename=")) {
+              const filenameMatch = part.match(/filename="([^"]*)"/);
+              const originalName = filenameMatch ? filenameMatch[1] : "";
+              if (!originalName) return;
+
+              const fileData = part.slice(splitIndex + 4);
+              if (!fileData) return;
+
+              const clean = fileData.slice(0, -2);
+              const originalExt = path.extname(originalName).toLowerCase();
+              const safeExt = [".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(originalExt) ? originalExt : ".png";
+              const filename = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}${safeExt}`;
+              const filePath = path.join(UPLOADS_DIR, filename);
+
+              fs.writeFileSync(filePath, Buffer.from(clean, "binary"));
+              uploadedFile = `/uploads/${filename}`;
+            } else {
+              const value = part.slice(splitIndex + 4);
+              if (value != null) {
+                fields[fieldName] = value.trim();
+              }
+            }
+          });
+
+          if (uploadedFile) {
+            fields.hero_media_url = uploadedFile;
+          }
+          applyHomepageFields(fields);
+          saveWebsiteContent(content);
+          return redirect(res, "/admin/website-content?saved=1");
+        });
+        return;
+      }
+
+      const body = await parseBody(req);
+      const p = new URLSearchParams(body);
+      const formFields = {};
+      for (const [key, value] of p.entries()) {
+        formFields[key] = value;
+      }
+      applyHomepageFields(formFields);
 
       saveWebsiteContent(content);
       return redirect(res, "/admin/website-content?saved=1");
