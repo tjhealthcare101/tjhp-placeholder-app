@@ -3468,10 +3468,16 @@ function getDefaultWebsiteContent() {
       },
     },
     about: {
+      title: "About TJ Healthcare Pro",
+      subtitle: "TJ Healthcare Pro is an AI-powered revenue intelligence platform built to help medical practices recover lost revenue and improve operational clarity.",
+      mission_title: "Our Mission",
+      mission_text: "To help healthcare organizations reduce administrative burden, improve decision clarity, and recover revenue using a disciplined, compliance-first approach powered by practical AI.",
       founder_name: "Tyquon Jordan, DHA",
       founder_title: "Founder",
-      founder_image_url: "",
       founder_bio: "Founder bio here...",
+      founder_image_url: "",
+      story_title: "Why We Built This",
+      story_text: "This platform was built from real-world healthcare operational challenges and financial gaps observed in practice."
     },
     company_links: {
       about_href: "/about",
@@ -11182,52 +11188,85 @@ const server = http.createServer(async (req, res) => {
     <body>
       ${renderPublicNavbar(pathname)}
 
-      <!-- HERO -->
       <div class="section center">
         <div class="container" style="max-width:800px;">
-          <h1>About TJ Healthcare Pro</h1>
-          <p style="margin-top:15px;">
-            TJ Healthcare Pro is an AI-powered revenue intelligence platform built to help medical practices 
-            recover lost revenue and improve operational clarity.
-          </p>
+          <h1>${safeStr(c.about.title)}</h1>
+          <p class="section-sub">${safeStr(c.about.subtitle)}</p>
         </div>
       </div>
 
-      <!-- MISSION -->
       <div class="section light center">
         <div class="container" style="max-width:800px;">
-          <h2>Our Mission</h2>
-          <p style="margin-top:15px;">
-            To help healthcare organizations reduce administrative burden, improve decision clarity, 
-            and recover revenue using a disciplined, compliance-first approach - powered by practical AI.
-          </p>
+          <h2>${safeStr(c.about.mission_title)}</h2>
+          <p class="section-sub">${safeStr(c.about.mission_text)}</p>
         </div>
       </div>
 
-      <!-- FOUNDER SECTION -->
       <div class="section">
-        <div class="container" style="
-          max-width:800px;
-          text-align:center;
-        ">
+        <div class="container" style="max-width:900px;text-align:center;">
           ${c.about.founder_image_url
-            ? `<img src="${safeStr(c.about.founder_image_url)}" alt="${safeStr(c.about.founder_name)}" style="max-width:300px;width:100%;border-radius:16px;" />`
-            : `<div class="card" style="height:300px;display:flex;align-items:center;justify-content:center;">Founder Image</div>`
+            ? `
+              <img src="${safeStr(c.about.founder_image_url)}"
+                   style="width:180px;height:180px;object-fit:cover;border-radius:50%;margin-bottom:20px;" />
+            `
+            : `
+              <div style="
+                width:180px;
+                height:180px;
+                border-radius:50%;
+                background:#eee;
+                margin:0 auto 20px auto;
+              "></div>
+            `
           }
-          <h2 style="margin-top:20px;">${safeStr(c.about.founder_name)}</h2>
-          <p style="font-weight:600;color:#2563eb;">${safeStr(c.about.founder_title)}</p>
-          <p style="white-space:pre-wrap;text-align:left;margin-top:15px;">${safeStr(c.about.founder_bio)}</p>
+          <h2>${safeStr(c.about.founder_name)}</h2>
+          <p style="color:#2563eb;font-weight:600;">${safeStr(c.about.founder_title)}</p>
+          <p style="margin-top:15px;max-width:600px;margin-left:auto;margin-right:auto;">
+            ${safeStr(c.about.founder_bio)}
+          </p>
         </div>
       </div>
 
-      <!-- CLOSING CTA -->
-      <div class="section center light">
-        <div class="container" style="max-width:700px;">
+      <div class="section light center">
+        <div class="container" style="max-width:800px;">
+          <h2>${safeStr(c.about.story_title)}</h2>
+          <p class="section-sub">${safeStr(c.about.story_text)}</p>
+        </div>
+      </div>
+
+      <div class="section center">
+        <div class="container" style="max-width:800px;">
+          <h2>Who We Help</h2>
+
+          <div class="grid-3" style="margin-top:30px;">
+            <div class="card center">
+              <strong>Small Practices</strong>
+              <p>Get visibility into missed revenue without adding complexity.</p>
+            </div>
+
+            <div class="card center">
+              <strong>Growing Teams</strong>
+              <p>Scale your billing operations with smarter insights.</p>
+            </div>
+
+            <div class="card center">
+              <strong>High-Volume Groups</strong>
+              <p>Handle large claim volumes with efficiency and precision.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="section center">
+        <div class="container">
           <h2>Built from real healthcare experience</h2>
-          <p style="margin:15px 0;">
-            This isn’t theory - it’s built from real operational challenges and real financial impact.
+          <p class="section-sub">
+            This isn’t theory — it’s built from real operational challenges and real financial impact.
           </p>
-          <a href="/signup" class="btn-primary">Start Free Trial - No Credit Card Required</a>
+          <a href="/signup" class="btn-primary">
+            Start Free Trial - No Credit Card Required
+          </a>
         </div>
       </div>
 
@@ -13194,7 +13233,7 @@ ${(content.demo.steps || []).map(s =>
           </details>
         </form>
 
-        <form method="POST" action="/admin/website/save-about">
+        <form method="POST" action="/admin/website/save-about" enctype="multipart/form-data">
           <details>
             <summary><strong>Company</strong></summary>
 
@@ -13202,6 +13241,18 @@ ${(content.demo.steps || []).map(s =>
 
               <details>
                 <summary>About</summary>
+
+                <label>Page Title</label>
+                <input name="about_title" value="${safeStr(content.about.title || "")}" />
+
+                <label>Subtitle</label>
+                <input name="about_subtitle" value="${safeStr(content.about.subtitle || "")}" />
+
+                <label>Mission Title</label>
+                <input name="mission_title" value="${safeStr(content.about.mission_title || "")}" />
+
+                <label>Mission Text</label>
+                <textarea name="mission_text">${safeStr(content.about.mission_text || "")}</textarea>
 
                 <label>Founder Name</label>
                 <input name="founder_name" value="${safeStr(content.about.founder_name)}" />
@@ -13211,7 +13262,23 @@ ${(content.demo.steps || []).map(s =>
 
                 <label>Founder Bio</label>
                 <textarea name="founder_bio">${safeStr(content.about.founder_bio)}</textarea>
-                <input type="hidden" name="founder_image_url" value="${safeStr(content.about.founder_image_url)}" />
+
+                <label>Upload Founder Image</label>
+                <input type="file" name="founder_image" accept="image/*" />
+
+                ${content.about.founder_image_url ? `
+                  <img src="${safeStr(content.about.founder_image_url)}"
+                       style="max-width:150px;margin:10px 0;border-radius:12px;" />
+                ` : ""}
+
+                <label>OR Image URL</label>
+                <input name="founder_image_url" value="${safeStr(content.about.founder_image_url)}" />
+
+                <label>Story Title</label>
+                <input name="story_title" value="${safeStr(content.about.story_title || "")}" />
+
+                <label>Story Text</label>
+                <textarea name="story_text">${safeStr(content.about.story_text || "")}</textarea>
               </details>
 
               <details>
@@ -13421,14 +13488,89 @@ ${(content.demo.steps || []).map(s =>
     }
 
     if (method === "POST" && pathname === "/admin/website/save-about") {
+      const contentType = req.headers["content-type"] || "";
+      const content = getWebsiteContent();
+      const applyAboutFields = (source) => {
+        const getValue = (name) => (source && source[name] != null ? String(source[name]) : "");
+        content.about.title = getValue("about_title");
+        content.about.subtitle = getValue("about_subtitle");
+        content.about.mission_title = getValue("mission_title");
+        content.about.mission_text = getValue("mission_text");
+        content.about.founder_name = getValue("founder_name");
+        content.about.founder_title = getValue("founder_title");
+        content.about.founder_image_url = getValue("founder_image_url");
+        content.about.founder_bio = getValue("founder_bio");
+        content.about.story_title = getValue("story_title");
+        content.about.story_text = getValue("story_text");
+      };
+
+      if (contentType.includes("multipart/form-data")) {
+        const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+        const boundary = (boundaryMatch && (boundaryMatch[1] || boundaryMatch[2])) || "";
+        if (!boundary) {
+          return redirect(res, "/admin/website-content?saved=1");
+        }
+
+        let raw = Buffer.alloc(0);
+        req.on("data", (chunk) => {
+          raw = Buffer.concat([raw, chunk]);
+        });
+
+        req.on("end", () => {
+          const parts = raw.toString("binary").split(`--${boundary}`);
+          const fields = {};
+          let uploadedFile = "";
+
+          parts.forEach((part) => {
+            if (!part.includes("Content-Disposition")) return;
+            const nameMatch = part.match(/name="([^"]+)"/);
+            if (!nameMatch) return;
+            const fieldName = nameMatch[1];
+            const splitIndex = part.indexOf("\r\n\r\n");
+            if (splitIndex === -1) return;
+
+            if (part.includes("filename=")) {
+              const filenameMatch = part.match(/filename="([^"]*)"/);
+              const originalName = filenameMatch ? filenameMatch[1] : "";
+              if (!originalName || fieldName !== "founder_image") return;
+
+              const fileData = part.slice(splitIndex + 4);
+              if (!fileData) return;
+
+              const clean = fileData.slice(0, -2);
+              const originalExt = path.extname(originalName).toLowerCase();
+              const safeExt = [".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(originalExt) ? originalExt : ".png";
+              const filename = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}${safeExt}`;
+              const filePath = path.join(UPLOADS_DIR, filename);
+
+              fs.writeFileSync(filePath, Buffer.from(clean, "binary"));
+              uploadedFile = `/uploads/${filename}`;
+            } else {
+              const value = part.slice(splitIndex + 4);
+              if (value != null) {
+                fields[fieldName] = value.trim();
+              }
+            }
+          });
+
+          if (uploadedFile) {
+            fields.founder_image_url = uploadedFile;
+          }
+
+          applyAboutFields(fields);
+          saveWebsiteContent(content);
+          return redirect(res, "/admin/website-content?saved=1");
+        });
+        return;
+      }
+
       const body = await parseBody(req);
       const p = new URLSearchParams(body);
-      const content = getWebsiteContent();
-
-      content.about.founder_name = p.get("founder_name") || "";
-      content.about.founder_title = p.get("founder_title") || "";
-      content.about.founder_image_url = p.get("founder_image_url") || "";
-      content.about.founder_bio = p.get("founder_bio") || "";
+      const fields = {};
+      for (const [key, value] of p.entries()) {
+        fields[key] = value;
+      }
+      applyAboutFields(fields);
 
       saveWebsiteContent(content);
       return redirect(res, "/admin/website-content?saved=1");
