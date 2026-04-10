@@ -10529,8 +10529,17 @@ const server = http.createServer(async (req, res) => {
         });
 
         debugLog("Stripe session created:", session.id);
+        console.log("STRIPE SESSION URL:", session.url);
+        console.log("FULL SESSION:", session);
 
-        return send(res, 200, JSON.stringify({ url: session.url }), "application/json");
+        if (!session.url) {
+          console.error("Stripe session missing URL");
+          return send(res, 500, JSON.stringify({
+            error: "Stripe session did not return a valid URL"
+          }), "application/json");
+        }
+
+        return send(res, 200, JSON.stringify({ url: session.url }, null, 2), "application/json");
       } catch (err) {
         console.error("STRIPE FULL ERROR:", err);
         return send(res, 500, JSON.stringify({ error: err.message || "Checkout failed" }), "application/json");
