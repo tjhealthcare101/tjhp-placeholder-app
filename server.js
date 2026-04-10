@@ -2517,6 +2517,22 @@ function renderPublicStyles() {
     margin: 0 auto;
   }
 
+  /* default nav links */
+  a {
+    color: #111;
+    text-decoration: none;
+  }
+
+  /* remove underline everywhere in nav */
+  nav a,
+  .container a {
+    text-decoration: none;
+  }
+
+  .container a {
+    padding-bottom: 4px;
+  }
+
   .hero {
     padding-top: 40px;
     padding-bottom: 80px;
@@ -2850,7 +2866,11 @@ function renderPublicNavbar(pathname = "") {
           <a href="/how-it-works" class="${pathname === "/how-it-works" ? "nav-active" : ""}">See How It Works</a>
           <a href="/pricing" class="${pathname === "/pricing" ? "nav-active" : ""}">Plans</a>
           <div style="position:relative;">
-            <a href="/company" class="${pathname === "/company" ? "nav-active" : ""}" style="cursor:pointer;text-decoration:none;color:inherit;" onmouseenter="showCompanyMenu()" onmouseleave="hideCompanyMenu()">
+            <a href="/about"
+               class="${pathname.startsWith('/about') || pathname.startsWith('/why') || pathname.startsWith('/careers') || pathname.startsWith('/culture') || pathname.startsWith('/contact') ? 'nav-active' : ''}"
+               style="cursor:pointer;text-decoration:none;color:inherit;"
+               onmouseenter="showCompanyMenu()"
+               onmouseleave="hideCompanyMenu()">
               Company
             </a>
 
