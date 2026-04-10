@@ -2489,6 +2489,7 @@ function renderPublicStyles() {
 
   .section.light {
     background: #f8fafc;
+    padding-top: 80px;
   }
 
   h1 {
@@ -2509,6 +2510,7 @@ function renderPublicStyles() {
 
   .hero {
     padding-top: 40px;
+    padding-bottom: 80px;
   }
 
   .hero-inner {
@@ -2668,6 +2670,40 @@ function renderPublicStyles() {
     text-align: center;
     font-size: 18px;
   }
+
+  .testimonial-slider {
+    position: relative;
+    max-width: 900px;
+    margin: 40px auto 0;
+    overflow: hidden;
+  }
+
+  .testimonial-track {
+    display: flex;
+    transition: transform 0.4s ease;
+  }
+
+  .testimonial-slide {
+    min-width: 100%;
+    display: flex;
+    justify-content: center;
+  }
+
+  .slider-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    cursor: pointer;
+    z-index: 10;
+  }
+
+  .slider-btn.left { left: -10px; }
+  .slider-btn.right { right: -10px; }
 
   .placeholder-box {
     background: #eee;
@@ -10292,19 +10328,31 @@ const server = http.createServer(async (req, res) => {
           <div class="container center">
             <h2>${safeStr(c.homepage.testimonial_title || "What Practices Are Saying")}</h2>
 
-            <div class="grid-3">
+            <div class="testimonial-slider">
+              ${(c.homepage.testimonials.length > 1) ? `
+                <button class="slider-btn left" onclick="prevTestimonial()">‹</button>
+              ` : ""}
+
+              <div class="testimonial-track" id="testimonialTrack">
               ${(c.homepage.testimonials || []).map(t => `
-                <div class="card center">
-                  <p>"${safeStr(t.quote)}"</p>
+                <div class="testimonial-slide">
+                  <div class="card center">
+                    <p>"${safeStr(t.quote)}"</p>
 
-                  <div style="color:#f59e0b;font-size:18px;margin:10px 0;">
-                    ${"★".repeat(Math.min(Number(t.stars || 5), 5))}
+                    <div style="color:#f59e0b;font-size:18px;margin:10px 0;">
+                      ${"★".repeat(Math.min(Number(t.stars || 5), 5))}
+                    </div>
+
+                    <strong>${safeStr(t.author)}</strong>
+                    <div>${safeStr(t.role)}</div>
                   </div>
-
-                  <strong>${safeStr(t.author)}</strong>
-                  <div>${safeStr(t.role)}</div>
                 </div>
               `).join("")}
+              </div>
+
+              ${(c.homepage.testimonials.length > 1) ? `
+                <button class="slider-btn right" onclick="nextTestimonial()">›</button>
+              ` : ""}
             </div>
           </div>
         </div>
@@ -10334,6 +10382,53 @@ const server = http.createServer(async (req, res) => {
         </div>
 
         ${renderStickyMobileCta()}
+        <script>
+          let currentIndex = 0;
+
+          function updateSlider() {
+            const track = document.getElementById("testimonialTrack");
+            if (!track) return;
+
+            const total = track.children.length;
+
+            if (total <= 1) {
+              track.style.transform = "translateX(0)";
+              return;
+            }
+
+            track.style.transform = "translateX(-" + currentIndex * 100 + "%)";
+          }
+
+          function nextTestimonial() {
+            const track = document.getElementById("testimonialTrack");
+            if (!track) return;
+
+            const total = track.children.length;
+
+            currentIndex = (currentIndex + 1) % total;
+            updateSlider();
+          }
+
+          function prevTestimonial() {
+            const track = document.getElementById("testimonialTrack");
+            if (!track) return;
+
+            const total = track.children.length;
+
+            currentIndex = (currentIndex - 1 + total) % total;
+            updateSlider();
+          }
+
+          setInterval(() => {
+            const track = document.getElementById("testimonialTrack");
+            if (!track) return;
+
+            const total = track.children.length;
+            if (total > 1) {
+              nextTestimonial();
+            }
+          }, 4000);
+        </script>
       </body>
       </html>
     `);
