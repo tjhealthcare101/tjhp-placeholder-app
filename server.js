@@ -68,7 +68,11 @@ const IS_PROD = process.env.NODE_ENV === "production";
 
 // ===== ENV =====
 const SESSION_SECRET = process.env.SESSION_SECRET || "CHANGE_ME_SESSION_SECRET";
-const APP_BASE_URL = process.env.APP_BASE_URL || ""; // e.g. https://app.tjhealthpro.com
+const APP_BASE_URL =
+  process.env.APP_BASE_URL ||
+  (process.env.NODE_ENV === "production"
+    ? "https://app.tjhealthpro.com"
+    : "http://localhost:8080");
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").toLowerCase();
 const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || "";
 const ADMIN_PASSWORD_PLAIN = process.env.ADMIN_PASSWORD_PLAIN || "";
@@ -11249,10 +11253,10 @@ const server = http.createServer(async (req, res) => {
     const selectedPlanRaw = String(params.get("plan") || "starter").toLowerCase();
     const selectedPlan = allowedPlans.has(selectedPlanRaw) ? selectedPlanRaw : "starter";
 
-    // ----- FIX: Admin sessions have no org/user context. Pick a real org + user for simulation -----
     const allUsers = readJSON(FILES.users, []);
     const allOrgs = readJSON(FILES.orgs, []);
 
+    // Only allow org/user override when STARTING simulation as admin (prevents abuse while simulating)
     const allowIdOverride = !isSimulating && sess && sess.role === "admin";
     const reqOrgId = allowIdOverride ? String(params.get("org_id") || parsed.query.org_id || "").trim() : "";
     const reqUserId = allowIdOverride ? String(params.get("user_id") || parsed.query.user_id || "").trim() : "";
@@ -11265,7 +11269,7 @@ const server = http.createServer(async (req, res) => {
 
     debugLog("[SIM] paths", { users: FILES.users, orgs: FILES.orgs, cwd: process.cwd(), dirname: __dirname });
     debugLog("[SIM] counts", { users: allUsers.length, orgs: allOrgs.length });
-    debugLog("[SIM] chosen ids pre", { targetOrgId, targetUserId, reqOrgId, reqUserId });
+    debugLog("[SIM] ids pre", { selectedPlan, reqOrgId, reqUserId, targetOrgId, targetUserId });
 
     let simOrg = (targetOrgId ? findOrg(targetOrgId) : null) || (targetOrgId ? getOrg(targetOrgId) : null);
     let simUser = (targetUserId ? findUser(targetUserId) : null) || (targetUserId ? getUserById(targetUserId) : null);
