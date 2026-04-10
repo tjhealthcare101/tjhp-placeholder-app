@@ -2487,6 +2487,10 @@ function renderPublicStyles() {
     padding: 80px 0;
   }
 
+  .section.center .container {
+    max-width: 900px;
+  }
+
   .section.light {
     background: #f8fafc;
     padding-top: 80px;
@@ -2506,6 +2510,11 @@ function renderPublicStyles() {
   p {
     color: #555;
     font-size: 16px;
+  }
+
+  p[style*="italic"] {
+    max-width: 600px;
+    margin: 0 auto;
   }
 
   .hero {
@@ -3402,7 +3411,16 @@ function getDefaultWebsiteContent() {
       contact_href: "/contact",
     },
     demo: {
+      title: "See How It Works",
+      subtitle: "See how TJ Healthcare identifies and recovers lost insurance revenue in minutes — without changing your workflow.",
       video_url: "",
+      steps: [
+        { title: "Upload Data", desc: "Upload billing files in seconds." },
+        { title: "AI Analysis", desc: "We identify revenue loss instantly." },
+        { title: "Recover Revenue", desc: "Get actions and appeal packets." }
+      ],
+      cta_text: "Start Free Trial - No Credit Card Required",
+      cta_href: "/signup"
     },
     testimonials: [
       {
@@ -10449,23 +10467,53 @@ const server = http.createServer(async (req, res) => {
 
         <div class="section center">
           <div class="container">
-            <h1>See How It Works</h1>
+            <h1>${safeStr(c.demo.title)}</h1>
+            <p class="section-sub">
+              ${safeStr(c.demo.subtitle || "See how TJ Healthcare identifies and recovers lost insurance revenue in minutes — without changing your workflow.")}
+            </p>
 
             <div style="margin:40px 0;">
               ${c.demo.video_url
-                ? `<iframe src="${safeStr(c.demo.video_url)}" title="Demo video" style="width:100%;height:420px;border:0;border-radius:12px;"></iframe>`
-                : `<div style="height:360px;background:#eee;border-radius:12px;display:flex;align-items:center;justify-content:center;">Demo Video</div>`
+                ? `<iframe src="${safeStr(c.demo.video_url)}" style="width:100%;height:420px;border-radius:12px;"></iframe>`
+                : `<div class="placeholder-box">Demo Video</div>`
               }
             </div>
 
-            <div class="grid-3">
-              <div class="card"><h3>1. Upload Data</h3><p>Upload billing files in seconds.</p></div>
-              <div class="card"><h3>2. AI Analysis</h3><p>We identify revenue loss instantly.</p></div>
-              <div class="card"><h3>3. Recover Revenue</h3><p>Get actions and appeal packets.</p></div>
+            <div class="grid-3" style="margin-top:30px;">
+              <div class="card center">No EHR Integration Required</div>
+              <div class="card center">Works with Exported Billing Files</div>
+              <div class="card center">Start in Minutes</div>
             </div>
 
-            <div style="margin-top:40px;">
-              <a href="/signup" class="btn-primary">Start Free Trial - No Credit Card Required</a>
+            <div class="grid-3">
+              ${c.demo.steps.map((s, i) => `
+                <div class="card">
+                  <h3>${i + 1}. ${safeStr(s.title)}</h3>
+                  <p>${safeStr(s.desc)}</p>
+                  <p style="font-size:13px;color:#777;margin-top:8px;">
+                    ${i === 0 ? "No system integrations required." :
+                      i === 1 ? "Instant insights on denied and underpaid claims." :
+                      "Generate appeals and recover revenue faster."}
+                  </p>
+                </div>
+              `).join("")}
+            </div>
+
+            <div style="margin-top:40px;text-align:center;">
+              <a href="${safeStr(c.demo.cta_href)}" class="btn-primary large">
+                ${safeStr(c.demo.cta_text)}
+              </a>
+              <p style="font-size:12px;color:#777;margin-top:8px;">
+                No credit card required • Get started in minutes
+              </p>
+            </div>
+
+            <div style="margin-top:50px;text-align:center;">
+              <p style="font-style:italic;">
+                "We identified $32,000 in missed revenue in the first 30 days."
+              </p>
+              <strong>Dr. Smith</strong>
+              <div style="font-size:13px;color:#777;">Family Practice Owner</div>
             </div>
           </div>
         </div>
@@ -12885,8 +12933,28 @@ ${(content.homepage.testimonials || []).map(t =>
             <summary><strong>See How It Works / Demo</strong></summary>
 
             <div class="card">
+              <label>Page Title</label>
+              <input name="demo_title" value="${safeStr(content.demo.title || "")}" />
+
+              <label>Subheadline</label>
+              <input name="demo_subtitle" value="${safeStr(content.demo.subtitle || "")}" />
+
               <label>Demo Video URL</label>
               <input name="video_url" value="${safeStr(content.demo.video_url)}" />
+
+              <label>Steps (one per line: Title | Description)</label>
+              <textarea name="demo_steps">
+${(content.demo.steps || []).map(s =>
+  `${safeStr(s.title)} | ${safeStr(s.desc)}`
+).join("\n")}
+</textarea>
+
+              <label>CTA Text</label>
+              <input name="demo_cta_text" value="${safeStr(content.demo.cta_text || "")}" />
+
+              <label>CTA Link</label>
+              <input name="demo_cta_href" value="${safeStr(content.demo.cta_href || "")}" />
+
               <button class="btn">Save Demo</button>
             </div>
 
@@ -13164,8 +13232,26 @@ ${(content.homepage.testimonials || []).map(t =>
       const body = await parseBody(req);
       const p = new URLSearchParams(body);
       const content = getWebsiteContent();
+      const getValue = (name) => p.get(name) || "";
+      const parsePairs = (txt) =>
+        String(txt || "")
+          .split("\n")
+          .map(line => line.trim())
+          .filter(Boolean)
+          .map(line => {
+            const [title, ...rest] = line.split("|");
+            return {
+              title: (title || "").trim(),
+              desc: rest.join("|").trim()
+            };
+          });
 
-      content.demo.video_url = p.get("video_url") || "";
+      content.demo.title = getValue("demo_title");
+      content.demo.subtitle = getValue("demo_subtitle");
+      content.demo.video_url = getValue("video_url");
+      content.demo.steps = parsePairs(getValue("demo_steps"));
+      content.demo.cta_text = getValue("demo_cta_text");
+      content.demo.cta_href = getValue("demo_cta_href");
 
       saveWebsiteContent(content);
       return redirect(res, "/admin/website-content?saved=1");
