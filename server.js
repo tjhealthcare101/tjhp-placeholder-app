@@ -3523,6 +3523,15 @@ function getDefaultWebsiteContent() {
       cta_title: "Ready to Build With Us?",
       cta_text: "If you’re looking to make a real impact in healthcare and help build something meaningful, explore our open roles and apply today."
     },
+    contact: {
+      title: "Contact Us",
+      subtitle: "Have a question, partnership idea, or need support?",
+      description: "Send us a message and our team will get back to you as soon as possible.",
+      left_title: "Reach Us Directly",
+      left_text: "We typically respond within 24 hours.\n\nUse the form to reach our team directly. No spam. No sharing.",
+      button_text: "Send Message",
+      success_text: "Your message has been securely sent to our team."
+    },
     company_links: {
       about_href: "/about",
       why_href: "/why",
@@ -3618,6 +3627,7 @@ function getWebsiteContent() {
     why: { ...getDefaultWebsiteContent().why, ...(content.why || {}) },
     careers: { ...getDefaultWebsiteContent().careers, ...(content.careers || {}) },
     culture: { ...getDefaultWebsiteContent().culture, ...(content.culture || {}) },
+    contact: { ...getDefaultWebsiteContent().contact, ...(content.contact || {}) },
     company_links: { ...getDefaultWebsiteContent().company_links, ...(content.company_links || {}) },
     demo: { ...getDefaultWebsiteContent().demo, ...(content.demo || {}) },
     testimonials: Array.isArray(content.testimonials) ? content.testimonials : [],
@@ -11407,6 +11417,13 @@ const server = http.createServer(async (req, res) => {
 <head>
   <meta charset="UTF-8">
   ${renderPublicStyles()}
+  <style>
+    @media (max-width: 800px) {
+      .contact-grid {
+        grid-template-columns: 1fr !important;
+      }
+    }
+  </style>
 </head>
 <body>
   ${renderPublicNavbar(pathname)}
@@ -11459,67 +11476,65 @@ const server = http.createServer(async (req, res) => {
 <head>
   <meta charset="UTF-8">
   ${renderPublicStyles()}
+  <style>
+    @media (max-width: 800px) {
+      .contact-grid {
+        grid-template-columns: 1fr !important;
+      }
+    }
+  </style>
 </head>
 <body>
   ${renderPublicNavbar(pathname)}
 
   <div class="section center">
     <div class="container" style="max-width:900px;">
-
-      <h1>Contact Us</h1>
+      <h1>${safeStr(c.contact.title)}</h1>
 
       ${parsed.query.sent ? `<div class="alert" style="background:#ecfdf3;border-color:#86efac;color:#166534;margin-bottom:20px;">Message sent!</div>` : ""}
 
-      <p style="margin-top:10px;font-size:18px;">
-        Have a question, partnership idea, or need support?
-      </p>
+      <p class="section-sub">${safeStr(c.contact.subtitle)}</p>
+      <p style="margin-top:10px;margin-bottom:20px;">${safeStr(c.contact.description)}</p>
+    </div>
+  </div>
 
-      <p class="muted" style="margin-bottom:30px;">
-        Send us a message and our team will get back to you as soon as possible.
-      </p>
+  <div class="section light">
+    <div class="container contact-grid" style="
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:40px;
+      align-items:start;
+      max-width:900px;
+    ">
+      <div>
+        <h3>${safeStr(c.contact.left_title)}</h3>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:30px;align-items:start;">
-
-        <div>
-          <div class="card">
-            <h3>Reach Us Directly</h3>
-
-            <p class="muted">We typically respond within 24 hours.</p>
-
-            <div style="margin-top:15px;">
-              <strong>Direct Contact</strong>
-              <p class="muted">
-                Use the form to reach our team directly. We respond within 24 hours.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <form method="POST" action="/contact">
-
-            <label>Name</label>
-            <input name="name" required style="width:100%;margin-bottom:12px;padding:10px;border-radius:8px;border:1px solid #ddd;" />
-
-            <label>Email</label>
-            <input name="email" type="email" required style="width:100%;margin-bottom:12px;padding:10px;border-radius:8px;border:1px solid #ddd;" />
-
-            <label>Message</label>
-            <textarea name="message" required style="width:100%;min-height:120px;margin-bottom:15px;padding:10px;border-radius:8px;border:1px solid #ddd;"></textarea>
-
-            <button class="btn-primary" style="width:100%;" type="submit">
-              Send Message
-            </button>
-
-            <p class="muted" style="font-size:13px;margin-top:10px;">
-              Your message is securely sent to our team. No spam. No sharing.
-            </p>
-
-          </form>
-        </div>
-
+        ${safeStr(c.contact.left_text)
+          .split("\n")
+          .map(p => `<p style="margin-top:10px;">${p}</p>`)
+          .join("")}
       </div>
 
+      <div class="card">
+        <form method="POST" action="/contact">
+          <label>Name</label>
+          <input name="name" required />
+
+          <label>Email</label>
+          <input name="email" required />
+
+          <label>Message</label>
+          <textarea name="message" required></textarea>
+
+          <button class="btn-primary" style="margin-top:15px;width:100%;">
+            ${safeStr(c.contact.button_text)}
+          </button>
+
+          <p style="font-size:12px;color:#777;margin-top:10px;text-align:center;">
+            ${safeStr(c.contact.success_text)}
+          </p>
+        </form>
+      </div>
     </div>
   </div>
 
@@ -13328,7 +13343,26 @@ ${(content.demo.steps || []).map(s =>
 
               <details>
                 <summary>Contact</summary>
-                <p class="muted">Add contact CMS later</p>
+                <label>Page Title</label>
+                <input name="contact_title" value="${safeStr(content.contact?.title || "")}" />
+
+                <label>Subtitle</label>
+                <input name="contact_subtitle" value="${safeStr(content.contact?.subtitle || "")}" />
+
+                <label>Description</label>
+                <textarea name="contact_description">${safeStr(content.contact?.description || "")}</textarea>
+
+                <label>Left Section Title</label>
+                <input name="contact_left_title" value="${safeStr(content.contact?.left_title || "")}" />
+
+                <label>Left Section Text</label>
+                <textarea name="contact_left_text">${safeStr(content.contact?.left_text || "")}</textarea>
+
+                <label>Button Text</label>
+                <input name="contact_button_text" value="${safeStr(content.contact?.button_text || "")}" />
+
+                <label>Success Text</label>
+                <input name="contact_success_text" value="${safeStr(content.contact?.success_text || "")}" />
               </details>
 
               <button class="btn">Save Company</button>
@@ -13570,6 +13604,15 @@ ${(content.demo.steps || []).map(s =>
         content.culture.hire_text = getValue("culture_hire_text");
         content.culture.cta_title = getValue("culture_cta_title");
         content.culture.cta_text = getValue("culture_cta_text");
+
+        content.contact = content.contact || {};
+        content.contact.title = getValue("contact_title");
+        content.contact.subtitle = getValue("contact_subtitle");
+        content.contact.description = getValue("contact_description");
+        content.contact.left_title = getValue("contact_left_title");
+        content.contact.left_text = getValue("contact_left_text");
+        content.contact.button_text = getValue("contact_button_text");
+        content.contact.success_text = getValue("contact_success_text");
       };
 
       if (contentType.includes("multipart/form-data")) {
