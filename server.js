@@ -2753,6 +2753,72 @@ function renderPublicStyles() {
     max-width: 600px;
   }
 
+
+  .contact-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    align-items: start;
+  }
+
+  .contact-form-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  }
+
+  .contact-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .contact-form label {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    color: #111827;
+    margin-bottom: 6px;
+  }
+
+  .contact-form input,
+  .contact-form textarea {
+    display: block;
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    font-size: 15px;
+    background: #fff;
+    color: #111827;
+    box-sizing: border-box;
+  }
+
+  .contact-form textarea {
+    min-height: 140px;
+    resize: vertical;
+  }
+
+  .contact-form input:focus,
+  .contact-form textarea:focus {
+    outline: none;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  }
+
+  .contact-copy {
+    max-width: 420px;
+  }
+
+  .contact-note {
+    font-size: 13px;
+    color: #6b7280;
+    margin-top: 10px;
+    text-align: center;
+  }
+
   @media (max-width: 900px) {
     .hero-inner {
       grid-template-columns: 1fr;
@@ -2773,6 +2839,14 @@ function renderPublicStyles() {
 
   @media (max-width: 800px) {
     h1 { font-size: 38px; }
+
+    .contact-grid {
+      grid-template-columns: 1fr !important;
+    }
+
+    .contact-copy {
+      max-width: 100%;
+    }
   }
 
   .mobile-sticky-cta {
@@ -11477,13 +11551,6 @@ const server = http.createServer(async (req, res) => {
 <head>
   <meta charset="UTF-8">
   ${renderPublicStyles()}
-  <style>
-    @media (max-width: 800px) {
-      .contact-grid {
-        grid-template-columns: 1fr !important;
-      }
-    }
-  </style>
 </head>
 <body>
   ${renderPublicNavbar(pathname)}
@@ -11500,14 +11567,8 @@ const server = http.createServer(async (req, res) => {
   </div>
 
   <div class="section light">
-    <div class="container contact-grid" style="
-      display:grid;
-      grid-template-columns:1fr 1fr;
-      gap:40px;
-      align-items:start;
-      max-width:900px;
-    ">
-      <div>
+    <div class="container contact-grid" style="max-width:900px;">
+      <div class="contact-copy">
         <h3>${safeStr(c.contact.left_title)}</h3>
 
         ${safeStr(c.contact.left_text)
@@ -11516,22 +11577,28 @@ const server = http.createServer(async (req, res) => {
           .join("")}
       </div>
 
-      <div class="card">
-        <form method="POST" action="/contact">
-          <label>Name</label>
-          <input name="name" required />
+      <div class="contact-form-card">
+        <form method="POST" action="/contact" class="contact-form">
+          <div>
+            <label for="contact-name">Name</label>
+            <input id="contact-name" name="name" required />
+          </div>
 
-          <label>Email</label>
-          <input name="email" required />
+          <div>
+            <label for="contact-email">Email</label>
+            <input id="contact-email" name="email" type="email" required />
+          </div>
 
-          <label>Message</label>
-          <textarea name="message" required></textarea>
+          <div>
+            <label for="contact-message">Message</label>
+            <textarea id="contact-message" name="message" required></textarea>
+          </div>
 
-          <button class="btn-primary" style="margin-top:15px;width:100%;">
+          <button class="btn-primary" type="submit" style="margin-top:6px;width:100%;">
             ${safeStr(c.contact.button_text)}
           </button>
 
-          <p style="font-size:12px;color:#777;margin-top:10px;text-align:center;">
+          <p class="contact-note">
             ${safeStr(c.contact.success_text)}
           </p>
         </form>
