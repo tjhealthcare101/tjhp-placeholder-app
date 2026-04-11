@@ -3496,6 +3496,16 @@ function getDefaultWebsiteContent() {
       cta_title: "Start Recovering What You're Losing",
       cta_text: "See what your current process is missing — and take control of your revenue."
     },
+    careers: {
+      title: "Join TJ Healthcare Pro",
+      subtitle: "We're building a new standard for healthcare revenue intelligence — helping practices recover lost revenue and operate more efficiently.",
+      intro_text: "We’re looking for people who want to build real solutions in healthcare — not just tools.",
+      pillars: [
+        "Real Impact | Your work directly impacts healthcare practices and real revenue outcomes.",
+        "Build From Ground Up | Be part of building systems, workflows, and AI solutions from day one.",
+        "Flexible & Remote | Work remotely with flexibility while contributing to meaningful work."
+      ]
+    },
     company_links: {
       about_href: "/about",
       why_href: "/why",
@@ -3589,6 +3599,7 @@ function getWebsiteContent() {
     },
     about: { ...getDefaultWebsiteContent().about, ...(content.about || {}) },
     why: { ...getDefaultWebsiteContent().why, ...(content.why || {}) },
+    careers: { ...getDefaultWebsiteContent().careers, ...(content.careers || {}) },
     company_links: { ...getDefaultWebsiteContent().company_links, ...(content.company_links || {}) },
     demo: { ...getDefaultWebsiteContent().demo, ...(content.demo || {}) },
     testimonials: Array.isArray(content.testimonials) ? content.testimonials : [],
@@ -11739,6 +11750,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/careers") {
+    const c = getWebsiteContent();
     const jobs = getJobs();
 
     return send(res, 200, `
@@ -11753,30 +11765,26 @@ const server = http.createServer(async (req, res) => {
 
       <div class="section center">
         <div class="container" style="max-width:800px;">
-          <h1>Join TJ Healthcare Pro</h1>
-          <p style="margin-top:15px;font-size:18px;max-width:700px;margin-left:auto;margin-right:auto;">
-            We’re building a new standard for healthcare revenue intelligence — helping medical practices
-            recover lost revenue, reduce administrative burden, and make better operational decisions.
-          </p>
-          <p style="margin-top:10px;">
-            We’re looking for people who want to build real solutions in healthcare — not just tools.
+          <h1>${safeStr(c.careers.title)}</h1>
+          <p class="section-sub">${safeStr(c.careers.subtitle)}</p>
+          <p style="margin-top:20px;">
+            ${safeStr(c.careers.intro_text)}
           </p>
         </div>
       </div>
 
       <div class="section light center">
-        <div class="container grid-3" style="max-width:900px;margin:auto;">
-          <div class="card">
-            <h3>Real Impact</h3>
-            <p>Your work directly impacts healthcare practices and real revenue outcomes.</p>
-          </div>
-          <div class="card">
-            <h3>Build From Ground Up</h3>
-            <p>Be part of building systems, workflows, and AI solutions from day one.</p>
-          </div>
-          <div class="card">
-            <h3>Flexible & Remote</h3>
-            <p>Work remotely with flexibility while contributing to meaningful work.</p>
+        <div class="container" style="max-width:900px;margin:auto;">
+          <div class="grid-3" style="margin-top:40px;">
+            ${(c.careers.pillars || []).map(p => {
+              const [title, desc] = String(p || "").split("|");
+              return `
+                <div class="card center">
+                  <strong>${safeStr(title)}</strong>
+                  <p>${safeStr(desc)}</p>
+                </div>
+              `;
+            }).join("")}
           </div>
         </div>
       </div>
@@ -11785,7 +11793,29 @@ const server = http.createServer(async (req, res) => {
         <div class="container" style="max-width:800px;">
           <div style="margin-top:30px;text-align:left;">
             ${jobs.length === 0 ? `
-              <p>No open positions right now.</p>
+              <div style="
+                text-align:center;
+                margin-top:40px;
+                padding:40px 20px;
+              ">
+                <p style="
+                  font-size:16px;
+                  color:#666;
+                  margin-bottom:10px;
+                ">
+                  No open positions right now.
+                </p>
+
+                <p style="
+                  font-size:14px;
+                  color:#999;
+                ">
+                  Check back soon or reach out if you're interested in working with us.
+                </p>
+                <a href="/contact" class="btn-primary" style="margin-top:15px;display:inline-block;">
+                  Contact Us
+                </a>
+              </div>
             ` : jobs.map(job => `
               <div class="card" style="margin-bottom:20px;">
                 <h3>${safeStr(job.title)}</h3>
@@ -13291,7 +13321,17 @@ ${(content.demo.steps || []).map(s =>
 
               <details>
                 <summary>Careers</summary>
-                <p class="muted">Add careers CMS later</p>
+                <label>Page Title</label>
+                <input name="careers_title" value="${safeStr(content.careers?.title || "")}" />
+
+                <label>Subtitle</label>
+                <input name="careers_subtitle" value="${safeStr(content.careers?.subtitle || "")}" />
+
+                <label>Intro Text</label>
+                <textarea name="careers_intro">${safeStr(content.careers?.intro_text || "")}</textarea>
+
+                <label>Pillars (one per line: Title | Description)</label>
+                <textarea name="careers_pillars">${(content.careers?.pillars || []).join("\n")}</textarea>
               </details>
 
               <details>
@@ -13521,6 +13561,15 @@ ${(content.demo.steps || []).map(s =>
           .filter(Boolean);
         content.why.cta_title = getValue("why_cta_title");
         content.why.cta_text = getValue("why_cta_text");
+
+        content.careers = content.careers || {};
+        content.careers.title = getValue("careers_title");
+        content.careers.subtitle = getValue("careers_subtitle");
+        content.careers.intro_text = getValue("careers_intro");
+        content.careers.pillars = String(getValue("careers_pillars") || "")
+          .split("\n")
+          .map(x => x.trim())
+          .filter(Boolean);
       };
 
       if (contentType.includes("multipart/form-data")) {
