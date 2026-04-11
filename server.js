@@ -193,6 +193,75 @@ function nowISO() { return new Date().toISOString(); }
 function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
 
 function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
+function sanitizeUploadName(name) {
+  return String(name || "file")
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .replace(/_+/g, "_");
+}
+
+function parseMultipartForm(req, callback) {
+  const contentType = req.headers["content-type"] || "";
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = (boundaryMatch && (boundaryMatch[1] || boundaryMatch[2])) || "";
+  if (!boundary) return callback(new Error("Missing multipart boundary"));
+
+  let raw = Buffer.alloc(0);
+  req.on("data", chunk => { raw = Buffer.concat([raw, chunk]); });
+  req.on("end", () => {
+    try {
+      const parts = raw.toString("binary").split(`--${boundary}`);
+      const fields = {};
+      const files = [];
+
+      parts.forEach(part => {
+        if (!part.includes("Content-Disposition")) return;
+        const nameMatch = part.match(/name="([^"]+)"/);
+        if (!nameMatch) return;
+        const fieldName = nameMatch[1];
+
+        const filenameMatch = part.match(/filename="([^"]*)"/);
+        const splitIndex = part.indexOf("\r\n\r\n");
+        if (splitIndex === -1) return;
+
+        const headerPart = part.slice(0, splitIndex);
+        let bodyPart = part.slice(splitIndex + 4);
+        bodyPart = bodyPart.replace(/\r\n$/, "");
+
+        if (filenameMatch && filenameMatch[1]) {
+          const originalName = sanitizeUploadName(filenameMatch[1]);
+          const contentTypeMatch = headerPart.match(/Content-Type:\s*([^\r\n]+)/i);
+          const mimeType = contentTypeMatch ? String(contentTypeMatch[1]).trim() : "application/octet-stream";
+
+          const uploadDir = path.join(__dirname, "uploads", "support");
+          ensureDir(uploadDir);
+
+          const storedName = `${Date.now()}-${uuid()}-${originalName}`;
+          const absPath = path.join(uploadDir, storedName);
+          fs.writeFileSync(absPath, Buffer.from(bodyPart, "binary"));
+
+          files.push({
+            fieldName,
+            originalName,
+            mimeType,
+            absPath,
+            url: `/uploads/support/${storedName}`
+          });
+        } else {
+          fields[fieldName] = Buffer.from(bodyPart, "binary").toString("utf8").trim();
+        }
+      });
+
+      callback(null, { fields, files });
+    } catch (err) {
+      callback(err);
+    }
+  });
+}
+
+function normalizeMessageAttachments(msg) {
+  return Array.isArray(msg && msg.attachments) ? msg.attachments : [];
+}
+
 function ensureFile(p, defaultVal) { if (!fs.existsSync(p)) fs.writeFileSync(p, JSON.stringify(defaultVal, null, 2)); }
 function readJSON(p, fallback) { ensureFile(p, fallback); return JSON.parse(fs.readFileSync(p, "utf8") || JSON.stringify(fallback)); }
 function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); }
@@ -10431,6 +10500,38 @@ const server = http.createServer(async (req, res) => {
   const pathname = parsed.pathname;
   const method = req.method;
 
+  if (method === "GET" && pathname.startsWith("/uploads/support/")) {
+    const rel = pathname.replace(/^\/uploads\/support\//, "");
+    const abs = path.join(__dirname, "uploads", "support", rel);
+
+    if (!fs.existsSync(abs)) {
+      return send(res, 404, "Not found", "text/plain");
+    }
+
+    const ext = path.extname(abs).toLowerCase();
+    const typeMap = {
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".gif": "image/gif",
+      ".webp": "image/webp",
+      ".pdf": "application/pdf",
+      ".txt": "text/plain",
+      ".csv": "text/csv",
+      ".json": "application/json",
+      ".doc": "application/msword",
+      ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ".xls": "application/vnd.ms-excel",
+      ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    };
+
+    res.writeHead(200, {
+      "Content-Type": typeMap[ext] || "application/octet-stream"
+    });
+    fs.createReadStream(abs).pipe(res);
+    return;
+  }
+
   if (pathname.startsWith("/uploads/")) {
     const filePath = path.join(__dirname, pathname);
     if (fs.existsSync(filePath)) {
@@ -11545,6 +11646,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/contact") {
+    const sess = getAuth(req);
+    if (sess && sess.user_id) {
+      return redirect(res, "/support");
+    }
+
     const c = getWebsiteContent();
     return send(res, 200, `
 <html>
@@ -11578,7 +11684,7 @@ const server = http.createServer(async (req, res) => {
       </div>
 
       <div class="contact-form-card">
-        <form method="POST" action="/contact" class="contact-form">
+        <form method="POST" action="/contact" enctype="multipart/form-data" class="contact-form">
           <div>
             <label for="contact-name">Name</label>
             <input id="contact-name" name="name" required />
@@ -11592,6 +11698,11 @@ const server = http.createServer(async (req, res) => {
           <div>
             <label for="contact-message">Message</label>
             <textarea id="contact-message" name="message" required></textarea>
+          </div>
+
+          <div>
+            <label for="contact-file">Attachment (optional)</label>
+            <input id="contact-file" type="file" name="attachment" />
           </div>
 
           <button class="btn-primary" type="submit" style="margin-top:6px;width:100%;">
@@ -11614,28 +11725,64 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "POST" && pathname === "/contact") {
-    const body = await parseBody(req);
-    const params = new URLSearchParams(body);
+    const contentType = req.headers["content-type"] || "";
+    let fields = {};
+    let files = [];
 
-    const msg = {
-      message_id: uuid(),
-      name: String(params.get("name") || ""),
-      email: String(params.get("email") || ""),
-      message: String(params.get("message") || ""),
-      status: "new",
-      created_at: nowISO()
+    if (contentType.includes("multipart/form-data")) {
+      const parsedForm = await new Promise((resolve, reject) => {
+        parseMultipartForm(req, (err, result) => err ? reject(err) : resolve(result));
+      }).catch(() => null);
+      if (!parsedForm) return send(res, 400, "Invalid form data", "text/plain");
+      fields = parsedForm.fields || {};
+      files = parsedForm.files || [];
+    } else {
+      const body = await parseBody(req);
+      const params = new URLSearchParams(body);
+      fields = {
+        name: String(params.get("name") || ""),
+        email: String(params.get("email") || ""),
+        message: String(params.get("message") || "")
+      };
+    }
+
+    const attachments = files.map(f => ({
+      name: f.originalName,
+      url: f.url,
+      mime_type: f.mimeType
+    }));
+
+    const thread = {
+      thread_id: uuid(),
+      source: "public",
+      user_id: "",
+      org_id: "",
+      name: String(fields.name || ""),
+      email: String(fields.email || ""),
+      status: "open",
+      created_at: nowISO(),
+      messages: [
+        {
+          sender: "user",
+          text: String(fields.message || ""),
+          created_at: nowISO(),
+          attachments
+        }
+      ]
     };
 
-    if (!msg.name || !msg.message) {
+    thread.unread = true;
+
+    if (!thread.name || !thread.messages?.[0]?.text) {
       return send(res, 400, "Missing required fields", "text/plain");
     }
 
-    if (!msg.email.includes("@")) {
+    if (!thread.email.includes("@")) {
       return send(res, 400, "Invalid email", "text/plain");
     }
 
     const msgs = readJSON("./data/contact_messages.json", []);
-    msgs.push(msg);
+    msgs.push(thread);
     writeJSON("./data/contact_messages.json", msgs);
 
     if (process.env.RESEND_API_KEY && process.env.CONTACT_EMAIL_TO) {
@@ -11651,9 +11798,15 @@ const server = http.createServer(async (req, res) => {
             to: [process.env.CONTACT_EMAIL_TO],
             subject: "New Contact Form Message",
             html: `
-              <p><strong>Name:</strong> ${safeStr(msg.name)}</p>
-              <p><strong>Email:</strong> ${safeStr(msg.email)}</p>
-              <p><strong>Message:</strong><br/>${safeStr(msg.message)}</p>
+              <p><strong>Name:</strong> ${safeStr(thread.name)}</p>
+              <p><strong>Email:</strong> ${safeStr(thread.email)}</p>
+              <p><strong>Message:</strong><br/>${safeStr(thread.messages?.[0]?.text || "")}</p>
+              ${attachments.length ? `
+                <p><strong>Attachments:</strong></p>
+                <ul>
+                  ${attachments.map(a => `<li><a href="${safeStr(a.url)}">${safeStr(a.name)}</a></li>`).join("")}
+                </ul>
+              ` : ""}
             `
           })
         });
@@ -11666,21 +11819,372 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/support") {
-    return send(res, 200, `
-    <html>
-    <head>${renderPublicStyles()}</head>
-    <body>
-      ${renderPublicNavbar(pathname)}
-      <div class="section center">
-        <div class="container">
-          <h1>Support</h1>
-          <p>Email us or use the platform chat for help.</p>
+    const sess = getAuth(req);
+    if (!sess || !sess.user_id) return redirect(res, "/login");
+
+    const user = getUserById(sess.user_id);
+    const threads = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+
+    const myThreads = threads
+      .filter(t =>
+        String(t.user_id || "") === String(sess.user_id) ||
+        ((t.email || "").toLowerCase() === String(user?.email || "").toLowerCase() && String(t.source || "") === "user")
+      )
+      .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+    const selectedId = String(parsed.query.id || (myThreads[0]?.thread_id || myThreads[0]?.message_id || ""));
+    const selectedThread = myThreads.find(t => String(t.thread_id || t.message_id || "") === selectedId);
+
+    if (selectedThread && Array.isArray(selectedThread.messages)) {
+      selectedThread.messages = selectedThread.messages.map(msg => {
+        if (msg.sender === "admin") {
+          return { ...msg, read_by_user: true };
+        }
+        return msg;
+      });
+      writeJSON(FILES.contact_messages || "./data/contact_messages.json", threads);
+    }
+
+    const normalizedMessages = selectedThread
+      ? (Array.isArray(selectedThread.messages)
+          ? selectedThread.messages
+          : [{
+              sender: "user",
+              text: String(selectedThread.message || ""),
+              created_at: String(selectedThread.created_at || nowISO())
+            }])
+      : [];
+
+    return send(res, 200, renderPage("Support", `
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h2>Support</h2>
+        <p class="muted" style="margin-top:0;">Message support and keep track of replies in one place.</p>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:320px 1fr;gap:20px;align-items:start;margin-top:20px;">
+      <div class="card">
+        <h3 style="margin-top:0;">Your Conversations</h3>
+
+        <form method="POST" action="/support/new-thread" enctype="multipart/form-data" style="margin-top:15px;">
+          <label>Start a new message</label>
+          <textarea name="message" required style="width:100%;min-height:110px;padding:12px;border-radius:10px;border:1px solid #d1d5db;"></textarea>
+          <label style="margin-top:10px;display:block;">Attachment (optional)</label>
+          <input type="file" name="attachment" style="margin-top:6px;" />
+          <button class="btn-primary" style="margin-top:10px;">Send New Message</button>
+          <p class="muted" style="font-size:12px;margin-top:8px;">You can attach one file per message.</p>
+        </form>
+
+        <div style="margin-top:20px;">
+          ${myThreads.length ? myThreads.map(t => {
+            const preview = Array.isArray(t.messages) && t.messages.length
+              ? String(t.messages[t.messages.length - 1].text || "")
+              : String(t.message || "");
+            const active = String(t.thread_id || "") === selectedId;
+            const unreadAdminReply = Array.isArray(t.messages) && t.messages.some(msg => msg.sender === "admin" && !msg.read_by_user);
+            return `
+              <a href="/support?id=${encodeURIComponent(String(t.thread_id || ""))}" style="
+                display:block;
+                padding:12px;
+                border-radius:10px;
+                margin-bottom:10px;
+                text-decoration:none;
+                border:1px solid ${active ? "#2563eb" : "#e5e7eb"};
+                background:${active ? "#eff6ff" : "#fff"};
+                color:#111827;
+              ">
+                <div style="font-weight:700;display:flex;justify-content:space-between;gap:10px;align-items:center;">
+                  <span>${safeStr(t.subject || "Support Conversation")}</span>
+                  ${unreadAdminReply ? `<span style="background:#ef4444;color:#fff;font-size:11px;padding:2px 8px;border-radius:999px;">New reply</span>` : ``}
+                </div>
+                <div style="font-size:12px;color:#6b7280;margin-top:6px;">
+                  ${safeStr(preview).slice(0, 80)}
+                </div>
+              </a>
+            `;
+          }).join("") : `<p class="muted">No conversations yet.</p>`}
         </div>
       </div>
-      ${renderStickyMobileCta()}
-    </body>
-    </html>
-    `);
+
+      <div class="card">
+        ${selectedThread ? `
+          <h3 style="margin-top:0;">Conversation</h3>
+
+          <div style="margin-top:15px;">
+            ${normalizedMessages.map(msg => `
+              <div style="
+                margin-bottom:15px;
+                padding:14px;
+                border-radius:12px;
+                border:1px solid #e5e7eb;
+                background:${msg.sender === "admin" ? "#e0f2fe" : "#f3f4f6"};
+              ">
+                <strong>${safeStr(msg.sender === "admin" ? "Support" : "You")}</strong><br/>
+                <span style="font-size:12px;color:#666;">
+                  ${msg.created_at ? new Date(msg.created_at).toLocaleString() : ""}
+                </span><br/>
+                ${safeStr(msg.text)}
+                ${normalizeMessageAttachments(msg).length ? `
+                  <div style="margin-top:10px;">
+                    ${normalizeMessageAttachments(msg).map(att => `
+                      <a href="${safeStr(att.url)}" target="_blank" rel="noopener noreferrer" style="
+                        display:inline-block;
+                        margin-right:8px;
+                        margin-top:6px;
+                        padding:6px 10px;
+                        border-radius:999px;
+                        background:#ffffff;
+                        border:1px solid #d1d5db;
+                        font-size:12px;
+                        text-decoration:none;
+                        color:#111827;
+                      ">
+                        📎 ${safeStr(att.name)}
+                      </a>
+                    `).join("")}
+                  </div>
+                ` : ""}
+              </div>
+            `).join("")}
+          </div>
+
+          <form method="POST" action="/support/reply" enctype="multipart/form-data">
+            <input type="hidden" name="thread_id" value="${safeStr(String(selectedThread.thread_id || ""))}" />
+            <label>Reply</label>
+            <textarea name="reply" required style="width:100%;min-height:120px;padding:12px;border-radius:10px;border:1px solid #d1d5db;"></textarea>
+            <label style="margin-top:10px;display:block;">Attachment (optional)</label>
+            <input type="file" name="attachment" style="margin-top:6px;" />
+            <button class="btn-primary" style="margin-top:12px;">Send Reply</button>
+            <p class="muted" style="font-size:12px;margin-top:8px;">You can attach one file per message.</p>
+          </form>
+        ` : `
+          <h3 style="margin-top:0;">No conversation selected</h3>
+          <p class="muted">Start a new message to contact support.</p>
+        `}
+      </div>
+    </div>
+
+    ${selectedThread ? `
+      <script>
+      (function() {
+        const currentId = ${JSON.stringify(selectedId)};
+        let lastCount = ${JSON.stringify(normalizedMessages.length)};
+        setInterval(async function() {
+          try {
+            const res = await fetch("/support/thread-state?id=" + encodeURIComponent(currentId), {
+              credentials: "same-origin"
+            });
+            const data = await res.json();
+            if (data && typeof data.count === "number" && data.count !== lastCount) {
+              window.location.reload();
+            }
+          } catch (_) {}
+        }, 10000);
+      })();
+      </script>
+    ` : ""}
+  `, navApp("account"), { showChat: false, orgName: "" }));
+  }
+
+  if (method === "POST" && pathname === "/support/new-thread") {
+    const sess = getAuth(req);
+    if (!sess || !sess.user_id) return redirect(res, "/login");
+
+    const contentType = req.headers["content-type"] || "";
+    let fields = {};
+    let files = [];
+
+    if (contentType.includes("multipart/form-data")) {
+      const parsedForm = await new Promise((resolve, reject) => {
+        parseMultipartForm(req, (err, result) => err ? reject(err) : resolve(result));
+      }).catch(() => null);
+      if (!parsedForm) return redirect(res, "/support");
+      fields = parsedForm.fields || {};
+      files = parsedForm.files || [];
+    } else {
+      const body = await parseBody(req);
+      const p = new URLSearchParams(body);
+      fields = { message: String(p.get("message") || "") };
+    }
+
+    const message = String(fields.message || "").trim();
+    if (!message) return redirect(res, "/support");
+
+    const attachments = files.map(f => ({
+      name: f.originalName,
+      url: f.url,
+      mime_type: f.mimeType
+    }));
+
+    const user = getUserById(sess.user_id);
+    const threads = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+
+    const thread = {
+      thread_id: uuid(),
+      source: "user",
+      user_id: String(sess.user_id || ""),
+      org_id: String(sess.org_id || ""),
+      name: String(user?.full_name || user?.name || user?.email || "User"),
+      email: String(user?.email || ""),
+      subject: "Support Request",
+      status: "open",
+      unread: true,
+      created_at: nowISO(),
+      messages: [
+        {
+          sender: "user",
+          text: message,
+          created_at: nowISO(),
+          read_by_user: true,
+          attachments
+        }
+      ]
+    };
+
+    threads.push(thread);
+    writeJSON(FILES.contact_messages || "./data/contact_messages.json", threads);
+
+    if (process.env.RESEND_API_KEY && process.env.CONTACT_EMAIL_TO) {
+      try {
+        await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            from: process.env.CONTACT_EMAIL_FROM || "TJ Healthcare <noreply@tjhealthcarepro.com>",
+            to: [process.env.CONTACT_EMAIL_TO],
+            subject: "New In-App Support Message",
+            html: `
+              <p><strong>Name:</strong> ${safeStr(thread.name)}</p>
+              <p><strong>Email:</strong> ${safeStr(thread.email)}</p>
+              <p><strong>Source:</strong> Logged-in user</p>
+              <p><strong>Message:</strong><br/>${safeStr(message)}</p>
+              ${attachments.length ? `
+                <p><strong>Attachments:</strong></p>
+                <ul>
+                  ${attachments.map(a => `<li><a href="${safeStr(a.url)}">${safeStr(a.name)}</a></li>`).join("")}
+                </ul>
+              ` : ""}
+            `
+          })
+        });
+      } catch (err) {
+        console.error("Failed to send support email notification", err);
+      }
+    }
+
+    return redirect(res, `/support?id=${encodeURIComponent(thread.thread_id)}`);
+  }
+
+  if (method === "POST" && pathname === "/support/reply") {
+    const sess = getAuth(req);
+    if (!sess || !sess.user_id) return redirect(res, "/login");
+
+    const contentType = req.headers["content-type"] || "";
+    let fields = {};
+    let files = [];
+
+    if (contentType.includes("multipart/form-data")) {
+      const parsedForm = await new Promise((resolve, reject) => {
+        parseMultipartForm(req, (err, result) => err ? reject(err) : resolve(result));
+      }).catch(() => null);
+      if (!parsedForm) return redirect(res, "/support");
+      fields = parsedForm.fields || {};
+      files = parsedForm.files || [];
+    } else {
+      const body = await parseBody(req);
+      const p = new URLSearchParams(body);
+      fields = {
+        thread_id: String(p.get("thread_id") || ""),
+        reply: String(p.get("reply") || "")
+      };
+    }
+
+    const thread_id = String(fields.thread_id || "");
+    const reply = String(fields.reply || "").trim();
+    const attachments = files.map(f => ({
+      name: f.originalName,
+      url: f.url,
+      mime_type: f.mimeType
+    }));
+
+    const threads = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+    const thread = threads.find(t =>
+      String(t.thread_id || t.message_id || "") === thread_id &&
+      (String(t.user_id || "") === String(sess.user_id || ""))
+    );
+
+    if (thread && reply) {
+      if (!Array.isArray(thread.messages)) {
+        thread.messages = [{
+          sender: "user",
+          text: String(thread.message || ""),
+          created_at: String(thread.created_at || nowISO()),
+          read_by_user: true,
+          attachments: []
+        }];
+      }
+
+      thread.messages.push({
+        sender: "user",
+        text: reply,
+        created_at: nowISO(),
+        read_by_user: true,
+        attachments
+      });
+
+      thread.unread = true;
+      thread.status = "open";
+      writeJSON(FILES.contact_messages || "./data/contact_messages.json", threads);
+
+      if (process.env.RESEND_API_KEY && process.env.CONTACT_EMAIL_TO) {
+        try {
+          await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              from: process.env.CONTACT_EMAIL_FROM || "TJ Healthcare <noreply@tjhealthcarepro.com>",
+              to: [process.env.CONTACT_EMAIL_TO],
+              subject: "New User Reply in Support Thread",
+              html: `
+                <p><strong>User:</strong> ${safeStr(thread.name)}</p>
+                <p><strong>Email:</strong> ${safeStr(thread.email)}</p>
+                <p><strong>Reply:</strong><br/>${safeStr(reply)}</p>
+                ${attachments.length ? `
+                  <p><strong>Attachments:</strong></p>
+                  <ul>
+                    ${attachments.map(a => `<li><a href="${safeStr(a.url)}">${safeStr(a.name)}</a></li>`).join("")}
+                  </ul>
+                ` : ""}
+              `
+            })
+          });
+        } catch (err) {
+          console.error("Failed to send support reply email notification", err);
+        }
+      }
+    }
+
+    return redirect(res, `/support?id=${encodeURIComponent(thread_id)}`);
+  }
+
+  if (method === "GET" && pathname === "/support/thread-state") {
+    const sess = getAuth(req);
+    if (!sess || !sess.user_id) return send(res, 401, JSON.stringify({ error: "unauthorized" }), "application/json");
+
+    const id = String(parsed.query.id || "");
+    const threads = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+    const thread = threads.find(t => String(t.thread_id || t.message_id || "") === id && String(t.user_id || "") === String(sess.user_id || ""));
+    if (!thread) return send(res, 404, JSON.stringify({ error: "not_found" }), "application/json");
+
+    const count = Array.isArray(thread.messages) ? thread.messages.length : (thread.message ? 1 : 0);
+    return send(res, 200, JSON.stringify({ count }), "application/json");
   }
 
   if (method === "GET" && pathname === "/apply") {
@@ -14049,30 +14553,50 @@ ${(content.demo.steps || []).map(s =>
 
     if (method === "GET" && pathname === "/admin/contact-messages") {
       const msgs = readJSON("./data/contact_messages.json", []);
+      const unreadCount = msgs.filter(m => m.unread).length;
 
-      const rows = msgs.slice().reverse().map(m => `
-        <tr>
-          <td>${safeStr(m.name)}</td>
+      const rows = msgs.slice().reverse().map(m => {
+        const threadId = String(m.thread_id || m.message_id || "");
+        const messagePreview = safeStr(m.messages?.[0]?.text || m.message || "");
+        const statusValue = String(m.status || "open");
+
+        return `
+        <tr style="background:${m.unread ? "#fef3c7" : "transparent"};">
+          <td>
+            ${safeStr(m.name)}<br/>
+            ${threadId ? `<a href="/admin/contact-thread?id=${encodeURIComponent(threadId)}">View</a>` : ""}
+          </td>
           <td><a href="mailto:${safeStr(m.email)}">${safeStr(m.email)}</a></td>
-          <td style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${safeStr(m.message)}</td>
-          <td>${safeStr(m.status)}</td>
+          <td style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${messagePreview}</td>
+          <td>${safeStr(statusValue)}</td>
           <td>${safeStr(m.created_at ? new Date(m.created_at).toLocaleString() : "-")}</td>
           <td>
             <form method="POST" action="/admin/contact-messages/update">
-              <input type="hidden" name="message_id" value="${safeStr(m.message_id)}" />
+              <input type="hidden" name="message_id" value="${safeStr(threadId)}" />
               <select name="status">
-                <option ${m.status==="new"?"selected":""}>new</option>
-                <option ${m.status==="replied"?"selected":""}>replied</option>
-                <option ${m.status==="closed"?"selected":""}>closed</option>
+                <option ${statusValue==="open"?"selected":""}>open</option>
+                <option ${statusValue==="replied"?"selected":""}>replied</option>
+                <option ${statusValue==="closed"?"selected":""}>closed</option>
               </select>
               <button class="btn small">Update</button>
             </form>
           </td>
         </tr>
-      `).join("");
+      `;
+      }).join("");
 
       return send(res, 200, renderPage("Contact Messages", `
-        <h2>Contact Messages</h2>
+        <h2>
+          Contact Messages
+          ${unreadCount > 0 ? `<span style="
+            background:#ef4444;
+            color:white;
+            padding:4px 8px;
+            border-radius:10px;
+            font-size:12px;
+            margin-left:10px;
+          ">${unreadCount}</span>` : ""}
+        </h2>
 
         <table>
           <tr>
@@ -14093,10 +14617,10 @@ ${(content.demo.steps || []).map(s =>
       const params = new URLSearchParams(body);
 
       const id = String(params.get("message_id") || "");
-      const status = String(params.get("status") || "new");
+      const status = String(params.get("status") || "open");
 
       const msgs = readJSON("./data/contact_messages.json", []);
-      const idx = msgs.findIndex(m => String(m.message_id || "") === id);
+      const idx = msgs.findIndex(m => String(m.thread_id || m.message_id || "") === id);
 
       if (idx >= 0) {
         msgs[idx].status = status;
@@ -14104,6 +14628,209 @@ ${(content.demo.steps || []).map(s =>
       }
 
       return redirect(res, "/admin/contact-messages");
+    }
+
+    if (method === "GET" && pathname === "/admin/contact-thread") {
+      const id = parsed.query.id;
+      const threads = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+      const thread = threads.find(t => String(t.thread_id || t.message_id || "") === String(id || ""));
+
+      if (!thread) return send(res, 404, "Thread not found");
+
+      thread.unread = false;
+      writeJSON(FILES.contact_messages || "./data/contact_messages.json", threads);
+
+      const normalizedMessages = Array.isArray(thread.messages)
+        ? thread.messages
+        : [{ sender: "user", text: String(thread.message || ""), created_at: String(thread.created_at || nowISO()) }];
+
+      return send(res, 200, `
+    <html>
+    <head>${renderPublicStyles()}</head>
+    <body>
+      ${navAdmin()}
+
+      <div class="container" style="max-width:800px;margin-top:40px;">
+        <h2>Conversation with ${safeStr(thread.name)}</h2>
+
+        <div style="margin-top:20px;">
+          ${normalizedMessages.map(msg => `
+            <div style="
+              margin-bottom:15px;
+              padding:14px;
+              border-radius:12px;
+              background:${msg.sender === "admin" ? "#e0f2fe" : "#f3f4f6"};
+              border:1px solid #e5e7eb;
+            ">
+              <strong>${safeStr(msg.sender)}</strong><br/>
+              <span style="font-size:12px;color:#666;">
+                ${msg.created_at ? new Date(msg.created_at).toLocaleString() : ""}
+              </span><br/>
+              ${safeStr(msg.text)}
+              ${normalizeMessageAttachments(msg).length ? `
+                <div style="margin-top:10px;">
+                  ${normalizeMessageAttachments(msg).map(att => `
+                    <a href="${safeStr(att.url)}" target="_blank" rel="noopener noreferrer" style="
+                      display:inline-block;
+                      margin-right:8px;
+                      margin-top:6px;
+                      padding:6px 10px;
+                      border-radius:999px;
+                      background:#ffffff;
+                      border:1px solid #d1d5db;
+                      font-size:12px;
+                      text-decoration:none;
+                      color:#111827;
+                    ">
+                      📎 ${safeStr(att.name)}
+                    </a>
+                  `).join("")}
+                </div>
+              ` : ""}
+            </div>
+          `).join("")}
+        </div>
+
+        <form method="POST" action="/admin/contact-reply" enctype="multipart/form-data">
+          <input type="hidden" name="thread_id" value="${safeStr(thread.thread_id || thread.message_id || "")}" />
+
+          <textarea name="reply" required style="
+  width:100%;
+  margin-top:20px;
+  padding:12px;
+  border-radius:10px;
+  border:1px solid #d1d5db;
+  min-height:120px;
+  font-size:14px;
+"></textarea>
+          <label style="margin-top:10px;display:block;">Attachment (optional)</label>
+          <input type="file" name="attachment" style="margin-top:6px;" />
+          <p class="muted" style="font-size:12px;margin-top:8px;">You can attach one file per message.</p>
+
+          <button class="btn-primary" style="margin-top:12px;">
+            Send Reply
+          </button>
+        </form>
+
+      </div>
+      <script>
+      (function() {
+        const currentId = ${JSON.stringify(String(thread.thread_id || thread.message_id || ""))};
+        let lastCount = ${JSON.stringify(normalizedMessages.length)};
+        setInterval(async function() {
+          try {
+            const res = await fetch("/admin/contact-thread-state?id=" + encodeURIComponent(currentId), {
+              credentials: "same-origin"
+            });
+            const data = await res.json();
+            if (data && typeof data.count === "number" && data.count !== lastCount) {
+              window.location.reload();
+            }
+          } catch (_) {}
+        }, 10000);
+      })();
+      </script>
+    </body>
+    </html>
+  `);
+    }
+
+    if (method === "POST" && pathname === "/admin/contact-reply") {
+      const contentType = req.headers["content-type"] || "";
+      let fields = {};
+      let files = [];
+
+      if (contentType.includes("multipart/form-data")) {
+        const parsedForm = await new Promise((resolve, reject) => {
+          parseMultipartForm(req, (err, result) => err ? reject(err) : resolve(result));
+        }).catch(() => null);
+        if (!parsedForm) return redirect(res, "/admin/contact-messages");
+        fields = parsedForm.fields || {};
+        files = parsedForm.files || [];
+      } else {
+        const body = await parseBody(req);
+        const p = new URLSearchParams(body);
+        fields = {
+          thread_id: p.get("thread_id"),
+          reply: p.get("reply")
+        };
+      }
+
+      const thread_id = String(fields.thread_id || "");
+      const reply = String(fields.reply || "");
+      const attachments = files.map(f => ({
+        name: f.originalName,
+        url: f.url,
+        mime_type: f.mimeType
+      }));
+
+      const threads = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+      const thread = threads.find(t => String(t.thread_id || t.message_id || "") === String(thread_id || ""));
+
+      if (thread && reply) {
+        if (!Array.isArray(thread.messages)) {
+          thread.messages = [{
+            sender: "user",
+            text: String(thread.message || ""),
+            created_at: String(thread.created_at || nowISO()),
+            attachments: []
+          }];
+        }
+
+        thread.messages.push({
+          sender: "admin",
+          text: reply,
+          created_at: nowISO(),
+          read_by_user: false,
+          attachments
+        });
+
+        thread.status = "replied";
+        writeJSON(FILES.contact_messages || "./data/contact_messages.json", threads);
+
+        if (process.env.RESEND_API_KEY && thread.email) {
+          try {
+            await fetch("https://api.resend.com/emails", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                from: process.env.CONTACT_EMAIL_FROM || "TJ Healthcare <noreply@tjhealthcarepro.com>",
+                to: [thread.email],
+                subject: "Reply from TJ Healthcare Support",
+                html: `
+                  <p>Hello ${safeStr(thread.name || "there")},</p>
+                  <p>Our team replied to your support message:</p>
+                  <blockquote>${safeStr(reply)}</blockquote>
+                  ${attachments.length ? `
+                    <p><strong>Attachments:</strong></p>
+                    <ul>
+                      ${attachments.map(a => `<li><a href="${safeStr(a.url)}">${safeStr(a.name)}</a></li>`).join("")}
+                    </ul>
+                  ` : ""}
+                  <p>You can reply by logging into your support page${thread.source === "public" ? " or by contacting us again" : ""}.</p>
+                `
+              })
+            });
+          } catch (err) {
+            console.error("Failed to send support reply email", err);
+          }
+        }
+      }
+
+      return redirect(res, `/admin/contact-thread?id=${encodeURIComponent(String(thread_id || ""))}`);
+    }
+
+    if (method === "GET" && pathname === "/admin/contact-thread-state") {
+      const threads = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+      const id = String(parsed.query.id || "");
+      const thread = threads.find(t => String(t.thread_id || t.message_id || "") === id);
+      if (!thread) return send(res, 404, JSON.stringify({ error: "not_found" }), "application/json");
+
+      const count = Array.isArray(thread.messages) ? thread.messages.length : (thread.message ? 1 : 0);
+      return send(res, 200, JSON.stringify({ count }), "application/json");
     }
 
     if (method === "GET" && pathname === "/admin/dashboard") {
