@@ -11471,6 +11471,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/contact") {
+    const c = getWebsiteContent();
     return send(res, 200, `
 <html>
 <head>
