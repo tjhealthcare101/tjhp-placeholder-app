@@ -11984,7 +11984,7 @@ const server = http.createServer(async (req, res) => {
       })();
       </script>
     ` : ""}
-  `, navApp("account"), { showChat: false, orgName: "" }));
+  `, navAdmin(), { showChat: false, orgName: "" }));
   }
 
   if (method === "POST" && pathname === "/support/new-thread") {
