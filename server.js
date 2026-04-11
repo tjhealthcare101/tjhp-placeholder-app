@@ -3506,6 +3506,23 @@ function getDefaultWebsiteContent() {
         "Flexible & Remote | Work remotely with flexibility while contributing to meaningful work."
       ]
     },
+    culture: {
+      title: "Our Culture",
+      subtitle: "We’re building more than a platform — we’re building a team focused on impact, ownership, and real results.",
+      intro_text: "At TJ Healthcare Pro, we operate with urgency, clarity, and accountability. We value people who take initiative, solve problems, and care about outcomes — not just activity.",
+      pillars: [
+        "Ownership | You take responsibility for results, not just tasks.",
+        "Real Impact | Your work directly affects healthcare operations and outcomes.",
+        "Build, Don’t Maintain | We create systems — not just manage them.",
+        "Speed + Execution | We move fast, test ideas, and iterate quickly.",
+        "High Standards | We care about doing things the right way — especially in healthcare.",
+        "Flexible & Remote | Work with flexibility while delivering real results."
+      ],
+      hire_title: "Who We’re Looking For",
+      hire_text: "We’re looking for builders — people who want to create, improve, and solve real problems in healthcare.\n\nIf you take initiative, learn quickly, and want to be part of something growing, you’ll fit right in.",
+      cta_title: "Ready to Build With Us?",
+      cta_text: "If you’re looking to make a real impact in healthcare and help build something meaningful, explore our open roles and apply today."
+    },
     company_links: {
       about_href: "/about",
       why_href: "/why",
@@ -3600,6 +3617,7 @@ function getWebsiteContent() {
     about: { ...getDefaultWebsiteContent().about, ...(content.about || {}) },
     why: { ...getDefaultWebsiteContent().why, ...(content.why || {}) },
     careers: { ...getDefaultWebsiteContent().careers, ...(content.careers || {}) },
+    culture: { ...getDefaultWebsiteContent().culture, ...(content.culture || {}) },
     company_links: { ...getDefaultWebsiteContent().company_links, ...(content.company_links || {}) },
     demo: { ...getDefaultWebsiteContent().demo, ...(content.demo || {}) },
     testimonials: Array.isArray(content.testimonials) ? content.testimonials : [],
@@ -11383,6 +11401,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/culture") {
+    const c = getWebsiteContent();
     return send(res, 200, `
 <html>
 <head>
@@ -11394,90 +11413,36 @@ const server = http.createServer(async (req, res) => {
 
   <div class="section center">
     <div class="container" style="max-width:900px;">
-
-      <h1>Our Culture</h1>
-
-      <p style="margin-top:15px;font-size:18px;">
-        We’re building more than a platform — we’re building a team focused on impact, ownership, and real results.
-      </p>
-
-      <p style="margin-top:10px;">
-        At TJ Healthcare Pro, we operate with urgency, clarity, and accountability. We value people who take initiative,
-        solve problems, and care about outcomes — not just activity.
-      </p>
-
-    </div>
-  </div>
-
-  <div class="section light">
-    <div class="container" style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;">
-
-      <div class="card">
-        <h3>Ownership</h3>
-        <p>You take responsibility for results, not just tasks. We trust our team to make decisions and execute.</p>
+      <h1>${safeStr(c.culture.title)}</h1>
+      <p class="section-sub">${safeStr(c.culture.subtitle)}</p>
+      ${safeStr(c.culture.intro_text)
+        .split("\n")
+        .map(p => `<p style="margin-top:15px;">${p}</p>`)
+        .join("")}
+      <div style="margin-top:40px;"></div>
+      <div class="grid-3" style="margin-top:60px;">
+        ${c.culture.pillars.map(p => {
+          const [title, desc] = p.split("|");
+          return `
+            <div class="card center">
+              <strong>${safeStr(title)}</strong>
+              <p>${safeStr(desc)}</p>
+            </div>
+          `;
+        }).join("")}
       </div>
-
-      <div class="card">
-        <h3>Real Impact</h3>
-        <p>Your work directly affects healthcare practices, revenue outcomes, and operational performance.</p>
-      </div>
-
-      <div class="card">
-        <h3>Build, Don’t Maintain</h3>
-        <p>We’re early — which means you’re building systems, not just maintaining them.</p>
-      </div>
-
-      <div class="card">
-        <h3>Speed + Execution</h3>
-        <p>We move fast, test ideas, and iterate quickly. Progress matters more than perfection.</p>
-      </div>
-
-      <div class="card">
-        <h3>High Standards</h3>
-        <p>We care about quality, clarity, and doing things the right way — especially in healthcare.</p>
-      </div>
-
-      <div class="card">
-        <h3>Flexible & Remote</h3>
-        <p>We focus on results — not where you work from. Flexibility with accountability.</p>
-      </div>
-
-    </div>
-  </div>
-
-  <div class="section center">
-    <div class="container" style="max-width:700px;">
-
-      <h2>Who We’re Looking For</h2>
-
-      <p style="margin-top:15px;">
-        We’re looking for builders — people who want to create, improve, and solve real problems in healthcare.
-      </p>
-
-      <p style="margin-top:10px;">
-        If you’re someone who takes initiative, learns quickly, and wants to be part of something growing,
-        you’ll fit right in.
-      </p>
-
-    </div>
-  </div>
-
-  <div class="section center light">
-    <div class="container" style="max-width:700px;">
-
-      <h2>Ready to Build With Us?</h2>
-
-      <p style="margin-top:15px;">
-        If you’re looking to make a real impact in healthcare and help build something meaningful,
-        explore our open roles and apply today.
-      </p>
-
-      <div style="margin-top:20px;">
-        <a href="/careers" class="btn-primary">
-          View Open Positions
-        </a>
-      </div>
-
+      <div style="margin-top:80px;"></div>
+      <h2 style="margin-top:60px;">${safeStr(c.culture.hire_title)}</h2>
+      ${safeStr(c.culture.hire_text)
+        .split("\n")
+        .map(p => `<p style="margin-top:10px;">${p}</p>`)
+        .join("")}
+      <div style="margin-top:60px;"></div>
+      <h2 style="margin-top:40px;">${safeStr(c.culture.cta_title)}</h2>
+      <p>${safeStr(c.culture.cta_text)}</p>
+      <a href="/careers" class="btn-primary" style="margin-top:15px;">
+        View Open Positions
+      </a>
     </div>
   </div>
 
@@ -13336,7 +13301,29 @@ ${(content.demo.steps || []).map(s =>
 
               <details>
                 <summary>Culture</summary>
-                <p class="muted">Add culture CMS later</p>
+                <label>Page Title</label>
+                <input name="culture_title" value="${safeStr(content.culture?.title || "")}" />
+
+                <label>Subtitle</label>
+                <input name="culture_subtitle" value="${safeStr(content.culture?.subtitle || "")}" />
+
+                <label>Intro Text</label>
+                <textarea name="culture_intro">${safeStr(content.culture?.intro_text || "")}</textarea>
+
+                <label>Pillars (one per line: Title | Description)</label>
+                <textarea name="culture_pillars">${(content.culture?.pillars || []).join("\n")}</textarea>
+
+                <label>Who We're Looking For Title</label>
+                <input name="culture_hire_title" value="${safeStr(content.culture?.hire_title || "")}" />
+
+                <label>Who We're Looking For Text</label>
+                <textarea name="culture_hire_text">${safeStr(content.culture?.hire_text || "")}</textarea>
+
+                <label>CTA Title</label>
+                <input name="culture_cta_title" value="${safeStr(content.culture?.cta_title || "")}" />
+
+                <label>CTA Text</label>
+                <input name="culture_cta_text" value="${safeStr(content.culture?.cta_text || "")}" />
               </details>
 
               <details>
@@ -13570,6 +13557,19 @@ ${(content.demo.steps || []).map(s =>
           .split("\n")
           .map(x => x.trim())
           .filter(Boolean);
+
+        content.culture = content.culture || {};
+        content.culture.title = getValue("culture_title");
+        content.culture.subtitle = getValue("culture_subtitle");
+        content.culture.intro_text = getValue("culture_intro");
+        content.culture.pillars = String(getValue("culture_pillars") || "")
+          .split("\n")
+          .map(x => x.trim())
+          .filter(Boolean);
+        content.culture.hire_title = getValue("culture_hire_title");
+        content.culture.hire_text = getValue("culture_hire_text");
+        content.culture.cta_title = getValue("culture_cta_title");
+        content.culture.cta_text = getValue("culture_cta_text");
       };
 
       if (contentType.includes("multipart/form-data")) {
