@@ -3158,18 +3158,24 @@ function renderLoginPage(contentHtml, pageTitle = "Login | TJ Healthcare Pro") {
     </html>
   `;
 }
-function navUser() {
+function navUser(active = "") {
   return `
-    <a href="/dashboard">Revenue Overview</a>
-    <a href="/claims">Claims Lifecycle</a>
-    <a href="/data-management">Data Management</a>
-    <a href="/revenue-intelligence">Revenue Intelligence Command Center</a>
-    <a href="/ai-copilot">AI Copilot</a>
-    <a href="/actions">Action Center</a>
-    <a href="/report">Reports</a>
-    <a href="/account">Account</a>
-    ${getAIStatusLabel()}
-    <a href="/logout">Logout</a>
+    <div style="border-bottom:1px solid #eee;">
+      <div class="container" style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;gap:16px;flex-wrap:wrap;">
+        
+        <div style="font-weight:800;font-size:20px;">
+          TJ Healthcare Pro
+        </div>
+
+        <div style="display:flex;gap:16px;align-items:center;font-size:14px;">
+          <a href="/dashboard" class="${active === "dashboard" ? "nav-active" : ""}">Dashboard</a>
+          <a href="/support" class="${active === "support" ? "nav-active" : ""}">Support</a>
+          <a href="/account" class="${active === "account" ? "nav-active" : ""}">Account</a>
+          <a href="/logout">Logout</a>
+        </div>
+
+      </div>
+    </div>
   `;
 }
 function navAdmin() {
@@ -11984,7 +11990,7 @@ const server = http.createServer(async (req, res) => {
       })();
       </script>
     ` : ""}
-  `, navAdmin(), { showChat: false, orgName: "" }));
+  `, navUser("support"), { showChat: false, orgName: "" }));
   }
 
   if (method === "POST" && pathname === "/support/new-thread") {
@@ -16088,7 +16094,7 @@ Keep it concise and factual.
         });
 
       </script>
-    `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser("dashboard"), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
