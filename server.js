@@ -3479,6 +3479,23 @@ function getDefaultWebsiteContent() {
       story_title: "Why We Built This",
       story_text: "This platform was built from real-world healthcare operational challenges and financial gaps observed in practice."
     },
+    why: {
+      title: "Our Why",
+      subtitle: "Healthcare practices are losing revenue every day — and most don’t even realize it.",
+      problem_title: "The Problem We Saw",
+      problem_text: "Denied claims go unappealed. Underpayments go unnoticed. Teams are overwhelmed, and revenue loss becomes normal.\n\nNot because people don’t care — but because systems aren’t built to support them.",
+      experience_title: "Built from Real Healthcare Operations",
+      experience_text: "TJ Healthcare Pro was built from firsthand experience working inside healthcare operations — where reimbursement pressure, staffing limitations, and time constraints are constant.\n\nThrough structured workflows and disciplined processes, we’ve seen what works — and what fails — when it comes to recovering lost revenue.",
+      build_title: "Why We Built TJ Healthcare Pro",
+      build_text: "We didn’t build this to replace teams.\n\nWe built it to give them clarity, structure, and support — using AI in a way that is practical, compliant, and aligned with real workflows.\n\nNot more tools. Not more noise.\n\nJust better decisions, better processes, and better outcomes.",
+      pillars: [
+        "Compliance First",
+        "Built for Reality",
+        "AI with Purpose"
+      ],
+      cta_title: "Start Recovering What You're Losing",
+      cta_text: "See what your current process is missing — and take control of your revenue."
+    },
     company_links: {
       about_href: "/about",
       why_href: "/why",
@@ -3571,6 +3588,7 @@ function getWebsiteContent() {
       },
     },
     about: { ...getDefaultWebsiteContent().about, ...(content.about || {}) },
+    why: { ...getDefaultWebsiteContent().why, ...(content.why || {}) },
     company_links: { ...getDefaultWebsiteContent().company_links, ...(content.company_links || {}) },
     demo: { ...getDefaultWebsiteContent().demo, ...(content.demo || {}) },
     testimonials: Array.isArray(content.testimonials) ? content.testimonials : [],
@@ -11293,97 +11311,51 @@ const server = http.createServer(async (req, res) => {
       <!-- HERO -->
       <div class="section center">
         <div class="container" style="max-width:800px;">
-          <h1>Our Why</h1>
-          <p style="margin-top:15px;font-size:18px;">
-            Healthcare practices are losing revenue every day - and most don’t even realize it.
-          </p>
+          <h1>${safeStr(c.why.title)}</h1>
+          <p class="section-sub">${safeStr(c.why.subtitle)}</p>
         </div>
       </div>
 
       <!-- PROBLEM -->
       <div class="section light center">
         <div class="container" style="max-width:800px;">
-          <h2>The Problem We Saw</h2>
-          <p style="margin-top:15px;">
-            Denied claims go unappealed. Underpayments go unnoticed.  
-            Teams are overwhelmed, and revenue loss becomes normal.
-          </p>
-
-          <p style="margin-top:15px;font-weight:600;">
-            Not because people don’t care - but because systems aren’t built to support them.
-          </p>
+          <h2>${safeStr(c.why.problem_title)}</h2>
+          <p>${safeStr(c.why.problem_text)}</p>
         </div>
       </div>
 
       <!-- EXPERIENCE -->
       <div class="section center">
         <div class="container" style="max-width:800px;">
-          <h2>Built from Real Healthcare Operations</h2>
-          <p style="margin-top:15px;">
-            TJ Healthcare Pro was built from firsthand experience working inside healthcare operations - 
-            where reimbursement pressure, staffing limitations, and time constraints are constant.
-          </p>
-
-          <p style="margin-top:15px;">
-            Through structured workflows and disciplined processes, we’ve seen what works - 
-            and what fails - when it comes to recovering lost revenue.
-          </p>
-
+          <h2>${safeStr(c.why.experience_title)}</h2>
+          <p>${safeStr(c.why.experience_text)}</p>
         </div>
       </div>
 
       <!-- SOLUTION -->
       <div class="section light center">
         <div class="container" style="max-width:800px;">
-          <h2>Why We Built TJ Healthcare Pro</h2>
-          <p style="margin-top:15px;">
-            We didn’t build this to replace teams.
-          </p>
-
-          <p style="margin-top:10px;">
-            We built it to give them clarity, structure, and support - using AI in a way that is 
-            practical, compliant, and aligned with real workflows.
-          </p>
-
-          <p style="margin-top:15px;">
-            Not more tools. Not more noise.
-          </p>
-
-          <p style="margin-top:10px;font-weight:600;">
-            Just better decisions, better processes, and better outcomes.
-          </p>
+          <h2>${safeStr(c.why.build_title)}</h2>
+          <p>${safeStr(c.why.build_text)}</p>
         </div>
       </div>
 
       <!-- DIFFERENTIATION -->
       <div class="section center">
-        <div class="container grid-3" style="max-width:900px;margin:auto;">
-
-          <div class="card">
-            <h3>Compliance First</h3>
-            <p>Designed to support workflows without introducing unnecessary risk.</p>
+        <div class="container" style="max-width:900px;margin:auto;">
+          <div class="grid-3">
+            ${c.why.pillars.map(p => `
+              <div class="card center">${safeStr(p)}</div>
+            `).join("")}
           </div>
-
-          <div class="card">
-            <h3>Built for Reality</h3>
-            <p>Created from real healthcare operational experience - not theory.</p>
-          </div>
-
-          <div class="card">
-            <h3>AI with Purpose</h3>
-            <p>Used to enhance clarity and efficiency - not replace human decision-making.</p>
-          </div>
-
         </div>
       </div>
 
       <!-- CTA -->
       <div class="section center light">
         <div class="container" style="max-width:700px;">
-          <h2>Start Recovering What You're Losing</h2>
-          <p style="margin:15px 0;">
-            See what your current process is missing - and take control of your revenue.
-          </p>
+          <h2>${safeStr(c.why.cta_title)}</h2>
+          <p>${safeStr(c.why.cta_text)}</p>
 
           <a href="/signup" class="btn-primary">
             Start Free Trial - No Credit Card Required
@@ -13283,7 +13255,38 @@ ${(content.demo.steps || []).map(s =>
 
               <details>
                 <summary>Why</summary>
-                <p class="muted">Add content fields here later if needed</p>
+                <label>Page Title</label>
+                <input name="why_title" value="${safeStr(content.why?.title || "")}" />
+
+                <label>Subtitle</label>
+                <input name="why_subtitle" value="${safeStr(content.why?.subtitle || "")}" />
+
+                <label>Problem Title</label>
+                <input name="why_problem_title" value="${safeStr(content.why?.problem_title || "")}" />
+
+                <label>Problem Text</label>
+                <textarea name="why_problem_text">${safeStr(content.why?.problem_text || "")}</textarea>
+
+                <label>Experience Title</label>
+                <input name="why_experience_title" value="${safeStr(content.why?.experience_title || "")}" />
+
+                <label>Experience Text</label>
+                <textarea name="why_experience_text">${safeStr(content.why?.experience_text || "")}</textarea>
+
+                <label>Build Title</label>
+                <input name="why_build_title" value="${safeStr(content.why?.build_title || "")}" />
+
+                <label>Build Text</label>
+                <textarea name="why_build_text">${safeStr(content.why?.build_text || "")}</textarea>
+
+                <label>Pillars (one per line)</label>
+                <textarea name="why_pillars">${(content.why?.pillars || []).join("\n")}</textarea>
+
+                <label>CTA Title</label>
+                <input name="why_cta_title" value="${safeStr(content.why?.cta_title || "")}" />
+
+                <label>CTA Text</label>
+                <input name="why_cta_text" value="${safeStr(content.why?.cta_text || "")}" />
               </details>
 
               <details>
@@ -13502,6 +13505,22 @@ ${(content.demo.steps || []).map(s =>
         content.about.founder_bio = getValue("founder_bio");
         content.about.story_title = getValue("story_title");
         content.about.story_text = getValue("story_text");
+
+        content.why = content.why || {};
+        content.why.title = getValue("why_title");
+        content.why.subtitle = getValue("why_subtitle");
+        content.why.problem_title = getValue("why_problem_title");
+        content.why.problem_text = getValue("why_problem_text");
+        content.why.experience_title = getValue("why_experience_title");
+        content.why.experience_text = getValue("why_experience_text");
+        content.why.build_title = getValue("why_build_title");
+        content.why.build_text = getValue("why_build_text");
+        content.why.pillars = String(getValue("why_pillars") || "")
+          .split("\n")
+          .map(x => x.trim())
+          .filter(Boolean);
+        content.why.cta_title = getValue("why_cta_title");
+        content.why.cta_text = getValue("why_cta_text");
       };
 
       if (contentType.includes("multipart/form-data")) {
