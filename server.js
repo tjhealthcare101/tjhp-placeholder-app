@@ -3160,22 +3160,16 @@ function renderLoginPage(contentHtml, pageTitle = "Login | TJ Healthcare Pro") {
 }
 function navUser(active = "") {
   return `
-    <div style="border-bottom:1px solid #eee;">
-      <div class="container" style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;gap:16px;flex-wrap:wrap;">
-        
-        <div style="font-weight:800;font-size:20px;">
-          TJ Healthcare Pro
-        </div>
+    <a href="/dashboard" class="${active === "dashboard" ? "nav-active" : ""}">Revenue Overview</a>
+    <a href="/claims-lifecycle" class="${active === "claims" ? "nav-active" : ""}">Claims Lifecycle</a>
+    <a href="/data-management" class="${active === "data" ? "nav-active" : ""}">Data Management</a>
+    <a href="/action-center" class="${active === "actions" ? "nav-active" : ""}">Action Center</a>
+    <a href="/revenue-intelligence" class="${active === "ri" ? "nav-active" : ""}">Revenue Intelligence</a>
+    <a href="/ai-copilot" class="${active === "ai" ? "nav-active" : ""}">AI Copilot</a>
 
-        <div style="display:flex;gap:16px;align-items:center;font-size:14px;">
-          <a href="/dashboard" class="${active === "dashboard" ? "nav-active" : ""}">Dashboard</a>
-          <a href="/support" class="${active === "support" ? "nav-active" : ""}">Support</a>
-          <a href="/account" class="${active === "account" ? "nav-active" : ""}">Account</a>
-          <a href="/logout">Logout</a>
-        </div>
-
-      </div>
-    </div>
+    <a href="/support" class="${active === "support" ? "nav-active" : ""}">Support</a>
+    <a href="/account" class="${active === "account" ? "nav-active" : ""}">Account</a>
+    <a href="/logout">Logout</a>
   `;
 }
 function navAdmin() {
