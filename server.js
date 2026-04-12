@@ -687,7 +687,7 @@ h3{margin:16px 0 8px;font-size:15px;}
 p{margin:8px 0;line-height:1.5;}
 .muted{color:var(--muted);font-size:13px;}
 .hr{height:1px;background:var(--border);margin:14px 0;}
-.btn{display:inline-flex;align-items:center;justify-content:center;line-height:normal;background:var(--primary);color:var(--primaryText);border:none;border-radius:10px;padding:10px 14px;font-weight:800;text-decoration:none;cursor:pointer;font-size:13px;}
+.btn{display: inline-flex;align-items: center;justify-content: center;line-height: 1;height: 44px;padding: 0 16px;box-sizing: border-box;background: var(--primary);color: var(--primaryText);border: none;border-radius: 10px;font-weight: 800;text-decoration: none;cursor: pointer;font-size: 13px;}
 .btn.secondary{background:#fff;color:var(--text);border:1px solid var(--border);}
 .btn.danger{background:var(--danger);}
 .btn.success{background:#16a34a;color:#fff;}
@@ -2632,16 +2632,22 @@ function renderPublicStyles() {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    line-height: normal;
+    line-height: 1;
   }
 
   .btn-primary {
     background: #2563eb;
     color: white;
-    padding: 12px 20px;
+    height: 44px;
+    padding: 0 20px;
     border-radius: 8px;
     text-decoration: none;
     font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    box-sizing: border-box;
   }
 
   .btn-primary:hover {
@@ -2650,10 +2656,16 @@ function renderPublicStyles() {
 
   .btn-secondary {
     border: 1px solid #ddd;
-    padding: 12px 20px;
+    height: 44px;
+    padding: 0 20px;
     border-radius: 8px;
     text-decoration: none;
     color: #111;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    box-sizing: border-box;
   }
 
   .btn-secondary:hover {
