@@ -12440,7 +12440,14 @@ const server = http.createServer(async (req, res) => {
                 ">
                   Check back soon or reach out if you're interested in working with us.
                 </p>
-                <a href="/contact" class="btn-primary" style="margin-top:15px;display:inline-block;">
+                <a href="/contact" class="btn-primary" style="
+                  display:inline-flex;
+                  align-items:center;
+                  justify-content:center;
+                  height:44px;
+                  padding:0 20px;
+                  line-height:1;
+                ">
                   Contact Us
                 </a>
               </div>
