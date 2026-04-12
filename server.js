@@ -687,7 +687,7 @@ h3{margin:16px 0 8px;font-size:15px;}
 p{margin:8px 0;line-height:1.5;}
 .muted{color:var(--muted);font-size:13px;}
 .hr{height:1px;background:var(--border);margin:14px 0;}
-.btn{display:inline-block;background:var(--primary);color:var(--primaryText);border:none;border-radius:10px;padding:10px 14px;font-weight:800;text-decoration:none;cursor:pointer;font-size:13px;}
+.btn{display:inline-flex;align-items:center;justify-content:center;line-height:normal;background:var(--primary);color:var(--primaryText);border:none;border-radius:10px;padding:10px 14px;font-weight:800;text-decoration:none;cursor:pointer;font-size:13px;}
 .btn.secondary{background:#fff;color:var(--text);border:1px solid var(--border);}
 .btn.danger{background:var(--danger);}
 .btn.success{background:#16a34a;color:#fff;}
@@ -2626,6 +2626,15 @@ function renderPublicStyles() {
     gap: 12px;
   }
 
+  .btn-primary,
+  .btn-secondary,
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: normal;
+  }
+
   .btn-primary {
     background: #2563eb;
     color: white;
@@ -2633,7 +2642,6 @@ function renderPublicStyles() {
     border-radius: 8px;
     text-decoration: none;
     font-weight: 600;
-    display: inline-block;
   }
 
   .btn-primary:hover {
@@ -2646,7 +2654,6 @@ function renderPublicStyles() {
     border-radius: 8px;
     text-decoration: none;
     color: #111;
-    display: inline-block;
   }
 
   .btn-secondary:hover {
@@ -2654,7 +2661,6 @@ function renderPublicStyles() {
   }
 
   .btn-primary.large {
-    display: inline-block;
     margin-top: 12px;
   }
 
