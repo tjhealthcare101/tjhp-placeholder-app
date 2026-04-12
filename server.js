@@ -11435,23 +11435,23 @@ const server = http.createServer(async (req, res) => {
 
       <div class="section center">
         <div class="container" style="max-width:800px;">
-          <h1>${safeStr(c.about.title)}</h1>
-          <p class="section-sub">${safeStr(c.about.subtitle)}</p>
+          <h1>${safeStr(c?.about?.title || "About TJ Healthcare Pro")}</h1>
+          <p class="section-sub">${safeStr(c?.about?.subtitle || "")}</p>
         </div>
       </div>
 
       <div class="section light center">
         <div class="container" style="max-width:800px;">
-          <h2>${safeStr(c.about.mission_title)}</h2>
-          <p class="section-sub">${safeStr(c.about.mission_text)}</p>
+          <h2>${safeStr(c?.about?.mission_title || "")}</h2>
+          <p class="section-sub">${safeStr(c?.about?.mission_text || "")}</p>
         </div>
       </div>
 
       <div class="section">
         <div class="container" style="max-width:900px;text-align:center;">
-          ${c.about.founder_image_url
+          ${c?.about?.founder_image_url
             ? `
-              <img src="${safeStr(c.about.founder_image_url)}"
+              <img src="${safeStr(c?.about?.founder_image_url || "")}"
                    style="width:180px;height:180px;object-fit:cover;border-radius:50%;margin-bottom:20px;" />
             `
             : `
@@ -11464,18 +11464,18 @@ const server = http.createServer(async (req, res) => {
               "></div>
             `
           }
-          <h2>${safeStr(c.about.founder_name)}</h2>
-          <p style="color:#2563eb;font-weight:600;">${safeStr(c.about.founder_title)}</p>
+          <h2>${safeStr(c?.about?.founder_name || "")}</h2>
+          <p style="color:#2563eb;font-weight:600;">${safeStr(c?.about?.founder_title || "")}</p>
           <p style="margin-top:15px;max-width:600px;margin-left:auto;margin-right:auto;">
-            ${safeStr(c.about.founder_bio)}
+            ${safeStr(c?.about?.founder_bio || "")}
           </p>
         </div>
       </div>
 
       <div class="section light center">
         <div class="container" style="max-width:800px;">
-          <h2>${safeStr(c.about.story_title)}</h2>
-          <p class="section-sub">${safeStr(c.about.story_text)}</p>
+          <h2>${safeStr(c?.about?.story_title || "")}</h2>
+          <p class="section-sub">${safeStr(c?.about?.story_text || "")}</p>
         </div>
       </div>
 
@@ -11524,6 +11524,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/why") {
+    const c = getWebsiteContent();
     return send(res, 200, `
     <html>
     <head>
@@ -11538,32 +11539,32 @@ const server = http.createServer(async (req, res) => {
       <!-- HERO -->
       <div class="section center">
         <div class="container" style="max-width:800px;">
-          <h1>${safeStr(c.why.title)}</h1>
-          <p class="section-sub">${safeStr(c.why.subtitle)}</p>
+          <h1>${safeStr(c?.why?.title || "Our Why")}</h1>
+          <p class="section-sub">${safeStr(c?.why?.subtitle || "")}</p>
         </div>
       </div>
 
       <!-- PROBLEM -->
       <div class="section light center">
         <div class="container" style="max-width:800px;">
-          <h2>${safeStr(c.why.problem_title)}</h2>
-          <p>${safeStr(c.why.problem_text)}</p>
+          <h2>${safeStr(c?.why?.problem_title || "")}</h2>
+          <p>${safeStr(c?.why?.problem_text || "")}</p>
         </div>
       </div>
 
       <!-- EXPERIENCE -->
       <div class="section center">
         <div class="container" style="max-width:800px;">
-          <h2>${safeStr(c.why.experience_title)}</h2>
-          <p>${safeStr(c.why.experience_text)}</p>
+          <h2>${safeStr(c?.why?.experience_title || "")}</h2>
+          <p>${safeStr(c?.why?.experience_text || "")}</p>
         </div>
       </div>
 
       <!-- SOLUTION -->
       <div class="section light center">
         <div class="container" style="max-width:800px;">
-          <h2>${safeStr(c.why.build_title)}</h2>
-          <p>${safeStr(c.why.build_text)}</p>
+          <h2>${safeStr(c?.why?.build_title || "")}</h2>
+          <p>${safeStr(c?.why?.build_text || "")}</p>
         </div>
       </div>
 
@@ -11571,7 +11572,7 @@ const server = http.createServer(async (req, res) => {
       <div class="section center">
         <div class="container" style="max-width:900px;margin:auto;">
           <div class="grid-3">
-            ${c.why.pillars.map(p => `
+            ${(c?.why?.pillars || []).map(p => `
               <div class="card center">${safeStr(p)}</div>
             `).join("")}
           </div>
@@ -11581,8 +11582,8 @@ const server = http.createServer(async (req, res) => {
       <!-- CTA -->
       <div class="section center light">
         <div class="container" style="max-width:700px;">
-          <h2>${safeStr(c.why.cta_title)}</h2>
-          <p>${safeStr(c.why.cta_text)}</p>
+          <h2>${safeStr(c?.why?.cta_title || "")}</h2>
+          <p>${safeStr(c?.why?.cta_text || "")}</p>
 
           <a href="/signup" class="btn-primary">
             Start Free Trial - No Credit Card Required
@@ -11618,16 +11619,16 @@ const server = http.createServer(async (req, res) => {
 
   <div class="section center">
     <div class="container" style="max-width:900px;">
-      <h1>${safeStr(c.culture.title)}</h1>
-      <p class="section-sub">${safeStr(c.culture.subtitle)}</p>
-      ${safeStr(c.culture.intro_text)
+      <h1>${safeStr(c?.culture?.title || "")}</h1>
+      <p class="section-sub">${safeStr(c?.culture?.subtitle || "")}</p>
+      ${safeStr(c?.culture?.intro_text || "")
         .split("\n")
         .map(p => `<p style="margin-top:15px;">${p}</p>`)
         .join("")}
       <div style="margin-top:40px;"></div>
       <div class="grid-3" style="margin-top:60px;">
-        ${c.culture.pillars.map(p => {
-          const [title, desc] = p.split("|");
+        ${(c?.culture?.pillars || []).map(p => {
+          const [title, desc] = String(p || "").split("|");
           return `
             <div class="card center">
               <strong>${safeStr(title)}</strong>
@@ -11637,14 +11638,14 @@ const server = http.createServer(async (req, res) => {
         }).join("")}
       </div>
       <div style="margin-top:80px;"></div>
-      <h2 style="margin-top:60px;">${safeStr(c.culture.hire_title)}</h2>
-      ${safeStr(c.culture.hire_text)
+      <h2 style="margin-top:60px;">${safeStr(c?.culture?.hire_title || "")}</h2>
+      ${safeStr(c?.culture?.hire_text || "")
         .split("\n")
         .map(p => `<p style="margin-top:10px;">${p}</p>`)
         .join("")}
       <div style="margin-top:60px;"></div>
-      <h2 style="margin-top:40px;">${safeStr(c.culture.cta_title)}</h2>
-      <p>${safeStr(c.culture.cta_text)}</p>
+      <h2 style="margin-top:40px;">${safeStr(c?.culture?.cta_title || "")}</h2>
+      <p>${safeStr(c?.culture?.cta_text || "")}</p>
       <a href="/careers" class="btn-primary" style="margin-top:15px;">
         View Open Positions
       </a>
@@ -11676,21 +11677,21 @@ const server = http.createServer(async (req, res) => {
 
   <div class="section center">
     <div class="container" style="max-width:900px;">
-      <h1>${safeStr(c.contact.title)}</h1>
+      <h1>${safeStr(c?.contact?.title || "Contact Us")}</h1>
 
       ${parsed.query.sent ? `<div class="alert" style="background:#ecfdf3;border-color:#86efac;color:#166534;margin-bottom:20px;">Message sent!</div>` : ""}
 
-      <p class="section-sub">${safeStr(c.contact.subtitle)}</p>
-      <p style="margin-top:10px;margin-bottom:20px;">${safeStr(c.contact.description)}</p>
+      <p class="section-sub">${safeStr(c?.contact?.subtitle || "")}</p>
+      <p style="margin-top:10px;margin-bottom:20px;">${safeStr(c?.contact?.description || "")}</p>
     </div>
   </div>
 
   <div class="section light">
     <div class="container contact-grid" style="max-width:900px;">
       <div class="contact-copy">
-        <h3>${safeStr(c.contact.left_title)}</h3>
+        <h3>${safeStr(c?.contact?.left_title || "")}</h3>
 
-        ${safeStr(c.contact.left_text)
+        ${safeStr(c?.contact?.left_text || "")
           .split("\n")
           .map(p => `<p style="margin-top:10px;">${p}</p>`)
           .join("")}
@@ -11719,11 +11720,11 @@ const server = http.createServer(async (req, res) => {
           </div>
 
           <button class="btn-primary" type="submit" style="margin-top:6px;width:100%;">
-            ${safeStr(c.contact.button_text)}
+            ${safeStr(c?.contact?.button_text || "")}
           </button>
 
           <p class="contact-note">
-            ${safeStr(c.contact.success_text)}
+            ${safeStr(c?.contact?.success_text || "")}
           </p>
         </form>
       </div>
@@ -12374,10 +12375,10 @@ const server = http.createServer(async (req, res) => {
 
       <div class="section center">
         <div class="container" style="max-width:800px;">
-          <h1>${safeStr(c.careers.title)}</h1>
-          <p class="section-sub">${safeStr(c.careers.subtitle)}</p>
+          <h1>${safeStr(c?.careers?.title || "Join Our Team")}</h1>
+          <p class="section-sub">${safeStr(c?.careers?.subtitle || "")}</p>
           <p style="margin-top:20px;">
-            ${safeStr(c.careers.intro_text)}
+            ${safeStr(c?.careers?.intro_text || "")}
           </p>
         </div>
       </div>
@@ -12385,7 +12386,7 @@ const server = http.createServer(async (req, res) => {
       <div class="section light center">
         <div class="container" style="max-width:900px;margin:auto;">
           <div class="grid-3" style="margin-top:40px;">
-            ${(c.careers.pillars || []).map(p => {
+            ${(c?.careers?.pillars || []).map(p => {
               const [title, desc] = String(p || "").split("|");
               return `
                 <div class="card center">
