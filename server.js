@@ -2990,6 +2990,45 @@ function renderPublicStyles() {
   @media (max-width: 640px) {
     h1 { font-size: 32px; }
   }
+
+  @media (max-width: 768px) {
+
+    /* Stack hero layout */
+    .hero-inner {
+      grid-template-columns: 1fr !important;
+      gap: 24px;
+    }
+
+    /* Make headline readable */
+    .hero h1 {
+      font-size: 32px;
+      line-height: 1.2;
+    }
+
+    /* Slightly smaller subtext */
+    .hero-sub {
+      font-size: 16px;
+    }
+
+    /* Stack buttons vertically */
+    .hero-actions {
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* Make buttons full width */
+    .hero-actions a {
+      width: 100%;
+    }
+
+    /* Fix hero image / placeholder */
+    .hero-right img,
+    .placeholder-box {
+      width: 100%;
+      height: auto;
+    }
+
+  }
 </style>`;
 }
 
