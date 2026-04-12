@@ -3158,7 +3158,18 @@ function renderLoginPage(contentHtml, pageTitle = "Login | TJ Healthcare Pro") {
     </html>
   `;
 }
-function navUser(active = "") {
+function getUserUnreadSupportCount(user_id) {
+  const threads = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+
+  return threads.filter(t =>
+    String(t.user_id || "") === String(user_id || "") &&
+    Array.isArray(t.messages) &&
+    t.messages.some(msg => msg.sender === "admin" && !msg.read_by_user)
+  ).length;
+}
+
+function navUser(active = "", user_id = "") {
+  const unreadCount = getUserUnreadSupportCount(user_id);
   return `
     <a href="/dashboard" class="${active === "dashboard" ? "nav-active" : ""}">Revenue Overview</a>
     <a href="/claims-lifecycle" class="${active === "claims" ? "nav-active" : ""}">Claims Lifecycle</a>
@@ -3167,7 +3178,9 @@ function navUser(active = "") {
     <a href="/revenue-intelligence" class="${active === "ri" ? "nav-active" : ""}">Revenue Intelligence</a>
     <a href="/ai-copilot" class="${active === "ai" ? "nav-active" : ""}">AI Copilot</a>
 
-    <a href="/support" class="${active === "support" ? "nav-active" : ""}">Support</a>
+    <a href="/support" class="${active === "support" ? "nav-active" : ""}">
+      Support ${unreadCount > 0 ? `(${unreadCount})` : ""}
+    </a>
     <a href="/account" class="${active === "account" ? "nav-active" : ""}">Account</a>
     <a href="/logout">Logout</a>
   `;
@@ -11864,15 +11877,39 @@ const server = http.createServer(async (req, res) => {
     </div>
 
     <div style="display:grid;grid-template-columns:320px 1fr;gap:20px;align-items:start;margin-top:20px;">
-      <div class="card">
+      <div class="card" style="padding:20px;border-radius:12px;border:1px solid #e5e7eb;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
         <h3 style="margin-top:0;">Your Conversations</h3>
 
         <form method="POST" action="/support/new-thread" enctype="multipart/form-data" style="margin-top:15px;">
           <label>Start a new message</label>
-          <textarea name="message" required style="width:100%;min-height:110px;padding:12px;border-radius:10px;border:1px solid #d1d5db;"></textarea>
+          <label>Subject (optional)</label>
+          <input name="subject" placeholder="Briefly describe your issue" style="
+            width:100%;
+            padding:10px;
+            border-radius:8px;
+            border:1px solid #d1d5db;
+            margin-bottom:10px;
+          " />
+          <textarea name="message" placeholder="Describe your issue in detail..." required style="
+            width:100%;
+            padding:12px;
+            border-radius:10px;
+            border:1px solid #d1d5db;
+            margin-top:8px;
+            margin-bottom:10px;
+            min-height:120px;
+          "></textarea>
           <label style="margin-top:10px;display:block;">Attachment (optional)</label>
           <input type="file" name="attachment" style="margin-top:6px;" />
-          <button class="btn-primary" style="margin-top:10px;">Send New Message</button>
+          <button class="btn-primary" style="
+            width:100%;
+            padding:12px;
+            border-radius:10px;
+            font-weight:600;
+          ">
+            Send Message
+          </button>
           <p class="muted" style="font-size:12px;margin-top:8px;">You can attach one file per message.</p>
         </form>
 
@@ -11895,7 +11932,7 @@ const server = http.createServer(async (req, res) => {
                 color:#111827;
               ">
                 <div style="font-weight:700;display:flex;justify-content:space-between;gap:10px;align-items:center;">
-                  <span>${safeStr(t.subject || "Support Conversation")}</span>
+                  <span>${safeStr(t.subject || "Support Request")}</span>
                   ${unreadAdminReply ? `<span style="background:#ef4444;color:#fff;font-size:11px;padding:2px 8px;border-radius:999px;">New reply</span>` : ``}
                 </div>
                 <div style="font-size:12px;color:#6b7280;margin-top:6px;">
@@ -11905,9 +11942,10 @@ const server = http.createServer(async (req, res) => {
             `;
           }).join("") : `<p class="muted">No conversations yet.</p>`}
         </div>
+        </div>
       </div>
 
-      <div class="card">
+      <div class="card" style="padding:20px;border-radius:12px;border:1px solid #e5e7eb;">
         ${selectedThread ? `
           <h3 style="margin-top:0;">Conversation</h3>
 
@@ -11952,10 +11990,25 @@ const server = http.createServer(async (req, res) => {
           <form method="POST" action="/support/reply" enctype="multipart/form-data">
             <input type="hidden" name="thread_id" value="${safeStr(String(selectedThread.thread_id || ""))}" />
             <label>Reply</label>
-            <textarea name="reply" required style="width:100%;min-height:120px;padding:12px;border-radius:10px;border:1px solid #d1d5db;"></textarea>
+            <textarea name="reply" placeholder="Describe your issue in detail..." required style="
+              width:100%;
+              padding:12px;
+              border-radius:10px;
+              border:1px solid #d1d5db;
+              margin-top:8px;
+              margin-bottom:10px;
+              min-height:120px;
+            "></textarea>
             <label style="margin-top:10px;display:block;">Attachment (optional)</label>
             <input type="file" name="attachment" style="margin-top:6px;" />
-            <button class="btn-primary" style="margin-top:12px;">Send Reply</button>
+            <button class="btn-primary" style="
+              width:100%;
+              padding:12px;
+              border-radius:10px;
+              font-weight:600;
+            ">
+              Send Message
+            </button>
             <p class="muted" style="font-size:12px;margin-top:8px;">You can attach one file per message.</p>
           </form>
         ` : `
@@ -11984,7 +12037,7 @@ const server = http.createServer(async (req, res) => {
       })();
       </script>
     ` : ""}
-  `, navUser("support"), { showChat: false, orgName: "" }));
+  `, navUser("support", sess.user_id), { showChat: false, orgName: "" }));
   }
 
   if (method === "POST" && pathname === "/support/new-thread") {
@@ -12005,9 +12058,13 @@ const server = http.createServer(async (req, res) => {
     } else {
       const body = await parseBody(req);
       const p = new URLSearchParams(body);
-      fields = { message: String(p.get("message") || "") };
+      fields = {
+        subject: String(p.get("subject") || ""),
+        message: String(p.get("message") || "")
+      };
     }
 
+    const subject = String(fields.subject || "").trim();
     const message = String(fields.message || "").trim();
     if (!message) return redirect(res, "/support");
 
@@ -12027,7 +12084,7 @@ const server = http.createServer(async (req, res) => {
       org_id: String(sess.org_id || ""),
       name: String(user?.full_name || user?.name || user?.email || "User"),
       email: String(user?.email || ""),
-      subject: "Support Request",
+      subject: subject || "Support Request",
       status: "open",
       unread: true,
       created_at: nowISO(),
@@ -14694,21 +14751,26 @@ ${(content.demo.steps || []).map(s =>
         <form method="POST" action="/admin/contact-reply" enctype="multipart/form-data">
           <input type="hidden" name="thread_id" value="${safeStr(thread.thread_id || thread.message_id || "")}" />
 
-          <textarea name="reply" required style="
+          <textarea name="reply" placeholder="Describe your issue in detail..." required style="
   width:100%;
-  margin-top:20px;
   padding:12px;
   border-radius:10px;
   border:1px solid #d1d5db;
+  margin-top:8px;
+  margin-bottom:10px;
   min-height:120px;
-  font-size:14px;
 "></textarea>
           <label style="margin-top:10px;display:block;">Attachment (optional)</label>
           <input type="file" name="attachment" style="margin-top:6px;" />
           <p class="muted" style="font-size:12px;margin-top:8px;">You can attach one file per message.</p>
 
-          <button class="btn-primary" style="margin-top:12px;">
-            Send Reply
+          <button class="btn-primary" style="
+  width:100%;
+  padding:12px;
+  border-radius:10px;
+  font-weight:600;
+">
+            Send Message
           </button>
         </form>
 
@@ -16088,7 +16150,7 @@ Keep it concise and factual.
         });
 
       </script>
-    `, navUser("dashboard"), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    `, navUser("dashboard", sess.user_id), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
@@ -26622,9 +26684,17 @@ function renderTemplateEditor(org, user){
 
           <div class="card">
             <h3>Need Help?</h3>
-            <p class="muted">Reach out to our team and we’ll assist you.</p>
+            <p class="muted">
+              Message our support team and track replies in your support inbox.
+            </p>
             <div class="btnRow">
-              <a href="/contact" class="btn-primary">Contact Support</a>
+              <a href="/support" style="
+                color:#2563eb;
+                font-weight:600;
+                text-decoration:none;
+              ">
+                Go to Support Inbox
+              </a>
             </div>
           </div>
         `;
@@ -26829,7 +26899,7 @@ function renderTemplateEditor(org, user){
       `;
     })();
 
-    const html = renderPage("Account", `<h2>Account</h2>${tabs}${section}`, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+    const html = renderPage("Account", `<h2>Account</h2>${tabs}${section}`, navUser("account", sess.user_id), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
     return send(res, 200, html);
   }
 
