@@ -2995,8 +2995,22 @@ function renderPublicStyles() {
 
     /* Stack hero layout */
     .hero-inner {
+      display: flex;
+      flex-direction: column;
       grid-template-columns: 1fr !important;
       gap: 24px;
+    }
+
+    .hero-left {
+      order: 1;
+    }
+
+    .hero-right {
+      order: 2;
+    }
+
+    .hero-actions {
+      order: 3;
     }
 
     /* Make headline readable */
@@ -3028,6 +3042,14 @@ function renderPublicStyles() {
       height: auto;
     }
 
+    .topbar .btn-primary {
+      display: none;
+    }
+
+    .hero-actions .btn-primary {
+      display: inline-flex !important;
+    }
+
   }
 </style>`;
 }
@@ -3057,7 +3079,7 @@ function renderPublicNavbar(pathname = "") {
   const content = getWebsiteContent();
   const links = content.company_links || {};
   return `
-    <div style="border-bottom:1px solid #eee;">
+    <div class="topbar" style="border-bottom:1px solid #eee;">
       <div class="container" style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;gap:16px;flex-wrap:wrap;">
         <div style="font-weight:800;font-size:20px;">TJ Healthcare Pro</div>
 
