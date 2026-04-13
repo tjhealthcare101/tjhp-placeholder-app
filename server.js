@@ -381,11 +381,21 @@ function setCookie(res, name, value, maxAgeSeconds) {
   ];
   if (IS_PROD) parts.push("Secure");
   if (maxAgeSeconds) parts.push(`Max-Age=${maxAgeSeconds}`);
-  res.setHeader("Set-Cookie", parts.join("; "));
+
+  // allow multiple cookies in the same response
+  const cookieStr = parts.join("; ");
+  const prev = res.getHeader("Set-Cookie");
+  if (!prev) res.setHeader("Set-Cookie", [cookieStr]);
+  else if (Array.isArray(prev)) res.setHeader("Set-Cookie", prev.concat(cookieStr));
+  else res.setHeader("Set-Cookie", [String(prev), cookieStr]);
 }
 
 function clearCookie(res, name) {
-  res.setHeader("Set-Cookie", `${name}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly${IS_PROD ? "; Secure" : ""}`);
+  const cookieStr = `${name}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly${IS_PROD ? "; Secure" : ""}`;
+  const prev = res.getHeader("Set-Cookie");
+  if (!prev) res.setHeader("Set-Cookie", [cookieStr]);
+  else if (Array.isArray(prev)) res.setHeader("Set-Cookie", prev.concat(cookieStr));
+  else res.setHeader("Set-Cookie", [String(prev), cookieStr]);
 }
 
 function send(res, status, body, type="text/html") {
@@ -432,13 +442,46 @@ function verifySession(token) {
     return payload;
   } catch { return null; }
 }
-function getAuth(req) {
+// Split sessions so admin + user can stay logged in in the same browser
+const USER_SESSION_COOKIE = "tjhp_session";
+const ADMIN_SESSION_COOKIE = "tjhp_admin_session";
+
+function getAuthUser(req) {
   const cookies = parseCookies(req);
-  return verifySession(cookies.tjhp_session);
+  const sess = verifySession(cookies[USER_SESSION_COOKIE]);
+  // Legacy safety: older builds stored admin sessions in the user cookie.
+  if (sess && sess.role === "admin") return null;
+  return sess;
+}
+
+function getAuthAdmin(req) {
+  const cookies = parseCookies(req);
+  const sess = verifySession(cookies[ADMIN_SESSION_COOKIE]);
+  if (sess) return sess;
+  // Legacy fallback: allow admin sessions that were stored in tjhp_session.
+  const legacy = verifySession(cookies[USER_SESSION_COOKIE]);
+  return (legacy && legacy.role === "admin") ? legacy : null;
+}
+
+function getAuth(req) {
+  let pathname = "";
+  try { pathname = new URL(req.url, "http://localhost").pathname; } catch { pathname = ""; }
+
+  const userSess = getAuthUser(req);
+  const adminSess = getAuthAdmin(req);
+
+  // Prefer owner/admin cookie on /admin routes, user cookie everywhere else.
+  if (pathname.startsWith("/admin")) return adminSess || userSess;
+  return userSess || adminSess;
 }
 function setSession(res, payload) {
   const token = makeSession(payload);
-  setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400);
+  setCookie(res, USER_SESSION_COOKIE, token, SESSION_TTL_DAYS * 86400);
+}
+
+function setAdminSession(res, payload) {
+  const token = makeSession(payload);
+  setCookie(res, ADMIN_SESSION_COOKIE, token, SESSION_TTL_DAYS * 86400);
 }
 
 // ===== Init storage =====
@@ -12000,9 +12043,14 @@ const server = http.createServer(async (req, res) => {
     const selectedThread = myThreads.find(t => String(t.thread_id || t.message_id || "") === selectedId);
 
     if (selectedThread && Array.isArray(selectedThread.messages)) {
-      if (selectedThread && parsed.query.id) {
-        selectedThread.user_has_unread = false;
-      }
+      // The thread is being shown on-screen, so mark admin replies as read.
+      selectedThread.user_has_unread = false;
+      selectedThread.messages = selectedThread.messages.map(msg => {
+        if (String(msg.sender || "") === "admin") {
+          return { ...msg, read_by_user: true };
+        }
+        return msg;
+      });
       writeJSON(FILES.contact_messages || "./data/contact_messages.json", threads);
     }
 
@@ -12173,6 +12221,7 @@ const server = http.createServer(async (req, res) => {
         let lastCount = ${JSON.stringify(normalizedMessages.length)};
       
         const container = document.querySelector("#support-messages");
+        if (!container) return;
       
         function renderMessage(msg) {
           const wrapper = document.createElement("div");
@@ -12187,8 +12236,36 @@ const server = http.createServer(async (req, res) => {
       
           wrapper.innerHTML =
             "<strong>" + name + "</strong><br/>" +
-            "<span style=\"font-size:12px;color:#666;\">" + time + "</span><br/>" +
-            String(msg.text || "");
+            "<span style=\"font-size:12px;color:#666;\">" + time + "</span><br/>";
+
+          // avoid HTML injection / XSS: render message text safely
+          const body = document.createElement("div");
+          body.style.marginTop = "6px";
+          body.textContent = String(msg.text || "");
+          wrapper.appendChild(body);
+
+          // Render attachments (if present)
+          if (Array.isArray(msg.attachments) && msg.attachments.length) {
+            const attWrap = document.createElement("div");
+            attWrap.style.marginTop = "10px";
+            msg.attachments.forEach(att => {
+              const a = document.createElement("a");
+              a.href = String(att.url || "#");
+              a.target = "_blank";
+              a.rel = "noopener noreferrer";
+              a.textContent = String(att.name || "Attachment");
+              a.style.display = "inline-block";
+              a.style.marginRight = "8px";
+              a.style.marginTop = "6px";
+              a.style.padding = "6px 10px";
+              a.style.borderRadius = "999px";
+              a.style.background = "#ffffff";
+              a.style.border = "1px solid #d1d5db";
+              a.style.fontSize = "12px";
+              attWrap.appendChild(a);
+            });
+            wrapper.appendChild(attWrap);
+          }
       
           return wrapper;
         }
@@ -12873,8 +12950,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     const exp = Date.now() + SESSION_TTL_DAYS * 86400 * 1000;
-    const token = makeSession({ role:"admin", exp });
-    setCookie(res, "tjhp_session", token, SESSION_TTL_DAYS * 86400);
+    setAdminSession(res, { role:"admin", exp });
     return redirect(res, "/admin/dashboard");
   }
 
@@ -13340,7 +13416,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "GET" && pathname === "/logout") {
-    clearCookie(res, "tjhp_session");
+    clearCookie(res, USER_SESSION_COOKIE);
+    clearCookie(res, ADMIN_SESSION_COOKIE);
     return redirect(res, "/login");
   }
 
@@ -13552,11 +13629,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (method === "GET" && pathname === "/admin/stop-simulation") {
-      const cleanedSession = { ...(sess || {}) };
-      delete cleanedSession.simulating;
-      delete cleanedSession.simulated_plan;
-      cleanedSession.role = "admin";
-      setSession(res, cleanedSession);
+      // Stop plan simulation without destroying the owner/admin session.
+      // (Simulation runs under the user-session cookie.)
+      const userSess = getAuthUser(req);
+      if (userSess && userSess.simulating) {
+        clearCookie(res, USER_SESSION_COOKIE);
+      }
       return redirect(res, "/admin/simulation");
     }
 
