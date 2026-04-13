@@ -12077,7 +12077,7 @@ const server = http.createServer(async (req, res) => {
         <div style="display:flex;flex-direction:column;gap:10px;">
         <h3 style="margin-top:0;">Your Conversations</h3>
 
-        <form method="POST" action="/support/new-thread" enctype="multipart/form-data" style="margin-top:15px;">
+        <form onsubmit="createThread(event)" enctype="multipart/form-data" style="margin-top:15px;">
           <label>Start a new message</label>
           <label>Subject (optional)</label>
           <input name="subject" placeholder="Briefly describe your issue" style="
@@ -12097,7 +12097,7 @@ const server = http.createServer(async (req, res) => {
             min-height:120px;
           "></textarea>
           <label style="margin-top:10px;display:block;">Attachment (optional)</label>
-          <input type="file" name="attachment" style="margin-top:6px;" />
+          <input type="file" name="attachment" multiple style="margin-top:6px;" />
           <button class="btn-primary" style="
             width:100%;
             padding:12px;
@@ -12145,7 +12145,7 @@ const server = http.createServer(async (req, res) => {
         ${selectedThread ? `
           <h3 style="margin-top:0;">Conversation</h3>
 
-          <div id="support-messages" style="margin-top:20px;">
+          <div id="conversationBox" style="margin-top:20px;">
             ${normalizedMessages.map(msg => `
               <div style="
                 margin-bottom:15px;
@@ -12183,7 +12183,7 @@ const server = http.createServer(async (req, res) => {
             `).join("")}
           </div>
 
-          <form method="POST" action="/support/reply" enctype="multipart/form-data">
+          <form onsubmit="sendUserMessage(event)">
             <input type="hidden" name="thread_id" value="${safeStr(String(selectedThread.thread_id || ""))}" />
             <label>Reply</label>
             <textarea name="reply" placeholder="Describe your issue in detail..." required style="
@@ -12196,7 +12196,8 @@ const server = http.createServer(async (req, res) => {
               min-height:120px;
             "></textarea>
             <label style="margin-top:10px;display:block;">Attachment (optional)</label>
-            <input type="file" name="attachment" style="margin-top:6px;" />
+            <input type="file" name="attachment" multiple style="margin-top:6px;" />
+            <div id="filePreview" style="margin-top:10px;"></div>
             <button class="btn-primary" style="
               width:100%;
               padding:12px;
@@ -12214,88 +12215,198 @@ const server = http.createServer(async (req, res) => {
       </div>
     </div>
 
+    <script>
+    async function createThread(e) {
+      e.preventDefault();
+
+      const form = e.target;
+      const formData = new FormData(form);
+
+      const res = await fetch("/support/new-thread", {
+        method: "POST",
+        body: formData,
+        credentials: "same-origin"
+      });
+
+      const data = await res.json();
+
+      if (data.thread_id) {
+        window.location.href = "/support?id=" + encodeURIComponent(data.thread_id);
+      }
+    }
+    </script>
+
     ${selectedThread ? `
       <script>
-      (function() {
-        const currentId = ${JSON.stringify(selectedId)};
-        let lastCount = ${JSON.stringify(normalizedMessages.length)};
-      
-        const container = document.querySelector("#support-messages");
+      let lastMessageCount = ${JSON.stringify(normalizedMessages.length)};
+      const currentThreadId = ${JSON.stringify(selectedId)};
+
+      function escapeHtmlClient(str) {
+        return String(str || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      }
+
+      async function fetchMessages() {
+        const res = await fetch("/support/thread-data?id=" + encodeURIComponent(currentThreadId), { credentials: "same-origin" });
+        const data = await res.json();
+
+        const messages = data.messages || [];
+
+        if (messages.length !== lastMessageCount) {
+          renderMessages(messages);
+          lastMessageCount = messages.length;
+        }
+      }
+
+      function renderMessages(messages) {
+        function getContainer() {
+          if (window.location.pathname.startsWith("/admin")) {
+            return document.getElementById("adminConversationBox");
+          }
+          return document.getElementById("conversationBox");
+        }
+
+        const container = getContainer();
         if (!container) return;
-      
-        function renderMessage(msg) {
+
+        // Only append NEW messages
+        if (!window._renderedCount) window._renderedCount = 0;
+
+        const newMessages = messages.slice(window._renderedCount);
+
+        newMessages.forEach(m => {
+          const bg = m.sender === "admin" ? "#e0f2fe" : "#f3f4f6";
+          const who = m.sender === "admin" ? "Support" : "You";
+          const time = m.created_at ? new Date(m.created_at).toLocaleString() : "";
+          const attachments = Array.isArray(m.attachments) ? m.attachments : [];
+
           const wrapper = document.createElement("div");
           wrapper.style.marginBottom = "15px";
           wrapper.style.padding = "14px";
           wrapper.style.borderRadius = "12px";
-          wrapper.style.background = msg.sender === "admin" ? "#e0f2fe" : "#f3f4f6";
           wrapper.style.border = "1px solid #e5e7eb";
-      
-          const name = msg.sender === "admin" ? "Admin" : "You";
-          const time = msg.created_at ? new Date(msg.created_at).toLocaleString() : "";
-      
+          wrapper.style.background = bg;
+
           wrapper.innerHTML =
-            "<strong>" + name + "</strong><br/>" +
-            "<span style=\"font-size:12px;color:#666;\">" + time + "</span><br/>";
+            "<strong>" + who + "</strong><br/>" +
+            "<span style='font-size:12px;color:#666;'>" + time + "</span><br/>" +
+            "<div style='margin-top:6px;'>" + escapeHtmlClient(m.text) + "</div>";
 
-          // avoid HTML injection / XSS: render message text safely
-          const body = document.createElement("div");
-          body.style.marginTop = "6px";
-          body.textContent = String(msg.text || "");
-          wrapper.appendChild(body);
-
-          // Render attachments (if present)
-          if (Array.isArray(msg.attachments) && msg.attachments.length) {
+          if (attachments.length) {
             const attWrap = document.createElement("div");
             attWrap.style.marginTop = "10px";
-            msg.attachments.forEach(att => {
+
+            attachments.forEach(att => {
               const a = document.createElement("a");
-              a.href = String(att.url || "#");
+              a.href = att.url || "#";
               a.target = "_blank";
               a.rel = "noopener noreferrer";
-              a.textContent = String(att.name || "Attachment");
+              a.textContent = "📎 " + (att.name || "Attachment");
+
               a.style.display = "inline-block";
               a.style.marginRight = "8px";
               a.style.marginTop = "6px";
               a.style.padding = "6px 10px";
               a.style.borderRadius = "999px";
-              a.style.background = "#ffffff";
+              a.style.background = "#fff";
               a.style.border = "1px solid #d1d5db";
               a.style.fontSize = "12px";
+              a.style.textDecoration = "none";
+              a.style.color = "#111827";
+
               attWrap.appendChild(a);
             });
+
             wrapper.appendChild(attWrap);
           }
-      
-          return wrapper;
+
+          container.appendChild(wrapper);
+        });
+
+        window._renderedCount = messages.length;
+
+        // Auto-scroll
+        container.scrollTop = container.scrollHeight;
+      }
+
+      async function markAsRead(threadId) {
+        await fetch("/support/mark-read", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ thread_id: threadId })
+        });
+        if (typeof updateSupportBadge === "function") {
+          updateSupportBadge();
         }
-      
-        async function fetchMessages() {
-          try {
-            const res = await fetch("/support/thread-data?id=" + encodeURIComponent(currentId), {
-              credentials: "same-origin"
-            });
-            const data = await res.json();
-      
-            if (!data || !Array.isArray(data.messages)) return;
-      
-            if (data.messages.length !== lastCount) {
-              lastCount = data.messages.length;
-      
-              // Clear and re-render messages
-              container.innerHTML = "";
-              data.messages.forEach(msg => {
-                container.appendChild(renderMessage(msg));
-              });
-      
-              // Auto-scroll to bottom
-              container.scrollTop = container.scrollHeight;
-            }
-          } catch (_) {}
+      }
+
+      setInterval(fetchMessages, 2000);
+      window._renderedCount = 0;
+      fetchMessages();
+      if (currentThreadId) markAsRead(currentThreadId);
+      </script>
+      <script>
+      document.addEventListener("change", function(e) {
+        if (!e.target.matches('input[type="file"]')) return;
+
+        const preview = document.getElementById("filePreview");
+        if (!preview) return;
+
+        preview.innerHTML = "";
+
+        const files = e.target.files || [];
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+
+          const item = document.createElement("div");
+          item.style.fontSize = "12px";
+          item.style.marginTop = "4px";
+          item.textContent = "📎 " + f.name;
+
+          preview.appendChild(item);
         }
-      
-        setInterval(fetchMessages, 4000);
-      })();
+      });
+      </script>
+      <script>
+      async function sendUserMessage(e) {
+        e.preventDefault();
+
+        const form = e.target;
+        const textarea = form.querySelector("textarea");
+        const fileInput = form.querySelector('input[type="file"]');
+        const message = (textarea.value || "").trim();
+        if (!message) return;
+
+        const formData = new FormData();
+        formData.append("thread_id", ${JSON.stringify(String(selectedId || ""))});
+        formData.append("message", message);
+
+        if (fileInput && fileInput.files && fileInput.files.length) {
+          for (let i = 0; i < fileInput.files.length; i++) {
+            formData.append("attachment", fileInput.files[i]);
+          }
+        }
+
+        const res = await fetch("/support/send", {
+          method: "POST",
+          body: formData,
+          credentials: "same-origin"
+        });
+
+        if (!res.ok) return;
+
+        textarea.value = "";
+        if (fileInput) fileInput.value = "";
+        const preview = document.getElementById("filePreview");
+        if (preview) preview.innerHTML = "";
+
+        await fetchMessages();
+      }
       </script>
     ` : ""}
   `, navUser("support", sess.user_id), { showChat: false, orgName: "" }));
@@ -12398,10 +12509,84 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    return redirect(res, `/support?id=${encodeURIComponent(thread.thread_id)}`);
+    return send(res, 200, JSON.stringify({
+      success: true,
+      thread_id: thread.thread_id
+    }), "application/json");
   }
 
-  if (method === "POST" && pathname === "/support/reply") {
+  if (method === "POST" && pathname === "/support/send") {
+    const auth = getAuth(req);
+    if (!auth) return send(res, 401, JSON.stringify({ error: "Unauthorized" }), "application/json");
+
+    const contentType = req.headers["content-type"] || "";
+    let fields = {};
+    let files = [];
+
+    if (contentType.includes("multipart/form-data")) {
+      const parsedForm = await new Promise((resolve, reject) => {
+        parseMultipartForm(req, (err, result) => err ? reject(err) : resolve(result));
+      }).catch(() => null);
+
+      if (!parsedForm) {
+        return send(res, 400, JSON.stringify({ error: "Invalid form data" }), "application/json");
+      }
+
+      fields = parsedForm.fields || {};
+      files = parsedForm.files || [];
+    } else {
+      const raw = await parseBody(req);
+      try {
+        fields = JSON.parse(raw || "{}");
+      } catch (_) {
+        fields = {};
+      }
+    }
+
+    const thread_id = String(fields.thread_id || "").trim();
+    const message = String(fields.message || "").trim();
+
+    if (!thread_id || !message) {
+      return send(res, 400, JSON.stringify({ error: "Missing thread_id or message" }), "application/json");
+    }
+
+    const threads = readJSON(FILES.contact_messages, []);
+    const thread = threads.find(t =>
+      String(t.thread_id || "") === thread_id &&
+      String(t.user_id || "") === String(auth.user_id || "")
+    );
+
+    if (!thread) {
+      return send(res, 404, JSON.stringify({ error: "Thread not found" }), "application/json");
+    }
+
+    const attachments = (files || []).map(f => ({
+      name: f.originalName || f.filename || "Attachment",
+      url: f.url,
+      type: f.mimetype || "",
+      size: Number(f.size || 0)
+    })).filter(a => a.url);
+
+    if (!Array.isArray(thread.messages)) thread.messages = [];
+
+    thread.messages.push({
+      sender: "user",
+      text: message,
+      created_at: nowISO(),
+      attachments
+    });
+
+    thread.admin_has_unread = true;
+    thread.latest_message_at = nowISO();
+    thread.latest_message_preview = message.slice(0, 140);
+
+    writeJSON(FILES.contact_messages, threads);
+
+    return send(res, 200, JSON.stringify({ success: true }), "application/json");
+  }
+
+  // Deprecated route kept disabled to prevent redirect-based messaging flow.
+  if (false && method === "POST" && pathname === "/support/reply") {
     const sess = getAuth(req);
     if (!sess || !sess.user_id) return redirect(res, "/login");
 
@@ -12497,7 +12682,28 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    return redirect(res, `/support?id=${encodeURIComponent(thread_id)}`);
+    return send(res, 200, JSON.stringify({ success: true }), "application/json");
+  }
+
+  if (method === "POST" && pathname === "/support/mark-read") {
+    const auth = getAuth(req);
+    if (!auth) return send(res, 401, "Unauthorized");
+
+    const body = JSON.parse(await parseBody(req));
+    const threads = readJSON(FILES.contact_messages, []);
+
+    const thread = threads.find(t =>
+      t.thread_id === body.thread_id &&
+      String(t.user_id || "") === String(auth.user_id || "")
+    );
+    if (thread) {
+      thread.user_has_unread = false;
+      thread.admin_has_unread = false;
+    }
+
+    writeJSON(FILES.contact_messages, threads);
+
+    return send(res, 200, JSON.stringify({ success: true }), "application/json");
   }
 
   if (method === "GET" && pathname === "/support/unread-count") {
@@ -15046,7 +15252,7 @@ ${(content.demo.steps || []).map(s =>
             ${senderContext.userName ? `<div><strong>User:</strong> ${safeStr(senderContext.userName)}</div>` : ``}
           </div>
 
-        <div style="margin-top:20px;">
+        <div id="adminConversationBox" style="margin-top:20px;">
           ${normalizedMessages.map(msg => `
             <div style="
               margin-bottom:15px;
@@ -15084,7 +15290,7 @@ ${(content.demo.steps || []).map(s =>
           `).join("")}
         </div>
 
-        <form method="POST" action="/admin/contact-reply" enctype="multipart/form-data">
+        <form onsubmit="sendAdminMessage(event)">
           <input type="hidden" name="thread_id" value="${safeStr(thread.thread_id || thread.message_id || "")}" />
 
           <textarea name="reply" placeholder="Write your reply..." required style="
@@ -15097,7 +15303,8 @@ ${(content.demo.steps || []).map(s =>
   min-height:120px;
 "></textarea>
           <label style="margin-top:10px;display:block;">Attachment (optional)</label>
-          <input type="file" name="attachment" style="margin-top:6px;" />
+          <input type="file" name="attachment" multiple style="margin-top:6px;" />
+          <div id="filePreview" style="margin-top:10px;"></div>
           <p class="muted" style="font-size:12px;margin-top:8px;">You can attach one file per message.</p>
 
           <button class="btn-primary" style="
@@ -15112,39 +15319,167 @@ ${(content.demo.steps || []).map(s =>
         </div>
       </div>
       <script>
-      (function() {
-        const currentId = ${JSON.stringify(String(thread.thread_id || thread.message_id || ""))};
-        let lastCount = ${JSON.stringify(normalizedMessages.length)};
-        setInterval(async function() {
-          try {
-            const res = await fetch("/admin/contact-thread-state?id=" + encodeURIComponent(currentId), {
-              credentials: "same-origin"
+      const currentId = ${JSON.stringify(String(thread.thread_id || thread.message_id || ""))};
+      let lastCount = ${JSON.stringify(normalizedMessages.length)};
+
+      function escapeHtmlClient(str) {
+        return String(str || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      }
+
+      function renderMessages(messages) {
+        function getContainer() {
+          if (window.location.pathname.startsWith("/admin")) {
+            return document.getElementById("adminConversationBox");
+          }
+          return document.getElementById("conversationBox");
+        }
+
+        const container = getContainer();
+        if (!container) return;
+
+        // Only append NEW messages
+        if (!window._renderedCount) window._renderedCount = 0;
+
+        const newMessages = messages.slice(window._renderedCount);
+
+        newMessages.forEach(m => {
+          const bg = m.sender === "admin" ? "#e0f2fe" : "#f3f4f6";
+          const who = m.sender === "admin" ? "Support" : "You";
+          const time = m.created_at ? new Date(m.created_at).toLocaleString() : "";
+          const attachments = Array.isArray(m.attachments) ? m.attachments : [];
+
+          const wrapper = document.createElement("div");
+          wrapper.style.marginBottom = "15px";
+          wrapper.style.padding = "14px";
+          wrapper.style.borderRadius = "12px";
+          wrapper.style.border = "1px solid #e5e7eb";
+          wrapper.style.background = bg;
+
+          wrapper.innerHTML =
+            "<strong>" + who + "</strong><br/>" +
+            "<span style='font-size:12px;color:#666;'>" + time + "</span><br/>" +
+            "<div style='margin-top:6px;'>" + escapeHtmlClient(m.text) + "</div>";
+
+          if (attachments.length) {
+            const attWrap = document.createElement("div");
+            attWrap.style.marginTop = "10px";
+
+            attachments.forEach(att => {
+              const a = document.createElement("a");
+              a.href = att.url || "#";
+              a.target = "_blank";
+              a.rel = "noopener noreferrer";
+              a.textContent = "📎 " + (att.name || "Attachment");
+
+              a.style.display = "inline-block";
+              a.style.marginRight = "8px";
+              a.style.marginTop = "6px";
+              a.style.padding = "6px 10px";
+              a.style.borderRadius = "999px";
+              a.style.background = "#fff";
+              a.style.border = "1px solid #d1d5db";
+              a.style.fontSize = "12px";
+              a.style.textDecoration = "none";
+              a.style.color = "#111827";
+
+              attWrap.appendChild(a);
             });
-            const data = await res.json();
-            if (data && typeof data.count === "number" && data.count !== lastCount) {
-              // Soft update instead of reload
-              if (window.location.pathname.startsWith("/support")) {
-                fetch(window.location.href, { credentials: "same-origin" })
-                  .then(() => {
-                    // lightweight refresh trigger
-                    // Safe refresh of support thread ONLY
-                    const currentUrl = window.location.pathname + window.location.search;
-                    window.location.replace(currentUrl);
-                  })
-                  .catch(() => {});
-              } else {
-                const currentUrl = window.location.pathname + window.location.search;
-                window.location.assign(currentUrl);
-              }
-            }
-          } catch (_) {}
-        }, 10000);
-      })();
+
+            wrapper.appendChild(attWrap);
+          }
+
+          container.appendChild(wrapper);
+        });
+
+        window._renderedCount = messages.length;
+
+        // Auto-scroll
+        container.scrollTop = container.scrollHeight;
+      }
+
+      async function fetchMessages() {
+        const res = await fetch("/admin/contact-thread-data?id=" + encodeURIComponent(currentId), {
+          credentials: "same-origin"
+        });
+        const data = await res.json();
+        const messages = data.messages || [];
+        if (messages.length !== lastCount) {
+          renderMessages(messages);
+          lastCount = messages.length;
+        }
+      }
+
+      async function sendAdminMessage(e) {
+        e.preventDefault();
+
+        const form = e.target;
+        const textarea = form.querySelector("textarea");
+        const fileInput = form.querySelector('input[type="file"]');
+        const message = (textarea.value || "").trim();
+        if (!message) return;
+
+        const formData = new FormData();
+        formData.append("thread_id", ${JSON.stringify(String(thread?.thread_id || thread?.message_id || ""))});
+        formData.append("message", message);
+
+        if (fileInput && fileInput.files && fileInput.files.length) {
+          for (let i = 0; i < fileInput.files.length; i++) {
+            formData.append("attachment", fileInput.files[i]);
+          }
+        }
+
+        const res = await fetch("/admin/support/reply", {
+          method: "POST",
+          body: formData,
+          credentials: "same-origin"
+        });
+
+        if (!res.ok) return;
+
+        textarea.value = "";
+        if (fileInput) fileInput.value = "";
+        const preview = document.getElementById("filePreview");
+        if (preview) preview.innerHTML = "";
+
+        await fetchMessages();
+      }
+
+      setInterval(fetchMessages, 2000);
+      window._renderedCount = 0;
+      fetchMessages();
+      </script>
+      <script>
+      document.addEventListener("change", function(e) {
+        if (!e.target.matches('input[type="file"]')) return;
+
+        const preview = document.getElementById("filePreview");
+        if (!preview) return;
+
+        preview.innerHTML = "";
+
+        const files = e.target.files || [];
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+
+          const item = document.createElement("div");
+          item.style.fontSize = "12px";
+          item.style.marginTop = "4px";
+          item.textContent = "📎 " + f.name;
+
+          preview.appendChild(item);
+        }
+      });
       </script>
   `, navAdmin(), { showChat: false, orgName: "" }));
     }
 
-    if (method === "POST" && pathname === "/admin/contact-reply") {
+    // Deprecated route kept disabled to prevent redirect-based messaging flow.
+    if (false && method === "POST" && pathname === "/admin/contact-reply") {
       const contentType = req.headers["content-type"] || "";
       let fields = {};
       let files = [];
@@ -15233,7 +15568,92 @@ ${(content.demo.steps || []).map(s =>
         }
       }
 
-      return redirect(res, `/admin/contact-thread?id=${encodeURIComponent(String(thread_id || ""))}`);
+      return send(res, 200, JSON.stringify({ success: true }), "application/json");
+    }
+
+    if (method === "POST" && pathname === "/admin/support/reply") {
+      const auth = getAuth(req);
+      if (!auth) return send(res, 401, JSON.stringify({ error: "Unauthorized" }), "application/json");
+
+      const contentType = req.headers["content-type"] || "";
+      let fields = {};
+      let files = [];
+
+      if (contentType.includes("multipart/form-data")) {
+        const parsedForm = await new Promise((resolve, reject) => {
+          parseMultipartForm(req, (err, result) => err ? reject(err) : resolve(result));
+        }).catch(() => null);
+
+        if (!parsedForm) {
+          return send(res, 400, JSON.stringify({ error: "Invalid form data" }), "application/json");
+        }
+
+        fields = parsedForm.fields || {};
+        files = parsedForm.files || [];
+      } else {
+        const raw = await parseBody(req);
+        try {
+          fields = JSON.parse(raw || "{}");
+        } catch (_) {
+          fields = {};
+        }
+      }
+
+      const thread_id = String(fields.thread_id || "").trim();
+      const message = String(fields.message || "").trim();
+
+      if (!thread_id || !message) {
+        return send(res, 400, JSON.stringify({ error: "Missing thread_id or message" }), "application/json");
+      }
+
+      const threads = readJSON(FILES.contact_messages, []);
+      const thread = threads.find(t => String(t.thread_id || "") === thread_id);
+
+      if (!thread) {
+        return send(res, 404, JSON.stringify({ error: "Thread not found" }), "application/json");
+      }
+
+      const attachments = (files || []).map(f => ({
+        name: f.originalName || f.filename || "Attachment",
+        url: f.url,
+        type: f.mimetype || "",
+        size: Number(f.size || 0)
+      })).filter(a => a.url);
+
+      if (!Array.isArray(thread.messages)) thread.messages = [];
+
+      thread.messages.push({
+        sender: "admin",
+        text: message,
+        created_at: nowISO(),
+        attachments
+      });
+
+      thread.user_has_unread = true;
+      thread.latest_message_at = nowISO();
+      thread.latest_message_preview = message.slice(0, 140);
+
+      writeJSON(FILES.contact_messages, threads);
+
+      return send(res, 200, JSON.stringify({ success: true }), "application/json");
+    }
+
+    if (method === "GET" && pathname === "/admin/contact-thread-data") {
+      const id = String(parsed.query.id || "");
+      const threads = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+      const thread = threads.find(t => String(t.thread_id || t.message_id || "") === id);
+      if (!thread) return send(res, 404, JSON.stringify({ error: "not_found" }), "application/json");
+
+      const messages = Array.isArray(thread.messages)
+        ? thread.messages
+        : [{
+            sender: "user",
+            text: String(thread.message || ""),
+            created_at: String(thread.created_at || nowISO()),
+            attachments: []
+          }];
+
+      return send(res, 200, JSON.stringify({ messages }), "application/json");
     }
 
     if (method === "GET" && pathname === "/admin/contact-thread-state") {
