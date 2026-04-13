@@ -168,6 +168,7 @@ const FILES = {
   jobs: path.join(DATA_DIR, "jobs.json"),
   applications: path.join(DATA_DIR, "applications.json"),
   website_content: path.join(DATA_DIR, "website_content.json"),
+  contact_messages: path.join(DATA_DIR, "contact_messages.json"),
 };
 
 // Directory for storing uploaded template files
@@ -704,6 +705,7 @@ textarea{min-height:220px;}
 .badge.bad{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
 .badge.underpaid{border-color:#fdba74;background:#fff7ed;color:#9a3412;}
 .badge.writeoff{border-color:#d1d5db;background:#f3f4f6;color:#374151;}
+.support-unread-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 6px;border-radius:999px;background:#ef4444;color:#fff;font-size:11px;font-weight:700;margin-left:6px;}
 /* Contract Missing Badge */
 .badge.contract-missing {
   background: #fef3c7;
@@ -3233,9 +3235,61 @@ function getUserUnreadSupportCount(user_id) {
 
   return threads.filter(t =>
     String(t.user_id || "") === String(user_id || "") &&
-    Array.isArray(t.messages) &&
-    t.messages.some(msg => msg.sender === "admin" && !msg.read_by_user)
+    (t.user_has_unread === true || (Array.isArray(t.messages) &&
+    t.messages.some(msg => msg.sender === "admin" && !msg.read_by_user)))
   ).length;
+}
+
+function getThreadLatestMessage(thread) {
+  if (Array.isArray(thread?.messages) && thread.messages.length) {
+    return thread.messages[thread.messages.length - 1];
+  }
+  return {
+    sender: "user",
+    text: String(thread?.message || ""),
+    created_at: String(thread?.created_at || "")
+  };
+}
+
+function getAdminUnreadSupportCount() {
+  const threads = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+  return threads.filter(thread => {
+    const latest = getThreadLatestMessage(thread);
+    const latestSender = String(latest?.sender || "").toLowerCase();
+    if (thread.admin_has_unread === true) return true;
+    return ["new", "open"].includes(String(thread.status || "").toLowerCase()) &&
+      (latestSender === "user" || latestSender === "public");
+  }).length;
+}
+
+function getAccountContextByEmail(email) {
+  const safeEmail = String(email || "").trim().toLowerCase();
+  if (!safeEmail) {
+    return { sourceLabel: "Public Website Lead", planLabel: "", organizationName: "", userName: "", email: "" };
+  }
+  const user = getUserByEmail(safeEmail);
+  if (!user) {
+    return { sourceLabel: "Public Website Lead", planLabel: "", organizationName: "", userName: "", email: safeEmail };
+  }
+  const org = getOrg(user.org_id);
+  const sub = getSub(user.org_id);
+  const pilot = getPilot(user.org_id);
+  const pilotActive = pilot && pilot.status === "active" && new Date(pilot.ends_at || 0).getTime() > Date.now();
+  const planMap = { starter: "Starter", growth: "Growth", pro: "Pro", enterprise: "Enterprise" };
+  const subPlan = String(sub?.plan || "").toLowerCase();
+  const planLabel = pilotActive
+    ? "Free Trial"
+    : (planMap[subPlan] || (sub?.status === "active" ? "Active User" : ""));
+  const sourceLabel = pilotActive
+    ? "Trial"
+    : (planMap[subPlan] ? planMap[subPlan] : "Active User");
+  return {
+    sourceLabel,
+    planLabel,
+    organizationName: String(org?.org_name || ""),
+    userName: String(user?.full_name || user?.name || ""),
+    email: String(user?.email || safeEmail)
+  };
 }
 
 function navUser(active = "", user_id = "") {
@@ -3256,7 +3310,8 @@ function navUser(active = "", user_id = "") {
   `;
 }
 function navAdmin() {
-  return `<a href="/admin/dashboard">Admin</a><a href="/admin/simulation">Simulation</a><a href="/admin/website-content">Website Content</a><a href="/admin/insights">Insights</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+  const unreadCount = getAdminUnreadSupportCount();
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/simulation">Simulation</a><a href="/admin/website-content">Website Content</a><a href="/admin/insights">Insights</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages${unreadCount > 0 ? `<span class="support-unread-badge">${unreadCount}</span>` : ""}</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
 
 // ===== Models helpers =====
@@ -11844,6 +11899,10 @@ const server = http.createServer(async (req, res) => {
       name: String(fields.name || ""),
       email: String(fields.email || ""),
       status: "open",
+      admin_has_unread: true,
+      user_has_unread: false,
+      latest_message_at: nowISO(),
+      latest_message_preview: String(fields.message || "").slice(0, 180),
       created_at: nowISO(),
       messages: [
         {
@@ -11926,6 +11985,7 @@ const server = http.createServer(async (req, res) => {
         }
         return msg;
       });
+      selectedThread.user_has_unread = false;
       writeJSON(FILES.contact_messages || "./data/contact_messages.json", threads);
     }
 
@@ -12101,7 +12161,8 @@ const server = http.createServer(async (req, res) => {
             });
             const data = await res.json();
             if (data && typeof data.count === "number" && data.count !== lastCount) {
-              window.location.reload();
+              const currentUrl = window.location.pathname + window.location.search;
+              window.location.href = currentUrl;
             }
           } catch (_) {}
         }, 10000);
@@ -12158,6 +12219,10 @@ const server = http.createServer(async (req, res) => {
       subject: subject || "Support Request",
       status: "open",
       unread: true,
+      admin_has_unread: true,
+      user_has_unread: false,
+      latest_message_at: nowISO(),
+      latest_message_preview: String(message || "").slice(0, 180),
       created_at: nowISO(),
       messages: [
         {
@@ -12266,6 +12331,10 @@ const server = http.createServer(async (req, res) => {
 
       thread.unread = true;
       thread.status = "open";
+      thread.admin_has_unread = true;
+      thread.user_has_unread = false;
+      thread.latest_message_at = nowISO();
+      thread.latest_message_preview = String(reply || "").slice(0, 180);
       writeJSON(FILES.contact_messages || "./data/contact_messages.json", threads);
 
       if (process.env.RESEND_API_KEY && process.env.CONTACT_EMAIL_TO) {
@@ -14687,24 +14756,31 @@ ${(content.demo.steps || []).map(s =>
     }
 
     if (method === "GET" && pathname === "/admin/contact-messages") {
-      const msgs = readJSON("./data/contact_messages.json", []);
-      const unreadCount = msgs.filter(m => m.unread).length;
+      const msgs = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+      const unreadCount = getAdminUnreadSupportCount();
 
       const rows = msgs.slice().reverse().map(m => {
         const threadId = String(m.thread_id || m.message_id || "");
-        const messagePreview = safeStr(m.messages?.[0]?.text || m.message || "");
+        const latestMessage = getThreadLatestMessage(m);
+        const messagePreview = safeStr(m.latest_message_preview || latestMessage?.text || m.message || "");
         const statusValue = String(m.status || "open");
+        const context = getAccountContextByEmail(m.email);
+        const sourceValue = String(m.source || "") === "public" ? "Public Lead" : context.sourceLabel;
+        const planValue = context.planLabel || (String(m.source || "") === "public" ? "-" : "Active User");
+        const adminUnread = m.admin_has_unread === true || (["new", "open"].includes(statusValue.toLowerCase()) && String(latestMessage?.sender || "").toLowerCase() === "user");
 
         return `
-        <tr style="background:${m.unread ? "#fef3c7" : "transparent"};">
+        <tr style="background:${adminUnread ? "#fef3c7" : "transparent"};font-weight:${adminUnread ? "700" : "500"};">
           <td>
             ${safeStr(m.name)}<br/>
             ${threadId ? `<a href="/admin/contact-thread?id=${encodeURIComponent(threadId)}">View</a>` : ""}
           </td>
           <td><a href="mailto:${safeStr(m.email)}">${safeStr(m.email)}</a></td>
+          <td>${safeStr(sourceValue)}</td>
+          <td>${safeStr(planValue || "-")}</td>
           <td style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${messagePreview}</td>
           <td>${safeStr(statusValue)}</td>
-          <td>${safeStr(m.created_at ? new Date(m.created_at).toLocaleString() : "-")}</td>
+          <td>${safeStr((m.latest_message_at || m.created_at) ? new Date(m.latest_message_at || m.created_at).toLocaleString() : "-")}</td>
           <td>
             <form method="POST" action="/admin/contact-messages/update">
               <input type="hidden" name="message_id" value="${safeStr(threadId)}" />
@@ -14737,12 +14813,14 @@ ${(content.demo.steps || []).map(s =>
           <tr>
             <th>Name</th>
             <th>Email</th>
+            <th>Source</th>
+            <th>Plan</th>
             <th>Message</th>
             <th>Status</th>
             <th>Date</th>
             <th>Action</th>
           </tr>
-          ${rows || "<tr><td colspan='6'>No messages</td></tr>"}
+          ${rows || "<tr><td colspan='8'>No messages</td></tr>"}
         </table>
       `, navAdmin(), { showChat: false, orgName: "" }));
     }
@@ -14754,12 +14832,12 @@ ${(content.demo.steps || []).map(s =>
       const id = String(params.get("message_id") || "");
       const status = String(params.get("status") || "open");
 
-      const msgs = readJSON("./data/contact_messages.json", []);
+      const msgs = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
       const idx = msgs.findIndex(m => String(m.thread_id || m.message_id || "") === id);
 
       if (idx >= 0) {
         msgs[idx].status = status;
-        writeJSON("./data/contact_messages.json", msgs);
+        writeJSON(FILES.contact_messages || "./data/contact_messages.json", msgs);
       }
 
       return redirect(res, "/admin/contact-messages");
@@ -14773,20 +14851,33 @@ ${(content.demo.steps || []).map(s =>
       if (!thread) return send(res, 404, "Thread not found");
 
       thread.unread = false;
+      thread.admin_has_unread = false;
       writeJSON(FILES.contact_messages || "./data/contact_messages.json", threads);
 
       const normalizedMessages = Array.isArray(thread.messages)
         ? thread.messages
         : [{ sender: "user", text: String(thread.message || ""), created_at: String(thread.created_at || nowISO()) }];
+      const senderContext = getAccountContextByEmail(thread.email);
+      const sourceLabel = String(thread.source || "") === "public" ? "Public Website Lead" : senderContext.sourceLabel;
 
-      return send(res, 200, `
-    <html>
-    <head>${renderPublicStyles()}</head>
-    <body>
-      ${navAdmin()}
-
-      <div class="container" style="max-width:800px;margin-top:40px;">
-        <h2>Conversation with ${safeStr(thread.name)}</h2>
+      return send(res, 200, renderPage("Contact Conversation", `
+      <div class="wrap" style="max-width:980px;">
+        <h2>Contact Conversation</h2>
+        <div class="card" style="max-width:860px;margin:14px auto 0;padding:22px;">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+            <div>
+              <div style="font-size:22px;font-weight:800;">${safeStr(thread.email || "-")}</div>
+              <div class="muted" style="margin-top:4px;">Sender: ${safeStr(thread.name || "Unknown")}</div>
+            </div>
+            <div class="badge">${safeStr(sourceLabel)}</div>
+          </div>
+          <div style="margin-top:14px;padding:12px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;">
+            <div><strong>Source:</strong> ${safeStr(sourceLabel)}</div>
+            ${senderContext.planLabel ? `<div><strong>Plan:</strong> ${safeStr(senderContext.planLabel)}</div>` : ``}
+            ${senderContext.organizationName ? `<div><strong>Organization:</strong> ${safeStr(senderContext.organizationName)}</div>` : ``}
+            <div><strong>Email:</strong> ${safeStr(thread.email || senderContext.email || "-")}</div>
+            ${senderContext.userName ? `<div><strong>User:</strong> ${safeStr(senderContext.userName)}</div>` : ``}
+          </div>
 
         <div style="margin-top:20px;">
           ${normalizedMessages.map(msg => `
@@ -14797,7 +14888,7 @@ ${(content.demo.steps || []).map(s =>
               background:${msg.sender === "admin" ? "#e0f2fe" : "#f3f4f6"};
               border:1px solid #e5e7eb;
             ">
-              <strong>${safeStr(msg.sender)}</strong><br/>
+              <strong>${safeStr(msg.sender === "admin" ? "Admin" : (thread.source === "public" ? "Public Lead" : "User"))}</strong><br/>
               <span style="font-size:12px;color:#666;">
                 ${msg.created_at ? new Date(msg.created_at).toLocaleString() : ""}
               </span><br/>
@@ -14829,7 +14920,7 @@ ${(content.demo.steps || []).map(s =>
         <form method="POST" action="/admin/contact-reply" enctype="multipart/form-data">
           <input type="hidden" name="thread_id" value="${safeStr(thread.thread_id || thread.message_id || "")}" />
 
-          <textarea name="reply" placeholder="Describe your issue in detail..." required style="
+          <textarea name="reply" placeholder="Write your reply..." required style="
   width:100%;
   padding:12px;
   border-radius:10px;
@@ -14851,7 +14942,7 @@ ${(content.demo.steps || []).map(s =>
             Send Message
           </button>
         </form>
-
+        </div>
       </div>
       <script>
       (function() {
@@ -14864,15 +14955,14 @@ ${(content.demo.steps || []).map(s =>
             });
             const data = await res.json();
             if (data && typeof data.count === "number" && data.count !== lastCount) {
-              window.location.reload();
+              const currentUrl = window.location.pathname + window.location.search;
+              window.location.href = currentUrl;
             }
           } catch (_) {}
         }, 10000);
       })();
       </script>
-    </body>
-    </html>
-  `);
+  `, navAdmin(), { showChat: false, orgName: "" }));
     }
 
     if (method === "POST" && pathname === "/admin/contact-reply") {
@@ -14926,6 +15016,10 @@ ${(content.demo.steps || []).map(s =>
         });
 
         thread.status = "replied";
+        thread.user_has_unread = true;
+        thread.admin_has_unread = false;
+        thread.latest_message_at = nowISO();
+        thread.latest_message_preview = String(reply || "").slice(0, 180);
         writeJSON(FILES.contact_messages || "./data/contact_messages.json", threads);
 
         if (process.env.RESEND_API_KEY && thread.email) {
