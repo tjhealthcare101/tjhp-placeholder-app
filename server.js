@@ -16963,6 +16963,18 @@ if (method === "GET" && pathname === "/executive-export") {
 // ==============================
 // CLAIMS LIFECYCLE (HUB + SUBTABS)
 // ==============================
+// ===== FIX: MAP NAV LINKS TO EXISTING PAGES =====
+
+// Claims Lifecycle → existing /claims page
+if (method === "GET" && pathname === "/claims-lifecycle") {
+  return redirect(res, "/claims");
+}
+
+// Action Center → existing /actions page
+if (method === "GET" && pathname === "/action-center") {
+  return redirect(res, "/actions");
+}
+
 if (method === "GET" && pathname === "/claims") {
 
   // Sub-tabs: billed | payments | denials | negotiations | all
