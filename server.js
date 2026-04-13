@@ -2993,64 +2993,55 @@ function renderPublicStyles() {
 
   @media (max-width: 768px) {
 
-    /* Stack hero layout */
-    .hero-inner {
-      display: flex;
-      flex-direction: column;
-      grid-template-columns: 1fr !important;
-      gap: 24px;
-    }
-
-    .hero-left {
-      order: 1;
-    }
-
-    .hero-right {
-      order: 2;
-    }
-
-    .hero-actions {
-      order: 3;
-    }
-
-    /* Make headline readable */
-    .hero h1 {
-      font-size: 32px;
-      line-height: 1.2;
-    }
-
-    /* Slightly smaller subtext */
-    .hero-sub {
-      font-size: 16px;
-    }
-
-    /* Stack buttons vertically */
-    .hero-actions {
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    /* Make buttons full width */
-    .hero-actions a {
-      width: 100%;
-    }
-
-    /* Fix hero image / placeholder */
-    .hero-right img,
-    .placeholder-box {
-      width: 100%;
-      height: auto;
-    }
-
-    .topbar .btn-primary {
-      display: none;
-    }
-
-    .hero-actions .btn-primary {
-      display: inline-flex !important;
-    }
-
+  .nav {
+    justify-content: center;
+    text-align: center;
   }
+
+  .hero-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    align-items: center;
+  }
+
+  /* Force left section to stack properly */
+  .hero-left {
+    display: flex;
+    flex-direction: column;
+    text-align: center;
+    max-width: 500px;
+    margin: 0 auto;
+  }
+
+  /* Move image AFTER text */
+  .hero-right {
+    order: 2;
+  }
+
+  /* Push buttons AFTER image */
+  .hero-actions {
+    order: 3;
+    margin-top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: center;
+  }
+
+  /* Buttons full width */
+  .hero-actions a {
+    width: 100%;
+  }
+
+  /* Image sizing */
+  .hero-right img,
+  .placeholder-box {
+    width: 100%;
+    height: auto;
+  }
+
+}
 </style>`;
 }
 
