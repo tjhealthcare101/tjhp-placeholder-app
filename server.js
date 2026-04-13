@@ -1400,6 +1400,27 @@ ${resetSessionUiState}
   });
 })();
 
+(function() {
+  async function updateSupportBadge() {
+    try {
+      const res = await fetch("/support/unread-count", {
+        credentials: "same-origin"
+      });
+      const data = await res.json();
+
+      const el = document.querySelector("a[href='/support']");
+      if (!el) return;
+
+      const count = Number(data.count || 0);
+
+      el.innerHTML = "Support" + (count > 0 ? " (" + count + ")" : "");
+    } catch (_) {}
+  }
+
+  setInterval(updateSupportBadge, 10000);
+  updateSupportBadge();
+})();
+
 window.__syncScrollBars = function(rootId){
   const root = document.getElementById(rootId);
   if (!root) return;
@@ -11979,13 +12000,9 @@ const server = http.createServer(async (req, res) => {
     const selectedThread = myThreads.find(t => String(t.thread_id || t.message_id || "") === selectedId);
 
     if (selectedThread && Array.isArray(selectedThread.messages)) {
-      selectedThread.messages = selectedThread.messages.map(msg => {
-        if (msg.sender === "admin") {
-          return { ...msg, read_by_user: true };
-        }
-        return msg;
-      });
-      selectedThread.user_has_unread = false;
+      if (selectedThread && parsed.query.id) {
+        selectedThread.user_has_unread = false;
+      }
       writeJSON(FILES.contact_messages || "./data/contact_messages.json", threads);
     }
 
@@ -12080,7 +12097,7 @@ const server = http.createServer(async (req, res) => {
         ${selectedThread ? `
           <h3 style="margin-top:0;">Conversation</h3>
 
-          <div style="margin-top:15px;">
+          <div id="support-messages" style="margin-top:20px;">
             ${normalizedMessages.map(msg => `
               <div style="
                 margin-bottom:15px;
@@ -12154,18 +12171,53 @@ const server = http.createServer(async (req, res) => {
       (function() {
         const currentId = ${JSON.stringify(selectedId)};
         let lastCount = ${JSON.stringify(normalizedMessages.length)};
-        setInterval(async function() {
+      
+        const container = document.querySelector("#support-messages");
+      
+        function renderMessage(msg) {
+          const wrapper = document.createElement("div");
+          wrapper.style.marginBottom = "15px";
+          wrapper.style.padding = "14px";
+          wrapper.style.borderRadius = "12px";
+          wrapper.style.background = msg.sender === "admin" ? "#e0f2fe" : "#f3f4f6";
+          wrapper.style.border = "1px solid #e5e7eb";
+      
+          const name = msg.sender === "admin" ? "Admin" : "You";
+          const time = msg.created_at ? new Date(msg.created_at).toLocaleString() : "";
+      
+          wrapper.innerHTML =
+            "<strong>" + name + "</strong><br/>" +
+            "<span style=\"font-size:12px;color:#666;\">" + time + "</span><br/>" +
+            String(msg.text || "");
+      
+          return wrapper;
+        }
+      
+        async function fetchMessages() {
           try {
-            const res = await fetch("/support/thread-state?id=" + encodeURIComponent(currentId), {
+            const res = await fetch("/support/thread-data?id=" + encodeURIComponent(currentId), {
               credentials: "same-origin"
             });
             const data = await res.json();
-            if (data && typeof data.count === "number" && data.count !== lastCount) {
-              const currentUrl = window.location.pathname + window.location.search;
-              window.location.href = currentUrl;
+      
+            if (!data || !Array.isArray(data.messages)) return;
+      
+            if (data.messages.length !== lastCount) {
+              lastCount = data.messages.length;
+      
+              // Clear and re-render messages
+              container.innerHTML = "";
+              data.messages.forEach(msg => {
+                container.appendChild(renderMessage(msg));
+              });
+      
+              // Auto-scroll to bottom
+              container.scrollTop = container.scrollHeight;
             }
           } catch (_) {}
-        }, 10000);
+        }
+      
+        setInterval(fetchMessages, 4000);
       })();
       </script>
     ` : ""}
@@ -12371,6 +12423,14 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, `/support?id=${encodeURIComponent(thread_id)}`);
   }
 
+  if (method === "GET" && pathname === "/support/unread-count") {
+    const sess = getAuth(req);
+    if (!sess || !sess.user_id) return send(res, 200, JSON.stringify({ count: 0 }), "application/json");
+
+    const count = getUserUnreadSupportCount(sess.user_id);
+    return send(res, 200, JSON.stringify({ count }), "application/json");
+  }
+
   if (method === "GET" && pathname === "/support/thread-state") {
     const sess = getAuth(req);
     if (!sess || !sess.user_id) return send(res, 401, JSON.stringify({ error: "unauthorized" }), "application/json");
@@ -12382,6 +12442,35 @@ const server = http.createServer(async (req, res) => {
 
     const count = Array.isArray(thread.messages) ? thread.messages.length : (thread.message ? 1 : 0);
     return send(res, 200, JSON.stringify({ count }), "application/json");
+  }
+
+  if (method === "GET" && pathname === "/support/thread-data") {
+    const sess = getAuth(req);
+    if (!sess || !sess.user_id) {
+      return send(res, 401, JSON.stringify({ error: "unauthorized" }), "application/json");
+    }
+
+    const id = String(parsed.query.id || "");
+    const threads = readJSON(FILES.contact_messages || "./data/contact_messages.json", []);
+    const thread = threads.find(t =>
+      String(t.thread_id || t.message_id || "") === id &&
+      String(t.user_id || "") === String(sess.user_id || "")
+    );
+
+    if (!thread) {
+      return send(res, 404, JSON.stringify({ error: "not_found" }), "application/json");
+    }
+
+    const messages = Array.isArray(thread.messages)
+      ? thread.messages
+      : [{
+          sender: "user",
+          text: String(thread.message || ""),
+          created_at: String(thread.created_at || nowISO()),
+          attachments: []
+        }];
+
+    return send(res, 200, JSON.stringify({ messages }), "application/json");
   }
 
   if (method === "GET" && pathname === "/apply") {
@@ -14955,8 +15044,20 @@ ${(content.demo.steps || []).map(s =>
             });
             const data = await res.json();
             if (data && typeof data.count === "number" && data.count !== lastCount) {
-              const currentUrl = window.location.pathname + window.location.search;
-              window.location.href = currentUrl;
+              // Soft update instead of reload
+              if (window.location.pathname.startsWith("/support")) {
+                fetch(window.location.href, { credentials: "same-origin" })
+                  .then(() => {
+                    // lightweight refresh trigger
+                    // Safe refresh of support thread ONLY
+                    const currentUrl = window.location.pathname + window.location.search;
+                    window.location.replace(currentUrl);
+                  })
+                  .catch(() => {});
+              } else {
+                const currentUrl = window.location.pathname + window.location.search;
+                window.location.assign(currentUrl);
+              }
             }
           } catch (_) {}
         }, 10000);
@@ -16314,7 +16415,19 @@ Keep it concise and factual.
             if (s <= 0) {
               el.textContent = "Ready";
               clearInterval(t);
-              window.location.reload();
+              // Soft update instead of reload
+              if (window.location.pathname.startsWith("/support")) {
+                fetch(window.location.href, { credentials: "same-origin" })
+                  .then(() => {
+                    // lightweight refresh trigger
+                    // Safe refresh of support thread ONLY
+                    const currentUrl = window.location.pathname + window.location.search;
+                    window.location.replace(currentUrl);
+                  })
+                  .catch(() => {});
+              } else {
+                window.location.href = window.location.href;
+              }
             } else {
               el.textContent = s + "s";
             }
