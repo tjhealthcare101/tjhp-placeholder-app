@@ -3653,21 +3653,41 @@ function getEffectivePlan(org_id, sess) {
   return String((sub && sub.plan) || "starter").toLowerCase();
 }
 function getBillingSummaryForOrg(org_id) {
-  const sub = getSub(org_id) || ensureSubscriptionForOrg(org_id);
-  const planKey = String(sub.plan || "").toLowerCase() || "starter";
+  const pilot = getPilot(org_id);
+  const sub = getSub(org_id);
+
+  let planKey = "starter";
+  let status = "inactive";
+
+  if (pilot && pilot.status === "active") {
+    planKey = "trial";
+    status = "active";
+  } else if (sub && sub.plan) {
+    planKey = String(sub.plan || "starter").toLowerCase();
+    status = String(sub.status || "active");
+  }
+
   const cfg = PLAN_RUNTIME_DEFAULTS[planKey] || PLAN_RUNTIME_DEFAULTS.starter;
 
+  let currentPeriodEnd = "";
+
+  if (pilot && pilot.status === "active") {
+    currentPeriodEnd = String(pilot.ends_at || "");
+  } else {
+    currentPeriodEnd = String(sub?.current_period_end || "");
+  }
+
   return {
-    plan: planKey || "starter",
-    status: String(sub.status || "inactive"),
-    stripe_customer_id: String(sub.stripe_customer_id || ""),
-    stripe_subscription_id: String(sub.stripe_subscription_id || ""),
-    current_period_end: String(sub.current_period_end || ""),
-    case_credits_per_month: Number(sub.case_credits_per_month || cfg.case_credits_per_month || 0),
-    payment_tracking_credits_per_month: Number(sub.payment_tracking_credits_per_month || cfg.payment_tracking_credits_per_month || 0),
-    ai_chat_limit: Number(sub.ai_chat_limit || cfg.ai_chat_limit || 0),
-    copilot_limit: Number(sub.copilot_limit || cfg.copilot_limit || 0),
-    workspace_limit: Number(sub.workspace_limit || cfg.workspace_limit || 0)
+    plan: planKey,
+    status,
+    stripe_customer_id: String(sub?.stripe_customer_id || ""),
+    stripe_subscription_id: String(sub?.stripe_subscription_id || ""),
+    current_period_end: currentPeriodEnd,
+    case_credits_per_month: Number(cfg.case_credits_per_month || 0),
+    payment_tracking_credits_per_month: Number(cfg.payment_tracking_credits_per_month || 0),
+    ai_chat_limit: Number(cfg.ai_chat_limit || 0),
+    copilot_limit: Number(cfg.copilot_limit || 0),
+    workspace_limit: Number(cfg.workspace_limit || 0)
   };
 }
 function currentMonthKey() {
@@ -11865,7 +11885,7 @@ const server = http.createServer(async (req, res) => {
     if (isSimulationSession(auth)) {
       return send(res, 200, JSON.stringify({
         simulation: true,
-        url: `/pricing?simulation=1&plan=${encodeURIComponent(String(auth.simulation_plan || plan))}`
+        url: `/account?tab=billing&simulation=1&plan=${encodeURIComponent(plan)}`
       }), "application/json");
     }
 
@@ -11945,7 +11965,7 @@ const server = http.createServer(async (req, res) => {
     if (isSimulationSession(auth)) {
       return send(res, 200, JSON.stringify({
         simulation: true,
-        url: `/pricing?simulation=1&plan=${encodeURIComponent(String(auth.simulation_plan || "starter"))}`
+        url: `/account?tab=billing&simulation=1&plan=${encodeURIComponent(String(auth.simulation_plan || "starter"))}`
       }), "application/json");
     }
 
@@ -27975,15 +27995,15 @@ function renderTemplateEditor(org, user){
             <div style="display:grid;grid-template-columns:1.1fr 1fr;gap:18px;align-items:start;">
               <div>
                 <div style="font-size:13px;color:#6b7280;margin-bottom:6px;">Current Plan</div>
-                <div style="font-size:28px;font-weight:800;text-transform:capitalize;">${safeStr(currentPlan)}</div>
+                <div style="font-size:28px;font-weight:800;text-transform:capitalize;">${currentPlan === "trial" ? "Free Trial" : safeStr(currentPlan)}</div>
                 <div style="margin-top:8px;font-size:14px;color:#374151;">
                   Status:
                   <span style="display:inline-block;padding:4px 10px;border-radius:999px;border:1px solid #d1d5db;background:#f9fafb;font-weight:700;text-transform:capitalize;">
-                    ${safeStr(currentStatus)}
+                    ${currentPlan === "trial" ? "Active" : safeStr(currentStatus)}
                   </span>
                 </div>
                 <div style="margin-top:8px;font-size:14px;color:#374151;">
-                  Renewal / Period End: <strong>${safeStr(currentPeriodEnd)}</strong>
+                  ${currentPlan === "trial" ? "Trial ends" : "Renewal / Period End"}: <strong>${safeStr(currentPeriodEnd)}</strong>
                 </div>
               </div>
 
