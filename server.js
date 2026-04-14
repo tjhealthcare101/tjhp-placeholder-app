@@ -3652,6 +3652,24 @@ function getEffectivePlan(org_id, sess) {
   const sub = getSub(org_id);
   return String((sub && sub.plan) || "starter").toLowerCase();
 }
+function getBillingSummaryForOrg(org_id) {
+  const sub = getSub(org_id) || ensureSubscriptionForOrg(org_id);
+  const planKey = String(sub.plan || "").toLowerCase() || "starter";
+  const cfg = PLAN_RUNTIME_DEFAULTS[planKey] || PLAN_RUNTIME_DEFAULTS.starter;
+
+  return {
+    plan: planKey || "starter",
+    status: String(sub.status || "inactive"),
+    stripe_customer_id: String(sub.stripe_customer_id || ""),
+    stripe_subscription_id: String(sub.stripe_subscription_id || ""),
+    current_period_end: String(sub.current_period_end || ""),
+    case_credits_per_month: Number(sub.case_credits_per_month || cfg.case_credits_per_month || 0),
+    payment_tracking_credits_per_month: Number(sub.payment_tracking_credits_per_month || cfg.payment_tracking_credits_per_month || 0),
+    ai_chat_limit: Number(sub.ai_chat_limit || cfg.ai_chat_limit || 0),
+    copilot_limit: Number(sub.copilot_limit || cfg.copilot_limit || 0),
+    workspace_limit: Number(sub.workspace_limit || cfg.workspace_limit || 0)
+  };
+}
 function currentMonthKey() {
   const d = new Date();
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`;
@@ -11819,6 +11837,104 @@ const server = http.createServer(async (req, res) => {
       exp
     });
     return redirect(res, "/dashboard?welcome=1");
+  }
+
+  if (method === "POST" && pathname === "/account/upgrade-plan") {
+    const auth = getAuth(req);
+    if (!auth || !auth.org_id) {
+      return send(res, 401, JSON.stringify({ error: "Unauthorized" }), "application/json");
+    }
+
+    const body = await parseBody(req);
+    let plan = "starter";
+
+    try {
+      const parsedBody = JSON.parse(body || "{}");
+      plan = String(parsedBody.plan || "starter").toLowerCase().trim();
+    } catch {
+      const params = new URLSearchParams(body || "");
+      plan = String(params.get("plan") || "starter").toLowerCase().trim();
+    }
+
+    plan = String(plan || "starter").toLowerCase().trim();
+
+    if (!["starter", "growth", "pro", "enterprise"].includes(plan)) {
+      return send(res, 400, JSON.stringify({ error: "Invalid plan" }), "application/json");
+    }
+
+    if (isSimulationSession(auth)) {
+      return send(res, 200, JSON.stringify({
+        simulation: true,
+        url: `/pricing?simulation=1&plan=${encodeURIComponent(String(auth.simulation_plan || plan))}`
+      }), "application/json");
+    }
+
+    const stripe = getStripeClient();
+    if (!stripe) {
+      return send(res, 500, JSON.stringify({ error: "Stripe is not configured" }), "application/json");
+    }
+
+    const priceMap = {
+      starter: "price_1TCtm5LpgIqLdJKsHVUiixiT",
+      growth: "price_1TCtmyLpgIqLdJKsTdEYSkAr",
+      pro: "price_1TCtnXLpgIqLdJKsS6yNBZuq",
+      enterprise: "price_1TCto2LpgIqLdJKs5XFblcS1"
+    };
+
+    const billing = getBillingSummaryForOrg(auth.org_id);
+
+    try {
+      if (billing.stripe_customer_id && billing.stripe_subscription_id) {
+        let portalSession;
+
+        try {
+          portalSession = await stripe.billingPortal.sessions.create({
+            customer: billing.stripe_customer_id,
+            return_url: `${APP_BASE_URL}/account?tab=billing`,
+            flow_data: {
+              type: "subscription_update_confirm",
+              subscription_update_confirm: {
+                subscription: billing.stripe_subscription_id,
+                items: [
+                  {
+                    id: (await stripe.subscriptions.retrieve(billing.stripe_subscription_id)).items.data[0].id,
+                    price: priceMap[plan],
+                    quantity: 1
+                  }
+                ]
+              }
+            }
+          });
+        } catch (err) {
+          console.warn("Stripe flow_data failed, falling back to standard portal:", err.message);
+
+          // fallback to standard portal if flow_data is not supported
+          portalSession = await stripe.billingPortal.sessions.create({
+            customer: billing.stripe_customer_id,
+            return_url: `${APP_BASE_URL}/account?tab=billing`
+          });
+        }
+
+        return send(res, 200, JSON.stringify({ url: portalSession.url }), "application/json");
+      }
+
+      const checkoutSession = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        payment_method_types: ["card"],
+        line_items: [{ price: priceMap[plan], quantity: 1 }],
+        metadata: {
+          plan,
+          org_id: auth.org_id || ""
+        },
+        success_url: `${APP_BASE_URL}/post-checkout?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${APP_BASE_URL}/account?tab=billing`
+      });
+
+      return send(res, 200, JSON.stringify({ url: checkoutSession.url }), "application/json");
+    } catch (err) {
+      console.error("Upgrade plan error:", err);
+      return send(res, 500, JSON.stringify({ error: "Unable to start upgrade flow" }), "application/json");
+    }
   }
 
   if (method === "POST" && pathname === "/billing-portal") {
@@ -27804,43 +27920,125 @@ function renderTemplateEditor(org, user){
         `;
       }
       if (tab === "billing") {
-        const planName = getActivePlanName(org.org_id);
-        const planEnds = (() => {
-          const p = getPilot(org.org_id) || ensurePilot(org.org_id);
-          return p?.ends_at ? new Date(p.ends_at).toLocaleDateString() : "-";
-        })();
-
+        const usage = getUsage(org.org_id);
+        const billing = getBillingSummaryForOrg(org.org_id);
         const copilotUsage = getCopilotUsageSnapshot(org.org_id);
-        const copilotLimit = Number(copilotUsage.limit || 0);
+        const sim = CURRENT_SIMULATION && CURRENT_SIMULATION.plan ? String(CURRENT_SIMULATION.plan) : "";
+        const currentPlan = String(billing.plan || "starter").toLowerCase();
+        const currentStatus = String(billing.status || "inactive").toLowerCase();
+        const currentPeriodEnd = billing.current_period_end
+          ? new Date(billing.current_period_end).toLocaleDateString()
+          : "—";
 
-        const caseUsed = Number(usage.monthly_case_credits_used || 0);
-        const caseLimit = Number(limits.case_credits_per_month || 0);
-        const caseOver = Number(usage.monthly_case_overage_count || 0);
+        const plans = [
+          {
+            key: "starter",
+            name: "Starter",
+            price: "$249/mo",
+            desc: "Best for small practices",
+            features: ["20 AI Packets / month", "50 Case Credits", "Core denial detection", "Basic revenue insights"]
+          },
+          {
+            key: "growth",
+            name: "Growth",
+            price: "$599/mo",
+            desc: "Best for growing teams",
+            features: ["100 AI Packets / month", "250 Case Credits", "Everything in Starter", "Faster case handling"],
+            highlight: true
+          },
+          {
+            key: "pro",
+            name: "Pro",
+            price: "$1200/mo",
+            desc: "Advanced analytics & scale",
+            features: ["500 AI Packets / month", "1000 Case Credits", "Everything in Growth", "Advanced analytics & insights"]
+          },
+          {
+            key: "enterprise",
+            name: "Enterprise",
+            price: "$2000/mo",
+            desc: "Unlimited access & enterprise workflows",
+            features: ["Unlimited AI Packets", "Unlimited Case Credits", "Everything in Pro", "Enterprise-level workflows"]
+          }
+        ];
 
         return `
           <h3>Plan & Billing</h3>
-          <table>
-            <tr><th>Current Plan</th><td>${safeStr(planName)}</td></tr>
-            <tr><th>Trial Ends</th><td>${safeStr(planEnds)}</td></tr>
-            <tr><th>Access Mode</th><td>${safeStr(limits.mode==="pilot" ? "trial" : limits.mode)}</td></tr>
 
-            <tr><th>Case Credits Used</th><td>${safeStr(String(caseUsed))}</td></tr>
-            <tr><th>Case Credits Limit</th><td>${safeStr(String(caseLimit))}</td></tr>
-            <tr><th>Overage Cases</th><td>${safeStr(String(caseOver))}</td></tr>
+          ${sim ? `
+            <div style="margin-bottom:16px;padding:12px 14px;border-radius:12px;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;font-weight:600;">
+              Simulation mode: previewing in-app billing for ${safeStr(sim)} plan.
+            </div>
+          ` : ""}
 
-            <tr><th>AI Copilot Queries Used</th><td>${safeStr(String(copilotUsage.used))}</td></tr>
-            <tr><th>AI Copilot Queries Limit</th><td>${copilotUsage.isUnlimited ? "Unlimited" : safeStr(String(copilotLimit))}</td></tr>
-          </table>
+          <div class="card" style="padding:18px;border:1px solid #e5e7eb;border-radius:14px;margin-bottom:18px;">
+            <div style="display:grid;grid-template-columns:1.1fr 1fr;gap:18px;align-items:start;">
+              <div>
+                <div style="font-size:13px;color:#6b7280;margin-bottom:6px;">Current Plan</div>
+                <div style="font-size:28px;font-weight:800;text-transform:capitalize;">${safeStr(currentPlan)}</div>
+                <div style="margin-top:8px;font-size:14px;color:#374151;">
+                  Status:
+                  <span style="display:inline-block;padding:4px 10px;border-radius:999px;border:1px solid #d1d5db;background:#f9fafb;font-weight:700;text-transform:capitalize;">
+                    ${safeStr(currentStatus)}
+                  </span>
+                </div>
+                <div style="margin-top:8px;font-size:14px;color:#374151;">
+                  Renewal / Period End: <strong>${safeStr(currentPeriodEnd)}</strong>
+                </div>
+              </div>
 
-          <div class="btnRow">
-            <a class="btn secondary" href="/account?tab=billing">Refresh</a>
+              <div>
+                <table>
+                  <tr><th>Case Credits Used</th><td>${safeStr(String(Number(usage.monthly_case_credits_used || 0)))}</td></tr>
+                  <tr><th>Case Credits Limit</th><td>${safeStr(String(Number(billing.case_credits_per_month || 0)))}</td></tr>
+                  <tr><th>AI Copilot Used</th><td>${safeStr(String(Number(copilotUsage.used || 0)))}</td></tr>
+                  <tr><th>AI Copilot Limit</th><td>${copilotUsage.isUnlimited ? "Unlimited" : safeStr(String(Number(billing.copilot_limit || 0)))}</td></tr>
+                  <tr><th>Workspace Limit</th><td>${safeStr(String(Number(billing.workspace_limit || 0)))}</td></tr>
+                </table>
+              </div>
+            </div>
 
-            <button type="button" onclick="openBillingPortal()" class="btn secondary">Manage Subscription</button>
-
-            <a href="/plans" class="btn-primary">
-              Upgrade Plan
-            </a>
+            <div class="btnRow" style="margin-top:16px;">
+              <a class="btn secondary" href="/account?tab=billing">Refresh</a>
+              <button type="button" onclick="openBillingPortal()" class="btn secondary">Manage Subscription</button>
+            </div>
           </div>
+
+          <div style="margin:6px 0 14px 0;font-size:22px;font-weight:800;">Compare Plans</div>
+
+          <div class="grid-4" style="gap:18px;">
+            ${plans.map(p => {
+              const isCurrent = p.key === currentPlan;
+              return `
+                <div class="card pricing-card" style="padding:22px;border-radius:18px;border:${p.highlight ? "2px solid #2563eb" : "1px solid #e5e7eb"};background:#fff;">
+                  <div style="min-height:24px;margin-bottom:10px;">
+                    ${p.highlight ? `<span style="background:#2563eb;color:#fff;font-size:12px;padding:6px 10px;border-radius:999px;font-weight:700;">Most Popular</span>` : ""}
+                    ${isCurrent ? `<span style="margin-left:8px;background:#111827;color:#fff;font-size:12px;padding:6px 10px;border-radius:999px;font-weight:700;">Current Plan</span>` : ""}
+                  </div>
+
+                  <div style="font-size:18px;font-weight:800;">${safeStr(p.name)}</div>
+                  <div style="font-size:34px;font-weight:900;margin-top:10px;">${safeStr(p.price)}</div>
+                  <div style="margin-top:8px;color:#6b7280;font-style:italic;">${safeStr(p.desc)}</div>
+
+                  <div style="margin-top:18px;padding-top:12px;border-top:1px solid #e5e7eb;">
+                    ${p.features.map(f => `
+                      <div style="margin-bottom:10px;font-size:15px;line-height:1.4;">✓ ${safeStr(f)}</div>
+                    `).join("")}
+                  </div>
+
+                  <div style="margin-top:18px;">
+                    ${isCurrent
+                      ? `<button type="button" class="btn secondary" style="width:100%;" disabled>Current Plan</button>`
+                      : `<button type="button" class="btn-primary" style="width:100%;" onclick="upgradePlan('${safeStr(p.key)}')">
+                          ${currentStatus !== "active" ? "Start Plan" : "Switch to " + safeStr(p.name)}
+                         </button>`
+                    }
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+
           <script>
             async function openBillingPortal() {
               try {
@@ -27861,9 +28059,30 @@ function renderTemplateEditor(org, user){
                 }
 
                 alert("No subscription found. Please upgrade first.");
-                window.location.href = "/pricing";
               } catch (err) {
                 alert("Unable to open billing portal.");
+              }
+            }
+
+            async function upgradePlan(plan) {
+              try {
+                const res = await fetch("/account/upgrade-plan", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  credentials: "same-origin",
+                  body: JSON.stringify({ plan })
+                });
+
+                const data = await res.json();
+
+                if (data.url) {
+                  window.location.href = data.url;
+                  return;
+                }
+
+                alert(data.error || "Unable to start plan change.");
+              } catch (err) {
+                alert("Unable to start plan change.");
               }
             }
           </script>
