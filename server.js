@@ -79,6 +79,7 @@ const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || "";
 const ADMIN_PASSWORD_PLAIN = process.env.ADMIN_PASSWORD_PLAIN || "";
 const ADMIN_ACTIVATE_TOKEN = process.env.ADMIN_ACTIVATE_TOKEN || "CHANGE_ME_ADMIN_ACTIVATE_TOKEN";
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 
 // ===== Timing =====
 const LOCK_SCREEN_MS = 5000;
@@ -429,6 +430,15 @@ function parseBody(req) {
   });
 }
 
+function parseRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", chunk => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
 // ===== Session =====
 function hmacSign(value, secret) {
   return crypto.createHmac("sha256", secret).update(value).digest("hex");
@@ -482,6 +492,9 @@ function getAuth(req) {
   // Prefer owner/admin cookie on /admin routes, user cookie everywhere else.
   if (pathname.startsWith("/admin")) return adminSess || userSess;
   return userSess || adminSess;
+}
+function isSimulationSession(sess) {
+  return !!(sess && (sess.simulation === true || String(sess.org_id || "").startsWith("sim_")));
 }
 function setSession(res, payload) {
   const token = makeSession(payload);
@@ -4361,6 +4374,122 @@ function ensureSubscriptionForOrg(org_id) {
     writeJSON(FILES.subscriptions, subs);
   }
   return s;
+}
+
+function upsertSubscriptionFromStripe(data) {
+  const subs = readJSON(FILES.subscriptions, []);
+  const users = readJSON(FILES.users, []);
+
+  const customerId = String(data.customer || "");
+  const subscriptionId = String(data.id || data.subscription || "");
+  const status = String(data.status || "");
+  const currentPeriodEnd =
+    data.current_period_end
+      ? new Date(Number(data.current_period_end) * 1000).toISOString()
+      : "";
+
+  const plan =
+    data.items && data.items.data && data.items.data[0] && data.items.data[0].price
+      ? String(data.items.data[0].price.nickname || data.metadata?.plan || "").toLowerCase()
+      : String(data.metadata?.plan || "").toLowerCase();
+
+  let sub = subs.find(s =>
+    String(s.stripe_subscription_id || "") === subscriptionId ||
+    String(s.stripe_customer_id || "") === customerId
+  );
+
+  let orgId = sub?.org_id || "";
+
+  if (!orgId && customerId) {
+    const user = users.find(u => String(u.stripe_customer_id || "") === customerId);
+    if (user) orgId = user.org_id;
+  }
+
+  if (!sub) {
+    sub = {
+      subscription_id: uuid(),
+      org_id: orgId || "",
+      status: status || "active",
+      plan: plan || "starter",
+      stripe_customer_id: customerId,
+      stripe_subscription_id: subscriptionId,
+      current_period_end: currentPeriodEnd,
+      created_at: nowISO(),
+      updated_at: nowISO()
+    };
+    subs.push(sub);
+  } else {
+    sub.org_id = orgId || sub.org_id || "";
+    sub.status = status || sub.status || "";
+    sub.plan = plan || sub.plan || "starter";
+    sub.stripe_customer_id = customerId || sub.stripe_customer_id || "";
+    sub.stripe_subscription_id = subscriptionId || sub.stripe_subscription_id || "";
+    sub.current_period_end = currentPeriodEnd || sub.current_period_end || "";
+    sub.updated_at = nowISO();
+  }
+
+  writeJSON(FILES.subscriptions, subs);
+
+  if (orgId) {
+    const userIdxs = users
+      .map((u, i) => ({ u, i }))
+      .filter(x => String(x.u.org_id || "") === String(orgId));
+
+    userIdxs.forEach(({ i }) => {
+      users[i].subscription_status = sub.status;
+      users[i].plan = sub.plan;
+      users[i].stripe_customer_id = sub.stripe_customer_id;
+      users[i].stripe_subscription_id = sub.stripe_subscription_id;
+    });
+
+    writeJSON(FILES.users, users);
+  }
+}
+
+function markSubscriptionCanceledByStripe(customerId, subscriptionId) {
+  const subs = readJSON(FILES.subscriptions, []);
+  const users = readJSON(FILES.users, []);
+
+  const sub = subs.find(s =>
+    String(s.stripe_subscription_id || "") === String(subscriptionId || "") ||
+    String(s.stripe_customer_id || "") === String(customerId || "")
+  );
+
+  if (sub) {
+    sub.status = "canceled";
+    sub.updated_at = nowISO();
+    writeJSON(FILES.subscriptions, subs);
+
+    users.forEach(u => {
+      if (String(u.org_id || "") === String(sub.org_id || "")) {
+        u.subscription_status = "canceled";
+      }
+    });
+    writeJSON(FILES.users, users);
+  }
+}
+
+function markSubscriptionPastDueByStripe(customerId, subscriptionId) {
+  const subs = readJSON(FILES.subscriptions, []);
+  const users = readJSON(FILES.users, []);
+
+  const sub = subs.find(s =>
+    String(s.stripe_subscription_id || "") === String(subscriptionId || "") ||
+    String(s.stripe_customer_id || "") === String(customerId || "")
+  );
+
+  if (sub) {
+    sub.status = "past_due";
+    sub.updated_at = nowISO();
+    writeJSON(FILES.subscriptions, subs);
+
+    users.forEach(u => {
+      if (String(u.org_id || "") === String(sub.org_id || "")) {
+        u.subscription_status = "past_due";
+      }
+    });
+    writeJSON(FILES.users, users);
+  }
 }
 
 function applyPlanToSubscription(sub, planName) {
@@ -10759,6 +10888,76 @@ const server = http.createServer(async (req, res) => {
   // health
   if (method === "GET" && pathname === "/health") return send(res, 200, "ok", "text/plain");
 
+  if (method === "POST" && (pathname === "/stripe/webhook" || pathname === "/stripe-webhook")) {
+    const stripe = getStripeClient();
+    if (!stripe || !STRIPE_WEBHOOK_SECRET) {
+      return send(res, 500, "Stripe webhook is not configured");
+    }
+
+    let rawBody;
+    try {
+      rawBody = await parseRawBody(req);
+    } catch (err) {
+      return send(res, 400, "Invalid webhook body");
+    }
+
+    const sig = req.headers["stripe-signature"];
+    let event;
+
+    try {
+      event = stripe.webhooks.constructEvent(rawBody, sig, STRIPE_WEBHOOK_SECRET);
+    } catch (err) {
+      console.error("Stripe webhook signature verification failed:", err.message);
+      return send(res, 400, `Webhook Error: ${err.message}`);
+    }
+
+    try {
+      switch (event.type) {
+        case "checkout.session.completed": {
+          const session = event.data.object;
+          if (session.mode === "subscription") {
+            const subscription = await stripe.subscriptions.retrieve(session.subscription);
+            upsertSubscriptionFromStripe(subscription);
+          }
+          break;
+        }
+
+        case "customer.subscription.created":
+        case "customer.subscription.updated": {
+          const subscription = event.data.object;
+          upsertSubscriptionFromStripe(subscription);
+          break;
+        }
+
+        case "customer.subscription.deleted": {
+          const subscription = event.data.object;
+          markSubscriptionCanceledByStripe(subscription.customer, subscription.id);
+          break;
+        }
+
+        case "invoice.payment_failed": {
+          const invoice = event.data.object;
+          markSubscriptionPastDueByStripe(invoice.customer, invoice.subscription);
+          break;
+        }
+
+        case "invoice.payment_succeeded": {
+          const invoice = event.data.object;
+          if (invoice.subscription) {
+            const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
+            upsertSubscriptionFromStripe(subscription);
+          }
+          break;
+        }
+      }
+
+      return send(res, 200, JSON.stringify({ received: true }), "application/json");
+    } catch (err) {
+      console.error("Stripe webhook processing error:", err);
+      return send(res, 500, "Webhook handler failed");
+    }
+  }
+
   // ===== AI DEBUG ROUTE =====
   if (method === "GET" && pathname === "/ai/debug") {
     return send(res, 200, JSON.stringify({
@@ -11149,6 +11348,7 @@ const server = http.createServer(async (req, res) => {
 
   if (method === "GET" && pathname === "/pricing") {
     const c = getWebsiteContent();
+    const simPlan = String(parsed.query.plan || "starter");
     const plans = Object.entries(getPlanConfigData()).map(([key, val]) => ({
       name: key.charAt(0).toUpperCase() + key.slice(1),
       price: safeStr(c.pricing?.plans?.[key]?.price || `$${val.price}/mo`),
@@ -11171,6 +11371,11 @@ const server = http.createServer(async (req, res) => {
         <div class="section center">
           <div class="container">
             <h1>${safeStr(c.pricing.heading)}</h1>
+            ${parsed.query.simulation ? `
+              <div style="max-width:900px;margin:0 auto 20px auto;padding:12px 16px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:12px;color:#1d4ed8;font-weight:600;">
+                Simulation mode: previewing upgrade flow from ${safeStr(simPlan)} plan.
+              </div>
+            ` : ""}
 
             <div class="grid-4" style="margin-top:40px;">
               ${plans.map(p => {
@@ -11620,6 +11825,12 @@ const server = http.createServer(async (req, res) => {
     const auth = getAuth(req);
     if (!auth) {
       return send(res, 401, JSON.stringify({ error: "Unauthorized" }), "application/json");
+    }
+    if (isSimulationSession(auth)) {
+      return send(res, 200, JSON.stringify({
+        simulation: true,
+        url: `/pricing?simulation=1&plan=${encodeURIComponent(String(auth.simulation_plan || "starter"))}`
+      }), "application/json");
     }
 
     const subs = readJSON(FILES.subscriptions, []);
@@ -13097,6 +13308,8 @@ const server = http.createServer(async (req, res) => {
       role: "user",
       user_id: simUser.user_id,
       org_id: simOrg.org_id,
+      simulation: true,
+      simulation_plan: selectedPlan,
       simulating: true,
       simulated_plan: selectedPlan,
       ...(usedEphemeralUser ? { sim_user: simUser } : {}),
@@ -13798,73 +14011,6 @@ const server = http.createServer(async (req, res) => {
 
     writeJSON(FILES.subscriptions, subs);
     return send(res, 200, "OK", "text/plain");
-  }
-
-
-  if (method === "POST" && pathname === "/stripe-webhook") {
-    const chunks = [];
-
-    req.on("data", chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-
-    req.on("end", async () => {
-      const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-      const body = Buffer.concat(chunks);
-      const sig = req.headers["stripe-signature"];
-
-      let event;
-
-      try {
-        event = stripe.webhooks.constructEvent(
-          body,
-          sig,
-          process.env.STRIPE_WEBHOOK_SECRET
-        );
-      } catch (err) {
-        console.error("❌ WEBHOOK SIGNATURE ERROR:", err.message);
-        return send(res, 400, "Webhook Error");
-      }
-
-      // ✅ HANDLE SUCCESSFUL CHECKOUT
-      if (event.type === "checkout.session.completed") {
-        const session = event.data.object;
-
-        const email = session.customer_details?.email || session.customer_email;
-        const plan = (session.metadata?.plan || "starter").toLowerCase();
-
-        debugLog("PAYMENT SUCCESS:", email, plan);
-
-        const users = readJSON(FILES.users, []);
-        const user = users.find(
-          u => (u.email || "").toLowerCase() === (email || "").toLowerCase()
-        );
-
-        if (user) {
-          const sub = ensureSubscriptionForOrg(user.org_id);
-
-          // 🔥 SAVE STRIPE IDS (CRITICAL)
-          sub.stripe_customer_id = session.customer;
-          sub.stripe_subscription_id = session.subscription;
-
-          applyPlanToSubscription(sub, plan);
-          const subscriptions = readJSON(FILES.subscriptions, []);
-          const subIndex = subscriptions.findIndex(existing => existing.org_id === user.org_id);
-          if (subIndex >= 0) {
-            subscriptions[subIndex] = { ...subscriptions[subIndex], ...sub };
-          } else {
-            subscriptions.push(sub);
-          }
-          writeJSON(FILES.subscriptions, subscriptions);
-
-          debugLog("PLAN ACTIVATED:", plan);
-        } else {
-          console.warn("⚠️ USER NOT FOUND FOR EMAIL:", email);
-        }
-      }
-
-      return send(res, 200, JSON.stringify({ received: true }), "application/json");
-    });
-
-    return;
   }
 
 
@@ -27703,10 +27849,17 @@ function renderTemplateEditor(org, user){
                   credentials: "same-origin"
                 });
                 const data = await res.json();
+
+                if (data.simulation && data.url) {
+                  window.location.href = data.url;
+                  return;
+                }
+
                 if (data.url) {
                   window.location.href = data.url;
                   return;
                 }
+
                 alert("No subscription found. Please upgrade first.");
                 window.location.href = "/pricing";
               } catch (err) {
