@@ -7,6 +7,7 @@ const bcrypt = require("bcryptjs");
 const OpenAI = require("openai");
 const PDFKitDocument = require("pdfkit");
 const { PDFDocument } = require("pdf-lib");
+const Stripe = require("stripe");
 
 const DEBUG_MODE = process.env.DEBUG_MODE === "true";
 
@@ -77,6 +78,7 @@ const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").toLowerCase();
 const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || "";
 const ADMIN_PASSWORD_PLAIN = process.env.ADMIN_PASSWORD_PLAIN || "";
 const ADMIN_ACTIVATE_TOKEN = process.env.ADMIN_ACTIVATE_TOKEN || "CHANGE_ME_ADMIN_ACTIVATE_TOKEN";
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
 
 // ===== Timing =====
 const LOCK_SCREEN_MS = 5000;
@@ -173,6 +175,13 @@ const FILES = {
 
 // Directory for storing uploaded template files
 const TEMPLATES_DIR = path.join(DATA_DIR, "templates");
+
+let stripeClient = null;
+function getStripeClient() {
+  if (!STRIPE_SECRET_KEY) return null;
+  if (!stripeClient) stripeClient = new Stripe(STRIPE_SECRET_KEY);
+  return stripeClient;
+}
 
 // ===== Helpers =====
 function uuid() {
@@ -11333,78 +11342,57 @@ const server = http.createServer(async (req, res) => {
 
   if (method === "POST" && pathname === "/create-checkout-session") {
     const sess = getAuth(req);
-    let body = "";
-    req.on("data", chunk => body += chunk);
-    req.on("end", async () => {
-      try {
-        const ct=String(req.headers["content-type"]||"").toLowerCase();
-        const isJ=ct.includes("application/json")||String(body||"").trim()[0]==="{";
-        let plan="";
-        try{ plan=isJ?JSON.parse(body||"{}").plan:new URLSearchParams(body||"").get("plan"); }
-        catch(_){ try{ plan=JSON.parse(body||"{}").plan; }catch{} if(!plan) plan=new URLSearchParams(body||"").get("plan"); }
-        plan=String(plan||"").toLowerCase().trim();
-        debugLog("[checkout] ct", ct, "plan", plan);
+    try {
+      const body = await parseBody(req);
+      const ct = String(req.headers["content-type"] || "").toLowerCase();
+      let plan = "starter";
 
-        debugLog("Creating checkout session for plan:", plan);
-
-        const stripeKey = process.env.STRIPE_SECRET_KEY;
-        if (!stripeKey) {
-          console.error("Missing STRIPE_SECRET_KEY");
-          return send(res, 500, JSON.stringify({ error: "Missing Stripe key" }), "application/json");
+      if (ct.includes("application/json") || String(body || "").trim().startsWith("{")) {
+        try {
+          const parsedBody = JSON.parse(body || "{}");
+          plan = String(parsedBody.plan || "starter").toLowerCase().trim();
+        } catch {
+          plan = "starter";
         }
-
-        const stripe = require("stripe")(stripeKey);
-
-        const priceMap = {
-          starter: "price_1TCtm5LpgIqLdJKsHVUiixiT",
-          growth: "price_1TCtmyLpgIqLdJKsTdEYSkAr",
-          pro: "price_1TCtnXLpgIqLdJKsS6yNBZuq",
-          enterprise: "price_1TCto2LpgIqLdJKs5XFblcS1"
-        };
-
-        if (!priceMap[plan]) {
-          console.error("Invalid plan:", plan);
-          return send(res, 400, JSON.stringify({ error: "Invalid plan" }), "application/json");
-        }
-
-        debugLog("Using price ID:", priceMap[plan]);
-
-        const session = await stripe.checkout.sessions.create({
-          mode: "subscription",
-          line_items: [
-            {
-              price: priceMap[plan],
-              quantity: 1
-            }
-          ],
-          metadata: {
-            plan: plan,
-            org_id: sess?.org_id || ""
-          },
-          customer_email: sess?.email || undefined,
-
-          success_url: `${APP_BASE_URL}/post-checkout?session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${APP_BASE_URL}/pricing`
-        });
-
-        debugLog("Stripe session created:", session.id);
-        console.log("STRIPE SESSION URL:", session.url);
-        console.log("FULL SESSION:", session);
-
-        if (!session.url) {
-          console.error("Stripe session missing URL");
-          return send(res, 500, JSON.stringify({
-            error: "Stripe session did not return a valid URL"
-          }), "application/json");
-        }
-
-        return send(res, 200, JSON.stringify({ url: session.url }, null, 2), "application/json");
-      } catch (err) {
-        console.error("STRIPE FULL ERROR:", err);
-        return send(res, 500, JSON.stringify({ error: err.message || "Checkout failed" }), "application/json");
+      } else {
+        const params = new URLSearchParams(body || "");
+        plan = String(params.get("plan") || "starter").toLowerCase().trim();
       }
-    });
-    return;
+
+      const priceMap = {
+        starter: "price_1TCtm5LpgIqLdJKsHVUiixiT",
+        growth: "price_1TCtmyLpgIqLdJKsTdEYSkAr",
+        pro: "price_1TCtnXLpgIqLdJKsS6yNBZuq",
+        enterprise: "price_1TCto2LpgIqLdJKs5XFblcS1"
+      };
+      const priceId = priceMap[plan];
+      if (!priceId) {
+        return send(res, 400, JSON.stringify({ error: "Invalid plan" }), "application/json");
+      }
+
+      const stripe = getStripeClient();
+      if (!stripe) {
+        return send(res, 500, JSON.stringify({ error: "Missing Stripe key" }), "application/json");
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        payment_method_types: ["card"],
+        line_items: [{ price: priceId, quantity: 1 }],
+        metadata: {
+          plan,
+          org_id: sess?.org_id || ""
+        },
+        customer_email: sess?.email || undefined,
+        success_url: `${APP_BASE_URL}/post-checkout?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${APP_BASE_URL}/pricing`
+      });
+
+      return send(res, 200, JSON.stringify({ url: session.url }), "application/json");
+    } catch (err) {
+      console.error("STRIPE FULL ERROR:", err);
+      return send(res, 500, JSON.stringify({ error: err.message || "Checkout failed" }), "application/json");
+    }
   }
 
   if (method === "GET" && pathname === "/post-checkout") {
@@ -11528,6 +11516,7 @@ const server = http.createServer(async (req, res) => {
     const existingSub = subs.find(s => (s.customer_email || "").toLowerCase() === email);
     const stripeCustomerId = existingSub?.stripe_customer_id || "";
     const stripeSubscriptionId = existingSub?.stripe_subscription_id || "";
+    const plan = existingSub?.plan || "starter";
 
     if (!user) {
       const orgs = readJSON(FILES.orgs, []);
@@ -11560,6 +11549,26 @@ const server = http.createServer(async (req, res) => {
         last_login_at: nowISO(),
       };
 
+      const subs = readJSON(FILES.subscriptions, []);
+      let sub = subs.find(s => s.org_id === user.org_id);
+
+      if (!sub) {
+        sub = {
+          subscription_id: uuid(),
+          org_id: user.org_id,
+          status: "active",
+          plan,
+          stripe_customer_id: stripeCustomerId,
+          stripe_subscription_id: stripeSubscriptionId,
+          created_at: nowISO()
+        };
+        subs.push(sub);
+      } else {
+        sub.stripe_customer_id = stripeCustomerId || sub.stripe_customer_id;
+        sub.stripe_subscription_id = stripeSubscriptionId || sub.stripe_subscription_id;
+      }
+
+      writeJSON(FILES.subscriptions, subs);
       users.push(user);
       writeJSON(FILES.users, users);
       writeJSON(FILES.orgs, orgs);
@@ -11571,6 +11580,27 @@ const server = http.createServer(async (req, res) => {
         users[idx].last_login_at = nowISO();
         users[idx].stripe_customer_id = stripeCustomerId || users[idx].stripe_customer_id || "";
         users[idx].stripe_subscription_id = stripeSubscriptionId || users[idx].stripe_subscription_id || "";
+
+        const subs = readJSON(FILES.subscriptions, []);
+        let sub = subs.find(s => s.org_id === user.org_id);
+
+        if (!sub) {
+          sub = {
+            subscription_id: uuid(),
+            org_id: user.org_id,
+            status: "active",
+            plan,
+            stripe_customer_id: stripeCustomerId,
+            stripe_subscription_id: stripeSubscriptionId,
+            created_at: nowISO()
+          };
+          subs.push(sub);
+        } else {
+          sub.stripe_customer_id = stripeCustomerId || sub.stripe_customer_id;
+          sub.stripe_subscription_id = stripeSubscriptionId || sub.stripe_subscription_id;
+        }
+
+        writeJSON(FILES.subscriptions, subs);
         writeJSON(FILES.users, users);
         user = users[idx];
       }
@@ -11586,6 +11616,35 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, "/dashboard?welcome=1");
   }
 
+  if (method === "POST" && pathname === "/billing-portal") {
+    const auth = getAuth(req);
+    if (!auth) {
+      return send(res, 401, JSON.stringify({ error: "Unauthorized" }), "application/json");
+    }
+
+    const subs = readJSON(FILES.subscriptions, []);
+    const sub = subs.find(s => s.org_id === auth.org_id);
+    if (!sub || !sub.stripe_customer_id) {
+      return send(res, 200, JSON.stringify({ error: "No billing account" }), "application/json");
+    }
+
+    const stripe = getStripeClient();
+    if (!stripe) {
+      return send(res, 500, JSON.stringify({ error: "Stripe billing is not configured" }), "application/json");
+    }
+
+    try {
+      const session = await stripe.billingPortal.sessions.create({
+        customer: sub.stripe_customer_id,
+        return_url: `${APP_BASE_URL}/account?tab=billing`
+      });
+      return send(res, 200, JSON.stringify({ url: session.url }), "application/json");
+    } catch (err) {
+      console.error("Billing portal error:", err);
+      return send(res, 500, JSON.stringify({ error: "Portal failed" }), "application/json");
+    }
+  }
+
   if (method === "GET" && pathname === "/billing-portal") {
     const sess = getAuth(req);
     if (!sess || !sess.org_id) return redirect(res, "/login");
@@ -11595,15 +11654,14 @@ const server = http.createServer(async (req, res) => {
       return send(res, 400, "No billing account found");
     }
 
-    if (!process.env.STRIPE_SECRET_KEY) {
+    const stripe = getStripeClient();
+    if (!stripe) {
       return send(res, 500, "Stripe billing is not configured");
     }
 
-    const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: sub.stripe_customer_id,
-      return_url: "https://app.tjhealthpro.com/dashboard"
+      return_url: `${APP_BASE_URL}/account?tab=billing`
     });
 
     return redirect(res, portalSession.url);
@@ -27631,14 +27689,31 @@ function renderTemplateEditor(org, user){
           <div class="btnRow">
             <a class="btn secondary" href="/account?tab=billing">Refresh</a>
 
-            <a href="/billing-portal" class="btn secondary">
-              Manage Subscription
-            </a>
+            <button type="button" onclick="openBillingPortal()" class="btn secondary">Manage Subscription</button>
 
             <a href="/plans" class="btn-primary">
               Upgrade Plan
             </a>
           </div>
+          <script>
+            async function openBillingPortal() {
+              try {
+                const res = await fetch("/billing-portal", {
+                  method: "POST",
+                  credentials: "same-origin"
+                });
+                const data = await res.json();
+                if (data.url) {
+                  window.location.href = data.url;
+                  return;
+                }
+                alert("No subscription found. Please upgrade first.");
+                window.location.href = "/pricing";
+              } catch (err) {
+                alert("Unable to open billing portal.");
+              }
+            }
+          </script>
         `;
       }
       if (tab === "integrations") return `<h3>Integrations</h3><p class="muted">Placeholder tab for enterprise integrations roadmap.</p>`;
