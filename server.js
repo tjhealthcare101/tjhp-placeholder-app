@@ -25963,7 +25963,7 @@ function renderTemplateEditor(org, user){
 
 
   if (method === "GET" && pathname === "/data-management") {
-    const tab = String(parsed.query.tab || "claims").toLowerCase();
+    const tab = String(parsed.query.tab || "upload").toLowerCase();
     const validTabs = ["upload","reimbursement","revenue"];
     const normalizedTab = tab === "automation" ? "revenue" : tab;
     const activeTab = validTabs.includes(normalizedTab) ? normalizedTab : "upload";
@@ -25990,7 +25990,9 @@ function renderTemplateEditor(org, user){
     const denialClaims = billed.filter(b => String(evaluateClaimDerived(b, claimCtx).lifecycleStage) === "Denied");
     const denialWithDoc = denialClaims.filter(b => !!(b.denial_doc_attached || b.denial_document || b.denial_file)).length;
 
-    function tabBtn(id, label){ return `<a class="btn ${activeTab===id?"":"secondary"}" href="/data-management?tab=${id}">${label}</a>`; }
+    function tabBtn(id, label){
+      return `<a class="btn ${activeTab===id?"":"secondary"}" href="/data-management?tab=${id}">${label}</a>`;
+    }
     const tabs = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
         ${tabBtn("upload","Upload")}
@@ -26007,12 +26009,29 @@ function renderTemplateEditor(org, user){
         </div>
 
         <form method="POST" action="/upload-router" enctype="multipart/form-data">
-          <div class="dropzone" onclick="this.querySelector('input').click()">
+          <input
+            id="dm-files"
+            type="file"
+            name="documents"
+            accept=".csv,.xls,.xlsx,.pdf,.txt,.doc,.docx,.jpg,.jpeg,.png"
+            multiple
+            required
+            style="display:none;"
+          />
+
+          <div
+            id="dm-drop"
+            class="dropzone"
+            style="margin-top:8px;"
+          >
             Drag & drop files here or click to upload
-            <input type="file" name="documents" style="display:none;" multiple required />
           </div>
 
-          <button class="btn">Upload File</button>
+          <div id="dm-filelist" class="muted small" style="margin-top:8px;"></div>
+
+          <div class="btnRow" style="margin-top:10px;">
+            <button class="btn" type="submit">Upload File</button>
+          </div>
         </form>
       </div>
     `;
@@ -26028,74 +26047,81 @@ function renderTemplateEditor(org, user){
         View uploaded claim, payment, and denial batches below.
       </div>
 
-      <h4>Claim Batches</h4>
+      <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="btn secondary small" onclick="filterUploadBatches('all')">All</button>
+        <button type="button" class="btn secondary small" onclick="filterUploadBatches('claims')">Claims</button>
+        <button type="button" class="btn secondary small" onclick="filterUploadBatches('payments')">Payments</button>
+        <button type="button" class="btn secondary small" onclick="filterUploadBatches('denials')">Denials</button>
+      </div>
+
       <div style="overflow:auto;">
-        <table>
+        <table id="upload-batches-table">
           <thead>
             <tr>
+              <th>Type</th>
               <th>File</th>
               <th>Uploaded By</th>
               <th>Uploaded At</th>
-              <th>Claim Count</th>
-              <th>Total Billed</th>
+              <th>Details</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            ${claimBatches.map(batch=>`
-              <tr>
-                <td>${safeStr(batch.filename)}</td>
-                <td>${safeStr(batch.uploaded_by || "")}</td>
-                <td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "-"}</td>
-                <td>${batch.claim_count}</td>
-                <td>${formatMoneyUI(batch.total_billed||0)}</td>
-              </tr>
-            `).join("") || '<tr><td colspan="5" class="muted">No claim batches.</td></tr>'}
-          </tbody>
-        </table>
-      </div>
+            ${
+              claimBatches.map(batch => `
+                <tr data-batch-type="claims">
+                  <td>Claims</td>
+                  <td><a href="/batch-detail?upload_id=${encodeURIComponent(batch.upload_id)}">${safeStr(batch.filename)}</a></td>
+                  <td>${safeStr(batch.uploaded_by || "")}</td>
+                  <td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "-"}</td>
+                  <td>${batch.claim_count} claims • ${formatMoneyUI(batch.total_billed || 0)}</td>
+                  <td>
+                    <form method="POST" action="/batch-delete" onsubmit="return confirm('Are you sure you want to permanently delete this batch and all associated claims?');">
+                      <input type="hidden" name="upload_id" value="${safeStr(batch.upload_id || "")}"/>
+                      <button class="btn danger small" type="submit">Delete</button>
+                    </form>
+                  </td>
+                </tr>
+              `).join("")
+            }
 
-      <h4 style="margin-top:20px;">Payment Batches</h4>
-      <div style="overflow:auto;">
-        <table>
-          <thead>
-            <tr>
-              <th>File</th>
-              <th>Uploaded</th>
-              <th>Rows</th>
-              <th>Total Paid</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${paymentBatches.map(batch=>`
-              <tr>
-                <td>${safeStr(batch.filename)}</td>
-                <td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "-"}</td>
-                <td>${batch.rows}</td>
-                <td>${formatMoneyUI(batch.total_paid||0)}</td>
-              </tr>
-            `).join("") || '<tr><td colspan="4" class="muted">No payment batches.</td></tr>'}
-          </tbody>
-        </table>
-      </div>
+            ${
+              paymentBatches.map(batch => `
+                <tr data-batch-type="payments">
+                  <td>Payments</td>
+                  <td>${safeStr(batch.source_file || batch.filename || "payment batch")}</td>
+                  <td>-</td>
+                  <td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "-"}</td>
+                  <td>${num(batch.row_count || batch.rows || 0)} rows • ${formatMoneyUI(batch.total_paid || 0)}</td>
+                  <td>
+                    <form method="POST" action="/payment-batch-delete" onsubmit="return confirm('Delete this payment batch?');">
+                      <input type="hidden" name="source_file" value="${safeStr(batch.source_file || "")}"/>
+                      <button class="btn danger small" type="submit">Delete</button>
+                    </form>
+                  </td>
+                </tr>
+              `).join("")
+            }
 
-      <h4 style="margin-top:20px;">Denial Batches</h4>
-      <div style="overflow:auto;">
-        <table>
-          <thead>
-            <tr>
-              <th>File</th>
-              <th>Uploaded</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${denialClaims.length ? denialClaims.map(b=>`
-              <tr>
-                <td>${safeStr(b.filename || "Denial File")}</td>
-                <td>${b.uploaded_at ? new Date(b.uploaded_at).toLocaleString() : "-"}</td>
-                <td>Processed</td>
-              </tr>
-            `).join("") : '<tr><td colspan="3" class="muted">No denial batches.</td></tr>'}
+            ${
+              ingests
+                .filter(i => String(i.category || "").toLowerCase() === "denials")
+                .map(ingest => `
+                  <tr data-batch-type="denials">
+                    <td>Denials</td>
+                    <td>${safeStr(ingest.original_filename || "denial upload")}</td>
+                    <td>-</td>
+                    <td>${ingest.uploaded_at ? new Date(ingest.uploaded_at).toLocaleString() : "-"}</td>
+                    <td>${safeStr(ingest.status || "Processed")}</td>
+                    <td>
+                      <form method="POST" action="/denial-batch-delete" onsubmit="return confirm('Delete this denial batch?');">
+                        <input type="hidden" name="ingest_id" value="${safeStr(ingest.ingest_id || "")}"/>
+                        <button class="btn danger small" type="submit">Delete</button>
+                      </form>
+                    </td>
+                  </tr>
+                `).join("")
+            }
           </tbody>
         </table>
       </div>
@@ -26572,15 +26598,75 @@ function renderTemplateEditor(org, user){
 `
     const revenueContent = renderTemplateEditor(org, user);
 
-    let content = "";
+    const practiceContent = revenueContent;
+    const section = ({
+      "upload": uploadContent,
+      "reimbursement": reimbursementContent,
+      "revenue": practiceContent,
+      "automation": practiceContent
+    })[activeTab] || uploadContent;
 
-    if (activeTab === "upload") content = uploadContent;
-    else if (activeTab === "reimbursement") content = reimbursementContent;
-    else if (activeTab === "revenue") content = revenueContent;
+    const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Upload and manage your claims, payments, denial documents, reimbursement rules, and automation templates in one place.</p>${tabs}${section}<script>
+(function(){
+  const dz = document.getElementById("dm-drop");
+  const inp = document.getElementById("dm-files");
+  const list = document.getElementById("dm-filelist");
 
-    const section = content;
+  if (dz && inp) {
+    const renderHints = () => {
+      if (!list) return;
+      const detectType = (fileName) => {
+        const n = String(fileName || "").toLowerCase();
+        if (n.includes("denial")) return "Denials";
+        if (n.includes("payment") || n.includes("era") || n.includes("eob")) return "Payments";
+        return "Auto-detect on upload";
+      };
 
-    const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Define how your claims should be reimbursed and how expected amounts are calculated.</p>${tabs}${section}<script>(function(){const dz=document.getElementById('dm-drop');const inp=document.getElementById('dm-files');const list=document.getElementById('dm-filelist');if(!dz||!inp||!list)return;const upd=()=>{const tab='${safeStr(activeTab)}';const suggested=(f)=>{const n=(f.name||'').toLowerCase();if(tab==='upload'&&(n.endsWith('.csv')||n.endsWith('.xls')||n.endsWith('.xlsx'))) return 'Upload';if(tab==='reimbursement') return 'Reimbursement';if(tab==='revenue') return 'Revenue';return 'Upload';};const lines=[...inp.files].map(f=>(f.name+' • '+f.name.split('.').pop().toUpperCase()+' • suggested: '+suggested(f)));list.innerHTML=lines.join('<br/>')||'No files selected';};dz.addEventListener('click',()=>inp.click());['dragenter','dragover'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{if(e.dataTransfer.files?.length){inp.files=e.dataTransfer.files;upd();}});inp.addEventListener('change',upd);})();</script>`, navUser(), {showChat:true, orgName: org.org_name});
+      const lines = [...(inp.files || [])].map(f =>
+        f.name + " • " + (f.name.split(".").pop() || "").toUpperCase() + " • " + detectType(f.name)
+      );
+
+      list.innerHTML = lines.join("<br/>") || "No files selected";
+    };
+
+    dz.addEventListener("click", () => inp.click());
+
+    ["dragenter","dragover"].forEach(evt => {
+      dz.addEventListener(evt, e => {
+        e.preventDefault();
+        dz.classList.add("dragover");
+      });
+    });
+
+    ["dragleave","drop"].forEach(evt => {
+      dz.addEventListener(evt, e => {
+        e.preventDefault();
+        dz.classList.remove("dragover");
+      });
+    });
+
+    dz.addEventListener("drop", e => {
+      if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+      inp.files = e.dataTransfer.files;
+      renderHints();
+    });
+
+    inp.addEventListener("change", renderHints);
+    renderHints();
+  }
+
+  window.filterUploadBatches = function(type){
+    const rows = document.querySelectorAll("#upload-batches-table tbody tr");
+    rows.forEach(row => {
+      if (type === "all") {
+        row.style.display = "";
+      } else {
+        row.style.display = row.getAttribute("data-batch-type") === type ? "" : "none";
+      }
+    });
+  };
+})();
+</script>`, navUser(), {showChat:true, orgName: org.org_name});
     return send(res, 200, html);
   }
 
