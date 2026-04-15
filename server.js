@@ -25991,7 +25991,12 @@ function renderTemplateEditor(org, user){
     const denialWithDoc = denialClaims.filter(b => !!(b.denial_doc_attached || b.denial_document || b.denial_file)).length;
 
     function tabBtn(id, label){ return `<a class="btn ${activeTab===id?"":"secondary"}" href="/data-management?tab=${id}">${label}</a>`; }
-    const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">${tabBtn("claims","Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("reimbursement","Reimbursement Contracts")}${tabBtn("revenue","Revenue Automation & Templates")}</div>`;
+    const tabs = `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
+        ${tabBtn("reimbursement","Reimbursement Contracts")}
+        ${tabBtn("revenue","Revenue Automation & Templates")}
+      </div>
+    `;
 
     const uploadPanel = `
       <div class="card" style="margin-bottom:16px;">
