@@ -18648,11 +18648,11 @@ if (method === "GET" && pathname === "/claims") {
 
   const claimsUploadBanner = (tab) => {
     const target = {
-      billed: "/data-management?tab=claims",
+      billed: "/data-management?tab=upload",
       payments: "/data-management?tab=payments",
       denials: "/data-management?tab=denials",
       negotiations: "/data-management?tab=reimbursement"
-    }[tab] || "/data-management?tab=claims";
+    }[tab] || "/data-management?tab=upload";
     return `
       <div style="border:1px solid var(--border);border-radius:10px;padding:10px;background:#f9fafb;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
         <div class="muted small">Uploads are managed in Data Management for consistency.</div>
@@ -25964,9 +25964,9 @@ function renderTemplateEditor(org, user){
 
   if (method === "GET" && pathname === "/data-management") {
     const tab = String(parsed.query.tab || "claims").toLowerCase();
-    const validTabs = ["claims","payments","denials","reimbursement","revenue","automation","practice-settings"];
+    const validTabs = ["upload","reimbursement","revenue"];
     const normalizedTab = tab === "automation" ? "revenue" : tab;
-    const activeTab = validTabs.includes(normalizedTab) ? normalizedTab : "claims";
+    const activeTab = validTabs.includes(normalizedTab) ? normalizedTab : "upload";
     const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const claimBatches = getClaimBatchHistory(org.org_id);
     const paymentBatches = getPaymentBatchHistory(org.org_id);
@@ -25993,6 +25993,7 @@ function renderTemplateEditor(org, user){
     function tabBtn(id, label){ return `<a class="btn ${activeTab===id?"":"secondary"}" href="/data-management?tab=${id}">${label}</a>`; }
     const tabs = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
+        ${tabBtn("upload","Upload")}
         ${tabBtn("reimbursement","Reimbursement Contracts")}
         ${tabBtn("revenue","Revenue Automation & Templates")}
       </div>
@@ -26013,6 +26014,90 @@ function renderTemplateEditor(org, user){
 
           <button class="btn">Upload File</button>
         </form>
+      </div>
+    `;
+
+    const uploadContent = `
+      ${uploadPanel}
+
+      <div class="hr"></div>
+
+      <h3>Batches</h3>
+
+      <div class="muted small" style="margin-bottom:10px;">
+        View uploaded claim, payment, and denial batches below.
+      </div>
+
+      <h4>Claim Batches</h4>
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Uploaded By</th>
+              <th>Uploaded At</th>
+              <th>Claim Count</th>
+              <th>Total Billed</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${claimBatches.map(batch=>`
+              <tr>
+                <td>${safeStr(batch.filename)}</td>
+                <td>${safeStr(batch.uploaded_by || "")}</td>
+                <td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "-"}</td>
+                <td>${batch.claim_count}</td>
+                <td>${formatMoneyUI(batch.total_billed||0)}</td>
+              </tr>
+            `).join("") || '<tr><td colspan="5" class="muted">No claim batches.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+
+      <h4 style="margin-top:20px;">Payment Batches</h4>
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Uploaded</th>
+              <th>Rows</th>
+              <th>Total Paid</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${paymentBatches.map(batch=>`
+              <tr>
+                <td>${safeStr(batch.filename)}</td>
+                <td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "-"}</td>
+                <td>${batch.rows}</td>
+                <td>${formatMoneyUI(batch.total_paid||0)}</td>
+              </tr>
+            `).join("") || '<tr><td colspan="4" class="muted">No payment batches.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+
+      <h4 style="margin-top:20px;">Denial Batches</h4>
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Uploaded</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${denialClaims.length ? denialClaims.map(b=>`
+              <tr>
+                <td>${safeStr(b.filename || "Denial File")}</td>
+                <td>${b.uploaded_at ? new Date(b.uploaded_at).toLocaleString() : "-"}</td>
+                <td>Processed</td>
+              </tr>
+            `).join("") : '<tr><td colspan="3" class="muted">No denial batches.</td></tr>'}
+          </tbody>
+        </table>
       </div>
     `;
 
@@ -26485,20 +26570,26 @@ function renderTemplateEditor(org, user){
 })();
 </script>
 `
-    const practiceContent = renderTemplateEditor(org, user);
+    const revenueContent = renderTemplateEditor(org, user);
 
-    const section = ({"claims":claimsContent,"payments":paymentsContent,"denials":denialContent,"reimbursement":reimbursementContent,"revenue":practiceContent,"automation":practiceContent,"practice-settings":practiceContent})[activeTab] || claimsContent;
+    let content = "";
 
-    const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Define how your claims should be reimbursed and how expected amounts are calculated.</p>${tabs}${section}<script>(function(){const dz=document.getElementById('dm-drop');const inp=document.getElementById('dm-files');const list=document.getElementById('dm-filelist');if(!dz||!inp||!list)return;const upd=()=>{const tab='${safeStr(activeTab)}';const suggested=(f)=>{const n=(f.name||'').toLowerCase();if(tab==='claims'&&(n.endsWith('.csv')||n.endsWith('.xls')||n.endsWith('.xlsx'))) return 'Claims';if(tab==='payments') return 'Payments';if(tab==='denials') return 'Denials';if(tab==='reimbursement') return 'Reimbursement';return 'Claims';};const lines=[...inp.files].map(f=>(f.name+' • '+f.name.split('.').pop().toUpperCase()+' • suggested: '+suggested(f)));list.innerHTML=lines.join('<br/>')||'No files selected';};dz.addEventListener('click',()=>inp.click());['dragenter','dragover'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{if(e.dataTransfer.files?.length){inp.files=e.dataTransfer.files;upd();}});inp.addEventListener('change',upd);})();</script>`, navUser(), {showChat:true, orgName: org.org_name});
+    if (activeTab === "upload") content = uploadContent;
+    else if (activeTab === "reimbursement") content = reimbursementContent;
+    else if (activeTab === "revenue") content = revenueContent;
+
+    const section = content;
+
+    const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Define how your claims should be reimbursed and how expected amounts are calculated.</p>${tabs}${section}<script>(function(){const dz=document.getElementById('dm-drop');const inp=document.getElementById('dm-files');const list=document.getElementById('dm-filelist');if(!dz||!inp||!list)return;const upd=()=>{const tab='${safeStr(activeTab)}';const suggested=(f)=>{const n=(f.name||'').toLowerCase();if(tab==='upload'&&(n.endsWith('.csv')||n.endsWith('.xls')||n.endsWith('.xlsx'))) return 'Upload';if(tab==='reimbursement') return 'Reimbursement';if(tab==='revenue') return 'Revenue';return 'Upload';};const lines=[...inp.files].map(f=>(f.name+' • '+f.name.split('.').pop().toUpperCase()+' • suggested: '+suggested(f)));list.innerHTML=lines.join('<br/>')||'No files selected';};dz.addEventListener('click',()=>inp.click());['dragenter','dragover'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('dragover');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('dragover');}));dz.addEventListener('drop',e=>{if(e.dataTransfer.files?.length){inp.files=e.dataTransfer.files;upd();}});inp.addEventListener('change',upd);})();</script>`, navUser(), {showChat:true, orgName: org.org_name});
     return send(res, 200, html);
   }
 
   if (method === "GET" && pathname === "/batch-detail") {
     const uploadId = String(parsed.query.upload_id || "").trim();
-    if (!uploadId) return redirect(res, "/data-management?tab=claims");
+    if (!uploadId) return redirect(res, "/data-management?tab=upload");
     const batches = readJSON(FILES.upload_batches, []).filter(b => b.org_id === org.org_id);
     const batch = batches.find(b => String(b.upload_id || "") === uploadId);
-    if (!batch) return redirect(res, "/data-management?tab=claims");
+    if (!batch) return redirect(res, "/data-management?tab=upload");
     const claims = readJSON(FILES.billed, []).filter(c => c.org_id === org.org_id && String(c.upload_id || "") === uploadId);
     const claimRows = claims.map(c => `<tr><td>${safeStr(c.billed_id || c.claim_number || "")}</td><td>${safeStr(c.payer || "")}</td><td>${formatMoneyUI(c.amount_billed || 0)}</td></tr>`).join("") || '<tr><td colspan="3" class="muted">No claims for this batch.</td></tr>';
     const html = renderPage("Batch Detail", `
@@ -26518,7 +26609,7 @@ function renderTemplateEditor(org, user){
           <input type="hidden" name="upload_id" value="${safeStr(batch.upload_id || "")}" />
           <button class="btn danger" type="submit">Delete Batch</button>
         </form>
-        <a class="btn secondary" href="/data-management?tab=claims">Back</a>
+        <a class="btn secondary" href="/data-management?tab=upload">Back</a>
       </div>
     `, navUser(), {showChat:false, orgName: org.org_name});
     return send(res, 200, html);
@@ -26531,7 +26622,7 @@ function renderTemplateEditor(org, user){
 
     const batches = readJSON(FILES.upload_batches, []);
     const batch = batches.find(b => b.upload_id === uploadId && b.org_id === org.org_id);
-    if (!batch) return redirect(res, "/data-management?tab=claims");
+    if (!batch) return redirect(res, "/data-management?tab=upload");
 
     const billed = readJSON(FILES.billed, []);
     const updatedBilled = billed.filter(c => !(c.org_id === org.org_id && c.upload_id === uploadId));
@@ -26558,7 +26649,7 @@ function renderTemplateEditor(org, user){
     writeJSON(FILES.audit_log, auditLog);
 
     rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
-    return redirect(res, "/data-management?tab=claims");
+    return redirect(res, "/data-management?tab=upload");
   }
 
   if (method === "POST" && pathname === "/payment-batch-delete") {
@@ -26583,7 +26674,7 @@ function renderTemplateEditor(org, user){
 
     rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
 
-    return redirect(res, "/data-management?tab=payments");
+    return redirect(res, "/data-management?tab=upload");
   }
 
   if (method === "POST" && pathname === "/denial-batch-delete") {
@@ -26608,7 +26699,7 @@ function renderTemplateEditor(org, user){
 
     rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
 
-    return redirect(res, "/data-management?tab=denials");
+    return redirect(res, "/data-management?tab=upload");
   }
 
   if (method === "POST" && pathname === "/data-management/network") {
@@ -26760,12 +26851,12 @@ function renderTemplateEditor(org, user){
     }
     writeJSON(FILES.billed, billedAll);
     rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
-    return redirect(res, "/data-management?tab=payments");
+    return redirect(res, "/data-management?tab=upload");
   }
 
   if (method === "POST" && pathname === "/data-management/reprocess-denials") {
     rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
-    return redirect(res, "/data-management?tab=denials");
+    return redirect(res, "/data-management?tab=upload");
   }
 
   if (method === "POST" && pathname === "/data-management/ingest/delete") {
