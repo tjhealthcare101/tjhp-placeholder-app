@@ -21342,6 +21342,86 @@ if (method === "GET" && pathname === "/upload-payments") return redirect(res, "/
 if (method === "GET" && pathname === "/upload-denials") return redirect(res, "/claims?view=denials");
 if (method === "GET" && pathname === "/upload-negotiations") return redirect(res, "/claims?view=negotiations");
 
+function detectUploadType(file) {
+  const name = String(file.filename || "").toLowerCase();
+
+  // filename fallback
+  if (name.includes("payment")) return "payments";
+  if (name.includes("denial")) return "denials";
+  if (name.includes("claim") || name.includes("billed")) return "billed";
+
+  try {
+    const raw = file.buffer
+      ? file.buffer.toString("utf8")
+      : (file.content || file.data || "");
+
+    const content = String(raw).slice(0, 2000).toLowerCase();
+
+    // column detection
+    if (content.includes("amount_paid") || content.includes("payment_date")) {
+      return "payments";
+    }
+
+    if (content.includes("denial_reason") || content.includes("denial_code")) {
+      return "denials";
+    }
+
+    if (content.includes("claim_number") || content.includes("amount_billed")) {
+      return "billed";
+    }
+  } catch (err) {
+    console.warn("Auto-detect failed:", err.message);
+  }
+
+  return null;
+}
+
+if (method === "POST" && pathname === "/upload-router") {
+  const contentType = req.headers["content-type"] || "";
+  const boundaryMatch = contentType.match(/boundary=(.*)$/);
+  if (!boundaryMatch) return send(res, 400, "Invalid upload");
+
+  const { files } = await parseMultipart(req, boundaryMatch[1]);
+
+  if (!files.length) return send(res, 400, "No file uploaded");
+
+  let processed = 0;
+
+  for (const file of files) {
+    const type = detectUploadType(file);
+
+    if (!type) {
+      console.warn("Skipping undetected file:", file.filename);
+      continue;
+    }
+
+    // clone request safely (avoid mutation bugs)
+    const newReq = Object.create(req);
+
+    if (type === "billed") newReq.url = "/upload-billed";
+    else if (type === "payments") newReq.url = "/upload-payments";
+    else if (type === "denials") newReq.url = "/upload-denials";
+
+    newReq.file = file;
+
+    // Only allow first request to use res
+    if (processed === 0) {
+      server.emit("request", newReq, res);
+    } else {
+      // future-safe: run without response binding
+      server.emit("request", newReq, { ...res, end: () => {} });
+    }
+
+    processed++;
+  }
+
+  if (processed === 0) {
+    return send(res, 400, "Unable to detect file type. Please rename file or include standard columns.");
+  }
+
+  return;
+}
+
 // ==============================
 // ACTION CENTER (WORKFLOW)
 // ==============================
@@ -25914,15 +25994,22 @@ function renderTemplateEditor(org, user){
     const tabs = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">${tabBtn("claims","Claims")}${tabBtn("payments","Payments")}${tabBtn("denials","Denials")}${tabBtn("reimbursement","Reimbursement Contracts")}${tabBtn("revenue","Revenue Automation & Templates")}</div>`;
 
     const uploadPanel = `
-      <h3>Upload Panel</h3>
-      <form method="POST" action="/data-management/upload" enctype="multipart/form-data">
-        <input type="hidden" name="tab" value="${safeStr(activeTab)}"/>
-        <input type="hidden" name="next" value="/data-management?tab=${safeStr(activeTab)}"/>
-        <input id="dm-files" type="file" name="documents" accept=".csv,.xls,.xlsx,.pdf,.txt,.doc,.docx,.jpg,.jpeg,.png" multiple required />
-        <div id="dm-drop" class="dropzone" style="margin-top:8px;">Drag and drop files here (multi-file)</div>
-        <div id="dm-filelist" class="muted" style="margin-top:8px;"></div>
-        <div class="btnRow"><button class="btn" type="submit">Upload Files</button></div>
-      </form>`;
+      <div class="card" style="margin-bottom:16px;">
+        <h3>Upload Data</h3>
+        <div class="muted small" style="margin-bottom:10px;">
+          Upload claims, payments, or denials in one place.
+        </div>
+
+        <form method="POST" action="/upload-router" enctype="multipart/form-data">
+          <div class="dropzone" onclick="this.querySelector('input').click()">
+            Drag & drop files here or click to upload
+            <input type="file" name="documents" style="display:none;" multiple required />
+          </div>
+
+          <button class="btn">Upload File</button>
+        </form>
+      </div>
+    `;
 
     const claimsContent = `
       ${uploadPanel}
