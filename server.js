@@ -21343,83 +21343,258 @@ if (method === "GET" && pathname === "/upload-denials") return redirect(res, "/c
 if (method === "GET" && pathname === "/upload-negotiations") return redirect(res, "/claims?view=negotiations");
 
 function detectUploadType(file) {
-  const name = String(file.filename || "").toLowerCase();
+  const filename = String(file.filename || "").toLowerCase();
+  const ext = path.extname(filename).toLowerCase();
 
-  // filename fallback
-  if (name.includes("payment")) return "payments";
-  if (name.includes("denial")) return "denials";
-  if (name.includes("claim") || name.includes("billed")) return "billed";
+  // Strong extension signal: denial documents are usually non-tabular
+  if ([".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png"].includes(ext)) {
+    // If it looks like a remittance/EOB, treat as payments, else denials
+    if (filename.includes("835") || filename.includes("eob") || filename.includes("era") || filename.includes("remit")) return "payments";
+    return "denials";
+  }
 
+  // Filename heuristics
+  if (filename.includes("payment") || filename.includes("835") || filename.includes("era") || filename.includes("eob") || filename.includes("remit")) return "payments";
+  if (filename.includes("denial") || filename.includes("appeal")) return "denials";
+  if (filename.includes("claim") || filename.includes("billed") || filename.includes("billing")) return "claims";
+
+  // Content heuristics (CSV/TXT)
   try {
     const raw = file.buffer
       ? file.buffer.toString("utf8")
       : (file.content || file.data || "");
 
-    const content = String(raw).slice(0, 2000).toLowerCase();
+    const content = String(raw).slice(0, 4000).toLowerCase();
 
-    // column detection
-    if (content.includes("amount_paid") || content.includes("payment_date")) {
+    // Payments signals
+    if (
+      content.includes("amount_paid") ||
+      content.includes("paid_amount") ||
+      content.includes("payment_date") ||
+      content.includes("remit") ||
+      content.includes("eob")
+    ) {
       return "payments";
     }
 
-    if (content.includes("denial_reason") || content.includes("denial_code")) {
+    // Denials signals
+    if (
+      content.includes("denial_reason") ||
+      content.includes("denial_code") ||
+      content.includes("denied")
+    ) {
       return "denials";
     }
 
-    if (content.includes("claim_number") || content.includes("amount_billed")) {
-      return "billed";
+    // Claims signals
+    if (
+      content.includes("claim_number") ||
+      content.includes("claim #") ||
+      content.includes("amount_billed") ||
+      content.includes("charge_amount")
+    ) {
+      return "claims";
     }
   } catch (err) {
     console.warn("Auto-detect failed:", err.message);
   }
 
+  // Fallback: treat unknown tabular uploads as claims
+  if ([".csv", ".xls", ".xlsx", ".txt"].includes(ext)) return "claims";
   return null;
 }
 
 if (method === "POST" && pathname === "/upload-router") {
   const contentType = req.headers["content-type"] || "";
-  const boundaryMatch = contentType.match(/boundary=(.*)$/);
-  if (!boundaryMatch) return send(res, 400, "Invalid upload");
+  if (!contentType.includes("multipart/form-data")) {
+    return redirect(res, "/data-management?tab=upload&upload=error&msg=invalid_form");
+  }
+
+  const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+  if (!boundaryMatch) {
+    return redirect(res, "/data-management?tab=upload&upload=error&msg=missing_boundary");
+  }
 
   const { files } = await parseMultipart(req, boundaryMatch[1]);
+  const docs = (files || []).filter(f => f && (f.fieldName === "documents" || f.fieldName === "documents[]"));
 
-  if (!files.length) return send(res, 400, "No file uploaded");
+  if (!docs.length) {
+    return redirect(res, "/data-management?tab=upload&upload=error&msg=no_files");
+  }
+
+  // Load stores ONCE
+  const billedAll = readJSON(FILES.billed, []);
+  const payments = readJSON(FILES.payments, []);
+  let cases = readJSON(FILES.cases, []);
+  let casesModified = false;
+  const uploadBatches = readJSON(FILES.upload_batches, []);
+  const settings = getPracticeSettings(org.org_id);
 
   let processed = 0;
+  let skipped = 0;
+  const errors = [];
 
-  for (const file of files) {
-    const type = detectUploadType(file);
+  for (const f of docs) {
+    const tab = detectUploadType(f);
 
-    if (!type) {
-      console.warn("Skipping undetected file:", file.filename);
+    if (!tab) {
+      skipped += 1;
+      errors.push(`${String(f.filename || "file")}: unable to auto-detect type`);
       continue;
     }
 
-    // clone request safely (avoid mutation bugs)
-    const newReq = Object.create(req);
-
-    if (type === "billed") newReq.url = "/upload-billed";
-    else if (type === "payments") newReq.url = "/upload-payments";
-    else if (type === "denials") newReq.url = "/upload-denials";
-
-    newReq.file = file;
-
-    // Only allow first request to use res
-    if (processed === 0) {
-      server.emit("request", newReq, res);
-    } else {
-      // future-safe: run without response binding
-      server.emit("request", newReq, { ...res, end: () => {} });
+    if (!isSupportedUploadExt(f.filename || "")) {
+      addDocumentIngest(org.org_id, categoryFromTab(tab), f, "Unsupported", 0, "Unsupported file type");
+      skipped += 1;
+      continue;
     }
 
-    processed++;
+    const ext = path.extname(String(f.filename || "").toLowerCase());
+    const category = categoryFromTab(tab);
+    const ingest = addDocumentIngest(org.org_id, category, f, "Stored", 0, "");
+
+    try {
+      if (tab === "claims") {
+        if (ext === ".csv") {
+          const parsedCSV = parseCSV(f.buffer.toString("utf8"));
+          const rows = parsedCSV.rows || [];
+
+          const uploadId = uuid();
+          const submissionUploadedAt = nowISO();
+
+          let insertedClaims = 0;
+          let totalBilledForBatch = 0;
+
+          for (const row of rows) {
+            const mapped = mapBilledClaimRow(row);
+            const claim_number = normalizeClaimKey(mapped.claim_number);
+            if (!claim_number) continue;
+
+            billedAll.push({
+              billed_id: uuid(),
+              org_id: org.org_id,
+              claim_number,
+              payer: String(mapped.payer || "").trim(),
+              procedure_code: mapped.procedure_code,
+              amount_billed: mapped.amount_billed,
+              patient_responsibility: num(pickField(row, [
+                "patient_resp",
+                "patient responsibility",
+                "copay",
+                "coinsurance"
+              ])),
+              upload_id: uploadId,
+              created_at: nowISO()
+            });
+
+            totalBilledForBatch += mapped.amount_billed;
+            insertedClaims += 1;
+          }
+
+          uploadBatches.push({
+            upload_id: uploadId,
+            org_id: org.org_id,
+            file_name: ingest.original_filename || f.filename || "claims_upload.csv",
+            uploaded_by: user.user_id,
+            uploaded_at: submissionUploadedAt,
+            claim_count: insertedClaims,
+            total_billed: totalBilledForBatch,
+          });
+
+          ingest.status = "Parsed";
+          ingest.linked_claims_count = insertedClaims;
+        } else {
+          ingest.status = "Unsupported for claims parsing";
+          ingest.notes = "Claims parsing currently supports CSV uploads.";
+        }
+      } else if (tab === "payments") {
+        if (ext === ".csv" || ext === ".txt") {
+          const parsedCSV = parseCSV(f.buffer.toString("utf8"));
+          for (const r of (parsedCSV.rows || [])) {
+            payments.push({
+              payment_id: uuid(),
+              org_id: org.org_id,
+              claim_number: String(pickField(r, ["claim", "claim#", "claim number", "clm"]) || ""),
+              payer: pickField(r, ["payer", "insurance", "carrier"]) || "",
+              amount_paid: num(pickField(r, ["paid", "amount", "payment", "paid amount"])),
+              date_paid: pickField(r, ["date", "paid date", "remit date"]) || "",
+              source_file: ingest.original_filename,
+              created_at: nowISO(),
+              denied_approved: false
+            });
+          }
+          ingest.status = "Parsed";
+          ingest.linked_claims_count = (parsedCSV.rows || []).length;
+        } else {
+          ingest.status = "Stored (unparsed)";
+          ingest.notes = "Payments parsing currently supports CSV/TXT uploads.";
+        }
+      } else if (tab === "denials") {
+        ingest.status = "Stored For Denial Linking";
+        const filename = String(ingest.original_filename || "");
+        const candidates = filename.match(/\d{5,}/g) || [];
+        let linkedClaim = null;
+        for (const candidate of candidates) {
+          const key = normalizeClaimKey(candidate);
+          if (!key) continue;
+          linkedClaim = billedAll.find(b => b.org_id === org.org_id && normalizeClaimKey(b.claim_number) === key) || null;
+          if (linkedClaim) break;
+        }
+        if (linkedClaim) {
+          ingest.linked_claim_number = linkedClaim.claim_number;
+          ingest.linked_claim_id = linkedClaim.billed_id;
+          ingest.status = "Linked";
+          linkedClaim.denial_doc_attached = true;
+          linkedClaim.denial_document = ingest.original_filename;
+          if (settings.auto_create_denial_cases === true || !linkedClaim.denial_case_id) {
+            ensureDenialCaseForClaim(linkedClaim);
+            casesModified = true;
+            cases = readJSON(FILES.cases, []);
+          }
+        }
+      }
+
+      // Persist updated ingest record
+      const allIngests = readJSON(FILES.document_ingests, []);
+      const idx = allIngests.findIndex(x => x.ingest_id === ingest.ingest_id);
+      if (idx >= 0) {
+        allIngests[idx] = ingest;
+        writeJSON(FILES.document_ingests, allIngests);
+      }
+
+      processed += 1;
+    } catch (e) {
+      ingest.status = "Error";
+      ingest.notes = String(e?.message || e);
+
+      const allIngests = readJSON(FILES.document_ingests, []);
+      const idx = allIngests.findIndex(x => x.ingest_id === ingest.ingest_id);
+      if (idx >= 0) {
+        allIngests[idx] = ingest;
+        writeJSON(FILES.document_ingests, allIngests);
+      }
+
+      skipped += 1;
+      errors.push(`${ingest.original_filename || f.filename || "file"}: ${String(e?.message || e)}`);
+    }
   }
 
-  if (processed === 0) {
-    return send(res, 400, "Unable to detect file type. Please rename file or include standard columns.");
-  }
+  // Persist stores
+  writeJSON(FILES.upload_batches, uploadBatches);
+  writeJSON(FILES.payments, payments);
+  writeJSON(FILES.billed, billedAll);
+  if (casesModified) writeJSON(FILES.cases, cases);
 
-  return;
+  rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
+
+  const qs = new URLSearchParams();
+  qs.set("tab", "upload");
+  qs.set("upload", "done");
+  qs.set("processed", String(processed));
+  qs.set("skipped", String(skipped));
+  if (errors.length) qs.set("errors", errors.slice(0, 6).join(" | ").slice(0, 800));
+
+  return redirect(res, "/data-management?" + qs.toString());
 }
 
 // ==============================
@@ -25990,6 +26165,35 @@ function renderTemplateEditor(org, user){
     const denialClaims = billed.filter(b => String(evaluateClaimDerived(b, claimCtx).lifecycleStage) === "Denied");
     const denialWithDoc = denialClaims.filter(b => !!(b.denial_doc_attached || b.denial_document || b.denial_file)).length;
 
+    const uploadStatus = String(parsed.query.upload || "").toLowerCase();
+    const uploadProcessed = Math.max(0, num(parsed.query.processed || 0));
+    const uploadSkipped = Math.max(0, num(parsed.query.skipped || 0));
+    const uploadErrors = String(parsed.query.errors || "").trim();
+    const uploadMsg = String(parsed.query.msg || "").trim();
+
+    const uploadBanner = (() => {
+      if (uploadStatus === "done") {
+        const details = `Processed ${uploadProcessed} file(s)` + (uploadSkipped ? ` • Skipped ${uploadSkipped}` : "");
+        return `
+          <div style="border:1px solid #a7f3d0;background:#ecfdf5;color:#065f46;padding:10px 12px;border-radius:12px;margin:10px 0;">
+            <div style="font-weight:900;">Upload complete</div>
+            <div class="small" style="margin-top:4px;">${safeStr(details)}</div>
+            ${uploadErrors ? `<div class="small" style="margin-top:6px;white-space:pre-wrap;">${safeStr(uploadErrors)}</div>` : ""}
+          </div>
+        `;
+      }
+      if (uploadStatus === "error") {
+        const errText = uploadMsg || "Upload failed. Please try again.";
+        return `
+          <div style="border:1px solid #fecaca;background:#fef2f2;color:#991b1b;padding:10px 12px;border-radius:12px;margin:10px 0;">
+            <div style="font-weight:900;">Upload error</div>
+            <div class="small" style="margin-top:4px;">${safeStr(errText)}</div>
+          </div>
+        `;
+      }
+      return "";
+    })();
+
     function tabBtn(id, label){
       return `<a class="btn ${activeTab===id?"":"secondary"}" href="/data-management?tab=${id}">${label}</a>`;
     }
@@ -26008,29 +26212,33 @@ function renderTemplateEditor(org, user){
           Upload claims, payments, or denials in one place.
         </div>
 
-        <form method="POST" action="/upload-router" enctype="multipart/form-data">
+        <form id="dm-upload-form" method="POST" action="/upload-router" enctype="multipart/form-data">
           <input
             id="dm-files"
             type="file"
             name="documents"
             accept=".csv,.xls,.xlsx,.pdf,.txt,.doc,.docx,.jpg,.jpeg,.png"
             multiple
-            required
             style="display:none;"
           />
 
           <div
             id="dm-drop"
             class="dropzone"
-            style="margin-top:8px;"
+            style="margin-top:8px;flex-direction:column;align-items:stretch;justify-content:center;padding:14px;text-align:center;"
           >
-            Drag & drop files here or click to upload
+            <div id="dm-drop-title" style="font-weight:900;">
+              Drag & drop files here or click to select
+            </div>
+            <div id="dm-drop-sub" class="muted small" style="margin-top:6px;">
+              Accepted: CSV, XLS/XLSX, TXT, PDF, DOC/DOCX, JPG/PNG
+            </div>
+            <div id="dm-filelist" class="muted small" style="margin-top:10px;display:none;line-height:1.5;text-align:left;max-height:90px;overflow:auto;"></div>
           </div>
 
-          <div id="dm-filelist" class="muted small" style="margin-top:8px;"></div>
-
           <div class="btnRow" style="margin-top:10px;">
-            <button class="btn" type="submit">Upload File</button>
+            <button id="dm-upload-btn" class="btn" type="submit" disabled>Upload</button>
+            <button id="dm-clear" class="btn secondary small" type="button" style="display:none;">Clear</button>
           </div>
         </form>
       </div>
@@ -26606,63 +26814,124 @@ function renderTemplateEditor(org, user){
       "automation": practiceContent
     })[activeTab] || uploadContent;
 
-    const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Upload and manage your claims, payments, denial documents, reimbursement rules, and automation templates in one place.</p>${tabs}${section}<script>
+    const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Upload and manage your claims, payments, denial documents, reimbursement rules, and automation templates in one place.</p>${uploadBanner}${tabs}${section}<script>
 (function(){
+  const form = document.getElementById("dm-upload-form");
   const dz = document.getElementById("dm-drop");
   const inp = document.getElementById("dm-files");
   const list = document.getElementById("dm-filelist");
+  const title = document.getElementById("dm-drop-title");
+  const sub = document.getElementById("dm-drop-sub");
+  const btn = document.getElementById("dm-upload-btn");
+  const clearBtn = document.getElementById("dm-clear");
 
   if (dz && inp) {
-    const renderHints = () => {
-      if (!list) return;
-      const detectType = (fileName) => {
-        const n = String(fileName || "").toLowerCase();
-        if (n.includes("denial")) return "Denials";
-        if (n.includes("payment") || n.includes("era") || n.includes("eob")) return "Payments";
-        return "Auto-detect on upload";
-      };
+    const esc = (s) => String(s || "").replace(/[<>&"]/g, c => c === "<" ? "&lt;" : (c === ">" ? "&gt;" : (c === "&" ? "&amp;" : "&quot;")));
+    const detectType = (fileName) => {
+      const n = String(fileName || "").toLowerCase();
+      const ext = "." + (n.split(".").pop() || "");
+      if ([".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png"].includes(ext)) return "Denials";
+      if (n.includes("denial") || n.includes("appeal")) return "Denials";
+      if (n.includes("payment") || n.includes("era") || n.includes("eob") || n.includes("835") || n.includes("remit")) return "Payments";
+      return "Claims (or auto-detect)";
+    };
 
-      const lines = [...(inp.files || [])].map(f =>
-        f.name + " • " + (f.name.split(".").pop() || "").toUpperCase() + " • " + detectType(f.name)
-      );
+    let selected = [];
 
-      list.innerHTML = lines.join("<br/>") || "No files selected";
+    const sameFile = (a, b) =>
+      !!(a && b && a.name === b.name && a.size === b.size && a.lastModified === b.lastModified);
+
+    const syncInput = () => {
+      const dt = new DataTransfer();
+      selected.forEach(f => dt.items.add(f));
+      inp.files = dt.files;
+    };
+
+    const render = () => {
+      if (!title || !sub || !list) return;
+
+      if (!selected.length) {
+        title.textContent = "Drag & drop files here or click to select";
+        sub.textContent = "Accepted: CSV, XLS/XLSX, TXT, PDF, DOC/DOCX, JPG/PNG";
+        list.style.display = "none";
+        list.innerHTML = "";
+        if (btn) { btn.disabled = true; btn.textContent = "Upload"; }
+        if (clearBtn) clearBtn.style.display = "none";
+        return;
+      }
+
+      title.textContent = (selected.length === 1)
+        ? "1 file ready to upload"
+        : (selected.length + " files ready to upload");
+
+      sub.textContent = "Drag & drop to add more, or click to replace selection";
+      list.style.display = "block";
+      list.innerHTML = selected.map(f =>
+        esc(f.name) + " • " + (f.name.split(".").pop() || "").toUpperCase() + " • " + detectType(f.name)
+      ).join("<br/>");
+
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = (selected.length === 1) ? "Upload File" : "Upload Files";
+      }
+      if (clearBtn) clearBtn.style.display = "inline-flex";
     };
 
     dz.addEventListener("click", () => inp.click());
 
-    ["dragenter","dragover"].forEach(evt => {
-      dz.addEventListener(evt, e => {
-        e.preventDefault();
-        dz.classList.add("dragover");
-      });
-    });
+    ["dragenter","dragover"].forEach(evt => dz.addEventListener(evt, e => {
+      e.preventDefault();
+      dz.classList.add("dragover");
+    }));
 
-    ["dragleave","drop"].forEach(evt => {
-      dz.addEventListener(evt, e => {
-        e.preventDefault();
-        dz.classList.remove("dragover");
-      });
-    });
+    ["dragleave","drop"].forEach(evt => dz.addEventListener(evt, e => {
+      e.preventDefault();
+      dz.classList.remove("dragover");
+    }));
 
     dz.addEventListener("drop", e => {
-      if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
-      inp.files = e.dataTransfer.files;
-      renderHints();
+      const dropped = Array.from((e.dataTransfer && e.dataTransfer.files) ? e.dataTransfer.files : []);
+      if (!dropped.length) return;
+
+      for (const f of dropped) {
+        if (!selected.some(x => sameFile(x, f))) selected.push(f);
+      }
+
+      try { syncInput(); } catch (_) {}
+      render();
     });
 
-    inp.addEventListener("change", renderHints);
-    renderHints();
+    inp.addEventListener("change", () => {
+      selected = Array.from(inp.files || []);
+      render();
+    });
+
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => {
+        selected = [];
+        try { inp.value = ""; } catch (_) {}
+        render();
+      });
+    }
+
+    if (form) {
+      form.addEventListener("submit", () => {
+        if (btn) { btn.disabled = true; btn.textContent = "Uploading..."; }
+        if (sub) sub.textContent = "Uploading... please wait";
+      });
+    }
+
+    // Init
+    selected = Array.from(inp.files || []);
+    render();
   }
 
+  // keep your existing batch filters
   window.filterUploadBatches = function(type){
     const rows = document.querySelectorAll("#upload-batches-table tbody tr");
     rows.forEach(row => {
-      if (type === "all") {
-        row.style.display = "";
-      } else {
-        row.style.display = row.getAttribute("data-batch-type") === type ? "" : "none";
-      }
+      if (type === "all") row.style.display = "";
+      else row.style.display = row.getAttribute("data-batch-type") === type ? "" : "none";
     });
   };
 })();
