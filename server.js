@@ -27995,11 +27995,11 @@ function renderTemplateEditor(org, user){
             <div style="display:grid;grid-template-columns:1.1fr 1fr;gap:18px;align-items:start;">
               <div>
                 <div style="font-size:13px;color:#6b7280;margin-bottom:6px;">Current Plan</div>
-                <div style="font-size:28px;font-weight:800;text-transform:capitalize;">${currentPlan === "trial" ? "Free Trial" : safeStr(currentPlan)}</div>
+                <div style="font-size:28px;font-weight:800;text-transform:capitalize;">${(sim ? safeStr(sim) : (currentPlan === "trial" ? "Free Trial" : safeStr(currentPlan)))}</div>
                 <div style="margin-top:8px;font-size:14px;color:#374151;">
                   Status:
                   <span style="display:inline-block;padding:4px 10px;border-radius:999px;border:1px solid #d1d5db;background:#f9fafb;font-weight:700;text-transform:capitalize;">
-                    ${currentPlan === "trial" ? "Active" : safeStr(currentStatus)}
+                    ${safeStr(currentStatus)}
                   </span>
                 </div>
                 <div style="margin-top:8px;font-size:14px;color:#374151;">
@@ -28050,7 +28050,7 @@ function renderTemplateEditor(org, user){
                     ${isCurrent
                       ? `<button type="button" class="btn secondary" style="width:100%;" disabled>Current Plan</button>`
                       : `<button type="button" class="btn-primary" style="width:100%;" onclick="upgradePlan('${safeStr(p.key)}')">
-                          ${currentStatus !== "active" ? "Start Plan" : "Switch to " + safeStr(p.name)}
+                          ${currentStatus !== "active" ? "Start Plan" : "Upgrade to " + safeStr(p.name)}
                          </button>`
                     }
                   </div>
@@ -28068,8 +28068,8 @@ function renderTemplateEditor(org, user){
                 });
                 const data = await res.json();
 
-                if (data.simulation && data.url) {
-                  window.location.href = data.url;
+                if (data.simulation) {
+                  alert("Simulation Mode:\n\nHere is what a paid user would see:\n\n• Update payment method\n• Cancel subscription\n• View invoices\n\n(Stripe portal preview not available in simulation)");
                   return;
                 }
 
