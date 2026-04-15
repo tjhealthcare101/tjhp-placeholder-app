@@ -27991,6 +27991,33 @@ function renderTemplateEditor(org, user){
             </div>
           ` : ""}
 
+          ${parsed.query && parsed.query.view === "simulation-portal" ? `
+            <div class="card" style="margin-bottom:18px;padding:20px;border:1px solid #e5e7eb;border-radius:14px;">
+              <h4 style="margin-top:0;">Subscription Management (Simulation)</h4>
+
+              <p style="margin-bottom:10px;">
+                This is what a paid user would see in the billing portal.
+              </p>
+
+              <ul style="margin:10px 0 16px 16px;color:#374151;">
+                <li>Update payment method</li>
+                <li>Cancel subscription</li>
+                <li>View invoices</li>
+                <li>Change billing details</li>
+              </ul>
+
+              <div class="btnRow">
+                <button class="btn secondary" disabled>Update Payment Method</button>
+                <button class="btn secondary" disabled>View Invoices</button>
+                <button class="btn-primary" disabled>Cancel Subscription</button>
+              </div>
+
+              <div style="margin-top:12px;font-size:12px;color:#6b7280;">
+                Simulation only — actions are disabled.
+              </div>
+            </div>
+          ` : ""}
+
           <div class="card" style="padding:18px;border:1px solid #e5e7eb;border-radius:14px;margin-bottom:18px;">
             <div style="display:grid;grid-template-columns:1.1fr 1fr;gap:18px;align-items:start;">
               <div>
@@ -28019,7 +28046,6 @@ function renderTemplateEditor(org, user){
             </div>
 
             <div class="btnRow" style="margin-top:16px;">
-              <a class="btn secondary" href="/account?tab=billing">Refresh</a>
               <button type="button" onclick="openBillingPortal()" class="btn secondary">Manage Subscription</button>
             </div>
           </div>
@@ -28069,7 +28095,8 @@ function renderTemplateEditor(org, user){
                 const data = await res.json();
 
                 if (data.simulation) {
-                  alert("Simulation Mode:\n\nHere is what a paid user would see:\n\n• Update payment method\n• Cancel subscription\n• View invoices\n\n(Stripe portal preview not available in simulation)");
+                  // simulate billing portal view instead of doing nothing
+                  window.location.href = "/account?tab=billing&view=simulation-portal";
                   return;
                 }
 
