@@ -26145,7 +26145,8 @@ function renderTemplateEditor(org, user){
     const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const claimBatches = getClaimBatchHistory(org.org_id);
     const paymentBatches = getPaymentBatchHistory(org.org_id);
-    const unmatchedPayments = getUnmatchedPayments(org.org_id, billed).slice(0, 100);
+    const unmatchedPaymentsAll = getUnmatchedPayments(org.org_id, billed);
+    const unmatchedPayments = unmatchedPaymentsAll.slice(0, 100);
     const contracts = getPayerContracts(org.org_id).sort((a,b)=> String(a.payer_name||"").localeCompare(String(b.payer_name||"")));
     const uploads = getReimbursementUploadLogs(org.org_id).slice(0, 20);
     const ingests = readJSON(FILES.document_ingests, []).filter(x => x.org_id === org.org_id).sort((a,b)=>new Date(b.uploaded_at||b.created_at||0)-new Date(a.uploaded_at||a.created_at||0));
@@ -26222,6 +26223,21 @@ function renderTemplateEditor(org, user){
             style="display:none;"
           />
 
+          ${uploadStatus === "ok" ? `
+            <div style="
+              background:#ecfdf5;
+              border:1px solid #10b981;
+              color:#065f46;
+              padding:10px;
+              border-radius:8px;
+              margin-bottom:10px;
+              font-size:13px;
+            ">
+              ✔ Upload complete — ${uploadProcessed} processed
+              ${uploadSkipped ? ` • ${uploadSkipped} skipped` : ""}
+            </div>
+          ` : ""}
+
           <div
             id="dm-drop"
             class="dropzone"
@@ -26244,8 +26260,31 @@ function renderTemplateEditor(org, user){
       </div>
     `;
 
+    const unmatchedClaims = billed.filter(c => !c.matched_payment_id);
+    const matchingPanel = `
+      <div class="card" style="margin-bottom:16px;">
+        <h3>Matching Review</h3>
+
+        <div style="margin-top:8px;">
+          <strong>Summary:</strong><br/>
+          ✔ Matched: ${billed.length - unmatchedClaims.length}<br/>
+          ⚠ Unmatched Claims: ${unmatchedClaims.length}<br/>
+          ⚠ Unmatched Payments: ${unmatchedPaymentsAll.length}
+        </div>
+
+        ${(unmatchedClaims.length || unmatchedPaymentsAll.length) ? `
+          <div style="margin-top:10px;">
+            <button class="btn small" onclick="window.location='/claims-lifecycle?filter=unmatched'">
+              Review & Fix Matches
+            </button>
+          </div>
+        ` : `<div class="muted" style="margin-top:8px;">All records matched successfully.</div>`}
+      </div>
+    `;
+
     const uploadContent = `
       ${uploadPanel}
+      ${matchingPanel}
 
       <div class="hr"></div>
 
@@ -26255,11 +26294,19 @@ function renderTemplateEditor(org, user){
         View uploaded claim, payment, and denial batches below.
       </div>
 
-      <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">
-        <button type="button" class="btn secondary small" onclick="filterUploadBatches('all')">All</button>
-        <button type="button" class="btn secondary small" onclick="filterUploadBatches('claims')">Claims</button>
-        <button type="button" class="btn secondary small" onclick="filterUploadBatches('payments')">Payments</button>
-        <button type="button" class="btn secondary small" onclick="filterUploadBatches('denials')">Denials</button>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+        <input type="date" id="startDate" />
+        <input type="date" id="endDate" />
+
+        <select id="typeFilter">
+          <option value="all">All</option>
+          <option value="claims">Claims</option>
+          <option value="payments">Payments</option>
+          <option value="denials">Denials</option>
+        </select>
+
+        <button class="btn small" onclick="applyBatchFilters()">Apply</button>
+        <button class="btn small secondary" onclick="resetBatchFilters()">Reset</button>
       </div>
 
       <div style="overflow:auto;">
@@ -26277,9 +26324,13 @@ function renderTemplateEditor(org, user){
           <tbody>
             ${
               claimBatches.map(batch => `
-                <tr data-batch-type="claims">
+                <tr data-batch-type="claims" data-uploaded-at="${safeStr(batch.uploaded_at || "")}">
                   <td>Claims</td>
-                  <td><a href="/batch-detail?upload_id=${encodeURIComponent(batch.upload_id)}">${safeStr(batch.filename)}</a></td>
+                  <td>
+                    <a href="/batch-detail?upload_id=${encodeURIComponent(batch.upload_id)}&type=claims">
+                      ${safeStr(batch.filename)}
+                    </a>
+                  </td>
                   <td>${safeStr(batch.uploaded_by || "")}</td>
                   <td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "-"}</td>
                   <td>${batch.claim_count} claims • ${formatMoneyUI(batch.total_billed || 0)}</td>
@@ -26295,9 +26346,13 @@ function renderTemplateEditor(org, user){
 
             ${
               paymentBatches.map(batch => `
-                <tr data-batch-type="payments">
+                <tr data-batch-type="payments" data-uploaded-at="${safeStr(batch.uploaded_at || "")}">
                   <td>Payments</td>
-                  <td>${safeStr(batch.source_file || batch.filename || "payment batch")}</td>
+                  <td>
+                    <a href="/batch-detail?source_file=${encodeURIComponent(batch.source_file || batch.filename)}&type=payments">
+                      ${safeStr(batch.source_file || batch.filename)}
+                    </a>
+                  </td>
                   <td>-</td>
                   <td>${batch.uploaded_at ? new Date(batch.uploaded_at).toLocaleString() : "-"}</td>
                   <td>${num(batch.row_count || batch.rows || 0)} rows • ${formatMoneyUI(batch.total_paid || 0)}</td>
@@ -26315,9 +26370,13 @@ function renderTemplateEditor(org, user){
               ingests
                 .filter(i => String(i.category || "").toLowerCase() === "denials")
                 .map(ingest => `
-                  <tr data-batch-type="denials">
+                  <tr data-batch-type="denials" data-uploaded-at="${safeStr(ingest.uploaded_at || "")}">
                     <td>Denials</td>
-                    <td>${safeStr(ingest.original_filename || "denial upload")}</td>
+                    <td>
+                      <a href="/batch-detail?ingest_id=${encodeURIComponent(ingest.ingest_id)}&type=denials">
+                        ${safeStr(ingest.original_filename || "denial upload")}
+                      </a>
+                    </td>
                     <td>-</td>
                     <td>${ingest.uploaded_at ? new Date(ingest.uploaded_at).toLocaleString() : "-"}</td>
                     <td>${safeStr(ingest.status || "Processed")}</td>
@@ -26923,16 +26982,49 @@ function renderTemplateEditor(org, user){
 
     // Init
     selected = Array.from(inp.files || []);
+    if (${JSON.stringify(uploadStatus)} === "ok") {
+      selected = [];
+      try { inp.value = ""; } catch (_) {}
+    }
+    if (${JSON.stringify(uploadStatus)} === "ok") {
+      const dropTitle = document.getElementById("dm-drop-title");
+      const dropSub = document.getElementById("dm-drop-sub");
+
+      if (dropTitle) dropTitle.textContent = "Upload another file";
+      if (dropSub) dropSub.textContent = "You can drag & drop more files or click to select";
+    }
     render();
   }
 
-  // keep your existing batch filters
-  window.filterUploadBatches = function(type){
+  window.applyBatchFilters = function(){
+    const start = document.getElementById("startDate").value;
+    const end = document.getElementById("endDate").value;
+    const type = document.getElementById("typeFilter").value;
+
     const rows = document.querySelectorAll("#upload-batches-table tbody tr");
+
     rows.forEach(row => {
-      if (type === "all") row.style.display = "";
-      else row.style.display = row.getAttribute("data-batch-type") === type ? "" : "none";
+      const rowType = row.getAttribute("data-batch-type");
+      const rowDate = row.getAttribute("data-uploaded-at");
+
+      let show = true;
+
+      if (type !== "all" && rowType !== type) show = false;
+
+      if (start && rowDate && new Date(rowDate) < new Date(start)) show = false;
+      if (end && rowDate && new Date(rowDate) > new Date(end)) show = false;
+
+      row.style.display = show ? "" : "none";
     });
+  };
+
+  window.resetBatchFilters = function(){
+    document.getElementById("startDate").value = "";
+    document.getElementById("endDate").value = "";
+    document.getElementById("typeFilter").value = "all";
+
+    document.querySelectorAll("#upload-batches-table tbody tr")
+      .forEach(r => r.style.display = "");
   };
 })();
 </script>`, navUser(), {showChat:true, orgName: org.org_name});
@@ -26940,6 +27032,33 @@ function renderTemplateEditor(org, user){
   }
 
   if (method === "GET" && pathname === "/batch-detail") {
+    const type = String(parsed.query.type || "");
+
+    if (type === "payments") {
+      const source = String(parsed.query.source_file || "");
+      const payments = readJSON(FILES.payments, []);
+      const rows = payments.filter(p => String(p.source_file) === source);
+
+      return send(res, 200, renderPage("Payment Batch", `
+        <h2>Payment Batch</h2>
+        <table>
+          <tr><th>Claim</th><th>Paid</th></tr>
+          ${rows.map(r=>`<tr><td>${safeStr(r.claim_number)}</td><td>${formatMoneyUI(r.amount_paid)}</td></tr>`).join("")}
+        </table>
+      `, navUser(), {showChat:false, orgName: org.org_name}));
+    }
+
+    if (type === "denials") {
+      const ingest_id = String(parsed.query.ingest_id || "");
+      const ingests = readJSON(FILES.document_ingests, []);
+      const doc = ingests.find(i => i.ingest_id === ingest_id);
+
+      return send(res, 200, renderPage("Denial Upload", `
+        <h2>Denial Upload</h2>
+        <div>${safeStr(doc?.original_filename || "Unknown file")}</div>
+      `, navUser(), {showChat:false, orgName: org.org_name}));
+    }
+
     const uploadId = String(parsed.query.upload_id || "").trim();
     if (!uploadId) return redirect(res, "/data-management?tab=upload");
     const batches = readJSON(FILES.upload_batches, []).filter(b => b.org_id === org.org_id);
