@@ -18455,7 +18455,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           return String(d.lifecycleStage || "").toLowerCase() === selectedStage.toLowerCase();
         })
         .sort((a,b) => computeClaimRiskScore(b) - computeClaimRiskScore(a))
-    : [];
+    : billedAll
+        .slice()
+        .sort((a,b) => computeClaimRiskScore(b) - computeClaimRiskScore(a));
 
   const page = Number(qs.page || 1);
   const pageSize = 25;
@@ -18463,71 +18465,94 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const paginatedClaims = filteredClaims.slice(startIdx, startIdx + pageSize);
   const totalPages = Math.max(1, Math.ceil(filteredClaims.length / pageSize));
 
-  const lifecycleTable = selectedStage ? `
-    <div style="margin-top:20px;">
-      <h3>Viewing: ${safeStr(selectedStage)}</h3>
-
-      <div style="margin-bottom:10px;">
-        <a class="btn secondary small" href="/claims-lifecycle">Clear Filter</a>
-      </div>
-
-      <div style="overflow:auto;">
-        <table>
-          <thead>
-            <tr>
-              <th>Claim #</th>
-              <th>Payer</th>
-              <th>Billed</th>
-              <th>Paid</th>
-              <th>At Risk</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              paginatedClaims.map(c => {
-                const d = evaluateClaimDerived(c, claimCtx);
-                return `
-                  <tr>
-                    <td>${safeStr(c.claim_number || "")}</td>
-                    <td>${safeStr(c.payer || "")}</td>
-                    <td>${formatMoneyUI(c.amount_billed || 0)}</td>
-                    <td>${formatMoneyUI(d.paidAmount || 0)}</td>
-                    <td>${formatMoneyUI(d.atRiskAmount || 0)}</td>
-                    <td>
-                      <span class="badge ${badgeClassForStatus(d.lifecycleStage)}">
-                        ${safeStr(d.lifecycleStage)}
-                      </span>
-                    </td>
-                    <td>
-                      <button class="btn small secondary"
-                              onclick="openClaimPanel('${safeStr(c.billed_id)}')">
-                        View
-                      </button>
-                      <a class="btn small"
-                         href="/action-center?tab=${encodeURIComponent(mapStageToActionTab(d.lifecycleStage))}&claim=${encodeURIComponent(c.billed_id)}">
-                         ${getActionLabel(d.lifecycleStage)}
-                      </a>
-                    </td>
-                  </tr>
-                `;
-              }).join("") || `<tr><td colspan="7">No claims</td></tr>`
-            }
-          </tbody>
-        </table>
-      </div>
-
-      <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-        ${Array.from({length: totalPages}, (_,i) => `
-          <a class="btn small ${i+1===page?"":"secondary"}"
-             href="/claims-lifecycle?stage=${encodeURIComponent(selectedStage)}&page=${i+1}">
-             ${i+1}
-          </a>
-        `).join("")}
-      </div>
+  const lifecycleTable = `
+  <div id="lifecycleTable" style="margin-top:20px;">
+    <h3>Claims</h3>
+    <div style="margin-bottom:10px;">
+      ${selectedStage ? `<a class="btn secondary small" href="/claims-lifecycle">Clear Filter</a>` : ""}
     </div>
-  ` : "";
+
+    <div style="overflow:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Claim #</th>
+            <th>Payer</th>
+            <th>Billed</th>
+            <th>Expected</th>
+            <th>Paid</th>
+            <th>At Risk</th>
+            <th>Risk</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            paginatedClaims.map(c => {
+              const d = evaluateClaimDerived(c, claimCtx);
+              const risk = computeClaimRiskScore(c);
+              const riskColor =
+                risk > 80 ? "#dc2626" :
+                risk > 60 ? "#f59e0b" :
+                "#16a34a";
+
+              return `
+                <tr>
+                  <td>
+                    <a href="/claim-detail?billed_id=${encodeURIComponent(c.billed_id)}">
+                      ${safeStr(c.claim_number || "")}
+                    </a>
+                  </td>
+                  <td>${safeStr(c.payer || "")}</td>
+                  <td>${formatMoneyUI(c.amount_billed || 0)}</td>
+                  <td>${d.expectedInsurance ? formatMoneyUI(d.expectedInsurance) : "-"}</td>
+                  <td>${formatMoneyUI(d.paidAmount || 0)}</td>
+                  <td>${formatMoneyUI(d.atRiskAmount || 0)}</td>
+                  <td style="font-weight:800;color:${riskColor};">
+                    ${risk}
+                  </td>
+                  <td>
+                    <span class="badge ${badgeClassForStatus(d.lifecycleStage)}">
+                      ${safeStr(d.lifecycleStage)}
+                    </span>
+                  </td>
+                  <td style="display:flex;gap:6px;">
+                    <button class="btn small" onclick="openClaimPanel('${c.billed_id}')">
+                      View
+                    </button>
+
+                    ${
+                      !d.expectedInsurance
+                        ? `<button class="btn small secondary">Fix Match</button>`
+                        : ""
+                    }
+
+                    <a class="btn small"
+                      href="/action-center?tab=${encodeURIComponent(mapStageToActionTab(d.lifecycleStage))}&claim=${encodeURIComponent(c.billed_id)}">
+                      ${mapStageToActionTab(d.lifecycleStage) === "denials" ? "Appeal" :
+                        mapStageToActionTab(d.lifecycleStage) === "underpayments" ? "Negotiate" :
+                        "Action"}
+                    </a>
+                  </td>
+                </tr>
+              `;
+            }).join("") || `<tr><td colspan="9">No claims</td></tr>`
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+      ${Array.from({length: totalPages}, (_,i) => `
+        <a class="btn small ${i+1===page?"":"secondary"}"
+           href="/claims-lifecycle?stage=${encodeURIComponent(selectedStage)}&page=${i+1}">
+           ${i+1}
+        </a>
+      `).join("")}
+    </div>
+  </div>
+`;
 
   if (view === "table" || view === "lifecycle") {
     const now = new Date();
@@ -18624,7 +18649,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         <div id="claim-panel-content" style="margin-top:10px;"></div>
       </div>
       <script>
-      const lifecycleClaims = ${JSON.stringify(billedAll)};
+      const lifecycleClaims = ${JSON.stringify(billedAll.map(c => ({ ...c, __derived: evaluateClaimDerived(c, claimCtx), __risk: computeClaimRiskScore(c) })))};
       </script>
       <script>
       function openClaimPanel(id){
@@ -18635,11 +18660,19 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
         if (!claim) return;
 
+        const c = claim || {};
+        const d = c.__derived || {};
         content.innerHTML = \`
-          <div><strong>Claim #:</strong> \${claim.claim_number || ""}</div>
-          <div><strong>Payer:</strong> \${claim.payer || ""}</div>
-          <div><strong>Billed:</strong> \${claim.amount_billed || 0}</div>
-          <div><strong>Status:</strong> \${claim.status || ""}</div>
+          <div>
+            <p><strong>Claim #:</strong> \${c.claim_number || ""}</p>
+            <p><strong>Payer:</strong> \${c.payer || ""}</p>
+            <p><strong>Billed:</strong> \${formatMoneyUI(c.amount_billed || 0)}</p>
+            <p><strong>Expected:</strong> \${d.expectedInsurance ? formatMoneyUI(d.expectedInsurance) : "-"}</p>
+            <p><strong>Paid:</strong> \${formatMoneyUI(d.paidAmount || 0)}</p>
+            <p><strong>At Risk:</strong> \${formatMoneyUI(d.atRiskAmount || 0)}</p>
+            <p><strong>Risk Score:</strong> \${c.__risk || 0}</p>
+            <p><strong>Status:</strong> \${d.lifecycleStage || c.status || ""}</p>
+          </div>
         \`;
 
         panel.style.right = "0";
@@ -18647,6 +18680,14 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
       function closeClaimPanel(){
         document.getElementById("claim-panel").style.right = "-420px";
+      }
+
+      const selectedLifecycleStage = new URLSearchParams(window.location.search).get("stage");
+      if (selectedLifecycleStage) {
+        setTimeout(() => {
+          const el = document.getElementById("lifecycleTable");
+          if (el) el.scrollIntoView({ behavior: "smooth" });
+        }, 100);
       }
       </script>
 
