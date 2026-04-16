@@ -18143,6 +18143,15 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     return "all";
   }
 
+  function getActionLabel(stage){
+    const s = String(stage || "");
+    if (s === "Denied") return "Appeal";
+    if (s === "Underpaid") return "Negotiate";
+    if (s === "Follow-Up Needed") return "Follow Up";
+    if (s === "Awaiting Payment") return "Check Status";
+    return "Take Action";
+  }
+
   function normalizeStageFilter(raw){
     const s = String(raw || "").trim();
     if (!s) return "";
@@ -18472,6 +18481,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
               <th>Paid</th>
               <th>At Risk</th>
               <th>Status</th>
+              <th>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -18490,9 +18500,19 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                         ${safeStr(d.lifecycleStage)}
                       </span>
                     </td>
+                    <td>
+                      <button class="btn small secondary"
+                              onclick="openClaimPanel('${safeStr(c.billed_id)}')">
+                        View
+                      </button>
+                      <a class="btn small"
+                         href="/action-center?tab=${encodeURIComponent(mapStageToActionTab(d.lifecycleStage))}&claim=${encodeURIComponent(c.billed_id)}">
+                         ${getActionLabel(d.lifecycleStage)}
+                      </a>
+                    </td>
                   </tr>
                 `;
-              }).join("") || `<tr><td colspan="6">No claims</td></tr>`
+              }).join("") || `<tr><td colspan="7">No claims</td></tr>`
             }
           </tbody>
         </table>
@@ -18582,6 +18602,53 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
       ${pipelineHtml}
       ${lifecycleTable}
+      <div id="claim-panel" style="
+        position:fixed;
+        top:0;
+        right:-420px;
+        width:400px;
+        height:100%;
+        background:#fff;
+        border-left:1px solid #e5e7eb;
+        box-shadow:-2px 0 10px rgba(0,0,0,0.1);
+        transition:right 0.3s ease;
+        z-index:9999;
+        padding:16px;
+        overflow:auto;
+      ">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <h3>Claim Detail</h3>
+          <button onclick="closeClaimPanel()">✕</button>
+        </div>
+
+        <div id="claim-panel-content" style="margin-top:10px;"></div>
+      </div>
+      <script>
+      const lifecycleClaims = ${JSON.stringify(billedAll)};
+      </script>
+      <script>
+      function openClaimPanel(id){
+        const panel = document.getElementById("claim-panel");
+        const content = document.getElementById("claim-panel-content");
+
+        const claim = lifecycleClaims.find(c => String(c.billed_id) === String(id));
+
+        if (!claim) return;
+
+        content.innerHTML = \`
+          <div><strong>Claim #:</strong> \${claim.claim_number || ""}</div>
+          <div><strong>Payer:</strong> \${claim.payer || ""}</div>
+          <div><strong>Billed:</strong> \${claim.amount_billed || 0}</div>
+          <div><strong>Status:</strong> \${claim.status || ""}</div>
+        \`;
+
+        panel.style.right = "0";
+      }
+
+      function closeClaimPanel(){
+        document.getElementById("claim-panel").style.right = "-420px";
+      }
+      </script>
 
     `,
         navUser(),
