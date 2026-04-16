@@ -18535,7 +18535,13 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     </div>
   `;
 
-  const filteredClaims = selectedStage
+  const lifecycleSearch = String(qs.search || "").trim().toLowerCase();
+  const lifecyclePayer = String(qs.payer || "").trim();
+  const lifecycleRange = String(qs.range || "all").trim();
+  const lifecyclePerPage = [10,25,50,100].includes(Number(qs.per_page)) ? Number(qs.per_page) : 25;
+
+  const nowTs = Date.now();
+  const stageFilteredClaims = selectedStage
     ? billedAll
         .filter(b => {
           const d = evaluateClaimDerived(b, claimCtx);
@@ -18546,8 +18552,39 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         .slice()
         .sort((a,b) => computeClaimRiskScore(b) - computeClaimRiskScore(a));
 
+  const filteredClaims = stageFilteredClaims.filter(c => {
+    const searchBlob = [
+      c.claim_number || "",
+      c.payer || "",
+      c.dos || ""
+    ].join(" ").toLowerCase();
+
+    if (lifecycleSearch && !searchBlob.includes(lifecycleSearch)) return false;
+    if (lifecyclePayer && String(c.payer || "") !== lifecyclePayer) return false;
+
+    if (lifecycleRange !== "all") {
+      const dt = new Date(c.created_at || c.dos || 0).getTime();
+      if (!dt) return false;
+
+      const dayMs = 24 * 60 * 60 * 1000;
+      if (lifecycleRange === "last30" && dt < nowTs - (30 * dayMs)) return false;
+      if (lifecycleRange === "last90" && dt < nowTs - (90 * dayMs)) return false;
+      if (lifecycleRange === "last365" && dt < nowTs - (365 * dayMs)) return false;
+    }
+
+    return true;
+  });
+
+  const lifecyclePayerOptions = Array.from(
+    new Set(
+      billedAll
+        .map(c => String(c.payer || "").trim())
+        .filter(Boolean)
+    )
+  ).sort((a,b) => a.localeCompare(b));
+
   const page = Number(qs.page || 1);
-  const pageSize = 25;
+  const pageSize = lifecyclePerPage;
   const startIdx = (page - 1) * pageSize;
   const paginatedClaims = filteredClaims.slice(startIdx, startIdx + pageSize);
   const totalPages = Math.max(1, Math.ceil(filteredClaims.length / pageSize));
@@ -18555,6 +18592,41 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const lifecycleTable = `
   <div id="lifecycleTable" style="margin-top:20px;">
     <h3>Claims</h3>
+    <form method="GET" action="/claims-lifecycle" style="margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+      ${selectedStage ? `<input type="hidden" name="stage" value="${safeStr(selectedStage)}">` : ""}
+      <div>
+        <label class="small">Search</label>
+        <input name="search" value="${safeStr(lifecycleSearch)}" placeholder="Claim #, payer, DOS..." />
+      </div>
+      <div>
+        <label class="small">Payer</label>
+        <select name="payer">
+          <option value="">All</option>
+          ${lifecyclePayerOptions.map(p => `
+            <option value="${safeStr(p)}" ${lifecyclePayer === p ? "selected" : ""}>${safeStr(p)}</option>
+          `).join("")}
+        </select>
+      </div>
+      <div>
+        <label class="small">Range</label>
+        <select name="range">
+          <option value="all" ${lifecycleRange === "all" ? "selected" : ""}>All Time</option>
+          <option value="last30" ${lifecycleRange === "last30" ? "selected" : ""}>Last 30 Days</option>
+          <option value="last90" ${lifecycleRange === "last90" ? "selected" : ""}>Last 90 Days</option>
+          <option value="last365" ${lifecycleRange === "last365" ? "selected" : ""}>Last 365 Days</option>
+        </select>
+      </div>
+      <div>
+        <label class="small">Per Page</label>
+        <select name="per_page">
+          ${[10,25,50,100].map(n => `<option value="${n}" ${pageSize === n ? "selected" : ""}>${n}</option>`).join("")}
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn small" type="submit">Apply</button>
+        <a class="btn secondary small" href="/claims-lifecycle${selectedStage ? `?stage=${encodeURIComponent(selectedStage)}` : ""}">Reset</a>
+      </div>
+    </form>
     <div style="margin-bottom:10px;">
       ${selectedStage ? `<a class="btn secondary small" href="/claims-lifecycle">Clear Filter</a>` : ""}
     </div>
@@ -18566,10 +18638,16 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             <th>Claim #</th>
             <th>Payer</th>
             <th>Billed</th>
-            <th>Expected</th>
+            <th>
+              Expected ${infoIcon("Expected insurance reimbursement based on contract rules or allowed amount logic.")}
+            </th>
             <th>Paid</th>
-            <th>At Risk</th>
-            <th>Risk</th>
+            <th>
+              At Risk ${infoIcon("Revenue still not recovered for this claim based on current claim status.")}
+            </th>
+            <th>
+              Risk ${infoIcon("Priority score based on claim status, dollars at risk, age, and workflow urgency.")}
+            </th>
             <th>Status</th>
             <th>Action</th>
           </tr>
@@ -18605,7 +18683,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                     </span>
                   </td>
                   <td style="display:flex;gap:6px;">
-                    <button class="btn small" onclick="openClaimPanel('${c.billed_id}')">
+                    <button class="btn small" onclick="openClaimPanel('${encodeURIComponent(String(c.billed_id || ""))}')">
                       View
                     </button>
 
@@ -18618,9 +18696,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                     <a class="btn small"
                       ${
                         mapStageToActionTab(d.lifecycleStage) === "denials"
-                          ? `href="/appeals/workspace?claim=${encodeURIComponent(c.billed_id)}"`
+                          ? `href="/ai-appeal?billed_id=${encodeURIComponent(c.billed_id)}"`
                           : mapStageToActionTab(d.lifecycleStage) === "underpayments"
-                          ? `href="/negotiations/workspace?claim=${encodeURIComponent(c.billed_id)}"`
+                          ? `href="/ai-negotiation?billed_id=${encodeURIComponent(c.billed_id)}"`
                           : `href="/action-center?claim=${encodeURIComponent(c.billed_id)}"`
                       }>
                       ${mapStageToActionTab(d.lifecycleStage) === "denials" ? "Appeal" :
@@ -18639,7 +18717,14 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
       ${Array.from({length: totalPages}, (_,i) => `
         <a class="btn small ${i+1===page?"":"secondary"}"
-           href="/claims-lifecycle?stage=${encodeURIComponent(selectedStage)}&page=${i+1}">
+           href="/claims-lifecycle?${new URLSearchParams({
+             ...(selectedStage ? { stage: selectedStage } : {}),
+             ...(lifecycleSearch ? { search: lifecycleSearch } : {}),
+             ...(lifecyclePayer ? { payer: lifecyclePayer } : {}),
+             ...(lifecycleRange ? { range: lifecycleRange } : {}),
+             per_page: String(pageSize),
+             page: String(i + 1)
+           }).toString()}">
            ${i+1}
         </a>
       `).join("")}
@@ -18758,25 +18843,72 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         const panel = document.getElementById("claim-panel");
         const content = document.getElementById("claim-panel-content");
 
-        const claim = lifecycleClaims.find(c => String(c.billed_id) === String(id));
+        const decodedId = decodeURIComponent(String(id || ""));
+        const claim = lifecycleClaims.find(c => String(c.billed_id) === decodedId);
         if (!claim) return;
 
         const d = claim.__derived || {};
 
         content.innerHTML = \`
           <div>
-            <p><strong>Claim #:</strong> \${claim.claim_number || ""}</p>
-            <p><strong>Payer:</strong> \${claim.payer || ""}</p>
-            <p><strong>Billed:</strong> \${formatMoneyUI(claim.amount_billed || 0)}</p>
-            <p><strong>Expected:</strong> \${d.expectedInsurance ? formatMoneyUI(d.expectedInsurance) : "-"}</p>
-            <p><strong>Paid:</strong> \${formatMoneyUI(d.paidAmount || 0)}</p>
-            <p><strong>At Risk:</strong> \${formatMoneyUI(d.atRiskAmount || 0)}</p>
-            <p><strong>Risk Score:</strong> \${claim.__risk || 0}</p>
+            <div style="font-size:18px;font-weight:900;margin-bottom:12px;">Claim #\${claim.claim_number || ""}</div>
+
+            <div class="muted small" style="margin-bottom:14px;">
+              \${claim.payer || ""} • \${claim.dos || "No DOS"}
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+              <div style="border:1px solid var(--border);border-radius:10px;padding:10px;">
+                <div class="muted small">Billed</div>
+                <div style="font-weight:900;">\${formatMoneyUI(claim.amount_billed || 0)}</div>
+              </div>
+              <div style="border:1px solid var(--border);border-radius:10px;padding:10px;">
+                <div class="muted small">Expected</div>
+                <div style="font-weight:900;">\${d.expectedInsurance ? formatMoneyUI(d.expectedInsurance) : "-"}</div>
+              </div>
+              <div style="border:1px solid var(--border);border-radius:10px;padding:10px;">
+                <div class="muted small">Paid</div>
+                <div style="font-weight:900;">\${formatMoneyUI(d.paidAmount || 0)}</div>
+              </div>
+              <div style="border:1px solid var(--border);border-radius:10px;padding:10px;">
+                <div class="muted small">At Risk</div>
+                <div style="font-weight:900;">\${formatMoneyUI(d.atRiskAmount || 0)}</div>
+              </div>
+            </div>
+
             <p><strong>Status:</strong> \${d.lifecycleStage || claim.status || ""}</p>
+            <p><strong>Risk Score:</strong> \${claim.__risk || 0}</p>
+
+            \${!d.expectedInsurance ? \`
+              <div style="margin:12px 0;padding:10px;border-radius:10px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;">
+                No contract match found for this claim. Review matching before taking reimbursement action.
+              </div>
+            \` : ""}
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">
+              <a class="btn small" href="/claim-detail?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Full Claim Detail</a>
+
+              \${
+                String(d.lifecycleStage || "") === "Denied"
+                  ? \`<a class="btn small" href="/ai-appeal?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Appeal Workspace</a>\`
+                  : String(d.lifecycleStage || "") === "Underpaid"
+                  ? \`<a class="btn small" href="/ai-negotiation?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Negotiation Workspace</a>\`
+                  : \`<a class="btn secondary small" href="/action-center?claim=\${encodeURIComponent(claim.billed_id)}">Open in Action Center</a>\`
+              }
+
+              \${
+                !d.expectedInsurance
+                  ? \`<a class="btn secondary small" href="/data-management?tab=matching-review">Fix Matching</a>\`
+                  : \`\`
+              }
+            </div>
           </div>
         \`;
 
-        panel.style.right = "0";
+        panel.style.right = "-420px";
+        setTimeout(() => {
+          panel.style.right = "0";
+        }, 50);
       }
 
       function closeClaimPanel(){
