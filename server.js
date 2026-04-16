@@ -9175,7 +9175,7 @@ function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   // ----- RE: LINE -----
   doc
     .font("Helvetica-Bold")
-    .text(`RE: Claim # ${claim.claim_number || ""}`);
+    .text(`RE: Claim # \${claim.claim_number || ""}`);
 
   doc.moveDown(1.5);
 
@@ -9204,7 +9204,7 @@ function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
 
   // Claim summary inline (NOT section)
   paragraph(
-    `This letter is in reference to Claim #${claim.claim_number || ""} for patient services.
+    `This letter is in reference to Claim #\${claim.claim_number || ""} for patient services.
 
 Patient: ${claim.patient_name || "N/A"}
 
@@ -18015,6 +18015,93 @@ if (method === "GET" && pathname === "/action-center") {
   return redirect(res, "/actions");
 }
 
+if (method === "GET" && pathname === "/appeals/workspace") {
+  const auth = getAuth(req);
+  if (!auth) return redirect(res, "/login");
+
+  const claimId = String(parsed.query.claim || "");
+  const billed = readJSON(FILES.billed, []).filter(c => c.org_id === auth.org_id);
+  const claim = billed.find(c => String(c.billed_id) === claimId);
+
+  if (!claim) return send(res, 404, "Claim not found");
+
+  const ctx = buildClaimContext(auth.org_id);
+  const d = evaluateClaimDerived(claim, ctx);
+
+  return send(res, 200, renderPage(
+    "Appeal Workspace",
+    `
+    <h2>Appeal Workspace</h2>
+
+    <div class="card">
+      <h3>Claim Summary</h3>
+      <p><strong>Claim #:</strong> ${safeStr(claim.claim_number)}</p>
+      <p><strong>Payer:</strong> ${safeStr(claim.payer)}</p>
+      <p><strong>Billed:</strong> ${formatMoneyUI(claim.amount_billed)}</p>
+      <p><strong>At Risk:</strong> ${formatMoneyUI(d.atRiskAmount)}</p>
+      <p><strong>Status:</strong> ${safeStr(d.lifecycleStage)}</p>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Appeal Actions</h3>
+      <button class="btn">Generate Appeal Letter</button>
+      <button class="btn secondary">Upload Supporting Docs</button>
+      <button class="btn secondary">Mark as Submitted</button>
+    </div>
+
+    <div style="margin-top:16px;">
+      <a class="btn secondary" href="/claims-lifecycle?stage=Denied">← Back to Lifecycle</a>
+    </div>
+    `,
+    navUser(),
+    { showChat: true }
+  ));
+}
+
+if (method === "GET" && pathname === "/negotiations/workspace") {
+  const auth = getAuth(req);
+  if (!auth) return redirect(res, "/login");
+
+  const claimId = String(parsed.query.claim || "");
+  const billed = readJSON(FILES.billed, []).filter(c => c.org_id === auth.org_id);
+  const claim = billed.find(c => String(c.billed_id) === claimId);
+
+  if (!claim) return send(res, 404, "Claim not found");
+
+  const ctx = buildClaimContext(auth.org_id);
+  const d = evaluateClaimDerived(claim, ctx);
+
+  return send(res, 200, renderPage(
+    "Negotiation Workspace",
+    `
+    <h2>Negotiation Workspace</h2>
+
+    <div class="card">
+      <h3>Claim Summary</h3>
+      <p><strong>Claim #:</strong> ${safeStr(claim.claim_number)}</p>
+      <p><strong>Payer:</strong> ${safeStr(claim.payer)}</p>
+      <p><strong>Billed:</strong> ${formatMoneyUI(claim.amount_billed)}</p>
+      <p><strong>Expected:</strong> ${formatMoneyUI(d.expectedInsurance || 0)}</p>
+      <p><strong>Paid:</strong> ${formatMoneyUI(d.paidAmount)}</p>
+      <p><strong>Underpaid:</strong> ${formatMoneyUI(d.underpaidAmount || 0)}</p>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Negotiation Actions</h3>
+      <button class="btn">Generate Negotiation Letter</button>
+      <button class="btn secondary">Upload EOB / Docs</button>
+      <button class="btn secondary">Mark as Resolved</button>
+    </div>
+
+    <div style="margin-top:16px;">
+      <a class="btn secondary" href="/claims-lifecycle?stage=Underpaid">← Back to Lifecycle</a>
+    </div>
+    `,
+    navUser(),
+    { showChat: true }
+  ));
+}
+
 if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecycle")) {
 
   // Sub-tabs: billed | payments | denials | negotiations | all
@@ -18529,7 +18616,13 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                     }
 
                     <a class="btn small"
-                      href="/action-center?tab=${encodeURIComponent(mapStageToActionTab(d.lifecycleStage))}&claim=${encodeURIComponent(c.billed_id)}">
+                      ${
+                        mapStageToActionTab(d.lifecycleStage) === "denials"
+                          ? `href="/appeals/workspace?claim=${encodeURIComponent(c.billed_id)}"`
+                          : mapStageToActionTab(d.lifecycleStage) === "underpayments"
+                          ? `href="/negotiations/workspace?claim=${encodeURIComponent(c.billed_id)}"`
+                          : `href="/action-center?claim=${encodeURIComponent(c.billed_id)}"`
+                      }>
                       ${mapStageToActionTab(d.lifecycleStage) === "denials" ? "Appeal" :
                         mapStageToActionTab(d.lifecycleStage) === "underpayments" ? "Negotiate" :
                         "Action"}
@@ -18649,7 +18742,16 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         <div id="claim-panel-content" style="margin-top:10px;"></div>
       </div>
       <script>
-      const lifecycleClaims = ${JSON.stringify(billedAll.map(c => ({ ...c, __derived: evaluateClaimDerived(c, claimCtx), __risk: computeClaimRiskScore(c) })))};
+      const lifecycleClaims = ${JSON.stringify(
+        billedAll.map(c => {
+          const d = evaluateClaimDerived(c, claimCtx);
+          return {
+            ...c,
+            __derived: d,
+            __risk: computeClaimRiskScore(c)
+          };
+        })
+      )};
       </script>
       <script>
       function openClaimPanel(id){
@@ -18657,21 +18759,20 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         const content = document.getElementById("claim-panel-content");
 
         const claim = lifecycleClaims.find(c => String(c.billed_id) === String(id));
-
         if (!claim) return;
 
-        const c = claim || {};
-        const d = c.__derived || {};
+        const d = claim.__derived || {};
+
         content.innerHTML = \`
           <div>
-            <p><strong>Claim #:</strong> \${c.claim_number || ""}</p>
-            <p><strong>Payer:</strong> \${c.payer || ""}</p>
-            <p><strong>Billed:</strong> \${formatMoneyUI(c.amount_billed || 0)}</p>
+            <p><strong>Claim #:</strong> \${claim.claim_number || ""}</p>
+            <p><strong>Payer:</strong> \${claim.payer || ""}</p>
+            <p><strong>Billed:</strong> \${formatMoneyUI(claim.amount_billed || 0)}</p>
             <p><strong>Expected:</strong> \${d.expectedInsurance ? formatMoneyUI(d.expectedInsurance) : "-"}</p>
             <p><strong>Paid:</strong> \${formatMoneyUI(d.paidAmount || 0)}</p>
             <p><strong>At Risk:</strong> \${formatMoneyUI(d.atRiskAmount || 0)}</p>
-            <p><strong>Risk Score:</strong> \${c.__risk || 0}</p>
-            <p><strong>Status:</strong> \${d.lifecycleStage || c.status || ""}</p>
+            <p><strong>Risk Score:</strong> \${claim.__risk || 0}</p>
+            <p><strong>Status:</strong> \${d.lifecycleStage || claim.status || ""}</p>
           </div>
         \`;
 
