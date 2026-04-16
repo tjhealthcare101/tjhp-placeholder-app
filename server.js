@@ -18010,23 +18010,20 @@ if (method === "GET" && pathname === "/executive-export") {
 // ==============================
 // ===== FIX: MAP NAV LINKS TO EXISTING PAGES =====
 
-// Claims Lifecycle → existing /claims page
-if (method === "GET" && pathname === "/claims-lifecycle") {
-  return redirect(res, "/claims");
-}
-
 // Action Center → existing /actions page
 if (method === "GET" && pathname === "/action-center") {
   return redirect(res, "/actions");
 }
 
-if (method === "GET" && pathname === "/claims") {
+if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecycle")) {
 
   // Sub-tabs: billed | payments | denials | negotiations | all
-  let view = String(parsed.query.view || "lifecycle").toLowerCase();
-  const selectedStage = String(parsed.query.stage || "").trim();
+  const qs = parsed.query || {};
+  let view = String(qs.view || "lifecycle").toLowerCase();
+  const selectedStage = String(qs.stage || "").trim();
+  const selectedSimpleStage = selectedStage;
 
-  if (parsed.query.stage) {
+  if (qs.stage && pathname === "/claims") {
     view = "table";
   }
   const reimbursementBatch = String(parsed.query.reimbursement_batch || "").trim();
@@ -18155,8 +18152,6 @@ if (method === "GET" && pathname === "/claims") {
     if (s === "Write-Off" || s === "Revenue Collected") return "Resolved";
     return "";
   }
-
-  const selectedSimpleStage = normalizeStageFilter(selectedStage);
 
   function renderClaimsPipeline(billedItems, claimContext){
     const PIPELINE_COLUMNS = [
@@ -18407,8 +18402,8 @@ if (method === "GET" && pathname === "/claims") {
 
   const stageToClaimsHref = (stage) => {
     const simple = normalizeStageFilter(stage);
-    if (!simple) return "/claims";
-    return `/claims?view=table&stage=${encodeURIComponent(simple)}`;
+    if (!simple) return "/claims-lifecycle";
+    return `/claims-lifecycle?stage=${encodeURIComponent(simple)}`;
   };
 
   const pipelineHtml = `
@@ -18443,6 +18438,76 @@ if (method === "GET" && pathname === "/claims") {
       </div>
     </div>
   `;
+
+  const filteredClaims = selectedStage
+    ? billedAll
+        .filter(b => {
+          const d = evaluateClaimDerived(b, claimCtx);
+          return String(d.lifecycleStage || "").toLowerCase() === selectedStage.toLowerCase();
+        })
+        .sort((a,b) => computeClaimRiskScore(b) - computeClaimRiskScore(a))
+    : [];
+
+  const page = Number(qs.page || 1);
+  const pageSize = 25;
+  const startIdx = (page - 1) * pageSize;
+  const paginatedClaims = filteredClaims.slice(startIdx, startIdx + pageSize);
+  const totalPages = Math.max(1, Math.ceil(filteredClaims.length / pageSize));
+
+  const lifecycleTable = selectedStage ? `
+    <div style="margin-top:20px;">
+      <h3>Viewing: ${safeStr(selectedStage)}</h3>
+
+      <div style="margin-bottom:10px;">
+        <a class="btn secondary small" href="/claims-lifecycle">Clear Filter</a>
+      </div>
+
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Claim #</th>
+              <th>Payer</th>
+              <th>Billed</th>
+              <th>Paid</th>
+              <th>At Risk</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              paginatedClaims.map(c => {
+                const d = evaluateClaimDerived(c, claimCtx);
+                return `
+                  <tr>
+                    <td>${safeStr(c.claim_number || "")}</td>
+                    <td>${safeStr(c.payer || "")}</td>
+                    <td>${formatMoneyUI(c.amount_billed || 0)}</td>
+                    <td>${formatMoneyUI(d.paidAmount || 0)}</td>
+                    <td>${formatMoneyUI(d.atRiskAmount || 0)}</td>
+                    <td>
+                      <span class="badge ${badgeClassForStatus(d.lifecycleStage)}">
+                        ${safeStr(d.lifecycleStage)}
+                      </span>
+                    </td>
+                  </tr>
+                `;
+              }).join("") || `<tr><td colspan="6">No claims</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+
+      <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+        ${Array.from({length: totalPages}, (_,i) => `
+          <a class="btn small ${i+1===page?"":"secondary"}"
+             href="/claims-lifecycle?stage=${encodeURIComponent(selectedStage)}&page=${i+1}">
+             ${i+1}
+          </a>
+        `).join("")}
+      </div>
+    </div>
+  ` : "";
 
   if (view === "table" || view === "lifecycle") {
     const now = new Date();
@@ -18516,6 +18581,7 @@ if (method === "GET" && pathname === "/claims") {
       </div>
 
       ${pipelineHtml}
+      ${lifecycleTable}
 
     `,
         navUser(),
