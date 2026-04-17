@@ -10795,6 +10795,7 @@ function computePayerIntelligence(org_id, payerName, preset="last30"){
 
 function badgeClassForStatus(st){
   const s = String(st||"Pending");
+  if (s === "Resolved") return "ok";
   if (s === "Paid") return "ok";
   if (s === "Denied") return "err";
   if (s === "Underpaid") return "underpaid";
@@ -18539,7 +18540,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   };
 
   for (const stage of CORE_LIFECYCLE_STAGES) {
-    pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
+    pipelineAgg[stage] = { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 };
   }
 
   billedAll.forEach(b => {
@@ -18550,6 +18551,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     if (isLifecycleClaimInRange(b, lifecycleRange)) {
       pipelineAgg[stage].count += 1;
       pipelineAgg[stage].billed += num(b.amount_billed);
+      pipelineAgg[stage].expected += num(d.expectedInsurance);
+      pipelineAgg[stage].paid += num(d.paidAmount);
       pipelineAgg[stage].atRisk += num(d.atRiskAmount);
       return;
     }
@@ -18578,6 +18581,34 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     return pctToColor(pct);
   }
 
+  function getLifecycleCardDisplay(stage, metrics){
+    if (stage === "Submitted"){
+      return {
+        primary: formatMoneyUI(metrics.billed || 0),
+        secondary: ""
+      };
+    }
+
+    if (stage === "Waiting Payment" || stage === "Denied" || stage === "Underpaid"){
+      return {
+        primary: formatMoneyUI(metrics.expected || 0),
+        secondary: `At Risk: ${formatMoneyUI(metrics.atRisk || 0)}`
+      };
+    }
+
+    if (stage === "Resolved"){
+      return {
+        primary: formatMoneyUI(metrics.paid || 0),
+        secondary: ""
+      };
+    }
+
+    return {
+      primary: formatMoneyUI(metrics.billed || 0),
+      secondary: `At Risk: ${formatMoneyUI(metrics.atRisk || 0)}`
+    };
+  }
+
   const pipelineHtml = `
     <div class="insight-card" style="margin-top:14px;">
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;">
@@ -18586,11 +18617,12 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       </div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;">
         ${CORE_LIFECYCLE_STAGES.map(stage => {
-          const d = pipelineAgg[stage] || { count:0, billed:0, atRisk:0 };
+          const d = pipelineAgg[stage] || { count:0, billed:0, expected:0, paid:0, atRisk:0 };
           const carry = pipelineCarryoverAgg[stage] || { count:0, billed:0, atRisk:0 };
           const pct = Math.round((d.count / pipelineTotal) * 100);
           const href = stageToClaimsHref(stage);
           const fillColor = stageToFillColor(stage, pct);
+          const cardDisplay = getLifecycleCardDisplay(stage, d);
 
           return `
             <a href="${href}"
@@ -18598,8 +18630,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
               <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);">
                 <div style="font-weight:900;">${stage}</div>
                 <div class="muted small">${safeStr(pipelineWindowLabel)} • Claims: ${formatNumberUI(d.count)}</div>
-                <div class="muted small">Billed: ${formatMoney(d.billed)}</div>
-                <div class="muted small">At Risk: ${formatMoney(d.atRisk)}</div>
+                <div class="muted small">${safeStr(cardDisplay.primary)}</div>
+                ${cardDisplay.secondary ? `<div class="muted small">${safeStr(cardDisplay.secondary)}</div>` : ``}
                 ${((stage === "Denied" || stage === "Underpaid") && lifecycleRange !== "all")
                   ? `<div class="muted small" style="margin-top:4px;color:#92400e;font-weight:800;">+${formatNumberUI(carry.count)} older unresolved</div>`
                   : ``}
@@ -18961,6 +18993,69 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           }
         }
 
+        function renderClaimSidePanelExtras(claim){
+          const derived = claim && claim.__derived ? claim.__derived : {};
+          const stage = String((derived && derived.lifecycleStage) || claim.lifecycleStage || claim.status || "");
+
+          const insight =
+            stage === "Denied" ? "This claim has not received payment from payer" :
+            stage === "Underpaid" ? "Partial payment received — potential recovery opportunity" :
+            stage === "Resolved" ? "Payment completed" :
+            stage === "Waiting Payment" ? "Awaiting payer response" :
+            "Awaiting payer processing";
+
+          const nextAction =
+            stage === "Denied" ? "Submit appeal" :
+            stage === "Underpaid" ? "Initiate negotiation" :
+            stage === "Waiting Payment" ? "Monitor for payer response" :
+            stage === "Submitted" ? "Await payer processing" :
+            "No action needed";
+
+          const submissionDate = claim.submitted_at || claim.created_at || "-";
+          const lastActivityDate = claim.updated_at || claim.last_activity || "-";
+          const expectedAmount = claim.expected_insurance != null
+            ? claim.expected_insurance
+            : (derived.expectedInsurance || 0);
+          const paidAmount = claim.paid_amount != null
+            ? claim.paid_amount
+            : (claim.insurance_paid != null ? claim.insurance_paid : (derived.paidAmount || 0));
+          const atRiskAmount = claim.atRiskAmount != null
+            ? claim.atRiskAmount
+            : (derived.atRiskAmount || 0);
+
+          return ''
+            + '<div class="hr"></div>'
+            + '<div>'
+            +   '<strong>Submission Date:</strong><br/>'
+            +   '<span class="muted small">' + panelEsc(submissionDate) + '</span>'
+            + '</div>'
+            + '<div style="margin-top:10px;">'
+            +   '<strong>Last Activity Date:</strong><br/>'
+            +   '<span class="muted small">' + panelEsc(lastActivityDate) + '</span>'
+            + '</div>'
+            + '<div style="margin-top:10px;">'
+            +   '<strong>Expected Amount:</strong><br/>'
+            +   '<span>' + panelMoney(expectedAmount) + '</span>'
+            + '</div>'
+            + '<div style="margin-top:10px;">'
+            +   '<strong>Paid Amount:</strong><br/>'
+            +   '<span>' + panelMoney(paidAmount) + '</span>'
+            + '</div>'
+            + '<div style="margin-top:10px;">'
+            +   '<strong>At Risk Amount:</strong><br/>'
+            +   '<span>' + panelMoney(atRiskAmount) + '</span>'
+            + '</div>'
+            + '<div class="hr"></div>'
+            + '<div>'
+            +   '<strong>Claim Insight</strong>'
+            +   '<p class="muted small">' + panelEsc(insight) + '</p>'
+            + '</div>'
+            + '<div style="margin-top:10px;">'
+            +   '<strong>Next Best Action</strong>'
+            +   '<p class="muted small">' + panelEsc(nextAction) + '</p>'
+            + '</div>';
+        }
+
         const claimsNode = document.getElementById("lifecycleClaimsData");
         let lifecycleClaims = [];
         try {
@@ -19075,7 +19170,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
             +   '<a class="btn small secondary" href="/claim-detail?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Full Claim</a>'
             +   primaryAction
-            + '</div>';
+            + '</div>'
+            + renderClaimSidePanelExtras(claim);
 
           document.body.style.overflow = "hidden";
           ui.backdrop.style.display = "block";
