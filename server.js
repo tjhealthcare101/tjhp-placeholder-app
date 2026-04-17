@@ -18629,7 +18629,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const lifecycleTable = `
   <div id="lifecycleTable" style="margin-top:20px;">
     <h3>Claims</h3>
-    <form method="GET" action="/claims-lifecycle" style="margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+    <form method="GET" action="/claims-lifecycle#lifecycleTable" style="margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
       ${!lifecycleStageFilter && selectedStage ? `<input type="hidden" name="stage" value="${safeStr(selectedStage)}">` : ""}
       <div>
         <label class="small">Search</label>
@@ -18668,9 +18668,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           ${[10,25,50,100].map(n => `<option value="${n}" ${pageSize === n ? "selected" : ""}>${n}</option>`).join("")}
         </select>
       </div>
-      <div style="display:flex;gap:8px;">
-        <button class="btn small" type="submit">Apply</button>
-        <a class="btn secondary small" href="/claims-lifecycle">Reset</a>
+      <div class="filter-actions" style="display:flex;gap:8px;">
+        <button class="btn small apply-filter-btn" type="submit">Apply</button>
+        <a class="btn secondary small reset-filter-btn" href="/claims-lifecycle#lifecycleTable">Reset</a>
       </div>
     </form>
     <div style="margin-bottom:10px;">
@@ -18678,7 +18678,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     </div>
 
     <div style="overflow:auto;">
-      <table>
+      <table class="claims-table lifecycle-claims-table">
         <thead>
           <tr>
             <th>Claim #</th>
@@ -18729,7 +18729,10 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                     </span>
                   </td>
                   <td style="display:flex;gap:6px;">
-                    <button class="btn small secondary" onclick="openClaimPanel('${encodeURIComponent(String(c.billed_id || ""))}')">
+                    <button
+                      type="button"
+                      class="btn small secondary view-claim-btn"
+                      data-id="${encodeURIComponent(String(c.billed_id || ""))}">
                       View
                     </button>
 
@@ -18760,7 +18763,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       </table>
     </div>
 
-    <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+    <div class="pagination" style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
       ${Array.from({length: totalPages}, (_,i) => `
         <a class="btn small ${i+1===page?"":"secondary"}"
            href="/claims-lifecycle?${new URLSearchParams({
@@ -18853,27 +18856,6 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       ${revenueKpiBar}
       ${pipelineHtml}
       ${lifecycleTable}
-      <div id="claim-panel" style="
-        position:fixed;
-        top:0;
-        right:-420px;
-        width:400px;
-        height:100%;
-        background:#fff;
-        border-left:1px solid #e5e7eb;
-        box-shadow:-2px 0 10px rgba(0,0,0,0.1);
-        transition:right 0.3s ease;
-        z-index:9999;
-        padding:16px;
-        overflow:auto;
-      ">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <h3>Claim Detail</h3>
-          <button onclick="closeClaimPanel()">✕</button>
-        </div>
-
-        <div id="claim-panel-content" style="margin-top:10px;"></div>
-      </div>
       <script>
       const lifecycleClaims = ${JSON.stringify(
         billedAll.map(c => {
@@ -18887,9 +18869,37 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       )};
       </script>
       <script>
-      function openClaimPanel(id){
-        const panel = document.getElementById("claim-panel");
-        const content = document.getElementById("claim-panel-content");
+      (function initClaimPanel(){
+        if (document.getElementById("claimSidePanel")) return;
+
+        const panel = document.createElement("div");
+        panel.id = "claimSidePanel";
+        panel.style.position = "fixed";
+        panel.style.top = "0";
+        panel.style.right = "-420px";
+        panel.style.width = "400px";
+        panel.style.height = "100%";
+        panel.style.background = "#fff";
+        panel.style.borderLeft = "1px solid #e5e7eb";
+        panel.style.boxShadow = "0 10px 30px rgba(0,0,0,0.1)";
+        panel.style.zIndex = "9999";
+        panel.style.padding = "16px";
+        panel.style.overflowY = "auto";
+        panel.style.transition = "right 0.25s ease";
+        panel.innerHTML = \`
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <strong>Claim Detail</strong>
+            <button onclick="closeClaimPanel()" style="border:none;background:none;font-size:18px;cursor:pointer;">✕</button>
+          </div>
+          <div id="claimPanelContent" class="muted small">Loading...</div>
+        \`;
+        document.body.appendChild(panel);
+      })();
+
+      window.openClaimPanel = function(id){
+        const panel = document.getElementById("claimSidePanel");
+        const content = document.getElementById("claimPanelContent");
+        if (!panel || !content) return;
 
         const decodedId = decodeURIComponent(String(id || ""));
         const claim = lifecycleClaims.find(c => String(c.billed_id) === decodedId);
@@ -18897,71 +18907,90 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
         const d = claim.__derived || {};
 
-        content.innerHTML = \`
-          <div>
-            <div style="font-size:18px;font-weight:900;margin-bottom:12px;">Claim #\${claim.claim_number || ""}</div>
-
+        panel.style.right = "-420px";
+        setTimeout(() => {
+          content.innerHTML = \`
+            <div style="font-size:18px;font-weight:900;margin-bottom:12px;">
+              Claim #\${claim.claim_number || ""}
+            </div>
             <div class="muted small" style="margin-bottom:14px;">
               \${claim.payer || ""} • \${claim.dos || "No DOS"}
             </div>
-
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
-              <div style="border:1px solid var(--border);border-radius:10px;padding:10px;">
-                <div class="muted small">Billed</div>
-                <div style="font-weight:900;">\${formatMoneyUI(claim.amount_billed || 0)}</div>
-              </div>
-              <div style="border:1px solid var(--border);border-radius:10px;padding:10px;">
-                <div class="muted small">Expected</div>
-                <div style="font-weight:900;">\${d.expectedInsurance ? formatMoneyUI(d.expectedInsurance) : "-"}</div>
-              </div>
-              <div style="border:1px solid var(--border);border-radius:10px;padding:10px;">
-                <div class="muted small">Paid</div>
-                <div style="font-weight:900;">\${formatMoneyUI(d.paidAmount || 0)}</div>
-              </div>
-              <div style="border:1px solid var(--border);border-radius:10px;padding:10px;">
-                <div class="muted small">At Risk</div>
-                <div style="font-weight:900;">\${formatMoneyUI(d.atRiskAmount || 0)}</div>
-              </div>
+              <div><strong>Billed:</strong> \${formatMoneyUI(claim.amount_billed || 0)}</div>
+              <div><strong>Expected:</strong> \${d.expectedInsurance ? formatMoneyUI(d.expectedInsurance) : "-"}</div>
+              <div><strong>Paid:</strong> \${formatMoneyUI(d.paidAmount || 0)}</div>
+              <div><strong>At Risk:</strong> \${formatMoneyUI(d.atRiskAmount || 0)}</div>
             </div>
-
-            <p><strong>Status:</strong> \${d.lifecycleStage || claim.status || ""}</p>
+            <p><strong>Status:</strong> \${d.lifecycleStage || ""}</p>
             <p><strong>Risk Score:</strong> \${claim.__risk || 0}</p>
-
-            \${!d.expectedInsurance ? \`
-              <div style="margin:12px 0;padding:10px;border-radius:10px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;">
-                No contract match found for this claim. Review matching before taking reimbursement action.
-              </div>
-            \` : ""}
-
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">
-              <a class="btn small secondary" href="/claim-detail?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Full Claim Detail</a>
-
+            <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+              <a class="btn secondary small" href="/claim-detail?billed_id=\${encodeURIComponent(claim.billed_id)}">
+                Open Full Claim
+              </a>
               \${
-                String(d.lifecycleStage || "") === "Denied"
-                  ? \`<a class="btn small secondary" href="/ai-appeal?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Appeal Workspace</a>\`
-                  : String(d.lifecycleStage || "") === "Underpaid"
-                  ? \`<a class="btn small secondary" href="/ai-negotiation?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Negotiation Workspace</a>\`
-                  : \`<a class="btn secondary small" href="/action-center?claim=\${encodeURIComponent(claim.billed_id)}">Open in Action Center</a>\`
-              }
-
-              \${
-                !d.expectedInsurance
-                  ? \`<a class="btn secondary small" href="/data-management?tab=matching-review">Fix Matching</a>\`
-                  : \`\`
+                d.lifecycleStage === "Denied"
+                  ? \`<a class="btn small secondary" href="/ai-appeal?billed_id=\${encodeURIComponent(claim.billed_id)}">Appeal</a>\`
+                  : d.lifecycleStage === "Underpaid"
+                  ? \`<a class="btn small secondary" href="/ai-negotiation?billed_id=\${encodeURIComponent(claim.billed_id)}">Negotiate</a>\`
+                  : ""
               }
             </div>
-          </div>
-        \`;
-
-        panel.style.right = "-420px";
-        setTimeout(() => {
+          \`;
           panel.style.right = "0";
         }, 50);
+      };
+
+      window.closeClaimPanel = function(){
+        const panel = document.getElementById("claimSidePanel");
+        if (panel) panel.style.right = "-420px";
+      };
+
+      document.querySelectorAll(".view-claim-btn").forEach(btn => {
+        btn.addEventListener("click", function(e){
+          e.preventDefault();
+          openClaimPanel(this.dataset.id);
+        });
+      });
+
+      (function fixFilterLayout(){
+        const btnRow = document.querySelector(".filter-actions");
+        if (!btnRow) return;
+        btnRow.style.display = "flex";
+        btnRow.style.justifyContent = "flex-end";
+        btnRow.style.gap = "8px";
+      })();
+
+      function scrollToClaimsTable(){
+        const table = document.querySelector(".claims-table");
+        if (table){
+          table.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
       }
 
-      function closeClaimPanel(){
-        document.getElementById("claim-panel").style.right = "-420px";
-      }
+      document.querySelectorAll(".apply-filter-btn").forEach(btn => {
+        btn.addEventListener("click", function(){
+          setTimeout(scrollToClaimsTable, 50);
+        });
+      });
+
+      document.querySelectorAll(".reset-filter-btn").forEach(btn => {
+        btn.addEventListener("click", function(){
+          setTimeout(scrollToClaimsTable, 50);
+        });
+      });
+
+      document.querySelectorAll(".pagination button, .pagination a").forEach(el => {
+        el.style.background = "#fff";
+        el.style.border = "1px solid #111";
+        el.style.color = "#111";
+        el.style.padding = "8px 12px";
+        el.style.borderRadius = "8px";
+        el.style.fontWeight = "600";
+        el.style.cursor = "pointer";
+        el.addEventListener("mouseover", () => { el.style.background = "#f3f4f6"; });
+        el.addEventListener("mouseout", () => { el.style.background = "#fff"; });
+      });
 
       const selectedLifecycleStage = new URLSearchParams(window.location.search).get("stage");
       if (selectedLifecycleStage) {
