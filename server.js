@@ -18460,34 +18460,112 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     `;
   }
 
+  const lifecycleRange = ["all", "last30", "last90", "last365"].includes(String(qs.range || "").trim())
+    ? String(qs.range || "last30").trim()
+    : "last30";
+
+  function lifecycleRangeLabel(range){
+    if (range === "all") return "All Time";
+    if (range === "last90") return "Last 90 Days";
+    if (range === "last365") return "Last 365 Days";
+    return "Last 30 Days";
+  }
+
+  function getLifecycleAnchorDateMs(claim){
+    const raw =
+      claim.denied_at ||
+      claim.paid_at ||
+      claim.remittance_date ||
+      claim.last_submission_at ||
+      claim.submitted_at ||
+      claim.submitted_date ||
+      claim.created_at ||
+      claim.dos ||
+      0;
+    const dt = new Date(raw).getTime();
+    return Number.isFinite(dt) && dt > 0 ? dt : 0;
+  }
+
+  function getLifecycleAgeDays(claim){
+    const anchor = getLifecycleAnchorDateMs(claim);
+    if (!anchor) return 9999;
+    return Math.max(0, Math.floor((Date.now() - anchor) / (1000 * 60 * 60 * 24)));
+  }
+
+  function getLifecycleAgeBucketLabel(days){
+    const n = Number(days || 0);
+    if (n <= 30) return "0–30";
+    if (n <= 60) return "31–60";
+    if (n <= 90) return "61–90";
+    return "90+";
+  }
+
+  function isLifecycleClaimInRange(claim, range = lifecycleRange){
+    if (range === "all") return true;
+    const dt = getLifecycleAnchorDateMs(claim);
+    if (!dt) return false;
+    const dayMs = 24 * 60 * 60 * 1000;
+    if (range === "last90") return dt >= (Date.now() - (90 * dayMs));
+    if (range === "last365") return dt >= (Date.now() - (365 * dayMs));
+    return dt >= (Date.now() - (30 * dayMs));
+  }
+
+  function getCoreLifecycleStageForCards(claim, derived){
+    const d = derived || evaluateClaimDerived(claim, claimCtx);
+    const expected = (d.expectedInsurance !== null && d.expectedInsurance !== undefined)
+      ? Number(d.expectedInsurance)
+      : Number(claim.amount_billed || 0);
+    const paid = Number(d.paidAmount || 0);
+
+    if (d.hasPaymentResponse) {
+      if (paid <= 0.0001 && expected > 0) return "Denied";
+      if (paid > 0 && paid + 0.0001 < expected) return "Underpaid";
+      return "Resolved";
+    }
+
+    return d.submittedFlag ? "Waiting Payment" : "Submitted";
+  }
+
+  const stageToClaimsHref = (stage) => {
+    const normalizedStage = CORE_LIFECYCLE_STAGES.includes(stage) ? stage : normalizeStageFilter(stage);
+    if (!normalizedStage) return `/claims-lifecycle?range=${encodeURIComponent(lifecycleRange)}#lifecycleTable`;
+    return `/claims-lifecycle?stage=${encodeURIComponent(normalizedStage)}&range=${encodeURIComponent(lifecycleRange)}#lifecycleTable`;
+  };
+
   const pipelineAgg = {};
-  for (const stage of PIPE_ORDER) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
-  const pipelineBaseStages = CORE_LIFECYCLE_STAGES.slice();
+  const pipelineCarryoverAgg = {
+    Denied: { count: 0, billed: 0, atRisk: 0 },
+    Underpaid: { count: 0, billed: 0, atRisk: 0 }
+  };
+
+  for (const stage of CORE_LIFECYCLE_STAGES) {
+    pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
+  }
 
   billedAll.forEach(b => {
     const d = evaluateClaimDerived(b, claimCtx);
-    const stage = toPipelineStage(b);
-    if (stage !== "Revenue Collected") {
-      if (!pipelineAgg[stage]) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
+    const stage = getCoreLifecycleStageForCards(b, d);
+    if (!CORE_LIFECYCLE_STAGES.includes(stage)) return;
+
+    if (isLifecycleClaimInRange(b, lifecycleRange)) {
       pipelineAgg[stage].count += 1;
       pipelineAgg[stage].billed += num(b.amount_billed);
       pipelineAgg[stage].atRisk += num(d.atRiskAmount);
+      return;
     }
 
-    if (num(d.paidAmount) > 0) {
-      pipelineAgg["Revenue Collected"].count += 1;
-      pipelineAgg["Revenue Collected"].billed += num(b.amount_billed);
-      if (!isResolvedLifecycleStage(d.lifecycleStage)) {
-        pipelineAgg["Revenue Collected"].atRisk += Math.max(0, num(d.underpaidAmount)) + Math.max(0, num(d.patientBalanceRemaining));
-      }
+    if (lifecycleRange !== "all" && (stage === "Denied" || stage === "Underpaid")) {
+      pipelineCarryoverAgg[stage].count += 1;
+      pipelineCarryoverAgg[stage].billed += num(b.amount_billed);
+      pipelineCarryoverAgg[stage].atRisk += num(d.atRiskAmount);
     }
   });
 
-  const pipelineTotal = pipelineBaseStages.reduce((s, k) => s + (pipelineAgg[k]?.count || 0), 0) || 1;
+  const pipelineTotal = CORE_LIFECYCLE_STAGES.reduce((sum, stage) => sum + (pipelineAgg[stage]?.count || 0), 0) || 1;
+  const pipelineWindowLabel = lifecycleRangeLabel(lifecycleRange);
 
   function pctToColor(pct){
     const p = Math.max(0, Math.min(100, Number(pct) || 0));
-    // Hue scale: 0=red, 120=green
     const hue = Math.round((p / 100) * 120);
     return `hsl(${hue}, 75%, 45%)`;
   }
@@ -18500,47 +18578,16 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     return pctToColor(pct);
   }
 
-  const stageToClaimsHref = (stage) => {
-    const simple = normalizeStageFilter(stage);
-    if (!simple) return "/claims-lifecycle";
-    return `/claims-lifecycle?stage=${encodeURIComponent(simple)}`;
-  };
-
-  const revenueKpiBar = `
-    <div class="insight-card" style="margin-top:10px;">
-      <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        
-        <div style="flex:1;min-width:180px;border:1px solid var(--border);border-radius:12px;padding:12px;">
-          <div class="muted small">Revenue Collected</div>
-          <div style="font-size:20px;font-weight:900;">
-            ${formatMoney(executiveRevenue.totalCollected || 0)}
-          </div>
-        </div>
-
-        <div style="flex:1;min-width:180px;border:1px solid var(--border);border-radius:12px;padding:12px;">
-          <div class="muted small">Total Billed</div>
-          <div style="font-size:20px;font-weight:900;">
-            ${formatMoney(executiveRevenue.totalBilled || 0)}
-          </div>
-        </div>
-
-        <div style="flex:1;min-width:180px;border:1px solid var(--border);border-radius:12px;padding:12px;">
-          <div class="muted small">Total At Risk</div>
-          <div style="font-size:20px;font-weight:900;">
-            ${formatMoney(executiveRevenue.totalAtRisk || 0)}
-          </div>
-        </div>
-
-      </div>
-    </div>
-  `;
-
   const pipelineHtml = `
     <div class="insight-card" style="margin-top:14px;">
-      <h3>Claims Lifecycle Stages <span class="tooltip" data-tip="Stage view of all claims. Denied/Underpaid only appear after payer response.">ⓘ</span></h3>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+        <h3 style="margin:0;">Claims Lifecycle Stages <span class="tooltip" data-tip="Stage view of claims in the selected time window. Denied and Underpaid also surface older unresolved carryover so revenue does not disappear from view.">ⓘ</span></h3>
+        <div class="muted small">${safeStr(pipelineWindowLabel)} • Default operational lens</div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;">
         ${CORE_LIFECYCLE_STAGES.map(stage => {
           const d = pipelineAgg[stage] || { count:0, billed:0, atRisk:0 };
+          const carry = pipelineCarryoverAgg[stage] || { count:0, billed:0, atRisk:0 };
           const pct = Math.round((d.count / pipelineTotal) * 100);
           const href = stageToClaimsHref(stage);
           const fillColor = stageToFillColor(stage, pct);
@@ -18550,9 +18597,12 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
               style="text-decoration:none;color:inherit;flex:1;min-width:170px;">
               <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);">
                 <div style="font-weight:900;">${stage}</div>
-                <div class="muted small">Claims: ${formatNumberUI(d.count)}</div>
+                <div class="muted small">${safeStr(pipelineWindowLabel)} • Claims: ${formatNumberUI(d.count)}</div>
                 <div class="muted small">Billed: ${formatMoney(d.billed)}</div>
                 <div class="muted small">At Risk: ${formatMoney(d.atRisk)}</div>
+                ${((stage === "Denied" || stage === "Underpaid") && lifecycleRange !== "all")
+                  ? `<div class="muted small" style="margin-top:4px;color:#92400e;font-weight:800;">+${formatNumberUI(carry.count)} older unresolved</div>`
+                  : ``}
                 <div style="height:10px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:10px;">
                   <div style="width:${pct}%;height:100%;background:${fillColor};"></div>
                 </div>
@@ -18567,18 +18617,17 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
   const lifecycleSearch = String(qs.search || "").trim().toLowerCase();
   const lifecyclePayer = String(qs.payer || "").trim();
-  const lifecycleRange = String(qs.range || "all").trim();
   let lifecycleStageFilter = String(qs.stage_filter || "").trim();
-  // If user selected dropdown filter, ignore stage from card
   const effectiveStage = lifecycleStageFilter ? "" : selectedStage;
   const lifecyclePerPage = [10,25,50,100].includes(Number(qs.per_page)) ? Number(qs.per_page) : 25;
+  const carryoverDrilldownStages = new Set(["Denied", "Underpaid"]);
+  const shouldBypassRangeForCardDrilldown = !!effectiveStage && carryoverDrilldownStages.has(effectiveStage);
 
-  const nowTs = Date.now();
   const stageFilteredClaims = effectiveStage
     ? billedAll
         .filter(b => {
           const d = evaluateClaimDerived(b, claimCtx);
-          return String(d.lifecycleStage || "").toLowerCase() === effectiveStage.toLowerCase();
+          return getCoreLifecycleStageForCards(b, d) === effectiveStage;
         })
         .sort((a,b) => computeClaimRiskScore(b) - computeClaimRiskScore(a))
     : billedAll
@@ -18586,6 +18635,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         .sort((a,b) => computeClaimRiskScore(b) - computeClaimRiskScore(a));
 
   const filteredClaims = stageFilteredClaims.filter(c => {
+    const d = evaluateClaimDerived(c, claimCtx);
     const searchBlob = [
       c.claim_number || "",
       c.payer || "",
@@ -18594,20 +18644,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
     if (lifecycleSearch && !searchBlob.includes(lifecycleSearch)) return false;
     if (lifecyclePayer && String(c.payer || "") !== lifecyclePayer) return false;
-    if (lifecycleStageFilter) {
-      const d = evaluateClaimDerived(c, claimCtx);
-      if (String(d.lifecycleStage || "") !== lifecycleStageFilter) return false;
-    }
-
-    if (lifecycleRange !== "all") {
-      const dt = new Date(c.created_at || c.dos || 0).getTime();
-      if (!dt) return false;
-
-      const dayMs = 24 * 60 * 60 * 1000;
-      if (lifecycleRange === "last30" && dt < nowTs - (30 * dayMs)) return false;
-      if (lifecycleRange === "last90" && dt < nowTs - (90 * dayMs)) return false;
-      if (lifecycleRange === "last365" && dt < nowTs - (365 * dayMs)) return false;
-    }
+    if (lifecycleStageFilter && getCoreLifecycleStageForCards(c, d) !== lifecycleStageFilter) return false;
+    if (!shouldBypassRangeForCardDrilldown && !isLifecycleClaimInRange(c, lifecycleRange)) return false;
 
     return true;
   });
@@ -18627,9 +18665,23 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const totalPages = Math.max(1, Math.ceil(filteredClaims.length / pageSize));
 
   const lifecycleTable = `
-  <div id="lifecycleTable" style="margin-top:20px;">
-    <h3>Claims</h3>
-    <form method="GET" action="/claims-lifecycle#lifecycleTable" style="margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+  <div id="lifecycleTable" style="margin-top:20px;scroll-margin-top:96px;">
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
+      <div>
+        <h3 style="margin:0;">Claims</h3>
+        <div class="muted small">
+          Showing ${safeStr(lifecycleRangeLabel(lifecycleRange))}
+          ${effectiveStage ? ` · ${safeStr(effectiveStage)} drilldown` : ``}
+          ${shouldBypassRangeForCardDrilldown ? ` + older unresolved carryover` : ``}
+        </div>
+      </div>
+    </div>
+
+    <form
+      method="GET"
+      action="/claims-lifecycle#lifecycleTable"
+      onsubmit="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}"
+      style="margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
       ${!lifecycleStageFilter && selectedStage ? `<input type="hidden" name="stage" value="${safeStr(selectedStage)}">` : ""}
       <div>
         <label class="small">Search</label>
@@ -18647,10 +18699,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       <div>
         <label class="small">Range</label>
         <select name="range">
-          <option value="all" ${lifecycleRange === "all" ? "selected" : ""}>All Time</option>
           <option value="last30" ${lifecycleRange === "last30" ? "selected" : ""}>Last 30 Days</option>
           <option value="last90" ${lifecycleRange === "last90" ? "selected" : ""}>Last 90 Days</option>
-          <option value="last365" ${lifecycleRange === "last365" ? "selected" : ""}>Last 365 Days</option>
+          <option value="all" ${lifecycleRange === "all" ? "selected" : ""}>All Time</option>
         </select>
       </div>
       <div>
@@ -18668,13 +18719,17 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           ${[10,25,50,100].map(n => `<option value="${n}" ${pageSize === n ? "selected" : ""}>${n}</option>`).join("")}
         </select>
       </div>
-      <div class="filter-actions" style="display:flex;gap:8px;">
-        <button class="btn small apply-filter-btn" type="submit">Apply</button>
-        <a class="btn secondary small reset-filter-btn" href="/claims-lifecycle#lifecycleTable">Reset</a>
+      <div class="filter-actions" style="display:flex;gap:8px;margin-left:auto;align-items:flex-end;">
+        <button class="btn small" type="submit">Apply</button>
+        <a
+          class="btn secondary small"
+          href="/claims-lifecycle#lifecycleTable"
+          onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">Reset</a>
       </div>
     </form>
+
     <div style="margin-bottom:10px;">
-      ${selectedStage ? `<a class="btn secondary small" href="/claims-lifecycle">Clear Filter</a>` : ""}
+      ${selectedStage ? `<a class="btn secondary small" href="/claims-lifecycle#lifecycleTable" onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">Clear Card Drilldown</a>` : ""}
     </div>
 
     <div style="overflow:auto;">
@@ -18694,6 +18749,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             <th>
               Risk ${infoIcon("Priority score based on claim status, dollars at risk, age, and workflow urgency.")}
             </th>
+            <th>
+              Aging ${infoIcon("Age bucket from the claim workflow anchor date. Used to surface carryover backlog.")}
+            </th>
             <th>Status</th>
             <th>Action</th>
           </tr>
@@ -18707,6 +18765,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                 risk > 80 ? "#dc2626" :
                 risk > 60 ? "#f59e0b" :
                 "#16a34a";
+              const ageDays = getLifecycleAgeDays(c);
+              const ageBucket = getLifecycleAgeBucketLabel(ageDays);
+              const isCarryoverRow = shouldBypassRangeForCardDrilldown && !isLifecycleClaimInRange(c, lifecycleRange);
 
               return `
                 <tr>
@@ -18723,12 +18784,16 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                   <td style="font-weight:800;color:${riskColor};">
                     ${risk}
                   </td>
+                  <td title="${ageDays} days">${safeStr(ageBucket)}</td>
                   <td>
-                    <span class="badge ${badgeClassForStatus(d.lifecycleStage)}">
-                      ${safeStr(d.lifecycleStage)}
-                    </span>
+                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                      <span class="badge ${badgeClassForStatus(d.lifecycleStage)}">
+                        ${safeStr(d.lifecycleStage)}
+                      </span>
+                      ${isCarryoverRow ? `<span class="badge warn">Carryover</span>` : ``}
+                    </div>
                   </td>
-                  <td style="display:flex;gap:6px;">
+                  <td style="display:flex;gap:6px;flex-wrap:wrap;">
                     <button
                       type="button"
                       class="btn small secondary view-claim-btn"
@@ -18738,7 +18803,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
                     ${
                       !d.expectedInsurance
-                        ? `<button class="btn small secondary">Fix Match</button>`
+                        ? `<button class="btn small secondary" type="button">Fix Match</button>`
                         : ""
                     }
 
@@ -18757,30 +18822,38 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                   </td>
                 </tr>
               `;
-            }).join("") || `<tr><td colspan="9">No claims</td></tr>`
+            }).join("") || `<tr><td colspan="10">No claims</td></tr>`
           }
         </tbody>
       </table>
     </div>
 
-    <div class="pagination" style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-      ${Array.from({length: totalPages}, (_,i) => `
-        <a class="btn small ${i+1===page?"":"secondary"}"
-           href="/claims-lifecycle?${new URLSearchParams({
-             ...(selectedStage ? { stage: selectedStage } : {}),
-             ...(lifecycleSearch ? { search: lifecycleSearch } : {}),
-             ...(lifecyclePayer ? { payer: lifecyclePayer } : {}),
-             ...(lifecycleRange ? { range: lifecycleRange } : {}),
-             ...(lifecycleStageFilter ? { stage_filter: lifecycleStageFilter } : {}),
-             per_page: String(pageSize),
-             page: String(i + 1)
-           }).toString()}">
-           ${i+1}
-        </a>
-      `).join("")}
+    <div class="pagination" style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+      ${Array.from({length: totalPages}, (_,i) => {
+        const isActivePage = (i + 1) === page;
+        return `
+          <a
+            class="btn small secondary"
+            aria-current="${isActivePage ? "page" : "false"}"
+            style="background:#fff;border:1px solid #111;color:#111;font-weight:${isActivePage ? 900 : 700};min-width:38px;padding:0 12px;box-shadow:${isActivePage ? "inset 0 0 0 1px #111" : "none"};"
+            href="/claims-lifecycle?${new URLSearchParams({
+              ...(!lifecycleStageFilter && selectedStage ? { stage: selectedStage } : {}),
+              ...(lifecycleSearch ? { search: lifecycleSearch } : {}),
+              ...(lifecyclePayer ? { payer: lifecyclePayer } : {}),
+              ...(lifecycleRange ? { range: lifecycleRange } : {}),
+              ...(lifecycleStageFilter ? { stage_filter: lifecycleStageFilter } : {}),
+              per_page: String(pageSize),
+              page: String(i + 1)
+            }).toString()}#lifecycleTable"
+            onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">
+            ${i+1}
+          </a>
+        `;
+      }).join("")}
     </div>
   </div>
 `;
+
 
   if (view === "table" || view === "lifecycle") {
     const now = new Date();
@@ -18856,8 +18929,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       ${revenueKpiBar}
       ${pipelineHtml}
       ${lifecycleTable}
-      <script>
-      const lifecycleClaims = ${JSON.stringify(
+      <script id="lifecycleClaimsData" type="application/json">${JSON.stringify(
         billedAll.map(c => {
           const d = evaluateClaimDerived(c, claimCtx);
           return {
@@ -18866,139 +18938,200 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             __risk: computeClaimRiskScore(c)
           };
         })
-      )};
-      </script>
+      ).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026")}</script>
       <script>
-      (function initClaimPanel(){
-        if (document.getElementById("claimSidePanel")) return;
-
-        const panel = document.createElement("div");
-        panel.id = "claimSidePanel";
-        panel.style.position = "fixed";
-        panel.style.top = "0";
-        panel.style.right = "-420px";
-        panel.style.width = "400px";
-        panel.style.height = "100%";
-        panel.style.background = "#fff";
-        panel.style.borderLeft = "1px solid #e5e7eb";
-        panel.style.boxShadow = "0 10px 30px rgba(0,0,0,0.1)";
-        panel.style.zIndex = "9999";
-        panel.style.padding = "16px";
-        panel.style.overflowY = "auto";
-        panel.style.transition = "right 0.25s ease";
-        panel.innerHTML = \`
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-            <strong>Claim Detail</strong>
-            <button onclick="closeClaimPanel()" style="border:none;background:none;font-size:18px;cursor:pointer;">✕</button>
-          </div>
-          <div id="claimPanelContent" class="muted small">Loading...</div>
-        \`;
-        document.body.appendChild(panel);
-      })();
-
-      window.openClaimPanel = function(id){
-        const panel = document.getElementById("claimSidePanel");
-        const content = document.getElementById("claimPanelContent");
-        if (!panel || !content) return;
-
-        const decodedId = decodeURIComponent(String(id || ""));
-        const claim = lifecycleClaims.find(c => String(c.billed_id) === decodedId);
-        if (!claim) return;
-
-        const d = claim.__derived || {};
-
-        panel.style.right = "-420px";
-        setTimeout(() => {
-          content.innerHTML = \`
-            <div style="font-size:18px;font-weight:900;margin-bottom:12px;">
-              Claim #\${claim.claim_number || ""}
-            </div>
-            <div class="muted small" style="margin-bottom:14px;">
-              \${claim.payer || ""} • \${claim.dos || "No DOS"}
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
-              <div><strong>Billed:</strong> \${formatMoneyUI(claim.amount_billed || 0)}</div>
-              <div><strong>Expected:</strong> \${d.expectedInsurance ? formatMoneyUI(d.expectedInsurance) : "-"}</div>
-              <div><strong>Paid:</strong> \${formatMoneyUI(d.paidAmount || 0)}</div>
-              <div><strong>At Risk:</strong> \${formatMoneyUI(d.atRiskAmount || 0)}</div>
-            </div>
-            <p><strong>Status:</strong> \${d.lifecycleStage || ""}</p>
-            <p><strong>Risk Score:</strong> \${claim.__risk || 0}</p>
-            <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
-              <a class="btn secondary small" href="/claim-detail?billed_id=\${encodeURIComponent(claim.billed_id)}">
-                Open Full Claim
-              </a>
-              \${
-                d.lifecycleStage === "Denied"
-                  ? \`<a class="btn small secondary" href="/ai-appeal?billed_id=\${encodeURIComponent(claim.billed_id)}">Appeal</a>\`
-                  : d.lifecycleStage === "Underpaid"
-                  ? \`<a class="btn small secondary" href="/ai-negotiation?billed_id=\${encodeURIComponent(claim.billed_id)}">Negotiate</a>\`
-                  : ""
-              }
-            </div>
-          \`;
-          panel.style.right = "0";
-        }, 50);
-      };
-
-      window.closeClaimPanel = function(){
-        const panel = document.getElementById("claimSidePanel");
-        if (panel) panel.style.right = "-420px";
-      };
-
-      document.querySelectorAll(".view-claim-btn").forEach(btn => {
-        btn.addEventListener("click", function(e){
-          e.preventDefault();
-          openClaimPanel(this.dataset.id);
-        });
-      });
-
-      (function fixFilterLayout(){
-        const btnRow = document.querySelector(".filter-actions");
-        if (!btnRow) return;
-        btnRow.style.display = "flex";
-        btnRow.style.justifyContent = "flex-end";
-        btnRow.style.gap = "8px";
-      })();
-
-      function scrollToClaimsTable(){
-        const table = document.querySelector(".claims-table");
-        if (table){
-          table.scrollIntoView({ behavior: "smooth", block: "start" });
+      (function(){
+        function panelEsc(v){
+          return String(v == null ? "" : v).replace(/[&<>"']/g, function(ch){
+            return ({
+              "&":"&amp;",
+              "<":"&lt;",
+              ">":"&gt;",
+              '"':"&quot;",
+              "'":"&#39;"
+            })[ch];
+          });
         }
-      }
 
-      document.querySelectorAll(".apply-filter-btn").forEach(btn => {
-        btn.addEventListener("click", function(){
-          setTimeout(scrollToClaimsTable, 50);
+        function panelMoney(v){
+          const n = Number(v || 0);
+          try {
+            return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+          } catch (err) {
+            return "$" + n.toFixed(2);
+          }
+        }
+
+        const claimsNode = document.getElementById("lifecycleClaimsData");
+        let lifecycleClaims = [];
+        try {
+          lifecycleClaims = JSON.parse(claimsNode ? claimsNode.textContent : "[]");
+        } catch (err) {
+          console.error("Unable to parse lifecycle claim payload.", err);
+          lifecycleClaims = [];
+        }
+        const claimMap = new Map(lifecycleClaims.map(function(claim){
+          return [String(claim.billed_id || ""), claim];
+        }));
+
+        function ensureClaimPanel(){
+          let backdrop = document.getElementById("claimSidePanelBackdrop");
+          let panel = document.getElementById("claimSidePanel");
+
+          if (!backdrop) {
+            backdrop = document.createElement("div");
+            backdrop.id = "claimSidePanelBackdrop";
+            backdrop.style.position = "fixed";
+            backdrop.style.inset = "0";
+            backdrop.style.background = "rgba(15,23,42,0.35)";
+            backdrop.style.opacity = "0";
+            backdrop.style.transition = "opacity 0.2s ease";
+            backdrop.style.zIndex = "9998";
+            backdrop.style.display = "none";
+            document.body.appendChild(backdrop);
+          }
+
+          if (!panel) {
+            panel = document.createElement("aside");
+            panel.id = "claimSidePanel";
+            panel.setAttribute("aria-hidden", "true");
+            panel.style.position = "fixed";
+            panel.style.top = "0";
+            panel.style.right = "-440px";
+            panel.style.width = "420px";
+            panel.style.maxWidth = "96vw";
+            panel.style.height = "100%";
+            panel.style.background = "#fff";
+            panel.style.borderLeft = "1px solid #e5e7eb";
+            panel.style.boxShadow = "-8px 0 30px rgba(15,23,42,0.18)";
+            panel.style.zIndex = "9999";
+            panel.style.padding = "18px";
+            panel.style.overflowY = "auto";
+            panel.style.transition = "right 0.22s ease";
+            panel.innerHTML = ''
+              + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+              +   '<div>'
+              +     '<div class="muted small" style="text-transform:uppercase;letter-spacing:.06em;">Claim Detail</div>'
+              +     '<strong style="font-size:16px;">Lifecycle View</strong>'
+              +   '</div>'
+              +   '<button type="button" data-claim-panel-close style="border:1px solid #111;background:#fff;color:#111;border-radius:10px;height:36px;padding:0 12px;cursor:pointer;font-weight:700;">Close</button>'
+              + '</div>'
+              + '<div data-claim-panel-content></div>';
+            document.body.appendChild(panel);
+          }
+
+          if (!backdrop.dataset.bound) {
+            backdrop.dataset.bound = "1";
+            backdrop.addEventListener("click", function(){
+              window.closeClaimPanel();
+            });
+          }
+
+          const closeBtn = panel.querySelector("[data-claim-panel-close]");
+          if (closeBtn && !closeBtn.dataset.bound) {
+            closeBtn.dataset.bound = "1";
+            closeBtn.addEventListener("click", function(){
+              window.closeClaimPanel();
+            });
+          }
+
+          return {
+            backdrop: backdrop,
+            panel: panel,
+            content: panel.querySelector("[data-claim-panel-content]")
+          };
+        }
+
+        window.openClaimPanel = function(id){
+          const ui = ensureClaimPanel();
+          const decodedId = decodeURIComponent(String(id || ""));
+          const claim = claimMap.get(decodedId);
+          if (!ui.panel || !ui.content || !claim) return;
+
+          const d = claim.__derived || {};
+          const hasExpected = d.expectedInsurance !== null && d.expectedInsurance !== undefined;
+          const primaryAction = d.lifecycleStage === "Denied"
+            ? '<a class="btn small secondary" href="/ai-appeal?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Appeal Workspace</a>'
+            : d.lifecycleStage === "Underpaid"
+            ? '<a class="btn small secondary" href="/ai-negotiation?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Negotiation Workspace</a>'
+            : '<a class="btn small secondary" href="/action-center?claim=' + encodeURIComponent(claim.billed_id) + '">Open in Action Center</a>';
+          const contractAlert = !hasExpected
+            ? '<div style="margin:12px 0;padding:10px;border-radius:12px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;">No contract match found for this claim. Review matching before taking reimbursement action.</div>'
+            : '';
+
+          ui.content.innerHTML = ''
+            + '<div style="font-size:20px;font-weight:900;margin-bottom:10px;">Claim #' + panelEsc(claim.claim_number || "") + '</div>'
+            + '<div class="muted small" style="margin-bottom:14px;">' + panelEsc(claim.payer || "") + ' • ' + panelEsc(claim.dos || "No DOS") + '</div>'
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">'
+            +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Billed</div><div style="font-weight:900;">' + panelMoney(claim.amount_billed || 0) + '</div></div>'
+            +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Expected</div><div style="font-weight:900;">' + (hasExpected ? panelMoney(d.expectedInsurance) : "-") + '</div></div>'
+            +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Paid</div><div style="font-weight:900;">' + panelMoney(d.paidAmount || 0) + '</div></div>'
+            +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + panelMoney(d.atRiskAmount || 0) + '</div></div>'
+            + '</div>'
+            + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
+            +   '<span class="badge">' + panelEsc(d.lifecycleStage || "Unknown") + '</span>'
+            +   '<span class="badge">Risk ' + panelEsc(String(claim.__risk || 0)) + '</span>'
+            + '</div>'
+            + contractAlert
+            + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
+            +   '<a class="btn small secondary" href="/claim-detail?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Full Claim</a>'
+            +   primaryAction
+            + '</div>';
+
+          document.body.style.overflow = "hidden";
+          ui.backdrop.style.display = "block";
+          ui.panel.setAttribute("aria-hidden", "false");
+
+          requestAnimationFrame(function(){
+            ui.backdrop.style.opacity = "1";
+            ui.panel.style.right = "0";
+          });
+        };
+
+        window.closeClaimPanel = function(){
+          const ui = ensureClaimPanel();
+          if (!ui.panel) return;
+
+          ui.panel.style.right = "-440px";
+          ui.panel.setAttribute("aria-hidden", "true");
+          ui.backdrop.style.opacity = "0";
+
+          setTimeout(function(){
+            ui.backdrop.style.display = "none";
+          }, 200);
+
+          document.body.style.overflow = "";
+        };
+
+        document.addEventListener("click", function(e){
+          const btn = e.target.closest(".view-claim-btn");
+          if (!btn) return;
+          e.preventDefault();
+          e.stopPropagation();
+          window.openClaimPanel(btn.getAttribute("data-id") || "");
         });
-      });
 
-      document.querySelectorAll(".reset-filter-btn").forEach(btn => {
-        btn.addEventListener("click", function(){
-          setTimeout(scrollToClaimsTable, 50);
+        document.addEventListener("keydown", function(e){
+          if (e.key === "Escape") window.closeClaimPanel();
         });
-      });
 
-      document.querySelectorAll(".pagination button, .pagination a").forEach(el => {
-        el.style.background = "#fff";
-        el.style.border = "1px solid #111";
-        el.style.color = "#111";
-        el.style.padding = "8px 12px";
-        el.style.borderRadius = "8px";
-        el.style.fontWeight = "600";
-        el.style.cursor = "pointer";
-        el.addEventListener("mouseover", () => { el.style.background = "#f3f4f6"; });
-        el.addEventListener("mouseout", () => { el.style.background = "#fff"; });
-      });
+        (function restoreLifecycleTable(){
+          const shouldRestore =
+            window.location.hash === "#lifecycleTable" ||
+            sessionStorage.getItem("claimsLifecycleRestore") === "1" ||
+            !!new URLSearchParams(window.location.search).get("stage");
 
-      const selectedLifecycleStage = new URLSearchParams(window.location.search).get("stage");
-      if (selectedLifecycleStage) {
-        setTimeout(() => {
+          if (!shouldRestore) return;
+          try { sessionStorage.removeItem("claimsLifecycleRestore"); } catch (err) {}
+
           const el = document.getElementById("lifecycleTable");
-          if (el) el.scrollIntoView({ behavior: "smooth" });
-        }, 100);
-      }
+          if (!el) return;
+
+          setTimeout(function(){
+            el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 80);
+        })();
+      })();
       </script>
 
     `,
