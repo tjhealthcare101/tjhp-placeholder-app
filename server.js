@@ -18584,30 +18584,67 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   function getLifecycleCardDisplay(stage, metrics){
     if (stage === "Submitted"){
       return {
-        primary: formatMoneyUI(metrics.billed || 0),
+        primary: `Billed: ${formatMoneyUI(metrics.billed || 0)}`,
         secondary: ""
       };
     }
 
-    if (stage === "Waiting Payment" || stage === "Denied" || stage === "Underpaid"){
+    if (stage === "Waiting Payment"){
       return {
-        primary: formatMoneyUI(metrics.expected || 0),
+        primary: `Expected: ${formatMoneyUI(metrics.expected || 0)}`,
+        secondary: ""
+      };
+    }
+
+    if (stage === "Denied" || stage === "Underpaid"){
+      return {
+        primary: `Expected: ${formatMoneyUI(metrics.expected || 0)}`,
         secondary: `At Risk: ${formatMoneyUI(metrics.atRisk || 0)}`
       };
     }
 
     if (stage === "Resolved"){
       return {
-        primary: formatMoneyUI(metrics.paid || 0),
+        primary: `Paid: ${formatMoneyUI(metrics.paid || 0)}`,
         secondary: ""
       };
     }
 
     return {
       primary: formatMoneyUI(metrics.billed || 0),
-      secondary: `At Risk: ${formatMoneyUI(metrics.atRisk || 0)}`
+      secondary: ""
     };
   }
+
+  // ==============================
+  // 4️⃣ EMPTY STATE FOR SUBMITTED + WAITING PAYMENT
+  // ==============================
+
+  const submittedCount = pipelineAgg["Submitted"]?.count || 0;
+  const waitingCount = pipelineAgg["Waiting Payment"]?.count || 0;
+
+  const showEmptyLifecycleMessage = submittedCount === 0 && waitingCount === 0;
+
+  const lifecycleEmptyMessage = showEmptyLifecycleMessage
+    ? `
+      <div style="
+        margin-top:12px;
+        padding:12px;
+        border:1px dashed var(--border);
+        border-radius:10px;
+        background:#f9fafb;
+        text-align:center;
+      ">
+        <div style="font-weight:800;">No Submitted Claims Yet</div>
+        <div class="muted small" style="margin-top:6px;">
+          Upload claims in the Data Management tab to begin tracking submissions and payments.
+        </div>
+        <div style="margin-top:10px;">
+          <a class="btn secondary small" href="/data-management">Go to Data Management</a>
+        </div>
+      </div>
+    `
+    : "";
 
   const pipelineHtml = `
     <div class="insight-card" style="margin-top:14px;">
@@ -18633,7 +18670,13 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                 <div class="muted small">${safeStr(cardDisplay.primary)}</div>
                 ${cardDisplay.secondary ? `<div class="muted small">${safeStr(cardDisplay.secondary)}</div>` : ``}
                 ${((stage === "Denied" || stage === "Underpaid") && lifecycleRange !== "all")
-                  ? `<div class="muted small" style="margin-top:4px;color:#92400e;font-weight:800;">+${formatNumberUI(carry.count)} older unresolved</div>`
+                  ? `<div class="muted small" style="
+                        margin-top:4px;
+                        font-weight:800;
+                        color:${carry.count === 0 ? '#16a34a' : '#92400e'};
+                      ">
+                        +${formatNumberUI(carry.count)} older unresolved
+                     </div>`
                   : ``}
                 <div style="height:10px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:10px;">
                   <div style="width:${pct}%;height:100%;background:${fillColor};"></div>
@@ -18644,6 +18687,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           `;
         }).join("")}
       </div>
+      ${lifecycleEmptyMessage}
     </div>
   `;
 
@@ -19010,40 +19054,24 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             stage === "Waiting Payment" ? "Monitor for payer response" :
             stage === "Submitted" ? "Await payer processing" :
             "No action needed";
-
-          const submissionDate = claim.submitted_at || claim.created_at || "-";
-          const lastActivityDate = claim.updated_at || claim.last_activity || "-";
-          const expectedAmount = claim.expected_insurance != null
-            ? claim.expected_insurance
-            : (derived.expectedInsurance || 0);
-          const paidAmount = claim.paid_amount != null
-            ? claim.paid_amount
-            : (claim.insurance_paid != null ? claim.insurance_paid : (derived.paidAmount || 0));
-          const atRiskAmount = claim.atRiskAmount != null
-            ? claim.atRiskAmount
-            : (derived.atRiskAmount || 0);
+          const actionButton =
+            stage === "Denied"
+              ? '<a class="btn" href="/ai-appeal?billed_id=' + encodeURIComponent(claim.billed_id) + '">Submit Appeal →</a>'
+            : stage === "Underpaid"
+              ? '<a class="btn" href="/ai-negotiation?billed_id=' + encodeURIComponent(claim.billed_id) + '">Start Negotiation →</a>'
+            : stage === "Waiting Payment"
+              ? '<a class="btn secondary" href="/action-center?claim=' + encodeURIComponent(claim.billed_id) + '">Monitor Claim →</a>'
+            : "";
 
           return ''
             + '<div class="hr"></div>'
             + '<div>'
             +   '<strong>Submission Date:</strong><br/>'
-            +   '<span class="muted small">' + panelEsc(submissionDate) + '</span>'
+            +   '<span class="muted small">' + panelEsc(claim.submitted_at || claim.created_at || "-") + '</span>'
             + '</div>'
             + '<div style="margin-top:10px;">'
             +   '<strong>Last Activity Date:</strong><br/>'
-            +   '<span class="muted small">' + panelEsc(lastActivityDate) + '</span>'
-            + '</div>'
-            + '<div style="margin-top:10px;">'
-            +   '<strong>Expected Amount:</strong><br/>'
-            +   '<span>' + panelMoney(expectedAmount) + '</span>'
-            + '</div>'
-            + '<div style="margin-top:10px;">'
-            +   '<strong>Paid Amount:</strong><br/>'
-            +   '<span>' + panelMoney(paidAmount) + '</span>'
-            + '</div>'
-            + '<div style="margin-top:10px;">'
-            +   '<strong>At Risk Amount:</strong><br/>'
-            +   '<span>' + panelMoney(atRiskAmount) + '</span>'
+            +   '<span class="muted small">' + panelEsc(claim.updated_at || "-") + '</span>'
             + '</div>'
             + '<div class="hr"></div>'
             + '<div>'
@@ -19053,6 +19081,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             + '<div style="margin-top:10px;">'
             +   '<strong>Next Best Action</strong>'
             +   '<p class="muted small">' + panelEsc(nextAction) + '</p>'
+            + '</div>'
+            + '<div style="margin-top:12px;">'
+            +   actionButton
             + '</div>';
         }
 
