@@ -18616,36 +18616,6 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     };
   }
 
-  // ==============================
-  // 4️⃣ EMPTY STATE FOR SUBMITTED + WAITING PAYMENT
-  // ==============================
-
-  const submittedCount = pipelineAgg["Submitted"]?.count || 0;
-  const waitingCount = pipelineAgg["Waiting Payment"]?.count || 0;
-
-  const showEmptyLifecycleMessage = submittedCount === 0 && waitingCount === 0;
-
-  const lifecycleEmptyMessage = showEmptyLifecycleMessage
-    ? `
-      <div style="
-        margin-top:12px;
-        padding:12px;
-        border:1px dashed var(--border);
-        border-radius:10px;
-        background:#f9fafb;
-        text-align:center;
-      ">
-        <div style="font-weight:800;">No Submitted Claims Yet</div>
-        <div class="muted small" style="margin-top:6px;">
-          Upload claims in the Data Management tab to begin tracking submissions and payments.
-        </div>
-        <div style="margin-top:10px;">
-          <a class="btn secondary small" href="/data-management">Go to Data Management</a>
-        </div>
-      </div>
-    `
-    : "";
-
   const pipelineHtml = `
     <div class="insight-card" style="margin-top:14px;">
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;">
@@ -18656,10 +18626,17 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         ${CORE_LIFECYCLE_STAGES.map(stage => {
           const d = pipelineAgg[stage] || { count:0, billed:0, expected:0, paid:0, atRisk:0 };
           const carry = pipelineCarryoverAgg[stage] || { count:0, billed:0, atRisk:0 };
-          const pct = Math.round((d.count / pipelineTotal) * 100);
+
+          let pct = Math.round((d.count / pipelineTotal) * 100);
+          if (stage === "Waiting Payment" && d.count === 0){
+            const submitted = pipelineAgg["Submitted"]?.count || 0;
+            if (submitted > 0) pct = Math.round((submitted / pipelineTotal) * 100);
+          }
+
           const href = stageToClaimsHref(stage);
           const fillColor = stageToFillColor(stage, pct);
           const cardDisplay = getLifecycleCardDisplay(stage, d);
+          const showEmptyCardMessage = d.count === 0;
 
           return `
             <a href="${href}"
@@ -18667,9 +18644,15 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
               <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);">
                 <div style="font-weight:900;">${stage}</div>
                 <div class="muted small">${safeStr(pipelineWindowLabel)} • Claims: ${formatNumberUI(d.count)}</div>
-                <div class="muted small">${safeStr(cardDisplay.primary)}</div>
-                ${cardDisplay.secondary ? `<div class="muted small">${safeStr(cardDisplay.secondary)}</div>` : ``}
-                ${((stage === "Denied" || stage === "Underpaid") && lifecycleRange !== "all")
+
+                ${showEmptyCardMessage
+                  ? `<div class="muted small" style="margin-top:6px;">No claims in this stage</div>`
+                  : `
+                    <div class="muted small">${safeStr(cardDisplay.primary)}</div>
+                    ${cardDisplay.secondary ? `<div class="muted small">${safeStr(cardDisplay.secondary)}</div>` : ``}
+                  `}
+
+                ${((stage === "Denied" || stage === "Underpaid") && lifecycleRange !== "all" && d.count > 0)
                   ? `<div class="muted small" style="
                         margin-top:4px;
                         font-weight:800;
@@ -18678,16 +18661,20 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                         +${formatNumberUI(carry.count)} older unresolved
                      </div>`
                   : ``}
-                <div style="height:10px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:10px;">
-                  <div style="width:${pct}%;height:100%;background:${fillColor};"></div>
-                </div>
-                <div class="muted small" style="margin-top:6px;">${pct}%</div>
+
+                ${d.count > 0
+                  ? `
+                    <div style="height:10px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:10px;">
+                      <div style="width:${pct}%;height:100%;background:${fillColor};"></div>
+                    </div>
+                    <div class="muted small" style="margin-top:6px;">${pct}%</div>
+                  `
+                  : ``}
               </div>
             </a>
           `;
         }).join("")}
       </div>
-      ${lifecycleEmptyMessage}
     </div>
   `;
 
@@ -19041,6 +19028,11 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           const derived = claim && claim.__derived ? claim.__derived : {};
           const stage = String((derived && derived.lifecycleStage) || claim.lifecycleStage || claim.status || "");
 
+          const networkStatus =
+            claim.network_status ||
+            claim.payer_type ||
+            "Unknown";
+
           const insight =
             stage === "Denied" ? "This claim has not received payment from payer" :
             stage === "Underpaid" ? "Partial payment received — potential recovery opportunity" :
@@ -19072,6 +19064,10 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             + '<div style="margin-top:10px;">'
             +   '<strong>Last Activity Date:</strong><br/>'
             +   '<span class="muted small">' + panelEsc(claim.updated_at || "-") + '</span>'
+            + '</div>'
+            + '<div style="margin-top:10px;">'
+            +   '<strong>Network Status:</strong><br/>'
+            +   '<span class="muted small">' + panelEsc(networkStatus) + '</span>'
             + '</div>'
             + '<div class="hr"></div>'
             + '<div>'
