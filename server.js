@@ -18926,7 +18926,6 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         Click a stage to drill into those claims, then move them into the Action Center or workspace.
       </div>
 
-      ${revenueKpiBar}
       ${pipelineHtml}
       ${lifecycleTable}
       <script id="lifecycleClaimsData" type="application/json">${JSON.stringify(
