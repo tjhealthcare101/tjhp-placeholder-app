@@ -18620,10 +18620,14 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   // 4️⃣ EMPTY STATE FOR SUBMITTED + WAITING PAYMENT
   // ==============================
 
-  const submittedCount = pipelineAgg["Submitted"]?.count || 0;
-  const waitingCount = pipelineAgg["Waiting Payment"]?.count || 0;
+  const totalPipelineClaims =
+    (pipelineAgg["Submitted"]?.count || 0) +
+    (pipelineAgg["Waiting Payment"]?.count || 0) +
+    (pipelineAgg["Denied"]?.count || 0) +
+    (pipelineAgg["Underpaid"]?.count || 0) +
+    (pipelineAgg["Resolved"]?.count || 0);
 
-  const showEmptyLifecycleMessage = submittedCount === 0 && waitingCount === 0;
+  const showEmptyLifecycleMessage = totalPipelineClaims === 0;
 
   const lifecycleEmptyMessage = showEmptyLifecycleMessage
     ? `
@@ -18656,6 +18660,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         ${CORE_LIFECYCLE_STAGES.map(stage => {
           const d = pipelineAgg[stage] || { count:0, billed:0, expected:0, paid:0, atRisk:0 };
           const carry = pipelineCarryoverAgg[stage] || { count:0, billed:0, atRisk:0 };
+          const showEmptyCardMessage = d.count === 0 && totalPipelineClaims === 0;
           const pct = Math.round((d.count / pipelineTotal) * 100);
           const href = stageToClaimsHref(stage);
           const fillColor = stageToFillColor(stage, pct);
@@ -18669,6 +18674,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                 <div class="muted small">${safeStr(pipelineWindowLabel)} • Claims: ${formatNumberUI(d.count)}</div>
                 <div class="muted small">${safeStr(cardDisplay.primary)}</div>
                 ${cardDisplay.secondary ? `<div class="muted small">${safeStr(cardDisplay.secondary)}</div>` : ``}
+                ${showEmptyCardMessage ? `<div class="muted small">No claims in selected period</div>` : ``}
                 ${((stage === "Denied" || stage === "Underpaid") && lifecycleRange !== "all")
                   ? `<div class="muted small" style="
                         margin-top:4px;
