@@ -18149,16 +18149,20 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const negotiationsAll = getNegotiations(org.org_id).map(n => normalizeNegotiation(n));
   const negByBilledId = new Map(negotiationsAll.map(n => [String(n.billed_id || ""), n]));
 
-  const PIPE_ORDER = [
+  const CORE_LIFECYCLE_STAGES = [
     "Submitted",
     "Waiting Payment",
-    "Revenue Collected",
     "Denied",
     "Underpaid",
+    "Resolved"
+  ];
+
+  const PIPE_ORDER = [
+    ...CORE_LIFECYCLE_STAGES,
+    "Revenue Collected",
     "In Appeal/Negotiation",
     "Patient Follow-Up",
-    "Write-Off",
-    "Resolved"
+    "Write-Off"
   ];
 
   function isAppealOpen(b){
@@ -18391,7 +18395,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                 <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
                   ${
                     stage === "Denied"
-                      ? `<a class="btn small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">
+                      ? `<a class="btn small secondary" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">
                            Appeal Workspace
                          </a>`
                       : ""
@@ -18399,7 +18403,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
                   ${
                     stage === "Underpaid"
-                      ? `<a class="btn small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">
+                      ? `<a class="btn small secondary" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">
                            Negotiation Workspace
                          </a>`
                       : ""
@@ -18407,7 +18411,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
                   ${
                     stage === "Follow-Up Needed" || stage === "Awaiting Payment"
-                      ? `<a class="btn small" href="/actions?tab=${mapStageToActionTab(stage)}&claim=${encodeURIComponent(b.billed_id)}">
+                      ? `<a class="btn small secondary" href="/actions?tab=${mapStageToActionTab(stage)}&claim=${encodeURIComponent(b.billed_id)}">
                            Go to Action Center
                          </a>`
                       : ""
@@ -18458,7 +18462,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
   const pipelineAgg = {};
   for (const stage of PIPE_ORDER) pipelineAgg[stage] = { count: 0, billed: 0, atRisk: 0 };
-  const pipelineBaseStages = PIPE_ORDER.filter(s => s !== "Revenue Collected");
+  const pipelineBaseStages = CORE_LIFECYCLE_STAGES.slice();
 
   billedAll.forEach(b => {
     const d = evaluateClaimDerived(b, claimCtx);
@@ -18502,15 +18506,42 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     return `/claims-lifecycle?stage=${encodeURIComponent(simple)}`;
   };
 
+  const revenueKpiBar = `
+    <div class="insight-card" style="margin-top:10px;">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+        
+        <div style="flex:1;min-width:180px;border:1px solid var(--border);border-radius:12px;padding:12px;">
+          <div class="muted small">Revenue Collected</div>
+          <div style="font-size:20px;font-weight:900;">
+            ${formatMoney(executiveRevenue.totalCollected || 0)}
+          </div>
+        </div>
+
+        <div style="flex:1;min-width:180px;border:1px solid var(--border);border-radius:12px;padding:12px;">
+          <div class="muted small">Total Billed</div>
+          <div style="font-size:20px;font-weight:900;">
+            ${formatMoney(executiveRevenue.totalBilled || 0)}
+          </div>
+        </div>
+
+        <div style="flex:1;min-width:180px;border:1px solid var(--border);border-radius:12px;padding:12px;">
+          <div class="muted small">Total At Risk</div>
+          <div style="font-size:20px;font-weight:900;">
+            ${formatMoney(executiveRevenue.totalAtRisk || 0)}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  `;
+
   const pipelineHtml = `
     <div class="insight-card" style="margin-top:14px;">
       <h3>Claims Lifecycle Stages <span class="tooltip" data-tip="Stage view of all claims. Denied/Underpaid only appear after payer response.">ⓘ</span></h3>
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
-        ${PIPE_ORDER.map(stage => {
+        ${CORE_LIFECYCLE_STAGES.map(stage => {
           const d = pipelineAgg[stage] || { count:0, billed:0, atRisk:0 };
-          const pct = stage === "Revenue Collected"
-            ? Math.round((executiveRevenue.totalCollected / (executiveRevenue.totalBilled || 1)) * 100)
-            : Math.round((d.count / pipelineTotal) * 100);
+          const pct = Math.round((d.count / pipelineTotal) * 100);
           const href = stageToClaimsHref(stage);
           const fillColor = stageToFillColor(stage, pct);
 
@@ -18521,7 +18552,6 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                 <div style="font-weight:900;">${stage}</div>
                 <div class="muted small">Claims: ${formatNumberUI(d.count)}</div>
                 <div class="muted small">Billed: ${formatMoney(d.billed)}</div>
-                ${stage === "Revenue Collected" ? `<div class="muted small">Revenue Collected: ${formatMoney(executiveRevenue.totalCollected)}</div>` : ``}
                 <div class="muted small">At Risk: ${formatMoney(d.atRisk)}</div>
                 <div style="height:10px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:10px;">
                   <div style="width:${pct}%;height:100%;background:${fillColor};"></div>
@@ -18538,14 +18568,17 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const lifecycleSearch = String(qs.search || "").trim().toLowerCase();
   const lifecyclePayer = String(qs.payer || "").trim();
   const lifecycleRange = String(qs.range || "all").trim();
+  let lifecycleStageFilter = String(qs.stage_filter || "").trim();
+  // If user selected dropdown filter, ignore stage from card
+  const effectiveStage = lifecycleStageFilter ? "" : selectedStage;
   const lifecyclePerPage = [10,25,50,100].includes(Number(qs.per_page)) ? Number(qs.per_page) : 25;
 
   const nowTs = Date.now();
-  const stageFilteredClaims = selectedStage
+  const stageFilteredClaims = effectiveStage
     ? billedAll
         .filter(b => {
           const d = evaluateClaimDerived(b, claimCtx);
-          return String(d.lifecycleStage || "").toLowerCase() === selectedStage.toLowerCase();
+          return String(d.lifecycleStage || "").toLowerCase() === effectiveStage.toLowerCase();
         })
         .sort((a,b) => computeClaimRiskScore(b) - computeClaimRiskScore(a))
     : billedAll
@@ -18561,6 +18594,10 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
     if (lifecycleSearch && !searchBlob.includes(lifecycleSearch)) return false;
     if (lifecyclePayer && String(c.payer || "") !== lifecyclePayer) return false;
+    if (lifecycleStageFilter) {
+      const d = evaluateClaimDerived(c, claimCtx);
+      if (String(d.lifecycleStage || "") !== lifecycleStageFilter) return false;
+    }
 
     if (lifecycleRange !== "all") {
       const dt = new Date(c.created_at || c.dos || 0).getTime();
@@ -18593,7 +18630,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   <div id="lifecycleTable" style="margin-top:20px;">
     <h3>Claims</h3>
     <form method="GET" action="/claims-lifecycle" style="margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
-      ${selectedStage ? `<input type="hidden" name="stage" value="${safeStr(selectedStage)}">` : ""}
+      ${!lifecycleStageFilter && selectedStage ? `<input type="hidden" name="stage" value="${safeStr(selectedStage)}">` : ""}
       <div>
         <label class="small">Search</label>
         <input name="search" value="${safeStr(lifecycleSearch)}" placeholder="Claim #, payer, DOS..." />
@@ -18617,6 +18654,15 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         </select>
       </div>
       <div>
+        <label class="small">Stage</label>
+        <select name="stage_filter">
+          <option value="">All</option>
+          ${CORE_LIFECYCLE_STAGES.map(s => `
+            <option value="${s}" ${lifecycleStageFilter === s ? "selected" : ""}>${s}</option>
+          `).join("")}
+        </select>
+      </div>
+      <div>
         <label class="small">Per Page</label>
         <select name="per_page">
           ${[10,25,50,100].map(n => `<option value="${n}" ${pageSize === n ? "selected" : ""}>${n}</option>`).join("")}
@@ -18624,7 +18670,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       </div>
       <div style="display:flex;gap:8px;">
         <button class="btn small" type="submit">Apply</button>
-        <a class="btn secondary small" href="/claims-lifecycle${selectedStage ? `?stage=${encodeURIComponent(selectedStage)}` : ""}">Reset</a>
+        <a class="btn secondary small" href="/claims-lifecycle">Reset</a>
       </div>
     </form>
     <div style="margin-bottom:10px;">
@@ -18683,7 +18729,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                     </span>
                   </td>
                   <td style="display:flex;gap:6px;">
-                    <button class="btn small" onclick="openClaimPanel('${encodeURIComponent(String(c.billed_id || ""))}')">
+                    <button class="btn small secondary" onclick="openClaimPanel('${encodeURIComponent(String(c.billed_id || ""))}')">
                       View
                     </button>
 
@@ -18693,7 +18739,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                         : ""
                     }
 
-                    <a class="btn small"
+                    <a class="btn small secondary"
                       ${
                         mapStageToActionTab(d.lifecycleStage) === "denials"
                           ? `href="/ai-appeal?billed_id=${encodeURIComponent(c.billed_id)}"`
@@ -18722,6 +18768,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
              ...(lifecycleSearch ? { search: lifecycleSearch } : {}),
              ...(lifecyclePayer ? { payer: lifecyclePayer } : {}),
              ...(lifecycleRange ? { range: lifecycleRange } : {}),
+             ...(lifecycleStageFilter ? { stage_filter: lifecycleStageFilter } : {}),
              per_page: String(pageSize),
              page: String(i + 1)
            }).toString()}">
@@ -18803,6 +18850,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         Click a stage to drill into those claims, then move them into the Action Center or workspace.
       </div>
 
+      ${revenueKpiBar}
       ${pipelineHtml}
       ${lifecycleTable}
       <div id="claim-panel" style="
@@ -18886,13 +18934,13 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             \` : ""}
 
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">
-              <a class="btn small" href="/claim-detail?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Full Claim Detail</a>
+              <a class="btn small secondary" href="/claim-detail?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Full Claim Detail</a>
 
               \${
                 String(d.lifecycleStage || "") === "Denied"
-                  ? \`<a class="btn small" href="/ai-appeal?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Appeal Workspace</a>\`
+                  ? \`<a class="btn small secondary" href="/ai-appeal?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Appeal Workspace</a>\`
                   : String(d.lifecycleStage || "") === "Underpaid"
-                  ? \`<a class="btn small" href="/ai-negotiation?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Negotiation Workspace</a>\`
+                  ? \`<a class="btn small secondary" href="/ai-negotiation?billed_id=\${encodeURIComponent(claim.billed_id)}">Open Negotiation Workspace</a>\`
                   : \`<a class="btn secondary small" href="/action-center?claim=\${encodeURIComponent(claim.billed_id)}">Open in Action Center</a>\`
               }
 
