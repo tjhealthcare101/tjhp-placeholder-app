@@ -18623,7 +18623,15 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         <div class="muted small">${safeStr(pipelineWindowLabel)} • Default operational lens</div>
       </div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;">
-        ${CORE_LIFECYCLE_STAGES.map(stage => {
+        ${(() => {
+          const totalPipelineClaims =
+            (pipelineAgg["Submitted"]?.count || 0) +
+            (pipelineAgg["Waiting Payment"]?.count || 0) +
+            (pipelineAgg["Denied"]?.count || 0) +
+            (pipelineAgg["Underpaid"]?.count || 0) +
+            (pipelineAgg["Resolved"]?.count || 0);
+
+          return CORE_LIFECYCLE_STAGES.map(stage => {
           const d = pipelineAgg[stage] || { count:0, billed:0, expected:0, paid:0, atRisk:0 };
           const carry = pipelineCarryoverAgg[stage] || { count:0, billed:0, atRisk:0 };
 
@@ -18636,7 +18644,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           const href = stageToClaimsHref(stage);
           const fillColor = stageToFillColor(stage, pct);
           const cardDisplay = getLifecycleCardDisplay(stage, d);
-          const showEmptyCardMessage = d.count === 0;
+          const showEmptyCardMessage = d.count === 0 && totalPipelineClaims === 0;
 
           return `
             <a href="${href}"
@@ -18673,7 +18681,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
               </div>
             </a>
           `;
-        }).join("")}
+          }).join("");
+        })()}
       </div>
     </div>
   `;
