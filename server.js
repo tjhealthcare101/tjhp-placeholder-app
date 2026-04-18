@@ -10847,7 +10847,7 @@ function badgeClassForStatus(st){
   if (s === "Denied") return "err";
   if (s === "Underpaid") return "underpaid";
   if (s === "Appeal") return "warn";
-  if (s === "Awaiting Payment") return "pending";
+  if (s === "Awaiting Payment") return "warn";
   if (s === "Patient Follow-Up" || s === "Follow-Up Needed") return "warn";
   if (s === "Contractual") return "writeoff";
   return "";
@@ -18996,6 +18996,11 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       </div>
     `;
     const topClaim = billedAll
+      .filter(claim => {
+        const derived = evaluateClaimDerived(claim, claimCtx);
+        const stage = normalizeLifecycleDisplayStage(getCoreLifecycleStageForCards(claim, derived));
+        return stage === "Denied" || stage === "Underpaid";
+      })
       .slice()
       .sort((a,b)=> computeClaimRiskScore(b) - computeClaimRiskScore(a))[0];
     const nextActionBanner = topClaim ? `
@@ -19004,10 +19009,11 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         · ${safeStr(topClaim.payer)}
         · ${formatMoneyUI(evaluateClaimDerived(topClaim, claimCtx).atRiskAmount)}
         at risk
-        <br/>
-        <a class="btn small" href="/claim-detail?billed_id=${encodeURIComponent(topClaim.billed_id)}">
-          Open Claim Detail →
-        </a>
+        <div style="margin-top:10px;">
+          <a class="btn small" href="/claim-detail?billed_id=${encodeURIComponent(topClaim.billed_id)}">
+            Open Claim Detail →
+          </a>
+        </div>
       </div>
     ` : "";
     const stageBanner = selectedSimpleStage ? `
@@ -19327,7 +19333,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       </script>
 
     `,
-        navUser(),
+        navUser("claims", sess.user_id),
         { showChat: true, orgName: org.org_name }
       ));
     }
@@ -19906,7 +19912,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     `;
   }
 
-  const html = renderPage("Claims Lifecycle", body, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
+  const html = renderPage("Claims Lifecycle", body, navUser("claims", sess.user_id), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
   return send(res, 200, html);
 }
 // ==============================
@@ -22449,6 +22455,281 @@ function renderClaimFinancialContext(billedClaim, derived){
   `;
 }
 
+function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
+  const safeScriptId = safeStr(scriptId || "claimPanelData");
+  const safePanelTitle = safeStr(panelTitle || "Claim View");
+  const payload = JSON.stringify(
+    (claims || []).map(claim => {
+      const derived = evaluateClaimDerived(claim, claimCtx);
+      return {
+        ...claim,
+        __derived: derived,
+        __risk: computeClaimRiskScore(claim)
+      };
+    })
+  ).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
+
+  return `
+    <script id="${safeScriptId}" type="application/json">${payload}</script>
+    <script>
+    (function(){
+      function panelEsc(v){
+        return String(v == null ? "" : v).replace(/[&<>"']/g, function(ch){
+          return ({
+            "&":"&amp;",
+            "<":"&lt;",
+            ">":"&gt;",
+            '"':"&quot;",
+            "'":"&#39;"
+          })[ch];
+        });
+      }
+
+      function normalizeStage(v){
+        const s = String(v || "").trim();
+        if (s === "Submitted" || s === "Waiting Payment") return "Awaiting Payment";
+        return s || "Unknown";
+      }
+
+      function panelMoney(v){
+        const n = Number(v || 0);
+        try {
+          return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+        } catch (err) {
+          return "$" + n.toFixed(2);
+        }
+      }
+
+      function renderClaimSidePanelExtras(claim){
+        const derived = claim && claim.__derived ? claim.__derived : {};
+        const stage = normalizeStage((derived && derived.lifecycleStage) || claim.lifecycleStage || claim.status || "");
+
+        const networkStatus =
+          claim.network_status ||
+          claim.payer_type ||
+          "Unknown";
+
+        const insight =
+          stage === "Denied" ? "This claim has received a payer response with no payment posted." :
+          stage === "Underpaid" ? "Partial payment received — potential recovery opportunity remains." :
+          stage === "Resolved" ? "Payment completed." :
+          stage === "Awaiting Payment" ? "Awaiting initial payer response." :
+          "Review claim context before taking action.";
+
+        const nextAction =
+          stage === "Denied" ? "Submit appeal" :
+          stage === "Underpaid" ? "Initiate negotiation" :
+          stage === "Awaiting Payment" ? "Monitor for payer response or upload posted payment" :
+          "No action needed";
+
+        const actionButton =
+          stage === "Denied"
+            ? '<a class="btn" href="/ai-appeal?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Appeal Workspace →</a>'
+          : stage === "Underpaid"
+            ? '<a class="btn" href="/ai-negotiation?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Negotiation Workspace →</a>'
+          : stage === "Awaiting Payment"
+            ? '<a class="btn secondary" href="/data-management?tab=payments">Upload Payment →</a>'
+          : '';
+
+        return ''
+          + '<div class="hr"></div>'
+          + '<div>'
+          +   '<strong>Submission Date:</strong><br/>'
+          +   '<span class="muted small">' + panelEsc(claim.submitted_at || claim.created_at || "-") + '</span>'
+          + '</div>'
+          + '<div style="margin-top:10px;">'
+          +   '<strong>Last Activity Date:</strong><br/>'
+          +   '<span class="muted small">' + panelEsc(claim.updated_at || "-") + '</span>'
+          + '</div>'
+          + '<div style="margin-top:10px;">'
+          +   '<strong>Network Status:</strong><br/>'
+          +   '<span class="muted small">' + panelEsc(networkStatus) + '</span>'
+          + '</div>'
+          + '<div class="hr"></div>'
+          + '<div>'
+          +   '<strong>Claim Insight</strong>'
+          +   '<p class="muted small">' + panelEsc(insight) + '</p>'
+          + '</div>'
+          + '<div style="margin-top:10px;">'
+          +   '<strong>Next Best Action</strong>'
+          +   '<p class="muted small">' + panelEsc(nextAction) + '</p>'
+          + '</div>'
+          + '<div style="margin-top:12px;">'
+          +   actionButton
+          + '</div>';
+      }
+
+      const claimsNode = document.getElementById("${safeScriptId}");
+      let panelClaims = [];
+      try {
+        panelClaims = JSON.parse(claimsNode ? claimsNode.textContent : "[]");
+      } catch (err) {
+        console.error("Unable to parse claim panel payload.", err);
+        panelClaims = [];
+      }
+
+      const claimMap = new Map(panelClaims.map(function(claim){
+        return [String(claim.billed_id || ""), claim];
+      }));
+
+      function ensureClaimPanel(){
+        let backdrop = document.getElementById("claimSidePanelBackdrop");
+        let panel = document.getElementById("claimSidePanel");
+
+        if (!backdrop) {
+          backdrop = document.createElement("div");
+          backdrop.id = "claimSidePanelBackdrop";
+          backdrop.style.position = "fixed";
+          backdrop.style.inset = "0";
+          backdrop.style.background = "rgba(15,23,42,0.35)";
+          backdrop.style.opacity = "0";
+          backdrop.style.transition = "opacity 0.2s ease";
+          backdrop.style.zIndex = "9998";
+          backdrop.style.display = "none";
+          document.body.appendChild(backdrop);
+        }
+
+        if (!panel) {
+          panel = document.createElement("aside");
+          panel.id = "claimSidePanel";
+          panel.setAttribute("aria-hidden", "true");
+          panel.style.position = "fixed";
+          panel.style.top = "0";
+          panel.style.right = "-440px";
+          panel.style.width = "420px";
+          panel.style.maxWidth = "96vw";
+          panel.style.height = "100%";
+          panel.style.background = "#fff";
+          panel.style.borderLeft = "1px solid #e5e7eb";
+          panel.style.boxShadow = "-8px 0 30px rgba(15,23,42,0.18)";
+          panel.style.zIndex = "9999";
+          panel.style.padding = "18px";
+          panel.style.overflowY = "auto";
+          panel.style.transition = "right 0.22s ease";
+          panel.innerHTML = ''
+            + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+            +   '<div>'
+            +     '<div class="muted small" style="text-transform:uppercase;letter-spacing:.06em;">Claim Detail</div>'
+            +     '<strong style="font-size:16px;">${safePanelTitle}</strong>'
+            +   '</div>'
+            +   '<button type="button" data-claim-panel-close style="border:1px solid #111;background:#fff;color:#111;border-radius:10px;height:36px;padding:0 12px;cursor:pointer;font-weight:700;">Close</button>'
+            + '</div>'
+            + '<div data-claim-panel-content></div>';
+          document.body.appendChild(panel);
+        }
+
+        if (!backdrop.dataset.bound) {
+          backdrop.dataset.bound = "1";
+          backdrop.addEventListener("click", function(){
+            window.closeClaimPanel();
+          });
+        }
+
+        const closeBtn = panel.querySelector("[data-claim-panel-close]");
+        if (closeBtn && !closeBtn.dataset.bound) {
+          closeBtn.dataset.bound = "1";
+          closeBtn.addEventListener("click", function(){
+            window.closeClaimPanel();
+          });
+        }
+
+        return {
+          backdrop: backdrop,
+          panel: panel,
+          content: panel.querySelector("[data-claim-panel-content]")
+        };
+      }
+
+      window.openClaimPanel = function(id){
+        const ui = ensureClaimPanel();
+        const decodedId = decodeURIComponent(String(id || ""));
+        const claim = claimMap.get(decodedId);
+        if (!ui.panel || !ui.content || !claim) return;
+
+        const d = claim.__derived || {};
+        const displayStage = normalizeStage(d.lifecycleStage || claim.lifecycleStage || claim.status || "");
+        const badgeClass =
+          displayStage === "Awaiting Payment" ? "warn" :
+          displayStage === "Denied" ? "err" :
+          displayStage === "Underpaid" ? "underpaid" :
+          "";
+        const hasExpected = d.expectedInsurance !== null && d.expectedInsurance !== undefined;
+        const isActionCenter = window.location.pathname.includes("/actions");
+
+        const primaryAction = displayStage === "Denied"
+          ? '<a class="btn small secondary" href="/ai-appeal?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Appeal Workspace</a>'
+          : displayStage === "Underpaid"
+          ? '<a class="btn small secondary" href="/ai-negotiation?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Negotiation Workspace</a>'
+          : displayStage === "Awaiting Payment"
+          ? '<a class="btn small secondary" href="/data-management?tab=payments">Upload Payment</a>'
+          : (!isActionCenter
+              ? '<a class="btn small secondary" href="/actions?claim=' + encodeURIComponent(claim.billed_id) + '">Open in Action Center</a>'
+              : '');
+        const contractAlert = !hasExpected
+          ? '<div style="margin:12px 0;padding:10px;border-radius:12px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;">No contract match found for this claim. Review matching before taking reimbursement action.</div>'
+          : '';
+
+        ui.content.innerHTML = ''
+          + '<div style="font-size:20px;font-weight:900;margin-bottom:10px;">Claim #' + panelEsc(claim.claim_number || "") + '</div>'
+          + '<div class="muted small" style="margin-bottom:14px;">' + panelEsc(claim.payer || "") + ' • ' + panelEsc(claim.dos || "No DOS") + '</div>'
+          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">'
+          +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Billed</div><div style="font-weight:900;">' + panelMoney(claim.amount_billed || 0) + '</div></div>'
+          +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Expected</div><div style="font-weight:900;">' + (hasExpected ? panelMoney(d.expectedInsurance) : "-") + '</div></div>'
+          +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Paid</div><div style="font-weight:900;">' + panelMoney(d.paidAmount || 0) + '</div></div>'
+          +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + panelMoney(d.atRiskAmount || 0) + '</div></div>'
+          + '</div>'
+          + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
+          +   '<span class="badge ' + panelEsc(badgeClass) + '">' + panelEsc(displayStage) + '</span>'
+          +   '<span class="badge">Risk ' + panelEsc(String(claim.__risk || 0)) + '</span>'
+          + '</div>'
+          + contractAlert
+          + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
+          +   '<a class="btn small secondary" href="/claim-detail?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Full Claim</a>'
+          +   primaryAction
+          + '</div>'
+          + renderClaimSidePanelExtras(claim);
+
+        document.body.style.overflow = "hidden";
+        ui.backdrop.style.display = "block";
+        ui.panel.setAttribute("aria-hidden", "false");
+
+        requestAnimationFrame(function(){
+          ui.backdrop.style.opacity = "1";
+          ui.panel.style.right = "0";
+        });
+      };
+
+      window.closeClaimPanel = function(){
+        const ui = ensureClaimPanel();
+        if (!ui.panel) return;
+
+        ui.panel.style.right = "-440px";
+        ui.panel.setAttribute("aria-hidden", "true");
+        ui.backdrop.style.opacity = "0";
+
+        setTimeout(function(){
+          ui.backdrop.style.display = "none";
+        }, 200);
+
+        document.body.style.overflow = "";
+      };
+
+      document.addEventListener("click", function(e){
+        const btn = e.target.closest(".view-claim-btn");
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        window.openClaimPanel(btn.getAttribute("data-id") || "");
+      });
+
+      document.addEventListener("keydown", function(e){
+        if (e.key === "Escape") window.closeClaimPanel();
+      });
+    })();
+    </script>
+  `;
+}
+
 if (method === "GET" && pathname === "/actions") {
   const selectedClaimId = String(parsed.query.claim || "").trim();
   const tabRaw = String(parsed.query.tab || "all").toLowerCase();
@@ -22800,6 +23081,7 @@ if (method === "GET" && pathname === "/actions") {
       `;
     } else if (x.kind === "negotiation") {
       actionsHtml = `
+        ${viewButtonHtml}
         <a class="btn secondary small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Negotiation Workspace</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
@@ -22896,6 +23178,7 @@ if (method === "GET" && pathname === "/actions") {
       }, 300);
     </script>
   ` : "";
+  const actionCenterClaimPanel = renderClaimPanelBootstrap("actionCenterClaimsData", billedAll, actionCtx, "Action Center View");
 
   const html = renderPage("Action Center", `
     <h2>Action Center <span class="tooltip" data-tip="This page prevents revenue leakage by surfacing what needs action. Use tabs to work denials and underpayments by risk score.">ⓘ</span></h2>
@@ -22978,12 +23261,26 @@ if (method === "GET" && pathname === "/actions") {
             window.location.href = u.toString();
           });
         });
+
+        // 🔥 FIX: Make View button open panel in Action Center
+        document.addEventListener("click", function(e){
+          const btn = e.target.closest(".view-claim-btn");
+          if (!btn) return;
+
+          e.preventDefault();
+          e.stopPropagation();
+
+          if (typeof window.openClaimPanel === "function") {
+            window.openClaimPanel(btn.getAttribute("data-id"));
+          }
+        });
       })();
     </script>
+    ${actionCenterClaimPanel}
     <script>window.__syncScrollBars && window.__syncScrollBars("actionTableSync");</script>
     ${scrollScript}
     ${nav}
-  `, navUser(), {showChat:true, orgName: org.org_name});
+  `, navUser("actions", sess.user_id), {showChat:true, orgName: org.org_name});
 
   return send(res, 200, html);
 }
