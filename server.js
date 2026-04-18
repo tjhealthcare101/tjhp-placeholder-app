@@ -18151,8 +18151,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const negByBilledId = new Map(negotiationsAll.map(n => [String(n.billed_id || ""), n]));
 
   const CORE_LIFECYCLE_STAGES = [
-    "Submitted",
-    "Waiting Payment",
+    "Awaiting Payment",
     "Denied",
     "Underpaid",
     "Resolved"
@@ -18533,27 +18532,29 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     return `/claims-lifecycle?stage=${encodeURIComponent(normalizedStage)}&range=${encodeURIComponent(lifecycleRange)}#lifecycleTable`;
   };
 
-  const pipelineAgg = {};
+  const pipelineAggRaw = {
+    Submitted: { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 },
+    "Waiting Payment": { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 },
+    Denied: { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 },
+    Underpaid: { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 },
+    Resolved: { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 }
+  };
   const pipelineCarryoverAgg = {
     Denied: { count: 0, billed: 0, atRisk: 0 },
     Underpaid: { count: 0, billed: 0, atRisk: 0 }
   };
 
-  for (const stage of CORE_LIFECYCLE_STAGES) {
-    pipelineAgg[stage] = { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 };
-  }
-
   billedAll.forEach(b => {
     const d = evaluateClaimDerived(b, claimCtx);
     const stage = getCoreLifecycleStageForCards(b, d);
-    if (!CORE_LIFECYCLE_STAGES.includes(stage)) return;
+    if (!Object.prototype.hasOwnProperty.call(pipelineAggRaw, stage)) return;
 
     if (isLifecycleClaimInRange(b, lifecycleRange)) {
-      pipelineAgg[stage].count += 1;
-      pipelineAgg[stage].billed += num(b.amount_billed);
-      pipelineAgg[stage].expected += num(d.expectedInsurance);
-      pipelineAgg[stage].paid += num(d.paidAmount);
-      pipelineAgg[stage].atRisk += num(d.atRiskAmount);
+      pipelineAggRaw[stage].count += 1;
+      pipelineAggRaw[stage].billed += num(b.amount_billed);
+      pipelineAggRaw[stage].expected += num(d.expectedInsurance);
+      pipelineAggRaw[stage].paid += num(d.paidAmount);
+      pipelineAggRaw[stage].atRisk += num(d.atRiskAmount);
       return;
     }
 
@@ -18563,6 +18564,19 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       pipelineCarryoverAgg[stage].atRisk += num(d.atRiskAmount);
     }
   });
+
+  const pipelineAgg = {
+    "Awaiting Payment": {
+      count: (pipelineAggRaw["Submitted"]?.count || 0) + (pipelineAggRaw["Waiting Payment"]?.count || 0),
+      billed: (pipelineAggRaw["Submitted"]?.billed || 0) + (pipelineAggRaw["Waiting Payment"]?.billed || 0),
+      expected: (pipelineAggRaw["Submitted"]?.expected || 0) + (pipelineAggRaw["Waiting Payment"]?.expected || 0),
+      paid: (pipelineAggRaw["Submitted"]?.paid || 0) + (pipelineAggRaw["Waiting Payment"]?.paid || 0),
+      atRisk: (pipelineAggRaw["Submitted"]?.atRisk || 0) + (pipelineAggRaw["Waiting Payment"]?.atRisk || 0),
+    },
+    "Denied": pipelineAggRaw["Denied"] || {},
+    "Underpaid": pipelineAggRaw["Underpaid"] || {},
+    "Resolved": pipelineAggRaw["Resolved"] || {}
+  };
 
   const pipelineTotal = CORE_LIFECYCLE_STAGES.reduce((sum, stage) => sum + (pipelineAgg[stage]?.count || 0), 0) || 1;
   const pipelineWindowLabel = lifecycleRangeLabel(lifecycleRange);
@@ -18582,14 +18596,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   }
 
   function getLifecycleCardDisplay(stage, metrics){
-    if (stage === "Submitted"){
-      return {
-        primary: `Billed: ${formatMoneyUI(metrics.billed || 0)}`,
-        secondary: ""
-      };
-    }
-
-    if (stage === "Waiting Payment"){
+    if (stage === "Awaiting Payment"){
       return {
         primary: `Expected: ${formatMoneyUI(metrics.expected || 0)}`,
         secondary: ""
@@ -18616,6 +18623,12 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     };
   }
 
+  const totalPipelineClaims =
+    (pipelineAgg["Awaiting Payment"]?.count || 0) +
+    (pipelineAgg["Denied"]?.count || 0) +
+    (pipelineAgg["Underpaid"]?.count || 0) +
+    (pipelineAgg["Resolved"]?.count || 0);
+
   const pipelineHtml = `
     <div class="insight-card" style="margin-top:14px;">
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;">
@@ -18628,15 +18641,12 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           const carry = pipelineCarryoverAgg[stage] || { count:0, billed:0, atRisk:0 };
 
           let pct = Math.round((d.count / pipelineTotal) * 100);
-          if (stage === "Waiting Payment" && d.count === 0){
-            const submitted = pipelineAgg["Submitted"]?.count || 0;
-            if (submitted > 0) pct = Math.round((submitted / pipelineTotal) * 100);
-          }
 
           const href = stageToClaimsHref(stage);
           const fillColor = stageToFillColor(stage, pct);
           const cardDisplay = getLifecycleCardDisplay(stage, d);
-          const showEmptyCardMessage = d.count === 0;
+          const showEmptyCardMessage = d.count === 0 && totalPipelineClaims === 0;
+          const showProgress = d.count > 0;
 
           return `
             <a href="${href}"
@@ -18647,10 +18657,13 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
                 ${showEmptyCardMessage
                   ? `<div class="muted small" style="margin-top:6px;">No claims in this stage</div>`
-                  : `
-                    <div class="muted small">${safeStr(cardDisplay.primary)}</div>
-                    ${cardDisplay.secondary ? `<div class="muted small">${safeStr(cardDisplay.secondary)}</div>` : ``}
-                  `}
+                  : d.count > 0
+                    ? `
+                      <div class="muted small">${safeStr(cardDisplay.primary)}</div>
+                      ${cardDisplay.secondary ? `<div class="muted small">${safeStr(cardDisplay.secondary)}</div>` : ``}
+                    `
+                    : ``
+                }
 
                 ${((stage === "Denied" || stage === "Underpaid") && lifecycleRange !== "all" && d.count > 0)
                   ? `<div class="muted small" style="
@@ -18662,7 +18675,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                      </div>`
                   : ``}
 
-                ${d.count > 0
+                ${showProgress
                   ? `
                     <div style="height:10px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:10px;">
                       <div style="width:${pct}%;height:100%;background:${fillColor};"></div>
@@ -18813,7 +18826,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
               Risk ${infoIcon("Priority score based on claim status, dollars at risk, age, and workflow urgency.")}
             </th>
             <th>
-              Aging ${infoIcon("Age bucket from the claim workflow anchor date. Used to surface carryover backlog.")}
+              Aging ${infoIcon("Aging days from the claim workflow anchor date. Displayed only after payment activity or for denied/underpaid claims.")}
             </th>
             <th>Status</th>
             <th>Action</th>
@@ -18828,9 +18841,40 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                 risk > 80 ? "#dc2626" :
                 risk > 60 ? "#f59e0b" :
                 "#16a34a";
-              const ageDays = getLifecycleAgeDays(c);
-              const ageBucket = getLifecycleAgeBucketLabel(ageDays);
+              const paid = Number(d.paidAmount || 0);
+              const status = String(d.lifecycleStage || c.status || "");
+              const agingDays = getLifecycleAgeDays(c);
+              const showAging =
+                (status === "Denied") ||
+                (status === "Underpaid") ||
+                (paid > 0);
+              const agingDisplay = showAging
+                ? `${agingDays}`
+                : "-";
               const isCarryoverRow = shouldBypassRangeForCardDrilldown && !isLifecycleClaimInRange(c, lifecycleRange);
+              const hasPayment =
+                (paid > 0) ||
+                (Number(c.paid_amount || 0) > 0) ||
+                (status === "Denied") ||
+                (status === "Underpaid");
+
+              let actionButtons = "";
+
+              if (!hasPayment) {
+                actionButtons = `
+                  <a href="/data-management?tab=payments" class="btn small">
+                    Upload Payment →
+                  </a>
+                `;
+              } else {
+                actionButtons = `
+                  <a href="/claim/${encodeURIComponent(c.claim_number || "")}" class="btn small">View</a>
+                  ${!d.expectedInsurance ? `<button class="btn secondary small">Fix Match</button>` : ""}
+                  <a href="/action-center?claim=${encodeURIComponent(c.claim_number || "")}" class="btn secondary small">
+                    Action
+                  </a>
+                `;
+              }
 
               return `
                 <tr>
@@ -18847,7 +18891,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                   <td style="font-weight:800;color:${riskColor};">
                     ${risk}
                   </td>
-                  <td title="${ageDays} days">${safeStr(ageBucket)}</td>
+                  <td>${safeStr(agingDisplay)}</td>
                   <td>
                     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                       <span class="badge ${badgeClassForStatus(d.lifecycleStage)}">
@@ -18857,31 +18901,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                     </div>
                   </td>
                   <td style="display:flex;gap:6px;flex-wrap:wrap;">
-                    <button
-                      type="button"
-                      class="btn small secondary view-claim-btn"
-                      data-id="${encodeURIComponent(String(c.billed_id || ""))}">
-                      View
-                    </button>
-
-                    ${
-                      !d.expectedInsurance
-                        ? `<button class="btn small secondary" type="button">Fix Match</button>`
-                        : ""
-                    }
-
-                    <a class="btn small secondary"
-                      ${
-                        mapStageToActionTab(d.lifecycleStage) === "denials"
-                          ? `href="/ai-appeal?billed_id=${encodeURIComponent(c.billed_id)}"`
-                          : mapStageToActionTab(d.lifecycleStage) === "underpayments"
-                          ? `href="/ai-negotiation?billed_id=${encodeURIComponent(c.billed_id)}"`
-                          : `href="/action-center?claim=${encodeURIComponent(c.billed_id)}"`
-                      }>
-                      ${mapStageToActionTab(d.lifecycleStage) === "denials" ? "Appeal" :
-                        mapStageToActionTab(d.lifecycleStage) === "underpayments" ? "Negotiate" :
-                        "Action"}
-                    </a>
+                    ${actionButtons}
                   </td>
                 </tr>
               `;
