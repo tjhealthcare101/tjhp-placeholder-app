@@ -9745,8 +9745,11 @@ function evaluateClaimDerived(claim, ctx={}){
 
   const key = normalizeClaimKey(claim.claim_number || "");
   const paymentRows = key && claimCtx.paymentsByClaim ? (claimCtx.paymentsByClaim[key] || []) : [];
-  const claimHasPaidField = [claim.insurance_paid, claim.paid_amount].some(v => v != null && String(v).trim() !== "");
-  const hasPaymentRecord = paymentRows.length > 0 || claimHasPaidField || !!claim.paid_at;
+  const paidFieldAmount = Math.max(
+    num(claim.insurance_paid || 0),
+    num(claim.paid_amount || 0)
+  );
+  const hasPositivePaidField = paidFieldAmount > 0.0001;
   const submittedFlag = !!(claim.submission_id || claim.submitted_at || claim.submitted_date || claim.submitted_to_payer);
 
   const appealCase = claim.denial_case_id && claimCtx.caseById ? claimCtx.caseById.get(String(claim.denial_case_id)) : null;
@@ -9756,11 +9759,37 @@ function evaluateClaimDerived(claim, ctx={}){
   const negotiationStatus = String(negotiation?.status || "");
   const hasActiveAppealOrNegotiation = activeCaseStatuses.includes(appealStatus) || activeCaseStatuses.includes(negotiationStatus);
 
-  const denialReason = String(claim.denial_reason || appealCase?.denial_reason || appealCase?.issue_reason || "").trim();
-  const denialDocAttached = !!(claim.denial_doc_attached || claim.denial_document || claim.denial_file ||
-    (appealCase && ((appealCase.files || []).length > 0 || (appealCase.appeal_attachments || []).length > 0)));
-  const explicitDenialUpload = denialDocAttached || String(appealCase?.status || "").toLowerCase().includes("denied");
+  const denialReason = String(
+    claim.denial_reason ||
+    claim.denial_code ||
+    appealCase?.denial_reason ||
+    appealCase?.issue_reason ||
+    ""
+  ).trim();
+  const denialDocAttached = !!(
+    claim.denial_doc_attached ||
+    claim.denial_document ||
+    claim.denial_file ||
+    (appealCase && (((appealCase.files || []).length > 0) || ((appealCase.appeal_attachments || []).length > 0)))
+  );
+  const explicitDenialUpload =
+    denialDocAttached ||
+    String(appealCase?.status || "").toLowerCase().includes("denied") ||
+    String(claim.denial_status || "").toLowerCase().includes("denied");
   const hasDenialContext = !!(denialReason || denialDocAttached || appealCase || explicitDenialUpload);
+  const responseStatus = String(
+    claim.remittance_status ||
+    claim.payment_status ||
+    claim.eob_status ||
+    claim.denial_status ||
+    ""
+  ).trim();
+  const hasPaymentRecord =
+    paymentRows.length > 0 ||
+    hasPositivePaidField ||
+    !!claim.paid_at ||
+    !!hasDenialContext ||
+    !!responseStatus;
 
   const expectedAmount = expectedForLifecycle;
 
@@ -10793,14 +10822,20 @@ function computePayerIntelligence(org_id, payerName, preset="last30"){
   };
 }
 
+function normalizeLifecycleDisplayStage(stage){
+  const s = String(stage || "").trim();
+  if (s === "Submitted" || s === "Waiting Payment") return "Awaiting Payment";
+  return s;
+}
+
 function badgeClassForStatus(st){
-  const s = String(st||"Pending");
+  const s = normalizeLifecycleDisplayStage(st || "Pending");
   if (s === "Resolved") return "ok";
   if (s === "Paid") return "ok";
   if (s === "Denied") return "err";
   if (s === "Underpaid") return "underpaid";
   if (s === "Appeal") return "warn";
-  if (s === "Waiting Payment" || s === "Submitted") return "warn";
+  if (s === "Awaiting Payment") return "warn";
   if (s === "Patient Follow-Up" || s === "Follow-Up Needed") return "warn";
   if (s === "Contractual") return "writeoff";
   return "";
@@ -18108,7 +18143,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   // Sub-tabs: billed | payments | denials | negotiations | all
   const qs = parsed.query || {};
   let view = String(qs.view || "lifecycle").toLowerCase();
-  const selectedStage = String(qs.stage || "").trim();
+  const selectedStage = normalizeStageFilter(String(qs.stage || "").trim());
   const selectedSimpleStage = selectedStage;
 
   if (qs.stage && pathname === "/claims") {
@@ -18523,7 +18558,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       return "Resolved";
     }
 
-    return d.submittedFlag ? "Waiting Payment" : "Submitted";
+    return "Awaiting Payment";
   }
 
   const stageToClaimsHref = (stage) => {
@@ -18532,9 +18567,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     return `/claims-lifecycle?stage=${encodeURIComponent(normalizedStage)}&range=${encodeURIComponent(lifecycleRange)}#lifecycleTable`;
   };
 
-  const pipelineAggRaw = {
-    Submitted: { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 },
-    "Waiting Payment": { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 },
+  const pipelineAgg = {
+    "Awaiting Payment": { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 },
     Denied: { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 },
     Underpaid: { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 },
     Resolved: { count: 0, billed: 0, expected: 0, paid: 0, atRisk: 0 }
@@ -18547,14 +18581,14 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   billedAll.forEach(b => {
     const d = evaluateClaimDerived(b, claimCtx);
     const stage = getCoreLifecycleStageForCards(b, d);
-    if (!Object.prototype.hasOwnProperty.call(pipelineAggRaw, stage)) return;
+    if (!Object.prototype.hasOwnProperty.call(pipelineAgg, stage)) return;
 
     if (isLifecycleClaimInRange(b, lifecycleRange)) {
-      pipelineAggRaw[stage].count += 1;
-      pipelineAggRaw[stage].billed += num(b.amount_billed);
-      pipelineAggRaw[stage].expected += num(d.expectedInsurance);
-      pipelineAggRaw[stage].paid += num(d.paidAmount);
-      pipelineAggRaw[stage].atRisk += num(d.atRiskAmount);
+      pipelineAgg[stage].count += 1;
+      pipelineAgg[stage].billed += num(b.amount_billed);
+      pipelineAgg[stage].expected += num(d.expectedInsurance);
+      pipelineAgg[stage].paid += num(d.paidAmount);
+      pipelineAgg[stage].atRisk += num(d.atRiskAmount);
       return;
     }
 
@@ -18564,19 +18598,6 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       pipelineCarryoverAgg[stage].atRisk += num(d.atRiskAmount);
     }
   });
-
-  const pipelineAgg = {
-    "Awaiting Payment": {
-      count: (pipelineAggRaw["Submitted"]?.count || 0) + (pipelineAggRaw["Waiting Payment"]?.count || 0),
-      billed: (pipelineAggRaw["Submitted"]?.billed || 0) + (pipelineAggRaw["Waiting Payment"]?.billed || 0),
-      expected: (pipelineAggRaw["Submitted"]?.expected || 0) + (pipelineAggRaw["Waiting Payment"]?.expected || 0),
-      paid: (pipelineAggRaw["Submitted"]?.paid || 0) + (pipelineAggRaw["Waiting Payment"]?.paid || 0),
-      atRisk: (pipelineAggRaw["Submitted"]?.atRisk || 0) + (pipelineAggRaw["Waiting Payment"]?.atRisk || 0),
-    },
-    "Denied": pipelineAggRaw["Denied"] || {},
-    "Underpaid": pipelineAggRaw["Underpaid"] || {},
-    "Resolved": pipelineAggRaw["Resolved"] || {}
-  };
 
   const pipelineTotal = CORE_LIFECYCLE_STAGES.reduce((sum, stage) => sum + (pipelineAgg[stage]?.count || 0), 0) || 1;
   const pipelineWindowLabel = lifecycleRangeLabel(lifecycleRange);
@@ -18695,15 +18716,16 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const lifecyclePayer = String(qs.payer || "").trim();
   let lifecycleStageFilter = String(qs.stage_filter || "").trim();
   const effectiveStage = lifecycleStageFilter ? "" : selectedStage;
+  const normalizedEffectiveStage = effectiveStage ? normalizeLifecycleDisplayStage(effectiveStage) : "";
   const lifecyclePerPage = [10,25,50,100].includes(Number(qs.per_page)) ? Number(qs.per_page) : 25;
   const carryoverDrilldownStages = new Set(["Denied", "Underpaid"]);
-  const shouldBypassRangeForCardDrilldown = !!effectiveStage && carryoverDrilldownStages.has(effectiveStage);
+  const shouldBypassRangeForCardDrilldown = !!normalizedEffectiveStage && carryoverDrilldownStages.has(normalizedEffectiveStage);
 
-  const stageFilteredClaims = effectiveStage
+  const stageFilteredClaims = normalizedEffectiveStage
     ? billedAll
         .filter(b => {
           const d = evaluateClaimDerived(b, claimCtx);
-          return getCoreLifecycleStageForCards(b, d) === effectiveStage;
+          return normalizeLifecycleDisplayStage(getCoreLifecycleStageForCards(b, d)) === normalizedEffectiveStage;
         })
         .sort((a,b) => computeClaimRiskScore(b) - computeClaimRiskScore(a))
     : billedAll
@@ -18720,7 +18742,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
     if (lifecycleSearch && !searchBlob.includes(lifecycleSearch)) return false;
     if (lifecyclePayer && String(c.payer || "") !== lifecyclePayer) return false;
-    if (lifecycleStageFilter && getCoreLifecycleStageForCards(c, d) !== lifecycleStageFilter) return false;
+    if (lifecycleStageFilter && normalizeLifecycleDisplayStage(getCoreLifecycleStageForCards(c, d)) !== normalizeLifecycleDisplayStage(lifecycleStageFilter)) return false;
     if (!shouldBypassRangeForCardDrilldown && !isLifecycleClaimInRange(c, lifecycleRange)) return false;
 
     return true;
@@ -18842,39 +18864,55 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                 risk > 60 ? "#f59e0b" :
                 "#16a34a";
               const paid = Number(d.paidAmount || 0);
-              const status = String(d.lifecycleStage || c.status || "");
+              const statusLabel = normalizeLifecycleDisplayStage(getCoreLifecycleStageForCards(c, d));
               const agingDays = getLifecycleAgeDays(c);
               const showAging =
-                (status === "Denied") ||
-                (status === "Underpaid") ||
+                (statusLabel === "Denied") ||
+                (statusLabel === "Underpaid") ||
+                !!d.hasPaymentResponse ||
                 (paid > 0);
               const agingDisplay = showAging
                 ? `${agingDays}`
                 : "-";
               const isCarryoverRow = shouldBypassRangeForCardDrilldown && !isLifecycleClaimInRange(c, lifecycleRange);
-              const hasPayment =
-                (paid > 0) ||
-                (Number(c.paid_amount || 0) > 0) ||
-                (status === "Denied") ||
-                (status === "Underpaid");
+              const hasPaymentResponse =
+                (typeof d.hasPaymentResponse === "boolean")
+                  ? d.hasPaymentResponse
+                  : ((paid > 0) || statusLabel === "Denied" || statusLabel === "Underpaid" || statusLabel === "Resolved");
+              const hasExpectedMatch = d.expectedInsurance !== null && d.expectedInsurance !== undefined;
 
-              let actionButtons = "";
+              const actionParts = [
+                `
+                  <button
+                    type="button"
+                    class="btn small secondary view-claim-btn"
+                    data-id="${encodeURIComponent(String(c.billed_id || ""))}">
+                    View
+                  </button>
+                `
+              ];
 
-              if (!hasPayment) {
-                actionButtons = `
+              if (!hasPaymentResponse) {
+                actionParts.push(`
                   <a href="/data-management?tab=payments" class="btn small">
                     Upload Payment →
                   </a>
-                `;
+                `);
               } else {
-                actionButtons = `
-                  <a href="/claim/${encodeURIComponent(c.claim_number || "")}" class="btn small">View</a>
-                  ${!d.expectedInsurance ? `<button class="btn secondary small">Fix Match</button>` : ""}
-                  <a href="/action-center?claim=${encodeURIComponent(c.claim_number || "")}" class="btn secondary small">
-                    Action
-                  </a>
-                `;
+                if (!hasExpectedMatch) {
+                  actionParts.push(`<button class="btn secondary small" type="button">Fix Match</button>`);
+                }
+
+                if (statusLabel === "Denied") {
+                  actionParts.push(`<a href="/ai-appeal?billed_id=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Appeal</a>`);
+                } else if (statusLabel === "Underpaid") {
+                  actionParts.push(`<a href="/ai-negotiation?billed_id=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Negotiate</a>`);
+                } else {
+                  actionParts.push(`<a href="/actions?claim=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Action</a>`);
+                }
               }
+
+              const actionButtons = actionParts.join("");
 
               return `
                 <tr>
@@ -18894,8 +18932,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                   <td>${safeStr(agingDisplay)}</td>
                   <td>
                     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                      <span class="badge ${badgeClassForStatus(d.lifecycleStage)}">
-                        ${safeStr(d.lifecycleStage)}
+                      <span class="badge ${badgeClassForStatus(statusLabel)}">
+                        ${safeStr(statusLabel)}
                       </span>
                       ${isCarryoverRow ? `<span class="badge warn">Carryover</span>` : ``}
                     </div>
@@ -22403,7 +22441,10 @@ if (method === "GET" && pathname === "/actions") {
   const selectedClaimId = String(parsed.query.claim || "").trim();
   const tabRaw = String(parsed.query.tab || "all").toLowerCase();
   const tab = (tabRaw === "awaiting" || tabRaw === "followup" || tabRaw === "payments") ? "postsubmission" : tabRaw; // all|denials|underpayments|postsubmission
-  const postSubFilter = String(parsed.query.postsub || (tabRaw === "followup" ? "followup" : (tabRaw === "awaiting" || tabRaw === "payments" ? "awaiting" : "all"))).toLowerCase(); // all|awaiting|followup
+  const subTabRaw = String(parsed.query.postsub || "all").toLowerCase();
+  const subTab = ["all", "appeals", "negotiations", "followup"].includes(subTabRaw)
+    ? subTabRaw
+    : (subTabRaw === "followup" ? "followup" : "all");
   const q = String(parsed.query.q || "").trim().toLowerCase();
   const payerFilter = String(parsed.query.payer || "").trim();
   const rangePreset = String(parsed.query.range || "last30").trim();
@@ -22451,28 +22492,69 @@ if (method === "GET" && pathname === "/actions") {
 
   const billed = Number(b.amount_billed || 0);
 
-  const rawStatus = String(derived?.lifecycleStage || b.status || "").toLowerCase();
-
-  // Awaiting Payment ONLY when explicitly approved / pending payment.
-  // Prefer denial case status when available (most reliable).
-  const denialCaseStatus = denialOpen ? "open" : ""; // just a hint; used below via rawStatus keywords
+  const normalizedStatus = normalizeLifecycleDisplayStage(String(derived?.lifecycleStage || b.status || ""));
+  const rawStatus = normalizedStatus.toLowerCase();
+  const hasPaymentResponse = !!(derived && derived.hasPaymentResponse);
   const hasApprovalSignal =
+    normalizedStatus === "Awaiting Payment" ||
     rawStatus.includes("approved") ||
-    rawStatus.includes("pending payment") ||
-    rawStatus.includes("awaiting payment");
+    rawStatus.includes("pending payment");
 
-  // 1) Awaiting Payment only if explicitly approved and paid is still 0
+  if (!hasPaymentResponse) return "Awaiting Payment";
   if (paid === 0 && hasApprovalSignal) return "Awaiting Payment";
-
-  // 2) Paid = 0 defaults to Denied
   if (paid === 0) return "Denied";
 
-  // 3) Underpaid
   if (expected !== null && paid < expected) return "Underpaid";
   if (expected === null && paid < billed) return "Underpaid";
 
   return "Paid";
 }
+
+  function filterPostSubmissionClaims(claims, subTabKey){
+    return claims.filter(claim => {
+      const d = evaluateClaimDerived(claim, actionCtx);
+      const appealCase = claim.denial_case_id ? caseById.get(claim.denial_case_id) : null;
+      const negotiationCase = negByBilled.get(claim.billed_id);
+
+      const hasAppeal =
+        !!claim.has_appeal ||
+        !!appealCase ||
+        !!(claim.workspace?.appeal && Number(claim.workspace.appeal.round || 0) >= 1);
+
+      const hasNegotiation =
+        !!claim.has_negotiation ||
+        !!negotiationCase ||
+        !!(claim.workspace?.negotiation && Number(claim.workspace.negotiation.round || 0) >= 1);
+
+      const followUpNeeded =
+        !!claim.follow_up_required ||
+        (d.lifecycleStage === "Denied" && hasAppeal) ||
+        (d.lifecycleStage === "Underpaid" && hasNegotiation);
+
+      if (subTabKey === "appeals") return hasAppeal;
+      if (subTabKey === "negotiations") return hasNegotiation;
+      if (subTabKey === "followup") return followUpNeeded;
+      return hasAppeal || hasNegotiation;
+    });
+  }
+
+  function getClaimRoundInfo(claim){
+    if (claim.workspace?.appeal){
+      return `Appeal • Round ${claim.workspace.appeal.round || 1}`;
+    }
+    if (claim.workspace?.negotiation){
+      return `Negotiation • Round ${claim.workspace.negotiation.round || 1}`;
+    }
+    const appealCase = claim.denial_case_id ? caseById.get(claim.denial_case_id) : null;
+    if (appealCase){
+      return `Appeal • Round ${Number(appealCase.round || appealCase.appeal_round || 1)}`;
+    }
+    const negotiationCase = negByBilled.get(claim.billed_id);
+    if (negotiationCase){
+      return `Negotiation • Round ${Number(negotiationCase.round || negotiationCase.negotiation_round || 1)}`;
+    }
+    return "";
+  }
 
   // Build actionable items by tab
   const items = [];
@@ -22501,15 +22583,18 @@ if (method === "GET" && pathname === "/actions") {
     }
 
     const followUpDue = b.follow_up_date ? new Date(b.follow_up_date) : null;
-    const isSubmittedClaim = String(b.submission_status || "").toLowerCase() === "submitted";
-    const isAwaitingPaymentClaim = isSubmittedClaim && String(derived.lifecycleStage || b.lifecycleStage || "") !== "Paid";
+    const hasPaymentResponse = !!derived.hasPaymentResponse;
+    const displayLifecycleStage = normalizeLifecycleDisplayStage(String(derived.lifecycleStage || b.lifecycleStage || b.status || ""));
+    const isSubmittedClaim =
+      !!derived.submittedFlag ||
+      displayLifecycleStage === "Awaiting Payment";
+    const isAwaitingPaymentClaim = displayLifecycleStage === "Awaiting Payment";
     const isFollowupNeededClaim = isSubmittedClaim && followUpDue && !Number.isNaN(followUpDue.getTime()) && followUpDue <= now;
     const postSubmissionStatus = isFollowupNeededClaim ? "Follow-Up Needed" : (isAwaitingPaymentClaim ? "Awaiting Payment" : "");
     const isPostSubmissionClaim = !!postSubmissionStatus;
 
     if (tab === "postsubmission" && !isPostSubmissionClaim) continue;
-    if (tab === "postsubmission" && postSubFilter === "awaiting" && postSubmissionStatus !== "Awaiting Payment") continue;
-    if (tab === "postsubmission" && postSubFilter === "followup" && postSubmissionStatus !== "Follow-Up Needed") continue;
+    if (tab === "postsubmission" && filterPostSubmissionClaims([b], subTab).length === 0) continue;
 
     // Determine action center grouping (PRIORITY ORDER FIXED)
     let group = null;
@@ -22523,21 +22608,26 @@ if (method === "GET" && pathname === "/actions") {
       secondaryStatus = d.caseStatus;
       kind = "denial";
 
-    // 2) If PAID = 0, it belongs in Denials UNLESS it is explicitly Awaiting Payment
-    } else if (paid0) {
-      // If there's a denial case and it maps to Awaiting Payment, keep it there
+    // 2) No payer response yet = Awaiting Payment / Post-Submission
+    } else if (isAwaitingPaymentClaim) {
+      group = "Post-Submission";
+      secondaryStatus = "Awaiting initial payer response";
+      kind = "other";
+
+    // 3) Paid = 0 AFTER payer response = Denied
+    } else if (paid0 && hasPaymentResponse) {
       const d = denialStageForClaim(b);
       if (d.stage === "Awaiting Payment") {
-        group = d.stage;
-        secondaryStatus = d.caseStatus;
-        kind = "denial";
+        group = "Post-Submission";
+        secondaryStatus = d.caseStatus || "Approved and awaiting payment";
+        kind = "other";
       } else {
         group = "Denials";
-        secondaryStatus = "Paid $0.00 (treat as denied until posted)";
+        secondaryStatus = "Payer responded with $0.00";
         kind = "denial";
       }
 
-    // 3) Underpaid logic (paid > 0 but not fully resolved)
+    // 4) Underpaid logic (paid > 0 but not fully resolved)
     } else if (opStatus === "Underpaid") {
       if (financials.expectedInsurance === null) {
         group = "Underpayments";
@@ -22629,19 +22719,15 @@ if (method === "GET" && pathname === "/actions") {
       ${tabBtn("all","All At Risk","All denials, underpayments, follow-ups, and awaiting payment work in one queue.")}
       ${tabBtn("denials","Denials","Denied claims that need an appeal packet or appeal follow-up.")}
       ${tabBtn("underpayments","Underpayments","Underpaid claims that need negotiation work or follow-up.")}
-      ${tabBtn("postsubmission","Post-Submission","Submitted claims grouped by post-submission status: Awaiting Payment or Follow-Up Needed.")}
+      ${tabBtn("postsubmission","Appeals & Negotiations","Submitted claims grouped by appeal, negotiation, and follow-up needs.")}
     </div>
   `;
-  const postSubFilterBtn = (key, label) => {
-    const active = postSubFilter === key;
-    const qs = new URLSearchParams({ ...parsed.query, tab: "postsubmission", postsub: key, page: "1" }).toString();
-    return `<a href="/actions?${qs}" style="text-decoration:none;display:inline-flex;gap:6px;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid #e5e7eb;background:${active ? "#111827" : "#fff"};color:${active ? "#fff" : "#111827"};font-weight:800;font-size:12px;">${label}</a>`;
-  };
-  const postSubFilters = (tab === "postsubmission") ? `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-      ${postSubFilterBtn("all","All")}
-      ${postSubFilterBtn("awaiting","Awaiting Payment")}
-      ${postSubFilterBtn("followup","Follow-Up Needed")}
+  const postSubmissionSubTabs = (tab === "postsubmission") ? `
+    <div class="subtabs" style="display:flex;gap:8px;margin-top:10px;">
+      <button class="subtab-btn ${subTab === 'all' ? 'active' : ''}" data-subtab="all">All</button>
+      <button class="subtab-btn ${subTab === 'appeals' ? 'active' : ''}" data-subtab="appeals">Appeals</button>
+      <button class="subtab-btn ${subTab === 'negotiations' ? 'active' : ''}" data-subtab="negotiations">Negotiations</button>
+      <button class="subtab-btn ${subTab === 'followup' ? 'active' : ''}" data-subtab="followup">Follow-Up Needed</button>
     </div>
   ` : ``;
 
@@ -22710,24 +22796,32 @@ if (method === "GET" && pathname === "/actions") {
         </a>
       ` : ``;
 
-      actionsHtml = `
-        ${contractAction}
-        <a class="btn secondary small" href="${claimLink}">Open Claim</a>
-        <a class="btn secondary small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Negotiation Workspace</a>
-        <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
-        ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `
-          <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">
-            Patient Follow-Up Write-Off
-          </a>
-        ` : ``}
-        ${x.kind === "followup_ws" ? `
-          <form method="POST" action="/agent-workspace/followup/escalate" style="display:inline-block;margin:0;">
-            <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}" />
-            <input type="hidden" name="channel" value="${safeStr(channel)}" />
-            <button class="btn secondary small" type="submit">Escalate</button>
-          </form>
-        ` : ``}
-      `;
+      if (x.postSubmissionStatus === "Awaiting Payment") {
+        actionsHtml = `
+          ${contractAction}
+          <a class="btn secondary small" href="${claimLink}">Open Claim</a>
+          <a class="btn secondary small" href="/data-management?tab=payments">Upload Payment</a>
+        `;
+      } else {
+        actionsHtml = `
+          ${contractAction}
+          <a class="btn secondary small" href="${claimLink}">Open Claim</a>
+          <a class="btn secondary small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Negotiation Workspace</a>
+          <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
+          ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `
+            <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">
+              Patient Follow-Up Write-Off
+            </a>
+          ` : ``}
+          ${x.kind === "followup_ws" ? `
+            <form method="POST" action="/agent-workspace/followup/escalate" style="display:inline-block;margin:0;">
+              <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}" />
+              <input type="hidden" name="channel" value="${safeStr(channel)}" />
+              <button class="btn secondary small" type="submit">Escalate</button>
+            </form>
+          ` : ``}
+        `;
+      }
     }
 
     return `<tr data-claim="${safeStr(String(b.billed_id || ""))}"${rowStyleAttr}>
@@ -22755,6 +22849,7 @@ if (method === "GET" && pathname === "/actions") {
         ${x.isSubmittedClaim ? `<span class="badge ok" style="margin-left:6px;">Submitted${x.postSubmissionStatus ? ` (${safeStr(x.postSubmissionStatus)})` : ""}</span>` : `<span class="badge" style="margin-left:6px;">Draft</span>`}
         ${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}
       </td>
+      <td>${safeStr(getClaimRoundInfo(b)) || "-"}</td>
       <td>${atRiskAmount !== null ? formatMoneyUI(atRiskAmount) : "-"}</td>
       <td>${x.riskScore}</td>
       <td>${followUpDateText}</td>
@@ -22792,13 +22887,13 @@ if (method === "GET" && pathname === "/actions") {
       <div class="muted small">Start with the highest-priority claims below. Open a workspace when a claim needs an appeal or negotiation packet.</div>
     </div>
     ${tabs}
-    ${postSubFilters}
+    ${postSubmissionSubTabs}
 
     <div class="hr"></div>
 
     <form method="GET" action="/actions" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
       <input type="hidden" name="tab" value="${safeStr(tab)}"/>
-      ${tab === "postsubmission" ? `<input type="hidden" name="postsub" value="${safeStr(postSubFilter)}"/>` : ``}
+      ${tab === "postsubmission" ? `<input type="hidden" name="postsub" value="${safeStr(subTab)}"/>` : ``}
       <div style="display:flex;flex-direction:column;min-width:220px;">
         <label>Search</label>
         <input name="q" value="${safeStr(parsed.query.q || "")}" placeholder="Claim #, payer, DOS..." />
@@ -22832,7 +22927,7 @@ if (method === "GET" && pathname === "/actions") {
       </div>
       <div>
         <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
-        <a class="btn secondary" href="/actions?tab=${encodeURIComponent(tab)}${tab === "postsubmission" ? `&postsub=${encodeURIComponent(postSubFilter)}` : ""}" style="margin-top:1.6em;">Reset</a>
+        <a class="btn secondary" href="/actions?tab=${encodeURIComponent(tab)}${tab === "postsubmission" ? `&postsub=${encodeURIComponent(subTab)}` : ""}" style="margin-top:1.6em;">Reset</a>
       </div>
     </form>
 
@@ -22842,18 +22937,31 @@ if (method === "GET" && pathname === "/actions") {
       <div>${sizeSelect}</div>
     </div>
 
-    ${(payerFilter || rangePreset || (tab === "postsubmission" && postSubFilter !== "all")) ? `<div class="muted small" style="margin-bottom:10px;">Filters: ${payerFilter ? `<span class="badge">${safeStr(payerFilter)}</span>` : ""} ${rangePreset ? `<span class="badge">${safeStr(rangePreset)}</span>` : ""} ${(tab === "postsubmission" && postSubFilter !== "all") ? `<span class="badge">${safeStr(postSubFilter)}</span>` : ""}</div>` : ""}
+    ${(payerFilter || rangePreset || (tab === "postsubmission" && subTab !== "all")) ? `<div class="muted small" style="margin-bottom:10px;">Filters: ${payerFilter ? `<span class="badge">${safeStr(payerFilter)}</span>` : ""} ${rangePreset ? `<span class="badge">${safeStr(rangePreset)}</span>` : ""} ${(tab === "postsubmission" && subTab !== "all") ? `<span class="badge">${safeStr(subTab)}</span>` : ""}</div>` : ""}
     ${claimBanner}
 
     <div id="actionTableSync">
       <div class="scrollSyncTop"><div></div></div>
       <div class="scrollSyncBottom tableScrollY">
       <table>
-        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed <span class="tooltip" data-tip="Original submitted claim charge amount.">ⓘ</span></th><th>Expected <span class="tooltip" data-tip="Estimated insurance expected amount after patient responsibility and contract terms.">ⓘ</span></th><th>Paid <span class="tooltip" data-tip="Total payer payment currently posted.">ⓘ</span></th><th>Status / Stage <span class="tooltip" data-tip="Derived from payer response, denial context, and negotiation state.">ⓘ</span></th><th>At Risk <span class="tooltip" data-tip="Estimated collectible dollars not yet recovered.">ⓘ</span></th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Follow-Up Date</th><th>Days Since Submission</th><th>Actions</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="11" class="muted">No items in this tab.</td></tr>`}</tbody>
+        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed <span class="tooltip" data-tip="Original submitted claim charge amount.">ⓘ</span></th><th>Expected <span class="tooltip" data-tip="Estimated insurance expected amount after patient responsibility and contract terms.">ⓘ</span></th><th>Paid <span class="tooltip" data-tip="Total payer payment currently posted.">ⓘ</span></th><th>Status / Stage <span class="tooltip" data-tip="Derived from payer response, denial context, and negotiation state.">ⓘ</span></th><th>Round</th><th>At Risk <span class="tooltip" data-tip="Estimated collectible dollars not yet recovered.">ⓘ</span></th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Follow-Up Date</th><th>Days Since Submission</th><th>Actions</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="12" class="muted">No items in this tab.</td></tr>`}</tbody>
       </table>
     </div>
     </div>
+    <script>
+      (function(){
+        document.querySelectorAll(".subtab-btn").forEach(btn => {
+          btn.addEventListener("click", function(){
+            const u = new URL(window.location.href);
+            u.searchParams.set("tab", "postsubmission");
+            u.searchParams.set("postsub", this.dataset.subtab || "all");
+            u.searchParams.set("page", "1");
+            window.location.href = u.toString();
+          });
+        });
+      })();
+    </script>
     <script>window.__syncScrollBars && window.__syncScrollBars("actionTableSync");</script>
     ${scrollScript}
     ${nav}
