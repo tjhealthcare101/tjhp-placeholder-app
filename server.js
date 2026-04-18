@@ -766,6 +766,12 @@ textarea{min-height:220px;}
 .badge{display:inline-block;border:1px solid var(--border);background:#fff;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:900;}
 .badge.ok{border-color:#a7f3d0;background:#ecfdf5;color:var(--ok);}
 .badge.warn{border-color:#fde68a;background:#fffbeb;color:var(--warn);}
+.badge.pending {
+  background: #f8fafc;
+  color: #111827;
+  border: 1px solid #d1d5db;
+  font-weight: 700;
+}
 .badge.err{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
 .badge.bad{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
 .badge.underpaid{border-color:#fdba74;background:#fff7ed;color:#9a3412;}
@@ -3380,19 +3386,25 @@ function getAccountContextByEmail(email) {
 
 function navUser(active = "", user_id = "") {
   const unreadCount = getUserUnreadSupportCount(user_id);
+  const navLinkStyle = (isActive) => `
+    padding:6px 12px;
+    border-radius:10px;
+    background:${isActive ? "#e5e7eb" : "transparent"};
+    font-weight:${isActive ? "800" : "600"};
+  `;
   return `
-    <a href="/dashboard" class="${active === "dashboard" ? "nav-active" : ""}">Revenue Overview</a>
-    <a href="/claims-lifecycle" class="${active === "claims" ? "nav-active" : ""}">Claims Lifecycle</a>
-    <a href="/data-management" class="${active === "data" ? "nav-active" : ""}">Data Management</a>
-    <a href="/action-center" class="${active === "actions" ? "nav-active" : ""}">Action Center</a>
-    <a href="/revenue-intelligence" class="${active === "ri" ? "nav-active" : ""}">Revenue Intelligence</a>
-    <a href="/ai-copilot" class="${active === "ai" ? "nav-active" : ""}">AI Copilot</a>
+    <a href="/dashboard" class="${active === "dashboard" ? "nav-active" : ""}" style="${navLinkStyle(active === "dashboard")}">Revenue Overview</a>
+    <a href="/claims-lifecycle" class="${active === "claims" ? "nav-active" : ""}" style="${navLinkStyle(active === "claims")}">Claims Lifecycle</a>
+    <a href="/data-management" class="${active === "data" ? "nav-active" : ""}" style="${navLinkStyle(active === "data")}">Data Management</a>
+    <a href="/actions" class="${active === "actions" ? "nav-active" : ""}" style="${navLinkStyle(active === "actions")}">Action Center</a>
+    <a href="/revenue-intelligence" class="${active === "ri" ? "nav-active" : ""}" style="${navLinkStyle(active === "ri")}">Revenue Intelligence</a>
+    <a href="/ai-copilot" class="${active === "ai" ? "nav-active" : ""}" style="${navLinkStyle(active === "ai")}">AI Copilot</a>
 
-    <a href="/support" class="${active === "support" ? "nav-active" : ""}">
+    <a href="/support" class="${active === "support" ? "nav-active" : ""}" style="${navLinkStyle(active === "support")}">
       Support ${unreadCount > 0 ? `(${unreadCount})` : ""}
     </a>
-    <a href="/account" class="${active === "account" ? "nav-active" : ""}">Account</a>
-    <a href="/logout">Logout</a>
+    <a href="/account" class="${active === "account" ? "nav-active" : ""}" style="${navLinkStyle(active === "account")}">Account</a>
+    <a href="/logout" style="${navLinkStyle(false)}">Logout</a>
   `;
 }
 function navAdmin() {
@@ -10835,7 +10847,7 @@ function badgeClassForStatus(st){
   if (s === "Denied") return "err";
   if (s === "Underpaid") return "underpaid";
   if (s === "Appeal") return "warn";
-  if (s === "Awaiting Payment") return "warn";
+  if (s === "Awaiting Payment") return "pending";
   if (s === "Patient Follow-Up" || s === "Follow-Up Needed") return "warn";
   if (s === "Contractual") return "writeoff";
   return "";
@@ -18894,9 +18906,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
               if (!hasPaymentResponse) {
                 actionParts.push(`
-                  <a href="/data-management?tab=payments" class="btn small">
-                    Upload Payment →
-                  </a>
+        <a href="/data-management?tab=payments" class="btn small secondary">
+          Upload Payment →
+        </a>
                 `);
               } else {
                 if (!hasExpectedMatch) {
@@ -22770,9 +22782,17 @@ if (method === "GET" && pathname === "/actions") {
     let badgeCls = badgeClassForStatus(status);
 
     let actionsHtml = '';
+    const viewButtonHtml = `
+      <button
+        type="button"
+        class="btn small secondary view-claim-btn"
+        data-id="${encodeURIComponent(String(b.billed_id || ""))}">
+        View
+      </button>
+    `;
     if (x.kind === "denial") {
       actionsHtml = `
-        <a class="btn secondary small" href="${claimLink}">Open Claim</a>
+        ${viewButtonHtml}
         <a class="btn secondary small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Appeal Workspace</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
         <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
@@ -22799,13 +22819,13 @@ if (method === "GET" && pathname === "/actions") {
       if (x.postSubmissionStatus === "Awaiting Payment") {
         actionsHtml = `
           ${contractAction}
-          <a class="btn secondary small" href="${claimLink}">Open Claim</a>
+          ${viewButtonHtml}
           <a class="btn secondary small" href="/data-management?tab=payments">Upload Payment</a>
         `;
       } else {
         actionsHtml = `
           ${contractAction}
-          <a class="btn secondary small" href="${claimLink}">Open Claim</a>
+          ${viewButtonHtml}
           <a class="btn secondary small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Negotiation Workspace</a>
           <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
           ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `
@@ -22846,8 +22866,6 @@ if (method === "GET" && pathname === "/actions") {
       <td class="num">${formatMoneyUI(paidAmount)}</td>
       <td>
         <span class="badge ${badgeCls}">${safeStr(status)}</span>
-        ${x.isSubmittedClaim ? `<span class="badge ok" style="margin-left:6px;">Submitted${x.postSubmissionStatus ? ` (${safeStr(x.postSubmissionStatus)})` : ""}</span>` : `<span class="badge" style="margin-left:6px;">Draft</span>`}
-        ${x.secondaryStatus ? `<div class="muted small">Stage: ${safeStr(x.secondaryStatus)}</div>` : ""}
       </td>
       <td>${safeStr(getClaimRoundInfo(b)) || "-"}</td>
       <td>${atRiskAmount !== null ? formatMoneyUI(atRiskAmount) : "-"}</td>
