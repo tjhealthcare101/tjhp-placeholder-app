@@ -776,6 +776,28 @@ textarea{min-height:220px;}
 .badge.bad{border-color:#fecaca;background:#fef2f2;color:var(--danger);}
 .badge.underpaid{border-color:#fdba74;background:#fff7ed;color:#9a3412;}
 .badge.writeoff{border-color:#d1d5db;background:#f3f4f6;color:#374151;}
+.badge.pending{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:auto;
+  min-height:30px;
+  padding:6px 12px;
+  border-radius:999px;
+  white-space:nowrap;
+  line-height:1.1;
+  vertical-align:middle;
+  background:#fffbeb;
+  color:#92400e;
+  border:1px solid #fde68a;
+  font-weight:800;
+}
+
+.lifecycle-claims-table td:nth-child(9),
+#actionTableSync td:nth-child(6){
+  vertical-align:middle;
+}
+
 .support-unread-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 6px;border-radius:999px;background:#ef4444;color:#fff;font-size:11px;font-weight:700;margin-left:6px;}
 /* Contract Missing Badge */
 .badge.contract-missing {
@@ -1536,6 +1558,382 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     toggle.textContent = hidden ? "Hide" : "Show";
   });
 });
+</script>
+
+
+<script>
+(() => {
+  if (window.__tjhpClaimsUiPatchBound) return;
+  window.__tjhpClaimsUiPatchBound = true;
+
+  const RISK_TIP =
+    "Priority score based on claim status, dollars at risk, age, and workflow urgency. 1 = low risk (good), 100 = high risk (bad).";
+
+  const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (ch) => ({
+    "&":"&amp;",
+    "<":"&lt;",
+    ">":"&gt;",
+    '"':"&quot;",
+    "'":"&#39;"
+  }[ch]));
+
+  const decodeId = (v) => {
+    try { return decodeURIComponent(String(v || "")); }
+    catch (_) { return String(v || ""); }
+  };
+
+  function getClaimIdFromHref(href) {
+    if (!href) return "";
+    try {
+      return new URL(href, window.location.origin).searchParams.get("billed_id") || "";
+    } catch (_) {
+      const m = String(href).match(/[?&]billed_id=([^&#]+)/);
+      return m ? decodeId(m[1]) : "";
+    }
+  }
+
+  function resolveButtonClaimId(btn) {
+    if (!btn) return "";
+    const row = btn.closest("tr");
+    return decodeId(
+      btn.getAttribute("data-id") ||
+      (row && row.getAttribute("data-claim")) ||
+      getClaimIdFromHref(
+        row &&
+        row.querySelector('a[href*="billed_id="]') &&
+        row.querySelector('a[href*="billed_id="]').getAttribute("href")
+      ) ||
+      ""
+    );
+  }
+
+  function resolveFallbackHref(btn, id) {
+    const row = btn && btn.closest("tr");
+    const href =
+      btn?.getAttribute("data-fallback-href") ||
+      row?.querySelector('a[href*="billed_id="]')?.getAttribute("href");
+    return href || (id ? "/claim-detail?billed_id=" + encodeURIComponent(id) : "/claims-lifecycle");
+  }
+
+  function badgeClassForStatusText(status) {
+    const s = String(status || "").trim().toLowerCase();
+    if (s === "awaiting payment" || s === "waiting payment" || s === "submitted") return "pending";
+    if (s.includes("denied")) return "err";
+    if (s.includes("underpaid")) return "underpaid";
+    if (s.includes("resolved") || s.includes("paid")) return "ok";
+    return "";
+  }
+
+  function patchRiskHeaderAndTooltip() {
+    const lifecycleRiskTh = document.querySelector(".lifecycle-claims-table thead th:nth-child(7)");
+    if (lifecycleRiskTh) {
+      const tip = lifecycleRiskTh.querySelector(".tooltip");
+      lifecycleRiskTh.innerHTML =
+        "Risk Score " + (tip ? tip.outerHTML : '<span class="tooltip" data-tip="' + esc(RISK_TIP) + '">ⓘ</span>');
+
+      const nextTip = lifecycleRiskTh.querySelector(".tooltip");
+      if (nextTip) nextTip.setAttribute("data-tip", RISK_TIP);
+    }
+
+    document
+      .querySelectorAll('th .tooltip[data-tip*="Priority score based on claim status"]')
+      .forEach((tip) => tip.setAttribute("data-tip", RISK_TIP));
+  }
+
+  function ensureMissingActionCenterViewButtons() {
+    if (!window.location.pathname.includes("/actions")) return;
+
+    document.querySelectorAll("#actionTableSync tbody tr").forEach((row) => {
+      const actionsCell = row.lastElementChild;
+      if (!actionsCell || actionsCell.querySelector(".view-claim-btn")) return;
+
+      const detailHref = row.querySelector('a[href*="billed_id="]')?.getAttribute("href");
+      const id = getClaimIdFromHref(detailHref);
+      if (!id) return;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn small secondary view-claim-btn";
+      btn.setAttribute("data-id", encodeURIComponent(id));
+      btn.setAttribute("data-fallback-href", detailHref || "");
+      btn.textContent = "View";
+
+      actionsCell.insertBefore(btn, actionsCell.firstChild);
+      actionsCell.insertBefore(document.createTextNode(" "), btn.nextSibling);
+    });
+  }
+
+  function buildClaimRegistry() {
+    const map = new Map();
+
+    document.querySelectorAll(".view-claim-btn").forEach((btn) => {
+      const row = btn.closest("tr");
+      if (!row) return;
+
+      const id = resolveButtonClaimId(btn);
+      if (!id) return;
+
+      const cells = Array.from(row.children);
+      const inLifecycle = !!row.closest(".lifecycle-claims-table");
+      const inAction = !!row.closest("#actionTableSync");
+      const statusBadge = row.querySelector(".badge");
+      const claimHref = resolveFallbackHref(btn, id);
+
+      const record = {
+        id,
+        claimHref,
+        claimNumber: cells[0]?.textContent?.trim() || "",
+        payer: cells[1]?.textContent?.trim() || "",
+        billed: cells[2]?.textContent?.trim() || "-",
+        expected: cells[3]?.textContent?.trim() || "-",
+        paid: cells[4]?.textContent?.trim() || "-",
+        atRisk: inLifecycle ? (cells[5]?.textContent?.trim() || "-") : (cells[7]?.textContent?.trim() || "-"),
+        risk: inLifecycle ? (cells[6]?.textContent?.trim() || "-") : (cells[8]?.textContent?.trim() || "-"),
+        agingOrDays: inLifecycle ? (cells[7]?.textContent?.trim() || "-") : (cells[10]?.textContent?.trim() || "-"),
+        status: statusBadge?.textContent?.trim() || (inAction ? (cells[5]?.textContent?.trim() || "Unknown") : "Unknown")
+      };
+
+      map.set(id, record);
+    });
+
+    return map;
+  }
+
+  function ensureFallbackPanel() {
+    let backdrop = document.getElementById("tjhpClaimPanelBackdrop");
+    let panel = document.getElementById("tjhpClaimPanel");
+
+    if (!backdrop) {
+      backdrop = document.createElement("div");
+      backdrop.id = "tjhpClaimPanelBackdrop";
+      backdrop.style.cssText =
+        "position:fixed;inset:0;background:rgba(15,23,42,.35);opacity:0;transition:opacity .2s ease;z-index:9998;display:none;";
+      document.body.appendChild(backdrop);
+    }
+
+    if (!panel) {
+      panel = document.createElement("aside");
+      panel.id = "tjhpClaimPanel";
+      panel.setAttribute("aria-hidden", "true");
+      panel.style.cssText =
+        "position:fixed;top:0;right:-440px;width:420px;max-width:96vw;height:100%;background:#fff;border-left:1px solid #e5e7eb;box-shadow:-8px 0 30px rgba(15,23,42,.18);z-index:9999;padding:18px;overflow-y:auto;transition:right .22s ease;";
+      panel.innerHTML = ""
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+        +   '<div><div class="muted small" style="text-transform:uppercase;letter-spacing:.06em;">Claim Detail</div><strong style="font-size:16px;">Claim View</strong></div>'
+        +   '<button type="button" data-tjhp-panel-close style="border:1px solid #111;background:#fff;color:#111;border-radius:10px;height:36px;padding:0 12px;cursor:pointer;font-weight:700;">Close</button>'
+        + '</div>'
+        + '<div data-tjhp-panel-body></div>';
+      document.body.appendChild(panel);
+    }
+
+    if (!backdrop.dataset.bound) {
+      backdrop.dataset.bound = "1";
+      backdrop.addEventListener("click", closeFallbackPanel);
+    }
+
+    const closeBtn = panel.querySelector("[data-tjhp-panel-close]");
+    if (closeBtn && !closeBtn.dataset.bound) {
+      closeBtn.dataset.bound = "1";
+      closeBtn.addEventListener("click", closeFallbackPanel);
+    }
+
+    return { backdrop, panel, body: panel.querySelector("[data-tjhp-panel-body]") };
+  }
+
+  function closeFallbackPanel() {
+    const ui = ensureFallbackPanel();
+    ui.panel.style.right = "-440px";
+    ui.panel.setAttribute("aria-hidden", "true");
+    ui.backdrop.style.opacity = "0";
+    setTimeout(() => { ui.backdrop.style.display = "none"; }, 200);
+    document.body.style.overflow = "";
+  }
+
+  function renderPrimaryAction(id, statusText) {
+    const s = String(statusText || "").toLowerCase();
+    if (s.includes("denied")) {
+      return '<a class="btn small secondary" href="/ai-appeal?billed_id=' + encodeURIComponent(id) + '">Open Appeal Workspace</a>';
+    }
+    if (s.includes("underpaid")) {
+      return '<a class="btn small secondary" href="/ai-negotiation?billed_id=' + encodeURIComponent(id) + '">Open Negotiation Workspace</a>';
+    }
+    if (s.includes("awaiting payment")) {
+      return '<a class="btn small secondary" href="/data-management?tab=payments">Upload Payment</a>';
+    }
+    if (window.location.pathname.includes("/actions")) {
+      return "";
+    }
+    return '<a class="btn small secondary" href="/actions?claim=' + encodeURIComponent(id) + '">Open in Action Center</a>';
+  }
+
+  function openFallbackPanel(id) {
+    const claims = buildClaimRegistry();
+    const claim = claims.get(String(id || ""));
+    if (!claim) return false;
+
+    const ui = ensureFallbackPanel();
+    const badgeCls = badgeClassForStatusText(claim.status);
+
+    ui.body.innerHTML = ""
+      + '<div style="font-size:20px;font-weight:900;margin-bottom:10px;">' + esc(claim.claimNumber || ("Claim #" + id)) + "</div>"
+      + '<div class="muted small" style="margin-bottom:14px;">' + esc(claim.payer || "") + "</div>"
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">'
+      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Billed</div><div style="font-weight:900;">' + esc(claim.billed) + "</div></div>"
+      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Expected</div><div style="font-weight:900;">' + esc(claim.expected) + "</div></div>"
+      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Paid</div><div style="font-weight:900;">' + esc(claim.paid) + "</div></div>"
+      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + esc(claim.atRisk) + "</div></div>"
+      + '</div>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
+      +   '<span class="badge ' + esc(badgeCls) + '">' + esc(claim.status || "Unknown") + "</span>"
+      +   '<span class="badge">Risk Score ' + esc(claim.risk || "-") + "</span>"
+      + '</div>'
+      + '<div class="muted small" style="margin-bottom:12px;">Age / timing: ' + esc(claim.agingOrDays || "-") + "</div>"
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
+      +   '<a class="btn small secondary" href="' + esc(claim.claimHref) + '">Open Full Claim</a>'
+      +   renderPrimaryAction(id, claim.status)
+      + '</div>';
+
+    document.body.style.overflow = "hidden";
+    ui.backdrop.style.display = "block";
+    ui.panel.setAttribute("aria-hidden", "false");
+
+    requestAnimationFrame(() => {
+      ui.backdrop.style.opacity = "1";
+      ui.panel.style.right = "0";
+    });
+
+    return true;
+  }
+
+  function normalizePanelActionsAfterOpen(id) {
+    window.setTimeout(() => {
+      const panel = document.getElementById("claimSidePanel") || document.getElementById("tjhpClaimPanel");
+      if (!panel) return;
+
+      panel.querySelectorAll("span.badge").forEach((badge) => {
+        const label = (badge.textContent || "").trim();
+        if (/^(Waiting Payment|Submitted|Awaiting Payment)$/i.test(label)) {
+          badge.textContent = "Awaiting Payment";
+          badge.classList.remove("warn");
+          badge.classList.add("pending");
+        }
+      });
+
+      panel.querySelectorAll('a[href*="/action-center?claim="]').forEach((a) => {
+        a.href = "/actions?claim=" + encodeURIComponent(id);
+        a.textContent = "Open in Action Center";
+      });
+
+      if (window.location.pathname.includes("/actions")) {
+        panel.querySelectorAll("a").forEach((a) => {
+          if ((a.textContent || "").trim() === "Open in Action Center") {
+            a.remove();
+          }
+        });
+      }
+    }, 0);
+  }
+
+  function applyClaimIdsLifecycleFilter() {
+    if (!window.location.pathname.includes("/claims-lifecycle")) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("claim_ids");
+    if (!raw) return;
+
+    const ids = raw.split(",").map((v) => decodeId(v).trim()).filter(Boolean);
+    if (!ids.length) return;
+
+    const idSet = new Set(ids);
+    const tableWrap = document.getElementById("lifecycleTable");
+    const tbody = document.querySelector(".lifecycle-claims-table tbody");
+    if (!tableWrap || !tbody) return;
+
+    let matched = 0;
+    tbody.querySelectorAll("tr").forEach((row) => {
+      const href = row.querySelector('a[href*="billed_id="]')?.getAttribute("href") || "";
+      const rowId = getClaimIdFromHref(href);
+      const keep = idSet.has(rowId);
+      row.style.display = keep ? "" : "none";
+      if (keep) matched += 1;
+    });
+
+    const existing = document.getElementById("affectedClaimsBanner");
+    if (existing) existing.remove();
+
+    const banner = document.createElement("div");
+    banner.id = "affectedClaimsBanner";
+    banner.className = "insight-card";
+    banner.style.borderLeft = "4px solid #6366f1";
+    banner.innerHTML = ""
+      + "<strong>Affected Claims Filter Active</strong>"
+      + '<div class="muted small" style="margin-top:6px;">Showing ' + matched + " uploaded-impacted claim" + (matched === 1 ? "" : "s") + " from the reimbursement commit flow.</div>"
+      + '<div style="margin-top:10px;">'
+      +   '<a class="btn secondary small" href="/claims-lifecycle#lifecycleTable" onclick="try{sessionStorage.setItem(\'claimsLifecycleRestore\',\'1\')}catch(e){}">Clear affected-claims filter</a>'
+      + "</div>";
+
+    tableWrap.insertAdjacentElement("afterbegin", banner);
+
+    if (window.location.hash === "#lifecycleTable") {
+      setTimeout(() => {
+        tableWrap.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 80);
+    }
+  }
+
+  function safeOpenClaimPanel(id) {
+    if (typeof window.openClaimPanel === "function") {
+      try {
+        window.openClaimPanel(id);
+        normalizePanelActionsAfterOpen(id);
+
+        const panel = document.getElementById("claimSidePanel");
+        if (panel && panel.getAttribute("aria-hidden") === "false") {
+          return true;
+        }
+      } catch (err) {
+        console.warn("openClaimPanel failed; falling back.", err);
+      }
+    }
+
+    return openFallbackPanel(id) || false;
+  }
+
+  document.addEventListener("click", (event) => {
+    const btn = event.target.closest(".view-claim-btn");
+    if (!btn) return;
+
+    const id = resolveButtonClaimId(btn);
+    if (!id) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+
+    if (!safeOpenClaimPanel(id)) {
+      window.location.assign(resolveFallbackHref(btn, id));
+    }
+  }, true);
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+
+    if (typeof window.closeClaimPanel === "function") {
+      try {
+        window.closeClaimPanel();
+        return;
+      } catch (_) {}
+    }
+
+    closeFallbackPanel();
+  });
+
+  patchRiskHeaderAndTooltip();
+  ensureMissingActionCenterViewButtons();
+  applyClaimIdsLifecycleFilter();
+})();
 </script>
 
 ${chatScript}
@@ -28971,9 +29369,13 @@ function renderTemplateEditor(org, user){
     rebuildOrgDerivedData(org.org_id);
 
     const impactedCount = affectedClaimIds.size;
-    const affectedClaimIdsCsv = Array.from(affectedClaimIds).filter(Boolean).join(",");
+    const affectedClaimIdsCsv = Array.from(affectedClaimIds)
+      .map((id) => String(id || "").trim())
+      .filter(Boolean)
+      .join(",");
+
     const affectedClaimsHref = affectedClaimIdsCsv
-      ? `/claims-lifecycle?claim_ids=${encodeURIComponent(affectedClaimIdsCsv)}#lifecycleTable`
+      ? `/claims-lifecycle?claim_ids=${encodeURIComponent(affectedClaimIdsCsv)}&per_page=100#lifecycleTable`
       : `/claims-lifecycle#lifecycleTable`;
 
     const html = renderPage("Reimbursement Commit Complete", `
