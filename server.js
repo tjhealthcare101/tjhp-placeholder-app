@@ -1989,182 +1989,81 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   applyClaimIdsLifecycleFilter();
 
   // ==============================
-  // Claims Lifecycle-only repair patch
-  // Paste inside this browser-side claims UI IIFE,
-  // just before the final IIFE terminator
+  // 🔥 FINAL LIFECYCLE FIX (CLEAN + COMPLETE)
   // ==============================
-  (function claimsLifecycleOnlyRepairPatch(){
-    if (window.__tjhpLifecycleOnlyRepairBound) return;
-    window.__tjhpLifecycleOnlyRepairBound = true;
+  (function(){
+    if (window.__lifecycleFinalFix) return;
+    window.__lifecycleFinalFix = true;
 
-    const LIFECYCLE_RISK_TIP =
-      "Priority score based on claim status, dollars at risk, age, and workflow urgency. 1 = low risk (good), 100 = high risk (bad).";
+    // =============================
+    // 1. STATUS PILL FIX (correct class)
+    // =============================
+    const style = document.createElement("style");
+    style.innerHTML = [
+      ".lifecycle-claims-table .badge.warn {",
+      "  display:inline-flex !important;",
+      "  align-items:center !important;",
+      "  justify-content:center !important;",
+      "  padding:3px 8px !important;",
+      "  height:auto !important;",
+      "  border-radius:999px !important;",
+      "  white-space:nowrap !important;",
+      "  font-size:12px !important;",
+      "  font-weight:800 !important;",
+      "  background:#fffbeb !important;",
+      "  color:#92400e !important;",
+      "  border:1px solid #fde68a !important;",
+      "  line-height:1.2 !important;",
+      "}"
+    ].join("\\n");
+    document.head.appendChild(style);
 
-    const STYLE_ID = "tjhp-lifecycle-only-repair-style";
-
-    function escapeAttr(value) {
-      return String(value == null ? "" : value)
-        .replace(/&/g, "&amp;")
-        .replace(/"/g, "&quot;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-    }
-
-    function safeDecode(value) {
-      const raw = String(value || "").trim();
-      if (!raw) return "";
-      try {
-        return decodeURIComponent(raw);
-      } catch (_) {
-        return raw;
-      }
-    }
-
-    function extractClaimIdFromHref(href) {
-      const rawHref = String(href || "").trim();
-      if (!rawHref) return "";
-
-      try {
-        return new URL(rawHref, window.location.origin).searchParams.get("billed_id") || "";
-      } catch (_) {
-        const match = rawHref.match(/[?&]billed_id=([^&#]+)/);
-        return match ? safeDecode(match[1]) : "";
-      }
-    }
-
-    function ensureLifecycleScopedStyle() {
-      let style = document.getElementById(STYLE_ID);
-      if (!style) {
-        style = document.createElement("style");
-        style.id = STYLE_ID;
-        document.head.appendChild(style);
-      }
-
-      style.textContent = [
-        ".lifecycle-claims-table tbody td:nth-child(9) {",
-        "  vertical-align: middle !important;",
-        "}",
-        ".lifecycle-claims-table tbody td:nth-child(9) > div {",
-        "  display: flex !important;",
-        "  align-items: center !important;",
-        "  gap: 6px !important;",
-        "  flex-wrap: wrap !important;",
-        "}",
-        ".lifecycle-claims-table tbody td:nth-child(9) > div > .badge.warn:first-child,",
-        ".lifecycle-claims-table tbody td:nth-child(9) > div > .badge.pending:first-child {",
-        "  display: inline-flex !important;",
-        "  align-items: center !important;",
-        "  justify-content: center !important;",
-        "  flex: 0 0 auto !important;",
-        "  align-self: center !important;",
-        "  width: auto !important;",
-        "  max-width: 100% !important;",
-        "  min-height: 0 !important;",
-        "  height: auto !important;",
-        "  padding: 3px 8px !important;",
-        "  line-height: 1.15 !important;",
-        "  white-space: nowrap !important;",
-        "  vertical-align: middle !important;",
-        "  border-radius: 999px !important;",
-        "  box-sizing: border-box !important;",
-        "  background: #fffbeb !important;",
-        "  color: #92400e !important;",
-        "  border: 1px solid #fde68a !important;",
-        "  font-size: 12px !important;",
-        "  font-weight: 800 !important;",
-        "}"
-      ].join("\n");
-    }
-
-    function patchLifecycleRiskHeader() {
-      const headerCells = Array.from(
-        document.querySelectorAll(".lifecycle-claims-table thead th")
-      );
-
-      const th =
-        headerCells[6] ||
-        headerCells.find((node) => /\brisk\b/i.test(node.textContent || ""));
-
-      if (!th) return false;
-
-      th.innerHTML =
-        'Risk Score <span class="tooltip" data-tip="' +
-        escapeAttr(LIFECYCLE_RISK_TIP) +
-        '">ⓘ</span>';
-
-      const tip = th.querySelector(".tooltip");
-      if (tip) tip.setAttribute("data-tip", LIFECYCLE_RISK_TIP);
-
-      return true;
-    }
-
-    function hydrateLifecycleViewButtons() {
-      const rows = document.querySelectorAll(".lifecycle-claims-table tbody tr");
-      if (!rows.length) return false;
-
-      let foundViewButton = false;
-
-      rows.forEach((row) => {
+    // =============================
+    // 2. VIEW BUTTON FIX (FULL HYDRATION)
+    // =============================
+    function fixLifecycleButtons(){
+      document.querySelectorAll(".lifecycle-claims-table tbody tr").forEach(row => {
         const btn = row.querySelector(".view-claim-btn");
         if (!btn) return;
 
-        foundViewButton = true;
+        const link = row.querySelector('a[href*="billed_id="]');
+        if (!link) return;
 
-        const currentButtonId = safeDecode(btn.getAttribute("data-id"));
-        const currentRowId = safeDecode(
-          row.getAttribute("data-claim") ||
-          row.getAttribute("data-claim-id") ||
-          row.getAttribute("data-billed-id")
-        );
-        const fallbackHref = btn.getAttribute("data-fallback-href") || "";
-        const rowLinkHref =
-          row.querySelector('a[href*="billed_id="]')?.getAttribute("href") || "";
+        const match = link.href.match(/billed_id=([^&]+)/);
+        if (!match) return;
 
-        const resolvedId =
-          currentButtonId ||
-          currentRowId ||
-          extractClaimIdFromHref(fallbackHref) ||
-          extractClaimIdFromHref(rowLinkHref);
+        const id = decodeURIComponent(match[1]);
 
-        // Graceful no-op if this row cannot be resolved to a billed_id.
-        if (!resolvedId) return;
-
-        const encodedId = encodeURIComponent(resolvedId);
-
-        if (btn.getAttribute("data-id") !== encodedId) {
-          btn.setAttribute("data-id", encodedId);
-        }
-
-        if (row.getAttribute("data-claim") !== resolvedId) {
-          row.setAttribute("data-claim", resolvedId);
-        }
-
-        if (extractClaimIdFromHref(fallbackHref) !== resolvedId) {
-          btn.setAttribute("data-fallback-href", "/claim-detail?billed_id=" + encodedId);
-        }
+        // ✅ FULL FIX
+        btn.setAttribute("data-id", encodeURIComponent(id));
+        btn.setAttribute("data-fallback-href", "/claim-detail?billed_id=" + encodeURIComponent(id));
+        row.setAttribute("data-claim", id);
       });
-
-      return foundViewButton;
     }
 
-    function runLifecycleOnlyRepair() {
-      const lifecycleTable = document.querySelector(".lifecycle-claims-table");
-      if (!lifecycleTable) return false;
+    // =============================
+    // 3. RISK HEADER FIX (CORRECT TOOLTIP)
+    // =============================
+    function fixRiskHeader(){
+      const th = document.querySelector(".lifecycle-claims-table thead th:nth-child(7)");
+      if (!th) return;
 
-      ensureLifecycleScopedStyle();
-      patchLifecycleRiskHeader();
-      hydrateLifecycleViewButtons();
-
-      return true;
+      th.innerHTML = [
+        "Risk Score",
+        "<span class=\\"tooltip\\"",
+        "  data-tip=\\"Priority score based on claim status, dollars at risk, age, and workflow urgency. 1 = low risk (good), 100 = high risk (bad)\\">",
+        "  ⓘ",
+        "</span>"
+      ].join("\\n");
     }
 
-    runLifecycleOnlyRepair();
-    if (typeof window.requestAnimationFrame === "function") {
-      window.requestAnimationFrame(runLifecycleOnlyRepair);
-    }
-    [80, 220, 600].forEach((delay) => {
-      window.setTimeout(runLifecycleOnlyRepair, delay);
-    });
+    // =============================
+    // RUN FIXES
+    // =============================
+    setTimeout(() => {
+      fixLifecycleButtons();
+      fixRiskHeader();
+    }, 100);
   })();
 })();
 </script>
