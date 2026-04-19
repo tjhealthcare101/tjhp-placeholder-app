@@ -1930,63 +1930,84 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     closeFallbackPanel();
   });
 
-  // ==============================
-  // 🔥 FINAL UI + VIEW BUTTON FIX (SAFE)
-  // ==============================
+  ensureMissingActionCenterViewButtons();
+  applyClaimIdsLifecycleFilter();
 
-  // 1. Fix status pill sizing (override duplicate CSS)
+  // ==============================
+  // 🔥 FINAL LIFECYCLE UI FIX (CLEAN PR VERSION)
+  // ==============================
   (function(){
+    if (window.__lifecycleFinalFix) return;
+    window.__lifecycleFinalFix = true;
+
+    // =============================
+    // 1. STATUS PILL FIX (correct class + tight sizing)
+    // =============================
     const style = document.createElement("style");
     style.innerHTML = ""
-      + ".lifecycle-claims-table .badge.pending {"
+      + ".lifecycle-claims-table .badge.warn {"
       + "display:inline-flex !important;"
       + "align-items:center !important;"
       + "justify-content:center !important;"
-      + "padding:4px 10px !important;"
+      + "padding:3px 8px !important;"
       + "height:auto !important;"
       + "border-radius:999px !important;"
       + "white-space:nowrap !important;"
       + "font-size:12px !important;"
-      + "font-weight:700 !important;"
+      + "font-weight:800 !important;"
       + "background:#fffbeb !important;"
       + "color:#92400e !important;"
       + "border:1px solid #fde68a !important;"
+      + "line-height:1.2 !important;"
       + "}";
     document.head.appendChild(style);
+
+    // =============================
+    // 2. VIEW BUTTON FIX (Lifecycle ONLY — no Action Center impact)
+    // =============================
+    function fixLifecycleButtons(){
+      document.querySelectorAll(".lifecycle-claims-table tbody tr").forEach(row => {
+        const btn = row.querySelector(".view-claim-btn");
+        if (!btn) return;
+
+        const link = row.querySelector('a[href*="billed_id="]');
+        if (!link) return;
+
+        const match = link.href.match(/billed_id=([^&]+)/);
+        if (!match) return;
+
+        const id = decodeURIComponent(match[1]);
+
+        // FULL hydration required by global handler
+        btn.setAttribute("data-id", encodeURIComponent(id));
+        btn.setAttribute("data-fallback-href", "/claim-detail?billed_id=" + encodeURIComponent(id));
+        row.setAttribute("data-claim", id);
+      });
+    }
+
+    // =============================
+    // 3. RISK HEADER FIX (correct label + full tooltip)
+    // =============================
+    function fixRiskHeader(){
+      const th = document.querySelector(".lifecycle-claims-table thead th:nth-child(7)");
+      if (!th) return;
+
+      th.innerHTML = ""
+        + "Risk Score "
+        + '<span class="tooltip" '
+        + 'data-tip="Priority score based on claim status, dollars at risk, age, and workflow urgency. 1 = low risk (good), 100 = high risk (bad)">'
+        + "ⓘ"
+        + "</span>";
+    }
+
+    // =============================
+    // RUN FIXES
+    // =============================
+    setTimeout(() => {
+      fixLifecycleButtons();
+      fixRiskHeader();
+    }, 100);
   })();
-
-  // 2. Fix lifecycle VIEW button (guaranteed working)
-  (function(){
-    document.querySelectorAll(".lifecycle-claims-table tbody tr").forEach(row => {
-
-      const btn = row.querySelector(".view-claim-btn");
-      if (!btn) return;
-
-      const link = row.querySelector('a[href*="billed_id="]');
-      if (!link) return;
-
-      const match = link.href.match(/billed_id=([^&]+)/);
-      if (!match) return;
-
-      const id = decodeURIComponent(match[1]);
-
-      btn.setAttribute("data-id", id);
-    });
-  })();
-
-  // 3. Fix Risk header label
-  (function(){
-    const th = document.querySelector(".lifecycle-claims-table thead th:nth-child(7)");
-    if (!th) return;
-
-    th.innerHTML = ""
-      + "Risk Score "
-      + '<span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad)">ⓘ</span>';
-  })();
-
-  patchRiskHeaderAndTooltip();
-  ensureMissingActionCenterViewButtons();
-  applyClaimIdsLifecycleFilter();
 })();
 </script>
 
