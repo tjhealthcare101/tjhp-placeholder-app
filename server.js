@@ -1930,6 +1930,60 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     closeFallbackPanel();
   });
 
+  // ==============================
+  // 🔥 FINAL UI + VIEW BUTTON FIX (SAFE)
+  // ==============================
+
+  // 1. Fix status pill sizing (override duplicate CSS)
+  (function(){
+    const style = document.createElement("style");
+    style.innerHTML = ""
+      + ".lifecycle-claims-table .badge.pending {"
+      + "display:inline-flex !important;"
+      + "align-items:center !important;"
+      + "justify-content:center !important;"
+      + "padding:4px 10px !important;"
+      + "height:auto !important;"
+      + "border-radius:999px !important;"
+      + "white-space:nowrap !important;"
+      + "font-size:12px !important;"
+      + "font-weight:700 !important;"
+      + "background:#fffbeb !important;"
+      + "color:#92400e !important;"
+      + "border:1px solid #fde68a !important;"
+      + "}";
+    document.head.appendChild(style);
+  })();
+
+  // 2. Fix lifecycle VIEW button (guaranteed working)
+  (function(){
+    document.querySelectorAll(".lifecycle-claims-table tbody tr").forEach(row => {
+
+      const btn = row.querySelector(".view-claim-btn");
+      if (!btn) return;
+
+      const link = row.querySelector('a[href*="billed_id="]');
+      if (!link) return;
+
+      const match = link.href.match(/billed_id=([^&]+)/);
+      if (!match) return;
+
+      const id = decodeURIComponent(match[1]);
+
+      btn.setAttribute("data-id", id);
+    });
+  })();
+
+  // 3. Fix Risk header label
+  (function(){
+    const th = document.querySelector(".lifecycle-claims-table thead th:nth-child(7)");
+    if (!th) return;
+
+    th.innerHTML = ""
+      + "Risk Score "
+      + '<span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad)">ⓘ</span>';
+  })();
+
   patchRiskHeaderAndTooltip();
   ensureMissingActionCenterViewButtons();
   applyClaimIdsLifecycleFilter();
@@ -32695,4 +32749,4 @@ setInterval(() => {
 
 server.listen(PORT, HOST, () => {
   debugLog(`TJHP server listening on ${HOST}:${PORT}`);
-});  
+});
