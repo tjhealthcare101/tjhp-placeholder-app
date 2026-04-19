@@ -1935,152 +1935,86 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   applyClaimIdsLifecycleFilter();
 
   // ==============================
-  // Claims Lifecycle-only repair patch
+  // Claims Lifecycle final stable fix
   // ==============================
-  (function lifecycleOnlyRepairPatch() {
-    if (window.__tjhpLifecycleOnlyRepairApplied) return;
-    window.__tjhpLifecycleOnlyRepairApplied = true;
+  (function lifecycleHardFix() {
+    if (window.__lifecycleHardFix) return;
+    window.__lifecycleHardFix = true;
 
-    const STYLE_ID = "tjhp-lifecycle-only-repair-style";
+    function fixLifecycle() {
+      const table = document.querySelector(".lifecycle-claims-table");
+      if (!table) return;
 
-    function ensureLifecycleOnlyStyle() {
-      let style = document.getElementById(STYLE_ID);
-      if (!style) {
-        style = document.createElement("style");
-        style.id = STYLE_ID;
-        document.head.appendChild(style);
-      }
-
-      style.textContent = [
-        ".lifecycle-claims-table tbody td:nth-child(9) {",
-        "  vertical-align: middle !important;",
-        "}",
-        ".lifecycle-claims-table tbody td:nth-child(9) > div {",
-        "  display: flex !important;",
-        "  align-items: center !important;",
-        "  gap: 6px !important;",
-        "  flex-wrap: wrap !important;",
-        "}",
-        ".lifecycle-claims-table tbody td:nth-child(9) > div > .badge.warn:first-child,",
-        ".lifecycle-claims-table tbody td:nth-child(9) > div > .badge.pending:first-child {",
-        "  display: inline-flex !important;",
-        "  align-items: center !important;",
-        "  justify-content: center !important;",
-        "  flex: 0 0 auto !important;",
-        "  align-self: center !important;",
-        "  width: auto !important;",
-        "  max-width: 100% !important;",
-        "  min-height: 0 !important;",
-        "  height: auto !important;",
-        "  padding: 3px 8px !important;",
-        "  line-height: 1.15 !important;",
-        "  white-space: nowrap !important;",
-        "  vertical-align: middle !important;",
-        "  border-radius: 999px !important;",
-        "  box-sizing: border-box !important;",
-        "  background: #fffbeb !important;",
-        "  color: #92400e !important;",
-        "  border: 1px solid #fde68a !important;",
-        "  font-size: 12px !important;",
-        "  font-weight: 800 !important;",
-        "}",
-      ].join("\n");
-    }
-
-    function repairLifecycleRiskHeader(table) {
-      if (!table) return false;
-
-      const th = table.querySelector("thead th:nth-child(7)");
-      if (!th) return false;
-
-      th.innerHTML =
-        'Risk Score <span class="tooltip" data-tip="' +
-        esc(RISK_TIP) +
-        '">ⓘ</span>';
-
-      const tip = th.querySelector(".tooltip");
-      if (tip) {
-        tip.setAttribute("data-tip", RISK_TIP);
-      }
-
-      return true;
-    }
-
-    function hydrateLifecycleViewButtons(table) {
-      const tbody = table && table.tBodies && table.tBodies[0];
-      if (!tbody) return false;
-
-      let hydrated = 0;
-
-      Array.from(tbody.rows).forEach((row) => {
+      // ===== VIEW BUTTON =====
+      table.querySelectorAll("tbody tr").forEach((row) => {
         const btn = row.querySelector(".view-claim-btn");
         if (!btn) return;
 
-        const resolvedId =
-          decodeId(
-            btn.getAttribute("data-id") ||
-            btn.getAttribute("data-claim") ||
-            btn.getAttribute("data-claim-id") ||
-            btn.getAttribute("data-billed-id") ||
-            ""
-          ) ||
-          decodeId(
-            row.getAttribute("data-claim") ||
-            row.getAttribute("data-claim-id") ||
-            row.getAttribute("data-billed-id") ||
-            ""
-          ) ||
-          getClaimIdFromHref(btn.getAttribute("data-fallback-href") || "") ||
-          getClaimIdFromHref(
-            (row.querySelector('a[href*="billed_id="]') || {}).getAttribute
-              ? row.querySelector('a[href*="billed_id="]').getAttribute("href")
-              : ""
-          );
+        const link = row.querySelector('a[href*="billed_id="]');
+        if (!link) return;
 
-        if (!resolvedId) return;
+        const match = link.href.match(/billed_id=([^&]+)/);
+        if (!match) return;
 
-        const encodedId = encodeURIComponent(resolvedId);
+        const id = decodeURIComponent(match[1]);
+        const encodedId = encodeURIComponent(id);
 
-        if (btn.getAttribute("data-id") !== encodedId) {
-          btn.setAttribute("data-id", encodedId);
-        }
-
-        if (row.getAttribute("data-claim") !== resolvedId) {
-          row.setAttribute("data-claim", resolvedId);
-        }
-
-        if (getClaimIdFromHref(btn.getAttribute("data-fallback-href") || "") !== resolvedId) {
-          btn.setAttribute(
-            "data-fallback-href",
-            "/claim-detail?billed_id=" + encodedId
-          );
-        }
-
-        hydrated += 1;
+        btn.setAttribute("data-id", encodedId);
+        btn.setAttribute("data-fallback-href", "/claim-detail?billed_id=" + encodedId);
+        row.setAttribute("data-claim", id);
       });
 
-      return hydrated > 0;
+      // ===== STATUS PILL =====
+      const styleId = "lifecycle-pill-fix";
+      if (!document.getElementById(styleId)) {
+        const style = document.createElement("style");
+        style.id = styleId;
+        style.innerHTML = [
+          ".lifecycle-claims-table tbody td:nth-child(9) > div {",
+          "  display:inline-flex !important;",
+          "  align-items:center !important;",
+          "  gap:6px !important;",
+          "  flex-wrap:nowrap !important;",
+          "}",
+          ".lifecycle-claims-table .badge.warn {",
+          "  flex:0 0 auto !important;",
+          "  display:inline-flex !important;",
+          "  align-items:center !important;",
+          "  justify-content:center !important;",
+          "  padding:2px 6px !important;",
+          "  height:auto !important;",
+          "  line-height:1.1 !important;",
+          "  border-radius:999px !important;",
+          "  white-space:nowrap !important;",
+          "  font-size:12px !important;",
+          "  font-weight:800 !important;",
+          "  width:auto !important;",
+          "}",
+        ].join("\n");
+        document.head.appendChild(style);
+      }
+
+      // ===== RISK HEADER =====
+      const th = table.querySelector("thead th:nth-child(7)");
+      if (th) {
+        th.innerHTML = [
+          "Risk Score",
+          '<span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad)">',
+          "ⓘ",
+          "</span>",
+        ].join(" ");
+      }
     }
 
-    function runLifecycleOnlyRepair() {
+    // 🔁 ONLY watch the lifecycle table (NOT entire DOM)
+    const interval = setInterval(() => {
       const table = document.querySelector(".lifecycle-claims-table");
-      if (!table) return false;
+      if (!table) return;
+      fixLifecycle();
+    }, 300);
 
-      ensureLifecycleOnlyStyle();
-      repairLifecycleRiskHeader(table);
-      hydrateLifecycleViewButtons(table);
-
-      return true;
-    }
-
-    runLifecycleOnlyRepair();
-
-    if (typeof window.requestAnimationFrame === "function") {
-      window.requestAnimationFrame(runLifecycleOnlyRepair);
-    }
-
-    window.setTimeout(runLifecycleOnlyRepair, 120);
-    window.setTimeout(runLifecycleOnlyRepair, 400);
+    // stop after stabilization
+    setTimeout(() => clearInterval(interval), 5000);
   })();
   })();
 })();
