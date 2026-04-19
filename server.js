@@ -19622,6 +19622,10 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       ).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026")}</script>
       <script>
       (function(){
+        function normalizeLifecycleDisplayStage(stage){
+          return stage || "";
+        }
+
         function panelEsc(v){
           return String(v == null ? "" : v).replace(/[&<>"']/g, function(ch){
             return ({
