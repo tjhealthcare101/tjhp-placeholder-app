@@ -1987,6 +1987,147 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   patchRiskHeaderAndTooltip();
   ensureMissingActionCenterViewButtons();
   applyClaimIdsLifecycleFilter();
+
+  // ==============================
+  // Claims Lifecycle-only repair patch
+  // Paste inside this browser-side claims UI IIFE,
+  // just before the final IIFE terminator
+  // ==============================
+  (function lifecycleOnlyRepairPatch() {
+    if (window.__tjhpLifecycleOnlyRepairApplied) return;
+    window.__tjhpLifecycleOnlyRepairApplied = true;
+
+    const STYLE_ID = "tjhp-lifecycle-only-repair-style";
+
+    function ensureLifecycleOnlyStyle() {
+      let style = document.getElementById(STYLE_ID);
+      if (!style) {
+        style = document.createElement("style");
+        style.id = STYLE_ID;
+        document.head.appendChild(style);
+      }
+
+      style.textContent = [
+        ".lifecycle-claims-table tbody td:nth-child(9) {",
+        "  vertical-align: middle !important;",
+        "}",
+        ".lifecycle-claims-table tbody td:nth-child(9) > div {",
+        "  align-items: center !important;",
+        "}",
+        ".lifecycle-claims-table tbody td:nth-child(9) > div > .badge.warn:first-child,",
+        ".lifecycle-claims-table tbody td:nth-child(9) > div > .badge.pending:first-child {",
+        "  display: inline-flex !important;",
+        "  align-items: center !important;",
+        "  justify-content: center !important;",
+        "  flex: 0 0 auto !important;",
+        "  align-self: center !important;",
+        "  width: auto !important;",
+        "  max-width: 100% !important;",
+        "  min-height: 0 !important;",
+        "  height: auto !important;",
+        "  padding: 3px 8px !important;",
+        "  line-height: 1.2 !important;",
+        "  white-space: nowrap !important;",
+        "  vertical-align: middle !important;",
+        "  border-radius: 999px !important;",
+        "  box-sizing: border-box !important;",
+        "}"
+      ].join("\n");
+    }
+
+    function repairLifecycleRiskHeader(table) {
+      if (!table) return false;
+
+      if (typeof patchRiskHeaderAndTooltip === "function") {
+        patchRiskHeaderAndTooltip();
+      }
+
+      const th = table.querySelector("thead th:nth-child(7)");
+      if (!th) return false;
+
+      const tip = th.querySelector(".tooltip");
+      if (tip) {
+        tip.setAttribute("data-tip", RISK_TIP);
+      } else {
+        th.innerHTML =
+          'Risk Score <span class="tooltip" data-tip="' +
+          esc(RISK_TIP) +
+          '">ⓘ</span>';
+      }
+
+      return true;
+    }
+
+    function hydrateLifecycleViewButtons(table) {
+      const tbody = table && table.tBodies && table.tBodies[0];
+      if (!tbody) return false;
+
+      let hydrated = 0;
+
+      Array.from(tbody.rows).forEach((row) => {
+        const btn = row.querySelector(".view-claim-btn");
+        if (!btn) return;
+
+        const resolvedId =
+          decodeId(
+            btn.getAttribute("data-id") ||
+            btn.getAttribute("data-claim") ||
+            btn.getAttribute("data-claim-id") ||
+            btn.getAttribute("data-billed-id") ||
+            ""
+          ) ||
+          decodeId(
+            row.getAttribute("data-claim") ||
+            row.getAttribute("data-claim-id") ||
+            row.getAttribute("data-billed-id") ||
+            ""
+          ) ||
+          getClaimIdFromHref(btn.getAttribute("data-fallback-href") || "") ||
+          getClaimIdFromHref(
+            row.querySelector('a[href*="billed_id="]')?.getAttribute("href") || ""
+          );
+
+        if (!resolvedId) return;
+
+        const encodedId = encodeURIComponent(resolvedId);
+
+        if (btn.getAttribute("data-id") !== encodedId) {
+          btn.setAttribute("data-id", encodedId);
+        }
+
+        if (row.getAttribute("data-claim") !== resolvedId) {
+          row.setAttribute("data-claim", resolvedId);
+        }
+
+        if (getClaimIdFromHref(btn.getAttribute("data-fallback-href") || "") !== resolvedId) {
+          btn.setAttribute(
+            "data-fallback-href",
+            "/claim-detail?billed_id=" + encodedId
+          );
+        }
+
+        hydrated += 1;
+      });
+
+      return hydrated > 0;
+    }
+
+    function runLifecycleOnlyRepair() {
+      const table = document.querySelector(".lifecycle-claims-table");
+      if (!table) return false;
+
+      ensureLifecycleOnlyStyle();
+      repairLifecycleRiskHeader(table);
+      hydrateLifecycleViewButtons(table);
+
+      return true;
+    }
+
+    runLifecycleOnlyRepair();
+    requestAnimationFrame(runLifecycleOnlyRepair);
+    setTimeout(runLifecycleOnlyRepair, 120);
+    setTimeout(runLifecycleOnlyRepair, 400);
+  })();
 })();
 </script>
 
