@@ -1955,25 +1955,6 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     document.head.appendChild(style);
   })();
 
-  // 2. Fix lifecycle VIEW button (guaranteed working)
-  (function(){
-    document.querySelectorAll(".lifecycle-claims-table tbody tr").forEach(row => {
-
-      const btn = row.querySelector(".view-claim-btn");
-      if (!btn) return;
-
-      const link = row.querySelector('a[href*="billed_id="]');
-      if (!link) return;
-
-      const match = link.href.match(/billed_id=([^&]+)/);
-      if (!match) return;
-
-      const id = decodeURIComponent(match[1]);
-
-      btn.setAttribute("data-id", id);
-    });
-  })();
-
   // 3. Fix Risk header label
   (function(){
     const th = document.querySelector(".lifecycle-claims-table thead th:nth-child(7)");
