@@ -1930,83 +1930,158 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     closeFallbackPanel();
   });
 
+  patchRiskHeaderAndTooltip();
   ensureMissingActionCenterViewButtons();
   applyClaimIdsLifecycleFilter();
 
   // ==============================
-  // 🔥 FINAL LIFECYCLE UI FIX (CLEAN PR VERSION)
+  // Claims Lifecycle-only repair patch
   // ==============================
-  (function(){
-    if (window.__lifecycleFinalFix) return;
-    window.__lifecycleFinalFix = true;
+  (function lifecycleOnlyRepairPatch() {
+    if (window.__tjhpLifecycleOnlyRepairApplied) return;
+    window.__tjhpLifecycleOnlyRepairApplied = true;
 
-    // =============================
-    // 1. STATUS PILL FIX (correct class + tight sizing)
-    // =============================
-    const style = document.createElement("style");
-    style.innerHTML = ""
-      + ".lifecycle-claims-table .badge.warn {"
-      + "display:inline-flex !important;"
-      + "align-items:center !important;"
-      + "justify-content:center !important;"
-      + "padding:3px 8px !important;"
-      + "height:auto !important;"
-      + "border-radius:999px !important;"
-      + "white-space:nowrap !important;"
-      + "font-size:12px !important;"
-      + "font-weight:800 !important;"
-      + "background:#fffbeb !important;"
-      + "color:#92400e !important;"
-      + "border:1px solid #fde68a !important;"
-      + "line-height:1.2 !important;"
-      + "}";
-    document.head.appendChild(style);
+    const STYLE_ID = "tjhp-lifecycle-only-repair-style";
 
-    // =============================
-    // 2. VIEW BUTTON FIX (Lifecycle ONLY — no Action Center impact)
-    // =============================
-    function fixLifecycleButtons(){
-      document.querySelectorAll(".lifecycle-claims-table tbody tr").forEach(row => {
+    function ensureLifecycleOnlyStyle() {
+      let style = document.getElementById(STYLE_ID);
+      if (!style) {
+        style = document.createElement("style");
+        style.id = STYLE_ID;
+        document.head.appendChild(style);
+      }
+
+      style.textContent = [
+        ".lifecycle-claims-table tbody td:nth-child(9) {",
+        "  vertical-align: middle !important;",
+        "}",
+        ".lifecycle-claims-table tbody td:nth-child(9) > div {",
+        "  display: flex !important;",
+        "  align-items: center !important;",
+        "  gap: 6px !important;",
+        "  flex-wrap: wrap !important;",
+        "}",
+        ".lifecycle-claims-table tbody td:nth-child(9) > div > .badge.warn:first-child,",
+        ".lifecycle-claims-table tbody td:nth-child(9) > div > .badge.pending:first-child {",
+        "  display: inline-flex !important;",
+        "  align-items: center !important;",
+        "  justify-content: center !important;",
+        "  flex: 0 0 auto !important;",
+        "  align-self: center !important;",
+        "  width: auto !important;",
+        "  max-width: 100% !important;",
+        "  min-height: 0 !important;",
+        "  height: auto !important;",
+        "  padding: 3px 8px !important;",
+        "  line-height: 1.15 !important;",
+        "  white-space: nowrap !important;",
+        "  vertical-align: middle !important;",
+        "  border-radius: 999px !important;",
+        "  box-sizing: border-box !important;",
+        "  background: #fffbeb !important;",
+        "  color: #92400e !important;",
+        "  border: 1px solid #fde68a !important;",
+        "  font-size: 12px !important;",
+        "  font-weight: 800 !important;",
+        "}",
+      ].join("\n");
+    }
+
+    function repairLifecycleRiskHeader(table) {
+      if (!table) return false;
+
+      const th = table.querySelector("thead th:nth-child(7)");
+      if (!th) return false;
+
+      th.innerHTML =
+        'Risk Score <span class="tooltip" data-tip="' +
+        esc(RISK_TIP) +
+        '">ⓘ</span>';
+
+      const tip = th.querySelector(".tooltip");
+      if (tip) {
+        tip.setAttribute("data-tip", RISK_TIP);
+      }
+
+      return true;
+    }
+
+    function hydrateLifecycleViewButtons(table) {
+      const tbody = table && table.tBodies && table.tBodies[0];
+      if (!tbody) return false;
+
+      let hydrated = 0;
+
+      Array.from(tbody.rows).forEach((row) => {
         const btn = row.querySelector(".view-claim-btn");
         if (!btn) return;
 
-        const link = row.querySelector('a[href*="billed_id="]');
-        if (!link) return;
+        const resolvedId =
+          decodeId(
+            btn.getAttribute("data-id") ||
+            btn.getAttribute("data-claim") ||
+            btn.getAttribute("data-claim-id") ||
+            btn.getAttribute("data-billed-id") ||
+            ""
+          ) ||
+          decodeId(
+            row.getAttribute("data-claim") ||
+            row.getAttribute("data-claim-id") ||
+            row.getAttribute("data-billed-id") ||
+            ""
+          ) ||
+          getClaimIdFromHref(btn.getAttribute("data-fallback-href") || "") ||
+          getClaimIdFromHref(
+            (row.querySelector('a[href*="billed_id="]') || {}).getAttribute
+              ? row.querySelector('a[href*="billed_id="]').getAttribute("href")
+              : ""
+          );
 
-        const match = link.href.match(/billed_id=([^&]+)/);
-        if (!match) return;
+        if (!resolvedId) return;
 
-        const id = decodeURIComponent(match[1]);
+        const encodedId = encodeURIComponent(resolvedId);
 
-        // FULL hydration required by global handler
-        btn.setAttribute("data-id", encodeURIComponent(id));
-        btn.setAttribute("data-fallback-href", "/claim-detail?billed_id=" + encodeURIComponent(id));
-        row.setAttribute("data-claim", id);
+        if (btn.getAttribute("data-id") !== encodedId) {
+          btn.setAttribute("data-id", encodedId);
+        }
+
+        if (row.getAttribute("data-claim") !== resolvedId) {
+          row.setAttribute("data-claim", resolvedId);
+        }
+
+        if (getClaimIdFromHref(btn.getAttribute("data-fallback-href") || "") !== resolvedId) {
+          btn.setAttribute(
+            "data-fallback-href",
+            "/claim-detail?billed_id=" + encodedId
+          );
+        }
+
+        hydrated += 1;
       });
+
+      return hydrated > 0;
     }
 
-    // =============================
-    // 3. RISK HEADER FIX (correct label + full tooltip)
-    // =============================
-    function fixRiskHeader(){
-      const th = document.querySelector(".lifecycle-claims-table thead th:nth-child(7)");
-      if (!th) return;
+    function runLifecycleOnlyRepair() {
+      const table = document.querySelector(".lifecycle-claims-table");
+      if (!table) return false;
 
-      th.innerHTML = ""
-        + "Risk Score "
-        + '<span class="tooltip" '
-        + 'data-tip="Priority score based on claim status, dollars at risk, age, and workflow urgency. 1 = low risk (good), 100 = high risk (bad)">'
-        + "ⓘ"
-        + "</span>";
+      ensureLifecycleOnlyStyle();
+      repairLifecycleRiskHeader(table);
+      hydrateLifecycleViewButtons(table);
+
+      return true;
     }
 
-    // =============================
-    // RUN FIXES
-    // =============================
-    setTimeout(() => {
-      fixLifecycleButtons();
-      fixRiskHeader();
-    }, 100);
+    runLifecycleOnlyRepair();
+
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(runLifecycleOnlyRepair);
+    }
+
+    window.setTimeout(runLifecycleOnlyRepair, 120);
+    window.setTimeout(runLifecycleOnlyRepair, 400);
+  })();
   })();
 })();
 </script>
