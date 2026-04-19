@@ -1935,18 +1935,28 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   applyClaimIdsLifecycleFilter();
 
   // ==============================
-  // Claims Lifecycle final stable fix
+  // 🔥 FINAL CLAIMS LIFECYCLE FIX (STABLE)
   // ==============================
-  (function lifecycleHardFix() {
-    if (window.__lifecycleHardFix) return;
-    window.__lifecycleHardFix = true;
+  (function(){
 
-    function fixLifecycle() {
+    if (window.__lifecycleFinalFix) return;
+    window.__lifecycleFinalFix = true;
+
+    // 🚫 STOP system from overwriting Risk header
+    if (typeof patchRiskHeaderAndTooltip === "function") {
+      patchRiskHeaderAndTooltip = function(){};
+    }
+
+    function fixLifecycle(){
+
       const table = document.querySelector(".lifecycle-claims-table");
       if (!table) return;
 
-      // ===== VIEW BUTTON =====
-      table.querySelectorAll("tbody tr").forEach((row) => {
+      // =========================
+      // 1. VIEW BUTTON (MATCH ACTION CENTER)
+      // =========================
+      table.querySelectorAll("tbody tr").forEach(row => {
+
         const btn = row.querySelector(".view-claim-btn");
         if (!btn) return;
 
@@ -1964,37 +1974,37 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         row.setAttribute("data-claim", id);
       });
 
-      // ===== STATUS PILL =====
-      const styleId = "lifecycle-pill-fix";
+      // =========================
+      // 2. STATUS PILL (STRUCTURE SAFE FIX)
+      // =========================
+      const styleId = "lifecycle-pill-final";
       if (!document.getElementById(styleId)) {
         const style = document.createElement("style");
         style.id = styleId;
         style.innerHTML = [
-          ".lifecycle-claims-table tbody td:nth-child(9) > div {",
-          "  display:inline-flex !important;",
-          "  align-items:center !important;",
-          "  gap:6px !important;",
-          "  flex-wrap:nowrap !important;",
+          ".lifecycle-claims-table td {",
+          "  vertical-align: middle !important;",
           "}",
-          ".lifecycle-claims-table .badge.warn {",
-          "  flex:0 0 auto !important;",
+          ".lifecycle-claims-table .badge {",
           "  display:inline-flex !important;",
           "  align-items:center !important;",
           "  justify-content:center !important;",
-          "  padding:2px 6px !important;",
-          "  height:auto !important;",
+          "  padding:2px 8px !important;",
           "  line-height:1.1 !important;",
           "  border-radius:999px !important;",
           "  white-space:nowrap !important;",
           "  font-size:12px !important;",
           "  font-weight:800 !important;",
           "  width:auto !important;",
+          "  max-width:max-content !important;",
           "}",
         ].join("\n");
         document.head.appendChild(style);
       }
 
-      // ===== RISK HEADER =====
+      // =========================
+      // 3. RISK HEADER (FORCED)
+      // =========================
       const th = table.querySelector("thead th:nth-child(7)");
       if (th) {
         th.innerHTML = [
@@ -2006,15 +2016,67 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       }
     }
 
-    // 🔁 ONLY watch the lifecycle table (NOT entire DOM)
-    const interval = setInterval(() => {
-      const table = document.querySelector(".lifecycle-claims-table");
-      if (!table) return;
-      fixLifecycle();
-    }, 300);
+    // =========================
+    // 4. PANEL FIX (AWAITING PAYMENT)
+    // =========================
+    function fixPanel(){
 
-    // stop after stabilization
-    setTimeout(() => clearInterval(interval), 5000);
+      const panel = document.querySelector(".claim-side-panel, [data-panel='claim']");
+      if (!panel) return;
+
+      const statusEl = panel.querySelector(".badge");
+      if (!statusEl) return;
+
+      const statusText = statusEl.textContent || "";
+
+      if (statusText.includes("Awaiting Payment")) {
+
+        // ❌ Remove Action Center button
+        panel.querySelectorAll("button, a").forEach(btn => {
+          if (btn.textContent.includes("Action Center")) {
+            btn.remove();
+          }
+        });
+
+        // ✅ Add Upload Payment button if missing
+        if (!panel.innerHTML.includes("Upload Payment")) {
+          const actions = panel.querySelector("div");
+          if (actions) {
+            const btn = document.createElement("button");
+            btn.className = "btn secondary";
+            btn.innerText = "Upload Payment →";
+            btn.onclick = () => window.location.href = "/upload-payments";
+            actions.appendChild(btn);
+          }
+        }
+
+        // ✅ Fix Claim Insight
+        const insight = Array.from(panel.querySelectorAll("h3, h4"))
+          .find(el => el.textContent.includes("Claim Insight"));
+
+        if (insight && insight.nextElementSibling) {
+          insight.nextElementSibling.innerText = "Awaiting initial payer response";
+        }
+
+        // ✅ Fix Next Best Action
+        const next = Array.from(panel.querySelectorAll("h3, h4"))
+          .find(el => el.textContent.includes("Next Best Action"));
+
+        if (next && next.nextElementSibling) {
+          next.nextElementSibling.innerText =
+            "Monitor for payer response or upload posted payment";
+        }
+      }
+    }
+
+    // =========================
+    // RUN FIXES (handles re-render)
+    // =========================
+    setInterval(() => {
+      fixLifecycle();
+      fixPanel();
+    }, 400);
+
   })();
   })();
 })();
