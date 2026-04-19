@@ -795,6 +795,8 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .claims-actions .muted.small{opacity:.75;}
 .center{text-align:center}
 .hidden{display:none;}
+.lifecycle-empty-note{margin-top:8px;color:var(--muted);font-size:12px;line-height:1.4;}
+.lifecycle-empty-cta{margin-top:10px;}
 
 /* Tooltip system */
 .tooltip{display:inline-block;cursor:help;color:var(--muted);}
@@ -18162,6 +18164,18 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     view = "table";
   }
   const reimbursementBatch = String(parsed.query.reimbursement_batch || "").trim();
+  const claimIdsFilterRaw = String(parsed.query.claim_ids || "").trim();
+  const claimIdsFilterList = claimIdsFilterRaw
+    ? Array.from(new Set(
+        claimIdsFilterRaw
+          .split(",")
+          .map(v => String(v || "").trim())
+          .filter(Boolean)
+      ))
+    : [];
+  const claimIdsFilterSet = new Set(claimIdsFilterList);
+  const hasClaimIdsFilter = claimIdsFilterSet.size > 0;
+  const claimIdsFilterCsv = claimIdsFilterList.join(",");
 
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
   const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
@@ -18575,8 +18589,11 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
   const stageToClaimsHref = (stage) => {
     const normalizedStage = CORE_LIFECYCLE_STAGES.includes(stage) ? stage : normalizeStageFilter(stage);
-    if (!normalizedStage) return `/claims-lifecycle?range=${encodeURIComponent(lifecycleRange)}#lifecycleTable`;
-    return `/claims-lifecycle?stage=${encodeURIComponent(normalizedStage)}&range=${encodeURIComponent(lifecycleRange)}#lifecycleTable`;
+    const params = new URLSearchParams();
+    if (normalizedStage) params.set("stage", normalizedStage);
+    params.set("range", lifecycleRange);
+    if (hasClaimIdsFilter) params.set("claim_ids", claimIdsFilterCsv);
+    return `/claims-lifecycle?${params.toString()}#lifecycleTable`;
   };
 
   const pipelineAgg = {
@@ -18681,21 +18698,35 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           const showEmptyCardMessage = d.count === 0 && totalPipelineClaims === 0;
           const showProgress = d.count > 0;
 
+          const isAwaitingPaymentZeroCard = stage === "Awaiting Payment" && d.count === 0;
+          const cardShellStart = isAwaitingPaymentZeroCard
+            ? `<div style="text-decoration:none;color:inherit;flex:1;min-width:170px;">`
+            : `<a href="${href}" style="text-decoration:none;color:inherit;flex:1;min-width:170px;">`;
+          const cardShellEnd = isAwaitingPaymentZeroCard ? `</div>` : `</a>`;
+          const emptyAwaitingPaymentHtml = isAwaitingPaymentZeroCard
+            ? `
+              <div class="muted small" style="margin-top:6px;">No claims are currently awaiting payment.</div>
+              <div class="lifecycle-empty-note">Upload more billed claims to restart the post-submission pipeline.</div>
+              <a class="btn secondary small lifecycle-empty-cta" href="/data-management?tab=upload">Upload more billed claims</a>
+            `
+            : ``;
+
           return `
-            <a href="${href}"
-              style="text-decoration:none;color:inherit;flex:1;min-width:170px;">
-              <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);">
+            ${cardShellStart}
+              <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);height:100%;">
                 <div style="font-weight:900;">${stage}</div>
                 <div class="muted small">${safeStr(pipelineWindowLabel)} • Claims: ${formatNumberUI(d.count)}</div>
 
-                ${showEmptyCardMessage
-                  ? `<div class="muted small" style="margin-top:6px;">No claims in this stage</div>`
-                  : d.count > 0
-                    ? `
-                      <div class="muted small">${safeStr(cardDisplay.primary)}</div>
-                      ${cardDisplay.secondary ? `<div class="muted small">${safeStr(cardDisplay.secondary)}</div>` : ``}
-                    `
-                    : ``
+                ${isAwaitingPaymentZeroCard
+                  ? emptyAwaitingPaymentHtml
+                  : showEmptyCardMessage
+                    ? `<div class="muted small" style="margin-top:6px;">No claims in this stage</div>`
+                    : d.count > 0
+                      ? `
+                        <div class="muted small">${safeStr(cardDisplay.primary)}</div>
+                        ${cardDisplay.secondary ? `<div class="muted small">${safeStr(cardDisplay.secondary)}</div>` : ``}
+                      `
+                      : ``
                 }
 
                 ${((stage === "Denied" || stage === "Underpaid") && lifecycleRange !== "all" && d.count > 0)
@@ -18717,7 +18748,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                   `
                   : ``}
               </div>
-            </a>
+            ${cardShellEnd}
           `;
         }).join("")}
       </div>
@@ -18744,7 +18775,11 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         .slice()
         .sort((a,b) => computeClaimRiskScore(b) - computeClaimRiskScore(a));
 
-  const filteredClaims = stageFilteredClaims.filter(c => {
+  const scopedLifecycleClaims = hasClaimIdsFilter
+    ? stageFilteredClaims.filter(c => claimIdsFilterSet.has(String(c.billed_id || "")))
+    : stageFilteredClaims;
+
+  const filteredClaims = scopedLifecycleClaims.filter(c => {
     const d = evaluateClaimDerived(c, claimCtx);
     const searchBlob = [
       c.claim_number || "",
@@ -18755,7 +18790,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     if (lifecycleSearch && !searchBlob.includes(lifecycleSearch)) return false;
     if (lifecyclePayer && String(c.payer || "") !== lifecyclePayer) return false;
     if (lifecycleStageFilter && normalizeLifecycleDisplayStage(getCoreLifecycleStageForCards(c, d)) !== normalizeLifecycleDisplayStage(lifecycleStageFilter)) return false;
-    if (!shouldBypassRangeForCardDrilldown && !isLifecycleClaimInRange(c, lifecycleRange)) return false;
+    if (!hasClaimIdsFilter && !shouldBypassRangeForCardDrilldown && !isLifecycleClaimInRange(c, lifecycleRange)) return false;
 
     return true;
   });
@@ -18774,13 +18809,36 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const paginatedClaims = filteredClaims.slice(startIdx, startIdx + pageSize);
   const totalPages = Math.max(1, Math.ceil(filteredClaims.length / pageSize));
 
+  const affectedClaimsResetHref = hasClaimIdsFilter
+    ? `/claims-lifecycle?${new URLSearchParams({ claim_ids: claimIdsFilterCsv }).toString()}#lifecycleTable`
+    : `/claims-lifecycle#lifecycleTable`;
+  const clearDrilldownHref = hasClaimIdsFilter
+    ? `/claims-lifecycle?${new URLSearchParams({ claim_ids: claimIdsFilterCsv }).toString()}#lifecycleTable`
+    : `/claims-lifecycle#lifecycleTable`;
+  const affectedClaimsBanner = hasClaimIdsFilter
+    ? `
+      <div class="insight-card" style="margin-bottom:12px;border-left:4px solid #2563eb;">
+        <strong>Affected Claims Filter Active</strong>
+        <div class="muted small" style="margin-top:4px;">
+          Showing ${formatNumberUI(filteredClaims.length)} matched claim${filteredClaims.length === 1 ? "" : "s"} from the last contract upload.
+          ${filteredClaims.length !== claimIdsFilterSet.size ? ` (${formatNumberUI(claimIdsFilterSet.size)} IDs supplied)` : ``}
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+          <a class="btn secondary small" href="${affectedClaimsResetHref}" onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">Reset table filters</a>
+          <a class="btn secondary small" href="/claims-lifecycle#lifecycleTable" onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">Clear affected-claims filter</a>
+        </div>
+      </div>
+    `
+    : ``;
+
   const lifecycleTable = `
   <div id="lifecycleTable" style="margin-top:20px;scroll-margin-top:96px;">
+    ${affectedClaimsBanner}
     <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
       <div>
         <h3 style="margin:0;">Claims</h3>
         <div class="muted small">
-          Showing ${safeStr(lifecycleRangeLabel(lifecycleRange))}
+          Showing ${safeStr(hasClaimIdsFilter ? "Affected Claims" : lifecycleRangeLabel(lifecycleRange))}
           ${effectiveStage ? ` · ${safeStr(effectiveStage)} drilldown` : ``}
           ${shouldBypassRangeForCardDrilldown ? ` + older unresolved carryover` : ``}
         </div>
@@ -18793,6 +18851,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       onsubmit="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}"
       style="margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
       ${!lifecycleStageFilter && selectedStage ? `<input type="hidden" name="stage" value="${safeStr(selectedStage)}">` : ""}
+      ${hasClaimIdsFilter ? `<input type="hidden" name="claim_ids" value="${safeStr(claimIdsFilterCsv)}">` : ""}
       <div>
         <label class="small">Search</label>
         <input name="search" value="${safeStr(lifecycleSearch)}" placeholder="Claim #, payer, DOS..." />
@@ -18839,7 +18898,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     </form>
 
     <div style="margin-bottom:10px;">
-      ${selectedStage ? `<a class="btn secondary small" href="/claims-lifecycle#lifecycleTable" onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">Clear Card Drilldown</a>` : ""}
+      ${selectedStage ? `<a class="btn secondary small" href="${clearDrilldownHref}" onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">Clear Card Drilldown</a>` : ""}
     </div>
 
     <div style="overflow:auto;">
@@ -18898,7 +18957,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                   <button
                     type="button"
                     class="btn small secondary view-claim-btn"
-                    data-id="${encodeURIComponent(String(c.billed_id || ""))}">
+                    data-id="${encodeURIComponent(String(c.billed_id || ""))}"
+                    data-fallback-href="/claim-detail?billed_id=${encodeURIComponent(String(c.billed_id || ""))}">
                     View
                   </button>
                 `
@@ -18975,6 +19035,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
               ...(lifecyclePayer ? { payer: lifecyclePayer } : {}),
               ...(lifecycleRange ? { range: lifecycleRange } : {}),
               ...(lifecycleStageFilter ? { stage_filter: lifecycleStageFilter } : {}),
+              ...(hasClaimIdsFilter ? { claim_ids: claimIdsFilterCsv } : {}),
               per_page: String(pageSize),
               page: String(i + 1)
             }).toString()}#lifecycleTable"
@@ -19246,12 +19307,20 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           if (!ui.panel || !ui.content || !claim) return;
 
           const d = claim.__derived || {};
+          const displayStage = normalizeLifecycleDisplayStage(d.lifecycleStage || claim.lifecycleStage || claim.status || "");
+          const badgeClass =
+            displayStage === "Awaiting Payment" ? "warn" :
+            displayStage === "Denied" ? "err" :
+            displayStage === "Underpaid" ? "underpaid" :
+            "";
           const hasExpected = d.expectedInsurance !== null && d.expectedInsurance !== undefined;
-          const primaryAction = d.lifecycleStage === "Denied"
+          const primaryAction = displayStage === "Denied"
             ? '<a class="btn small secondary" href="/ai-appeal?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Appeal Workspace</a>'
-            : d.lifecycleStage === "Underpaid"
+            : displayStage === "Underpaid"
             ? '<a class="btn small secondary" href="/ai-negotiation?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Negotiation Workspace</a>'
-            : '<a class="btn small secondary" href="/action-center?claim=' + encodeURIComponent(claim.billed_id) + '">Open in Action Center</a>';
+            : displayStage === "Awaiting Payment"
+            ? '<a class="btn small secondary" href="/data-management?tab=payments">Upload Payment</a>'
+            : '<a class="btn small secondary" href="/actions?claim=' + encodeURIComponent(claim.billed_id) + '">Open in Action Center</a>';
           const contractAlert = !hasExpected
             ? '<div style="margin:12px 0;padding:10px;border-radius:12px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;">No contract match found for this claim. Review matching before taking reimbursement action.</div>'
             : '';
@@ -19266,7 +19335,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + panelMoney(d.atRiskAmount || 0) + '</div></div>'
             + '</div>'
             + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
-            +   '<span class="badge">' + panelEsc(d.lifecycleStage || "Unknown") + '</span>'
+            +   '<span class="badge ' + panelEsc(badgeClass) + '">' + panelEsc(displayStage || "Unknown") + '</span>'
             +   '<span class="badge">Risk ' + panelEsc(String(claim.__risk || 0)) + '</span>'
             + '</div>'
             + contractAlert
@@ -19306,7 +19375,12 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           if (!btn) return;
           e.preventDefault();
           e.stopPropagation();
-          window.openClaimPanel(btn.getAttribute("data-id") || "");
+          if (typeof window.openClaimPanel === "function") {
+            window.openClaimPanel(btn.getAttribute("data-id") || "");
+            return;
+          }
+          const fallbackHref = btn.getAttribute("data-fallback-href");
+          if (fallbackHref) window.location.href = fallbackHref;
         });
 
         document.addEventListener("keydown", function(e){
@@ -19317,7 +19391,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           const shouldRestore =
             window.location.hash === "#lifecycleTable" ||
             sessionStorage.getItem("claimsLifecycleRestore") === "1" ||
-            !!new URLSearchParams(window.location.search).get("stage");
+            !!new URLSearchParams(window.location.search).get("stage") ||
+            !!new URLSearchParams(window.location.search).get("claim_ids");
 
           if (!shouldRestore) return;
           try { sessionStorage.removeItem("claimsLifecycleRestore"); } catch (err) {}
@@ -22715,11 +22790,17 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
       };
 
       document.addEventListener("click", function(e){
+        if (e.defaultPrevented) return;
         const btn = e.target.closest(".view-claim-btn");
         if (!btn) return;
         e.preventDefault();
         e.stopPropagation();
-        window.openClaimPanel(btn.getAttribute("data-id") || "");
+        if (typeof window.openClaimPanel === "function") {
+          window.openClaimPanel(btn.getAttribute("data-id") || "");
+          return;
+        }
+        const fallbackHref = btn.getAttribute("data-fallback-href");
+        if (fallbackHref) window.location.href = fallbackHref;
       });
 
       document.addEventListener("keydown", function(e){
@@ -23067,7 +23148,8 @@ if (method === "GET" && pathname === "/actions") {
       <button
         type="button"
         class="btn small secondary view-claim-btn"
-        data-id="${encodeURIComponent(String(b.billed_id || ""))}">
+        data-id="${encodeURIComponent(String(b.billed_id || ""))}"
+        data-fallback-href="${claimLink}">
         View
       </button>
     `;
@@ -23264,6 +23346,7 @@ if (method === "GET" && pathname === "/actions") {
 
         // 🔥 FIX: Make View button open panel in Action Center
         document.addEventListener("click", function(e){
+          if (e.defaultPrevented) return;
           const btn = e.target.closest(".view-claim-btn");
           if (!btn) return;
 
@@ -23271,8 +23354,12 @@ if (method === "GET" && pathname === "/actions") {
           e.stopPropagation();
 
           if (typeof window.openClaimPanel === "function") {
-            window.openClaimPanel(btn.getAttribute("data-id"));
+            window.openClaimPanel(btn.getAttribute("data-id") || "");
+            return;
           }
+
+          const fallbackHref = btn.getAttribute("data-fallback-href");
+          if (fallbackHref) window.location.href = fallbackHref;
         });
       })();
     </script>
@@ -28884,6 +28971,10 @@ function renderTemplateEditor(org, user){
     rebuildOrgDerivedData(org.org_id);
 
     const impactedCount = affectedClaimIds.size;
+    const affectedClaimIdsCsv = Array.from(affectedClaimIds).filter(Boolean).join(",");
+    const affectedClaimsHref = affectedClaimIdsCsv
+      ? `/claims-lifecycle?claim_ids=${encodeURIComponent(affectedClaimIdsCsv)}#lifecycleTable`
+      : `/claims-lifecycle#lifecycleTable`;
 
     const html = renderPage("Reimbursement Commit Complete", `
       <h2>Upload Committed</h2>
@@ -28896,8 +28987,7 @@ function renderTemplateEditor(org, user){
       <div class="btnRow" style="margin-top:16px;">
         <a class="btn" href="/data-management?tab=reimbursement">Back to Reimbursement Contracts</a>
 
-        <a class="btn secondary"
-           href="/claims?view=all&reimbursement_batch=${encodeURIComponent(safeStr(pending.upload_batch_id))}">
+        <a class="btn secondary" href="${affectedClaimsHref}">
            View Affected Claims (${impactedCount || 0})
         </a>
       </div>
