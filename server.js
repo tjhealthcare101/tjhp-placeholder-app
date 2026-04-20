@@ -18677,8 +18677,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
           ${safeStr(c.next_action)}
         </div>
 
-        <a class="btn small secondary" href="/actions?type=issues&claim=${encodeURIComponent(c.billed_id)}">
-          Go to Action Center
+        <a class="btn small secondary" href="/claims-lifecycle?priority=top&claim=${encodeURIComponent(c.billed_id)}">
+          Open in Claims Lifecycle
         </a>
 
       </div>
@@ -19829,6 +19829,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const lifecycleSearch = String(qs.search || "").trim().toLowerCase();
   const lifecyclePayer = String(qs.payer || "").trim();
   const lifecyclePayerKey = normalizePayerKey(lifecyclePayer);
+  const priorityMode = String(parsed.query.priority || "").toLowerCase();
   let lifecycleStageFilter = String(qs.stage_filter || "").trim();
   const effectiveStage = lifecycleStageFilter ? "" : selectedStage;
   const normalizedEffectiveStage = effectiveStage ? normalizeLifecycleDisplayStage(effectiveStage) : "";
@@ -19875,11 +19876,18 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     )
   ).sort((a,b) => a.localeCompare(b));
 
+  let items = filteredClaims.slice();
+  if (priorityMode === "top") {
+    items = items
+      .sort((a,b)=> (computeClaimRiskScore(b) - computeClaimRiskScore(a)) || (num(evaluateClaimDerived(b, claimCtx).atRiskAmount) - num(evaluateClaimDerived(a, claimCtx).atRiskAmount)))
+      .slice(0, 20);
+  }
+
   const page = Number(qs.page || 1);
   const pageSize = lifecyclePerPage;
   const startIdx = (page - 1) * pageSize;
-  const paginatedClaims = filteredClaims.slice(startIdx, startIdx + pageSize);
-  const totalPages = Math.max(1, Math.ceil(filteredClaims.length / pageSize));
+  const paginatedClaims = items.slice(startIdx, startIdx + pageSize);
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
 
   const affectedClaimsResetHref = hasClaimIdsFilter
     ? `/claims-lifecycle?${new URLSearchParams({ claim_ids: claimIdsFilterCsv }).toString()}#lifecycleTable`
@@ -19902,15 +19910,29 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       </div>
     `
     : ``;
+  const topModeBanner = priorityMode === "top" ? `
+    <div style="
+      background:#ecfdf5;
+      border:1px solid #10b981;
+      padding:10px;
+      border-radius:8px;
+      margin-bottom:12px;
+    ">
+      Showing highest priority claims to work first.
+      <a href="/claims-lifecycle" class="btn small secondary">Clear Filter</a>
+    </div>
+  ` : "";
 
   const lifecycleTable = `
   <div id="lifecycleTable" style="margin-top:20px;scroll-margin-top:96px;">
+    ${topModeBanner}
     ${affectedClaimsBanner}
     <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
       <div>
         <h3 style="margin:0;">Claims</h3>
         <div class="muted small">
           Showing ${safeStr(hasClaimIdsFilter ? "Affected Claims" : lifecycleRangeLabel(lifecycleRange))}
+          ${priorityMode === "top" ? ` · Top Priority` : ``}
           ${effectiveStage ? ` · ${safeStr(effectiveStage)} drilldown` : ``}
           ${shouldBypassRangeForCardDrilldown ? ` + older unresolved carryover` : ``}
         </div>
@@ -19924,6 +19946,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       style="margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
       ${!lifecycleStageFilter && selectedStage ? `<input type="hidden" name="stage" value="${safeStr(selectedStage)}">` : ""}
       ${hasClaimIdsFilter ? `<input type="hidden" name="claim_ids" value="${safeStr(claimIdsFilterCsv)}">` : ""}
+      ${priorityMode ? `<input type="hidden" name="priority" value="${safeStr(priorityMode)}">` : ""}
       <div>
         <label class="small">Search</label>
         <input name="search" value="${safeStr(lifecycleSearch)}" placeholder="Claim #, payer, DOS..." />
@@ -19999,7 +20022,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         </thead>
         <tbody>
           ${
-            paginatedClaims.map(c => {
+            paginatedClaims.map((c, index) => {
               const d = evaluateClaimDerived(c, claimCtx);
               const risk = computeClaimRiskScore(c);
               const riskColor =
@@ -20057,9 +20080,13 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
               }
 
               const actionButtons = actionParts.join("");
+              const isTopPriority = priorityMode === "top" && index < 5;
+              const rowStyle = isTopPriority
+                ? ' style="background:#fef3c7;border-left:4px solid #f59e0b;"'
+                : "";
 
               return `
-                <tr>
+                <tr${rowStyle}>
                   <td>
                     <a href="/claim-detail?billed_id=${encodeURIComponent(c.billed_id)}">
                       ${safeStr(c.claim_number || "")}
@@ -20107,6 +20134,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
               ...(lifecyclePayer ? { payer: lifecyclePayer } : {}),
               ...(lifecycleRange ? { range: lifecycleRange } : {}),
               ...(lifecycleStageFilter ? { stage_filter: lifecycleStageFilter } : {}),
+              ...(priorityMode ? { priority: priorityMode } : {}),
               ...(hasClaimIdsFilter ? { claim_ids: claimIdsFilterCsv } : {}),
               per_page: String(pageSize),
               page: String(i + 1)
@@ -24429,23 +24457,6 @@ if (method === "GET" && pathname === "/actions") {
 
   const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer||"").trim()).filter(Boolean))).sort();
   const selectedClaim = selectedClaimId ? billedAll.find(c => String(c.billed_id) === selectedClaimId) : null;
-  const topClaims = getTopClaimsForOrg(org.org_id, 5);
-  const topClaimsCard = `
-  <div class="insight-card" style="margin-bottom:12px;">
-    <h3>🔥 Top Claims to Work Today</h3>
-    ${topClaims.length === 0 ? `
-      <div class="muted small">No high-risk claims right now.</div>
-    ` : topClaims.map(c => `
-      <div style="margin-bottom:10px;padding:8px;border-bottom:1px solid #eee;">
-        <strong>#${safeStr(c.claim_number || "-")}</strong> — ${formatMoneyUI(c.at_risk_amount)} at risk<br/>
-        <span class="muted small">${safeStr(c.next_action)}</span><br/>
-        <a class="btn small secondary" href="/actions?type=issues&claim=${encodeURIComponent(c.billed_id)}">
-          Open in Action Center
-        </a>
-      </div>
-    `).join("")}
-  </div>
-`;
   const claimBanner = selectedClaimId ? `
     <div class="insight-card" style="border-left:4px solid #6366f1;">
       Working Claim: <strong>#${safeStr((selectedClaim && selectedClaim.claim_number) || selectedClaimId)}</strong>
@@ -24663,7 +24674,6 @@ if (method === "GET" && pathname === "/actions") {
 
     ${(payerFilter || rangePreset || (tab === "postsubmission" && subTab !== "all")) ? `<div class="muted small" style="margin-bottom:10px;">Filters: ${payerFilter ? `<span class="badge">${safeStr(payerFilter)}</span>` : ""} ${rangePreset ? `<span class="badge">${safeStr(rangePreset)}</span>` : ""} ${(tab === "postsubmission" && subTab !== "all") ? `<span class="badge">${safeStr(subTab)}</span>` : ""}</div>` : ""}
     ${claimBanner}
-    ${topClaimsCard}
 
     <div id="actionTableSync">
       <div class="scrollSyncTop"><div></div></div>
