@@ -4772,7 +4772,7 @@ function renderUpgradePrompt(limitType) {
         You've reached your ${safeStr(limitType)} limit. Upgrade your plan to continue.
       </div>
       <div style="margin-top:8px;">
-        <a href="/plans" class="btn-primary">Upgrade Plan</a>
+        <a href="/account?tab=plan-billing#upgrade-options" class="btn-primary">Upgrade Plan</a>
       </div>
     </div>
   `;
@@ -4796,6 +4796,9 @@ function canGeneratePacket(org_id) {
 
 function hasFeatureAccess(org_id, feature) {
   if (!org_id || !feature) return false;
+
+  // Payer Intelligence is now available on all plans, including free trial.
+  if (String(feature) === "payer_intelligence") return true;
   const sess = CURRENT_SIMULATION
     ? { simulating:true, simulated_plan: CURRENT_SIMULATION.plan }
     : null;
@@ -4820,7 +4823,7 @@ function renderFeatureLocked(featureName) {
         Upgrade your plan to unlock this feature.
       </div>
       <div style="margin-top:8px;">
-        <a href="/plans" class="btn-primary">Upgrade Plan</a>
+        <a href="/account?tab=plan-billing#upgrade-options" class="btn-primary">Upgrade Plan</a>
       </div>
     </div>
   `;
@@ -4859,7 +4862,7 @@ function renderTrialBanner(org_id) {
       transition:all 0.2s ease;
     ">
       Free Trial: ${trial.daysLeft} day(s) remaining
-      <a href="/plans" style="margin-left:10px;color:white;font-weight:600;">Upgrade Now</a>
+      <a href="/account?tab=plan-billing#upgrade-options" style="margin-left:10px;color:white;font-weight:600;">Upgrade Now</a>
 
       <span onclick="document.getElementById('trialBanner').remove(); localStorage.setItem('hideTrialBanner','1');"
         style="
@@ -30569,7 +30572,8 @@ function renderTemplateEditor(org, user){
     const sub = getSub(org.org_id);
     const pilot = getPilot(org.org_id) || ensurePilot(org.org_id);
     const limits = getLimitProfile(org.org_id);
-    const tab = String(parsed.query.tab || "profile").toLowerCase();
+    const requestedTab = String(parsed.query.tab || "profile").toLowerCase();
+    const tab = requestedTab === "plan-billing" ? "billing" : requestedTab;
     const usage = getUsage(org.org_id);
     const savedBanner = (tab === "org" && String(parsed.query.saved || "") === "1") ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;">Saved ✓ Organization Settings updated.</div>` : "";
     const errBanner = parsed.query.err ? `<div class="alert">${safeStr(parsed.query.err)}</div>` : "";
@@ -30850,7 +30854,7 @@ function renderTemplateEditor(org, user){
             </div>
           </div>
 
-          <div style="margin:6px 0 14px 0;font-size:22px;font-weight:800;">Compare Plans</div>
+          <div id="upgrade-options" style="margin:6px 0 14px 0;font-size:22px;font-weight:800;">Compare Plans</div>
 
           <div class="grid-4" style="gap:18px;">
             ${plans.map(p => {
@@ -30931,6 +30935,10 @@ function renderTemplateEditor(org, user){
               } catch (err) {
                 alert("Unable to start plan change.");
               }
+            }
+
+            if (window.location.hash === "#upgrade-options") {
+              document.getElementById("upgrade-options")?.scrollIntoView({ behavior: "smooth", block: "start" });
             }
           </script>
         `;
@@ -31715,9 +31723,6 @@ else if (type === "payers") {
 
   // AI Analyze Payer route
   if (method === "GET" && pathname === "/analyze-payer") {
-    if (!hasFeatureAccess(org.org_id, "payer_intelligence")) {
-      return send(res, 403, renderPage("Payer Intelligence", renderFeatureLocked("Payer Intelligence"), navUser(), {showChat:true, orgName: org.org_name}));
-    }
     const payer = (parsed.query.payer || "").trim();
     const data = computePayerIntelligence(org.org_id, payer, String(parsed.query.preset || "last30"));
     const gradeTone = toneForGrade(data.grade);
