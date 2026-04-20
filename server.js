@@ -18593,22 +18593,6 @@ if (method === "GET" && pathname === "/weekly-summary") {
     ` : "";
     const dashboardCtx = buildClaimContext(org.org_id);
     const topClaims = getTopClaimsForOrg(org.org_id, 3);
-    const topClaimsOverview = `
-      <div class="card" style="margin-top:12px;">
-        <h3>🔥 Top Claims to Work Today</h3>
-        ${topClaims.length === 0 ? `
-          <div class="muted small">No urgent claims at the moment.</div>
-        ` : topClaims.map(c => `
-          <div style="margin-bottom:8px;">
-            <strong>#${safeStr(c.claim_number || "-")}</strong> — ${formatMoneyUI(c.at_risk_amount)} at risk<br/>
-            <span class="muted small">${safeStr(c.next_action)}</span><br/>
-            <a class="btn small secondary" href="/actions?type=issues&claim=${encodeURIComponent(c.billed_id)}">
-              Go to Action Center
-            </a>
-          </div>
-        `).join("")}
-      </div>
-    `;
     const todaysPriorities = dashboardClaims.reduce((acc, b) => {
 
       let simpleStage = "Unknown";
@@ -18651,6 +18635,62 @@ if (method === "GET" && pathname === "/weekly-summary") {
       underpaid: { count: 0, amount: 0 },
       followup: { count: 0, amount: 0 }
     });
+    const revenueSummaryBlock = `
+<div class="insight-card" style="margin-bottom:16px;">
+
+  <h3 style="margin:0 0 10px;">Revenue Overview</h3>
+
+  <div class="muted small" style="margin-bottom:10px;">
+    <strong>Total At Risk:</strong> ${formatMoneyUI(todaysPriorities.denied.amount + todaysPriorities.underpaid.amount + todaysPriorities.followup.amount)}
+  </div>
+
+  <div class="muted small" style="margin-bottom:6px;">
+    Denied: <strong>${formatNumberUI(todaysPriorities.denied.count)}</strong> · ${formatMoneyUI(todaysPriorities.denied.amount)}
+  </div>
+
+  <div class="muted small" style="margin-bottom:6px;">
+    Underpaid: <strong>${formatNumberUI(todaysPriorities.underpaid.count)}</strong> · ${formatMoneyUI(todaysPriorities.underpaid.amount)}
+  </div>
+
+  <div class="muted small" style="margin-bottom:10px;">
+    Follow-Up Needed: <strong>${formatNumberUI(todaysPriorities.followup.count)}</strong> · ${formatMoneyUI(todaysPriorities.followup.amount)}
+  </div>
+
+  <div class="btnRow" style="margin-bottom:12px;">
+    <a class="btn" href="/claims-lifecycle">Review Claims Lifecycle</a>
+    <a class="btn secondary" href="/actions">Open Action Center</a>
+  </div>
+
+  <div class="hr"></div>
+
+  <h4 style="margin:10px 0 8px;">Top Claims to Work Today</h4>
+
+  ${
+    topClaims.length === 0
+    ? `<div class="muted small">No high-priority claims right now.</div>`
+    : topClaims.map(c => `
+      <div style="padding:8px 0;border-bottom:1px solid #eee;">
+
+        <strong>#${safeStr(c.claim_number || "-")}</strong> — ${formatMoneyUI(c.at_risk_amount)} at risk<br/>
+
+        <div class="muted small" style="margin:2px 0 6px;">
+          ${safeStr(c.next_action)}
+        </div>
+
+        <a class="btn small secondary" href="/actions?type=issues&claim=${encodeURIComponent(c.billed_id)}">
+          Go to Action Center
+        </a>
+
+      </div>
+    `).join("")
+  }
+
+  <div class="muted small" style="margin-top:10px;">
+    Start in Claims Lifecycle to see where claims are stuck, then move into Action Center to work them.
+  </div>
+
+</div>
+`;
 
     const html = renderPage("Revenue Overview", `
       ${alertBanner}
@@ -18741,21 +18781,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
       </div>
 
-      <div class="insight-card" style="margin-bottom:16px;">
-        <h3 style="margin:0 0 10px;">Revenue at Risk</h3>
-        <div class="muted">Review the claims driving your at-risk dollars, then move directly into the Action Center to recover revenue.</div>
-        <div class="btnRow" style="margin-top:10px;">
-          <a class="btn" href="/claims?view=lifecycle">Review Claims Lifecycle</a>
-          <a class="btn secondary" href="/actions">Open Action Center</a>
-        </div>
-        <div class="hr"></div>
-        <h4 style="margin:0 0 8px;">Today’s Priorities</h4>
-        <div class="muted small">Denied claims needing appeal: <strong>${formatNumberUI(todaysPriorities.denied.count)}</strong> · ${formatMoneyUI(todaysPriorities.denied.amount)}</div>
-        <div class="muted small">Underpaid claims needing negotiation: <strong>${formatNumberUI(todaysPriorities.underpaid.count)}</strong> · ${formatMoneyUI(todaysPriorities.underpaid.amount)}</div>
-        <div class="muted small">Claims needing follow-up: <strong>${formatNumberUI(todaysPriorities.followup.count)}</strong> · ${formatMoneyUI(todaysPriorities.followup.amount)}</div>
-        ${topClaimsOverview}
-        <div class="muted small" style="margin-top:10px;">Start in Claims Lifecycle to see where claims are stuck, then move into Action Center to work them.</div>
-      </div>
+      ${revenueSummaryBlock}
 
       <div class="kpi-strip">
         <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.revenueAtRisk)}</p><p class="kpi-label">Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Outstanding revenue from denied, underpaid, or unpaid claims.</span></span></p><div class="kpi-delta">-</div></div>
