@@ -11130,6 +11130,21 @@ function computeClaimRiskScore(b){
   return Math.round(clamp(total, 0, 100));
 }
 
+function getTopClaimsForOrg(org_id, limit = 5) {
+  const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+
+  return billedAll
+    .map(b => ({
+      ...b,
+      risk_score: Number(b.risk_score || computeClaimRiskScore(b)),
+      at_risk_amount: Number(b.at_risk_amount || computeClaimAtRisk(b)),
+      next_action: b.next_action || "Review Claim"
+    }))
+    .filter(c => c.at_risk_amount > 0)
+    .sort((a,b)=> (b.risk_score - a.risk_score) || (b.at_risk_amount - a.at_risk_amount))
+    .slice(0, limit);
+}
+
 function claimRiskBand(score){
   if (score >= 80) return { label: "Critical", cls: "err" };
   if (score >= 60) return { label: "High", cls: "warn" };
@@ -18413,6 +18428,23 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const overviewTargets = getOrgSettings(org.org_id).recovery_targets || {};
     const dashboardClaims = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const dashboardCtx = buildClaimContext(org.org_id);
+    const topClaims = getTopClaimsForOrg(org.org_id, 3);
+    const topClaimsOverview = `
+      <div class="card" style="margin-top:12px;">
+        <h3>🔥 Top Claims to Work Today</h3>
+        ${topClaims.length === 0 ? `
+          <div class="muted small">No urgent claims at the moment.</div>
+        ` : topClaims.map(c => `
+          <div style="margin-bottom:8px;">
+            <strong>#${safeStr(c.claim_number || "-")}</strong> — ${formatMoneyUI(c.at_risk_amount)} at risk<br/>
+            <span class="muted small">${safeStr(c.next_action)}</span><br/>
+            <a class="btn small secondary" href="/actions?type=issues&claim=${encodeURIComponent(c.billed_id)}">
+              Go to Action Center
+            </a>
+          </div>
+        `).join("")}
+      </div>
+    `;
     const todaysPriorities = dashboardClaims.reduce((acc, b) => {
 
       let simpleStage = "Unknown";
@@ -18556,6 +18588,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="muted small">Denied claims needing appeal: <strong>${formatNumberUI(todaysPriorities.denied.count)}</strong> · ${formatMoneyUI(todaysPriorities.denied.amount)}</div>
         <div class="muted small">Underpaid claims needing negotiation: <strong>${formatNumberUI(todaysPriorities.underpaid.count)}</strong> · ${formatMoneyUI(todaysPriorities.underpaid.amount)}</div>
         <div class="muted small">Claims needing follow-up: <strong>${formatNumberUI(todaysPriorities.followup.count)}</strong> · ${formatMoneyUI(todaysPriorities.followup.amount)}</div>
+        ${topClaimsOverview}
         <div class="muted small" style="margin-top:10px;">Start in Claims Lifecycle to see where claims are stuck, then move into Action Center to work them.</div>
       </div>
 
@@ -24205,6 +24238,23 @@ if (method === "GET" && pathname === "/actions") {
 
   const payerOpts = Array.from(new Set(billedAll.map(b => (b.payer||"").trim()).filter(Boolean))).sort();
   const selectedClaim = selectedClaimId ? billedAll.find(c => String(c.billed_id) === selectedClaimId) : null;
+  const topClaims = getTopClaimsForOrg(org.org_id, 5);
+  const topClaimsCard = `
+  <div class="insight-card" style="margin-bottom:12px;">
+    <h3>🔥 Top Claims to Work Today</h3>
+    ${topClaims.length === 0 ? `
+      <div class="muted small">No high-risk claims right now.</div>
+    ` : topClaims.map(c => `
+      <div style="margin-bottom:10px;padding:8px;border-bottom:1px solid #eee;">
+        <strong>#${safeStr(c.claim_number || "-")}</strong> — ${formatMoneyUI(c.at_risk_amount)} at risk<br/>
+        <span class="muted small">${safeStr(c.next_action)}</span><br/>
+        <a class="btn small secondary" href="/actions?type=issues&claim=${encodeURIComponent(c.billed_id)}">
+          Open in Action Center
+        </a>
+      </div>
+    `).join("")}
+  </div>
+`;
   const claimBanner = selectedClaimId ? `
     <div class="insight-card" style="border-left:4px solid #6366f1;">
       Working Claim: <strong>#${safeStr((selectedClaim && selectedClaim.claim_number) || selectedClaimId)}</strong>
@@ -24422,6 +24472,7 @@ if (method === "GET" && pathname === "/actions") {
 
     ${(payerFilter || rangePreset || (tab === "postsubmission" && subTab !== "all")) ? `<div class="muted small" style="margin-bottom:10px;">Filters: ${payerFilter ? `<span class="badge">${safeStr(payerFilter)}</span>` : ""} ${rangePreset ? `<span class="badge">${safeStr(rangePreset)}</span>` : ""} ${(tab === "postsubmission" && subTab !== "all") ? `<span class="badge">${safeStr(subTab)}</span>` : ""}</div>` : ""}
     ${claimBanner}
+    ${topClaimsCard}
 
     <div id="actionTableSync">
       <div class="scrollSyncTop"><div></div></div>
