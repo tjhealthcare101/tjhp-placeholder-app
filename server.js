@@ -20045,29 +20045,52 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             // ONLY adjust Awaiting Payment
             if (!status.includes("awaiting payment")) return;
 
-            // ❌ Remove Action Center button
-            panel.querySelectorAll("a, button").forEach(btn => {
-              if ((btn.textContent || "").toLowerCase().includes("action center")) {
+            // =========================
+            // 1. TARGET ACTION BUTTON ROW
+            // =========================
+            let actionRow = panel.querySelector(".btnRow");
+
+            if (!actionRow) {
+              const candidates = panel.querySelectorAll("div");
+              for (const div of candidates) {
+                if (div.querySelector("a.btn, button")) {
+                  actionRow = div;
+                  break;
+                }
+              }
+            }
+
+            if (!actionRow) return;
+
+            // =========================
+            // 2. REMOVE ACTION CENTER BUTTON (STRICT MATCH)
+            // =========================
+            actionRow.querySelectorAll("a, button").forEach(btn => {
+              const txt = (btn.textContent || "").trim().toLowerCase();
+
+              if (txt === "open in action center") {
                 btn.remove();
               }
             });
 
-            // ✅ Add Upload Payment button (if missing)
-            const actionContainer = panel.querySelector(".btnRow") || panel.querySelector("div > .btn");
+            // =========================
+            // 3. ADD UPLOAD PAYMENT BUTTON (IF MISSING)
+            // =========================
+            const hasUpload = Array.from(actionRow.querySelectorAll("a, button"))
+              .some(btn => (btn.textContent || "").toLowerCase().includes("upload payment"));
 
-            if (actionContainer && !panel.innerHTML.includes("Upload Payment")) {
+            if (!hasUpload) {
               const uploadBtn = document.createElement("a");
               uploadBtn.className = "btn secondary";
               uploadBtn.href = "/data-management?tab=payments";
               uploadBtn.textContent = "Upload Payment";
-              if (actionContainer.classList && actionContainer.classList.contains("btn")) {
-                actionContainer.parentElement && actionContainer.parentElement.appendChild(uploadBtn);
-              } else {
-                actionContainer.appendChild(uploadBtn);
-              }
+
+              actionRow.appendChild(uploadBtn);
             }
 
-            // ✅ Fix Claim Insight
+            // =========================
+            // 4. FIX TEXT (INSIGHT + NEXT ACTION)
+            // =========================
             const insightHeader = Array.from(panel.querySelectorAll("h3, h4"))
               .find(el => el.textContent.includes("Claim Insight"));
 
@@ -20076,7 +20099,6 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                 "Awaiting initial payer response";
             }
 
-            // ✅ Fix Next Best Action
             const nextHeader = Array.from(panel.querySelectorAll("h3, h4"))
               .find(el => el.textContent.includes("Next Best Action"));
 
@@ -20117,6 +20139,22 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
               setTimeout(fixPanelUI, 120);
               setTimeout(fixPanelUI, 260);
             }, 0);
+          });
+
+          document.addEventListener("click", function(e){
+            const btn = e.target.closest(".view-claim-btn");
+            if (!btn) return;
+
+            let attempts = 0;
+
+            const interval = setInterval(() => {
+              fixPanelUI();
+              attempts++;
+
+              if (attempts > 6) {
+                clearInterval(interval);
+              }
+            }, 100);
           });
 
         })();
