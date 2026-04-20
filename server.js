@@ -10869,6 +10869,7 @@ function rebuildOrgDerivedData(org_id, opts={}){
   runAIRecoveryEngine(org_id);
   enqueueRecoveryTasksForOrg(org_id);
   runRecoveryAgentTick(org_id);
+  runClaimAutomationSweep(org_id);
 
   const subsAll = readJSON(FILES.billed_submissions, []);
   const orgClaims = billedAll.filter(b => b.org_id === org_id);
@@ -10889,6 +10890,217 @@ function rebuildOrgDerivedData(org_id, opts={}){
     s.updated_at = nowISO();
   }
   writeJSON(FILES.billed_submissions, subsAll);
+}
+
+function getClaimAgingStartDate(claim){
+  const candidates = [
+    claim.submitted_at,
+    claim.submitted_date,
+    claim.created_at,
+    claim.dos
+  ];
+  for (const raw of candidates){
+    const t = new Date(raw || 0).getTime();
+    if (Number.isFinite(t) && t > 0) return t;
+  }
+  return Date.now();
+}
+
+function getClaimAgeDays(claim){
+  const start = getClaimAgingStartDate(claim);
+  return Math.max(0, Math.floor((Date.now() - start) / (1000 * 60 * 60 * 24)));
+}
+
+function normalizeAutomationLifecycleStage(stage){
+  const s = String(stage || "").trim();
+  if (s === "Submitted" || s === "Waiting Payment") return "Awaiting Payment";
+  return s || "Pending";
+}
+
+function getClaimAutomationNextAction(stage, ageDays, derived){
+  const s = normalizeAutomationLifecycleStage(stage);
+  if (s === "Denied") return "Appeal";
+  if (s === "Underpaid") return "Negotiate";
+  if (s === "In Appeal/Negotiation") return "Review Workspace";
+  if (s === "Patient Follow-Up") return "Collect Patient Balance";
+  if (s === "Awaiting Payment" && ageDays >= 21) return "Follow Up With Payer";
+  if (s === "Awaiting Payment") return "Monitor Payer Response";
+  if (isResolvedLifecycleStage(s)) return "Resolved";
+  if (Number(derived?.atRiskAmount || 0) > 0) return "Review Claim";
+  return "Monitor Claim";
+}
+
+function ensureAgingFollowupTask(org_id, claim, derived, ageDays){
+  if (!org_id || !claim?.billed_id) return null;
+
+  const stage = normalizeAutomationLifecycleStage(derived?.lifecycleStage || claim?.status || "");
+  if (stage !== "Awaiting Payment") return null;
+  if (ageDays < 21) return null;
+
+  const allTasks = readJSON(FILES.agent_tasks, []);
+  const existing = allTasks.find(t =>
+    t.org_id === org_id &&
+    String(t.billed_id || "") === String(claim.billed_id || "") &&
+    String(t.stage_type || "") === "followup" &&
+    String(t.status || "") !== "closed"
+  );
+
+  const priority = Math.min(100, 55 + Math.floor(ageDays / 3) + Math.floor(num(derived?.atRiskAmount || 0) / 1000));
+  const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+  if (existing) {
+    return markTask(existing.task_id, {
+      priority,
+      status: "ready_for_review",
+      risk_level: ageDays >= 30 ? "HIGH" : "MEDIUM",
+      estimated_value: Number(num(derived?.atRiskAmount || 0)),
+      recommended_next_step: "Follow up with payer for missing payment response",
+      next_actions: [
+        "Call payer",
+        "Check claim status",
+        "Document reference number",
+        "Upload payment if received"
+      ],
+      notes: `Awaiting payment for ${ageDays} day(s).`,
+      follow_up_due_at: dueAt
+    });
+  }
+
+  return upsertAgentTask({
+    org_id,
+    billed_id: claim.billed_id,
+    stage_type: "followup",
+    status: "ready_for_review",
+    priority,
+    risk_level: ageDays >= 30 ? "HIGH" : "MEDIUM",
+    estimated_value: Number(num(derived?.atRiskAmount || 0)),
+    recommended_next_step: "Follow up with payer for missing payment response",
+    next_actions: [
+      "Call payer",
+      "Check claim status",
+      "Document reference number",
+      "Upload payment if received"
+    ],
+    missing_docs: [],
+    notes: `Awaiting payment for ${ageDays} day(s).`,
+    follow_up_due_at: dueAt
+  });
+}
+
+function runClaimAutomationSweep(org_id){
+  if (!org_id) return { processed: 0, updated: 0, followups: 0 };
+
+  const billedAll = readJSON(FILES.billed, []);
+  const ctx = buildClaimContext(org_id);
+  let updated = 0;
+  let followups = 0;
+
+  for (const claim of billedAll) {
+    if (claim.org_id !== org_id) continue;
+
+    const derived = evaluateClaimDerived(claim, ctx);
+    const lifecycleStage = normalizeAutomationLifecycleStage(derived.lifecycleStage || claim.status || "");
+    const ageDays = getClaimAgeDays(claim);
+    const riskScore = computeClaimRiskScore(claim);
+    const atRiskAmount = computeClaimAtRisk(claim);
+    const nextAction = getClaimAutomationNextAction(lifecycleStage, ageDays, derived);
+
+    const followupThresholdDays = lifecycleStage === "Awaiting Payment" ? 21 : 14;
+    const needsFollowup =
+      !isResolvedLifecycleStage(lifecycleStage) &&
+      lifecycleStage !== "Denied" &&
+      lifecycleStage !== "Underpaid" &&
+      ageDays >= followupThresholdDays;
+
+    const followupStatus =
+      needsFollowup
+        ? (ageDays >= 30 ? "Urgent Follow-Up" : "Follow-Up Needed")
+        : "";
+
+    const before = JSON.stringify({
+      lifecycle_stage: claim.lifecycle_stage,
+      status: claim.status,
+      risk_score: claim.risk_score,
+      at_risk_amount: claim.at_risk_amount,
+      age_days: claim.age_days,
+      next_action: claim.next_action,
+      requires_follow_up: claim.requires_follow_up,
+      follow_up_status: claim.follow_up_status
+    });
+
+    claim.lifecycle_stage = lifecycleStage;
+    claim.status = lifecycleStage;
+    claim.risk_score = riskScore;
+    claim.at_risk_amount = Number(num(atRiskAmount));
+    claim.age_days = ageDays;
+    claim.next_action = nextAction;
+    claim.requires_follow_up = !!needsFollowup;
+    claim.follow_up_status = followupStatus;
+    claim.follow_up_due_at = needsFollowup
+      ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      : "";
+    claim.last_automation_run_at = nowISO();
+
+    if (lifecycleStage === "Denied") {
+      ensureDenialCaseForClaim(claim);
+    }
+
+    if (lifecycleStage === "Awaiting Payment" && needsFollowup) {
+      const task = ensureAgingFollowupTask(org_id, claim, derived, ageDays);
+      if (task) followups += 1;
+    }
+
+    const after = JSON.stringify({
+      lifecycle_stage: claim.lifecycle_stage,
+      status: claim.status,
+      risk_score: claim.risk_score,
+      at_risk_amount: claim.at_risk_amount,
+      age_days: claim.age_days,
+      next_action: claim.next_action,
+      requires_follow_up: claim.requires_follow_up,
+      follow_up_status: claim.follow_up_status
+    });
+
+    if (before !== after) updated += 1;
+  }
+
+  writeJSON(FILES.billed, billedAll);
+
+  return {
+    processed: billedAll.filter(b => b.org_id === org_id).length,
+    updated,
+    followups
+  };
+}
+
+function runAutomationCycleForOrg(org_id){
+  if (!org_id) return null;
+
+  rebuildOrgDerivedData(org_id, {
+    resyncDenials: true,
+    autodraft: true
+  });
+
+  return runClaimAutomationSweep(org_id);
+}
+
+function runAutomationCycleForAllOrgs(){
+  const orgs = readJSON(FILES.orgs, []);
+  let cycles = 0;
+
+  for (const org of orgs) {
+    if (!org?.org_id) continue;
+    if (String(org.account_status || "active") !== "active") continue;
+
+    try {
+      runAutomationCycleForOrg(org.org_id);
+      cycles += 1;
+    } catch (e) {
+      console.error("Automation cycle error:", org.org_id, e?.message || e);
+    }
+  }
+
+  return cycles;
 }
 
 function computeClaimAtRisk(b){
@@ -33222,6 +33434,14 @@ setInterval(() => {
     console.error("Recovery agent tick error:", e?.message || e);
   }
 }, 60_000);
+
+setInterval(() => {
+  try {
+    runAutomationCycleForAllOrgs();
+  } catch (e) {
+    console.error("Automation sweep error:", e?.message || e);
+  }
+}, 5 * 60_000);
 
 server.listen(PORT, HOST, () => {
   debugLog(`TJHP server listening on ${HOST}:${PORT}`);
