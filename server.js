@@ -1912,6 +1912,21 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     }
   }, true);
 
+  document.addEventListener("click", function(e){
+    const btn = e.target.closest(".view-claim-btn");
+    if (!btn) return;
+
+    // RUN FIX MULTIPLE TIMES AFTER PANEL OPENS
+    let tries = 0;
+
+    const interval = setInterval(() => {
+      fixPanel();
+      tries++;
+
+      if (tries > 8) clearInterval(interval);
+    }, 120);
+  });
+
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
 
@@ -2015,9 +2030,11 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     // 4. PANEL FIX (AWAITING PAYMENT)
     // =========================
     function fixPanel(){
+      // TARGET BOTH PANELS
+      const panel =
+        document.getElementById("claimSidePanel") ||
+        document.getElementById("tjhpClaimPanel");
 
-      // ✅ TARGET THE REAL PANEL (this was your main issue)
-      const panel = document.getElementById("claimSidePanel");
       if (!panel) return;
 
       const statusEl = panel.querySelector(".badge");
@@ -2025,25 +2042,28 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
 
       const statusText = (statusEl.textContent || "").toLowerCase();
 
-      // ✅ ONLY RUN FOR AWAITING PAYMENT
+      // ONLY RUN FOR AWAITING PAYMENT
       if (!statusText.includes("awaiting payment")) return;
 
       // =========================
-      // 1. REMOVE WRONG BUTTON
+      // 1. FORCE REMOVE ACTION CENTER BUTTON
       // =========================
       panel.querySelectorAll("a, button").forEach(btn => {
-        const txt = (btn.textContent || "").toLowerCase();
-        if (txt.includes("action center")) {
+        const txt = (btn.textContent || "").toLowerCase().trim();
+
+        if (
+          txt === "open in action center" ||
+          txt.includes("action center")
+        ) {
           btn.remove();
         }
       });
 
       // =========================
-      // 2. ADD UPLOAD PAYMENT (CORRECT LOCATION)
+      // 2. FIND ACTION ROW (ROBUST)
       // =========================
       let actionRow = panel.querySelector(".btnRow");
 
-      // fallback if class not present
       if (!actionRow) {
         const buttons = panel.querySelectorAll("a, button");
         if (buttons.length > 0) {
@@ -2051,7 +2071,15 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         }
       }
 
-      if (actionRow && !actionRow.innerHTML.includes("Upload Payment")) {
+      if (!actionRow) return;
+
+      // =========================
+      // 3. ADD UPLOAD PAYMENT BUTTON (IF MISSING)
+      // =========================
+      const hasUpload = Array.from(actionRow.querySelectorAll("a, button"))
+        .some(btn => (btn.textContent || "").toLowerCase().includes("upload payment"));
+
+      if (!hasUpload) {
         const uploadBtn = document.createElement("a");
         uploadBtn.className = "btn secondary";
         uploadBtn.href = "/data-management?tab=payments";
@@ -2061,18 +2089,16 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       }
 
       // =========================
-      // 3. FIX CLAIM INSIGHT TEXT
+      // 4. FIX TEXT
       // =========================
       const insight = Array.from(panel.querySelectorAll("h3, h4"))
         .find(el => el.textContent.includes("Claim Insight"));
 
       if (insight && insight.nextElementSibling) {
-        insight.nextElementSibling.innerText = "Awaiting initial payer response";
+        insight.nextElementSibling.innerText =
+          "Awaiting initial payer response";
       }
 
-      // =========================
-      // 4. FIX NEXT BEST ACTION
-      // =========================
       const next = Array.from(panel.querySelectorAll("h3, h4"))
         .find(el => el.textContent.includes("Next Best Action"));
 
@@ -2082,7 +2108,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       }
 
       // =========================
-      // 5. FORCE CORRECT STATUS PILL STYLE
+      // 5. FORCE STATUS STYLE
       // =========================
       statusEl.textContent = "Awaiting Payment";
       statusEl.classList.remove("warn", "err", "underpaid");
