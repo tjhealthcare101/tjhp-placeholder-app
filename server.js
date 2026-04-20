@@ -19392,6 +19392,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
   const lifecycleSearch = String(qs.search || "").trim().toLowerCase();
   const lifecyclePayer = String(qs.payer || "").trim();
+  const lifecyclePayerKey = normalizePayerKey(lifecyclePayer);
   let lifecycleStageFilter = String(qs.stage_filter || "").trim();
   const effectiveStage = lifecycleStageFilter ? "" : selectedStage;
   const normalizedEffectiveStage = effectiveStage ? normalizeLifecycleDisplayStage(effectiveStage) : "";
@@ -19423,7 +19424,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     ].join(" ").toLowerCase();
 
     if (lifecycleSearch && !searchBlob.includes(lifecycleSearch)) return false;
-    if (lifecyclePayer && String(c.payer || "") !== lifecyclePayer) return false;
+    if (lifecyclePayerKey && normalizePayerKey(c.payer) !== lifecyclePayerKey) return false;
     if (lifecycleStageFilter && normalizeLifecycleDisplayStage(getCoreLifecycleStageForCards(c, d)) !== normalizeLifecycleDisplayStage(lifecycleStageFilter)) return false;
     if (!hasClaimIdsFilter && !shouldBypassRangeForCardDrilldown && !isLifecycleClaimInRange(c, lifecycleRange)) return false;
 
@@ -19496,7 +19497,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         <select name="payer">
           <option value="">All</option>
           ${lifecyclePayerOptions.map(p => `
-            <option value="${safeStr(p)}" ${lifecyclePayer === p ? "selected" : ""}>${safeStr(p)}</option>
+            <option value="${safeStr(p)}" ${lifecyclePayerKey && normalizePayerKey(p) === lifecyclePayerKey ? "selected" : ""}>${safeStr(p)}</option>
           `).join("")}
         </select>
       </div>
@@ -23683,7 +23684,16 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
 
 if (method === "GET" && pathname === "/actions") {
   const selectedClaimId = String(parsed.query.claim || "").trim();
-  const tabRaw = String(parsed.query.tab || "all").toLowerCase();
+  const actionType = String(parsed.query.type || "").toLowerCase();
+  const tabAliasFromType = ({
+    denied: "denials",
+    denials: "denials",
+    underpaid: "underpayments",
+    underpayments: "underpayments",
+    issues: "all",
+    all: "all"
+  })[actionType] || "";
+  const tabRaw = String(parsed.query.tab || tabAliasFromType || "all").toLowerCase();
   const tab = (tabRaw === "awaiting" || tabRaw === "followup" || tabRaw === "payments") ? "postsubmission" : tabRaw; // all|denials|underpayments|postsubmission
   const subTabRaw = String(parsed.query.postsub || "all").toLowerCase();
   const subTab = ["all", "appeals", "negotiations", "followup"].includes(subTabRaw)
@@ -31724,7 +31734,8 @@ else if (type === "payers") {
   // AI Analyze Payer route
   if (method === "GET" && pathname === "/analyze-payer") {
     const payer = (parsed.query.payer || "").trim();
-    const data = computePayerIntelligence(org.org_id, payer, String(parsed.query.preset || "last30"));
+    const preset = String(parsed.query.preset || "last30");
+    const data = computePayerIntelligence(org.org_id, payer, preset);
     const gradeTone = toneForGrade(data.grade);
 
     const donut = svgDonut({
@@ -31752,18 +31763,62 @@ else if (type === "payers") {
       ? `<ul>${data.cptTop.map(r => `<li>${safeStr(r.label)} - ${formatMoneyUI(r.value)}</li>`).join("")}</ul>`
       : `<div class="muted small">No CPT underpayment drivers found yet.</div>`;
 
+    const payerParam = encodeURIComponent(payer);
+
+    // MAIN ACTIONS
+    const viewClaimsBtn = `
+      <a class="btn" href="/claims-lifecycle?payer=${payerParam}">
+        View Claims
+      </a>
+    `;
+
+    const openActionCenterBtn = `
+      <a class="btn secondary" href="/actions?type=issues&payer=${payerParam}&sort=risk_score">
+        Open in Action Center
+      </a>
+    `;
+
+    const underpaidBtn = `
+      <a class="btn secondary" href="/actions?type=underpaid&payer=${payerParam}">
+        Underpaid List
+      </a>
+    `;
+
+    const deniedBtn = `
+      <a class="btn secondary" href="/actions?type=denied&payer=${payerParam}">
+        Denied List
+      </a>
+    `;
+
     const actionsPanel = `
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
-        <a class="btn" href="/payer-claims?payer=${encodeURIComponent(data.payerName)}">View Claims</a>
-        <a class="btn secondary" href="/actions?payer=${encodeURIComponent(data.payerName)}">Open In Action Center</a>
-        <a class="btn secondary" href="/claims?view=all&status=Underpaid&payer=${encodeURIComponent(data.payerName)}">Underpaid List</a>
-        <a class="btn secondary" href="/claims?view=denials&payer=${encodeURIComponent(data.payerName)}">Denied List</a>
-        <a class="btn secondary" href="/executive-export">Export Executive PDF</a>
+      <div class="btnRow">
+        ${viewClaimsBtn}
+        ${openActionCenterBtn}
+        ${underpaidBtn}
+        ${deniedBtn}
+      </div>
+    `;
+
+    const timeFilter = `
+      <div style="margin:10px 0 16px 0;">
+        <form method="GET" action="/analyze-payer" style="display:flex;gap:8px;align-items:center;">
+          <input type="hidden" name="payer" value="${safeStr(payer)}"/>
+
+          <select name="preset">
+            <option value="last30" ${preset==="last30"?"selected":""}>Last 30 Days</option>
+            <option value="last60" ${preset==="last60"?"selected":""}>Last 60 Days</option>
+            <option value="last90" ${preset==="last90"?"selected":""}>Last 90 Days</option>
+          </select>
+
+          <button class="btn secondary" type="submit">Apply</button>
+        </form>
       </div>
     `;
 
     const html = renderPage(`AI Payer Intelligence: ${safeStr(data.payerName)}`, `
       <h2>AI Payer Intelligence: ${safeStr(data.payerName)}</h2>
+
+      ${timeFilter}
 
       <div class="row" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px;">
         ${renderKpiCard("Total Claims", formatNumberUI(data.totalClaims), "", "neutral")}
@@ -31819,9 +31874,10 @@ else if (type === "payers") {
         </ul>
       </div>
 
-      <div class="btnRow" style="margin-top:12px;">
-        <a class="btn secondary" href="/claims?view=all">Back to Claims</a>
-        <a class="btn secondary" href="/revenue-overview">Back to Revenue Overview</a>
+      <div class="btnRow">
+        <a class="btn secondary" href="/revenue-intelligence?payerHub=1">
+          Back to Payer Hub
+        </a>
       </div>
     `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
 
