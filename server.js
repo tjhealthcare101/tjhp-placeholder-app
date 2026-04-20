@@ -80,6 +80,7 @@ const ADMIN_PASSWORD_PLAIN = process.env.ADMIN_PASSWORD_PLAIN || "";
 const ADMIN_ACTIVATE_TOKEN = process.env.ADMIN_ACTIVATE_TOKEN || "CHANGE_ME_ADMIN_ACTIVATE_TOKEN";
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
+const INTEGRATION_CREDENTIALS_SECRET = process.env.INTEGRATION_CREDENTIALS_SECRET || "CHANGE_ME_INTEGRATION_SECRET_32_CHARS";
 
 // ===== Timing =====
 const LOCK_SCREEN_MS = 5000;
@@ -171,6 +172,7 @@ const FILES = {
   alerts: path.join(DATA_DIR, "alerts.json"),
   jobs: path.join(DATA_DIR, "jobs.json"),
   applications: path.join(DATA_DIR, "applications.json"),
+  integrations: path.join(DATA_DIR, "integrations.json"),
   website_content: path.join(DATA_DIR, "website_content.json"),
   contact_messages: path.join(DATA_DIR, "contact_messages.json"),
 };
@@ -277,6 +279,421 @@ function normalizeMessageAttachments(msg) {
 function ensureFile(p, defaultVal) { if (!fs.existsSync(p)) fs.writeFileSync(p, JSON.stringify(defaultVal, null, 2)); }
 function readJSON(p, fallback) { ensureFile(p, fallback); return JSON.parse(fs.readFileSync(p, "utf8") || JSON.stringify(fallback)); }
 function writeJSON(p, val) { fs.writeFileSync(p, JSON.stringify(val, null, 2)); }
+function encrypt(data) {
+  const iv = crypto.randomBytes(16);
+  const key = crypto.createHash("sha256").update(String(INTEGRATION_CREDENTIALS_SECRET)).digest();
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const plaintext = JSON.stringify(data ?? {});
+  const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `${iv.toString("hex")}:${authTag.toString("hex")}:${encrypted.toString("hex")}`;
+}
+
+function decrypt(payload) {
+  try {
+    const [ivHex, tagHex, dataHex] = String(payload || "").split(":");
+    if (!ivHex || !tagHex || !dataHex) return {};
+    const key = crypto.createHash("sha256").update(String(INTEGRATION_CREDENTIALS_SECRET)).digest();
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivHex, "hex"));
+    decipher.setAuthTag(Buffer.from(tagHex, "hex"));
+    const decrypted = Buffer.concat([decipher.update(Buffer.from(dataHex, "hex")), decipher.final()]);
+    return JSON.parse(decrypted.toString("utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function getOrgIntegrations(org_id) {
+  const all = readJSON(FILES.integrations, []);
+  return all.find(i => i.org_id === org_id) || {
+    org_id,
+    integrations: []
+  };
+}
+
+function saveOrgIntegrations(data) {
+  const all = readJSON(FILES.integrations, []);
+  const idx = all.findIndex(i => i.org_id === data.org_id);
+  if (idx >= 0) all[idx] = data;
+  else all.push(data);
+  writeJSON(FILES.integrations, all);
+}
+
+function upsertOrgIntegration(org_id, integration) {
+  const doc = getOrgIntegrations(org_id);
+  const list = Array.isArray(doc.integrations) ? doc.integrations : [];
+  const idx = list.findIndex(
+    x => String(x.type || "") === String(integration.type || "") &&
+         String(x.provider || "") === String(integration.provider || "")
+  );
+
+  if (idx >= 0) {
+    list[idx] = {
+      ...list[idx],
+      ...integration,
+      updated_at: nowISO()
+    };
+  } else {
+    list.push({
+      integration_id: uuid(),
+      created_at: nowISO(),
+      updated_at: nowISO(),
+      ...integration
+    });
+  }
+
+  doc.integrations = list;
+  saveOrgIntegrations(doc);
+  return doc;
+}
+
+function disconnectOrgIntegration(org_id, type, provider) {
+  const doc = getOrgIntegrations(org_id);
+  doc.integrations = (doc.integrations || []).map(i => {
+    if (String(i.type || "") === String(type || "") && String(i.provider || "") === String(provider || "")) {
+      return {
+        ...i,
+        status: "disconnected",
+        updated_at: nowISO()
+      };
+    }
+    return i;
+  });
+  saveOrgIntegrations(doc);
+  return doc;
+}
+
+function mapToCanonicalClaim(raw) {
+  return {
+    claim_id: raw.claim_id || raw.id || raw.claim_number || "",
+    payer: raw.payer_name || raw.payer || "",
+    billed_amount: Number(raw.billed_amount ?? raw.billed ?? 0),
+    paid_amount: Number(raw.paid_amount ?? raw.paid ?? 0),
+    status: raw.status || "Pending",
+    dos: raw.dos || "",
+    source: raw.source || "integration"
+  };
+}
+
+function mapToCanonicalClaims(org_id, rows) {
+  const incoming = Array.isArray(rows) ? rows.map(mapToCanonicalClaim) : [];
+  if (!incoming.length) return;
+
+  const billed = readJSON(FILES.billed, []);
+  const orgClaims = billed.filter(b => b.org_id === org_id);
+
+  for (const c of incoming) {
+    if (!c.claim_id) continue;
+
+    const match = orgClaims.find(x =>
+      String(x.claim_id || x.claim_number || x.billed_id || "") === String(c.claim_id)
+    );
+
+    if (match) {
+      if (c.payer) match.payer = c.payer;
+      if (Number.isFinite(c.billed_amount)) match.billed_amount = c.billed_amount;
+      if (Number.isFinite(c.paid_amount)) match.paid_amount = c.paid_amount;
+      if (c.status) match.status = c.status;
+      if (c.dos) match.dos = c.dos;
+      match.last_sync_at = nowISO();
+      match.updated_at = nowISO();
+    } else {
+      billed.push({
+        billed_id: uuid(),
+        org_id,
+        claim_id: c.claim_id,
+        claim_number: c.claim_id,
+        payer: c.payer || "",
+        billed_amount: Number.isFinite(c.billed_amount) ? c.billed_amount : 0,
+        paid_amount: Number.isFinite(c.paid_amount) ? c.paid_amount : 0,
+        status: c.status || "Pending",
+        dos: c.dos || "",
+        source: c.source || "integration",
+        created_at: nowISO(),
+        updated_at: nowISO(),
+        last_sync_at: nowISO()
+      });
+    }
+  }
+
+  writeJSON(FILES.billed, billed);
+}
+
+function derivePaidStatusForClaim(claim, paidAmount) {
+  const billedAmt = Number(claim?.billed_amount || 0);
+  const expectedAmt = Number(claim?.expected_amount || 0);
+
+  if (paidAmount <= 0) return "Denied";
+  if (expectedAmt > 0 && paidAmount < expectedAmt) return "Underpaid";
+  if (billedAmt > 0 && paidAmount < billedAmt && expectedAmt <= 0) return "Partial Payment";
+  return "Paid";
+}
+
+function applyPaymentToClaim(org_id, payment) {
+  const canonical = {
+    claim_id: payment.claim_id || payment.claim_number || "",
+    paid_amount: Number(payment.paid_amount || 0),
+    payer: payment.payer || payment.payer_name || "",
+    status: payment.status || "",
+    source: payment.source || "835"
+  };
+
+  const billed = readJSON(FILES.billed, []);
+  const claim = billed.find(b =>
+    b.org_id === org_id &&
+    String(b.claim_id || b.claim_number || b.billed_id || "") === String(canonical.claim_id || "")
+  );
+
+  if (!claim) {
+    return { matched: false, reason: "claim_not_found", claim_id: canonical.claim_id };
+  }
+
+  const priorPaid = Number(claim.paid_amount || 0);
+  const newPaid = Number(canonical.paid_amount || 0);
+
+  claim.payer = canonical.payer || claim.payer || "";
+  claim.paid_amount = newPaid;
+  claim.status = canonical.status || derivePaidStatusForClaim(claim, newPaid);
+  claim.last_payment_sync_at = nowISO();
+  claim.updated_at = nowISO();
+  claim.payment_source = canonical.source;
+
+  const payments = readJSON(FILES.payments, []);
+  payments.push({
+    payment_id: uuid(),
+    org_id,
+    billed_id: claim.billed_id,
+    claim_id: claim.claim_id || claim.claim_number || "",
+    payer: canonical.payer || claim.payer || "",
+    paid_amount: newPaid,
+    previous_paid_amount: priorPaid,
+    source: canonical.source,
+    imported_at: nowISO()
+  });
+
+  writeJSON(FILES.billed, billed);
+  writeJSON(FILES.payments, payments);
+
+  return {
+    matched: true,
+    billed_id: claim.billed_id,
+    claim_id: claim.claim_id || claim.claim_number || "",
+    paid_amount: newPaid,
+    status: claim.status
+  };
+}
+
+function updateClaimStatus(org_id, statusUpdate) {
+  const canonical = mapToCanonicalClaim(statusUpdate);
+  const billed = readJSON(FILES.billed, []);
+  const claim = billed.find(b =>
+    b.org_id === org_id &&
+    String(b.claim_id || b.claim_number || b.billed_id || "") === String(canonical.claim_id || "")
+  );
+
+  if (!claim) return { matched: false, reason: "claim_not_found", claim_id: canonical.claim_id };
+
+  claim.status = canonical.status || claim.status || "Pending";
+  claim.last_status_sync_at = nowISO();
+  claim.updated_at = nowISO();
+  claim.status_source = canonical.source || "integration";
+
+  writeJSON(FILES.billed, billed);
+
+  return {
+    matched: true,
+    billed_id: claim.billed_id,
+    claim_id: claim.claim_id || claim.claim_number || "",
+    status: claim.status
+  };
+}
+
+function normalizeEdiText(input) {
+  if (Buffer.isBuffer(input)) return input.toString("utf8");
+  if (typeof input === "string") return input;
+  if (input && typeof input.text === "string") return input.text;
+  return "";
+}
+
+function parse835(input) {
+  const text = normalizeEdiText(input).trim();
+  if (!text) return [];
+
+  const normalized = text
+    .replace(/\r\n/g, "")
+    .replace(/\n/g, "")
+    .replace(/\r/g, "");
+
+  const rawSegments = normalized
+    .split("~")
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  let currentPayer = "";
+  const payments = [];
+
+  for (let idx = 0; idx < rawSegments.length; idx++) {
+    const seg = rawSegments[idx];
+    const parts = seg.split("*");
+    const tag = parts[0];
+
+    if (tag === "N1" && String(parts[1] || "").toUpperCase() === "PR") {
+      currentPayer = parts[2] || currentPayer || "";
+    }
+
+    if (tag === "CLP") {
+      const claimId = String(parts[1] || "").trim();
+      const statusCode = String(parts[2] || "").trim();
+      const totalCharge = Number(parts[3] || 0);
+      const paidAmount = Number(parts[4] || 0);
+
+      let mappedStatus = "Paid";
+      if (statusCode === "4") mappedStatus = "Denied";
+      else if (paidAmount <= 0) mappedStatus = "Denied";
+      else if (paidAmount > 0 && totalCharge > 0 && paidAmount < totalCharge) mappedStatus = "Partial Payment";
+
+      payments.push({
+        claim_id: claimId,
+        payer: currentPayer,
+        billed_amount: totalCharge,
+        paid_amount: paidAmount,
+        status: mappedStatus,
+        source: "835"
+      });
+    }
+  }
+
+  return payments;
+}
+
+function parse277(input) {
+  const text = normalizeEdiText(input).trim();
+  if (!text) return [];
+
+  const normalized = text
+    .replace(/\r\n/g, "")
+    .replace(/\n/g, "")
+    .replace(/\r/g, "");
+
+  const rawSegments = normalized
+    .split("~")
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  const updates = [];
+  let currentClaimId = "";
+
+  for (const seg of rawSegments) {
+    const parts = seg.split("*");
+    const tag = parts[0];
+
+    if (tag === "TRN") {
+      currentClaimId = String(parts[2] || parts[1] || "").trim();
+    }
+
+    if (tag === "STC" && currentClaimId) {
+      const composite = String(parts[1] || "");
+      const category = composite.split(":")[0] || "";
+      let mappedStatus = "Pending";
+
+      if (category === "F2" || category === "A3") mappedStatus = "Denied";
+      else if (category === "A1") mappedStatus = "Submitted";
+      else if (category === "A2") mappedStatus = "In Process";
+      else if (category === "P3") mappedStatus = "Paid";
+
+      updates.push({
+        claim_id: currentClaimId,
+        status: mappedStatus,
+        source: "277"
+      });
+    }
+  }
+
+  return updates;
+}
+
+async function fetchEHRClaims(token) {
+  if (!token) return [];
+  return [];
+}
+
+async function scrapePortal(creds) {
+  if (!creds) return [];
+  return [];
+}
+
+const IntegrationAdapters = {
+  clearinghouse: {
+    ingest835: async (org_id, fileOrText) => {
+      const parsed = parse835(fileOrText);
+      const results = parsed.map(p => applyPaymentToClaim(org_id, p));
+      return {
+        parsed_count: parsed.length,
+        matched_count: results.filter(r => r && r.matched).length,
+        unmatched_count: results.filter(r => !r || !r.matched).length,
+        results
+      };
+    },
+
+    ingest277: async (org_id, fileOrText) => {
+      const statuses = parse277(fileOrText);
+      const results = statuses.map(s => updateClaimStatus(org_id, s));
+      return {
+        parsed_count: statuses.length,
+        matched_count: results.filter(r => r && r.matched).length,
+        unmatched_count: results.filter(r => !r || !r.matched).length,
+        results
+      };
+    }
+  },
+
+  ehr: {
+    syncClaims: async (org_id, token) => {
+      const data = await fetchEHRClaims(token);
+      mapToCanonicalClaims(org_id, data);
+      return { synced_count: Array.isArray(data) ? data.length : 0 };
+    }
+  },
+
+  portal: {
+    syncStatus: async (org_id, creds) => {
+      const data = await scrapePortal(creds);
+      mapToCanonicalClaims(org_id, data);
+      return { synced_count: Array.isArray(data) ? data.length : 0 };
+    }
+  }
+};
+
+async function runIntegrationSync() {
+  const all = readJSON(FILES.integrations, []);
+
+  for (const org of all) {
+    for (const i of (org.integrations || [])) {
+      const decryptedCreds = i.credentials ? decrypt(i.credentials) : {};
+
+      try {
+        if (i.type === "clearinghouse" && i.status === "connected") {
+          // waiting on live inbound files/webhooks
+        }
+
+        if (i.type === "ehr" && i.status === "connected") {
+          await IntegrationAdapters.ehr.syncClaims(org.org_id, decryptedCreds.token);
+        }
+
+        if (i.type === "payer_portal" && i.status === "connected") {
+          await IntegrationAdapters.portal.syncStatus(org.org_id, decryptedCreds);
+        }
+
+        i.last_sync = nowISO();
+        i.last_error = "";
+      } catch (err) {
+        i.last_error = String(err?.message || err || "Sync error");
+      }
+    }
+
+    saveOrgIntegrations(org);
+  }
+}
 function getSystemSettings(){
   return readJSON(SYSTEM_SETTINGS_PATH, {
     maintenance_mode: false,
@@ -562,6 +979,7 @@ ensureFile(FILES.analytics, { leads: 0, signups: 0, revenue: 0, subscriptions: {
 ensureFile(FILES.alerts, []);
 ensureFile(FILES.jobs, []);
 ensureFile(FILES.applications, []);
+ensureFile(FILES.integrations, []);
 
 function getAnnouncements() {
   return readJSON(FILES.admin_announcements, []);
@@ -31048,6 +31466,82 @@ function renderTemplateEditor(org, user){
     return redirect(res, "/data-management?tab=reimbursement");
   }
 
+  if (method === "POST" && pathname === "/account/integrations/connect") {
+    const body = await parseBody(req);
+    const payload = new URLSearchParams(body);
+
+    const type = String(payload.get("type") || "").trim();
+    const provider = String(payload.get("provider") || "").trim();
+    const display_name = String(payload.get("display_name") || provider || type || "").trim();
+
+    if (!type || !provider) {
+      return redirect(res, "/account?tab=integrations&err=Missing integration type or provider");
+    }
+
+    const credentialPayload = {
+      username: String(payload.get("username") || "").trim(),
+      password: String(payload.get("password") || "").trim(),
+      api_key: String(payload.get("api_key") || "").trim(),
+      token: String(payload.get("token") || "").trim(),
+      portal_url: String(payload.get("portal_url") || "").trim()
+    };
+
+    upsertOrgIntegration(org.org_id, {
+      type,
+      provider,
+      display_name,
+      status: "connected",
+      credentials: encrypt(credentialPayload),
+      config: {
+        mode: String(payload.get("mode") || "manual").trim()
+      },
+      last_sync: "",
+      last_error: ""
+    });
+
+    return redirect(res, "/account?tab=integrations&saved=1");
+  }
+
+  if (method === "POST" && pathname === "/account/integrations/disconnect") {
+    const body = await parseBody(req);
+    const payload = new URLSearchParams(body);
+
+    disconnectOrgIntegration(
+      org.org_id,
+      String(payload.get("type") || "").trim(),
+      String(payload.get("provider") || "").trim()
+    );
+
+    return redirect(res, "/account?tab=integrations&saved=1");
+  }
+
+  if (method === "POST" && pathname === "/account/integrations/upload-835") {
+    return parseMultipartForm(req, async (err, form) => {
+      if (err) {
+        return redirect(res, "/account?tab=integrations&err=Unable to process 835 upload");
+      }
+
+      try {
+        const file = (form.files || [])[0];
+        if (!file?.absPath) {
+          return redirect(res, "/account?tab=integrations&err=Please upload a valid 835 file");
+        }
+
+        const text = fs.readFileSync(file.absPath, "utf8");
+        const summary = await IntegrationAdapters.clearinghouse.ingest835(org.org_id, text);
+
+        return redirect(
+          res,
+          `/account?tab=integrations&saved=1&msg=${encodeURIComponent(
+            `835 processed. Parsed ${summary.parsed_count}, matched ${summary.matched_count}, unmatched ${summary.unmatched_count}.`
+          )}`
+        );
+      } catch (e) {
+        return redirect(res, `/account?tab=integrations&err=${encodeURIComponent("835 processing failed")}`);
+      }
+    });
+  }
+
   if (method === "GET" && pathname === "/account") {
     const orgProfile = normalizeOrgProfile(org);
     const orgSettings = getOrgSettings(org.org_id);
@@ -31067,7 +31561,7 @@ function renderTemplateEditor(org, user){
         ${tabBtn("org","Organization Settings","Canonical source for identity, defaults, and workflow rules.")}
         ${tabBtn("billing","Plan & Billing")}
         ${tabBtn("help","Help")}
-        ${tabBtn("integrations","Integrations","Enterprise placeholder; not yet operable.")}
+        ${tabBtn("integrations","Integrations","Connect clearinghouse, EHR, and payer portals.")}
         ${tabBtn("security","Security","Account password and security mode placeholders.")}
         ${tabBtn("targets","Targets","Configure executive revenue performance targets.")}
       </div>
@@ -31425,7 +31919,209 @@ function renderTemplateEditor(org, user){
           </script>
         `;
       }
-      if (tab === "integrations") return `<h3>Integrations</h3><p class="muted">Placeholder tab for enterprise integrations roadmap.</p>`;
+      if (tab === "integrations") {
+        const savedNotice = String(parsed.query.saved || "") === "1"
+          ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;">Integration settings updated.</div>`
+          : "";
+
+        const msgNotice = parsed.query.msg
+          ? `<div class="alert" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;">${safeStr(parsed.query.msg)}</div>`
+          : "";
+
+        const errNotice = parsed.query.err
+          ? `<div class="alert">${safeStr(parsed.query.err)}</div>`
+          : "";
+
+        const integrationDoc = getOrgIntegrations(org.org_id);
+        const integrations = Array.isArray(integrationDoc.integrations) ? integrationDoc.integrations : [];
+
+        const findIntegration = (type, provider) =>
+          integrations.find(i => String(i.type || "") === type && String(i.provider || "") === provider);
+
+        const renderStatus = (row) => {
+          if (!row) return `<span class="badge">Not Connected</span>`;
+          if (row.status === "connected") return `<span class="badge ok">Connected</span>`;
+          if (row.status === "pending") return `<span class="badge warn">Pending</span>`;
+          return `<span class="badge">${safeStr(row.status || "Disconnected")}</span>`;
+        };
+
+        const renderSyncMeta = (row) => {
+          if (!row) return `<div class="muted small">No sync history yet.</div>`;
+          return `
+            <div class="muted small" style="margin-top:6px;">
+              Last Sync: ${safeStr(row.last_sync || "-")}<br/>
+              Last Error: ${safeStr(row.last_error || "None")}
+            </div>
+          `;
+        };
+
+        const clearinghouse = findIntegration("clearinghouse", "generic");
+        const ehr = findIntegration("ehr", "generic");
+        const portal = findIntegration("payer_portal", "generic");
+
+        return `
+          ${savedNotice}
+          ${msgNotice}
+          ${errNotice}
+
+          <div class="card" style="margin-bottom:16px;">
+            <h3 style="margin-bottom:8px;">Integrations</h3>
+            <div class="muted small" style="margin-bottom:12px;">
+              Connect your systems to sync claims, payments, and statuses into TJ Healthcare Pro.
+            </div>
+          </div>
+
+          <div class="card" style="margin-bottom:16px;">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+              <div>
+                <strong>Clearinghouse</strong><br/>
+                <div class="muted small">Recommended first. Supports 835 payments and 277 claim status imports.</div>
+                ${renderSyncMeta(clearinghouse)}
+              </div>
+              <div>${renderStatus(clearinghouse)}</div>
+            </div>
+
+            <form method="POST" action="/account/integrations/connect" style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+              <input type="hidden" name="type" value="clearinghouse" />
+              <input type="hidden" name="provider" value="generic" />
+              <input type="hidden" name="display_name" value="Clearinghouse" />
+              <input type="hidden" name="mode" value="manual" />
+
+              <div>
+                <label>Username</label>
+                <input name="username" placeholder="Optional username" />
+              </div>
+
+              <div>
+                <label>Password</label>
+                <input type="password" name="password" placeholder="Optional password" />
+              </div>
+
+              <div>
+                <label>API Key</label>
+                <input name="api_key" placeholder="Optional API key" />
+              </div>
+
+              <div style="display:flex;align-items:flex-end;gap:8px;">
+                <button class="btn" type="submit">Connect Clearinghouse</button>
+              </div>
+            </form>
+
+            <form method="POST" action="/account/integrations/upload-835" enctype="multipart/form-data" style="margin-top:12px;display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+              <div>
+                <label>Upload 835 ERA File</label>
+                <input type="file" name="file" accept=".txt,.835,.edi" />
+              </div>
+              <button class="btn secondary" type="submit">Process 835</button>
+            </form>
+
+            ${
+              clearinghouse
+                ? `
+                  <form method="POST" action="/account/integrations/disconnect" style="margin-top:12px;">
+                    <input type="hidden" name="type" value="clearinghouse" />
+                    <input type="hidden" name="provider" value="generic" />
+                    <button class="btn secondary" type="submit">Disconnect</button>
+                  </form>
+                `
+                : ""
+            }
+          </div>
+
+          <div class="card" style="margin-bottom:16px;">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+              <div>
+                <strong>EHR / Practice Management</strong><br/>
+                <div class="muted small">Foundation for future API-based claim and encounter sync.</div>
+                ${renderSyncMeta(ehr)}
+              </div>
+              <div>${renderStatus(ehr)}</div>
+            </div>
+
+            <form method="POST" action="/account/integrations/connect" style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+              <input type="hidden" name="type" value="ehr" />
+              <input type="hidden" name="provider" value="generic" />
+              <input type="hidden" name="display_name" value="EHR / Practice Management" />
+              <input type="hidden" name="mode" value="api" />
+
+              <div>
+                <label>Access Token</label>
+                <input name="token" placeholder="Access token" />
+              </div>
+
+              <div>
+                <label>API Key</label>
+                <input name="api_key" placeholder="Optional API key" />
+              </div>
+
+              <div style="display:flex;align-items:flex-end;gap:8px;">
+                <button class="btn" type="submit">Connect EHR</button>
+              </div>
+            </form>
+
+            ${
+              ehr
+                ? `
+                  <form method="POST" action="/account/integrations/disconnect" style="margin-top:12px;">
+                    <input type="hidden" name="type" value="ehr" />
+                    <input type="hidden" name="provider" value="generic" />
+                    <button class="btn secondary" type="submit">Disconnect</button>
+                  </form>
+                `
+                : ""
+            }
+          </div>
+
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+              <div>
+                <strong>Payer Portals</strong><br/>
+                <div class="muted small">Advanced option for payer-specific status sync when clearinghouse data is unavailable.</div>
+                ${renderSyncMeta(portal)}
+              </div>
+              <div>${renderStatus(portal)}</div>
+            </div>
+
+            <form method="POST" action="/account/integrations/connect" style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+              <input type="hidden" name="type" value="payer_portal" />
+              <input type="hidden" name="provider" value="generic" />
+              <input type="hidden" name="display_name" value="Payer Portal" />
+              <input type="hidden" name="mode" value="portal" />
+
+              <div>
+                <label>Portal URL</label>
+                <input name="portal_url" placeholder="https://payer-portal.example.com" />
+              </div>
+
+              <div>
+                <label>Username</label>
+                <input name="username" placeholder="Portal username" />
+              </div>
+
+              <div>
+                <label>Password</label>
+                <input type="password" name="password" placeholder="Portal password" />
+              </div>
+
+              <div style="display:flex;align-items:flex-end;gap:8px;">
+                <button class="btn" type="submit">Add Portal</button>
+              </div>
+            </form>
+
+            ${
+              portal
+                ? `
+                  <form method="POST" action="/account/integrations/disconnect" style="margin-top:12px;">
+                    <input type="hidden" name="type" value="payer_portal" />
+                    <input type="hidden" name="provider" value="generic" />
+                    <button class="btn secondary" type="submit">Disconnect</button>
+                  </form>
+                `
+                : ""
+            }
+          </div>
+        `;
+      }
       if (tab === "targets") {
         const settings = getOrgSettings(org.org_id);
         const targets = settings.recovery_targets || {};
@@ -33702,6 +34398,12 @@ setInterval(() => {
     console.error("Automation sweep error:", e?.message || e);
   }
 }, 5 * 60_000);
+
+setInterval(() => {
+  runIntegrationSync().catch((e) => {
+    console.error("Integration sync error:", e?.message || e);
+  });
+}, 30 * 60 * 1000);
 
 // ==============================
 // 🔥 DAILY ALERT SCHEDULER
