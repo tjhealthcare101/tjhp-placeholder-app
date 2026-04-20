@@ -23903,14 +23903,15 @@ if (method === "GET" && pathname === "/actions") {
     underpaid: "underpayments",
     underpayments: "underpayments",
     issues: "all",
-    all: "all"
+    all: "all",
+    followup: "followup"
   })[actionType] || "";
   const tabRaw = String(parsed.query.tab || tabAliasFromType || "all").toLowerCase();
-  const tab = (tabRaw === "awaiting" || tabRaw === "followup" || tabRaw === "payments") ? "postsubmission" : tabRaw; // all|denials|underpayments|postsubmission
+  const tab = (tabRaw === "awaiting" || tabRaw === "payments") ? "postsubmission" : tabRaw; // all|denials|underpayments|postsubmission|followup
   const subTabRaw = String(parsed.query.postsub || "all").toLowerCase();
-  const subTab = ["all", "appeals", "negotiations", "followup"].includes(subTabRaw)
+  const subTab = ["all", "appeals", "negotiations"].includes(subTabRaw)
     ? subTabRaw
-    : (subTabRaw === "followup" ? "followup" : "all");
+    : "all";
   const q = String(parsed.query.q || "").trim().toLowerCase();
   const payerFilter = String(parsed.query.payer || "").trim();
   const rangePreset = String(parsed.query.range || "last30").trim();
@@ -24058,9 +24059,11 @@ if (method === "GET" && pathname === "/actions") {
     const isFollowupNeededClaim = isSubmittedClaim && followUpDue && !Number.isNaN(followUpDue.getTime()) && followUpDue <= now;
     const postSubmissionStatus = isFollowupNeededClaim ? "Follow-Up Needed" : (isAwaitingPaymentClaim ? "Awaiting Payment" : "");
     const isPostSubmissionClaim = !!postSubmissionStatus;
+    const requiresFollowUp = Boolean(b.requires_follow_up);
 
     if (tab === "postsubmission" && !isPostSubmissionClaim) continue;
     if (tab === "postsubmission" && filterPostSubmissionClaims([b], subTab).length === 0) continue;
+    if (tab === "followup" && !requiresFollowUp) continue;
 
     // Determine action center grouping (PRIORITY ORDER FIXED)
     let group = null;
@@ -24132,7 +24135,7 @@ if (method === "GET" && pathname === "/actions") {
 
     if (tab === "underpayments" && !(kind === "negotiation" || kind === "contract_missing")) continue;
     if (tab === "all" && !["denial", "negotiation", "other", "followup_ws", "contract_missing"].includes(kind)) continue;
-    if (tab !== "all" && tabKey !== tab) continue;
+    if (tab !== "all" && tab !== "followup" && tabKey !== tab) continue;
 
     const atRisk = Number(derived.atRiskAmount || computeClaimAtRisk(b));
     const riskScore = computeClaimRiskScore({ ...b, status: st });
@@ -24159,7 +24162,8 @@ if (method === "GET" && pathname === "/actions") {
   }
 
   // Sorting
-  if (sort === "atrisk") items.sort((a,b)=> b.atRisk - a.atRisk);
+  if (tab === "followup") items.sort((a,b)=> (b.riskScore - a.riskScore) || (b.atRisk - a.atRisk));
+  else if (sort === "atrisk") items.sort((a,b)=> b.atRisk - a.atRisk);
   else if (sort === "payer") items.sort((a,b)=> String(a.b.payer||"").localeCompare(String(b.b.payer||"")));
   else if (sort === "dos") items.sort((a,b)=> new Date(a.b.dos||a.b.created_at||0) - new Date(b.b.dos||b.b.created_at||0));
   else items.sort((a,b)=> (b.riskScore - a.riskScore) || (b.atRisk - a.atRisk));
@@ -24180,12 +24184,15 @@ if (method === "GET" && pathname === "/actions") {
     </a>`;
   };
 
+  const followUpTypeQs = new URLSearchParams({ ...parsed.query, type: "followup", tab: "followup", page: "1" }).toString();
+  const followUpTab = `<a href="/actions?${followUpTypeQs}" style="text-decoration:none;display:inline-flex;gap:6px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:${tab === "followup" ? "#111827" : "#fff"};color:${tab === "followup" ? "#fff" : "#111827"};font-weight:900;font-size:12px;">Claims Needing Follow-Up</a>`;
   const tabs = `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
       ${tabBtn("all","All At Risk","All denials, underpayments, follow-ups, and awaiting payment work in one queue.")}
       ${tabBtn("denials","Denials","Denied claims that need an appeal packet or appeal follow-up.")}
       ${tabBtn("underpayments","Underpayments","Underpaid claims that need negotiation work or follow-up.")}
       ${tabBtn("postsubmission","Appeals & Negotiations","Submitted claims grouped by appeal, negotiation, and follow-up needs.")}
+      ${followUpTab}
     </div>
   `;
   const postSubmissionSubTabs = (tab === "postsubmission") ? `
@@ -24193,7 +24200,6 @@ if (method === "GET" && pathname === "/actions") {
       <button class="subtab-btn ${subTab === 'all' ? 'active' : ''}" data-subtab="all">All</button>
       <button class="subtab-btn ${subTab === 'appeals' ? 'active' : ''}" data-subtab="appeals">Appeals</button>
       <button class="subtab-btn ${subTab === 'negotiations' ? 'active' : ''}" data-subtab="negotiations">Negotiations</button>
-      <button class="subtab-btn ${subTab === 'followup' ? 'active' : ''}" data-subtab="followup">Follow-Up Needed</button>
     </div>
   ` : ``;
 
@@ -24224,7 +24230,8 @@ if (method === "GET" && pathname === "/actions") {
       ? Math.max(0, Math.floor((Date.now() - submittedAtMs) / (24 * 60 * 60 * 1000)))
       : null;
     const daysSinceSubmissionText = daysSinceSubmission === null ? "-" : `${daysSinceSubmission} day${daysSinceSubmission === 1 ? "" : "s"}`;
-    const followUpDateText = x.followUpDate ? safeStr(String(x.followUpDate)) : "-";
+    const followUpStatusText = safeStr(b.follow_up_status || "-");
+    const nextActionText = safeStr(b.next_action || "-");
     const rowStyles = [];
     if (x.isFollowupNeededClaim) rowStyles.push("background:#fff7ed;");
     if (selectedClaimId && String(b.billed_id) === selectedClaimId) {
@@ -24326,8 +24333,9 @@ if (method === "GET" && pathname === "/actions") {
       <td>${safeStr(getClaimRoundInfo(b)) || "-"}</td>
       <td>${atRiskAmount !== null ? formatMoneyUI(atRiskAmount) : "-"}</td>
       <td>${x.riskScore}</td>
-      <td>${followUpDateText}</td>
+      <td>${followUpStatusText}</td>
       <td>${safeStr(daysSinceSubmissionText)}</td>
+      <td>${nextActionText}</td>
       <td style="white-space:nowrap;">${actionsHtml}</td>
     </tr>`;
   }).join("\n");
@@ -24419,8 +24427,8 @@ if (method === "GET" && pathname === "/actions") {
       <div class="scrollSyncTop"><div></div></div>
       <div class="scrollSyncBottom tableScrollY">
       <table>
-        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed <span class="tooltip" data-tip="Original submitted claim charge amount.">ⓘ</span></th><th>Expected <span class="tooltip" data-tip="Estimated insurance expected amount after patient responsibility and contract terms.">ⓘ</span></th><th>Paid <span class="tooltip" data-tip="Total payer payment currently posted.">ⓘ</span></th><th>Status / Stage <span class="tooltip" data-tip="Derived from payer response, denial context, and negotiation state.">ⓘ</span></th><th>Round</th><th>At Risk <span class="tooltip" data-tip="Estimated collectible dollars not yet recovered.">ⓘ</span></th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Follow-Up Date</th><th>Days Since Submission</th><th>Actions</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="12" class="muted">No items in this tab.</td></tr>`}</tbody>
+        <thead><tr><th>Claim #</th><th>Payer</th><th>Billed <span class="tooltip" data-tip="Original submitted claim charge amount.">ⓘ</span></th><th>Expected <span class="tooltip" data-tip="Estimated insurance expected amount after patient responsibility and contract terms.">ⓘ</span></th><th>Paid <span class="tooltip" data-tip="Total payer payment currently posted.">ⓘ</span></th><th>Status / Stage <span class="tooltip" data-tip="Derived from payer response, denial context, and negotiation state.">ⓘ</span></th><th>Round</th><th>At Risk <span class="tooltip" data-tip="Estimated collectible dollars not yet recovered.">ⓘ</span></th><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><th>Follow-Up Status</th><th>Days Since Submission</th><th>Next Action</th><th>Actions</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="13" class="muted">No items in this tab.</td></tr>`}</tbody>
       </table>
     </div>
     </div>
