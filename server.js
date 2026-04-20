@@ -168,6 +168,7 @@ const FILES = {
   admin_announcements: path.join(DATA_DIR, "admin_announcements.json"),
   plan_settings: path.join(DATA_DIR, "plan_settings.json"),
   analytics: path.join(DATA_DIR, "analytics.json"),
+  alerts: path.join(DATA_DIR, "alerts.json"),
   jobs: path.join(DATA_DIR, "jobs.json"),
   applications: path.join(DATA_DIR, "applications.json"),
   website_content: path.join(DATA_DIR, "website_content.json"),
@@ -558,6 +559,7 @@ ensureFile(FILES.agent_tasks, []);
 ensureFile(FILES.admin_announcements, []);
 ensureFile(FILES.plan_settings, {});
 ensureFile(FILES.analytics, { leads: 0, signups: 0, revenue: 0, subscriptions: { starter: 0, growth: 0, pro: 0, enterprise: 0 } });
+ensureFile(FILES.alerts, []);
 ensureFile(FILES.jobs, []);
 ensureFile(FILES.applications, []);
 
@@ -11103,6 +11105,148 @@ function runAutomationCycleForAllOrgs(){
   return cycles;
 }
 
+// ==============================
+// 🔥 DAILY ALERT SYSTEM (SAFE)
+// ==============================
+
+// Build alert summary for an org
+function buildDailyAlertSummary(org_id){
+  const claims = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
+
+  const actionable = claims
+    .map(c => ({
+      ...c,
+      risk_score: Number(c.risk_score || computeClaimRiskScore(c)),
+      at_risk_amount: Number(c.at_risk_amount || computeClaimAtRisk(c)),
+      next_action: c.next_action || "Review Claim",
+      requires_follow_up: Boolean(c.requires_follow_up)
+    }))
+    .filter(c => c.at_risk_amount > 0);
+
+  const topClaims = actionable
+    .sort((a,b)=> (b.risk_score - a.risk_score) || (b.at_risk_amount - a.at_risk_amount))
+    .slice(0,5);
+
+  const totalAtRisk = actionable.reduce((sum,c)=> sum + c.at_risk_amount, 0);
+
+  const followUps = actionable.filter(c => c.requires_follow_up).length;
+
+  return {
+    totalAtRisk,
+    followUps,
+    count: actionable.length,
+    topClaims
+  };
+}
+
+
+// Store alerts (in-app)
+function storeDailyAlert(org_id){
+  const summary = buildDailyAlertSummary(org_id);
+
+  const alerts = readJSON(FILES.alerts || "alerts.json", []);
+  const todayKey = new Date().toISOString().slice(0,10);
+
+  const alreadySent = alerts.find(a =>
+    a.org_id === org_id &&
+    a.day_key === todayKey
+  );
+
+  if (alreadySent) {
+    return alreadySent; // 🚫 prevent duplicate alerts same day
+  }
+
+  const now = new Date();
+  const todayAlertKey = now.toISOString().slice(0,10); // YYYY-MM-DD
+
+  const newAlert = {
+    alert_id: "alert_" + Date.now(),
+    org_id,
+    created_at: nowISO(),
+    day_key: todayAlertKey,
+    total_at_risk: summary.totalAtRisk,
+    follow_up_count: summary.followUps,
+    claim_count: summary.count,
+    top_claims: summary.topClaims.map(c => ({
+      claim_number: c.claim_number,
+      billed_id: c.billed_id,
+      at_risk_amount: c.at_risk_amount,
+      next_action: c.next_action
+    }))
+  };
+
+  alerts.push(newAlert);
+  writeJSON(FILES.alerts || "alerts.json", alerts);
+
+  return newAlert;
+}
+
+
+// Build email content (ready for future send)
+function buildDailyAlertEmail(alert){
+  if (!alert) return "";
+
+  return `
+  <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px;">
+    <div style="max-width:600px;margin:auto;background:#ffffff;border-radius:10px;padding:20px;border:1px solid #e5e7eb;">
+
+      <h2 style="margin-bottom:10px;">🔥 Daily Revenue Alert</h2>
+
+      <div style="margin-bottom:15px;">
+        <strong>Total At Risk:</strong> ${formatMoneyUI(alert.total_at_risk)}<br/>
+        <strong>Claims to Work:</strong> ${alert.claim_count}<br/>
+        <strong>Follow-Ups Needed:</strong> ${alert.follow_up_count}
+      </div>
+
+      <div style="margin-bottom:15px;">
+        <h3 style="margin-bottom:8px;">Top Claims to Work Today</h3>
+        ${(alert.top_claims || []).map((c,i)=> `
+          <div style="padding:10px;border-bottom:1px solid #eee;">
+            <strong>#${c.claim_number}</strong> — ${formatMoneyUI(c.at_risk_amount)} at risk<br/>
+            <span style="color:#6b7280;">${c.next_action}</span>
+          </div>
+        `).join("")}
+      </div>
+
+      <div style="text-align:center;margin-top:20px;">
+        <a href="https://yourapp.com/actions"
+           style="background:#111827;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:600;">
+          Open Action Center
+        </a>
+      </div>
+
+      <div style="margin-top:20px;font-size:12px;color:#9ca3af;text-align:center;">
+        TJ Healthcare Pro — Revenue Intelligence Platform
+      </div>
+
+    </div>
+  </div>
+  `;
+}
+
+
+// Run alerts for all orgs (called in automation loop)
+function runDailyAlertCycle(){
+  const orgs = readJSON(FILES.orgs, []);
+
+  for (const org of orgs){
+    if (!org?.org_id) continue;
+    if (String(org.account_status || "active") !== "active") continue;
+
+    try {
+      const alert = storeDailyAlert(org.org_id);
+
+      // 🔥 Future: send email here
+      const emailBody = buildDailyAlertEmail(alert);
+
+      console.log("Daily Alert Generated:", org.org_id, emailBody);
+
+    } catch(e){
+      console.error("Daily alert error:", org.org_id, e?.message || e);
+    }
+  }
+}
+
 function computeClaimAtRisk(b){
   const d = evaluateClaimDerived(b, b?.org_id ? buildClaimContext(b.org_id) : {});
   if (isResolvedLifecycleStage(d.lifecycleStage)) return 0;
@@ -18427,6 +18571,26 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const topRiskPayer = (m.payerRiskRanking || [])[0];
     const overviewTargets = getOrgSettings(org.org_id).recovery_targets || {};
     const dashboardClaims = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+    const latestAlert = readJSON(FILES.alerts || "alerts.json", [])
+      .filter(a => a.org_id === org.org_id)
+      .slice(-1)[0];
+    const alertBanner = latestAlert ? `
+      <div style="
+        background:#fef3c7;
+        border:1px solid #f59e0b;
+        padding:10px;
+        border-radius:8px;
+        margin-bottom:12px;
+      ">
+        ⚠️ You have ${formatNumberUI(latestAlert.claim_count)} claims to work
+        💰 ${formatMoneyUI(latestAlert.total_at_risk)} at risk
+        🔁 ${formatNumberUI(latestAlert.follow_up_count)} need follow-up
+
+        <a class="btn small" href="/actions?type=issues">
+          Open Action Center
+        </a>
+      </div>
+    ` : "";
     const dashboardCtx = buildClaimContext(org.org_id);
     const topClaims = getTopClaimsForOrg(org.org_id, 3);
     const topClaimsOverview = `
@@ -18489,6 +18653,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     });
 
     const html = renderPage("Revenue Overview", `
+      ${alertBanner}
       ${showWelcome ? `
         <div style="
           background:#ecfdf5;
@@ -33501,6 +33666,35 @@ setInterval(() => {
     console.error("Automation sweep error:", e?.message || e);
   }
 }, 5 * 60_000);
+
+// ==============================
+// 🔥 DAILY ALERT SCHEDULER
+// ==============================
+
+function shouldRunDailyAlert(now = new Date()){
+  const hour = now.getHours();
+
+  // 🔥 Choose your send time (8 AM server time)
+  return hour === 8;
+}
+
+let lastDailyRun = null;
+
+setInterval(() => {
+  try {
+    const now = new Date();
+    const todayKey = now.toISOString().slice(0,10);
+
+    if (shouldRunDailyAlert(now) && lastDailyRun !== todayKey) {
+      runDailyAlertCycle();
+      lastDailyRun = todayKey;
+      console.log("Daily alert cycle executed");
+    }
+
+  } catch (e) {
+    console.error("Daily scheduler error:", e?.message || e);
+  }
+}, 60 * 60 * 1000); // check every hour
 
 server.listen(PORT, HOST, () => {
   debugLog(`TJHP server listening on ${HOST}:${PORT}`);
