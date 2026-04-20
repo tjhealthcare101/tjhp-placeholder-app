@@ -1819,11 +1819,6 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         }
       });
 
-      panel.querySelectorAll('a[href*="/action-center?claim="]').forEach((a) => {
-        a.href = "/actions?claim=" + encodeURIComponent(id);
-        a.textContent = "Open in Action Center";
-      });
-
       if (window.location.pathname.includes("/actions")) {
         panel.querySelectorAll("a").forEach((a) => {
           if ((a.textContent || "").trim() === "Open in Action Center") {
@@ -2021,52 +2016,77 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     // =========================
     function fixPanel(){
 
-      const panel = document.querySelector(".claim-side-panel, [data-panel='claim']");
+      // ✅ TARGET THE REAL PANEL (this was your main issue)
+      const panel = document.getElementById("claimSidePanel");
       if (!panel) return;
 
       const statusEl = panel.querySelector(".badge");
       if (!statusEl) return;
 
-      const statusText = statusEl.textContent || "";
+      const statusText = (statusEl.textContent || "").toLowerCase();
 
-      if (statusText.includes("Awaiting Payment")) {
+      // ✅ ONLY RUN FOR AWAITING PAYMENT
+      if (!statusText.includes("awaiting payment")) return;
 
-        // ❌ Remove Action Center button
-        panel.querySelectorAll("button, a").forEach(btn => {
-          if (btn.textContent.includes("Action Center")) {
-            btn.remove();
-          }
-        });
-
-        // ✅ Add Upload Payment button if missing
-        if (!panel.innerHTML.includes("Upload Payment")) {
-          const actions = panel.querySelector("div");
-          if (actions) {
-            const btn = document.createElement("button");
-            btn.className = "btn secondary";
-            btn.innerText = "Upload Payment →";
-            btn.onclick = () => window.location.href = "/upload-payments";
-            actions.appendChild(btn);
-          }
+      // =========================
+      // 1. REMOVE WRONG BUTTON
+      // =========================
+      panel.querySelectorAll("a, button").forEach(btn => {
+        const txt = (btn.textContent || "").toLowerCase();
+        if (txt.includes("action center")) {
+          btn.remove();
         }
+      });
 
-        // ✅ Fix Claim Insight
-        const insight = Array.from(panel.querySelectorAll("h3, h4"))
-          .find(el => el.textContent.includes("Claim Insight"));
+      // =========================
+      // 2. ADD UPLOAD PAYMENT (CORRECT LOCATION)
+      // =========================
+      let actionRow = panel.querySelector(".btnRow");
 
-        if (insight && insight.nextElementSibling) {
-          insight.nextElementSibling.innerText = "Awaiting initial payer response";
-        }
-
-        // ✅ Fix Next Best Action
-        const next = Array.from(panel.querySelectorAll("h3, h4"))
-          .find(el => el.textContent.includes("Next Best Action"));
-
-        if (next && next.nextElementSibling) {
-          next.nextElementSibling.innerText =
-            "Monitor for payer response or upload posted payment";
+      // fallback if class not present
+      if (!actionRow) {
+        const buttons = panel.querySelectorAll("a, button");
+        if (buttons.length > 0) {
+          actionRow = buttons[0].parentElement;
         }
       }
+
+      if (actionRow && !actionRow.innerHTML.includes("Upload Payment")) {
+        const uploadBtn = document.createElement("a");
+        uploadBtn.className = "btn secondary";
+        uploadBtn.href = "/data-management?tab=payments";
+        uploadBtn.textContent = "Upload Payment";
+
+        actionRow.appendChild(uploadBtn);
+      }
+
+      // =========================
+      // 3. FIX CLAIM INSIGHT TEXT
+      // =========================
+      const insight = Array.from(panel.querySelectorAll("h3, h4"))
+        .find(el => el.textContent.includes("Claim Insight"));
+
+      if (insight && insight.nextElementSibling) {
+        insight.nextElementSibling.innerText = "Awaiting initial payer response";
+      }
+
+      // =========================
+      // 4. FIX NEXT BEST ACTION
+      // =========================
+      const next = Array.from(panel.querySelectorAll("h3, h4"))
+        .find(el => el.textContent.includes("Next Best Action"));
+
+      if (next && next.nextElementSibling) {
+        next.nextElementSibling.innerText =
+          "Monitor for payer response or upload posted payment";
+      }
+
+      // =========================
+      // 5. FORCE CORRECT STATUS PILL STYLE
+      // =========================
+      statusEl.textContent = "Awaiting Payment";
+      statusEl.classList.remove("warn", "err", "underpaid");
+      statusEl.classList.add("pending");
     }
 
     // =========================
