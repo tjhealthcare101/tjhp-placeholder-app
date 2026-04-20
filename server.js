@@ -1644,6 +1644,20 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     if (!window.location.pathname.includes("/actions")) return;
 
     document.querySelectorAll("#actionTableSync tbody tr").forEach((row) => {
+      const rowStatus = String(
+        row.querySelector(".badge")?.textContent ||
+        row.children[5]?.textContent ||
+        ""
+      ).replace(/\s+/g, " ").trim().toLowerCase();
+
+      if (
+        rowStatus === "awaiting payment" ||
+        rowStatus === "waiting payment" ||
+        rowStatus === "submitted"
+      ) {
+        return;
+      }
+
       const actionsCell = row.lastElementChild;
       if (!actionsCell || actionsCell.querySelector(".view-claim-btn")) return;
 
@@ -1750,14 +1764,21 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   }
 
   function renderPrimaryAction(id, statusText) {
-    const s = String(statusText || "").toLowerCase();
+    const s = String(statusText || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    const normalized =
+      s === "submitted" || s === "waiting payment"
+        ? "awaiting payment"
+        : s;
     if (s.includes("denied")) {
       return '<a class="btn small secondary" href="/ai-appeal?billed_id=' + encodeURIComponent(id) + '">Open Appeal Workspace</a>';
     }
     if (s.includes("underpaid")) {
       return '<a class="btn small secondary" href="/ai-negotiation?billed_id=' + encodeURIComponent(id) + '">Open Negotiation Workspace</a>';
     }
-    if (s.includes("awaiting payment")) {
+    if (normalized === "awaiting payment") {
       return '<a class="btn small secondary" href="/data-management?tab=payments">Upload Payment</a>';
     }
     if (window.location.pathname.includes("/actions")) {
@@ -1788,7 +1809,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       +   '<span class="badge">Risk Score ' + esc(claim.risk || "-") + "</span>"
       + '</div>'
       + '<div class="muted small" style="margin-bottom:12px;">Age / timing: ' + esc(claim.agingOrDays || "-") + "</div>"
-      + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
+      + '<div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
       +   '<a class="btn small secondary" href="' + esc(claim.claimHref) + '">Open Full Claim</a>'
       +   renderPrimaryAction(id, claim.status)
       + '</div>';
@@ -2026,94 +2047,107 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       }
     }
 
+    function normalizeAwaitingPaymentLabel(text){
+      const s = String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (s === "awaiting payment" || s === "waiting payment" || s === "submitted") {
+        return "Awaiting Payment";
+      }
+      return "";
+    }
+
+    function getPanelActionRow(panel){
+      return (
+        panel.querySelector(".btnRow") ||
+        Array.from(panel.querySelectorAll("div")).find((div) => {
+          const actions = Array.from(div.querySelectorAll("a, button")).filter((el) => {
+            return !el.matches("[data-claim-panel-close], [data-tjhp-panel-close]");
+          });
+          if (!actions.length) return false;
+          const text = (div.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+          return /open full claim|open in action center|upload payment|open appeal workspace|open negotiation workspace/.test(text);
+        })
+      );
+    }
+
     // =========================
     // 4. PANEL FIX (AWAITING PAYMENT)
     // =========================
     function fixPanel(){
-      // TARGET BOTH PANELS
       const panel =
         document.getElementById("claimSidePanel") ||
         document.getElementById("tjhpClaimPanel");
-
       if (!panel) return;
 
-      const statusEl = panel.querySelector(".badge");
+      const statusEl = Array.from(panel.querySelectorAll(".badge")).find((el) => {
+        return !!normalizeAwaitingPaymentLabel(el.textContent);
+      });
       if (!statusEl) return;
 
-      const statusText = (statusEl.textContent || "").toLowerCase();
+      const normalizedStatus = normalizeAwaitingPaymentLabel(statusEl.textContent);
+      if (!normalizedStatus) return;
 
-      // ONLY RUN FOR AWAITING PAYMENT
-      if (!statusText.includes("awaiting payment")) return;
-
-      // =========================
-      // 1. FORCE REMOVE ACTION CENTER BUTTON
-      // =========================
-      panel.querySelectorAll("a, button").forEach(btn => {
-        const txt = (btn.textContent || "").toLowerCase().trim();
+      panel.querySelectorAll("a, button").forEach((btn) => {
+        const txt = (btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+        const href = (btn.getAttribute("href") || "").toLowerCase();
+        const dataAction = (btn.getAttribute("data-action") || "").toLowerCase();
+        const cls = (btn.className || "").toLowerCase();
 
         if (
           txt === "open in action center" ||
-          txt.includes("action center")
+          href.includes("/actions?claim=") ||
+          dataAction === "open-action-center" ||
+          cls.includes("open-action-center")
         ) {
           btn.remove();
         }
       });
 
-      // =========================
-      // 2. FIND ACTION ROW (ROBUST)
-      // =========================
-      let actionRow = panel.querySelector(".btnRow");
+      const actionRow = getPanelActionRow(panel);
+      if (actionRow) {
+        const hasUpload = Array.from(actionRow.querySelectorAll("a, button")).some((btn) => {
+          return /upload payment/i.test(btn.textContent || "");
+        });
 
-      if (!actionRow) {
-        const buttons = panel.querySelectorAll("a, button");
-        if (buttons.length > 0) {
-          actionRow = buttons[0].parentElement;
+        if (!hasUpload) {
+          const uploadBtn = document.createElement("a");
+          uploadBtn.className = "btn small secondary";
+          uploadBtn.href = "/data-management?tab=payments";
+          uploadBtn.textContent = "Upload Payment";
+          actionRow.appendChild(uploadBtn);
         }
       }
 
-      if (!actionRow) return;
-
-      // =========================
-      // 3. ADD UPLOAD PAYMENT BUTTON (IF MISSING)
-      // =========================
-      const hasUpload = Array.from(actionRow.querySelectorAll("a, button"))
-        .some(btn => (btn.textContent || "").toLowerCase().includes("upload payment"));
-
-      if (!hasUpload) {
-        const uploadBtn = document.createElement("a");
-        uploadBtn.className = "btn secondary";
-        uploadBtn.href = "/data-management?tab=payments";
-        uploadBtn.textContent = "Upload Payment";
-
-        actionRow.appendChild(uploadBtn);
-      }
-
-      // =========================
-      // 4. FIX TEXT
-      // =========================
-      const insight = Array.from(panel.querySelectorAll("h3, h4"))
-        .find(el => el.textContent.includes("Claim Insight"));
-
+      const insight = Array.from(panel.querySelectorAll("h3, h4, strong"))
+        .find(el => (el.textContent || "").includes("Claim Insight"));
       if (insight && insight.nextElementSibling) {
-        insight.nextElementSibling.innerText =
-          "Awaiting initial payer response";
+        insight.nextElementSibling.innerText = "Awaiting initial payer response";
       }
 
-      const next = Array.from(panel.querySelectorAll("h3, h4"))
-        .find(el => el.textContent.includes("Next Best Action"));
-
+      const next = Array.from(panel.querySelectorAll("h3, h4, strong"))
+        .find(el => (el.textContent || "").includes("Next Best Action"));
       if (next && next.nextElementSibling) {
         next.nextElementSibling.innerText =
           "Monitor for payer response or upload posted payment";
       }
 
-      // =========================
-      // 5. FORCE STATUS STYLE
-      // =========================
-      statusEl.textContent = "Awaiting Payment";
+      statusEl.textContent = normalizedStatus;
       statusEl.classList.remove("warn", "err", "underpaid");
       statusEl.classList.add("pending");
     }
+
+    function schedulePanelFixes(){
+      fixPanel();
+      [50, 150, 300, 600].forEach((ms) => setTimeout(fixPanel, ms));
+    }
+
+    document.addEventListener("click", function(e){
+      if (!e.target.closest(".view-claim-btn")) return;
+      schedulePanelFixes();
+    }, true);
+
+    const panelObserver = new MutationObserver(() => {
+      fixPanel();
+    });
 
     // =========================
     // RUN FIXES (handles re-render)
@@ -2121,9 +2155,17 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     setInterval(() => {
       fixLifecycle();
       fixPanel();
+
+      const livePanel =
+        document.getElementById("claimSidePanel") ||
+        document.getElementById("tjhpClaimPanel");
+
+      if (livePanel && !livePanel.dataset.awaitingPaymentObserverBound) {
+        livePanel.dataset.awaitingPaymentObserverBound = "1";
+        panelObserver.observe(livePanel, { childList: true, subtree: true });
+      }
     }, 400);
 
-  })();
   })();
 })();
 </script>
@@ -19731,7 +19773,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       <script>
       (function(){
         function normalizeLifecycleDisplayStage(stage){
-          return stage || "";
+          const s = String(stage || "").trim();
+          if (s === "Submitted" || s === "Waiting Payment") return "Awaiting Payment";
+          return s;
         }
 
         function panelEsc(v){
@@ -19757,7 +19801,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
         function renderClaimSidePanelExtras(claim){
           const derived = claim && claim.__derived ? claim.__derived : {};
-          const stage = String((derived && derived.lifecycleStage) || claim.lifecycleStage || claim.status || "");
+          const stage = normalizeLifecycleDisplayStage(
+            (derived && derived.lifecycleStage) || claim.lifecycleStage || claim.status || ""
+          );
 
           const networkStatus =
             claim.network_status ||
@@ -19768,22 +19814,21 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             stage === "Denied" ? "This claim has not received payment from payer" :
             stage === "Underpaid" ? "Partial payment received — potential recovery opportunity" :
             stage === "Resolved" ? "Payment completed" :
-            stage === "Waiting Payment" ? "Awaiting payer response" :
+            stage === "Awaiting Payment" ? "Awaiting initial payer response" :
             "Awaiting payer processing";
 
           const nextAction =
             stage === "Denied" ? "Submit appeal" :
             stage === "Underpaid" ? "Initiate negotiation" :
-            stage === "Waiting Payment" ? "Monitor for payer response" :
-            stage === "Submitted" ? "Await payer processing" :
+            stage === "Awaiting Payment" ? "Monitor for payer response or upload posted payment" :
             "No action needed";
           const actionButton =
             stage === "Denied"
               ? '<a class="btn" href="/ai-appeal?billed_id=' + encodeURIComponent(claim.billed_id) + '">Submit Appeal →</a>'
             : stage === "Underpaid"
               ? '<a class="btn" href="/ai-negotiation?billed_id=' + encodeURIComponent(claim.billed_id) + '">Start Negotiation →</a>'
-            : stage === "Waiting Payment"
-              ? '<a class="btn secondary" href="/action-center?claim=' + encodeURIComponent(claim.billed_id) + '">Monitor Claim →</a>'
+            : stage === "Awaiting Payment"
+              ? '<a class="btn secondary" href="/data-management?tab=payments">Upload Payment →</a>'
             : "";
 
           return ''
@@ -19902,8 +19947,12 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
           const d = claim.__derived || {};
           const displayStage = normalizeLifecycleDisplayStage(d.lifecycleStage || claim.lifecycleStage || claim.status || "");
+          const normalizedDisplayStage =
+            displayStage === "Submitted" || displayStage === "Waiting Payment"
+              ? "Awaiting Payment"
+              : displayStage;
           const badgeClass =
-            displayStage === "Awaiting Payment" ? "warn" :
+            normalizedDisplayStage === "Awaiting Payment" ? "warn" :
             displayStage === "Denied" ? "err" :
             displayStage === "Underpaid" ? "underpaid" :
             "";
@@ -19912,7 +19961,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             ? '<a class="btn small secondary" href="/ai-appeal?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Appeal Workspace</a>'
             : displayStage === "Underpaid"
             ? '<a class="btn small secondary" href="/ai-negotiation?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Negotiation Workspace</a>'
-            : displayStage === "Awaiting Payment"
+            : normalizedDisplayStage === "Awaiting Payment"
             ? '<a class="btn small secondary" href="/data-management?tab=payments">Upload Payment</a>'
             : '<a class="btn small secondary" href="/actions?claim=' + encodeURIComponent(claim.billed_id) + '">Open in Action Center</a>';
           const contractAlert = !hasExpected
@@ -19933,7 +19982,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             +   '<span class="badge">Risk ' + panelEsc(String(claim.__risk || 0)) + '</span>'
             + '</div>'
             + contractAlert
-            + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
+            + '<div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
             +   '<a class="btn small secondary" href="/claim-detail?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Full Claim</a>'
             +   primaryAction
             + '</div>'
@@ -23537,8 +23586,12 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
 
         const d = claim.__derived || {};
         const displayStage = normalizeStage(d.lifecycleStage || claim.lifecycleStage || claim.status || "");
+        const normalizedDisplayStage =
+          displayStage === "Submitted" || displayStage === "Waiting Payment"
+            ? "Awaiting Payment"
+            : displayStage;
         const badgeClass =
-          displayStage === "Awaiting Payment" ? "warn" :
+          normalizedDisplayStage === "Awaiting Payment" ? "warn" :
           displayStage === "Denied" ? "err" :
           displayStage === "Underpaid" ? "underpaid" :
           "";
@@ -23549,7 +23602,7 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
           ? '<a class="btn small secondary" href="/ai-appeal?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Appeal Workspace</a>'
           : displayStage === "Underpaid"
           ? '<a class="btn small secondary" href="/ai-negotiation?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Negotiation Workspace</a>'
-          : displayStage === "Awaiting Payment"
+          : normalizedDisplayStage === "Awaiting Payment"
           ? '<a class="btn small secondary" href="/data-management?tab=payments">Upload Payment</a>'
           : (!isActionCenter
               ? '<a class="btn small secondary" href="/actions?claim=' + encodeURIComponent(claim.billed_id) + '">Open in Action Center</a>'
@@ -23568,11 +23621,11 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
           +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + panelMoney(d.atRiskAmount || 0) + '</div></div>'
           + '</div>'
           + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
-          +   '<span class="badge ' + panelEsc(badgeClass) + '">' + panelEsc(displayStage) + '</span>'
+          +   '<span class="badge ' + panelEsc(badgeClass) + '">' + panelEsc(normalizedDisplayStage) + '</span>'
           +   '<span class="badge">Risk ' + panelEsc(String(claim.__risk || 0)) + '</span>'
           + '</div>'
           + contractAlert
-          + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
+          + '<div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
           +   '<a class="btn small secondary" href="/claim-detail?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Full Claim</a>'
           +   primaryAction
           + '</div>'
