@@ -1864,7 +1864,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       + "<strong>Affected Claims Filter Active</strong>"
       + '<div class="muted small" style="margin-top:6px;">Showing ' + matched + " uploaded-impacted claim" + (matched === 1 ? "" : "s") + " from the reimbursement commit flow.</div>"
       + '<div style="margin-top:10px;">'
-      +   '<a class="btn secondary small" href="/claims-lifecycle#lifecycleTable" onclick="try{sessionStorage.setItem(\'claimsLifecycleRestore\',\'1\')}catch(e){}">Clear affected-claims filter</a>'
+      +   '<a class="btn secondary small" href="/claims-lifecycle#lifecycleTable" data-restore-lifecycle="1">Clear affected-claims filter</a>'
       + "</div>";
 
     tableWrap.insertAdjacentElement("afterbegin", banner);
@@ -19388,8 +19388,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           ${filteredClaims.length !== claimIdsFilterSet.size ? ` (${formatNumberUI(claimIdsFilterSet.size)} IDs supplied)` : ``}
         </div>
         <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
-          <a class="btn secondary small" href="${affectedClaimsResetHref}" onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">Reset table filters</a>
-          <a class="btn secondary small" href="/claims-lifecycle#lifecycleTable" onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">Clear affected-claims filter</a>
+          <a class="btn secondary small" href="${affectedClaimsResetHref}" data-restore-lifecycle="1">Reset table filters</a>
+          <a class="btn secondary small" href="/claims-lifecycle#lifecycleTable" data-restore-lifecycle="1">Clear affected-claims filter</a>
         </div>
       </div>
     `
@@ -19457,12 +19457,12 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         <a
           class="btn secondary small"
           href="/claims-lifecycle#lifecycleTable"
-          onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">Reset</a>
+          data-restore-lifecycle="1">Reset</a>
       </div>
     </form>
 
     <div style="margin-bottom:10px;">
-      ${selectedStage ? `<a class="btn secondary small" href="${clearDrilldownHref}" onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">Clear Card Drilldown</a>` : ""}
+      ${selectedStage ? `<a class="btn secondary small" href="${clearDrilldownHref}" data-restore-lifecycle="1">Clear Card Drilldown</a>` : ""}
     </div>
 
     <div style="overflow:auto;">
@@ -19603,7 +19603,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
               per_page: String(pageSize),
               page: String(i + 1)
             }).toString()}#lifecycleTable"
-            onclick="try{sessionStorage.setItem('claimsLifecycleRestore','1')}catch(e){}">
+            data-restore-lifecycle="1">
             ${i+1}
           </a>
         `;
@@ -19950,6 +19950,188 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           const fallbackHref = btn.getAttribute("data-fallback-href");
           if (fallbackHref) window.location.href = fallbackHref;
         });
+
+        // ==============================
+        // 🔥 FINAL CLEAN LIFECYCLE FIX
+        // ==============================
+        (function(){
+
+          if (window.__lifecycleCleanFix) return;
+          window.__lifecycleCleanFix = true;
+
+          // =========================
+          // 1. FIX LIFECYCLE TABLE UI
+          // =========================
+          function fixLifecycleTable(){
+
+            const table = document.querySelector(".lifecycle-claims-table");
+            if (!table) return;
+
+            // ✅ Fix Risk → Risk Score (once)
+            const riskTh = table.querySelector("thead th:nth-child(7)");
+            if (riskTh && !riskTh.dataset.fixed) {
+              riskTh.dataset.fixed = "1";
+              riskTh.innerHTML =
+                'Risk Score'
+                + '<span class="tooltip"'
+                + ' data-tip="Priority score based on claim status, dollars at risk, age, and workflow urgency. 1 = low risk (good), 100 = high risk (bad)">'
+                + ' ⓘ'
+                + '</span>';
+            }
+
+            // ✅ Fix status pill (structure-safe)
+            if (!document.getElementById("lifecycle-pill-style")) {
+              const style = document.createElement("style");
+              style.id = "lifecycle-pill-style";
+              style.innerHTML =
+                ".lifecycle-claims-table .badge {"
+                + "display:inline-flex !important;"
+                + "align-items:center !important;"
+                + "justify-content:center !important;"
+                + "padding:2px 8px !important;"
+                + "border-radius:999px !important;"
+                + "font-size:12px !important;"
+                + "font-weight:800 !important;"
+                + "line-height:1.1 !important;"
+                + "white-space:nowrap !important;"
+                + "width:auto !important;"
+                + "flex:0 0 auto !important;"
+                + "}"
+                + ".lifecycle-claims-table .badge.pending {"
+                + "background:#fffbeb !important;"
+                + "color:#92400e !important;"
+                + "border:1px solid #fde68a !important;"
+                + "}"
+                + ".lifecycle-claims-table td:last-child {"
+                + "display:flex !important;"
+                + "align-items:center !important;"
+                + "}";
+              document.head.appendChild(style);
+            }
+
+            // ✅ Ensure lifecycle View button works (matches Action Center)
+            table.querySelectorAll("tbody tr").forEach(row => {
+
+              const btn = row.querySelector(".view-claim-btn");
+              if (!btn) return;
+
+              const link = row.querySelector('a[href*="billed_id="]');
+              if (!link) return;
+
+              const match = link.href.match(/billed_id=([^&]+)/);
+              if (!match) return;
+
+              const id = decodeURIComponent(match[1]);
+
+              btn.setAttribute("data-id", id);
+              btn.setAttribute("data-fallback-href", "/claim-detail?billed_id=" + encodeURIComponent(id));
+              row.setAttribute("data-claim", id);
+            });
+          }
+
+          // =========================
+          // 2. FIX PANEL (AWAITING PAYMENT ONLY)
+          // =========================
+          function fixPanelUI(){
+
+            const panel = document.getElementById("claimSidePanel");
+            if (!panel) return;
+
+            const statusEl = panel.querySelector(".badge");
+            if (!statusEl) return;
+
+            const status = (statusEl.textContent || "").toLowerCase();
+
+            // ONLY adjust Awaiting Payment
+            if (!status.includes("awaiting payment")) return;
+
+            // ❌ Remove Action Center button
+            panel.querySelectorAll("a, button").forEach(btn => {
+              if ((btn.textContent || "").toLowerCase().includes("action center")) {
+                btn.remove();
+              }
+            });
+
+            // ✅ Add Upload Payment button (if missing)
+            const actionContainer = panel.querySelector(".btnRow") || panel.querySelector("div > .btn");
+
+            if (actionContainer && !panel.innerHTML.includes("Upload Payment")) {
+              const uploadBtn = document.createElement("a");
+              uploadBtn.className = "btn secondary";
+              uploadBtn.href = "/data-management?tab=payments";
+              uploadBtn.textContent = "Upload Payment";
+              if (actionContainer.classList && actionContainer.classList.contains("btn")) {
+                actionContainer.parentElement && actionContainer.parentElement.appendChild(uploadBtn);
+              } else {
+                actionContainer.appendChild(uploadBtn);
+              }
+            }
+
+            // ✅ Fix Claim Insight
+            const insightHeader = Array.from(panel.querySelectorAll("h3, h4"))
+              .find(el => el.textContent.includes("Claim Insight"));
+
+            if (insightHeader && insightHeader.nextElementSibling) {
+              insightHeader.nextElementSibling.innerText =
+                "Awaiting initial payer response";
+            }
+
+            // ✅ Fix Next Best Action
+            const nextHeader = Array.from(panel.querySelectorAll("h3, h4"))
+              .find(el => el.textContent.includes("Next Best Action"));
+
+            if (nextHeader && nextHeader.nextElementSibling) {
+              nextHeader.nextElementSibling.innerText =
+                "Monitor for payer response or upload posted payment";
+            }
+          }
+
+          // =========================
+          // 3. RUN FIXES (RENDER-SAFE)
+          // =========================
+
+          // run immediately
+          fixLifecycleTable();
+
+          // 🔁 watch ONLY lifecycle table (not whole DOM)
+          const lifecycleObserver = new MutationObserver(() => {
+            fixLifecycleTable();
+          });
+
+          const lifecycleContainer = document.getElementById("lifecycleTable");
+
+          if (lifecycleContainer) {
+            lifecycleObserver.observe(lifecycleContainer, {
+              childList: true,
+              subtree: true
+            });
+          }
+
+          document.addEventListener("click", function(e){
+            const btn = e.target.closest(".view-claim-btn");
+            if (!btn) return;
+
+            // run AFTER panel renders
+            setTimeout(() => {
+              fixPanelUI();
+              setTimeout(fixPanelUI, 120);
+              setTimeout(fixPanelUI, 260);
+            }, 0);
+          });
+
+        })();
+
+        // ==============================
+        // 🔥 FIX claimsLifecycleRestore CRASH (REAL FIX)
+        // ==============================
+        document.addEventListener("click", function(e){
+          const el = e.target.closest('[data-restore-lifecycle="1"]');
+          if (!el) return;
+
+          try {
+            sessionStorage.setItem("claimsLifecycleRestore", "1");
+          } catch (_) {}
+        }, true);
 
         document.addEventListener("keydown", function(e){
           if (e.key === "Escape") window.closeClaimPanel();
