@@ -128,6 +128,7 @@ const FILES = {
   subscriptions: path.join(DATA_DIR, "subscriptions.json"),
   cases: path.join(DATA_DIR, "cases.json"),
   payments: path.join(DATA_DIR, "payments.json"), // parsed payment rows (limited)
+  unmatched_payments: path.join(DATA_DIR, "unmatched_payments.json"),
   expectations: path.join(DATA_DIR, "expectations.json"),
   flags: path.join(DATA_DIR, "flags.json"),
   usage: path.join(DATA_DIR, "usage.json"),
@@ -429,34 +430,173 @@ function derivePaidStatusForClaim(claim, paidAmount) {
   return "Paid";
 }
 
+function scorePaymentMatch(claim, payment) {
+  let score = 0;
+
+  const claimId = String(claim.claim_id || claim.claim_number || "").toLowerCase();
+  const paymentId = String(payment.claim_id || "").toLowerCase();
+
+  const payerA = String(claim.payer || "").toLowerCase();
+  const payerB = String(payment.payer || "").toLowerCase();
+
+  const billed = Number(claim.billed_amount || 0);
+  const expected = Number(claim.expected_amount || 0);
+  const paid = Number(payment.paid_amount || 0);
+
+  if (claimId && paymentId && claimId === paymentId) score += 70;
+
+  if (expected > 0) {
+    const diff = Math.abs(expected - paid);
+    const pct = diff / expected;
+
+    if (pct < 0.02) score += 25;
+    else if (pct < 0.1) score += 15;
+    else if (pct < 0.25) score += 5;
+  } else if (billed > 0) {
+    const diff = Math.abs(billed - paid);
+    const pct = diff / billed;
+
+    if (pct < 0.02) score += 20;
+    else if (pct < 0.1) score += 10;
+  }
+
+  if (payerA && payerB && payerA === payerB) score += 10;
+
+  return Math.min(score, 100);
+}
+
+function findBestClaimMatch(org_id, payment) {
+  const claims = readJSON(FILES.billed, [])
+    .filter(c => c.org_id === org_id);
+
+  let best = null;
+
+  for (const claim of claims) {
+    const score = scorePaymentMatch(claim, payment);
+
+    if (!best || score > best.score) {
+      best = {
+        claim,
+        score
+      };
+    }
+  }
+
+  return best;
+}
+
+const AUTO_MATCH_THRESHOLD = 90;
+
+function attemptAutoMatch(org_id, payment) {
+  const bestMatch = findBestClaimMatch(org_id, payment);
+
+  if (!bestMatch || bestMatch.score < AUTO_MATCH_THRESHOLD) {
+    return {
+      autoMatched: false,
+      reason: "low_confidence",
+      score: bestMatch?.score || 0
+    };
+  }
+
+  const claim = bestMatch.claim;
+
+  const result = applyPaymentToClaim(org_id, {
+    claim_id: claim.claim_id || claim.claim_number || claim.billed_id,
+    paid_amount: payment.paid_amount,
+    payer: payment.payer,
+    billed_amount: payment.billed_amount,
+    source: "auto_match"
+  });
+
+  return {
+    autoMatched: true,
+    score: bestMatch.score,
+    claim_id: claim.claim_id || claim.claim_number,
+    result
+  };
+}
+
 function applyPaymentToClaim(org_id, payment) {
   const canonical = {
     claim_id: payment.claim_id || payment.claim_number || "",
     paid_amount: Number(payment.paid_amount || 0),
     payer: payment.payer || payment.payer_name || "",
-    status: payment.status || "",
+    billed_amount: Number(payment.billed_amount || 0),
     source: payment.source || "835"
   };
 
   const billed = readJSON(FILES.billed, []);
+  const unmatched = readJSON(FILES.unmatched_payments, []);
+
   const claim = billed.find(b =>
     b.org_id === org_id &&
-    String(b.claim_id || b.claim_number || b.billed_id || "") === String(canonical.claim_id || "")
+    String(b.claim_id || b.claim_number || b.billed_id || "") === String(canonical.claim_id)
   );
 
   if (!claim) {
-    return { matched: false, reason: "claim_not_found", claim_id: canonical.claim_id };
+    const auto = attemptAutoMatch(org_id, canonical);
+
+    if (auto.autoMatched) {
+      return {
+        matched: true,
+        autoMatched: true,
+        score: auto.score,
+        claim_id: auto.claim_id
+      };
+    }
+
+    unmatched.push({
+      unmatched_id: uuid(),
+      org_id,
+      claim_id: canonical.claim_id,
+      payer: canonical.payer,
+      billed_amount: canonical.billed_amount,
+      paid_amount: canonical.paid_amount,
+      source: canonical.source,
+      status: "unmatched",
+      auto_match_score: auto.score,
+      created_at: nowISO()
+    });
+
+    writeJSON(FILES.unmatched_payments, unmatched);
+
+    return {
+      matched: false,
+      reason: "claim_not_found",
+      auto_match_score: auto.score
+    };
+  }
+
+  const expected = Number(claim.expected_amount || 0);
+  const paid = Number(canonical.paid_amount || 0);
+
+  let newStatus = "Paid";
+
+  if (paid <= 0) {
+    newStatus = "Denied";
+  } else if (expected > 0 && paid < expected) {
+    newStatus = "Underpaid";
+  } else if (claim.billed_amount > 0 && paid < claim.billed_amount && expected === 0) {
+    newStatus = "Partial Payment";
+  } else {
+    newStatus = "Paid";
   }
 
   const priorPaid = Number(claim.paid_amount || 0);
-  const newPaid = Number(canonical.paid_amount || 0);
 
   claim.payer = canonical.payer || claim.payer || "";
-  claim.paid_amount = newPaid;
-  claim.status = canonical.status || derivePaidStatusForClaim(claim, newPaid);
+  claim.paid_amount = paid;
+  claim.status = newStatus;
   claim.last_payment_sync_at = nowISO();
   claim.updated_at = nowISO();
   claim.payment_source = canonical.source;
+
+  claim.payment_debug = {
+    expected_amount: expected,
+    paid_amount: paid,
+    previous_paid_amount: priorPaid,
+    decision: newStatus
+  };
 
   const payments = readJSON(FILES.payments, []);
   payments.push({
@@ -465,8 +605,10 @@ function applyPaymentToClaim(org_id, payment) {
     billed_id: claim.billed_id,
     claim_id: claim.claim_id || claim.claim_number || "",
     payer: canonical.payer || claim.payer || "",
-    paid_amount: newPaid,
+    paid_amount: paid,
     previous_paid_amount: priorPaid,
+    expected_amount: expected,
+    status: newStatus,
     source: canonical.source,
     imported_at: nowISO()
   });
@@ -478,11 +620,11 @@ function applyPaymentToClaim(org_id, payment) {
     matched: true,
     billed_id: claim.billed_id,
     claim_id: claim.claim_id || claim.claim_number || "",
-    paid_amount: newPaid,
-    status: claim.status
+    paid_amount: paid,
+    expected_amount: expected,
+    status: newStatus
   };
 }
-
 function updateClaimStatus(org_id, statusUpdate) {
   const canonical = mapToCanonicalClaim(statusUpdate);
   const billed = readJSON(FILES.billed, []);
@@ -933,6 +1075,7 @@ ensureFile(FILES.pilots, []);
 ensureFile(FILES.subscriptions, []);
 ensureFile(FILES.cases, []);
 ensureFile(FILES.payments, []);
+ensureFile(FILES.unmatched_payments, []);
 ensureFile(FILES.expectations, []);
 ensureFile(FILES.flags, []);
 ensureFile(FILES.usage, []);
@@ -31542,6 +31685,60 @@ function renderTemplateEditor(org, user){
     });
   }
 
+  if (method === "POST" && pathname === "/account/integrations/match-payment") {
+    const body = await parseBody(req);
+    const payload = new URLSearchParams(body);
+
+    const unmatched_id = String(payload.get("unmatched_id") || "");
+    const selected_claim_id = String(payload.get("claim_id") || "");
+
+    if (!unmatched_id || !selected_claim_id) {
+      return redirect(res, "/account?tab=integrations&err=Missing match data");
+    }
+
+    const unmatched = readJSON(FILES.unmatched_payments, []);
+    const billed = readJSON(FILES.billed, []);
+
+    const payment = unmatched.find(p => p.unmatched_id === unmatched_id);
+
+    if (!payment || payment.org_id !== org.org_id) {
+      return redirect(res, "/account?tab=integrations&err=Payment not found");
+    }
+
+    const claim = billed.find(c =>
+      c.org_id === org.org_id &&
+      String(c.claim_id || c.claim_number || c.billed_id || "") === selected_claim_id
+    );
+
+    if (!claim) {
+      return redirect(res, "/account?tab=integrations&err=Claim not found");
+    }
+
+    applyPaymentToClaim(org.org_id, {
+      claim_id: selected_claim_id,
+      paid_amount: payment.paid_amount,
+      payer: payment.payer,
+      billed_amount: payment.billed_amount,
+      source: "manual_match"
+    });
+
+    const updated = unmatched.map(p => {
+      if (p.unmatched_id === unmatched_id) {
+        return {
+          ...p,
+          status: "matched",
+          matched_claim_id: selected_claim_id,
+          resolved_at: nowISO()
+        };
+      }
+      return p;
+    });
+
+    writeJSON(FILES.unmatched_payments, updated);
+
+    return redirect(res, "/account?tab=integrations&saved=1&msg=Payment matched successfully");
+  }
+
   if (method === "GET" && pathname === "/account") {
     const orgProfile = normalizeOrgProfile(org);
     const orgSettings = getOrgSettings(org.org_id);
@@ -31959,6 +32156,93 @@ function renderTemplateEditor(org, user){
         const ehr = findIntegration("ehr", "generic");
         const portal = findIntegration("payer_portal", "generic");
 
+        const allClaims = readJSON(FILES.billed, [])
+          .filter(c => c.org_id === org.org_id)
+          .slice(0, 200);
+
+        const unmatchedPayments = readJSON(FILES.unmatched_payments, [])
+          .filter(p => p.org_id === org.org_id && p.status === "unmatched")
+          .slice(-10);
+
+        const unmatchedUI = `
+          <div class="card" style="margin-top:16px;">
+            <h4>Unmatched Payments</h4>
+
+            ${
+              unmatchedPayments.length === 0
+                ? `<div class="muted small">No unmatched payments.</div>`
+                : unmatchedPayments.map(p => {
+
+                  const bestMatch = findBestClaimMatch(org.org_id, p);
+                  const bestClaim = bestMatch?.claim;
+                  const confidence = bestMatch?.score || p.auto_match_score || 0;
+
+                  const confidenceLabel =
+                    confidence >= 80 ? "High Confidence" :
+                    confidence >= 50 ? "Medium Confidence" :
+                    "Low Confidence";
+
+                  const confidenceColor =
+                    confidence >= 80 ? "#16a34a" :
+                    confidence >= 50 ? "#f59e0b" :
+                    "#dc2626";
+
+                  return `
+                  <div style="padding:10px 0;border-bottom:1px solid #eee;">
+
+                    <div>
+                      <strong>Claim ID:</strong> ${safeStr(p.claim_id)}<br/>
+                      <span class="muted small">
+                        ${formatMoneyUI(p.paid_amount)} from ${safeStr(p.payer)}
+                      </span>
+                    </div>
+
+                    ${
+                      bestClaim ? `
+                      <div style="margin-top:6px;font-size:12px;color:${confidenceColor};">
+                        ${confidence >= 90 ? `<span style="color:#16a34a;">Auto-match eligible</span><br/>` : ""}
+                        Suggested: ${safeStr(bestClaim.claim_number || bestClaim.claim_id)}
+                        (${confidence}% • ${confidenceLabel})
+                      </div>
+                      ` : ""
+                    }
+
+                    <form method="POST" action="/account/integrations/match-payment" style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+
+                      <input type="hidden" name="unmatched_id" value="${safeStr(p.unmatched_id)}" />
+
+                      <select name="claim_id" required style="min-width:180px;">
+                        <option value="">Select Claim</option>
+
+                        ${
+                          allClaims.map(c => {
+                            const selected = bestClaim &&
+                              String(c.claim_id || c.claim_number || c.billed_id) ===
+                              String(bestClaim.claim_id || bestClaim.claim_number || bestClaim.billed_id)
+                              ? "selected"
+                              : "";
+
+                            return `
+                              <option value="${safeStr(c.claim_id || c.claim_number || c.billed_id)}" ${selected}>
+                                ${safeStr(c.claim_number || c.claim_id)} — ${formatMoneyUI(c.billed_amount)}
+                              </option>
+                            `;
+                          }).join("")
+                        }
+
+                      </select>
+
+                      <button class="btn small" type="submit">Match</button>
+
+                    </form>
+
+                  </div>
+                  `;
+                }).join("")
+            }
+          </div>
+        `;
+
         return `
           ${savedNotice}
           ${msgNotice}
@@ -32014,6 +32298,8 @@ function renderTemplateEditor(org, user){
               </div>
               <button class="btn secondary" type="submit">Process 835</button>
             </form>
+
+            ${unmatchedUI}
 
             ${
               clearinghouse
