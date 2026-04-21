@@ -4423,6 +4423,277 @@ async function requestOpenAIChatCompletion({ messages, temperature = 0.2 }) {
   });
 }
 
+function classifyCopilotQuery(message) {
+  const text = String(message || "").toLowerCase();
+
+  if (/medicare|aetna|cigna|payer|claims|denial|underpaid|ar|revenue|payment/.test(text)) {
+    return "DATA_QUESTION";
+  }
+
+  if (/what does|how do i|where is|how to use/.test(text)) {
+    return "APP_QUESTION";
+  }
+
+  return "OUT_OF_SCOPE";
+}
+
+function buildCopilotDataContext(org_id) {
+  const billed = readJSON(FILES.billed, []).filter((x) => x.org_id === org_id);
+  const payments = readJSON(FILES.payments, []).filter((x) => x.org_id === org_id);
+  const cases = readJSON(FILES.cases, []).filter((x) => x.org_id === org_id);
+
+  return {
+    totalClaims: billed.length,
+    totalPaid: payments.reduce((s, p) => s + num(p.paid_amount), 0),
+    totalBilled: billed.reduce((s, b) => s + num(b.billed_amount), 0),
+    deniedClaims: billed.filter((b) => String(b.status).toLowerCase() === "denied").length,
+    underpaidClaims: billed.filter((b) => String(b.status).toLowerCase() === "underpaid").length,
+    payers: [...new Set(billed.map((b) => b.payer).filter(Boolean))],
+    raw: {
+      billed: billed.slice(0, 50),
+      payments: payments.slice(0, 50),
+      cases: cases.slice(0, 50),
+    },
+  };
+}
+
+// ==============================
+// QUERY-AWARE DATA RETRIEVAL ENGINE
+// ==============================
+
+// ---- Extract filters from user query ----
+function extractQueryFilters(message){
+  const text = String(message || "").toLowerCase();
+
+  let payer = null;
+  let status = null;
+
+  // payer detection
+  const knownPayers = ["medicare","aetna","cigna","uhc","united","bcbs","blue cross"];
+  for (const p of knownPayers){
+    if (text.includes(p)){
+      payer = p;
+      break;
+    }
+  }
+
+  // status detection
+  if (/denied|denial/.test(text)) status = "denied";
+  if (/underpaid|underpayment/.test(text)) status = "underpaid";
+  if (/paid/.test(text)) status = "paid";
+
+  return { payer, status };
+}
+
+// ---- Smart data filtering ----
+function filterDataForQuery(org_id, message){
+  const billed = readJSON(FILES.billed, []).filter(x => x.org_id === org_id);
+  const payments = readJSON(FILES.payments, []).filter(x => x.org_id === org_id);
+  const cases = readJSON(FILES.cases, []).filter(x => x.org_id === org_id);
+
+  const { payer, status } = extractQueryFilters(message);
+
+  let filteredBilled = billed;
+
+  if (payer){
+    filteredBilled = filteredBilled.filter(b =>
+      String(b.payer || "").toLowerCase().includes(payer)
+    );
+  }
+
+  if (status){
+    filteredBilled = filteredBilled.filter(b =>
+      String(b.status || "").toLowerCase() === status
+    );
+  }
+
+  // match payments to filtered claims
+  const claimIds = new Set(filteredBilled.map(b => b.claim_id || b.claim_number));
+
+  const filteredPayments = payments.filter(p =>
+    claimIds.has(p.claim_id || p.claim_number)
+  );
+
+  return {
+    billed: filteredBilled.slice(0, 100),
+    payments: filteredPayments.slice(0, 100),
+    cases: cases.slice(0, 50),
+    filters: { payer, status }
+  };
+}
+
+// ---- Build smarter context ----
+function buildSmartCopilotContext(org_id, message){
+  const filtered = filterDataForQuery(org_id, message);
+
+  const billed = filtered.billed;
+  const payments = filtered.payments;
+
+  return {
+    filters: filtered.filters,
+
+    totals: {
+      claims: billed.length,
+      billed: billed.reduce((s,b)=>s + num(b.billed_amount),0),
+      paid: payments.reduce((s,p)=>s + num(p.paid_amount),0)
+    },
+
+    metrics: {
+      denied: billed.filter(b => String(b.status).toLowerCase() === "denied").length,
+      underpaid: billed.filter(b => String(b.status).toLowerCase() === "underpaid").length
+    },
+
+    sample: {
+      claims: billed.slice(0, 10),
+      payments: payments.slice(0, 10)
+    }
+  };
+}
+
+// ==============================
+// STRUCTURED AI RESPONSE ENGINE
+// ==============================
+
+function buildStructuredPrompt(context, question){
+  return `
+You are a healthcare revenue AI assistant.
+
+STRICT RULES:
+- ONLY use the provided data
+- DO NOT make up numbers
+- If data missing, say "No internal data available"
+
+RETURN JSON ONLY in this format:
+
+{
+  "summary": "short 1-2 sentence answer",
+  "metrics": {
+    "total_billed": number,
+    "total_paid": number,
+    "total_claims": number,
+    "denied_claims": number,
+    "underpaid_claims": number
+  },
+  "top_items": [
+    {
+      "label": "claim or payer",
+      "value": number
+    }
+  ],
+  "insights": [
+    "insight 1",
+    "insight 2"
+  ]
+}
+
+DATA:
+${JSON.stringify(context)}
+
+QUESTION:
+${question}
+`;
+}
+
+// ---- STRUCTURED AI CALL ----
+async function runStructuredCopilot({ org_id, message }){
+  const context = buildSmartCopilotContext(org_id, message);
+
+  const prompt = buildStructuredPrompt(context, message);
+
+  const ai = await requestOpenAIChatCompletion({
+    messages: [
+      { role: "system", content: prompt }
+    ],
+    temperature: 0
+  });
+
+  let raw = ai?.choices?.[0]?.message?.content || "";
+
+  let parsed = null;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // fallback if model returns text instead of JSON
+    return {
+      summary: raw || "No internal data available",
+      metrics: null,
+      top_items: [],
+      insights: []
+    };
+  }
+
+  return parsed;
+}
+
+function enforceGroundedResponse(answer, context) {
+  if (!answer) return "No data available in your system for this request.";
+
+  const hasNumbers = /\d/.test(answer);
+  const claimCount = Number(context?.totalClaims ?? context?.totals?.claims ?? 0);
+  if (hasNumbers && !claimCount) {
+    return "No internal data available for this request.";
+  }
+
+  return answer;
+}
+
+async function runGroundedCopilot({ org_id, message }) {
+  const type = classifyCopilotQuery(message);
+
+  if (type === "OUT_OF_SCOPE") {
+    return {
+      answer: "I can only answer questions based on your uploaded data and this platform.",
+      grounded: true,
+    };
+  }
+
+  const context = buildSmartCopilotContext(org_id, message);
+
+  const claimCount = Number(context?.totalClaims ?? context?.totals?.claims ?? 0);
+  if (!claimCount) {
+    return {
+      answer: "No internal data available for this request.",
+      grounded: true,
+    };
+  }
+
+  const systemPrompt = `
+You are a healthcare revenue AI assistant.
+
+STRICT RULES:
+- ONLY use the provided data context
+- DO NOT make up numbers
+- If data is missing, say: "No internal data available"
+- Answer clearly and directly
+- No assumptions, no external knowledge
+
+DATA CONTEXT:
+${JSON.stringify(context)}
+`;
+
+  const userPrompt = message;
+
+  const ai = await requestOpenAIChatCompletion({
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    temperature: 0,
+  });
+
+  let answer =
+    ai?.choices?.[0]?.message?.content ||
+    "No internal data available for this request.";
+
+  answer = enforceGroundedResponse(answer, context);
+
+  return {
+    answer,
+    grounded: true,
+  };
+}
+
 function renderFallbackPage(message) {
   return renderPage("AI Unavailable", `
     <div class="card">
@@ -20382,38 +20653,64 @@ if (method === "GET" && pathname === "/file") {
   return send(res, 200, JSON.stringify({ ok: true, body: draft.body }), "application/json");
 }
 
-if (method === "POST" && pathname === "/ai/chat") {
-  const body = await parseBody(req);
-  let payload = {};
-  try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+if (pathname === "/ai/chat" && req.method === "POST") {
+  const sess = getAuthUser(req);
+  if (!sess) return send(res, 401, JSON.stringify({ error:"Unauthorized" }), "application/json");
 
-  const msg = String(payload.message || "").trim();
-  const currentPath = String(payload.currentPath || payload.path || req.headers.referer || "");
+  const body = JSON.parse(await parseBody(req) || "{}");
+  const message = String(body.message || "").trim();
 
-  if (!msg) {
-    return send(res, 200, JSON.stringify({
-      answer: "Please enter a question to continue."
-    }), "application/json");
+  if (!message) {
+    return send(res, 400, JSON.stringify({ error:"Message required" }), "application/json");
   }
 
-  // ===== Snapshot BEFORE consumption
-  const usageBefore = getCopilotUsageSnapshot(org.org_id);
-
-  // ===== Validate + consume credit
-  const consume = consumeCopilotQuery(org.org_id);
-  if (!consume.ok) {
+  // ===== USAGE CHECK =====
+  const usageCheck = consumeCopilotQuery(sess.org_id);
+  if (!usageCheck.ok) {
     return send(res, 200, JSON.stringify({
-      answer: consume.message,
-      used: usageBefore.used,
-      limit: usageBefore.limit,
+      answer: usageCheck.message,
       limitReached: true
     }), "application/json");
   }
 
-  // ===== Always create workspace FIRST
+  // =========================
+  // 🔥 STEP 1: STRUCTURED + GROUNDED ANSWER
+  // =========================
+  const structured = await runStructuredCopilot({
+    org_id: sess.org_id,
+    message
+  });
+
+  // fallback to grounded if needed
+  const shortAnswer =
+    structured?.summary ||
+    (await runGroundedCopilot({ org_id: sess.org_id, message })).answer;
+
+  // 👉 Floating Copilot stays simple
+  if (
+    shortAnswer &&
+    shortAnswer.length < 200 &&
+    !/analyze|compare|trend|report|breakdown|summary|why/i.test(message)
+  ) {
+    return send(res, 200, JSON.stringify({
+      answer: shortAnswer,
+      metrics: structured.metrics || null,
+      used: usageCheck.used,
+      limit: usageCheck.limit,
+      grounded: true
+    }), "application/json");
+  }
+
+  // =========================
+  // 🔵 STEP 2: FULL COPILOT (YOUR ORIGINAL SYSTEM)
+  // =========================
+
+  const msg = message;
+
+  // ===== Create Workspace (RESTORED)
   const workspace = {
     workspace_id: uuid(),
-    org_id: org.org_id,
+    org_id: sess.org_id,
     title: msg.slice(0, 60),
     messages: [
       { role: "user", content: msg, created_at: nowISO() }
@@ -20425,123 +20722,46 @@ if (method === "POST" && pathname === "/ai/chat") {
 
   saveCopilotWorkspace(workspace);
 
-  // ===== Deterministic payer detection
-  let result = null;
-  const deterministic = tryBuildDeterministicPayerAnswer(org.org_id, msg);
+  // ===== PAYER MATCHING (RESTORED)
+  const payerMatches = detectPayerCandidatesFromPrompt(msg, sess.org_id);
 
-  if (deterministic) {
-    result = buildCopilotResponse({
-      org_id: org.org_id,
-      rangePreset: "last30",
-      responseFormat: "executive",
-      question: msg
+  if (payerMatches.length > 1) {
+    const clarification =
+      `Multiple payer matches found:\n` +
+      payerMatches.map(p => `- ${p}`).join("\n") +
+      `\n\nReply with the exact payer name.`;
+
+    workspace.messages.push({
+      role: "assistant",
+      content: clarification,
+      created_at: nowISO()
     });
-  } else {
 
-    // ===== Force payer matching guardrail
-    const payerMatches = detectPayerCandidatesFromPrompt(msg, org.org_id);
-    if (payerMatches.length > 0) {
+    workspace.updated_at = nowISO();
+    saveCopilotWorkspace(workspace);
 
-      if (payerMatches.length > 1) {
-        workspace.messages.push({
-          role: "assistant",
-          content:
-            `Multiple payer matches found:
-` +
-            payerMatches.map(p => `- ${p}`).join("\n") +
-            `\n\nReply with the exact payer name.`,
-          created_at: nowISO()
-        });
-
-        workspace.updated_at = nowISO();
-        saveCopilotWorkspace(workspace);
-
-        const usageAfter = getCopilotUsageSnapshot(org.org_id);
-
-        return send(res, 200, JSON.stringify({
-          answer: workspace.messages[1].content,
-          workspace_id: workspace.workspace_id,
-          used: usageAfter.used,
-          limit: usageAfter.limit,
-          limitReached: usageAfter.limitReached,
-          deterministic: true
-        }), "application/json");
-      }
-
-      result = buildCopilotResponse({
-        org_id: org.org_id,
-        rangePreset: "last30",
-        responseFormat: "executive",
-        question: msg
-      });
-
-    } else {
-
-      // ===== OpenAI fallback (internal only)
-      try {
-        const openai = new OpenAI({
-          apiKey: process.env.OPENAI_API_KEY
-        });
-
-        const completion = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content: `
-You are the AI Revenue Intelligence assistant for TJ Healthcare Pro.
-
-RULES:
-- Only answer using internal application data.
-- Never provide public insurance industry information.
-- If data is not available internally, say:
-  "No internal data available for this request."
-`
-            },
-            { role: "user", content: msg }
-          ],
-          temperature: 0.3
-        });
-
-        const aiReply = completion?.choices?.[0]?.message?.content || 
-                        "No internal data available for this request.";
-
-        workspace.messages.push({
-          role: "assistant",
-          content: aiReply,
-          created_at: nowISO()
-        });
-
-        workspace.updated_at = nowISO();
-        saveCopilotWorkspace(workspace);
-
-        const usageAfter = getCopilotUsageSnapshot(org.org_id);
-
-        return send(res, 200, JSON.stringify({
-          answer: aiReply,
-          workspace_id: workspace.workspace_id,
-          used: usageAfter.used,
-          limit: usageAfter.limit,
-          limitReached: usageAfter.limitReached,
-          deterministic: false
-        }), "application/json");
-
-      } catch (err) {
-        console.error("AI CHAT ERROR:", err);
-        return send(res, 500, JSON.stringify({
-          answer: "AI system error. Please try again."
-        }), "application/json");
-      }
-    }
+    return send(res, 200, JSON.stringify({
+      answer: clarification,
+      workspace_id: workspace.workspace_id,
+      grounded: true
+    }), "application/json");
   }
 
-  // ===== Save Brief (Unified Path)
+  // ===== EXECUTIVE BRIEF (RESTORED)
+  const result = buildCopilotResponse({
+    org_id: sess.org_id,
+    rangePreset: "last30",
+    responseFormat: "executive",
+    question: msg
+  });
+
+  // ===== SAVE BRIEF (RESTORED)
   const briefs = readJSON(FILES.copilot_briefs, []);
   const brief_id = "BRF-" + Date.now();
 
   briefs.push({
     brief_id,
-    org_id: org.org_id,
+    org_id: sess.org_id,
     created: nowISO(),
     result
   });
@@ -20550,18 +20770,14 @@ RULES:
 
   workspace.latest_brief = { brief_id, result };
 
-  // Do NOT add a separate assistant title message.
-  // The executive brief card will display the title.
-
   workspace.updated_at = nowISO();
   saveCopilotWorkspace(workspace);
 
-  const usageAfter = getCopilotUsageSnapshot(org.org_id);
-
+  // ===== PREVIEW RESPONSE (RESTORED)
   const metrics = result?.metrics || {};
   const totals = metrics.totals || {};
   const rates = metrics.rates || {};
-  const title = result.briefTitle || buildExecutiveTitle(result);
+  const title = result.briefTitle || "Executive Revenue Summary";
 
   const preview =
     `${title}
@@ -20580,10 +20796,9 @@ RULES:
     answer: preview,
     workspace_id: workspace.workspace_id,
     savedToWorkspace: true,
-    used: usageAfter.used,
-    limit: usageAfter.limit,
-    limitReached: usageAfter.limitReached,
-    deterministic: true
+    used: usageCheck.used,
+    limit: usageCheck.limit,
+    grounded: true
   }), "application/json");
 }
 
