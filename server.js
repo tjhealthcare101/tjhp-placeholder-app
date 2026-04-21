@@ -1170,6 +1170,81 @@ async function buildOutboundPacketBundle(org_id, packet){
   };
 }
 
+// ==============================
+// PACKET WORKSPACE POLISH
+// ==============================
+
+// bundle all generated exports into one zip-like manifest download fallback
+// MVP safe approach: generate a single bundle.json that lists all export URLs
+function exportPacketBundle(packet){
+  packet.exports = packet.exports || {};
+
+  const bundle = {
+    packet_id: packet.packet_id,
+    generated_at: nowISO(),
+    files: {
+      printable_html: packet.exports.printable_html || null,
+      manifest_json: packet.exports.manifest_json || null,
+      edi_275_stub: packet.exports.edi_275_stub || null
+    }
+  };
+
+  const bundlePath = packetExportPath(packet.packet_id, "bundle.json");
+  fs.writeFileSync(bundlePath, JSON.stringify(bundle, null, 2), "utf8");
+
+  packet.exports.bundle_json = `/data/packet_exports/${packet.packet_id}.bundle.json`;
+  packet.updated_at = nowISO();
+  savePacket(packet);
+
+  return {
+    type: "bundle_json",
+    path: bundlePath,
+    url: packet.exports.bundle_json
+  };
+}
+
+function regeneratePacketArtifacts(packet){
+  exportPacketPrintable(packet);
+  exportPacketManifest(packet);
+  exportPacket275Stub(packet);
+  exportPacketBundle(packet);
+
+  packet.updated_at = nowISO();
+  savePacket(packet);
+  return packet;
+}
+
+function getSubmissionStatusMeta(packet){
+  const submission = packet.submission || {};
+  const status = String(packet.status || "").toLowerCase();
+
+  if (status === "error") {
+    return {
+      label: "Error",
+      color: "#dc2626"
+    };
+  }
+
+  if (submission.prepared_only) {
+    return {
+      label: "Prepared Only",
+      color: "#f59e0b"
+    };
+  }
+
+  if (status === "submitted" || status === "accepted") {
+    return {
+      label: "Submitted",
+      color: "#16a34a"
+    };
+  }
+
+  return {
+    label: packet.status || "Draft",
+    color: "#6b7280"
+  };
+}
+
 // ------------------------------
 // ADAPTERS
 // NOTE: real HTTP calls only if credentials + endpoint configured.
@@ -1656,6 +1731,113 @@ function closeTasksForClaim(org_id, billed_id) {
     return t;
   });
   saveTasks(updated);
+}
+
+// ======================================================
+// MANUAL SUBMISSION TRACKING (API-READY)
+// ======================================================
+
+// ---------- UPDATE PACKET OUTCOME ----------
+function updatePacketOutcome(org_id, packet_id, outcome, notes = "", user_id = "user"){
+  const packets = readJSON(PACKET_FILE, []);
+  const idx = packets.findIndex(p => p.packet_id === packet_id && p.org_id === org_id);
+  if (idx < 0) throw new Error("Packet not found");
+
+  let packet = packets[idx];
+
+  let newStatus = packet.status;
+
+  if (outcome === "submitted"){
+    newStatus = PACKET_STATES.SUBMITTED;
+  }
+
+  if (outcome === "accepted"){
+    newStatus = PACKET_STATES.ACCEPTED;
+  }
+
+  if (outcome === "rejected"){
+    newStatus = PACKET_STATES.REJECTED;
+  }
+
+  packet = updatePacketStatus(packet, newStatus);
+
+  // store outcome details
+  packet.outcome = {
+    result: outcome,
+    notes,
+    updated_by: user_id,
+    updated_at: nowISO()
+  };
+
+  savePacket(packet);
+
+  // log event
+  logSubmission({
+    packet_id,
+    org_id,
+    outcome,
+    notes,
+    updated_by: user_id
+  });
+
+  // ---------- AUTO CLOSE TASK IF ACCEPTED ----------
+  if (outcome === "accepted"){
+    closeTasksForClaim(org_id, packet.billed_id);
+  }
+
+  return packet;
+}
+
+// ---------- GET TASK FOR CLAIM ----------
+function getOpenTaskForClaim(org_id, billed_id){
+  const tasks = readJSON(FILES.agent_tasks, []);
+  return tasks.find(t =>
+    t.org_id === org_id &&
+    t.billed_id === billed_id &&
+    ["queued","open","in_progress"].includes(String(t.status || ""))
+  );
+}
+
+// ---------- MARK TASK BASED ON OUTCOME ----------
+function syncTaskWithOutcome(org_id, packet){
+  const task = getOpenTaskForClaim(org_id, packet.billed_id);
+  if (!task) return;
+
+  if (packet.status === PACKET_STATES.ACCEPTED){
+    task.status = "closed";
+  }
+
+  if (packet.status === PACKET_STATES.REJECTED){
+    task.status = "open";
+    task.next_action = "Review rejection and resubmit";
+  }
+
+  task.updated_at = nowISO();
+
+  const tasks = readJSON(FILES.agent_tasks, []);
+  const idx = tasks.findIndex(t => t.task_id === task.task_id);
+  if (idx >= 0){
+    tasks[idx] = task;
+    writeJSON(FILES.agent_tasks, tasks);
+  }
+}
+
+// ---------- API-READY HOOK (IMPORTANT) ----------
+function handleExternalSubmissionUpdate(org_id, packet_id, externalStatus){
+  // This will be used later by:
+  // - Availity webhook
+  // - Optum response polling
+  // - Clearinghouse callbacks
+
+  if (externalStatus === "accepted"){
+    const packet = updatePacketOutcome(org_id, packet_id, "accepted", "Auto-updated from payer");
+    syncTaskWithOutcome(org_id, packet);
+  }
+
+  if (externalStatus === "rejected"){
+    const packet = updatePacketOutcome(org_id, packet_id, "rejected", "Auto-updated from payer");
+    syncTaskWithOutcome(org_id, packet);
+  }
 }
 
 function applyPaymentToClaim(org_id, payment) {
@@ -13921,6 +14103,69 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, JSON.stringify({ ok: true, attachments: updated.content.attachments }), "application/json");
   }
 
+  // RE-GENERATE PACKET EXPORTS
+  if (pathname === "/packet/regenerate" && req.method === "POST"){
+    const body = await parseBody(req);
+    const data = JSON.parse(body || "{}");
+
+    const sess = getAuth(req);
+    if (!sess) return send(res, 401, "Unauthorized");
+
+    const packets = readJSON(PACKET_FILE, []);
+    const packet = packets.find(p => p.packet_id === data.packet_id && p.org_id === sess.org_id);
+    if (!packet) return send(res, 404, "Packet not found");
+
+    const updated = regeneratePacketArtifacts(packet);
+
+    return send(res, 200, JSON.stringify({
+      ok: true,
+      exports: updated.exports || {}
+    }), "application/json");
+  }
+
+  // DOWNLOAD ALL (generate bundle if needed, then redirect to bundle json)
+  // MVP safe version: bundle.json acts as all-in-one download reference
+  if (pathname === "/packet/download-all" && req.method === "GET"){
+    const sess = getAuth(req);
+    if (!sess) return send(res, 401, "Unauthorized");
+
+    const packet_id = String((parsed.query || {}).packet_id || "");
+    const packets = readJSON(PACKET_FILE, []);
+    const packet = packets.find(p => p.packet_id === packet_id && p.org_id === sess.org_id);
+    if (!packet) return send(res, 404, "Packet not found");
+
+    const exports = packet.exports || {};
+    if (!exports.bundle_json){
+      exportPacketBundle(packet);
+    }
+
+    return redirect(res, packet.exports.bundle_json || `/data/packet_exports/${packet.packet_id}.bundle.json`);
+  }
+
+  // UPDATE PACKET OUTCOME (MANUAL)
+  if (pathname === "/packet/update-outcome" && req.method === "POST"){
+    const body = await parseBody(req);
+    const data = JSON.parse(body || "{}");
+
+    const sess = getAuth(req);
+    if (!sess) return send(res, 401, "Unauthorized");
+
+    const packet = updatePacketOutcome(
+      sess.org_id,
+      data.packet_id,
+      data.outcome,
+      data.notes || "",
+      sess.user_id || "user"
+    );
+
+    syncTaskWithOutcome(sess.org_id, packet);
+
+    return send(res, 200, JSON.stringify({
+      ok: true,
+      status: packet.status
+    }), "application/json");
+  }
+
   // SUBMIT PACKET (with checklist + override)
   if (pathname === "/packet/submit" && req.method === "POST"){
     const body = await parseBody(req);
@@ -13967,6 +14212,7 @@ const server = http.createServer(async (req, res) => {
     const checklist = getPacketChecklist(p);
     const exports = p.exports || {};
     const submission = p.submission || {};
+    const statusMeta = getSubmissionStatusMeta(p);
 
     const html = `
     <div class="card">
@@ -13974,7 +14220,8 @@ const server = http.createServer(async (req, res) => {
 
       <div class="muted small">
         Route: ${safeStr(p.route || "-")} |
-        Status: <strong>${safeStr(p.status || "-")}</strong>
+        Status:
+        <strong style="color:${statusMeta.color};">${safeStr(statusMeta.label)}</strong>
       </div>
 
       <div style="margin-top:10px;">
@@ -13982,6 +14229,7 @@ const server = http.createServer(async (req, res) => {
         Channel: ${safeStr(submission.channel || "-")}<br/>
         External ID: ${safeStr(submission.external_id || "-")}<br/>
         ${submission.prepared_only ? `<span style="color:#f59e0b;">Prepared Only (Not Sent)</span>` : ""}
+        ${p.error ? `<br/><span style="color:#dc2626;">${safeStr(p.error)}</span>` : ""}
       </div>
 
       <hr style="margin:12px 0;"/>
@@ -14021,6 +14269,10 @@ const server = http.createServer(async (req, res) => {
               </a>
             ` : ""}
 
+            <a class="btn small secondary" href="/packet/download-all?packet_id=${encodeURIComponent(p.packet_id)}">
+              Download All
+            </a>
+
           </div>
         `
       }
@@ -14038,6 +14290,17 @@ const server = http.createServer(async (req, res) => {
         <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn" type="button" onclick="submitPacket()">Submit Packet</button>
           <button class="btn secondary" type="button" onclick="fetchEHR()">Pull EHR Docs</button>
+          <button class="btn secondary" type="button" onclick="regeneratePacket()">Re-generate Packet</button>
+        </div>
+
+        <hr style="margin:12px 0;"/>
+
+        <h4>Update Outcome</h4>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn small" type="button" onclick="updateOutcome('submitted')">Mark Submitted</button>
+          <button class="btn small" type="button" onclick="updateOutcome('accepted')">Mark Accepted</button>
+          <button class="btn small secondary" type="button" onclick="updateOutcome('rejected')">Mark Rejected</button>
         </div>
       </form>
     </div>
@@ -14073,11 +14336,41 @@ const server = http.createServer(async (req, res) => {
         alert("EHR docs pulled");
         location.reload();
       }
+
+      async function regeneratePacket(){
+        const packet_id = document.getElementById("packet_id").value;
+
+        const res = await fetch("/packet/regenerate", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ packet_id })
+        }).then(r=>r.json());
+
+        alert("Packet exports regenerated");
+        location.reload();
+      }
+
+      async function updateOutcome(outcome){
+        const packet_id = document.getElementById("packet_id").value;
+
+        const res = await fetch("/packet/update-outcome", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({
+            packet_id,
+            outcome
+          })
+        }).then(r=>r.json());
+
+        alert("Updated: " + outcome);
+        location.reload();
+      }
     </script>
     `;
 
     return send(res, 200, renderPage("Packet Workspace", html));
   }
+
 
   if (method === "POST" && pathname === "/edi/835") {
     try {
