@@ -4626,6 +4626,216 @@ async function runStructuredCopilot({ org_id, message }){
   return parsed;
 }
 
+
+// ==============================
+// AI ACTION ENGINE
+// additive only - does not replace existing copilot flow
+// ==============================
+
+function buildActionRecommendations(context, message){
+  const totals = context?.totals || {};
+  const metrics = context?.metrics || {};
+  const sampleClaims = context?.sample?.claims || [];
+  const filters = context?.filters || {};
+
+  const actions = [];
+
+  // denied claims
+  if (Number(metrics.denied || 0) > 0) {
+    const deniedTop = sampleClaims
+      .filter(c => String(c.status || "").toLowerCase() === "denied")
+      .slice(0, 5)
+      .map(c => ({
+        claim_id: c.claim_id || c.claim_number || c.billed_id || "",
+        claim_number: c.claim_number || c.claim_id || "",
+        billed_id: c.billed_id || "",
+        payer: c.payer || "",
+        amount: num(c.billed_amount || c.expected_amount || 0),
+        route: c.billed_id ? `/claim-detail?id=${encodeURIComponent(c.billed_id)}` : null,
+        action_route: c.billed_id ? `/actions?type=denials&claim=${encodeURIComponent(c.billed_id)}` : null
+      }))
+      .sort((a,b) => b.amount - a.amount);
+
+    actions.push({
+      type: "denials",
+      title: "Appeal denied claims",
+      priority: "high",
+      reason: `${metrics.denied} denied claim(s) need review.`,
+      next_step: "Review denial reasons and send highest-value claims to appeal.",
+      items: deniedTop
+    });
+  }
+
+  // underpaid claims
+  if (Number(metrics.underpaid || 0) > 0) {
+    const underpaidTop = sampleClaims
+      .filter(c => String(c.status || "").toLowerCase() === "underpaid")
+      .slice(0, 5)
+      .map(c => {
+        const expected = num(c.expected_amount || 0);
+        const paid = num(c.paid_amount || 0);
+        const gap = Math.max(0, expected - paid);
+        return {
+          claim_id: c.claim_id || c.claim_number || c.billed_id || "",
+          claim_number: c.claim_number || c.claim_id || "",
+          billed_id: c.billed_id || "",
+          payer: c.payer || "",
+          amount: gap,
+          route: c.billed_id ? `/claim-detail?id=${encodeURIComponent(c.billed_id)}` : null,
+          action_route: c.billed_id ? `/actions?type=underpayments&claim=${encodeURIComponent(c.billed_id)}` : null
+        };
+      })
+      .sort((a,b) => b.amount - a.amount);
+
+    actions.push({
+      type: "underpayments",
+      title: "Negotiate underpaid claims",
+      priority: "high",
+      reason: `${metrics.underpaid} underpaid claim(s) detected.`,
+      next_step: "Prioritize highest reimbursement gaps for negotiation or payer follow-up.",
+      items: underpaidTop
+    });
+  }
+
+  // no paid / low paid scenario
+  if (Number(totals.claims || 0) > 0 && Number(totals.paid || 0) === 0) {
+    actions.push({
+      type: "no_payments",
+      title: "Review payment posting or claim status",
+      priority: "high",
+      reason: "Claims were found but no matching payments were identified in the filtered dataset.",
+      next_step: "Check remits, payment matching, and unresolved claim lifecycle stages.",
+      items: []
+    });
+  }
+
+  // payer-specific recommendation
+  if (filters.payer) {
+    actions.push({
+      type: "payer_followup",
+      title: `Review ${filters.payer} performance`,
+      priority: "medium",
+      reason: `This question is focused on ${filters.payer}.`,
+      next_step: `Review payer-specific claims, denials, and payment trends for ${filters.payer}.`,
+      items: []
+    });
+  }
+
+  // default if nothing actionable
+  if (!actions.length) {
+    actions.push({
+      type: "monitor",
+      title: "No immediate action identified",
+      priority: "low",
+      reason: "No denied or underpaid claims were found in the filtered context.",
+      next_step: "Continue monitoring trends and review new exceptions as they appear.",
+      items: []
+    });
+  }
+
+  return actions;
+}
+
+function buildActionAwareStructuredPrompt(context, question, actions){
+  return `
+You are a healthcare revenue AI assistant.
+
+STRICT RULES:
+- ONLY use the provided data
+- DO NOT make up numbers
+- If data missing, say "No internal data available"
+- Recommendations must be grounded in the provided metrics and claims only
+
+RETURN JSON ONLY in this format:
+
+{
+  "summary": "short 1-2 sentence answer",
+  "metrics": {
+    "total_billed": number,
+    "total_paid": number,
+    "total_claims": number,
+    "denied_claims": number,
+    "underpaid_claims": number
+  },
+  "top_items": [
+    {
+      "label": "claim or payer",
+      "value": number
+    }
+  ],
+  "insights": [
+    "insight 1",
+    "insight 2"
+  ],
+  "actions": [
+    {
+      "title": "action title",
+      "priority": "high|medium|low",
+      "reason": "why this matters",
+      "next_step": "what to do next"
+    }
+  ]
+}
+
+DATA:
+${JSON.stringify(context)}
+
+PREBUILT ACTION CANDIDATES:
+${JSON.stringify(actions)}
+
+QUESTION:
+${question}
+`;
+}
+
+async function runStructuredCopilotWithActions({ org_id, message }){
+  const context = buildSmartCopilotContext(org_id, message);
+  const prebuiltActions = buildActionRecommendations(context, message);
+  const prompt = buildActionAwareStructuredPrompt(context, message, prebuiltActions);
+
+  const ai = await requestOpenAIChatCompletion({
+    messages: [
+      { role: "system", content: prompt }
+    ],
+    temperature: 0
+  });
+
+  let raw = ai?.choices?.[0]?.message?.content || "";
+
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      summary: parsed.summary || "No internal data available",
+      metrics: parsed.metrics || null,
+      top_items: Array.isArray(parsed.top_items) ? parsed.top_items : [],
+      insights: Array.isArray(parsed.insights) ? parsed.insights : [],
+      actions: Array.isArray(parsed.actions) && parsed.actions.length
+        ? parsed.actions
+        : prebuiltActions.map(a => ({
+            title: a.title,
+            priority: a.priority,
+            reason: a.reason,
+            next_step: a.next_step
+          })),
+      action_items: prebuiltActions
+    };
+  } catch {
+    return {
+      summary: raw || "No internal data available",
+      metrics: null,
+      top_items: [],
+      insights: [],
+      actions: prebuiltActions.map(a => ({
+        title: a.title,
+        priority: a.priority,
+        reason: a.reason,
+        next_step: a.next_step
+      })),
+      action_items: prebuiltActions
+    };
+  }
+}
+
 function enforceGroundedResponse(answer, context) {
   if (!answer) return "No data available in your system for this request.";
 
@@ -4691,6 +4901,60 @@ ${JSON.stringify(context)}
   return {
     answer,
     grounded: true,
+  };
+}
+
+// ==============================
+// LIGHTWEIGHT COPILOT MEMORY
+// ==============================
+
+function getCopilotMemory(org_id){
+  const mem = readJSON("./data/copilot_memory.json", {});
+  return mem[org_id] || {};
+}
+
+function saveCopilotMemory(org_id, data){
+  const mem = readJSON("./data/copilot_memory.json", {});
+  mem[org_id] = {
+    ...mem[org_id],
+    ...data,
+    updated_at: nowISO()
+  };
+  writeJSON("./data/copilot_memory.json", mem);
+}
+
+// ---- Extract context from question ----
+function extractContextFromMessage(message){
+  const text = String(message || "").toLowerCase();
+
+  let payer = null;
+
+  const knownPayers = ["medicare","aetna","cigna","uhc","united","bcbs","blue cross"];
+  for (const p of knownPayers){
+    if (text.includes(p)){
+      payer = p;
+      break;
+    }
+  }
+
+  return { payer };
+}
+
+// ---- Apply memory to query ----
+function applyMemoryToMessage(org_id, message){
+  const memory = getCopilotMemory(org_id);
+  const extracted = extractContextFromMessage(message);
+
+  let enhancedMessage = message;
+
+  // If no payer mentioned but memory has one → inject it
+  if (!extracted.payer && memory.payer){
+    enhancedMessage = `${message} (for ${memory.payer})`;
+  }
+
+  return {
+    message: enhancedMessage,
+    newContext: extracted
   };
 }
 
@@ -20658,7 +20922,15 @@ if (pathname === "/ai/chat" && req.method === "POST") {
   if (!sess) return send(res, 401, JSON.stringify({ error:"Unauthorized" }), "application/json");
 
   const body = JSON.parse(await parseBody(req) || "{}");
-  const message = String(body.message || "").trim();
+  const rawMessage = String(body.message || "").trim();
+
+  // 🔥 APPLY MEMORY
+  const { message, newContext } = applyMemoryToMessage(sess.org_id, rawMessage);
+
+  // 🔥 SAVE MEMORY
+  if (newContext.payer){
+    saveCopilotMemory(sess.org_id, newContext);
+  }
 
   if (!message) {
     return send(res, 400, JSON.stringify({ error:"Message required" }), "application/json");
@@ -20676,7 +20948,7 @@ if (pathname === "/ai/chat" && req.method === "POST") {
   // =========================
   // 🔥 STEP 1: STRUCTURED + GROUNDED ANSWER
   // =========================
-  const structured = await runStructuredCopilot({
+  const structured = await runStructuredCopilotWithActions({
     org_id: sess.org_id,
     message
   });
@@ -20695,6 +20967,8 @@ if (pathname === "/ai/chat" && req.method === "POST") {
     return send(res, 200, JSON.stringify({
       answer: shortAnswer,
       metrics: structured.metrics || null,
+      insights: structured.insights || [],
+      actions: structured.actions || [],
       used: usageCheck.used,
       limit: usageCheck.limit,
       grounded: true
