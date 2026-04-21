@@ -535,6 +535,98 @@ function attemptAutoMatch(org_id, payment) {
   };
 }
 
+// ==============================
+// ACTION CENTER TASK ENGINE
+// ==============================
+function getTasksForOrg(org_id) {
+  return readJSON(FILES.agent_tasks, []).filter(t => t.org_id === org_id);
+}
+
+function saveTasks(tasks) {
+  writeJSON(FILES.agent_tasks, tasks);
+}
+
+// prevent duplicates (same claim + same task type still open)
+function findOpenTask(tasks, org_id, billed_id, type) {
+  return tasks.find(t =>
+    t.org_id === org_id &&
+    t.billed_id === billed_id &&
+    t.type === type &&
+    ["queued", "open", "in_progress"].includes(String(t.status || ""))
+  );
+}
+
+function createActionTask(org_id, claim, type, meta = {}) {
+  const tasks = getTasksForOrg(org_id);
+
+  const exists = findOpenTask(tasks, org_id, claim.billed_id, type);
+  if (exists) return exists; // no duplicates
+
+  const task = {
+    task_id: uuid(),
+    org_id,
+    billed_id: claim.billed_id,
+    claim_id: claim.claim_id || claim.claim_number || "",
+    payer: claim.payer || "",
+    type, // "appeal" | "negotiation" | "follow_up"
+    status: "queued",
+    priority: Number(claim.__risk || claim.risk_score || 50),
+    at_risk_amount: Number(claim.at_risk_amount || 0),
+    next_action: meta.next_action || "",
+    source: meta.source || "system_auto",
+    created_at: nowISO(),
+    updated_at: nowISO()
+  };
+
+  const allTasks = readJSON(FILES.agent_tasks, []);
+  allTasks.push(task);
+  saveTasks(allTasks);
+  return task;
+}
+
+function autoCreateTasksFromStatus(org_id, claim) {
+  const status = String(claim.status || "").toLowerCase();
+
+  if (status === "underpaid") {
+    createActionTask(org_id, claim, "negotiation", {
+      next_action: "Initiate negotiation for underpayment"
+    });
+  }
+
+  if (status === "denied") {
+    createActionTask(org_id, claim, "appeal", {
+      next_action: "Prepare and submit appeal"
+    });
+  }
+
+  if (status === "waiting payment") {
+    const days = claim.dos
+      ? Math.floor((Date.now() - new Date(claim.dos).getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
+
+    if (days > 30) {
+      createActionTask(org_id, claim, "follow_up", {
+        next_action: "Follow up with payer (no payment >30 days)"
+      });
+    }
+  }
+}
+
+function closeTasksForClaim(org_id, billed_id) {
+  const tasks = readJSON(FILES.agent_tasks, []);
+  const updated = tasks.map(t => {
+    if (t.org_id === org_id && t.billed_id === billed_id) {
+      return {
+        ...t,
+        status: "closed",
+        updated_at: nowISO()
+      };
+    }
+    return t;
+  });
+  saveTasks(updated);
+}
+
 function applyPaymentToClaim(org_id, payment) {
   const canonical = {
     claim_id: payment.claim_id || payment.claim_number || "",
@@ -606,6 +698,11 @@ function applyPaymentToClaim(org_id, payment) {
   claim.payer = canonical.payer || claim.payer || "";
   claim.paid_amount = paid;
   claim.status = newStatus;
+  // AUTO CREATE TASKS
+  autoCreateTasksFromStatus(org_id, claim);
+  if (newStatus === "Paid") {
+    closeTasksForClaim(org_id, claim.billed_id);
+  }
   claim.last_payment_sync_at = nowISO();
   claim.updated_at = nowISO();
   claim.payment_source = canonical.source;
