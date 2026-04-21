@@ -12631,6 +12631,34 @@ const server = http.createServer(async (req, res) => {
   // health
   if (method === "GET" && pathname === "/health") return send(res, 200, "ok", "text/plain");
 
+  if (method === "POST" && pathname === "/edi/835") {
+    try {
+      let body = "";
+      req.on("data", chunk => body += chunk);
+      await new Promise(resolve => req.on("end", resolve));
+
+      const apiKey = req.headers["x-api-key"] || "";
+      const org = readJSON(FILES.orgs, []).find(o => String(o.integration_api_key || "") === String(apiKey));
+
+      if (!org) {
+        return send(res, 401, "Invalid API key");
+      }
+
+      const summary = await IntegrationAdapters.clearinghouse.ingest835(org.org_id, body);
+      return send(res, 200, JSON.stringify({
+        success: true,
+        parsed: summary.parsed_count,
+        matched: summary.matched_count,
+        unmatched: summary.unmatched_count
+      }), "application/json");
+    } catch (e) {
+      return send(res, 500, JSON.stringify({
+        success: false,
+        error: "835 ingestion failed"
+      }), "application/json");
+    }
+  }
+
   if (method === "POST" && (pathname === "/stripe/webhook" || pathname === "/stripe-webhook")) {
     const stripe = getStripeClient();
     if (!stripe || !STRIPE_WEBHOOK_SECRET) {
@@ -16072,6 +16100,13 @@ const server = http.createServer(async (req, res) => {
         const params = new URLSearchParams(body);
 
         const settings = {
+          free_trial: {
+            ai_generations: Number(params.get("free_trial_ai") || 10),
+            claims_limit: Number(params.get("free_trial_claims") || 25),
+            payment_limits: Number(params.get("free_trial_payments") || 2000),
+            features: collectPlanFeatures(params, "free_trial"),
+            integrations_enabled: readPlanBool(params, "free_trial_integrations_enabled")
+          },
           starter: {
             ai_generations: Number(params.get("starter_ai") || 20),
             claims_limit: Number(params.get("starter_claims") || 50),
@@ -16110,6 +16145,7 @@ const server = http.createServer(async (req, res) => {
 
     if (method === "GET" && pathname === "/admin/plan-controls") {
       const planSettings = normalizePlanFeatureSettings(getPlanSettings());
+      const freeTrialConfig = { ...(planSettings.free_trial || {}) };
       const starterConfig = { ...getPlanConfig("starter"), ...(planSettings.starter || {}) };
       const growthConfig = { ...getPlanConfig("growth"), ...(planSettings.growth || {}) };
       const proConfig = { ...getPlanConfig("pro"), ...(planSettings.pro || {}) };
@@ -16176,6 +16212,7 @@ const server = http.createServer(async (req, res) => {
         <div class="muted">Adjust limits, feature access, and public pricing by plan.</div>
 
         <form method="POST" action="/admin/plan-controls/save">
+          ${renderPlanControls("free_trial", "Free Trial", freeTrialConfig, { ai_generations: 10, claims_limit: 25, payment_limits: 2000 })}
           ${renderPlanControls("starter", "Starter", starterConfig, { ai_generations: 20, claims_limit: 50, payment_limits: 10 })}
           ${renderPlanControls("growth", "Growth", growthConfig, { ai_generations: 100, claims_limit: 250, payment_limits: 50 })}
           ${renderPlanControls("pro", "Pro", proConfig, { ai_generations: 500, claims_limit: 1000, payment_limits: 150 })}
@@ -32303,10 +32340,24 @@ function renderTemplateEditor(org, user){
 
         const renderSyncMeta = (row) => {
           if (!row) return `<div class="muted small">No sync history yet.</div>`;
+          const lastSync = row.last_sync || "";
+          const lastError = row.last_error || "";
+          let health = "Healthy";
+          let color = "#16a34a";
+
+          if (lastError) {
+            health = "Error";
+            color = "#dc2626";
+          } else if (!lastSync) {
+            health = "Not Synced";
+            color = "#6b7280";
+          }
+
           return `
             <div class="muted small" style="margin-top:6px;">
-              Last Sync: ${safeStr(row.last_sync || "-")}<br/>
-              Last Error: ${safeStr(row.last_error || "None")}
+              Status: <span style="color:${color};font-weight:600;">${health}</span><br/>
+              Last Sync: ${safeStr(lastSync || "-")}<br/>
+              Last Error: ${safeStr(lastError || "None")}
             </div>
           `;
         };
