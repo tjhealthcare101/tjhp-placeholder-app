@@ -323,15 +323,22 @@ function saveOrgIntegrations(data) {
 function upsertOrgIntegration(org_id, integration) {
   const doc = getOrgIntegrations(org_id);
   const list = Array.isArray(doc.integrations) ? doc.integrations : [];
-  const idx = list.findIndex(
-    x => String(x.type || "") === String(integration.type || "") &&
-         String(x.provider || "") === String(integration.provider || "")
+  const integrationKey = String(
+    integration.integration_key ||
+    `${integration.type}:${integration.provider}:${integration.display_name || ""}`
   );
+  const idx = list.findIndex(x =>
+    String(x.integration_key || `${x.type}:${x.provider}:${x.display_name || ""}`) === integrationKey
+  );
+  const payload = {
+    integration_key: integrationKey,
+    ...integration
+  };
 
   if (idx >= 0) {
     list[idx] = {
       ...list[idx],
-      ...integration,
+      ...payload,
       updated_at: nowISO()
     };
   } else {
@@ -339,7 +346,7 @@ function upsertOrgIntegration(org_id, integration) {
       integration_id: uuid(),
       created_at: nowISO(),
       updated_at: nowISO(),
-      ...integration
+      ...payload
     });
   }
 
@@ -348,10 +355,10 @@ function upsertOrgIntegration(org_id, integration) {
   return doc;
 }
 
-function disconnectOrgIntegration(org_id, type, provider) {
+function disconnectOrgIntegration(org_id, integration_key) {
   const doc = getOrgIntegrations(org_id);
   doc.integrations = (doc.integrations || []).map(i => {
-    if (String(i.type || "") === String(type || "") && String(i.provider || "") === String(provider || "")) {
+    if (String(i.integration_key || "") === String(integration_key || "")) {
       return {
         ...i,
         status: "disconnected",
@@ -362,6 +369,18 @@ function disconnectOrgIntegration(org_id, type, provider) {
   });
   saveOrgIntegrations(doc);
   return doc;
+}
+
+function getOrgPortalIntegrations(org_id) {
+  return (getOrgIntegrations(org_id).integrations || []).filter(i => String(i.type || "") === "payer_portal");
+}
+
+function getOrgClearinghouseIntegrations(org_id) {
+  return (getOrgIntegrations(org_id).integrations || []).filter(i => String(i.type || "") === "clearinghouse");
+}
+
+function getOrgEhrIntegrations(org_id) {
+  return (getOrgIntegrations(org_id).integrations || []).filter(i => String(i.type || "") === "ehr");
 }
 
 function mapToCanonicalClaim(raw) {
@@ -1138,6 +1157,75 @@ function getPlanSettings() {
 
 function savePlanSettings(settings) {
   writeJSON(FILES.plan_settings, settings || {});
+}
+
+function getPlanFeatureAccess(planName, org_id = "") {
+  const allPlanSettings = getPlanSettings() || {};
+  const normalizedPlan = String(planName || "").toLowerCase();
+
+  const defaultMatrix = {
+    starter: { integrations_enabled: false },
+    growth: { integrations_enabled: false },
+    pro: { integrations_enabled: false },
+    enterprise: { integrations_enabled: true }
+  };
+
+  const planSettings = allPlanSettings[normalizedPlan] || {};
+  const merged = {
+    ...(defaultMatrix[normalizedPlan] || { integrations_enabled: false }),
+    ...planSettings
+  };
+
+  const orgSettings = org_id ? getOrgSettings(org_id) : {};
+  if (orgSettings && typeof orgSettings.integrations_override === "boolean") {
+    merged.integrations_enabled = orgSettings.integrations_override;
+  }
+
+  return merged;
+}
+
+function orgPlanKey(org) {
+  const sub = getSub(org.org_id);
+  if (sub && sub.status === "active") {
+    return String(sub.plan || org.plan || "starter").toLowerCase();
+  }
+  if (org && org.plan) return String(org.plan).toLowerCase();
+  return "starter";
+}
+
+function isIntegrationsEnabledForOrg(org) {
+  const planKey = orgPlanKey(org);
+  const access = getPlanFeatureAccess(planKey, org.org_id);
+  return !!access.integrations_enabled;
+}
+
+function normalizePlanFeatureSettings(settings) {
+  const s = settings || {};
+  return {
+    ...s,
+    starter: {
+      ...(s.starter || {}),
+      integrations_enabled: !!(s.starter && s.starter.integrations_enabled)
+    },
+    growth: {
+      ...(s.growth || {}),
+      integrations_enabled: !!(s.growth && s.growth.integrations_enabled)
+    },
+    pro: {
+      ...(s.pro || {}),
+      integrations_enabled: !!(s.pro && s.pro.integrations_enabled)
+    },
+    enterprise: {
+      ...(s.enterprise || {}),
+      integrations_enabled: s.enterprise && typeof s.enterprise.integrations_enabled === "boolean"
+        ? !!s.enterprise.integrations_enabled
+        : true
+    }
+  };
+}
+
+function readPlanBool(payload, key) {
+  return payload.get(key) === "on";
 }
 
 function getJobs() {
@@ -15988,40 +16076,51 @@ const server = http.createServer(async (req, res) => {
             ai_generations: Number(params.get("starter_ai") || 20),
             claims_limit: Number(params.get("starter_claims") || 50),
             payment_limits: Number(params.get("starter_payments") || 10),
-            features: collectPlanFeatures(params, "starter")
+            features: collectPlanFeatures(params, "starter"),
+            integrations_enabled: readPlanBool(params, "starter_integrations_enabled")
           },
           growth: {
             ai_generations: Number(params.get("growth_ai") || 100),
             claims_limit: Number(params.get("growth_claims") || 250),
             payment_limits: Number(params.get("growth_payments") || 50),
-            features: collectPlanFeatures(params, "growth")
+            features: collectPlanFeatures(params, "growth"),
+            integrations_enabled: readPlanBool(params, "growth_integrations_enabled")
           },
           pro: {
             ai_generations: Number(params.get("pro_ai") || 500),
             claims_limit: Number(params.get("pro_claims") || 1000),
             payment_limits: Number(params.get("pro_payments") || 150),
-            features: collectPlanFeatures(params, "pro")
+            features: collectPlanFeatures(params, "pro"),
+            integrations_enabled: readPlanBool(params, "pro_integrations_enabled")
           },
           enterprise: {
             ai_generations: Number(params.get("enterprise_ai") || 999999),
             claims_limit: Number(params.get("enterprise_claims") || 999999),
             payment_limits: Number(params.get("enterprise_payments") || 999999),
-            features: collectPlanFeatures(params, "enterprise")
+            features: collectPlanFeatures(params, "enterprise"),
+            integrations_enabled: readPlanBool(params, "enterprise_integrations_enabled")
           }
         };
 
-        savePlanSettings(settings);
+        savePlanSettings(normalizePlanFeatureSettings(settings));
         return redirect(res, "/admin/plan-controls");
       });
       return;
     }
 
     if (method === "GET" && pathname === "/admin/plan-controls") {
-      const starterConfig = getPlanConfig("starter");
-      const growthConfig = getPlanConfig("growth");
-      const proConfig = getPlanConfig("pro");
-      const enterpriseConfig = getPlanConfig("enterprise");
+      const planSettings = normalizePlanFeatureSettings(getPlanSettings());
+      const starterConfig = { ...getPlanConfig("starter"), ...(planSettings.starter || {}) };
+      const growthConfig = { ...getPlanConfig("growth"), ...(planSettings.growth || {}) };
+      const proConfig = { ...getPlanConfig("pro"), ...(planSettings.pro || {}) };
+      const enterpriseConfig = { ...getPlanConfig("enterprise"), ...(planSettings.enterprise || {}) };
       const publicPlans = getPlanConfigData();
+      const integrationsCheckbox = (planKey, current) => `
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" name="${planKey}_integrations_enabled" ${current ? "checked" : ""} />
+          Enable Integrations
+        </label>
+      `;
       const renderPlanControls = (planKey, planLabel, config, defaults) => `
         <section class="card" style="padding:16px;margin:14px 0;display:grid;gap:14px;">
           <div>
@@ -16061,6 +16160,9 @@ const server = http.createServer(async (req, res) => {
                 <div>
                   <label>Payment Limits</label>
                   <input name="${planKey}_payments" value="${Number(config.payment_limits || defaults.payment_limits)}" />
+                </div>
+                <div>
+                  ${integrationsCheckbox(planKey, !!config.integrations_enabled)}
                 </div>
               </div>
             </div>
@@ -18012,6 +18114,24 @@ ${(content.demo.steps || []).map(s =>
       return send(res, 200, html);
     }
 
+    if (method === "POST" && pathname === "/admin/org/set-integrations-override") {
+      const body = await parseBody(req);
+      const payload = new URLSearchParams(body);
+
+      const target_org_id = String(payload.get("org_id") || "");
+      const enabled = payload.get("integrations_override") === "on";
+
+      if (!target_org_id) {
+        return redirect(res, "/admin/orgs");
+      }
+
+      const settings = getOrgSettings(target_org_id);
+      settings.integrations_override = enabled;
+      saveOrgSettings(target_org_id, settings);
+
+      return redirect(res, `/admin/org?org_id=${encodeURIComponent(target_org_id)}`);
+    }
+
     if (method === "GET" && pathname === "/admin/org") {
       const org_id = parsed.query.org_id || "";
       const org = getOrg(org_id);
@@ -18022,6 +18142,7 @@ ${(content.demo.steps || []).map(s =>
       const sub = getSub(org_id);
       const usage = getUsage(org_id);
       const a = computeAnalytics(org_id);
+      const orgIntegrationOverride = !!getOrgSettings(org.org_id).integrations_override;
 
       const plan = (sub && sub.status==="active") ? "Monthly (active)" : (pilot.status==="active" ? "Pilot (active)" : "Expired");
 
@@ -18097,6 +18218,18 @@ ${(content.demo.steps || []).map(s =>
     <button class="btn secondary" name="action" value="extend_trial">Extend Trial</button>
   </div>
 </form>
+
+            <div class="card" style="margin-top:16px;">
+              <h3>Integration Access Override</h3>
+              <form method="POST" action="/admin/org/set-integrations-override">
+                <input type="hidden" name="org_id" value="${safeStr(org.org_id)}" />
+                <label style="display:flex;align-items:center;gap:8px;margin:8px 0;">
+                  <input type="checkbox" name="integrations_override" ${orgIntegrationOverride ? "checked" : ""} />
+                  Allow this organization to access Integrations regardless of plan
+                </label>
+                <button class="btn" type="submit">Save Override</button>
+              </form>
+            </div>
           </div>
 
           <div class="col">
@@ -31610,12 +31743,20 @@ function renderTemplateEditor(org, user){
   }
 
   if (method === "POST" && pathname === "/account/integrations/connect") {
+    if (!isIntegrationsEnabledForOrg(org)) {
+      return redirect(res, "/account?tab=integrations&err=Integrations are only available on Enterprise or by admin override");
+    }
+
     const body = await parseBody(req);
     const payload = new URLSearchParams(body);
 
     const type = String(payload.get("type") || "").trim();
     const provider = String(payload.get("provider") || "").trim();
     const display_name = String(payload.get("display_name") || provider || type || "").trim();
+    const integration_key = String(
+      payload.get("integration_key") ||
+      `${type}:${provider}:${display_name}`
+    ).trim();
 
     if (!type || !provider) {
       return redirect(res, "/account?tab=integrations&err=Missing integration type or provider");
@@ -31626,10 +31767,13 @@ function renderTemplateEditor(org, user){
       password: String(payload.get("password") || "").trim(),
       api_key: String(payload.get("api_key") || "").trim(),
       token: String(payload.get("token") || "").trim(),
-      portal_url: String(payload.get("portal_url") || "").trim()
+      portal_url: String(payload.get("portal_url") || "").trim(),
+      client_id: String(payload.get("client_id") || "").trim(),
+      client_secret: String(payload.get("client_secret") || "").trim()
     };
 
     upsertOrgIntegration(org.org_id, {
+      integration_key,
       type,
       provider,
       display_name,
@@ -31649,11 +31793,12 @@ function renderTemplateEditor(org, user){
     const body = await parseBody(req);
     const payload = new URLSearchParams(body);
 
-    disconnectOrgIntegration(
-      org.org_id,
-      String(payload.get("type") || "").trim(),
-      String(payload.get("provider") || "").trim()
-    );
+    const integration_key = String(payload.get("integration_key") || "").trim();
+    if (!integration_key) {
+      return redirect(res, "/account?tab=integrations&err=Missing integration key");
+    }
+
+    disconnectOrgIntegration(org.org_id, integration_key);
 
     return redirect(res, "/account?tab=integrations&saved=1");
   }
@@ -31751,14 +31896,22 @@ function renderTemplateEditor(org, user){
     const savedBanner = (tab === "org" && String(parsed.query.saved || "") === "1") ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;">Saved ✓ Organization Settings updated.</div>` : "";
     const errBanner = parsed.query.err ? `<div class="alert">${safeStr(parsed.query.err)}</div>` : "";
 
+    const planKey = orgPlanKey(org);
+    const planAccess = getPlanFeatureAccess(planKey, org.org_id);
+    const integrationsUnlocked = !!planAccess.integrations_enabled;
+
     const tabBtn = (id, label, tip="") => `<a class="btn ${tab===id?"":"secondary"}" href="/account?tab=${encodeURIComponent(id)}">${safeStr(label)} ${tip ? infoIcon(tip) : ""}</a>`;
+    const lockedTabBtn = (id, label, tip = "") =>
+      `<a class="btn secondary" href="/account?tab=${encodeURIComponent(id)}">${safeStr(label)} ${tip ? infoIcon(tip) : ""}</a>`;
     const tabs = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
         ${tabBtn("profile","Profile")}
         ${tabBtn("org","Organization Settings","Canonical source for identity, defaults, and workflow rules.")}
         ${tabBtn("billing","Plan & Billing")}
         ${tabBtn("help","Help")}
-        ${tabBtn("integrations","Integrations","Connect clearinghouse, EHR, and payer portals.")}
+        ${integrationsUnlocked
+          ? tabBtn("integrations","Integrations","Connect clearinghouse, EHR, and payer portals.")
+          : lockedTabBtn("integrations","Integrations","Enterprise feature unless admin override is enabled.")}
         ${tabBtn("security","Security","Account password and security mode placeholders.")}
         ${tabBtn("targets","Targets","Configure executive revenue performance targets.")}
       </div>
@@ -32117,6 +32270,18 @@ function renderTemplateEditor(org, user){
         `;
       }
       if (tab === "integrations") {
+        if (!integrationsUnlocked) {
+          return `
+            <div class="card">
+              <h3>Integrations</h3>
+              <div class="muted small" style="margin-top:8px;margin-bottom:12px;">
+                Integrations are available on the Enterprise plan or by admin override.
+              </div>
+              <a class="btn" href="/account?tab=billing#upgrade-options">Upgrade Plan</a>
+            </div>
+          `;
+        }
+
         const savedNotice = String(parsed.query.saved || "") === "1"
           ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;">Integration settings updated.</div>`
           : "";
@@ -32128,12 +32293,6 @@ function renderTemplateEditor(org, user){
         const errNotice = parsed.query.err
           ? `<div class="alert">${safeStr(parsed.query.err)}</div>`
           : "";
-
-        const integrationDoc = getOrgIntegrations(org.org_id);
-        const integrations = Array.isArray(integrationDoc.integrations) ? integrationDoc.integrations : [];
-
-        const findIntegration = (type, provider) =>
-          integrations.find(i => String(i.type || "") === type && String(i.provider || "") === provider);
 
         const renderStatus = (row) => {
           if (!row) return `<span class="badge">Not Connected</span>`;
@@ -32152,93 +32311,109 @@ function renderTemplateEditor(org, user){
           `;
         };
 
-        const clearinghouse = findIntegration("clearinghouse", "generic");
-        const ehr = findIntegration("ehr", "generic");
-        const portal = findIntegration("payer_portal", "generic");
-
-        const allClaims = readJSON(FILES.billed, [])
-          .filter(c => c.org_id === org.org_id)
-          .slice(0, 200);
+        const clearinghouses = getOrgClearinghouseIntegrations(org.org_id);
+        const ehrs = getOrgEhrIntegrations(org.org_id);
+        const portals = getOrgPortalIntegrations(org.org_id);
 
         const unmatchedPayments = readJSON(FILES.unmatched_payments, [])
           .filter(p => p.org_id === org.org_id && p.status === "unmatched")
           .slice(-10);
 
+        const allClaims = readJSON(FILES.billed, [])
+          .filter(c => c.org_id === org.org_id)
+          .slice(0, 200);
+
         const unmatchedUI = `
           <div class="card" style="margin-top:16px;">
             <h4>Unmatched Payments</h4>
-
             ${
               unmatchedPayments.length === 0
                 ? `<div class="muted small">No unmatched payments.</div>`
                 : unmatchedPayments.map(p => {
+                    const bestMatch = findBestClaimMatch(org.org_id, p);
+                    const bestClaim = bestMatch?.claim;
+                    const confidence = bestMatch?.score || p.auto_match_score || 0;
 
-                  const bestMatch = findBestClaimMatch(org.org_id, p);
-                  const bestClaim = bestMatch?.claim;
-                  const confidence = bestMatch?.score || p.auto_match_score || 0;
+                    const confidenceLabel =
+                      confidence >= 80 ? "High Confidence" :
+                      confidence >= 50 ? "Medium Confidence" :
+                      "Low Confidence";
 
-                  const confidenceLabel =
-                    confidence >= 80 ? "High Confidence" :
-                    confidence >= 50 ? "Medium Confidence" :
-                    "Low Confidence";
+                    const confidenceColor =
+                      confidence >= 80 ? "#16a34a" :
+                      confidence >= 50 ? "#f59e0b" :
+                      "#dc2626";
 
-                  const confidenceColor =
-                    confidence >= 80 ? "#16a34a" :
-                    confidence >= 50 ? "#f59e0b" :
-                    "#dc2626";
-
-                  return `
-                  <div style="padding:10px 0;border-bottom:1px solid #eee;">
-
-                    <div>
-                      <strong>Claim ID:</strong> ${safeStr(p.claim_id)}<br/>
-                      <span class="muted small">
-                        ${formatMoneyUI(p.paid_amount)} from ${safeStr(p.payer)}
-                      </span>
-                    </div>
-
-                    ${
-                      bestClaim ? `
-                      <div style="margin-top:6px;font-size:12px;color:${confidenceColor};">
-                        ${confidence >= 90 ? `<span style="color:#16a34a;">Auto-match eligible</span><br/>` : ""}
-                        Suggested: ${safeStr(bestClaim.claim_number || bestClaim.claim_id)}
-                        (${confidence}% • ${confidenceLabel})
-                      </div>
-                      ` : ""
-                    }
-
-                    <form method="POST" action="/account/integrations/match-payment" style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
-
-                      <input type="hidden" name="unmatched_id" value="${safeStr(p.unmatched_id)}" />
-
-                      <select name="claim_id" required style="min-width:180px;">
-                        <option value="">Select Claim</option>
+                    return `
+                      <div style="padding:10px 0;border-bottom:1px solid #eee;">
+                        <div>
+                          <strong>Claim ID:</strong> ${safeStr(p.claim_id)}<br/>
+                          <span class="muted small">
+                            ${formatMoneyUI(p.paid_amount)} from ${safeStr(p.payer)}
+                          </span>
+                        </div>
 
                         ${
-                          allClaims.map(c => {
-                            const selected = bestClaim &&
-                              String(c.claim_id || c.claim_number || c.billed_id) ===
-                              String(bestClaim.claim_id || bestClaim.claim_number || bestClaim.billed_id)
-                              ? "selected"
-                              : "";
-
-                            return `
-                              <option value="${safeStr(c.claim_id || c.claim_number || c.billed_id)}" ${selected}>
-                                ${safeStr(c.claim_number || c.claim_id)} — ${formatMoneyUI(c.billed_amount)}
-                              </option>
-                            `;
-                          }).join("")
+                          bestClaim ? `
+                            <div style="margin-top:6px;font-size:12px;color:${confidenceColor};">
+                              ${confidence >= 90 ? `<span style="color:#16a34a;">Auto-match eligible</span><br/>` : ""}
+                              Suggested: ${safeStr(bestClaim.claim_number || bestClaim.claim_id)}
+                              (${confidence}% • ${confidenceLabel})
+                            </div>
+                          ` : ""
                         }
 
-                      </select>
+                        <form method="POST" action="/account/integrations/match-payment" style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+                          <input type="hidden" name="unmatched_id" value="${safeStr(p.unmatched_id)}" />
+                          <select name="claim_id" required style="min-width:180px;">
+                            <option value="">Select Claim</option>
+                            ${
+                              allClaims.map(c => {
+                                const selected = bestClaim &&
+                                  String(c.claim_id || c.claim_number || c.billed_id) ===
+                                  String(bestClaim.claim_id || bestClaim.claim_number || bestClaim.billed_id)
+                                  ? "selected"
+                                  : "";
 
-                      <button class="btn small" type="submit">Match</button>
+                                return `
+                                  <option value="${safeStr(c.claim_id || c.claim_number || c.billed_id)}" ${selected}>
+                                    ${safeStr(c.claim_number || c.claim_id)} — ${formatMoneyUI(c.billed_amount)}
+                                  </option>
+                                `;
+                              }).join("")
+                            }
+                          </select>
+                          <button class="btn small" type="submit">Match</button>
+                        </form>
+                      </div>
+                    `;
+                  }).join("")
+            }
+          </div>
+        `;
 
-                    </form>
-
-                  </div>
-                  `;
-                }).join("")
+        const renderIntegrationList = (rows, label) => `
+          <div style="margin-top:12px;">
+            <strong>${safeStr(label)}</strong>
+            ${
+              rows.length === 0
+                ? `<div class="muted small" style="margin-top:6px;">None configured.</div>`
+                : rows.map(row => `
+                    <div style="margin-top:8px;padding:10px;border:1px solid #e5e7eb;border-radius:10px;">
+                      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                        <div>
+                          <strong>${safeStr(row.display_name || row.provider || row.type)}</strong><br/>
+                          <div class="muted small">Provider: ${safeStr(row.provider || "-")}</div>
+                          ${renderSyncMeta(row)}
+                        </div>
+                        <div>${renderStatus(row)}</div>
+                      </div>
+                      <form method="POST" action="/account/integrations/disconnect" style="margin-top:10px;">
+                        <input type="hidden" name="integration_key" value="${safeStr(row.integration_key || "")}" />
+                        <button class="btn secondary" type="submit">Disconnect</button>
+                      </form>
+                    </div>
+                  `).join("")
             }
           </div>
         `;
@@ -32259,26 +32434,38 @@ function renderTemplateEditor(org, user){
             <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
               <div>
                 <strong>Clearinghouse</strong><br/>
-                <div class="muted small">Recommended first. Supports 835 payments and 277 claim status imports.</div>
-                ${renderSyncMeta(clearinghouse)}
+                <div class="muted small">Configure one or more clearinghouse connections. Manual 835 upload can still be used.</div>
               </div>
-              <div>${renderStatus(clearinghouse)}</div>
             </div>
 
             <form method="POST" action="/account/integrations/connect" style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
               <input type="hidden" name="type" value="clearinghouse" />
-              <input type="hidden" name="provider" value="generic" />
-              <input type="hidden" name="display_name" value="Clearinghouse" />
               <input type="hidden" name="mode" value="manual" />
 
               <div>
-                <label>Username</label>
-                <input name="username" placeholder="Optional username" />
+                <label>Provider</label>
+                <select name="provider" required>
+                  <option value="">Select provider</option>
+                  <option value="availity">Availity</option>
+                  <option value="office_ally">Office Ally</option>
+                  <option value="waystar">Waystar</option>
+                  <option value="other_manual">Other / Manual</option>
+                </select>
               </div>
 
               <div>
-                <label>Password</label>
-                <input type="password" name="password" placeholder="Optional password" />
+                <label>Display Name</label>
+                <input name="display_name" placeholder="Example: Availity Primary" />
+              </div>
+
+              <div>
+                <label>Client ID / Username</label>
+                <input name="client_id" placeholder="Client ID or username" />
+              </div>
+
+              <div>
+                <label>Client Secret / Password</label>
+                <input type="password" name="client_secret" placeholder="Client secret or password" />
               </div>
 
               <div>
@@ -32287,7 +32474,7 @@ function renderTemplateEditor(org, user){
               </div>
 
               <div style="display:flex;align-items:flex-end;gap:8px;">
-                <button class="btn" type="submit">Connect Clearinghouse</button>
+                <button class="btn" type="submit">Save Clearinghouse</button>
               </div>
             </form>
 
@@ -32299,36 +32486,34 @@ function renderTemplateEditor(org, user){
               <button class="btn secondary" type="submit">Process 835</button>
             </form>
 
+            ${renderIntegrationList(clearinghouses, "Saved Clearinghouse Connections")}
             ${unmatchedUI}
-
-            ${
-              clearinghouse
-                ? `
-                  <form method="POST" action="/account/integrations/disconnect" style="margin-top:12px;">
-                    <input type="hidden" name="type" value="clearinghouse" />
-                    <input type="hidden" name="provider" value="generic" />
-                    <button class="btn secondary" type="submit">Disconnect</button>
-                  </form>
-                `
-                : ""
-            }
           </div>
 
           <div class="card" style="margin-bottom:16px;">
-            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
-              <div>
-                <strong>EHR / Practice Management</strong><br/>
-                <div class="muted small">Foundation for future API-based claim and encounter sync.</div>
-                ${renderSyncMeta(ehr)}
-              </div>
-              <div>${renderStatus(ehr)}</div>
-            </div>
+            <strong>EHR / Practice Management</strong><br/>
+            <div class="muted small" style="margin-bottom:10px;">Configure one or more EHR / PM integrations.</div>
 
             <form method="POST" action="/account/integrations/connect" style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
               <input type="hidden" name="type" value="ehr" />
-              <input type="hidden" name="provider" value="generic" />
-              <input type="hidden" name="display_name" value="EHR / Practice Management" />
               <input type="hidden" name="mode" value="api" />
+
+              <div>
+                <label>Provider</label>
+                <select name="provider" required>
+                  <option value="">Select provider</option>
+                  <option value="athenahealth">athenahealth</option>
+                  <option value="drchrono">DrChrono</option>
+                  <option value="ecw">eClinicalWorks</option>
+                  <option value="advancedmd">AdvancedMD</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+
+              <div>
+                <label>Display Name</label>
+                <input name="display_name" placeholder="Example: Athena Main" />
+              </div>
 
               <div>
                 <label>Access Token</label>
@@ -32341,38 +32526,30 @@ function renderTemplateEditor(org, user){
               </div>
 
               <div style="display:flex;align-items:flex-end;gap:8px;">
-                <button class="btn" type="submit">Connect EHR</button>
+                <button class="btn" type="submit">Save EHR</button>
               </div>
             </form>
 
-            ${
-              ehr
-                ? `
-                  <form method="POST" action="/account/integrations/disconnect" style="margin-top:12px;">
-                    <input type="hidden" name="type" value="ehr" />
-                    <input type="hidden" name="provider" value="generic" />
-                    <button class="btn secondary" type="submit">Disconnect</button>
-                  </form>
-                `
-                : ""
-            }
+            ${renderIntegrationList(ehrs, "Saved EHR Connections")}
           </div>
 
           <div class="card">
-            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
-              <div>
-                <strong>Payer Portals</strong><br/>
-                <div class="muted small">Advanced option for payer-specific status sync when clearinghouse data is unavailable.</div>
-                ${renderSyncMeta(portal)}
-              </div>
-              <div>${renderStatus(portal)}</div>
-            </div>
+            <strong>Payer Portals</strong><br/>
+            <div class="muted small" style="margin-bottom:10px;">Add multiple payer portals when clearinghouse data is unavailable.</div>
 
             <form method="POST" action="/account/integrations/connect" style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
               <input type="hidden" name="type" value="payer_portal" />
-              <input type="hidden" name="provider" value="generic" />
-              <input type="hidden" name="display_name" value="Payer Portal" />
               <input type="hidden" name="mode" value="portal" />
+
+              <div>
+                <label>Provider</label>
+                <input name="provider" placeholder="Example: bcbs, aetna, uhc" required />
+              </div>
+
+              <div>
+                <label>Display Name</label>
+                <input name="display_name" placeholder="Example: BCBS Texas" />
+              </div>
 
               <div>
                 <label>Portal URL</label>
@@ -32394,17 +32571,7 @@ function renderTemplateEditor(org, user){
               </div>
             </form>
 
-            ${
-              portal
-                ? `
-                  <form method="POST" action="/account/integrations/disconnect" style="margin-top:12px;">
-                    <input type="hidden" name="type" value="payer_portal" />
-                    <input type="hidden" name="provider" value="generic" />
-                    <button class="btn secondary" type="submit">Disconnect</button>
-                  </form>
-                `
-                : ""
-            }
+            ${renderIntegrationList(portals, "Saved Payer Portals")}
           </div>
         `;
       }
