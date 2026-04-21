@@ -612,6 +612,1037 @@ function autoCreateTasksFromStatus(org_id, claim) {
   }
 }
 
+// ==============================
+// AUTO PACKET CREATION ENGINE
+// ==============================
+
+function findExistingPacket(org_id, billed_id, type) {
+  const packets = readJSON(PACKET_FILE, []);
+  return packets.find(p =>
+    p.org_id === org_id &&
+    p.billed_id === billed_id &&
+    p.type === type &&
+    p.status !== "closed"
+  );
+}
+
+function createPacketForClaim(org_id, claim, type) {
+  const existing = findExistingPacket(org_id, claim.billed_id, type);
+  if (existing) return existing; // 🚫 prevent duplicates
+
+  const packet = {
+    packet_id: uuid(),
+    org_id,
+    billed_id: claim.billed_id,
+    claim_id: claim.claim_id || claim.claim_number,
+    payer: claim.payer || "",
+    type, // "appeal" | "negotiation"
+    status: "draft",
+    created_at: nowISO(),
+    updated_at: nowISO(),
+
+    data: {
+      claim_number: claim.claim_number || "",
+      dos: claim.dos || "",
+      billed_amount: claim.billed_amount || 0,
+      paid_amount: claim.paid_amount || 0,
+      expected_amount: claim.expected_amount || 0
+    }
+  };
+
+  return savePacket(packet);
+}
+
+// ==============================
+// LINK PACKET TO TASK
+// ==============================
+
+function attachPacketToTask(org_id, claim, taskType) {
+  const tasks = readJSON(FILES.agent_tasks, []);
+
+  const task = tasks.find(t =>
+    t.org_id === org_id &&
+    t.billed_id === claim.billed_id &&
+    t.type === taskType &&
+    ["queued","open","in_progress"].includes(String(t.status || ""))
+  );
+
+  if (!task) return null;
+
+  // already linked
+  if (task.packet_id) return task;
+
+  let packetType = null;
+
+  if (taskType === "appeal") packetType = "appeal";
+  if (taskType === "negotiation") packetType = "negotiation";
+
+  if (!packetType) return task;
+
+  const packet = createPacketForClaim(org_id, claim, packetType);
+
+  task.packet_id = packet.packet_id;
+  task.updated_at = nowISO();
+
+  writeJSON(FILES.agent_tasks, tasks);
+
+  return task;
+}
+
+// ==============================
+// LIFECYCLE → TASK → PACKET LINK
+// ==============================
+
+function autoLinkPacketFromStatus(org_id, claim) {
+  const status = String(claim.status || "").toLowerCase();
+
+  if (status === "underpaid") {
+    attachPacketToTask(org_id, claim, "negotiation");
+  }
+
+  if (status === "denied") {
+    attachPacketToTask(org_id, claim, "appeal");
+  }
+}
+
+// ======================================================
+// PACKET AUTO-FILL + WORKSPACE LINK + SAFE ROUTING (NO AUTO SEND)
+// ======================================================
+
+// ---------- OPTIONAL EHR DOCUMENT HOOK (safe placeholder) ----------
+function fetchEHRDocuments(org_id, claim){
+  // 🔒 SAFE: return empty until you wire real EHR
+  // Later: pull via FHIR DocumentReference/Binary
+  return {
+    denial_letter: null,
+    eob: null,
+    claim_form: null,
+    medical_records: [],
+    labs: []
+  };
+}
+
+// ---------- AUTO-FILL PACKET CONTENT ----------
+function buildPacketContent(org_id, claim, type){
+  const ehr = fetchEHRDocuments(org_id, claim);
+
+  const underpaid = Math.max(0,
+    Number(claim.expected_amount || 0) - Number(claim.paid_amount || 0)
+  );
+
+  const narrative = `
+Re: Claim #${claim.claim_number || claim.claim_id}
+Payer: ${claim.payer || ""}
+DOS: ${claim.dos || "N/A"}
+
+This ${type} is submitted for reconsideration of the above claim.
+
+Summary:
+- Billed: $${Number(claim.billed_amount || 0).toFixed(2)}
+- Expected: $${Number(claim.expected_amount || 0).toFixed(2)}
+- Paid: $${Number(claim.paid_amount || 0).toFixed(2)}
+- At Risk: $${underpaid.toFixed(2)}
+
+Requested Action:
+- Reprocess claim per benefits/contract
+- Apply correct reimbursement
+- Provide written rationale if denial remains
+`;
+
+  return {
+    financial_summary: {
+      billed: claim.billed_amount || 0,
+      expected: claim.expected_amount || 0,
+      paid: claim.paid_amount || 0,
+      underpaid
+    },
+    narrative,
+    attachments: {
+      denial_letter: ehr.denial_letter,
+      eob: ehr.eob,
+      claim_form: ehr.claim_form,
+      medical_records: ehr.medical_records,
+      labs: ehr.labs
+    },
+    completeness: {
+      has_denial_letter: !!ehr.denial_letter,
+      has_eob: !!ehr.eob,
+      has_claim_form: !!ehr.claim_form
+    }
+  };
+}
+
+// ---------- ROUTING (PREP ONLY — NO SEND) ----------
+function determinePacketRoute(payer){
+  const p = String(payer || "").toLowerCase();
+
+  if (p.includes("medicare")) return "esmd";
+  if (p.includes("uhc") || p.includes("united")) return "optum_api";
+  if (p.includes("aetna") || p.includes("cigna")) return "availity";
+
+  return "manual";
+}
+
+// ---------- CREATE OR UPDATE PACKET WITH CONTENT ----------
+function enrichPacketWithContent(org_id, packet, claim){
+  const content = buildPacketContent(org_id, claim, packet.type);
+
+  packet.content = content;
+
+  // 👇 READY FOR REVIEW (NOT SENT)
+  packet.status = "ready_for_review";
+  packet.route = determinePacketRoute(packet.payer);
+
+  packet.updated_at = nowISO();
+
+  savePacket(packet);
+  return packet;
+}
+
+// ---------- TASK → WORKSPACE LINK ----------
+function getWorkspaceUrl(packet_id){
+  return `/packet/workspace?packet_id=${encodeURIComponent(packet_id)}`;
+}
+
+function attachWorkspaceToTask(task){
+  if (!task.packet_id) return task;
+
+  task.workspace_url = getWorkspaceUrl(task.packet_id);
+  task.updated_at = nowISO();
+  return task;
+}
+
+// ---------- LIFECYCLE EXTENSION (MAIN ENTRY POINT) ----------
+function autoPreparePacketFromStatus(org_id, claim){
+  const status = String(claim.status || "").toLowerCase();
+
+  let packetType = null;
+  let taskType = null;
+
+  if (status === "underpaid"){
+    packetType = "negotiation";
+    taskType = "negotiation";
+  }
+
+  if (status === "denied"){
+    packetType = "appeal";
+    taskType = "appeal";
+  }
+
+  if (!packetType) return;
+
+  // 1. Ensure task exists (you already do this elsewhere)
+  // 2. Find or create packet
+  const packet = createPacketForClaim(org_id, claim, packetType);
+
+  // 3. Enrich packet with data (AUTO-FILL)
+  const enriched = enrichPacketWithContent(org_id, packet, claim);
+
+  // 4. Attach to task
+  const tasks = readJSON(FILES.agent_tasks, []);
+  const task = tasks.find(t =>
+    t.org_id === org_id &&
+    t.billed_id === claim.billed_id &&
+    t.type === taskType &&
+    ["queued","open","in_progress"].includes(String(t.status || ""))
+  );
+
+  if (task){
+    task.packet_id = enriched.packet_id;
+    attachWorkspaceToTask(task);
+    writeJSON(FILES.agent_tasks, tasks);
+  }
+}
+
+// ======================================================
+// PACKET SUBMISSION + CHECKLIST + FHIR EHR PULL (SAFE)
+// ======================================================
+
+// ---------- CHECKLIST (can be overridden) ----------
+function getPacketChecklist(packet){
+  const c = packet.content || {};
+  const a = (c.attachments || {});
+  return {
+    has_eob: !!a.eob,
+    has_denial_letter: !!a.denial_letter,
+    has_claim_form: !!a.claim_form,
+    // you can add payer-specific rules later
+    ready:
+      !!a.eob && (!!a.denial_letter || packet.type === "negotiation")
+  };
+}
+
+// ======================================================
+// PDF + EDI PACKAGING + REAL ADAPTER FRAMEWORK
+// plugs into existing packet/workspace system
+// ======================================================
+
+const PACKET_EXPORT_DIR = path.join(DATA_DIR, "packet_exports");
+if (!fs.existsSync(PACKET_EXPORT_DIR)) fs.mkdirSync(PACKET_EXPORT_DIR, { recursive: true });
+
+// ------------------------------
+// HELPERS
+// ------------------------------
+function packetExportPath(packet_id, ext){
+  return path.join(PACKET_EXPORT_DIR, `${packet_id}.${ext}`);
+}
+
+function safeJsonParse(v, fallback = {}){
+  try { return typeof v === "string" ? JSON.parse(v) : (v || fallback); }
+  catch { return fallback; }
+}
+
+function packetToPlainText(packet){
+  const c = packet.content || {};
+  const a = c.attachments || {};
+  const fsum = c.financial_summary || {};
+
+  return [
+    `TJ Healthcare Pro Packet`,
+    `Packet ID: ${packet.packet_id}`,
+    `Type: ${packet.type || ""}`,
+    `Status: ${packet.status || ""}`,
+    `Route: ${packet.route || ""}`,
+    ``,
+    `Claim Number: ${packet.data?.claim_number || packet.claim_id || ""}`,
+    `Payer: ${packet.payer || ""}`,
+    `DOS: ${packet.data?.dos || ""}`,
+    ``,
+    `Financial Summary`,
+    `Billed: ${Number(fsum.billed || packet.data?.billed_amount || 0).toFixed(2)}`,
+    `Expected: ${Number(fsum.expected || packet.data?.expected_amount || 0).toFixed(2)}`,
+    `Paid: ${Number(fsum.paid || packet.data?.paid_amount || 0).toFixed(2)}`,
+    `Underpaid: ${Number(fsum.underpaid || 0).toFixed(2)}`,
+    ``,
+    `Narrative`,
+    `${c.narrative || ""}`,
+    ``,
+    `Attachments`,
+    `EOB: ${a.eob ? "Included" : "Missing"}`,
+    `Denial Letter: ${a.denial_letter ? "Included" : "Missing"}`,
+    `Claim Form: ${a.claim_form ? "Included" : "Missing"}`,
+    `Medical Records Count: ${(a.medical_records || []).length}`,
+    `Labs Count: ${(a.labs || []).length}`
+  ].join("\n");
+}
+
+// ------------------------------
+// PDF PACKAGING (HTML->saved .html for now, PDF-ready)
+// ------------------------------
+// Safe MVP: generates printable HTML export now.
+// Later you can swap in a true PDF renderer.
+function buildPacketPrintableHtml(packet){
+  const c = packet.content || {};
+  const a = c.attachments || {};
+  const fsum = c.financial_summary || {};
+
+  return `
+  <html>
+  <head>
+    <meta charset="utf-8"/>
+    <title>Packet ${escapeHtml(packet.packet_id)}</title>
+    <style>
+      body { font-family: Arial, sans-serif; padding: 24px; color: #111827; }
+      h1,h2,h3 { margin-bottom: 8px; }
+      .muted { color: #6b7280; font-size: 12px; }
+      .card { border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-bottom:16px; }
+      table { width:100%; border-collapse: collapse; }
+      td, th { border:1px solid #e5e7eb; padding:8px; text-align:left; }
+      pre { white-space: pre-wrap; font-family: Arial, sans-serif; }
+    </style>
+  </head>
+  <body>
+    <h1>Appeal / Negotiation Packet</h1>
+    <div class="muted">
+      Packet ID: ${escapeHtml(packet.packet_id)} |
+      Type: ${escapeHtml(packet.type || "")} |
+      Route: ${escapeHtml(packet.route || "")} |
+      Status: ${escapeHtml(packet.status || "")}
+    </div>
+
+    <div class="card">
+      <h3>Claim Summary</h3>
+      <table>
+        <tr><th>Claim</th><td>${escapeHtml(packet.data?.claim_number || packet.claim_id || "")}</td></tr>
+        <tr><th>Payer</th><td>${escapeHtml(packet.payer || "")}</td></tr>
+        <tr><th>DOS</th><td>${escapeHtml(packet.data?.dos || "")}</td></tr>
+        <tr><th>Billed</th><td>${formatMoneyUI(Number(fsum.billed || packet.data?.billed_amount || 0))}</td></tr>
+        <tr><th>Expected</th><td>${formatMoneyUI(Number(fsum.expected || packet.data?.expected_amount || 0))}</td></tr>
+        <tr><th>Paid</th><td>${formatMoneyUI(Number(fsum.paid || packet.data?.paid_amount || 0))}</td></tr>
+        <tr><th>Underpaid</th><td>${formatMoneyUI(Number(fsum.underpaid || 0))}</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Narrative</h3>
+      <pre>${escapeHtml(c.narrative || "")}</pre>
+    </div>
+
+    <div class="card">
+      <h3>Attachment Checklist</h3>
+      <table>
+        <tr><th>EOB</th><td>${a.eob ? "Included" : "Missing"}</td></tr>
+        <tr><th>Denial Letter</th><td>${a.denial_letter ? "Included" : "Missing"}</td></tr>
+        <tr><th>Claim Form</th><td>${a.claim_form ? "Included" : "Missing"}</td></tr>
+        <tr><th>Medical Records</th><td>${(a.medical_records || []).length}</td></tr>
+        <tr><th>Labs</th><td>${(a.labs || []).length}</td></tr>
+      </table>
+    </div>
+  </body>
+  </html>
+  `;
+}
+
+function exportPacketPrintable(packet){
+  const html = buildPacketPrintableHtml(packet);
+  const htmlPath = packetExportPath(packet.packet_id, "html");
+  fs.writeFileSync(htmlPath, html, "utf8");
+
+  packet.exports = packet.exports || {};
+  packet.exports.printable_html = `/data/packet_exports/${packet.packet_id}.html`;
+  packet.updated_at = nowISO();
+  savePacket(packet);
+
+  return {
+    type: "printable_html",
+    path: htmlPath,
+    url: packet.exports.printable_html
+  };
+}
+
+// ------------------------------
+// EDI / JSON MANIFEST PACKAGING
+// ------------------------------
+function buildAttachmentManifest(packet){
+  const c = packet.content || {};
+  const a = c.attachments || {};
+
+  const attachments = [];
+
+  if (a.eob) {
+    attachments.push({
+      kind: "eob",
+      mime: a.eob.mime || "application/pdf",
+      included: true
+    });
+  }
+  if (a.denial_letter) {
+    attachments.push({
+      kind: "denial_letter",
+      mime: a.denial_letter.mime || "application/pdf",
+      included: true
+    });
+  }
+  if (a.claim_form) {
+    attachments.push({
+      kind: "claim_form",
+      mime: a.claim_form.mime || "application/pdf",
+      included: true
+    });
+  }
+
+  for (const mr of (a.medical_records || [])) {
+    attachments.push({
+      kind: "medical_record",
+      mime: mr.mime || "application/pdf",
+      included: true
+    });
+  }
+
+  for (const lab of (a.labs || [])) {
+    attachments.push({
+      kind: "lab",
+      mime: lab.mime || "application/pdf",
+      included: true
+    });
+  }
+
+  return {
+    packet_id: packet.packet_id,
+    org_id: packet.org_id,
+    claim_id: packet.claim_id,
+    billed_id: packet.billed_id,
+    payer: packet.payer,
+    route: packet.route,
+    packet_type: packet.type,
+    created_at: nowISO(),
+    claim: {
+      claim_number: packet.data?.claim_number || "",
+      dos: packet.data?.dos || "",
+      billed_amount: Number(packet.data?.billed_amount || 0),
+      paid_amount: Number(packet.data?.paid_amount || 0),
+      expected_amount: Number(packet.data?.expected_amount || 0)
+    },
+    attachments
+  };
+}
+
+function exportPacketManifest(packet){
+  const manifest = buildAttachmentManifest(packet);
+  const manifestPath = packetExportPath(packet.packet_id, "manifest.json");
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
+  packet.exports = packet.exports || {};
+  packet.exports.manifest_json = `/data/packet_exports/${packet.packet_id}.manifest.json`;
+  packet.updated_at = nowISO();
+  savePacket(packet);
+
+  return {
+    type: "manifest_json",
+    path: manifestPath,
+    url: packet.exports.manifest_json
+  };
+}
+
+// optional: simple 275-style envelope placeholder
+function exportPacket275Stub(packet){
+  const manifest = buildAttachmentManifest(packet);
+  const payload = [
+    "ISA*00*          *00*          *ZZ*TJHEALTHPRO    *ZZ*PAYER         *250101*1200*^*00501*000000001*0*T*:~",
+    "GS*PW*TJHEALTHPRO*PAYER*20250101*1200*1*X*005010X210~",
+    `ST*275*${String(Date.now()).slice(-4)}~`,
+    `BGN*00*${packet.packet_id}*${new Date().toISOString().slice(0,10).replace(/-/g,"")}~`,
+    `N1*PR*${packet.payer || "PAYER"}~`,
+    `REF*D9*${packet.claim_id || ""}~`,
+    `PWK*OZ*EL***AC*${manifest.attachments.length}~`,
+    `SE*7*${String(Date.now()).slice(-4)}~`,
+    "GE*1*1~",
+    "IEA*1*000000001~"
+  ].join("\n");
+
+  const ediPath = packetExportPath(packet.packet_id, "275.txt");
+  fs.writeFileSync(ediPath, payload, "utf8");
+
+  packet.exports = packet.exports || {};
+  packet.exports.edi_275_stub = `/data/packet_exports/${packet.packet_id}.275.txt`;
+  packet.updated_at = nowISO();
+  savePacket(packet);
+
+  return {
+    type: "edi_275_stub",
+    path: ediPath,
+    url: packet.exports.edi_275_stub
+  };
+}
+
+// ------------------------------
+// REAL CONNECTIVITY FRAMEWORK
+// ------------------------------
+async function getIntegrationCredentialsForRoute(org_id, route){
+  if (route === "availity") {
+    const row = (getOrgClearinghouseIntegrations(org_id) || []).find(i =>
+      String(i.provider || "").toLowerCase().includes("availity") && i.status === "connected"
+    );
+    if (!row) return null;
+    try { return decrypt(row.credentials || {}); } catch { return null; }
+  }
+
+  if (route === "optum_api") {
+    const row = (getOrgPortalIntegrations(org_id) || []).find(i =>
+      String(i.provider || "").toLowerCase().includes("optum") && i.status === "connected"
+    );
+    if (!row) return null;
+    try { return decrypt(row.credentials || {}); } catch { return null; }
+  }
+
+  if (route === "esmd") {
+    const row = (getOrgClearinghouseIntegrations(org_id) || []).find(i =>
+      String(i.provider || "").toLowerCase().includes("medicare") && i.status === "connected"
+    );
+    if (!row) return null;
+    try { return decrypt(row.credentials || {}); } catch { return null; }
+  }
+
+  return null;
+}
+
+async function buildOutboundPacketBundle(org_id, packet){
+  const printable = exportPacketPrintable(packet);
+  const manifest = exportPacketManifest(packet);
+  const edi275 = exportPacket275Stub(packet);
+
+  return {
+    packet_id: packet.packet_id,
+    route: packet.route,
+    printable,
+    manifest,
+    edi275
+  };
+}
+
+// ------------------------------
+// ADAPTERS
+// NOTE: real HTTP calls only if credentials + endpoint configured.
+// Otherwise returns "prepared_not_sent" safely.
+// ------------------------------
+async function sendViaAvaility(org_id, packet){
+  const creds = await getIntegrationCredentialsForRoute(org_id, "availity");
+  const bundle = await buildOutboundPacketBundle(org_id, packet);
+
+  if (!creds || !creds.base_url || !(creds.api_key || creds.token || creds.client_id)) {
+    return {
+      ok: true,
+      prepared_only: true,
+      channel: "availity_api",
+      external_id: "AV-PREP-" + Date.now(),
+      message: "Availity adapter prepared, credentials/endpoints incomplete"
+    };
+  }
+
+  // Real call scaffold
+  // Replace endpoint + payload shape with actual Availity attachment endpoint contract
+  const headers = {
+    "Content-Type": "application/json",
+    ...(creds.token ? { "Authorization": `Bearer ${creds.token}` } : {}),
+    ...(creds.api_key ? { "x-api-key": creds.api_key } : {})
+  };
+
+  const payload = {
+    packet_id: packet.packet_id,
+    claim_id: packet.claim_id,
+    payer: packet.payer,
+    packet_type: packet.type,
+    manifest_url: bundle.manifest.url,
+    printable_url: bundle.printable.url,
+    edi_275_url: bundle.edi275.url
+  };
+
+  const response = await fetch(`${String(creds.base_url).replace(/\/+$/,"")}/attachments`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload)
+  }).then(async (r) => ({
+    ok: r.ok,
+    status: r.status,
+    body: await r.text()
+  }));
+
+  return {
+    ok: !!response.ok,
+    prepared_only: false,
+    channel: "availity_api",
+    external_id: "AV-" + Date.now(),
+    response_status: response.status
+  };
+}
+
+async function sendViaOptum(org_id, packet){
+  const creds = await getIntegrationCredentialsForRoute(org_id, "optum_api");
+  const bundle = await buildOutboundPacketBundle(org_id, packet);
+
+  if (!creds || !creds.base_url || !(creds.api_key || creds.token || creds.client_id)) {
+    return {
+      ok: true,
+      prepared_only: true,
+      channel: "optum_api",
+      external_id: "OP-PREP-" + Date.now(),
+      message: "Optum adapter prepared, credentials/endpoints incomplete"
+    };
+  }
+
+  const headers = {
+    "Content-Type": "application/json",
+    ...(creds.token ? { "Authorization": `Bearer ${creds.token}` } : {}),
+    ...(creds.api_key ? { "x-api-key": creds.api_key } : {})
+  };
+
+  const payload = {
+    packet_id: packet.packet_id,
+    claim_id: packet.claim_id,
+    payer: packet.payer,
+    packet_type: packet.type,
+    manifest_url: bundle.manifest.url,
+    printable_url: bundle.printable.url,
+    edi_275_url: bundle.edi275.url
+  };
+
+  const response = await fetch(`${String(creds.base_url).replace(/\/+$/,"")}/claim-actions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload)
+  }).then(async (r) => ({
+    ok: r.ok,
+    status: r.status,
+    body: await r.text()
+  }));
+
+  return {
+    ok: !!response.ok,
+    prepared_only: false,
+    channel: "optum_api",
+    external_id: "OP-" + Date.now(),
+    response_status: response.status
+  };
+}
+
+async function sendViaEsmd(org_id, packet){
+  const creds = await getIntegrationCredentialsForRoute(org_id, "esmd");
+  await buildOutboundPacketBundle(org_id, packet);
+
+  if (!creds || !creds.base_url) {
+    return {
+      ok: true,
+      prepared_only: true,
+      channel: "esmd",
+      external_id: "ES-PREP-" + Date.now(),
+      message: "esMD adapter prepared, credentials/endpoints incomplete"
+    };
+  }
+
+  return {
+    ok: true,
+    prepared_only: true,
+    channel: "esmd",
+    external_id: "ES-" + Date.now(),
+    message: "esMD packaging prepared"
+  };
+}
+
+async function sendViaManualExport(org_id, packet){
+  const bundle = await buildOutboundPacketBundle(org_id, packet);
+
+  return {
+    ok: true,
+    prepared_only: true,
+    channel: "manual_export",
+    external_id: "MAN-" + Date.now(),
+    exports: bundle
+  };
+}
+
+// ------------------------------
+// REPLACE routePacket WITH REAL FRAMEWORK
+// ------------------------------
+async function routePacket(packet){
+  const route = packet.route || determinePacketRoute(packet.payer);
+
+  if (route === "availity") {
+    return await sendViaAvaility(packet.org_id, packet);
+  }
+
+  if (route === "optum_api") {
+    return await sendViaOptum(packet.org_id, packet);
+  }
+
+  if (route === "esmd") {
+    return await sendViaEsmd(packet.org_id, packet);
+  }
+
+  return await sendViaManualExport(packet.org_id, packet);
+}
+
+// ------------------------------
+// ENHANCE SUBMISSION TRACKING
+// ------------------------------
+function markPacketPrepared(packet, res){
+  packet.submission = packet.submission || {};
+  packet.submission.channel = res.channel || "";
+  packet.submission.external_id = res.external_id || "";
+  packet.submission.prepared_only = !!res.prepared_only;
+  packet.submission.message = res.message || "";
+  packet.updated_at = nowISO();
+  savePacket(packet);
+  return packet;
+}
+
+// ======================================================
+// PRODUCTION PACKET STATE MACHINE + RETRY + TRACKING
+// ======================================================
+
+// ---------- STATE MACHINE ----------
+const PACKET_STATES = {
+  DRAFT: "draft",
+  READY: "ready_for_review",
+  SUBMITTED: "submitted",
+  IN_TRANSIT: "in_transit",
+  ACCEPTED: "accepted",
+  REJECTED: "rejected",
+  ERROR: "error"
+};
+
+// ---------- SAFE STATE TRANSITION ----------
+function updatePacketStatus(packet, newStatus){
+  const prev = packet.status;
+
+  packet.status = newStatus;
+  packet.updated_at = nowISO();
+
+  packet.status_history = packet.status_history || [];
+  packet.status_history.push({
+    from: prev,
+    to: newStatus,
+    at: nowISO()
+  });
+
+  savePacket(packet);
+  return packet;
+}
+
+// ---------- RETRY CONFIG ----------
+const MAX_RETRIES = 3;
+
+// ---------- ROUTE WITH ERROR HANDLING ----------
+async function routePacketWithRetry(packet){
+  let attempt = 0;
+  let lastError = null;
+
+  while (attempt < MAX_RETRIES){
+    try {
+      attempt++;
+
+      const res = await routePacket(packet);
+
+      if (!res || !res.ok){
+        throw new Error("Routing failed");
+      }
+
+      return {
+        success: true,
+        attempt,
+        channel: res.channel,
+        external_id: res.external_id,
+        prepared_only: !!res.prepared_only,
+        message: res.message || ""
+      };
+
+    } catch (e){
+      lastError = e;
+    }
+  }
+
+  return {
+    success: false,
+    attempt: MAX_RETRIES,
+    error: String(lastError?.message || lastError || "Unknown error")
+  };
+}
+
+// ---------- SUBMIT WITH FULL TRACKING ----------
+async function submitPacketProduction(org_id, packet_id, opts = {}){
+  const { override = false, confirm_missing = false, user_id = "system" } = opts;
+
+  const packets = readJSON(PACKET_FILE, []);
+  const idx = packets.findIndex(p => p.packet_id === packet_id && p.org_id === org_id);
+  if (idx < 0) throw new Error("Packet not found");
+
+  let packet = packets[idx];
+
+  // checklist
+  const checklist = getPacketChecklist(packet);
+
+  if (!checklist.ready && !override && !confirm_missing){
+    return {
+      ok: false,
+      blocked: true,
+      checklist
+    };
+  }
+
+  // move to in_transit
+  packet = updatePacketStatus(packet, PACKET_STATES.IN_TRANSIT);
+
+  const result = await routePacketWithRetry(packet);
+
+  if (!result.success){
+    packet.error = result.error;
+    packet.retry_count = result.attempt;
+
+    updatePacketStatus(packet, PACKET_STATES.ERROR);
+
+    logSubmission({
+      packet_id,
+      org_id,
+      status: "error",
+      error: result.error
+    });
+
+    return {
+      ok: false,
+      error: result.error
+    };
+  }
+
+  // success path
+  packet.submission = {
+    channel: result.channel,
+    external_id: result.external_id,
+    submitted_by: user_id,
+    override_used: !!override || !!confirm_missing
+  };
+
+  packet.retry_count = result.attempt;
+
+  markPacketPrepared(packet, result);
+  updatePacketStatus(packet, PACKET_STATES.SUBMITTED);
+
+  logSubmission({
+    packet_id,
+    org_id,
+    status: "submitted",
+    channel: result.channel,
+    external_id: result.external_id
+  });
+
+  return {
+    ok: true,
+    channel: result.channel
+  };
+}
+
+// ---------- STATUS CHECK (POLLING READY) ----------
+function getPacketStatus(packet_id, org_id){
+  const packets = readJSON(PACKET_FILE, []);
+  return packets.find(p => p.packet_id === packet_id && p.org_id === org_id);
+}
+
+// ---------- SUBMIT PACKET (with override) ----------
+async function submitPacketWithChecks(org_id, packet_id, opts = {}){
+  const { override = false, confirm_missing = false } = opts;
+
+  const packets = readJSON(PACKET_FILE, []);
+  const idx = packets.findIndex(p => p.packet_id === packet_id && p.org_id === org_id);
+  if (idx < 0) throw new Error("Packet not found");
+
+  const packet = packets[idx];
+
+  const checklist = getPacketChecklist(packet);
+
+  if (!checklist.ready && !override && !confirm_missing){
+    return {
+      ok: false,
+      blocked: true,
+      reason: "missing_required_documents",
+      checklist
+    };
+  }
+
+  const res = await routePacket(packet);
+
+  packet.status = "submitted";
+  packet.submitted_at = nowISO();
+  packet.submission = {
+    channel: res.channel,
+    external_id: res.external_id,
+    override_used: !!override || !!confirm_missing
+  };
+  packet.updated_at = nowISO();
+
+  packets[idx] = packet;
+  writeJSON(PACKET_FILE, packets);
+
+  // log
+  logSubmission({
+    packet_id,
+    org_id,
+    route: packet.route,
+    channel: res.channel,
+    external_id: res.external_id,
+    override_used: !!override || !!confirm_missing
+  });
+
+  return { ok: true, channel: res.channel, external_id: res.external_id };
+}
+
+// ---------- FHIR EHR DOCUMENT PULL ----------
+async function fetchFHIRDocuments(org_id, claim){
+  // expects you saved EHR integration with token + base_url
+  const ehrs = (getOrgEhrIntegrations(org_id) || []).filter(i => i.status === "connected");
+  if (!ehrs.length) return {};
+
+  const ehr = ehrs[0]; // MVP: use first connection
+  let creds = {};
+  try { creds = decrypt(ehr.credentials || {}); } catch(e){}
+
+  const base = (creds.base_url || "").replace(/\/+$/,"");
+  const token = creds.token || "";
+
+  if (!base || !token) return {};
+
+  // Try to find documents by patient or claim reference
+  const patientRef = claim.patient_id ? `Patient/${encodeURIComponent(claim.patient_id)}` : "";
+  const url = patientRef
+    ? `${base}/DocumentReference?patient=${encodeURIComponent(patientRef)}&_count=10`
+    : `${base}/DocumentReference?_count=10`;
+
+  const headers = {
+    "Authorization": `Bearer ${token}`,
+    "Accept": "application/fhir+json"
+  };
+
+  try {
+    const dr = await fetch(url, { headers }).then(r => r.json());
+
+    const docs = (dr.entry || []).map(e => e.resource).filter(Boolean);
+
+    // pick a few common items
+    const picked = {
+      eob: null,
+      denial_letter: null,
+      claim_form: null,
+      medical_records: []
+    };
+
+    for (const d of docs){
+      const coding = (((d.type||{}).coding)||[]).map(c => (c.code||"").toLowerCase());
+      const att = (((d.content||[])[0]||{}).attachment)||{};
+      const binUrl = att.url; // Binary endpoint or external
+
+      // fetch binary if URL present
+      let data = null;
+      if (binUrl){
+        try {
+          const bin = await fetch(binUrl, { headers }).then(r => r.arrayBuffer());
+          data = Buffer.from(bin).toString("base64");
+        } catch(e){}
+      }
+
+      if (!data) continue;
+
+      if (!picked.eob && (coding.includes("eob") || coding.includes("remittance"))){
+        picked.eob = { mime: att.contentType || "application/pdf", data };
+        continue;
+      }
+
+      if (!picked.denial_letter && (coding.includes("denial") || coding.includes("adjudication"))){
+        picked.denial_letter = { mime: att.contentType || "application/pdf", data };
+        continue;
+      }
+
+      if (!picked.claim_form && (coding.includes("claim") || coding.includes("837"))){
+        picked.claim_form = { mime: att.contentType || "application/pdf", data };
+        continue;
+      }
+
+      picked.medical_records.push({ mime: att.contentType || "application/pdf", data });
+    }
+
+    return picked;
+
+  } catch (e){
+    return {};
+  }
+}
+
+// ---------- ENRICH PACKET WITH EHR DOCS ----------
+async function enrichPacketWithEHR(org_id, packet, claim){
+  const docs = await fetchFHIRDocuments(org_id, claim);
+  packet.content = packet.content || {};
+  packet.content.attachments = packet.content.attachments || {};
+
+  // merge without overwriting existing attachments
+  packet.content.attachments.eob = packet.content.attachments.eob || docs.eob || null;
+  packet.content.attachments.denial_letter = packet.content.attachments.denial_letter || docs.denial_letter || null;
+  packet.content.attachments.claim_form = packet.content.attachments.claim_form || docs.claim_form || null;
+  packet.content.attachments.medical_records = [
+    ...(packet.content.attachments.medical_records || []),
+    ...(docs.medical_records || [])
+  ];
+
+  packet.updated_at = nowISO();
+  savePacket(packet);
+  return packet;
+}
+
 function closeTasksForClaim(org_id, billed_id) {
   const tasks = readJSON(FILES.agent_tasks, []);
   const updated = tasks.map(t => {
@@ -700,6 +1731,10 @@ function applyPaymentToClaim(org_id, payment) {
   claim.status = newStatus;
   // AUTO CREATE TASKS
   autoCreateTasksFromStatus(org_id, claim);
+  // 🔥 AUTO LINK PACKET
+  autoLinkPacketFromStatus(org_id, claim);
+  // 🔥 AUTO PREP PACKET (FILLED + ROUTED + READY FOR REVIEW)
+  autoPreparePacketFromStatus(org_id, claim);
   if (newStatus === "Paid") {
     closeTasksForClaim(org_id, claim.billed_id);
   }
@@ -1239,6 +2274,98 @@ ensureFile(FILES.alerts, []);
 ensureFile(FILES.jobs, []);
 ensureFile(FILES.applications, []);
 ensureFile(FILES.integrations, []);
+
+// ==============================
+// PACKET STORAGE (MVP)
+// ==============================
+
+const PACKET_FILE = path.join(DATA_DIR, "appeal_packets.json");
+const SUBMISSION_FILE = path.join(DATA_DIR, "submission_ledger.json");
+
+ensureFile(PACKET_FILE, []);
+ensureFile(SUBMISSION_FILE, []);
+
+function getPackets(org_id){
+  return readJSON(PACKET_FILE, []).filter(p => p.org_id === org_id);
+}
+
+function savePacket(packet){
+  const all = readJSON(PACKET_FILE, []);
+  const idx = all.findIndex(p => p.packet_id === packet.packet_id);
+  if (idx >= 0) all[idx] = packet;
+  else all.push(packet);
+  writeJSON(PACKET_FILE, all);
+  return packet;
+}
+
+function logSubmission(entry){
+  const all = readJSON(SUBMISSION_FILE, []);
+  all.push({ ...entry, created_at: nowISO() });
+  writeJSON(SUBMISSION_FILE, all);
+}
+
+// ==============================
+// PACKET ENGINE
+// ==============================
+
+function createPacket(org_id, claim, type="appeal"){
+  const packet = {
+    packet_id: uuid(),
+    org_id,
+    claim_id: claim.claim_id || claim.claim_number,
+    payer: claim.payer || "",
+    type,
+    status: "draft",
+    created_at: nowISO(),
+    updated_at: nowISO(),
+
+    // core structure
+    data: {
+      claim_number: claim.claim_number || "",
+      dos: claim.dos || "",
+      billed_amount: claim.billed_amount || 0,
+      paid_amount: claim.paid_amount || 0,
+      underpaid_amount: Math.max(0, (claim.expected_amount || 0) - (claim.paid_amount || 0))
+    },
+
+    route: null
+  };
+
+  return savePacket(packet);
+}
+
+// ==============================
+// ROUTER LOGIC (SIMPLIFIED)
+// ==============================
+
+function determineRoute(payer){
+  const p = String(payer || "").toLowerCase();
+
+  if (p.includes("medicare")) return "esmd";
+  if (p.includes("united") || p.includes("uhc")) return "optum_api";
+  if (p.includes("aetna") || p.includes("cigna")) return "availity";
+
+  return "manual"; // fallback
+}
+
+function submitPacket(packet){
+  const route = determineRoute(packet.payer);
+
+  packet.route = route;
+  packet.status = "submitted";
+  packet.updated_at = nowISO();
+
+  savePacket(packet);
+
+  logSubmission({
+    packet_id: packet.packet_id,
+    org_id: packet.org_id,
+    route,
+    status: "submitted"
+  });
+
+  return packet;
+}
 
 function getAnnouncements() {
   return readJSON(FILES.admin_announcements, []);
@@ -12736,8 +13863,221 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (method === "GET" && pathname.startsWith("/data/packet_exports/")) {
+    const abs = path.join(__dirname, pathname);
+    if (!abs.startsWith(PACKET_EXPORT_DIR)) return send(res, 403, "Forbidden");
+    if (!fs.existsSync(abs)) return send(res, 404, "Not found");
+
+    const ext = path.extname(abs).toLowerCase();
+    const typeMap = {
+      ".html": "text/html; charset=utf-8",
+      ".json": "application/json",
+      ".txt": "text/plain; charset=utf-8"
+    };
+
+    return send(res, 200, fs.readFileSync(abs), typeMap[ext] || "application/octet-stream");
+  }
+
   // health
   if (method === "GET" && pathname === "/health") return send(res, 200, "ok", "text/plain");
+
+  // ==============================
+  // PACKET ENDPOINTS
+  // ==============================
+
+  // CREATE PACKET
+  if (pathname === "/packet/create" && req.method === "POST") {
+    const body = await parseBody(req);
+    const data = JSON.parse(body || "{}");
+
+    const sess = getAuth(req);
+    if (!sess) return send(res, 401, "Unauthorized");
+
+    const packet = createPacket(sess.org_id, data.claim, data.type);
+
+    return send(res, 200, JSON.stringify({
+      success: true,
+      packet_id: packet.packet_id
+    }), "application/json");
+  }
+
+  // Pull EHR docs into packet
+  if (pathname === "/packet/fetch-ehr" && req.method === "POST"){
+    const body = await parseBody(req);
+    const data = JSON.parse(body || "{}");
+    const sess = getAuth(req);
+    if (!sess) return send(res, 401, "Unauthorized");
+
+    const packets = readJSON(PACKET_FILE, []);
+    const packet = packets.find(p => p.packet_id === data.packet_id && p.org_id === sess.org_id);
+    if (!packet) return send(res, 404, "Packet not found");
+
+    // you need claim context; fetch from billed
+    const claims = readJSON(FILES.billed, []);
+    const claim = claims.find(c => c.billed_id === packet.billed_id);
+
+    const updated = await enrichPacketWithEHR(sess.org_id, packet, claim || {});
+
+    return send(res, 200, JSON.stringify({ ok: true, attachments: updated.content.attachments }), "application/json");
+  }
+
+  // SUBMIT PACKET (with checklist + override)
+  if (pathname === "/packet/submit" && req.method === "POST"){
+    const body = await parseBody(req);
+    const data = JSON.parse(body || "{}");
+    const sess = getAuth(req);
+    if (!sess) return send(res, 401, "Unauthorized");
+
+    const result = await submitPacketProduction(sess.org_id, data.packet_id, {
+      override: !!data.override,
+      confirm_missing: !!data.confirm_missing,
+      user_id: sess.user_id || "user"
+    });
+
+    return send(res, 200, JSON.stringify(result), "application/json");
+  }
+
+  // GET PACKETS
+  if (pathname === "/packet/list" && req.method === "GET") {
+    const sess = getAuth(req);
+    if (!sess) return send(res, 401, "Unauthorized");
+
+    const packets = getPackets(sess.org_id);
+
+    return send(res, 200, JSON.stringify({
+      packets
+    }), "application/json");
+  }
+
+  // ==============================
+  // ENHANCED PACKET WORKSPACE UI
+  // ==============================
+
+  if (pathname === "/packet/workspace" && req.method === "GET"){
+    const sess = getAuth(req);
+    if (!sess) return send(res, 401, "Unauthorized");
+
+    const q = parsed.query || {};
+    const packet_id = String(q.packet_id || "");
+    const packets = readJSON(PACKET_FILE, []);
+    const p = packets.find(x => x.packet_id === packet_id && x.org_id === sess.org_id);
+
+    if (!p) return send(res, 404, "Packet not found");
+
+    const checklist = getPacketChecklist(p);
+    const exports = p.exports || {};
+    const submission = p.submission || {};
+
+    const html = `
+    <div class="card">
+      <h3>Packet Workspace</h3>
+
+      <div class="muted small">
+        Route: ${safeStr(p.route || "-")} |
+        Status: <strong>${safeStr(p.status || "-")}</strong>
+      </div>
+
+      <div style="margin-top:10px;">
+        <strong>Submission:</strong><br/>
+        Channel: ${safeStr(submission.channel || "-")}<br/>
+        External ID: ${safeStr(submission.external_id || "-")}<br/>
+        ${submission.prepared_only ? `<span style="color:#f59e0b;">Prepared Only (Not Sent)</span>` : ""}
+      </div>
+
+      <hr style="margin:12px 0;"/>
+
+      <h4>Checklist</h4>
+      <ul>
+        <li>EOB: ${checklist.has_eob ? "✔" : "✖"}</li>
+        <li>Denial Letter: ${checklist.has_denial_letter ? "✔" : "✖"}</li>
+        <li>Claim Form: ${checklist.has_claim_form ? "✔" : "✖"}</li>
+      </ul>
+
+      <hr style="margin:12px 0;"/>
+
+      <h4>Packet Exports</h4>
+
+      ${
+        (!exports.printable_html && !exports.manifest_json && !exports.edi_275_stub)
+        ? `<div class="muted small">No exports generated yet. Submit or prepare packet first.</div>`
+        : `
+          <div style="display:flex;flex-direction:column;gap:6px;">
+
+            ${exports.printable_html ? `
+              <a class="btn small" target="_blank" href="${exports.printable_html}">
+                View Printable Packet
+              </a>
+            ` : ""}
+
+            ${exports.manifest_json ? `
+              <a class="btn small secondary" target="_blank" href="${exports.manifest_json}">
+                Download Manifest (JSON)
+              </a>
+            ` : ""}
+
+            ${exports.edi_275_stub ? `
+              <a class="btn small secondary" target="_blank" href="${exports.edi_275_stub}">
+                Download EDI 275 File
+              </a>
+            ` : ""}
+
+          </div>
+        `
+      }
+
+      <hr style="margin:12px 0;"/>
+
+      <form onsubmit="event.preventDefault(); submitPacket();">
+        <input type="hidden" id="packet_id" value="${safeStr(p.packet_id)}"/>
+
+        <label>
+          <input type="checkbox" id="override"/>
+          Send even if documents are missing
+        </label>
+
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn" type="button" onclick="submitPacket()">Submit Packet</button>
+          <button class="btn secondary" type="button" onclick="fetchEHR()">Pull EHR Docs</button>
+        </div>
+      </form>
+    </div>
+
+    <script>
+      async function submitPacket(){
+        const packet_id = document.getElementById("packet_id").value;
+        const override = document.getElementById("override").checked;
+
+        const res = await fetch("/packet/submit", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({
+            packet_id,
+            override,
+            confirm_missing: override
+          })
+        }).then(r=>r.json());
+
+        alert(JSON.stringify(res, null, 2));
+        location.reload();
+      }
+
+      async function fetchEHR(){
+        const packet_id = document.getElementById("packet_id").value;
+
+        await fetch("/packet/fetch-ehr", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ packet_id })
+        });
+
+        alert("EHR docs pulled");
+        location.reload();
+      }
+    </script>
+    `;
+
+    return send(res, 200, renderPage("Packet Workspace", html));
+  }
 
   if (method === "POST" && pathname === "/edi/835") {
     try {
