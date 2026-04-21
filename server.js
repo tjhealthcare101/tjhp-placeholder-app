@@ -1261,6 +1261,7 @@ function getPlanFeatureAccess(planName, org_id = "") {
   const normalizedPlan = String(planName || "").toLowerCase();
 
   const defaultMatrix = {
+    free_trial: { integrations_enabled: false },
     starter: { integrations_enabled: false },
     growth: { integrations_enabled: false },
     pro: { integrations_enabled: false },
@@ -1283,10 +1284,16 @@ function getPlanFeatureAccess(planName, org_id = "") {
 
 function orgPlanKey(org) {
   const sub = getSub(org.org_id);
-  if (sub && sub.status === "active") {
-    return String(sub.plan || org.plan || "starter").toLowerCase();
+  const pilot = getPilot(org.org_id);
+
+  if (pilot && pilot.status === "active") {
+    return "free_trial";
   }
-  if (org && org.plan) return String(org.plan).toLowerCase();
+
+  if (sub && sub.status === "active") {
+    return String(sub.plan || "starter").toLowerCase();
+  }
+
   return "starter";
 }
 
@@ -1300,6 +1307,10 @@ function normalizePlanFeatureSettings(settings) {
   const s = settings || {};
   return {
     ...s,
+    free_trial: {
+      ...(s.free_trial || {}),
+      integrations_enabled: !!(s.free_trial && s.free_trial.integrations_enabled)
+    },
     starter: {
       ...(s.starter || {}),
       integrations_enabled: !!(s.starter && s.starter.integrations_enabled)
