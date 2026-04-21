@@ -1840,6 +1840,101 @@ function handleExternalSubmissionUpdate(org_id, packet_id, externalStatus){
   }
 }
 
+// ======================================================
+// WEBHOOK + POLLING SYSTEM FOR PAYER RESPONSES
+// ======================================================
+
+// ---------- VERIFY WEBHOOK (basic security) ----------
+function verifyWebhook(req, expectedKey){
+  const key = req.headers["x-webhook-key"] || "";
+  return String(key) === String(expectedKey || process.env.WEBHOOK_SECRET || "dev_secret");
+}
+
+// ---------- GENERIC WEBHOOK HANDLER ----------
+async function handleIncomingWebhook(body){
+  // Expected payload shape (flexible):
+  // {
+  //   packet_id,
+  //   external_id,
+  //   status: "accepted" | "rejected"
+  // }
+
+  const data = typeof body === "string" ? JSON.parse(body || "{}") : (body || {});
+  const { packet_id, external_id, status } = data;
+
+  if (!packet_id && !external_id){
+    return { ok: false, error: "missing identifiers" };
+  }
+
+  const packets = readJSON(PACKET_FILE, []);
+
+  let packet = null;
+
+  if (packet_id){
+    packet = packets.find(p => p.packet_id === packet_id);
+  }
+
+  if (!packet && external_id){
+    packet = packets.find(p =>
+      p.submission && String(p.submission.external_id) === String(external_id)
+    );
+  }
+
+  if (!packet){
+    return { ok: false, error: "packet not found" };
+  }
+
+  const org_id = packet.org_id;
+
+  // 🔥 CORE HOOK (you already built this earlier)
+  handleExternalSubmissionUpdate(org_id, packet.packet_id, status);
+
+  return { ok: true };
+}
+
+// ---------- MOCK STATUS CHECK (replace with real APIs later) ----------
+async function checkExternalStatus(packet){
+  const submission = packet.submission || {};
+
+  // If no external ID → nothing to check
+  if (!submission.external_id) return null;
+
+  // 🔒 SAFE: mock behavior for now
+  // Later: call Availity / Optum APIs here
+
+  const rand = Math.random();
+
+  if (rand < 0.05) return "accepted";  // 5% simulate success
+  if (rand < 0.10) return "rejected";  // 5% simulate rejection
+
+  return null; // still pending
+}
+
+// ---------- POLLING WORKER ----------
+async function pollPacketStatuses(){
+  const packets = readJSON(PACKET_FILE, []);
+
+  for (const packet of packets){
+
+    // only check submitted packets
+    if (!packet || packet.status !== PACKET_STATES.SUBMITTED) continue;
+
+    try {
+      const status = await checkExternalStatus(packet);
+
+      if (!status) continue;
+
+      // 🔥 reuse same system as webhook
+      handleExternalSubmissionUpdate(packet.org_id, packet.packet_id, status);
+
+      console.log("Packet updated via polling:", packet.packet_id, status);
+
+    } catch (e){
+      console.error("Polling error:", packet.packet_id, e?.message || e);
+    }
+  }
+}
+
 function applyPaymentToClaim(org_id, payment) {
   const canonical = {
     claim_id: payment.claim_id || payment.claim_number || "",
@@ -14180,6 +14275,26 @@ const server = http.createServer(async (req, res) => {
     });
 
     return send(res, 200, JSON.stringify(result), "application/json");
+  }
+
+  // ---------- WEBHOOK ENDPOINT ----------
+  if (pathname === "/webhook/payer" && req.method === "POST"){
+    const body = await parseBody(req);
+
+    // optional security
+    if (!verifyWebhook(req)){
+      return send(res, 401, JSON.stringify({ ok: false, error: "unauthorized" }), "application/json");
+    }
+
+    try {
+      const result = await handleIncomingWebhook(body);
+      return send(res, 200, JSON.stringify(result), "application/json");
+    } catch (e){
+      return send(res, 500, JSON.stringify({
+        ok: false,
+        error: "webhook processing failed"
+      }), "application/json");
+    }
   }
 
   // GET PACKETS
@@ -36678,6 +36793,11 @@ setInterval(() => {
     console.error("Daily scheduler error:", e?.message || e);
   }
 }, 60 * 60 * 1000); // check every hour
+
+// ---------- RUN POLLING EVERY 2 MIN ----------
+setInterval(() => {
+  pollPacketStatuses();
+}, 2 * 60 * 1000);
 
 server.listen(PORT, HOST, () => {
   debugLog(`TJHP server listening on ${HOST}:${PORT}`);
