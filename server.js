@@ -3508,6 +3508,148 @@ if (!window.__tjhpOutsideClickBound) {
   });
 })();
 
+function determineChartType(message){
+  const text = String(message || "").toLowerCase();
+
+  if (text.includes("payer")) return "payer_bar";
+  if (text.includes("denial")) return "denial_bar";
+  if (text.includes("underpaid")) return "underpaid_bar";
+  if (text.includes("revenue") || text.includes("paid")) return "revenue_bar";
+
+  return null;
+}
+
+function renderChart(container, type, metrics){
+  if (!metrics || !type || typeof Chart === "undefined") return;
+
+  const canvas = document.createElement("canvas");
+  canvas.style.maxHeight = "200px";
+  container.appendChild(canvas);
+
+  let data = [];
+
+  if (type === "revenue_bar"){
+    data = [
+      { label: "Billed", value: metrics.total_billed || 0 },
+      { label: "Paid", value: metrics.total_paid || 0 }
+    ];
+  }
+
+  if (type === "denial_bar"){
+    data = [
+      { label: "Denied", value: metrics.denied_claims || 0 },
+      { label: "Other", value: (metrics.total_claims || 0) - (metrics.denied_claims || 0) }
+    ];
+  }
+
+  if (type === "underpaid_bar"){
+    data = [
+      { label: "Underpaid", value: metrics.underpaid_claims || 0 },
+      { label: "Other", value: (metrics.total_claims || 0) - (metrics.underpaid_claims || 0) }
+    ];
+  }
+
+  if (!data.length) return;
+
+  new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels: data.map(d => d.label),
+      datasets: [{
+        label: "Value",
+        data: data.map(d => d.value)
+      }]
+    }
+  });
+}
+
+function renderActions(container, actions){
+  if (!actions || !actions.length) return;
+
+  const section = document.createElement("div");
+  section.innerHTML = "<strong>Recommended Actions</strong>";
+  section.style.marginTop = "10px";
+
+  actions.forEach(a => {
+    const card = document.createElement("div");
+    card.style.border = "1px solid #eee";
+    card.style.padding = "8px";
+    card.style.marginTop = "6px";
+    card.style.borderRadius = "6px";
+
+    card.innerHTML = '\
+      <div><strong>' + (a.title || "Action") + '</strong> (' + (a.priority || "normal") + ')</div>\
+      <div style="font-size:12px;color:#666;">' + (a.reason || "") + '</div>\
+      <div style="margin-top:4px;">\
+        <button onclick="window.location.href=\'/actions\'">Open Action Center</button>\
+      </div>\
+    ';
+
+    section.appendChild(card);
+  });
+
+  container.appendChild(section);
+}
+
+function renderTopClaims(container, actions){
+  if (!actions || !actions.length) return;
+
+  const claims = actions.flatMap(a => a.items || []).slice(0,5);
+  if (!claims.length) return;
+
+  const section = document.createElement("div");
+  section.style.marginTop = "10px";
+  section.innerHTML = "<strong>Top Claims</strong>";
+
+  const table = document.createElement("table");
+  table.style.width = "100%";
+  table.style.fontSize = "12px";
+  table.style.marginTop = "5px";
+
+  table.innerHTML = '\
+    <tr>\
+      <th>Claim</th>\
+      <th>Payer</th>\
+      <th>Amount</th>\
+      <th></th>\
+    </tr>\
+  ';
+
+  claims.forEach(c => {
+    const row = document.createElement("tr");
+    const amount = Number(c.amount || 0);
+    const route = c.route || "#";
+
+    row.innerHTML = '\
+      <td>' + (c.claim_number || c.claim_id || "-") + '</td>\
+      <td>' + (c.payer || "-") + '</td>\
+      <td>$' + amount.toFixed(2) + '</td>\
+      <td><button onclick="window.location.href=\'' + route + '\'">Open</button></td>\
+    ';
+
+    table.appendChild(row);
+  });
+
+  section.appendChild(table);
+  container.appendChild(section);
+}
+
+function renderMetrics(container, metrics){
+  if (!metrics) return;
+
+  const section = document.createElement("div");
+  section.style.marginTop = "8px";
+
+  section.innerHTML = '\
+    <strong>Key Metrics</strong><br/>\
+    Claims: ' + (metrics.total_claims || 0) + ' |\
+    Billed: $' + (metrics.total_billed || 0) + ' |\
+    Paid: $' + (metrics.total_paid || 0) + '\
+  ';
+
+  container.appendChild(section);
+}
+
 async function sendCopilotMessage(){
   const input = document.querySelector("#aiChatInput");
   const msg = (input && input.value || "").trim();
@@ -3516,20 +3658,19 @@ async function sendCopilotMessage(){
   const container = document.querySelector("#aiChatMsgs");
   if (!container) return;
 
-  // 👇 Add user message
+  // USER MESSAGE
   const userEl = document.createElement("div");
   userEl.innerHTML = "<strong>You:</strong> " + msg;
   container.appendChild(userEl);
 
   input.value = "";
 
-  // 👇 Add THINKING indicator
+  // THINKING
   const thinkingEl = document.createElement("div");
   thinkingEl.className = "copilot-thinking";
   thinkingEl.innerHTML = '<strong>AI:</strong> <span class="dots"><span>.</span><span>.</span><span>.</span></span>';
   container.appendChild(thinkingEl);
 
-  // scroll down
   container.scrollTop = container.scrollHeight;
 
   try {
@@ -3541,67 +3682,34 @@ async function sendCopilotMessage(){
 
     const data = await res.json();
 
-    // 👇 REMOVE thinking indicator
     thinkingEl.remove();
 
-    // 👇 Add AI response
     const aiEl = document.createElement("div");
 
-    // Base answer
-    let html = "<strong>AI:</strong> " + data.answer;
+    // MAIN ANSWER
+    aiEl.innerHTML = "<strong>AI:</strong> " + (data.answer || "");
 
-    // 🔥 Suggested questions when no data
-    if (data.noData) {
-      html += '<div style="margin-top:8px; font-size:12px; color:#6b7280;">Try asking:</div>';
-      html += '<div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px;">';
-      html += '<button class="copilot-suggest-btn" data-q="What claims do I have?">View all claims</button>';
-      html += '<button class="copilot-suggest-btn" data-q="Which payers have data?">Available payers</button>';
-      html += '<button class="copilot-suggest-btn" data-q="Show denied claims">Denied claims</button>';
-      html += "</div>";
-    }
+    // METRICS
+    renderMetrics(aiEl, data.metrics);
 
-    // 🔥 Add clickable actions (if they exist)
-    if (
-      !data.noData &&
-      data.actions &&
-      Array.isArray(data.actions) &&
-      data.actions.length
-    ) {
-      html += '<div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">';
+    // ACTIONS
+    renderActions(aiEl, data.actions);
 
-      data.actions.slice(0,3).forEach(action => {
+    // CLAIM TABLE
+    renderTopClaims(aiEl, data.actions);
 
-        let route = "#";
+    // CHART
+    const chartType = determineChartType(msg);
+    renderChart(aiEl, chartType, data.metrics);
 
-        // map action types → routes
-        if (action.title.toLowerCase().includes("appeal")) {
-          route = "/actions?type=denials";
-        }
-
-        if (action.title.toLowerCase().includes("underpaid")) {
-          route = "/actions?type=underpayments";
-        }
-
-        if (action.title.toLowerCase().includes("payer")) {
-          route = "/claims-lifecycle";
-        }
-
-        html += '<a href="' + route + '" style="background:#111827; color:#fff; padding:6px 10px; border-radius:8px; font-size:12px; text-decoration:none; font-weight:600;">' + action.title + '</a>';
-      });
-
-      html += '</div>';
-    }
-
-    // inject into DOM
-    aiEl.innerHTML = html;
     container.appendChild(aiEl);
 
   } catch (e){
     thinkingEl.remove();
 
-    const errEl = document.createElement("div");
-    errEl.innerHTML = "<strong>AI:</strong> Error processing request";
-    container.appendChild(errEl);
+    const err = document.createElement("div");
+    err.innerHTML = "<strong>AI:</strong> Error";
+    container.appendChild(err);
   }
 
   container.scrollTop = container.scrollHeight;
