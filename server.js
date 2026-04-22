@@ -3182,6 +3182,20 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   animation-delay: 0.4s;
 }
 
+.copilot-suggest-btn {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.copilot-suggest-btn:hover {
+  background: #e5e7eb;
+}
+
 @keyframes blink {
   0% { opacity: 0.2; }
   20% { opacity: 1; }
@@ -3536,8 +3550,23 @@ async function sendCopilotMessage(){
     // Base answer
     let html = "<strong>AI:</strong> " + data.answer;
 
+    // 🔥 Suggested questions when no data
+    if (data.noData) {
+      html += '<div style="margin-top:8px; font-size:12px; color:#6b7280;">Try asking:</div>';
+      html += '<div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px;">';
+      html += '<button class="copilot-suggest-btn" data-q="What claims do I have?">View all claims</button>';
+      html += '<button class="copilot-suggest-btn" data-q="Which payers have data?">Available payers</button>';
+      html += '<button class="copilot-suggest-btn" data-q="Show denied claims">Denied claims</button>';
+      html += "</div>";
+    }
+
     // 🔥 Add clickable actions (if they exist)
-    if (data.actions && Array.isArray(data.actions) && data.actions.length) {
+    if (
+      !data.noData &&
+      data.actions &&
+      Array.isArray(data.actions) &&
+      data.actions.length
+    ) {
       html += '<div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">';
 
       data.actions.slice(0,3).forEach(action => {
@@ -3577,6 +3606,22 @@ async function sendCopilotMessage(){
 
   container.scrollTop = container.scrollHeight;
 }
+
+// 🔥 Handle suggested question clicks
+document.addEventListener("click", function(e){
+  const btn = e.target.closest(".copilot-suggest-btn");
+  if (!btn) return;
+
+  const question = btn.getAttribute("data-q");
+  const input = document.querySelector("#aiChatInput");
+
+  if (!input) return;
+
+  input.value = question;
+
+  // auto-send
+  window.__tjhpSendChat();
+});
 
 window.__tjhpSendChat = sendCopilotMessage;
 
@@ -21050,7 +21095,16 @@ if (pathname === "/ai/chat" && req.method === "POST") {
 
   if (!validation.ok){
     return send(res, 200, JSON.stringify({
-      answer: `No internal data available for ${validation.payer}.`,
+      answer: `No internal data available for ${validation.payer}.
+
+Try:
+- Upload claims for this payer
+- Check a different payer
+- Remove filters`,
+      metrics: null,
+      insights: [],
+      actions: [],
+      noData: true,
       grounded: true
     }), "application/json");
   }
@@ -26063,7 +26117,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
           </div>
           <div class="ws-sidebar-actions">
             <button type="button" class="btn secondary small" id="wsCollapseBtn">Collapse</button>
-            <a class="btn secondary small" href="/ai-copilot?new=1">New Analysis</a>
+            <a class="btn secondary small js-new-analysis-btn" href="/ai-copilot?new=1">New Analysis</a>
           </div>
         </div>
         <div class="ws-sidebar-list">
@@ -26114,14 +26168,16 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
         <div class="ws-composer">
           <div class="ws-composer-shell" id="wsComposerShell">
-            <div class="ws-composer-head">
-              <div>
-                <div class="ws-section-kicker">Prompt Library</div>
-                <div class="ws-section-heading">Start with a guided analysis</div>
-                <div class="ws-section-copy">Choose a premium prompt template or write your own question below.</div>
+            <div id="copilotPromptLibrary">
+              <div class="ws-composer-head">
+                <div>
+                  <div class="ws-section-kicker">Prompt Library</div>
+                  <div class="ws-section-heading">Start with a guided analysis</div>
+                  <div class="ws-section-copy">Choose a premium prompt template or write your own question below.</div>
+                </div>
               </div>
+              ${tilesHtml}
             </div>
-            ${tilesHtml}
 
             <form method="POST" action="${workspace ? "/ai-copilot/followup" : "/ai-copilot/new"}" class="ws-composer-form" id="copilotComposerForm">
               ${workspace ? `<input type="hidden" name="workspace_id" value="${safeStr(workspace.workspace_id)}" />` : ``}
@@ -26134,7 +26190,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
               <div class="ws-composer-hint">Press Enter to send or Shift+Enter for a new line</div>
               <div id="copilotOutput"></div>
               <div class="ws-composer-actions">
-                <a class="btn secondary" href="/ai-copilot?new=1">New Analysis</a>
+                <a class="btn secondary js-new-analysis-btn" href="/ai-copilot?new=1">New Analysis</a>
                 <a class="btn secondary" href="/revenue-intelligence">Open Revenue Intelligence</a>
               </div>
             </form>
@@ -26145,8 +26201,22 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 const btn = document.getElementById("copilotSendBtn");
                 const grid = document.getElementById("copilotTileGrid");
                 const composerShell = document.getElementById("wsComposerShell");
+                const newAnalysisLinks = document.querySelectorAll(".js-new-analysis-btn");
 
                 if (!form || !input) return;
+
+                // ==============================
+                // PROMPT LIBRARY VISIBILITY CONTROL
+                // ==============================
+                function hidePromptLibrary(){
+                  const el = document.getElementById("copilotPromptLibrary");
+                  if (el) el.style.display = "none";
+                }
+
+                function showPromptLibrary(){
+                  const el = document.getElementById("copilotPromptLibrary");
+                  if (el) el.style.display = "block";
+                }
 
                 function showUpgradeModal(message){
                   const modal = document.createElement("div");
@@ -26195,6 +26265,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 async function submitMainCopilot() {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
+                  hidePromptLibrary();
                   // clear input immediately (ChatGPT behavior)
                   input.value = "";
 
@@ -26404,6 +26475,14 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     input.value = txt;
                     input.focus();
                     submitMainCopilot();
+                  });
+                }
+
+                if (newAnalysisLinks && newAnalysisLinks.length){
+                  newAnalysisLinks.forEach((link) => {
+                    link.addEventListener("click", function(){
+                      showPromptLibrary();
+                    });
                   });
                 }
               })();
