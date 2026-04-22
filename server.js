@@ -4711,6 +4711,44 @@ function buildSmartCopilotContext(org_id, message){
   };
 }
 
+
+function tryDeterministicAnswer(org_id, message){
+  const text = String(message || "").toLowerCase();
+
+  const context = buildSmartCopilotContext(org_id, message);
+  const claims = filterDataForQuery(org_id, message).billed || [];
+
+  // ---- EXPECTED AMOUNT ----
+  if (/expected amount|expected reimbursement|expected total/.test(text)){
+    const totalExpected = claims.reduce((s,c)=>s + num(c.expected_amount),0);
+
+    if (!totalExpected){
+      return "No internal data available for expected amounts.";
+    }
+
+    return `The total expected amount is ${formatMoneyUI(totalExpected)}.`;
+  }
+
+  // ---- PAID AMOUNT ----
+  if (/\bpaid\b|\breimbursed\b|\bcollected\b/.test(text)){
+    const totalPaid = context?.totals?.paid || 0;
+
+    if (!totalPaid){
+      return "No internal data available for payments.";
+    }
+
+    return `The total amount paid is ${formatMoneyUI(totalPaid)}.`;
+  }
+
+  // ---- CLAIM COUNT ----
+  if (/how many claims|total claims/.test(text)){
+    const total = context?.totals?.claims || 0;
+    return `You have ${total} claims in this dataset.`;
+  }
+
+  return null;
+}
+
 // ==============================
 // STRUCTURED AI RESPONSE ENGINE
 // ==============================
@@ -21135,6 +21173,18 @@ Try:
   // =========================
   // 🔥 STEP 1: STRUCTURED + GROUNDED ANSWER
   // =========================
+  // 🔥 TRY DETERMINISTIC FIRST
+  const deterministic = tryDeterministicAnswer(sess.org_id, message);
+
+  if (deterministic){
+    return send(res, 200, JSON.stringify({
+      answer: deterministic,
+      used: usageCheck.used,
+      limit: usageCheck.limit,
+      grounded: true
+    }), "application/json");
+  }
+
   const structured = await runStructuredCopilotWithActions({
     org_id: sess.org_id,
     message
@@ -21146,10 +21196,12 @@ Try:
     (await runGroundedCopilot({ org_id: sess.org_id, message })).answer;
 
   // 👉 Floating Copilot stays simple
+  const isAnalytic = /aetna|payer|claims|denial|underpaid|revenue|expected|paid/.test(message);
+
   if (
     shortAnswer &&
     shortAnswer.length < 200 &&
-    !/analyze|compare|trend|report|breakdown|summary|why/i.test(message)
+    !isAnalytic
   ) {
     return send(res, 200, JSON.stringify({
       answer: shortAnswer,
