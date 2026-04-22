@@ -3167,6 +3167,27 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
   border:1px solid #e2e8f0;
 }
 
+.copilot-thinking .dots span {
+  animation: blink 1.4s infinite;
+  font-weight: bold;
+  font-size: 18px;
+  margin-left: 2px;
+}
+
+.copilot-thinking .dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.copilot-thinking .dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes blink {
+  0% { opacity: 0.2; }
+  20% { opacity: 1; }
+  100% { opacity: 0.2; }
+}
+
 /* Mobile spacing fix for auth screens */
 @media (max-width: 640px) {
   .card { padding: 16px !important; }
@@ -3473,66 +3494,91 @@ if (!window.__tjhpOutsideClickBound) {
   });
 })();
 
-window.__tjhpSendChat = async function(){
-  const input = document.getElementById("aiChatInput");
-  const msgs = document.getElementById("aiChatMsgs");
-  const sendBtn = document.getElementById("aiChatSendBtn");
-  const savedNotice = document.getElementById("aiChatSavedNotice");
-  if (!input || !msgs || !sendBtn) return;
-  const text = (input.value || "").trim();
-  if (!text || sendBtn.disabled) return;
+async function sendCopilotMessage(){
+  const input = document.querySelector("#aiChatInput");
+  const msg = (input && input.value || "").trim();
+  if (!msg) return;
 
-  const esc = (s)=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-  const addMsg = (who, t) => {
-    const div = document.createElement("div");
-    div.style.margin = "6px 0";
-    div.innerHTML = "<strong>" + who + ":</strong> " + esc(t);
-    msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
-  };
+  const container = document.querySelector("#aiChatMsgs");
+  if (!container) return;
 
-  addMsg("You", text);
-  const empty = msgs.querySelector(".empty-state");
-  if (empty) empty.remove();
+  // 👇 Add user message
+  const userEl = document.createElement("div");
+  userEl.innerHTML = "<strong>You:</strong> " + msg;
+  container.appendChild(userEl);
+
   input.value = "";
-  if (savedNotice) savedNotice.style.display = "none";
 
-  try{
-    sendBtn.disabled = true;
-    const r = await fetch("/ai/chat", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ message: text })
+  // 👇 Add THINKING indicator
+  const thinkingEl = document.createElement("div");
+  thinkingEl.className = "copilot-thinking";
+  thinkingEl.innerHTML = '<strong>AI:</strong> <span class="dots"><span>.</span><span>.</span><span>.</span></span>';
+  container.appendChild(thinkingEl);
+
+  // scroll down
+  container.scrollTop = container.scrollHeight;
+
+  try {
+    const res = await fetch("/ai/chat", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ message: msg })
     });
-    const data = await r.json();
-    addMsg("AI", (data && data.answer) ? data.answer : "No response.");
 
-    // ===== Real-time usage update =====
-    if (data && typeof data.used === "number") {
-      const usageBadge = document.getElementById("aiChatUsageBadge");
-      if (usageBadge) {
-        const limitText = data.limit !== undefined
-          ? (data.limit >= 999999 ? "Unlimited" : data.limit)
-          : usageBadge.textContent.split("/")[1].trim();
+    const data = await res.json();
 
-        usageBadge.textContent =
-          "AI Usage: " + data.used + " / " + limitText;
-      }
+    // 👇 REMOVE thinking indicator
+    thinkingEl.remove();
+
+    // 👇 Add AI response
+    const aiEl = document.createElement("div");
+
+    // Base answer
+    let html = "<strong>AI:</strong> " + data.answer;
+
+    // 🔥 Add clickable actions (if they exist)
+    if (data.actions && Array.isArray(data.actions) && data.actions.length) {
+      html += '<div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">';
+
+      data.actions.slice(0,3).forEach(action => {
+
+        let route = "#";
+
+        // map action types → routes
+        if (action.title.toLowerCase().includes("appeal")) {
+          route = "/actions?type=denials";
+        }
+
+        if (action.title.toLowerCase().includes("underpaid")) {
+          route = "/actions?type=underpayments";
+        }
+
+        if (action.title.toLowerCase().includes("payer")) {
+          route = "/claims-lifecycle";
+        }
+
+        html += '<a href="' + route + '" style="background:#111827; color:#fff; padding:6px 10px; border-radius:8px; font-size:12px; text-decoration:none; font-weight:600;">' + action.title + '</a>';
+      });
+
+      html += '</div>';
     }
-    if (data && data.limitReached) {
-      sendBtn.disabled = true;
-      sendBtn.textContent = "Limit Reached";
-      return;
-    }
-    sendBtn.disabled = false;
-    sendBtn.textContent = "Send";
-    if (data && data.savedToWorkspace && savedNotice) savedNotice.style.display = "block";
-  }catch(e){
-    addMsg("AI", "Error contacting assistant. Try again.");
-    sendBtn.disabled = false;
-    sendBtn.textContent = "Send";
+
+    // inject into DOM
+    aiEl.innerHTML = html;
+    container.appendChild(aiEl);
+
+  } catch (e){
+    thinkingEl.remove();
+
+    const errEl = document.createElement("div");
+    errEl.innerHTML = "<strong>AI:</strong> Error processing request";
+    container.appendChild(errEl);
   }
-};
+
+  container.scrollTop = container.scrollHeight;
+}
+
+window.__tjhpSendChat = sendCopilotMessage;
 
 // Allow Enter key to submit floating AI chat
 (function(){
@@ -4483,6 +4529,76 @@ function extractQueryFilters(message){
   if (/paid/.test(text)) status = "paid";
 
   return { payer, status };
+}
+
+// ==============================
+// STRICT DATA VALIDATION + FUZZY MATCH
+// ==============================
+
+function normalizePayerName(name){
+  return String(name || "").toLowerCase().replace(/[^a-z]/g, "");
+}
+
+function findBestPayerMatch(input, org_id){
+  const billed = readJSON(FILES.billed, []).filter(x => x.org_id === org_id);
+  const payers = [...new Set(billed.map(b => b.payer).filter(Boolean))];
+
+  const normalizedInput = normalizePayerName(input);
+
+  let best = null;
+  let bestScore = 0;
+
+  for (const p of payers){
+    const norm = normalizePayerName(p);
+
+    // simple fuzzy match
+    let score = 0;
+
+    if (norm.includes(normalizedInput)) score += 2;
+    if (normalizedInput.includes(norm)) score += 2;
+
+    // partial similarity
+    for (let i = 0; i < Math.min(norm.length, normalizedInput.length); i++){
+      if (norm[i] === normalizedInput[i]) score += 1;
+    }
+
+    if (score > bestScore){
+      bestScore = score;
+      best = p;
+    }
+  }
+
+  return bestScore >= 2 ? best : null;
+}
+
+// ---- strict data check before Copilot ----
+function validateQueryHasData(org_id, message){
+  const { payer } = extractQueryFilters(message);
+
+  if (!payer) return { ok: true };
+
+  const billed = readJSON(FILES.billed, []).filter(x => x.org_id === org_id);
+
+  const exactMatch = billed.filter(b =>
+    String(b.payer || "").toLowerCase().includes(payer)
+  );
+
+  if (exactMatch.length > 0){
+    return { ok: true, payer };
+  }
+
+  // try fuzzy match
+  const fuzzy = findBestPayerMatch(payer, org_id);
+
+  if (fuzzy){
+    return { ok: true, payer: fuzzy, corrected: true };
+  }
+
+  return {
+    ok: false,
+    reason: "NO_DATA_FOR_PAYER",
+    payer
+  };
 }
 
 // ---- Smart data filtering ----
@@ -20925,7 +21041,24 @@ if (pathname === "/ai/chat" && req.method === "POST") {
   const rawMessage = String(body.message || "").trim();
 
   // 🔥 APPLY MEMORY
-  const { message, newContext } = applyMemoryToMessage(sess.org_id, rawMessage);
+  const memoryApplied = applyMemoryToMessage(sess.org_id, rawMessage);
+  let message = memoryApplied.message;
+  const { newContext } = memoryApplied;
+
+  // 🔥 STRICT VALIDATION
+  const validation = validateQueryHasData(sess.org_id, message);
+
+  if (!validation.ok){
+    return send(res, 200, JSON.stringify({
+      answer: `No internal data available for ${validation.payer}.`,
+      grounded: true
+    }), "application/json");
+  }
+
+  // 🔥 APPLY CORRECTED PAYER IF FUZZY MATCHED
+  if (validation.corrected){
+    message = `${message} (for ${validation.payer})`;
+  }
 
   // 🔥 SAVE MEMORY
   if (newContext.payer){
