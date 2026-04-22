@@ -5863,6 +5863,200 @@ function renderDynamicActionButtons(result) {
   `;
 }
 
+
+function renderCopilotMetrics(metrics){
+  if (!metrics) return "";
+  return `
+    <div class="card" style="margin-top:12px;">
+      <h4>Key Metrics</h4>
+      <div>
+        Claims: ${Number(metrics.total_claims || 0)} |
+        Billed: ${formatMoneyUI(metrics.total_billed || 0)} |
+        Paid: ${formatMoneyUI(metrics.total_paid || 0)}
+      </div>
+    </div>
+  `;
+}
+
+function renderCopilotActions(actions){
+  if (!actions || !actions.length) return "";
+
+  function priorityMeta(priority){
+    const p = String(priority || "").toLowerCase();
+    if (p === "high") {
+      return {
+        badgeBg: "#fee2e2",
+        badgeColor: "#991b1b",
+        border: "#fca5a5",
+        label: "High Priority"
+      };
+    }
+    if (p === "medium") {
+      return {
+        badgeBg: "#fef3c7",
+        badgeColor: "#92400e",
+        border: "#fcd34d",
+        label: "Medium Priority"
+      };
+    }
+    return {
+      badgeBg: "#dcfce7",
+      badgeColor: "#166534",
+      border: "#86efac",
+      label: "Low Priority"
+    };
+  }
+
+  return `
+    <div class="card" style="margin-top:12px;">
+      <h4>Recommended Actions</h4>
+      ${actions.map((a, idx) => {
+        const meta = priorityMeta(a.priority);
+        const title = safeStr(a.title || "Action");
+        const reason = safeStr(a.reason || "");
+        const nextStep = safeStr(a.next_step || "Open Action Center");
+
+        const items = Array.isArray(a.items) ? a.items.slice(0, 2) : [];
+        const firstItem = items[0] || null;
+        const claimRoute = firstItem?.route ? safeStr(firstItem.route) : "";
+        const actionRoute = firstItem?.action_route ? safeStr(firstItem.action_route) : "/actions";
+
+        return `
+          <div style="
+            border:1px solid ${meta.border};
+            padding:10px;
+            margin-top:8px;
+            border-radius:10px;
+            background:#fff;
+          ">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap;">
+              <div>
+                <div style="font-weight:700;">${title}</div>
+                <div class="muted small" style="margin-top:4px;">${reason}</div>
+              </div>
+              <div style="
+                background:${meta.badgeBg};
+                color:${meta.badgeColor};
+                padding:4px 8px;
+                border-radius:999px;
+                font-size:12px;
+                font-weight:700;
+                white-space:nowrap;
+              ">${meta.label}</div>
+            </div>
+
+            <div style="margin-top:8px;font-size:13px;">${nextStep}</div>
+
+            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+              ${claimRoute ? `<a class="btn small secondary" href="${claimRoute}">Open Claim</a>` : ""}
+              <a class="btn small" href="${actionRoute}">Open Action Center</a>
+            </div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+function renderCopilotTopClaims(actions){
+  if (!actions || !actions.length) return "";
+
+  const claims = actions
+    .flatMap(a => Array.isArray(a.items) ? a.items : [])
+    .sort((a, b) => Number(b?.amount || 0) - Number(a?.amount || 0))
+    .slice(0, 5);
+
+  if (!claims.length) return "";
+
+  return `
+    <div class="card" style="margin-top:12px;">
+      <h4>Top Claims</h4>
+      <table style="width:100%;font-size:13px;">
+        <tr>
+          <th style="text-align:left;">Claim</th>
+          <th style="text-align:left;">Payer</th>
+          <th style="text-align:left;">Amount</th>
+          <th style="text-align:left;"></th>
+        </tr>
+        ${claims.map(c => `
+          <tr>
+            <td>${safeStr(c.claim_number || c.claim_id || "-")}</td>
+            <td>${safeStr(c.payer || "-")}</td>
+            <td>${formatMoneyUI(c.amount || 0)}</td>
+            <td style="white-space:nowrap;">
+              ${c.route ? `<a class="btn small secondary" href="${safeStr(c.route)}">Open Claim</a>` : ""}
+              ${c.action_route ? `<a class="btn small" href="${safeStr(c.action_route)}">Action Center</a>` : ""}
+            </td>
+          </tr>
+        `).join("")}
+      </table>
+    </div>
+  `;
+}
+function determineWorkspaceChartType(result){
+  if (!result) return null;
+
+  if (Number(result.metrics?.denied_claims || 0) > 0) return "denial";
+  if (Number(result.metrics?.underpaid_claims || 0) > 0) return "underpaid";
+  return "revenue";
+}
+
+function renderCopilotChart(result, chartId){
+  const type = determineWorkspaceChartType(result);
+  if (!type) return "";
+
+  let data = [];
+  let title = "Chart";
+
+  if (type === "revenue") {
+    title = "Revenue Overview";
+    data = [
+      { label: "Billed", value: Number(result.metrics?.total_billed || 0) },
+      { label: "Paid", value: Number(result.metrics?.total_paid || 0) }
+    ];
+  } else if (type === "denial") {
+    title = "Denial Overview";
+    data = [
+      { label: "Denied", value: Number(result.metrics?.denied_claims || 0) },
+      { label: "Other", value: Math.max(0, Number(result.metrics?.total_claims || 0) - Number(result.metrics?.denied_claims || 0)) }
+    ];
+  } else {
+    title = "Underpayment Overview";
+    data = [
+      { label: "Underpaid", value: Number(result.metrics?.underpaid_claims || 0) },
+      { label: "Other", value: Math.max(0, Number(result.metrics?.total_claims || 0) - Number(result.metrics?.underpaid_claims || 0)) }
+    ];
+  }
+
+  const safeChartId = safeStr(String(chartId || "copilotChart")).replace(/[^a-zA-Z0-9_-]/g, "_");
+
+  return `
+    <div class="card" style="margin-top:12px;">
+      <h4>${title}</h4>
+      <canvas id="${safeChartId}" height="120"></canvas>
+      <script>
+        (function(){
+          const ctx = document.getElementById(${JSON.stringify(safeChartId)});
+          if (!ctx || typeof Chart === "undefined") return;
+          const data = ${JSON.stringify(data)};
+          new Chart(ctx, {
+            type: "bar",
+            data: {
+              labels: data.map(d => d.label),
+              datasets: [{
+                label: "Value",
+                data: data.map(d => d.value)
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false
+            }
+          });
+        })();
+      </script>
+    </div>
+  `;
+}
 function renderCopilotBriefMessage(result, brief_id, workspace_id){
   const r = result || {};
   const m = r.metrics || {};
@@ -5894,6 +6088,15 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
       </div>
     </div>
   `).join("");
+
+  const hasExistingCharts = Array.isArray(charts) && charts.length > 0;
+
+  const enhancedUI = `
+    ${renderCopilotMetrics(r?.metrics)}
+    ${renderCopilotActions(r?.actions)}
+    ${renderCopilotTopClaims(r?.actions)}
+    ${!hasExistingCharts ? renderCopilotChart(r, `copilotChart_${safeBriefId}`) : ""}
+  `;
 
   return `
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -5941,6 +6144,8 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
         </section>
 
         ${chartCards}
+
+        ${enhancedUI}
 
         ${renderDynamicActionButtons(r)}
       </div>
