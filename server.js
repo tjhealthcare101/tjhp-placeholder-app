@@ -3453,6 +3453,20 @@ try{
 // ===== Floating Copilot Open/Close Controller =====
 window.__tjhpChatState = window.__tjhpChatState || { open: false, justOpenedAt: 0 };
 
+function buildFloaterAction(action){
+  if (!action) return "";
+
+  const first = Array.isArray(action.items) ? action.items[0] : null;
+  if (!first) {
+    return '<a class="btn primary" href="/ai-copilot?from=chat">View Full Analysis</a>';
+  }
+
+  const route = first?.billed_id
+    ? ("/claim-detail?id=" + encodeURIComponent(first.billed_id))
+    : (first?.route || "/claims-lifecycle");
+  return '<a class="btn primary" style="padding:8px 12px;border-radius:8px;font-weight:600;" href="' + route + '">View Related Claim</a>';
+}
+
 window.__tjhpOpenChat = function(){
   const box = document.getElementById("aiChatBox");
   if (!box) return;
@@ -3569,25 +3583,11 @@ async function sendCopilotMessage(){
     ) {
       html += '<div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">';
 
-      data.actions.slice(0,3).forEach(action => {
-
-        let route = "#";
-
-        // map action types → routes
-        if (action.title.toLowerCase().includes("appeal")) {
-          route = "/actions?type=denials";
-        }
-
-        if (action.title.toLowerCase().includes("underpaid")) {
-          route = "/actions?type=underpayments";
-        }
-
-        if (action.title.toLowerCase().includes("payer")) {
-          route = "/claims-lifecycle";
-        }
-
-        html += '<a href="' + route + '" style="background:#111827; color:#fff; padding:6px 10px; border-radius:8px; font-size:12px; text-decoration:none; font-weight:600;">' + action.title + '</a>';
-      });
+      const primaryAction = data.actions?.[0];
+      const actionBtn = buildFloaterAction(primaryAction);
+      if (actionBtn){
+        html += '<div style="margin-top:8px;">' + actionBtn + '</div>';
+      }
 
       html += '</div>';
     }
@@ -4449,48 +4449,33 @@ ${chatScript}
   }
 
   // =========================
-  // 2. FORCE CHART RENDER (matches YOUR chart structure)
+  // 2. FORCE CHART RENDER
   // =========================
-  function fixCharts(){
+  function renderChartsAfterLoad(){
+    if (typeof window === "undefined") return;
     if (typeof Chart === "undefined") return;
 
-    document.querySelectorAll("canvas[id^='copilotChart_'], canvas[id^='wsChart_']").forEach(canvas => {
-      if (canvas.__fixed) return;
+    setTimeout(() => {
+      document.querySelectorAll("canvas[id^='copilotChart_'], canvas[id^='wsChart_']").forEach(canvas => {
+        if (canvas.__rendered) return;
 
-      const parent = canvas.parentElement;
-      if (!parent) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
 
-      try {
-        // rebuild chart using existing data already in DOM
-        const labels = [];
-        const values = [];
+        try {
+          const rawConfig = canvas.dataset.config || canvas.dataset.chart || "{}";
+          const decoded = String(rawConfig)
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/&amp;/g, "&");
+          const config = JSON.parse(decoded);
+          if (!config || !config.data) return;
 
-        parent.querySelectorAll("li").forEach(li => {
-          const txt = li.textContent || "";
-          const num = parseFloat(txt.replace(/[^0-9.]/g,""));
-          if (!isNaN(num)){
-            labels.push(txt.split(":")[0]);
-            values.push(num);
-          }
-        });
-
-        if (!labels.length) return;
-
-        new Chart(canvas, {
-          type: "bar",
-          data: {
-            labels,
-            datasets: [{
-              label: "Value",
-              data: values
-            }]
-          }
-        });
-
-        canvas.__fixed = true;
-
-      } catch(e){}
-    });
+          canvas._chartInstance = new Chart(ctx, config);
+          canvas.__rendered = true;
+        } catch (e) {}
+      });
+    }, 100);
   }
 
   // =========================
@@ -4542,7 +4527,7 @@ ${chatScript}
   // =========================
   function run(){
     removeDuplicateHeaders();
-    fixCharts();
+    renderChartsAfterLoad();
     hidePromptLibrary();
     fixActionButtons();
     fixFullAnalysis();
@@ -5993,17 +5978,30 @@ function renderDynamicActionButtons(result) {
 
 
 function renderCopilotMetrics(metrics){
-  if (!metrics) return "";
+  const cleanMetrics = sanitizeMetrics(metrics);
+  if (!cleanMetrics) return "";
   return `
     <div class="card" style="margin-top:12px;">
       <h4>Key Metrics</h4>
       <div>
-        Claims: ${Number(metrics.total_claims || 0)} |
-        Billed: ${formatMoneyUI(metrics.total_billed || 0)} |
-        Paid: ${formatMoneyUI(metrics.total_paid || 0)}
+        Claims: ${Number(cleanMetrics.total_claims || 0)} |
+        Billed: ${formatMoneyUI(cleanMetrics.total_billed || 0)} |
+        Paid: ${formatMoneyUI(cleanMetrics.total_paid || 0)}
       </div>
     </div>
   `;
+}
+
+function sanitizeMetrics(metrics){
+  if (!metrics) return metrics;
+  if (
+    Number(metrics.total_claims || 0) === 0 &&
+    Number(metrics.total_billed || 0) === 0 &&
+    Number(metrics.total_paid || 0) === 0
+  ) {
+    return null;
+  }
+  return metrics;
 }
 
 function renderCopilotActions(actions){
@@ -6204,7 +6202,7 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
       <div class="ws-chart">
         <canvas 
           id="wsChart_${safeBriefId}_${i}" 
-          data-chart='${JSON.stringify({
+          data-config='${JSON.stringify({
             type: c.type || "bar",
             data: {
               labels: c.labels || [],
@@ -26389,16 +26387,12 @@ if (method === "GET" && pathname === "/ai-copilot") {
   const thread = (workspace && Array.isArray(workspace.messages)) ? workspace.messages : [];
   const brief = workspace?.latest_brief || null;
 
-  const hasSavedAnalyses = allWorkspaces.length > 0;
-  const emptyStateHtml = (!workspace && !hasSavedAnalyses) ? `
-    <div class="ws-empty-state">
-      <div class="ws-empty-icon">✨</div>
-      <div>
-        <h3>Start your first AI analysis</h3>
-        <p>Ask Copilot for an executive brief, risk review, or payer analysis. You can also start with one of the suggested prompt tiles below and it will auto-submit for you.</p>
-      </div>
+  const emptyStateHtml = `
+    <div class="card" style="margin-top:20px;text-align:center;padding:40px;">
+      <h3>Start Your Analysis</h3>
+      <p class="muted">Ask a question to generate insights on your revenue, denials, and payments.</p>
     </div>
-  ` : ``;
+  `;
 
   const threadHtml = `
     <div class="ws-thread" id="wsThread">
@@ -26603,6 +26597,49 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   if (el) el.style.display = "block";
                 }
 
+                function fixButtonStyles(){
+                  if (typeof document === "undefined") return;
+                  document.querySelectorAll("button").forEach(btnEl => {
+                    if ((btnEl.textContent || "").includes("New Analysis")){
+                      btnEl.style.padding = "10px 16px";
+                      btnEl.style.borderRadius = "10px";
+                      btnEl.style.fontWeight = "600";
+                    }
+                  });
+                }
+
+                function renderChartsAfterLoad(){
+                  if (typeof window === "undefined" || typeof Chart === "undefined") return;
+                  setTimeout(() => {
+                    document.querySelectorAll("canvas[id^='copilotChart_'], canvas[id^='wsChart_']").forEach(canvas => {
+                      if (canvas.__rendered) return;
+                      const ctx = canvas.getContext("2d");
+                      if (!ctx) return;
+                      try {
+                        const rawConfig = canvas.dataset.config || canvas.dataset.chart || "{}";
+                        const decoded = String(rawConfig)
+                          .replace(/&quot;/g, '"')
+                          .replace(/&#39;/g, "'")
+                          .replace(/&amp;/g, "&");
+                        const config = JSON.parse(decoded);
+                        if (!config || !config.data) return;
+                        canvas._chartInstance = new Chart(ctx, config);
+                        canvas.__rendered = true;
+                      } catch(e){}
+                    });
+                  }, 100);
+                }
+
+                function applyCopilotFixes(){
+                  if (typeof document === "undefined") return;
+                  const messages = document.querySelectorAll(".ws-msg");
+                  if (messages.length > 0){
+                    hidePromptLibrary();
+                  }
+                  fixButtonStyles();
+                  renderChartsAfterLoad();
+                }
+
                 function showUpgradeModal(message){
                   const modal = document.createElement("div");
                   modal.innerHTML = \`
@@ -26778,14 +26815,14 @@ if (method === "GET" && pathname === "/ai-copilot") {
                           setTimeout(() => {
                             try {
                               if (window.Chart) {
-                                document.querySelectorAll("canvas[data-chart]").forEach((canvas) => {
+                                document.querySelectorAll("canvas[data-config], canvas[data-chart]").forEach((canvas) => {
                                   const ctx = canvas.getContext("2d");
 
                                   if (canvas._chartInstance) {
                                     canvas._chartInstance.destroy();
                                   }
 
-                                  const raw = canvas.getAttribute("data-chart");
+                                  const raw = canvas.getAttribute("data-config") || canvas.getAttribute("data-chart") || "{}";
 
                                   // 🔥 FIX: decode HTML entities back to valid JSON
                                   const decoded = raw
@@ -26840,6 +26877,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     e.preventDefault();
                     submitMainCopilot();
                   });
+                }
+
+                if (typeof window !== "undefined") {
+                  setInterval(applyCopilotFixes, 400);
                 }
 
                 if (grid){
