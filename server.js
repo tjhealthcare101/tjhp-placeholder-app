@@ -3373,7 +3373,7 @@ function renderPage(title, content, navHtml="", opts={}) {
         <div class="small" style="color:#1e3a8a;line-height:1.35;">
           For executive briefs, charts, and deeper analysis, use the full AI Copilot workspace.
         </div>
-        <a class="btn secondary small" href="/ai-copilot?from=chat">Open AI Copilot</a>
+        <a class="btn secondary small" href="/ai-copilot?from=chat&view=full">Open AI Copilot</a>
       </div>
 
       <div class="muted small" style="margin-bottom:8px;">
@@ -3423,7 +3423,7 @@ function renderPage(title, content, navHtml="", opts={}) {
 
         <div id="aiChatSavedNotice" class="small">
           Full report saved to AI Copilot workspace.
-          <a href="/ai-copilot?from=chat" style="font-weight:800;margin-left:6px;">→ View Full Analysis</a>
+          <a href="/ai-copilot?from=chat&view=full" style="font-weight:800;margin-left:6px;">→ View Full Analysis</a>
         </div>
 
         <div class="btnRow">
@@ -3456,15 +3456,25 @@ window.__tjhpChatState = window.__tjhpChatState || { open: false, justOpenedAt: 
 function buildFloaterAction(action){
   if (!action) return "";
 
-  const first = Array.isArray(action.items) ? action.items[0] : null;
-  if (!first) {
-    return '<a class="btn primary" href="/ai-copilot?from=chat">View Full Analysis</a>';
+  if (action.type === "navigation" && action.route){
+    return '<a class="btn primary" style="padding:8px 12px;border-radius:8px;font-weight:700;" href="' + action.route + '">' + (action.label || "Open") + '</a>';
   }
 
-  const route = first?.billed_id
-    ? ("/claim-detail?id=" + encodeURIComponent(first.billed_id))
-    : (first?.route || "/claims-lifecycle");
-  return '<a class="btn primary" style="padding:8px 12px;border-radius:8px;font-weight:600;" href="' + route + '">View Related Claim</a>';
+  const first = Array.isArray(action.items) ? action.items[0] : null;
+
+  if (first && first.billed_id){
+    return '<a class="btn primary" style="padding:8px 12px;border-radius:8px;font-weight:700;" href="/claim-detail?id=' + encodeURIComponent(first.billed_id) + '">View Claim</a>';
+  }
+
+  if (first && first.action_route){
+    return '<a class="btn primary" style="padding:8px 12px;border-radius:8px;font-weight:700;" href="' + first.action_route + '">Open Action Center</a>';
+  }
+
+  if (first && first.route){
+    return '<a class="btn primary" style="padding:8px 12px;border-radius:8px;font-weight:700;" href="' + first.route + '">Open Related Item</a>';
+  }
+
+  return '<a class="btn primary" style="padding:8px 12px;border-radius:8px;font-weight:700;" href="/actions">Open Action Center</a>';
 }
 
 window.__tjhpOpenChat = function(){
@@ -4529,7 +4539,7 @@ ${chatScript}
     if (!notice.innerHTML.includes("View Full Analysis")){
       notice.innerHTML = \`
         Full report saved.
-        <a href="/copilot" style="font-weight:800;margin-left:6px;">
+        <a href="/ai-copilot?from=chat&view=full" style="font-weight:800;margin-left:6px;">
           → View Full Analysis
         </a>
       \`;
@@ -5718,6 +5728,196 @@ function tryHandleUIQuestion(message, currentPath = "") {
   return null;
 }
 
+function isSimpleQuestion(message) {
+  const text = String(message || "").toLowerCase().trim();
+
+  return (
+    text.startsWith("what is") ||
+    text.startsWith("what does") ||
+    text.startsWith("how does") ||
+    text.startsWith("where is") ||
+    text.startsWith("explain") ||
+    text.startsWith("how do i")
+  );
+}
+
+function extractSmartDateRange(message){
+  const text = String(message || "").toLowerCase();
+
+  if (/\btoday\b/.test(text)) return "today";
+  if (/last\s*7\s*days|past\s*7\s*days|7\s*day/.test(text)) return "last7";
+  if (/last\s*30\s*days|past\s*30\s*days|30\s*day/.test(text)) return "last30";
+  if (/last\s*60\s*days|past\s*60\s*days|60\s*day/.test(text)) return "last60";
+  if (/last\s*90\s*days|past\s*90\s*days|90\s*day/.test(text)) return "last90";
+  if (/this\s*month|current\s*month/.test(text)) return "thismonth";
+  if (/this\s*year|current\s*year/.test(text)) return "thisyear";
+
+  return "";
+}
+
+function extractSmartPayer(org_id, message){
+  try {
+    const detected = detectPayerFromPrompt(message, org_id);
+    if (detected) return detected;
+
+    const candidates = detectPayerCandidatesFromPrompt(message, org_id);
+    if (Array.isArray(candidates) && candidates.length === 1) return candidates[0];
+
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+function smartUrl(base, params = {}){
+  const clean = Object.entries(params)
+    .filter(([_, v]) => v !== undefined && v !== null && String(v).trim() !== "")
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .join("&");
+
+  return clean ? `${base}${base.includes("?") ? "&" : "?"}${clean}` : base;
+}
+
+function buildSmartCopilotActions(org_id, message, opts = {}){
+  const text = String(message || "").toLowerCase();
+  const payer = extractSmartPayer(org_id, message);
+  const range = extractSmartDateRange(message);
+  const source = String(opts.source || "chat");
+
+  const isFullCopilot = source === "full";
+  const actions = [];
+
+  const add = (type, label, route) => {
+    actions.push({ type: "navigation", label, route });
+  };
+
+  if (/denied|denial/.test(text)) {
+    add("denials", payer ? `View ${payer} Denials` : "View Denied Claims", smartUrl("/actions", {
+      tab: "denials",
+      payer,
+      range
+    }));
+
+    if (isFullCopilot) {
+      add("analysis", "Open Revenue Intelligence", smartUrl("/revenue-intelligence", {
+        tab: "payers",
+        payer,
+        range
+      }));
+    }
+
+    return actions;
+  }
+
+  if (/underpaid|underpayment|underpaying/.test(text)) {
+    add("underpayments", payer ? `View ${payer} Underpayments` : "View Underpaid Claims", smartUrl("/actions", {
+      tab: "underpayments",
+      payer,
+      range
+    }));
+
+    if (isFullCopilot) {
+      add("analysis", "Open Revenue Intelligence", smartUrl("/revenue-intelligence", {
+        tab: "payers",
+        payer,
+        range
+      }));
+    }
+
+    return actions;
+  }
+
+  if (/appeal|appeals|negotiation|negotiations/.test(text)) {
+    add("appeals", "View Appeals & Negotiations", smartUrl("/actions", {
+      tab: "appeals",
+      payer,
+      range
+    }));
+    return actions;
+  }
+
+  if (/follow\s*up|follow-up|needs follow/.test(text)) {
+    add("followup", "View Claims Needing Follow-Up", smartUrl("/actions", {
+      tab: "followup",
+      payer,
+      range
+    }));
+    return actions;
+  }
+
+  if (/submitted|waiting payment|awaiting payment|claim batch|batches|lifecycle/.test(text)) {
+    add("lifecycle", "Open Claims Lifecycle", smartUrl("/claims-lifecycle", {
+      payer,
+      range
+    }));
+    return actions;
+  }
+
+  if (/action center/.test(text)) {
+    add("actions", "Open Action Center", smartUrl("/actions", {
+      payer,
+      range
+    }));
+    return actions;
+  }
+
+  if (/payer|performance|revenue|at risk|collected|paid|forecast|trend/.test(text)) {
+    if (source === "chat") {
+      add("full_analysis", "Open Full Analysis", smartUrl("/ai-copilot", {
+        from: "chat",
+        view: "full",
+        payer,
+        range
+      }));
+    } else {
+      add("payer_analysis", "Open Revenue Intelligence", smartUrl("/revenue-intelligence", {
+        tab: payer ? "payers" : "executive",
+        payer,
+        range
+      }));
+      add("actions", "View Related Claims", smartUrl("/actions", {
+        payer,
+        range
+      }));
+    }
+
+    return actions;
+  }
+
+  add("dashboard", "Open Revenue Overview", smartUrl("/dashboard", {
+    payer,
+    range
+  }));
+
+  return actions;
+}
+
+function buildSmartSimpleAnswer(message){
+  const text = String(message || "").toLowerCase();
+
+  if (/action center/.test(text)) {
+    return "The Action Center shows claims that need attention, such as denials, underpayments, appeals, negotiations, and follow-ups, so your team knows what to work next.";
+  }
+
+  if (/claims lifecycle|lifecycle/.test(text)) {
+    return "Claims Lifecycle helps you track claims from submission through payment, denial, underpayment, appeal, negotiation, or resolution.";
+  }
+
+  if (/revenue intelligence/.test(text)) {
+    return "Revenue Intelligence provides deeper financial analytics, payer performance views, forecasts, and executive-level revenue insights.";
+  }
+
+  if (/ai copilot|copilot/.test(text)) {
+    return "AI Copilot helps you ask questions about your revenue data, generate analysis, and connect insights to the right next action.";
+  }
+
+  if (/data management|uploads|upload/.test(text)) {
+    return "Data Management is where you upload and manage billed claims, payments, denials, contracts, and related revenue files.";
+  }
+
+  return "This feature helps you understand and act on your healthcare revenue data more efficiently.";
+}
+
 function tryBuildDeterministicPayerAnswer(org_id, message) {
   const text = String(message || "").trim();
   const isDenialQ = /denial rate/i.test(text);
@@ -6485,7 +6685,21 @@ function buildCopilotResponse({
   );
 
   const primaryAction = determinePrimaryAction({ briefType, payerScope, metrics, forecast, denialForecast });
-  const actionLinks = buildActionLinks({ briefType, payerScope, metrics }, rangePreset || "last30");
+  let actionLinks = buildActionLinks({ briefType, payerScope, metrics }, rangePreset || "last30");
+
+  const dynamicLinks = buildSmartCopilotActions(org_id, question, { source: "full" }).map(a => ({
+    type: a.type,
+    label: a.label,
+    url: a.route
+  }));
+
+  const existingUrls = new Set(actionLinks.map(x => String(x.url || "")));
+  dynamicLinks.forEach(link => {
+    if (link.url && !existingUrls.has(String(link.url))) {
+      actionLinks.push(link);
+      existingUrls.add(String(link.url));
+    }
+  });
 
   return {
     briefType,
@@ -21518,33 +21732,55 @@ Try:
   }
 
   // =========================
-  // 🔥 STEP 1: STRUCTURED + GROUNDED ANSWER
+  // 🔥 SMART INTENT ROUTING
   // =========================
-  // 🔥 TRY DETERMINISTIC FIRST
-  const deterministic = tryDeterministicAnswer(sess.org_id, message);
+  const simple = isSimpleQuestion(message);
 
-  if (deterministic){
+  // ===== SIMPLE QUESTION FIRST =====
+  if (simple) {
+    const answer = buildSmartSimpleAnswer(message);
+
     return send(res, 200, JSON.stringify({
-      answer: deterministic,
+      answer,
+      noData: false,
+      actions: buildSmartCopilotActions(sess.org_id, message, { source: "chat" }),
+      simple: true,
       used: usageCheck.used,
       limit: usageCheck.limit,
       grounded: true
     }), "application/json");
   }
 
+
+  // ===== THEN DETERMINISTIC DATA ANSWERS =====
+  const deterministic = tryDeterministicAnswer(sess.org_id, message);
+
+  if (deterministic){
+    return send(res, 200, JSON.stringify({
+      answer: deterministic.answer || deterministic,
+      actions: buildSmartCopilotActions(sess.org_id, message, { source: "chat" }),
+      used: usageCheck.used,
+      limit: usageCheck.limit,
+      grounded: true
+    }), "application/json");
+  }
+
+
+  // =========================
+  // 🔥 STRUCTURED (UNCHANGED BUT ENHANCED)
+  // =========================
   const structured = await runStructuredCopilotWithActions({
     org_id: sess.org_id,
     message
   });
 
-  // fallback to grounded if needed
   const shortAnswer =
     structured?.summary ||
     (await runGroundedCopilot({ org_id: sess.org_id, message })).answer;
 
-  // 👉 Floating Copilot stays simple
   const isAnalytic = /aetna|payer|claims|denial|underpaid|revenue|expected|paid/.test(message);
 
+  // ===== FLOATING COPILOT =====
   if (
     shortAnswer &&
     shortAnswer.length < 200 &&
@@ -21552,17 +21788,17 @@ Try:
   ) {
     return send(res, 200, JSON.stringify({
       answer: shortAnswer,
+      actions: buildSmartCopilotActions(sess.org_id, message, { source: "chat" }),
       metrics: structured.metrics || null,
       insights: structured.insights || [],
-      actions: structured.actions || [],
       used: usageCheck.used,
-      limit: usageCheck.limit,
-      grounded: true
+      limit: usageCheck.limit
     }), "application/json");
   }
 
+
   // =========================
-  // 🔵 STEP 2: FULL COPILOT (YOUR ORIGINAL SYSTEM)
+  // 🔥 FULL COPILOT ENGINE (RESTORED + SMART)
   // =========================
 
   const msg = message;
@@ -21640,22 +21876,18 @@ Try:
   const title = result.briefTitle || "Executive Revenue Summary";
 
   const preview =
-    `${title}
-
-` +
-    `Total Collected: ${formatMoneyUI(totals.collected || 0)}
-` +
-    `Revenue At Risk: ${formatMoneyUI(totals.atRisk || 0)}
-` +
-    `Denial Rate: ${Number(rates.denialRate || 0).toFixed(1)}%
-
-` +
+    `${title}\n\n` +
+    `Total Collected: ${formatMoneyUI(totals.collected || 0)}\n` +
+    `Revenue At Risk: ${formatMoneyUI(totals.atRisk || 0)}\n` +
+    `Denial Rate: ${Number(rates.denialRate || 0).toFixed(1)}%\n\n` +
     `Full executive brief available below.`;
 
+  // ===== FINAL RESPONSE (SMART + RESTORED)
   return send(res, 200, JSON.stringify({
     answer: preview,
     workspace_id: workspace.workspace_id,
     savedToWorkspace: true,
+    actions: buildSmartCopilotActions(sess.org_id, message, { source: "chat" }),
     used: usageCheck.used,
     limit: usageCheck.limit,
     grounded: true
@@ -26605,6 +26837,16 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 const newAnalysisLinks = document.querySelectorAll(".js-new-analysis-btn");
 
                 if (!form || !input) return;
+
+                const urlParams = new URLSearchParams(location.search);
+                if (urlParams.get("view") === "full") {
+                  document.body.classList.add("copilot-full-view");
+
+                  // Force expand panels
+                  setTimeout(() => {
+                    document.querySelectorAll("details").forEach(d => d.open = true);
+                  }, 50);
+                }
 
                 // ==============================
                 // PROMPT LIBRARY VISIBILITY CONTROL
