@@ -26387,24 +26387,28 @@ if (method === "GET" && pathname === "/ai-copilot") {
   const thread = (workspace && Array.isArray(workspace.messages)) ? workspace.messages : [];
   const brief = workspace?.latest_brief || null;
 
-  const emptyStateHtml = `
-    <div class="card" style="margin-top:20px;text-align:center;padding:40px;">
-      <h3>Start Your Analysis</h3>
-      <p class="muted">Ask a question to generate insights on your revenue, denials, and payments.</p>
-    </div>
-  `;
+  const hasMessages = thread.length > 0 || !!brief;
 
   const threadHtml = `
     <div class="ws-thread" id="wsThread">
-      ${emptyStateHtml}
-      ${thread.map(msg => `
-        <div class="ws-msg ${msg.role === "user" ? "ws-user" : "ws-ai"}">
-          <div class="ws-who">${msg.role === "user" ? "You" : "Copilot"}</div>
+
+      ${!hasMessages ? `
+        <div class="card" style="margin-top:20px;text-align:center;padding:40px;">
+          <h3>Start Your Analysis</h3>
+          <p class="muted">Ask a question to generate insights on your revenue, denials, and payments.</p>
+        </div>
+      ` : ``}
+
+      ${thread
+        .filter(msg => msg.role === "user")
+        .map(msg => `
+        <div class="ws-msg ws-user">
+          <div class="ws-who">You</div>
           <div class="ws-card">${safeStr(msg.content || "")}</div>
         </div>
       `).join("")}
 
-      ${brief ? renderCopilotBriefMessage(brief.result, brief.brief_id, workspace?.workspace_id) : (workspace ? `<div class="ws-msg ws-ai"><div class="ws-who">Copilot</div><div class="ws-card muted">Pick a prompt tile or ask a question below.</div></div>` : ``)}
+      ${brief ? renderCopilotBriefMessage(brief.result, brief.brief_id, workspace?.workspace_id) : ``}
     </div>
   `;
 
@@ -26415,6 +26419,9 @@ if (method === "GET" && pathname === "/ai-copilot") {
       .ws-layout.ws-collapsed{display:block;}
       .ws-layout.ws-collapsed .ws-sidebar{display:none;}
       .ws-layout.ws-collapsed .ws-main{width:100%;margin:0;}
+      .ws-layout{display:grid !important;}
+      .ws-layout.ws-collapsed{display:grid !important;}
+      .ws-sidebar{display:block !important;}
       .ws-sidebar{border:1px solid rgba(148,163,184,.22);border-radius:18px;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));padding:16px;box-shadow:0 16px 40px rgba(15,23,42,.07);height:calc(100vh - 156px);overflow:auto;position:sticky;top:92px;}
       .ws-sidebar-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;}
       .ws-sidebar-title{font-weight:900;font-size:15px;letter-spacing:-.01em;}
@@ -26494,9 +26501,11 @@ if (method === "GET" && pathname === "/ai-copilot") {
             <div class="ws-sidebar-title">Saved Analyses</div>
             <div class="ws-sidebar-sub">Return to prior executive briefs, follow-ups, and exports.</div>
           </div>
-          <div class="ws-sidebar-actions">
-            <button type="button" class="btn secondary small" id="wsCollapseBtn">Collapse</button>
-            <a class="btn secondary small js-new-analysis-btn" href="/ai-copilot?new=1">New Analysis</a>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <button type="button" class="btn secondary" id="wsCollapseBtn">Collapse</button>
+            <button type="button" class="btn js-new-analysis-btn" style="display:flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:10px;font-weight:600;" onclick="window.location.href='/ai-copilot?new=1'">
+              New Analysis
+            </button>
           </div>
         </div>
         <div class="ws-sidebar-list">
