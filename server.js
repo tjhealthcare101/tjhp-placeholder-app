@@ -4493,13 +4493,29 @@ ${chatScript}
   // 4. FIX ACTION ROUTING (smarter)
   // =========================
   function fixActionButtons(){
-    document.querySelectorAll("a").forEach(a => {
+  
+    // 🚨 ONLY target AI/chat-generated links
+    // DO NOT touch navigation tabs or Action Center links
+    document.querySelectorAll("#aiChatMsgs a, #copilotOutput a, .ws-actions a").forEach(a => {
+
+      // 🛑 CRITICAL: skip Action Center tabs
+      if (a.hasAttribute("data-action-tab")) return;
+
       const txt = (a.textContent || "").toLowerCase();
 
-      if (txt.includes("review payment")) a.href = "/claims-lifecycle";
-      if (txt.includes("appeal")) a.href = "/actions?type=denials";
-      if (txt.includes("underpaid")) a.href = "/actions?type=underpayments";
-      if (txt.includes("claim")) a.href = "/claims-lifecycle";
+      if (txt.includes("review payment")) {
+        a.href = "/claims-lifecycle";
+      }
+      else if (txt.includes("underpaid") || txt.includes("underpayment")) {
+        a.href = "/actions?tab=underpayments";
+      }
+      else if (txt.includes("appeal")) {
+        a.href = "/actions?tab=denials";
+      }
+      else if (txt.includes("claim")) {
+        a.href = "/claims-lifecycle";
+      }
+
     });
   }
 
@@ -27884,6 +27900,7 @@ if (method === "GET" && pathname === "/actions") {
   const tabRaw = String(parsed.query.tab || tabAliasFromType || "all").toLowerCase();
   const normalizedTabRaw = tabRaw === "appeals" ? "postsubmission" : tabRaw;
   const tab = (normalizedTabRaw === "awaiting" || normalizedTabRaw === "payments") ? "postsubmission" : normalizedTabRaw; // all|denials|underpayments|postsubmission|followup
+  const uiTab = tabRaw === "appeals" ? "appeals" : tab;
   const subTabRaw = String(parsed.query.postsub || "all").toLowerCase();
   const subTab = ["all", "appeals", "negotiations"].includes(subTabRaw)
     ? subTabRaw
@@ -28035,7 +28052,7 @@ if (method === "GET" && pathname === "/actions") {
     const isFollowupNeededClaim = isSubmittedClaim && followUpDue && !Number.isNaN(followUpDue.getTime()) && followUpDue <= now;
     const postSubmissionStatus = isFollowupNeededClaim ? "Follow-Up Needed" : (isAwaitingPaymentClaim ? "Awaiting Payment" : "");
     const isPostSubmissionClaim = !!postSubmissionStatus;
-    const requiresFollowUp = Boolean(b.requires_follow_up);
+    const requiresFollowUp = Boolean(b.requires_follow_up || isFollowupNeededClaim);
 
     if (tab === "postsubmission" && !isPostSubmissionClaim) continue;
     if (tab === "postsubmission" && filterPostSubmissionClaims([b], subTab).length === 0) continue;
@@ -28124,7 +28141,7 @@ if (method === "GET" && pathname === "/actions") {
     ensurePacketSections(ws);
     const dueAt = ws.follow_up?.due_at ? new Date(ws.follow_up.due_at).getTime() : NaN;
     if (String(ws.status || "") !== "submitted" || !isFinite(dueAt) || dueAt > dueSoon) continue;
-    if (!["all","postsubmission"].includes(tab)) continue;
+    if (!["all","postsubmission","followup"].includes(tab)) continue;
     const b = billedAll.find(x => x.billed_id === ws.billed_id);
     if (!b) continue;
     if (payerFilter) {
@@ -28134,35 +28151,23 @@ if (method === "GET" && pathname === "/actions") {
     const wsDt = new Date(b.created_at || b.dos || b.date_paid || nowISO()).getTime();
     if (wsDt < range.start.getTime() || wsDt > range.end.getTime()) continue;
     const derived = evaluateClaimDerived(b, actionCtx);
-    items.push({ b, derived, st: "Follow-Up Needed", kind: "followup_ws", atRisk: Number(derived.atRiskAmount || computeClaimAtRisk(b)), riskScore: computeClaimRiskScore({ ...b, status: "Submitted" }), secondaryStatus: `Due ${ws.follow_up?.due_at || ""}`, tabKey: "postsubmission", ws, postSubmissionStatus: "Follow-Up Needed", followUpDate: ws.follow_up?.due_at || "" });
+    items.push({
+      b,
+      derived,
+      st: "Follow-Up Needed",
+      kind: "followup_ws",
+      atRisk: Number(derived.atRiskAmount || computeClaimAtRisk(b)),
+      riskScore: computeClaimRiskScore({ ...b, status: "Submitted" }),
+      secondaryStatus: `Due ${ws.follow_up?.due_at || ""}`,
+      tabKey: "postsubmission",
+      ws,
+      isFollowupNeededClaim: true,
+      postSubmissionStatus: "Follow-Up Needed",
+      followUpDate: ws.follow_up?.due_at || ""
+    });
   }
 
-  function filterActionClaims(claims){
-    const activeTab = normalizedTabRaw || "all";
-
-    if (activeTab === "denials"){
-      return claims.filter(c => String(c.st || c.derived?.lifecycleStage || "").toLowerCase() === "denied");
-    }
-
-    if (activeTab === "underpayments"){
-      return claims.filter(c => String(c.st || c.derived?.lifecycleStage || "").toLowerCase() === "underpaid");
-    }
-
-    if (activeTab === "appeals"){
-      return claims.filter(c => {
-        const stage = String(c.st || c.derived?.lifecycleStage || "").toLowerCase();
-        return stage.includes("appeal") || stage.includes("negotiation");
-      });
-    }
-
-    if (activeTab === "followup"){
-      return claims.filter(c => c.isFollowupNeededClaim === true);
-    }
-
-    return claims;
-  }
-
-  const claimsToRender = filterActionClaims(items);
+  const claimsToRender = items.slice();
 
   // Sorting
   if (tab === "followup") claimsToRender.sort((a,b)=> (b.riskScore - a.riskScore) || (b.atRisk - a.atRisk));
@@ -28179,16 +28184,24 @@ if (method === "GET" && pathname === "/actions") {
 
   // Tabs UI
   const tabBtn = (key, label, tip) => {
-    const active = (tab === key) || (key === "appeals" && tab === "postsubmission");
-    const qs = new URLSearchParams({ ...parsed.query, tab: key, page: "1" }).toString();
-    return `<a href="/actions?${qs}" style="text-decoration:none;display:inline-flex;gap:6px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:${active ? "#111827" : "#fff"};color:${active ? "#fff" : "#111827"};font-weight:900;font-size:12px;">
+    const active = (uiTab === key) || (key === "appeals" && tab === "postsubmission");
+    const qs = new URLSearchParams(parsed.query || {});
+    qs.delete("type");
+    if (key !== "appeals") qs.delete("postsub");
+    qs.set("tab", key);
+    qs.set("page", "1");
+    return `<a data-action-tab="${safeStr(key)}" href="/actions?${qs.toString()}" style="text-decoration:none;display:inline-flex;gap:6px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:${active ? "#111827" : "#fff"};color:${active ? "#fff" : "#111827"};font-weight:900;font-size:12px;">
       ${label}
       <span class="tooltip">ⓘ<span class="tooltiptext">${safeStr(tip)}</span></span>
     </a>`;
   };
 
-  const followUpTypeQs = new URLSearchParams({ ...parsed.query, type: "followup", tab: "followup", page: "1" }).toString();
-  const followUpTab = `<a href="/actions?${followUpTypeQs}" style="text-decoration:none;display:inline-flex;gap:6px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:${tab === "followup" ? "#111827" : "#fff"};color:${tab === "followup" ? "#fff" : "#111827"};font-weight:900;font-size:12px;">Claims Needing Follow-Up</a>`;
+  const followUpQs = new URLSearchParams(parsed.query || {});
+  followUpQs.delete("postsub");
+  followUpQs.set("type", "followup");
+  followUpQs.set("tab", "followup");
+  followUpQs.set("page", "1");
+  const followUpTab = `<a data-action-tab="followup" href="/actions?${followUpQs.toString()}" style="text-decoration:none;display:inline-flex;gap:6px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:${uiTab === "followup" ? "#111827" : "#fff"};color:${uiTab === "followup" ? "#fff" : "#111827"};font-weight:900;font-size:12px;">Claims Needing Follow-Up</a>`;
   const tabs = `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
       ${tabBtn("all","All At Risk","All denials, underpayments, follow-ups, and awaiting payment work in one queue.")}
@@ -28347,12 +28360,12 @@ if (method === "GET" && pathname === "/actions") {
     <label class="small muted" style="margin-right:8px;">Per page</label>
     <select onchange="window.location=this.value">
       ${PAGE_SIZE_OPTIONS.map(n=>{
-        const qs = new URLSearchParams({ ...parsed.query, tab, page:"1", pageSize:String(n) }).toString();
+        const qs = new URLSearchParams({ ...parsed.query, tab: uiTab, page:"1", pageSize:String(n) }).toString();
         return `<option value="/actions?${qs}" ${n===pageSize?"selected":""}>${n}</option>`;
       }).join("")}
     </select>
   `;
-  const nav = buildPageNav("/actions", { ...parsed.query, tab, pageSize:String(pageSize) }, page, totalPages);
+  const nav = buildPageNav("/actions", { ...parsed.query, tab: uiTab, pageSize:String(pageSize) }, page, totalPages);
   const scrollScript = selectedClaimId ? `
     <script>
       setTimeout(() => {
@@ -28378,7 +28391,7 @@ if (method === "GET" && pathname === "/actions") {
     <div class="hr"></div>
 
     <form method="GET" action="/actions" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
-      <input type="hidden" name="tab" value="${safeStr(tab)}"/>
+      <input type="hidden" name="tab" value="${safeStr(uiTab)}"/>
       ${tab === "postsubmission" ? `<input type="hidden" name="postsub" value="${safeStr(subTab)}"/>` : ``}
       <div style="display:flex;flex-direction:column;min-width:220px;">
         <label>Search</label>
@@ -28413,7 +28426,7 @@ if (method === "GET" && pathname === "/actions") {
       </div>
       <div>
         <button class="btn secondary" type="submit" style="margin-top:1.6em;">Apply</button>
-        <a class="btn secondary" href="/actions?tab=${encodeURIComponent(tab)}${tab === "postsubmission" ? `&postsub=${encodeURIComponent(subTab)}` : ""}" style="margin-top:1.6em;">Reset</a>
+        <a class="btn secondary" href="/actions?tab=${encodeURIComponent(uiTab)}${tab === "postsubmission" ? `&postsub=${encodeURIComponent(subTab)}` : ""}" style="margin-top:1.6em;">Reset</a>
       </div>
     </form>
 
@@ -28440,31 +28453,28 @@ if (method === "GET" && pathname === "/actions") {
         function goToActionTab(tabKey){
           const url = new URL(window.location.href);
           url.pathname = "/actions";
+          url.searchParams.delete("type");
+          if (tabKey !== "appeals") url.searchParams.delete("postsub");
+          if (tabKey === "followup") {
+            url.searchParams.set("type", "followup");
+          }
           url.searchParams.set("tab", tabKey);
           url.searchParams.set("page", "1");
           window.location.href = url.toString();
         }
 
-        const tabMap = {
-          "All At Risk": "all",
-          "Denials": "denials",
-          "Underpayments": "underpayments",
-          "Appeals & Negotiations": "appeals",
-          "Claims Needing Follow-Up": "followup"
-        };
-        document.querySelectorAll(".btn, .tab, button, a").forEach(el => {
-          const text = (el.textContent || "").trim();
-          if (!tabMap[text]) return;
-          el.onclick = function(e){
+        document.querySelectorAll("[data-action-tab]").forEach(el => {
+          el.addEventListener("click", function(e){
             e.preventDefault();
-            goToActionTab(tabMap[text]);
-          };
+            goToActionTab(this.getAttribute("data-action-tab") || "all");
+          });
         });
 
         document.querySelectorAll(".subtab-btn").forEach(btn => {
           btn.addEventListener("click", function(){
             const u = new URL(window.location.href);
-            u.searchParams.set("tab", "postsubmission");
+            u.searchParams.delete("type");
+            u.searchParams.set("tab", "appeals");
             u.searchParams.set("postsub", this.dataset.subtab || "all");
             u.searchParams.set("page", "1");
             window.location.href = u.toString();
