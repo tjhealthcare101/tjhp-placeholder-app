@@ -4425,6 +4425,134 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
 </script>
 
 ${chatScript}
+
+<script>
+(function(){
+
+  if (window.__COPILOT_UI_FIXED__) return;
+  window.__COPILOT_UI_FIXED__ = true;
+
+  // =========================
+  // 1. REMOVE DUPLICATE HEADER (stronger match)
+  // =========================
+  function removeDuplicateHeaders(){
+    document.querySelectorAll(".ws-ai").forEach((card, i) => {
+      if (i === 0) return; // keep first (real one)
+
+      const title = card.querySelector("div[style*='font-size:18px']");
+      if (!title) return;
+
+      if (title.textContent.includes("Performance")){
+        card.remove();
+      }
+    });
+  }
+
+  // =========================
+  // 2. FORCE CHART RENDER (matches YOUR chart structure)
+  // =========================
+  function fixCharts(){
+    if (typeof Chart === "undefined") return;
+
+    document.querySelectorAll("canvas[id^='copilotChart_'], canvas[id^='wsChart_']").forEach(canvas => {
+      if (canvas.__fixed) return;
+
+      const parent = canvas.parentElement;
+      if (!parent) return;
+
+      try {
+        // rebuild chart using existing data already in DOM
+        const labels = [];
+        const values = [];
+
+        parent.querySelectorAll("li").forEach(li => {
+          const txt = li.textContent || "";
+          const num = parseFloat(txt.replace(/[^0-9.]/g,""));
+          if (!isNaN(num)){
+            labels.push(txt.split(":")[0]);
+            values.push(num);
+          }
+        });
+
+        if (!labels.length) return;
+
+        new Chart(canvas, {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [{
+              label: "Value",
+              data: values
+            }]
+          }
+        });
+
+        canvas.__fixed = true;
+
+      } catch(e){}
+    });
+  }
+
+  // =========================
+  // 3. HIDE PROMPT LIBRARY (stronger)
+  // =========================
+  function hidePromptLibrary(){
+    document.querySelectorAll("div").forEach(el => {
+      if ((el.textContent || "").includes("Try asking")){
+        el.style.display = "none";
+      }
+    });
+  }
+
+  // =========================
+  // 4. FIX ACTION ROUTING (smarter)
+  // =========================
+  function fixActionButtons(){
+    document.querySelectorAll("a").forEach(a => {
+      const txt = (a.textContent || "").toLowerCase();
+
+      if (txt.includes("review payment")) a.href = "/claims-lifecycle";
+      if (txt.includes("appeal")) a.href = "/actions?type=denials";
+      if (txt.includes("underpaid")) a.href = "/actions?type=underpayments";
+      if (txt.includes("claim")) a.href = "/claims-lifecycle";
+    });
+  }
+
+  // =========================
+  // 5. FIX FULL ANALYSIS LINK
+  // =========================
+  function fixFullAnalysis(){
+    const notice = document.querySelector("#aiChatSavedNotice");
+    if (!notice) return;
+
+    if (!notice.innerHTML.includes("View Full Analysis")){
+      notice.innerHTML = \`
+        Full report saved.
+        <a href="/copilot" style="font-weight:800;margin-left:6px;">
+          → View Full Analysis
+        </a>
+      \`;
+    }
+
+    notice.style.display = "block";
+  }
+
+  // =========================
+  // RUN LOOP
+  // =========================
+  function run(){
+    removeDuplicateHeaders();
+    fixCharts();
+    hidePromptLibrary();
+    fixActionButtons();
+    fixFullAnalysis();
+  }
+
+  setInterval(run, 300);
+
+})();
+</script>
+
 </body></html>`;
 }
 
