@@ -26432,12 +26432,9 @@ if (method === "GET" && pathname === "/ai-copilot") {
     <style>
       .page-shell:has(#wsLayout), .page-shell #wsLayout{max-width:none;}
       .ws-layout{display:grid;grid-template-columns:minmax(250px,290px) minmax(0,1fr);gap:20px;align-items:stretch;max-width:1480px;margin:0 auto;}
-      .ws-layout.ws-collapsed{display:block;}
+      .ws-layout.ws-collapsed{grid-template-columns:minmax(0,1fr);}
       .ws-layout.ws-collapsed .ws-sidebar{display:none;}
-      .ws-layout.ws-collapsed .ws-main{width:100%;margin:0;}
-      .ws-layout{display:grid !important;}
-      .ws-layout.ws-collapsed{display:grid !important;}
-      .ws-sidebar{display:block !important;}
+      .ws-layout.ws-collapsed .ws-main{width:100%;grid-column:1 / -1;}
       .ws-sidebar{border:1px solid rgba(148,163,184,.22);border-radius:18px;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));padding:16px;box-shadow:0 16px 40px rgba(15,23,42,.07);height:calc(100vh - 156px);overflow:auto;position:sticky;top:92px;}
       .ws-sidebar-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;}
       .ws-sidebar-title{font-weight:900;font-size:15px;letter-spacing:-.01em;}
@@ -26974,28 +26971,38 @@ if (method === "GET" && pathname === "/ai-copilot") {
           window.history.replaceState({}, "", newUrl);
         }
 
-        const layout = document.getElementById("wsLayout");
-        const btn = document.getElementById("wsCollapseBtn");
-        const floatBtn = document.getElementById("wsExpandBtn");
-        function setCollapsed(v){
-          if(!layout || !btn || !floatBtn) return;
-          if(v){
-            layout.classList.add("ws-collapsed");
-            localStorage.setItem("tjhp_copilot_sidebar_collapsed","1");
-            floatBtn.style.display = "inline-flex";
-          } else {
-            layout.classList.remove("ws-collapsed");
-            localStorage.setItem("tjhp_copilot_sidebar_collapsed","0");
-            floatBtn.style.display = "none";
-          }
-        }
+	        const layout = document.getElementById("wsLayout");
+	        const btn = document.getElementById("wsCollapseBtn");
+	        const floatBtn = document.getElementById("wsExpandBtn");
 
-        if(layout && btn && floatBtn){
-          const init = localStorage.getItem("tjhp_copilot_sidebar_collapsed") === "1";
-          setCollapsed(init);
-          btn.onclick = function(){ setCollapsed(!layout.classList.contains("ws-collapsed")); };
-          floatBtn.onclick = function(){ setCollapsed(false); };
-        }
+	        function setCollapsed(v){
+	          if(!layout || !btn || !floatBtn) return;
+
+	          if(v){
+	            layout.classList.add("ws-collapsed");
+	            localStorage.setItem("tjhp_copilot_sidebar_collapsed","1");
+	            floatBtn.style.display = "inline-flex";
+	          } else {
+	            layout.classList.remove("ws-collapsed");
+	            localStorage.setItem("tjhp_copilot_sidebar_collapsed","0");
+	            floatBtn.style.display = "none";
+	          }
+	        }
+
+	        if(layout && btn && floatBtn){
+	          const stored = localStorage.getItem("tjhp_copilot_sidebar_collapsed");
+	          const init = stored === null ? true : stored === "1";
+
+	          setCollapsed(init);
+
+	          btn.onclick = function(){
+	            setCollapsed(!layout.classList.contains("ws-collapsed"));
+	          };
+
+	          floatBtn.onclick = function(){
+	            setCollapsed(false);
+	          };
+	        }
 
       })();
     </script>
