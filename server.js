@@ -5853,15 +5853,35 @@ function buildSmartCopilotActions(org_id, message, opts = {}){
     return actions;
   }
 
-  if (/action center/.test(text)) {
-    add("actions", "Open Action Center", smartUrl("/actions", {
-      payer,
-      range
-    }));
+  if (/action\s*center/.test(text)) {
+    add("actions", "Open Action Center", smartUrl("/actions", { payer, range }));
     return actions;
   }
 
-  if (/payer|performance|revenue|at risk|collected|paid|forecast|trend/.test(text)) {
+  // =========================
+  // 🔥 PRECISE OVERVIEW ROUTING (SAFE)
+  // =========================
+  if (
+    /revenue\s*overview/.test(text) ||
+    /\boverview\s*tab\b/.test(text) ||
+    /\bdashboard\b/.test(text) ||
+    /what\s+does\s+(the\s+)?(revenue\s+)?overview/.test(text)
+  ) {
+    add("overview", "Open Revenue Overview", smartUrl("/dashboard", { payer, range }));
+    return actions;
+  }
+
+  if (/copilot/.test(text)) {
+    add("copilot", "Open AI Copilot", smartUrl("/ai-copilot", { view: "full" }));
+    return actions;
+  }
+
+  if (/data\s*management|uploads|data/.test(text)) {
+    add("data", "Open Data Management", smartUrl("/data-management", { payer, range }));
+    return actions;
+  }
+
+  if (/payer|performance|at risk|collected|paid|forecast|trend/.test(text)) {
     if (source === "chat") {
       add("full_analysis", "Open Full Analysis", smartUrl("/ai-copilot", {
         from: "chat",
@@ -21731,12 +21751,9 @@ Try:
     }), "application/json");
   }
 
-  // =========================
-  // 🔥 SMART INTENT ROUTING
-  // =========================
   const simple = isSimpleQuestion(message);
 
-  // ===== SIMPLE QUESTION FIRST =====
+  // ===== SIMPLE QUESTION FIRST (GLOBAL FIX) =====
   if (simple) {
     const answer = buildSmartSimpleAnswer(message);
 
@@ -21750,7 +21767,6 @@ Try:
       grounded: true
     }), "application/json");
   }
-
 
   // ===== THEN DETERMINISTIC DATA ANSWERS =====
   const deterministic = tryDeterministicAnswer(sess.org_id, message);
@@ -21803,18 +21819,34 @@ Try:
 
   const msg = message;
 
-  // ===== Create Workspace (RESTORED)
-  const workspace = {
-    workspace_id: uuid(),
-    org_id: sess.org_id,
-    title: msg.slice(0, 60),
-    messages: [
-      { role: "user", content: msg, created_at: nowISO() }
-    ],
-    latest_brief: null,
-    created_at: nowISO(),
-    updated_at: nowISO(),
-  };
+  // ===== Create/Load Workspace (RESTORED)
+  let workspace_id = String(body.workspace_id || "").trim();
+  let workspace = null;
+
+  if (workspace_id) {
+    workspace = getCopilotWorkspace(sess.org_id, workspace_id);
+  }
+
+  if (!workspace) {
+    workspace = {
+      workspace_id: uuid(),
+      org_id: sess.org_id,
+      title: msg.slice(0, 60),
+      messages: [],
+      latest_brief: null,
+      created_at: nowISO(),
+      updated_at: nowISO(),
+    };
+  }
+
+  // ===== ALWAYS append user message =====
+  workspace.messages.push({
+    role: "user",
+    content: msg,
+    created_at: nowISO()
+  });
+
+  workspace.updated_at = nowISO();
 
   saveCopilotWorkspace(workspace);
 
@@ -21882,12 +21914,22 @@ Try:
     `Denial Rate: ${Number(rates.denialRate || 0).toFixed(1)}%\n\n` +
     `Full executive brief available below.`;
 
+  // ===== ALWAYS SAVE ASSISTANT RESPONSE =====
+  workspace.messages.push({
+    role: "assistant",
+    content: preview,
+    created_at: nowISO()
+  });
+
+  workspace.updated_at = nowISO();
+  saveCopilotWorkspace(workspace);
+
   // ===== FINAL RESPONSE (SMART + RESTORED)
   return send(res, 200, JSON.stringify({
     answer: preview,
     workspace_id: workspace.workspace_id,
     savedToWorkspace: true,
-    actions: buildSmartCopilotActions(sess.org_id, message, { source: "chat" }),
+    actions: buildSmartCopilotActions(sess.org_id, msg, { source: "full" }),
     used: usageCheck.used,
     limit: usageCheck.limit,
     grounded: true
