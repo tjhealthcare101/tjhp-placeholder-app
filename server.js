@@ -5728,17 +5728,54 @@ function tryHandleUIQuestion(message, currentPath = "") {
   return null;
 }
 
+// =========================
+// 🔥 STRONG UI HELP DETECTION (FIXES EXEC BRIEF ISSUE)
+// =========================
+function isUiHelpQuestion(message) {
+  const text = String(message || "").toLowerCase().trim();
+
+  // Must start like a question
+  const helpLead = /^(what is|what are|what does|what do|how does|where is|explain|tell me about|how do i)\b/.test(text);
+
+  // Must reference UI / platform (VERY IMPORTANT)
+  const uiKeywords = /\b(tab|tabs|page|pages|screen|screens|section|sections|feature|features|button|buttons|dashboard|overview|action\s*center|data\s*management|revenue\s*intelligence|copilot|claims?\s*lifecycle|upload|uploads)\b/.test(text);
+
+  return helpLead && uiKeywords;
+}
+
+// =========================
+// 🔥 FIX: SIMPLE QUESTION DETECTION (BLOCKS EXEC BRIEF)
+// =========================
 function isSimpleQuestion(message) {
   const text = String(message || "").toLowerCase().trim();
 
+  // ✅ HARD STOP: UI help ALWAYS simple
+  if (isUiHelpQuestion(text)) return true;
+
+  // ❌ If it smells like DATA → NOT simple
+  const analyticSignals = /\b(payer|payers|claim|claims|denial|denials|underpaid|underpayment|underpayments|at risk|collected|paid|forecast|trend|trends|performance|rate|rates|amount|amounts|how much|how many)\b/.test(text);
+
+  if (analyticSignals) return false;
+
+  // fallback simple detection
   return (
     text.startsWith("what is") ||
+    text.startsWith("what are") ||
     text.startsWith("what does") ||
+    text.startsWith("what do") ||
     text.startsWith("how does") ||
     text.startsWith("where is") ||
     text.startsWith("explain") ||
+    text.startsWith("tell me about") ||
     text.startsWith("how do i")
   );
+}
+
+function shouldEscalateToFullAnalysis(message){
+  const text = String(message || "").toLowerCase();
+
+  // analytic intent → escalate
+  return /\b(why|how much|how many|trend|performance|rate|compare|analysis|breakdown)\b/.test(text);
 }
 
 function extractSmartDateRange(message){
@@ -5778,161 +5815,109 @@ function smartUrl(base, params = {}){
   return clean ? `${base}${base.includes("?") ? "&" : "?"}${clean}` : base;
 }
 
-function buildSmartCopilotActions(org_id, message, opts = {}){
+// =========================
+// 🔥 FIX: CONSERVATIVE ROUTING (NO OVER-TRIGGER)
+// =========================
+function buildSmartCopilotActions(org_id, message, opts = {}) {
   const text = String(message || "").toLowerCase();
   const payer = extractSmartPayer(org_id, message);
   const range = extractSmartDateRange(message);
-  const source = String(opts.source || "chat");
 
-  const isFullCopilot = source === "full";
   const actions = [];
+  const isUiHelp = isUiHelpQuestion(message);
 
   const add = (type, label, route) => {
     actions.push({ type: "navigation", label, route });
   };
 
-  if (/denied|denial/.test(text)) {
-    add("denials", payer ? `View ${payer} Denials` : "View Denied Claims", smartUrl("/actions", {
-      tab: "denials",
-      payer,
-      range
-    }));
+  // =========================
+  // 🔥 STRICT UI ROUTING ONLY
+  // =========================
 
-    if (isFullCopilot) {
-      add("analysis", "Open Revenue Intelligence", smartUrl("/revenue-intelligence", {
-        tab: "payers",
-        payer,
-        range
-      }));
-    }
-
-    return actions;
-  }
-
-  if (/underpaid|underpayment|underpaying/.test(text)) {
-    add("underpayments", payer ? `View ${payer} Underpayments` : "View Underpaid Claims", smartUrl("/actions", {
-      tab: "underpayments",
-      payer,
-      range
-    }));
-
-    if (isFullCopilot) {
-      add("analysis", "Open Revenue Intelligence", smartUrl("/revenue-intelligence", {
-        tab: "payers",
-        payer,
-        range
-      }));
-    }
-
-    return actions;
-  }
-
-  if (/appeal|appeals|negotiation|negotiations/.test(text)) {
-    add("appeals", "View Appeals & Negotiations", smartUrl("/actions", {
-      tab: "appeals",
-      payer,
-      range
-    }));
-    return actions;
-  }
-
-  if (/follow\s*up|follow-up|needs follow/.test(text)) {
-    add("followup", "View Claims Needing Follow-Up", smartUrl("/actions", {
-      tab: "followup",
-      payer,
-      range
-    }));
-    return actions;
-  }
-
-  if (/submitted|waiting payment|awaiting payment|claim batch|batches|lifecycle/.test(text)) {
-    add("lifecycle", "Open Claims Lifecycle", smartUrl("/claims-lifecycle", {
-      payer,
-      range
-    }));
-    return actions;
-  }
-
-  if (/action\s*center/.test(text)) {
+  if (isUiHelp && /action\s*center/.test(text)) {
     add("actions", "Open Action Center", smartUrl("/actions", { payer, range }));
     return actions;
   }
 
-  // =========================
-  // 🔥 PRECISE OVERVIEW ROUTING (SAFE)
-  // =========================
-  if (
-    /revenue\s*overview/.test(text) ||
-    /\boverview\s*tab\b/.test(text) ||
-    /\bdashboard\b/.test(text) ||
-    /what\s+does\s+(the\s+)?(revenue\s+)?overview/.test(text)
-  ) {
-    add("overview", "Open Revenue Overview", smartUrl("/dashboard", { payer, range }));
+  if (isUiHelp && /claims\s*lifecycle/.test(text)) {
+    add("lifecycle", "Open Claims Lifecycle", smartUrl("/claims-lifecycle", { payer, range }));
     return actions;
   }
 
-  if (/copilot/.test(text)) {
-    add("copilot", "Open AI Copilot", smartUrl("/ai-copilot", { view: "full" }));
-    return actions;
-  }
-
-  if (/data\s*management|uploads|data/.test(text)) {
+  if (isUiHelp && /data\s*management|\buploads?\b/.test(text)) {
     add("data", "Open Data Management", smartUrl("/data-management", { payer, range }));
     return actions;
   }
 
-  if (/payer|performance|at risk|collected|paid|forecast|trend/.test(text)) {
-    if (source === "chat") {
-      add("full_analysis", "Open Full Analysis", smartUrl("/ai-copilot", {
-        from: "chat",
-        view: "full",
-        payer,
-        range
-      }));
-    } else {
-      add("payer_analysis", "Open Revenue Intelligence", smartUrl("/revenue-intelligence", {
-        tab: payer ? "payers" : "executive",
-        payer,
-        range
-      }));
-      add("actions", "View Related Claims", smartUrl("/actions", {
-        payer,
-        range
-      }));
-    }
-
+  if (isUiHelp && (/revenue\s*overview/.test(text) || /\boverview\b/.test(text))) {
+    add("overview", "Open Revenue Overview", smartUrl("/dashboard", { payer, range }));
     return actions;
   }
 
-  add("dashboard", "Open Revenue Overview", smartUrl("/dashboard", {
-    payer,
-    range
-  }));
+  if (isUiHelp && /revenue\s*intelligence/.test(text)) {
+    add("ri", "Open Revenue Intelligence", smartUrl("/revenue-intelligence", { payer, range }));
+    return actions;
+  }
+
+  if (isUiHelp && /copilot/.test(text)) {
+    add("copilot", "Open AI Copilot", smartUrl("/ai-copilot"));
+    return actions;
+  }
+
+  // 🚫 IMPORTANT: If UI help but no match → RETURN NOTHING
+  if (isUiHelp) return actions;
+
+  // =========================
+  // 🔥 ANALYTIC ROUTING (UNCHANGED)
+  // =========================
+  if (/denied|denial/.test(text)) {
+    add("denials", "View Denials", smartUrl("/actions", { tab: "denials", payer, range }));
+    return actions;
+  }
+
+  if (/underpaid|underpayment/.test(text)) {
+    add("underpayments", "View Underpayments", smartUrl("/actions", { tab: "underpayments", payer, range }));
+    return actions;
+  }
+
+  if (/payer|performance|at risk|collected|paid|forecast|trend/.test(text)) {
+    add("analysis", "Open Full Analysis", smartUrl("/ai-copilot", { payer, range }));
+    return actions;
+  }
 
   return actions;
 }
 
 function buildSmartSimpleAnswer(message){
   const text = String(message || "").toLowerCase();
+  const isUiHelp = isUiHelpQuestion(message);
 
-  if (/action center/.test(text)) {
+  if (/action\s*center/.test(text)) {
     return "The Action Center shows claims that need attention, such as denials, underpayments, appeals, negotiations, and follow-ups, so your team knows what to work next.";
   }
 
-  if (/claims lifecycle|lifecycle/.test(text)) {
+  if (/claims\s*lifecycle|\blifecycle\b/.test(text)) {
     return "Claims Lifecycle helps you track claims from submission through payment, denial, underpayment, appeal, negotiation, or resolution.";
   }
 
-  if (/revenue intelligence/.test(text)) {
+  if (/revenue\s*intelligence|payer\s*intelligence/.test(text)) {
     return "Revenue Intelligence provides deeper financial analytics, payer performance views, forecasts, and executive-level revenue insights.";
   }
 
-  if (/ai copilot|copilot/.test(text)) {
+  if (isUiHelp && (/revenue\s*overview/.test(text) || /\boverview\b/.test(text) || /\bdashboard\b/.test(text))) {
+    return "Revenue Overview is the high-level dashboard for billed revenue, collections, at-risk dollars, and top performance trends so you can quickly understand overall financial health.";
+  }
+
+  if (/ai\s*copilot|\bcopilot\b/.test(text)) {
     return "AI Copilot helps you ask questions about your revenue data, generate analysis, and connect insights to the right next action.";
   }
 
-  if (/data management|uploads|upload/.test(text)) {
+  if (/data\s*management|\buploads?\b|\bimport\b/.test(text)) {
     return "Data Management is where you upload and manage billed claims, payments, denials, contracts, and related revenue files.";
+  }
+
+  if (/\btabs?\b|\bpages?\b|\bscreens?\b|\bsections?\b/.test(text)) {
+    return "Each tab opens a different workspace in the platform so you can move between high-level dashboards, detailed claim workflows, data operations, and AI analysis without losing context.";
   }
 
   return "This feature helps you understand and act on your healthcare revenue data more efficiently.";
@@ -21703,6 +21688,57 @@ if (pathname === "/ai/chat" && req.method === "POST") {
 
   const body = JSON.parse(await parseBody(req) || "{}");
   const rawMessage = String(body.message || "").trim();
+  const requestSource = String(body.source || "chat").trim().toLowerCase();
+  let isFullCopilotRequest = requestSource === "full";
+  const requestedWorkspaceId = String(body.workspace_id || "").trim();
+
+  let activeWorkspace = null;
+  function getOrCreateActiveWorkspace(seedTitle = rawMessage || "New Analysis") {
+    if (!isFullCopilotRequest) return null;
+    if (activeWorkspace) return activeWorkspace;
+
+    if (requestedWorkspaceId) {
+      activeWorkspace = getCopilotWorkspace(sess.org_id, requestedWorkspaceId);
+    }
+
+    if (!activeWorkspace) {
+      activeWorkspace = {
+        workspace_id: uuid(),
+        org_id: sess.org_id,
+        title: String(seedTitle || "New Analysis").slice(0, 60),
+        messages: [],
+        latest_brief: null,
+        created_at: nowISO(),
+        updated_at: nowISO(),
+      };
+    }
+
+    activeWorkspace.messages = Array.isArray(activeWorkspace.messages) ? activeWorkspace.messages : [];
+
+    if (!activeWorkspace.title) {
+      activeWorkspace.title = String(seedTitle || "New Analysis").slice(0, 60);
+    }
+
+    return activeWorkspace;
+  }
+
+  function appendWorkspaceTurn(role, content) {
+    const ws = getOrCreateActiveWorkspace();
+    if (!ws) return null;
+    ws.messages.push({
+      role,
+      content,
+      created_at: nowISO()
+    });
+    ws.updated_at = nowISO();
+    return ws;
+  }
+
+  function persistActiveWorkspace() {
+    if (!activeWorkspace) return;
+    activeWorkspace.updated_at = nowISO();
+    saveCopilotWorkspace(activeWorkspace);
+  }
 
   // 🔥 APPLY MEMORY
   const memoryApplied = applyMemoryToMessage(sess.org_id, rawMessage);
@@ -21713,18 +21749,28 @@ if (pathname === "/ai/chat" && req.method === "POST") {
   const validation = validateQueryHasData(sess.org_id, message);
 
   if (!validation.ok){
-    return send(res, 200, JSON.stringify({
-      answer: `No internal data available for ${validation.payer}.
+    const answer = `No internal data available for ${validation.payer}.
 
 Try:
 - Upload claims for this payer
 - Check a different payer
-- Remove filters`,
+- Remove filters`;
+
+    if (isFullCopilotRequest) {
+      getOrCreateActiveWorkspace(rawMessage || message);
+      appendWorkspaceTurn("user", rawMessage || message);
+      appendWorkspaceTurn("assistant", answer);
+      persistActiveWorkspace();
+    }
+
+    return send(res, 200, JSON.stringify({
+      answer,
       metrics: null,
       insights: [],
       actions: [],
       noData: true,
-      grounded: true
+      grounded: true,
+      ...(activeWorkspace ? { workspace_id: activeWorkspace.workspace_id } : {})
     }), "application/json");
   }
 
@@ -21752,19 +21798,47 @@ Try:
   }
 
   const simple = isSimpleQuestion(message);
+  const escalate = shouldEscalateToFullAnalysis(message);
+
+  // 🔥 FLOATER ESCALATION
+  if (!isFullCopilotRequest && escalate) {
+    // force full copilot behavior
+    body.source = "full";
+    isFullCopilotRequest = true;
+  }
 
   // ===== SIMPLE QUESTION FIRST (GLOBAL FIX) =====
   if (simple) {
     const answer = buildSmartSimpleAnswer(message);
+    const actionSource = isFullCopilotRequest ? "full" : "chat";
+
+    if (isFullCopilotRequest) {
+      getOrCreateActiveWorkspace(rawMessage || message);
+      appendWorkspaceTurn("user", rawMessage || message);
+      appendWorkspaceTurn("assistant", answer);
+      persistActiveWorkspace();
+    }
 
     return send(res, 200, JSON.stringify({
       answer,
       noData: false,
-      actions: buildSmartCopilotActions(sess.org_id, message, { source: "chat" }),
+      actions: [
+        ...buildSmartCopilotActions(sess.org_id, message, { source: actionSource }),
+        ...(
+          !isUiHelpQuestion(message)
+            ? [{
+                type: "navigation",
+                label: "Run Full Analysis",
+                route: "/ai-copilot?view=full"
+              }]
+            : []
+        )
+      ],
       simple: true,
       used: usageCheck.used,
       limit: usageCheck.limit,
-      grounded: true
+      grounded: true,
+      ...(activeWorkspace ? { workspace_id: activeWorkspace.workspace_id } : {})
     }), "application/json");
   }
 
@@ -21772,12 +21846,23 @@ Try:
   const deterministic = tryDeterministicAnswer(sess.org_id, message);
 
   if (deterministic){
+    const answer = deterministic.answer || deterministic;
+    const actionSource = isFullCopilotRequest ? "full" : "chat";
+
+    if (isFullCopilotRequest) {
+      getOrCreateActiveWorkspace(rawMessage || message);
+      appendWorkspaceTurn("user", rawMessage || message);
+      appendWorkspaceTurn("assistant", answer);
+      persistActiveWorkspace();
+    }
+
     return send(res, 200, JSON.stringify({
-      answer: deterministic.answer || deterministic,
-      actions: buildSmartCopilotActions(sess.org_id, message, { source: "chat" }),
+      answer,
+      actions: buildSmartCopilotActions(sess.org_id, message, { source: actionSource }),
       used: usageCheck.used,
       limit: usageCheck.limit,
-      grounded: true
+      grounded: true,
+      ...(activeWorkspace ? { workspace_id: activeWorkspace.workspace_id } : {})
     }), "application/json");
   }
 
@@ -21796,19 +21881,29 @@ Try:
 
   const isAnalytic = /aetna|payer|claims|denial|underpaid|revenue|expected|paid/.test(message);
 
-  // ===== FLOATING COPILOT =====
+  // ===== SHORT COPILOT ANSWER =====
   if (
     shortAnswer &&
     shortAnswer.length < 200 &&
     !isAnalytic
   ) {
+    const actionSource = isFullCopilotRequest ? "full" : "chat";
+
+    if (isFullCopilotRequest) {
+      getOrCreateActiveWorkspace(rawMessage || message);
+      appendWorkspaceTurn("user", rawMessage || message);
+      appendWorkspaceTurn("assistant", shortAnswer);
+      persistActiveWorkspace();
+    }
+
     return send(res, 200, JSON.stringify({
       answer: shortAnswer,
-      actions: buildSmartCopilotActions(sess.org_id, message, { source: "chat" }),
+      actions: buildSmartCopilotActions(sess.org_id, message, { source: actionSource }),
       metrics: structured.metrics || null,
       insights: structured.insights || [],
       used: usageCheck.used,
-      limit: usageCheck.limit
+      limit: usageCheck.limit,
+      ...(activeWorkspace ? { workspace_id: activeWorkspace.workspace_id } : {})
     }), "application/json");
   }
 
@@ -26689,14 +26784,16 @@ if (method === "GET" && pathname === "/ai-copilot") {
         </div>
       ` : ``}
 
-      ${thread
-        .filter(msg => msg.role === "user")
-        .map(msg => `
-        <div class="ws-msg ws-user">
-          <div class="ws-who">You</div>
-          <div class="ws-card">${safeStr(msg.content || "")}</div>
+      ${thread.map(msg => {
+        const role = String(msg?.role || "").toLowerCase();
+        if (role !== "user" && role !== "assistant") return "";
+        return `
+        <div class="ws-msg ${role === "user" ? "ws-user" : "ws-ai"}">
+          <div class="ws-who">${role === "user" ? "You" : "Copilot"}</div>
+          <div class="ws-card" style="white-space:pre-wrap;">${safeStr(String(msg.content || "")).replace(/\n/g, "<br>")}</div>
         </div>
-      `).join("")}
+      `;
+      }).join("")}
 
       ${brief ? renderCopilotBriefMessage(brief.result, brief.brief_id, workspace?.workspace_id) : ``}
     </div>
@@ -27028,6 +27125,56 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   if (composerShell) composerShell.classList.add("is-loading");
 
                   try {
+                    const workspaceInput = form.querySelector('input[name="workspace_id"]');
+                    const urlState = new URLSearchParams(window.location.search);
+                    const currentWorkspaceId = String(
+                      (workspaceInput && workspaceInput.value) ||
+                      urlState.get("workspace") ||
+                      urlState.get("workspace_id") ||
+                      ""
+                    ).trim();
+
+                    const lowerPrompt = String(prompt || "").toLowerCase().trim();
+                    function shouldEscalateToFullAnalysis(message){
+                      const text = String(message || "").toLowerCase();
+                      return /\b(why|how much|how many|trend|performance|rate|compare|analysis|breakdown)\b/.test(text);
+                    }
+                    const helpLead = /^(what is|what are|what does|what do|how does|where is|explain|tell me about|how do i)\b/.test(lowerPrompt);
+                    const uiKeywords = /\b(tab|tabs|page|pages|screen|screens|section|sections|feature|features|button|buttons|dashboard|overview|action\s*center|data\s*management|revenue\s*intelligence|copilot|claims?\s*lifecycle|upload|uploads)\b/.test(lowerPrompt);
+                    const isUiHelpPrompt = helpLead && uiKeywords;
+                    const shouldEscalate = shouldEscalateToFullAnalysis(prompt);
+
+                    // 🔥 UI HELP → but allow escalation
+                    if (isUiHelpPrompt && !shouldEscalate) {
+                      const res = await fetch("/ai/chat", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({
+                          message: prompt,
+                          workspace_id: currentWorkspaceId,
+                          source: "full"
+                        })
+                      });
+
+                      const data = await res.json();
+
+                      if (thinkingEl) {
+                        thinkingEl.innerHTML = \`
+                          <div class="ws-who">Copilot</div>
+                          <div style="white-space:pre-wrap;">\${data.answer || "Done."}</div>
+                        \`;
+                      }
+
+                      if (data.workspace_id) {
+                        window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id));
+                      }
+
+                      return;
+                    }
+
+                    // Analytic path: full engine + inline refresh
                     const res = await fetch("/intelligence/query", {
                       method: "POST",
                       headers: {
@@ -27042,9 +27189,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     });
 
                     const data = await res.json();
-                    // 🔥 HANDLE LIMIT WITHOUT BREAKING UI
-                    if (data && data.error === "limit_reached") {
-
+                    if (data && (data.error === "limit_reached" || data.limitReached)) {
                       if (thinkingEl) {
                         thinkingEl.innerHTML = \`
                           <div class="ws-who">Copilot</div>
@@ -27052,50 +27197,34 @@ if (method === "GET" && pathname === "/ai-copilot") {
                             ⚠️ You’ve reached your AI Copilot limit.
                           </div>
                           <div class="muted" style="margin-top:6px;">
-                            \${data.message || "Upgrade your plan to continue."}
+                            \${data.message || data.answer || "Upgrade your plan to continue."}
                           </div>
                           <div style="margin-top:10px;">
                             <a class="btn primary" href="/upgrade">Upgrade Plan</a>
                           </div>
                         \`;
                       }
-                      showUpgradeModal(data.message);
-
-                      if (btn) {
-                        btn.disabled = false;
-                        btn.textContent = "➤";
-                      }
-                      if (composerShell) composerShell.classList.remove("is-loading");
-
+                      showUpgradeModal(data.message || data.answer);
                       return;
                     }
 
-                    // 🔥 PHASE 2: SHOW PREVIEW BEFORE REDIRECT
                     if (thinkingEl) {
                       const preview = (data && data.answer)
                         ? data.answer.slice(0, 180) + "..."
                         : "Analyzing revenue performance...";
-
                       thinkingEl.innerHTML = \`
                         <div class="ws-who">Copilot</div>
                         <div>\${preview}</div>
                       \`;
                     }
 
-                    // 🔥 PHASE 3+4: NO REDIRECT — REFRESH THREAD INLINE
                     if (data && data.workspace_id) {
-
                       const workspaceId = data.workspace_id;
-
-                      // update URL
                       window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
 
                       try {
-                        // 🔥 FETCH FULL WORKSPACE CONTENT
                         const res2 = await fetch("/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
                         const html = await res2.text();
-
-                        // 🔥 Extract ONLY the thread content (IMPORTANT)
                         const temp = document.createElement("div");
                         temp.innerHTML = html;
 
@@ -27104,14 +27233,13 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                         if (newThread && currentThread) {
                           currentThread.innerHTML = newThread.innerHTML;
-                          // 🔥 AUTO SCROLL TO TOP OF NEW ANALYSIS
+
                           setTimeout(() => {
-                            const thread = document.getElementById("wsThread");
-                            if (thread) {
-                              thread.scrollTop = 0;
+                            const threadEl = document.getElementById("wsThread");
+                            if (threadEl) {
+                              threadEl.scrollTop = 0;
                             }
 
-                            // optional: scroll page to analysis
                             const firstCard = document.querySelector(".ws-card");
                             if (firstCard) {
                               firstCard.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -27123,18 +27251,17 @@ if (method === "GET" && pathname === "/ai-copilot") {
                               if (window.Chart) {
                                 document.querySelectorAll("canvas[data-config], canvas[data-chart]").forEach((canvas) => {
                                   const ctx = canvas.getContext("2d");
+                                  if (!ctx) return;
 
                                   if (canvas._chartInstance) {
                                     canvas._chartInstance.destroy();
                                   }
 
                                   const raw = canvas.getAttribute("data-config") || canvas.getAttribute("data-chart") || "{}";
-
-                                  // 🔥 FIX: decode HTML entities back to valid JSON
                                   const decoded = raw
                                     .replace(/&quot;/g, '"')
                                     .replace(/&#39;/g, "'")
-                                    .replace(/&amp;/g, '&');
+                                    .replace(/&amp;/g, "&");
 
                                   const config = JSON.parse(decoded);
                                   canvas._chartInstance = new Chart(ctx, config);
@@ -27155,7 +27282,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     }
 
                     if (thinkingEl) {
-                      thinkingEl.innerHTML = \`<div class="ws-who">Copilot</div><div>Error loading analysis.</div>\`;
+                      thinkingEl.innerHTML = \`<div class="ws-who">Copilot</div><div style="white-space:pre-wrap;">\${(data && data.answer) || "Error loading analysis."}</div>\`;
                     }
 
                   } catch (e) {
