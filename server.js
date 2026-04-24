@@ -3456,6 +3456,10 @@ window.__tjhpChatState = window.__tjhpChatState || { open: false, justOpenedAt: 
 function buildFloaterAction(action){
   if (!action) return "";
 
+  if (action.type === "prompt" && action.prompt){
+    return '<button class="btn primary copilot-prompt-action-btn" style="padding:8px 12px;border-radius:8px;font-weight:700;" data-prompt="' + encodeURIComponent(action.prompt) + '">' + (action.label || "Ask") + '</button>';
+  }
+
   if (action.type === "navigation" && action.route){
     return '<a class="btn primary" style="padding:8px 12px;border-radius:8px;font-weight:700;" href="' + action.route + '">' + (action.label || "Open") + '</a>';
   }
@@ -3640,6 +3644,32 @@ document.addEventListener("click", function(e){
 
   // auto-send
   window.__tjhpSendChat();
+});
+
+document.addEventListener("click", function(e){
+  const btn = e.target.closest(".copilot-prompt-action-btn");
+  if (!btn) return;
+
+  const action = {
+    type: "prompt",
+    prompt: decodeURIComponent(btn.getAttribute("data-prompt") || "")
+  };
+
+  if (action.type === "prompt") {
+    const input = document.querySelector("#aiChatInput, textarea, input[type='text']");
+    if (input) {
+      input.value = action.prompt;
+    }
+
+    const form = input.closest("form");
+    if (form) {
+      form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+    } else if (typeof window.__tjhpSendChat === "function") {
+      window.__tjhpSendChat();
+    }
+
+    return;
+  }
 });
 
 window.__tjhpSendChat = sendCopilotMessage;
@@ -5672,6 +5702,15 @@ function detectPayerCandidatesFromPrompt(prompt, org_id) {
   return findPayerCandidates(org_id, text);
 }
 
+function detectMultiplePayers(text, org_id){
+  const candidates = detectPayerCandidatesFromPrompt(text, org_id) || [];
+  return Array.isArray(candidates) ? candidates.slice(0, 3) : [];
+}
+
+function isCompareQuestion(text){
+  return /\b(compare|vs|versus|against)\b/i.test(text);
+}
+
 function computePayerSpecificMetrics(org_id, payerScope, rangePreset = "last30") {
   const intel = computePayerIntelligence(org_id, payerScope, rangePreset);
   return {
@@ -5987,33 +6026,49 @@ function buildLightweightDataAnswer(org_id, message) {
       };
     }
 
+    const answer =
+      `${payer} reimbursement refers to the payments tied to that payer in your claims and payment data.
+
+` +
+      `Based on your current data:
+` +
+      `• Claims: ${totalClaims}
+` +
+      `• Collected: ${formatMoneyUI(totalCollected)}
+` +
+      `• At Risk: ${formatMoneyUI(totalAtRisk)}
+` +
+      `• Denial Rate: ${denialRate.toFixed(1)}%`;
+
+    // 🔥 FIX 3: CORRECT BUTTON ROUTING
+    const actions = [
+      {
+        type: "navigation",
+        label: `View ${payer} Claims`,
+        route: lifecycleRoute   // ✅ filtered lifecycle table
+      },
+      {
+        type: "navigation",
+        label: "Run Full Analysis",
+        route: analysisRoute    // ✅ triggers full analysis
+      }
+    ];
+
+    const insights = buildAutoInsights(org_id, payer, range);
+    const followUps = buildSmartFollowUps(payer);
+
     return {
       answer:
-        `${payer} reimbursement refers to the payments tied to that payer in your claims and payment data.
+        `${answer}\n\n` +
+        (insights.length ? `Insights:\n• ${insights.join("\n• ")}` : ""),
 
-` +
-        `Based on your current data:
-` +
-        `• Claims: ${totalClaims}
-` +
-        `• Collected: ${formatMoneyUI(totalCollected)}
-` +
-        `• At Risk: ${formatMoneyUI(totalAtRisk)}
-` +
-        `• Denial Rate: ${denialRate.toFixed(1)}%`,
-
-      // 🔥 FIX 3: CORRECT BUTTON ROUTING
       actions: [
-        {
-          type: "navigation",
-          label: `View ${payer} Claims`,
-          route: lifecycleRoute   // ✅ filtered lifecycle table
-        },
-        {
-          type: "navigation",
-          label: "Run Full Analysis",
-          route: analysisRoute    // ✅ triggers full analysis
-        }
+        ...actions,
+        ...followUps.map(f => ({
+          type: "prompt",
+          label: f.label,
+          prompt: f.prompt
+        }))
       ]
     };
   }
@@ -6055,6 +6110,118 @@ function buildLightweightDataAnswer(org_id, message) {
       }
     ]
   };
+}
+
+function buildComparePayerAnswer(org_id, message){
+  const text = String(message || "").trim();
+  const payers = detectMultiplePayers(text, org_id);
+  const range = extractSmartDateRange(text) || "last30";
+
+  if (!payers.length) return null;
+
+  const results = payers.map(p => {
+    const intel = computePayerIntelligence(org_id, p, range);
+    return {
+      payer: p,
+      claims: Number(intel.totalClaims || 0),
+      collected: Number(intel.totalCollected || 0),
+      atRisk: Number(intel.totalAtRisk || 0),
+      denialRate: Number(intel.denialRate || 0)
+    };
+  });
+
+  const answerLines = results.map(r =>
+    `${r.payer}:\n• Claims: ${r.claims}\n• Collected: ${formatMoneyUI(r.collected)}\n• At Risk: ${formatMoneyUI(r.atRisk)}\n• Denial Rate: ${r.denialRate.toFixed(1)}%`
+  );
+
+  return {
+    answer:
+      `Payer Comparison (${range}):\n\n` +
+      answerLines.join("\n\n"),
+
+    actions: [
+      ...results.map(r => ({
+        type: "navigation",
+        label: `View ${r.payer} Claims`,
+        route: smartUrl("/claims-lifecycle", { payer: r.payer, range }) + "#lifecycleTable"
+      })),
+      {
+        type: "navigation",
+        label: "Run Full Comparison",
+        route: smartUrl("/ai-copilot", { range, view: "full", autoRun: "1" })
+      }
+    ]
+  };
+}
+
+function buildAutoInsights(org_id, payer, range){
+  if (!payer) return [];
+
+  const current = computePayerIntelligence(org_id, payer, range);
+  function getPreviousRange(range){
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    function shiftRange(days){
+      return {
+        start: now - (days * 2 * dayMs),
+        end: now - (days * dayMs)
+      };
+    }
+
+    if (range === "last7") return shiftRange(7);
+    if (range === "last30") return shiftRange(30);
+    if (range === "last60") return shiftRange(60);
+    if (range === "last90") return shiftRange(90);
+    if (range === "last365") return shiftRange(365);
+
+    // fallback
+    return shiftRange(30);
+  }
+
+  let prevRange = getPreviousRange(range);
+
+  let previous;
+
+  if (typeof prevRange === "string") {
+    previous = computePayerIntelligence(org_id, payer, prevRange);
+  } else {
+    // 🔥 support custom date window
+    previous = computePayerIntelligence(org_id, payer, range, {
+      start: prevRange.start,
+      end: prevRange.end
+    });
+  }
+
+  const insights = [];
+
+  const currRate = Number(current.denialRate || 0);
+  const prevRate = Number(previous.denialRate || 0);
+
+  if (prevRate > 0) {
+    const change = currRate - prevRate;
+    if (Math.abs(change) >= 1) {
+      insights.push(
+        `${payer} denial rate ${change > 0 ? "increased" : "decreased"} by ${Math.abs(change).toFixed(1)}%`
+      );
+    }
+  }
+
+  if (Number(current.totalAtRisk || 0) > 0) {
+    insights.push(`${payer} has ${formatMoneyUI(current.totalAtRisk)} currently at risk`);
+  }
+
+  return insights;
+}
+
+function buildSmartFollowUps(payer){
+  if (!payer) return [];
+
+  return [
+    { label: `Why are ${payer} denials high?`, prompt: `Why are ${payer} denials increasing?` },
+    { label: `Top denial reasons for ${payer}`, prompt: `Top denial reasons for ${payer}` },
+    { label: `Compare ${payer} vs others`, prompt: `Compare ${payer} vs other payers` }
+  ];
 }
 
 
@@ -22088,6 +22255,16 @@ Try:
         source: isFullCopilotRequest ? "full" : "chat"
       });
     } else if (lightweightData) {
+      if (isCompareQuestion(message) && !shouldEscalateToFullAnalysis(message)) {
+        const compare = buildComparePayerAnswer(sess.org_id, message);
+        if (compare) {
+          return send(res, 200, JSON.stringify({
+            answer: compare.answer,
+            actions: compare.actions,
+            simple: true
+          }), "application/json");
+        }
+      }
       const direct = buildLightweightDataAnswer(sess.org_id, message);
       answer = direct.answer;
       actions = Array.isArray(direct.actions) ? direct.actions : [];
