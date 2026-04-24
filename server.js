@@ -5904,14 +5904,36 @@ function isLightweightDataQuestion(message) {
 
 function buildLightweightDataAnswer(org_id, message) {
   const text = String(message || "").trim();
+
   let payer = extractSmartPayer(org_id, text);
+
+  // 🔥 FIX 1: fallback payer detection
   if (!payer) {
     const candidates = detectPayerCandidatesFromPrompt(text, org_id);
     if (Array.isArray(candidates) && candidates.length === 1) {
       payer = candidates[0];
     }
   }
+
   const range = extractSmartDateRange(text) || "last30";
+
+  // 🔥 Build FILTERED route (KEY FIX)
+  const lifecycleRoute = smartUrl("/claims-lifecycle", {
+    payer,
+    range
+  });
+
+  const analysisRoute = payer
+    ? smartUrl("/ai-copilot", {
+        payer,
+        range,
+        view: "full",
+        autoRun: "1"   // 🔥 IMPORTANT: triggers analysis
+      })
+    : smartUrl("/ai-copilot", {
+        view: "full",
+        autoRun: "1"
+      });
 
   if (payer) {
     const intel = computePayerIntelligence(org_id, payer, range);
@@ -5921,53 +5943,95 @@ function buildLightweightDataAnswer(org_id, message) {
     const totalAtRisk = Number(intel.totalAtRisk || 0);
     const denialRate = Number(intel.denialRate || 0);
 
+    // 🔥 FIX 2: handle empty / missing payer data
     if (!totalClaims && !totalCollected && !totalAtRisk) {
       return {
-        answer: `I could not find internal reimbursement data for ${payer} yet. Upload billed claims and payment files for this payer, then I can summarize reimbursement, denials, underpayments, and payment trends.`,
+        answer: `I could not find internal reimbursement data for ${payer} yet. Upload billed claims and payment files for this payer, then I can analyze reimbursement, denials, and underpayments.`,
         actions: [
-          { type: "navigation", label: "Upload Payments", route: "/data-management?tab=payments" },
-          { type: "navigation", label: "Upload Billed Claims", route: "/data-management?tab=billed" }
+          {
+            type: "navigation",
+            label: "Upload Payments",
+            route: "/data-management?tab=payments"
+          },
+          {
+            type: "navigation",
+            label: "Upload Billed Claims",
+            route: "/data-management?tab=billed"
+          }
         ]
       };
     }
 
     return {
       answer:
-        `${payer} reimbursement means the payment activity tied to this payer in your uploaded claims and payment data. ` +
-        `Based on your current data, ${payer} has ${totalClaims} claim${totalClaims === 1 ? "" : "s"}, ` +
-        `${formatMoneyUI(totalCollected)} collected, ${formatMoneyUI(totalAtRisk)} at risk, ` +
-        `and a ${denialRate.toFixed(1)}% denial rate for the selected period.`,
+        `${payer} reimbursement refers to the payments tied to that payer in your claims and payment data.
+
+` +
+        `Based on your current data:
+` +
+        `• Claims: ${totalClaims}
+` +
+        `• Collected: ${formatMoneyUI(totalCollected)}
+` +
+        `• At Risk: ${formatMoneyUI(totalAtRisk)}
+` +
+        `• Denial Rate: ${denialRate.toFixed(1)}%`,
+
+      // 🔥 FIX 3: CORRECT BUTTON ROUTING
       actions: [
-        { type: "navigation", label: `View ${payer} Claims`, route: smartUrl("/actions", { payer }) },
-        { type: "navigation", label: "Run Full Analysis", route: smartUrl("/ai-copilot", { payer, view: "full" }) }
+        {
+          type: "navigation",
+          label: `View ${payer} Claims`,
+          route: lifecycleRoute   // ✅ filtered lifecycle table
+        },
+        {
+          type: "navigation",
+          label: "Run Full Analysis",
+          route: analysisRoute    // ✅ triggers full analysis
+        }
       ]
     };
   }
 
-  const groundedContext = buildSmartCopilotContext(org_id, text);
-  const totalClaims = Number(groundedContext?.totals?.claims || 0);
-  const paid = Number(groundedContext?.totals?.paid || 0);
-  const billed = Number(groundedContext?.totals?.billed || 0);
+  // 🔥 fallback (no payer detected)
+  const context = buildSmartCopilotContext(org_id, text);
+
+  const totalClaims = Number(context?.totals?.claims || 0);
+  const paid = Number(context?.totals?.paid || 0);
+  const billed = Number(context?.totals?.billed || 0);
 
   if (!totalClaims && !paid && !billed) {
     return {
-      answer: "I could not find internal data for that question yet. Upload billed claims and payments first, then I can answer with your actual reimbursement data.",
+      answer: "No internal data found yet. Upload claims and payments to begin analysis.",
       actions: [
-        { type: "navigation", label: "Open Data Management", route: "/data-management" }
+        {
+          type: "navigation",
+          label: "Open Data Management",
+          route: "/data-management"
+        }
       ]
     };
   }
 
   return {
     answer:
-      `Based on your current uploaded data, you have ${totalClaims} claim${totalClaims === 1 ? "" : "s"}, ` +
-      `${formatMoneyUI(billed)} billed, and ${formatMoneyUI(paid)} collected. For a deeper breakdown, run a full analysis.`,
+      `You currently have ${totalClaims} claims, ${formatMoneyUI(billed)} billed, and ${formatMoneyUI(paid)} collected.`,
+
     actions: [
-      { type: "navigation", label: "Run Full Analysis", route: "/ai-copilot?view=full" },
-      { type: "navigation", label: "Open Action Center", route: "/actions" }
+      {
+        type: "navigation",
+        label: "Run Full Analysis",
+        route: analysisRoute
+      },
+      {
+        type: "navigation",
+        label: "Open Claims Lifecycle",
+        route: "/claims-lifecycle"
+      }
     ]
   };
 }
+
 
 function saveSimpleCopilotTurnIfNeeded(isFullCopilotRequest, getOrCreateActiveWorkspace, appendWorkspaceTurn, persistActiveWorkspace, userText, assistantText) {
   if (!isFullCopilotRequest) return null;
@@ -6607,12 +6671,14 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
 function buildCopilotResponse({
   org_id,
   rangePreset,
+  payer,
   responseFormat,
-  question
+  question,
+  opts
 }){
 
   const range = rangeFromPreset(rangePreset || "last30");
-  const payerScope = detectPayerFromPrompt(question, org_id);
+  let payerScope = opts?.payer || payer || detectPayerFromPrompt(question, org_id);
   const intent = detectCopilotIntent(question);
   const briefType = determineBriefType({ question, intentKey: intent.key, payerScope });
   const briefTitle = buildBriefTitle({ briefType, payerScope, question });
@@ -8639,17 +8705,31 @@ function consumeCopilotQuery(org_id) {
   return { ok: true, used: nextUsed, limit };
 }
 
-function createCopilotWorkspaceFromPrompt(org_id, prompt) {
-  const workspace = getOrCreateCopilotWorkspace(org_id, "", prompt);
+function createCopilotWorkspace(org_id, prompt) {
+  return getOrCreateCopilotWorkspace(org_id, "", prompt);
+}
+
+function createCopilotWorkspaceFromPrompt(org_id, prompt, opts = {}) {
+  const workspace = createCopilotWorkspace(org_id, prompt);
+
+  // 🔥 NEW: persist structured context safely
+  workspace.context = {
+    ...(workspace.context || {}),
+    payer: opts.payer || null,
+    range: opts.range || "last30"
+  };
+
   const result = buildCopilotResponse({
     org_id,
-    rangePreset: "last30",
+    rangePreset: opts?.range || "last30",
+    payer: opts?.payer || null,
     responseFormat: "executive",
     question: prompt,
   });
 
   workspace.messages.push({ role: "user", content: prompt, created_at: nowISO() });
   appendExecutiveBriefToWorkspace(workspace, result);
+  saveCopilotWorkspace(workspace);
   return workspace;
 }
 
@@ -22451,7 +22531,8 @@ Keep it concise and factual.
     const workspace = getOrCreateCopilotWorkspace(org.org_id, requestedWorkspaceId, rawPrompt);
     const result = buildCopilotResponse({
       org_id: org.org_id,
-      rangePreset: "last30",
+      rangePreset: (workspace?.context?.range || "last30"),
+      payer: workspace?.context?.payer || null,
       responseFormat: "executive",
       question: rawPrompt
     });
@@ -26918,6 +26999,25 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
 // AI COPILOT WORKSPACE
 // ===============================
 if (method === "GET" && pathname === "/ai-copilot") {
+  const urlObj = new URL(req.url, "http://localhost");
+
+  // 🔥 AUTO RUN FULL ANALYSIS FROM LINK
+  const autoRun = urlObj.searchParams.get("autoRun");
+  const payer = urlObj.searchParams.get("payer");
+  const range = urlObj.searchParams.get("range") || "last30";
+
+  if (autoRun === "1" && payer) {
+    const workspace = createCopilotWorkspaceFromPrompt(
+      sess.org_id,
+      `Analyze ${payer || "revenue"} performance`,
+      {
+        payer,
+        range
+      }
+    );
+
+    return redirect(res, `/ai-copilot?workspace=${workspace.workspace_id}`);
+  }
   const copilotUsage = getCopilotUsageSnapshot(org.org_id);
 
   // ❌ DO NOT BLOCK PAGE
