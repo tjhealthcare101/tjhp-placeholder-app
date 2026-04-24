@@ -8483,6 +8483,8 @@ function createCopilotWorkspaceFromPrompt(org_id, prompt) {
       { role: "assistant", content: buildExecutiveTitle(result), created_at: nowISO() }
     ],
     latest_brief: { brief_id, result },
+    latest_brief_visible: true,
+    last_turn_type: "executive_brief",
     created_at: nowISO(),
     updated_at: nowISO(),
   };
@@ -21813,9 +21815,13 @@ Try:
     const actionSource = isFullCopilotRequest ? "full" : "chat";
 
     if (isFullCopilotRequest) {
-      getOrCreateActiveWorkspace(rawMessage || message);
+      const ws = getOrCreateActiveWorkspace(rawMessage || message);
       appendWorkspaceTurn("user", rawMessage || message);
       appendWorkspaceTurn("assistant", answer);
+
+      ws.latest_brief_visible = false;
+      ws.last_turn_type = "simple_ui_help";
+
       persistActiveWorkspace();
     }
 
@@ -21850,9 +21856,13 @@ Try:
     const actionSource = isFullCopilotRequest ? "full" : "chat";
 
     if (isFullCopilotRequest) {
-      getOrCreateActiveWorkspace(rawMessage || message);
+      const ws = getOrCreateActiveWorkspace(rawMessage || message);
       appendWorkspaceTurn("user", rawMessage || message);
       appendWorkspaceTurn("assistant", answer);
+
+      ws.latest_brief_visible = false;
+      ws.last_turn_type = "deterministic";
+
       persistActiveWorkspace();
     }
 
@@ -21890,9 +21900,13 @@ Try:
     const actionSource = isFullCopilotRequest ? "full" : "chat";
 
     if (isFullCopilotRequest) {
-      getOrCreateActiveWorkspace(rawMessage || message);
+      const ws = getOrCreateActiveWorkspace(rawMessage || message);
       appendWorkspaceTurn("user", rawMessage || message);
       appendWorkspaceTurn("assistant", shortAnswer);
+
+      ws.latest_brief_visible = false;
+      ws.last_turn_type = "short_answer";
+
       persistActiveWorkspace();
     }
 
@@ -21992,6 +22006,8 @@ Try:
   writeJSON(FILES.copilot_briefs, briefs);
 
   workspace.latest_brief = { brief_id, result };
+  workspace.latest_brief_visible = true;
+  workspace.last_turn_type = "executive_brief";
 
   workspace.updated_at = nowISO();
   saveCopilotWorkspace(workspace);
@@ -26770,7 +26786,12 @@ if (method === "GET" && pathname === "/ai-copilot") {
   const tilesHtml = renderCopilotTiles();
 
   const thread = (workspace && Array.isArray(workspace.messages)) ? workspace.messages : [];
-  const brief = workspace?.latest_brief || null;
+  const brief =
+    workspace &&
+    workspace.latest_brief_visible !== false &&
+    workspace.last_turn_type === "executive_brief"
+      ? (workspace.latest_brief || null)
+      : null;
 
   const hasMessages = thread.length > 0 || !!brief;
 
@@ -27148,9 +27169,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     if (isUiHelpPrompt && !shouldEscalate) {
                       const res = await fetch("/ai/chat", {
                         method: "POST",
-                        headers: {
-                          "Content-Type": "application/json"
-                        },
+                        headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                           message: prompt,
                           workspace_id: currentWorkspaceId,
@@ -27160,15 +27179,35 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                       const data = await res.json();
 
-                      if (thinkingEl) {
-                        thinkingEl.innerHTML = \`
-                          <div class="ws-who">Copilot</div>
-                          <div style="white-space:pre-wrap;">\${data.answer || "Done."}</div>
-                        \`;
-                      }
-
                       if (data.workspace_id) {
-                        window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id));
+                        const workspaceId = data.workspace_id;
+
+                        // update URL
+                        window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
+
+                        // 🔥 REFRESH THREAD (THIS WAS MISSING)
+                        try {
+                          const res2 = await fetch("/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
+                          const html = await res2.text();
+                          const temp = document.createElement("div");
+                          temp.innerHTML = html;
+
+                          const newThread = temp.querySelector("#wsThread");
+                          const currentThread = document.getElementById("wsThread");
+
+                          if (newThread && currentThread) {
+                            currentThread.innerHTML = newThread.innerHTML;
+
+                            setTimeout(() => {
+                              const threadEl = document.getElementById("wsThread");
+                              if (threadEl) {
+                                threadEl.scrollTop = threadEl.scrollHeight;
+                              }
+                            }, 50);
+                          }
+                        } catch (e) {
+                          console.error("Thread refresh failed", e);
+                        }
                       }
 
                       return;
@@ -27220,6 +27259,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                     if (data && data.workspace_id) {
                       const workspaceId = data.workspace_id;
+                      const workspaceInput = form.querySelector('input[name="workspace_id"]');
+                      if (workspaceInput) {
+                        workspaceInput.value = workspaceId;
+                      }
                       window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
 
                       try {
@@ -27237,7 +27280,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                           setTimeout(() => {
                             const threadEl = document.getElementById("wsThread");
                             if (threadEl) {
-                              threadEl.scrollTop = 0;
+                              threadEl.scrollTop = threadEl.scrollHeight;
                             }
 
                             const firstCard = document.querySelector(".ws-card");
@@ -27482,6 +27525,8 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
   writeJSON(FILES.copilot_briefs, briefs);
 
   workspace.latest_brief = { brief_id, result };
+  workspace.latest_brief_visible = true;
+  workspace.last_turn_type = "executive_brief";
   workspace.messages.push({ role: "assistant", content: buildExecutiveTitle(result), created_at: nowISO() });
 
   workspace.updated_at = nowISO();
