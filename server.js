@@ -3567,6 +3567,16 @@ async function sendCopilotMessage(){
 
     // 👇 REMOVE thinking indicator
     thinkingEl.remove();
+    const savedNotice = document.getElementById("aiChatSavedNotice");
+    if (savedNotice) {
+      if (data.savedToWorkspace || data.workspace_id) {
+        savedNotice.dataset.forceShow = "1";
+        savedNotice.style.display = "block";
+      } else {
+        delete savedNotice.dataset.forceShow;
+        savedNotice.style.display = "none";
+      }
+    }
 
     // 👇 Add AI response
     const aiEl = document.createElement("div");
@@ -3591,13 +3601,12 @@ async function sendCopilotMessage(){
       Array.isArray(data.actions) &&
       data.actions.length
     ) {
-      html += '<div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">';
+      html += '<div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:8px;">';
 
-      const primaryAction = data.actions?.[0];
-      const actionBtn = buildFloaterAction(primaryAction);
-      if (actionBtn){
-        html += '<div style="margin-top:8px;">' + actionBtn + '</div>';
-      }
+      data.actions.slice(0, 3).forEach(function(action){
+        const actionBtn = buildFloaterAction(action);
+        if (actionBtn) html += actionBtn;
+      });
 
       html += '</div>';
     }
@@ -4545,7 +4554,9 @@ ${chatScript}
       \`;
     }
 
-    notice.style.display = "block";
+    if (!notice.dataset.forceShow) {
+      notice.style.display = "none";
+    }
   }
 
   // =========================
@@ -5749,16 +5760,16 @@ function isUiHelpQuestion(message) {
 function isSimpleQuestion(message) {
   const text = String(message || "").toLowerCase().trim();
 
-  // 🔥 HARD OVERRIDE: UI HELP ALWAYS SIMPLE
+  if (!text) return false;
+
   if (isUiHelpQuestion(text)) return true;
 
-  // 🔥 ANALYTIC SIGNALS (NOT SIMPLE)
-  const analyticSignals = /\b(payer|payers|claim|claims|denial|denials|underpaid|underpayment|underpayments|at risk|collected|paid|forecast|trend|performance|rate|rates|amount|amounts|how much|how many|compare|analysis|breakdown)\b/.test(text);
+  if (/^(what is|what are|define|explain|tell me about)\b/.test(text)) {
+    const deepSignals = /\b(analysis|analyze|trend|trends|breakdown|compare|performance|rate|rates|forecast|projection|top|drivers|why|how much|how many)\b/.test(text);
+    return !deepSignals;
+  }
 
-  if (analyticSignals) return false;
-
-  // fallback
-  return /^(what is|what are|what does|what do|how does|where is|explain|tell me about|how do i)/.test(text);
+  return false;
 }
 
 function shouldEscalateToFullAnalysis(message){
@@ -5878,39 +5889,141 @@ function buildSmartCopilotActions(org_id, message, opts = {}) {
   return actions;
 }
 
+function isLightweightDataQuestion(message) {
+  const text = String(message || "").toLowerCase().trim();
+  if (!text) return false;
+
+  if (isUiHelpQuestion(text)) return false;
+
+  const hasDataSubject = /\b(aetna|cigna|medicare|medicaid|uhc|unitedhealthcare|united healthcare|bluecross|blue cross|bcbs|payer|reimbursement|payment|paid|collected|claim|claims)\b/.test(text);
+
+  const deepSignals = /\b(analysis|analyze|trend|trends|breakdown|compare|performance|rate|rates|forecast|projection|top|drivers|why|how much|how many|denial rate|underpayment rate|revenue risk drivers)\b/.test(text);
+
+  return hasDataSubject && !deepSignals;
+}
+
+function buildLightweightDataAnswer(org_id, message) {
+  const text = String(message || "").trim();
+  let payer = extractSmartPayer(org_id, text);
+  if (!payer) {
+    const candidates = detectPayerCandidatesFromPrompt(text, org_id);
+    if (Array.isArray(candidates) && candidates.length === 1) {
+      payer = candidates[0];
+    }
+  }
+  const range = extractSmartDateRange(text) || "last30";
+
+  if (payer) {
+    const intel = computePayerIntelligence(org_id, payer, range);
+
+    const totalClaims = Number(intel.totalClaims || 0);
+    const totalCollected = Number(intel.totalCollected || 0);
+    const totalAtRisk = Number(intel.totalAtRisk || 0);
+    const denialRate = Number(intel.denialRate || 0);
+
+    if (!totalClaims && !totalCollected && !totalAtRisk) {
+      return {
+        answer: `I could not find internal reimbursement data for ${payer} yet. Upload billed claims and payment files for this payer, then I can summarize reimbursement, denials, underpayments, and payment trends.`,
+        actions: [
+          { type: "navigation", label: "Upload Payments", route: "/data-management?tab=payments" },
+          { type: "navigation", label: "Upload Billed Claims", route: "/data-management?tab=billed" }
+        ]
+      };
+    }
+
+    return {
+      answer:
+        `${payer} reimbursement means the payment activity tied to this payer in your uploaded claims and payment data. ` +
+        `Based on your current data, ${payer} has ${totalClaims} claim${totalClaims === 1 ? "" : "s"}, ` +
+        `${formatMoneyUI(totalCollected)} collected, ${formatMoneyUI(totalAtRisk)} at risk, ` +
+        `and a ${denialRate.toFixed(1)}% denial rate for the selected period.`,
+      actions: [
+        { type: "navigation", label: `View ${payer} Claims`, route: smartUrl("/actions", { payer }) },
+        { type: "navigation", label: "Run Full Analysis", route: smartUrl("/ai-copilot", { payer, view: "full" }) }
+      ]
+    };
+  }
+
+  const groundedContext = buildSmartCopilotContext(org_id, text);
+  const totalClaims = Number(groundedContext?.totals?.claims || 0);
+  const paid = Number(groundedContext?.totals?.paid || 0);
+  const billed = Number(groundedContext?.totals?.billed || 0);
+
+  if (!totalClaims && !paid && !billed) {
+    return {
+      answer: "I could not find internal data for that question yet. Upload billed claims and payments first, then I can answer with your actual reimbursement data.",
+      actions: [
+        { type: "navigation", label: "Open Data Management", route: "/data-management" }
+      ]
+    };
+  }
+
+  return {
+    answer:
+      `Based on your current uploaded data, you have ${totalClaims} claim${totalClaims === 1 ? "" : "s"}, ` +
+      `${formatMoneyUI(billed)} billed, and ${formatMoneyUI(paid)} collected. For a deeper breakdown, run a full analysis.`,
+    actions: [
+      { type: "navigation", label: "Run Full Analysis", route: "/ai-copilot?view=full" },
+      { type: "navigation", label: "Open Action Center", route: "/actions" }
+    ]
+  };
+}
+
+function saveSimpleCopilotTurnIfNeeded(isFullCopilotRequest, getOrCreateActiveWorkspace, appendWorkspaceTurn, persistActiveWorkspace, userText, assistantText) {
+  if (!isFullCopilotRequest) return null;
+
+  const ws = getOrCreateActiveWorkspace(userText || "New Analysis");
+  appendWorkspaceTurn("user", userText || "");
+  appendWorkspaceTurn("assistant", assistantText || "");
+
+  ws.latest_brief_visible = false;
+  ws.last_turn_type = "simple_answer";
+  ws.updated_at = nowISO();
+
+  persistActiveWorkspace();
+  return ws;
+}
+
 function buildSmartSimpleAnswer(message){
   const text = String(message || "").toLowerCase();
-  const isUiHelp = isUiHelpQuestion(message);
 
   if (/action\s*center/.test(text)) {
-    return "The Action Center shows claims that need attention, such as denials, underpayments, appeals, negotiations, and follow-ups, so your team knows what to work next.";
+    return "The Action Center is the work queue for claims that need attention. It organizes denied claims, underpaid claims, active appeals and negotiations, and claims needing follow-up. The goal is to help the practice see what needs action next instead of letting revenue issues sit unnoticed.";
   }
 
   if (/claims\s*lifecycle|\blifecycle\b/.test(text)) {
-    return "Claims Lifecycle helps you track claims from submission through payment, denial, underpayment, appeal, negotiation, or resolution.";
+    return "Claims Lifecycle tracks claims from billed submission through payer response, payment, denial, underpayment, follow-up, appeal, negotiation, write-off, or resolution. It helps you understand where each claim sits in the revenue cycle and what happened to it over time.";
   }
 
-  if (/revenue\s*intelligence|payer\s*intelligence/.test(text)) {
-    return "Revenue Intelligence provides deeper financial analytics, payer performance views, forecasts, and executive-level revenue insights.";
-  }
-
-  if (isUiHelp && (/revenue\s*overview/.test(text) || /\boverview\b/.test(text) || /\bdashboard\b/.test(text))) {
-    return "Revenue Overview is the high-level dashboard for billed revenue, collections, at-risk dollars, and top performance trends so you can quickly understand overall financial health.";
-  }
-
-  if (/ai\s*copilot|\bcopilot\b/.test(text)) {
-    return "AI Copilot helps you ask questions about your revenue data, generate analysis, and connect insights to the right next action.";
+  if (/revenue\s*overview|\boverview\b|\bdashboard\b/.test(text)) {
+    return "Revenue Overview is the high-level dashboard for financial performance. It summarizes billed revenue, allowed or expected revenue, paid amounts, denied dollars, write-offs, underpayments, payer performance, and revenue at risk so you can quickly understand the practice’s overall revenue health.";
   }
 
   if (/data\s*management|\buploads?\b|\bimport\b/.test(text)) {
-    return "Data Management is where you upload and manage billed claims, payments, denials, contracts, and related revenue files.";
+    return "Data Management is where the practice uploads and manages the files that power the platform. This includes billed claims, payments, denials, payer contracts, fee schedules, reimbursement rules, and related revenue files. These uploads allow the system to match payments to claims and identify denials, underpayments, and revenue risk.";
+  }
+
+  if (/revenue\s*intelligence|payer\s*intelligence/.test(text)) {
+    return "Revenue Intelligence is the deeper analytics workspace. It helps review payer performance, revenue exposure, forecasts, recovery opportunities, denial patterns, underpayment trends, and executive-level insights that go beyond the basic dashboard.";
+  }
+
+  if (/ai\s*copilot|\bcopilot\b/.test(text)) {
+    return "AI Copilot lets you ask questions about your uploaded revenue data and platform workflows. It can give quick answers for simple questions or generate deeper executive briefs when you ask for analysis, trends, breakdowns, payer performance, or risk drivers.";
+  }
+
+  if (/\bsupport\b/.test(text)) {
+    return "The Support tab is where users can contact the TJ Healthcare Pro team for help, questions, technical issues, account support, or workflow guidance. It keeps support communication inside the platform instead of relying only on outside email.";
+  }
+
+  if (/\baccount\b|\bbilling\b|\bplan\b/.test(text)) {
+    return "The Account tab is where users manage organization information, plan and billing details, subscription status, profile settings, and account-level configuration.";
   }
 
   if (/\btabs?\b|\bpages?\b|\bscreens?\b|\bsections?\b/.test(text)) {
-    return "Each tab opens a different workspace in the platform so you can move between high-level dashboards, detailed claim workflows, data operations, and AI analysis without losing context.";
+    return "Each tab opens a different workspace inside TJ Healthcare Pro. Revenue Overview gives the high-level financial picture. Claims Lifecycle tracks claim movement. Data Management handles uploads and reimbursement data. Action Center shows claims needing work. Revenue Intelligence provides deeper analytics. AI Copilot helps answer questions and generate analysis.";
   }
 
-  return "This feature helps you understand and act on your healthcare revenue data more efficiently.";
+  return "This area helps users understand and act on healthcare revenue data more efficiently.";
 }
 
 function tryBuildDeterministicPayerAnswer(org_id, message) {
@@ -21831,69 +21944,12 @@ Try:
   const escalate =
     shouldEscalateToFullAnalysis(message) ||
     shouldEscalateToFullAnalysis(rawMessage);
+  const lightweightData =
+    isLightweightDataQuestion(message) ||
+    isLightweightDataQuestion(rawMessage);
 
-  // 🔥 HARD BLOCK UI HELP (FINAL GUARANTEE)
-  if (isUiHelpQuestion(rawMessage)) {
-    const answer = buildSmartSimpleAnswer(rawMessage);
-
-    if (isFullCopilotRequest) {
-      getOrCreateActiveWorkspace(rawMessage);
-      appendWorkspaceTurn("user", rawMessage);
-      appendWorkspaceTurn("assistant", answer);
-      persistActiveWorkspace();
-    }
-
-    return send(res, 200, JSON.stringify({
-      answer,
-      simple: true,
-      actions: buildSmartCopilotActions(sess.org_id, rawMessage, { source: isFullCopilotRequest ? "full" : "chat" }),
-      ...(activeWorkspace ? { workspace_id: activeWorkspace.workspace_id } : {})
-    }), "application/json");
-  }
-
-  // 🔥 FLOATER ESCALATION
-  if (!isFullCopilotRequest && escalate) {
-    // force full copilot behavior
-    body.source = "full";
-    isFullCopilotRequest = true;
-  }
-
-  // ===== SIMPLE QUESTION FIRST (GLOBAL FIX) =====
-  if (simple) {
-    const answer = buildSmartSimpleAnswer(message);
-    const actionSource = isFullCopilotRequest ? "full" : "chat";
-
-    if (isFullCopilotRequest) {
-      getOrCreateActiveWorkspace(rawMessage || message);
-      appendWorkspaceTurn("user", rawMessage || message);
-      appendWorkspaceTurn("assistant", answer);
-      persistActiveWorkspace();
-    }
-
-    return send(res, 200, JSON.stringify({
-      answer,
-      noData: false,
-      actions: [
-        ...buildSmartCopilotActions(sess.org_id, message, { source: actionSource }),
-        ...(
-          !isUiHelpQuestion(message)
-            ? [{
-                type: "navigation",
-                label: "Run Full Analysis",
-                route: "/ai-copilot?view=full"
-              }]
-            : []
-        )
-      ],
-      simple: true,
-      used: usageCheck.used,
-      limit: usageCheck.limit,
-      grounded: true,
-      ...(activeWorkspace ? { workspace_id: activeWorkspace.workspace_id } : {})
-    }), "application/json");
-  }
-
-  // ===== THEN DETERMINISTIC DATA ANSWERS =====
+  // ===== DETERMINISTIC DATA ANSWERS FIRST =====
+  // Exact data answers should win before lightweight/simple responses.
   const deterministic = tryDeterministicAnswer(sess.org_id, message);
 
   if (deterministic){
@@ -21917,6 +21973,54 @@ Try:
     }), "application/json");
   }
 
+  if ((simple || lightweightData) && !escalate) {
+    let answer = "";
+    let actions = [];
+
+    if (isUiHelpQuestion(message)) {
+      answer = buildSmartSimpleAnswer(message);
+      actions = buildSmartCopilotActions(sess.org_id, message, {
+        source: isFullCopilotRequest ? "full" : "chat"
+      });
+    } else if (lightweightData) {
+      const direct = buildLightweightDataAnswer(sess.org_id, message);
+      answer = direct.answer;
+      actions = Array.isArray(direct.actions) ? direct.actions : [];
+    } else {
+      answer = buildSmartSimpleAnswer(message);
+      actions = buildSmartCopilotActions(sess.org_id, message, {
+        source: isFullCopilotRequest ? "full" : "chat"
+      });
+    }
+
+    const ws = saveSimpleCopilotTurnIfNeeded(
+      isFullCopilotRequest,
+      getOrCreateActiveWorkspace,
+      appendWorkspaceTurn,
+      persistActiveWorkspace,
+      rawMessage || message,
+      answer
+    );
+
+    return send(res, 200, JSON.stringify({
+      answer,
+      noData: false,
+      simple: true,
+      actions,
+      used: usageCheck.used,
+      limit: usageCheck.limit,
+      grounded: true,
+      savedToWorkspace: !!ws,
+      ...(ws ? { workspace_id: ws.workspace_id } : {})
+    }), "application/json");
+  }
+
+  // 🔥 FLOATER ESCALATION
+  if (!isFullCopilotRequest && escalate) {
+    // force full copilot behavior
+    body.source = "full";
+    isFullCopilotRequest = true;
+  }
 
   // =========================
   // 🔥 STRUCTURED (UNCHANGED BUT ENHANCED)
@@ -27233,14 +27337,18 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     }
                     const helpLead = /^(what is|what are|what does|what do|how does|where is|explain|tell me about|how do i)\b/.test(lowerPrompt);
                     const uiKeywords = /\b(tab|tabs|page|pages|screen|screens|section|sections|feature|features|button|buttons|dashboard|overview|action\s*center|data\s*management|revenue\s*intelligence|copilot|claims?\s*lifecycle|upload|uploads)\b/.test(lowerPrompt);
-                    const isUiHelpPrompt =
-                      helpLead &&
-                      uiKeywords &&
-                      /\b(tab|tabs|page|screen|dashboard|overview|action center|claims lifecycle|data management|revenue intelligence)\b/.test(lowerPrompt);
+                    const isUiHelpPrompt = helpLead && uiKeywords;
+                    function isLightweightDataPrompt(message){
+                      const text = String(message || "").toLowerCase().trim();
+                      const hasDataSubject = /\b(aetna|cigna|medicare|medicaid|uhc|unitedhealthcare|united healthcare|bluecross|blue cross|bcbs|payer|reimbursement|payment|paid|collected|claim|claims)\b/.test(text);
+                      const deepSignals = /\b(analysis|analyze|trend|trends|breakdown|compare|performance|rate|rates|forecast|projection|top|drivers|why|how much|how many|denial rate|underpayment rate|revenue risk drivers)\b/.test(text);
+                      return hasDataSubject && !deepSignals;
+                    }
+                    const isLightweightDataQuestion = isLightweightDataPrompt(prompt);
                     const shouldEscalate = shouldEscalateToFullAnalysis(prompt);
 
                     // 🔥 UI HELP → but allow escalation
-                    if (isUiHelpPrompt && !shouldEscalate) {
+                    if ((isUiHelpPrompt || isLightweightDataQuestion) && !shouldEscalate) {
                       const res = await fetch("/ai/chat", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
