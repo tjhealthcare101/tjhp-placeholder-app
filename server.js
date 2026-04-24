@@ -5749,26 +5749,16 @@ function isUiHelpQuestion(message) {
 function isSimpleQuestion(message) {
   const text = String(message || "").toLowerCase().trim();
 
-  // ✅ HARD STOP: UI help ALWAYS simple
+  // 🔥 HARD OVERRIDE: UI HELP ALWAYS SIMPLE
   if (isUiHelpQuestion(text)) return true;
 
-  // ❌ If it smells like DATA → NOT simple
-  const analyticSignals = /\b(payer|payers|claim|claims|denial|denials|underpaid|underpayment|underpayments|at risk|collected|paid|forecast|trend|trends|performance|rate|rates|amount|amounts|how much|how many)\b/.test(text);
+  // 🔥 ANALYTIC SIGNALS (NOT SIMPLE)
+  const analyticSignals = /\b(payer|payers|claim|claims|denial|denials|underpaid|underpayment|underpayments|at risk|collected|paid|forecast|trend|performance|rate|rates|amount|amounts|how much|how many|compare|analysis|breakdown)\b/.test(text);
 
   if (analyticSignals) return false;
 
-  // fallback simple detection
-  return (
-    text.startsWith("what is") ||
-    text.startsWith("what are") ||
-    text.startsWith("what does") ||
-    text.startsWith("what do") ||
-    text.startsWith("how does") ||
-    text.startsWith("where is") ||
-    text.startsWith("explain") ||
-    text.startsWith("tell me about") ||
-    text.startsWith("how do i")
-  );
+  // fallback
+  return /^(what is|what are|what does|what do|how does|where is|explain|tell me about|how do i)/.test(text);
 }
 
 function shouldEscalateToFullAnalysis(message){
@@ -8387,6 +8377,82 @@ function saveCopilotWorkspace(workspace){
   writeJSON(FILES.copilot_workspaces, keep.concat([workspace]));
 }
 
+function getOrCreateCopilotWorkspace(org_id, workspace_id, seedTitle = "New Analysis"){
+  let workspace = null;
+
+  if (workspace_id) {
+    workspace = getCopilotWorkspace(org_id, workspace_id);
+  }
+
+  if (!workspace) {
+    workspace = {
+      workspace_id: uuid(),
+      org_id,
+      title: String(seedTitle || "New Analysis").slice(0, 60),
+      messages: [],
+      latest_brief: null,
+      created_at: nowISO(),
+      updated_at: nowISO(),
+    };
+  }
+
+  workspace.messages = Array.isArray(workspace.messages) ? workspace.messages : [];
+  if (!workspace.title) {
+    workspace.title = String(seedTitle || "New Analysis").slice(0, 60);
+  }
+
+  return workspace;
+}
+
+function saveCopilotBriefRecord(org_id, result){
+  const briefs = readJSON(FILES.copilot_briefs, []);
+  const brief_id = "BRF-" + Date.now();
+  briefs.push({ brief_id, org_id, created: nowISO(), result });
+  writeJSON(FILES.copilot_briefs, briefs);
+  return { brief_id, result };
+}
+
+function backfillLatestBriefIntoThread(workspace) {
+  if (!workspace?.latest_brief?.brief_id) return;
+
+  workspace.messages = Array.isArray(workspace.messages) ? workspace.messages : [];
+  const alreadyInThread = workspace.messages.some(msg =>
+    String(msg?.brief_id || "") === String(workspace.latest_brief?.brief_id || "")
+  );
+  if (alreadyInThread) return;
+
+  workspace.messages.push({
+    role: "assistant",
+    kind: "executive_brief",
+    brief_id: workspace.latest_brief.brief_id,
+    content: buildExecutiveTitle(workspace.latest_brief.result),
+    created_at: workspace.updated_at || nowISO()
+  });
+}
+
+function appendExecutiveBriefToWorkspace(workspace, result) {
+  backfillLatestBriefIntoThread(workspace);
+
+  const savedBrief = saveCopilotBriefRecord(workspace.org_id, result);
+
+  workspace.messages = Array.isArray(workspace.messages) ? workspace.messages : [];
+  workspace.messages.push({
+    role: "assistant",
+    kind: "executive_brief",
+    brief_id: savedBrief.brief_id,
+    content: buildExecutiveTitle(result),
+    created_at: nowISO()
+  });
+
+  workspace.latest_brief = savedBrief;
+  workspace.latest_brief_visible = true;
+  workspace.last_turn_type = "executive_brief";
+  workspace.updated_at = nowISO();
+  saveCopilotWorkspace(workspace);
+
+  return savedBrief;
+}
+
 function getCopilotUsageSnapshot(org_id) {
   const usage = getUsage(org_id);
   const limits = getLimitProfile(org_id);
@@ -8461,7 +8527,7 @@ function consumeCopilotQuery(org_id) {
 }
 
 function createCopilotWorkspaceFromPrompt(org_id, prompt) {
-  const workspace_id = uuid();
+  const workspace = getOrCreateCopilotWorkspace(org_id, "", prompt);
   const result = buildCopilotResponse({
     org_id,
     rangePreset: "last30",
@@ -8469,26 +8535,8 @@ function createCopilotWorkspaceFromPrompt(org_id, prompt) {
     question: prompt,
   });
 
-  const briefs = readJSON(FILES.copilot_briefs, []);
-  const brief_id = "BRF-" + Date.now();
-  briefs.push({ brief_id, org_id, created: nowISO(), result });
-  writeJSON(FILES.copilot_briefs, briefs);
-
-  const workspace = {
-    workspace_id,
-    org_id,
-    title: prompt.slice(0, 60),
-    messages: [
-      { role: "user", content: prompt, created_at: nowISO() },
-      { role: "assistant", content: buildExecutiveTitle(result), created_at: nowISO() }
-    ],
-    latest_brief: { brief_id, result },
-    latest_brief_visible: true,
-    last_turn_type: "executive_brief",
-    created_at: nowISO(),
-    updated_at: nowISO(),
-  };
-  saveCopilotWorkspace(workspace);
+  workspace.messages.push({ role: "user", content: prompt, created_at: nowISO() });
+  appendExecutiveBriefToWorkspace(workspace, result);
   return workspace;
 }
 
@@ -21698,29 +21746,7 @@ if (pathname === "/ai/chat" && req.method === "POST") {
   function getOrCreateActiveWorkspace(seedTitle = rawMessage || "New Analysis") {
     if (!isFullCopilotRequest) return null;
     if (activeWorkspace) return activeWorkspace;
-
-    if (requestedWorkspaceId) {
-      activeWorkspace = getCopilotWorkspace(sess.org_id, requestedWorkspaceId);
-    }
-
-    if (!activeWorkspace) {
-      activeWorkspace = {
-        workspace_id: uuid(),
-        org_id: sess.org_id,
-        title: String(seedTitle || "New Analysis").slice(0, 60),
-        messages: [],
-        latest_brief: null,
-        created_at: nowISO(),
-        updated_at: nowISO(),
-      };
-    }
-
-    activeWorkspace.messages = Array.isArray(activeWorkspace.messages) ? activeWorkspace.messages : [];
-
-    if (!activeWorkspace.title) {
-      activeWorkspace.title = String(seedTitle || "New Analysis").slice(0, 60);
-    }
-
+    activeWorkspace = getOrCreateCopilotWorkspace(sess.org_id, requestedWorkspaceId, seedTitle);
     return activeWorkspace;
   }
 
@@ -21799,8 +21825,31 @@ Try:
     }), "application/json");
   }
 
-  const simple = isSimpleQuestion(message);
-  const escalate = shouldEscalateToFullAnalysis(message);
+  const simple =
+    isSimpleQuestion(message) ||
+    isSimpleQuestion(rawMessage);
+  const escalate =
+    shouldEscalateToFullAnalysis(message) ||
+    shouldEscalateToFullAnalysis(rawMessage);
+
+  // 🔥 HARD BLOCK UI HELP (FINAL GUARANTEE)
+  if (isUiHelpQuestion(rawMessage)) {
+    const answer = buildSmartSimpleAnswer(rawMessage);
+
+    if (isFullCopilotRequest) {
+      getOrCreateActiveWorkspace(rawMessage);
+      appendWorkspaceTurn("user", rawMessage);
+      appendWorkspaceTurn("assistant", answer);
+      persistActiveWorkspace();
+    }
+
+    return send(res, 200, JSON.stringify({
+      answer,
+      simple: true,
+      actions: buildSmartCopilotActions(sess.org_id, rawMessage, { source: isFullCopilotRequest ? "full" : "chat" }),
+      ...(activeWorkspace ? { workspace_id: activeWorkspace.workspace_id } : {})
+    }), "application/json");
+  }
 
   // 🔥 FLOATER ESCALATION
   if (!isFullCopilotRequest && escalate) {
@@ -21815,13 +21864,9 @@ Try:
     const actionSource = isFullCopilotRequest ? "full" : "chat";
 
     if (isFullCopilotRequest) {
-      const ws = getOrCreateActiveWorkspace(rawMessage || message);
+      getOrCreateActiveWorkspace(rawMessage || message);
       appendWorkspaceTurn("user", rawMessage || message);
       appendWorkspaceTurn("assistant", answer);
-
-      ws.latest_brief_visible = false;
-      ws.last_turn_type = "simple_ui_help";
-
       persistActiveWorkspace();
     }
 
@@ -21856,13 +21901,9 @@ Try:
     const actionSource = isFullCopilotRequest ? "full" : "chat";
 
     if (isFullCopilotRequest) {
-      const ws = getOrCreateActiveWorkspace(rawMessage || message);
+      getOrCreateActiveWorkspace(rawMessage || message);
       appendWorkspaceTurn("user", rawMessage || message);
       appendWorkspaceTurn("assistant", answer);
-
-      ws.latest_brief_visible = false;
-      ws.last_turn_type = "deterministic";
-
       persistActiveWorkspace();
     }
 
@@ -21900,13 +21941,9 @@ Try:
     const actionSource = isFullCopilotRequest ? "full" : "chat";
 
     if (isFullCopilotRequest) {
-      const ws = getOrCreateActiveWorkspace(rawMessage || message);
+      getOrCreateActiveWorkspace(rawMessage || message);
       appendWorkspaceTurn("user", rawMessage || message);
       appendWorkspaceTurn("assistant", shortAnswer);
-
-      ws.latest_brief_visible = false;
-      ws.last_turn_type = "short_answer";
-
       persistActiveWorkspace();
     }
 
@@ -21929,24 +21966,8 @@ Try:
   const msg = message;
 
   // ===== Create/Load Workspace (RESTORED)
-  let workspace_id = String(body.workspace_id || "").trim();
-  let workspace = null;
-
-  if (workspace_id) {
-    workspace = getCopilotWorkspace(sess.org_id, workspace_id);
-  }
-
-  if (!workspace) {
-    workspace = {
-      workspace_id: uuid(),
-      org_id: sess.org_id,
-      title: msg.slice(0, 60),
-      messages: [],
-      latest_brief: null,
-      created_at: nowISO(),
-      updated_at: nowISO(),
-    };
-  }
+  const workspace_id = String(body.workspace_id || "").trim();
+  const workspace = getOrCreateCopilotWorkspace(sess.org_id, workspace_id, msg);
 
   // ===== ALWAYS append user message =====
   workspace.messages.push({
@@ -21993,24 +22014,7 @@ Try:
   });
 
   // ===== SAVE BRIEF (RESTORED)
-  const briefs = readJSON(FILES.copilot_briefs, []);
-  const brief_id = "BRF-" + Date.now();
-
-  briefs.push({
-    brief_id,
-    org_id: sess.org_id,
-    created: nowISO(),
-    result
-  });
-
-  writeJSON(FILES.copilot_briefs, briefs);
-
-  workspace.latest_brief = { brief_id, result };
-  workspace.latest_brief_visible = true;
-  workspace.last_turn_type = "executive_brief";
-
-  workspace.updated_at = nowISO();
-  saveCopilotWorkspace(workspace);
+  appendExecutiveBriefToWorkspace(workspace, result);
 
   // ===== PREVIEW RESPONSE (RESTORED)
   const metrics = result?.metrics || {};
@@ -22024,16 +22028,6 @@ Try:
     `Revenue At Risk: ${formatMoneyUI(totals.atRisk || 0)}\n` +
     `Denial Rate: ${Number(rates.denialRate || 0).toFixed(1)}%\n\n` +
     `Full executive brief available below.`;
-
-  // ===== ALWAYS SAVE ASSISTANT RESPONSE =====
-  workspace.messages.push({
-    role: "assistant",
-    content: preview,
-    created_at: nowISO()
-  });
-
-  workspace.updated_at = nowISO();
-  saveCopilotWorkspace(workspace);
 
   // ===== FINAL RESPONSE (SMART + RESTORED)
   return send(res, 200, JSON.stringify({
@@ -22060,6 +22054,7 @@ Try:
     const style = String(params.style || "exec").trim();
     const save = String(params.save || "") === "1";
     const saveName = String(params.save_name || "").trim();
+    const requestedWorkspaceId = String(params.workspace_id || "").trim();
 
     if (!rawPrompt) {
       return send(res, 200, JSON.stringify({ ok:false, error:"Missing prompt" }), "application/json");
@@ -22071,6 +22066,33 @@ Try:
         ok: false,
         error: "limit_reached",
         message: getUpgradeMessage(plan, "copilot")
+      }), "application/json");
+    }
+
+    const isUiHelpPrompt = isUiHelpQuestion(rawPrompt);
+    const shouldEscalate = shouldEscalateToFullAnalysis(rawPrompt);
+    if (isUiHelpPrompt && !shouldEscalate) {
+      const workspace = getOrCreateCopilotWorkspace(org.org_id, requestedWorkspaceId, rawPrompt);
+      const answer = buildSmartSimpleAnswer(rawPrompt);
+
+      workspace.messages.push({
+        role: "user",
+        content: rawPrompt,
+        created_at: nowISO()
+      });
+      workspace.messages.push({
+        role: "assistant",
+        content: answer,
+        created_at: nowISO()
+      });
+      workspace.updated_at = nowISO();
+      saveCopilotWorkspace(workspace);
+
+      return send(res, 200, JSON.stringify({
+        ok: true,
+        simple: true,
+        answer,
+        workspace_id: workspace.workspace_id
       }), "application/json");
     }
 
@@ -22322,7 +22344,33 @@ Keep it concise and factual.
       saveSavedQuery(savedRec);
     }
 
-    const workspace = createCopilotWorkspaceFromPrompt(org.org_id, rawPrompt);
+    const workspace = getOrCreateCopilotWorkspace(org.org_id, requestedWorkspaceId, rawPrompt);
+    const result = buildCopilotResponse({
+      org_id: org.org_id,
+      rangePreset: "last30",
+      responseFormat: "executive",
+      question: rawPrompt
+    });
+
+    workspace.messages.push({
+      role: "user",
+      content: rawPrompt,
+      created_at: nowISO()
+    });
+
+    const savedBrief = saveCopilotBriefRecord(org.org_id, result);
+
+    workspace.messages.push({
+      role: "assistant",
+      kind: "executive_brief",
+      brief_id: savedBrief.brief_id,
+      content: buildExecutiveTitle(result),
+      created_at: nowISO()
+    });
+
+    workspace.latest_brief = savedBrief;
+    workspace.updated_at = nowISO();
+    saveCopilotWorkspace(workspace);
 
     return send(res, 200, JSON.stringify({
       ok: true,
@@ -26786,14 +26834,18 @@ if (method === "GET" && pathname === "/ai-copilot") {
   const tilesHtml = renderCopilotTiles();
 
   const thread = (workspace && Array.isArray(workspace.messages)) ? workspace.messages : [];
-  const brief =
+  const briefStore = readJSON(FILES.copilot_briefs, [])
+    .filter(b => !workspace || b.org_id === workspace.org_id);
+  const briefById = new Map(briefStore.map(b => [String(b.brief_id || ""), b]));
+  const hasInlineBriefs = thread.some(msg => String(msg?.kind || "") === "executive_brief");
+  const legacyBrief =
+    !hasInlineBriefs &&
     workspace &&
-    workspace.latest_brief_visible !== false &&
-    workspace.last_turn_type === "executive_brief"
+    workspace.latest_brief
       ? (workspace.latest_brief || null)
       : null;
 
-  const hasMessages = thread.length > 0 || !!brief;
+  const hasMessages = thread.length > 0 || !!legacyBrief;
 
   const threadHtml = `
     <div class="ws-thread" id="wsThread">
@@ -26808,6 +26860,25 @@ if (method === "GET" && pathname === "/ai-copilot") {
       ${thread.map(msg => {
         const role = String(msg?.role || "").toLowerCase();
         if (role !== "user" && role !== "assistant") return "";
+
+        if (String(msg?.kind || "") === "executive_brief") {
+          const briefRec = briefById.get(String(msg?.brief_id || "")) || workspace.latest_brief;
+          const briefResult = briefRec?.result || null;
+          if (!briefResult) {
+            return `
+              <div class="ws-msg ws-ai">
+                <div class="ws-who">Copilot</div>
+                <div class="ws-card" style="white-space:pre-wrap;">${safeStr(String(msg.content || "Executive brief unavailable.")).replace(/\n/g, "<br>")}</div>
+              </div>
+            `;
+          }
+          return renderCopilotBriefMessage(
+            briefResult,
+            msg?.brief_id || "brief",
+            workspace?.workspace_id
+          );
+        }
+
         return `
         <div class="ws-msg ${role === "user" ? "ws-user" : "ws-ai"}">
           <div class="ws-who">${role === "user" ? "You" : "Copilot"}</div>
@@ -26816,7 +26887,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
       `;
       }).join("")}
 
-      ${brief ? renderCopilotBriefMessage(brief.result, brief.brief_id, workspace?.workspace_id) : ``}
+      ${legacyBrief ? renderCopilotBriefMessage(legacyBrief.result, legacyBrief.brief_id, workspace?.workspace_id) : ``}
     </div>
   `;
 
@@ -27148,7 +27219,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   try {
                     const workspaceInput = form.querySelector('input[name="workspace_id"]');
                     const urlState = new URLSearchParams(window.location.search);
-                    const currentWorkspaceId = String(
+                    let currentWorkspaceId = String(
                       (workspaceInput && workspaceInput.value) ||
                       urlState.get("workspace") ||
                       urlState.get("workspace_id") ||
@@ -27162,7 +27233,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     }
                     const helpLead = /^(what is|what are|what does|what do|how does|where is|explain|tell me about|how do i)\b/.test(lowerPrompt);
                     const uiKeywords = /\b(tab|tabs|page|pages|screen|screens|section|sections|feature|features|button|buttons|dashboard|overview|action\s*center|data\s*management|revenue\s*intelligence|copilot|claims?\s*lifecycle|upload|uploads)\b/.test(lowerPrompt);
-                    const isUiHelpPrompt = helpLead && uiKeywords;
+                    const isUiHelpPrompt =
+                      helpLead &&
+                      uiKeywords &&
+                      /\b(tab|tabs|page|screen|dashboard|overview|action center|claims lifecycle|data management|revenue intelligence)\b/.test(lowerPrompt);
                     const shouldEscalate = shouldEscalateToFullAnalysis(prompt);
 
                     // 🔥 UI HELP → but allow escalation
@@ -27181,6 +27255,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                       if (data.workspace_id) {
                         const workspaceId = data.workspace_id;
+                        const workspaceInput = form.querySelector('input[name="workspace_id"]');
+                        if (workspaceInput) {
+                          workspaceInput.value = workspaceId;
+                        }
 
                         // update URL
                         window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
@@ -27223,11 +27301,19 @@ if (method === "GET" && pathname === "/ai-copilot") {
                         prompt,
                         style: "exec",
                         save: "1",
-                        save_name: prompt.slice(0, 60)
+                        save_name: prompt.slice(0, 60),
+                        workspace_id: currentWorkspaceId
                       })
                     });
 
                     const data = await res.json();
+                    if (data.workspace_id) {
+                      currentWorkspaceId = data.workspace_id;
+                      const workspaceInput = form.querySelector('input[name="workspace_id"]');
+                      if (workspaceInput) {
+                        workspaceInput.value = data.workspace_id;
+                      }
+                    }
                     if (data && (data.error === "limit_reached" || data.limitReached)) {
                       if (thinkingEl) {
                         thinkingEl.innerHTML = \`
@@ -27281,11 +27367,6 @@ if (method === "GET" && pathname === "/ai-copilot") {
                             const threadEl = document.getElementById("wsThread");
                             if (threadEl) {
                               threadEl.scrollTop = threadEl.scrollHeight;
-                            }
-
-                            const firstCard = document.querySelector(".ws-card");
-                            if (firstCard) {
-                              firstCard.scrollIntoView({ behavior: "smooth", block: "start" });
                             }
                           }, 50);
 
@@ -27519,18 +27600,7 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
     question: prompt
   });
 
-  const briefs = readJSON(FILES.copilot_briefs, []);
-  const brief_id = "BRF-" + Date.now();
-  briefs.push({ brief_id, org_id: org.org_id, created: nowISO(), result });
-  writeJSON(FILES.copilot_briefs, briefs);
-
-  workspace.latest_brief = { brief_id, result };
-  workspace.latest_brief_visible = true;
-  workspace.last_turn_type = "executive_brief";
-  workspace.messages.push({ role: "assistant", content: buildExecutiveTitle(result), created_at: nowISO() });
-
-  workspace.updated_at = nowISO();
-  saveCopilotWorkspace(workspace);
+  appendExecutiveBriefToWorkspace(workspace, result);
 
   return redirect(res, `/ai-copilot?workspace=${encodeURIComponent(workspace_id)}`);
 }
