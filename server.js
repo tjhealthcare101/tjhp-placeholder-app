@@ -4512,18 +4512,24 @@ ${chatScript}
   // 4. FIX ACTION ROUTING (smarter)
   // =========================
   function fixActionButtons(){
-  
-    // 🚨 ONLY target AI/chat-generated links
-    // DO NOT touch navigation tabs or Action Center links
     document.querySelectorAll("#aiChatMsgs a, #copilotOutput a, .ws-actions a").forEach(a => {
 
-      // 🛑 CRITICAL: skip Action Center tabs
       if (a.hasAttribute("data-action-tab")) return;
 
       const txt = (a.textContent || "").toLowerCase();
+      const href = String(a.getAttribute("href") || "").trim();
+
+      // 🔥 DO NOT TOUCH ALREADY FILTERED LINKS
+      if (
+        href.includes("payer=") ||
+        href.includes("range=") ||
+        href.includes("#lifecycleTable")
+      ) {
+        return;
+      }
 
       if (txt.includes("review payment")) {
-        a.href = "/claims-lifecycle";
+        a.href = "/claims-lifecycle#lifecycleTable";
       }
       else if (txt.includes("underpaid") || txt.includes("underpayment")) {
         a.href = "/actions?tab=underpayments";
@@ -4532,7 +4538,7 @@ ${chatScript}
         a.href = "/actions?tab=denials";
       }
       else if (txt.includes("claim")) {
-        a.href = "/claims-lifecycle";
+        a.href = "/claims-lifecycle#lifecycleTable";
       }
 
     });
@@ -5910,18 +5916,37 @@ function buildLightweightDataAnswer(org_id, message) {
   // 🔥 FIX 1: fallback payer detection
   if (!payer) {
     const candidates = detectPayerCandidatesFromPrompt(text, org_id);
+
     if (Array.isArray(candidates) && candidates.length === 1) {
       payer = candidates[0];
+    }
+
+    // 🔥 NEW: MULTI-PAYER HANDLING (SAFE FALLBACK)
+    else if (Array.isArray(candidates) && candidates.length > 1) {
+      return {
+        answer:
+          "I found multiple payers in your question. Please choose one to view reimbursement details.",
+        actions: candidates.slice(0, 3).map(p => ({
+          type: "navigation",
+          label: `View ${p} Claims`,
+          route:
+            smartUrl("/claims-lifecycle", {
+              payer: p,
+              range: extractSmartDateRange(text) || "last30"
+            }) + "#lifecycleTable"
+        }))
+      };
     }
   }
 
   const range = extractSmartDateRange(text) || "last30";
 
   // 🔥 Build FILTERED route (KEY FIX)
-  const lifecycleRoute = smartUrl("/claims-lifecycle", {
-    payer,
-    range
-  });
+  const lifecycleRoute =
+    smartUrl("/claims-lifecycle", {
+      payer,
+      range
+    }) + "#lifecycleTable";
 
   const analysisRoute = payer
     ? smartUrl("/ai-copilot", {
@@ -6026,7 +6051,7 @@ function buildLightweightDataAnswer(org_id, message) {
       {
         type: "navigation",
         label: "Open Claims Lifecycle",
-        route: "/claims-lifecycle"
+        route: "/claims-lifecycle#lifecycleTable"
       }
     ]
   };
@@ -23872,14 +23897,30 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     `;
   }
 
-  const lifecycleRange = ["all", "last30", "last90", "last365"].includes(String(qs.range || "").trim())
+  const lifecycleRange = [
+    "today",
+    "last7",
+    "last30",
+    "last60",
+    "last90",
+    "thismonth",
+    "thisyear",
+    "last365",
+    "all"
+  ].includes(String(qs.range || "").trim())
     ? String(qs.range || "last30").trim()
     : "last30";
 
   function lifecycleRangeLabel(range){
-    if (range === "all") return "All Time";
+    if (range === "today") return "Today";
+    if (range === "last7") return "Last 7 Days";
+    if (range === "last30") return "Last 30 Days";
+    if (range === "last60") return "Last 60 Days";
     if (range === "last90") return "Last 90 Days";
+    if (range === "thismonth") return "This Month";
+    if (range === "thisyear") return "This Year";
     if (range === "last365") return "Last 365 Days";
+    if (range === "all") return "All Time";
     return "Last 30 Days";
   }
 
@@ -23912,14 +23953,41 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     return "90+";
   }
 
+  function startOfTodayMs(){
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+
+  function startOfMonthMs(){
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+  }
+
+  function startOfYearMs(){
+    const d = new Date();
+    return new Date(d.getFullYear(), 0, 1).getTime();
+  }
+
   function isLifecycleClaimInRange(claim, range = lifecycleRange){
     if (range === "all") return true;
+
     const dt = getLifecycleAnchorDateMs(claim);
     if (!dt) return false;
+
+    const now = Date.now();
     const dayMs = 24 * 60 * 60 * 1000;
-    if (range === "last90") return dt >= (Date.now() - (90 * dayMs));
-    if (range === "last365") return dt >= (Date.now() - (365 * dayMs));
-    return dt >= (Date.now() - (30 * dayMs));
+
+    if (range === "today") return dt >= startOfTodayMs();
+    if (range === "last7") return dt >= (now - (7 * dayMs));
+    if (range === "last30") return dt >= (now - (30 * dayMs));
+    if (range === "last60") return dt >= (now - (60 * dayMs));
+    if (range === "last90") return dt >= (now - (90 * dayMs));
+    if (range === "thismonth") return dt >= startOfMonthMs();
+    if (range === "thisyear") return dt >= startOfYearMs();
+    if (range === "last365") return dt >= (now - (365 * dayMs));
+
+    return dt >= (now - (30 * dayMs));
   }
 
   function getCoreLifecycleStageForCards(claim, derived){
@@ -24243,8 +24311,14 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       <div>
         <label class="small">Range</label>
         <select name="range">
+          <option value="today" ${lifecycleRange === "today" ? "selected" : ""}>Today</option>
+          <option value="last7" ${lifecycleRange === "last7" ? "selected" : ""}>Last 7 Days</option>
           <option value="last30" ${lifecycleRange === "last30" ? "selected" : ""}>Last 30 Days</option>
+          <option value="last60" ${lifecycleRange === "last60" ? "selected" : ""}>Last 60 Days</option>
           <option value="last90" ${lifecycleRange === "last90" ? "selected" : ""}>Last 90 Days</option>
+          <option value="thismonth" ${lifecycleRange === "thismonth" ? "selected" : ""}>This Month</option>
+          <option value="thisyear" ${lifecycleRange === "thisyear" ? "selected" : ""}>This Year</option>
+          <option value="last365" ${lifecycleRange === "last365" ? "selected" : ""}>Last 365 Days</option>
           <option value="all" ${lifecycleRange === "all" ? "selected" : ""}>All Time</option>
         </select>
       </div>
@@ -27444,7 +27518,14 @@ if (method === "GET" && pathname === "/ai-copilot") {
                       const deepSignals = /\b(analysis|analyze|trend|trends|breakdown|compare|performance|rate|rates|forecast|projection|top|drivers|why|how much|how many|denial rate|underpayment rate|revenue risk drivers)\b/.test(text);
                       return hasDataSubject && !deepSignals;
                     }
-                    const isLightweightDataQuestion = isLightweightDataPrompt(prompt);
+                    let isLightweightDataQuestion = isLightweightDataPrompt(prompt);
+
+                    // 🔥 HARD FAILSAFE FOR PAYER QUESTIONS
+                    if (!isLightweightDataQuestion) {
+                      if (/\b(cigna|aetna|medicare|medicaid|uhc|bluecross|bcbs|payer|reimbursement|payment)\b/i.test(prompt)) {
+                        isLightweightDataQuestion = true;
+                      }
+                    }
                     const shouldEscalate = shouldEscalateToFullAnalysis(prompt);
 
                     // 🔥 UI HELP → but allow escalation
@@ -27468,12 +27549,15 @@ if (method === "GET" && pathname === "/ai-copilot") {
                           workspaceInput.value = workspaceId;
                         }
 
-                        // update URL
                         window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
+                      }
 
-                        // 🔥 REFRESH THREAD (THIS WAS MISSING)
+                      let refreshed = false;
+
+                      // Try to refresh thread FIRST
+                      if (data.workspace_id) {
                         try {
-                          const res2 = await fetch("/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
+                          const res2 = await fetch("/ai-copilot?workspace=" + encodeURIComponent(data.workspace_id));
                           const html = await res2.text();
                           const temp = document.createElement("div");
                           temp.innerHTML = html;
@@ -27483,6 +27567,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
 
                           if (newThread && currentThread) {
                             currentThread.innerHTML = newThread.innerHTML;
+                            refreshed = true;
 
                             setTimeout(() => {
                               const threadEl = document.getElementById("wsThread");
@@ -27493,6 +27578,17 @@ if (method === "GET" && pathname === "/ai-copilot") {
                           }
                         } catch (e) {
                           console.error("Thread refresh failed", e);
+                        }
+                      }
+
+                      // 🔥 ONLY fallback if refresh failed
+                      if (!refreshed) {
+                        if (thinkingEl) {
+                          thinkingEl.innerHTML =
+                            '<div class="ws-who">Copilot</div>' +
+                            '<div style="white-space:pre-wrap;">' +
+                            ((data && data.answer) || "Done.") +
+                            '</div>';
                         }
                       }
 
