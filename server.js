@@ -7242,7 +7242,14 @@ function buildComparePayerAnswer(org_id, message){
       {
         type: "navigation",
         label: "Run Full Comparison",
-        route: smartUrl("/ai-copilot", { range, autoRun: "1" })
+        route: smartUrl("/ai-copilot", {
+          view: "full",
+          autoRun: "1",
+          intent: "compare",
+          range,
+          q: text,
+          payers: results.map(r => r.payer).join("|")
+        })
       }
     ]
   };
@@ -7319,18 +7326,92 @@ function buildSmartFollowUps(payer){
 }
 
 
-function saveSimpleCopilotTurnIfNeeded(isFullCopilotRequest, getOrCreateActiveWorkspace, appendWorkspaceTurn, persistActiveWorkspace, userText, assistantText) {
+function buildOptionalExecutiveActionForMessage(org_id, message, rawMessage){
+  if (isUiHelpQuestion(message)) return [];
+
+  const compare = isCompareQuestion(message);
+  const range = extractSmartDateRange(message) || "last30";
+  const payers = compare ? detectMultiplePayers(message, org_id).join("|") : "";
+
+  return [{
+    type: "navigation",
+    label: compare ? "Run Full Comparison" : "Generate Executive Brief",
+    route: smartUrl("/ai-copilot", {
+      view: "full",
+      autoRun: "1",
+      intent: compare ? "compare" : "brief",
+      q: rawMessage || message,
+      range,
+      payers
+    })
+  }];
+}
+
+function dedupeCopilotActions(actions){
+  const seen = new Set();
+
+  return (Array.isArray(actions) ? actions : []).filter(a => {
+    if (!a) return false;
+
+    const key = [
+      a.type || "",
+      a.label || "",
+      a.route || "",
+      a.prompt || ""
+    ].join("|");
+
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function attachActionsToLastAssistantTurn(ws, actions, turnType){
+  if (!ws || !Array.isArray(ws.messages)) return ws;
+
+  const cleaned = dedupeCopilotActions(actions);
+  if (!cleaned.length) return ws;
+
+  for (let i = ws.messages.length - 1; i >= 0; i--){
+    if (ws.messages[i] && ws.messages[i].role === "assistant"){
+      ws.messages[i].actions = cleaned;
+      ws.messages[i].turn_type = turnType || ws.messages[i].turn_type || "simple_answer";
+      break;
+    }
+  }
+
+  ws.latest_brief_visible = false;
+  ws.last_turn_type = turnType || "simple_answer";
+  ws.updated_at = nowISO();
+
+  return ws;
+}
+
+function saveSimpleCopilotTurnIfNeeded(
+  isFullCopilotRequest,
+  getOrCreateActiveWorkspace,
+  appendWorkspaceTurn,
+  persistActiveWorkspace,
+  userText,
+  assistantText,
+  actions = [],
+  turnType = "simple_answer"
+) {
   if (!isFullCopilotRequest) return null;
 
   const ws = getOrCreateActiveWorkspace(userText || "New Analysis");
+
   appendWorkspaceTurn("user", userText || "");
   appendWorkspaceTurn("assistant", assistantText || "");
 
+  attachActionsToLastAssistantTurn(ws, actions, turnType);
+
   ws.latest_brief_visible = false;
-  ws.last_turn_type = "simple_answer";
+  ws.last_turn_type = turnType;
   ws.updated_at = nowISO();
 
   persistActiveWorkspace();
+
   return ws;
 }
 
@@ -7967,6 +8048,36 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
           ${drivers.length ? `<ul class="ws-list">${drivers.map(d=>`<li>${safeStr(d)}</li>`).join("")}</ul>` : `<div class="muted">No threshold breaches detected.</div>`}
         </section>
 
+        ${Array.isArray(r.payerComparisons) && r.payerComparisons.length ? `
+          <section class="ws-brief-section">
+            <div class="ws-section-title">Payer Comparison</div>
+            <div class="ws-table-wrap">
+              <table class="ws-table">
+                <thead>
+                  <tr>
+                    <th>Payer</th>
+                    <th>Claims</th>
+                    <th>Collected</th>
+                    <th>At Risk</th>
+                    <th>Denial Rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${r.payerComparisons.map(p => `
+                    <tr>
+                      <td>${safeStr(p.payer)}</td>
+                      <td>${formatNumberUI(p.claims || 0)}</td>
+                      <td>${formatMoneyUI(p.collected || 0)}</td>
+                      <td>${formatMoneyUI(p.atRisk || 0)}</td>
+                      <td>${Number(p.denialRate || 0).toFixed(1)}%</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ` : ``}
+
         <section class="ws-brief-section">
           <div class="ws-section-title">Recommended Executive Actions</div>
           ${actions.length ? `<ul class="ws-list">${actions.map(a=>`<li>${safeStr(a)}</li>`).join("")}</ul>` : `<div class="muted">No immediate corrective actions required.</div>`}
@@ -7998,10 +8109,25 @@ function buildCopilotResponse({
 }){
 
   const range = rangeFromPreset(rangePreset || "last30");
+  const comparePayers = Array.isArray(opts?.comparePayers)
+    ? opts.comparePayers.filter(Boolean)
+    : (
+        isCompareQuestion(question)
+          ? detectMultiplePayers(question, org_id)
+          : []
+      );
+
   let payerScope = opts?.payer || payer || detectPayerFromPrompt(question, org_id);
-  const intent = detectCopilotIntent(question);
-  const briefType = determineBriefType({ question, intentKey: intent.key, payerScope });
-  const briefTitle = buildBriefTitle({ briefType, payerScope, question });
+  const intent = comparePayers.length >= 2
+    ? { key: "payer_compare", label: "Payer Compare" }
+    : detectCopilotIntent(question);
+  const briefType = comparePayers.length >= 2
+    ? "PAYER_COMPARISON"
+    : determineBriefType({ question, intentKey: intent.key, payerScope });
+
+  const briefTitle = comparePayers.length >= 2
+    ? `Payer Comparison Brief: ${comparePayers.join(" vs ")} (${formatRangeLabel(rangePreset || "last30")})`
+    : buildBriefTitle({ briefType, payerScope, question });
   let dashboard = null;
   let metrics = null;
   let topPayers = [];
@@ -8211,7 +8337,20 @@ function buildCopilotResponse({
     payerRiskScore,
     topPayers,
     primaryAction,
-    actionLinks
+    actionLinks,
+    comparePayers,
+    payerComparisons: comparePayers.length >= 2
+      ? comparePayers.map(p => {
+          const intel = computePayerIntelligence(org_id, p, rangePreset || "last30");
+          return {
+            payer: p,
+            claims: Number(intel.totalClaims || 0),
+            collected: Number(intel.totalCollected || 0),
+            atRisk: Number(intel.totalAtRisk || 0),
+            denialRate: Number(intel.denialRate || 0)
+          };
+        })
+      : []
   };
 }
 
@@ -8984,7 +9123,7 @@ function navUser(active = "", user_id = "") {
     <a href="/data-management" class="${active === "data" ? "nav-active" : ""}" style="${navLinkStyle(active === "data")}">Data Management</a>
     <a href="/actions" class="${active === "actions" ? "nav-active" : ""}" style="${navLinkStyle(active === "actions")}">Action Center</a>
     <a href="/revenue-intelligence" class="${active === "ri" ? "nav-active" : ""}" style="${navLinkStyle(active === "ri")}">Revenue Intelligence</a>
-    <a href="/ai-copilot" class="${active === "ai" ? "nav-active" : ""}" style="${navLinkStyle(active === "ai")}">AI Copilot</a>
+    <a href="/ai-copilot?view=full" class="${active === "ai" ? "nav-active" : ""}" style="${navLinkStyle(active === "ai")}">AI Copilot</a>
 
     <a href="/support" class="${active === "support" ? "nav-active" : ""}" style="${navLinkStyle(active === "support")}">
       Support ${unreadCount > 0 ? `(${unreadCount})` : ""}
@@ -10029,22 +10168,18 @@ function createCopilotWorkspace(org_id, prompt) {
   return getOrCreateCopilotWorkspace(org_id, "", prompt);
 }
 
-function createCopilotWorkspaceFromPrompt(org_id, prompt, opts = {}) {
+function createCopilotWorkspaceFromPrompt(org_id, prompt, context = {}) {
   const workspace = createCopilotWorkspace(org_id, prompt);
 
-  // 🔥 NEW: persist structured context safely
-  workspace.context = {
-    ...(workspace.context || {}),
-    payer: opts.payer || null,
-    range: opts.range || "last30"
-  };
+  workspace.context = context || {};
 
   const result = buildCopilotResponse({
     org_id,
-    rangePreset: opts?.range || "last30",
-    payer: opts?.payer || null,
+    rangePreset: context.range || "last30",
+    payer: context.payer || null,
     responseFormat: "executive",
-    question: prompt,
+    question: context.originalPrompt || prompt,
+    opts: context || {}
   });
 
   workspace.messages.push({ role: "user", content: prompt, created_at: nowISO() });
@@ -23382,20 +23517,29 @@ Try:
     const answer = deterministic.answer || deterministic;
     const actionSource = isFullCopilotRequest ? "full" : "chat";
 
-    if (isFullCopilotRequest) {
-      getOrCreateActiveWorkspace(rawMessage || message);
-      appendWorkspaceTurn("user", rawMessage || message);
-      appendWorkspaceTurn("assistant", answer);
-      persistActiveWorkspace();
-    }
+    const actions = dedupeCopilotActions([
+      ...buildSmartCopilotActions(sess.org_id, message, { source: actionSource }),
+      ...buildOptionalExecutiveActionForMessage(sess.org_id, message, rawMessage)
+    ]);
+
+    const ws = saveSimpleCopilotTurnIfNeeded(
+      isFullCopilotRequest,
+      getOrCreateActiveWorkspace,
+      appendWorkspaceTurn,
+      persistActiveWorkspace,
+      rawMessage || message,
+      answer,
+      actions,
+      "deterministic_answer"
+    );
 
     return send(res, 200, JSON.stringify({
       answer,
-      actions: buildSmartCopilotActions(sess.org_id, message, { source: actionSource }),
+      actions,
       used: usageCheck.used,
       limit: usageCheck.limit,
       grounded: true,
-      ...(activeWorkspace ? { workspace_id: activeWorkspace.workspace_id } : {})
+      ...(ws ? { workspace_id: ws.workspace_id } : {})
     }), "application/json");
   }
 
@@ -23411,11 +23555,31 @@ Try:
     } else if (lightweightData) {
       if (isCompareQuestion(message) && !shouldEscalateToFullAnalysis(message)) {
         const compare = buildComparePayerAnswer(sess.org_id, message);
+
         if (compare) {
+          const actions = dedupeCopilotActions(Array.isArray(compare.actions) ? compare.actions : []);
+
+          const ws = saveSimpleCopilotTurnIfNeeded(
+            isFullCopilotRequest,
+            getOrCreateActiveWorkspace,
+            appendWorkspaceTurn,
+            persistActiveWorkspace,
+            rawMessage || message,
+            compare.answer,
+            actions,
+            "simple_compare_answer"
+          );
+
           return send(res, 200, JSON.stringify({
             answer: compare.answer,
-            actions: compare.actions,
-            simple: true
+            actions,
+            simple: true,
+            noData: false,
+            used: usageCheck.used,
+            limit: usageCheck.limit,
+            grounded: true,
+            savedToWorkspace: !!ws,
+            ...(ws ? { workspace_id: ws.workspace_id } : {})
           }), "application/json");
         }
       }
@@ -23429,13 +23593,20 @@ Try:
       });
     }
 
+    actions = dedupeCopilotActions([
+      ...actions,
+      ...buildOptionalExecutiveActionForMessage(sess.org_id, message, rawMessage)
+    ]);
+
     const ws = saveSimpleCopilotTurnIfNeeded(
       isFullCopilotRequest,
       getOrCreateActiveWorkspace,
       appendWorkspaceTurn,
       persistActiveWorkspace,
       rawMessage || message,
-      answer
+      answer,
+      actions,
+      lightweightData ? "lightweight_data_answer" : "simple_answer"
     );
 
     return send(res, 200, JSON.stringify({
@@ -23480,21 +23651,30 @@ Try:
   ) {
     const actionSource = isFullCopilotRequest ? "full" : "chat";
 
-    if (isFullCopilotRequest) {
-      getOrCreateActiveWorkspace(rawMessage || message);
-      appendWorkspaceTurn("user", rawMessage || message);
-      appendWorkspaceTurn("assistant", shortAnswer);
-      persistActiveWorkspace();
-    }
+    const actions = dedupeCopilotActions([
+      ...buildSmartCopilotActions(sess.org_id, message, { source: actionSource }),
+      ...buildOptionalExecutiveActionForMessage(sess.org_id, message, rawMessage)
+    ]);
+
+    const ws = saveSimpleCopilotTurnIfNeeded(
+      isFullCopilotRequest,
+      getOrCreateActiveWorkspace,
+      appendWorkspaceTurn,
+      persistActiveWorkspace,
+      rawMessage || message,
+      shortAnswer,
+      actions,
+      "short_answer"
+    );
 
     return send(res, 200, JSON.stringify({
       answer: shortAnswer,
-      actions: buildSmartCopilotActions(sess.org_id, message, { source: actionSource }),
+      actions,
       metrics: structured.metrics || null,
       insights: structured.insights || [],
       used: usageCheck.used,
       limit: usageCheck.limit,
-      ...(activeWorkspace ? { workspace_id: activeWorkspace.workspace_id } : {})
+      ...(ws ? { workspace_id: ws.workspace_id } : {})
     }), "application/json");
   }
 
@@ -28432,6 +28612,12 @@ if (method === "GET" && pathname === "/ai-copilot") {
   const autoRun = urlObj.searchParams.get("autoRun");
   const payer = urlObj.searchParams.get("payer");
   const range = urlObj.searchParams.get("range") || "last30";
+  const autoRunIntent = String(urlObj.searchParams.get("intent") || "").trim().toLowerCase();
+  const autoRunQuery = String(urlObj.searchParams.get("q") || "").trim();
+  const autoRunPayers = String(urlObj.searchParams.get("payers") || "")
+    .split("|")
+    .map(x => x.trim())
+    .filter(Boolean);
   let workspace_id = String(parsed.query.workspace_id || parsed.query.workspace || "").trim();
   let workspace = null;
   if (workspace_id) {
@@ -28439,8 +28625,47 @@ if (method === "GET" && pathname === "/ai-copilot") {
   }
 
   try {
+    // Specific payer comparison from floater/main direct answer.
+    // This must run BEFORE the generic "all payers" comparison.
+    if (
+      autoRun === "1" &&
+      (
+        autoRunIntent === "compare" ||
+        autoRunPayers.length >= 2 ||
+        (autoRunQuery && isCompareQuestion(autoRunQuery))
+      )
+    ) {
+      let comparePayers = autoRunPayers;
+
+      if (comparePayers.length < 2 && autoRunQuery) {
+        try {
+          comparePayers = detectMultiplePayers(autoRunQuery, sess.org_id);
+        } catch {}
+      }
+
+      if (comparePayers.length >= 2) {
+        const comparePrompt =
+          `Compare ${comparePayers.join(" vs ")} payer performance for ${formatRangeLabel(range)}`;
+
+        const workspace = createCopilotWorkspaceFromPrompt(
+          sess.org_id,
+          comparePrompt,
+          {
+            range,
+            intent: "compare",
+            comparePayers,
+            originalPrompt: autoRunQuery || comparePrompt
+          }
+        );
+
+        if (workspace && workspace.workspace_id) {
+          return redirect(res, `/ai-copilot?workspace=${workspace.workspace_id}&view=full`);
+        }
+      }
+    }
+
     // Full compare (no payer).
-    if (autoRun === "1" && !payer) {
+    if (autoRun === "1" && !payer && autoRunIntent !== "brief" && !autoRunQuery) {
       const workspace = createCopilotWorkspaceFromPrompt(
         sess.org_id,
         `Compare payer performance across all payers for ${formatRangeLabel(range)}`
@@ -28468,6 +28693,28 @@ if (method === "GET" && pathname === "/ai-copilot") {
     }
   } catch (err) {
     console.error("AutoRun failed:", err);
+  }
+
+  // Specific optional executive brief from a direct/simple answer.
+  // This must run before generic fallback so "Aetna expected amount" becomes a targeted brief.
+  if (
+    autoRun === "1" &&
+    autoRunIntent === "brief" &&
+    autoRunQuery
+  ) {
+    const workspace = createCopilotWorkspaceFromPrompt(
+      sess.org_id,
+      autoRunQuery,
+      {
+        range,
+        intent: "brief",
+        originalPrompt: autoRunQuery
+      }
+    );
+
+    if (workspace && workspace.workspace_id) {
+      return redirect(res, `/ai-copilot?workspace=${workspace.workspace_id}&view=full`);
+    }
   }
 
   // Final fallback to avoid dead-end autoRun links.
@@ -28554,6 +28801,19 @@ if (method === "GET" && pathname === "/ai-copilot") {
         <div class="ws-msg ${role === "user" ? "ws-user" : "ws-ai"}">
           <div class="ws-who">${role === "user" ? "You" : "Copilot"}</div>
           <div class="ws-card" style="white-space:pre-wrap;">${safeStr(String(msg.content || "")).replace(/\n/g, "<br>")}</div>
+          ${role === "assistant" && Array.isArray(msg.actions) && msg.actions.length ? `
+            <div class="btnRow" style="margin-top:10px;">
+              ${msg.actions.map(a => {
+                if (a.type === "navigation" && a.route) {
+                  return `<a class="btn secondary small" href="${safeStr(a.route)}">${safeStr(a.label || "Open")}</a>`;
+                }
+                if (a.type === "prompt" && a.prompt) {
+                  return `<button class="btn secondary small copilot-prompt-action-btn" data-prompt="${encodeURIComponent(a.prompt)}">${safeStr(a.label || "Ask")}</button>`;
+                }
+                return "";
+              }).join("")}
+            </div>
+          ` : ``}
         </div>
       `;
       }).join("")}
@@ -28850,6 +29110,32 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   if (composerShell) composerShell.classList.add("is-loading");
                 }
 
+                function renderCopilotInlineActions(actions){
+                  if (!Array.isArray(actions) || !actions.length) return "";
+
+                  return '<div class="btnRow" style="margin-top:10px;">' + actions.map(function(a){
+                    if (!a) return "";
+
+                    if (a.type === "navigation" && a.route) {
+                      return '<a class="btn secondary small" href="' +
+                        String(a.route).replace(/"/g, "&quot;") +
+                        '">' +
+                        String(a.label || "Open").replace(/</g, "&lt;").replace(/>/g, "&gt;") +
+                        '</a>';
+                    }
+
+                    if (a.type === "prompt" && a.prompt) {
+                      return '<button class="btn secondary small copilot-prompt-action-btn" data-prompt="' +
+                        encodeURIComponent(a.prompt) +
+                        '">' +
+                        String(a.label || "Ask").replace(/</g, "&lt;").replace(/>/g, "&gt;") +
+                        '</button>';
+                    }
+
+                    return "";
+                  }).join("") + '</div>';
+                }
+
                 async function submitMainCopilot() {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
@@ -28898,6 +29184,21 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     ).trim();
 
                     const lowerPrompt = String(prompt || "").toLowerCase().trim();
+                    function isDirectCopilotAnswerPrompt(message){
+                      const t = String(message || "").toLowerCase();
+
+                      if (!t) return false;
+
+                      if (/\b(vs|versus|compare)\b/.test(t)) return true;
+
+                      const dataWords =
+                        /\b(expected|amount|paid|collected|billed|at risk|risk|denial rate|reimbursement|underpaid|underpayment|claims?|payer|aetna|cigna|bluecross|unitedhealthcare|united healthcare)\b/;
+
+                      const fullWords =
+                        /\b(executive brief|full analysis|deep dive|chart|charts|trend|forecast|projection|drivers|recommendations|strategy)\b/;
+
+                      return dataWords.test(t) && !fullWords.test(t);
+                    }
                     function shouldEscalateToFullAnalysis(message){
                       const text = String(message || "").toLowerCase();
                       return /\b(why|how much|how many|trend|performance|rate|compare|analysis|breakdown)\b/.test(text);
@@ -28922,7 +29223,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     const shouldEscalate = shouldEscalateToFullAnalysis(prompt);
 
                     // 🔥 UI HELP → but allow escalation
-                    if ((isUiHelpPrompt || isLightweightDataQuestion) && !shouldEscalate) {
+                    if ((isUiHelpPrompt && !shouldEscalate) || isDirectCopilotAnswerPrompt(prompt)) {
                       const res = await fetch("/ai/chat", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -28963,11 +29264,18 @@ if (method === "GET" && pathname === "/ai-copilot") {
                             refreshed = true;
 
                             setTimeout(() => {
-                              const threadEl = document.getElementById("wsThread");
-                              if (threadEl) {
-                                threadEl.scrollTop = threadEl.scrollHeight;
+                              const refreshedThread = document.getElementById("wsThread");
+                              if (refreshedThread) refreshedThread.scrollTop = 0;
+
+                              const firstNewAnswer =
+                                document.querySelector("#wsThread .ws-msg.ws-ai:last-of-type") ||
+                                document.querySelector("#wsThread .ws-card") ||
+                                document.getElementById("wsThread");
+
+                              if (firstNewAnswer && firstNewAnswer.scrollIntoView) {
+                                firstNewAnswer.scrollIntoView({ behavior: "smooth", block: "start" });
                               }
-                            }, 50);
+                            }, 80);
                           }
                         } catch (e) {
                           console.error("Thread refresh failed", e);
@@ -29061,11 +29369,18 @@ if (method === "GET" && pathname === "/ai-copilot") {
                           currentThread.innerHTML = newThread.innerHTML;
 
                           setTimeout(() => {
-                            const threadEl = document.getElementById("wsThread");
-                            if (threadEl) {
-                              threadEl.scrollTop = threadEl.scrollHeight;
+                            const refreshedThread = document.getElementById("wsThread");
+                            if (refreshedThread) refreshedThread.scrollTop = 0;
+
+                            const firstNewAnswer =
+                              document.querySelector("#wsThread .ws-msg.ws-ai:last-of-type") ||
+                              document.querySelector("#wsThread .ws-card") ||
+                              document.getElementById("wsThread");
+
+                            if (firstNewAnswer && firstNewAnswer.scrollIntoView) {
+                              firstNewAnswer.scrollIntoView({ behavior: "smooth", block: "start" });
                             }
-                          }, 50);
+                          }, 80);
 
                           setTimeout(() => {
                             try {
@@ -29095,7 +29410,10 @@ if (method === "GET" && pathname === "/ai-copilot") {
                         }
                       } catch (err) {
                         if (thinkingEl) {
-                          thinkingEl.innerHTML = '<div class="ws-who">Copilot</div><div>' + (data.answer || "Analysis complete.") + '</div>';
+                          thinkingEl.innerHTML =
+                            '<div class="ws-who">Copilot</div>' +
+                            '<div style="white-space:pre-wrap;">' + ((data && data.answer) || "Analysis complete.") + '</div>' +
+                            renderCopilotInlineActions(data && data.actions);
                         }
                       }
 
@@ -29103,7 +29421,9 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     }
 
                     if (thinkingEl) {
-                      thinkingEl.innerHTML = \`<div class="ws-who">Copilot</div><div style="white-space:pre-wrap;">\${(data && data.answer) || "Error loading analysis."}</div>\`;
+                      thinkingEl.innerHTML =
+                        \`<div class="ws-who">Copilot</div><div style="white-space:pre-wrap;">\${(data && data.answer) || "Error loading analysis."}</div>\` +
+                        renderCopilotInlineActions(data && data.actions);
                     }
 
                   } catch (e) {
@@ -29214,6 +29534,29 @@ if (method === "GET" && pathname === "/ai-copilot") {
 	        const layout = document.getElementById("wsLayout");
 	        const btn = document.getElementById("wsCollapseBtn");
 	        const floatBtn = document.getElementById("wsExpandBtn");
+          function setDefaultCopilotFullLayout(){
+            const sidebar =
+              document.querySelector(".ws-sidebar") ||
+              document.querySelector(".saved-analyses") ||
+              document.getElementById("savedAnalysesPanel");
+
+            const main =
+              document.querySelector(".ws-main") ||
+              document.querySelector(".copilot-main") ||
+              document.getElementById("copilotMain");
+
+            if (!sidebar || !main) return;
+
+            const parent = sidebar.parentElement;
+
+            sidebar.style.display = "none";
+            main.style.width = "100%";
+            main.style.flex = "1";
+
+            if (parent) {
+              parent.style.gridTemplateColumns = "minmax(0,1fr)";
+            }
+          }
 
 	        function setCollapsed(v){
 	          if(!layout || !btn || !floatBtn) return;
@@ -29230,13 +29573,27 @@ if (method === "GET" && pathname === "/ai-copilot") {
 	        }
 
 	        if(layout && btn && floatBtn){
+	          const forceFullView =
+	            url.searchParams.get("view") === "full" ||
+	            url.searchParams.get("from") === "chat" ||
+	            !url.searchParams.has("workspace");
+
 	          const stored = localStorage.getItem("tjhp_copilot_sidebar_collapsed");
-	          const init = stored === null ? true : stored === "1";
+
+	          const init = forceFullView
+	            ? true
+	            : (stored === null ? true : stored === "1");
 
 	          setCollapsed(init);
 
+	          if (init) {
+	            setDefaultCopilotFullLayout();
+	          }
+
 	          btn.onclick = function(){
-	            setCollapsed(!layout.classList.contains("ws-collapsed"));
+	            const next = !layout.classList.contains("ws-collapsed");
+	            setCollapsed(next);
+	            if (next) setDefaultCopilotFullLayout();
 	          };
 
 	          floatBtn.onclick = function(){
