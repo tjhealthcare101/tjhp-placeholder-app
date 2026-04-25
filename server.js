@@ -5376,8 +5376,110 @@ function detectCopilotIntent(text){
   return { key:"general", label:"General" };
 }
 
+function detectIntentScore(question){
+  const q = String(question || "").toLowerCase();
+  const score = {
+    risk: 0,
+    denial: 0,
+    underpayment: 0,
+    compare: 0
+  };
+
+  const riskTerms = [
+    "risk","exposure","leakage","loss","losses","pressure",
+    "inefficien","gap","decline","drop","where are we losing",
+    "cash flow","collections slowing","billing issue"
+  ];
+
+  riskTerms.forEach((t) => {
+    if (q.includes(t)) score.risk += 1;
+  });
+
+  if (q.includes("denial") || q.includes("appeal")) score.denial += 2;
+  if (q.includes("underpaid") || q.includes("underpayment")) score.underpayment += 2;
+  if (q.includes("compare") || q.includes("vs") || q.includes("versus")) score.compare += 2;
+
+  return score;
+}
+
+function isRiskDriverPrompt(question){
+  const q = String(question || "").toLowerCase();
+  const score = detectIntentScore(q);
+
+  return (
+    score.risk >= 2 ||
+    q.includes("risk driver") ||
+    q.includes("risk factor") ||
+    q.includes("top risks") ||
+    q.includes("biggest risks")
+  );
+}
+
+function extractLastUserQuery(req, workspace){
+  try {
+    // 1) Header (if exists).
+    let q = String(req.headers["x-last-user-message"] || "").trim();
+    if (q) return q;
+
+    // 2) Query param.
+    const urlObj = new URL(req.url, "http://localhost");
+    q = String(urlObj.searchParams.get("q") || "").trim();
+    if (q) return q;
+
+    // 3) Workspace last user message.
+    if (workspace && Array.isArray(workspace.messages)) {
+      const lastUser = [...workspace.messages].reverse().find((m) => m.role === "user");
+      if (lastUser && lastUser.content) {
+        return String(lastUser.content);
+      }
+    }
+
+    // 4) Body fallback.
+    if (req.body && req.body.message) {
+      return String(req.body.message);
+    }
+  } catch (e) {
+    console.warn("extractLastUserQuery failed");
+  }
+
+  return "";
+}
+
+function inferFallbackIntent(req, workspace, range){
+  const lastQuery = extractLastUserQuery(req, workspace);
+
+  if (!lastQuery) {
+    return `Identify key revenue risks and performance gaps for ${formatRangeLabel(range)}`;
+  }
+
+  const q = String(lastQuery).toLowerCase();
+  const score = detectIntentScore(q);
+
+  if (score.compare >= 2) {
+    return `Compare payer performance across all payers for ${formatRangeLabel(range)}`;
+  }
+  if (score.risk >= 2) {
+    return `Identify the top revenue risk drivers for ${formatRangeLabel(range)}`;
+  }
+  if (score.denial >= 2) {
+    return `Analyze denial performance and trends for ${formatRangeLabel(range)}`;
+  }
+  if (score.underpayment >= 2) {
+    return `Analyze underpayment recovery opportunities for ${formatRangeLabel(range)}`;
+  }
+
+  return `Analyze financial performance and identify revenue opportunities for ${formatRangeLabel(range)}`;
+}
+
 function determineBriefType({ question, intentKey, payerScope }) {
   const q = String(question || "").toLowerCase();
+
+  // Strong prompt-driven matches (take precedence over payer scope / generic intent).
+  if (isRiskDriverPrompt(question)) return "RISK_OVERVIEW";
+  if (q.includes("denial performance")) return "DENIAL_ANALYSIS";
+  if (q.includes("underpayment")) return "UNDERPAYMENT_RECOVERY";
+  if (q.includes("payer exposure")) return "PAYER_EXPOSURE";
+  if (q.includes("operational health")) return "OPERATIONAL_HEALTH";
 
   if (payerScope) return "PAYER_PERFORMANCE";
 
@@ -5411,6 +5513,12 @@ function buildBriefTitle({ briefType, payerScope, question }) {
       return "AR Exposure Brief (Last 30 Days)";
     case "RISK_OVERVIEW":
       return "Revenue Risk Drivers Brief (Last 30 Days)";
+    case "UNDERPAYMENT_RECOVERY":
+      return "Underpayment Recovery Brief (Last 30 Days)";
+    case "PAYER_EXPOSURE":
+      return "Payer Exposure Brief (Last 30 Days)";
+    case "OPERATIONAL_HEALTH":
+      return "Operational Health Brief (Last 30 Days)";
     case "FORECAST_REPORT":
       return "Revenue Forecast Brief (Next 30/60/90 Days)";
     default:
@@ -5838,6 +5946,19 @@ function extractSmartDateRange(message){
   return "";
 }
 
+function formatRangeLabel(range){
+  if (!range) return "Last 30 Days";
+  if (range === "today") return "Today";
+  if (range === "last7") return "Last 7 Days";
+  if (range === "last30") return "Last 30 Days";
+  if (range === "last60") return "Last 60 Days";
+  if (range === "last90") return "Last 90 Days";
+  if (range === "thismonth") return "This Month";
+  if (range === "thisyear") return "This Year";
+  if (range === "last365") return "Last 365 Days";
+  return String(range);
+}
+
 function extractSmartPayer(org_id, message){
   try {
     const detected = detectPayerFromPrompt(message, org_id);
@@ -6136,7 +6257,7 @@ function buildComparePayerAnswer(org_id, message){
 
   return {
     answer:
-      `Payer Comparison (${range}):\n\n` +
+      `Payer Comparison (${formatRangeLabel(range)}):\n\n` +
       answerLines.join("\n\n"),
 
     actions: [
@@ -6148,7 +6269,7 @@ function buildComparePayerAnswer(org_id, message){
       {
         type: "navigation",
         label: "Run Full Comparison",
-        route: smartUrl("/ai-copilot", { range, view: "full", autoRun: "1" })
+        route: smartUrl("/ai-copilot", { range, autoRun: "1" })
       }
     ]
   };
@@ -6512,8 +6633,18 @@ function renderBriefFocusSection(result) {
   if (t === "RISK_OVERVIEW") {
     return `
       <div class="hr"></div>
-      <div style="font-weight:900;margin:0 0 8px;">Risk Drivers Focus</div>
-      <div class="muted small">At Risk: ${formatMoneyUI(totals.atRisk || 0)} · Projected 30d: ${formatMoneyUI(forecast.projected30 || 0)}</div>
+      <div style="font-weight:900;margin:0 0 8px;">Revenue Risk Drivers</div>
+      <div class="muted small">
+        Focus Areas:
+        <ul style="margin:6px 0 0 18px;padding:0;">
+          <li>Denials impact</li>
+          <li>Underpayment exposure</li>
+          <li>AR aging risk</li>
+        </ul>
+      </div>
+      <div class="muted small" style="margin-top:8px;">
+        At Risk: ${formatMoneyUI(totals.atRisk || 0)} · Projected 30d: ${formatMoneyUI(forecast.projected30 || 0)}
+      </div>
     `;
   }
 
@@ -6525,6 +6656,30 @@ function renderBriefFocusSection(result) {
         At Risk now: ${formatMoneyUI(forecast.currentAtRisk || totals.atRisk || 0)} ·
         30/60/90: ${formatMoneyUI(forecast.projected30 || 0)} / ${formatMoneyUI(forecast.projected60 || 0)} / ${formatMoneyUI(forecast.projected90 || 0)}
       </div>
+    `;
+  }
+
+  if (t === "UNDERPAYMENT_RECOVERY") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Underpayment Recovery Focus</div>
+      <div class="muted small">Prioritize underpaid dollars, negotiation ROI, and high-value payer recovery opportunities.</div>
+    `;
+  }
+
+  if (t === "PAYER_EXPOSURE") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Payer Exposure Focus</div>
+      <div class="muted small">Use this brief to identify concentration risk and denial / underpayment pressure by payer.</div>
+    `;
+  }
+
+  if (t === "OPERATIONAL_HEALTH") {
+    return `
+      <div class="hr"></div>
+      <div style="font-weight:900;margin:0 0 8px;">Operational Health Focus</div>
+      <div class="muted small">Highlights workflow readiness, documentation quality, and actions to improve collections velocity.</div>
     `;
   }
 
@@ -27256,30 +27411,70 @@ if (method === "GET" && pathname === "/ai-copilot") {
   const autoRun = urlObj.searchParams.get("autoRun");
   const payer = urlObj.searchParams.get("payer");
   const range = urlObj.searchParams.get("range") || "last30";
+  let workspace_id = String(parsed.query.workspace_id || parsed.query.workspace || "").trim();
+  let workspace = null;
+  if (workspace_id) {
+    workspace = getCopilotWorkspace(org.org_id, workspace_id);
+  }
 
-  if (autoRun === "1" && payer) {
-    const workspace = createCopilotWorkspaceFromPrompt(
-      sess.org_id,
-      `Analyze ${payer || "revenue"} performance`,
-      {
-        payer,
-        range
+  try {
+    // Full compare (no payer).
+    if (autoRun === "1" && !payer) {
+      const workspace = createCopilotWorkspaceFromPrompt(
+        sess.org_id,
+        `Compare payer performance across all payers for ${formatRangeLabel(range)}`
+      );
+
+      if (workspace && workspace.workspace_id) {
+        return redirect(res, `/ai-copilot?workspace=${workspace.workspace_id}`);
       }
+    }
+
+    // Payer analysis.
+    if (autoRun === "1" && payer) {
+      const workspace = createCopilotWorkspaceFromPrompt(
+        sess.org_id,
+        `Analyze ${payer} performance for ${formatRangeLabel(range)}`,
+        {
+          payer,
+          range
+        }
+      );
+
+      if (workspace && workspace.workspace_id) {
+        return redirect(res, `/ai-copilot?workspace=${workspace.workspace_id}`);
+      }
+    }
+  } catch (err) {
+    console.error("AutoRun failed:", err);
+  }
+
+  // Final fallback to avoid dead-end autoRun links.
+  if (autoRun === "1") {
+    let fallbackPrompt;
+
+    try {
+      fallbackPrompt = inferFallbackIntent(req, workspace, range);
+    } catch (e) {
+      console.warn("Fallback intent detection failed");
+      fallbackPrompt = `Analyze financial performance for ${formatRangeLabel(range)}`;
+    }
+
+    const fallbackWorkspace = createCopilotWorkspaceFromPrompt(
+      sess.org_id,
+      fallbackPrompt
     );
 
-    return redirect(res, `/ai-copilot?workspace=${workspace.workspace_id}`);
+    if (fallbackWorkspace && fallbackWorkspace.workspace_id) {
+      return redirect(res, `/ai-copilot?workspace=${fallbackWorkspace.workspace_id}`);
+    }
   }
+
   const copilotUsage = getCopilotUsageSnapshot(org.org_id);
 
   // ❌ DO NOT BLOCK PAGE
   // Just let UI + button handle limit
   // 🔥 FIX: accept BOTH workspace + workspace_id
-  let workspace_id = String(parsed.query.workspace_id || parsed.query.workspace || "").trim();
-
-  let workspace = null;
-  if (workspace_id) {
-    workspace = getCopilotWorkspace(org.org_id, workspace_id);
-  }
   const allWorkspaces = getCopilotWorkspaces(org.org_id);
 
   if (!workspace && allWorkspaces.length && !parsed.query.new) {
@@ -27939,6 +28134,14 @@ if (method === "GET" && pathname === "/ai-copilot") {
                     input.value = txt;
                     input.focus();
                     submitMainCopilot();
+
+                    // Smoothly return to the top of the copilot view after selecting a prompt tile.
+                    setTimeout(() => {
+                      window.scrollTo({
+                        top: 0,
+                        behavior: "smooth"
+                      });
+                    }, 150);
                   });
                 }
 
