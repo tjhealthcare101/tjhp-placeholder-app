@@ -30720,10 +30720,72 @@ if (method === "GET" && pathname === "/actions") {
 
 
 // ==============================
-// CLAIM EDIT ALIAS
-// Clean route for resolved claim editing.
-// Redirects to the existing claim-action adjustment page.
+// CLAIM EDIT — FULL CLAIM ADJUSTMENT HUB
 // ==============================
+function resolveEditableClaimForOrg(org_id, rawId){
+  const id = String(rawId || "").trim();
+  if (!id) return null;
+
+  const billedAll = readJSON(FILES.billed, []);
+  const index = billedAll.findIndex(x =>
+    x.org_id === org_id &&
+    (
+      String(x.billed_id || "") === id ||
+      String(x.claim_id || "") === id ||
+      String(x.claim_number || "") === id
+    )
+  );
+
+  if (index < 0) return null;
+
+  return {
+    billedAll,
+    index,
+    claim: billedAll[index]
+  };
+}
+
+function claimEditMoneyValue(value){
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return "0.00";
+  return n.toFixed(2);
+}
+
+function claimEditFirstMoney(){
+  for (const value of arguments){
+    if (value !== undefined && value !== null && String(value).trim() !== ""){
+      return claimEditMoneyValue(value);
+    }
+  }
+  return "0.00";
+}
+
+function readClaimEditMoney(params, key){
+  const raw = String(params.get(key) || "").replace(/[$,]/g, "").trim();
+  if (!raw) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeClaimEditStatus(value, fallback){
+  const raw = String(value || fallback || "").replace(/\s+/g, " ").trim();
+
+  const allowed = [
+    "Resolved",
+    "Underpaid",
+    "Denied",
+    "Submitted",
+    "Waiting Payment",
+    "Awaiting Payment",
+    "Patient Follow-Up",
+    "In Appeal/Negotiation",
+    "Closed"
+  ];
+
+  const found = allowed.find(x => x.toLowerCase() === raw.toLowerCase());
+  return found || raw || fallback || "Submitted";
+}
+
 if (method === "GET" && pathname === "/claim-edit") {
   const rawId = String(
     parsed.query.claim_id ||
@@ -30732,23 +30794,263 @@ if (method === "GET" && pathname === "/claim-edit") {
     ""
   ).trim();
 
-  if (!rawId) return redirect(res, "/claims-lifecycle");
+  const resolved = resolveEditableClaimForOrg(org.org_id, rawId);
+  if (!resolved) return redirect(res, "/claims-lifecycle");
 
-  const billedAll = readJSON(FILES.billed, []);
-  const b = billedAll.find(x =>
-    x.org_id === org.org_id &&
-    (
-      String(x.billed_id || "") === rawId ||
-      String(x.claim_id || "") === rawId ||
-      String(x.claim_number || "") === rawId
-    )
+  const b = resolved.claim;
+  const claimCtx = buildClaimContext(org.org_id);
+  const d = evaluateClaimDerived(b, claimCtx);
+  const patient = computePatientBalance(b);
+
+  const currentStatus = normalizeClaimEditStatus(
+    b.status || d.lifecycleStage || "",
+    d.lifecycleStage || "Submitted"
   );
 
-  if (!b) return redirect(res, "/claims-lifecycle");
+  const statusOptions = [
+    "Resolved",
+    "Underpaid",
+    "Denied",
+    "Submitted",
+    "Waiting Payment",
+    "Awaiting Payment",
+    "Patient Follow-Up",
+    "In Appeal/Negotiation",
+    "Closed"
+  ].map(status => `
+    <option value="${safeStr(status)}" ${status === currentStatus ? "selected" : ""}>
+      ${safeStr(status)}
+    </option>
+  `).join("");
+
+  const amountBilled = claimEditFirstMoney(b.amount_billed, b.billed_amount, d.billedAmount);
+  const allowedAmount = claimEditFirstMoney(b.allowed_amount, d.allowedAmount);
+  const expectedAmount = claimEditFirstMoney(b.expected_amount, d.expectedInsurance);
+  const insurancePaid = claimEditFirstMoney(b.insurance_paid, b.paid_amount, d.paidAmount);
+  const patientResp = claimEditFirstMoney(b.patient_responsibility, patient.patientResp);
+  const patientCollected = claimEditFirstMoney(b.patient_collected, patient.patientCollected);
+  const patientWriteOff = claimEditFirstMoney(b.patient_writeoff_amount, patient.patientWriteOff);
+  const insuranceWriteOff = claimEditFirstMoney(b.write_off_amount, b.contractual_adjustment, b.write_off, d.insuranceWriteOff);
+
+  const html = renderPage("Edit Claim", `
+    <h2>Edit Claim</h2>
+    <p class="muted">
+      Update claim financials, status, denial context, and notes. Changes are saved through the claim recalculation engine so the lifecycle table and Action Center stay in sync.
+    </p>
+
+    <div class="hr"></div>
+
+    ${renderClaimFinancialContext(b, d)}
+
+    <form method="POST" action="/claim-edit">
+      <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
+
+      <div class="card" style="box-shadow:none;margin-top:14px;">
+        <h3>Claim Status</h3>
+
+        <div class="row">
+          <div class="col">
+            <label>Status</label>
+            <select name="status" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;margin-top:6px;">
+              ${statusOptions}
+            </select>
+            <p class="muted small">
+              Status is saved, then recalculated against the financial values. Example: if paid is below expected, the claim may remain Underpaid even if Resolved is selected.
+            </p>
+          </div>
+
+          <div class="col">
+            <label>Manual Edit Reason / Notes</label>
+            <input name="manual_edit_reason" value="${safeStr(b.manual_edit_reason || "")}" placeholder="e.g. payer recoupment, correction, late denial..." />
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="box-shadow:none;margin-top:14px;">
+        <h3>Financials</h3>
+
+        <div class="row">
+          <div class="col">
+            <label>Amount Billed</label>
+            <input name="amount_billed" value="${safeStr(amountBilled)}" />
+          </div>
+
+          <div class="col">
+            <label>Allowed Amount</label>
+            <input name="allowed_amount" value="${safeStr(allowedAmount)}" />
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:10px;">
+          <div class="col">
+            <label>Expected Insurance</label>
+            <input name="expected_amount" value="${safeStr(expectedAmount)}" />
+          </div>
+
+          <div class="col">
+            <label>Insurance Paid / Collected</label>
+            <input name="insurance_paid" value="${safeStr(insurancePaid)}" />
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:10px;">
+          <div class="col">
+            <label>Insurance Write-Off</label>
+            <input name="insurance_writeoff" value="${safeStr(insuranceWriteOff)}" />
+          </div>
+
+          <div class="col">
+            <label>Patient Responsibility</label>
+            <input name="patient_responsibility" value="${safeStr(patientResp)}" />
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:10px;">
+          <div class="col">
+            <label>Patient Collected</label>
+            <input name="patient_collected" value="${safeStr(patientCollected)}" />
+          </div>
+
+          <div class="col">
+            <label>Patient Write-Off</label>
+            <input name="patient_writeoff_amount" value="${safeStr(patientWriteOff)}" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="box-shadow:none;margin-top:14px;">
+        <h3>Denial / Adjustment Context</h3>
+
+        <div class="row">
+          <div class="col">
+            <label>Denial Code</label>
+            <input name="denial_code" value="${safeStr(b.denial_code || "")}" placeholder="e.g. CO16, CO29, CO197" />
+          </div>
+
+          <div class="col">
+            <label>Denial Reason</label>
+            <input name="denial_reason" value="${safeStr(b.denial_reason || "")}" placeholder="Reason from EOB/payer if applicable" />
+          </div>
+        </div>
+
+        <div style="margin-top:10px;">
+          <label>Internal Claim Notes</label>
+          <textarea name="claim_notes" style="min-height:110px;">${safeStr(b.claim_notes || b.notes || "")}</textarea>
+        </div>
+      </div>
+
+      <div class="btnRow">
+        <button class="btn" type="submit">Save Claim Changes</button>
+        <a class="btn secondary" href="/claims-lifecycle">Back to Claims Lifecycle</a>
+        <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">Open Full Claim</a>
+      </div>
+    </form>
+  `, navUser("claims"), {showChat:true, orgName: org.org_name});
+
+  return send(res, 200, html);
+}
+
+if (method === "POST" && pathname === "/claim-edit") {
+  const body = await parseBody(req);
+  const params = new URLSearchParams(body);
+
+  const billed_id = String(params.get("billed_id") || "").trim();
+  const resolved = resolveEditableClaimForOrg(org.org_id, billed_id);
+  if (!resolved) return redirect(res, "/claims-lifecycle");
+
+  const { billedAll, index } = resolved;
+  const b = billedAll[index];
+
+  const requestedStatus = normalizeClaimEditStatus(
+    params.get("status"),
+    b.status || "Submitted"
+  );
+
+  const amountBilled = readClaimEditMoney(params, "amount_billed");
+  const allowedAmount = readClaimEditMoney(params, "allowed_amount");
+  const expectedAmount = readClaimEditMoney(params, "expected_amount");
+  const insurancePaid = readClaimEditMoney(params, "insurance_paid");
+  const insuranceWriteOff = readClaimEditMoney(params, "insurance_writeoff");
+  const patientResp = readClaimEditMoney(params, "patient_responsibility");
+  const patientCollected = readClaimEditMoney(params, "patient_collected");
+  const patientWriteOff = readClaimEditMoney(params, "patient_writeoff_amount");
+
+  const denialCode = String(params.get("denial_code") || "").trim();
+  const denialReason = String(params.get("denial_reason") || "").trim();
+  const claimNotes = String(params.get("claim_notes") || "").trim();
+  const manualReason = String(params.get("manual_edit_reason") || "").trim();
+
+  const updates = {
+    // Status and workflow context
+    status: requestedStatus,
+    manual_status_requested: requestedStatus,
+    manual_edit_reason: manualReason,
+    last_manual_edit_at: nowISO(),
+
+    // Denial context
+    denial_code: denialCode,
+    denial_reason: denialReason,
+    marked_denied: requestedStatus === "Denied",
+
+    // Financial fields — keep both legacy and canonical aliases in sync
+    amount_billed: amountBilled,
+    billed_amount: amountBilled,
+
+    allowed_amount: allowedAmount,
+
+    expected_amount: expectedAmount,
+
+    insurance_paid: insurancePaid,
+    paid_amount: insurancePaid,
+
+    write_off_amount: insuranceWriteOff,
+    contractual_adjustment: insuranceWriteOff,
+    write_off: insuranceWriteOff,
+
+    patient_responsibility: patientResp,
+    patient_collected: patientCollected,
+    patient_writeoff_amount: patientWriteOff,
+
+    claim_notes: claimNotes,
+    notes: claimNotes,
+
+    updated_at: nowISO()
+  };
+
+  if (insurancePaid > 0 && !b.paid_at) {
+    updates.paid_at = new Date().toISOString().split("T")[0];
+  }
+
+  applyClaimEditAndRecalculate(
+    org.org_id,
+    b,
+    updates,
+    "user_claim_edit"
+  );
+
+  // Preserve the user's requested status for audit/debugging without bypassing recalculation.
+  b.manual_status_requested = requestedStatus;
+  b.last_manual_edit_at = nowISO();
+  b.updated_at = nowISO();
+
+  billedAll[index] = b;
+  writeJSON(FILES.billed, billedAll);
+
+  try {
+    auditLog({
+      actor: "user",
+      action: "claim_edit_saved",
+      org_id: org.org_id,
+      billed_id: b.billed_id,
+      requested_status: requestedStatus,
+      final_status: b.status,
+      manual_edit_reason: manualReason
+    });
+  } catch {}
 
   return redirect(
     res,
-    "/claim-action?billed_id=" + encodeURIComponent(b.billed_id) + "&action=patient_resp"
+    "/claim-detail?billed_id=" + encodeURIComponent(b.billed_id)
   );
 }
 
