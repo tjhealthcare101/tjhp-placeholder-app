@@ -2083,7 +2083,12 @@ function recalculateClaimFinancials(org_id, claim){
 
   const underpaid = Math.max(0, expectedInsurance - paid);
   claim.expected_amount = expectedInsurance;
+  claim.expected_insurance = expectedInsurance;
   claim.underpaid_amount = underpaid;
+  claim.insurance_remaining = underpaid;
+  claim.remaining_payer_balance = underpaid;
+  claim.at_risk_amount = underpaid;
+  claim.revenue_at_risk = underpaid;
   return claim;
 }
 
@@ -2460,7 +2465,11 @@ function applyPaymentToClaim(org_id, payment) {
   applyClaimEditAndRecalculate(org_id, claim, {
     payer: payment.payer || claim.payer || "",
     paid_amount: Number(payment.paid_amount || 0),
-    ...(pr !== null ? { patient_responsibility: pr } : {})
+    insurance_paid: Number(payment.paid_amount || 0),
+    ...(pr !== null ? { patient_responsibility: pr } : {}),
+    // A new real payment/import should become the new source of truth.
+    manual_financial_override: false,
+    manual_financial_override_cleared_at: nowISO()
   }, "integration_payment");
   const expected = Number(claim.expected_amount || 0);
   const newStatus = claim.status;
@@ -15516,14 +15525,34 @@ function computePatientBalance(claim){
 
 function computeInsuranceBalance(claim, ctx={}){
   const claimCtx = (ctx && ctx.paymentsByClaim) ? ctx : buildClaimContext(claim.org_id || "");
+  const hasManualOverride =
+    claim.manual_financial_override === true ||
+    claim.manual_financial_override === "true";
   const expectedInsuranceRaw = computeExpectedInsuranceForClaim(claim);
   const hasContract = Boolean(expectedInsuranceRaw && expectedInsuranceRaw.source === "contract");
-  const expectedInsurance = hasContract ? num(expectedInsuranceRaw.amount) : null;
+  const manualExpected = num(
+    claim.expected_amount ||
+    claim.expected_insurance ||
+    claim.contract_expected_amount ||
+    0
+  );
+  const expectedInsurance =
+    hasManualOverride && manualExpected > 0
+      ? manualExpected
+      : (hasContract ? num(expectedInsuranceRaw.amount) : null);
   const key = normalizeClaimKey(claim.claim_number || "");
   const paymentRows = key && claimCtx.paymentsByClaim ? (claimCtx.paymentsByClaim[key] || []) : [];
-  const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid), 0);
-  const paidFromClaim = num(claim.insurance_paid || claim.paid_amount);
-  const paidAmount = Math.max(paymentFromRows, paidFromClaim);
+  const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid || p.paid_amount || 0), 0);
+  const paidFromClaim = num(
+    claim.insurance_paid !== undefined && claim.insurance_paid !== null && String(claim.insurance_paid).trim() !== ""
+      ? claim.insurance_paid
+      : claim.paid_amount
+  );
+  // Normal mode: trust payment ledger if it is higher.
+  // Manual edit mode: trust the edited claim amount so recoupments/corrections work.
+  const paidAmount = hasManualOverride
+    ? paidFromClaim
+    : Math.max(paymentFromRows, paidFromClaim);
   const insuranceWriteOff = num(claim.write_off_amount || claim.contractual_adjustment || claim.write_off || 0);
   const insuranceRemaining =
     expectedInsurance !== null
@@ -15674,6 +15703,12 @@ function recalculateContractsForOrg(org_id){
   for (const b of billedAll) {
     if (b.org_id !== org_id) continue;
     stampCanonicalClaimFields(b);
+    // Manual claim edits are authoritative until overwritten by a new payment/import.
+    // Do not let contract recalculation reset expected/paid/status after a user correction.
+    if (b.manual_financial_override === true || b.manual_financial_override === "true") {
+      changed = true;
+      continue;
+    }
     const contracts = getPayerContracts(org_id).map(normalizeContract);
     const contract = findContractForClaim(org_id, b);
 
@@ -30987,6 +31022,12 @@ if (method === "POST" && pathname === "/claim-edit") {
     manual_edit_reason: manualReason,
     last_manual_edit_at: nowISO(),
 
+    // Manual financial override:
+    // downstream Claim Detail, Lifecycle, Action Center, and metrics should trust these edited values.
+    manual_financial_override: true,
+    manual_financial_override_at: nowISO(),
+    manual_financial_override_by: sess.user_id || "user",
+
     // Denial context
     denial_code: denialCode,
     denial_reason: denialReason,
@@ -31032,6 +31073,38 @@ if (method === "POST" && pathname === "/claim-edit") {
   b.manual_status_requested = requestedStatus;
   b.last_manual_edit_at = nowISO();
   b.updated_at = nowISO();
+
+  // Re-derive using the same engine used by Claim Detail, Claims Lifecycle, Action Center, and metrics.
+  try {
+    const freshCtx = buildClaimContext(org.org_id);
+    const freshDerived = evaluateClaimDerived(b, freshCtx);
+
+    if (freshDerived && freshDerived.lifecycleStage) {
+      b.status = freshDerived.lifecycleStage;
+    }
+
+    b.expected_amount = num(freshDerived.expectedInsurance ?? b.expected_amount);
+    b.expected_insurance = b.expected_amount;
+
+    b.paid_amount = num(freshDerived.paidAmount ?? b.paid_amount);
+    b.insurance_paid = b.paid_amount;
+
+    b.underpaid_amount = num(freshDerived.underpaidAmount ?? b.underpaid_amount);
+    b.insurance_remaining = b.underpaid_amount;
+    b.remaining_payer_balance = b.underpaid_amount;
+
+    b.at_risk_amount = num(freshDerived.atRiskAmount ?? b.at_risk_amount);
+    b.revenue_at_risk = b.at_risk_amount;
+
+    b.write_off_amount = num(freshDerived.writeOffAmount ?? b.write_off_amount);
+    b.contractual_adjustment = b.write_off_amount;
+    b.write_off = b.write_off_amount;
+
+    // Re-sync Action Center/task/packet routing after final derived status is known.
+    syncClaimToPipeline(org.org_id, b);
+  } catch (e) {
+    // If derive fails, keep the recalculation result already applied above.
+  }
 
   billedAll[index] = b;
   writeJSON(FILES.billed, billedAll);
@@ -40226,24 +40299,31 @@ if (method === "GET" && pathname === "/claim-detail") {
   const riskBand = claimRiskBand(riskScore);
   const atRisk = num(d.atRiskAmount);
   const suggested = suggestedNextActionForClaim(b);
-  const nextStepBody = suggested === "Appeal"
-    ? "This claim should move into an appeal workflow."
-    : suggested === "Negotiate"
-      ? "This claim should move into a negotiation workflow."
-      : suggested === "Review Claim"
-        ? "Review this claim in the Claims Lifecycle and Action Center."
-        : "Use the Action Center to continue working this claim.";
-  const nextStepPrimaryHref = suggested === "Appeal"
-    ? `/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}`
-    : suggested === "Negotiate"
-      ? `/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}`
-      : `/actions?q=${encodeURIComponent(b.claim_number || "")}`;
-  const nextStepPrimaryLabel = suggested === "Appeal"
-    ? "Open Appeal Workspace"
-    : suggested === "Negotiate"
-      ? "Open Negotiation Workspace"
-      : "Open Action Center";
   const derivedStatus = String(d.lifecycleStage || b.status || "Pending");
+  const isResolvedDetailClaim = String(derivedStatus || "").toLowerCase().includes("resolved");
+  const nextStepBody = isResolvedDetailClaim
+    ? "This claim is currently resolved. Use Edit Claim only if a payer recoupment, late denial, correction, or financial adjustment changes the claim."
+    : suggested === "Appeal"
+      ? "This claim should move into an appeal workflow."
+      : suggested === "Negotiate"
+        ? "This claim should move into a negotiation workflow."
+        : suggested === "Review Claim"
+          ? "Review this claim in the Claims Lifecycle and Action Center."
+          : "Use the Action Center to continue working this claim.";
+  const nextStepPrimaryHref = isResolvedDetailClaim
+    ? `/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}`
+    : suggested === "Appeal"
+      ? `/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}`
+      : suggested === "Negotiate"
+        ? `/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}`
+        : `/actions?q=${encodeURIComponent(b.claim_number || "")}`;
+  const nextStepPrimaryLabel = isResolvedDetailClaim
+    ? "Edit Claim"
+    : suggested === "Appeal"
+      ? "Open Appeal Workspace"
+      : suggested === "Negotiate"
+        ? "Open Negotiation Workspace"
+        : "Open Action Center";
 
   const detailContract = findContractForClaim(org.org_id, b);
   const networkStatus = String(b.network_status || detailContract?.network_status || "Unknown");
@@ -40384,6 +40464,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       "View In Claims Lifecycle"
     )}
     <div class="btnRow">
+      <a class="btn secondary" href="/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}">Edit Claim</a>
       ${suggested === "Appeal" ? `<a class="btn secondary" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Open Appeal Workspace</a>` : ``}
       ${suggested === "Negotiate" ? `<a class="btn secondary" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Open Negotiation Workspace</a>` : ``}
       ${suggested === "Adjust Patient Responsibility" ? `<a class="btn secondary" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Perform Suggested Action</a>` : ``}
