@@ -141,6 +141,7 @@ const FILES = {
   saved_queries: path.join(DATA_DIR, "saved_queries.json"),
   deleted_payment_batches: path.join(DATA_DIR, "deleted_payment_batches.json"),
   payer_contracts: path.join(DATA_DIR, "payer_contracts.json"),
+  denial_code_map: path.join(DATA_DIR, "denial_code_map.json"),
   contract_versions: path.join(DATA_DIR, "contract_versions.json"),
   document_ingests: path.join(DATA_DIR, "document_ingests.json"),
   allowed_amount_rules: path.join(DATA_DIR, "allowed_amount_rules.json"),
@@ -1935,6 +1936,471 @@ async function pollPacketStatuses(){
   }
 }
 
+// =====================================
+// 🔥 CONTRACT-AWARE EXPECTED LOGIC
+// =====================================
+function normalizeCptList(raw){
+  const s = String(raw || "")
+    .replace(/\s+/g, "")
+    .toUpperCase();
+
+  if (!s) return [];
+
+  const parts = s.split(/[,|]/).filter(Boolean);
+  const baseCodes = parts.map(p => p.split("-")[0]);
+
+  return [...new Set(baseCodes)];
+}
+
+function resolveBestBundle(contract, cptList){
+  if (!contract || !Array.isArray(contract.bundle_rules)) return null;
+
+  const claimSet = new Set(cptList.map(c => String(c).toUpperCase()));
+  let best = null;
+
+  for (const bundle of contract.bundle_rules){
+    const codes = (bundle.codes || []).map(c => String(c).toUpperCase());
+    if (!codes.length) continue;
+
+    const bundleSet = new Set(codes);
+
+    const exactMatch =
+      bundleSet.size === claimSet.size &&
+      [...bundleSet].every(c => claimSet.has(c));
+
+    const matchedCount = codes.filter(c => claimSet.has(c)).length;
+    const matchRatio = matchedCount / codes.length;
+
+    const subsetAllowed = bundle.allow_subset === true &&
+      matchRatio >= Number(bundle.min_match_ratio || 0.8);
+
+    if (!exactMatch && !subsetAllowed) continue;
+
+    const score =
+      (Number(bundle.priority || 0) * 1000) +
+      (exactMatch ? 100 : 0) +
+      (matchRatio * 50) +
+      matchedCount;
+
+    if (!best || score > best.score){
+      best = { bundle, score };
+    }
+  }
+
+  return best ? best.bundle : null;
+}
+
+function resolveExpectedInsurance(org_id, claim){
+  if (!claim) return 0;
+
+  if (Number(claim.expected_amount || 0) > 0){
+    return Number(claim.expected_amount);
+  }
+
+  const billed = Number(claim.billed_amount || claim.amount_billed || 0);
+  const allowed = Number(claim.allowed_amount || 0);
+  const patientResp = Number(claim.patient_responsibility || 0);
+  const cptList = normalizeCptList(claim.cpt_code || claim.procedure_code);
+
+  try {
+    const contracts = readJSON(FILES.payer_contracts, []);
+    const contract = contracts.find(c =>
+      c.org_id === org_id &&
+      String(c.payer || "").toLowerCase() === String(claim.payer || "").toLowerCase()
+    );
+
+    if (contract){
+      // 🔥 CPT BUNDLE RULES
+      if (contract.bundle_rules && Array.isArray(contract.bundle_rules)){
+        const bestBundle = resolveBestBundle(contract, cptList);
+        if (bestBundle){
+          return Math.max(0, Number(bestBundle.bundle_price || 0) - patientResp);
+        }
+      }
+
+      if (contract.cpt_rates && cptList.length){
+        let total = 0;
+        let matched = false;
+
+        cptList.forEach(code => {
+          if (contract.cpt_rates[code]){
+            total += Number(contract.cpt_rates[code]);
+            matched = true;
+          }
+        });
+
+        if (matched){
+          // 🔥 apply cap if exists
+          if (contract.max_total){
+            total = Math.min(total, Number(contract.max_total));
+          }
+
+          // 🔥 apply discount if exists
+          if (contract.bundle_discount){
+            total = total * (1 - Number(contract.bundle_discount));
+          }
+
+          return Math.max(0, total - patientResp);
+        }
+      }
+
+      if (Array.isArray(contract.tiers)){
+        const tier = contract.tiers.find(t =>
+          billed >= Number(t.min || 0) && billed <= Number(t.max || Infinity)
+        );
+        if (tier && tier.rate){
+          return Math.max(0, billed * Number(tier.rate) - patientResp);
+        }
+      }
+
+      if (contract.flat_rate){
+        return Math.max(0, Number(contract.flat_rate) - patientResp);
+      }
+
+      if (contract.allowed_rate){
+        return Math.max(0, billed * Number(contract.allowed_rate) - patientResp);
+      }
+    }
+  } catch(e){
+    console.warn("Contract resolution failed");
+  }
+
+  if (allowed > 0){
+    return Math.max(0, allowed - patientResp);
+  }
+
+  return Math.max(0, billed - patientResp);
+}
+
+// =====================================
+// 🔥 FINAL SAFE CLAIM RECALCULATION ENGINE
+// =====================================
+function recalculateClaimFinancials(org_id, claim){
+  if (!claim) return claim;
+
+  const paid = Number(claim.paid_amount || claim.insurance_paid || 0);
+  const expectedInsurance = resolveExpectedInsurance(org_id, claim);
+
+  const underpaid = Math.max(0, expectedInsurance - paid);
+  claim.expected_amount = expectedInsurance;
+  claim.underpaid_amount = underpaid;
+  return claim;
+}
+
+// =====================================
+// 🔥 IMPROVED DENIAL DETECTION
+// =====================================
+const DEFAULT_DENIAL_CODE_MAP = {
+  CO16: true,
+  CO18: true,
+  CO29: true,
+  CO50: true,
+  CO96: true,
+  CO109: true,
+  CO119: true,
+  CO197: true,
+  CO45: false,
+  CO97: false,
+  PR1: false,
+  PR2: false,
+  PR3: false
+};
+
+function getPayerDenialOverride(org_id, payer, code){
+  try {
+    const normalized = String(code).replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    const map = readJSON(FILES.denial_code_map, {});
+    const payerKey = String(payer || "").toLowerCase();
+    const entry = Object.entries(map).find(([k]) => k.toLowerCase() === payerKey);
+
+    if (entry){
+      const payerMap = entry[1] || {};
+      if (normalized in payerMap){
+        return !!payerMap[normalized];
+      }
+    }
+
+    if (normalized in DEFAULT_DENIAL_CODE_MAP){
+      return !!DEFAULT_DENIAL_CODE_MAP[normalized];
+    }
+  } catch(e){}
+  return null;
+}
+
+function isTrueDenialCode(code, claim){
+  if (!code) return false;
+
+  const c = String(code).replace(/[^A-Z0-9]/gi, "").toUpperCase();
+
+  const override = getPayerDenialOverride(
+    claim.org_id,
+    claim.payer,
+    c
+  );
+  if (override !== null) return override;
+
+  if (c.startsWith("PR")) return false;
+  if (c.startsWith("CO")) return false;
+  if (c.startsWith("OA") || c.startsWith("PI")) return true;
+
+  return false;
+}
+
+function hasTrueDenialCode(claim){
+  const codes = [
+    claim.denial_code,
+    claim.remark_code,
+    claim.eob_code
+  ].filter(Boolean);
+
+  return codes.some(code => {
+    return isTrueDenialCode(code, claim);
+  });
+}
+
+const SAFE_NON_DENIAL_TEXT = [
+  "processed with adjustment",
+  "benefit applied",
+  "contractual adjustment",
+  "coinsurance",
+  "copay",
+  "deductible"
+];
+
+const STRONG_DENIAL_TEXT = [
+  "denied",
+  "not covered",
+  "claim rejected",
+  "invalid claim",
+  "no authorization"
+];
+
+function isLikelyDenied(claim){
+  const paid = Number(claim.paid_amount || claim.insurance_paid || 0);
+  if (paid > 0) return false;
+
+  if (claim.marked_denied === true) return true;
+  if (hasTrueDenialCode(claim)) return true;
+
+  const text = String(
+    claim.status_reason ||
+    claim.eob_reason ||
+    claim.remark_text ||
+    ""
+  ).toLowerCase();
+
+  if (SAFE_NON_DENIAL_TEXT.some(t => text.includes(t))){
+    return false;
+  }
+
+  if (STRONG_DENIAL_TEXT.some(t => text.includes(t))){
+    return true;
+  }
+
+  return false;
+}
+
+function recalculateClaimState(org_id, claim){
+  if (!claim) return claim;
+
+  recalculateClaimFinancials(org_id, claim);
+
+  const expected = Number(claim.expected_amount || 0);
+  const paid = Number(claim.paid_amount || claim.insurance_paid || 0);
+
+  let newStatus = claim.status;
+
+  if (expected > 0 && paid >= expected){
+    newStatus = "Resolved";
+  }
+  else if (expected > 0 && paid > 0 && paid < expected){
+    newStatus = "Underpaid";
+  }
+  else if (isLikelyDenied(claim)){
+    newStatus = "Denied";
+  }
+
+  claim.status = newStatus;
+  return claim;
+}
+
+function removeClaimFromAllBuckets(org_id, billed_id){
+  if (!org_id || !billed_id) return;
+  closeTasksForClaim(org_id, billed_id);
+}
+
+function addClaimToDenialQueue(org_id, claim){
+  if (!claim) return;
+  const payload = { ...claim, status: "Denied" };
+  autoCreateTasksFromStatus(org_id, payload);
+  autoLinkPacketFromStatus(org_id, payload);
+  autoPreparePacketFromStatus(org_id, payload);
+}
+
+function addClaimToNegotiationQueue(org_id, claim){
+  if (!claim) return;
+  const payload = { ...claim, status: "Underpaid" };
+  autoCreateTasksFromStatus(org_id, payload);
+  autoLinkPacketFromStatus(org_id, payload);
+  autoPreparePacketFromStatus(org_id, payload);
+}
+
+function addClaimToActivePipeline(org_id, claim){
+  if (!claim) return;
+  autoCreateTasksFromStatus(org_id, claim);
+  autoLinkPacketFromStatus(org_id, claim);
+  autoPreparePacketFromStatus(org_id, claim);
+}
+
+// =====================================
+// 🔥 PIPELINE SYNC (UNCHANGED BUT SAFE)
+// =====================================
+// =====================================
+// 🔥 PIPELINE ROUTING (SAFE)
+// =====================================
+function syncClaimToPipeline(org_id, claim){
+  if (!claim || !claim.billed_id) return;
+
+  const status = String(claim.status || "").toLowerCase();
+
+  removeClaimFromAllBuckets(org_id, claim.billed_id);
+
+  if (status === "denied"){
+    addClaimToDenialQueue(org_id, claim);
+  }
+  else if (status === "underpaid"){
+    addClaimToNegotiationQueue(org_id, claim);
+  }
+  else if (status === "resolved"){
+    // resolved claims remain out of action center queues
+  }
+  else {
+    addClaimToActivePipeline(org_id, claim);
+  }
+}
+
+// =====================================
+// 🔥 AUDIT LOG ROTATION (AUTO CLEANUP)
+// =====================================
+const AUDIT_LOCK_FILE = (FILES.audit || "audit.log") + ".lock";
+
+function withAuditLockAsync(fn){
+  const fsLocal = require("fs");
+  const start = Date.now();
+
+  function tryLock(){
+    return new Promise(resolve => {
+      fsLocal.open(AUDIT_LOCK_FILE, "wx", (err, fd) => {
+        if (!err && fd){
+          fsLocal.close(fd, () => resolve(true));
+        } else {
+          resolve(false);
+        }
+      });
+    });
+  }
+
+  function wait(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+  return (async () => {
+    let locked = await tryLock();
+    while (!locked && (Date.now() - start < 2000)){
+      await wait(10);
+      locked = await tryLock();
+    }
+
+    try {
+      return await fn();
+    } finally {
+      if (locked){
+        try { fsLocal.unlinkSync(AUDIT_LOCK_FILE); } catch {}
+      }
+    }
+  })();
+}
+
+async function appendAuditLog(entry){
+  const fsLocal = require("fs");
+
+  return withAuditLockAsync(async () => {
+    try {
+      const line = JSON.stringify(entry) + "\n";
+      await fsLocal.promises.appendFile(FILES.audit, line, "utf8");
+
+      const stats = await fsLocal.promises.stat(FILES.audit);
+      const MAX_SIZE = 5 * 1024 * 1024;
+
+      if (stats.size > MAX_SIZE){
+        const base = FILES.audit.replace(/\.[^/.]+$/, "");
+        const archiveTmp = `${base}_archive_${Date.now()}.tmp`;
+        const archiveFile = archiveTmp.replace(".tmp", ".log");
+
+        await fsLocal.promises.copyFile(FILES.audit, archiveTmp);
+        await fsLocal.promises.rename(archiveTmp, archiveFile);
+        await fsLocal.promises.truncate(FILES.audit, 0);
+
+        console.log("Audit log rotated to archive:", archiveFile);
+      }
+
+    } catch(e){
+      console.warn("Audit append failed");
+    }
+  });
+}
+
+// =====================================
+// 🔥 MAIN EDIT ENTRY POINT
+// =====================================
+function applyClaimEditAndRecalculate(org_id, claim, updates, actor = "system"){
+  if (!claim) return claim;
+
+  const before = { ...claim };
+  Object.assign(claim, updates || {});
+  recalculateClaimState(org_id, claim);
+  syncClaimToPipeline(org_id, claim);
+
+  appendAuditLog({
+    audit_id: uuid(),
+    org_id,
+    billed_id: claim.billed_id,
+    action: "claim_updated",
+    actor,
+    before,
+    after: { ...claim },
+    changed_fields: Object.keys(updates || {}),
+    created_at: nowISO()
+  });
+
+  return claim;
+}
+
+function extractPatientResponsibilityFromPayment(payment, claim){
+  const text = String(
+    payment.remark_text ||
+    payment.eob_reason ||
+    payment.adjustment_reason ||
+    ""
+  ).toLowerCase();
+
+  const isPR =
+    text.includes("coinsurance") ||
+    text.includes("copay") ||
+    text.includes("deductible") ||
+    String(payment.remark_code || "").toUpperCase().startsWith("PR");
+
+  if (!isPR) return null;
+
+  if (Number(payment.patient_responsibility || 0) > 0){
+    return Number(payment.patient_responsibility);
+  }
+
+  if (Number(payment.adjustment_amount || 0) > 0){
+    return Number(payment.adjustment_amount);
+  }
+
+  return null;
+}
+
 function applyPaymentToClaim(org_id, payment) {
   const canonical = {
     claim_id: payment.claim_id || payment.claim_number || "",
@@ -1986,35 +2452,19 @@ function applyPaymentToClaim(org_id, payment) {
     };
   }
 
-  const expected = Number(claim.expected_amount || 0);
   const paid = Number(canonical.paid_amount || 0);
-
-  let newStatus = "Paid";
-
-  if (paid <= 0) {
-    newStatus = "Denied";
-  } else if (expected > 0 && paid < expected) {
-    newStatus = "Underpaid";
-  } else if (claim.billed_amount > 0 && paid < claim.billed_amount && expected === 0) {
-    newStatus = "Partial Payment";
-  } else {
-    newStatus = "Paid";
-  }
+  const pr = extractPatientResponsibilityFromPayment(payment, claim);
 
   const priorPaid = Number(claim.paid_amount || 0);
 
-  claim.payer = canonical.payer || claim.payer || "";
-  claim.paid_amount = paid;
-  claim.status = newStatus;
-  // AUTO CREATE TASKS
-  autoCreateTasksFromStatus(org_id, claim);
-  // 🔥 AUTO LINK PACKET
-  autoLinkPacketFromStatus(org_id, claim);
-  // 🔥 AUTO PREP PACKET (FILLED + ROUTED + READY FOR REVIEW)
-  autoPreparePacketFromStatus(org_id, claim);
-  if (newStatus === "Paid") {
-    closeTasksForClaim(org_id, claim.billed_id);
-  }
+  applyClaimEditAndRecalculate(org_id, claim, {
+    payer: payment.payer || claim.payer || "",
+    paid_amount: Number(payment.paid_amount || 0),
+    ...(pr !== null ? { patient_responsibility: pr } : {})
+  }, "integration_payment");
+  const expected = Number(claim.expected_amount || 0);
+  const newStatus = claim.status;
+
   claim.last_payment_sync_at = nowISO();
   claim.updated_at = nowISO();
   claim.payment_source = canonical.source;
@@ -2518,6 +2968,7 @@ ensureFile(FILES.ai_queries, []);
 ensureFile(FILES.saved_queries, []);
 ensureFile(FILES.deleted_payment_batches, []);
 ensureFile(FILES.payer_contracts, []);
+ensureFile(FILES.denial_code_map, {});
 ensureFile(FILES.contract_versions, []);
 ensureFile(FILES.document_ingests, []);
 ensureFile(FILES.allowed_amount_rules, []);
@@ -4348,6 +4799,38 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
           "</span>",
         ].join(" ");
       }
+
+      // =========================
+      // 4. RESOLVED ACTIONS -> EDIT CLAIM
+      // =========================
+      table.querySelectorAll("tbody tr").forEach((row) => {
+        const statusEl = row.querySelector(".badge");
+        if (!statusEl || !isResolvedStatus(statusEl.textContent || "")) return;
+
+        const actionCell = row.lastElementChild;
+        if (!actionCell) return;
+
+        const link = row.querySelector('a[href*="billed_id="]');
+        if (!link) return;
+
+        const match = link.href.match(/billed_id=([^&]+)/);
+        if (!match) return;
+        const claimId = decodeURIComponent(match[1]);
+
+        actionCell.querySelectorAll("a,button").forEach((el) => {
+          if ((el.textContent || "").toLowerCase().includes("action")) {
+            el.remove();
+          }
+        });
+
+        if (!actionCell.querySelector(".edit-claim-btn")) {
+          const editBtn = document.createElement("a");
+          editBtn.className = "btn small secondary edit-claim-btn";
+          editBtn.href = "/claim-edit?claim_id=" + encodeURIComponent(claimId);
+          editBtn.textContent = "Edit Claim";
+          actionCell.appendChild(editBtn);
+        }
+      });
     }
 
     function normalizeAwaitingPaymentLabel(text){
@@ -4356,6 +4839,11 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         return "Awaiting Payment";
       }
       return "";
+    }
+
+    function isResolvedStatus(text){
+      const s = String(text || "").toLowerCase();
+      return s.includes("resolved") || s === "paid";
     }
 
     function getPanelActionRow(panel){
@@ -4375,11 +4863,41 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     // =========================
     // 4. PANEL FIX (AWAITING PAYMENT)
     // =========================
+    function ensurePanelEditActionForResolved(panel){
+      const statusEl = panel.querySelector(".badge");
+      if (!statusEl || !isResolvedStatus(statusEl.textContent || "")) return;
+
+      const claimLink = panel.querySelector('a[href*="billed_id="]');
+      if (!claimLink) return;
+
+      const match = claimLink.href.match(/billed_id=([^&]+)/);
+      if (!match) return;
+      const claimId = decodeURIComponent(match[1]);
+
+      const actionRow = getPanelActionRow(panel);
+      if (!actionRow) return;
+
+      actionRow.querySelectorAll("a, button").forEach((btn) => {
+        const txt = (btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+        if (txt.includes("action center")) btn.remove();
+      });
+
+      if (!actionRow.querySelector(".edit-claim-btn")) {
+        const editBtn = document.createElement("a");
+        editBtn.className = "btn small secondary edit-claim-btn";
+        editBtn.href = "/claim-edit?claim_id=" + encodeURIComponent(claimId);
+        editBtn.textContent = "Edit Claim";
+        actionRow.appendChild(editBtn);
+      }
+    }
+
     function fixPanel(){
       const panel =
         document.getElementById("claimSidePanel") ||
         document.getElementById("tjhpClaimPanel");
       if (!panel) return;
+
+      ensurePanelEditActionForResolved(panel);
 
       const statusEl = Array.from(panel.querySelectorAll(".badge")).find((el) => {
         return !!normalizeAwaitingPaymentLabel(el.textContent);
@@ -30629,26 +31147,14 @@ if (apply && rec.billed_id) {
     const collected = num(rec.collected_amount);
     if (collected > 0) {
       updateBilledClaim(rec.billed_id, (b)=>{
-        // apply as insurance paid increment and recalc status (keep manual override possible later)
+        // apply as insurance paid increment and recalc status
         const priorPaid = num(b.insurance_paid || b.paid_amount);
-        const billedAmt = num(b.amount_billed);
         const newPaid = priorPaid + collected;
-        b.insurance_paid = newPaid;
-        b.paid_amount = newPaid;
-        b.paid_at = b.paid_at || new Date().toISOString().split("T")[0];
-
-        // recompute expected
-        const allowed = num(b.allowed_amount);
-        const patientResp = num(b.patient_responsibility);
-        const expectedInsurance = (() => {
-          const fin = computeClaimFinancials(b);
-          return fin.expectedInsurance != null ? num(fin.expectedInsurance) : Math.max(0, (allowed > 0 ? allowed : billedAmt) - patientResp);
-        })();
-
-        const underpaid = Math.max(0, expectedInsurance - newPaid);
-        b.underpaid_amount = underpaid;
-        if (underpaid <= 0.01) b.status = "Paid";
-        else b.status = "Underpaid";
+        applyClaimEditAndRecalculate(org.org_id, b, {
+          insurance_paid: newPaid,
+          paid_amount: newPaid,
+          paid_at: b.paid_at || new Date().toISOString().split("T")[0]
+        }, "user_negotiation");
       });
 
       auditLog({ actor:"user", action:"negotiation_apply_to_claim", org_id: org.org_id, negotiation_id, collected_applied: collected });
