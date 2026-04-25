@@ -30516,17 +30516,13 @@ if (method === "GET" && pathname === "/actions") {
       actionsHtml = `
         ${viewButtonHtml}
         <a class="btn secondary small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Appeal Workspace</a>
-        <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
-        <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
-        ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Follow-Up Write-Off</a>` : ``}
+        <a class="btn secondary small edit-claim-btn" href="/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}">Edit Claim</a>
       `;
     } else if (x.kind === "negotiation") {
       actionsHtml = `
         ${viewButtonHtml}
         <a class="btn secondary small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Negotiation Workspace</a>
-        <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
-        <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>
-        ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `<a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">Patient Follow-Up Write-Off</a>` : ``}
+        <a class="btn secondary small edit-claim-btn" href="/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}">Edit Claim</a>
       `;
     } else {
       const channel = workspaceChannelForClaim(b, x.derived);
@@ -30550,12 +30546,7 @@ if (method === "GET" && pathname === "/actions") {
           ${contractAction}
           ${viewButtonHtml}
           <a class="btn secondary small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Negotiation Workspace</a>
-          <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Adjust Patient Resp</a>
-          ${num(x.derived?.patientBalanceRemaining || 0) > 0 ? `
-            <a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_writeoff">
-              Patient Follow-Up Write-Off
-            </a>
-          ` : ``}
+          <a class="btn secondary small edit-claim-btn" href="/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}">Edit Claim</a>
           ${x.kind === "followup_ws" ? `
             <form method="POST" action="/agent-workspace/followup/escalate" style="display:inline-block;margin:0;">
               <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}" />
@@ -30821,6 +30812,19 @@ function normalizeClaimEditStatus(value, fallback){
   return found || raw || fallback || "Submitted";
 }
 
+function normalizeClaimEditNetworkStatus(value, fallback){
+  const raw = String(value || fallback || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  if (!raw || raw === "unknown") return "Unknown";
+  if (raw.includes("out")) return "Out of Network";
+  if (raw.includes("in")) return "In Network";
+
+  return fallback || "Unknown";
+}
+
 if (method === "GET" && pathname === "/claim-edit") {
   const rawId = String(
     parsed.query.claim_id ||
@@ -30854,6 +30858,21 @@ if (method === "GET" && pathname === "/claim-edit") {
     "Closed"
   ].map(status => `
     <option value="${safeStr(status)}" ${status === currentStatus ? "selected" : ""}>
+      ${safeStr(status)}
+    </option>
+  `).join("");
+
+  const currentNetworkStatus = normalizeClaimEditNetworkStatus(
+    b.network_status || "",
+    d.networkStatus || "Unknown"
+  );
+
+  const networkStatusOptions = [
+    "Unknown",
+    "In Network",
+    "Out of Network"
+  ].map(status => `
+    <option value="${safeStr(status)}" ${status === currentNetworkStatus ? "selected" : ""}>
       ${safeStr(status)}
     </option>
   `).join("");
@@ -30895,9 +30914,18 @@ if (method === "GET" && pathname === "/claim-edit") {
           </div>
 
           <div class="col">
-            <label>Manual Edit Reason / Notes</label>
-            <input name="manual_edit_reason" value="${safeStr(b.manual_edit_reason || "")}" placeholder="e.g. payer recoupment, correction, late denial..." />
+            <label>Network Status</label>
+            <select name="network_status" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;margin-top:6px;">
+              ${networkStatusOptions}
+            </select>
+            <p class="muted small">
+              Used for contract context, risk scoring, and claim classification.
+            </p>
           </div>
+        </div>
+        <div style="margin-top:10px;">
+          <label>Manual Edit Reason / Notes</label>
+          <input name="manual_edit_reason" value="${safeStr(b.manual_edit_reason || "")}" placeholder="e.g. payer recoupment, correction, late denial..." />
         </div>
       </div>
 
@@ -31015,12 +31043,19 @@ if (method === "POST" && pathname === "/claim-edit") {
   const claimNotes = String(params.get("claim_notes") || "").trim();
   const manualReason = String(params.get("manual_edit_reason") || "").trim();
 
+  const networkStatus = normalizeClaimEditNetworkStatus(
+    params.get("network_status"),
+    b.network_status || "Unknown"
+  );
+
   const updates = {
     // Status and workflow context
     status: requestedStatus,
     manual_status_requested: requestedStatus,
     manual_edit_reason: manualReason,
     last_manual_edit_at: nowISO(),
+    network_status: networkStatus,
+    network_status_source: "manual_edit",
 
     // Manual financial override:
     // downstream Claim Detail, Lifecycle, Action Center, and metrics should trust these edited values.
