@@ -4369,6 +4369,81 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     return href || (id ? "/claim-detail?billed_id=" + encodeURIComponent(id) : "/claims-lifecycle");
   }
 
+  function tjhpResolvedStatusText(statusText) {
+    const s = String(statusText || "").replace(/\s+/g, " ").trim().toLowerCase();
+    return s.includes("resolved") || s === "paid";
+  }
+
+  function tjhpGetParamFromHref(href) {
+    if (!href) return "";
+    try {
+      const u = new URL(href, window.location.origin);
+      return (
+        u.searchParams.get("billed_id") ||
+        u.searchParams.get("claim_id") ||
+        u.searchParams.get("claim") ||
+        u.searchParams.get("id") ||
+        ""
+      );
+    } catch (_) {
+      const m = String(href).match(/[?&](?:billed_id|claim_id|claim|id)=([^&#]+)/);
+      return m ? decodeId(m[1]) : "";
+    }
+  }
+
+  function tjhpEditClaimHref(id) {
+    return "/claim-edit?claim_id=" + encodeURIComponent(String(id || ""));
+  }
+
+  function tjhpResolveRowClaimId(row) {
+    if (!row) return "";
+
+    const viewBtn = row.querySelector(".view-claim-btn");
+    const fromBtn =
+      viewBtn?.getAttribute("data-id") ||
+      viewBtn?.dataset?.id ||
+      "";
+
+    if (fromBtn) return decodeId(fromBtn);
+
+    const fromRow = row.getAttribute("data-claim") || row.dataset?.claim || "";
+    if (fromRow) return decodeId(fromRow);
+
+    const link = row.querySelector(
+      'a[href*="billed_id="], a[href*="claim_id="], a[href*="claim="], a[href*="id="]'
+    );
+
+    const fromHref = link ? tjhpGetParamFromHref(link.getAttribute("href")) : "";
+    if (fromHref) return decodeId(fromHref);
+
+    return "";
+  }
+
+  function tjhpResolvePanelClaimId(panel) {
+    if (!panel) return "";
+
+    const fromPanel =
+      panel.getAttribute("data-claim") ||
+      panel.getAttribute("data-id") ||
+      panel.dataset?.claim ||
+      panel.dataset?.id ||
+      "";
+
+    if (fromPanel) return decodeId(fromPanel);
+
+    const links = Array.from(panel.querySelectorAll("a[href]"));
+    for (const a of links) {
+      const id = tjhpGetParamFromHref(a.getAttribute("href"));
+      if (id) return decodeId(id);
+    }
+
+    if (window.__tjhpLastOpenedClaimId) {
+      return decodeId(window.__tjhpLastOpenedClaimId);
+    }
+
+    return "";
+  }
+
   function badgeClassForStatusText(status) {
     const s = String(status || "").trim().toLowerCase();
     if (s === "awaiting payment" || s === "waiting payment" || s === "submitted") return "pending";
@@ -4522,22 +4597,33 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       .replace(/\s+/g, " ")
       .trim()
       .toLowerCase();
+
     const normalized =
       s === "submitted" || s === "waiting payment"
         ? "awaiting payment"
         : s;
+
+    // Resolved claims should never route back to Action Center.
+    if (tjhpResolvedStatusText(s)) {
+      return '<a class="btn small secondary edit-claim-btn" href="' + tjhpEditClaimHref(id) + '">Edit Claim</a>';
+    }
+
     if (s.includes("denied")) {
       return '<a class="btn small secondary" href="/ai-appeal?billed_id=' + encodeURIComponent(id) + '">Open Appeal Workspace</a>';
     }
+
     if (s.includes("underpaid")) {
       return '<a class="btn small secondary" href="/ai-negotiation?billed_id=' + encodeURIComponent(id) + '">Open Negotiation Workspace</a>';
     }
+
     if (normalized === "awaiting payment") {
       return '<a class="btn small secondary" href="/data-management?tab=payments">Upload Payment</a>';
     }
+
     if (window.location.pathname.includes("/actions")) {
       return "";
     }
+
     return '<a class="btn small secondary" href="/actions?claim=' + encodeURIComponent(id) + '">Open in Action Center</a>';
   }
 
@@ -4675,6 +4761,8 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
 
     const id = resolveButtonClaimId(btn);
     if (!id) return;
+
+    window.__tjhpLastOpenedClaimId = id;
 
     event.preventDefault();
     event.stopPropagation();
@@ -4833,6 +4921,46 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       });
     }
 
+    function fixResolvedLifecycleActionButtonsStrong(){
+      const table = document.querySelector(".lifecycle-claims-table");
+      if (!table) return;
+
+      table.querySelectorAll("tbody tr").forEach((row) => {
+        const statusEl = row.querySelector(".badge");
+        const statusText = statusEl ? statusEl.textContent : "";
+
+        if (!tjhpResolvedStatusText(statusText)) return;
+
+        const actionCell = row.lastElementChild;
+        if (!actionCell) return;
+
+        const claimId = tjhpResolveRowClaimId(row);
+        if (!claimId) return;
+
+        actionCell.querySelectorAll("a, button").forEach((el) => {
+          const txt = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+          const href = String(el.getAttribute("href") || "").toLowerCase();
+
+          // Keep View. Remove Action / Action Center only.
+          if (
+            txt === "action" ||
+            txt.includes("open in action center") ||
+            href.includes("/actions")
+          ) {
+            el.remove();
+          }
+        });
+
+        if (!actionCell.querySelector(".edit-claim-btn")) {
+          const editBtn = document.createElement("a");
+          editBtn.className = "btn small secondary edit-claim-btn";
+          editBtn.href = tjhpEditClaimHref(claimId);
+          editBtn.textContent = "Edit Claim";
+          actionCell.appendChild(editBtn);
+        }
+      });
+    }
+
     function normalizeAwaitingPaymentLabel(text){
       const s = String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
       if (s === "awaiting payment" || s === "waiting payment" || s === "submitted") {
@@ -4864,28 +4992,41 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     // 4. PANEL FIX (AWAITING PAYMENT)
     // =========================
     function ensurePanelEditActionForResolved(panel){
-      const statusEl = panel.querySelector(".badge");
-      if (!statusEl || !isResolvedStatus(statusEl.textContent || "")) return;
+      if (!panel) return;
 
-      const claimLink = panel.querySelector('a[href*="billed_id="]');
-      if (!claimLink) return;
+      const statusText = Array.from(panel.querySelectorAll(".badge"))
+        .map(el => el.textContent || "")
+        .join(" ");
 
-      const match = claimLink.href.match(/billed_id=([^&]+)/);
-      if (!match) return;
-      const claimId = decodeURIComponent(match[1]);
+      const panelText = String(panel.textContent || "");
 
-      const actionRow = getPanelActionRow(panel);
+      if (!tjhpResolvedStatusText(statusText) && !/\bresolved\b/i.test(panelText)) {
+        return;
+      }
+
+      const claimId = tjhpResolvePanelClaimId(panel);
+      if (!claimId) return;
+
+      const actionRow = getPanelActionRow(panel) || panel.querySelector(".btnRow");
       if (!actionRow) return;
 
       actionRow.querySelectorAll("a, button").forEach((btn) => {
         const txt = (btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-        if (txt.includes("action center")) btn.remove();
+        const href = String(btn.getAttribute("href") || "").toLowerCase();
+
+        if (
+          txt.includes("open in action center") ||
+          txt === "action" ||
+          href.includes("/actions")
+        ) {
+          btn.remove();
+        }
       });
 
       if (!actionRow.querySelector(".edit-claim-btn")) {
         const editBtn = document.createElement("a");
         editBtn.className = "btn small secondary edit-claim-btn";
-        editBtn.href = "/claim-edit?claim_id=" + encodeURIComponent(claimId);
+        editBtn.href = tjhpEditClaimHref(claimId);
         editBtn.textContent = "Edit Claim";
         actionRow.appendChild(editBtn);
       }
@@ -4975,6 +5116,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     // =========================
     setInterval(() => {
       fixLifecycle();
+      fixResolvedLifecycleActionButtonsStrong();
       fixPanel();
 
       const livePanel =
@@ -4986,6 +5128,8 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         panelObserver.observe(livePanel, { childList: true, subtree: true });
       }
     }, 400);
+
+    fixResolvedLifecycleActionButtonsStrong();
 
   })();
 })();
@@ -30242,6 +30386,40 @@ if (method === "GET" && pathname === "/actions") {
   `, navUser("actions", sess.user_id), {showChat:true, orgName: org.org_name});
 
   return send(res, 200, html);
+}
+
+
+// ==============================
+// CLAIM EDIT ALIAS
+// Clean route for resolved claim editing.
+// Redirects to the existing claim-action adjustment page.
+// ==============================
+if (method === "GET" && pathname === "/claim-edit") {
+  const rawId = String(
+    parsed.query.claim_id ||
+    parsed.query.billed_id ||
+    parsed.query.id ||
+    ""
+  ).trim();
+
+  if (!rawId) return redirect(res, "/claims-lifecycle");
+
+  const billedAll = readJSON(FILES.billed, []);
+  const b = billedAll.find(x =>
+    x.org_id === org.org_id &&
+    (
+      String(x.billed_id || "") === rawId ||
+      String(x.claim_id || "") === rawId ||
+      String(x.claim_number || "") === rawId
+    )
+  );
+
+  if (!b) return redirect(res, "/claims-lifecycle");
+
+  return redirect(
+    res,
+    "/claim-action?billed_id=" + encodeURIComponent(b.billed_id) + "&action=patient_resp"
+  );
 }
 
 
