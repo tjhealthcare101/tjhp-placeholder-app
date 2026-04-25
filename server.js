@@ -25487,6 +25487,18 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const startIdx = (page - 1) * pageSize;
   const paginatedClaims = items.slice(startIdx, startIdx + pageSize);
   const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const isResolvedLikeStage = (value) => {
+    const s = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+
+    return (
+      s === "resolved" ||
+      s === "paid" ||
+      s.includes("resolved")
+    );
+  };
 
   const affectedClaimsResetHref = hasClaimIdsFilter
     ? `/claims-lifecycle?${new URLSearchParams({ claim_ids: claimIdsFilterCsv }).toString()}#lifecycleTable`
@@ -25679,6 +25691,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                   actionParts.push(`<a href="/ai-appeal?billed_id=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Appeal</a>`);
                 } else if (statusLabel === "Underpaid") {
                   actionParts.push(`<a href="/ai-negotiation?billed_id=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Negotiate</a>`);
+                } else if (isResolvedLikeStage(statusLabel)) {
+                  actionParts.push(`<a href="/claim-edit?claim_id=${encodeURIComponent(c.billed_id)}" class="btn secondary small edit-claim-btn">Edit Claim</a>`);
                 } else {
                   actionParts.push(`<a href="/actions?claim=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Action</a>`);
                 }
@@ -26030,7 +26044,13 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             displayStage === "Underpaid" ? "underpaid" :
             "";
           const hasExpected = d.expectedInsurance !== null && d.expectedInsurance !== undefined;
-          const primaryAction = displayStage === "Denied"
+          const primaryAction = (
+              normalizedDisplayStage === "Resolved" ||
+              normalizedDisplayStage === "Paid" ||
+              String(normalizedDisplayStage || "").toLowerCase().includes("resolved")
+            )
+            ? '<a class="btn small secondary edit-claim-btn" href="/claim-edit?claim_id=' + encodeURIComponent(claim.billed_id) + '">Edit Claim</a>'
+            : displayStage === "Denied"
             ? '<a class="btn small secondary" href="/ai-appeal?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Appeal Workspace</a>'
             : displayStage === "Underpaid"
             ? '<a class="btn small secondary" href="/ai-negotiation?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Negotiation Workspace</a>'
@@ -29941,7 +29961,13 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
         const hasExpected = d.expectedInsurance !== null && d.expectedInsurance !== undefined;
         const isActionCenter = window.location.pathname.includes("/actions");
 
-        const primaryAction = displayStage === "Denied"
+        const primaryAction = (
+            normalizedDisplayStage === "Resolved" ||
+            normalizedDisplayStage === "Paid" ||
+            String(normalizedDisplayStage || "").toLowerCase().includes("resolved")
+          )
+          ? '<a class="btn small secondary edit-claim-btn" href="/claim-edit?claim_id=' + encodeURIComponent(claim.billed_id) + '">Edit Claim</a>'
+          : displayStage === "Denied"
           ? '<a class="btn small secondary" href="/ai-appeal?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Appeal Workspace</a>'
           : displayStage === "Underpaid"
           ? '<a class="btn small secondary" href="/ai-negotiation?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Negotiation Workspace</a>'
