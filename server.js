@@ -5135,6 +5135,263 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
 })();
 </script>
 
+
+<script>
+(function(){
+  if (window.__tjhpResolvedEditFinalOverride) return;
+  window.__tjhpResolvedEditFinalOverride = true;
+
+  function cleanText(v){
+    return String(v || "").replace(/\s+/g, " ").trim();
+  }
+
+  function isResolvedText(v){
+    const s = cleanText(v).toLowerCase();
+    return s.includes("resolved") || s === "paid";
+  }
+
+  function safeDecode(v){
+    try { return decodeURIComponent(String(v || "")); }
+    catch(e){ return String(v || ""); }
+  }
+
+  function getParamFromHref(href){
+    if (!href) return "";
+    try {
+      const u = new URL(href, window.location.origin);
+      return (
+        u.searchParams.get("billed_id") ||
+        u.searchParams.get("claim_id") ||
+        u.searchParams.get("claim") ||
+        u.searchParams.get("id") ||
+        ""
+      );
+    } catch(e){
+      const m = String(href).match(/[?&](?:billed_id|claim_id|claim|id)=([^&#]+)/);
+      return m ? safeDecode(m[1]) : "";
+    }
+  }
+
+  function editClaimHref(id){
+    return "/claim-edit?claim_id=" + encodeURIComponent(String(id || ""));
+  }
+
+  function extractClaimIdFromPanel(panel){
+    if (!panel) return "";
+
+    const txt = cleanText(panel.textContent || "");
+    const m = txt.match(/Claim\s*#\s*([A-Za-z0-9._-]+)/i);
+    if (m && m[1]) return cleanText(m[1]);
+
+    const links = Array.from(panel.querySelectorAll("a[href]"));
+    for (const a of links){
+      const id = getParamFromHref(a.getAttribute("href"));
+      if (id) return id;
+    }
+
+    if (window.__tjhpLastOpenedClaimId) {
+      return safeDecode(window.__tjhpLastOpenedClaimId);
+    }
+
+    return "";
+  }
+
+  function extractClaimIdFromRow(row){
+    if (!row) return "";
+
+    const firstCell = row.children && row.children[0] ? row.children[0] : null;
+    if (firstCell){
+      const linkText = cleanText((firstCell.querySelector("a") || firstCell).textContent || "");
+      if (linkText) return linkText.replace(/^#/, "");
+    }
+
+    const viewBtn = row.querySelector(".view-claim-btn");
+    if (viewBtn){
+      const id =
+        viewBtn.getAttribute("data-id") ||
+        viewBtn.dataset.id ||
+        "";
+      if (id) return safeDecode(id);
+    }
+
+    const rowId = row.getAttribute("data-claim") || row.dataset.claim || "";
+    if (rowId) return safeDecode(rowId);
+
+    const link = row.querySelector('a[href*="billed_id="], a[href*="claim_id="], a[href*="claim="], a[href*="id="]');
+    if (link){
+      const id = getParamFromHref(link.getAttribute("href"));
+      if (id) return id;
+    }
+
+    return "";
+  }
+
+  function isActionCenterButton(el){
+    if (!el) return false;
+
+    const txt = cleanText(el.textContent || "").toLowerCase();
+    const href = String(el.getAttribute && el.getAttribute("href") || "").toLowerCase();
+
+    return (
+      txt === "action" ||
+      txt === "open in action center" ||
+      txt.includes("open in action center") ||
+      href.includes("/actions")
+    );
+  }
+
+  function getRowStatus(row){
+    if (!row) return "";
+
+    const badge = row.querySelector(".badge");
+    if (badge) return cleanText(badge.textContent || "");
+
+    // Lifecycle table status is usually second-to-last cell before action.
+    const cells = Array.from(row.children || []);
+    for (const cell of cells){
+      const t = cleanText(cell.textContent || "");
+      if (/\bresolved\b|\bpaid\b|\bdenied\b|\bunderpaid\b/i.test(t)) {
+        return t;
+      }
+    }
+
+    return "";
+  }
+
+  function ensureEditButton(container, claimId){
+    if (!container || !claimId) return;
+
+    if (container.querySelector(".edit-claim-btn")) return;
+
+    const edit = document.createElement("a");
+    edit.className = "btn small secondary edit-claim-btn";
+    edit.href = editClaimHref(claimId);
+    edit.textContent = "Edit Claim";
+
+    container.appendChild(edit);
+  }
+
+  function fixResolvedTableRows(){
+    const table = document.querySelector(".lifecycle-claims-table");
+    if (!table) return;
+
+    table.querySelectorAll("tbody tr").forEach(function(row){
+      const status = getRowStatus(row);
+      if (!isResolvedText(status)) return;
+
+      const claimId = extractClaimIdFromRow(row);
+      if (!claimId) return;
+
+      const actionCell = row.lastElementChild;
+      if (!actionCell) return;
+
+      actionCell.querySelectorAll("a, button").forEach(function(el){
+        const txt = cleanText(el.textContent || "").toLowerCase();
+
+        // Keep View. Remove only Action / Action Center.
+        if (txt === "view") return;
+
+        if (isActionCenterButton(el)) {
+          el.remove();
+        }
+      });
+
+      ensureEditButton(actionCell, claimId);
+    });
+  }
+
+  function panelIsResolved(panel){
+    if (!panel) return false;
+
+    const badges = Array.from(panel.querySelectorAll(".badge"));
+    if (badges.some(b => isResolvedText(b.textContent))) return true;
+
+    const text = cleanText(panel.textContent || "");
+    return /\bresolved\b/i.test(text);
+  }
+
+  function fixResolvedPanel(){
+    const panels = [
+      document.getElementById("claimSidePanel"),
+      document.getElementById("tjhpClaimPanel")
+    ].filter(Boolean);
+
+    panels.forEach(function(panel){
+      if (!panelIsResolved(panel)) return;
+
+      const claimId = extractClaimIdFromPanel(panel);
+      if (!claimId) return;
+
+      let actionParent = null;
+
+      panel.querySelectorAll("a, button").forEach(function(el){
+        if (isActionCenterButton(el)){
+          actionParent = el.closest(".btnRow") || el.parentElement || actionParent;
+          el.remove();
+        }
+      });
+
+      if (!actionParent) {
+        actionParent =
+          panel.querySelector(".btnRow") ||
+          Array.from(panel.querySelectorAll("div")).find(function(div){
+            return /open full claim|edit claim|action center/i.test(div.textContent || "");
+          });
+      }
+
+      if (!actionParent) {
+        actionParent = document.createElement("div");
+        actionParent.className = "btnRow";
+        actionParent.style.marginTop = "12px";
+        panel.appendChild(actionParent);
+      }
+
+      ensureEditButton(actionParent, claimId);
+    });
+  }
+
+  function rememberOpenedClaim(e){
+    const btn = e.target && e.target.closest ? e.target.closest(".view-claim-btn") : null;
+    if (!btn) return;
+
+    const row = btn.closest("tr");
+    const id =
+      btn.getAttribute("data-id") ||
+      (row && row.getAttribute("data-claim")) ||
+      (row ? extractClaimIdFromRow(row) : "");
+
+    if (id) window.__tjhpLastOpenedClaimId = safeDecode(id);
+
+    [50, 120, 250, 500, 900, 1400].forEach(function(ms){
+      setTimeout(runResolvedEditFix, ms);
+    });
+  }
+
+  function runResolvedEditFix(){
+    fixResolvedTableRows();
+    fixResolvedPanel();
+  }
+
+  document.addEventListener("click", rememberOpenedClaim, true);
+
+  const observer = new MutationObserver(function(){
+    runResolvedEditFix();
+  });
+
+  try {
+    observer.observe(document.body, { childList: true, subtree: true });
+  } catch(e){}
+
+  setInterval(runResolvedEditFix, 250);
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", runResolvedEditFix);
+  } else {
+    runResolvedEditFix();
+  }
+})();
+</script>
+
 ${chatScript}
 
 <script>
