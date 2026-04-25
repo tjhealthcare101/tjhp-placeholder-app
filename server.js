@@ -3412,6 +3412,37 @@ textarea{min-height:220px;}
   vertical-align:middle;
 }
 
+.lifecycle-claims-table th:last-child,
+.lifecycle-claims-table td.lifecycle-action-cell{
+  min-width:190px;
+  vertical-align:middle !important;
+}
+
+.lifecycle-action-buttons{
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  gap:8px;
+  flex-wrap:nowrap;
+  white-space:nowrap;
+}
+
+.lifecycle-action-buttons .btn{
+  flex:0 0 auto;
+  height:38px;
+  padding:0 12px;
+  white-space:nowrap;
+}
+
+@media (max-width: 640px){
+  .lifecycle-claims-table td.lifecycle-action-cell{
+    min-width:180px;
+  }
+  .lifecycle-action-buttons{
+    flex-wrap:nowrap;
+  }
+}
+
 .support-unread-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 6px;border-radius:999px;background:#ef4444;color:#fff;font-size:11px;font-weight:700;margin-left:6px;}
 /* Contract Missing Badge */
 .badge.contract-missing {
@@ -4912,11 +4943,16 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         });
 
         if (!actionCell.querySelector(".edit-claim-btn")) {
+          const target =
+            actionCell.querySelector(".lifecycle-action-buttons") ||
+            actionCell;
+
           const editBtn = document.createElement("a");
           editBtn.className = "btn small secondary edit-claim-btn";
           editBtn.href = "/claim-edit?claim_id=" + encodeURIComponent(claimId);
           editBtn.textContent = "Edit Claim";
-          actionCell.appendChild(editBtn);
+
+          target.appendChild(editBtn);
         }
       });
     }
@@ -4952,11 +4988,16 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         });
 
         if (!actionCell.querySelector(".edit-claim-btn")) {
+          const target =
+            actionCell.querySelector(".lifecycle-action-buttons") ||
+            actionCell;
+
           const editBtn = document.createElement("a");
           editBtn.className = "btn small secondary edit-claim-btn";
           editBtn.href = tjhpEditClaimHref(claimId);
           editBtn.textContent = "Edit Claim";
-          actionCell.appendChild(editBtn);
+
+          target.appendChild(editBtn);
         }
       });
     }
@@ -5261,6 +5302,10 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   function ensureEditButton(container, claimId){
     if (!container || !claimId) return;
 
+    const target =
+      container.querySelector(".lifecycle-action-buttons") ||
+      container;
+
     if (container.querySelector(".edit-claim-btn")) return;
 
     const edit = document.createElement("a");
@@ -5268,7 +5313,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     edit.href = editClaimHref(claimId);
     edit.textContent = "Edit Claim";
 
-    container.appendChild(edit);
+    target.appendChild(edit);
   }
 
   function fixResolvedTableRows(){
@@ -25728,8 +25773,10 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                       ${isCarryoverRow ? `<span class="badge warn">Carryover</span>` : ``}
                     </div>
                   </td>
-                  <td style="display:flex;gap:6px;flex-wrap:wrap;">
-                    ${actionButtons}
+                  <td class="lifecycle-action-cell">
+                    <div class="lifecycle-action-buttons">
+                      ${actionButtons}
+                    </div>
                   </td>
                 </tr>
               `;
