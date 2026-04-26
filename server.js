@@ -384,6 +384,607 @@ function getOrgEhrIntegrations(org_id) {
   return (getOrgIntegrations(org_id).integrations || []).filter(i => String(i.type || "") === "ehr");
 }
 
+function integrationCredentialFieldNames(){
+  return [
+    // Existing fields
+    "username",
+    "password",
+    "api_key",
+    "token",
+    "portal_url",
+    "client_id",
+    "client_secret",
+
+    // OAuth / auth fields
+    "access_token",
+    "refresh_token",
+    "auth_url",
+    "token_url",
+    "redirect_uri",
+    "scopes",
+    "tenant_id",
+    "api_version",
+
+    // Core API URLs
+    "base_url",
+    "api_base_url",
+    "fhir_base_url",
+
+    // Pull / sync endpoints
+    "document_pull_endpoint",
+    "documents_endpoint",
+    "documentreference_endpoint",
+    "binary_endpoint",
+    "patient_lookup_endpoint",
+    "claims_endpoint",
+    "payments_endpoint",
+    "era_endpoint",
+    "status_endpoint",
+    "claim_status_endpoint",
+    "eligibility_endpoint",
+    "attachments_endpoint",
+    "attachment_submission_endpoint",
+    "claim_action_endpoint",
+    "test_endpoint",
+    "test_method",
+    "metadata_endpoint",
+    "document_pull_method",
+    "documents_method",
+    "document_pull_payload_template",
+    "documents_payload_template",
+    "payload_template",
+    "headers_json",
+    "custom_headers_json",
+    "submission_payload_template",
+    "provider_notes",
+
+    // Payer / routing fields
+    "payer_id",
+    "clearinghouse_payer_id",
+    "submitter_id",
+    "receiver_id",
+    "practice_id",
+    "facility_id",
+
+    // Environment
+    "environment",
+    "sandbox"
+  ];
+}
+
+function readIntegrationCredentialPayload(payload){
+  const out = {};
+
+  integrationCredentialFieldNames().forEach((key) => {
+    out[key] = String(payload.get(key) || "").trim();
+  });
+
+  if (!out.base_url && out.api_base_url) out.base_url = out.api_base_url;
+  if (!out.base_url && out.fhir_base_url) out.base_url = out.fhir_base_url;
+
+  if (!out.token && out.access_token) out.token = out.access_token;
+  if (!out.access_token && out.token) out.access_token = out.token;
+
+  if (!out.document_pull_endpoint && out.documents_endpoint) {
+    out.document_pull_endpoint = out.documents_endpoint;
+  }
+
+  if (!out.documents_endpoint && out.document_pull_endpoint) {
+    out.documents_endpoint = out.document_pull_endpoint;
+  }
+
+  return out;
+}
+
+function getIntegrationByKey(org_id, integration_key){
+  const doc = getOrgIntegrations(org_id);
+  return (doc.integrations || []).find(i =>
+    String(i.integration_key || "") === String(integration_key || "")
+  ) || null;
+}
+
+function updateIntegrationByKey(org_id, integration_key, patch = {}){
+  const doc = getOrgIntegrations(org_id);
+  const list = Array.isArray(doc.integrations) ? doc.integrations : [];
+
+  const idx = list.findIndex(i =>
+    String(i.integration_key || "") === String(integration_key || "")
+  );
+
+  if (idx < 0) return null;
+
+  list[idx] = {
+    ...list[idx],
+    ...patch,
+    updated_at: nowISO()
+  };
+
+  doc.integrations = list;
+  saveOrgIntegrations(doc);
+  return list[idx];
+}
+
+function integrationSafeUrl(value){
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  try {
+    const u = new URL(raw);
+    if (!["http:", "https:"].includes(u.protocol)) return "";
+    return u.toString().replace(/\/+$/,"");
+  } catch {
+    return "";
+  }
+}
+
+function integrationJoinUrl(base, endpoint){
+  const b = String(base || "").replace(/\/+$/,"");
+  const e = String(endpoint || "").trim();
+
+  if (!b) return "";
+  if (!e) return b;
+
+  if (/^https?:\/\//i.test(e)) return e;
+  return `${b}/${e.replace(/^\/+/,"")}`;
+}
+
+function integrationTestStatusLabel(status){
+  const labels = {
+    verified: "Verified",
+    reachable_auth_required: "Reachable - Auth Required",
+    reachable_permission_denied: "Reachable - Permission Denied",
+    reachable_method_not_allowed: "Reachable - Method Not Allowed",
+    reachable_unverified: "Reachable - Not Verified",
+    failed: "Failed",
+    missing_url: "Missing URL",
+    not_found: "Not Found"
+  };
+
+  return labels[String(status || "").trim()] || String(status || "Not tested");
+}
+
+function integrationTestStatusBadgeClass(status){
+  const s = String(status || "").trim();
+
+  if (s === "verified") return "ok";
+  if (s.startsWith("reachable_")) return "warn";
+  return "err";
+}
+
+function integrationParseJsonConfig(value, fallback = {}){
+  const raw = String(value || "").trim();
+  if (!raw) return fallback;
+
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function integrationTemplateValue(value, context){
+  if (typeof value === "string") {
+    return value.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_, key) => {
+      const k = String(key || "").trim();
+      return String(context[k] ?? "");
+    });
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(v => integrationTemplateValue(v, context));
+  }
+
+  if (value && typeof value === "object") {
+    const out = {};
+    Object.entries(value).forEach(([k, v]) => {
+      out[k] = integrationTemplateValue(v, context);
+    });
+    return out;
+  }
+
+  return value;
+}
+
+function integrationClaimContext(claim, docKey){
+  return {
+    doc_key: docKey || "",
+    claim_id: claim?.claim_id || claim?.claim_number || claim?.billed_id || "",
+    billed_id: claim?.billed_id || "",
+    claim_number: claim?.claim_number || claim?.claim_id || "",
+    payer: claim?.payer || "",
+    payer_id: claim?.payer_id || "",
+    dos: claim?.dos || "",
+    patient_id: claim?.patient_id || "",
+    amount_billed: String(claim?.amount_billed || claim?.billed_amount || 0),
+    billed_amount: String(claim?.amount_billed || claim?.billed_amount || 0),
+    expected_amount: String(claim?.expected_amount || claim?.expected_insurance || 0),
+    paid_amount: String(claim?.paid_amount || claim?.insurance_paid || 0)
+  };
+}
+
+function integrationCustomHeaders(creds){
+  const headers = {
+    ...(creds?.token || creds?.access_token ? { "Authorization": `Bearer ${creds.token || creds.access_token}` } : {}),
+    ...(creds?.api_key ? { "x-api-key": creds.api_key } : {})
+  };
+
+  const custom = {
+    ...integrationParseJsonConfig(creds?.headers_json, {}),
+    ...integrationParseJsonConfig(creds?.custom_headers_json, {})
+  };
+
+  Object.entries(custom).forEach(([k, v]) => {
+    if (!k) return;
+    headers[k] = String(v);
+  });
+
+  return headers;
+}
+
+function integrationFlatQuery(obj){
+  const params = new URLSearchParams();
+
+  Object.entries(obj || {}).forEach(([k, v]) => {
+    if (v === undefined || v === null) return;
+    if (Array.isArray(v)) {
+      v.forEach(item => params.append(k, String(item)));
+      return;
+    }
+    if (typeof v === "object") {
+      params.append(k, JSON.stringify(v));
+      return;
+    }
+    params.append(k, String(v));
+  });
+
+  return params.toString();
+}
+
+function integrationBuildDocumentPullPayload(creds, claim, docKey){
+  const context = integrationClaimContext(claim, docKey);
+
+  const templateRaw =
+    creds?.document_pull_payload_template ||
+    creds?.documents_payload_template ||
+    creds?.payload_template ||
+    "";
+
+  const template = integrationParseJsonConfig(templateRaw, null);
+
+  if (template && typeof template === "object") {
+    return integrationTemplateValue(template, context);
+  }
+
+  return {
+    claim_id: claim?.claim_id || claim?.claim_number || claim?.billed_id,
+    billed_id: claim?.billed_id || "",
+    claim_number: claim?.claim_number || claim?.claim_id || "",
+    payer: claim?.payer || "",
+    doc_key: docKey,
+    search_terms: workspaceDocSearchTerms(docKey)
+  };
+}
+
+function integrationResponseFilename(docKey, sourcePrefix, contentType){
+  const ext =
+    String(contentType || "").includes("pdf") ? "pdf" :
+    String(contentType || "").includes("json") ? "json" :
+    "txt";
+
+  return `${docKey || "document"}_${sourcePrefix || "integration"}.${ext}`;
+}
+
+async function integrationFetchDocumentFromUrl(downloadUrl, headers, baseUrl){
+  const finalUrl = /^https?:\/\//i.test(String(downloadUrl || ""))
+    ? String(downloadUrl)
+    : integrationJoinUrl(baseUrl, downloadUrl);
+
+  if (!finalUrl) return null;
+
+  const response = await fetch(finalUrl, {
+    method: "GET",
+    headers
+  });
+
+  if (!response.ok) return null;
+
+  return {
+    contentType: response.headers.get("content-type") || "application/octet-stream",
+    content: Buffer.from(await response.arrayBuffer())
+  };
+}
+
+async function integrationPullDocumentByConfiguredEndpoint({
+  base,
+  endpoint,
+  creds,
+  claim,
+  docKey,
+  sourcePrefix
+}){
+  const pullUrl = integrationJoinUrl(base, endpoint);
+
+  if (!pullUrl) {
+    return {
+      ok: false,
+      reason: `${sourcePrefix || "integration"}_pull_url_missing`
+    };
+  }
+
+  const method = String(
+    creds?.document_pull_method ||
+    creds?.documents_method ||
+    "POST"
+  ).trim().toUpperCase();
+
+  const payload = integrationBuildDocumentPullPayload(creds, claim, docKey);
+
+  const headers = {
+    "Content-Type": "application/json",
+    "Accept": "application/json,application/pdf,text/plain,*/*",
+    ...integrationCustomHeaders(creds)
+  };
+
+  let requestUrl = pullUrl;
+  const fetchOptions = {
+    method,
+    headers
+  };
+
+  if (method === "GET") {
+    const qs = integrationFlatQuery(payload);
+    requestUrl = qs
+      ? `${pullUrl}${pullUrl.includes("?") ? "&" : "?"}${qs}`
+      : pullUrl;
+  } else {
+    fetchOptions.body = JSON.stringify(payload);
+  }
+
+  try {
+    const response = await fetch(requestUrl, fetchOptions);
+    const contentType = response.headers.get("content-type") || "";
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        reason: `${sourcePrefix || "integration"}_document_not_found`,
+        response_status: response.status
+      };
+    }
+
+    if (contentType.includes("application/json")) {
+      const json = await response.json();
+
+      const base64 =
+        json.document_base64 ||
+        json.content_base64 ||
+        json.file_base64 ||
+        json.data_base64 ||
+        "";
+
+      if (base64) {
+        return {
+          ok: true,
+          filename: json.filename || integrationResponseFilename(docKey, sourcePrefix, json.mime_type || json.content_type || "application/pdf"),
+          mime: json.mime_type || json.content_type || "application/pdf",
+          content: Buffer.from(String(base64), "base64")
+        };
+      }
+
+      const downloadUrl =
+        json.download_url ||
+        json.file_url ||
+        json.url ||
+        json.document_url ||
+        "";
+
+      if (downloadUrl) {
+        const pulled = await integrationFetchDocumentFromUrl(downloadUrl, headers, base);
+        if (pulled) {
+          return {
+            ok: true,
+            filename: json.filename || integrationResponseFilename(docKey, sourcePrefix, pulled.contentType),
+            mime: pulled.contentType,
+            content: pulled.content
+          };
+        }
+      }
+
+      const textContent =
+        json.text ||
+        json.content ||
+        json.body ||
+        "";
+
+      if (textContent) {
+        return {
+          ok: true,
+          filename: json.filename || integrationResponseFilename(docKey, sourcePrefix, "text/plain"),
+          mime: "text/plain",
+          content: Buffer.from(String(textContent), "utf8")
+        };
+      }
+
+      return {
+        ok: false,
+        reason: `${sourcePrefix || "integration"}_document_payload_empty`
+      };
+    }
+
+    return {
+      ok: true,
+      filename: integrationResponseFilename(docKey, sourcePrefix, contentType),
+      mime: contentType || "application/octet-stream",
+      content: Buffer.from(await response.arrayBuffer())
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `${sourcePrefix || "integration"}_pull_failed`,
+      error: String(e?.message || e)
+    };
+  }
+}
+
+async function testIntegrationConnectionSafe(row){
+  if (!row) {
+    return {
+      ok: false,
+      verified: false,
+      reachable: false,
+      verification_status: "not_found",
+      message: "Integration not found."
+    };
+  }
+
+  let creds = {};
+  try {
+    creds = decrypt(row.credentials || {});
+  } catch {
+    creds = {};
+  }
+
+  const type = String(row.type || "").toLowerCase();
+
+  const baseUrl = integrationSafeUrl(
+    creds.base_url ||
+    creds.api_base_url ||
+    creds.fhir_base_url ||
+    creds.portal_url ||
+    ""
+  );
+
+  if (!baseUrl) {
+    return {
+      ok: false,
+      verified: false,
+      reachable: false,
+      verification_status: "missing_url",
+      message: "Missing API Base URL / FHIR Base URL / Portal URL."
+    };
+  }
+
+  let testUrl = baseUrl;
+
+  if (creds.test_endpoint) {
+    testUrl = integrationJoinUrl(baseUrl, creds.test_endpoint);
+  } else if (type === "ehr") {
+    testUrl = integrationJoinUrl(
+      baseUrl,
+      creds.status_endpoint ||
+      creds.metadata_endpoint ||
+      "metadata"
+    );
+  } else if (type === "clearinghouse") {
+    testUrl = integrationJoinUrl(
+      baseUrl,
+      creds.status_endpoint ||
+      creds.eligibility_endpoint ||
+      creds.claims_endpoint ||
+      ""
+    );
+  } else if (type === "payer_portal") {
+    testUrl = integrationJoinUrl(
+      baseUrl,
+      creds.status_endpoint ||
+      creds.claim_status_endpoint ||
+      ""
+    );
+  }
+
+  const method = String(creds.test_method || "GET").trim().toUpperCase();
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    const headers = {
+      "Accept": "application/json,text/plain,text/html,*/*",
+      ...integrationCustomHeaders(creds)
+    };
+
+    const response = await fetch(testUrl, {
+      method,
+      headers,
+      signal: controller.signal
+    });
+
+    clearTimeout(timeout);
+
+    const status = Number(response.status || 0);
+
+    if (response.ok) {
+      return {
+        ok: true,
+        verified: true,
+        reachable: true,
+        verification_status: "verified",
+        message: `Connection verified. HTTP ${status}.`,
+        status,
+        test_url: testUrl
+      };
+    }
+
+    if (status === 401) {
+      return {
+        ok: false,
+        verified: false,
+        reachable: true,
+        verification_status: "reachable_auth_required",
+        message: "Endpoint is reachable, but authentication was not verified. Check token, API key, client credentials, or auth flow.",
+        status,
+        test_url: testUrl
+      };
+    }
+
+    if (status === 403) {
+      return {
+        ok: false,
+        verified: false,
+        reachable: true,
+        verification_status: "reachable_permission_denied",
+        message: "Endpoint is reachable, but access was denied. Check permissions, payer access, scopes, or provider approval.",
+        status,
+        test_url: testUrl
+      };
+    }
+
+    if (status === 405) {
+      return {
+        ok: false,
+        verified: false,
+        reachable: true,
+        verification_status: "reachable_method_not_allowed",
+        message: "Endpoint is reachable, but the selected test method is not allowed. Try a different test endpoint or method.",
+        status,
+        test_url: testUrl
+      };
+    }
+
+    return {
+      ok: false,
+      verified: false,
+      reachable: status > 0,
+      verification_status: status > 0 ? "reachable_unverified" : "failed",
+      message: `Connection reached but was not verified. HTTP ${status}.`,
+      status,
+      test_url: testUrl
+    };
+  } catch (e) {
+    clearTimeout(timeout);
+
+    return {
+      ok: false,
+      verified: false,
+      reachable: false,
+      verification_status: "failed",
+      message: `Connection test failed: ${String(e?.message || e || "unknown error")}`,
+      test_url: testUrl
+    };
+  }
+}
+
 function mapToCanonicalClaim(raw) {
   return {
     claim_id: raw.claim_id || raw.id || raw.claim_number || "",
@@ -1283,7 +1884,15 @@ async function sendViaAvaility(org_id, packet){
     edi_275_url: bundle.edi275.url
   };
 
-  const response = await fetch(`${String(creds.base_url).replace(/\/+$/,"")}/attachments`, {
+  const availityEndpoint = String(
+    creds.attachment_submission_endpoint ||
+    creds.attachments_endpoint ||
+    "/attachments"
+  );
+
+  const availityUrl = integrationJoinUrl(creds.base_url || creds.api_base_url || "", availityEndpoint);
+
+  const response = await fetch(availityUrl, {
     method: "POST",
     headers,
     body: JSON.stringify(payload)
@@ -1332,7 +1941,15 @@ async function sendViaOptum(org_id, packet){
     edi_275_url: bundle.edi275.url
   };
 
-  const response = await fetch(`${String(creds.base_url).replace(/\/+$/,"")}/claim-actions`, {
+  const optumEndpoint = String(
+    creds.claim_action_endpoint ||
+    creds.claim_status_endpoint ||
+    "/claim-actions"
+  );
+
+  const optumUrl = integrationJoinUrl(creds.base_url || creds.api_base_url || creds.portal_url || "", optumEndpoint);
+
+  const response = await fetch(optumUrl, {
     method: "POST",
     headers,
     body: JSON.stringify(payload)
@@ -12741,19 +13358,30 @@ function ensureWorkspaceRounds(ws, channel){
 function defaultWorkspacePacket(){
   return {
     completeness: { total: 0, complete: 0, pct: 0 },
+
     required_appeal: [
       { key:"denial_letter", label:"Denial Letter", required:true, status:"missing", attachment_id:null, updated_at:null },
       { key:"eob_era", label:"EOB/ERA", required:true, status:"missing", attachment_id:null, updated_at:null },
-      { key:"claim_form", label:"Claim Form / Itemized Bill", required:true, status:"missing", attachment_id:null, updated_at:null }
+      { key:"claim_form", label:"Claim Form / Itemized Bill", required:true, status:"missing", attachment_id:null, updated_at:null },
+
+      // Negotiation proof docs live here too so existing upload/upsert logic keeps working.
+      { key:"variance_calc", label:"Expected vs Paid Variance Calculation", required:false, status:"missing", attachment_id:null, updated_at:null },
+      { key:"payment_history", label:"Payment History", required:false, status:"missing", attachment_id:null, updated_at:null },
+      { key:"payer_correspondence", label:"Payer Correspondence", required:false, status:"missing", attachment_id:null, updated_at:null }
     ],
+
     clinical_support: [
       { key:"lmn", label:"Letter of Medical Necessity", required:false, status:"missing", attachment_id:null, lmn_text:"", updated_at:null },
       { key:"office_notes", label:"Office Notes / Op Note", required:false, status:"missing", attachment_id:null, updated_at:null },
-      { key:"labs_imaging", label:"Labs / Imaging", required:false, status:"missing", attachment_id:null, updated_at:null }
+      { key:"labs_imaging", label:"Labs / Imaging", required:false, status:"missing", attachment_id:null, updated_at:null },
+      { key:"prior_auth", label:"Prior Authorization Proof", required:false, status:"missing", attachment_id:null, updated_at:null },
+      { key:"coding_support", label:"Coding / Modifier Support", required:false, status:"missing", attachment_id:null, updated_at:null }
     ],
+
     contract_policy: [
       { key:"contract_excerpt", label:"Contract Excerpt / Allowed Rules", required:false, status:"missing", attachment_id:null, updated_at:null },
-      { key:"payer_policy", label:"Payer Policy Citation", required:false, status:"missing", attachment_id:null, updated_at:null }
+      { key:"payer_policy", label:"Payer Policy Citation", required:false, status:"missing", attachment_id:null, updated_at:null },
+      { key:"fee_schedule", label:"Fee Schedule / Reimbursement Rule", required:false, status:"missing", attachment_id:null, updated_at:null }
     ]
   };
 }
@@ -12792,8 +13420,9 @@ function getWorkspacePacketItem(ws, key){
 }
 
 function requiredPacketKeysForChannel(channel){
-  if (channel === "negotiation") return ["eob_era", "claim_form"];
-  return ["denial_letter", "eob_era", "claim_form"];
+  return workspaceRequiredDocConfig(channel)
+    .filter(d => d.required)
+    .map(d => d.key);
 }
 
 function packetHasKey(ws, key){
@@ -12807,7 +13436,15 @@ function packetMissingKeys(ws, channel){
 }
 
 function canMarkReady(ws, channel){
-  const missing = packetMissingKeys(ws, channel);
+  const claim = ws?.org_id && ws?.billed_id
+    ? getBilledById(ws.org_id, ws.billed_id)
+    : null;
+
+  const docs = workspaceRequiredDocConfig(channel);
+  const missing = docs
+    .filter(d => d.required && !workspaceDocPresent(ws, d, claim))
+    .map(d => d.key);
+
   return { ok: missing.length === 0, missing };
 }
 
@@ -13610,6 +14247,24 @@ function applyAgentInstructionToDraft(draftText, instruction, channel){
   if (lower.includes("shorter") || lower.includes("concise")) {
     next = next.replace(/\n\nThank you for your prompt review\.[\s\S]*$/m, "\n\nThank you for your review.");
   }
+  if (channel === "negotiation") {
+    if (lower.includes("contract") || lower.includes("fee schedule")) {
+      next += "\n\nContract variance emphasis:\n- The payment should be reviewed against the contracted allowed amount, fee schedule, or reimbursement methodology applicable to this claim.";
+    }
+
+    if (lower.includes("justify") || lower.includes("amount") || lower.includes("variance")) {
+      next += "\n\nRequested amount justification:\n- The requested additional payment is based on the difference between expected reimbursement and payer-paid amount.";
+    }
+  } else {
+    if (lower.includes("medical") || lower.includes("necessity")) {
+      next += "\n\nMedical necessity emphasis:\n- The service should be reconsidered based on clinical documentation and the payer's applicable coverage criteria.";
+    }
+
+    if (lower.includes("policy") || lower.includes("denial")) {
+      next += "\n\nDenial reversal emphasis:\n- The denial should be reversed or reprocessed because the supporting documentation and payer rules support payment.";
+    }
+  }
+
   next += `\n\nRequested edits (${channel}):\n- ${ins}`;
   return next;
 }
@@ -13712,30 +14367,77 @@ function buildAttachmentsIndex(ws){
 function workspaceDocLabel(key){
   const labels = {
     denial_letter: "Denial Letter",
-    eob_era: "EOB / ERA",
+    eob_era: "EOB / ERA / Remittance",
     claim_form: "Claim Form / Itemized Bill",
     lmn: "Letter of Medical Necessity",
     office_notes: "Office / Operative Notes",
     labs_imaging: "Labs / Imaging",
     contract_excerpt: "Contract Excerpt / Allowed Rule",
     payer_policy: "Payer Policy Citation",
-    medical_records: "Medical Records"
+    medical_records: "Medical Records",
+
+    payment_history: "Payment History",
+    payer_correspondence: "Payer Correspondence",
+    variance_calc: "Expected vs Paid Variance Calculation",
+    fee_schedule: "Fee Schedule / Reimbursement Rule",
+    prior_auth: "Prior Authorization Proof",
+    coding_support: "Coding / Modifier Support"
   };
+
   return labels[key] || key;
 }
 
 function workspaceRequiredDocConfig(channel){
-  const base = [
-    { key:"eob_era", label:"EOB / ERA", required:true },
-    { key:"claim_form", label:"Claim Form / Itemized Bill", required:true },
-    { key:"contract_excerpt", label:"Contract Excerpt / Allowed Rule", required:false },
-    { key:"payer_policy", label:"Payer Policy Citation", required:false },
-    { key:"lmn", label:"Letter of Medical Necessity", required:false },
-    { key:"office_notes", label:"Office / Operative Notes", required:false },
-    { key:"labs_imaging", label:"Labs / Imaging", required:false }
+  if (channel === "negotiation") {
+    return [
+      { key:"eob_era", label:"EOB / ERA / Remittance", required:true, why:"Shows what the payer actually paid." },
+      { key:"claim_form", label:"Claim Form / Itemized Bill", required:true, why:"Shows billed charges and submitted claim detail." },
+      { key:"contract_excerpt", label:"Contract Excerpt / Allowed Rule", required:true, why:"Supports why the expected reimbursement is valid." },
+      { key:"variance_calc", label:"Expected vs Paid Variance Calculation", required:false, why:"Shows the exact reimbursement gap being requested." },
+      { key:"fee_schedule", label:"Fee Schedule / Reimbursement Rule", required:false, why:"Strengthens payer-specific reimbursement logic." },
+      { key:"payment_history", label:"Payment History", required:false, why:"Useful when payer paid inconsistently across similar claims." },
+      { key:"payer_correspondence", label:"Payer Correspondence", required:false, why:"Supports prior communication or payer acknowledgement." },
+      { key:"payer_policy", label:"Payer Policy Citation", required:false, why:"Useful when payment rule or policy language supports the adjustment." },
+      { key:"coding_support", label:"Coding / Modifier Support", required:false, why:"Useful when the underpayment is tied to coding/modifier handling." }
+    ];
+  }
+
+  return [
+    { key:"denial_letter", label:"Denial Letter", required:true, why:"Shows the payer's stated denial reason and appeal basis." },
+    { key:"eob_era", label:"EOB / ERA", required:true, why:"Shows payer adjudication, payment, adjustment, and denial details." },
+    { key:"claim_form", label:"Claim Form / Itemized Bill", required:true, why:"Shows the submitted claim and billed services." },
+    { key:"payer_policy", label:"Payer Policy Citation", required:false, why:"Supports coverage, authorization, or medical policy arguments." },
+    { key:"contract_excerpt", label:"Contract Excerpt / Allowed Rule", required:false, why:"Useful if denial also involves reimbursement or contracted terms." },
+    { key:"lmn", label:"Letter of Medical Necessity", required:false, why:"Useful for medical necessity denials." },
+    { key:"office_notes", label:"Office / Operative Notes", required:false, why:"Useful when documentation supports service necessity." },
+    { key:"labs_imaging", label:"Labs / Imaging", required:false, why:"Useful when clinical evidence supports the appealed service." },
+    { key:"prior_auth", label:"Prior Authorization Proof", required:false, why:"Useful for authorization-related denials." }
   ];
-  if (channel === "appeal") base.unshift({ key:"denial_letter", label:"Denial Letter", required:true });
-  return base;
+}
+
+function workspaceHasAutoEob(ws){
+  return !!(
+    ws?.negotiation?.packet_sections?.eob_era ||
+    ws?.appeal?.packet_sections?.eob_era
+  );
+}
+
+function workspaceHasAutoContract(ws, claim){
+  try {
+    const org_id = ws?.org_id || claim?.org_id || "";
+    return !!(org_id && findContractForClaim(org_id, claim || {}));
+  } catch {
+    return false;
+  }
+}
+
+function workspaceDocPresent(ws, doc, claim){
+  if (!doc || !doc.key) return false;
+  if (packetHasKey(ws, doc.key)) return true;
+  if (doc.key === "contract_excerpt" && workspaceHasAutoContract(ws, claim)) return true;
+  if (doc.key === "eob_era" && workspaceHasAutoEob(ws)) return true;
+  if (doc.key === "variance_calc" && String(ws?.negotiation?.packet_sections?.variance_explanation || "").trim()) return true;
+  return false;
 }
 
 function workspaceFindAttachmentByPacketKey(ws, key){
@@ -13768,22 +14470,342 @@ function workspaceAttachmentKindForDocKey(key){
     denial_letter: "denial_letter",
     eob_era: "eob",
     claim_form: "claim_form",
+
     lmn: "lmn",
     office_notes: "medical_records",
     labs_imaging: "medical_records",
+    medical_records: "medical_records",
+    prior_auth: "authorization",
+    coding_support: "coding_support",
+
     contract_excerpt: "contract",
     payer_policy: "policy",
-    medical_records: "medical_records"
+    fee_schedule: "fee_schedule",
+
+    variance_calc: "variance_calculation",
+    payment_history: "payment_history",
+    payer_correspondence: "payer_correspondence"
   };
+
   return map[key] || "supporting";
 }
 
-function workspaceEnhancedCompleteness(ws, channel){
+function workspacePreferredPullSourceForDoc(docKey, channel){
+  try {
+    return workspacePreferredAutomationSource(docKey, channel);
+  } catch {
+    return "manual_upload";
+  }
+}
+
+function getConnectedWorkspaceIntegration(org_id, sourceType){
+  let rows = [];
+
+  if (sourceType === "ehr") rows = getOrgEhrIntegrations(org_id) || [];
+  if (sourceType === "clearinghouse") rows = getOrgClearinghouseIntegrations(org_id) || [];
+  if (sourceType === "payer_portal") rows = getOrgPortalIntegrations(org_id) || [];
+
+  return rows.find(row => {
+    const s = String(row.status || "").toLowerCase();
+    return ["connected","active","enabled","configured"].includes(s);
+  }) || null;
+}
+
+function workspacePulledUploadDir(org_id){
+  const dir = path.join(UPLOADS_DIR, "workspace_pulled", String(org_id || "unknown"));
+  ensureDir(dir);
+  return dir;
+}
+
+function workspaceWritePulledFile({ org_id, doc_key, filename, content, mime }){
+  const cleanName = sanitizeUploadName(filename || `${doc_key || "document"}.txt`);
+  const storedName = `${Date.now()}-${uuid()}-${cleanName}`;
+  const absPath = path.join(workspacePulledUploadDir(org_id), storedName);
+
+  const buffer = Buffer.isBuffer(content)
+    ? content
+    : Buffer.from(String(content || ""), "utf8");
+
+  fs.writeFileSync(absPath, buffer);
+
+  return {
+    filename: cleanName,
+    stored_path: absPath,
+    mime_type: mime || "text/plain"
+  };
+}
+
+function workspaceDocSearchTerms(docKey){
+  const key = String(docKey || "");
+
+  if (key === "denial_letter") return ["denial", "denial letter", "payer denial"];
+  if (key === "eob_era") return ["eob", "era", "remittance", "payment"];
+  if (key === "claim_form") return ["claim form", "cms1500", "ub04", "itemized bill"];
+  if (key === "office_notes") return ["office note", "clinical note", "progress note"];
+  if (key === "labs_imaging") return ["lab", "imaging", "radiology", "result"];
+  if (key === "prior_auth") return ["authorization", "prior authorization", "auth"];
+  if (key === "medical_records") return ["medical record", "clinical record"];
+  if (key === "payer_correspondence") return ["payer correspondence", "message", "letter"];
+  if (key === "payment_history") return ["payment history", "remittance history"];
+  if (key === "fee_schedule") return ["fee schedule", "reimbursement rule"];
+  if (key === "contract_excerpt") return ["contract", "allowed amount", "fee schedule"];
+
+  return [key.replace(/_/g, " ")];
+}
+
+function workspacePulledDocFallbackContent({ sourceType, docKey, claim, channel }){
+  const label = workspaceDocLabel(docKey);
+  const claimNo = claim?.claim_number || claim?.claim_id || "";
+  const payer = claim?.payer || "";
+
+  return [
+    `${label}`,
+    ``,
+    `Source: ${workspaceSourceLabel(sourceType)}`,
+    `Claim: ${claimNo}`,
+    `Payer: ${payer}`,
+    `Workspace: ${channel}`,
+    `Generated/Pulled: ${nowISO()}`,
+    ``,
+    `This placeholder was created because the integration connection exists but did not return a source file through the current adapter.`,
+    `Upload the original source document if payer submission requires a physical attachment.`
+  ].join("\n");
+}
+
+async function pullWorkspaceDocumentFromEHR(org_id, claim, docKey){
+  const integration = getConnectedWorkspaceIntegration(org_id, "ehr");
+  if (!integration) return { ok:false, reason:"ehr_not_connected" };
+
+  let creds = {};
+  try { creds = decrypt(integration.credentials || {}); } catch {}
+
+  const base = String(creds.base_url || creds.fhir_base_url || "").replace(/\/+$/,"");
+  const token = creds.token || creds.access_token || "";
+
+  if (!base || !token) {
+    return { ok:false, reason:"ehr_credentials_incomplete" };
+  }
+
+  try {
+    const patientRef = claim.patient_id ? `Patient/${encodeURIComponent(claim.patient_id)}` : "";
+    const documentReferenceEndpoint = String(
+      creds.documentreference_endpoint ||
+      creds.documents_endpoint ||
+      "DocumentReference"
+    ).replace(/^\/+/,"");
+
+    const documentReferenceUrl = integrationJoinUrl(base, documentReferenceEndpoint);
+
+    const query = patientRef
+      ? `${documentReferenceUrl}?patient=${encodeURIComponent(patientRef)}&_count=25`
+      : `${documentReferenceUrl}?_count=25`;
+
+    const headers = {
+      "Authorization": `Bearer ${token}`,
+      "Accept": "application/fhir+json"
+    };
+
+    const dr = await fetch(query, { headers }).then(r => r.ok ? r.json() : null);
+    const docs = (dr?.entry || []).map(e => e.resource).filter(Boolean);
+    const terms = workspaceDocSearchTerms(docKey).map(x => String(x).toLowerCase());
+
+    for (const d of docs){
+      const typeText = [
+        d.description || "",
+        d.type?.text || "",
+        ...(((d.type || {}).coding || []).map(c => `${c.code || ""} ${c.display || ""}`))
+      ].join(" ").toLowerCase();
+
+      if (!terms.some(t => typeText.includes(t))) continue;
+
+      const att = (((d.content || [])[0] || {}).attachment) || {};
+      const binUrl = att.url;
+      if (!binUrl) continue;
+
+      try {
+        const finalBinUrl = /^https?:\/\//i.test(String(binUrl || ""))
+          ? String(binUrl)
+          : integrationJoinUrl(base, binUrl);
+
+        const bin = await fetch(finalBinUrl, { headers }).then(r => r.ok ? r.arrayBuffer() : null);
+        if (!bin) continue;
+
+        return {
+          ok:true,
+          filename: att.title || `${docKey}.pdf`,
+          mime: att.contentType || "application/pdf",
+          content: Buffer.from(bin)
+        };
+      } catch {}
+    }
+
+    return { ok:false, reason:"ehr_document_not_found" };
+  } catch (e) {
+    return { ok:false, reason:"ehr_pull_failed", error:String(e?.message || e) };
+  }
+}
+
+async function pullWorkspaceDocumentFromClearinghouse(org_id, claim, docKey){
+  const integration = getConnectedWorkspaceIntegration(org_id, "clearinghouse");
+  if (!integration) return { ok:false, reason:"clearinghouse_not_connected" };
+
+  let creds = {};
+  try { creds = decrypt(integration.credentials || {}); } catch {}
+
+  const base = String(creds.base_url || creds.api_base_url || "").replace(/\/+$/,"");
+  const token = creds.token || creds.access_token || creds.api_key || "";
+
+  if (!base || !token) {
+    return { ok:false, reason:"clearinghouse_credentials_incomplete" };
+  }
+
+  const endpoint =
+    creds.document_pull_endpoint ||
+    creds.documents_endpoint ||
+    "";
+
+  if (!endpoint) {
+    return { ok:false, reason:"clearinghouse_document_endpoint_missing" };
+  }
+
+  return await integrationPullDocumentByConfiguredEndpoint({
+    base,
+    endpoint,
+    creds,
+    claim,
+    docKey,
+    sourcePrefix: "clearinghouse"
+  });
+}
+
+async function pullWorkspaceDocumentFromPayerPortal(org_id, claim, docKey){
+  const integration = getConnectedWorkspaceIntegration(org_id, "payer_portal");
+  if (!integration) return { ok:false, reason:"payer_portal_not_connected" };
+
+  let creds = {};
+  try { creds = decrypt(integration.credentials || {}); } catch {}
+
+  const base = String(creds.base_url || creds.api_base_url || creds.portal_url || "").replace(/\/+$/,"");
+  const token = creds.token || creds.access_token || creds.api_key || "";
+
+  if (!base || !token) {
+    return { ok:false, reason:"payer_portal_credentials_incomplete" };
+  }
+
+  const endpoint =
+    creds.document_pull_endpoint ||
+    creds.documents_endpoint ||
+    "";
+
+  if (!endpoint) {
+    return { ok:false, reason:"payer_portal_document_endpoint_missing" };
+  }
+
+  return await integrationPullDocumentByConfiguredEndpoint({
+    base,
+    endpoint,
+    creds,
+    claim,
+    docKey,
+    sourcePrefix: "payer_portal"
+  });
+}
+
+async function pullWorkspaceDocumentBySource(org_id, claim, docKey, sourceType, channel){
+  if (sourceType === "ehr") {
+    return await pullWorkspaceDocumentFromEHR(org_id, claim, docKey);
+  }
+
+  if (sourceType === "clearinghouse") {
+    return await pullWorkspaceDocumentFromClearinghouse(org_id, claim, docKey);
+  }
+
+  if (sourceType === "payer_portal") {
+    return await pullWorkspaceDocumentFromPayerPortal(org_id, claim, docKey);
+  }
+
+  if (sourceType === "contract_rules" || sourceType === "system") {
+    return {
+      ok:false,
+      reason:"source_document_required",
+      message:"This item is currently system-derived. Attach the source document if the payer requires submission proof."
+    };
+  }
+
+  return { ok:false, reason:"unsupported_source_type" };
+}
+
+function attachPulledWorkspaceDocument(ws, claim, channel, docKey, sourceType, pulled){
   ensureWorkspacePacket(ws);
-  ensurePacketSections(ws);
+
+  const stored = workspaceWritePulledFile({
+    org_id: ws.org_id || claim.org_id,
+    doc_key: docKey,
+    filename: pulled.filename || `${docKey}.pdf`,
+    content: pulled.content,
+    mime: pulled.mime || "application/pdf"
+  });
+
+  const attachment = {
+    attachment_id: uuid(),
+    filename: stored.filename,
+    stored_path: stored.stored_path,
+    mime_type: stored.mime_type,
+    kind: workspaceAttachmentKindForDocKey(docKey),
+    uploaded_at: nowISO(),
+    pulled_at: nowISO(),
+    doc_key: docKey,
+
+    source_type: sourceType,
+    source_label: workspaceSourceLabel(sourceType),
+    source_system: workspaceSourceLabel(sourceType),
+    source_status: "pulled",
+
+    proof_level: "pulled_source_document",
+    is_source_document: true
+  };
+
+  ws.attachments = Array.isArray(ws.attachments) ? ws.attachments : [];
+  ws.attachments = ws.attachments.filter(a => String(a.doc_key || "") !== String(docKey));
+  ws.attachments.push(attachment);
+
+  workspaceUpsertPacketItem(ws, docKey, {
+    status: "present",
+    attachment_id: attachment.attachment_id,
+    updated_at: nowISO(),
+    source_type: sourceType,
+    source_label: workspaceSourceLabel(sourceType),
+    source_status: "pulled",
+    proof_level: "pulled_source_document",
+    is_source_document: true
+  });
+
+  ws.activity = ws.activity || {};
+  ws.activity.last_document_pull_at = nowISO();
+
+  ws.audit = Array.isArray(ws.audit) ? ws.audit : [];
+  ws.audit.push({
+    event_id: uuid(),
+    type: "document_pulled",
+    doc_key: docKey,
+    source_type: sourceType,
+    attachment_id: attachment.attachment_id,
+    created_at: nowISO()
+  });
+
+  return attachment;
+}
+
+function workspaceEnhancedCompleteness(ws, channel, claim){
+  ensureWorkspacePacket(ws);
+  ensurePacketSections(ws, claim);
+
+  const claimCtx = claim || (ws?.org_id && ws?.billed_id ? getBilledById(ws.org_id, ws.billed_id) : null);
   const docs = workspaceRequiredDocConfig(channel);
-  const totalRequired = docs.filter(d => d.required).length;
-  const haveRequired = docs.filter(d => d.required && packetHasKey(ws, d.key)).length;
+
+  const requiredDocs = docs.filter(d => d.required);
+  const totalRequired = requiredDocs.length;
+  const haveRequired = requiredDocs.filter(d => workspaceDocPresent(ws, d, claimCtx)).length;
 
   const sectionKey = packetNarrativeKey(channel);
   const sections = channel === "negotiation"
@@ -13801,33 +14823,65 @@ function workspaceEnhancedCompleteness(ws, channel){
     total,
     complete,
     pct,
-    requiredMissing: docs.filter(d => d.required && !packetHasKey(ws, d.key)),
+    requiredMissing: requiredDocs.filter(d => !workspaceDocPresent(ws, d, claimCtx)),
     docs,
-    sectionKey
+    sectionKey,
+    requiredComplete: haveRequired,
+    requiredTotal: totalRequired
   };
 }
 
 function computeWorkspaceQuickScore(ws, claim, derived, channel){
-  const completeness = workspaceEnhancedCompleteness(ws, channel);
-  const hasEOB = packetHasKey(ws, "eob_era");
-  const hasClaim = packetHasKey(ws, "claim_form");
-  const hasDenial = packetHasKey(ws, "denial_letter");
+  const completeness = workspaceEnhancedCompleteness(ws, channel, claim);
+  const docs = workspaceRequiredDocConfig(channel);
 
-  let score = 50;
+  let score = 45;
 
-  if (hasEOB) score += 10;
-  if (hasClaim) score += 10;
-  if (channel === "appeal" && hasDenial) score += 10;
+  const hasRequiredProof = (key) => {
+    const doc = docs.find(d => d.key === key) || { key };
+    return workspaceDocPresent(ws, doc, claim);
+  };
 
-  score += Math.round((completeness.pct || 0) * 0.2);
+  if (channel === "appeal") {
+    if (hasRequiredProof("denial_letter")) score += 14;
+    if (hasRequiredProof("eob_era")) score += 12;
+    if (hasRequiredProof("claim_form")) score += 10;
+
+    if (hasRequiredProof("payer_policy")) score += 5;
+    if (hasRequiredProof("lmn")) score += 5;
+    if (hasRequiredProof("office_notes")) score += 4;
+    if (hasRequiredProof("prior_auth")) score += 4;
+  } else {
+    if (hasRequiredProof("eob_era")) score += 14;
+    if (hasRequiredProof("claim_form")) score += 10;
+    if (hasRequiredProof("contract_excerpt")) score += 14;
+
+    if (hasRequiredProof("variance_calc")) score += 6;
+    if (hasRequiredProof("fee_schedule")) score += 5;
+    if (hasRequiredProof("payment_history")) score += 3;
+    if (hasRequiredProof("payer_correspondence")) score += 3;
+  }
+
+  score += Math.round((completeness.pct || 0) * 0.16);
+
+  const missingRequiredPenalty = Number(completeness.requiredMissing?.length || 0) * 8;
+  score -= missingRequiredPenalty;
 
   score = Math.max(10, Math.min(95, score));
 
-  const estimatedRecovery = Math.round((derived?.underpaidAmount || derived?.atRiskAmount || 0) * (score / 100));
+  const recoveryBase =
+    Number(derived?.underpaidAmount || 0) ||
+    Number(derived?.atRiskAmount || 0) ||
+    Number(claim?.underpaid_amount || 0) ||
+    Number(claim?.at_risk_amount || 0) ||
+    0;
+
+  const estimatedRecovery = Math.round(recoveryBase * (score / 100));
 
   return {
     probability: score,
-    estimatedRecovery
+    estimatedRecovery,
+    completeness
   };
 }
 
@@ -13839,15 +14893,29 @@ function renderWorkspaceIntelligence(ws, claim, derived, channel){
     score.probability >= 60 ? "Moderate Confidence" :
     "Low Confidence";
 
+  const docs = workspaceRequiredDocConfig(channel);
+  const missingRequired = docs.filter(d => d.required && !workspaceDocPresent(ws, d, claim));
+
   const drivers = [];
 
-  if (!packetHasKey(ws,"eob_era")) drivers.push("Missing EOB");
-  if (!packetHasKey(ws,"claim_form")) drivers.push("Missing claim form");
-  if (channel === "appeal" && !packetHasKey(ws,"denial_letter")) drivers.push("Missing denial");
+  missingRequired.forEach(d => drivers.push(`Missing ${d.label}`));
+
+  if (channel === "appeal") {
+    if (!workspaceDocPresent(ws, {key:"payer_policy"}, claim) && !workspaceDocPresent(ws, {key:"lmn"}, claim)) {
+      drivers.push("Appeal argument may need policy or medical-necessity support");
+    }
+  } else {
+    if (!workspaceDocPresent(ws, {key:"contract_excerpt"}, claim)) {
+      drivers.push("Negotiation needs contract or allowed-rule proof");
+    }
+    if (!String(ws?.negotiation?.packet_sections?.variance_explanation || "").trim()) {
+      drivers.push("Variance explanation should clearly compare expected vs paid");
+    }
+  }
 
   const driverText = drivers.length
-    ? `Risk Factors: ${drivers.join(", ")}`
-    : "All required documents present";
+    ? `Risk Factors: ${drivers.slice(0,4).join(", ")}`
+    : "Packet has the core proof needed for this workflow";
 
   const actionSignal =
     score.probability >= 80 ? "Proceed to Submission" :
@@ -13856,7 +14924,6 @@ function renderWorkspaceIntelligence(ws, claim, derived, channel){
 
   return `
     <div class="ws-intel-card">
-
       <div class="ws-intel-header">
         <div style="display:flex;align-items:center;gap:6px;">
           <span>📊</span>
@@ -13883,17 +14950,80 @@ function renderWorkspaceIntelligence(ws, claim, derived, channel){
       </div>
 
       <div class="ws-intel-sub">
-        ${riskLevel}
+        ${safeStr(riskLevel)}
       </div>
 
-      <div class="ws-intel-sub" style="opacity:.8;">
-        ${driverText}
+      <div class="ws-intel-risk">
+        ${safeStr(driverText)}
       </div>
 
-      <div style="margin-top:10px;font-weight:700;">
-        ${actionSignal}
+      <div style="margin-top:10px;font-weight:800;">
+        ${safeStr(actionSignal)}
+      </div>
+    </div>
+  `;
+}
+
+function renderWorkspaceStrategyPanel(ws, claim, derived, channel){
+  const isNegotiation = channel === "negotiation";
+  const docs = workspaceRequiredDocConfig(channel);
+  const missingRequired = docs.filter(d => d.required && !workspaceDocPresent(ws, d, claim));
+
+  const expected = Number(derived?.expectedInsurance || claim?.expected_amount || claim?.expected_insurance || 0);
+  const paid = Number(derived?.paidAmount || claim?.paid_amount || claim?.insurance_paid || 0);
+  const billed = Number(derived?.billedAmount || claim?.amount_billed || claim?.billed_amount || 0);
+  const atRisk = Number(derived?.underpaidAmount || derived?.atRiskAmount || claim?.underpaid_amount || claim?.at_risk_amount || 0);
+
+  const payer = claim?.payer || "the payer";
+  const claimNo = claim?.claim_number || claim?.claim_id || "";
+
+  const strategyTitle = isNegotiation
+    ? "Contract / Underpayment Negotiation Strategy"
+    : "Denial Reversal Appeal Strategy";
+
+  const whyHere = isNegotiation
+    ? `This claim is in negotiation because ${payer} paid ${formatMoneyUI(paid)} against an expected amount of ${formatMoneyUI(expected)}, leaving ${formatMoneyUI(atRisk)} in reimbursement variance.`
+    : `This claim is in appeal because ${payer} denied or failed to pay the claim. The goal is to reverse the denial or force reprocessing with supporting evidence.`;
+
+  const recommended = isNegotiation
+    ? "Lead with the expected-versus-paid variance, attach EOB/ERA and claim form, then cite contract or allowed-rule support for the corrected payment."
+    : "Lead with the denial reason, attach the denial notice and EOB/ERA, then support reprocessing with claim form, policy language, and medical/coding evidence when relevant.";
+
+  const nextAction = missingRequired.length
+    ? `Upload or validate: ${missingRequired.map(d => d.label).join(", ")}.`
+    : isNegotiation
+      ? "Review the variance explanation and requested amount, then export or submit the negotiation packet."
+      : "Review the appeal argument and requested action, then export or submit the appeal packet.";
+
+  const proofList = docs
+    .filter(d => d.required || workspaceDocPresent(ws, d, claim))
+    .slice(0, 6)
+    .map(d => {
+      const present = workspaceDocPresent(ws, d, claim);
+      return `<li>${present ? "✓" : "•"} ${safeStr(d.label)}${d.why ? ` — <span class="muted">${safeStr(d.why)}</span>` : ""}</li>`;
+    })
+    .join("");
+
+  return `
+    <div class="ws-panel" style="border-left:4px solid #111827;">
+      <h3>${safeStr(strategyTitle)}</h3>
+
+      <div class="muted small" style="margin-bottom:8px;">
+        Claim #${safeStr(claimNo)} · ${safeStr(payer)} · Billed ${formatMoneyUI(billed)} · Expected ${formatMoneyUI(expected)} · Paid ${formatMoneyUI(paid)} · Opportunity ${formatMoneyUI(atRisk)}
       </div>
 
+      <div style="font-weight:800;margin-top:8px;">Why this claim is here</div>
+      <div class="muted" style="margin-top:4px;">${safeStr(whyHere)}</div>
+
+      <div style="font-weight:800;margin-top:10px;">Recommended strategy</div>
+      <div class="muted" style="margin-top:4px;">${safeStr(recommended)}</div>
+
+      <div style="font-weight:800;margin-top:10px;">Proof needed</div>
+      <ul style="margin-top:6px;padding-left:18px;">${proofList}</ul>
+
+      <div class="ws-callout ${missingRequired.length ? "warn" : "ok"}" style="margin-top:10px;">
+        <strong>Next best action:</strong> ${safeStr(nextAction)}
+      </div>
     </div>
   `;
 }
@@ -13985,6 +15115,7 @@ function renderWorkflowPanel(ws, claim, channel){
   const previousSubmission = ws.submission || {};
   const enhanced = workspaceEnhancedCompleteness(ws, channel);
   const ready = canMarkReady(ws, channel);
+  const autoReadiness = buildWorkspaceAutomationReadiness(ws, claim, channel);
   const isSubmitted = submission.status === "submitted";
   const tone = ready.ok ? "ok" : "warn";
 
@@ -13992,8 +15123,10 @@ function renderWorkflowPanel(ws, claim, channel){
     <div class="ws-panel">
       <h3>⚙️ Workflow</h3>
       <div class="ws-score">
-        <div class="ws-score-num">${enhanced.pct}%</div>
-        <div class="ws-score-sub">${enhanced.complete} of ${enhanced.total} preview elements completed</div>
+        <div class="ws-score-num">${autoReadiness.submissionPct}%</div>
+        <div class="ws-score-sub">
+          Submission readiness · Draft readiness ${autoReadiness.draftPct}% · ${enhanced.complete} of ${enhanced.total} preview elements completed
+        </div>
       </div>
       <div class="ws-chip-row">
         <span class="ws-chip ${isSubmitted ? "ok" : tone}">${isSubmitted ? "Submitted" : (ready.ok ? "Ready for Review" : "Missing Required Items")}</span>
@@ -14004,7 +15137,11 @@ function renderWorkflowPanel(ws, claim, channel){
         isSubmitted
           ? ``
           : ready.ok
-          ? `<div class="ws-callout ok" style="margin-top:10px;">Packet is ready for review and export.</div>`
+          ? (
+              autoReadiness.submissionPct >= 100
+                ? `<div class="ws-callout ok" style="margin-top:10px;">Packet has required source documents attached or pulled for submission proof.</div>`
+                : `<div class="ws-callout warn" style="margin-top:10px;">Packet can be drafted, but submission proof is incomplete. Pull/upload source documents or proceed with documented override if appropriate.</div>`
+            )
           : `<div class="ws-callout warn" style="margin-top:10px;">Missing required documents: ${ready.missing.map(workspaceDocLabel).join(", ")}.</div>`
       }
 
@@ -14041,6 +15178,14 @@ function renderWorkflowPanel(ws, claim, channel){
         <label class="small">Follow-up Date</label>
         <input type="date" name="follow_up_date"/>
 
+        <label class="small">Override Reason if Source Proof Missing</label>
+        <textarea name="override_reason" placeholder="Optional. Required if you submit with auto-filled/system-derived evidence instead of attached source documents." style="min-height:80px;"></textarea>
+
+        <label class="small" style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+          <input type="checkbox" name="confirm_missing_source_docs" value="1"/>
+          Continue with draft evidence / missing source documents if needed
+        </label>
+
         <button class="btn secondary" style="margin-top:8px;">
           Submit Round ${currentRound}
         </button>
@@ -14049,36 +15194,831 @@ function renderWorkflowPanel(ws, claim, channel){
   `;
 }
 
+function workspacePolishStyles(){
+  return `
+    <style>
+      .packet-workspace-shell{
+        --ws-soft:#f8fafc;
+        --ws-border:#e5e7eb;
+        --ws-ink:#111827;
+        --ws-muted:#64748b;
+        --ws-good:#059669;
+        --ws-warn:#d97706;
+        --ws-bad:#dc2626;
+      }
+
+      .packet-workspace-shell .ws-banner{
+        border:1px solid #dbeafe;
+        background:linear-gradient(135deg,#eef6ff 0%,#ffffff 70%);
+        box-shadow:0 18px 45px rgba(15,23,42,.08);
+      }
+
+      .packet-workspace-shell .ws-layout{
+        display:grid;
+        grid-template-columns:minmax(310px,390px) minmax(0,1fr);
+        gap:18px;
+        align-items:start;
+      }
+
+      .packet-workspace-shell .workspace-left{
+        position:sticky;
+        top:12px;
+        align-self:start;
+      }
+
+      .packet-workspace-shell .workspace-right{
+        min-width:0;
+      }
+
+      .packet-workspace-shell .ws-panel,
+      .packet-workspace-shell .ws-intel-card,
+      .packet-workspace-shell .ws-command-card{
+        border:1px solid var(--ws-border);
+        border-radius:18px;
+        background:#fff;
+        box-shadow:0 14px 35px rgba(15,23,42,.06);
+      }
+
+      .packet-workspace-shell .ws-panel{
+        padding:14px;
+        margin-bottom:12px;
+      }
+
+      .packet-workspace-shell .ws-panel h3{
+        margin:0 0 10px;
+        font-size:15px;
+        letter-spacing:.01em;
+      }
+
+      .packet-workspace-shell .ws-command-card{
+        padding:16px;
+        margin:14px 0 16px;
+      }
+
+      .packet-workspace-shell .ws-command-head{
+        display:flex;
+        justify-content:space-between;
+        gap:14px;
+        align-items:flex-start;
+        flex-wrap:wrap;
+      }
+
+      .packet-workspace-shell .ws-command-title{
+        font-size:20px;
+        font-weight:900;
+        margin:0;
+      }
+
+      .packet-workspace-shell .ws-command-sub{
+        color:var(--ws-muted);
+        margin-top:4px;
+        max-width:760px;
+      }
+
+      .packet-workspace-shell .ws-command-grid{
+        display:grid;
+        grid-template-columns:repeat(4,minmax(0,1fr));
+        gap:10px;
+        margin-top:14px;
+      }
+
+      .packet-workspace-shell .ws-command-metric{
+        border:1px solid var(--ws-border);
+        border-radius:14px;
+        padding:12px;
+        background:#fbfdff;
+      }
+
+      .packet-workspace-shell .ws-command-label{
+        color:var(--ws-muted);
+        font-size:11px;
+        font-weight:900;
+        text-transform:uppercase;
+        letter-spacing:.08em;
+      }
+
+      .packet-workspace-shell .ws-command-value{
+        margin-top:6px;
+        font-size:18px;
+        font-weight:950;
+      }
+
+      .packet-workspace-shell .ws-progress-track{
+        height:9px;
+        background:#e5e7eb;
+        border-radius:999px;
+        overflow:hidden;
+        margin-top:12px;
+      }
+
+      .packet-workspace-shell .ws-progress-fill{
+        height:100%;
+        background:linear-gradient(90deg,#111827,#4f46e5);
+        border-radius:999px;
+      }
+
+      .packet-workspace-shell .ws-auto-grid{
+        display:grid;
+        grid-template-columns:repeat(3,minmax(0,1fr));
+        gap:8px;
+        margin:10px 0;
+      }
+
+      .packet-workspace-shell .ws-auto-source{
+        border:1px solid var(--ws-border);
+        border-radius:12px;
+        padding:10px;
+        background:#f8fafc;
+      }
+
+      .packet-workspace-shell .ws-auto-source strong{
+        display:block;
+        font-size:12px;
+      }
+
+      .packet-workspace-shell .ws-auto-source span{
+        display:block;
+        color:var(--ws-muted);
+        font-size:12px;
+        margin-top:2px;
+      }
+
+      .packet-workspace-shell .ws-auto-table{
+        width:100%;
+        border-collapse:collapse;
+        font-size:12px;
+        margin-top:8px;
+      }
+
+      .packet-workspace-shell .ws-auto-table th,
+      .packet-workspace-shell .ws-auto-table td{
+        border-top:1px solid #eef2f7;
+        padding:8px 4px;
+        text-align:left;
+        vertical-align:top;
+      }
+
+      .packet-workspace-shell .ws-source-pill{
+        display:inline-flex;
+        align-items:center;
+        gap:5px;
+        padding:4px 8px;
+        border-radius:999px;
+        font-size:11px;
+        font-weight:900;
+        border:1px solid #e5e7eb;
+        background:#f8fafc;
+        white-space:nowrap;
+      }
+
+      .packet-workspace-shell .ws-source-pill.ok{
+        background:#ecfdf5;
+        border-color:#a7f3d0;
+        color:#065f46;
+      }
+
+      .packet-workspace-shell .ws-source-pill.warn{
+        background:#fffbeb;
+        border-color:#fde68a;
+        color:#92400e;
+      }
+
+      .packet-workspace-shell .ws-source-pill.err{
+        background:#fef2f2;
+        border-color:#fecaca;
+        color:#991b1b;
+      }
+
+      .packet-workspace-shell .ws-source-pill.info{
+        background:#eff6ff;
+        border-color:#bfdbfe;
+        color:#1d4ed8;
+      }
+
+      .packet-workspace-shell .ws-doc-item{
+        border:1px solid #edf2f7;
+        border-radius:14px;
+        padding:11px;
+        background:#fff;
+        margin-bottom:9px;
+      }
+
+      .packet-workspace-shell .ws-doc-item-top{
+        display:flex;
+        justify-content:space-between;
+        gap:8px;
+        align-items:flex-start;
+      }
+
+      .packet-workspace-shell .ws-doc-name{
+        font-weight:900;
+      }
+
+      .packet-workspace-shell .ws-doc-meta{
+        color:var(--ws-muted);
+        font-size:12px;
+        margin-top:3px;
+      }
+
+      .packet-workspace-shell .ws-upload-form{
+        margin-top:9px;
+        display:flex;
+        gap:8px;
+        align-items:center;
+        flex-wrap:wrap;
+      }
+
+      .packet-workspace-shell textarea{
+        border-radius:14px;
+      }
+
+      @media(max-width:980px){
+        .packet-workspace-shell .ws-layout{
+          grid-template-columns:1fr;
+        }
+        .packet-workspace-shell .workspace-left{
+          position:static;
+        }
+        .packet-workspace-shell .ws-command-grid,
+        .packet-workspace-shell .ws-auto-grid{
+          grid-template-columns:1fr 1fr;
+        }
+      }
+
+      @media(max-width:640px){
+        .packet-workspace-shell .ws-command-grid,
+        .packet-workspace-shell .ws-auto-grid{
+          grid-template-columns:1fr;
+        }
+      }
+    </style>
+  `;
+}
+
+function workspaceIntegrationConnected(row){
+  const s = String(row?.status || "").toLowerCase();
+  return ["connected","active","enabled","configured"].includes(s);
+}
+
+function workspaceIntegrationCount(org_id, sourceType){
+  try {
+    let rows = [];
+
+    if (sourceType === "ehr" && typeof getOrgEhrIntegrations === "function") {
+      rows = getOrgEhrIntegrations(org_id) || [];
+    }
+
+    if (sourceType === "clearinghouse" && typeof getOrgClearinghouseIntegrations === "function") {
+      rows = getOrgClearinghouseIntegrations(org_id) || [];
+    }
+
+    if (sourceType === "payer_portal" && typeof getOrgPortalIntegrations === "function") {
+      rows = getOrgPortalIntegrations(org_id) || [];
+    }
+
+    return rows.filter(workspaceIntegrationConnected).length;
+  } catch {
+    return 0;
+  }
+}
+
+function workspacePreferredAutomationSource(docKey, channel){
+  const key = String(docKey || "");
+
+  if (["office_notes","labs_imaging","medical_records","lmn","prior_auth","coding_support"].includes(key)) {
+    return "ehr";
+  }
+
+  if (["eob_era","claim_form","payment_history","variance_calc"].includes(key)) {
+    return "clearinghouse";
+  }
+
+  if (["denial_letter","payer_policy","payer_correspondence"].includes(key)) {
+    return "payer_portal";
+  }
+
+  if (["contract_excerpt","fee_schedule"].includes(key)) {
+    return "contract_rules";
+  }
+
+  return channel === "appeal" ? "payer_portal" : "clearinghouse";
+}
+
+function workspaceProofLabel(proofLevel){
+  const labels = {
+    source_document: "Attached Source Document",
+    pulled_source_document: "Pulled Source Document",
+    manual_source_document: "Manual Source Document",
+    draft_evidence: "Draft Evidence Only",
+    pull_available: "Ready to Pull",
+    missing: "Missing Source"
+  };
+
+  return labels[proofLevel] || proofLevel || "Unknown";
+}
+
+function workspaceProofPillClass(proofLevel){
+  if (
+    proofLevel === "source_document" ||
+    proofLevel === "pulled_source_document" ||
+    proofLevel === "manual_source_document"
+  ) return "ok";
+
+  if (proofLevel === "draft_evidence" || proofLevel === "pull_available") return "warn";
+
+  return "err";
+}
+
+function workspaceIsSubmissionProof(row){
+  return !!(
+    row &&
+    (
+      row.proofLevel === "source_document" ||
+      row.proofLevel === "pulled_source_document" ||
+      row.proofLevel === "manual_source_document"
+    )
+  );
+}
+
+function workspaceIsDraftEvidence(row){
+  return !!(
+    row &&
+    (
+      workspaceIsSubmissionProof(row) ||
+      row.proofLevel === "draft_evidence"
+    )
+  );
+}
+
+function workspaceSourceLabel(sourceType){
+  const labels = {
+    manual_upload: "Manual Upload",
+    upload: "Manual Upload",
+    ehr: "EHR",
+    clearinghouse: "Clearinghouse",
+    payer_portal: "Payer Portal",
+    contract_rules: "Contract / Rules Upload",
+    system: "System-derived",
+    missing: "Missing"
+  };
+
+  return labels[sourceType] || sourceType || "Unknown";
+}
+
+function workspaceAttachmentSourceType(att){
+  const raw = String(
+    att?.source_type ||
+    att?.source ||
+    att?.source_system ||
+    att?.integration_type ||
+    ""
+  ).toLowerCase();
+
+  if (raw.includes("ehr")) return "ehr";
+  if (raw.includes("clearing")) return "clearinghouse";
+  if (raw.includes("portal") || raw.includes("payer")) return "payer_portal";
+  if (raw.includes("contract")) return "contract_rules";
+  if (raw.includes("system")) return "system";
+
+  return "manual_upload";
+}
+
+function workspaceSafeFindAttachment(ws, key){
+  try {
+    if (typeof workspaceFindAttachmentByPacketKey === "function") {
+      return workspaceFindAttachmentByPacketKey(ws, key);
+    }
+  } catch {}
+
+  try {
+    const item = getWorkspacePacketItem(ws, key);
+    if (item && item.attachment_id) {
+      return (ws.attachments || []).find(a =>
+        String(a.attachment_id || "") === String(item.attachment_id || "")
+      ) || null;
+    }
+  } catch {}
+
+  return null;
+}
+
+function workspaceSafeAutoEob(ws){
+  try {
+    if (typeof workspaceHasAutoEob === "function") return workspaceHasAutoEob(ws);
+  } catch {}
+
+  return !!(
+    ws?.negotiation?.packet_sections?.eob_era ||
+    ws?.appeal?.packet_sections?.eob_era
+  );
+}
+
+function workspaceSafeAutoContract(ws, claim){
+  try {
+    if (typeof workspaceHasAutoContract === "function") return workspaceHasAutoContract(ws, claim);
+  } catch {}
+
+  try {
+    const org_id = ws?.org_id || claim?.org_id || "";
+    return !!(org_id && typeof findContractForClaim === "function" && findContractForClaim(org_id, claim || {}));
+  } catch {
+    return false;
+  }
+}
+
+function workspaceDocAutomationStatus(ws, doc, claim, channel){
+  const key = String(doc?.key || "");
+  const preferred = workspacePreferredAutomationSource(key, channel);
+  const attachment = workspaceSafeFindAttachment(ws, key);
+
+  if (attachment) {
+    const type = workspaceAttachmentSourceType(attachment);
+    const pulled = attachment.proof_level === "pulled_source_document" || attachment.source_status === "pulled";
+    const manual = type === "manual_upload";
+
+    return {
+      key,
+      label: doc.label || workspaceDocLabel(key),
+      required: !!doc.required,
+      status: "present",
+      statusLabel: pulled ? "Pulled + Attached" : "Attached",
+      proofLevel: pulled ? "pulled_source_document" : (manual ? "manual_source_document" : "source_document"),
+      proofLabel: pulled ? "Pulled Source Document" : (manual ? "Manual Source Document" : "Attached Source Document"),
+      pillClass: "ok",
+      sourceType: type,
+      sourceLabel: attachment.source_label || workspaceSourceLabel(type),
+      detail: attachment.filename ? `Source document attached: ${attachment.filename}` : "Source document is attached.",
+      nextAction: "Ready for submission proof"
+    };
+  }
+
+  if (key === "eob_era" && workspaceSafeAutoEob(ws)) {
+    return {
+      key,
+      label: doc.label || workspaceDocLabel(key),
+      required: !!doc.required,
+      status: "draft_evidence",
+      statusLabel: "Auto-filled Draft Evidence",
+      proofLevel: "draft_evidence",
+      proofLabel: "Draft Evidence Only",
+      pillClass: "warn",
+      sourceType: "clearinghouse",
+      sourceLabel: "Claim Payment Data",
+      detail: "Auto-filled from claim payment/remittance data. This helps draft the packet, but a source EOB/ERA document is still recommended for payer submission.",
+      nextAction: "Pull from Clearinghouse or upload source EOB/ERA."
+    };
+  }
+
+  if (key === "contract_excerpt" && workspaceSafeAutoContract(ws, claim)) {
+    return {
+      key,
+      label: doc.label || workspaceDocLabel(key),
+      required: !!doc.required,
+      status: "draft_evidence",
+      statusLabel: "Auto-filled Draft Evidence",
+      proofLevel: "draft_evidence",
+      proofLabel: "Draft Evidence Only",
+      pillClass: "warn",
+      sourceType: "contract_rules",
+      sourceLabel: "Contract / Rules Upload",
+      detail: "Auto-filled from matched contract/rule data. This supports drafting, but attach the source contract excerpt if payer submission requires proof.",
+      nextAction: "Upload contract excerpt or attach contract source document."
+    };
+  }
+
+  if (key === "variance_calc" && String(ws?.negotiation?.packet_sections?.variance_explanation || "").trim()) {
+    return {
+      key,
+      label: doc.label || workspaceDocLabel(key),
+      required: !!doc.required,
+      status: "draft_evidence",
+      statusLabel: "System-derived Draft Evidence",
+      proofLevel: "draft_evidence",
+      proofLabel: "Draft Evidence Only",
+      pillClass: "warn",
+      sourceType: "system",
+      sourceLabel: "System-derived",
+      detail: "Generated from expected-versus-paid claim data. This supports the packet draft, but it is not an external source document.",
+      nextAction: "Review variance language; attach payer/contract source proof when needed."
+    };
+  }
+
+  const org_id = ws?.org_id || claim?.org_id || "";
+  const connected =
+    preferred === "ehr" ? workspaceIntegrationCount(org_id, "ehr") :
+    preferred === "clearinghouse" ? workspaceIntegrationCount(org_id, "clearinghouse") :
+    preferred === "payer_portal" ? workspaceIntegrationCount(org_id, "payer_portal") :
+    0;
+
+  if (connected > 0 && preferred !== "contract_rules") {
+    return {
+      key,
+      label: doc.label || workspaceDocLabel(key),
+      required: !!doc.required,
+      status: "pull_available",
+      statusLabel: "Ready to Pull",
+      proofLevel: "pull_available",
+      proofLabel: "Ready to Pull",
+      pillClass: "info",
+      sourceType: preferred,
+      sourceLabel: workspaceSourceLabel(preferred),
+      detail: `${workspaceSourceLabel(preferred)} connection is configured. Pull the source document or upload manually.`,
+      nextAction: `Pull from ${workspaceSourceLabel(preferred)} or upload manually.`
+    };
+  }
+
+  return {
+    key,
+    label: doc.label || workspaceDocLabel(key),
+    required: !!doc.required,
+    status: "missing",
+    statusLabel: doc.required ? "Missing Required" : "Missing Optional",
+    proofLevel: "missing",
+    proofLabel: "Missing Source",
+    pillClass: doc.required ? "err" : "warn",
+    sourceType: "missing",
+    sourceLabel: preferred === "contract_rules" ? "Contract / Rules Upload" : workspaceSourceLabel(preferred),
+    detail: doc.why || "No source document has been attached or auto-filled yet.",
+    nextAction: preferred === "contract_rules"
+      ? "Upload contract/rule support or add reimbursement rule in Data Management."
+      : `Connect ${workspaceSourceLabel(preferred)} or upload manually.`
+  };
+}
+
+function buildWorkspaceAutomationReadiness(ws, claim, channel){
+  const docs = workspaceRequiredDocConfig(channel);
+  const rows = docs.map(doc => workspaceDocAutomationStatus(ws, doc, claim, channel));
+
+  const required = rows.filter(r => r.required);
+  const requiredDraftReady = required.filter(workspaceIsDraftEvidence).length;
+  const requiredSubmissionReady = required.filter(workspaceIsSubmissionProof).length;
+  const requiredPullAvailable = required.filter(r => r.status === "pull_available").length;
+  const requiredMissing = required.filter(r => r.status === "missing").length;
+
+  const draftPct = required.length
+    ? Math.round((requiredDraftReady / required.length) * 100)
+    : 100;
+
+  const submissionPct = required.length
+    ? Math.round((requiredSubmissionReady / required.length) * 100)
+    : 100;
+
+  const org_id = ws?.org_id || claim?.org_id || "";
+
+  return {
+    rows,
+    required,
+    requiredPresent: requiredSubmissionReady,
+    requiredDraftReady,
+    requiredSubmissionReady,
+    requiredPullAvailable,
+    requiredMissing,
+    draftPct,
+    submissionPct,
+    connected: {
+      ehr: workspaceIntegrationCount(org_id, "ehr"),
+      clearinghouse: workspaceIntegrationCount(org_id, "clearinghouse"),
+      payer_portal: workspaceIntegrationCount(org_id, "payer_portal")
+    }
+  };
+}
+
+function renderAutomationReadinessPanel(ws, claim, channel){
+  const auto = buildWorkspaceAutomationReadiness(ws, claim, channel);
+  const readyCount = auto.rows.filter(r => r.status === "present").length;
+  const pullCount = auto.rows.filter(r => r.status === "pull_available").length;
+  const missingCount = auto.rows.filter(r => r.status === "missing").length;
+
+  const connectionCard = (label, count) => `
+    <div class="ws-auto-source">
+      <strong>${safeStr(label)}</strong>
+      <span>${count > 0 ? `${count} connected` : "Not connected yet"}</span>
+    </div>
+  `;
+
+  return `
+    <details class="ws-panel ws-automation" open>
+      <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:center;">
+        <span>⚙️ Automation Readiness</span>
+        ${auto.requiredMissing > 0
+          ? `<span class="badge warn">${auto.requiredMissing} required missing</span>`
+          : `<span class="badge ok">Required ready</span>`
+        }
+      </summary>
+
+      <div class="hint" style="margin-top:8px;">
+        Shows where each packet document is coming from: manual upload, EHR, clearinghouse, payer portal, contract/rules data, system-derived data, or still missing.
+      </div>
+
+      <div class="ws-auto-grid">
+        ${connectionCard("EHR", auto.connected.ehr)}
+        ${connectionCard("Clearinghouse", auto.connected.clearinghouse)}
+        ${connectionCard("Payer Portal", auto.connected.payer_portal)}
+      </div>
+
+      <div class="muted small" style="margin-top:8px;">
+        Draft readiness: ${auto.draftPct}% · Submission readiness: ${auto.submissionPct}% · Pull available: ${pullCount} · Missing: ${missingCount}
+      </div>
+
+      ${auto.submissionPct < 100 ? `
+        <div class="ws-callout warn" style="margin-top:10px;">
+          <strong>Submission proof still needed.</strong>
+          Some required items may be auto-filled or system-derived. That is enough to draft the packet, but payer submission is stronger when source documents are attached or pulled.
+        </div>
+      ` : `
+        <div class="ws-callout ok" style="margin-top:10px;">
+          Required source documents are attached or pulled for submission proof.
+        </div>
+      `}
+
+      <table class="ws-auto-table">
+        <thead>
+          <tr>
+            <th>Document</th>
+            <th>Source</th>
+            <th>Proof Level</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${auto.rows.map(row => `
+            <tr>
+              <td>
+                <strong>${safeStr(row.label)}</strong>
+                ${row.required ? `<div class="muted small">Required</div>` : `<div class="muted small">Optional</div>`}
+              </td>
+              <td>
+                <span class="ws-source-pill ${safeStr(row.pillClass)}">${safeStr(row.sourceLabel)}</span>
+                <div class="muted small" style="margin-top:4px;">${safeStr(row.detail)}</div>
+              </td>
+
+              <td>
+                <span class="ws-source-pill ${safeStr(workspaceProofPillClass(row.proofLevel))}">
+                  ${safeStr(row.proofLabel || workspaceProofLabel(row.proofLevel))}
+                </span>
+              </td>
+
+              <td>
+                <span class="badge ${row.pillClass === "ok" ? "ok" : row.pillClass === "err" ? "err" : "warn"}">
+                  ${safeStr(row.statusLabel)}
+                </span>
+              </td>
+              <td>
+                ${row.status === "pull_available" ? `
+                  <form method="POST" action="/ai-workspace/pull-document" style="display:inline;">
+                    <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
+                    <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+                    <input type="hidden" name="doc_key" value="${safeStr(row.key)}"/>
+                    <input type="hidden" name="source_type" value="${safeStr(row.sourceType)}"/>
+                    <button class="btn secondary small" type="submit">Pull from ${safeStr(row.sourceLabel)}</button>
+                  </form>
+                ` : row.proofLevel === "draft_evidence" ? `
+                  <div class="muted small">
+                    ${safeStr(row.nextAction)}
+                  </div>
+                ` : row.status === "present" ? `
+                  <div class="muted small">Ready</div>
+                ` : `
+                  <div class="muted small">${safeStr(row.nextAction)}</div>
+                `}
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </details>
+  `;
+}
+
+function renderWorkspaceCommandCenter(ws, claim, derived, channel){
+  const isNegotiation = channel === "negotiation";
+  const completeness = workspaceEnhancedCompleteness(ws, channel, claim);
+  const score = computeWorkspaceQuickScore(ws, claim, derived, channel);
+  const auto = buildWorkspaceAutomationReadiness(ws, claim, channel);
+  const ready = canMarkReady(ws, channel);
+
+  const expected = Number(derived?.expectedInsurance || claim?.expected_amount || claim?.expected_insurance || 0);
+  const paid = Number(derived?.paidAmount || claim?.paid_amount || claim?.insurance_paid || 0);
+  const opportunity = Number(derived?.underpaidAmount || derived?.atRiskAmount || claim?.underpaid_amount || claim?.at_risk_amount || 0);
+
+  const title = isNegotiation
+    ? "Negotiation Packet Command Center"
+    : "Appeal Packet Command Center";
+
+  const sub = isNegotiation
+    ? `Underpayment recovery workspace for ${claim?.payer || "payer"} claim #${claim?.claim_number || ""}.`
+    : `Denial reversal workspace for ${claim?.payer || "payer"} claim #${claim?.claim_number || ""}.`;
+
+  const statusBadge = ready.ok
+    ? `<span class="badge ok">Ready for final review</span>`
+    : `<span class="badge warn">Needs ${ready.missing.length} required item${ready.missing.length === 1 ? "" : "s"}</span>`;
+
+  return `
+    <div class="ws-command-card">
+      <div class="ws-command-head">
+        <div>
+          <h2 class="ws-command-title">${safeStr(title)}</h2>
+          <div class="ws-command-sub">${safeStr(sub)}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          ${statusBadge}
+          <span class="badge">${safeStr(channel === "negotiation" ? "Negotiation" : "Appeal")}</span>
+        </div>
+      </div>
+
+      <div class="ws-command-grid">
+        <div class="ws-command-metric">
+          <div class="ws-command-label">Packet Readiness</div>
+          <div class="ws-command-value">${Number(completeness.pct || 0)}%</div>
+        </div>
+
+        <div class="ws-command-metric">
+          <div class="ws-command-label">Success Probability</div>
+          <div class="ws-command-value">${Number(score.probability || 0)}%</div>
+        </div>
+
+        <div class="ws-command-metric">
+          <div class="ws-command-label">Recovery Opportunity</div>
+          <div class="ws-command-value">${formatMoneyUI(opportunity)}</div>
+        </div>
+
+        <div class="ws-command-metric">
+          <div class="ws-command-label">Automation</div>
+          <div class="ws-command-value">${auto.requiredPresent}/${Math.max(1, auto.required.length)} required</div>
+        </div>
+      </div>
+
+      <div class="ws-progress-track" aria-label="Packet readiness">
+        <div class="ws-progress-fill" style="width:${Math.max(0, Math.min(100, Number(completeness.pct || 0)))}%;"></div>
+      </div>
+
+      <div class="muted small" style="margin-top:10px;">
+        Expected ${formatMoneyUI(expected)} · Paid ${formatMoneyUI(paid)} · Required present ${auto.requiredPresent} · Pull available ${auto.requiredPullAvailable} · Missing ${auto.requiredMissing}
+      </div>
+    </div>
+  `;
+}
+
 function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
   const docs = workspaceRequiredDocConfig(channel);
-  const hasMissing = docs.some(d => d.required && !packetHasKey(ws, d.key));
-  const contract = (ws?.org_id || claim?.org_id)
-    ? findContractForClaim(ws?.org_id || claim?.org_id, claim || {})
-    : null;
+  const hasMissing = docs.some(d => d.required && !workspaceDocPresent(ws, d, claim));
+
   return `
     <details class="ws-panel ws-docs">
       <summary>
         <span>📄 Documents & Missing Items</span>
         ${hasMissing ? `<span class="badge warn">⚠ Missing Required</span>` : `<span class="badge ok">✓ Complete</span>`}
       </summary>
+
+      <div class="hint" style="margin:8px 0 10px;">
+        ${channel === "negotiation"
+          ? "Negotiation packets focus on payment proof, contract/allowed amount proof, and the expected-vs-paid variance. Medical records are optional unless the payment dispute is tied to medical necessity, coding, or documentation."
+          : "Appeal packets focus on denial proof, payer reason, claim proof, and supporting clinical/policy evidence when needed."
+        }
+      </div>
+
       <div class="ws-doc-list">
         ${docs.map(doc => {
-          const isAutoContract = doc.key === "contract_excerpt" && !!contract;
-          const isAutoEob = doc.key === "eob_era" && (
-            !!ws?.negotiation?.packet_sections?.eob_era ||
-            !!ws?.appeal?.packet_sections?.eob_era
-          );
-          const present = packetHasKey(ws, doc.key) || isAutoContract || isAutoEob;
-          const attachment = workspaceFindAttachmentByPacketKey(ws, doc.key);
+          const automation = workspaceDocAutomationStatus(ws, doc, claim, channel);
+          const present = automation.status === "present";
+          const draftOnly = automation.proofLevel === "draft_evidence";
+          const attachment = workspaceSafeFindAttachment(ws, doc.key);
+          const isAutoContract = automation.sourceType === "contract_rules" && automation.status === "present" && !attachment;
+          const isAutoEob = automation.sourceType === "clearinghouse" && automation.status === "present" && !attachment;
+          const meta = automation.detail;
+
           return `
             <div class="ws-doc-item">
               <div class="ws-doc-item-top">
                 <div>
-                  <div class="ws-doc-name">${safeStr(doc.label)} ${doc.required ? `<span class="badge warn" style="margin-left:6px;">Required</span>` : ``}${isAutoContract || isAutoEob ? `<span class="badge ok" style="margin-left:6px;">Auto-filled</span>` : ""}</div>
-                  <div class="ws-doc-meta">${isAutoContract && !attachment ? "Auto-filled from contract terms" : (isAutoEob && !attachment ? "Auto-filled from claim payment data" : (present ? `Uploaded: ${safeStr(attachment?.filename || "Attached")}` : "Not uploaded yet"))}</div>
+                  <div class="ws-doc-name">
+                    ${safeStr(doc.label)}
+                    ${doc.required ? `<span class="badge warn" style="margin-left:6px;">Required</span>` : `<span class="badge" style="margin-left:6px;">Optional</span>`}
+                    ${present ? `<span class="badge ok" style="margin-left:6px;">${safeStr(automation.sourceLabel)}</span>` : ""}
+                    ${draftOnly ? `<span class="badge warn" style="margin-left:6px;">Draft Evidence Only</span>` : ""}
+                    ${automation.status === "pull_available" ? `<span class="badge" style="margin-left:6px;">Pull Available</span>` : ""}
+                  </div>
+                  <div class="ws-doc-meta">${safeStr(meta)}</div>
                 </div>
-                <div>${present ? `<span class="badge ok">Present</span>` : `<span class="badge err">Missing</span>`}</div>
+                <div>
+                  ${automation.status === "present"
+                    ? `<span class="badge ok">Source Attached</span>`
+                    : automation.proofLevel === "draft_evidence"
+                      ? `<span class="badge warn">Draft Only</span>`
+                      : automation.status === "pull_available"
+                        ? `<span class="badge warn">Pull Available</span>`
+                        : `<span class="badge err">Missing Source</span>`
+                  }
+                </div>
               </div>
+
+              ${draftOnly ? `
+                <div class="ws-callout warn" style="margin-top:8px;">
+                  This item is auto-filled/system-derived for drafting, but a source document is still recommended for payer submission.
+                </div>
+              ` : ``}
+
               <form class="ws-upload-form" method="POST" action="/ai-workspace/upload" enctype="multipart/form-data">
                 <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
                 <input type="hidden" name="channel" value="${safeStr(channel)}"/>
@@ -14090,12 +16030,35 @@ function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
           `;
         }).join("")}
       </div>
-      <div class="hint" style="margin-top:10px;">Users should not guess what to do. Keep required docs green before review/export.</div>
+
+      <div class="hint" style="margin-top:10px;">
+        Keep required documents green before export/submission. Optional documents should be added when they strengthen the specific argument.
+      </div>
     </details>
   `;
 }
 
 function renderInlineAIAssist(billed_id, channel){
+  const isNegotiation = channel === "negotiation";
+
+  const helperText = isNegotiation
+    ? `
+      Ask AI to improve this negotiation packet:
+      <br/>• strengthen contract variance language
+      <br/>• add reimbursement methodology
+      <br/>• justify the requested payment amount
+    `
+    : `
+      Ask AI to improve this appeal packet:
+      <br/>• strengthen denial reversal argument
+      <br/>• add medical necessity or policy support
+      <br/>• rewrite for appeal approval
+    `;
+
+  const placeholder = isNegotiation
+    ? "e.g. Make this stronger using contract variance and expected-vs-paid reimbursement logic"
+    : "e.g. Make this stronger for medical necessity or denial reversal";
+
   return `
     <div class="ws-panel">
       <h3>🤖 AI Assist</h3>
@@ -14104,23 +16067,26 @@ function renderInlineAIAssist(billed_id, channel){
         <input type="hidden" name="channel" value="${safeStr(channel)}" />
 
         <div class="hint" style="margin-bottom:8px;">
-          Ask AI to improve this packet:
-          <br/>• strengthen medical necessity
-          <br/>• add contract language
-          <br/>• rewrite for approval
+          ${helperText}
         </div>
 
         <div style="margin-bottom:8px;">
           <div class="small muted">Quick Improvements:</div>
 
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
-            <button type="submit" class="btn small" name="preset" value="improve">Improve Argument</button>
-            <button type="submit" class="btn small" name="preset" value="contract">Add Contract Language</button>
-            <button type="submit" class="btn small" name="preset" value="justify">Strengthen Justification</button>
+            ${isNegotiation ? `
+              <button type="submit" class="btn small" name="preset" value="improve">Strengthen Variance Argument</button>
+              <button type="submit" class="btn small" name="preset" value="contract">Add Contract / Fee Schedule Language</button>
+              <button type="submit" class="btn small" name="preset" value="justify">Justify Requested Amount</button>
+            ` : `
+              <button type="submit" class="btn small" name="preset" value="improve">Improve Appeal Argument</button>
+              <button type="submit" class="btn small" name="preset" value="contract">Add Policy / Contract Language</button>
+              <button type="submit" class="btn small" name="preset" value="justify">Strengthen Medical Justification</button>
+            `}
           </div>
         </div>
 
-        <textarea name="prompt" placeholder="e.g. Make this stronger for medical necessity or rewrite for appeal approval"></textarea>
+        <textarea name="prompt" placeholder="${safeStr(placeholder)}"></textarea>
 
         <button class="btn">Apply AI Update</button>
       </form>
@@ -38287,15 +40253,7 @@ function renderTemplateEditor(org, user){
       return redirect(res, "/account?tab=integrations&err=Missing integration type or provider");
     }
 
-    const credentialPayload = {
-      username: String(payload.get("username") || "").trim(),
-      password: String(payload.get("password") || "").trim(),
-      api_key: String(payload.get("api_key") || "").trim(),
-      token: String(payload.get("token") || "").trim(),
-      portal_url: String(payload.get("portal_url") || "").trim(),
-      client_id: String(payload.get("client_id") || "").trim(),
-      client_secret: String(payload.get("client_secret") || "").trim()
-    };
+    const credentialPayload = readIntegrationCredentialPayload(payload);
 
     upsertOrgIntegration(org.org_id, {
       integration_key,
@@ -38305,13 +40263,60 @@ function renderTemplateEditor(org, user){
       status: "connected",
       credentials: encrypt(credentialPayload),
       config: {
-        mode: String(payload.get("mode") || "manual").trim()
+        mode: String(payload.get("mode") || "manual").trim(),
+        environment: String(payload.get("environment") || payload.get("sandbox") || "").trim(),
+        api_ready: true,
+        saved_for_future_api_use: true
       },
       last_sync: "",
       last_error: ""
     });
 
     return redirect(res, "/account?tab=integrations&saved=1");
+  }
+
+  if (method === "POST" && pathname === "/account/integrations/test") {
+    if (!isIntegrationsEnabledForOrg(org)) {
+      return redirect(res, "/account?tab=integrations&err=Integrations are only available on Enterprise or by admin override");
+    }
+
+    const body = await parseBody(req);
+    const payload = new URLSearchParams(body);
+
+    const integration_key = String(payload.get("integration_key") || "").trim();
+
+    if (!integration_key) {
+      return redirect(res, "/account?tab=integrations&err=Missing integration key");
+    }
+
+    const row = getIntegrationByKey(org.org_id, integration_key);
+
+    if (!row) {
+      return redirect(res, "/account?tab=integrations&err=Integration not found");
+    }
+
+    const result = await testIntegrationConnectionSafe(row);
+
+    const verificationStatus =
+      result.verification_status ||
+      (result.verified ? "verified" : result.reachable ? "reachable_unverified" : "failed");
+
+    updateIntegrationByKey(org.org_id, integration_key, {
+      last_test_at: nowISO(),
+      last_test_status: verificationStatus,
+      last_test_verified: !!result.verified,
+      last_test_reachable: !!result.reachable,
+      last_test_message: result.message || "",
+      last_test_url: result.test_url || "",
+      last_error: result.verified ? "" : (result.message || "Connection test failed")
+    });
+
+    const resultLabel = integrationTestStatusLabel(verificationStatus);
+
+    return redirect(
+      res,
+      `/account?tab=integrations&msg=${encodeURIComponent(`${resultLabel}: ${result.message || "Connection test complete"}`)}`
+    );
   }
 
   if (method === "POST" && pathname === "/account/integrations/disconnect") {
@@ -38947,10 +40952,29 @@ function renderTemplateEditor(org, user){
                         </div>
                         <div>${renderStatus(row)}</div>
                       </div>
-                      <form method="POST" action="/account/integrations/disconnect" style="margin-top:10px;">
-                        <input type="hidden" name="integration_key" value="${safeStr(row.integration_key || "")}" />
-                        <button class="btn secondary" type="submit">Disconnect</button>
-                      </form>
+                      <div class="muted small" style="margin-top:8px;">
+                        ${row.last_test_at ? `
+                          Test:
+                          <span class="badge ${safeStr(integrationTestStatusBadgeClass(row.last_test_status))}">
+                            ${safeStr(integrationTestStatusLabel(row.last_test_status))}
+                          </span>
+                          <span class="muted small">· ${safeStr(row.last_test_message || "")}</span>
+                        ` : `
+                          Test: Not tested yet
+                        `}
+                      </div>
+
+                      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+                        <form method="POST" action="/account/integrations/test" style="margin:0;">
+                          <input type="hidden" name="integration_key" value="${safeStr(row.integration_key || "")}" />
+                          <button class="btn secondary" type="submit">Test Connection</button>
+                        </form>
+
+                        <form method="POST" action="/account/integrations/disconnect" style="margin:0;">
+                          <input type="hidden" name="integration_key" value="${safeStr(row.integration_key || "")}" />
+                          <button class="btn secondary" type="submit">Disconnect</button>
+                        </form>
+                      </div>
                     </div>
                   `).join("")
             }
@@ -38965,7 +40989,7 @@ function renderTemplateEditor(org, user){
           <div class="card" style="margin-bottom:16px;">
             <h3 style="margin-bottom:8px;">Integrations</h3>
             <div class="muted small" style="margin-bottom:12px;">
-              Connect your systems to sync claims, payments, and statuses into TJ Healthcare Pro.
+              Connect your systems to sync claims, payments, statuses, packet documents, EOB/ERA data, payer correspondence, and source proof into TJ Healthcare Pro. You can save credentials now, test connection readiness, and wire provider-specific API endpoints later.
             </div>
           </div>
 
@@ -38979,7 +41003,7 @@ function renderTemplateEditor(org, user){
 
             <form method="POST" action="/account/integrations/connect" style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
               <input type="hidden" name="type" value="clearinghouse" />
-              <input type="hidden" name="mode" value="manual" />
+              <input type="hidden" name="mode" value="api_or_manual" />
 
               <div>
                 <label>Provider</label>
@@ -39010,6 +41034,96 @@ function renderTemplateEditor(org, user){
               <div>
                 <label>API Key</label>
                 <input name="api_key" placeholder="Optional API key" />
+              </div>
+
+              <div>
+                <label>Access Token</label>
+                <input name="access_token" placeholder="Optional bearer token" />
+              </div>
+
+              <div>
+                <label>API Base URL</label>
+                <input name="base_url" placeholder="https://api.clearinghouse.com" />
+              </div>
+
+              <div>
+                <label>Auth URL</label>
+                <input name="auth_url" placeholder="https://api.clearinghouse.com/oauth/token" />
+              </div>
+
+              <div>
+                <label>Document Pull Endpoint</label>
+                <input name="document_pull_endpoint" placeholder="/documents/pull or /attachments/search" />
+              </div>
+
+              <div>
+                <label>Claims Endpoint</label>
+                <input name="claims_endpoint" placeholder="/claims" />
+              </div>
+
+              <div>
+                <label>Payments / ERA Endpoint</label>
+                <input name="payments_endpoint" placeholder="/payments or /era" />
+              </div>
+
+              <div>
+                <label>Status Endpoint</label>
+                <input name="status_endpoint" placeholder="/status or /health" />
+              </div>
+
+              <div>
+                <label>Submitter ID</label>
+                <input name="submitter_id" placeholder="Submitter ID if required" />
+              </div>
+
+              <div>
+                <label>Receiver ID</label>
+                <input name="receiver_id" placeholder="Receiver ID if required" />
+              </div>
+
+              <div>
+                <label>Environment</label>
+                <select name="environment">
+                  <option value="">Select environment</option>
+                  <option value="sandbox">Sandbox</option>
+                  <option value="production">Production</option>
+                </select>
+              </div>
+
+              <div>
+                <label>Test Endpoint</label>
+                <input name="test_endpoint" placeholder="/status, /health, /claims, or provider test path" />
+              </div>
+
+              <div>
+                <label>Test Method</label>
+                <select name="test_method">
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                </select>
+              </div>
+
+              <div>
+                <label>Document Pull Method</label>
+                <select name="document_pull_method">
+                  <option value="POST">POST</option>
+                  <option value="GET">GET</option>
+                </select>
+              </div>
+
+              <div>
+                <label>Custom Headers JSON</label>
+                <textarea name="custom_headers_json" placeholder='{"X-Client-Id":"{{client_id}}"}'></textarea>
+              </div>
+
+              <div>
+                <label>Document Pull Payload Template JSON</label>
+                <textarea name="document_pull_payload_template" placeholder='{"claimId":"{{claim_id}}","documentType":"{{doc_key}}"}'></textarea>
+              </div>
+
+              <div>
+                <label>Provider Notes</label>
+                <textarea name="provider_notes" placeholder="Provider-specific setup notes, scopes, payer approvals, or endpoint instructions"></textarea>
               </div>
 
               <div style="display:flex;align-items:flex-end;gap:8px;">
@@ -39056,12 +41170,99 @@ function renderTemplateEditor(org, user){
 
               <div>
                 <label>Access Token</label>
-                <input name="token" placeholder="Access token" />
+                <input name="access_token" placeholder="Access token" />
               </div>
 
               <div>
                 <label>API Key</label>
                 <input name="api_key" placeholder="Optional API key" />
+              </div>
+
+              <div>
+                <label>FHIR Base URL</label>
+                <input name="fhir_base_url" placeholder="https://ehr.example.com/fhir/v1" />
+              </div>
+
+              <div>
+                <label>API Base URL</label>
+                <input name="base_url" placeholder="Optional API base URL if different from FHIR" />
+              </div>
+
+              <div>
+                <label>Auth URL</label>
+                <input name="auth_url" placeholder="OAuth/token URL" />
+              </div>
+
+              <div>
+                <label>Client ID</label>
+                <input name="client_id" placeholder="OAuth client ID" />
+              </div>
+
+              <div>
+                <label>Client Secret</label>
+                <input type="password" name="client_secret" placeholder="OAuth client secret" />
+              </div>
+
+              <div>
+                <label>Refresh Token</label>
+                <input name="refresh_token" placeholder="Optional refresh token" />
+              </div>
+
+              <div>
+                <label>DocumentReference Endpoint</label>
+                <input name="documentreference_endpoint" placeholder="/DocumentReference" />
+              </div>
+
+              <div>
+                <label>Patient Lookup Endpoint</label>
+                <input name="patient_lookup_endpoint" placeholder="/Patient" />
+              </div>
+
+              <div>
+                <label>Binary Endpoint</label>
+                <input name="binary_endpoint" placeholder="/Binary" />
+              </div>
+
+              <div>
+                <label>Tenant / Practice ID</label>
+                <input name="tenant_id" placeholder="Tenant, practice, or facility ID" />
+              </div>
+
+              <div>
+                <label>Environment</label>
+                <select name="environment">
+                  <option value="">Select environment</option>
+                  <option value="sandbox">Sandbox</option>
+                  <option value="production">Production</option>
+                </select>
+              </div>
+
+              <div>
+                <label>Test Endpoint</label>
+                <input name="test_endpoint" placeholder="metadata or provider health endpoint" />
+              </div>
+
+              <div>
+                <label>Test Method</label>
+                <select name="test_method">
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                </select>
+              </div>
+
+              <div>
+                <label>Custom Headers JSON</label>
+                <textarea name="custom_headers_json" placeholder='{"X-Tenant":"{{tenant_id}}"}'></textarea>
+              </div>
+
+              <div>
+                <label>Document Pull Payload Template JSON</label>
+                <textarea name="document_pull_payload_template" placeholder='{"patientId":"{{patient_id}}","claimId":"{{claim_id}}","documentType":"{{doc_key}}"}'></textarea>
+              </div>
+
+              <div>
+                <label>Provider Notes</label>
+                <textarea name="provider_notes" placeholder="FHIR version, scope requirements, patient matching notes, or vendor instructions"></textarea>
               </div>
 
               <div style="display:flex;align-items:flex-end;gap:8px;">
@@ -39103,6 +41304,81 @@ function renderTemplateEditor(org, user){
               <div>
                 <label>Password</label>
                 <input type="password" name="password" placeholder="Portal password" />
+              </div>
+
+              <div>
+                <label>API Base URL</label>
+                <input name="base_url" placeholder="https://payer-api.example.com" />
+              </div>
+
+              <div>
+                <label>API Key</label>
+                <input name="api_key" placeholder="Optional payer API key" />
+              </div>
+
+              <div>
+                <label>Access Token</label>
+                <input name="access_token" placeholder="Optional bearer token" />
+              </div>
+
+              <div>
+                <label>Document Pull Endpoint</label>
+                <input name="document_pull_endpoint" placeholder="/documents/pull or /letters" />
+              </div>
+
+              <div>
+                <label>Claim Status Endpoint</label>
+                <input name="claim_status_endpoint" placeholder="/claims/status" />
+              </div>
+
+              <div>
+                <label>Payer ID</label>
+                <input name="payer_id" placeholder="Payer ID / Trading partner ID" />
+              </div>
+
+              <div>
+                <label>Environment</label>
+                <select name="environment">
+                  <option value="">Select environment</option>
+                  <option value="sandbox">Sandbox</option>
+                  <option value="production">Production</option>
+                </select>
+              </div>
+
+              <div>
+                <label>Test Endpoint</label>
+                <input name="test_endpoint" placeholder="/status, /claims/status, or provider test path" />
+              </div>
+
+              <div>
+                <label>Test Method</label>
+                <select name="test_method">
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                </select>
+              </div>
+
+              <div>
+                <label>Document Pull Method</label>
+                <select name="document_pull_method">
+                  <option value="POST">POST</option>
+                  <option value="GET">GET</option>
+                </select>
+              </div>
+
+              <div>
+                <label>Custom Headers JSON</label>
+                <textarea name="custom_headers_json" placeholder='{"X-Payer-ID":"{{payer_id}}"}'></textarea>
+              </div>
+
+              <div>
+                <label>Document Pull Payload Template JSON</label>
+                <textarea name="document_pull_payload_template" placeholder='{"claimNumber":"{{claim_number}}","documentType":"{{doc_key}}"}'></textarea>
+              </div>
+
+              <div>
+                <label>Provider Notes</label>
+                <textarea name="provider_notes" placeholder="Portal/API notes, MFA limitations, payer permissions, or document retrieval rules"></textarea>
               </div>
 
               <div style="display:flex;align-items:flex-end;gap:8px;">
@@ -40164,7 +42440,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
     ` : "";
 
     const pageContent = `
-      <div class="ws-main">
+      ${workspacePolishStyles()}
+      <div class="ws-main packet-workspace-shell">
         <div class="ws-banner">
           <div class="ws-banner-title">${channel === "appeal" ? `Round ${currentRound} (Appeal)` : `Round ${currentRound} (Negotiation)`}</div>
           <div class="ws-banner-sub">Edit directly from the packet preview, upload missing documents from the sidebar, and export a clean letter that matches this preview.</div>
@@ -40176,12 +42453,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
             </a>
           </div>
         </div>
-        ${renderFlowBridgeCard(
-          "What happens next",
-          "After submission, you’ll be taken to Claim Detail where you can track the round, follow-up date, and packet history.",
-          `/claim-detail?billed_id=${encodeURIComponent(claim.billed_id)}`,
-          "Open Claim Detail"
-        )}
+        ${renderWorkspaceCommandCenter(ws, claim, derived, channel)}
 
         ${savedMsg}
         ${uploadedMsg}
@@ -40191,10 +42463,12 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
         <div class="ws-layout">
           <div class="ws-side workspace-left">
-            <div class="hint" style="margin-bottom:8px;">Workspace Tools</div>
+            <div class="hint" style="margin-bottom:8px;">Workspace Command Center</div>
             ${renderWorkspaceIntelligence(ws, claim, derived, channel)}
-            ${renderInlineAIAssist(claim.billed_id, channel)}
+            ${typeof renderWorkspaceStrategyPanel === "function" ? renderWorkspaceStrategyPanel(ws, claim, derived, channel) : ""}
+            ${renderAutomationReadinessPanel(ws, claim, channel)}
             ${renderPacketMissingChecklist(ws, claim, derived, channel, claim.billed_id)}
+            ${renderInlineAIAssist(claim.billed_id, channel)}
             ${renderWorkflowPanel(ws, claim, channel)}
           </div>
 
@@ -40298,6 +42572,74 @@ if (method === "GET" && pathname === "/agent-workspace") {
     return;
   }
 
+  if (method === "POST" && pathname === "/ai-workspace/pull-document") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+    if (!isAccessEnabled(sess.org_id)) return send(res, 403, "Access disabled");
+
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const billed_id = String(params.get("billed_id") || "").trim();
+    const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const doc_key = String(params.get("doc_key") || "").trim();
+    const requestedSource = String(params.get("source_type") || "").trim();
+
+    if (!billed_id || !doc_key) {
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
+    }
+
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return redirect(res, `/ai-${channel}`);
+
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    ensureWorkspacePacket(ws);
+    ensurePacketSections(ws, claim);
+
+    const sourceType = requestedSource || workspacePreferredPullSourceForDoc(doc_key, channel);
+    const pulled = await pullWorkspaceDocumentBySource(sess.org_id, claim, doc_key, sourceType, channel);
+
+    ws.activity = ws.activity || {};
+    ws.activity.last_opened_at = nowISO();
+
+    if (pulled && pulled.ok) {
+      attachPulledWorkspaceDocument(ws, claim, channel, doc_key, sourceType, pulled);
+      saveAgentWorkspace(sess.org_id, ws);
+
+      try {
+        auditLog({
+          actor: "user",
+          action: "workspace_document_pulled",
+          org_id: sess.org_id,
+          billed_id,
+          channel,
+          doc_key,
+          source_type: sourceType
+        });
+      } catch {}
+
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&pulled=${encodeURIComponent(doc_key)}`);
+    }
+
+    ws.audit = Array.isArray(ws.audit) ? ws.audit : [];
+    ws.audit.push({
+      event_id: uuid(),
+      type: "document_pull_failed",
+      doc_key,
+      source_type: sourceType,
+      reason: pulled?.reason || "unknown",
+      message: pulled?.message || "",
+      created_at: nowISO()
+    });
+
+    saveAgentWorkspace(sess.org_id, ws);
+
+    return redirect(
+      res,
+      `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&pull_failed=${encodeURIComponent(doc_key)}&reason=${encodeURIComponent(pulled?.reason || "not_found")}`
+    );
+  }
+
   if (method === "POST" && pathname === "/ai-workspace/upload") {
     const sess = getAuth(req);
     if (!sess || !sess.org_id) return redirect(res, "/login");
@@ -40330,7 +42672,17 @@ if (method === "GET" && pathname === "/agent-workspace") {
       stored_path: stored.stored_path,
       kind: workspaceAttachmentKindForDocKey(doc_key),
       uploaded_at: nowISO(),
-      doc_key
+      doc_key,
+
+      // Source tracking for Automation Readiness.
+      source_type: "manual_upload",
+      source_label: "Manual Upload",
+      source_system: "User Upload",
+
+      // Manual uploads are actual submission proof.
+      proof_level: "manual_source_document",
+      is_source_document: true,
+      source_status: "attached"
     };
 
     ws.attachments = Array.isArray(ws.attachments) ? ws.attachments : [];
@@ -40373,6 +42725,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
     const submissionMethod = String(params.get("method") || "").trim();
     const follow_up_date = String(params.get("follow_up_date") || "").trim();
+    const overrideReason = String(params.get("override_reason") || "").trim();
+    const confirmMissingSourceDocs = params.get("confirm_missing_source_docs") === "1";
 
     const claim = getBilledById(sess.org_id, billed_id);
     if (!claim) return send(res, 404, "Claim not found");
@@ -40381,6 +42735,30 @@ if (method === "GET" && pathname === "/agent-workspace") {
     ensureWorkspacePacket(ws);
     ensurePacketSections(ws, claim);
     ensureWorkspaceRounds(ws, channel);
+    const autoReadiness = buildWorkspaceAutomationReadiness(ws, claim, channel);
+    const sourceProofIncomplete = Number(autoReadiness.submissionPct || 0) < 100;
+
+    if (sourceProofIncomplete && !confirmMissingSourceDocs) {
+      ws.submission = ws.submission || {};
+      ws.submission.status = "blocked";
+      ws.submission.blocked_at = nowISO();
+      ws.submission.blocked_reason = "missing_source_documents";
+      ws.submission.submission_readiness_pct = autoReadiness.submissionPct;
+      saveAgentWorkspace(sess.org_id, ws);
+
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&submit_blocked=missing_source_docs`);
+    }
+
+    if (sourceProofIncomplete && confirmMissingSourceDocs && !overrideReason) {
+      ws.submission = ws.submission || {};
+      ws.submission.status = "blocked";
+      ws.submission.blocked_at = nowISO();
+      ws.submission.blocked_reason = "override_reason_required";
+      ws.submission.submission_readiness_pct = autoReadiness.submissionPct;
+      saveAgentWorkspace(sess.org_id, ws);
+
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&submit_blocked=override_reason_required`);
+    }
 
     const submittedAt = nowISO();
 
@@ -40388,7 +42766,12 @@ if (method === "GET" && pathname === "/agent-workspace") {
       status: "submitted",
       method: submissionMethod,
       follow_up_date,
-      submitted_at: submittedAt
+      submitted_at: submittedAt,
+      source_proof_incomplete: sourceProofIncomplete,
+      submission_readiness_pct: autoReadiness.submissionPct,
+      draft_readiness_pct: autoReadiness.draftPct,
+      override_reason: overrideReason,
+      override_missing_source_docs: confirmMissingSourceDocs
     };
     ws.history = Array.isArray(ws.history) ? ws.history : [];
     ws.history.push({
@@ -40397,6 +42780,18 @@ if (method === "GET" && pathname === "/agent-workspace") {
       submitted_at: submittedAt,
       method: submissionMethod,
       follow_up_date
+    });
+
+    ws.audit = Array.isArray(ws.audit) ? ws.audit : [];
+    ws.audit.push({
+      event_id: uuid(),
+      type: "submission_source_proof_check",
+      source_proof_incomplete: sourceProofIncomplete,
+      submission_readiness_pct: autoReadiness.submissionPct,
+      draft_readiness_pct: autoReadiness.draftPct,
+      override_used: confirmMissingSourceDocs,
+      override_reason: overrideReason,
+      created_at: nowISO()
     });
 
     ws[channel].round = Number(ws[channel].round || 1) + 1;
