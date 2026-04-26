@@ -7977,9 +7977,15 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
   const m = r.metrics || {};
   const totals = m.totals || {};
   const rates = m.rates || {};
-  const bullets = Array.isArray(r.bullets) ? r.bullets : [];
+  const bullets = Array.isArray(r.contextSummaryBullets) && r.contextSummaryBullets.length
+    ? r.contextSummaryBullets
+    : (Array.isArray(r.bullets) ? r.bullets : []);
+
   const drivers = Array.isArray(r.disciplineDrivers) ? r.disciplineDrivers : [];
-  const actions = Array.isArray(r.executiveActions) ? r.executiveActions : [];
+
+  const actions = Array.isArray(r.contextExecutiveActions) && r.contextExecutiveActions.length
+    ? r.contextExecutiveActions
+    : (Array.isArray(r.executiveActions) ? r.executiveActions : []);
   const payers = Array.isArray(r.topPayers) ? r.topPayers : [];
   const charts = Array.isArray(r.charts) ? r.charts : [];
 
@@ -8004,9 +8010,26 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
     </div>
   `).join("");
 
+  const isPayerComparisonBrief =
+    String(r.briefType || "") === "PAYER_COMPARISON" &&
+    Array.isArray(r.payerComparisons) &&
+    r.payerComparisons.length >= 2;
+
+  const comparisonNames = isPayerComparisonBrief
+    ? r.payerComparisons.map(p => p.payer).join(" vs ")
+    : "";
+
+  const selectedPayerTotalsLabel = isPayerComparisonBrief
+    ? `Selected Payers: ${safeStr(comparisonNames)}`
+    : "";
+
   const hasExistingCharts = Array.isArray(charts) && charts.length > 0;
 
-  const enhancedUI = `
+  const suppressEnhancedUI =
+    !!r.suppressGenericEnhancedUI ||
+    isPayerComparisonBrief;
+
+  const enhancedUI = suppressEnhancedUI ? "" : `
     ${renderCopilotMetrics(r?.metrics)}
     ${renderCopilotActions(r?.actions)}
     ${renderCopilotTopClaims(r?.actions)}
@@ -8023,20 +8046,66 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
           <div>
             <div class="muted" style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;">Executive Copilot Brief</div>
             <div style="font-size:18px;font-weight:900;margin-top:4px;">${safeStr(r.briefTitle || "Financial Performance Snapshot")}</div>
-            <div class="muted">KPI highlights, drivers, and recommended actions.</div>
+            <div class="muted">${safeStr(r.briefSubtitle || "KPI highlights, drivers, and recommended actions.")}</div>
           </div>
         </div>
 
-        <div class="ws-kpis">
-          <div class="ws-kpi"><div class="ws-kpi-l">Total Billed</div><div class="ws-kpi-v">$${Number(totals.billed||0).toLocaleString()}</div></div>
-          <div class="ws-kpi"><div class="ws-kpi-l">Total Collected</div><div class="ws-kpi-v">$${Number(totals.collected||0).toLocaleString()}</div></div>
-          <div class="ws-kpi"><div class="ws-kpi-l">Revenue At Risk</div><div class="ws-kpi-v">$${Number(totals.atRisk||0).toLocaleString()}</div></div>
-          <div class="ws-kpi"><div class="ws-kpi-l">Recovery Rate</div><div class="ws-kpi-v">${Number(rates.recoveryRate||0).toFixed(1)}%</div></div>
-          <div class="ws-kpi"><div class="ws-kpi-l">Denial Rate</div><div class="ws-kpi-v">${Number(rates.denialRate||0).toFixed(1)}%</div></div>
-          <div class="ws-kpi"><div class="ws-kpi-l">AI Case Readiness</div><div class="ws-kpi-v">${Number(r.metrics?.disciplineScore||0).toFixed(0)}/100</div></div>
-        </div>
+        ${isPayerComparisonBrief ? `
+          <div class="muted" style="margin:8px 0 12px;">
+            ${selectedPayerTotalsLabel}
+          </div>
+          <div class="ws-kpis">
+            <div class="ws-kpi">
+              <div class="ws-kpi-l">Selected Payers Billed</div>
+              <div class="ws-kpi-v">$${Number(totals.billed||0).toLocaleString()}</div>
+            </div>
+            <div class="ws-kpi">
+              <div class="ws-kpi-l">Selected Payers Collected</div>
+              <div class="ws-kpi-v">$${Number(totals.collected||0).toLocaleString()}</div>
+            </div>
+            <div class="ws-kpi">
+              <div class="ws-kpi-l">Selected Payers At Risk</div>
+              <div class="ws-kpi-v">$${Number(totals.atRisk||0).toLocaleString()}</div>
+            </div>
+            <div class="ws-kpi">
+              <div class="ws-kpi-l">Avg Denial Rate</div>
+              <div class="ws-kpi-v">${Number(rates.denialRate||0).toFixed(1)}%</div>
+            </div>
+          </div>
+        ` : `
+          <div class="ws-kpis">
+            <div class="ws-kpi"><div class="ws-kpi-l">Total Billed</div><div class="ws-kpi-v">$${Number(totals.billed||0).toLocaleString()}</div></div>
+            <div class="ws-kpi"><div class="ws-kpi-l">Total Collected</div><div class="ws-kpi-v">$${Number(totals.collected||0).toLocaleString()}</div></div>
+            <div class="ws-kpi"><div class="ws-kpi-l">Revenue At Risk</div><div class="ws-kpi-v">$${Number(totals.atRisk||0).toLocaleString()}</div></div>
+            <div class="ws-kpi"><div class="ws-kpi-l">Recovery Rate</div><div class="ws-kpi-v">${Number(rates.recoveryRate||0).toFixed(1)}%</div></div>
+            <div class="ws-kpi"><div class="ws-kpi-l">Denial Rate</div><div class="ws-kpi-v">${Number(rates.denialRate||0).toFixed(1)}%</div></div>
+            <div class="ws-kpi"><div class="ws-kpi-l">AI Case Readiness</div><div class="ws-kpi-v">${Number(r.metrics?.disciplineScore||0).toFixed(0)}/100</div></div>
+          </div>
+        `}
 
-        ${renderBriefFocusSection(r)}
+        ${r.questionSpecificAnswer ? `
+          <section class="ws-brief-section">
+            <div class="ws-section-title">Direct Answer</div>
+            <div>${safeStr(r.questionSpecificAnswer)}</div>
+          </section>
+        ` : ``}
+
+        ${r.contextFocusTitle ? `
+          <section class="ws-brief-section">
+            <div class="ws-section-title">${safeStr(r.contextFocusTitle)}</div>
+            <div class="muted">${safeStr(r.contextFocusBody || "")}</div>
+          </section>
+        ` : (
+          isPayerComparisonBrief ? `
+          <section class="ws-brief-section">
+            <div class="ws-section-title">Payer Comparison Focus</div>
+            <div class="muted">
+              This brief compares only ${safeStr(comparisonNames)} for ${safeStr(r.rangeLabel || "the selected period")}. 
+              KPI totals shown above are selected-payer totals, not whole-practice totals.
+            </div>
+          </section>
+        ` : renderBriefFocusSection(r)
+        )}
 
         <section class="ws-brief-section">
           <div class="ws-section-title">Executive Summary</div>
@@ -8057,8 +8126,10 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
                   <tr>
                     <th>Payer</th>
                     <th>Claims</th>
+                    <th>Billed</th>
                     <th>Collected</th>
                     <th>At Risk</th>
+                    <th>Recovery Rate</th>
                     <th>Denial Rate</th>
                   </tr>
                 </thead>
@@ -8067,8 +8138,10 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
                     <tr>
                       <td>${safeStr(p.payer)}</td>
                       <td>${formatNumberUI(p.claims || 0)}</td>
+                      <td>${formatMoneyUI(p.billed || 0)}</td>
                       <td>${formatMoneyUI(p.collected || 0)}</td>
                       <td>${formatMoneyUI(p.atRisk || 0)}</td>
+                      <td>${Number(p.recoveryRate || 0).toFixed(1)}%</td>
                       <td>${Number(p.denialRate || 0).toFixed(1)}%</td>
                     </tr>
                   `).join("")}
@@ -8083,12 +8156,25 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
           ${actions.length ? `<ul class="ws-list">${actions.map(a=>`<li>${safeStr(a)}</li>`).join("")}</ul>` : `<div class="muted">No immediate corrective actions required.</div>`}
         </section>
 
-        <section class="ws-brief-section">
-          <div class="ws-section-title">Top Risk Payers</div>
-          ${payers.length ? `<ul class="ws-list">${payers.map(p=>`<li>${safeStr(p.payer)} - $${Math.round(p.risk||0).toLocaleString()} at risk</li>`).join("")}</ul>` : `<div class="muted">No payer risk data available.</div>`}
-        </section>
+        ${!isPayerComparisonBrief ? `
+          <section class="ws-brief-section">
+            <div class="ws-section-title">Top Risk Payers</div>
+            ${payers.length ? `<ul class="ws-list">${payers.map(p=>`<li>${safeStr(p.payer)} - $${Math.round(p.risk||0).toLocaleString()} at risk</li>`).join("")}</ul>` : `<div class="muted">No payer risk data available.</div>`}
+          </section>
 
-        ${chartCards}
+          ${chartCards}
+        ` : `
+          <section class="ws-brief-section">
+            <div class="ws-section-title">Comparison Takeaway</div>
+            <ul class="ws-list">
+              ${r.payerComparisons
+                .slice()
+                .sort((a,b) => Number(b.atRisk || 0) - Number(a.atRisk || 0))
+                .map(p => `<li>${safeStr(p.payer)} has ${formatMoneyUI(p.atRisk || 0)} at risk with a ${Number(p.denialRate || 0).toFixed(1)}% denial rate.</li>`)
+                .join("")}
+            </ul>
+          </section>
+        `}
 
         ${enhancedUI}
 
@@ -8097,6 +8183,268 @@ function renderCopilotBriefMessage(result, brief_id, workspace_id){
     </div>
 
   `;
+}
+
+function detectBriefQuestionFocus(question){
+  const q = String(question || "").toLowerCase();
+
+  if (/\b(vs|versus|compare|comparison)\b/.test(q)) return "payer_comparison";
+  if (/\bexpected|expected amount|expected insurance|allowed amount|contract\b/.test(q)) return "expected_amount";
+  if (/\bpaid|collected|collection|reimbursement|reimbursed|recovery\b/.test(q)) return "collections";
+  if (/\bdenial|denials|denied|appeal\b/.test(q)) return "denials";
+  if (/\bunderpaid|underpayment|negotiation|short paid|variance\b/.test(q)) return "underpayments";
+  if (/\bat risk|risk drivers|exposure|leakage|loss|losses|ar aging|aging\b/.test(q)) return "risk";
+  if (/\baction|recommend|next steps|what should|priority|prioritize\b/.test(q)) return "actions";
+
+  return "general";
+}
+
+function isBroadExecutiveBriefPrompt(question){
+  const q = String(question || "").toLowerCase();
+
+  return (
+    /\bexecutive brief\b/.test(q) ||
+    /\bfull analysis\b/.test(q) ||
+    /\bdeep dive\b/.test(q) ||
+    /\btop revenue risk drivers\b/.test(q) ||
+    /\bperformance snapshot\b/.test(q) ||
+    /\boverview\b/.test(q)
+  );
+}
+
+function buildQuestionSpecificBriefAnswer({
+  org_id,
+  question,
+  rangePreset,
+  payerScope,
+  comparePayers,
+  metrics,
+  payerComparisonRows
+}){
+  const q = String(question || "").trim();
+  const focus = detectBriefQuestionFocus(q);
+  const rangeLabel = formatRangeLabel(rangePreset || "last30");
+
+  if (!q || isBroadExecutiveBriefPrompt(q)) return "";
+
+  if (focus === "payer_comparison" && Array.isArray(payerComparisonRows) && payerComparisonRows.length >= 2) {
+    const leader = payerComparisonRows
+      .slice()
+      .sort((a,b) => Number(b.atRisk || 0) - Number(a.atRisk || 0))[0];
+
+    return `This brief compares ${payerComparisonRows.map(p => p.payer).join(" vs ")} for ${rangeLabel}. ${leader?.payer || "The highest-risk payer"} has the highest selected-payer exposure at ${formatMoneyUI(leader?.atRisk || 0)}.`;
+  }
+
+  const totals = metrics?.totals || {};
+  const rates = metrics?.rates || {};
+  const payerLabel = payerScope ? `${payerScope} ` : "";
+  const scopeLabel = payerScope ? payerScope : "the selected scope";
+
+  if (focus === "expected_amount") {
+    return `${payerLabel}expected insurance amount is ${formatMoneyUI(totals.expected || 0)} for ${rangeLabel}. Billed amount is ${formatMoneyUI(totals.billed || 0)}, collected is ${formatMoneyUI(totals.collected || 0)}, and current at-risk exposure is ${formatMoneyUI(totals.atRisk || 0)}.`;
+  }
+
+  if (focus === "collections") {
+    return `${payerLabel}collected amount is ${formatMoneyUI(totals.collected || 0)} for ${rangeLabel}. Recovery rate is ${Number(rates.recoveryRate || 0).toFixed(1)}%, with ${formatMoneyUI(totals.atRisk || 0)} still at risk.`;
+  }
+
+  if (focus === "denials") {
+    return `${scopeLabel} has a denial rate of ${Number(rates.denialRate || 0).toFixed(1)}% for ${rangeLabel}, with ${formatMoneyUI(totals.atRisk || 0)} at risk.`;
+  }
+
+  if (focus === "underpayments") {
+    return `${scopeLabel} has ${formatMoneyUI(totals.atRisk || 0)} in underpayment or payer-balance exposure for ${rangeLabel}. Prioritize claims with the largest gap between expected and paid amounts.`;
+  }
+
+  if (focus === "risk") {
+    return `${scopeLabel} has ${formatMoneyUI(totals.atRisk || 0)} in revenue exposure for ${rangeLabel}. The largest drivers are claims with low recovery, denials, underpayments, or unresolved payer balances.`;
+  }
+
+  return "";
+}
+
+function buildContextAwareBriefContent({
+  question,
+  briefType,
+  payerScope,
+  comparePayers,
+  payerComparisonRows,
+  metrics,
+  topPayers,
+  rangePreset
+}){
+  const focus = detectBriefQuestionFocus(question);
+  const rangeLabel = formatRangeLabel(rangePreset || "last30");
+  const totals = metrics?.totals || {};
+  const rates = metrics?.rates || {};
+  const payerLabel = payerScope ? `${payerScope} ` : "";
+  const isCompare = briefType === "PAYER_COMPARISON" && Array.isArray(payerComparisonRows) && payerComparisonRows.length >= 2;
+
+  if (isCompare) {
+    const sorted = payerComparisonRows
+      .slice()
+      .sort((a,b) => Number(b.atRisk || 0) - Number(a.atRisk || 0));
+
+    const highestRisk = sorted[0];
+    const strongestCollection = payerComparisonRows
+      .slice()
+      .sort((a,b) => Number(b.collected || 0) - Number(a.collected || 0))[0];
+
+    return {
+      contextMode: "payer_comparison",
+      focusTitle: "Payer Comparison Focus",
+      focusBody: `This brief compares only ${payerComparisonRows.map(p => p.payer).join(" vs ")} for ${rangeLabel}. KPI totals are selected-payer totals, not whole-practice totals.`,
+      summaryBullets: [
+        `${highestRisk?.payer || "The highest-risk payer"} has the highest at-risk exposure at ${formatMoneyUI(highestRisk?.atRisk || 0)}.`,
+        `${strongestCollection?.payer || "The strongest collection payer"} has the highest collected amount at ${formatMoneyUI(strongestCollection?.collected || 0)}.`,
+        `Average denial rate across the selected payers is ${Number(rates.denialRate || 0).toFixed(1)}%.`,
+        `Selected-payer total at risk is ${formatMoneyUI(totals.atRisk || 0)}.`
+      ],
+      actionBullets: [
+        `Review the highest at-risk selected payer: ${highestRisk?.payer || "N/A"}.`,
+        "Open the payer-specific claims to validate denial and underpayment causes.",
+        "Prioritize follow-up on selected-payer claims with unpaid expected balances.",
+        "Use payer-specific trends before escalating appeals or negotiations."
+      ],
+      suppressGenericEnhancedUI: true
+    };
+  }
+
+  if (focus === "expected_amount") {
+    return {
+      contextMode: "expected_amount",
+      focusTitle: "Expected Amount Focus",
+      focusBody: `This brief is focused on expected insurance amount for ${payerScope || "the selected data"} during ${rangeLabel}.`,
+      summaryBullets: [
+        `${payerLabel}expected insurance amount is ${formatMoneyUI(totals.expected || 0)}.`,
+        `${payerLabel}billed amount is ${formatMoneyUI(totals.billed || 0)}.`,
+        `${payerLabel}collected amount is ${formatMoneyUI(totals.collected || 0)}.`,
+        `${payerLabel}current at-risk exposure is ${formatMoneyUI(totals.atRisk || 0)}.`
+      ],
+      actionBullets: [
+        "Confirm the expected amount against payer contract or reimbursement rules.",
+        "Review claims where paid amount is below expected amount.",
+        "Use Claim Edit only if expected/paid values need correction.",
+        "Open payer claims to validate which claims created the expected amount."
+      ],
+      suppressGenericEnhancedUI: false
+    };
+  }
+
+  if (focus === "collections") {
+    return {
+      contextMode: "collections",
+      focusTitle: "Collection / Reimbursement Focus",
+      focusBody: `This brief is focused on reimbursement and collection performance for ${payerScope || "the selected scope"} during ${rangeLabel}.`,
+      summaryBullets: [
+        `${payerLabel}collected amount is ${formatMoneyUI(totals.collected || 0)}.`,
+        `${payerLabel}recovery rate is ${Number(rates.recoveryRate || 0).toFixed(1)}%.`,
+        `${payerLabel}remaining at-risk exposure is ${formatMoneyUI(totals.atRisk || 0)}.`,
+        `${payerLabel}denial rate is ${Number(rates.denialRate || 0).toFixed(1)}%.`
+      ],
+      actionBullets: [
+        "Review claims with expected balances not fully collected.",
+        "Separate true denials from underpaid claims before escalation.",
+        "Check payer reimbursement rules when collected amounts do not match expected amounts.",
+        "Prioritize claims with the largest expected-to-paid gap."
+      ],
+      suppressGenericEnhancedUI: false
+    };
+  }
+
+  if (focus === "denials") {
+    return {
+      contextMode: "denials",
+      focusTitle: "Denial Focus",
+      focusBody: `This brief is focused on denial performance for ${payerScope || "the selected scope"} during ${rangeLabel}.`,
+      summaryBullets: [
+        `${payerLabel}denial rate is ${Number(rates.denialRate || 0).toFixed(1)}%.`,
+        `${payerLabel}revenue at risk is ${formatMoneyUI(totals.atRisk || 0)}.`,
+        `${payerLabel}collected amount is ${formatMoneyUI(totals.collected || 0)}.`,
+        `${payerLabel}AI case readiness is ${Number(metrics?.disciplineScore || 0).toFixed(0)}/100.`
+      ],
+      actionBullets: [
+        "Open denial claims and validate denial reason or code.",
+        "Prepare appeals for claims with payer responsibility remaining.",
+        "Check documentation gaps before submitting appeal packets.",
+        "Track payer-specific denial trends before escalation."
+      ],
+      suppressGenericEnhancedUI: false
+    };
+  }
+
+  if (focus === "underpayments") {
+    return {
+      contextMode: "underpayments",
+      focusTitle: "Underpayment Focus",
+      focusBody: `This brief is focused on underpayment and negotiation opportunity for ${payerScope || "the selected scope"} during ${rangeLabel}.`,
+      summaryBullets: [
+        `${payerLabel}at-risk / underpayment exposure is ${formatMoneyUI(totals.atRisk || 0)}.`,
+        `${payerLabel}expected amount is ${formatMoneyUI(totals.expected || 0)}.`,
+        `${payerLabel}collected amount is ${formatMoneyUI(totals.collected || 0)}.`,
+        `${payerLabel}recovery rate is ${Number(rates.recoveryRate || 0).toFixed(1)}%.`
+      ],
+      actionBullets: [
+        "Open underpaid claims and compare expected versus paid.",
+        "Start negotiation workspace for claims with clear reimbursement gaps.",
+        "Validate payer contract rules before writing off balances.",
+        "Prioritize highest-dollar underpayments first."
+      ],
+      suppressGenericEnhancedUI: false
+    };
+  }
+
+  if (focus === "risk") {
+    return {
+      contextMode: "risk",
+      focusTitle: "Revenue Risk Focus",
+      focusBody: `This brief is focused on revenue exposure and risk drivers for ${rangeLabel}.`,
+      summaryBullets: [
+        `Total revenue at risk is ${formatMoneyUI(totals.atRisk || 0)}.`,
+        `Total billed amount is ${formatMoneyUI(totals.billed || 0)}.`,
+        `Total collected amount is ${formatMoneyUI(totals.collected || 0)}.`,
+        `Denial rate is ${Number(rates.denialRate || 0).toFixed(1)}%.`
+      ],
+      actionBullets: [
+        "Prioritize the highest at-risk claims in Action Center.",
+        "Separate denial risk from underpayment risk.",
+        "Review payer concentration in the risk drivers.",
+        "Escalate claims where expected reimbursement is clear but unpaid."
+      ],
+      suppressGenericEnhancedUI: false
+    };
+  }
+
+  return {
+    contextMode: "general",
+    focusTitle: "",
+    focusBody: "",
+    summaryBullets: [],
+    actionBullets: [],
+    suppressGenericEnhancedUI: false
+  };
+}
+
+function buildPayerComparisonRowsForBrief(org_id, comparePayers, rangePreset){
+  return (Array.isArray(comparePayers) ? comparePayers : [])
+    .filter(Boolean)
+    .map(payerName => {
+      const scoped = computePayerSpecificMetrics(org_id, payerName, rangePreset || "last30");
+      const intel = computePayerIntelligence(org_id, payerName, rangePreset || "last30");
+
+      const totals = scoped?.metrics?.totals || {};
+      const rates = scoped?.metrics?.rates || {};
+
+      return {
+        payer: payerName,
+        claims: Number(intel.totalClaims || 0),
+        billed: Number(totals.billed || intel.totalBilled || 0),
+        collected: Number(totals.collected || intel.totalCollected || 0),
+        atRisk: Number(totals.atRisk || intel.totalAtRisk || 0),
+        recoveryRate: Number(rates.recoveryRate || 0),
+        denialRate: Number(rates.denialRate || intel.denialRate || 0)
+      };
+    });
 }
 
 function buildCopilotResponse({
@@ -8117,7 +8465,17 @@ function buildCopilotResponse({
           : []
       );
 
-  let payerScope = opts?.payer || payer || detectPayerFromPrompt(question, org_id);
+  const isPayerComparisonBrief = comparePayers.length >= 2;
+
+  // In a true payer comparison, do not let detectPayerFromPrompt pick only the first payer.
+  // Otherwise the KPI cards can accidentally become "Aetna only" or "Cigna only".
+  let payerScope = isPayerComparisonBrief
+    ? null
+    : (opts?.payer || payer || detectPayerFromPrompt(question, org_id));
+
+  const payerComparisonRows = isPayerComparisonBrief
+    ? buildPayerComparisonRowsForBrief(org_id, comparePayers, rangePreset || "last30")
+    : [];
   const intent = comparePayers.length >= 2
     ? { key: "payer_compare", label: "Payer Compare" }
     : detectCopilotIntent(question);
@@ -8133,7 +8491,38 @@ function buildCopilotResponse({
   let topPayers = [];
   let scoped = null;
 
-  if (payerScope) {
+  if (isPayerComparisonBrief) {
+    const totalBilled = payerComparisonRows.reduce((s, p) => s + Number(p.billed || 0), 0);
+    const totalCollected = payerComparisonRows.reduce((s, p) => s + Number(p.collected || 0), 0);
+    const totalAtRisk = payerComparisonRows.reduce((s, p) => s + Number(p.atRisk || 0), 0);
+    const totalClaims = payerComparisonRows.reduce((s, p) => s + Number(p.claims || 0), 0);
+
+    metrics = {
+      totals: {
+        billed: round2(totalBilled),
+        collected: round2(totalCollected),
+        expected: round2(totalBilled),
+        atRisk: round2(totalAtRisk),
+        claims: totalClaims
+      },
+      rates: {
+        recoveryRate: totalBilled > 0 ? round2((totalCollected / totalBilled) * 100) : 0,
+        denialRate: payerComparisonRows.length
+          ? round2(payerComparisonRows.reduce((s, p) => s + Number(p.denialRate || 0), 0) / payerComparisonRows.length)
+          : 0
+      },
+      disciplineScore: Math.max(0, Math.min(100, 100 - Math.round(totalAtRisk / 5)))
+    };
+
+    topPayers = payerComparisonRows
+      .slice()
+      .sort((a,b) => Number(b.atRisk || 0) - Number(a.atRisk || 0))
+      .map(p => ({
+        payer: p.payer,
+        risk: p.atRisk
+      }));
+
+  } else if (payerScope) {
     scoped = computePayerSpecificMetrics(org_id, payerScope, rangePreset);
     metrics = scoped.metrics;
     topPayers = scoped.topPayers;
@@ -8321,11 +8710,58 @@ function buildCopilotResponse({
     }
   });
 
+  const questionSpecificAnswer = buildQuestionSpecificBriefAnswer({
+    org_id,
+    question,
+    rangePreset: rangePreset || "last30",
+    payerScope,
+    comparePayers,
+    metrics,
+    payerComparisonRows
+  });
+
+  const contextBrief = buildContextAwareBriefContent({
+    question,
+    briefType,
+    payerScope,
+    comparePayers,
+    payerComparisonRows,
+    metrics,
+    topPayers,
+    rangePreset: rangePreset || "last30"
+  });
+
+  const contextSummaryBullets =
+    Array.isArray(contextBrief.summaryBullets) && contextBrief.summaryBullets.length
+      ? contextBrief.summaryBullets
+      : bullets;
+
+  const contextExecutiveActions =
+    Array.isArray(contextBrief.actionBullets) && contextBrief.actionBullets.length
+      ? contextBrief.actionBullets
+      : executiveActions;
+
+  const briefSubtitle = questionSpecificAnswer
+    ? "Direct answer plus KPI context based on your question."
+    : briefType === "PAYER_COMPARISON"
+      ? "Selected-payer comparison with KPI context and recommended actions."
+      : "KPI highlights, drivers, and recommended actions.";
+
   return {
     briefType,
     briefTitle,
+    originalQuestion: question,
+    questionFocus: detectBriefQuestionFocus(question),
+    questionSpecificAnswer,
+    contextMode: contextBrief.contextMode || "",
+    contextFocusTitle: contextBrief.focusTitle || "",
+    contextFocusBody: contextBrief.focusBody || "",
+    contextSummaryBullets,
+    contextExecutiveActions,
+    suppressGenericEnhancedUI: !!contextBrief.suppressGenericEnhancedUI,
+    briefSubtitle,
     intentKey: intent.key,
-    bullets,
+    bullets: contextSummaryBullets,
     charts,
     metrics,
     payerScope,
@@ -8333,24 +8769,13 @@ function buildCopilotResponse({
     denialForecast,
     disciplineBreakdown,
     disciplineDrivers,
-    executiveActions,
+    executiveActions: contextExecutiveActions,
     payerRiskScore,
     topPayers,
     primaryAction,
     actionLinks,
     comparePayers,
-    payerComparisons: comparePayers.length >= 2
-      ? comparePayers.map(p => {
-          const intel = computePayerIntelligence(org_id, p, rangePreset || "last30");
-          return {
-            payer: p,
-            claims: Number(intel.totalClaims || 0),
-            collected: Number(intel.totalCollected || 0),
-            atRisk: Number(intel.totalAtRisk || 0),
-            denialRate: Number(intel.denialRate || 0)
-          };
-        })
-      : []
+    payerComparisons: isPayerComparisonBrief ? payerComparisonRows : []
   };
 }
 
@@ -29531,75 +29956,87 @@ if (method === "GET" && pathname === "/ai-copilot") {
           window.history.replaceState({}, "", newUrl);
         }
 
-	        const layout = document.getElementById("wsLayout");
-	        const btn = document.getElementById("wsCollapseBtn");
-	        const floatBtn = document.getElementById("wsExpandBtn");
-          function setDefaultCopilotFullLayout(){
-            const sidebar =
-              document.querySelector(".ws-sidebar") ||
-              document.querySelector(".saved-analyses") ||
-              document.getElementById("savedAnalysesPanel");
+        const layout = document.getElementById("wsLayout");
+        const btn = document.getElementById("wsCollapseBtn");
+        const floatBtn = document.getElementById("wsExpandBtn");
 
-            const main =
-              document.querySelector(".ws-main") ||
-              document.querySelector(".copilot-main") ||
-              document.getElementById("copilotMain");
+        function getCopilotSidebar(){
+          return (
+            document.querySelector("#wsLayout .ws-sidebar") ||
+            document.querySelector(".ws-sidebar") ||
+            document.querySelector(".saved-analyses") ||
+            document.getElementById("savedAnalysesPanel")
+          );
+        }
 
-            if (!sidebar || !main) return;
+        function getCopilotMain(){
+          return (
+            document.querySelector("#wsLayout .ws-main") ||
+            document.querySelector(".ws-main") ||
+            document.querySelector(".copilot-main") ||
+            document.getElementById("copilotMain")
+          );
+        }
 
-            const parent = sidebar.parentElement;
+        function setCollapsed(v){
+          if (!layout) return;
 
-            sidebar.style.display = "none";
-            main.style.width = "100%";
-            main.style.flex = "1";
+          const sidebar = getCopilotSidebar();
+          const main = getCopilotMain();
 
-            if (parent) {
-              parent.style.gridTemplateColumns = "minmax(0,1fr)";
-            }
+          layout.classList.toggle("ws-collapsed", !!v);
+
+          if (sidebar) {
+            sidebar.style.display = v ? "none" : "";
+            sidebar.style.visibility = v ? "hidden" : "visible";
           }
 
-	        function setCollapsed(v){
-	          if(!layout || !btn || !floatBtn) return;
+          if (main) {
+            main.style.width = v ? "100%" : "";
+            main.style.flex = v ? "1 1 100%" : "";
+          }
 
-	          if(v){
-	            layout.classList.add("ws-collapsed");
-	            localStorage.setItem("tjhp_copilot_sidebar_collapsed","1");
-	            floatBtn.style.display = "inline-flex";
-	          } else {
-	            layout.classList.remove("ws-collapsed");
-	            localStorage.setItem("tjhp_copilot_sidebar_collapsed","0");
-	            floatBtn.style.display = "none";
-	          }
-	        }
+          if (layout) {
+            layout.style.gridTemplateColumns = v ? "minmax(0, 1fr)" : "";
+          }
 
-	        if(layout && btn && floatBtn){
-	          const forceFullView =
-	            url.searchParams.get("view") === "full" ||
-	            url.searchParams.get("from") === "chat" ||
-	            !url.searchParams.has("workspace");
+          if (btn) {
+            btn.style.display = v ? "none" : "inline-flex";
+          }
 
-	          const stored = localStorage.getItem("tjhp_copilot_sidebar_collapsed");
+          if (floatBtn) {
+            floatBtn.style.display = v ? "inline-flex" : "none";
+          }
 
-	          const init = forceFullView
-	            ? true
-	            : (stored === null ? true : stored === "1");
+          try {
+            localStorage.setItem("tjhp_copilot_sidebar_collapsed", v ? "1" : "0");
+          } catch {}
+        }
 
-	          setCollapsed(init);
+        if(layout && btn && floatBtn){
+          const params = new URLSearchParams(window.location.search || "");
 
-	          if (init) {
-	            setDefaultCopilotFullLayout();
-	          }
+          const forceFullView =
+            params.get("view") === "full" ||
+            params.get("from") === "chat" ||
+            !params.has("workspace");
 
-	          btn.onclick = function(){
-	            const next = !layout.classList.contains("ws-collapsed");
-	            setCollapsed(next);
-	            if (next) setDefaultCopilotFullLayout();
-	          };
+          const stored = localStorage.getItem("tjhp_copilot_sidebar_collapsed");
 
-	          floatBtn.onclick = function(){
-	            setCollapsed(false);
-	          };
-	        }
+          const init = forceFullView
+            ? true
+            : (stored === null ? true : stored === "1");
+
+          setCollapsed(init);
+
+          btn.onclick = function(){
+            setCollapsed(true);
+          };
+
+          floatBtn.onclick = function(){
+            setCollapsed(false);
+          };
+        }
 
       })();
     </script>
@@ -29668,9 +30105,8 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
 }
 
 if (method === "GET" && pathname === "/ai-copilot/export") {
-  if (!hasFeatureAccess(org.org_id, "copilot")) {
-    return send(res, 403, renderPage("AI Copilot", renderFeatureLocked("AI Copilot"), navUser(), {showChat:true, orgName: org.org_name}));
-  }
+  // Export is allowed for signed-in users who own the requested workspace.
+  // Do not block export behind the Copilot feature gate.
   const workspace_id = String(parsed.query.workspace_id || "").trim();
   if (!workspace_id) return redirect(res, "/ai-copilot");
 
