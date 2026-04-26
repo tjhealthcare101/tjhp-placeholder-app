@@ -1551,6 +1551,7 @@ function buildPacketPrintableHtml(packet){
       table { width:100%; border-collapse: collapse; }
       td, th { border:1px solid #e5e7eb; padding:8px; text-align:left; }
       pre { white-space: pre-wrap; font-family: Arial, sans-serif; }
+
     </style>
   </head>
   <body>
@@ -15451,6 +15452,248 @@ function workspacePolishStyles(){
           grid-template-columns:1fr;
         }
       }
+
+      /* Premium workspace cleanup pass */
+      .page-shell:has(.packet-workspace-shell){
+        max-width:1320px;
+      }
+
+      .packet-workspace-shell .ws-layout{
+        grid-template-columns:minmax(260px,330px) minmax(0,1fr);
+        gap:24px;
+      }
+
+      .packet-workspace-shell .workspace-left{
+        max-width:330px;
+      }
+
+      .packet-workspace-shell .workspace-right{
+        min-width:0;
+        overflow:visible;
+      }
+
+      .packet-workspace-shell .ws-panel{
+        overflow:hidden;
+      }
+
+      .packet-workspace-shell .ws-clean-summary{
+        cursor:pointer;
+        display:flex;
+        justify-content:space-between;
+        gap:8px;
+        align-items:center;
+      }
+
+      .packet-workspace-shell .ws-preview-shell{
+        width:100%;
+      }
+
+      .packet-workspace-shell .ws-preview-body{
+        overflow:visible;
+      }
+
+      .packet-workspace-shell .ws-letter{
+        max-width:820px;
+        margin:0 auto;
+        background:#fff;
+        border:1px solid #e5e7eb;
+        border-radius:22px;
+        padding:28px;
+        box-shadow:0 18px 45px rgba(15,23,42,.08);
+      }
+
+      .packet-workspace-shell .ws-letterhead{
+        margin-bottom:18px;
+        padding-bottom:14px;
+        border-bottom:1px solid #e5e7eb;
+      }
+
+      .packet-workspace-shell .ws-meta-grid{
+        display:grid;
+        grid-template-columns:repeat(2,minmax(0,1fr));
+        gap:10px;
+        margin:14px 0 18px;
+      }
+
+      .packet-workspace-shell .ws-meta-card{
+        border:1px solid #eef2f7;
+        border-radius:14px;
+        padding:10px;
+        background:#fbfdff;
+      }
+
+      .packet-workspace-shell .ws-meta-card .k{
+        font-size:10px;
+        text-transform:uppercase;
+        letter-spacing:.08em;
+        color:#64748b;
+        font-weight:900;
+      }
+
+      .packet-workspace-shell .ws-meta-card .v{
+        margin-top:5px;
+        font-weight:900;
+      }
+
+      .packet-workspace-shell .ws-section-card{
+        border:1px solid #eef2f7;
+        border-radius:18px;
+        padding:16px;
+        margin-top:16px;
+        background:#fff;
+      }
+
+      .packet-workspace-shell .ws-section-head{
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-start;
+        gap:10px;
+        margin-bottom:8px;
+      }
+
+      .packet-workspace-shell .ws-section-actions,
+      .packet-workspace-shell .ws-section-actions .badge{
+        display:none !important;
+      }
+
+      .packet-workspace-shell .ws-section-title{
+        font-size:17px;
+        font-weight:950;
+        color:#111827;
+      }
+
+      .packet-workspace-shell .ws-section-body{
+        white-space:pre-wrap;
+        line-height:1.55;
+        font-size:14px;
+        color:#1f2937;
+        background:#ffffff;
+      }
+
+      .packet-workspace-shell .ws-section-editor{
+        margin-top:12px;
+        border-top:1px dashed #e5e7eb;
+        padding-top:10px;
+      }
+
+      .packet-workspace-shell .ws-section-editor summary{
+        cursor:pointer;
+        font-weight:900;
+        color:#334155;
+        font-size:13px;
+      }
+
+      .packet-workspace-shell .ws-edit-form{
+        margin-top:10px;
+      }
+
+      .packet-workspace-shell .ws-edit-form textarea{
+        min-height:120px;
+        resize:vertical;
+        background:#fbfdff;
+        border:1px solid #dbe3ef;
+        font-family:inherit;
+        line-height:1.45;
+      }
+
+      .packet-workspace-shell .ws-edit-form.compact textarea{
+        min-height:74px;
+      }
+
+      .packet-workspace-shell .ws-inline-save{
+        display:flex;
+        justify-content:flex-end;
+        margin-top:8px;
+      }
+
+      .packet-workspace-shell .ws-compact-readiness .ws-readiness-list{
+        margin-top:10px;
+        display:grid;
+        gap:8px;
+      }
+
+      .packet-workspace-shell .ws-readiness-row{
+        border:1px solid #eef2f7;
+        border-radius:14px;
+        padding:10px;
+        background:#fff;
+        display:grid;
+        grid-template-columns:minmax(0,1fr);
+        gap:8px;
+      }
+
+      .packet-workspace-shell .ws-readiness-title{
+        font-weight:950;
+        font-size:13px;
+        display:flex;
+        gap:6px;
+        flex-wrap:wrap;
+        align-items:center;
+      }
+
+      .packet-workspace-shell .ws-readiness-sub{
+        color:#64748b;
+        font-size:12px;
+        margin-top:4px;
+        line-height:1.35;
+      }
+
+      .packet-workspace-shell .ws-readiness-pills{
+        display:flex;
+        flex-wrap:wrap;
+        gap:5px;
+        margin-top:8px;
+      }
+
+      .packet-workspace-shell .ws-readiness-action{
+        font-size:12px;
+      }
+
+      .packet-workspace-shell .ws-optional-docs{
+        margin-top:10px;
+        border-top:1px solid #eef2f7;
+        padding-top:10px;
+      }
+
+      .packet-workspace-shell .ws-optional-docs summary{
+        cursor:pointer;
+        font-weight:900;
+        color:#334155;
+      }
+
+      .packet-workspace-shell .ws-auto-grid{
+        grid-template-columns:1fr;
+      }
+
+      .packet-workspace-shell .ws-auto-table{
+        display:none;
+      }
+
+      @media(max-width:1100px){
+        .packet-workspace-shell .ws-layout{
+          grid-template-columns:1fr;
+        }
+
+        .packet-workspace-shell .workspace-left{
+          position:static;
+          max-width:none;
+        }
+
+        .packet-workspace-shell .ws-letter{
+          max-width:none;
+        }
+      }
+
+      @media(max-width:700px){
+        .packet-workspace-shell .ws-meta-grid{
+          grid-template-columns:1fr;
+        }
+
+        .packet-workspace-shell .ws-command-grid{
+          grid-template-columns:1fr 1fr;
+        }
+      }
+
     </style>
   `;
 }
@@ -15480,6 +15723,123 @@ function workspaceIntegrationCount(org_id, sourceType){
   } catch {
     return 0;
   }
+}
+
+function workspaceIntegrationsAllowedForOrgId(org_id){
+  try {
+    const orgRecord = typeof getOrg === "function" ? getOrg(org_id) : null;
+    if (!orgRecord) return false;
+
+    if (typeof isIntegrationsEnabledForOrg === "function") {
+      return !!isIntegrationsEnabledForOrg(orgRecord);
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function workspacePlanUiContext(ws, claim){
+  const org_id = ws?.org_id || claim?.org_id || "";
+  const integrationsEnabled = workspaceIntegrationsAllowedForOrgId(org_id);
+
+  return {
+    org_id,
+    integrationsEnabled
+  };
+}
+
+function workspaceManualSourceLabel(row){
+  const sourceType = String(row?.sourceType || "").toLowerCase();
+
+  if (row?.status === "present") {
+    if (sourceType === "system") return "System-derived";
+    if (sourceType === "contract_rules") return "Contract / Rules Data";
+    return "Uploaded Source";
+  }
+
+  if (row?.proofLevel === "draft_evidence") {
+    if (sourceType === "contract_rules") return "Contract / Rules Data";
+    return "System-derived";
+  }
+
+  return "Manual Upload";
+}
+
+function workspaceManualOnlyNextAction(row){
+  if (!row) return "Upload source document manually.";
+
+  if (row.proofLevel === "draft_evidence") {
+    return "Review draft evidence and upload source document if payer submission requires proof.";
+  }
+
+  if (row.status === "present") {
+    return "Ready.";
+  }
+
+  return "Upload source document manually.";
+}
+
+function workspaceRemoveIntegrationWords(text){
+  return String(text || "")
+    .replace(/\bEHR\b/gi, "source document")
+    .replace(/\bEMR\b/gi, "source document")
+    .replace(/\bClearinghouse\b/gi, "payment source")
+    .replace(/\bPayer Portal\b/gi, "payer source")
+    .replace(/\bPull from\b/gi, "Upload")
+    .replace(/\bPull Available\b/gi, "Manual upload needed")
+    .replace(/\bConnect\b/gi, "Upload")
+    .replace(/\bconnection is configured\b/gi, "source is available")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function workspaceUiAutomationRow(ws, claim, row){
+  const ctx = workspacePlanUiContext(ws, claim);
+  if (ctx.integrationsEnabled) return row;
+
+  const next = { ...(row || {}) };
+  next.integrationsEnabled = false;
+
+  const originalSourceType = String(next.sourceType || "").toLowerCase();
+
+  // No integration-enabled plan: do not show EHR / clearinghouse / portal wording.
+  if (["ehr", "clearinghouse", "payer_portal"].includes(originalSourceType)) {
+    next.sourceType = "manual_upload";
+    next.sourceLabel = workspaceManualSourceLabel(next);
+    next.detail = next.status === "present"
+      ? workspaceRemoveIntegrationWords(next.detail || "Source document is attached.")
+      : "No source document has been uploaded yet.";
+    next.nextAction = workspaceManualOnlyNextAction(next);
+
+    if (next.status === "pull_available") {
+      next.status = "missing";
+      next.statusLabel = next.required ? "Missing Required" : "Missing Optional";
+      next.proofLevel = "missing";
+      next.proofLabel = "Missing Source";
+      next.pillClass = next.required ? "err" : "warn";
+      next.nextAction = "Upload source document manually.";
+    }
+  }
+
+  if (originalSourceType === "system") {
+    next.sourceLabel = "System-derived";
+    next.detail = workspaceRemoveIntegrationWords(next.detail || "Generated from claim data.");
+    next.nextAction = workspaceManualOnlyNextAction(next);
+  }
+
+  if (originalSourceType === "contract_rules") {
+    next.sourceLabel = "Contract / Rules Data";
+    next.detail = workspaceRemoveIntegrationWords(next.detail || "Auto-filled from contract/rule data.");
+    next.nextAction = "Upload contract excerpt or keep system-derived rule support for draft preparation.";
+  }
+
+  if (next.status === "missing") {
+    next.nextAction = "Upload source document manually.";
+  }
+
+  return next;
 }
 
 function workspacePreferredAutomationSource(docKey, channel){
@@ -15747,12 +16107,20 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
 
 function buildWorkspaceAutomationReadiness(ws, claim, channel){
   const docs = workspaceRequiredDocConfig(channel);
-  const rows = docs.map(doc => workspaceDocAutomationStatus(ws, doc, claim, channel));
+  const ctx = workspacePlanUiContext(ws, claim);
+
+  const rows = docs.map(doc => {
+    const raw = workspaceDocAutomationStatus(ws, doc, claim, channel);
+    return workspaceUiAutomationRow(ws, claim, raw);
+  });
 
   const required = rows.filter(r => r.required);
+
   const requiredDraftReady = required.filter(workspaceIsDraftEvidence).length;
   const requiredSubmissionReady = required.filter(workspaceIsSubmissionProof).length;
-  const requiredPullAvailable = required.filter(r => r.status === "pull_available").length;
+  const requiredPullAvailable = ctx.integrationsEnabled
+    ? required.filter(r => r.status === "pull_available").length
+    : 0;
   const requiredMissing = required.filter(r => r.status === "missing").length;
 
   const draftPct = required.length
@@ -15763,11 +16131,22 @@ function buildWorkspaceAutomationReadiness(ws, claim, channel){
     ? Math.round((requiredSubmissionReady / required.length) * 100)
     : 100;
 
-  const org_id = ws?.org_id || claim?.org_id || "";
+  const connected = ctx.integrationsEnabled
+    ? {
+        ehr: workspaceIntegrationCount(ctx.org_id, "ehr"),
+        clearinghouse: workspaceIntegrationCount(ctx.org_id, "clearinghouse"),
+        payer_portal: workspaceIntegrationCount(ctx.org_id, "payer_portal")
+      }
+    : {
+        ehr: 0,
+        clearinghouse: 0,
+        payer_portal: 0
+      };
 
   return {
     rows,
     required,
+    integrationsEnabled: ctx.integrationsEnabled,
     requiredPresent: requiredSubmissionReady,
     requiredDraftReady,
     requiredSubmissionReady,
@@ -15775,19 +16154,28 @@ function buildWorkspaceAutomationReadiness(ws, claim, channel){
     requiredMissing,
     draftPct,
     submissionPct,
-    connected: {
-      ehr: workspaceIntegrationCount(org_id, "ehr"),
-      clearinghouse: workspaceIntegrationCount(org_id, "clearinghouse"),
-      payer_portal: workspaceIntegrationCount(org_id, "payer_portal")
-    }
+    connected
   };
 }
 
 function renderAutomationReadinessPanel(ws, claim, channel){
   const auto = buildWorkspaceAutomationReadiness(ws, claim, channel);
+  const integrationsEnabled = !!auto.integrationsEnabled;
+
   const readyCount = auto.rows.filter(r => r.status === "present").length;
-  const pullCount = auto.rows.filter(r => r.status === "pull_available").length;
+  const pullCount = integrationsEnabled
+    ? auto.rows.filter(r => r.status === "pull_available").length
+    : 0;
   const missingCount = auto.rows.filter(r => r.status === "missing").length;
+
+  const requiredRows = auto.rows.filter(r => r.required);
+  const optionalRows = auto.rows.filter(r => !r.required);
+
+  const title = integrationsEnabled ? "⚙️ Automation Readiness" : "📄 Document Readiness";
+
+  const intro = integrationsEnabled
+    ? "Shows which packet documents are uploaded, system-derived, pulled from connected sources, ready to pull, or still missing."
+    : "Manual workspace mode. Upload source documents manually and use system-derived evidence for drafting where available.";
 
   const connectionCard = (label, count) => `
     <div class="ws-auto-source">
@@ -15796,10 +16184,61 @@ function renderAutomationReadinessPanel(ws, claim, channel){
     </div>
   `;
 
+  const renderRow = (row) => {
+    const proofClass = typeof workspaceProofPillClass === "function"
+      ? workspaceProofPillClass(row.proofLevel)
+      : (row.pillClass || "");
+
+    const canPull = integrationsEnabled && row.status === "pull_available";
+
+    return `
+      <div class="ws-readiness-row ${row.required ? "required" : "optional"}">
+        <div class="ws-readiness-main">
+          <div class="ws-readiness-title">
+            ${safeStr(row.label)}
+            ${row.required ? `<span class="badge warn">Required</span>` : `<span class="badge">Optional</span>`}
+          </div>
+
+          <div class="ws-readiness-sub">
+            ${safeStr(row.detail || "")}
+          </div>
+
+          <div class="ws-readiness-pills">
+            <span class="ws-source-pill ${safeStr(row.pillClass || "")}">
+              ${safeStr(row.sourceLabel || "Manual Upload")}
+            </span>
+
+            <span class="ws-source-pill ${safeStr(proofClass)}">
+              ${safeStr(row.proofLabel || workspaceProofLabel(row.proofLevel))}
+            </span>
+
+            <span class="badge ${row.pillClass === "ok" ? "ok" : row.pillClass === "err" ? "err" : "warn"}">
+              ${safeStr(row.statusLabel || "")}
+            </span>
+          </div>
+        </div>
+
+        <div class="ws-readiness-action">
+          ${canPull ? `
+            <form method="POST" action="/ai-workspace/pull-document" style="margin:0;">
+              <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
+              <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+              <input type="hidden" name="doc_key" value="${safeStr(row.key)}"/>
+              <input type="hidden" name="source_type" value="${safeStr(row.sourceType)}"/>
+              <button class="btn secondary small" type="submit">Pull</button>
+            </form>
+          ` : `
+            <div class="muted small">${safeStr(row.nextAction || "")}</div>
+          `}
+        </div>
+      </div>
+    `;
+  };
+
   return `
-    <details class="ws-panel ws-automation" open>
-      <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:center;">
-        <span>⚙️ Automation Readiness</span>
+    <details class="ws-panel ws-automation ws-compact-readiness" open>
+      <summary class="ws-clean-summary">
+        <span>${title}</span>
         ${auto.requiredMissing > 0
           ? `<span class="badge warn">${auto.requiredMissing} required missing</span>`
           : `<span class="badge ok">Required ready</span>`
@@ -15807,86 +16246,44 @@ function renderAutomationReadinessPanel(ws, claim, channel){
       </summary>
 
       <div class="hint" style="margin-top:8px;">
-        Shows where each packet document is coming from: manual upload, EHR, clearinghouse, payer portal, contract/rules data, system-derived data, or still missing.
+        ${safeStr(intro)}
       </div>
 
-      <div class="ws-auto-grid">
-        ${connectionCard("EHR", auto.connected.ehr)}
-        ${connectionCard("Clearinghouse", auto.connected.clearinghouse)}
-        ${connectionCard("Payer Portal", auto.connected.payer_portal)}
-      </div>
+      ${integrationsEnabled ? `
+        <div class="ws-auto-grid">
+          ${connectionCard("EHR", auto.connected.ehr)}
+          ${connectionCard("Clearinghouse", auto.connected.clearinghouse)}
+          ${connectionCard("Payer Portal", auto.connected.payer_portal)}
+        </div>
+      ` : ``}
 
       <div class="muted small" style="margin-top:8px;">
-        Draft readiness: ${auto.draftPct}% · Submission readiness: ${auto.submissionPct}% · Pull available: ${pullCount} · Missing: ${missingCount}
+        Draft readiness: ${auto.draftPct}% · Submission readiness: ${auto.submissionPct}%${integrationsEnabled ? ` · Pull available: ${pullCount}` : ``} · Missing: ${missingCount}
       </div>
 
       ${auto.submissionPct < 100 ? `
         <div class="ws-callout warn" style="margin-top:10px;">
           <strong>Submission proof still needed.</strong>
-          Some required items may be auto-filled or system-derived. That is enough to draft the packet, but payer submission is stronger when source documents are attached or pulled.
+          Some required items may be auto-filled or system-derived. That helps draft the packet, but payer submission is stronger when source documents are uploaded${integrationsEnabled ? " or pulled" : ""}.
         </div>
       ` : `
         <div class="ws-callout ok" style="margin-top:10px;">
-          Required source documents are attached or pulled for submission proof.
+          Required source documents are attached for submission proof.
         </div>
       `}
 
-      <table class="ws-auto-table">
-        <thead>
-          <tr>
-            <th>Document</th>
-            <th>Source</th>
-            <th>Proof Level</th>
-            <th>Status</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${auto.rows.map(row => `
-            <tr>
-              <td>
-                <strong>${safeStr(row.label)}</strong>
-                ${row.required ? `<div class="muted small">Required</div>` : `<div class="muted small">Optional</div>`}
-              </td>
-              <td>
-                <span class="ws-source-pill ${safeStr(row.pillClass)}">${safeStr(row.sourceLabel)}</span>
-                <div class="muted small" style="margin-top:4px;">${safeStr(row.detail)}</div>
-              </td>
+      <div class="ws-readiness-list">
+        ${requiredRows.map(renderRow).join("")}
+      </div>
 
-              <td>
-                <span class="ws-source-pill ${safeStr(workspaceProofPillClass(row.proofLevel))}">
-                  ${safeStr(row.proofLabel || workspaceProofLabel(row.proofLevel))}
-                </span>
-              </td>
-
-              <td>
-                <span class="badge ${row.pillClass === "ok" ? "ok" : row.pillClass === "err" ? "err" : "warn"}">
-                  ${safeStr(row.statusLabel)}
-                </span>
-              </td>
-              <td>
-                ${row.status === "pull_available" ? `
-                  <form method="POST" action="/ai-workspace/pull-document" style="display:inline;">
-                    <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
-                    <input type="hidden" name="channel" value="${safeStr(channel)}"/>
-                    <input type="hidden" name="doc_key" value="${safeStr(row.key)}"/>
-                    <input type="hidden" name="source_type" value="${safeStr(row.sourceType)}"/>
-                    <button class="btn secondary small" type="submit">Pull from ${safeStr(row.sourceLabel)}</button>
-                  </form>
-                ` : row.proofLevel === "draft_evidence" ? `
-                  <div class="muted small">
-                    ${safeStr(row.nextAction)}
-                  </div>
-                ` : row.status === "present" ? `
-                  <div class="muted small">Ready</div>
-                ` : `
-                  <div class="muted small">${safeStr(row.nextAction)}</div>
-                `}
-              </td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
+      ${optionalRows.length ? `
+        <details class="ws-optional-docs">
+          <summary>Optional supporting documents (${optionalRows.length})</summary>
+          <div class="ws-readiness-list">
+            ${optionalRows.map(renderRow).join("")}
+          </div>
+        </details>
+      ` : ``}
     </details>
   `;
 }
@@ -15897,6 +16294,8 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
   const score = computeWorkspaceQuickScore(ws, claim, derived, channel);
   const auto = buildWorkspaceAutomationReadiness(ws, claim, channel);
   const ready = canMarkReady(ws, channel);
+  const integrationsEnabled = !!auto.integrationsEnabled;
+  const commandSourceLabel = integrationsEnabled ? "Automation" : "Source Proof";
 
   const expected = Number(derived?.expectedInsurance || claim?.expected_amount || claim?.expected_insurance || 0);
   const paid = Number(derived?.paidAmount || claim?.paid_amount || claim?.insurance_paid || 0);
@@ -15944,7 +16343,7 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
         </div>
 
         <div class="ws-command-metric">
-          <div class="ws-command-label">Automation</div>
+          <div class="ws-command-label">${safeStr(commandSourceLabel)}</div>
           <div class="ws-command-value">${auto.requiredPresent}/${Math.max(1, auto.required.length)} required</div>
         </div>
       </div>
@@ -15954,7 +16353,7 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
       </div>
 
       <div class="muted small" style="margin-top:10px;">
-        Expected ${formatMoneyUI(expected)} · Paid ${formatMoneyUI(paid)} · Required present ${auto.requiredPresent} · Pull available ${auto.requiredPullAvailable} · Missing ${auto.requiredMissing}
+        Expected ${formatMoneyUI(expected)} · Paid ${formatMoneyUI(paid)} · Required present ${auto.requiredPresent}${integrationsEnabled ? ` · Pull available ${auto.requiredPullAvailable}` : ``} · Missing ${auto.requiredMissing}
       </div>
     </div>
   `;
@@ -15980,7 +16379,11 @@ function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
 
       <div class="ws-doc-list">
         ${docs.map(doc => {
-          const automation = workspaceDocAutomationStatus(ws, doc, claim, channel);
+          const automation = workspaceUiAutomationRow(
+      ws,
+      claim,
+      workspaceDocAutomationStatus(ws, doc, claim, channel)
+    );
           const present = automation.status === "present";
           const draftOnly = automation.proofLevel === "draft_evidence";
           const attachment = workspaceSafeFindAttachment(ws, doc.key);
@@ -16140,32 +16543,43 @@ function renderEditablePacketSection(opts){
   if (exportMode){
     return `
       <div class="ws-section-card">
-        <div class="ws-section-head"><div class="ws-section-title">${safeStr(title)}</div></div>
+        <div class="ws-section-head">
+          <div class="ws-section-title">${safeStr(title)}</div>
+        </div>
         ${description ? `<div class="muted small" style="margin-bottom:8px;">${safeStr(description)}</div>` : ``}
         <div class="ws-section-body">${safeStr(value || "—")}</div>
       </div>
     `;
   }
 
+  const showPreview = String(value || "").trim()
+    ? safeStr(value)
+    : `<span class="muted">No content yet.</span>`;
+
   return `
-    <div class="ws-section-card">
+    <div class="ws-section-card ws-clean-section">
       <div class="ws-section-head">
-        <div class="ws-section-title">${safeStr(title)}</div>
-        <div class="ws-section-actions">
-          <span class="badge">${safeStr(section_key)}</span>
+        <div>
+          <div class="ws-section-title">${safeStr(title)}</div>
+          ${description ? `<div class="muted small" style="margin-top:3px;">${safeStr(description)}</div>` : ``}
         </div>
       </div>
-      ${description ? `<div class="muted small" style="margin-bottom:8px;">${safeStr(description)}</div>` : ``}
-      <div class="ws-section-body">${safeStr(value || "—")}</div>
-      <form class="ws-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
-        <input type="hidden" name="channel" value="${safeStr(channel)}"/>
-        <input type="hidden" name="section_key" value="${safeStr(section_key)}"/>
-        <textarea name="value">${escapeHtml(value)}</textarea>
-        <div class="ws-inline-save">
-          <button class="btn secondary" type="submit">Save Section</button>
-        </div>
-      </form>
+
+      <div class="ws-section-body">${showPreview}</div>
+
+      <details class="ws-section-editor" ${compact ? "" : ""}>
+        <summary>Edit section</summary>
+
+        <form class="ws-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview">
+          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+          <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+          <input type="hidden" name="section_key" value="${safeStr(section_key)}"/>
+          <textarea name="value">${escapeHtml(value)}</textarea>
+          <div class="ws-inline-save">
+            <button class="btn secondary" type="submit">Save Section</button>
+          </div>
+        </form>
+      </details>
     </div>
   `;
 }
@@ -42463,7 +42877,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
         <div class="ws-layout">
           <div class="ws-side workspace-left">
-            <div class="hint" style="margin-bottom:8px;">Workspace Command Center</div>
+            <div class="hint" style="margin-bottom:8px;">Workspace Tools</div>
             ${renderWorkspaceIntelligence(ws, claim, derived, channel)}
             ${typeof renderWorkspaceStrategyPanel === "function" ? renderWorkspaceStrategyPanel(ws, claim, derived, channel) : ""}
             ${renderAutomationReadinessPanel(ws, claim, channel)}
