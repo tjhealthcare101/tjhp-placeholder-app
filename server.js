@@ -29114,7 +29114,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
                 <span class="muted small"> · ${formatMoneyUI(c.at_risk_amount)} at risk</span>
                 <div class="muted small">${safeStr(c.next_action)}</div>
               </div>
-              <a class="btn small secondary" href="/actions?tab=all&claim=${encodeURIComponent(c.billed_id)}">Open</a>
+              <a class="btn small secondary" href="/actions?tab=all&claim=${encodeURIComponent(c.billed_id)}&q=${encodeURIComponent(c.claim_number || c.claim_id || c.billed_id || "")}">Open</a>
             </div>
           `).join("")}
         </div>
@@ -29350,12 +29350,12 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
         <div class="health-driver-grid">
           <div class="health-driver">
-            <div class="muted small">Collection Efficiency</div>
-            <strong>${formatNumberUI(m.subscores?.collection_efficiency || 0)}</strong>
+            <div class="muted small">Collection Strength</div>
+            <strong>${formatNumberUI(m.subscores?.collection_strength || m.subscores?.collection_efficiency || 0)}</strong>
           </div>
           <div class="health-driver">
-            <div class="muted small">Denial Risk Score</div>
-            <strong>${formatNumberUI(m.subscores?.denial_risk || 0)}</strong>
+            <div class="muted small">Denial Discipline</div>
+            <strong>${formatNumberUI(m.subscores?.denial_discipline || m.subscores?.denial_risk || 0)}</strong>
           </div>
           <div class="health-driver">
             <div class="muted small">AR Aging Score</div>
@@ -35354,7 +35354,7 @@ if (method === "GET" && pathname === "/actions") {
     if (dt < range.start.getTime() || dt > range.end.getTime()) continue;
 
     if (q){
-      const blob = `${b.claim_number||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
+      const blob = `${b.claim_number||""} ${b.claim_id||""} ${b.billed_id||""} ${b.payer||""} ${b.dos||""}`.toLowerCase();
       if (!blob.includes(q)) continue;
     }
 
