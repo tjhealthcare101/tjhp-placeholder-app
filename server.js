@@ -2072,6 +2072,161 @@ function attachWorkspaceToTask(task){
 }
 
 // ---------- LIFECYCLE EXTENSION (MAIN ENTRY POINT) ----------
+function inferOutcomeTypeForClaim(org_id, claim){
+  try {
+    const tasks = readJSON(FILES.agent_tasks, []).filter(t =>
+      t.org_id === org_id &&
+      t.billed_id === claim.billed_id
+    );
+
+    const hasNegotiationTask = tasks.some(t =>
+      String(t.type || "").toLowerCase() === "negotiation"
+    );
+
+    const hasAppealTask = tasks.some(t =>
+      String(t.type || "").toLowerCase() === "appeal"
+    );
+
+    if (hasNegotiationTask) return "negotiation";
+    if (hasAppealTask) return "appeal";
+  } catch {}
+
+  try {
+    const workspaces = readJSON(FILES.agent_workspaces, []).filter(ws =>
+      ws.org_id === org_id &&
+      ws.billed_id === claim.billed_id
+    );
+
+    const hasNegotiationWorkspace = workspaces.some(ws =>
+      ws.negotiation &&
+      (
+        ws.negotiation.submitted_at ||
+        ws.negotiation.last_submitted_at ||
+        ws.negotiation.status === "submitted" ||
+        Number(ws.negotiation.requested_amount || 0) > 0 ||
+        String(ws.negotiation.packet_sections?.variance_explanation || "").trim().length > 40
+      )
+    );
+
+    const hasAppealWorkspace = workspaces.some(ws =>
+      ws.appeal &&
+      (
+        ws.appeal.submitted_at ||
+        ws.appeal.last_submitted_at ||
+        ws.appeal.status === "submitted" ||
+        String(ws.appeal.packet_sections?.argument || "").trim().length > 40
+      )
+    );
+
+    if (hasNegotiationWorkspace) return "negotiation";
+    if (hasAppealWorkspace) return "appeal";
+  } catch {}
+
+  const status = String(claim.status || "").toLowerCase();
+
+  if (
+    status.includes("underpaid") ||
+    Number(claim.underpaid_amount || 0) > 0 ||
+    (
+      Number(claim.expected_amount || claim.expected_insurance || 0) > 0 &&
+      Number(claim.paid_amount || claim.insurance_paid || 0) > 0 &&
+      Number(claim.paid_amount || claim.insurance_paid || 0) < Number(claim.expected_amount || claim.expected_insurance || 0)
+    )
+  ) {
+    return "negotiation";
+  }
+
+  if (
+    status.includes("denied") ||
+    claim.denial_code ||
+    claim.denial_reason ||
+    claim.adjustment_code
+  ) {
+    return "appeal";
+  }
+
+  return "appeal";
+}
+
+function estimateRecoveredAmountForOutcome(claim){
+  const paid = Number(claim.paid_amount || claim.insurance_paid || 0);
+  const expected = Number(claim.expected_amount || claim.expected_insurance || 0);
+  const priorRisk = Number(
+    claim.previous_at_risk_amount ||
+    claim.original_at_risk_amount ||
+    claim.revenue_at_risk_before_resolution ||
+    claim.last_known_at_risk_amount ||
+    0
+  );
+
+  if (priorRisk > 0) return priorRisk;
+
+  if (expected > 0 && paid > 0) {
+    return Math.min(paid, expected);
+  }
+
+  return Number(claim.recovered_amount || 0);
+}
+
+function hasWorkedAppealOrNegotiationForOutcome(org_id, claim){
+  try {
+    const tasks = readJSON(FILES.agent_tasks, []).filter(t =>
+      t.org_id === org_id &&
+      t.billed_id === claim.billed_id
+    );
+
+    const hasWorkedTask = tasks.some(t => {
+      const type = String(t.type || "").toLowerCase();
+      const status = String(t.status || "").toLowerCase();
+
+      return (
+        ["appeal", "negotiation"].includes(type) &&
+        (
+          ["in_progress", "submitted", "completed", "closed", "resolved"].includes(status) ||
+          t.packet_id ||
+          t.workspace_url
+        )
+      );
+    });
+
+    if (hasWorkedTask) return true;
+  } catch {}
+
+  try {
+    const workspaces = readJSON(FILES.agent_workspaces, []).filter(ws =>
+      ws.org_id === org_id &&
+      ws.billed_id === claim.billed_id
+    );
+
+    const hasWorkedWorkspace = workspaces.some(ws => {
+      const appealWorked =
+        ws.appeal &&
+        (
+          ws.appeal.submitted_at ||
+          ws.appeal.last_submitted_at ||
+          ws.appeal.status === "submitted" ||
+          String(ws.appeal.packet_sections?.argument || "").trim().length > 40
+        );
+
+      const negotiationWorked =
+        ws.negotiation &&
+        (
+          ws.negotiation.submitted_at ||
+          ws.negotiation.last_submitted_at ||
+          ws.negotiation.status === "submitted" ||
+          Number(ws.negotiation.requested_amount || 0) > 0 ||
+          String(ws.negotiation.packet_sections?.variance_explanation || "").trim().length > 40
+        );
+
+      return appealWorked || negotiationWorked;
+    });
+
+    if (hasWorkedWorkspace) return true;
+  } catch {}
+
+  return false;
+}
+
 function autoPreparePacketFromStatus(org_id, claim){
   const status = String(claim.status || "").toLowerCase();
 
@@ -2088,29 +2243,65 @@ function autoPreparePacketFromStatus(org_id, claim){
     taskType = "appeal";
   }
 
-  if (!packetType) return;
+  if (packetType) {
+    // 1. Ensure task exists (you already do this elsewhere)
+    // 2. Find or create packet
+    const packet = createPacketForClaim(org_id, claim, packetType);
 
-  // 1. Ensure task exists (you already do this elsewhere)
-  // 2. Find or create packet
-  const packet = createPacketForClaim(org_id, claim, packetType);
+    // 3. Enrich packet with data (AUTO-FILL)
+    const enriched = enrichPacketWithContent(org_id, packet, claim);
 
-  // 3. Enrich packet with data (AUTO-FILL)
-  const enriched = enrichPacketWithContent(org_id, packet, claim);
+    // 4. Attach to task
+    const tasks = readJSON(FILES.agent_tasks, []);
+    const task = tasks.find(t =>
+      t.org_id === org_id &&
+      t.billed_id === claim.billed_id &&
+      t.type === taskType &&
+      ["queued","open","in_progress"].includes(String(t.status || ""))
+    );
 
-  // 4. Attach to task
-  const tasks = readJSON(FILES.agent_tasks, []);
-  const task = tasks.find(t =>
-    t.org_id === org_id &&
-    t.billed_id === claim.billed_id &&
-    t.type === taskType &&
-    ["queued","open","in_progress"].includes(String(t.status || ""))
-  );
-
-  if (task){
-    task.packet_id = enriched.packet_id;
-    attachWorkspaceToTask(task);
-    writeJSON(FILES.agent_tasks, tasks);
+    if (task){
+      task.packet_id = enriched.packet_id;
+      attachWorkspaceToTask(task);
+      writeJSON(FILES.agent_tasks, tasks);
+    }
   }
+
+  // AUTO OUTCOME CAPTURE
+  const existingOutcomes = readJSON(FILES.workspace_outcomes, []);
+
+  if (
+    (status.includes("resolved") || status === "paid") &&
+    Number(claim.paid_amount || claim.insurance_paid || 0) > 0 &&
+    hasWorkedAppealOrNegotiationForOutcome(org_id, claim)
+  ) {
+    const alreadyExists = existingOutcomes.some(o =>
+      o.org_id === org_id &&
+      o.billed_id === claim.billed_id &&
+      normalizeWorkspaceOutcomeResult(o) === "won"
+    );
+
+    if (!alreadyExists) {
+      saveWorkspaceOutcome(org_id, {
+        billed_id: claim.billed_id,
+        payer: claim.payer,
+        type: inferOutcomeTypeForClaim(org_id, claim),
+        result: "won",
+        recovered_amount: estimateRecoveredAmountForOutcome(claim),
+        resolved_at: nowISO(),
+
+        has_denial_letter: !!(claim.denial_code || claim.denial_reason),
+        has_eob: !!(claim.paid_amount || claim.insurance_paid),
+        has_claim_form: true,
+        has_policy: !!claim.policy_citation,
+        has_contract: !!(claim.expected_amount || claim.expected_insurance)
+      });
+    }
+  }
+
+  // Do not auto-record denied claims as lost outcomes.
+  // "Denied" means the claim needs appeal work; it is not evidence that the appeal failed.
+  // Lost outcomes should be recorded only from explicit workspace outcome/result handling.
 }
 
 // ======================================================
@@ -14524,7 +14715,7 @@ function normalizeDenialReasonKey(v){
   return String(v || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "unknown";
 }
 
-function extractPacketFeatures({ argumentText, requestedActionText, attachmentsState, hasContract, hasDenialLetter, hasEob, hasClaimForm, hasMedicalRecords, hasPolicyCitation, hasContractCitation }){
+function extractPacketFeatures({ org_id, argumentText, requestedActionText, attachmentsState, hasContract, hasDenialLetter, hasEob, hasClaimForm, hasMedicalRecords, hasPolicyCitation, hasContractCitation }){
   const aText = String(argumentText || "").trim();
   const rText = String(requestedActionText || "").trim();
   const at = attachmentsState || {};
@@ -14547,6 +14738,26 @@ function extractPacketFeatures({ argumentText, requestedActionText, attachmentsS
   completenessScore += argumentLength >= 200 ? 10 : 0;
   completenessScore += hasClearAsk ? 5 : 0;
   completenessScore = Math.max(0, Math.min(100, completenessScore));
+  try {
+    const insights = computeOutcomeInsights(org_id || "");
+    if (insights && insights.evidenceInsights) {
+      insights.evidenceInsights.slice(0,3).forEach(e => {
+        if (e.winRate > 60) {
+          if (
+            (e.key === "denial_letter" && denial) ||
+            (e.key === "eob" && eob) ||
+            (e.key === "claim_form" && claimForm) ||
+            (e.key === "policy" && policy) ||
+            (e.key === "contract" && contractCite)
+          ) {
+            completenessScore += 5;
+          }
+        }
+      });
+
+      completenessScore = Math.min(100, completenessScore);
+    }
+  } catch(e){}
   return {
     hasDenialLetter: denial,
     hasEob: eob,
@@ -14566,10 +14777,148 @@ function loadWorkspaceOutcomes(org_id){
   return readJSON(FILES.workspace_outcomes, []).filter(r => r && r.org_id === org_id);
 }
 
-function saveWorkspaceOutcome(record){
+function saveWorkspaceOutcome(org_id, data){
+  if (typeof org_id === "object" && org_id) {
+    const record = org_id;
+    const all = readJSON(FILES.workspace_outcomes, []);
+    all.push({ ...record, created_at: record.created_at || nowISO() });
+    writeJSON(FILES.workspace_outcomes, all);
+    return record;
+  }
+
   const all = readJSON(FILES.workspace_outcomes, []);
-  all.push({ ...record, created_at: record.created_at || nowISO() });
+
+  const record = {
+    outcome_id: uuid(),
+    org_id,
+    billed_id: data?.billed_id,
+    payer: data?.payer || "",
+    type: data?.type || "appeal",
+    result: data?.result || "pending", // won | lost | partial | pending
+    recovered_amount: Number(data?.recovered_amount || 0),
+    created_at: nowISO(),
+    resolved_at: data?.resolved_at || null,
+    evidence_flags: {
+      has_denial_letter: !!data?.has_denial_letter,
+      has_eob: !!data?.has_eob,
+      has_claim_form: !!data?.has_claim_form,
+      has_policy: !!data?.has_policy,
+      has_contract: !!data?.has_contract
+    }
+  };
+
+  all.push(record);
   writeJSON(FILES.workspace_outcomes, all);
+  return record;
+}
+
+function normalizeWorkspaceOutcomeResult(outcome){
+  const raw = String(
+    outcome?.result ||
+    outcome?.outcome_status ||
+    outcome?.status ||
+    ""
+  ).trim().toLowerCase();
+
+  if (["won", "approved", "paid_in_full", "paid in full", "success"].includes(raw)) return "won";
+  if (["partial", "partially_paid", "partial_payment", "partially recovered"].includes(raw)) return "partial";
+  if (["lost", "denied_after_appeal", "rejected", "failed"].includes(raw)) return "lost";
+  if (["pending", "submitted", "in_progress", "open"].includes(raw)) return "pending";
+
+  return raw || "pending";
+}
+
+function computeOutcomeInsights(org_id){
+  const outcomes = readJSON(FILES.workspace_outcomes, [])
+    .filter(o => o.org_id === org_id);
+
+  const successSet = new Set(["won", "partial"]);
+  const completedSet = new Set(["won", "partial", "lost"]);
+  const completedOutcomes = outcomes.filter(o =>
+    completedSet.has(normalizeWorkspaceOutcomeResult(o))
+  );
+  const total = completedOutcomes.length;
+  const wins = completedOutcomes.filter(o =>
+    successSet.has(normalizeWorkspaceOutcomeResult(o))
+  );
+  const losses = completedOutcomes.filter(o =>
+    normalizeWorkspaceOutcomeResult(o) === "lost"
+  );
+  const winRate = total ? (wins.length / total) * 100 : 0;
+
+  // Evidence learning
+  const evidenceStats = {
+    denial_letter: { total:0, wins:0 },
+    eob: { total:0, wins:0 },
+    claim_form: { total:0, wins:0 },
+    policy: { total:0, wins:0 },
+    contract: { total:0, wins:0 }
+  };
+
+  completedOutcomes.forEach(o => {
+    const flags = o.evidence_flags || {};
+    const normalizedFlags = {
+      denial_letter: !!(flags.denial_letter ?? flags.has_denial_letter),
+      eob: !!(flags.eob ?? flags.has_eob),
+      claim_form: !!(flags.claim_form ?? flags.has_claim_form),
+      policy: !!(flags.policy ?? flags.has_policy),
+      contract: !!(flags.contract ?? flags.has_contract)
+    };
+    Object.entries(normalizedFlags).forEach(([k,v]) => {
+      if (!v) return;
+      if (!evidenceStats[k]) return;
+      evidenceStats[k].total++;
+      if (successSet.has(normalizeWorkspaceOutcomeResult(o))) evidenceStats[k].wins++;
+    });
+  });
+
+  const evidenceInsights = Object.entries(evidenceStats)
+    .map(([k,v]) => {
+      const rate = v.total ? (v.wins / v.total) * 100 : 0;
+      return { key:k, winRate:rate, count:v.total };
+    })
+    .filter(x => x.count >= 3) // only meaningful data
+    .sort((a,b) => b.winRate - a.winRate);
+
+  return {
+    total,
+    rawTotal: outcomes.length,
+    pending: outcomes.length - completedOutcomes.length,
+    winRate,
+    losses: losses.length,
+    evidenceInsights
+  };
+}
+
+function buildOutcomeInsightText(org_id){
+  const insights = computeOutcomeInsights(org_id);
+
+  if (!insights.rawTotal) {
+    return "No historical outcomes yet. Submit appeals and negotiations to start learning what works best.";
+  }
+  if (!insights.total) {
+    return `Outcome tracking has started, but no completed outcomes are available yet. Pending/open outcomes: ${Number(insights.pending || 0)}.`;
+  }
+
+  const lines = [];
+  lines.push(`Overall win rate: ${insights.winRate.toFixed(1)}%`);
+  if (Number(insights.pending || 0) > 0) {
+    lines.push(`Pending/open outcomes not included in win rate: ${Number(insights.pending || 0)}`);
+  }
+
+  insights.evidenceInsights.slice(0,3).forEach(e => {
+    let label = "";
+
+    if (e.key === "denial_letter") label = "Denial Letter";
+    if (e.key === "eob") label = "EOB/ERA";
+    if (e.key === "claim_form") label = "Claim Form";
+    if (e.key === "policy") label = "Payer Policy";
+    if (e.key === "contract") label = "Contract / Fee Schedule";
+
+    lines.push(`${label} improves success rate to ${e.winRate.toFixed(1)}%`);
+  });
+
+  return lines.join("\n");
 }
 
 function computePayerBehaviorIntelligence(org_id, payer){
@@ -14581,20 +14930,38 @@ function computePayerBehaviorIntelligence(org_id, payer){
 
   if (!rows.length) return null;
 
-  const successSet = new Set(["approved", "partial", "paid_in_full"]);
-  const appealRows = rows.filter(r => String(r.stage_type || "") === "appeal");
-  const negotiationRows = rows.filter(r => String(r.stage_type || "") === "negotiation");
-  const appealSuccesses = appealRows.filter(r => successSet.has(String(r.outcome_status || "")));
-  const negotiationSuccesses = negotiationRows.filter(r => successSet.has(String(r.outcome_status || "")));
+  const successSet = new Set(["won", "partial"]);
+  const outcomeType = (r) =>
+    String(r.type || r.stage_type || r.channel || "").trim().toLowerCase();
+  const appealRows = rows.filter(r => outcomeType(r) === "appeal");
+  const negotiationRows = rows.filter(r => outcomeType(r) === "negotiation");
+  const appealSuccesses = appealRows.filter(r =>
+    successSet.has(normalizeWorkspaceOutcomeResult(r))
+  );
+  const negotiationSuccesses = negotiationRows.filter(r =>
+    successSet.has(normalizeWorkspaceOutcomeResult(r))
+  );
 
   const appealSuccessRate = appealRows.length ? (appealSuccesses.length / appealRows.length) : 0;
   const negotiationSuccessRate = negotiationRows.length ? (negotiationSuccesses.length / negotiationRows.length) : 0;
 
-  const allSuccesses = rows.filter(r => successSet.has(String(r.outcome_status || "")));
+  const allSuccesses = rows.filter(r =>
+    successSet.has(normalizeWorkspaceOutcomeResult(r))
+  );
   const avgRecoveredPct = allSuccesses.length
     ? allSuccesses.reduce((sum, r) => {
-        const req = num(r.requested_amount);
-        const rec = num(r.recovered_amount);
+        const req = num(
+          r.requested_amount ||
+          r.requested_recovery_amount ||
+          r.expected_recovery_amount ||
+          0
+        );
+        const rec = num(
+          r.recovered_amount ||
+          r.amount_recovered ||
+          r.recovery_amount ||
+          0
+        );
         return sum + (req > 0 ? (rec / req) : 0);
       }, 0) / allSuccesses.length
     : 0;
@@ -14610,7 +14977,7 @@ function computePayerBehaviorIntelligence(org_id, payer){
     strategyCounts[k] = (strategyCounts[k] || 0) + 1;
     if (!strategySuccess[k]) strategySuccess[k] = { n: 0, s: 0 };
     strategySuccess[k].n += 1;
-    if (successSet.has(String(r.outcome_status || ""))) strategySuccess[k].s += 1;
+    if (successSet.has(normalizeWorkspaceOutcomeResult(r))) strategySuccess[k].s += 1;
     const d = Number(r.days_to_payment);
     if (Number.isFinite(d) && d >= 0) {
       if (!strategyDays[k]) strategyDays[k] = [];
@@ -44873,6 +45240,13 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
       </div>
     ` : "";
+    const outcomeInsightText = buildOutcomeInsightText(sess.org_id);
+    const outcomeInsightCard = `
+      <div class="card" style="margin-top:12px;">
+        <h3>Outcome Intelligence</h3>
+        <pre style="white-space:pre-wrap;font-size:12px;">${safeStr(outcomeInsightText)}</pre>
+      </div>
+    `;
 
     const pageContent = `
       ${workspacePolishStyles()}
@@ -44889,6 +45263,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
           </div>
         </div>
         ${renderWorkspaceCommandCenter(ws, claim, derived, channel)}
+        ${outcomeInsightCard}
 
         ${savedMsg}
         ${uploadedMsg}
