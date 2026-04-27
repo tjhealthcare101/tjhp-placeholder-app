@@ -29060,20 +29060,19 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
   <div class="priority-header">
     <div>
-      <div class="muted small" style="font-weight:800;text-transform:uppercase;letter-spacing:.05em;">What needs attention</div>
-      <h3 style="margin:4px 0 6px;">Work the highest-value recovery opportunities first</h3>
-      <div class="muted small">Denied, underpaid, and follow-up claims that may need staff action.</div>
+      <div class="muted small" style="font-weight:800;text-transform:uppercase;letter-spacing:.05em;">Revenue at risk</div>
+      <h3 style="margin:4px 0 6px;">Prioritize the dollars most likely to be lost</h3>
+      <div class="muted small">Start with denied, underpaid, and follow-up claims that need action today.</div>
     </div>
     <div class="priority-actions">
-      <a class="btn" href="/claims-lifecycle">Review Claims Lifecycle</a>
-      <a class="btn secondary" href="/actions">Open Action Center</a>
+      <a class="btn" href="/actions?tab=all">Open All At-Risk Work</a>
     </div>
   </div>
 
   <div class="priority-grid">
     <div class="priority-main">
       <div class="priority-main-value">${formatMoneyUI(todaysAtRiskTotal)}</div>
-      <div class="priority-main-label">Active Recovery Opportunity</div>
+      <div class="priority-main-label">Revenue At Risk</div>
     </div>
     <div class="priority-metric">
       <strong>${formatNumberUI(todaysPriorities.denied.count)}</strong>
@@ -29098,8 +29097,14 @@ if (method === "GET" && pathname === "/weekly-summary") {
     : `
       <details class="priority-claims">
         <summary>
-          <span>Top claims to work today</span>
-          <strong>${formatNumberUI(topClaims.length)}</strong>
+          <span>
+            <span>Top claims to work today</span>
+            <small>Click to expand and open work in Action Center</small>
+          </span>
+          <span class="priority-summary-right">
+            <strong>${formatNumberUI(topClaims.length)}</strong>
+            <span class="priority-chevron">⌄</span>
+          </span>
         </summary>
         <div class="priority-claim-list">
           ${topClaims.map(c => `
@@ -29109,7 +29114,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
                 <span class="muted small"> · ${formatMoneyUI(c.at_risk_amount)} at risk</span>
                 <div class="muted small">${safeStr(c.next_action)}</div>
               </div>
-              <a class="btn small secondary" href="/claims-lifecycle?priority=top&claim=${encodeURIComponent(c.billed_id)}">Open</a>
+              <a class="btn small secondary" href="/actions?tab=all&claim=${encodeURIComponent(c.billed_id)}">Open</a>
             </div>
           `).join("")}
         </div>
@@ -29210,10 +29215,17 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .priority-metric small{display:block;font-size:12px;color:var(--muted);margin-top:4px;}
         .priority-empty{margin-top:12px;}
         .priority-claims{margin-top:12px;border-top:1px solid var(--border);padding-top:10px;}
-        .priority-claims summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;font-weight:900;}
+        .priority-claims summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;font-weight:900;border:1px solid var(--border);border-radius:12px;padding:12px;background:#f8fafc;}
+        .priority-claims summary small{display:block;font-size:11px;color:var(--muted);font-weight:700;margin-top:3px;}
+        .priority-summary-right{display:inline-flex;align-items:center;gap:10px;}
+        .priority-chevron{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:999px;background:#fff;border:1px solid var(--border);font-weight:900;}
+        .priority-claims[open] .priority-chevron{transform:rotate(180deg);}
         .priority-claim-list{margin-top:8px;}
         .priority-claim-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #eee;}
         .recovery-snapshot{padding:16px;}
+        .recovery-progress-wrap{border:1px solid var(--border);border-radius:12px;background:#f8fafc;padding:12px;margin-top:12px;}
+        .recovery-progress-bar{height:10px;border-radius:999px;background:#e5e7eb;overflow:hidden;margin-top:8px;}
+        .recovery-progress-fill{display:block;height:100%;border-radius:999px;background:#111827;}
         .recovery-core-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:12px;}
         .recovery-core-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:#fff;}
         .recovery-mini-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:12px;}
@@ -29226,6 +29238,13 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .recovery-value{margin:0;font-size:24px;font-weight:900;line-height:1.1;}
         .recovery-label{margin:6px 0 0;font-size:12px;color:var(--muted);font-weight:700;}
         .recovery-sub{margin-top:6px;font-size:11px;color:var(--muted);line-height:1.35;}
+        .health-compact{padding:16px;}
+        .health-row{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;}
+        .health-score-value{font-size:30px;font-weight:900;line-height:1;}
+        .health-bar{height:10px;border-radius:999px;background:#e5e7eb;overflow:hidden;margin-top:12px;}
+        .health-fill{height:100%;border-radius:999px;background:#111827;}
+        .health-driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px;}
+        .health-driver{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px 12px;}
         @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row .btn{width:100%;}}
       </style>
 
@@ -29239,13 +29258,6 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </div>
 
       ${revenueSummaryBlock}
-
-      <div class="kpi-strip">
-        <div class="kpi-card"><p class="kpi-value">${fmtMoney(m.kpis.revenueAtRisk)}</p><p class="kpi-label">Revenue At Risk <span class="tooltip">ⓘ<span class="tooltiptext">Outstanding revenue from denied, underpaid, or unpaid claims.</span></span></p><div class="kpi-delta">-</div></div>
-        <div class="kpi-card"><p class="kpi-value">${Number(m.denialRate||0).toFixed(1)}%</p><p class="kpi-label">Denial Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed claims that were denied by payers.</span></span></p><div class="kpi-delta">-</div></div>
-        <div class="kpi-card"><p class="kpi-value">${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p><p class="kpi-label">Recovery Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed revenue successfully collected.</span></span></p><div class="kpi-delta">-</div></div>
-        
-      </div>
 
 
       <div class="exec-card recovery-snapshot">
@@ -29279,6 +29291,19 @@ if (method === "GET" && pathname === "/weekly-summary") {
           </div>
         </div>
 
+        <div class="recovery-progress-wrap">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
+            <div>
+              <strong>Recovery Progress</strong>
+              <div class="muted small">Recovered versus revenue found in this date range.</div>
+            </div>
+            <strong>${(roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0).toFixed(1)}%</strong>
+          </div>
+          <div class="recovery-progress-bar">
+            <span class="recovery-progress-fill" style="width:${(roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0).toFixed(1)}%;"></span>
+          </div>
+        </div>
+
         <div class="recovery-mini-grid">
           <div class="recovery-mini">
             <div class="recovery-mini-label">Win Rate</div>
@@ -29306,62 +29331,38 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
       </div>
 
-      <div class="exec-card">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+      <div class="exec-card health-compact">
+        <div class="health-row">
           <div>
             <h3 style="margin:0 0 6px;">Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, AR aging, and AI Case Readiness. Higher is better.">ⓘ</span></h3>
-            <div style="font-size:28px;font-weight:900;line-height:1;">
+            <div class="health-score-value">
               ${formatNumberUI(m.healthScore || 0)} / 100
               <span class="badge ${gradeBadgeClass(m.healthGrade)}" style="margin-left:8px;">${safeStr(m.healthGrade || "-")}</span>
             </div>
-            <div class="muted small" style="margin-top:6px;">This is your high-level revenue health indicator.</div>
+            <div class="muted small" style="margin-top:6px;">Compact health indicator based on collections, denial risk, AR aging, and workflow readiness.</div>
           </div>
-          <div style="min-width:320px;flex:1;">
-            <div class="chart-container" style="height:260px;max-height:260px;">
-              <canvas id="healthScoreDonut"></canvas>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="exec-card">
-        <h3>Operational Breakdown</h3>
-        <div class="muted small" style="margin-bottom:10px;">
-          Quick manager-level visibility into payout drivers.
+          <a class="btn secondary small" href="/revenue-intelligence?tab=executive">View Deeper Analysis</a>
         </div>
 
-        <div class="kpi-strip" style="margin-top:0;">
-          <div class="kpi-card">
-            <p class="kpi-value">${formatNumberUI(m.subscores?.collection_efficiency || 0)}</p>
-            <p class="kpi-label">Collection Efficiency</p>
-          </div>
+        <div class="health-bar">
+          <div class="health-fill" style="width:${Math.max(0, Math.min(100, Number(m.healthScore || 0)))}%;"></div>
+        </div>
 
-          <div class="kpi-card">
-            <p class="kpi-value">${formatNumberUI(m.subscores?.denial_risk || 0)}</p>
-            <p class="kpi-label">Denial Risk Score</p>
+        <div class="health-driver-grid">
+          <div class="health-driver">
+            <div class="muted small">Collection Efficiency</div>
+            <strong>${formatNumberUI(m.subscores?.collection_efficiency || 0)}</strong>
           </div>
-
-          <div class="kpi-card">
-            <p class="kpi-value">${formatNumberUI(m.subscores?.ar_aging || 0)}</p>
-            <p class="kpi-label">AR Aging Score</p>
+          <div class="health-driver">
+            <div class="muted small">Denial Risk Score</div>
+            <strong>${formatNumberUI(m.subscores?.denial_risk || 0)}</strong>
+          </div>
+          <div class="health-driver">
+            <div class="muted small">AR Aging Score</div>
+            <strong>${formatNumberUI(m.subscores?.ar_aging || 0)}</strong>
           </div>
         </div>
       </div>
-
-      ${topRiskPayer ? `
-      <div class="exec-card">
-        <h3>Top Risk Payer</h3>
-        <div style="font-weight:700;">
-          ${safeStr(topRiskPayer.payer)}
-        </div>
-        <div class="muted">
-          $${Math.round(topRiskPayer.risk || 0).toLocaleString()} at risk · ${Number(topRiskPayer.riskRate||0).toFixed(1)}% exposure
-        </div>
-        <div style="margin-top:8px;">
-          <a class="btn small" href="/revenue-intelligence?tab=payers">Analyze in Command Center</a>
-        </div>
-      </div>
-      ` : ""}
 
       <div class="executive-panel">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:end;">
@@ -29450,19 +29451,22 @@ document.addEventListener("DOMContentLoaded", function(){
   const good = Math.max(0, Math.min(100, hs));
   const remaining = Math.max(0, 100 - good);
 
-  new Chart(document.getElementById("healthScoreDonut"), {
-    type: "doughnut",
-    data: {
-      labels: ["Health Score", "Remaining"],
-      datasets: [{ data: [good, remaining] }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      cutout: "72%",
-      plugins: { legend: { position: "bottom" } }
-    }
-  });
+  const healthScoreDonut = document.getElementById("healthScoreDonut");
+  if (healthScoreDonut) {
+    new Chart(healthScoreDonut, {
+      type: "doughnut",
+      data: {
+        labels: ["Health Score", "Remaining"],
+        datasets: [{ data: [good, remaining] }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "72%",
+        plugins: { legend: { position: "bottom" } }
+      }
+    });
+  }
 
   const trendCfg = {
     type: "line",
