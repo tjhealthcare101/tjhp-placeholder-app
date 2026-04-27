@@ -176,6 +176,7 @@ const FILES = {
   applications: path.join(DATA_DIR, "applications.json"),
   integrations: path.join(DATA_DIR, "integrations.json"),
   website_content: path.join(DATA_DIR, "website_content.json"),
+  payer_policy_sources: path.join(DATA_DIR, "payer_policy_sources.json"),
   contact_messages: path.join(DATA_DIR, "contact_messages.json"),
 };
 
@@ -526,6 +527,662 @@ function integrationJoinUrl(base, endpoint){
 
   if (/^https?:\/\//i.test(e)) return e;
   return `${b}/${e.replace(/^\/+/,"")}`;
+}
+
+const PAYER_POLICY_CACHE_MAX_BYTES = 5 * 1024 * 1024;
+const PAYER_POLICY_TEXT_MAX_CHARS = 120000;
+
+function payerPolicyNormalize(value){
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function payerPolicySourceTypeLabel(value){
+  const labels = {
+    coverage_policy: "Coverage Policy",
+    medical_policy: "Medical Policy",
+    reimbursement_policy: "Reimbursement Policy",
+    rate_policy: "Rate / Payment Policy",
+    fee_schedule: "Fee Schedule",
+    contract_policy: "Contract / Allowed Rule",
+    payer_manual: "Payer Manual",
+    custom: "Custom Source"
+  };
+
+  return labels[String(value || "").trim()] || String(value || "Policy Source");
+}
+
+function getPayerPolicySources(org_id){
+  return readJSON(FILES.payer_policy_sources, [])
+    .filter(x => x.org_id === org_id);
+}
+
+function savePayerPolicySourcesForOrg(org_id, rows){
+  const all = readJSON(FILES.payer_policy_sources, []);
+  const keep = all.filter(x => x.org_id !== org_id);
+  writeJSON(FILES.payer_policy_sources, [...keep, ...(rows || [])]);
+}
+
+function getPayerPolicySourceById(org_id, source_id){
+  return getPayerPolicySources(org_id).find(x =>
+    String(x.source_id || "") === String(source_id || "")
+  ) || null;
+}
+
+function payerPolicyCacheDir(org_id){
+  const dir = path.join(UPLOADS_DIR, "payer_policy_cache", String(org_id || "unknown"));
+  ensureDir(dir);
+  return dir;
+}
+
+function payerPolicyCacheUrl(org_id, filename){
+  return `/uploads/payer_policy_cache/${encodeURIComponent(String(org_id || "unknown"))}/${encodeURIComponent(String(filename || ""))}`;
+}
+
+function payerPolicyIsPrivateHost(hostname){
+  const h = String(hostname || "").trim().toLowerCase();
+
+  if (!h) return true;
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  if (h === "0.0.0.0" || h === "::1") return true;
+
+  if (/^127\./.test(h)) return true;
+  if (/^10\./.test(h)) return true;
+  if (/^192\.168\./.test(h)) return true;
+  if (/^169\.254\./.test(h)) return true;
+
+  const m = h.match(/^172\.(\d+)\./);
+  if (m) {
+    const n = Number(m[1]);
+    if (n >= 16 && n <= 31) return true;
+  }
+
+  return false;
+}
+
+function payerPolicySafePublicUrl(rawUrl){
+  const raw = String(rawUrl || "").trim();
+  if (!raw) return "";
+
+  try {
+    const u = new URL(raw);
+    if (!["http:", "https:"].includes(u.protocol)) return "";
+    if (payerPolicyIsPrivateHost(u.hostname)) return "";
+    return u.toString();
+  } catch {
+    return "";
+  }
+}
+
+function payerPolicyValidateSourceUrlByAccess(rawUrl, accessType){
+  const access = String(accessType || "public").trim();
+
+  if (access !== "public") {
+    return {
+      ok: true,
+      url: String(rawUrl || "").trim(),
+      fetchable: false,
+      message: "Source saved as non-public. It will not be fetched by the public policy cache."
+    };
+  }
+
+  const safeUrl = payerPolicySafePublicUrl(rawUrl);
+
+  if (!safeUrl) {
+    return {
+      ok: false,
+      url: "",
+      fetchable: false,
+      message: "Invalid, private, or blocked public URL."
+    };
+  }
+
+  return {
+    ok: true,
+    url: safeUrl,
+    fetchable: true,
+    message: "Public URL accepted."
+  };
+}
+
+function payerPolicyPlainTextFromHtml(html){
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<\/li>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#39;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n\s+/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function payerPolicyExtractPdfText(buffer){
+  try {
+    const pdfParse = require("pdf-parse");
+    const parsed = await pdfParse(buffer);
+    const text = String(parsed?.text || "")
+      .replace(/\s+\n/g, "\n")
+      .replace(/\n\s+/g, "\n")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
+    return {
+      ok: !!text,
+      text,
+      status: text ? "extracted" : "empty",
+      message: text ? "PDF text extracted." : "PDF parsed but no text was extracted."
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      text: "",
+      status: "unavailable",
+      message: "PDF text extraction dependency is not available or extraction failed. PDF snapshot was cached."
+    };
+  }
+}
+
+function payerPolicySourceAccessLabel(value){
+  const labels = {
+    public: "Public Approved URL",
+    payer_portal: "Payer Portal / Login Required",
+    api: "API / Integration Required",
+    manual: "Manual Source Only"
+  };
+
+  return labels[String(value || "public").trim()] || "Public Approved URL";
+}
+
+function payerPolicySourceCanFetch(source){
+  const access = String(source?.access_type || source?.source_access || "public").trim();
+  return !access || access === "public";
+}
+
+function payerPolicyBuildExcerpt(text, keywords){
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+
+  const terms = String(keywords || "")
+    .split(/[,\n|]+/)
+    .map(t => payerPolicyNormalize(t))
+    .filter(Boolean);
+
+  const lower = payerPolicyNormalize(clean);
+
+  let idx = -1;
+  for (const term of terms) {
+    const found = lower.indexOf(term);
+    if (found >= 0) {
+      idx = Math.max(0, found - 300);
+      break;
+    }
+  }
+
+  if (idx < 0) idx = 0;
+
+  return clean.slice(idx, idx + 1800).trim();
+}
+
+function payerPolicyClaimSearchText(claim){
+  return payerPolicyNormalize([
+    claim?.payer,
+    claim?.claim_number,
+    claim?.claim_id,
+    claim?.procedure_code,
+    claim?.cpt_code,
+    claim?.cpt,
+    claim?.diagnosis_code,
+    claim?.dx_code,
+    claim?.status,
+    claim?.denial_code,
+    claim?.denial_reason,
+    claim?.adjustment_code,
+    claim?.adjustment_reason,
+    claim?.network_status
+  ].filter(Boolean).join(" "));
+}
+
+function payerPolicySourceMatchesPayer(source, claim){
+  const sourcePayer = payerPolicyNormalize(source?.payer || "");
+  const claimPayer = payerPolicyNormalize(claim?.payer || "");
+
+  if (!sourcePayer || sourcePayer === "all" || sourcePayer === "all payers") return true;
+  if (!claimPayer) return false;
+
+  return (
+    sourcePayer === claimPayer ||
+    sourcePayer.includes(claimPayer) ||
+    claimPayer.includes(sourcePayer)
+  );
+}
+
+function payerPolicySourceMatchesDoc(source, docKey){
+  const type = String(source?.source_type || "custom").trim();
+
+  if (docKey === "payer_policy") {
+    return [
+      "coverage_policy",
+      "medical_policy",
+      "reimbursement_policy",
+      "rate_policy",
+      "payer_manual",
+      "custom"
+    ].includes(type);
+  }
+
+  if (docKey === "contract_excerpt") {
+    return [
+      "contract_policy",
+      "reimbursement_policy",
+      "payer_manual",
+      "custom"
+    ].includes(type);
+  }
+
+  if (docKey === "fee_schedule") {
+    return [
+      "fee_schedule",
+      "rate_policy",
+      "reimbursement_policy",
+      "payer_manual",
+      "custom"
+    ].includes(type);
+  }
+
+  return false;
+}
+
+function payerPolicySourceMatchesKeywords(source, claim){
+  const keywords = String(source?.keywords || source?.tags || "")
+    .split(/[,\n|]+/)
+    .map(t => payerPolicyNormalize(t))
+    .filter(Boolean);
+
+  if (!keywords.length) return true;
+
+  const haystack = payerPolicyClaimSearchText(claim);
+  if (!haystack) return true;
+
+  return keywords.some(k => haystack.includes(k));
+}
+
+function findPayerPolicyEvidenceForDoc(org_id, claim, docKey){
+  const rows = getPayerPolicySources(org_id)
+    .filter(s => String(s.status || "approved") === "approved")
+    .filter(s => payerPolicySourceMatchesDoc(s, docKey))
+    .filter(s => payerPolicySourceMatchesPayer(s, claim))
+    .filter(s => payerPolicySourceMatchesKeywords(s, claim))
+    .filter(s => String(s.cached_text || s.cached_excerpt || s.cached_file_url || "").trim());
+
+  return rows
+    .sort((a,b) => new Date(b.last_fetched_at || b.updated_at || b.created_at || 0) - new Date(a.last_fetched_at || a.updated_at || a.created_at || 0))
+    .slice(0, 3);
+}
+
+function payerPolicyEvidencePreviewText(org_id, claim, docKey){
+  const sources = findPayerPolicyEvidenceForDoc(org_id, claim, docKey);
+  if (!sources.length) return "";
+
+  const header =
+    docKey === "payer_policy" ? "Payer policy citation evidence" :
+    docKey === "fee_schedule" ? "Fee schedule / reimbursement policy evidence" :
+    "Contract / allowed rule policy evidence";
+
+  const blocks = sources.map((s, i) => {
+    const excerpt = String(s.cached_excerpt || s.cached_text || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 1800);
+
+    return [
+      `${i + 1}. ${s.title || payerPolicySourceTypeLabel(s.source_type)}`,
+      `Payer: ${s.payer || "All payers"}`,
+      `Type: ${payerPolicySourceTypeLabel(s.source_type)}`,
+      `Source URL: ${s.url}`,
+      `Access Type: ${payerPolicySourceAccessLabel(s.access_type || "public")}`,
+      `Last fetched: ${s.last_fetched_at || "Not fetched"}`,
+      s.cached_file_url ? `Cached snapshot: ${s.cached_file_url}` : "",
+      s.content_hash ? `Snapshot hash: ${s.content_hash}` : "",
+      "",
+      excerpt ? `Excerpt:\n${excerpt}` : "No text excerpt available. Cached file/source URL is available."
+    ].filter(Boolean).join("\n");
+  });
+
+  return [
+    header,
+    "",
+    "Use this as draft support and citation context. Public cached sources support research and packet drafting. Payer-login/API-only sources must be confirmed through authorized integrations or manual source documents before payer submission.",
+    "",
+    ...blocks
+  ].join("\n\n---\n\n");
+}
+
+async function refreshPayerPolicySourceSnapshot(org_id, source_id){
+  const rows = getPayerPolicySources(org_id);
+  const idx = rows.findIndex(x => String(x.source_id || "") === String(source_id || ""));
+  if (idx < 0) {
+    return { ok:false, message:"Policy source not found." };
+  }
+
+  const source = rows[idx];
+
+  if (!payerPolicySourceCanFetch(source)) {
+    rows[idx] = {
+      ...source,
+      fetch_status: "not_fetchable",
+      fetch_error: "This source requires payer portal/API/manual access and is not eligible for public URL caching.",
+      updated_at: nowISO()
+    };
+
+    savePayerPolicySourcesForOrg(org_id, rows);
+
+    return {
+      ok:false,
+      message:"This source is not public. Use payer portal/API integration or manual upload for this source."
+    };
+  }
+
+  const safeUrl = payerPolicySafePublicUrl(source.url);
+
+  if (!safeUrl) {
+    rows[idx] = {
+      ...source,
+      fetch_status: "failed",
+      fetch_error: "URL is missing, invalid, private, or blocked.",
+      updated_at: nowISO()
+    };
+
+    savePayerPolicySourcesForOrg(org_id, rows);
+    return { ok:false, message:"URL is missing, invalid, private, or blocked." };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 9000);
+
+  try {
+    const response = await fetch(safeUrl, {
+      method: "GET",
+      headers: {
+        "Accept": "text/html,application/pdf,text/plain,*/*",
+        "User-Agent": "TJHealthcareProPolicyCache/1.0"
+      },
+      signal: controller.signal
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      rows[idx] = {
+        ...source,
+        fetch_status: "failed",
+        fetch_error: `HTTP ${response.status}`,
+        updated_at: nowISO()
+      };
+
+      savePayerPolicySourcesForOrg(org_id, rows);
+      return { ok:false, message:`Source returned HTTP ${response.status}.` };
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    const buf = Buffer.from(await response.arrayBuffer());
+
+    if (buf.length > PAYER_POLICY_CACHE_MAX_BYTES) {
+      rows[idx] = {
+        ...source,
+        fetch_status: "failed",
+        fetch_error: "Source exceeded cache size limit.",
+        updated_at: nowISO()
+      };
+
+      savePayerPolicySourcesForOrg(org_id, rows);
+      return { ok:false, message:"Source exceeded cache size limit." };
+    }
+
+    const isPdf =
+      contentType.toLowerCase().includes("pdf") ||
+      safeUrl.toLowerCase().split("?")[0].endsWith(".pdf");
+
+    const hash = crypto.createHash("sha256").update(buf).digest("hex");
+    const ext = isPdf ? ".pdf" : ".txt";
+    const fileName = `${Date.now()}-${source.source_id}-${sanitizeUploadName(source.title || "payer_policy")}${ext}`;
+    const absPath = path.join(payerPolicyCacheDir(org_id), fileName);
+    fs.writeFileSync(absPath, buf);
+
+    let text = "";
+    let pdfExtractionStatus = "";
+    let pdfExtractionMessage = "";
+
+    if (isPdf) {
+      const extracted = await payerPolicyExtractPdfText(buf);
+
+      pdfExtractionStatus = extracted.status;
+      pdfExtractionMessage = extracted.message;
+
+      text = extracted.ok
+        ? extracted.text
+        : [
+            "PDF payer policy source cached.",
+            "PDF text extraction was not available or did not return text.",
+            "Use the cached PDF/source URL as the citation and attach/confirm the source if needed.",
+            "",
+            extracted.message || ""
+          ].join("\n");
+    } else {
+      const rawText = buf.toString("utf8");
+      text = contentType.toLowerCase().includes("html")
+        ? payerPolicyPlainTextFromHtml(rawText)
+        : String(rawText || "").replace(/\s+/g, " ").trim();
+
+      text = text.slice(0, PAYER_POLICY_TEXT_MAX_CHARS);
+    }
+
+    const excerpt = payerPolicyBuildExcerpt(text, source.keywords || source.tags || "");
+
+    rows[idx] = {
+      ...source,
+      url: safeUrl,
+      cached_text: text,
+      cached_excerpt: excerpt,
+      cached_file_path: absPath,
+      cached_file_url: payerPolicyCacheUrl(org_id, fileName),
+      content_type: contentType || (isPdf ? "application/pdf" : "text/plain"),
+      content_hash: hash,
+      last_fetched_at: nowISO(),
+      fetch_status: "cached",
+      fetch_error: "",
+      pdf_text_status: isPdf ? pdfExtractionStatus : "",
+      pdf_text_message: isPdf ? pdfExtractionMessage : "",
+      updated_at: nowISO()
+    };
+
+    savePayerPolicySourcesForOrg(org_id, rows);
+
+    return {
+      ok: true,
+      message: "Policy source cached.",
+      source: rows[idx]
+    };
+  } catch (e) {
+    clearTimeout(timeout);
+
+    rows[idx] = {
+      ...source,
+      fetch_status: "failed",
+      fetch_error: String(e?.message || e || "Fetch failed"),
+      updated_at: nowISO()
+    };
+
+    savePayerPolicySourcesForOrg(org_id, rows);
+
+    return {
+      ok:false,
+      message:`Fetch failed: ${String(e?.message || e || "unknown error")}`
+    };
+  }
+}
+
+function renderPayerPolicySourceLibraryPanel(org_id){
+  const sources = getPayerPolicySources(org_id)
+    .sort((a,b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
+
+  const typeOptions = [
+    ["coverage_policy", "Coverage Policy"],
+    ["medical_policy", "Medical Policy"],
+    ["reimbursement_policy", "Reimbursement Policy"],
+    ["rate_policy", "Rate / Payment Policy"],
+    ["fee_schedule", "Fee Schedule"],
+    ["contract_policy", "Contract / Allowed Rule"],
+    ["payer_manual", "Payer Manual"],
+    ["custom", "Custom Source"]
+  ].map(([v,l]) => `<option value="${safeStr(v)}">${safeStr(l)}</option>`).join("");
+
+  const rows = sources.map(s => `
+    <tr>
+      <td>
+        <strong>${safeStr(s.title || "-")}</strong>
+        <div class="muted small">${safeStr(s.url || "")}</div>
+      </td>
+      <td>${safeStr(s.payer || "All payers")}</td>
+      <td>${safeStr(payerPolicySourceTypeLabel(s.source_type))}</td>
+      <td>${safeStr(payerPolicySourceAccessLabel(s.access_type || "public"))}</td>
+      <td>
+        ${s.fetch_status === "cached"
+          ? `<span class="badge ok">Cached</span>`
+          : s.fetch_status === "failed"
+            ? `<span class="badge err">Failed</span>`
+            : s.fetch_status === "not_fetchable"
+              ? `<span class="badge warn">Tracked Only</span>`
+              : `<span class="badge warn">Not fetched</span>`
+        }
+        <div class="muted small">${safeStr(s.last_fetched_at || "")}</div>
+        ${s.fetch_error ? `<div class="muted small" style="color:#991b1b;">${safeStr(s.fetch_error)}</div>` : ""}
+      </td>
+      <td class="policy-source-preview">
+        <details>
+          <summary>Preview</summary>
+          <div class="muted small" style="margin:6px 0;">Citation: ${safeStr(s.url || "")}</div>
+          ${s.cached_file_url ? `<div class="muted small"><a href="${safeStr(s.cached_file_url)}" target="_blank">Open cached snapshot</a></div>` : ""}
+          ${s.pdf_text_status ? `
+            <div class="muted small">
+              PDF text status: ${safeStr(s.pdf_text_status)}
+              ${s.pdf_text_message ? `· ${safeStr(s.pdf_text_message)}` : ""}
+            </div>
+          ` : ""}
+          <pre style="font-size:12px;max-height:180px;overflow:auto;">${safeStr(s.cached_excerpt || s.cached_text || "No cached text yet.")}</pre>
+        </details>
+      </td>
+      <td>
+        <div class="btnRow">
+          ${payerPolicySourceCanFetch(s) ? `
+            <form method="POST" action="/data-management/payer-policy-sources/fetch" style="margin:0;">
+              <input type="hidden" name="source_id" value="${safeStr(s.source_id)}"/>
+              <button class="btn small secondary" type="submit">Refresh Source</button>
+            </form>
+          ` : `
+            <span class="badge warn">Use Integration / Manual Upload</span>
+          `}
+          <form method="POST" action="/data-management/payer-policy-sources/delete" style="margin:0;" onsubmit="return confirm('Delete this policy source?');">
+            <input type="hidden" name="source_id" value="${safeStr(s.source_id)}"/>
+            <button class="btn small danger" type="submit">Delete</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+  `).join("") || `<tr><td colspan="7" class="muted">No payer policy sources saved yet.</td></tr>`;
+
+  return `
+    <div class="card" style="box-shadow:none;margin:16px 0;">
+      <h3>Payer Policy Source Library</h3>
+      <p class="muted">
+        Add approved payer policy, reimbursement, fee schedule, rate, or coverage sources here. Public URLs can be refreshed and cached. Payer-login or API-only sources are tracked here for evidence planning, but must be pulled through authorized payer portal/API integrations or uploaded manually.
+      </p>
+
+      <div class="alert" style="background:#f8fafc;color:#334155;border-color:#e2e8f0;">
+        <strong>Location:</strong> Data Management → Reimbursement → Payer Policy Source Library.
+        This is separate from Integrations because it stores approved policy/rate source references, not API credentials.
+      </div>
+
+      <div class="alert" style="background:#eff6ff;color:#1e3a8a;border-color:#bfdbfe;">
+        Public-source cache only. Do not include PHI in URLs. Payer-login content should be pulled later through authorized payer portal/API integrations.
+      </div>
+
+      <form method="POST" action="/data-management/payer-policy-sources/add" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
+        <div>
+          <label>Payer</label>
+          <input name="payer" placeholder="e.g. Aetna, Cigna, UnitedHealthcare, All Payers" />
+        </div>
+
+        <div>
+          <label>Source Type</label>
+          <select name="source_type">${typeOptions}</select>
+        </div>
+
+        <div>
+          <label>Access Type</label>
+          <select name="access_type">
+            <option value="public">Public Approved URL</option>
+            <option value="payer_portal">Payer Portal / Login Required</option>
+            <option value="api">API / Integration Required</option>
+            <option value="manual">Manual Source Only</option>
+          </select>
+        </div>
+
+        <div>
+          <label>Title</label>
+          <input name="title" placeholder="e.g. Aetna medical policy, UHC reimbursement policy..." />
+        </div>
+
+        <div>
+          <label>Keywords / CPT / Policy Tags</label>
+          <input name="keywords" placeholder="e.g. 99213, modifier 25, medical necessity, anesthesia..." />
+        </div>
+
+        <div style="grid-column:1/-1;">
+          <label>Approved Source URL</label>
+          <input name="url" placeholder="https://payer.example.com/policy-or-fee-schedule" />
+        </div>
+
+        <div style="grid-column:1/-1;">
+          <button class="btn" type="submit">Add Approved Source</button>
+        </div>
+      </form>
+
+      <div class="hr"></div>
+
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Source</th>
+              <th>Payer</th>
+              <th>Type</th>
+              <th>Access</th>
+              <th>Status</th>
+              <th>Cached Preview</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 function integrationTestStatusLabel(status){
@@ -14283,6 +14940,22 @@ function renderTemplate(templateBody, claim){
     .replace(/{{PAID}}/g, formatMoneyUI(claim.paid_amount || 0));
 }
 
+function appendPolicySourceSupportToDraft(draft, org_id, claim){
+  const payerPolicyEvidence = payerPolicyEvidencePreviewText(org_id, claim, "payer_policy");
+  const contractPolicyEvidence = payerPolicyEvidencePreviewText(org_id, claim, "contract_excerpt");
+  const feeScheduleEvidence = payerPolicyEvidencePreviewText(org_id, claim, "fee_schedule");
+
+  const sourceNotes = [
+    payerPolicyEvidence ? "Payer policy source evidence is available in the workspace and should be reviewed for payer-specific coverage or reimbursement support." : "",
+    contractPolicyEvidence ? "Contract/allowed-rule source evidence is available in the workspace and should be reviewed for reimbursement support." : "",
+    feeScheduleEvidence ? "Fee schedule/rate policy evidence is available in the workspace and should be reviewed for requested-payment support." : ""
+  ].filter(Boolean);
+
+  if (!sourceNotes.length) return draft;
+
+  return `${draft}\n\nPolicy / Rate Source Support:\n${sourceNotes.map(x => `- ${x}`).join("\n")}`;
+}
+
 function generateDraftUsingTemplateOrRules({ org_id, type, claim, derived, appealCase, negotiationCase, ws }){
   const orgSettings = getOrgSettings(org_id);
   const letterDefaults = getLetterDefaults(orgSettings);
@@ -14306,7 +14979,8 @@ function generateDraftUsingTemplateOrRules({ org_id, type, claim, derived, appea
   const financials = claimFinancialSnapshot(derived, claim);
   if (template && String(template.body || "").trim()) {
     const rendered = renderTemplate(template.body, claim).trim();
-    return applyChannelDefaults(`${header}
+    return appendPolicySourceSupportToDraft(
+      applyChannelDefaults(`${header}
 
 ${rendered}
 
@@ -14314,7 +14988,10 @@ Claim Financial Snapshot
 ${financials}
 
 Sincerely,
-${signature}`);
+${signature}`),
+      org_id,
+      claim
+    );
   }
   if (type === "negotiation") {
     const variance = Number(derived?.underpaidAmount || 0);
@@ -14329,10 +15006,10 @@ This creates a variance of ${formatMoneyUI(variance)}.
 We respectfully request review and adjustment of the allowed amount in accordance with the provider agreement and applicable reimbursement methodology.
 
 Please reprocess the claim and issue corrected payment.`;
-    return applyChannelDefaults(negotiationNarrative);
+    return appendPolicySourceSupportToDraft(applyChannelDefaults(negotiationNarrative), org_id, claim);
   }
   const rulesDraft = agentDraftFromRules({ type, claim, derived, appealCase, negotiationCase, orgProfile: orgRecord, practiceSettings: getPracticeSettings(org_id), orgSettings });
-  return applyChannelDefaults(rulesDraft);
+  return appendPolicySourceSupportToDraft(applyChannelDefaults(rulesDraft), org_id, claim);
 }
 
 
@@ -14554,8 +15231,9 @@ function workspaceDocSearchTerms(docKey){
   if (key === "medical_records") return ["medical record", "clinical record"];
   if (key === "payer_correspondence") return ["payer correspondence", "message", "letter"];
   if (key === "payment_history") return ["payment history", "remittance history"];
-  if (key === "fee_schedule") return ["fee schedule", "reimbursement rule"];
-  if (key === "contract_excerpt") return ["contract", "allowed amount", "fee schedule"];
+  if (key === "payer_policy") return ["payer policy", "coverage policy", "medical policy", "reimbursement policy", "policy citation"];
+  if (key === "fee_schedule") return ["fee schedule", "rate policy", "payment policy", "reimbursement rule", "allowed amount"];
+  if (key === "contract_excerpt") return ["contract", "allowed amount", "contracted rate", "reimbursement policy", "payer policy"];
 
   return [key.replace(/_/g, " ")];
 }
@@ -15255,6 +15933,11 @@ function workspacePolishStyles(){
         margin:0 0 10px;
         font-size:15px;
         letter-spacing:.01em;
+      }
+
+      .policy-source-preview pre,
+      .ws-evidence-preview pre{
+        white-space: pre-wrap;
       }
 
       .packet-workspace-shell .ws-command-card{
@@ -16323,20 +17006,30 @@ function workspaceEvidencePreviewText(ws, claim, doc, row, channel){
       contract = null;
     }
 
-    if (!contract && !workspaceSafeAutoContract(ws, claim)) return "";
+    const policyPreview = payerPolicyEvidencePreviewText(
+      claim?.org_id || ws?.org_id || "",
+      claim || {},
+      key
+    );
 
-    return [
+    if (!contract && !workspaceSafeAutoContract(ws, claim) && !policyPreview) return "";
+
+    const basePreview = [
       key === "fee_schedule" ? "Fee schedule / reimbursement rule preview" : "Contract / allowed rule preview",
       "",
       "This supports drafting, but attach the source contract excerpt or fee schedule if payer submission requires proof.",
       "",
       `Payer: ${claim?.payer || contract?.payer || "-"}`,
-      `Rule Source: ${contract?.source || contract?.contract_name || contract?.name || "Matched reimbursement rule"}`,
+      `Rule Source: ${contract?.source || contract?.contract_name || contract?.name || "Matched reimbursement rule / policy library"}`,
       `Reimbursement Model: ${contract?.reimbursement_model || contract?.model || "-"}`,
       `Expected / Allowed Value: ${workspaceMoneyPreview(contract?.expected_value || claim?.expected_amount || claim?.expected_insurance || 0)}`,
       `Billed: ${workspaceMoneyPreview(billed)}`,
-      `Confidence: ${contract?.confidence || contract?.match_confidence || "System match"}`
+      `Confidence: ${contract?.confidence || contract?.match_confidence || (policyPreview ? "Policy source matched" : "System match")}`
     ].join("\n");
+
+    return policyPreview
+      ? `${basePreview}\n\n---\n\n${policyPreview}`
+      : basePreview;
   }
 
   if (key === "variance_calc") {
@@ -16380,6 +17073,16 @@ function workspaceEvidencePreviewText(ws, claim, doc, row, channel){
     ].join("\n");
   }
 
+  if (key === "payer_policy") {
+    const policyPreview = payerPolicyEvidencePreviewText(
+      claim?.org_id || ws?.org_id || "",
+      claim || {},
+      key
+    );
+
+    if (policyPreview) return policyPreview;
+  }
+
   return "";
 }
 
@@ -16393,6 +17096,9 @@ function workspaceProofSourceLabel(row, doc, integrationsEnabled){
   if (workspaceIsSubmissionProof(row)) return "Uploaded Source";
 
   if (row?.proofLevel === "draft_evidence") {
+    if (key === "payer_policy") return "Payer Policy Library";
+    if (key === "contract_excerpt" && row?.sourceType === "payer_policy_library") return "Payer Policy Library";
+    if (key === "fee_schedule" && row?.sourceType === "payer_policy_library") return "Payer Policy Library";
     if (key === "eob_era" || key === "payment_history") return "Claim Payment Data";
     if (key === "contract_excerpt" || key === "fee_schedule") return "Contract / Rules Data";
     if (key === "variance_calc") return "System-derived";
@@ -16765,6 +17471,7 @@ function workspaceSourceLabel(sourceType){
     clearinghouse: "Clearinghouse",
     payer_portal: "Payer Portal",
     contract_rules: "Contract / Rules Upload",
+    payer_policy_library: "Payer Policy Library",
     system: "System-derived",
     missing: "Missing"
   };
@@ -17036,6 +17743,31 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
       detail: `${workspaceSourceLabel(preferred)} connection is configured. Pull the source document or upload manually.`,
       nextAction: `Pull from ${workspaceSourceLabel(preferred)} or upload manually.`
     };
+  }
+
+  if (["payer_policy", "contract_excerpt", "fee_schedule"].includes(key)) {
+    const policySources = findPayerPolicyEvidenceForDoc(
+      claim?.org_id || ws?.org_id || "",
+      claim || {},
+      key
+    );
+
+    if (policySources.length) {
+      return {
+        key,
+        label: doc.label || workspaceDocLabel(key),
+        required: !!doc.required,
+        status: "draft_evidence",
+        statusLabel: "Policy Source Cached",
+        proofLevel: "draft_evidence",
+        proofLabel: "Draft Evidence Only",
+        pillClass: "warn",
+        sourceType: "payer_policy_library",
+        sourceLabel: "Payer Policy Library",
+        detail: `${policySources.length} approved cached payer policy/rate source${policySources.length === 1 ? "" : "s"} matched this claim.`,
+        nextAction: "Review cached policy evidence and confirm applicability. Upload a source document if payer submission requires attachment proof."
+      };
+    }
   }
 
   return {
@@ -20672,6 +21404,34 @@ const server = http.createServer(async (req, res) => {
   const parsed = url.parse(req.url, true);
   const pathname = parsed.pathname;
   const method = req.method;
+
+  if (method === "GET" && pathname.startsWith("/uploads/payer_policy_cache/")) {
+    const rel = pathname.replace(/^\/uploads\/payer_policy_cache\//, "");
+    const abs = path.join(UPLOADS_DIR, "payer_policy_cache", rel);
+
+    if (!abs.startsWith(path.join(UPLOADS_DIR, "payer_policy_cache"))) {
+      return send(res, 403, "Forbidden", "text/plain");
+    }
+
+    if (!fs.existsSync(abs)) {
+      return send(res, 404, "Not found", "text/plain");
+    }
+
+    const ext = path.extname(abs).toLowerCase();
+    const typeMap = {
+      ".pdf": "application/pdf",
+      ".txt": "text/plain; charset=utf-8",
+      ".html": "text/html; charset=utf-8",
+      ".json": "application/json"
+    };
+
+    res.writeHead(200, {
+      "Content-Type": typeMap[ext] || "application/octet-stream"
+    });
+
+    fs.createReadStream(abs).pipe(res);
+    return;
+  }
 
   if (method === "GET" && pathname.startsWith("/uploads/support/")) {
     const rel = pathname.replace(/^\/uploads\/support\//, "");
@@ -39562,6 +40322,10 @@ function renderTemplateEditor(org, user){
 <h2>Reimbursement Contracts</h2>
 <p class="muted">Define how your claims should be reimbursed and how expected amounts are calculated.</p>
 
+<div id="payerPolicySources">
+  ${renderPayerPolicySourceLibraryPanel(org.org_id)}
+</div>
+
 <div class="card" style="margin-bottom:16px;">
   <h3>
     Reimbursement Precedence
@@ -41308,6 +42072,118 @@ function renderTemplateEditor(org, user){
   }
 
 
+
+  if (method === "POST" && pathname === "/data-management/payer-policy-sources/add") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const payer = String(params.get("payer") || "").trim() || "All Payers";
+    const title = String(params.get("title") || "").trim();
+    const source_type = String(params.get("source_type") || "custom").trim();
+    const access_type = String(params.get("access_type") || "public").trim();
+    const keywords = String(params.get("keywords") || "").trim();
+    const rawUrl = String(params.get("url") || "").trim();
+    const urlValidation = payerPolicyValidateSourceUrlByAccess(rawUrl, access_type);
+
+    if (!urlValidation.ok) {
+      return redirect(res, "/data-management?tab=reimbursement&err=Invalid%20or%20blocked%20policy%20source%20URL");
+    }
+    const safeUrl = urlValidation.url;
+
+    const sources = getPayerPolicySources(org.org_id);
+
+    sources.push({
+      source_id: uuid(),
+      org_id: org.org_id,
+      payer,
+      title: title || payerPolicySourceTypeLabel(source_type),
+      source_type,
+      access_type,
+      access_label: payerPolicySourceAccessLabel(access_type),
+      keywords,
+      url: safeUrl,
+      status: "approved",
+      approved_at: nowISO(),
+      approved_by: user.user_id,
+      cached_text: "",
+      cached_excerpt: "",
+      cached_file_path: "",
+      cached_file_url: "",
+      content_type: "",
+      content_hash: "",
+      last_fetched_at: "",
+      fetch_status: access_type === "public" ? "not_fetched" : "not_fetchable",
+      fetch_error: access_type === "public" ? "" : "Saved as non-public source. Use payer portal/API integration or manual upload.",
+      created_at: nowISO(),
+      updated_at: nowISO()
+    });
+
+    savePayerPolicySourcesForOrg(org.org_id, sources);
+
+    if (typeof logAudit === "function") {
+      logAudit("payer_policy_source_added", {
+        org_id: org.org_id,
+        payer,
+        source_type,
+        url: safeUrl,
+        user_id: user.user_id
+      });
+    }
+
+    return redirect(res, "/data-management?tab=reimbursement#payerPolicySources");
+  }
+
+  if (method === "POST" && pathname === "/data-management/payer-policy-sources/fetch") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const source_id = String(params.get("source_id") || "").trim();
+
+    if (!source_id) {
+      return redirect(res, "/data-management?tab=reimbursement#payerPolicySources");
+    }
+
+    const result = await refreshPayerPolicySourceSnapshot(org.org_id, source_id);
+
+    if (typeof logAudit === "function") {
+      logAudit(result.ok ? "payer_policy_source_cached" : "payer_policy_source_cache_failed", {
+        org_id: org.org_id,
+        source_id,
+        message: result.message || "",
+        user_id: user.user_id
+      });
+    }
+
+    return redirect(
+      res,
+      `/data-management?tab=reimbursement&msg=${encodeURIComponent(result.message || "Policy source refreshed")}#payerPolicySources`
+    );
+  }
+
+  if (method === "POST" && pathname === "/data-management/payer-policy-sources/delete") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const source_id = String(params.get("source_id") || "").trim();
+
+    if (source_id) {
+      const sources = getPayerPolicySources(org.org_id);
+      const existing = sources.find(s => String(s.source_id || "") === source_id);
+      const keep = sources.filter(s => String(s.source_id || "") !== source_id);
+
+      savePayerPolicySourcesForOrg(org.org_id, keep);
+
+      if (typeof logAudit === "function") {
+        logAudit("payer_policy_source_deleted", {
+          org_id: org.org_id,
+          source_id,
+          payer: existing?.payer || "",
+          user_id: user.user_id
+        });
+      }
+    }
+
+    return redirect(res, "/data-management?tab=reimbursement#payerPolicySources");
+  }
+
   if (method === "POST" && pathname === "/data-management/contracts/upload") {
     // Legacy route fully removed. All reimbursement uploads handled by:
     // POST /data-management/reimbursement/upload
@@ -42153,6 +43029,12 @@ function renderTemplateEditor(org, user){
             <h3 style="margin-bottom:8px;">Integrations</h3>
             <div class="muted small" style="margin-bottom:12px;">
               Connect your systems to sync claims, payments, statuses, packet documents, EOB/ERA data, payer correspondence, and source proof into TJ Healthcare Pro. You can save credentials now, test connection readiness, and wire provider-specific API endpoints later.
+            </div>
+            <div class="alert" style="background:#eff6ff;color:#1e3a8a;border-color:#bfdbfe;">
+              <strong>Looking for payer policy/rate URLs?</strong>
+              Public payer policy, reimbursement, coverage, fee schedule, and rate URLs are managed in
+              <a href="/data-management?tab=reimbursement#payerPolicySources">Data Management → Reimbursement → Payer Policy Source Library</a>.
+              Use Integrations here for EHR, clearinghouse, and payer portal API credentials.
             </div>
           </div>
 
