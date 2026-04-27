@@ -14921,6 +14921,365 @@ function buildOutcomeInsightText(org_id){
   return lines.join("\n");
 }
 
+
+function outcomeEvidenceLabel(key){
+  const labels = {
+    denial_letter: "Denial Letter",
+    eob: "EOB / ERA",
+    claim_form: "Claim Form / Itemized Bill",
+    policy: "Payer Policy Citation",
+    contract: "Contract / Fee Schedule"
+  };
+
+  return labels[String(key || "")] || String(key || "Evidence");
+}
+
+function outcomeEvidenceActionText(key, channel){
+  const k = String(key || "");
+
+  if (k === "denial_letter") {
+    return "Upload the payer denial letter in Document & Proof Center.";
+  }
+
+  if (k === "eob") {
+    return "Upload or attach the actual EOB / ERA / remittance source document, even if payment data is already in the system.";
+  }
+
+  if (k === "claim_form") {
+    return "Upload the claim form or itemized bill.";
+  }
+
+  if (k === "policy") {
+    return "Add payer policy citation evidence or attach the payer policy source.";
+  }
+
+  if (k === "contract") {
+    return channel === "negotiation"
+      ? "Add source contract, allowed-rule, or fee schedule support for the requested payment."
+      : "Add source contract, allowed-rule, or fee schedule support if reimbursement terms strengthen the appeal.";
+  }
+
+  return "Add supporting evidence before final submission.";
+}
+
+function getWorkspaceOutcomeEvidenceFlags(org_id, ws, claim, channel){
+  const safePacketHasKey = (key) => {
+    try {
+      return typeof packetHasKey === "function" && packetHasKey(ws, key);
+    } catch {
+      return false;
+    }
+  };
+
+  const safeSubmissionProof = (key) => {
+    try {
+      if (typeof workspaceDocHasSubmissionProof !== "function") return false;
+      const doc = { key, label: typeof workspaceDocLabel === "function" ? workspaceDocLabel(key) : key, required:false };
+      return workspaceDocHasSubmissionProof(ws, claim, doc, channel);
+    } catch {
+      return false;
+    }
+  };
+
+  const hasDoc = (key) => safePacketHasKey(key) || safeSubmissionProof(key);
+
+  const hasStrictEobSourceProof = () => {
+    if (hasDoc("eob_era")) return true;
+
+    const attached = Array.isArray(ws?.attachments) ? ws.attachments : [];
+    const hasWorkspaceEobAttachment = attached.some(a => {
+      const blob = [
+        a.kind,
+        a.doc_key,
+        a.filename,
+        a.source_label,
+        a.source_type
+      ].filter(Boolean).join(" ").toLowerCase();
+
+      return (
+        blob.includes("eob") ||
+        blob.includes("era") ||
+        blob.includes("remittance") ||
+        blob.includes("remit")
+      );
+    });
+
+    if (hasWorkspaceEobAttachment) return true;
+
+    return !!(
+      claim?.eob_attached ||
+      claim?.era_attached ||
+      claim?.remittance_attached ||
+      claim?.eob_file_id ||
+      claim?.era_file_id ||
+      claim?.remittance_file_id ||
+      claim?.source_eob_url ||
+      claim?.source_era_url
+    );
+  };
+
+  const hasStrictContractSourceProof = () => {
+    if (hasDoc("contract_excerpt") || hasDoc("fee_schedule")) return true;
+
+    const attached = Array.isArray(ws?.attachments) ? ws.attachments : [];
+    const hasContractAttachment = attached.some(a => {
+      const blob = [
+        a.kind,
+        a.doc_key,
+        a.filename,
+        a.source_label,
+        a.source_type
+      ].filter(Boolean).join(" ").toLowerCase();
+
+      return (
+        blob.includes("contract") ||
+        blob.includes("fee_schedule") ||
+        blob.includes("fee schedule") ||
+        blob.includes("allowed rule") ||
+        blob.includes("allowed_rule")
+      );
+    });
+
+    if (hasContractAttachment) return true;
+
+    return !!(
+      claim?.contract_excerpt ||
+      claim?.contract_excerpt_attached ||
+      claim?.contract_file_id ||
+      claim?.fee_schedule ||
+      claim?.fee_schedule_attached ||
+      claim?.fee_schedule_file_id ||
+      claim?.allowed_rule_id ||
+      claim?.contract_rule_id ||
+      claim?.source_contract_url ||
+      claim?.source_fee_schedule_url
+    );
+  };
+
+  const hasEobEvidence = (() => {
+    // Strict source-proof level EOB/ERA evidence only.
+    // Do not use detectEobEraForClaim here because that helper can count denial docs
+    // or denial ingests, which should not hide the EOB/ERA recommendation.
+    return hasStrictEobSourceProof();
+  })();
+
+  const hasContractEvidence = (() => {
+    // Strict source-proof level contract/fee-schedule evidence only.
+    // Auto contract matching and findContractForClaim are useful draft evidence,
+    // but should not hide recommendations for source contract / fee schedule proof.
+    return hasStrictContractSourceProof();
+  })();
+
+  const hasPolicyEvidence = (() => {
+    if (hasDoc("payer_policy")) return true;
+
+    try {
+      const org = ws?.org_id || claim?.org_id || org_id;
+      if (
+        typeof findPayerPolicyEvidenceForDoc === "function" &&
+        findPayerPolicyEvidenceForDoc(org, claim || {}, "payer_policy").length
+      ) return true;
+    } catch {}
+
+    return !!(
+      claim?.policy_citation ||
+      claim?.payer_policy ||
+      claim?.coverage_policy
+    );
+  })();
+
+  return {
+    denial_letter: !!(
+      hasDoc("denial_letter") ||
+      claim?.denial_doc_attached ||
+      claim?.denial_document ||
+      claim?.denial_file
+    ),
+    eob: hasEobEvidence,
+    claim_form: !!(
+      hasDoc("claim_form") ||
+      claim?.claim_form_attached ||
+      claim?.itemized_bill_attached
+    ),
+    policy: hasPolicyEvidence,
+    contract: hasContractEvidence
+  };
+}
+
+function buildOutcomeRecommendations(org_id, ws, claim, channel){
+  const insights = computeOutcomeInsights(org_id);
+  const flags = getWorkspaceOutcomeEvidenceFlags(org_id, ws, claim, channel);
+
+  const recommendations = [];
+
+  const addRecommendation = ({ key, title, reason, action, priority = "Recommended", source = "Outcome Learning", winRate = null, count = 0 }) => {
+    if (!key || flags[key]) return;
+
+    const exists = recommendations.some(r => r.key === key);
+    if (exists) return;
+
+    recommendations.push({
+      key,
+      title: title || `Add ${outcomeEvidenceLabel(key)}`,
+      reason,
+      action: action || outcomeEvidenceActionText(key, channel),
+      priority,
+      source,
+      winRate,
+      count
+    });
+  };
+
+  const meaningfulEvidence = Array.isArray(insights.evidenceInsights)
+    ? insights.evidenceInsights.filter(e => Number(e.count || 0) >= 3)
+    : [];
+
+  meaningfulEvidence.forEach(e => {
+    const winRate = Number(e.winRate || 0);
+
+    if (winRate < 55) return;
+
+    addRecommendation({
+      key: e.key,
+      title: `Add ${outcomeEvidenceLabel(e.key)}`,
+      reason: `${outcomeEvidenceLabel(e.key)} has appeared in successful packets with a ${winRate.toFixed(1)}% success rate across ${Number(e.count || 0)} comparable outcome record${Number(e.count || 0) === 1 ? "" : "s"}.`,
+      action: outcomeEvidenceActionText(e.key, channel),
+      priority: winRate >= 70 ? "High Impact" : "Recommended",
+      source: "Outcome Learning",
+      winRate,
+      count: Number(e.count || 0)
+    });
+  });
+
+  // Starter recommendations until there is enough outcome history.
+  if (!meaningfulEvidence.length) {
+    if (channel === "appeal") {
+      addRecommendation({
+        key: "denial_letter",
+        title: "Add Denial Letter",
+        reason: "Appeals are stronger when the payer's denial reason is attached as source proof.",
+        action: outcomeEvidenceActionText("denial_letter", channel),
+        priority: "Baseline",
+        source: "Best-Practice Baseline"
+      });
+
+      addRecommendation({
+        key: "eob",
+        title: "Add EOB / ERA",
+        reason: "The EOB/ERA supports the denial or adjustment reason and payer adjudication details.",
+        action: outcomeEvidenceActionText("eob", channel),
+        priority: "Baseline",
+        source: "Best-Practice Baseline"
+      });
+
+      addRecommendation({
+        key: "claim_form",
+        title: "Add Claim Form / Itemized Bill",
+        reason: "The submitted claim detail helps support what was billed and what should be reprocessed.",
+        action: outcomeEvidenceActionText("claim_form", channel),
+        priority: "Baseline",
+        source: "Best-Practice Baseline"
+      });
+
+      addRecommendation({
+        key: "policy",
+        title: "Add Payer Policy Citation",
+        reason: "Policy evidence can strengthen coverage, medical necessity, or payer-rule arguments.",
+        action: outcomeEvidenceActionText("policy", channel),
+        priority: "Suggested",
+        source: "Best-Practice Baseline"
+      });
+    }
+
+    if (channel === "negotiation") {
+      addRecommendation({
+        key: "eob",
+        title: "Add EOB / ERA",
+        reason: "Negotiations need payment proof showing what the payer actually paid.",
+        action: outcomeEvidenceActionText("eob", channel),
+        priority: "Baseline",
+        source: "Best-Practice Baseline"
+      });
+
+      addRecommendation({
+        key: "claim_form",
+        title: "Add Claim Form / Itemized Bill",
+        reason: "The claim form or itemized bill supports the submitted charge and service detail.",
+        action: outcomeEvidenceActionText("claim_form", channel),
+        priority: "Baseline",
+        source: "Best-Practice Baseline"
+      });
+
+      addRecommendation({
+        key: "contract",
+        title: "Add Contract / Fee Schedule Support",
+        reason: "Contract, allowed-rule, or fee schedule support strengthens the expected-versus-paid variance argument.",
+        action: outcomeEvidenceActionText("contract", channel),
+        priority: "High Impact",
+        source: "Best-Practice Baseline"
+      });
+    }
+  }
+
+  return recommendations
+    .sort((a,b) => {
+      const priorityRank = { "High Impact": 3, "Recommended": 2, "Baseline": 1, "Suggested": 0 };
+      return (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0);
+    })
+    .slice(0, 5);
+}
+
+function renderOutcomeRecommendationsCard(org_id, ws, claim, channel){
+  const recommendations = buildOutcomeRecommendations(org_id, ws, claim, channel);
+
+  const insight = computeOutcomeInsights(org_id);
+  const enoughHistory = Array.isArray(insight.evidenceInsights) && insight.evidenceInsights.length > 0;
+
+  if (!recommendations.length) {
+    return `
+      <div class="card outcome-recommendation-card" style="margin-top:12px;border-left:4px solid #10b981;">
+        <h3>Outcome-Based Recommendations</h3>
+        <p class="muted" style="margin-bottom:0;">
+          No major evidence gaps detected for this ${safeStr(channel)} packet. Current supporting evidence aligns with the available outcome history${enoughHistory ? "" : " and baseline packet standards"}.
+        </p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="card outcome-recommendation-card" style="margin-top:12px;border-left:4px solid #f59e0b;">
+      <h3>Outcome-Based Recommendations</h3>
+      <p class="muted">
+        These recommendations compare the current packet against evidence patterns that have helped prior appeals and negotiations.
+      </p>
+
+      <div style="display:grid;gap:10px;margin-top:10px;">
+        ${recommendations.map(r => `
+          <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#fffaf2;">
+            <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+              <div>
+                <div style="font-weight:900;">${safeStr(r.title)}</div>
+                <div class="muted small" style="margin-top:4px;">${safeStr(r.reason || "")}</div>
+              </div>
+              <span class="badge ${r.priority === "High Impact" ? "warn" : ""}">${safeStr(r.priority)}</span>
+            </div>
+
+            <div style="margin-top:8px;font-size:12px;">
+              <strong>Next step:</strong> ${safeStr(r.action)}
+            </div>
+
+            <div class="muted small" style="margin-top:6px;">
+              Source: ${safeStr(r.source)}
+              ${r.winRate !== null ? ` · Success rate: ${Number(r.winRate || 0).toFixed(1)}%` : ""}
+              ${r.count ? ` · Records: ${Number(r.count || 0)}` : ""}
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function computePayerBehaviorIntelligence(org_id, payer){
   const rows = readJSON(FILES.workspace_outcomes, []).filter(r =>
     r &&
@@ -45247,6 +45606,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
         <pre style="white-space:pre-wrap;font-size:12px;">${safeStr(outcomeInsightText)}</pre>
       </div>
     `;
+    const outcomeRecommendationCard = renderOutcomeRecommendationsCard(sess.org_id, ws, claim, channel);
 
     const pageContent = `
       ${workspacePolishStyles()}
@@ -45264,6 +45624,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
         </div>
         ${renderWorkspaceCommandCenter(ws, claim, derived, channel)}
         ${outcomeInsightCard}
+        ${outcomeRecommendationCard}
 
         ${savedMsg}
         ${uploadedMsg}
