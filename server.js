@@ -13443,10 +13443,13 @@ function canMarkReady(ws, channel){
 
   const docs = workspaceRequiredDocConfig(channel);
   const missing = docs
-    .filter(d => d.required && !workspaceDocPresent(ws, d, claim))
+    .filter(d => d.required && !workspaceDocHasSubmissionProof(ws, claim, d, channel))
     .map(d => d.key);
 
-  return { ok: missing.length === 0, missing };
+  return {
+    ok: missing.length === 0,
+    missing
+  };
 }
 
 function defaultWorkspaceTab(stage){
@@ -14432,6 +14435,9 @@ function workspaceHasAutoContract(ws, claim){
   }
 }
 
+// Draft/readiness helper.
+// This may count system-derived evidence as present for draft completeness.
+// Final submission readiness must use workspaceDocHasSubmissionProof(), not this helper.
 function workspaceDocPresent(ws, doc, claim){
   if (!doc || !doc.key) return false;
   if (packetHasKey(ws, doc.key)) return true;
@@ -15693,6 +15699,223 @@ function workspacePolishStyles(){
           grid-template-columns:1fr 1fr;
         }
       }
+      /* Combined Document & Proof Center */
+      .packet-workspace-shell .ws-proof-center{
+        border:1px solid #e5e7eb;
+        border-radius:18px;
+        background:#fff;
+      }
+
+      .packet-workspace-shell .ws-proof-intro{
+        color:#64748b;
+        font-size:13px;
+        line-height:1.45;
+        margin-top:8px;
+      }
+
+      .packet-workspace-shell .ws-proof-readiness-grid{
+        display:grid;
+        grid-template-columns:repeat(3,minmax(0,1fr));
+        gap:8px;
+        margin-top:12px;
+      }
+
+      .packet-workspace-shell .ws-proof-readiness-grid > div{
+        border:1px solid #eef2f7;
+        background:#fbfdff;
+        border-radius:14px;
+        padding:10px;
+      }
+
+      .packet-workspace-shell .ws-proof-readiness-grid strong{
+        font-size:18px;
+        font-weight:950;
+      }
+
+      .packet-workspace-shell .ws-proof-list{
+        display:grid;
+        gap:10px;
+        margin-top:12px;
+      }
+
+      .packet-workspace-shell .ws-proof-card{
+        border:1px solid #eef2f7;
+        border-radius:16px;
+        padding:12px;
+        background:#fff;
+      }
+
+      .packet-workspace-shell .ws-proof-card.required.err{
+        border-color:#fecaca;
+        background:#fffafa;
+      }
+
+      .packet-workspace-shell .ws-proof-card.optional.warn,
+      .packet-workspace-shell .ws-proof-card.warn{
+        border-color:#fed7aa;
+        background:#fffaf2;
+      }
+
+      .packet-workspace-shell .ws-proof-head{
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-start;
+        gap:10px;
+      }
+
+      .packet-workspace-shell .ws-proof-title{
+        font-weight:950;
+        display:flex;
+        gap:6px;
+        align-items:center;
+        flex-wrap:wrap;
+      }
+
+      .packet-workspace-shell .ws-proof-detail{
+        color:#64748b;
+        font-size:12px;
+        line-height:1.35;
+        margin-top:5px;
+      }
+
+      .packet-workspace-shell .ws-proof-status{
+        flex:0 0 auto;
+      }
+
+      .packet-workspace-shell .ws-proof-pills{
+        display:flex;
+        gap:6px;
+        flex-wrap:wrap;
+        margin-top:9px;
+      }
+
+      .packet-workspace-shell .badge.optional,
+      .packet-workspace-shell .ws-source-pill.warn{
+        background:#fff7ed;
+        border-color:#fed7aa;
+        color:#9a3412;
+      }
+
+      .packet-workspace-shell .ws-proof-action-hint{
+        color:#475569;
+        font-size:12px;
+        margin-top:10px;
+      }
+
+      .packet-workspace-shell .ws-proof-actions{
+        display:grid;
+        gap:8px;
+        margin-top:8px;
+      }
+
+      .packet-workspace-shell .ws-proof-ready{
+        margin-top:10px;
+        color:#047857;
+        font-weight:900;
+        font-size:12px;
+      }
+
+      .packet-workspace-shell .ws-drop-upload{
+        display:grid;
+        gap:8px;
+        margin:0;
+      }
+
+      .packet-workspace-shell .ws-drop-zone{
+        display:block;
+        border:1.5px dashed #cbd5e1;
+        border-radius:14px;
+        padding:12px;
+        background:#f8fafc;
+        cursor:pointer;
+        transition:background .15s ease,border-color .15s ease;
+      }
+
+      .packet-workspace-shell .ws-drop-zone:hover,
+      .packet-workspace-shell .ws-drop-zone.dragging{
+        border-color:#64748b;
+        background:#eef2ff;
+      }
+
+      .packet-workspace-shell .ws-drop-zone.has-file{
+        border-color:#16a34a;
+        background:#f0fdf4;
+      }
+
+      .packet-workspace-shell .ws-drop-zone input[type="file"]{
+        width:100%;
+        margin-bottom:6px;
+      }
+
+      .packet-workspace-shell .ws-drop-title{
+        display:block;
+        font-weight:950;
+        color:#111827;
+      }
+
+      .packet-workspace-shell .ws-drop-sub{
+        display:block;
+        color:#64748b;
+        font-size:12px;
+        margin-top:2px;
+      }
+
+      .packet-workspace-shell .ws-file-name{
+        display:block;
+        margin-top:6px;
+        font-weight:800;
+      }
+
+      .packet-workspace-shell .ws-evidence-preview{
+        margin-top:10px;
+        border:1px solid #e5e7eb;
+        border-radius:14px;
+        padding:10px;
+        background:#fbfdff;
+      }
+
+      .packet-workspace-shell .ws-evidence-preview summary{
+        cursor:pointer;
+        font-weight:900;
+        color:#334155;
+        font-size:13px;
+      }
+
+      .packet-workspace-shell .ws-evidence-preview pre{
+        white-space:pre-wrap;
+        font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+        font-size:12px;
+        line-height:1.45;
+        margin:10px 0 0;
+        color:#1f2937;
+      }
+
+      .packet-workspace-shell .ws-optional-proof-docs{
+        margin-top:14px;
+        border-top:1px solid #eef2f7;
+        padding-top:12px;
+      }
+
+      .packet-workspace-shell .ws-optional-proof-docs summary{
+        cursor:pointer;
+        font-weight:950;
+        color:#9a3412;
+      }
+
+      @media(max-width:700px){
+        .packet-workspace-shell .ws-proof-readiness-grid{
+          grid-template-columns:1fr;
+        }
+
+        .packet-workspace-shell .ws-proof-head{
+          display:block;
+        }
+
+        .packet-workspace-shell .ws-proof-status{
+          margin-top:8px;
+        }
+      }
+
 
     </style>
   `;
@@ -15842,6 +16065,619 @@ function workspaceUiAutomationRow(ws, claim, row){
   return next;
 }
 
+function workspaceNormalizeEvidenceKey(value){
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .replace(/[^a-zA-Z0-9._-]/g, "")
+    .toLowerCase();
+}
+
+function workspacePaymentRowsForClaim(claim){
+  try {
+    const org_id = claim?.org_id || "";
+    if (!org_id) return [];
+
+    const claimKeys = new Set(
+      [
+        claim?.billed_id,
+        claim?.claim_id,
+        claim?.claim_number,
+        claim?.patient_control_number,
+        claim?.payer_claim_control_number
+      ]
+        .map(workspaceNormalizeEvidenceKey)
+        .filter(Boolean)
+    );
+
+    if (!claimKeys.size) return [];
+
+    const payments = readJSON(FILES.payments, []);
+
+    return payments
+      .filter(p => {
+        if (p.org_id !== org_id) return false;
+
+        const paymentKeys = [
+          p.billed_id,
+          p.claim_id,
+          p.claim_number,
+          p.claim,
+          p.patient_control_number,
+          p.payer_claim_control_number,
+          p.claim_control_number
+        ]
+          .map(workspaceNormalizeEvidenceKey)
+          .filter(Boolean);
+
+        return paymentKeys.some(k => claimKeys.has(k));
+      })
+      .slice(-5);
+  } catch {
+    return [];
+  }
+}
+
+function workspaceClaimSourceLooksPaymentOrRemittance(claim){
+  const hint = [
+    claim?.payment_source,
+    claim?.payment_batch_id,
+    claim?.payment_id,
+    claim?.payment_file_id,
+    claim?.payment_upload_id,
+    claim?.era_file_id,
+    claim?.era_batch_id,
+    claim?.era_id,
+    claim?.eob_file_id,
+    claim?.remittance_id,
+    claim?.remit_id,
+    claim?.clearinghouse_batch_id,
+    claim?.last_payment_sync_at,
+    claim?.source,
+    claim?.import_type,
+    claim?.upload_type,
+    claim?.source_file
+  ]
+    .filter(v => v !== undefined && v !== null && String(v).trim() !== "")
+    .join(" ")
+    .toLowerCase();
+
+  return /\b835\b|era|eob|remit|remittance|payment|paid|clearinghouse|payer response|adjudication/.test(hint);
+}
+
+function workspaceClaimHasPaymentEvidence(claim){
+  if (!claim) return false;
+
+  // Strongest evidence: a parsed payment/remittance row matched to the claim.
+  const rows = workspacePaymentRowsForClaim(claim);
+  if (rows.length > 0) return true;
+
+  const paid = Number(
+    claim.paid_amount ||
+    claim.insurance_paid ||
+    claim.amount_paid ||
+    claim.payment_amount ||
+    0
+  );
+
+  const hasPaymentMarker = !!(
+    claim.payment_source ||
+    claim.last_payment_sync_at ||
+    claim.payment_batch_id ||
+    claim.payment_id ||
+    claim.payment_file_id ||
+    claim.payment_upload_id ||
+    claim.era_file_id ||
+    claim.era_batch_id ||
+    claim.era_id ||
+    claim.eob_file_id ||
+    claim.remittance_id ||
+    claim.remit_id ||
+    claim.clearinghouse_batch_id
+  );
+
+  const hasPaymentLikeSource = workspaceClaimSourceLooksPaymentOrRemittance(claim);
+
+  const hasAdjudicationData = !!(
+    claim.denial_code ||
+    claim.denial_reason ||
+    claim.adjustment_code ||
+    claim.adjustment_reason ||
+    claim.reason_code ||
+    claim.remark_code ||
+    claim.carrier_reason_code ||
+    claim.patient_responsibility ||
+    claim.patient_resp
+  );
+
+  // Do NOT count source_file alone. That may be a billed-claim upload.
+  // EOB/ERA draft evidence needs actual payment/remittance markers, payment-like source hints,
+  // parsed payment rows, or adjudication fields tied to a payment/remittance source.
+  if (hasPaymentMarker && (paid > 0 || hasAdjudicationData)) return true;
+  if (paid > 0 && hasPaymentLikeSource) return true;
+  if (hasAdjudicationData && hasPaymentLikeSource) return true;
+
+  return false;
+}
+
+function workspaceClaimHasDenialEvidence(claim){
+  if (!claim) return false;
+
+  return !!(
+    claim.denial_code ||
+    claim.denial_reason ||
+    claim.adjustment_code ||
+    claim.adjustment_reason ||
+    String(claim.status || "").toLowerCase().includes("denied")
+  );
+}
+
+function workspaceMoneyPreview(value){
+  const n = Number(value || 0);
+  if (typeof formatMoneyUI === "function") return formatMoneyUI(n);
+  return "$" + n.toFixed(2);
+}
+
+function workspaceEvidencePreviewText(ws, claim, doc, row, channel){
+  const key = String(doc?.key || row?.key || "");
+  const attachment = workspaceSafeFindAttachment(ws, key);
+
+  if (attachment) {
+    return [
+      "Attached source document",
+      `File: ${attachment.filename || "Uploaded file"}`,
+      `Source: ${attachment.source_label || workspaceSourceLabel(workspaceAttachmentSourceType(attachment))}`,
+      `Uploaded: ${attachment.uploaded_at || "-"}`
+    ].join("\n");
+  }
+
+  const expected = Number(
+    claim?.expected_amount ||
+    claim?.expected_insurance ||
+    claim?.contract_expected_amount ||
+    0
+  );
+
+  const paid = Number(
+    claim?.paid_amount ||
+    claim?.insurance_paid ||
+    0
+  );
+
+  const billed = Number(
+    claim?.amount_billed ||
+    claim?.billed_amount ||
+    0
+  );
+
+  const underpaid = Math.max(0, expected - paid);
+
+  if (key === "denial_letter") {
+    if (!workspaceClaimHasDenialEvidence(claim)) return "";
+
+    return [
+      "Denial evidence from claim/payment data",
+      "",
+      "No separate denial letter is attached yet.",
+      "The EOB/ERA or payer response may support the denial reason, but a separate denial notice is stronger payer-submission proof when available.",
+      "",
+      `Status: ${claim?.status || "-"}`,
+      `Denial Code: ${claim?.denial_code || claim?.adjustment_code || "-"}`,
+      `Denial Reason: ${claim?.denial_reason || claim?.adjustment_reason || "-"}`
+    ].join("\n");
+  }
+
+  if (key === "eob_era") {
+    if (!workspaceHasEobEraDraftEvidence(ws, claim)) return "";
+
+    const rows = workspacePaymentRowsForClaim(claim);
+    const rowLines = rows.length
+      ? rows.map(p =>
+          `- ${p.date_paid || p.created_at || "-"} · ${p.payer || claim?.payer || "-"} · Paid ${workspaceMoneyPreview(p.amount_paid || p.paid_amount || 0)} · Source ${p.source_file || p.batch_file || "-"}`
+        )
+      : [];
+
+    return [
+      "EOB / ERA / payment evidence from system data",
+      "",
+      "This supports packet drafting. It is not a source EOB/ERA PDF unless a real document is uploaded or pulled.",
+      "",
+      `Payer: ${claim?.payer || "-"}`,
+      `Claim #: ${claim?.claim_number || claim?.claim_id || "-"}`,
+      `Billed: ${workspaceMoneyPreview(billed)}`,
+      `Expected: ${expected > 0 ? workspaceMoneyPreview(expected) : "Not available"}`,
+      `Paid: ${workspaceMoneyPreview(paid)}`,
+      `Underpaid / At Risk: ${workspaceMoneyPreview(underpaid)}`,
+      `Patient Responsibility: ${workspaceMoneyPreview(claim?.patient_responsibility || 0)}`,
+      `Denial / Adjustment Code: ${claim?.denial_code || claim?.adjustment_code || "-"}`,
+      `Denial / Adjustment Reason: ${claim?.denial_reason || claim?.adjustment_reason || "-"}`,
+      rowLines.length ? "\nRecent payment rows:" : "",
+      ...rowLines
+    ].filter(Boolean).join("\n");
+  }
+
+  if (key === "claim_form") {
+    if (!claim?.source_file && !claim?.claim_number && !claim?.claim_id) return "";
+
+    return [
+      "Claim data from billing upload / claim record",
+      "",
+      "This supports drafting, but it is not the submitted claim form or itemized bill unless the source document is uploaded.",
+      "",
+      `Claim #: ${claim?.claim_number || claim?.claim_id || "-"}`,
+      `Payer: ${claim?.payer || "-"}`,
+      `DOS: ${claim?.dos || "-"}`,
+      `Billed: ${workspaceMoneyPreview(billed)}`,
+      `Source File: ${claim?.source_file || "-"}`
+    ].join("\n");
+  }
+
+  if (key === "contract_excerpt" || key === "fee_schedule") {
+    let contract = null;
+
+    try {
+      const org_id = ws?.org_id || claim?.org_id || "";
+      contract = org_id && typeof findContractForClaim === "function"
+        ? findContractForClaim(org_id, claim || {})
+        : null;
+    } catch {
+      contract = null;
+    }
+
+    if (!contract && !workspaceSafeAutoContract(ws, claim)) return "";
+
+    return [
+      key === "fee_schedule" ? "Fee schedule / reimbursement rule preview" : "Contract / allowed rule preview",
+      "",
+      "This supports drafting, but attach the source contract excerpt or fee schedule if payer submission requires proof.",
+      "",
+      `Payer: ${claim?.payer || contract?.payer || "-"}`,
+      `Rule Source: ${contract?.source || contract?.contract_name || contract?.name || "Matched reimbursement rule"}`,
+      `Reimbursement Model: ${contract?.reimbursement_model || contract?.model || "-"}`,
+      `Expected / Allowed Value: ${workspaceMoneyPreview(contract?.expected_value || claim?.expected_amount || claim?.expected_insurance || 0)}`,
+      `Billed: ${workspaceMoneyPreview(billed)}`,
+      `Confidence: ${contract?.confidence || contract?.match_confidence || "System match"}`
+    ].join("\n");
+  }
+
+  if (key === "variance_calc") {
+    if (!(expected > 0 || paid > 0 || billed > 0)) return "";
+
+    return [
+      "Expected vs paid variance calculation",
+      "",
+      `Expected Reimbursement: ${expected > 0 ? workspaceMoneyPreview(expected) : "Not available"}`,
+      `Paid by Payer: ${workspaceMoneyPreview(paid)}`,
+      `Variance / Underpaid Amount: ${workspaceMoneyPreview(underpaid)}`,
+      "",
+      "Formula: Expected Reimbursement - Payer Paid = Requested Additional Payment"
+    ].join("\n");
+  }
+
+  if (key === "payment_history") {
+    const rows = workspacePaymentRowsForClaim(claim);
+
+    if (!rows.length && !workspaceClaimHasPaymentEvidence(claim)) return "";
+
+    return [
+      "Payment history preview",
+      "",
+      rows.length
+        ? rows.map(p =>
+            `- ${p.date_paid || p.created_at || "-"} · ${p.payer || claim?.payer || "-"} · ${workspaceMoneyPreview(p.amount_paid || p.paid_amount || 0)} · ${p.source_file || p.batch_file || "system"}`
+          ).join("\n")
+        : `Paid by Payer: ${workspaceMoneyPreview(paid)}\nSource: ${claim?.payment_source || claim?.source_file || "system claim/payment data"}`
+    ].join("\n");
+  }
+
+  if (key === "payer_correspondence") {
+    const note = claim?.payer_correspondence || claim?.follow_up_notes || claim?.notes || "";
+    if (!note) return "";
+
+    return [
+      "Payer correspondence / notes preview",
+      "",
+      note
+    ].join("\n");
+  }
+
+  return "";
+}
+
+function workspaceProofSourceLabel(row, doc, integrationsEnabled){
+  const key = String(row?.key || doc?.key || "");
+
+  if (integrationsEnabled) {
+    return row?.sourceLabel || workspaceSourceLabel(row?.sourceType);
+  }
+
+  if (workspaceIsSubmissionProof(row)) return "Uploaded Source";
+
+  if (row?.proofLevel === "draft_evidence") {
+    if (key === "eob_era" || key === "payment_history") return "Claim Payment Data";
+    if (key === "contract_excerpt" || key === "fee_schedule") return "Contract / Rules Data";
+    if (key === "variance_calc") return "System-derived";
+    if (key === "claim_form") return "Billing Upload Data";
+    if (key === "denial_letter") return "Denial Data";
+    return "System-derived";
+  }
+
+  return "Manual Upload";
+}
+
+function workspaceProofStatusClass(row){
+  if (workspaceIsSubmissionProof(row)) return "ok";
+  if (row?.required) return "err";
+  return "warn";
+}
+
+function workspaceRequiredBadge(doc){
+  return doc?.required
+    ? `<span class="badge warn">Required</span>`
+    : `<span class="badge optional">Optional</span>`;
+}
+
+function workspaceProofStatusBadge(row){
+  const cls = workspaceProofStatusClass(row);
+
+  if (workspaceIsSubmissionProof(row)) {
+    return `<span class="badge ok">${safeStr(row.statusLabel || "Attached")}</span>`;
+  }
+
+  if (row?.proofLevel === "draft_evidence") {
+    return `<span class="badge warn">Draft Evidence Only</span>`;
+  }
+
+  if (row?.required) {
+    return `<span class="badge err">Missing Required</span>`;
+  }
+
+  return `<span class="badge optional">Missing Optional</span>`;
+}
+
+function renderWorkspaceEvidencePreview(ws, claim, doc, row, channel){
+  const text = workspaceEvidencePreviewText(ws, claim, doc, row, channel);
+  if (!String(text || "").trim()) return "";
+
+  return `
+    <details class="ws-evidence-preview">
+      <summary>Preview evidence</summary>
+      <pre>${safeStr(text)}</pre>
+    </details>
+  `;
+}
+
+function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel){
+  const billed_id = claim?.billed_id || ws?.billed_id || "";
+  const docKey = doc?.key || row?.key || "";
+
+  return `
+    <form class="ws-drop-upload" method="POST" action="/ai-workspace/upload" enctype="multipart/form-data">
+      <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+      <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+      <input type="hidden" name="doc_key" value="${safeStr(docKey)}"/>
+
+      <label class="ws-drop-zone">
+        <input class="ws-doc-file-input" type="file" name="file" />
+        <span class="ws-drop-title">Drop document here or choose file</span>
+        <span class="ws-drop-sub">PDF, image, CSV, or supporting document</span>
+        <span class="ws-file-name muted small"></span>
+      </label>
+
+      <button class="btn secondary small" type="submit">Upload</button>
+    </form>
+  `;
+}
+
+function renderWorkspacePullForm(ws, claim, doc, row, channel){
+  if (row?.status !== "pull_available") return "";
+
+  return `
+    <form method="POST" action="/ai-workspace/pull-document" style="margin:0;">
+      <input type="hidden" name="billed_id" value="${safeStr(claim?.billed_id || ws?.billed_id || "")}"/>
+      <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+      <input type="hidden" name="doc_key" value="${safeStr(doc?.key || row?.key || "")}"/>
+      <input type="hidden" name="source_type" value="${safeStr(row?.sourceType || "")}"/>
+      <button class="btn secondary small" type="submit">Pull Document</button>
+    </form>
+  `;
+}
+
+function renderWorkspaceProofCard(ws, claim, doc, channel){
+  const integrationsEnabled = !!workspacePlanUiContext(ws, claim).integrationsEnabled;
+
+  const rawRow = workspaceDocAutomationStatus(ws, doc, claim, channel);
+  const row = workspaceUiAutomationRow(ws, claim, rawRow);
+
+  const sourceLabel = workspaceProofSourceLabel(row, doc, integrationsEnabled);
+  const uploadNeeded = !workspaceIsSubmissionProof(row);
+  const preview = renderWorkspaceEvidencePreview(ws, claim, doc, row, channel);
+
+  const detail = integrationsEnabled
+    ? (row.detail || "")
+    : workspaceRemoveIntegrationWords(row.detail || "");
+
+  const nextAction = integrationsEnabled
+    ? (row.nextAction || "")
+    : (
+        workspaceIsSubmissionProof(row)
+          ? "Ready for submission proof."
+          : row.proofLevel === "draft_evidence"
+            ? "Review the preview below and upload source proof if payer submission requires it."
+            : "Upload source document manually."
+      );
+
+  return `
+    <div class="ws-proof-card ${doc.required ? "required" : "optional"} ${workspaceProofStatusClass(row)}">
+      <div class="ws-proof-head">
+        <div>
+          <div class="ws-proof-title">
+            ${safeStr(doc.label || row.label || workspaceDocLabel(doc.key))}
+            ${workspaceRequiredBadge(doc)}
+          </div>
+
+          <div class="ws-proof-detail">
+            ${safeStr(detail || doc.why || "")}
+          </div>
+        </div>
+
+        <div class="ws-proof-status">
+          ${workspaceProofStatusBadge({ ...row, required: !!doc.required })}
+        </div>
+      </div>
+
+      <div class="ws-proof-pills">
+        <span class="ws-source-pill ${workspaceProofStatusClass(row)}">${safeStr(sourceLabel)}</span>
+        <span class="ws-source-pill ${workspaceProofPillClass(row.proofLevel)}">${safeStr(row.proofLabel || workspaceProofLabel(row.proofLevel))}</span>
+      </div>
+
+      ${preview}
+
+      ${uploadNeeded ? `
+        <div class="ws-proof-action-hint">${safeStr(nextAction)}</div>
+        <div class="ws-proof-actions">
+          ${integrationsEnabled ? renderWorkspacePullForm(ws, claim, doc, row, channel) : ""}
+          ${renderWorkspaceDocUploadForm(ws, claim, doc, row, channel)}
+        </div>
+      ` : `
+        <div class="ws-proof-ready">✓ Source proof attached.</div>
+      `}
+    </div>
+  `;
+}
+
+function workspaceDropzoneScript(){
+  return `
+    <script>
+      (function(){
+        if (window.__tjhpWorkspaceDropzoneBound) return;
+        window.__tjhpWorkspaceDropzoneBound = true;
+
+        function setName(zone, files){
+          var name = zone.querySelector(".ws-file-name");
+          if (!name) return;
+          name.textContent = files && files.length ? files[0].name : "";
+        }
+
+        document.addEventListener("change", function(e){
+          var input = e.target && e.target.closest ? e.target.closest(".ws-doc-file-input") : null;
+          if (!input) return;
+          var zone = input.closest(".ws-drop-zone");
+          if (zone) {
+            zone.classList.toggle("has-file", !!(input.files && input.files.length));
+            setName(zone, input.files);
+          }
+        });
+
+        document.addEventListener("dragover", function(e){
+          var zone = e.target && e.target.closest ? e.target.closest(".ws-drop-zone") : null;
+          if (!zone) return;
+          e.preventDefault();
+          zone.classList.add("dragging");
+        });
+
+        document.addEventListener("dragleave", function(e){
+          var zone = e.target && e.target.closest ? e.target.closest(".ws-drop-zone") : null;
+          if (!zone) return;
+          zone.classList.remove("dragging");
+        });
+
+        document.addEventListener("drop", function(e){
+          var zone = e.target && e.target.closest ? e.target.closest(".ws-drop-zone") : null;
+          if (!zone) return;
+
+          e.preventDefault();
+          zone.classList.remove("dragging");
+
+          var input = zone.querySelector(".ws-doc-file-input");
+          if (!input || !e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+
+          input.files = e.dataTransfer.files;
+          zone.classList.add("has-file");
+          setName(zone, input.files);
+        });
+      })();
+    </script>
+  `;
+}
+
+function renderWorkspaceProofCenter(ws, claim, channel){
+  const auto = buildWorkspaceAutomationReadiness(ws, claim, channel);
+  const integrationsEnabled = !!auto.integrationsEnabled;
+
+  const docs = workspaceRequiredDocConfig(channel);
+  const requiredDocs = docs.filter(d => d.required);
+  const optionalDocs = docs.filter(d => !d.required);
+
+  const title = integrationsEnabled ? "Document & Automation Proof Center" : "Document & Proof Center";
+
+  const intro = integrationsEnabled
+    ? "Review what is attached, what can be pulled from connected sources, what is draft-only, and what still needs source proof."
+    : "Manual workspace mode. Upload source documents here and review system-derived draft evidence where available.";
+
+  const blocking = auto.requiredMissing > 0
+    ? `<span class="badge warn">${auto.requiredMissing} required missing</span>`
+    : `<span class="badge ok">Required ready</span>`;
+
+  return `
+    <details class="ws-panel ws-proof-center" open>
+      <summary class="ws-clean-summary">
+        <span>📄 ${safeStr(title)}</span>
+        ${blocking}
+      </summary>
+
+      <div class="ws-proof-intro">${safeStr(intro)}</div>
+
+      <div class="ws-proof-readiness-grid">
+        <div>
+          <div class="muted small">Draft Readiness</div>
+          <strong>${Number(auto.draftPct || 0)}%</strong>
+        </div>
+        <div>
+          <div class="muted small">Submission Readiness</div>
+          <strong>${Number(auto.submissionPct || 0)}%</strong>
+        </div>
+        <div>
+          <div class="muted small">Required Missing</div>
+          <strong>${Number(auto.requiredMissing || 0)}</strong>
+        </div>
+      </div>
+
+      ${auto.submissionPct < 100 ? `
+        <div class="ws-callout warn" style="margin-top:10px;">
+          <strong>Submission proof still needed.</strong>
+          System-derived evidence can help draft the packet, but payer submission is stronger when source documents are uploaded${integrationsEnabled ? " or pulled" : ""}.
+        </div>
+      ` : `
+        <div class="ws-callout ok" style="margin-top:10px;">
+          Required source documents are attached for submission proof.
+        </div>
+      `}
+
+      ${channel === "appeal" ? `
+        <div class="ws-callout info" style="margin-top:10px;">
+          <strong>Denial Letter vs EOB/ERA:</strong>
+          An EOB/ERA can show denial or adjustment reason codes. A denial letter is usually a separate payer notice. If you only have EOB/ERA denial evidence, upload the EOB/ERA and keep the denial letter as missing unless a separate letter exists.
+        </div>
+      ` : ""}
+
+      <div class="ws-proof-list">
+        ${requiredDocs.map(doc => renderWorkspaceProofCard(ws, claim, doc, channel)).join("")}
+      </div>
+
+      ${optionalDocs.length ? `
+        <details class="ws-optional-docs ws-optional-proof-docs">
+          <summary>Optional supporting documents (${optionalDocs.length})</summary>
+          <div class="ws-proof-list">
+            ${optionalDocs.map(doc => renderWorkspaceProofCard(ws, claim, doc, channel)).join("")}
+          </div>
+        </details>
+      ` : ""}
+
+      ${workspaceDropzoneScript()}
+    </details>
+  `;
+}
+
 function workspacePreferredAutomationSource(docKey, channel){
   const key = String(docKey || "");
 
@@ -15898,6 +16734,17 @@ function workspaceIsSubmissionProof(row){
       row.proofLevel === "manual_source_document"
     )
   );
+}
+
+function workspaceSubmissionProofRowForDoc(ws, claim, doc, channel){
+  const raw = workspaceDocAutomationStatus(ws, doc, claim, channel);
+  const row = workspaceUiAutomationRow(ws, claim, raw);
+  return row;
+}
+
+function workspaceDocHasSubmissionProof(ws, claim, doc, channel){
+  const row = workspaceSubmissionProofRowForDoc(ws, claim, doc, channel);
+  return workspaceIsSubmissionProof(row);
 }
 
 function workspaceIsDraftEvidence(row){
@@ -15973,6 +16820,37 @@ function workspaceSafeAutoEob(ws){
   );
 }
 
+function workspacePacketSectionHasMeaningfulEobEraText(ws){
+  const raw = [
+    ws?.negotiation?.packet_sections?.eob_era,
+    ws?.appeal?.packet_sections?.eob_era
+  ]
+    .filter(v => v !== undefined && v !== null)
+    .join("\n")
+    .trim();
+
+  if (!raw) return false;
+
+  const text = raw.toLowerCase();
+
+  const hasRemittanceLanguage =
+    /era|eob|remittance|remit|payment|paid by payer|payer paid|amount paid|claim payment|adjudication|adjustment|denial code|remark code|patient responsibility/.test(text);
+
+  const onlyPlaceholder =
+    /no source document|not uploaded|missing|no supporting documents|n\/a|not available/.test(text) &&
+    !hasRemittanceLanguage;
+
+  if (onlyPlaceholder) return false;
+
+  return hasRemittanceLanguage;
+}
+
+function workspaceHasEobEraDraftEvidence(ws, claim){
+  if (workspaceClaimHasPaymentEvidence(claim)) return true;
+  if (workspacePacketSectionHasMeaningfulEobEraText(ws)) return true;
+  return false;
+}
+
 function workspaceSafeAutoContract(ws, claim){
   try {
     if (typeof workspaceHasAutoContract === "function") return workspaceHasAutoContract(ws, claim);
@@ -16012,7 +16890,7 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
     };
   }
 
-  if (key === "eob_era" && workspaceSafeAutoEob(ws)) {
+  if (key === "eob_era" && workspaceHasEobEraDraftEvidence(ws, claim)) {
     return {
       key,
       label: doc.label || workspaceDocLabel(key),
@@ -16026,6 +16904,79 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
       sourceLabel: "Claim Payment Data",
       detail: "Auto-filled from claim payment/remittance data. This helps draft the packet, but a source EOB/ERA document is still recommended for payer submission.",
       nextAction: "Pull from Clearinghouse or upload source EOB/ERA."
+    };
+  }
+
+  if (key === "denial_letter" && workspaceClaimHasDenialEvidence(claim)) {
+    return {
+      key,
+      label: doc.label || workspaceDocLabel(key),
+      required: !!doc.required,
+      status: "draft_evidence",
+      statusLabel: "Denial Evidence Found",
+      proofLevel: "draft_evidence",
+      proofLabel: "Draft Evidence Only",
+      pillClass: "warn",
+      sourceType: "system",
+      sourceLabel: "Denial Data",
+      detail: "Denial information exists in claim/payment data, but no separate payer denial letter is attached.",
+      nextAction: "Upload the payer denial letter if available. EOB/ERA denial evidence can support drafting but should not be mislabeled as a separate denial letter."
+    };
+  }
+
+  if (key === "claim_form" && (claim?.source_file || claim?.claim_number || claim?.claim_id)) {
+    return {
+      key,
+      label: doc.label || workspaceDocLabel(key),
+      required: !!doc.required,
+      status: "draft_evidence",
+      statusLabel: "Claim Data Found",
+      proofLevel: "draft_evidence",
+      proofLabel: "Draft Evidence Only",
+      pillClass: "warn",
+      sourceType: "system",
+      sourceLabel: "Billing Upload Data",
+      detail: "Claim data exists in the system, but the submitted claim form or itemized bill source document is not attached.",
+      nextAction: "Upload the claim form or itemized bill if payer submission requires source proof."
+    };
+  }
+
+  if (key === "variance_calc") {
+    const expected = Number(claim?.expected_amount || claim?.expected_insurance || 0);
+    const paid = Number(claim?.paid_amount || claim?.insurance_paid || 0);
+
+    if (expected > 0 || paid > 0) {
+      return {
+        key,
+        label: doc.label || workspaceDocLabel(key),
+        required: !!doc.required,
+        status: "draft_evidence",
+        statusLabel: "Calculated",
+        proofLevel: "draft_evidence",
+        proofLabel: "Draft Evidence Only",
+        pillClass: "warn",
+        sourceType: "system",
+        sourceLabel: "System-derived",
+        detail: "Generated from expected reimbursement and payer-paid claim data.",
+        nextAction: "Review the calculation preview and upload source payment/contract documents if needed."
+      };
+    }
+  }
+
+  if (key === "payment_history" && workspaceClaimHasPaymentEvidence(claim)) {
+    return {
+      key,
+      label: doc.label || workspaceDocLabel(key),
+      required: !!doc.required,
+      status: "draft_evidence",
+      statusLabel: "Payment Data Found",
+      proofLevel: "draft_evidence",
+      proofLabel: "Draft Evidence Only",
+      pillClass: "warn",
+      sourceType: "system",
+      sourceLabel: "Claim Payment Data",
+      detail: "Payment data exists in the system from claim/payment uploads. This helps draft the packet, but source remittance documents are still stronger for payer submission.",
+      nextAction: "Review the payment preview and upload source payment documentation if needed."
     };
   }
 
@@ -16159,133 +17110,7 @@ function buildWorkspaceAutomationReadiness(ws, claim, channel){
 }
 
 function renderAutomationReadinessPanel(ws, claim, channel){
-  const auto = buildWorkspaceAutomationReadiness(ws, claim, channel);
-  const integrationsEnabled = !!auto.integrationsEnabled;
-
-  const readyCount = auto.rows.filter(r => r.status === "present").length;
-  const pullCount = integrationsEnabled
-    ? auto.rows.filter(r => r.status === "pull_available").length
-    : 0;
-  const missingCount = auto.rows.filter(r => r.status === "missing").length;
-
-  const requiredRows = auto.rows.filter(r => r.required);
-  const optionalRows = auto.rows.filter(r => !r.required);
-
-  const title = integrationsEnabled ? "⚙️ Automation Readiness" : "📄 Document Readiness";
-
-  const intro = integrationsEnabled
-    ? "Shows which packet documents are uploaded, system-derived, pulled from connected sources, ready to pull, or still missing."
-    : "Manual workspace mode. Upload source documents manually and use system-derived evidence for drafting where available.";
-
-  const connectionCard = (label, count) => `
-    <div class="ws-auto-source">
-      <strong>${safeStr(label)}</strong>
-      <span>${count > 0 ? `${count} connected` : "Not connected yet"}</span>
-    </div>
-  `;
-
-  const renderRow = (row) => {
-    const proofClass = typeof workspaceProofPillClass === "function"
-      ? workspaceProofPillClass(row.proofLevel)
-      : (row.pillClass || "");
-
-    const canPull = integrationsEnabled && row.status === "pull_available";
-
-    return `
-      <div class="ws-readiness-row ${row.required ? "required" : "optional"}">
-        <div class="ws-readiness-main">
-          <div class="ws-readiness-title">
-            ${safeStr(row.label)}
-            ${row.required ? `<span class="badge warn">Required</span>` : `<span class="badge">Optional</span>`}
-          </div>
-
-          <div class="ws-readiness-sub">
-            ${safeStr(row.detail || "")}
-          </div>
-
-          <div class="ws-readiness-pills">
-            <span class="ws-source-pill ${safeStr(row.pillClass || "")}">
-              ${safeStr(row.sourceLabel || "Manual Upload")}
-            </span>
-
-            <span class="ws-source-pill ${safeStr(proofClass)}">
-              ${safeStr(row.proofLabel || workspaceProofLabel(row.proofLevel))}
-            </span>
-
-            <span class="badge ${row.pillClass === "ok" ? "ok" : row.pillClass === "err" ? "err" : "warn"}">
-              ${safeStr(row.statusLabel || "")}
-            </span>
-          </div>
-        </div>
-
-        <div class="ws-readiness-action">
-          ${canPull ? `
-            <form method="POST" action="/ai-workspace/pull-document" style="margin:0;">
-              <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
-              <input type="hidden" name="channel" value="${safeStr(channel)}"/>
-              <input type="hidden" name="doc_key" value="${safeStr(row.key)}"/>
-              <input type="hidden" name="source_type" value="${safeStr(row.sourceType)}"/>
-              <button class="btn secondary small" type="submit">Pull</button>
-            </form>
-          ` : `
-            <div class="muted small">${safeStr(row.nextAction || "")}</div>
-          `}
-        </div>
-      </div>
-    `;
-  };
-
-  return `
-    <details class="ws-panel ws-automation ws-compact-readiness" open>
-      <summary class="ws-clean-summary">
-        <span>${title}</span>
-        ${auto.requiredMissing > 0
-          ? `<span class="badge warn">${auto.requiredMissing} required missing</span>`
-          : `<span class="badge ok">Required ready</span>`
-        }
-      </summary>
-
-      <div class="hint" style="margin-top:8px;">
-        ${safeStr(intro)}
-      </div>
-
-      ${integrationsEnabled ? `
-        <div class="ws-auto-grid">
-          ${connectionCard("EHR", auto.connected.ehr)}
-          ${connectionCard("Clearinghouse", auto.connected.clearinghouse)}
-          ${connectionCard("Payer Portal", auto.connected.payer_portal)}
-        </div>
-      ` : ``}
-
-      <div class="muted small" style="margin-top:8px;">
-        Draft readiness: ${auto.draftPct}% · Submission readiness: ${auto.submissionPct}%${integrationsEnabled ? ` · Pull available: ${pullCount}` : ``} · Missing: ${missingCount}
-      </div>
-
-      ${auto.submissionPct < 100 ? `
-        <div class="ws-callout warn" style="margin-top:10px;">
-          <strong>Submission proof still needed.</strong>
-          Some required items may be auto-filled or system-derived. That helps draft the packet, but payer submission is stronger when source documents are uploaded${integrationsEnabled ? " or pulled" : ""}.
-        </div>
-      ` : `
-        <div class="ws-callout ok" style="margin-top:10px;">
-          Required source documents are attached for submission proof.
-        </div>
-      `}
-
-      <div class="ws-readiness-list">
-        ${requiredRows.map(renderRow).join("")}
-      </div>
-
-      ${optionalRows.length ? `
-        <details class="ws-optional-docs">
-          <summary>Optional supporting documents (${optionalRows.length})</summary>
-          <div class="ws-readiness-list">
-            ${optionalRows.map(renderRow).join("")}
-          </div>
-        </details>
-      ` : ``}
-    </details>
-  `;
+  return renderWorkspaceProofCenter(ws, claim, channel);
 }
 
 function renderWorkspaceCommandCenter(ws, claim, derived, channel){
@@ -16360,85 +17185,9 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
 }
 
 function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
-  const docs = workspaceRequiredDocConfig(channel);
-  const hasMissing = docs.some(d => d.required && !workspaceDocPresent(ws, d, claim));
-
-  return `
-    <details class="ws-panel ws-docs">
-      <summary>
-        <span>📄 Documents & Missing Items</span>
-        ${hasMissing ? `<span class="badge warn">⚠ Missing Required</span>` : `<span class="badge ok">✓ Complete</span>`}
-      </summary>
-
-      <div class="hint" style="margin:8px 0 10px;">
-        ${channel === "negotiation"
-          ? "Negotiation packets focus on payment proof, contract/allowed amount proof, and the expected-vs-paid variance. Medical records are optional unless the payment dispute is tied to medical necessity, coding, or documentation."
-          : "Appeal packets focus on denial proof, payer reason, claim proof, and supporting clinical/policy evidence when needed."
-        }
-      </div>
-
-      <div class="ws-doc-list">
-        ${docs.map(doc => {
-          const automation = workspaceUiAutomationRow(
-      ws,
-      claim,
-      workspaceDocAutomationStatus(ws, doc, claim, channel)
-    );
-          const present = automation.status === "present";
-          const draftOnly = automation.proofLevel === "draft_evidence";
-          const attachment = workspaceSafeFindAttachment(ws, doc.key);
-          const isAutoContract = automation.sourceType === "contract_rules" && automation.status === "present" && !attachment;
-          const isAutoEob = automation.sourceType === "clearinghouse" && automation.status === "present" && !attachment;
-          const meta = automation.detail;
-
-          return `
-            <div class="ws-doc-item">
-              <div class="ws-doc-item-top">
-                <div>
-                  <div class="ws-doc-name">
-                    ${safeStr(doc.label)}
-                    ${doc.required ? `<span class="badge warn" style="margin-left:6px;">Required</span>` : `<span class="badge" style="margin-left:6px;">Optional</span>`}
-                    ${present ? `<span class="badge ok" style="margin-left:6px;">${safeStr(automation.sourceLabel)}</span>` : ""}
-                    ${draftOnly ? `<span class="badge warn" style="margin-left:6px;">Draft Evidence Only</span>` : ""}
-                    ${automation.status === "pull_available" ? `<span class="badge" style="margin-left:6px;">Pull Available</span>` : ""}
-                  </div>
-                  <div class="ws-doc-meta">${safeStr(meta)}</div>
-                </div>
-                <div>
-                  ${automation.status === "present"
-                    ? `<span class="badge ok">Source Attached</span>`
-                    : automation.proofLevel === "draft_evidence"
-                      ? `<span class="badge warn">Draft Only</span>`
-                      : automation.status === "pull_available"
-                        ? `<span class="badge warn">Pull Available</span>`
-                        : `<span class="badge err">Missing Source</span>`
-                  }
-                </div>
-              </div>
-
-              ${draftOnly ? `
-                <div class="ws-callout warn" style="margin-top:8px;">
-                  This item is auto-filled/system-derived for drafting, but a source document is still recommended for payer submission.
-                </div>
-              ` : ``}
-
-              <form class="ws-upload-form" method="POST" action="/ai-workspace/upload" enctype="multipart/form-data">
-                <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
-                <input type="hidden" name="channel" value="${safeStr(channel)}"/>
-                <input type="hidden" name="doc_key" value="${safeStr(doc.key)}"/>
-                <input type="file" name="file" required />
-                <button class="btn secondary" type="submit">${present ? "Replace" : "Upload"}</button>
-              </form>
-            </div>
-          `;
-        }).join("")}
-      </div>
-
-      <div class="hint" style="margin-top:10px;">
-        Keep required documents green before export/submission. Optional documents should be added when they strengthen the specific argument.
-      </div>
-    </details>
-  `;
+  // Combined into renderWorkspaceProofCenter() so users do not see duplicate
+  // Document Readiness + Documents & Missing Items sections.
+  return "";
 }
 
 function renderInlineAIAssist(billed_id, channel){
