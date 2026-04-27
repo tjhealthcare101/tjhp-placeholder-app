@@ -13374,6 +13374,294 @@ function computeRecoveryIntelligence(org_id, start, end){
   };
 }
 
+
+function computeRoiMetrics(org_id, start, end){
+  const claimsAll = readJSON(FILES.billed, []).filter(b => b && b.org_id === org_id);
+  const paymentsAll = readJSON(FILES.payments, []).filter(p => p && p.org_id === org_id);
+  const outcomesAll = readJSON(FILES.workspace_outcomes, []).filter(o => o && o.org_id === org_id);
+  const tasksAll = readJSON(FILES.agent_tasks, []).filter(t => t && t.org_id === org_id);
+  const workspacesAll = readJSON(FILES.agent_workspaces, []).filter(w => w && w.org_id === org_id).map(w => ensurePacketSections(w));
+  const packetsAll = readJSON(PACKET_FILE, []).filter(p => p && p.org_id === org_id);
+  const ctx = buildClaimContext(org_id);
+
+  const asDate = (...vals) => {
+    for (const v of vals) {
+      if (!v) continue;
+      const d = new Date(v);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+    return null;
+  };
+
+  const isInRange = (...vals) => {
+    const d = asDate(...vals);
+    return !!(d && d >= start && d <= end);
+  };
+
+  const claimKeyFor = (row) => String(
+    row?.billed_id ||
+    row?.claim_id ||
+    row?.claim_number ||
+    ""
+  ).trim();
+
+  const claimByKey = new Map();
+  claimsAll.forEach(claim => {
+    const keys = [
+      claim?.billed_id,
+      claim?.claim_id,
+      claim?.claim_number
+    ].map(v => String(v || "").trim()).filter(Boolean);
+    keys.forEach(k => {
+      if (!claimByKey.has(k)) claimByKey.set(k, claim);
+    });
+  });
+
+  const getClaimFor = (row) => {
+    const keys = [
+      row?.billed_id,
+      row?.claim_id,
+      row?.claim_number
+    ].map(v => String(v || "").trim()).filter(Boolean);
+    for (const k of keys) {
+      if (claimByKey.has(k)) return claimByKey.get(k);
+    }
+    return null;
+  };
+
+  const normalizedStageForClaim = (claim) => {
+    const d = evaluateClaimDerived(claim, ctx);
+    return String(d.lifecycleStage || claim.status || "").trim();
+  };
+
+  const openRecoveryAmountForClaim = (claim) => {
+    const d = evaluateClaimDerived(claim, ctx);
+    const stage = normalizedStageForClaim(claim);
+    if (stage === "Denied") return Math.max(0, num(d.atRiskAmount || 0));
+    if (stage === "Underpaid") return Math.max(0, num(d.underpaidAmount || d.atRiskAmount || 0));
+    if (stage === "In Appeal/Negotiation") return Math.max(0, num(d.atRiskAmount || d.underpaidAmount || 0));
+    return 0;
+  };
+
+  const isOpenRecoveryClaim = (claim) => {
+    const stage = normalizedStageForClaim(claim);
+    return stage === "Denied" || stage === "Underpaid" || stage === "In Appeal/Negotiation";
+  };
+
+  const foundByClaim = new Map();
+  const pendingByClaim = new Map();
+  const recoveredByClaim = new Map();
+  const payerLeakage = {};
+  const recoveryContextClaims = new Set();
+
+  const noteRecoveryContext = (row) => {
+    const key = claimKeyFor(row);
+    if (key) recoveryContextClaims.add(key);
+  };
+
+  workspacesAll
+    .filter(ws => isInRange(ws.updated_at, ws.created_at, ws.submission?.submitted_at))
+    .forEach(ws => noteRecoveryContext(ws));
+
+  packetsAll
+    .filter(p => isInRange(p.updated_at, p.created_at, p.submitted_at))
+    .forEach(p => noteRecoveryContext(p));
+
+  tasksAll
+    .filter(t => isInRange(t.updated_at, t.created_at, t.completed_at, t.due_at))
+    .forEach(t => noteRecoveryContext(t));
+
+  outcomesAll
+    .filter(o => isInRange(o.updated_at, o.created_at, o.outcome_date, o.response_received_at))
+    .forEach(o => noteRecoveryContext(o));
+
+  claimsAll
+    .filter(claim => isInRange(claim.updated_at, claim.created_at, claim.denied_at, claim.paid_at, claim.dos))
+    .forEach(claim => {
+      const key = claimKeyFor(claim);
+      if (!key) return;
+      if (!isOpenRecoveryClaim(claim)) return;
+
+      const amount = Math.max(0, num(openRecoveryAmountForClaim(claim)));
+      if (amount <= 0) return;
+
+      foundByClaim.set(key, Math.max(num(foundByClaim.get(key) || 0), amount));
+      pendingByClaim.set(key, Math.max(num(pendingByClaim.get(key) || 0), amount));
+
+      const payer = String(claim.payer || "Unknown").trim() || "Unknown";
+      payerLeakage[payer] = (payerLeakage[payer] || 0) + amount;
+    });
+
+  const successSet = new Set(["won", "win", "approved", "partial", "partially_approved", "paid_in_full", "accepted", "resolved", "success"]);
+  const completedSet = new Set(["won", "win", "approved", "partial", "partially_approved", "paid_in_full", "accepted", "resolved", "success", "lost", "loss", "denied", "rejected", "closed", "completed", "settled"]);
+  const seenCompleted = new Set();
+  let wonCount = 0;
+  let completedCount = 0;
+  const recoveryDays = [];
+
+  const registerOutcome = (row) => {
+    const status = String(row?.outcome_status || row?.status || row?.result || row?.final_status || "").trim().toLowerCase();
+    if (!completedSet.has(status)) return;
+
+    const dedupeKey = [
+      String(row?.workspace_id || ""),
+      String(row?.outcome_id || ""),
+      String(row?.billed_id || ""),
+      String(row?.claim_id || ""),
+      String(row?.claim_number || ""),
+      String(row?.updated_at || row?.created_at || "")
+    ].join("|");
+
+    if (seenCompleted.has(dedupeKey)) return;
+    seenCompleted.add(dedupeKey);
+
+    completedCount += 1;
+    const isWin = successSet.has(status);
+    if (isWin) wonCount += 1;
+
+    const linkedClaim = getClaimFor(row);
+    const key = claimKeyFor(row) || claimKeyFor(linkedClaim);
+    if (key) recoveryContextClaims.add(key);
+
+    if (isWin && key) {
+      const recoveredAmount = Math.max(
+        0,
+        num(row?.recovered_amount || 0),
+        num(row?.paid_posted_amount || 0),
+        num(row?.approved_amount || 0)
+      );
+      if (recoveredAmount > 0) {
+        recoveredByClaim.set(key, Math.max(num(recoveredByClaim.get(key) || 0), recoveredAmount));
+        foundByClaim.set(key, Math.max(num(foundByClaim.get(key) || 0), recoveredAmount));
+      }
+    }
+
+    const startD = asDate(row?.submitted_at, linkedClaim?.denied_at, linkedClaim?.created_at, linkedClaim?.dos, row?.created_at);
+    const endD = asDate(row?.response_received_at, row?.outcome_date, row?.updated_at, row?.created_at);
+    if (startD && endD && endD >= startD) {
+      recoveryDays.push(Math.round((endD.getTime() - startD.getTime()) / (1000 * 60 * 60 * 24)));
+    }
+  };
+
+  outcomesAll
+    .filter(o => isInRange(o.updated_at, o.created_at, o.outcome_date, o.response_received_at))
+    .forEach(registerOutcome);
+
+  workspacesAll
+    .filter(ws => isInRange(ws.updated_at, ws.created_at, ws.submission?.submitted_at, ws.outcome?.updated_at, ws.outcome?.created_at))
+    .forEach(ws => {
+      if (!ws.outcome) return;
+      registerOutcome({
+        ...ws.outcome,
+        workspace_id: ws.workspace_id,
+        billed_id: ws.billed_id,
+        claim_id: ws.claim_id,
+        claim_number: ws.claim_number,
+        submitted_at: ws.submission?.submitted_at || ws.created_at
+      });
+    });
+
+  claimsAll
+    .filter(claim => isInRange(claim.updated_at, claim.paid_at, claim.created_at, claim.dos))
+    .forEach(claim => {
+      const key = claimKeyFor(claim);
+      if (!key || !recoveryContextClaims.has(key)) return;
+      if (recoveredByClaim.has(key)) return;
+
+      const d = evaluateClaimDerived(claim, ctx);
+      const expected = Math.max(
+        0,
+        num(d.expectedInsurance || 0),
+        num(claim.expected_amount || 0),
+        num(claim.expected_insurance || 0),
+        num(claim.allowed_amount || 0)
+      );
+      const paid = Math.max(
+        0,
+        num(d.paidAmount || 0),
+        num(claim.paid_amount || 0),
+        num(claim.insurance_paid || 0)
+      );
+
+      if (isResolvedLifecycleStage(d.lifecycleStage) && expected > 0 && paid + 0.0001 >= expected) {
+        const conservativeRecovered = Math.max(
+          0,
+          num(claim.recovered_amount || 0),
+          num(claim.recovery_amount || 0),
+          num(claim.approved_amount || 0)
+        );
+        if (conservativeRecovered > 0) {
+          recoveredByClaim.set(key, conservativeRecovered);
+          foundByClaim.set(key, Math.max(num(foundByClaim.get(key) || 0), conservativeRecovered));
+        }
+      }
+    });
+
+  paymentsAll
+    .filter(payment => isInRange(payment.updated_at, payment.created_at, payment.paid_at, payment.posted_at, payment.imported_at))
+    .forEach(payment => {
+      const key = claimKeyFor(payment);
+      if (!key) return;
+
+      const status = String(payment.status || payment.payment_status || "").toLowerCase();
+      const source = String(payment.source || payment.payment_source || "").toLowerCase();
+
+      const explicitRecoveryPayment =
+        payment.denied_approved === true ||
+        payment.recovery_payment === true ||
+        payment.recovered === true ||
+        status.includes("recovered") ||
+        status.includes("recovery") ||
+        status.includes("appeal") ||
+        status.includes("negotiation") ||
+        source.includes("recovery") ||
+        source.includes("appeal") ||
+        source.includes("negotiation");
+
+      const linkedToRecoveryWork = recoveryContextClaims.has(key);
+
+      const approvedRecoveryStatus =
+        status.includes("approved") ||
+        status.includes("resolved") ||
+        status.includes("paid");
+
+      if (!explicitRecoveryPayment && !(linkedToRecoveryWork && approvedRecoveryStatus)) return;
+
+      const recoveredAmount = Math.max(0, num(payment.amount_paid || payment.paid_amount || 0));
+
+      if (recoveredAmount > 0) {
+        recoveredByClaim.set(key, Math.max(num(recoveredByClaim.get(key) || 0), recoveredAmount));
+        foundByClaim.set(key, Math.max(num(foundByClaim.get(key) || 0), recoveredAmount));
+      }
+    });
+
+  const openTasksInRange = tasksAll.filter(t => {
+    if (!isInRange(t.updated_at, t.created_at, t.completed_at, t.due_at)) return false;
+    const st = String(t.status || "").toLowerCase();
+    return !["done", "closed", "completed", "resolved"].includes(st);
+  });
+
+  const packetWorkUnits = packetsAll.filter(p => isInRange(p.updated_at, p.created_at, p.submitted_at)).length
+    + workspacesAll.filter(ws => isInRange(ws.updated_at, ws.created_at, ws.submission?.submitted_at)).length;
+
+  const topPayerLeakage = Object.entries(payerLeakage)
+    .sort((a, b) => b[1] - a[1])
+    .map(([payer, amount]) => ({ payer, amount }))[0] || { payer: "No leakage detected", amount: 0 };
+
+  return {
+    revenueFound: round2(Array.from(foundByClaim.values()).reduce((s, n) => s + num(n || 0), 0)),
+    revenueRecovered: round2(Array.from(recoveredByClaim.values()).reduce((s, n) => s + num(n || 0), 0)),
+    pendingRecovery: round2(Array.from(pendingByClaim.values()).reduce((s, n) => s + num(n || 0), 0)),
+    winRate: completedCount ? round2((wonCount / completedCount) * 100) : 0,
+    wonOutcomes: wonCount,
+    completedOutcomes: completedCount,
+    avgRecoveryTimeDays: recoveryDays.length ? round2(recoveryDays.reduce((s, d) => s + num(d || 0), 0) / recoveryDays.length) : 0,
+    topPayerLeakage,
+    staffTimeSavedHours: round2(((openTasksInRange.length + packetWorkUnits) * 15) / 60),
+    staffTimeSavedWorkUnits: openTasksInRange.length + packetWorkUnits
+  };
+}
+
 function computeDashboardMetrics(org_id, start, end, preset){
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
@@ -28592,6 +28880,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     }
 
     const m = computeDashboardMetrics(org.org_id, startDate, endDate, preset);
+    const roiMetrics = computeRoiMetrics(org.org_id, startDate, endDate);
     const payerRanks = computeAllPayerRankings(org.org_id);
     const casesInRange = readJSON(FILES.cases, [])
       .filter(c => c.org_id === org.org_id)
@@ -28900,6 +29189,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .chart-container.trend{height:320px;max-height:320px;}
         .exec-table{margin-top:12px;overflow:auto;}
         .trend-toggle{display:flex;gap:8px;align-items:center;}
+        .recovery-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:12px;}
+        .recovery-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:#fff;}
+        .recovery-value{margin:0;font-size:24px;font-weight:900;line-height:1.1;}
+        .recovery-label{margin:6px 0 0;font-size:12px;color:var(--muted);font-weight:700;}
+        .recovery-sub{margin-top:6px;font-size:11px;color:var(--muted);line-height:1.35;}
       </style>
 
       <div style="border-left:6px solid ${verdictColor};padding:14px 18px;margin-bottom:18px;background:var(--card);border-radius:10px;">
@@ -28918,6 +29212,57 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="kpi-card"><p class="kpi-value">${Number(m.denialRate||0).toFixed(1)}%</p><p class="kpi-label">Denial Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed claims that were denied by payers.</span></span></p><div class="kpi-delta">-</div></div>
         <div class="kpi-card"><p class="kpi-value">${Number(m.kpis.netCollectionRate||0).toFixed(1)}%</p><p class="kpi-label">Recovery Rate <span class="tooltip">ⓘ<span class="tooltiptext">Percentage of billed revenue successfully collected.</span></span></p><div class="kpi-delta">-</div></div>
         
+      </div>
+
+
+      <div class="exec-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+          <div>
+            <h3 style="margin:0 0 6px;">Revenue Recovery Insights</h3>
+            <div class="muted small">
+              Focused on recovery workflow performance for ${safeStr(rangeLabel)}. This is separate from the general Revenue Overview KPIs above.
+            </div>
+          </div>
+          <div class="muted small">Date Range: ${safeStr(rangeLabel)}</div>
+        </div>
+
+        <div class="recovery-grid">
+          <div class="recovery-card">
+            <p class="recovery-value">${formatMoneyUI(roiMetrics.revenueFound || 0)}</p>
+            <p class="recovery-label">Revenue Found</p>
+            <div class="recovery-sub">Recovery opportunities identified in the selected date range.</div>
+          </div>
+          <div class="recovery-card">
+            <p class="recovery-value">${formatMoneyUI(roiMetrics.revenueRecovered || 0)}</p>
+            <p class="recovery-label">Revenue Recovered</p>
+            <div class="recovery-sub">Successful recovery dollars from outcomes and linked recovery workflow activity.</div>
+          </div>
+          <div class="recovery-card">
+            <p class="recovery-value">${formatMoneyUI(roiMetrics.pendingRecovery || 0)}</p>
+            <p class="recovery-label">Pending Recovery</p>
+            <div class="recovery-sub">Still open and not yet recovered.</div>
+          </div>
+          <div class="recovery-card">
+            <p class="recovery-value">${Number(roiMetrics.winRate || 0).toFixed(1)}%</p>
+            <p class="recovery-label">Win Rate</p>
+            <div class="recovery-sub">${formatNumberUI(roiMetrics.wonOutcomes || 0)} won of ${formatNumberUI(roiMetrics.completedOutcomes || 0)} completed outcomes.</div>
+          </div>
+          <div class="recovery-card">
+            <p class="recovery-value">${roiMetrics.avgRecoveryTimeDays ? `${Number(roiMetrics.avgRecoveryTimeDays || 0).toFixed(0)}d` : "-"}</p>
+            <p class="recovery-label">Average Recovery Time</p>
+            <div class="recovery-sub">Average days from recovery work start to outcome.</div>
+          </div>
+          <div class="recovery-card">
+            <p class="recovery-value" style="font-size:20px;">${safeStr(roiMetrics.topPayerLeakage?.payer || "No leakage detected")}</p>
+            <p class="recovery-label">Top Payer Leakage</p>
+            <div class="recovery-sub">${formatMoneyUI(roiMetrics.topPayerLeakage?.amount || 0)} currently open at risk.</div>
+          </div>
+          <div class="recovery-card">
+            <p class="recovery-value">${Number(roiMetrics.staffTimeSavedHours || 0).toFixed(1)}h</p>
+            <p class="recovery-label">Staff Time Saved Estimate</p>
+            <div class="recovery-sub">${formatNumberUI(roiMetrics.staffTimeSavedWorkUnits || 0)} recovery tasks / packets × 15 minutes.</div>
+          </div>
+        </div>
       </div>
 
       <div class="exec-card">
