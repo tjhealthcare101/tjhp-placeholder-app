@@ -29054,59 +29054,68 @@ if (method === "GET" && pathname === "/weekly-summary") {
       underpaid: { count: 0, amount: 0 },
       followup: { count: 0, amount: 0 }
     });
+    const todaysAtRiskTotal = todaysPriorities.denied.amount + todaysPriorities.underpaid.amount + todaysPriorities.followup.amount;
     const revenueSummaryBlock = `
-<div class="insight-card" style="margin-bottom:16px;">
+<div class="insight-card priority-summary" style="margin-bottom:16px;">
 
-  <h3 style="margin:0 0 10px;">Revenue Overview</h3>
-
-  <div class="muted small" style="margin-bottom:10px;">
-    <strong>Total At Risk:</strong> ${formatMoneyUI(todaysPriorities.denied.amount + todaysPriorities.underpaid.amount + todaysPriorities.followup.amount)}
+  <div class="priority-header">
+    <div>
+      <div class="muted small" style="font-weight:800;text-transform:uppercase;letter-spacing:.05em;">What needs attention</div>
+      <h3 style="margin:4px 0 6px;">Work the highest-value recovery opportunities first</h3>
+      <div class="muted small">Denied, underpaid, and follow-up claims that may need staff action.</div>
+    </div>
+    <div class="priority-actions">
+      <a class="btn" href="/claims-lifecycle">Review Claims Lifecycle</a>
+      <a class="btn secondary" href="/actions">Open Action Center</a>
+    </div>
   </div>
 
-  <div class="muted small" style="margin-bottom:6px;">
-    Denied: <strong>${formatNumberUI(todaysPriorities.denied.count)}</strong> · ${formatMoneyUI(todaysPriorities.denied.amount)}
+  <div class="priority-grid">
+    <div class="priority-main">
+      <div class="priority-main-value">${formatMoneyUI(todaysAtRiskTotal)}</div>
+      <div class="priority-main-label">Active Recovery Opportunity</div>
+    </div>
+    <div class="priority-metric">
+      <strong>${formatNumberUI(todaysPriorities.denied.count)}</strong>
+      <span>Denied</span>
+      <small>${formatMoneyUI(todaysPriorities.denied.amount)}</small>
+    </div>
+    <div class="priority-metric">
+      <strong>${formatNumberUI(todaysPriorities.underpaid.count)}</strong>
+      <span>Underpaid</span>
+      <small>${formatMoneyUI(todaysPriorities.underpaid.amount)}</small>
+    </div>
+    <div class="priority-metric">
+      <strong>${formatNumberUI(todaysPriorities.followup.count)}</strong>
+      <span>Follow-Up</span>
+      <small>${formatMoneyUI(todaysPriorities.followup.amount)}</small>
+    </div>
   </div>
-
-  <div class="muted small" style="margin-bottom:6px;">
-    Underpaid: <strong>${formatNumberUI(todaysPriorities.underpaid.count)}</strong> · ${formatMoneyUI(todaysPriorities.underpaid.amount)}
-  </div>
-
-  <div class="muted small" style="margin-bottom:10px;">
-    Follow-Up Needed: <strong>${formatNumberUI(todaysPriorities.followup.count)}</strong> · ${formatMoneyUI(todaysPriorities.followup.amount)}
-  </div>
-
-  <div class="btnRow" style="margin-bottom:12px;">
-    <a class="btn" href="/claims-lifecycle">Review Claims Lifecycle</a>
-    <a class="btn secondary" href="/actions">Open Action Center</a>
-  </div>
-
-  <div class="hr"></div>
-
-  <h4 style="margin:10px 0 8px;">Top Claims to Work Today</h4>
 
   ${
     topClaims.length === 0
-    ? `<div class="muted small">No high-priority claims right now.</div>`
-    : topClaims.map(c => `
-      <div style="padding:8px 0;border-bottom:1px solid #eee;">
-
-        <strong>#${safeStr(c.claim_number || "-")}</strong> — ${formatMoneyUI(c.at_risk_amount)} at risk<br/>
-
-        <div class="muted small" style="margin:2px 0 6px;">
-          ${safeStr(c.next_action)}
+    ? `<div class="priority-empty muted small">No high-priority claims right now.</div>`
+    : `
+      <details class="priority-claims">
+        <summary>
+          <span>Top claims to work today</span>
+          <strong>${formatNumberUI(topClaims.length)}</strong>
+        </summary>
+        <div class="priority-claim-list">
+          ${topClaims.map(c => `
+            <div class="priority-claim-row">
+              <div>
+                <strong>#${safeStr(c.claim_number || "-")}</strong>
+                <span class="muted small"> · ${formatMoneyUI(c.at_risk_amount)} at risk</span>
+                <div class="muted small">${safeStr(c.next_action)}</div>
+              </div>
+              <a class="btn small secondary" href="/claims-lifecycle?priority=top&claim=${encodeURIComponent(c.billed_id)}">Open</a>
+            </div>
+          `).join("")}
         </div>
-
-        <a class="btn small secondary" href="/claims-lifecycle?priority=top&claim=${encodeURIComponent(c.billed_id)}">
-          Open in Claims Lifecycle
-        </a>
-
-      </div>
-    `).join("")
+      </details>
+    `
   }
-
-  <div class="muted small" style="margin-top:10px;">
-    Start in Claims Lifecycle to see where claims are stuck, then move into Action Center to work them.
-  </div>
 
 </div>
 `;
@@ -29189,11 +29198,35 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .chart-container.trend{height:320px;max-height:320px;}
         .exec-table{margin-top:12px;overflow:auto;}
         .trend-toggle{display:flex;gap:8px;align-items:center;}
+        .priority-summary{padding:16px;}
+        .priority-header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;}
+        .priority-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+        .priority-grid{display:grid;grid-template-columns:1.4fr repeat(3, minmax(120px,1fr));gap:12px;margin-top:14px;}
+        .priority-main,.priority-metric{border:1px solid var(--border);border-radius:12px;background:#fff;padding:14px;}
+        .priority-main-value{font-size:28px;font-weight:900;line-height:1.05;}
+        .priority-main-label{font-size:12px;color:var(--muted);font-weight:800;margin-top:5px;}
+        .priority-metric strong{display:block;font-size:22px;line-height:1.05;}
+        .priority-metric span{display:block;font-size:12px;color:var(--muted);font-weight:800;margin-top:5px;}
+        .priority-metric small{display:block;font-size:12px;color:var(--muted);margin-top:4px;}
+        .priority-empty{margin-top:12px;}
+        .priority-claims{margin-top:12px;border-top:1px solid var(--border);padding-top:10px;}
+        .priority-claims summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;font-weight:900;}
+        .priority-claim-list{margin-top:8px;}
+        .priority-claim-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #eee;}
+        .recovery-snapshot{padding:16px;}
+        .recovery-core-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:12px;}
+        .recovery-core-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:#fff;}
+        .recovery-mini-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:12px;}
+        .recovery-mini{border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:#f8fafc;}
+        .recovery-mini-label{font-size:11px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.04em;}
+        .recovery-mini-value{font-size:17px;font-weight:900;margin-top:4px;}
+        .recovery-mini-sub{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.35;}
         .recovery-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:12px;}
         .recovery-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:#fff;}
         .recovery-value{margin:0;font-size:24px;font-weight:900;line-height:1.1;}
         .recovery-label{margin:6px 0 0;font-size:12px;color:var(--muted);font-weight:700;}
         .recovery-sub{margin-top:6px;font-size:11px;color:var(--muted);line-height:1.35;}
+        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row .btn{width:100%;}}
       </style>
 
       <div style="border-left:6px solid ${verdictColor};padding:14px 18px;margin-bottom:18px;background:var(--card);border-radius:10px;">
@@ -29215,52 +29248,60 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </div>
 
 
-      <div class="exec-card">
+      <div class="exec-card recovery-snapshot">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
           <div>
             <h3 style="margin:0 0 6px;">Revenue Recovery Insights</h3>
             <div class="muted small">
-              Focused on recovery workflow performance for ${safeStr(rangeLabel)}. This is separate from the general Revenue Overview KPIs above.
+              Recovery workflow ROI for ${safeStr(rangeLabel)}.
             </div>
           </div>
           <div class="muted small">Date Range: ${safeStr(rangeLabel)}</div>
         </div>
 
-        <div class="recovery-grid">
-          <div class="recovery-card">
+        <div class="recovery-core-grid">
+          <div class="recovery-core-card">
             <p class="recovery-value">${formatMoneyUI(roiMetrics.revenueFound || 0)}</p>
             <p class="recovery-label">Revenue Found</p>
-            <div class="recovery-sub">Recovery opportunities identified in the selected date range.</div>
+            <div class="recovery-sub">Identified recovery opportunity.</div>
           </div>
-          <div class="recovery-card">
+
+          <div class="recovery-core-card">
             <p class="recovery-value">${formatMoneyUI(roiMetrics.revenueRecovered || 0)}</p>
             <p class="recovery-label">Revenue Recovered</p>
-            <div class="recovery-sub">Successful recovery dollars from outcomes and linked recovery workflow activity.</div>
+            <div class="recovery-sub">Recovered from outcomes or linked recovery work.</div>
           </div>
-          <div class="recovery-card">
+
+          <div class="recovery-core-card">
             <p class="recovery-value">${formatMoneyUI(roiMetrics.pendingRecovery || 0)}</p>
             <p class="recovery-label">Pending Recovery</p>
-            <div class="recovery-sub">Still open and not yet recovered.</div>
+            <div class="recovery-sub">Still open and awaiting resolution.</div>
           </div>
-          <div class="recovery-card">
-            <p class="recovery-value">${Number(roiMetrics.winRate || 0).toFixed(1)}%</p>
-            <p class="recovery-label">Win Rate</p>
-            <div class="recovery-sub">${formatNumberUI(roiMetrics.wonOutcomes || 0)} won of ${formatNumberUI(roiMetrics.completedOutcomes || 0)} completed outcomes.</div>
+        </div>
+
+        <div class="recovery-mini-grid">
+          <div class="recovery-mini">
+            <div class="recovery-mini-label">Win Rate</div>
+            <div class="recovery-mini-value">${Number(roiMetrics.winRate || 0).toFixed(1)}%</div>
+            <div class="recovery-mini-sub">${formatNumberUI(roiMetrics.wonOutcomes || 0)} won / ${formatNumberUI(roiMetrics.completedOutcomes || 0)} completed</div>
           </div>
-          <div class="recovery-card">
-            <p class="recovery-value">${roiMetrics.avgRecoveryTimeDays ? `${Number(roiMetrics.avgRecoveryTimeDays || 0).toFixed(0)}d` : "-"}</p>
-            <p class="recovery-label">Average Recovery Time</p>
-            <div class="recovery-sub">Average days from recovery work start to outcome.</div>
+
+          <div class="recovery-mini">
+            <div class="recovery-mini-label">Avg Recovery Time</div>
+            <div class="recovery-mini-value">${roiMetrics.avgRecoveryTimeDays ? `${Number(roiMetrics.avgRecoveryTimeDays || 0).toFixed(0)}d` : "-"}</div>
+            <div class="recovery-mini-sub">From recovery work start to outcome</div>
           </div>
-          <div class="recovery-card">
-            <p class="recovery-value" style="font-size:20px;">${safeStr(roiMetrics.topPayerLeakage?.payer || "No leakage detected")}</p>
-            <p class="recovery-label">Top Payer Leakage</p>
-            <div class="recovery-sub">${formatMoneyUI(roiMetrics.topPayerLeakage?.amount || 0)} currently open at risk.</div>
+
+          <div class="recovery-mini">
+            <div class="recovery-mini-label">Top Payer Leakage</div>
+            <div class="recovery-mini-value" style="font-size:15px;">${safeStr(roiMetrics.topPayerLeakage?.payer || "No leakage detected")}</div>
+            <div class="recovery-mini-sub">${formatMoneyUI(roiMetrics.topPayerLeakage?.amount || 0)} open at risk</div>
           </div>
-          <div class="recovery-card">
-            <p class="recovery-value">${Number(roiMetrics.staffTimeSavedHours || 0).toFixed(1)}h</p>
-            <p class="recovery-label">Staff Time Saved Estimate</p>
-            <div class="recovery-sub">${formatNumberUI(roiMetrics.staffTimeSavedWorkUnits || 0)} recovery tasks / packets × 15 minutes.</div>
+
+          <div class="recovery-mini">
+            <div class="recovery-mini-label">Time Saved</div>
+            <div class="recovery-mini-value">${Number(roiMetrics.staffTimeSavedHours || 0).toFixed(1)}h</div>
+            <div class="recovery-mini-sub">${formatNumberUI(roiMetrics.staffTimeSavedWorkUnits || 0)} tasks / packets × 15 min</div>
           </div>
         </div>
       </div>
