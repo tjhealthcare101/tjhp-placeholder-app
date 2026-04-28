@@ -1126,7 +1126,7 @@ function renderLoadedPayerStarterGuidance(starterSources){
   const groups = Object.entries(byPack).map(([label, sources]) => `
     <div class="starter-guidance-group">
       <strong>${safeStr(label)}</strong>
-      <div class="muted small">Use this as an internal checklist only. Add real uploaded documents or approved URLs before using policy support in packets.</div>
+      <div class="muted small">Use this as an internal checklist only. Add a real uploaded document or approved URL before using policy support in packets.</div>
       <ul style="margin:8px 0 0 18px;">
         ${sources.map(s => `<li>${safeStr(s.title || payerPolicySourceTypeLabel(s.source_type))}</li>`).join("")}
       </ul>
@@ -1135,8 +1135,8 @@ function renderLoadedPayerStarterGuidance(starterSources){
 
   return `
     <details class="card" style="box-shadow:none;background:#fff;margin:12px 0;">
-      <summary style="cursor:pointer;font-weight:900;">Loaded starter guidance</summary>
-      <div class="muted small" style="margin-top:8px;">These are hidden from the main source table so the page stays clean.</div>
+      <summary style="cursor:pointer;font-weight:900;">Saved payer document checklists</summary>
+      <div class="muted small" style="margin-top:8px;">These are internal checklists only. They stay hidden from the main source table so this page stays focused on real rules and evidence.</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-top:10px;">
         ${groups}
       </div>
@@ -1215,7 +1215,23 @@ function applyPayerPolicyStarterPack(org_id, packKey, user_id){
   };
 }
 
-function renderPayerPolicySourceLibraryPanel(org_id){
+function renderPayerPolicySourceLibraryPanel(org_id, orgContext=null){
+  let orgObj = orgContext || null;
+  try {
+    if (!orgObj && typeof getOrg === "function") orgObj = getOrg(org_id);
+  } catch (e) {
+    orgObj = null;
+  }
+
+  const integrationsUnlocked = !!(orgObj && typeof isIntegrationsEnabledForOrg === "function" && isIntegrationsEnabledForOrg(orgObj));
+  const lockedSuffix = integrationsUnlocked ? "" : " (locked on current plan)";
+  const lockedAttr = integrationsUnlocked ? "" : " disabled";
+  const accessOptions = `
+    <option value="public">Public Approved URL</option>
+    <option value="payer_portal"${lockedAttr}>Payer Portal / Login Required${lockedSuffix}</option>
+    <option value="api"${lockedAttr}>API / Integration Required${lockedSuffix}</option>
+    <option value="manual">Manual Source Only</option>
+  `;
   const allSources = getPayerPolicySources(org_id)
     .sort((a,b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
   const starterSources = allSources.filter(isPayerPolicyStarterSource);
@@ -1245,15 +1261,15 @@ function renderPayerPolicySourceLibraryPanel(org_id){
       <div class="starter-pack-card">
         <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">
           <div>
-            <strong>${safeStr(pack.payer)} guide</strong>
-            <div class="muted small">Adds a simple checklist of policy documents staff should gather for ${safeStr(pack.payer)} work.</div>
-            <div class="muted small" style="margin-top:4px;">This does not add live payer rules or approved evidence.</div>
+            <strong>${safeStr(pack.payer)} document checklist</strong>
+            <div class="muted small">Shows staff which policy/support documents to gather for ${safeStr(pack.payer)} recovery work.</div>
+            <div class="muted small" style="margin-top:4px;">This does not create rules, connect to payers, or add approved evidence.</div>
           </div>
           ${loaded
             ? `<span class="badge ok">Loaded</span>`
             : `<form method="POST" action="/data-management/payer-policy-sources/starter-pack" style="margin:0;">
                 <input type="hidden" name="pack" value="${safeStr(pack.key)}" />
-                <button class="btn small secondary" type="submit">Load Guide</button>
+                <button class="btn small secondary" type="submit">Save Checklist</button>
               </form>`
           }
         </div>
@@ -1321,7 +1337,7 @@ function renderPayerPolicySourceLibraryPanel(org_id){
     <div class="card" style="box-shadow:none;margin:16px 0;">
       <h3>Payer Policy Source Library</h3>
       <p class="muted">
-        Keep verified policy, reimbursement, fee schedule, rate, and coverage sources here. Starter guides are optional checklists and are hidden from the main source table until real evidence is added.
+        Use this lower section for supporting payer policy evidence. It does not change reimbursement calculations unless you upload contract / fee schedule rules above.
       </p>
 
       <div class="alert" style="background:#f8fafc;color:#334155;border-color:#e2e8f0;">
@@ -1334,9 +1350,9 @@ function renderPayerPolicySourceLibraryPanel(org_id){
       </div>
 
       <details id="payerPolicyStarterPacks" class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
-        <summary style="cursor:pointer;font-weight:900;">Optional payer setup guides</summary>
+        <summary style="cursor:pointer;font-weight:900;">Optional payer document checklists</summary>
         <p class="muted small" style="margin-top:0;">
-          Use these only to remind staff what policy/support documents to gather for common payer work. They do not create rules, do not add verified evidence, and do not affect calculations.
+          These checklists help staff know what payer documents to gather. They do not create rules, do not connect to payers, do not add verified evidence, and do not affect calculations.
         </p>
         <style>
           .starter-pack-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:10px;}
@@ -1351,8 +1367,8 @@ function renderPayerPolicySourceLibraryPanel(org_id){
       ${renderLoadedPayerStarterGuidance(starterSources)}
 
       <details class="card" style="box-shadow:none;background:#fff;margin:12px 0;">
-        <summary style="cursor:pointer;font-weight:900;">Advanced: add approved source URL manually</summary>
-        <div class="muted small" style="margin-top:8px;">Use this when staff has already verified a public payer policy, fee schedule, or reimbursement source URL.</div>
+        <summary style="cursor:pointer;font-weight:900;">Advanced: add policy source manually</summary>
+        <div class="muted small" style="margin-top:8px;">Use this when staff has already verified a public payer policy, fee schedule, reimbursement URL, or an internal manual-only source reference.</div>
 
       <form method="POST" action="/data-management/payer-policy-sources/add" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
         <div>
@@ -1367,12 +1383,8 @@ function renderPayerPolicySourceLibraryPanel(org_id){
 
         <div>
           <label>Access Type</label>
-          <select name="access_type">
-            <option value="public">Public Approved URL</option>
-            <option value="payer_portal">Payer Portal / Login Required</option>
-            <option value="api">API / Integration Required</option>
-            <option value="manual">Manual Source Only</option>
-          </select>
+          <select id="payer-policy-access-type" name="access_type" data-integrations-unlocked="${integrationsUnlocked ? "1" : "0"}">${accessOptions}</select>
+          <div id="payer-policy-access-help" class="muted small" style="margin-top:6px;"></div>
         </div>
 
         <div>
@@ -1386,8 +1398,8 @@ function renderPayerPolicySourceLibraryPanel(org_id){
         </div>
 
         <div style="grid-column:1/-1;">
-          <label>Approved Source URL</label>
-          <input name="url" placeholder="https://payer.example.com/policy-or-fee-schedule" />
+          <label id="payer-policy-url-label">Approved Source URL</label>
+          <input id="payer-policy-url-input" name="url" placeholder="https://payer.example.com/policy-or-fee-schedule" />
         </div>
 
         <div style="grid-column:1/-1;">
@@ -1419,6 +1431,56 @@ function renderPayerPolicySourceLibraryPanel(org_id){
           <tbody>${rows}</tbody>
         </table>
       </div>
+
+      <script>
+      (function(){
+        const access = document.getElementById("payer-policy-access-type");
+        const help = document.getElementById("payer-policy-access-help");
+        const urlLabel = document.getElementById("payer-policy-url-label");
+        const urlInput = document.getElementById("payer-policy-url-input");
+        if (!access || !help || !urlLabel || !urlInput) return;
+
+        const integrationsUnlocked = access.dataset.integrationsUnlocked === "1";
+
+        function renderAccessHelp(){
+          const value = String(access.value || "public");
+
+          if ((value === "payer_portal" || value === "api") && !integrationsUnlocked) {
+            access.value = "public";
+            renderAccessHelp();
+            return;
+          }
+
+          if (value === "public") {
+            help.innerHTML = "Public approved URLs can be cached and used as draft citation support. Do not include PHI.";
+            urlLabel.textContent = "Approved Source URL";
+            urlInput.placeholder = "https://payer.example.com/policy-or-fee-schedule";
+            urlInput.disabled = false;
+            return;
+          }
+
+          if (value === "manual") {
+            help.innerHTML = "Manual sources are tracked for staff reference only. Upload the actual document above or add an internal source note here.";
+            urlLabel.textContent = "Source note / file reference";
+            urlInput.placeholder = "Optional: internal document name, storage location, or staff note";
+            urlInput.disabled = false;
+            return;
+          }
+
+          help.innerHTML = "This access type requires an enabled integration. Configure credentials in Account → Integrations, then use this record as the source reference.";
+          urlLabel.textContent = value === "api" ? "API source reference" : "Payer portal source reference";
+          urlInput.placeholder = value === "api" ? "Optional: API endpoint or source name" : "Optional: portal page, document name, or source note";
+          urlInput.disabled = false;
+        }
+
+        if (!integrationsUnlocked) {
+          help.innerHTML = "Payer portal and API sources are locked on the current plan. Use Public Approved URL, Manual Source Only, or upload documents above.";
+        }
+
+        access.addEventListener("change", renderAccessHelp);
+        renderAccessHelp();
+      })();
+      </script>
     </div>
   `;
 }
@@ -42144,28 +42206,6 @@ function renderTemplateEditor(org, user){
 <h2>Reimbursement Contracts</h2>
 <p class="muted">Define how your claims should be reimbursed and how expected amounts are calculated.</p>
 
-<div id="payerPolicySources">
-  ${renderPayerPolicySourceLibraryPanel(org.org_id)}
-</div>
-
-<div class="card" style="margin-bottom:16px;">
-  <h3>
-    Reimbursement Precedence
-    <span class="tooltip">ⓘ
-      <span class="tooltiptext">
-        Calculation Order:
-        1. Payer Contract (Highest Priority)
-        2. Fee Schedule
-        3. Default Reimbursement Rule (Fallback)
-      </span>
-    </span>
-  </h3>
-  <p class="muted">
-    These settings power Expected Insurance calculations,
-    underpayment detection, revenue at risk,
-    and negotiation automation.
-  </p>
-</div>
 
 <div class="card" style="margin-bottom:16px;">
   <h3>Upload Reimbursement Data</h3>
@@ -42240,7 +42280,7 @@ function renderTemplateEditor(org, user){
   </div>
 </div>
 
-<details class="card" open style="margin-top:16px;">
+<details class="card" style="margin-top:16px;">
   <summary style="font-weight:800;font-size:16px;cursor:pointer;">
     Manual Contract Rule Entry
   </summary>
@@ -42300,10 +42340,10 @@ function renderTemplateEditor(org, user){
       <button class="btn">Add Contract Rule</button>
     </div>
   </form>
+</details>
 
-  <div class="hr"></div>
-
-  <h4>Existing Contract Rules</h4>
+<div class="card" style="margin-top:16px;">
+  <h3>Existing Contract Rules</h3>
   <div style="overflow:auto;">
     <table>
       <thead>
@@ -42347,7 +42387,7 @@ function renderTemplateEditor(org, user){
       </tbody>
     </table>
   </div>
-</details>
+</div>
 
 <details class="card" style="margin-top:16px;">
   <summary style="font-weight:800;font-size:16px;cursor:pointer;">
@@ -42382,6 +42422,24 @@ function renderTemplateEditor(org, user){
     </div>
   </form>
 </details>
+
+<details class="card" style="margin-top:16px;">
+  <summary style="font-weight:800;font-size:16px;cursor:pointer;">
+    How reimbursement is calculated
+    <span class="tooltip">ⓘ
+      <span class="tooltiptext">
+        Calculation Order: payer contract → fee schedule → default fallback.
+      </span>
+    </span>
+  </summary>
+  <p class="muted small" style="margin-top:10px;">
+    These settings power Expected Insurance calculations, underpayment detection, revenue at risk, and negotiation automation.
+  </p>
+</details>
+
+<div id="payerPolicySources">
+  ${renderPayerPolicySourceLibraryPanel(org.org_id, org)}
+</div>
 
 <script>
 (function(){
@@ -43999,6 +44057,17 @@ function renderTemplateEditor(org, user){
     const title = String(params.get("title") || "").trim();
     const source_type = String(params.get("source_type") || "custom").trim();
     const access_type = String(params.get("access_type") || "public").trim();
+
+    const integrationSourceRequested = ["payer_portal", "api"].includes(access_type);
+
+    const integrationsAllowed = (typeof isIntegrationsEnabledForOrg === "function")
+      ? !!isIntegrationsEnabledForOrg(org)
+      : false;
+
+    if (integrationSourceRequested && !integrationsAllowed) {
+      return redirect(res, "/data-management?tab=reimbursement&err=Integration%20sources%20are%20not%20enabled%20on%20this%20plan#payerPolicySources");
+    }
+
     const keywords = String(params.get("keywords") || "").trim();
     const rawUrl = String(params.get("url") || "").trim();
     const urlValidation = payerPolicyValidateSourceUrlByAccess(rawUrl, access_type);
