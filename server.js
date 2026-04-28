@@ -13858,6 +13858,23 @@ function computeRoiMetrics(org_id, start, end){
 function computeOnboardingWizardMetrics(org_id){
   const claims = readJSON(FILES.billed, []).filter(b => b && b.org_id === org_id);
   const payments = readJSON(FILES.payments, []).filter(p => p && p.org_id === org_id);
+  let contracts = [];
+  let feeSchedules = [];
+
+  try {
+    contracts = (typeof getPayerContracts === "function")
+      ? getPayerContracts(org_id)
+      : readJSON(FILES.payer_contracts, []).filter(c => c && c.org_id === org_id);
+  } catch (e) {
+    contracts = [];
+  }
+
+  try {
+    feeSchedules = (typeof getFeeSchedules === "function") ? getFeeSchedules(org_id) : [];
+  } catch (e) {
+    feeSchedules = [];
+  }
+
   const ctx = buildClaimContext(org_id);
 
   const keyVariants = (...vals) => {
@@ -13922,6 +13939,9 @@ function computeOnboardingWizardMetrics(org_id){
   return {
     claimsCount: claims.length,
     paymentsCount: payments.length,
+    contractsCount: contracts.length,
+    feeSchedulesCount: feeSchedules.length,
+    hasContracts: contracts.length > 0 || feeSchedules.length > 0,
     matchedClaims,
     unmatchedClaims: Math.max(0, claims.length - matchedClaims),
     deniedCount,
@@ -14012,7 +14032,7 @@ function runOnboardingRevenueScan(org_id){
 function renderOnboardingWizardPage(org, sess, parsed){
   const onboarding = computeOnboardingWizardMetrics(org.org_id);
   const requestedStep = String(parsed.query.step || "").toLowerCase();
-  const activeStep = requestedStep || (!onboarding.hasClaims ? "claims" : (!onboarding.hasPayments ? "payments" : (onboarding.hasRevenueFound ? "results" : "scan")));
+  const activeStep = requestedStep || (!onboarding.hasClaims ? "claims" : (!onboarding.hasPayments ? "payments" : (!onboarding.hasContracts ? "contracts" : (onboarding.hasRevenueFound ? "results" : "scan"))));
   const scanDone = String(parsed.query.scan || "").toLowerCase() === "done" || activeStep === "results";
   const orgName = (org && org.org_name) ? org.org_name : "";
 
@@ -14024,7 +14044,8 @@ function renderOnboardingWizardPage(org, sess, parsed){
   const uploadNotice = (() => {
     const uploaded = String(parsed.query.uploaded || "").toLowerCase();
     if (uploaded === "claims") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Claims uploaded.</strong> Next, upload payments so the system can compare paid vs expected.</div>`;
-    if (uploaded === "payments") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Payments uploaded.</strong> Now run the revenue scan to find denied and underpaid dollars.</div>`;
+    if (uploaded === "payments") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Payments uploaded.</strong> Next, optionally add contract rules to improve expected-vs-paid accuracy, or skip to the revenue scan.</div>`;
+    if (uploaded === "contracts") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Contract rules uploaded.</strong> Now run the revenue scan using expected reimbursement logic.</div>`;
     if (scanDone) return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Revenue scan complete.</strong> Review the revenue found below and start the Action Center queue.</div>`;
     return "";
   })();
@@ -14038,36 +14059,74 @@ function renderOnboardingWizardPage(org, sess, parsed){
     </tr>
   `).join("") : `<tr><td colspan="4" class="muted">No at-risk claims found yet. Upload claims and payments, then run the revenue scan.</td></tr>`;
 
-  const html = renderPage("Onboarding Wizard", `
+  const html = renderPage("Onboarding Pro", `
     <style>
       .onboard-hero{border:1px solid var(--border);border-radius:18px;padding:20px;background:#fff;box-shadow:var(--shadow);margin-bottom:16px;}
       .onboard-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:16px;}
       .onboard-step{border:1px solid var(--border);border-radius:14px;background:#fff;padding:12px;}
       .onboard-step.active{border-color:#111827;box-shadow:0 0 0 3px rgba(17,24,39,.08);}
       .onboard-step.done{border-color:#a7f3d0;background:#ecfdf5;}
-      .onboard-num{width:28px;height:28px;border-radius:999px;background:#111827;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;margin-bottom:8px;}
+      .onboard-step strong{display:block;margin-top:6px;line-height:1.25;}
+      .onboard-num{width:30px;height:30px;border-radius:999px;background:#111827;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;margin-bottom:10px;}
       .onboard-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,380px);gap:16px;align-items:start;}
       .onboard-upload{border:1px dashed #cbd5e1;background:#f8fafc;border-radius:14px;padding:14px;margin-top:10px;}
+      .onboard-dropzone{position:relative;display:block;border:1px dashed #94a3b8;border-radius:14px;background:#fff;padding:18px;cursor:pointer;text-align:center;margin:10px 0;}
+      .onboard-dropzone:hover,.onboard-dropzone.dragover{border-color:#111827;background:#f1f5f9;}
+      .onboard-dropzone input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;}
+      .onboard-dropzone strong{display:block;font-size:14px;margin-bottom:4px;}
+      .onboard-file-label{display:block;font-size:12px;color:var(--muted);margin-top:8px;}
+      .onboard-option-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px;}
+      .onboard-option{border:1px solid var(--border);border-radius:14px;background:#f8fafc;padding:12px;}
       .onboard-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:12px;}
       .onboard-kpi{border:1px solid var(--border);border-radius:14px;background:#fff;padding:12px;}
-      .onboard-kpi strong{display:block;font-size:22px;line-height:1.1;}
+      .onboard-kpi strong{display:block;font-size:22px;line-height:1.1;margin-bottom:7px;}
+      .onboard-kpi .muted{display:block;}
       @media(max-width:820px){.onboard-grid{grid-template-columns:1fr;}}
     </style>
+
+    <script>
+      document.addEventListener("DOMContentLoaded", function(){
+        document.querySelectorAll(".onboard-dropzone").forEach(function(zone){
+          const input = zone.querySelector("input[type='file']");
+          const label = zone.querySelector(".onboard-file-label");
+          if (!input) return;
+
+          const setLabel = function(files){
+            if (!label) return;
+            const list = Array.from(files || []).map(f => f.name).filter(Boolean);
+            label.textContent = list.length ? list.join(", ") : "No file selected";
+          };
+
+          input.addEventListener("change", function(){ setLabel(input.files); });
+          zone.addEventListener("dragover", function(e){ e.preventDefault(); zone.classList.add("dragover"); });
+          zone.addEventListener("dragleave", function(){ zone.classList.remove("dragover"); });
+          zone.addEventListener("drop", function(e){
+            e.preventDefault();
+            zone.classList.remove("dragover");
+            if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+              input.files = e.dataTransfer.files;
+              setLabel(input.files);
+            }
+          });
+        });
+      });
+    </script>
 
     <div class="onboard-hero">
       <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;">
         <div>
-          <span class="badge ok">Upload → Scan → Work Revenue</span>
+          <span class="badge ok">Upload → Contracts → Scan → Work Revenue</span>
           <h2 style="margin:10px 0 6px;font-size:28px;">Find lost revenue in 10 minutes</h2>
-          <p class="muted" style="max-width:680px;">Upload claims and payments, run a revenue scan, then jump straight into Action Center with the highest-value recovery work.</p>
+          <p class="muted" style="max-width:680px;">Upload claims, payments, and optional contract rules, then run a revenue scan and jump straight into Action Center with the highest-value recovery work.</p>
         </div>
         <a class="btn secondary" href="/dashboard">Skip to Dashboard</a>
       </div>
       <div class="onboard-steps">
         ${stepCard(1, "claims", "Upload claims", onboarding.hasClaims ? `${formatNumberUI(onboarding.claimsCount)} claims loaded` : "Start with billing / claim CSV data", onboarding.hasClaims)}
         ${stepCard(2, "payments", "Upload payments", onboarding.hasPayments ? `${formatNumberUI(onboarding.paymentsCount)} payment rows loaded` : "Add ERA / payment CSV or TXT", onboarding.hasPayments)}
-        ${stepCard(3, "scan", "Run revenue scan", scanDone ? `${formatNumberUI(onboarding.matchedClaims)} matched claims` : "Compare paid vs expected and detect leakage", scanDone)}
-        ${stepCard(4, "results", "Work revenue", onboarding.hasRevenueFound ? `${formatMoneyUI(onboarding.revenueAtRisk)} found` : "Open the recovery queue", onboarding.hasRevenueFound)}
+        ${stepCard(3, "contracts", "Add contract rules", onboarding.hasContracts ? `${formatNumberUI(onboarding.contractsCount + onboarding.feeSchedulesCount)} reimbursement rules loaded` : "Optional, improves expected vs paid", onboarding.hasContracts)}
+        ${stepCard(4, "scan", "Run revenue scan", scanDone ? `${formatNumberUI(onboarding.matchedClaims)} matched claims` : "Compare paid vs expected and detect leakage", scanDone)}
+        ${stepCard(5, "results", "Work revenue", onboarding.hasRevenueFound ? `${formatMoneyUI(onboarding.revenueAtRisk)} found` : "Open the recovery queue", onboarding.hasRevenueFound)}
       </div>
     </div>
 
@@ -14082,7 +14141,12 @@ function renderOnboardingWizardPage(org, sess, parsed){
             <input type="hidden" name="tab" value="claims" />
             <input type="hidden" name="next" value="/onboarding?step=payments&amp;uploaded=claims" />
             <label>Claims CSV</label>
-            <input type="file" name="documents" accept=".csv" required />
+            <label class="onboard-dropzone">
+              <input type="file" name="documents" accept=".csv" required />
+              <strong>Drag & drop claims CSV here</strong>
+              <span class="muted small">or click to choose a file</span>
+              <span class="onboard-file-label">No file selected</span>
+            </label>
             <div class="btnRow"><button class="btn" type="submit">Upload Claims</button></div>
           </form>
         </div>
@@ -14092,15 +14156,42 @@ function renderOnboardingWizardPage(org, sess, parsed){
           <p class="muted small">Use ERA / payment CSV or TXT data. Claim numbers are used for matching behind the scenes.</p>
           <form method="POST" action="/data-management/upload" enctype="multipart/form-data" class="onboard-upload">
             <input type="hidden" name="tab" value="payments" />
-            <input type="hidden" name="next" value="/onboarding?step=scan&amp;uploaded=payments" />
+            <input type="hidden" name="next" value="/onboarding?step=contracts&amp;uploaded=payments" />
             <label>Payment CSV / TXT</label>
-            <input type="file" name="documents" accept=".csv,.txt" required />
+            <label class="onboard-dropzone">
+              <input type="file" name="documents" accept=".csv,.txt" required />
+              <strong>Drag & drop payment file here</strong>
+              <span class="muted small">or click to choose a file</span>
+              <span class="onboard-file-label">No file selected</span>
+            </label>
             <div class="btnRow"><button class="btn" type="submit">Upload Payments</button></div>
           </form>
         </div>
 
         <div class="card" style="margin-bottom:14px;">
-          <h3>3) Run revenue scan</h3>
+          <h3>3) Add contract rules <span class="muted small">(optional)</span></h3>
+          <p class="muted small">Upload expected reimbursement rules so the scan can compare expected vs paid more accurately. You can skip this and run the scan with current data.</p>
+          <form method="POST" action="/data-management/reimbursement/upload" enctype="multipart/form-data" class="onboard-upload">
+            <input type="hidden" name="next" value="/onboarding?step=scan&amp;uploaded=contracts" />
+            <label>Contract / reimbursement rules CSV</label>
+            <label class="onboard-dropzone">
+              <input type="file" name="reimbursement_files" accept=".csv" multiple required />
+              <strong>Drag & drop contract rules CSV here</strong>
+              <span class="muted small">contracts + fee schedules supported</span>
+              <span class="onboard-file-label">No file selected</span>
+            </label>
+            <div class="muted small">
+              Suggested columns: payer_name, network_status, procedure_code, reimbursement_model, allowed_amount, effective_date.
+            </div>
+            <div class="btnRow">
+              <button class="btn secondary" type="submit">Upload & Review Contract Rules</button>
+              <a class="btn secondary" href="/onboarding?step=scan">Skip for Now</a>
+            </div>
+          </form>
+        </div>
+
+        <div class="card" style="margin-bottom:14px;">
+          <h3>4) Run revenue scan</h3>
           <p class="muted small">This uses existing matching, expected amount, lifecycle, task, and packet logic. It prepares work only. Nothing is sent to payers.</p>
           ${(!onboarding.hasClaims || !onboarding.hasPayments) ? `<div class="alert" style="background:#fffbeb;color:#92400e;border-color:#fde68a;"><strong>Waiting for data.</strong> Upload at least claims and payments before running the scan.</div>` : ""}
           <form method="POST" action="/onboarding/run">
@@ -14127,20 +14218,63 @@ function renderOnboardingWizardPage(org, sess, parsed){
 
       <div>
         <div class="card" style="margin-bottom:14px;">
-          <h3>Revenue found</h3>
+          <h3>Setup status</h3>
           <div class="onboard-kpis">
             <div class="onboard-kpi"><strong>${formatMoneyUI(onboarding.revenueAtRisk || 0)}</strong><div class="muted small">Revenue At Risk</div></div>
             <div class="onboard-kpi"><strong>${formatNumberUI(onboarding.deniedCount || 0)}</strong><div class="muted small">Denied Claims</div></div>
             <div class="onboard-kpi"><strong>${formatNumberUI(onboarding.underpaidCount || 0)}</strong><div class="muted small">Underpaid Claims</div></div>
             <div class="onboard-kpi"><strong>${formatNumberUI(onboarding.matchedClaims || 0)}</strong><div class="muted small">Matched Claims</div></div>
+            <div class="onboard-kpi"><strong>${formatNumberUI(onboarding.contractsCount + onboarding.feeSchedulesCount || 0)}</strong><div class="muted small">Contract Rules</div></div>
           </div>
         </div>
 
         <div class="card">
-          <h3>What happens next</h3>
-          <div class="card" style="box-shadow:none;margin-bottom:10px;"><strong>Top payer leakage</strong><div class="muted small">${safeStr(onboarding.topPayer.payer)} · ${formatMoneyUI(onboarding.topPayer.amount || 0)} at risk</div></div>
-          <div class="card" style="box-shadow:none;margin-bottom:10px;"><strong>Action Center queue</strong><div class="muted small">Tasks and packets are prepared by existing workflow automation after the scan.</div></div>
-          <div class="card" style="box-shadow:none;margin-bottom:10px;"><strong>Safe workflow</strong><div class="muted small">Staff still reviews before any submission. No automated payer submission occurs here.</div></div>
+          <h3>What to do next</h3>
+
+          <div class="card" style="box-shadow:none;margin-bottom:10px;">
+            <strong>1) Start in Action Center</strong>
+            <div class="muted small">
+              Work the highest-value at-risk claims first. Top payer leakage: ${safeStr(onboarding.topPayer.payer)} · ${formatMoneyUI(onboarding.topPayer.amount || 0)} at risk.
+            </div>
+            <div style="margin-top:8px;">
+              <a class="btn small" href="/actions?tab=all">Open All At-Risk Work</a>
+            </div>
+          </div>
+
+          <div class="card" style="box-shadow:none;margin-bottom:10px;">
+            <strong>2) Work denied claims in the appeal flow</strong>
+            <div class="muted small">
+              Open denials, choose a claim, then use the workspace/packet tools to prepare appeal work for review.
+            </div>
+            <div style="margin-top:8px;">
+              <a class="btn small secondary" href="/actions?tab=denials">Open Denials</a>
+            </div>
+          </div>
+
+          <div class="card" style="box-shadow:none;margin-bottom:10px;">
+            <strong>3) Work underpaid claims in the negotiation flow</strong>
+            <div class="muted small">
+              Open underpayments, choose a claim, then prepare the negotiation packet using expected-vs-paid data.
+            </div>
+            <div style="margin-top:8px;">
+              <a class="btn small secondary" href="/actions?tab=underpayments">Open Underpayments</a>
+            </div>
+          </div>
+
+          <div class="card" style="box-shadow:none;margin-bottom:10px;">
+            <strong>4) Track progress in Revenue Overview</strong>
+            <div class="muted small">
+              Watch revenue at risk, recovery progress, and payer leakage as staff completes work.
+            </div>
+            <div style="margin-top:8px;">
+              <a class="btn small secondary" href="/dashboard">View Revenue Overview</a>
+            </div>
+          </div>
+
+          <div class="muted small" style="margin-top:8px;">
+            No automated payer submission occurs here. Staff reviews all work before anything is sent.
+          </div>
+
           <div class="btnRow">
             <a class="btn" href="/actions?tab=all">Start Working Revenue</a>
             <a class="btn secondary" href="/dashboard">View Revenue Overview</a>
@@ -42547,9 +42681,15 @@ function renderTemplateEditor(org, user){
     const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
     if (!boundaryMatch) return redirect(res, "/data-management?tab=reimbursement");
 
-    const { files } = await parseMultipart(req, boundaryMatch[1]);
+    const parsedMp = await parseMultipart(req, boundaryMatch[1]);
+    const fields = parsedMp.fields || {};
+    const files = parsedMp.files || [];
+    const rawNext = String(fields.next || "").trim();
+    const next = (rawNext.startsWith("/onboarding") || rawNext.startsWith("/welcome"))
+      ? rawNext
+      : "";
     const docs = files.filter(f => f.fieldName === "reimbursement_files");
-    if (!docs.length) return redirect(res, "/data-management?tab=reimbursement");
+    if (!docs.length) return redirect(res, next || "/data-management?tab=reimbursement");
 
     const token = "RPU-" + Date.now() + "-" + Math.random().toString(16).slice(2);
     const upload_batch_id = uuid();
@@ -42714,7 +42854,7 @@ function renderTemplateEditor(org, user){
         <div class="alert">${issues.map(x=>safeStr(x)).join("<br/>")}</div>
         ${warnings.length ? `<div class="card" style="border:1px solid #f59e0b;background:#fff7ed;"><strong>Warnings:</strong><ul>${warnings.map(w=>`<li>${safeStr(w)}</li>`).join("")}</ul></div>` : ""}
         <div class="btnRow" style="margin-top:16px;">
-          <a class="btn secondary" href="/data-management?tab=reimbursement">Back</a>
+          <a class="btn secondary" href="${safeStr(next || "/data-management?tab=reimbursement")}">Back</a>
         </div>
       `, navUser(), {showChat:false, orgName: org.org_name});
       return send(res, 200, html);
@@ -42733,7 +42873,8 @@ function renderTemplateEditor(org, user){
       warnings,
       previewRows,
       stagedContracts,
-      stagedFeeSchedules
+      stagedFeeSchedules,
+      next
     });
 
     const previewTable = previewRows.length
@@ -42788,7 +42929,7 @@ function renderTemplateEditor(org, user){
           <input type="hidden" name="token" value="${safeStr(token)}"/>
           <button class="btn secondary" type="submit">Cancel</button>
         </form>
-        <a class="btn secondary" href="/data-management?tab=reimbursement">Back</a>
+        <a class="btn secondary" href="${safeStr(next || "/data-management?tab=reimbursement")}">Back</a>
       </div>
     `, navUser(), {showChat:false, orgName: org.org_name});
 
@@ -42869,6 +43010,10 @@ function renderTemplateEditor(org, user){
     rebuildOrgDerivedData(org.org_id);
 
     const impactedCount = affectedClaimIds.size;
+    const rawContinueHref = String(pending.next || "").trim();
+    const continueHref = (rawContinueHref.startsWith("/onboarding") || rawContinueHref.startsWith("/welcome"))
+      ? rawContinueHref
+      : "";
     const affectedClaimIdsCsv = Array.from(affectedClaimIds)
       .map((id) => String(id || "").trim())
       .filter(Boolean)
@@ -42887,11 +43032,15 @@ function renderTemplateEditor(org, user){
       </div>
 
       <div class="btnRow" style="margin-top:16px;">
-        <a class="btn" href="/data-management?tab=reimbursement">Back to Reimbursement Contracts</a>
+        ${continueHref
+          ? `<a class="btn" href="${safeStr(continueHref)}">Continue 10-Minute Setup</a>`
+          : `<a class="btn" href="/data-management?tab=reimbursement">Back to Reimbursement Contracts</a>`
+        }
 
         <a class="btn secondary" href="${affectedClaimsHref}">
            View Affected Claims (${impactedCount || 0})
         </a>
+        ${continueHref ? `<a class="btn secondary" href="/data-management?tab=reimbursement">Back to Reimbursement Contracts</a>` : ""}
       </div>
     `, navUser(), {showChat:false, orgName: org.org_name});
 
@@ -42903,8 +43052,13 @@ function renderTemplateEditor(org, user){
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const token = String(params.get("token") || "").trim();
+    const pending = getPendingReimbursement(org.org_id, token);
+    const rawNext = String(pending?.next || "").trim();
+    const next = (rawNext.startsWith("/onboarding") || rawNext.startsWith("/welcome"))
+      ? rawNext
+      : "";
     deletePendingReimbursement(org.org_id, token);
-    return redirect(res, "/data-management?tab=reimbursement");
+    return redirect(res, next || "/data-management?tab=reimbursement");
   }
 
   // Delete (rollback) a committed reimbursement upload
@@ -43934,7 +44088,7 @@ function renderTemplateEditor(org, user){
             <h3>First-time setup</h3>
             <p class="muted">Use the onboarding wizard to upload claims, upload payments, run the revenue scan, and start the Action Center queue.</p>
             <div class="btnRow">
-              <a class="btn" href="/onboarding">Open Onboarding Wizard</a>
+              <a class="btn" href="/onboarding">Onboarding Pro</a>
               <a class="btn secondary" href="/data-management?tab=upload">Open Data Management</a>
             </div>
           </div>
