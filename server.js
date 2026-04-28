@@ -1037,6 +1037,140 @@ async function refreshPayerPolicySourceSnapshot(org_id, source_id){
   }
 }
 
+function payerPolicyStarterPackDefinitions(){
+  const sharedKeywords = "appeal, denial, underpayment, reconsideration, medical necessity, prior authorization, timely filing, EOB, ERA, allowed amount, fee schedule, modifier, CPT, claim form";
+
+  const makeRow = (source_type, title, keywords, guidance, access_type = "manual") => ({
+    source_type,
+    title,
+    access_type,
+    keywords: [sharedKeywords, keywords].filter(Boolean).join(", "),
+    guidance
+  });
+
+  return {
+    aetna: {
+      key: "aetna",
+      payer: "Aetna",
+      label: "Aetna Starter Pack",
+      description: "Starter source checklist for Aetna recovery work. Add verified source URLs or upload source documents before using any source as payer-facing evidence.",
+      rows: [
+        makeRow("payer_manual", "Aetna payer manual / provider manual source", "provider manual, claims, reconsideration, appeal", "Track the current Aetna provider manual or payer manual source your staff uses for claims, appeals, and reconsideration workflow guidance."),
+        makeRow("reimbursement_policy", "Aetna reimbursement policy source", "reimbursement policy, payment policy, coding policy", "Track the current Aetna reimbursement/payment policy source used to support expected-vs-paid review and negotiation packet drafting."),
+        makeRow("medical_policy", "Aetna medical policy source", "medical policy, clinical policy, medical necessity", "Track the current Aetna medical policy source used when denial reasons involve medical necessity, coverage criteria, or clinical documentation."),
+        makeRow("fee_schedule", "Aetna fee schedule / contract rate source", "fee schedule, contract rate, allowed amount", "Track the current Aetna fee schedule, contract, or allowed-amount source used to validate underpayment and expected reimbursement."),
+        makeRow("custom", "Aetna appeal packet evidence checklist", "appeal packet, denial letter, EOB, claim form, medical records", "Checklist placeholder: denial letter/EOB, claim form, relevant medical records, payer policy citation, expected-vs-paid support, and staff-reviewed appeal narrative.")
+      ]
+    },
+    cigna: {
+      key: "cigna",
+      payer: "Cigna",
+      label: "Cigna Starter Pack",
+      description: "Starter source checklist for Cigna recovery work. Add verified source URLs or upload source documents before using any source as payer-facing evidence.",
+      rows: [
+        makeRow("payer_manual", "Cigna payer manual / provider manual source", "provider manual, claims, reconsideration, appeal", "Track the current Cigna provider manual or payer manual source your staff uses for claims, appeals, and reconsideration workflow guidance."),
+        makeRow("reimbursement_policy", "Cigna reimbursement policy source", "reimbursement policy, payment policy, coding policy", "Track the current Cigna reimbursement/payment policy source used to support expected-vs-paid review and negotiation packet drafting."),
+        makeRow("medical_policy", "Cigna medical policy source", "medical policy, clinical policy, medical necessity", "Track the current Cigna medical policy source used when denial reasons involve medical necessity, coverage criteria, or clinical documentation."),
+        makeRow("fee_schedule", "Cigna fee schedule / contract rate source", "fee schedule, contract rate, allowed amount", "Track the current Cigna fee schedule, contract, or allowed-amount source used to validate underpayment and expected reimbursement."),
+        makeRow("custom", "Cigna appeal packet evidence checklist", "appeal packet, denial letter, EOB, claim form, medical records", "Checklist placeholder: denial letter/EOB, claim form, relevant medical records, payer policy citation, expected-vs-paid support, and staff-reviewed appeal narrative.")
+      ]
+    },
+    uhc: {
+      key: "uhc",
+      payer: "UnitedHealthcare",
+      label: "UnitedHealthcare Starter Pack",
+      description: "Starter source checklist for UnitedHealthcare recovery work. Add verified source URLs or upload source documents before using any source as payer-facing evidence.",
+      rows: [
+        makeRow("payer_manual", "UnitedHealthcare payer manual / provider manual source", "provider manual, claims, reconsideration, appeal, UHC", "Track the current UnitedHealthcare provider manual or payer manual source your staff uses for claims, appeals, and reconsideration workflow guidance."),
+        makeRow("reimbursement_policy", "UnitedHealthcare reimbursement policy source", "reimbursement policy, payment policy, coding policy, UHC", "Track the current UnitedHealthcare reimbursement/payment policy source used to support expected-vs-paid review and negotiation packet drafting."),
+        makeRow("medical_policy", "UnitedHealthcare medical policy source", "medical policy, clinical policy, medical necessity, UHC", "Track the current UnitedHealthcare medical policy source used when denial reasons involve medical necessity, coverage criteria, or clinical documentation."),
+        makeRow("fee_schedule", "UnitedHealthcare fee schedule / contract rate source", "fee schedule, contract rate, allowed amount, UHC", "Track the current UnitedHealthcare fee schedule, contract, or allowed-amount source used to validate underpayment and expected reimbursement."),
+        makeRow("custom", "UnitedHealthcare appeal packet evidence checklist", "appeal packet, denial letter, EOB, claim form, medical records, UHC", "Checklist placeholder: denial letter/EOB, claim form, relevant medical records, payer policy citation, expected-vs-paid support, and staff-reviewed appeal narrative.")
+      ]
+    }
+  };
+}
+
+function payerPolicyStarterPackList(){
+  return Object.values(payerPolicyStarterPackDefinitions());
+}
+
+function getPayerPolicyStarterPack(packKey){
+  const key = String(packKey || "").trim().toLowerCase();
+  return payerPolicyStarterPackDefinitions()[key] || null;
+}
+
+function applyPayerPolicyStarterPack(org_id, packKey, user_id){
+  const pack = getPayerPolicyStarterPack(packKey);
+
+  if (!pack) {
+    return { ok: false, message: "Starter pack not found.", added: 0, skipped: 0 };
+  }
+
+  const rows = getPayerPolicySources(org_id);
+  const existingKeys = new Set(rows.map(row => String(row.starter_pack_dedupe_key || "").trim()).filter(Boolean));
+  const now = nowISO();
+  let added = 0;
+  let skipped = 0;
+
+  for (const template of pack.rows) {
+    const dedupeKey = [pack.key, template.source_type, template.title].join("|").toLowerCase();
+    if (existingKeys.has(dedupeKey)) {
+      skipped += 1;
+      continue;
+    }
+
+    rows.push({
+      source_id: uuid(),
+      org_id,
+      payer: pack.payer,
+      title: template.title,
+      source_type: template.source_type,
+      access_type: template.access_type || "manual",
+      access_label: payerPolicySourceAccessLabel(template.access_type || "manual"),
+      keywords: template.keywords || "",
+      url: "",
+      status: "starter",
+      approved_at: "",
+      approved_by: "",
+      cached_text: "",
+      cached_excerpt: [
+        pack.description,
+        "",
+        template.guidance,
+        "",
+        "Starter pack only. Add a verified source URL or upload the source document before using this as payer-facing evidence."
+      ].join("\n"),
+      cached_file_path: "",
+      cached_file_url: "",
+      content_type: "",
+      content_hash: "",
+      last_fetched_at: "",
+      fetch_status: "starter",
+      fetch_error: "Starter pack placeholder. Add approved source URL or upload source document before using as evidence.",
+      starter_pack: true,
+      starter_pack_key: pack.key,
+      starter_pack_label: pack.label,
+      starter_pack_dedupe_key: dedupeKey,
+      created_at: now,
+      updated_at: now
+    });
+
+    existingKeys.add(dedupeKey);
+    added += 1;
+  }
+
+  if (added > 0) savePayerPolicySourcesForOrg(org_id, rows);
+
+  return {
+    ok: true,
+    pack,
+    added,
+    skipped,
+    message: `${pack.label}: ${added} starter sources loaded${skipped ? `, ${skipped} already existed` : ""}.`
+  };
+}
+
 function renderPayerPolicySourceLibraryPanel(org_id){
   const sources = getPayerPolicySources(org_id)
     .sort((a,b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
@@ -1052,6 +1186,32 @@ function renderPayerPolicySourceLibraryPanel(org_id){
     ["custom", "Custom Source"]
   ].map(([v,l]) => `<option value="${safeStr(v)}">${safeStr(l)}</option>`).join("");
 
+  const starterPacks = payerPolicyStarterPackList();
+  const loadedStarterPackKeys = new Set(
+    sources
+      .filter(s => String(s.starter_pack_key || "").trim())
+      .map(s => String(s.starter_pack_key || "").trim())
+  );
+
+  const starterPackCards = starterPacks.map(pack => {
+    const loaded = loadedStarterPackKeys.has(pack.key);
+    return `
+      <div class="starter-pack-card">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+          <div>
+            <strong>${safeStr(pack.label)}</strong>
+            <div class="muted small">${safeStr(pack.description)}</div>
+            <div class="muted small" style="margin-top:4px;">Includes ${formatNumberUI(pack.rows.length)} starter sources / checklist placeholders.</div>
+          </div>
+          <form method="POST" action="/data-management/payer-policy-sources/starter-pack" style="margin:0;">
+            <input type="hidden" name="pack" value="${safeStr(pack.key)}" />
+            <button class="btn small ${loaded ? "secondary" : ""}" type="submit">${loaded ? "Refresh Pack" : "Load Pack"}</button>
+          </form>
+        </div>
+      </div>
+    `;
+  }).join("");
+
   const rows = sources.map(s => `
     <tr>
       <td>
@@ -1062,7 +1222,9 @@ function renderPayerPolicySourceLibraryPanel(org_id){
       <td>${safeStr(payerPolicySourceTypeLabel(s.source_type))}</td>
       <td>${safeStr(payerPolicySourceAccessLabel(s.access_type || "public"))}</td>
       <td>
-        ${s.fetch_status === "cached"
+        ${s.status === "starter" || s.fetch_status === "starter"
+          ? `<span class="badge warn">Starter</span>`
+          : s.fetch_status === "cached"
           ? `<span class="badge ok">Cached</span>`
           : s.fetch_status === "failed"
             ? `<span class="badge err">Failed</span>`
@@ -1120,6 +1282,20 @@ function renderPayerPolicySourceLibraryPanel(org_id){
 
       <div class="alert" style="background:#eff6ff;color:#1e3a8a;border-color:#bfdbfe;">
         Public-source cache only. Do not include PHI in URLs. Payer-login content should be pulled later through authorized payer portal/API integrations.
+      </div>
+
+      <div id="payerPolicyStarterPacks" class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
+        <h4 style="margin-top:0;">Payer Policy Starter Packs</h4>
+        <p class="muted small" style="margin-top:0;">
+          Load payer-specific source scaffolds for common recovery work. These packs do not create payer policy facts and do not count as verified evidence until your team adds approved source URLs or uploads source documents.
+        </p>
+        <style>
+          .starter-pack-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:10px;}
+          .starter-pack-card{border:1px solid var(--border);border-radius:12px;background:#fff;padding:12px;}
+        </style>
+        <div class="starter-pack-grid">
+          ${starterPackCards}
+        </div>
       </div>
 
       <form method="POST" action="/data-management/payer-policy-sources/add" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
@@ -43670,6 +43846,28 @@ function renderTemplateEditor(org, user){
   }
 
 
+
+  if (method === "POST" && pathname === "/data-management/payer-policy-sources/starter-pack") {
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const packKey = String(params.get("pack") || "").trim().toLowerCase();
+    const result = applyPayerPolicyStarterPack(org.org_id, packKey, user.user_id);
+
+    if (typeof logAudit === "function") {
+      logAudit(result.ok ? "payer_policy_starter_pack_loaded" : "payer_policy_starter_pack_failed", {
+        org_id: org.org_id,
+        pack: packKey,
+        added: result.added || 0,
+        skipped: result.skipped || 0,
+        user_id: user.user_id
+      });
+    }
+
+    return redirect(
+      res,
+      `/data-management?tab=reimbursement&msg=${encodeURIComponent(result.message || "Starter pack updated")}#payerPolicyStarterPacks`
+    );
+  }
 
   if (method === "POST" && pathname === "/data-management/payer-policy-sources/add") {
     const body = await parseBody(req);
