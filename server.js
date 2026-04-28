@@ -29823,14 +29823,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
     : `
       <details class="priority-claims">
         <summary>
-          <span>
-            <span>Top claims to work today</span>
-            <small>Click to expand and open work in Action Center</small>
-          </span>
-          <span class="priority-summary-right">
-            <strong>${formatNumberUI(topClaims.length)}</strong>
-            <span class="priority-chevron">⌄</span>
-          </span>
+          <span>Top claims to work today</span>
+          <strong>${formatNumberUI(topClaims.length)}</strong>
         </summary>
         <div class="priority-claim-list">
           ${topClaims.map(c => `
@@ -29840,7 +29834,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
                 <span class="muted small"> · ${formatMoneyUI(c.at_risk_amount)} at risk</span>
                 <div class="muted small">${safeStr(c.next_action)}</div>
               </div>
-              <a class="btn small secondary" href="/actions?tab=all&claim=${encodeURIComponent(c.billed_id)}&q=${encodeURIComponent(c.claim_number || c.claim_id || c.billed_id || "")}">Open</a>
+              <a class="btn small secondary" href="/claims-lifecycle?priority=top&claim=${encodeURIComponent(c.billed_id)}">Open</a>
             </div>
           `).join("")}
         </div>
@@ -29941,17 +29935,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .priority-metric small{display:block;font-size:12px;color:var(--muted);margin-top:4px;}
         .priority-empty{margin-top:12px;}
         .priority-claims{margin-top:12px;border-top:1px solid var(--border);padding-top:10px;}
-        .priority-claims summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;font-weight:900;border:1px solid var(--border);border-radius:12px;padding:12px;background:#f8fafc;}
-        .priority-claims summary small{display:block;font-size:11px;color:var(--muted);font-weight:700;margin-top:3px;}
-        .priority-summary-right{display:inline-flex;align-items:center;gap:10px;}
-        .priority-chevron{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:999px;background:#fff;border:1px solid var(--border);font-weight:900;}
-        .priority-claims[open] .priority-chevron{transform:rotate(180deg);}
+        .priority-claims summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;font-weight:900;}
         .priority-claim-list{margin-top:8px;}
         .priority-claim-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #eee;}
         .recovery-snapshot{padding:16px;}
-        .recovery-progress-wrap{border:1px solid var(--border);border-radius:12px;background:#f8fafc;padding:12px;margin-top:12px;}
-        .recovery-progress-bar{height:10px;border-radius:999px;background:#e5e7eb;overflow:hidden;margin-top:8px;}
-        .recovery-progress-fill{display:block;height:100%;border-radius:999px;background:#111827;}
         .recovery-core-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:12px;}
         .recovery-core-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:#fff;}
         .recovery-mini-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:12px;}
@@ -30014,19 +30001,6 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <p class="recovery-value">${formatMoneyUI(roiMetrics.pendingRecovery || 0)}</p>
             <p class="recovery-label">Pending Recovery</p>
             <div class="recovery-sub">Still open and awaiting resolution.</div>
-          </div>
-        </div>
-
-        <div class="recovery-progress-wrap">
-          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
-            <div>
-              <strong>Recovery Progress</strong>
-              <div class="muted small">Recovered versus revenue found in this date range.</div>
-            </div>
-            <strong>${(roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0).toFixed(1)}%</strong>
-          </div>
-          <div class="recovery-progress-bar">
-            <span class="recovery-progress-fill" style="width:${(roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0).toFixed(1)}%;"></span>
           </div>
         </div>
 
