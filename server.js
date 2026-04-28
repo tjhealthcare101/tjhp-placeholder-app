@@ -13853,6 +13853,306 @@ function computeRoiMetrics(org_id, start, end){
   };
 }
 
+
+
+function computeOnboardingWizardMetrics(org_id){
+  const claims = readJSON(FILES.billed, []).filter(b => b && b.org_id === org_id);
+  const payments = readJSON(FILES.payments, []).filter(p => p && p.org_id === org_id);
+  const ctx = buildClaimContext(org_id);
+
+  const keyVariants = (...vals) => {
+    const out = new Set();
+    vals.forEach(v => {
+      const raw = String(v || "").trim().toLowerCase();
+      if (!raw) return;
+      out.add(raw);
+      const normalized = normalizeClaimKey(raw);
+      if (normalized) out.add(String(normalized).toLowerCase());
+    });
+    return Array.from(out);
+  };
+
+  const paymentKeys = new Set();
+  payments.forEach(p => keyVariants(p.claim_number, p.claim_id, p.billed_id).forEach(k => paymentKeys.add(k)));
+
+  let matchedClaims = 0;
+  let deniedCount = 0;
+  let underpaidCount = 0;
+  let followUpCount = 0;
+  let revenueAtRisk = 0;
+  const payerLeakage = {};
+  const topClaims = [];
+
+  claims.forEach(claim => {
+    const claimKeys = keyVariants(claim.claim_number, claim.claim_id, claim.billed_id);
+    if (claimKeys.some(k => paymentKeys.has(k))) matchedClaims += 1;
+
+    const d = evaluateClaimDerived(claim, ctx);
+    const rawStage = String(d.lifecycleStage || claim.lifecycleStage || claim.status || "Pending");
+    const stage = (typeof normalizeLifecycleDisplayStage === "function") ? normalizeLifecycleDisplayStage(rawStage) : rawStage;
+    const billed = Math.max(0, num(d.billedAmount || 0), num(claim.amount_billed || 0), num(claim.billed_amount || 0));
+    const paid = Math.max(0, num(d.paidAmount || 0), num(claim.paid_amount || 0), num(claim.insurance_paid || 0));
+    let atRisk = Math.max(0, num(d.atRiskAmount || 0), num(d.underpaidAmount || 0), num(claim.at_risk_amount || claim.revenue_at_risk || 0));
+    if (stage === "Denied" && atRisk <= 0) atRisk = Math.max(0, billed - paid);
+
+    if (stage === "Denied") deniedCount += 1;
+    if (stage === "Underpaid") underpaidCount += 1;
+    if (["Patient Follow-Up", "Awaiting Payment", "Waiting Payment", "Submitted", "Follow-Up Needed"].includes(stage)) followUpCount += 1;
+
+    if (["Denied", "Underpaid", "In Appeal/Negotiation", "Awaiting Payment", "Waiting Payment", "Submitted", "Follow-Up Needed"].includes(stage) && atRisk > 0) {
+      revenueAtRisk += atRisk;
+      const payer = String(claim.payer || "Unknown").trim() || "Unknown";
+      payerLeakage[payer] = (payerLeakage[payer] || 0) + atRisk;
+      topClaims.push({
+        billed_id: claim.billed_id || "",
+        claim_number: claim.claim_number || claim.claim_id || "",
+        payer,
+        stage,
+        atRisk
+      });
+    }
+  });
+
+  const topPayer = Object.entries(payerLeakage)
+    .sort((a,b) => b[1] - a[1])
+    .map(([payer, amount]) => ({ payer, amount }))[0] || { payer: "No leakage detected", amount: 0 };
+
+  topClaims.sort((a,b) => b.atRisk - a.atRisk);
+
+  return {
+    claimsCount: claims.length,
+    paymentsCount: payments.length,
+    matchedClaims,
+    unmatchedClaims: Math.max(0, claims.length - matchedClaims),
+    deniedCount,
+    underpaidCount,
+    followUpCount,
+    revenueAtRisk: round2(revenueAtRisk),
+    topPayer,
+    topClaims: topClaims.slice(0, 5),
+    hasClaims: claims.length > 0,
+    hasPayments: payments.length > 0,
+    hasRevenueFound: revenueAtRisk > 0
+  };
+}
+
+function runOnboardingRevenueScan(org_id){
+  const billedAll = readJSON(FILES.billed, []);
+  const payments = readJSON(FILES.payments, []).filter(p => p && p.org_id === org_id);
+
+  const keyVariants = (...vals) => {
+    const out = new Set();
+    vals.forEach(v => {
+      const raw = String(v || "").trim().toLowerCase();
+      if (!raw) return;
+      out.add(raw);
+      const normalized = normalizeClaimKey(raw);
+      if (normalized) out.add(String(normalized).toLowerCase());
+    });
+    return Array.from(out);
+  };
+
+  const paymentsByKey = {};
+  payments.forEach(payment => {
+    const amount = num(payment.amount_paid || payment.paid_amount || 0);
+    keyVariants(payment.claim_number, payment.claim_id, payment.billed_id).forEach(k => {
+      paymentsByKey[k] = (paymentsByKey[k] || 0) + amount;
+    });
+  });
+
+  let matchedCount = 0;
+  let changed = false;
+  billedAll.forEach(claim => {
+    if (!claim || claim.org_id !== org_id) return;
+    const keys = keyVariants(claim.claim_number, claim.claim_id, claim.billed_id);
+    const matchedKey = keys.find(k => Object.prototype.hasOwnProperty.call(paymentsByKey, k));
+    if (!matchedKey) return;
+
+    const scannedPaid = Math.max(0, ...keys.map(k => num(paymentsByKey[k] || 0)));
+    const existingPaid = Math.max(
+      0,
+      num(claim.insurance_paid || 0),
+      num(claim.paid_amount || 0)
+    );
+
+    const nextPaid = Math.max(existingPaid, scannedPaid);
+    let claimChanged = false;
+
+    if (nextPaid > existingPaid) {
+      claim.insurance_paid = nextPaid;
+      claim.paid_amount = nextPaid;
+      claimChanged = true;
+    }
+
+    if (!claim.matched_payment_id) {
+      claim.matched_payment_id = `scan-${matchedKey}`;
+      claimChanged = true;
+    }
+
+    if (scannedPaid <= 0 && !claim.has_zero_payment_record) {
+      claim.has_zero_payment_record = true;
+      claimChanged = true;
+    }
+
+    if (claimChanged) {
+      claim.updated_at = nowISO();
+      changed = true;
+    }
+
+    matchedCount += 1;
+  });
+
+  if (changed) {
+    writeJSON(FILES.billed, billedAll);
+    rebuildOrgDerivedData(org_id, { resyncDenials: true, autodraft: true });
+  }
+  return { matchedCount, ...computeOnboardingWizardMetrics(org_id) };
+}
+
+function renderOnboardingWizardPage(org, sess, parsed){
+  const onboarding = computeOnboardingWizardMetrics(org.org_id);
+  const requestedStep = String(parsed.query.step || "").toLowerCase();
+  const activeStep = requestedStep || (!onboarding.hasClaims ? "claims" : (!onboarding.hasPayments ? "payments" : (onboarding.hasRevenueFound ? "results" : "scan")));
+  const scanDone = String(parsed.query.scan || "").toLowerCase() === "done" || activeStep === "results";
+  const orgName = (org && org.org_name) ? org.org_name : "";
+
+  const stepCard = (num, id, title, text, done) => {
+    const state = done ? "done" : (activeStep === id ? "active" : "");
+    return `<div class="onboard-step ${state}"><div class="onboard-num">${num}</div><strong>${safeStr(title)}</strong><div class="muted small">${safeStr(text)}</div></div>`;
+  };
+
+  const uploadNotice = (() => {
+    const uploaded = String(parsed.query.uploaded || "").toLowerCase();
+    if (uploaded === "claims") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Claims uploaded.</strong> Next, upload payments so the system can compare paid vs expected.</div>`;
+    if (uploaded === "payments") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Payments uploaded.</strong> Now run the revenue scan to find denied and underpaid dollars.</div>`;
+    if (scanDone) return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Revenue scan complete.</strong> Review the revenue found below and start the Action Center queue.</div>`;
+    return "";
+  })();
+
+  const topRows = onboarding.topClaims.length ? onboarding.topClaims.map(c => `
+    <tr>
+      <td><strong>#${safeStr(c.claim_number || "-")}</strong><div class="muted small">${safeStr(c.payer || "Unknown payer")}</div></td>
+      <td>${safeStr(c.stage || "-")}</td>
+      <td>${formatMoneyUI(c.atRisk || 0)}</td>
+      <td><a class="btn small secondary" href="/actions?tab=all&claim=${encodeURIComponent(c.billed_id || "")}&q=${encodeURIComponent(c.claim_number || "")}">Work</a></td>
+    </tr>
+  `).join("") : `<tr><td colspan="4" class="muted">No at-risk claims found yet. Upload claims and payments, then run the revenue scan.</td></tr>`;
+
+  const html = renderPage("Onboarding Wizard", `
+    <style>
+      .onboard-hero{border:1px solid var(--border);border-radius:18px;padding:20px;background:#fff;box-shadow:var(--shadow);margin-bottom:16px;}
+      .onboard-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:16px;}
+      .onboard-step{border:1px solid var(--border);border-radius:14px;background:#fff;padding:12px;}
+      .onboard-step.active{border-color:#111827;box-shadow:0 0 0 3px rgba(17,24,39,.08);}
+      .onboard-step.done{border-color:#a7f3d0;background:#ecfdf5;}
+      .onboard-num{width:28px;height:28px;border-radius:999px;background:#111827;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;margin-bottom:8px;}
+      .onboard-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,380px);gap:16px;align-items:start;}
+      .onboard-upload{border:1px dashed #cbd5e1;background:#f8fafc;border-radius:14px;padding:14px;margin-top:10px;}
+      .onboard-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:12px;}
+      .onboard-kpi{border:1px solid var(--border);border-radius:14px;background:#fff;padding:12px;}
+      .onboard-kpi strong{display:block;font-size:22px;line-height:1.1;}
+      @media(max-width:820px){.onboard-grid{grid-template-columns:1fr;}}
+    </style>
+
+    <div class="onboard-hero">
+      <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+        <div>
+          <span class="badge ok">Upload → Scan → Work Revenue</span>
+          <h2 style="margin:10px 0 6px;font-size:28px;">Find lost revenue in 10 minutes</h2>
+          <p class="muted" style="max-width:680px;">Upload claims and payments, run a revenue scan, then jump straight into Action Center with the highest-value recovery work.</p>
+        </div>
+        <a class="btn secondary" href="/dashboard">Skip to Dashboard</a>
+      </div>
+      <div class="onboard-steps">
+        ${stepCard(1, "claims", "Upload claims", onboarding.hasClaims ? `${formatNumberUI(onboarding.claimsCount)} claims loaded` : "Start with billing / claim CSV data", onboarding.hasClaims)}
+        ${stepCard(2, "payments", "Upload payments", onboarding.hasPayments ? `${formatNumberUI(onboarding.paymentsCount)} payment rows loaded` : "Add ERA / payment CSV or TXT", onboarding.hasPayments)}
+        ${stepCard(3, "scan", "Run revenue scan", scanDone ? `${formatNumberUI(onboarding.matchedClaims)} matched claims` : "Compare paid vs expected and detect leakage", scanDone)}
+        ${stepCard(4, "results", "Work revenue", onboarding.hasRevenueFound ? `${formatMoneyUI(onboarding.revenueAtRisk)} found` : "Open the recovery queue", onboarding.hasRevenueFound)}
+      </div>
+    </div>
+
+    ${uploadNotice}
+
+    <div class="onboard-grid">
+      <div>
+        <div class="card" style="margin-bottom:14px;">
+          <h3>1) Upload claims</h3>
+          <p class="muted small">Use a CSV with claim number, payer, amount billed, and any available procedure / DOS fields.</p>
+          <form method="POST" action="/data-management/upload" enctype="multipart/form-data" class="onboard-upload">
+            <input type="hidden" name="tab" value="claims" />
+            <input type="hidden" name="next" value="/onboarding?step=payments&amp;uploaded=claims" />
+            <label>Claims CSV</label>
+            <input type="file" name="documents" accept=".csv" required />
+            <div class="btnRow"><button class="btn" type="submit">Upload Claims</button></div>
+          </form>
+        </div>
+
+        <div class="card" style="margin-bottom:14px;">
+          <h3>2) Upload payments</h3>
+          <p class="muted small">Use ERA / payment CSV or TXT data. Claim numbers are used for matching behind the scenes.</p>
+          <form method="POST" action="/data-management/upload" enctype="multipart/form-data" class="onboard-upload">
+            <input type="hidden" name="tab" value="payments" />
+            <input type="hidden" name="next" value="/onboarding?step=scan&amp;uploaded=payments" />
+            <label>Payment CSV / TXT</label>
+            <input type="file" name="documents" accept=".csv,.txt" required />
+            <div class="btnRow"><button class="btn" type="submit">Upload Payments</button></div>
+          </form>
+        </div>
+
+        <div class="card" style="margin-bottom:14px;">
+          <h3>3) Run revenue scan</h3>
+          <p class="muted small">This uses existing matching, expected amount, lifecycle, task, and packet logic. It prepares work only. Nothing is sent to payers.</p>
+          ${(!onboarding.hasClaims || !onboarding.hasPayments) ? `<div class="alert" style="background:#fffbeb;color:#92400e;border-color:#fde68a;"><strong>Waiting for data.</strong> Upload at least claims and payments before running the scan.</div>` : ""}
+          <form method="POST" action="/onboarding/run">
+            <button class="btn" type="submit" ${(!onboarding.hasClaims || !onboarding.hasPayments) ? "disabled" : ""}>Run Revenue Scan</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
+            <div>
+              <h3 style="margin:0 0 4px;">Top revenue to work</h3>
+              <div class="muted small">Highest-value denied, underpaid, or waiting-payment claims found during onboarding.</div>
+            </div>
+            <a class="btn secondary small" href="/actions?tab=all">Open Action Center</a>
+          </div>
+          <div style="overflow:auto;margin-top:10px;">
+            <table>
+              <thead><tr><th>Claim</th><th>Status</th><th>At Risk</th><th>Action</th></tr></thead>
+              <tbody>${topRows}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card" style="margin-bottom:14px;">
+          <h3>Revenue found</h3>
+          <div class="onboard-kpis">
+            <div class="onboard-kpi"><strong>${formatMoneyUI(onboarding.revenueAtRisk || 0)}</strong><div class="muted small">Revenue At Risk</div></div>
+            <div class="onboard-kpi"><strong>${formatNumberUI(onboarding.deniedCount || 0)}</strong><div class="muted small">Denied Claims</div></div>
+            <div class="onboard-kpi"><strong>${formatNumberUI(onboarding.underpaidCount || 0)}</strong><div class="muted small">Underpaid Claims</div></div>
+            <div class="onboard-kpi"><strong>${formatNumberUI(onboarding.matchedClaims || 0)}</strong><div class="muted small">Matched Claims</div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>What happens next</h3>
+          <div class="card" style="box-shadow:none;margin-bottom:10px;"><strong>Top payer leakage</strong><div class="muted small">${safeStr(onboarding.topPayer.payer)} · ${formatMoneyUI(onboarding.topPayer.amount || 0)} at risk</div></div>
+          <div class="card" style="box-shadow:none;margin-bottom:10px;"><strong>Action Center queue</strong><div class="muted small">Tasks and packets are prepared by existing workflow automation after the scan.</div></div>
+          <div class="card" style="box-shadow:none;margin-bottom:10px;"><strong>Safe workflow</strong><div class="muted small">Staff still reviews before any submission. No automated payer submission occurs here.</div></div>
+          <div class="btnRow">
+            <a class="btn" href="/actions?tab=all">Start Working Revenue</a>
+            <a class="btn secondary" href="/dashboard">View Revenue Overview</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  `, navUser("data", sess.user_id), { showChat:true, orgName });
+
+  return html;
+}
+
 function computeDashboardMetrics(org_id, start, end, preset){
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
@@ -25709,8 +26009,8 @@ const server = http.createServer(async (req, res) => {
       We’ll analyze everything and highlight revenue at risk within minutes.
     </p>
 
-    <a href="/upload-billed" class="btn" style="font-size:14px;">
-      Upload Data
+    <a href="/onboarding" class="btn" style="font-size:14px;">
+      Start 10-Minute Setup
     </a>
   </div>
 
@@ -28620,6 +28920,15 @@ ${(content.demo.steps || []).map(s =>
   cleanupExpiredAppealAttachments(org.org_id);
 
   if (!isAccessEnabled(org.org_id)) return redirect(res, "/pilot-complete");
+
+  if (method === "POST" && pathname === "/onboarding/run") {
+    runOnboardingRevenueScan(org.org_id);
+    return redirect(res, "/onboarding?step=results&scan=done");
+  }
+
+  if (method === "GET" && pathname === "/onboarding") {
+    return send(res, 200, renderOnboardingWizardPage(org, sess, parsed));
+  }
 
   // ===== PAYER DEBUG (SAFE) =====
   if (method === "GET" && pathname === "/debug/payers") {
@@ -41106,24 +41415,33 @@ function renderTemplateEditor(org, user){
     `;
 
     const unmatchedClaims = billed.filter(c => !c.matched_payment_id);
-    const matchingPanel = `
-      <div class="card" style="margin-bottom:16px;">
-        <h3>Matching Review</h3>
+    const showMatchingReview = String(parsed.query.matching || "").toLowerCase() === "1" || uploadStatus === "done";
+    const matchingPanel = showMatchingReview ? `
+      <details class="card" style="margin-bottom:16px;" open>
+        <summary style="cursor:pointer;font-weight:900;">Advanced Matching Review</summary>
+
+        <div class="muted small" style="margin-top:8px;">
+          This is an upload diagnostic. The onboarding wizard shows a simpler revenue-scan result for staff.
+        </div>
 
         <div style="margin-top:8px;">
           <strong>Summary:</strong><br/>
-          ✔ Matched: ${billed.length - unmatchedClaims.length}<br/>
+          ✔ Matched: ${Math.max(0, billed.length - unmatchedClaims.length)}<br/>
           ⚠ Unmatched Claims: ${unmatchedClaims.length}<br/>
           ⚠ Unmatched Payments: ${unmatchedPaymentsAll.length}
         </div>
 
         ${(unmatchedClaims.length || unmatchedPaymentsAll.length) ? `
           <div style="margin-top:10px;">
-            <button class="btn small" onclick="window.location='/claims-lifecycle?filter=unmatched'">
+            <a class="btn small secondary" href="/claims-lifecycle?filter=unmatched">
               Review & Fix Matches
-            </button>
+            </a>
           </div>
-        ` : `<div class="muted" style="margin-top:8px;">All records matched successfully.</div>`}
+        ` : `<div class="muted" style="margin-top:8px;">No matching exceptions detected from the current diagnostic view.</div>`}
+      </details>
+    ` : `
+      <div class="muted small" style="margin:-4px 0 16px 0;">
+        Need upload diagnostics? <a href="/data-management?tab=upload&amp;matching=1">Review matching details</a>
       </div>
     `;
 
@@ -43611,6 +43929,15 @@ function renderTemplateEditor(org, user){
         return `
           <h2>Help & Getting Started</h2>
           <p class="muted">Here’s how to use TJ Healthcare Pro effectively.</p>
+
+          <div class="card" style="margin-bottom:16px;">
+            <h3>First-time setup</h3>
+            <p class="muted">Use the onboarding wizard to upload claims, upload payments, run the revenue scan, and start the Action Center queue.</p>
+            <div class="btnRow">
+              <a class="btn" href="/onboarding">Open Onboarding Wizard</a>
+              <a class="btn secondary" href="/data-management?tab=upload">Open Data Management</a>
+            </div>
+          </div>
 
           <div class="card" style="margin-bottom:16px;">
             <h3>Step 1: Upload Data</h3>
