@@ -1100,6 +1100,50 @@ function getPayerPolicyStarterPack(packKey){
   return payerPolicyStarterPackDefinitions()[key] || null;
 }
 
+function isPayerPolicyStarterSource(source){
+  return !!(
+    source &&
+    (
+      source.starter_pack === true ||
+      String(source.status || "").trim().toLowerCase() === "starter" ||
+      String(source.fetch_status || "").trim().toLowerCase() === "starter" ||
+      String(source.starter_pack_key || "").trim()
+    )
+  );
+}
+
+function renderLoadedPayerStarterGuidance(starterSources){
+  const rows = Array.isArray(starterSources) ? starterSources : [];
+  if (!rows.length) return "";
+
+  const byPack = {};
+  rows.forEach(source => {
+    const key = String(source.starter_pack_label || source.payer || "Starter Guide").trim() || "Starter Guide";
+    if (!byPack[key]) byPack[key] = [];
+    byPack[key].push(source);
+  });
+
+  const groups = Object.entries(byPack).map(([label, sources]) => `
+    <div class="starter-guidance-group">
+      <strong>${safeStr(label)}</strong>
+      <div class="muted small">Use this as an internal checklist only. Add real uploaded documents or approved URLs before using policy support in packets.</div>
+      <ul style="margin:8px 0 0 18px;">
+        ${sources.map(s => `<li>${safeStr(s.title || payerPolicySourceTypeLabel(s.source_type))}</li>`).join("")}
+      </ul>
+    </div>
+  `).join("");
+
+  return `
+    <details class="card" style="box-shadow:none;background:#fff;margin:12px 0;">
+      <summary style="cursor:pointer;font-weight:900;">Loaded starter guidance</summary>
+      <div class="muted small" style="margin-top:8px;">These are hidden from the main source table so the page stays clean.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-top:10px;">
+        ${groups}
+      </div>
+    </details>
+  `;
+}
+
 function applyPayerPolicyStarterPack(org_id, packKey, user_id){
   const pack = getPayerPolicyStarterPack(packKey);
 
@@ -1172,8 +1216,10 @@ function applyPayerPolicyStarterPack(org_id, packKey, user_id){
 }
 
 function renderPayerPolicySourceLibraryPanel(org_id){
-  const sources = getPayerPolicySources(org_id)
+  const allSources = getPayerPolicySources(org_id)
     .sort((a,b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
+  const starterSources = allSources.filter(isPayerPolicyStarterSource);
+  const sources = allSources.filter(s => !isPayerPolicyStarterSource(s));
 
   const typeOptions = [
     ["coverage_policy", "Coverage Policy"],
@@ -1188,7 +1234,7 @@ function renderPayerPolicySourceLibraryPanel(org_id){
 
   const starterPacks = payerPolicyStarterPackList();
   const loadedStarterPackKeys = new Set(
-    sources
+    allSources
       .filter(s => String(s.starter_pack_key || "").trim())
       .map(s => String(s.starter_pack_key || "").trim())
   );
@@ -1199,14 +1245,17 @@ function renderPayerPolicySourceLibraryPanel(org_id){
       <div class="starter-pack-card">
         <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">
           <div>
-            <strong>${safeStr(pack.label)}</strong>
-            <div class="muted small">${safeStr(pack.description)}</div>
-            <div class="muted small" style="margin-top:4px;">Includes ${formatNumberUI(pack.rows.length)} starter sources / checklist placeholders.</div>
+            <strong>${safeStr(pack.payer)} guide</strong>
+            <div class="muted small">Adds a simple checklist of policy documents staff should gather for ${safeStr(pack.payer)} work.</div>
+            <div class="muted small" style="margin-top:4px;">This does not add live payer rules or approved evidence.</div>
           </div>
-          <form method="POST" action="/data-management/payer-policy-sources/starter-pack" style="margin:0;">
-            <input type="hidden" name="pack" value="${safeStr(pack.key)}" />
-            <button class="btn small ${loaded ? "secondary" : ""}" type="submit">${loaded ? "Refresh Pack" : "Load Pack"}</button>
-          </form>
+          ${loaded
+            ? `<span class="badge ok">Loaded</span>`
+            : `<form method="POST" action="/data-management/payer-policy-sources/starter-pack" style="margin:0;">
+                <input type="hidden" name="pack" value="${safeStr(pack.key)}" />
+                <button class="btn small secondary" type="submit">Load Guide</button>
+              </form>`
+          }
         </div>
       </div>
     `;
@@ -1266,13 +1315,13 @@ function renderPayerPolicySourceLibraryPanel(org_id){
         </div>
       </td>
     </tr>
-  `).join("") || `<tr><td colspan="7" class="muted">No payer policy sources saved yet.</td></tr>`;
+  `).join("") || `<tr><td colspan="7" class="muted">No approved source URLs or uploaded policy documents saved yet.</td></tr>`;
 
   return `
     <div class="card" style="box-shadow:none;margin:16px 0;">
       <h3>Payer Policy Source Library</h3>
       <p class="muted">
-        Add approved payer policy, reimbursement, fee schedule, rate, or coverage sources here. Public URLs can be refreshed and cached. Payer-login or API-only sources are tracked here for evidence planning, but must be pulled through authorized payer portal/API integrations or uploaded manually.
+        Keep verified policy, reimbursement, fee schedule, rate, and coverage sources here. Starter guides are optional checklists and are hidden from the main source table until real evidence is added.
       </p>
 
       <div class="alert" style="background:#f8fafc;color:#334155;border-color:#e2e8f0;">
@@ -1284,19 +1333,26 @@ function renderPayerPolicySourceLibraryPanel(org_id){
         Public-source cache only. Do not include PHI in URLs. Payer-login content should be pulled later through authorized payer portal/API integrations.
       </div>
 
-      <div id="payerPolicyStarterPacks" class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
-        <h4 style="margin-top:0;">Payer Policy Starter Packs</h4>
+      <details id="payerPolicyStarterPacks" class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
+        <summary style="cursor:pointer;font-weight:900;">Optional payer setup guides</summary>
         <p class="muted small" style="margin-top:0;">
-          Load payer-specific source scaffolds for common recovery work. These packs do not create payer policy facts and do not count as verified evidence until your team adds approved source URLs or uploads source documents.
+          Use these only to remind staff what policy/support documents to gather for common payer work. They do not create rules, do not add verified evidence, and do not affect calculations.
         </p>
         <style>
           .starter-pack-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:10px;}
           .starter-pack-card{border:1px solid var(--border);border-radius:12px;background:#fff;padding:12px;}
+          .starter-guidance-group{border:1px solid var(--border);border-radius:12px;background:#f8fafc;padding:12px;}
         </style>
         <div class="starter-pack-grid">
           ${starterPackCards}
         </div>
-      </div>
+      </details>
+
+      ${renderLoadedPayerStarterGuidance(starterSources)}
+
+      <details class="card" style="box-shadow:none;background:#fff;margin:12px 0;">
+        <summary style="cursor:pointer;font-weight:900;">Advanced: add approved source URL manually</summary>
+        <div class="muted small" style="margin-top:8px;">Use this when staff has already verified a public payer policy, fee schedule, or reimbursement source URL.</div>
 
       <form method="POST" action="/data-management/payer-policy-sources/add" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
         <div>
@@ -1338,8 +1394,14 @@ function renderPayerPolicySourceLibraryPanel(org_id){
           <button class="btn" type="submit">Add Approved Source</button>
         </div>
       </form>
+      </details>
 
       <div class="hr"></div>
+
+      <h4>Approved / uploaded policy sources</h4>
+      <div class="muted small" style="margin-bottom:10px;">
+        Starter guide placeholders are hidden here. This table shows real source URLs and uploaded/manual sources only.
+      </div>
 
       <div style="overflow:auto;">
         <table>
@@ -42109,21 +42171,24 @@ function renderTemplateEditor(org, user){
   <h3>Upload Reimbursement Data</h3>
 
   <p class="muted small" style="margin-bottom:10px;">
-    Upload payer contracts and fee schedules. The system will automatically detect and apply them.
+    Upload payer contracts, fee schedules, reimbursement policies, or supporting documents. CSV files create rules automatically; other supported files are stored for review.
   </p>
 
   <ul class="muted small" style="margin-bottom:12px;padding-left:18px;">
     <li>Contracts</li>
     <li>Fee schedules</li>
-    <li>Mixed CSV files (auto-detected)</li>
+    <li>Policy/support documents</li>
   </ul>
 
   <form method="POST" action="/data-management/reimbursement/upload" enctype="multipart/form-data">
-    <input type="file" name="reimbursement_files" id="reimbursement-files" multiple accept=".csv" required />
+    <input type="file" name="reimbursement_files" id="reimbursement-files" multiple accept=".csv,.xls,.xlsx,.pdf,.txt,.doc,.docx,.jpg,.jpeg,.png" required style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;" />
     <div class="dropzone" id="reimbursement-dropzone" style="margin-top:8px;">
-      Drag & drop reimbursement CSV files here
+      Drag & drop reimbursement files here, or click to choose files
     </div>
     <p class="muted small" id="reimbursement-file-hints"></p>
+    <p class="muted small">
+      Accepted: CSV, Excel, PDF, TXT, Word, JPG, PNG. CSV files can create contract / fee schedule rules automatically.
+    </p>
 
     <div class="btnRow">
       <button class="btn">Upload Files</button>
@@ -42329,12 +42394,14 @@ function renderTemplateEditor(org, user){
     const n = String(fileName || '').toLowerCase();
     if (n.includes('contract')) return 'Contract';
     if (n.includes('fee') || n.includes('schedule')) return 'Fee Schedule';
+    if (n.endsWith('.csv')) return 'CSV rule file';
+    if (n.endsWith('.pdf') || n.endsWith('.doc') || n.endsWith('.docx') || n.endsWith('.xls') || n.endsWith('.xlsx') || n.endsWith('.txt') || n.endsWith('.jpg') || n.endsWith('.jpeg') || n.endsWith('.png')) return 'Supporting document';
     return 'Auto-detect on upload';
   };
 
   const renderHints = () => {
     const lines = [...(input.files || [])].map(f => (f.name + ' → ' + detectType(f.name)));
-    hints.innerHTML = lines.join('<br/>') || 'Tip: drop mixed reimbursement CSVs here; the server auto-sorts contract vs fee schedule files.';
+    hints.innerHTML = lines.join('<br/>') || 'Tip: CSV creates rules automatically. PDF, Excel, Word, TXT, and image files are stored as supporting documents.';
   };
 
   ['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, e => {
@@ -42892,6 +42959,7 @@ function renderTemplateEditor(org, user){
     const warnings = [];
     const issues = [];
     const previewRows = [];
+    let storedSupportingDocs = 0;
 
     // We'll stage these, then commit later
     const stagedContracts = [];
@@ -42905,21 +42973,68 @@ function renderTemplateEditor(org, user){
       const lowerName = filename.toLowerCase();
       const ext = path.extname(lowerName);
 
+      if ([".pdf", ".doc", ".docx"].includes(ext)) {
+        const text = extractTextFromBuffer(f.buffer, f.filename);
+        const extractedContracts = parseContractFromText(text);
+        addDocumentIngest(
+          org.org_id,
+          "contracts",
+          f,
+          "Stored",
+          extractedContracts.length,
+          extractedContracts.length ? "Stored and scanned for contract rules." : "Stored as supporting reimbursement document."
+        );
+
+        if (!extractedContracts.length) storedSupportingDocs += 1;
+
+        for (const c of extractedContracts) {
+          const candidateKey = contractRowKey(c);
+          const dup =
+            existingContracts.some(x => contractRowKey(normalizeContract(x)) === candidateKey) ||
+            stagedContracts.some(x => contractRowKey(normalizeContract(x)) === candidateKey);
+
+          if (dup) {
+            duplicatesSkipped++;
+            continue;
+          }
+
+          stagedContracts.push({
+            ...normalizeContract(c),
+            org_id: org.org_id,
+            upload_batch_id,
+            updated_at: nowISO()
+          });
+          contractsAdded++;
+
+          if (previewRows.length < 20) {
+            previewRows.push({
+              type:"Contract",
+              payer: c.payer_name,
+              code: c.procedure_code,
+              expected: c.expected_value,
+              file: f.filename
+            });
+          }
+        }
+        continue;
+      }
+
       if (ext !== ".csv") {
-        const supported = (typeof isSupportedUploadExt === "function") ? isSupportedUploadExt(filename) : true;
-        if (supported && typeof addDocumentIngest === "function") {
+        if (isSupportedUploadExt(filename || "")) {
           addDocumentIngest(
             org.org_id,
-            "reimbursement",
+            "contracts",
             f,
             "Stored",
             0,
-            "Stored as supporting contract / payer policy document. Upload CSV to automatically create reimbursement rules."
+            "Stored as supporting reimbursement / payer policy document. Upload CSV to automatically create contract or fee schedule rules."
           );
-          warnings.push(`${filename} → Stored as supporting contract / payer policy document. CSV is required only for automatic rule creation.`);
-        } else {
-          warnings.push(`${filename} → Unsupported file type.`);
+          storedSupportingDocs += 1;
+          warnings.push(`${filename} → Stored as a supporting reimbursement / payer policy document. CSV is only required for automatic rule creation.`);
+          continue;
         }
+
+        warnings.push(`${filename} → Unsupported file type.`);
         continue;
       }
 
@@ -43027,6 +43142,13 @@ function renderTemplateEditor(org, user){
       else {
         warnings.push(`${f.filename} → Could not detect file structure (contract vs fee schedule).`);
       }
+    }
+
+    if (!stagedContracts.length && !stagedFeeSchedules.length && !issues.length && storedSupportingDocs > 0) {
+      return redirect(
+        res,
+        next || `/data-management?tab=reimbursement&msg=${encodeURIComponent(`${storedSupportingDocs} supporting reimbursement document${storedSupportingDocs === 1 ? "" : "s"} stored. Upload CSV if you want to create reimbursement rules automatically.`)}`
+      );
     }
 
     // If there are blocking issues, show validation page (no commit)
@@ -43219,14 +43341,14 @@ function renderTemplateEditor(org, user){
 
       <div class="btnRow" style="margin-top:16px;">
         ${continueHref
-          ? `<a class="btn" href="${safeStr(continueHref)}">Continue 10-Minute Setup</a>`
-          : `<a class="btn" href="/data-management?tab=reimbursement">Back to Reimbursement Contracts</a>`
+          ? `<a class="btn" href="${safeStr(continueHref)}">Continue Onboarding Pro</a>`
+          : `<a class="btn" href="/data-management?tab=reimbursement">Back to Reimbursement Engine</a>`
         }
 
         <a class="btn secondary" href="${affectedClaimsHref}">
            View Affected Claims (${impactedCount || 0})
         </a>
-        ${continueHref ? `<a class="btn secondary" href="/data-management?tab=reimbursement">Back to Reimbursement Contracts</a>` : ""}
+        ${continueHref ? `<a class="btn secondary" href="/data-management?tab=reimbursement">Back to Reimbursement Engine</a>` : ""}
       </div>
     `, navUser(), {showChat:false, orgName: org.org_name});
 
