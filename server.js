@@ -14034,6 +14034,8 @@ function renderOnboardingWizardPage(org, sess, parsed){
   const requestedStep = String(parsed.query.step || "").toLowerCase();
   const activeStep = requestedStep || (!onboarding.hasClaims ? "claims" : (!onboarding.hasPayments ? "payments" : (!onboarding.hasContracts ? "contracts" : (onboarding.hasRevenueFound ? "results" : "scan"))));
   const scanDone = String(parsed.query.scan || "").toLowerCase() === "done" || activeStep === "results";
+  const uploadedParam = String(parsed.query.uploaded || "").toLowerCase();
+  const shouldAutoRunScan = onboarding.hasClaims && onboarding.hasPayments && !scanDone && activeStep === "scan";
   const orgName = (org && org.org_name) ? org.org_name : "";
 
   const stepCard = (num, id, title, text, done) => {
@@ -14042,11 +14044,11 @@ function renderOnboardingWizardPage(org, sess, parsed){
   };
 
   const uploadNotice = (() => {
-    const uploaded = String(parsed.query.uploaded || "").toLowerCase();
-    if (uploaded === "claims") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Claims uploaded.</strong> Next, upload payments so the system can compare paid vs expected.</div>`;
-    if (uploaded === "payments") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Payments uploaded.</strong> Next, optionally add contract rules to improve expected-vs-paid accuracy, or skip to the revenue scan.</div>`;
-    if (uploaded === "contracts") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Contract rules uploaded.</strong> Now run the revenue scan using expected reimbursement logic.</div>`;
+    if (uploadedParam === "claims") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Claims uploaded.</strong> Next, upload payments so the system can compare paid vs expected.</div>`;
+    if (uploadedParam === "payments") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Payments uploaded.</strong> Next, optionally add contract rules to improve expected-vs-paid accuracy, or skip ahead and Onboarding Pro will scan automatically.</div>`;
+    if (uploadedParam === "contracts") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Contract files uploaded.</strong> Onboarding Pro will scan automatically once you continue.</div>`;
     if (scanDone) return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;"><strong>Revenue scan complete.</strong> Review the revenue found below and start the Action Center queue.</div>`;
+    if (shouldAutoRunScan) return `<div class="alert" style="background:#eff6ff;color:#1e3a8a;border-color:#bfdbfe;"><strong>Scanning revenue now.</strong> Onboarding Pro is comparing paid vs expected and preparing the recovery queue.</div>`;
     return "";
   })();
 
@@ -14075,6 +14077,7 @@ function renderOnboardingWizardPage(org, sess, parsed){
       .onboard-dropzone input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;}
       .onboard-dropzone strong{display:block;font-size:14px;margin-bottom:4px;}
       .onboard-file-label{display:block;font-size:12px;color:var(--muted);margin-top:8px;}
+      .onboard-file-note{display:block;font-size:11px;color:var(--muted);margin-top:4px;line-height:1.35;}
       .onboard-option-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px;}
       .onboard-option{border:1px solid var(--border);border-radius:14px;background:#f8fafc;padding:12px;}
       .onboard-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:12px;}
@@ -14110,22 +14113,29 @@ function renderOnboardingWizardPage(org, sess, parsed){
           });
         });
       });
+
+      document.addEventListener("DOMContentLoaded", function(){
+        const autoScanForm = document.getElementById("auto-revenue-scan-form");
+        if (autoScanForm && autoScanForm.dataset.autoscan === "1") {
+          window.setTimeout(function(){ autoScanForm.submit(); }, 450);
+        }
+      });
     </script>
 
     <div class="onboard-hero">
       <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;">
         <div>
-          <span class="badge ok">Upload → Contracts → Scan → Work Revenue</span>
+          <span class="badge ok">Upload → Contracts → Work Revenue</span>
           <h2 style="margin:10px 0 6px;font-size:28px;">Find lost revenue in 10 minutes</h2>
-          <p class="muted" style="max-width:680px;">Upload claims, payments, and optional contract rules, then run a revenue scan and jump straight into Action Center with the highest-value recovery work.</p>
+          <p class="muted" style="max-width:680px;">Upload claims, payments, and optional contract rules. Onboarding Pro scans in the background and sends staff straight to the highest-value recovery work.</p>
         </div>
         <a class="btn secondary" href="/dashboard">Skip to Dashboard</a>
       </div>
       <div class="onboard-steps">
-        ${stepCard(1, "claims", "Upload claims", onboarding.hasClaims ? `${formatNumberUI(onboarding.claimsCount)} claims loaded` : "Start with billing / claim CSV data", onboarding.hasClaims)}
-        ${stepCard(2, "payments", "Upload payments", onboarding.hasPayments ? `${formatNumberUI(onboarding.paymentsCount)} payment rows loaded` : "Add ERA / payment CSV or TXT", onboarding.hasPayments)}
+        ${stepCard(1, "claims", "Upload claims", onboarding.hasClaims ? `${formatNumberUI(onboarding.claimsCount)} claims loaded` : "Start with billing / claim data", onboarding.hasClaims)}
+        ${stepCard(2, "payments", "Upload payments", onboarding.hasPayments ? `${formatNumberUI(onboarding.paymentsCount)} payment rows loaded` : "Add ERA / payment data", onboarding.hasPayments)}
         ${stepCard(3, "contracts", "Add contract rules", onboarding.hasContracts ? `${formatNumberUI(onboarding.contractsCount + onboarding.feeSchedulesCount)} reimbursement rules loaded` : "Optional, improves expected vs paid", onboarding.hasContracts)}
-        ${stepCard(4, "scan", "Run revenue scan", scanDone ? `${formatNumberUI(onboarding.matchedClaims)} matched claims` : "Compare paid vs expected and detect leakage", scanDone)}
+        ${stepCard(4, "scan", "Find revenue", scanDone ? `${formatNumberUI(onboarding.matchedClaims)} matched claims` : "Auto-scan paid vs expected", scanDone)}
         ${stepCard(5, "results", "Work revenue", onboarding.hasRevenueFound ? `${formatMoneyUI(onboarding.revenueAtRisk)} found` : "Open the recovery queue", onboarding.hasRevenueFound)}
       </div>
     </div>
@@ -14136,15 +14146,16 @@ function renderOnboardingWizardPage(org, sess, parsed){
       <div>
         <div class="card" style="margin-bottom:14px;">
           <h3>1) Upload claims</h3>
-          <p class="muted small">Use a CSV with claim number, payer, amount billed, and any available procedure / DOS fields.</p>
+          <p class="muted small">Upload claim exports or supporting claim documents. CSV parses immediately; Excel, PDF, Word, TXT, and image files are stored for review.</p>
           <form method="POST" action="/data-management/upload" enctype="multipart/form-data" class="onboard-upload">
             <input type="hidden" name="tab" value="claims" />
             <input type="hidden" name="next" value="/onboarding?step=payments&amp;uploaded=claims" />
-            <label>Claims CSV</label>
+            <label>Claims files</label>
             <label class="onboard-dropzone">
-              <input type="file" name="documents" accept=".csv" required />
-              <strong>Drag & drop claims CSV here</strong>
+              <input type="file" name="documents" accept=".csv,.xls,.xlsx,.pdf,.txt,.doc,.docx,.jpg,.jpeg,.png" multiple required />
+              <strong>Drag & drop claims files here</strong>
               <span class="muted small">or click to choose a file</span>
+              <span class="onboard-file-note">Accepted: CSV, Excel, PDF, TXT, Word, JPG, PNG</span>
               <span class="onboard-file-label">No file selected</span>
             </label>
             <div class="btnRow"><button class="btn" type="submit">Upload Claims</button></div>
@@ -14153,15 +14164,16 @@ function renderOnboardingWizardPage(org, sess, parsed){
 
         <div class="card" style="margin-bottom:14px;">
           <h3>2) Upload payments</h3>
-          <p class="muted small">Use ERA / payment CSV or TXT data. Claim numbers are used for matching behind the scenes.</p>
+          <p class="muted small">Upload ERA/payment exports or supporting payment documents. CSV/TXT parses immediately; Excel, PDF, Word, and images are stored for review.</p>
           <form method="POST" action="/data-management/upload" enctype="multipart/form-data" class="onboard-upload">
             <input type="hidden" name="tab" value="payments" />
             <input type="hidden" name="next" value="/onboarding?step=contracts&amp;uploaded=payments" />
-            <label>Payment CSV / TXT</label>
+            <label>Payment files</label>
             <label class="onboard-dropzone">
-              <input type="file" name="documents" accept=".csv,.txt" required />
-              <strong>Drag & drop payment file here</strong>
+              <input type="file" name="documents" accept=".csv,.xls,.xlsx,.pdf,.txt,.doc,.docx,.jpg,.jpeg,.png" multiple required />
+              <strong>Drag & drop payment files here</strong>
               <span class="muted small">or click to choose a file</span>
+              <span class="onboard-file-note">Accepted: CSV, Excel, PDF, TXT, Word, JPG, PNG</span>
               <span class="onboard-file-label">No file selected</span>
             </label>
             <div class="btnRow"><button class="btn" type="submit">Upload Payments</button></div>
@@ -14170,18 +14182,19 @@ function renderOnboardingWizardPage(org, sess, parsed){
 
         <div class="card" style="margin-bottom:14px;">
           <h3>3) Add contract rules <span class="muted small">(optional)</span></h3>
-          <p class="muted small">Upload expected reimbursement rules so the scan can compare expected vs paid more accurately. You can skip this and run the scan with current data.</p>
+          <p class="muted small">Upload contract rules or payer policy documents. CSV creates reimbursement rules automatically; PDF, Excel, Word, TXT, and images are stored as supporting contract/policy documents.</p>
           <form method="POST" action="/data-management/reimbursement/upload" enctype="multipart/form-data" class="onboard-upload">
             <input type="hidden" name="next" value="/onboarding?step=scan&amp;uploaded=contracts" />
-            <label>Contract / reimbursement rules CSV</label>
+            <label>Contract / reimbursement files</label>
             <label class="onboard-dropzone">
-              <input type="file" name="reimbursement_files" accept=".csv" multiple required />
-              <strong>Drag & drop contract rules CSV here</strong>
-              <span class="muted small">contracts + fee schedules supported</span>
+              <input type="file" name="reimbursement_files" accept=".csv,.xls,.xlsx,.pdf,.txt,.doc,.docx,.jpg,.jpeg,.png" multiple required />
+              <strong>Drag & drop contract or policy files here</strong>
+              <span class="muted small">CSV creates rules; other files are stored for review</span>
+              <span class="onboard-file-note">Accepted: CSV, Excel, PDF, TXT, Word, JPG, PNG</span>
               <span class="onboard-file-label">No file selected</span>
             </label>
             <div class="muted small">
-              Suggested columns: payer_name, network_status, procedure_code, reimbursement_model, allowed_amount, effective_date.
+              For automatic rule creation, use CSV columns like payer_name, network_status, procedure_code, reimbursement_model, allowed_amount, effective_date.
             </div>
             <div class="btnRow">
               <button class="btn secondary" type="submit">Upload & Review Contract Rules</button>
@@ -14191,11 +14204,14 @@ function renderOnboardingWizardPage(org, sess, parsed){
         </div>
 
         <div class="card" style="margin-bottom:14px;">
-          <h3>4) Run revenue scan</h3>
-          <p class="muted small">This uses existing matching, expected amount, lifecycle, task, and packet logic. It prepares work only. Nothing is sent to payers.</p>
+          <h3>4) Find revenue automatically</h3>
+          <p class="muted small">Onboarding Pro uses existing matching, expected amount, lifecycle, task, and packet logic in the background. It prepares work only. Nothing is sent to payers.</p>
           ${(!onboarding.hasClaims || !onboarding.hasPayments) ? `<div class="alert" style="background:#fffbeb;color:#92400e;border-color:#fde68a;"><strong>Waiting for data.</strong> Upload at least claims and payments before running the scan.</div>` : ""}
-          <form method="POST" action="/onboarding/run">
-            <button class="btn" type="submit" ${(!onboarding.hasClaims || !onboarding.hasPayments) ? "disabled" : ""}>Run Revenue Scan</button>
+          ${shouldAutoRunScan ? `<div class="muted small" style="margin-bottom:10px;">Scanning will start automatically. If the page does not continue, use the button below.</div>` : ""}
+          <form id="auto-revenue-scan-form" method="POST" action="/onboarding/run" data-autoscan="${shouldAutoRunScan ? "1" : "0"}">
+            <button class="btn ${scanDone ? "secondary" : ""}" type="submit" ${(!onboarding.hasClaims || !onboarding.hasPayments) ? "disabled" : ""}>
+              ${scanDone ? "Re-run Revenue Scan" : "Scan Now"}
+            </button>
           </form>
         </div>
 
@@ -42709,35 +42725,25 @@ function renderTemplateEditor(org, user){
     const existingContracts = getPayerContracts(org.org_id);
 
     for (const f of docs) {
-      const ext = String(f.filename || "").toLowerCase();
+      const filename = String(f.filename || "");
+      const lowerName = filename.toLowerCase();
+      const ext = path.extname(lowerName);
 
-      if (ext.endsWith(".pdf") || ext.endsWith(".doc") || ext.endsWith(".docx")) {
-        const text = extractTextFromBuffer(f.buffer, f.filename);
-        const extractedContracts = parseContractFromText(text);
-
-        for (const c of extractedContracts){
-          const candidateKey = contractRowKey(c);
-          const dup =
-            existingContracts.some(x => contractRowKey(normalizeContract(x)) === candidateKey) ||
-            stagedContracts.some(x => contractRowKey(normalizeContract(x)) === candidateKey);
-
-          if (dup) continue;
-
-          stagedContracts.push({
-            ...c,
-            org_id: org.org_id,
-            upload_batch_id,
-            updated_at: nowISO()
-          });
-
-          contractsAdded++;
+      if (ext !== ".csv") {
+        const supported = (typeof isSupportedUploadExt === "function") ? isSupportedUploadExt(filename) : true;
+        if (supported && typeof addDocumentIngest === "function") {
+          addDocumentIngest(
+            org.org_id,
+            "reimbursement",
+            f,
+            "Stored",
+            0,
+            "Stored as supporting contract / payer policy document. Upload CSV to automatically create reimbursement rules."
+          );
+          warnings.push(`${filename} → Stored as supporting contract / payer policy document. CSV is required only for automatic rule creation.`);
+        } else {
+          warnings.push(`${filename} → Unsupported file type.`);
         }
-
-        continue;
-      }
-
-      if (!ext.endsWith(".csv")) {
-        warnings.push(`${f.filename} → Unsupported file type (CSV, PDF, DOC, DOCX supported).`);
         continue;
       }
 
@@ -42848,6 +42854,10 @@ function renderTemplateEditor(org, user){
     }
 
     // If there are blocking issues, show validation page (no commit)
+    if (!stagedContracts.length && !stagedFeeSchedules.length && next && !issues.length) {
+      return redirect(res, next);
+    }
+
     if (issues.length > 0) {
       const html = renderPage("Reimbursement Upload Validation", `
         <h2>Upload Validation Failed</h2>
@@ -44086,7 +44096,7 @@ function renderTemplateEditor(org, user){
 
           <div class="card" style="margin-bottom:16px;">
             <h3>First-time setup</h3>
-            <p class="muted">Use the onboarding wizard to upload claims, upload payments, run the revenue scan, and start the Action Center queue.</p>
+            <p class="muted">Use Onboarding Pro to resume setup, review uploaded data, find revenue at risk, and start the Action Center queue.</p>
             <div class="btnRow">
               <a class="btn" href="/onboarding">Onboarding Pro</a>
               <a class="btn secondary" href="/data-management?tab=upload">Open Data Management</a>
