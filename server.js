@@ -19479,7 +19479,7 @@ function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, opts={}){
         <span class="ws-file-name muted small"></span>
       </label>
 
-      <button class="btn secondary small" type="submit">${safeStr(buttonLabel)}</button>
+      <button class="btn secondary small" type="submit">${safeStr(buttonLabel === "Upload" ? "Upload Files" : buttonLabel)}</button>
     </form>
   `;
 }
@@ -19488,6 +19488,29 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
   const exportMode = !!opts.exportMode;
   const items = workspacePacketAttachmentPlan(channel);
   const rows = items.map((item) => {
+    if (channel === "appeal" && item.key === "lmn") {
+      ensurePacketSections(ws, claim);
+      const packetSections = ws.appeal?.packet_sections || defaultAppealPacketSections();
+      const descriptions = packetSectionDescriptions("appeal");
+
+      return `
+        <div class="ws-lmn-edit-break">
+          <div class="muted small" style="margin:4px 0 10px;">
+            The Letter of Medical Necessity is generated from claim and organization data. Edit it directly below instead of uploading it as a file.
+          </div>
+          ${renderEditablePacketSection({
+            billed_id: claim?.billed_id || ws?.billed_id || "",
+            channel: "appeal",
+            section_key: "letter_of_medical_necessity",
+            title: "Letter of Medical Necessity",
+            value: packetSections.letter_of_medical_necessity,
+            description: descriptions.letter_of_medical_necessity,
+            exportMode
+          })}
+        </div>
+      `;
+    }
+
     const state = outcomeRecommendationEvidenceState(ws, claim, item.key, channel);
     const doc = state.doc;
     const row = state.row;
@@ -19512,7 +19535,7 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
           <div style="margin-top:10px;">
             ${renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, {
               compact: true,
-              buttonLabel: hasSourceProof ? "Replace" : (hasDraftEvidence ? "Upload Source Proof" : "Upload")
+              buttonLabel: hasSourceProof ? "Replace / Add Files" : (hasDraftEvidence ? "Upload Source Proof" : "Upload Files")
             })}
           </div>
         `}
@@ -19645,7 +19668,18 @@ function workspaceDropzoneScript(){
         function setName(zone, files){
           var name = zone.querySelector(".ws-file-name");
           if (!name) return;
-          name.textContent = files && files.length ? files[0].name : "";
+          if (!files || !files.length) {
+            name.textContent = "";
+            return;
+          }
+          if (files.length === 1) {
+            name.textContent = files[0].name;
+            return;
+          }
+          var previewNames = Array.prototype.slice.call(files, 0, 3).map(function(file){
+            return file.name;
+          }).join(", ");
+          name.textContent = files.length + " files selected" + (previewNames ? ": " + previewNames + (files.length > 3 ? "…" : "") : "");
         }
 
         document.addEventListener("change", function(e){
@@ -21696,29 +21730,37 @@ function workspaceBuildExportExhibitItems(ws, claim, channel){
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key).push({ ...att, __attachment_index: index });
   });
-  const org_id = String(ws?.org_id || claim?.org_id || "");
-  let recommendationRows = [];
-  try {
-    recommendationRows = typeof buildOutcomeRecommendations === "function" ? buildOutcomeRecommendations(org_id, ws, claim, channel) : [];
-  } catch (e) { recommendationRows = []; }
-  const fallbackRows = (typeof workspaceRequiredDocConfig === "function" ? workspaceRequiredDocConfig(channel) : []).map(doc => ({
-    key: doc.key, title: doc.label || (typeof workspaceDocLabel === "function" ? workspaceDocLabel(doc.key) : doc.key), reason: doc.why || "Supporting proof strengthens this packet.", source: "Packet Requirement", priority: doc.required ? "Required" : "Optional"
-  }));
-  const baseRows = recommendationRows.length ? recommendationRows : fallbackRows;
   const usedAttachmentIndexes = new Set();
-  const items = [];
-  baseRows.forEach(row => {
+  const items = workspacePacketAttachmentPlan(channel)
+    .filter(row => !(channel === "appeal" && row.key === "lmn"))
+    .map((row, index) => {
     const docKey = workspaceExhibitKeyFromRecommendationKey(row.key);
     const attached = (byKey.get(docKey) || [])[0] || null;
     if (attached && attached.__attachment_index !== undefined) usedAttachmentIndexes.add(attached.__attachment_index);
-    items.push({ docKey, label: typeof workspaceDocLabel === "function" ? workspaceDocLabel(docKey) : (row.title || docKey || "Supporting Document"), reason: row.reason || "Supporting proof strengthens this packet.", source: row.source || "Outcome-Based Recommendation", priority: row.priority || "", attachment: attached });
+    return {
+      docKey,
+      label: row.title || (typeof workspaceDocLabel === "function" ? workspaceDocLabel(docKey) : docKey),
+      reason: row.reason || "Supporting proof strengthens this packet.",
+      source: row.source || "Packet Standard",
+      priority: row.priority || "",
+      attachment: attached,
+      position: index + 1
+    };
   });
   attachments.forEach((att, index) => {
     if (usedAttachmentIndexes.has(index)) return;
     const docKey = String(att?.doc_key || att?.key || "supporting_document").trim() || "supporting_document";
-    items.push({ docKey, label: typeof workspaceDocLabel === "function" ? workspaceDocLabel(docKey) : docKey, reason: "Additional uploaded supporting document.", source: "Uploaded Evidence", priority: "", attachment: { ...att, __attachment_index: index } });
+    items.push({
+      docKey,
+      label: typeof workspaceDocLabel === "function" ? workspaceDocLabel(docKey) : docKey,
+      reason: "Additional uploaded supporting document.",
+      source: "Uploaded Evidence",
+      priority: "",
+      attachment: { ...att, __attachment_index: index },
+      position: items.length + 1
+    });
   });
-  return items.map((item, index) => ({ ...item, exhibitName: `Exhibit ${String.fromCharCode(65 + index)}` }));
+  return items;
 }
 
 function workspacePdfKitBuffer(renderFn){
@@ -21929,24 +21971,38 @@ The reimbursement received does not align with the expected amount based on appl
   doc.text("Sincerely,", { width: CONTENT_WIDTH, align: "left" });
   doc.text(identity.legal_name || "Your Practice", { width: CONTENT_WIDTH, align: "left" });
 
-  const recommendedExhibits = buildOutcomeRecommendations(claim.org_id, ws, claim, channel);
-  const exhibitDocs = recommendedExhibits.length
-    ? recommendedExhibits.map(r => ({ key: outcomeRecommendationDocKey(r.key), label: outcomeEvidenceLabel(r.key), source: r.source || "Outcome-Based Recommendation" }))
-    : workspaceRequiredDocConfig(channel).map(d => ({ key: d.key, label: d.label || workspaceDocLabel(d.key), source: "Packet Requirement" }));
-
-  if (exhibitDocs.length) {
+  const lmnText = String(ws?.appeal?.packet_sections?.letter_of_medical_necessity || "").trim();
+  if (channel === "appeal" && lmnText) {
     doc.addPage();
-    doc.font("Helvetica-Bold").fontSize(16).text("Packet Exhibits", { width: CONTENT_WIDTH, align: "left" });
+    doc.font("Helvetica-Bold").fontSize(16).text("Letter of Medical Necessity", { width: CONTENT_WIDTH, align: "left" });
+    doc.moveDown(0.75);
+    doc.font("Helvetica").fontSize(10).text(lmnText, {
+      width: CONTENT_WIDTH,
+      align: "left",
+      lineGap: 3
+    });
+  }
+
+  const packetAttachments = workspaceBuildExportExhibitItems(ws, claim, channel);
+
+  if (packetAttachments.length) {
+    doc.addPage();
+    doc.font("Helvetica-Bold").fontSize(16).text("Packet Attachments / Supporting Documents", { width: CONTENT_WIDTH, align: "left" });
     doc.moveDown(0.5);
-    doc.font("Helvetica").fontSize(10).text("The following supporting exhibits are included or recommended for this packet. Uploaded source files are merged after the letter packet when available.", { width: CONTENT_WIDTH, lineGap: 3 });
+    doc.font("Helvetica").fontSize(10).text(
+      channel === "appeal"
+        ? "The formal appeal letter appears first. The editable Letter of Medical Necessity appears as its own packet section. Supporting documents are included or recommended below in the standard appeal packet order. Uploaded source files are merged after the letter packet when available."
+        : "The negotiation letter appears first. Supporting documents are included or recommended below in the standard negotiation packet order. Uploaded source files are merged after the letter packet when available.",
+      { width: CONTENT_WIDTH, lineGap: 3 }
+    );
     doc.moveDown(1);
 
-    exhibitDocs.forEach((exhibit, index) => {
-      const attached = (Array.isArray(ws.attachments) ? ws.attachments : []).find(a => String(a.doc_key || "") === String(exhibit.key || ""));
-      doc.font("Helvetica-Bold").fontSize(12).text(`Exhibit ${String.fromCharCode(65 + index)}: ${workspaceDocLabel(exhibit.key)}`, { width: CONTENT_WIDTH });
+    packetAttachments.forEach((item) => {
+      const attached = !!item.attachment;
+      doc.font("Helvetica-Bold").fontSize(12).text(item.label || workspaceDocLabel(item.docKey), { width: CONTENT_WIDTH });
       doc.font("Helvetica").fontSize(10).text(`Status: ${attached ? "Attached" : "Recommended / not attached"}`, { width: CONTENT_WIDTH });
-      if (attached?.filename) doc.text(`File: ${attached.filename}`, { width: CONTENT_WIDTH });
-      if (exhibit.source) doc.text(`Source: ${exhibit.source}`, { width: CONTENT_WIDTH });
+      if (item.attachment?.filename) doc.text(`File: ${item.attachment.filename}`, { width: CONTENT_WIDTH });
+      if (item.source) doc.text(`Source: ${item.source}`, { width: CONTENT_WIDTH });
       doc.moveDown(0.8);
     });
   }
@@ -22068,10 +22124,13 @@ async function buildMergedPacketPDF({ claim, derived, ws, channel, res, preview=
       const storedPath = att ? workspaceAttachmentStoredPath(att) : "";
       const hasFile = !!(storedPath && fs.existsSync(storedPath));
       const ext = hasFile ? path.extname(String(workspaceAttachmentFilename(att) || storedPath)).toLowerCase() : "";
-      await workspaceAppendExhibitCoverPage(mergedPdf, exhibit, hasFile
-        ? "Attached source file follows this cover page."
-        : "No uploaded source file is attached yet. This exhibit is listed as recommended or system-found evidence only.");
       if (!hasFile) continue;
+
+      await workspaceAppendExhibitCoverPage(
+        mergedPdf,
+        exhibit,
+        "Attached source file follows this supporting-document cover page."
+      );
 
       if (ext === ".pdf") {
         const pdfBytes = fs.readFileSync(storedPath);
@@ -46754,7 +46813,9 @@ function renderTemplateEditor(org, user){
     if (!m) return send(res, 400, "Expected multipart form data");
 
     const { files } = await parseMultipart(req, m[1]);
-    const file = (files || [])[0];
+    const uploadedFiles = (files || []).filter(file =>
+      file && file.buffer && String(file.filename || "").trim()
+    );
     if (!file) return send(res, 400, "No file uploaded");
 
     const stored = storeWorkspaceUpload(sess.org_id, file);
@@ -47665,6 +47726,13 @@ if (method === "GET" && pathname === "/agent-workspace") {
     ws[channel].user_modified = true;
 
     if (channel === "appeal" && section_key === "argument") ws[channel].draft_text = value;
+    if (channel === "appeal" && section_key === "letter_of_medical_necessity") {
+      ws.packet.clinical_support = (ws.packet.clinical_support || []).map(item =>
+        item.key === "lmn"
+          ? { ...item, lmn_text: value, status: "present", updated_at: nowISO() }
+          : item
+      );
+    }
     if (channel === "negotiation" && section_key === "variance_explanation") ws[channel].draft_text = value;
     if (channel === "negotiation" && section_key === "requested_amount") ws[channel].requested_amount = num(value);
 
@@ -47792,9 +47860,13 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const billed_id = String(fields.billed_id || "").trim();
     const channel = String(fields.channel || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
     const doc_key = String(fields.doc_key || "").trim();
-    const file = (files || [])[0];
+    const uploadedFiles = (files || []).filter(file =>
+      file && file.buffer && String(file.filename || "").trim()
+    );
 
-    if (!billed_id || !doc_key || !file) return send(res, 400, "Missing billed_id, doc_key, or file");
+    if (!billed_id || !doc_key || !uploadedFiles.length) {
+      return send(res, 400, "Missing billed_id, doc_key, or file");
+    }
 
     const claim = getBilledById(sess.org_id, billed_id);
     if (!claim) return send(res, 404, "Claim not found");
@@ -47804,38 +47876,54 @@ if (method === "GET" && pathname === "/agent-workspace") {
     ensurePacketSections(ws, claim);
     ensureWorkspaceRounds(ws, channel);
 
-    const stored = storeWorkspaceUpload(sess.org_id, file);
-    const attachment = {
-      attachment_id: uuid(),
-      filename: stored.filename,
-      stored_path: stored.stored_path,
-      kind: workspaceAttachmentKindForDocKey(doc_key),
-      uploaded_at: nowISO(),
-      doc_key,
-
-      // Source tracking for Automation Readiness.
-      source_type: "manual_upload",
-      source_label: "Manual Upload",
-      source_system: "User Upload",
-
-      // Manual uploads are actual submission proof.
-      proof_level: "manual_source_document",
-      is_source_document: true,
-      source_status: "attached"
-    };
-
     ws.attachments = Array.isArray(ws.attachments) ? ws.attachments : [];
-    ws.attachments.push(attachment);
+    const savedAttachments = [];
+
+    for (const file of uploadedFiles) {
+      const stored = storeWorkspaceUpload(sess.org_id, file);
+      const attachment = {
+        attachment_id: uuid(),
+        filename: stored.filename,
+        stored_path: stored.stored_path,
+        kind: workspaceAttachmentKindForDocKey(doc_key),
+        uploaded_at: nowISO(),
+        channel,
+        doc_key,
+        key: doc_key,
+
+        // Source tracking for Automation Readiness.
+        source_type: "manual_upload",
+        source_label: "Manual Upload",
+        source_system: "User Upload",
+
+        // Manual uploads are actual submission proof.
+        proof_level: "manual_source_document",
+        is_source_document: true,
+        source_status: "attached"
+      };
+
+      ws.attachments.push(attachment);
+      savedAttachments.push(attachment);
+    }
+
+    const currentItem = getWorkspacePacketItem(ws, doc_key);
+    const existingAttachmentIds = Array.isArray(currentItem?.attachment_ids)
+      ? currentItem.attachment_ids
+      : (currentItem?.attachment_id ? [currentItem.attachment_id] : []);
+    const newAttachmentIds = savedAttachments.map(a => a.attachment_id);
 
     workspaceUpsertPacketItem(ws, doc_key, {
       status: "present",
-      attachment_id: attachment.attachment_id,
+      attachment_id: currentItem?.attachment_id || savedAttachments[0].attachment_id,
+      attachment_ids: [...existingAttachmentIds, ...newAttachmentIds],
       updated_at: nowISO()
     });
 
     if (doc_key === "lmn") {
       ws.packet.clinical_support = (ws.packet.clinical_support || []).map(item =>
-        item.key === "lmn" ? { ...item, lmn_text: ws.appeal?.packet_sections?.argument || item.lmn_text || "" } : item
+        item.key === "lmn"
+          ? { ...item, lmn_text: String(ws.appeal?.packet_sections?.letter_of_medical_necessity || item.lmn_text || ""), updated_at: nowISO() }
+          : item
       );
     }
 
