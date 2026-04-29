@@ -18517,15 +18517,13 @@ function workspacePolishStyles(){
         padding:10px;
       }
       .packet-workspace-shell .ws-ai-assist-launcher{ border-left:4px solid #4f46e5; }
-      .ws-ai-drawer-backdrop{ position:fixed; inset:0; background:rgba(15,23,42,.38); opacity:0; pointer-events:none; transition:opacity .18s ease; z-index:9998; }
-      .ws-ai-drawer-backdrop.open{ opacity:1; pointer-events:auto; }
-      .ws-ai-drawer{ position:fixed; top:0; right:-520px; width:min(520px,94vw); height:100vh; background:#fff; border-left:1px solid #e5e7eb; box-shadow:-18px 0 45px rgba(15,23,42,.2); z-index:9999; transition:right .22s ease; overflow:auto; padding:18px; }
-      .ws-ai-drawer.open{ right:0; }
+      .ws-ai-drawer-backdrop{display:none;}
+      .ws-ai-drawer{position:fixed;right:20px;bottom:20px;width:min(430px,92vw);max-height:min(680px,82vh);height:auto;min-width:min(320px,92vw);min-height:260px;background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 18px 55px rgba(15,23,42,.24);z-index:9999;transform:translateY(16px) scale(.98);opacity:0;pointer-events:none;transition:opacity .18s ease, transform .18s ease;overflow:auto;padding:18px;resize:both;}
+      .ws-ai-drawer.open{opacity:1;pointer-events:auto;transform:translateY(0) scale(1);}
       .ws-ai-drawer-head{ display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:12px; }
       .ws-ai-drawer-close{ border:1px solid #e5e7eb; background:#f8fafc; border-radius:999px; width:34px; height:34px; cursor:pointer; font-weight:900; }
       .ws-ai-preset-grid{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
-      .ws-ai-drawer textarea{ min-height:150px; }
-      body.ws-ai-drawer-open{ overflow:hidden; }
+      .ws-ai-drawer textarea{min-height:150px;}
       @media(max-width:760px){ .packet-workspace-shell .ws-intel-strip > summary{ flex-direction:column; } .packet-workspace-shell .ws-intel-strip-metrics{ justify-content:flex-start; } }
 
       .packet-workspace-shell .ws-drop-zone.has-file{
@@ -19936,17 +19934,16 @@ function renderInlineAIAssist(billed_id, channel){
   const isNegotiation = channel === "negotiation";
   const safeId = String(`${channel || "workspace"}-${billed_id || ""}`).replace(/[^a-zA-Z0-9_-]/g, "_");
   const drawerId = `wsAiAssistDrawer_${safeId}`;
-  const backdropId = `${drawerId}_backdrop`;
 
   const helperText = isNegotiation
     ? `
-      Use AI to improve this negotiation packet without leaving the packet preview.
+      Use AI while the packet remains visible behind this floating panel.
       <br/>• strengthen contract variance language
       <br/>• add reimbursement methodology
       <br/>• justify the requested payment amount
     `
     : `
-      Use AI to improve this appeal packet without leaving the packet preview.
+      Use AI while the packet remains visible behind this floating panel.
       <br/>• strengthen denial reversal argument
       <br/>• add medical necessity or policy support
       <br/>• rewrite for appeal approval
@@ -19960,13 +19957,12 @@ function renderInlineAIAssist(billed_id, channel){
     <div class="ws-panel ws-ai-assist-launcher">
       <h3>🤖 AI Assist</h3>
       <p class="muted small" style="margin-top:0;">
-        Improve the ${safeStr(isNegotiation ? "negotiation" : "appeal")} language in a slide-out panel while keeping the packet preview visible.
+        Improve the ${safeStr(isNegotiation ? "negotiation" : "appeal")} language in a floating panel while keeping the packet preview scrollable.
       </p>
       <button class="btn secondary small" type="button" onclick="openWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">
         Open AI Assist
       </button>
     </div>
-    <div id="${safeStr(backdropId)}" class="ws-ai-drawer-backdrop" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')"></div>
     <aside id="${safeStr(drawerId)}" class="ws-ai-drawer" aria-hidden="true">
       <div class="ws-ai-drawer-head">
         <div><h3 style="margin:0;">🤖 AI Assist</h3><div class="muted small">Improve this ${safeStr(isNegotiation ? "negotiation" : "appeal")} packet, then apply the changes.</div></div>
@@ -20004,8 +20000,18 @@ function renderInlineAIAssist(billed_id, channel){
         </div>
       </form>
       <script>
-      window.openWorkspaceAiAssistDrawer = window.openWorkspaceAiAssistDrawer || function(id){ var drawer = document.getElementById(id); var backdrop = document.getElementById(id + "_backdrop"); if (!drawer) return; drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); if (backdrop) backdrop.classList.add("open"); document.body.classList.add("ws-ai-drawer-open"); };
-      window.closeWorkspaceAiAssistDrawer = window.closeWorkspaceAiAssistDrawer || function(id){ var drawer = document.getElementById(id); var backdrop = document.getElementById(id + "_backdrop"); if (!drawer) return; drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); if (backdrop) backdrop.classList.remove("open"); document.body.classList.remove("ws-ai-drawer-open"); };
+      window.openWorkspaceAiAssistDrawer = window.openWorkspaceAiAssistDrawer || function(id){
+        var drawer = document.getElementById(id);
+        if (!drawer) return;
+        drawer.classList.add("open");
+        drawer.setAttribute("aria-hidden", "false");
+      };
+      window.closeWorkspaceAiAssistDrawer = window.closeWorkspaceAiAssistDrawer || function(id){
+        var drawer = document.getElementById(id);
+        if (!drawer) return;
+        drawer.classList.remove("open");
+        drawer.setAttribute("aria-hidden", "true");
+      };
       </script>
     </aside>
   `;
