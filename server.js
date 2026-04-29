@@ -17493,34 +17493,45 @@ function renderWorkspaceIntelligenceStrip(ws, claim, derived, channel, outcomeIn
     .filter(Boolean);
 
   const missingCount = Number(auto.requiredMissing || 0);
-  const proofReady = Number(auto.requiredPresent || 0);
-  const proofTotal = Math.max(1, Number(auto.required?.length || 0));
-
   const confidence =
     score.probability >= 80 ? "High confidence" :
     score.probability >= 60 ? "Moderate confidence" :
     "Needs strengthening";
+
+  const helping = [];
+  const attention = [];
+
+  if (Number(completeness.pct || 0) >= 80) helping.push("Packet structure is mostly complete.");
+  if (Number(auto.requiredPresent || 0) > 0) helping.push(`${Number(auto.requiredPresent || 0)} required proof item${Number(auto.requiredPresent || 0) === 1 ? "" : "s"} ready.`);
+  if (Number(score.estimatedRecovery || 0) > 0) helping.push(`${formatMoneyUI(score.estimatedRecovery || 0)} estimated recovery opportunity remains.`);
+
+  if (missingCount > 0) attention.push(`${missingCount} required proof item${missingCount === 1 ? "" : "s"} still missing.`);
+  if (score.probability < 60) attention.push("Success probability is below target until proof and packet support are strengthened.");
+  if (!lines.length) attention.push("No historical outcomes yet, so baseline packet guidance is being used.");
 
   return `
     <details class="ws-intel-strip">
       <summary>
         <div>
           <strong>Outcome Intelligence <span class="tooltip" data-tip="Shows learning from prior appeal and negotiation outcomes. When there is not enough history, this uses baseline packet guidance until completed outcomes are available.">ⓘ</span></strong>
-          <div class="muted small">${safeStr(confidence)} · ${safeStr(channel === "negotiation" ? "Negotiation" : "Appeal")} packet</div>
+          <div class="muted small">${safeStr(confidence)} · insight only, not another KPI panel</div>
         </div>
         <div class="ws-intel-strip-metrics">
-          <span>${Number(score.probability || 0)}% success</span>
-          <span>${formatMoneyUI(score.estimatedRecovery || 0)} est. recovery</span>
-          <span>${proofReady}/${proofTotal} proof ready</span>
+          <span>${safeStr(channel === "negotiation" ? "Negotiation" : "Appeal")} insight</span>
+          <span>${missingCount ? `${missingCount} proof gap${missingCount === 1 ? "" : "s"}` : "Proof on track"}</span>
         </div>
       </summary>
 
       <div class="ws-intel-strip-body">
-        <div class="ws-intel-mini-grid">
-          <div><strong>${Number(completeness.pct || 0)}%</strong><span>Packet readiness</span></div>
-          <div><strong>${Number(score.probability || 0)}%</strong><span>Success probability</span></div>
-          <div><strong>${formatMoneyUI(score.estimatedRecovery || 0)}</strong><span>Estimated recovery</span></div>
-          <div><strong>${missingCount}</strong><span>Missing required proof</span></div>
+        <div class="ws-intel-insight-grid">
+          <div>
+            <strong>What is helping</strong>
+            <ul>${(helping.length ? helping : ["Packet is ready for review once source proof is complete."]).map(x => `<li>${safeStr(x)}</li>`).join("")}</ul>
+          </div>
+          <div>
+            <strong>What still needs attention</strong>
+            <ul>${(attention.length ? attention : ["No major outcome intelligence warnings detected."]).map(x => `<li>${safeStr(x)}</li>`).join("")}</ul>
+          </div>
         </div>
 
         <div class="muted small" style="margin-top:10px;">
@@ -18323,6 +18334,55 @@ function workspacePolishStyles(){
         padding:12px 14px 14px;
       }
 
+      .packet-workspace-shell .ws-intel-insight-grid{
+        display:grid;
+        grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+        gap:10px;
+      }
+
+      .packet-workspace-shell .ws-intel-insight-grid > div{
+        border:1px solid var(--ws-border);
+        border-radius:12px;
+        padding:10px;
+        background:#f8fafc;
+      }
+
+      .packet-workspace-shell .ws-intel-insight-grid strong{
+        display:block;
+        margin-bottom:6px;
+      }
+
+      .packet-workspace-shell .ws-intel-insight-grid ul{
+        margin:0 0 0 18px;
+        padding:0;
+        color:var(--ws-muted);
+        font-size:12px;
+        line-height:1.4;
+      }
+
+      .packet-workspace-shell .ws-inline-edit-form{
+        display:none;
+        margin-top:10px;
+      }
+
+      .packet-workspace-shell .ws-clean-section.editing .ws-inline-edit-form{
+        display:block;
+      }
+
+      .packet-workspace-shell .ws-clean-section.editing .ws-section-body{
+        display:none;
+      }
+
+      .packet-workspace-shell .ws-section-body.click-edit{
+        cursor:text;
+      }
+
+      .packet-workspace-shell .ws-section-body.click-edit:hover{
+        outline:2px dashed #cbd5e1;
+        outline-offset:6px;
+        border-radius:10px;
+      }
+
       .packet-workspace-shell .ws-intel-mini-grid{
         display:grid;
         grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
@@ -18515,6 +18575,58 @@ function workspacePolishStyles(){
 
       .packet-workspace-shell .outcome-rec-proof-box .ws-drop-zone{
         padding:10px;
+      }
+      .packet-workspace-shell .ws-proof-mini-list{
+        display:grid;
+        grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+        gap:8px;
+        margin-top:10px;
+      }
+      .packet-workspace-shell .ws-proof-mini-row{
+        display:flex;
+        justify-content:space-between;
+        gap:8px;
+        align-items:center;
+        border:1px solid var(--ws-border);
+        border-radius:12px;
+        padding:9px 10px;
+        background:#f8fafc;
+        font-size:12px;
+        font-weight:800;
+      }
+      .packet-workspace-shell .ws-proof-center > summary{ cursor:pointer; }
+      .packet-workspace-shell .ws-clean-summary .ws-summary-copy{
+        display:block;
+        color:var(--ws-muted);
+        font-size:11px;
+        font-weight:700;
+        margin-top:3px;
+      }
+      .packet-workspace-shell .ws-clean-summary .ws-summary-chevron{ font-weight:900; margin-left:8px; }
+      .packet-workspace-shell .ws-proof-center[open] .ws-summary-chevron{ transform:rotate(180deg); }
+      .packet-workspace-shell .ws-packet-exhibits{ border-left:4px solid #0ea5e9; }
+      .packet-workspace-shell .ws-exhibit-grid{
+        display:grid;
+        grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+        gap:10px;
+        margin-top:10px;
+      }
+      .packet-workspace-shell .ws-exhibit-card{
+        border:1px solid var(--ws-border);
+        border-radius:12px;
+        padding:10px;
+        background:#f8fafc;
+      }
+      .packet-workspace-shell .ws-exhibit-title{ font-weight:900; margin-bottom:4px; }
+      .packet-workspace-shell .ws-bottom-actions{
+        display:flex;
+        justify-content:space-between;
+        gap:10px;
+        flex-wrap:wrap;
+        align-items:center;
+        border-top:1px solid var(--ws-border);
+        margin-top:18px;
+        padding-top:14px;
       }
       .packet-workspace-shell .ws-ai-assist-launcher{ border-left:4px solid #4f46e5; }
       .ws-ai-drawer-backdrop{display:none;}
@@ -19182,6 +19294,54 @@ function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, opts={}){
   `;
 }
 
+function renderWorkspacePacketExhibits(ws, claim, channel){
+  const docs = workspaceRequiredDocConfig(channel);
+  const rows = docs.map((doc, index) => {
+    const rawRow = workspaceDocAutomationStatus(ws, doc, claim, channel);
+    const row = workspaceUiAutomationRow(ws, claim, rawRow);
+    const hasSourceProof = workspaceIsSubmissionProof(row);
+    const hasDraftEvidence = workspaceIsDraftEvidence(row);
+    const label = workspaceDocLabel(doc.key);
+    const exhibitName = `Exhibit ${String.fromCharCode(65 + index)}`;
+    const status = hasSourceProof ? "Attached" : (hasDraftEvidence ? "Found in system" : "Missing");
+    const badge = hasSourceProof ? "ok" : (hasDraftEvidence ? "warn" : (doc.required ? "err" : "optional"));
+    const preview = (hasSourceProof || hasDraftEvidence)
+      ? renderWorkspaceEvidencePreview(ws, claim, doc, row, channel)
+      : "";
+
+    return `
+      <div class="ws-exhibit-card">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+          <div>
+            <div class="ws-exhibit-title">${safeStr(exhibitName)} · ${safeStr(label)}</div>
+            <div class="muted small">${safeStr(row.detail || doc.why || "")}</div>
+          </div>
+          <span class="badge ${safeStr(badge)}">${safeStr(status)}</span>
+        </div>
+        ${preview}
+        <div style="margin-top:8px;">
+          ${renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, {
+            compact: true,
+            buttonLabel: hasSourceProof ? "Replace" : "Upload"
+          })}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="ws-section-card ws-packet-exhibits">
+      <div class="ws-section-head">
+        <div>
+          <div class="ws-section-title">Supporting Documents / Exhibits</div>
+          <div class="muted small" style="margin-top:3px;">Uploaded and system-found proof that will support this packet.</div>
+        </div>
+      </div>
+      <div class="ws-exhibit-grid">${rows}</div>
+    </div>
+  `;
+}
+
 function renderWorkspacePullForm(ws, claim, doc, row, channel){
   if (row?.status !== "pull_available") return "";
 
@@ -19332,11 +19492,28 @@ function renderWorkspaceProofCenter(ws, claim, channel){
     ? `<span class="badge warn">${auto.requiredMissing} required missing</span>`
     : `<span class="badge ok">Required ready</span>`;
 
+  const proofSummaryRows = requiredDocs.map(doc => {
+    const rawRow = workspaceDocAutomationStatus(ws, doc, claim, channel);
+    const row = workspaceUiAutomationRow(ws, claim, rawRow);
+    const cls = workspaceProofStatusClass({ ...row, required: !!doc.required });
+    const status = workspaceIsSubmissionProof(row)
+      ? "Attached"
+      : (row.proofLevel === "draft_evidence" ? "Draft" : "Missing");
+    return `<div class="ws-proof-mini-row"><span>${safeStr(doc.label || workspaceDocLabel(doc.key))}</span><span class="badge ${safeStr(cls)}">${safeStr(status)}</span></div>`;
+  }).join("");
+
   return `
-    <details class="ws-panel ws-proof-center">
+    <details class="ws-panel ws-proof-center" ${auto.requiredMissing > 0 ? "open" : ""}>
       <summary class="ws-clean-summary">
-        <span>📄 ${safeStr(title)}</span>
-        ${blocking}
+        <span style="display:block;min-width:0;flex:1;">
+          <span>📄 ${safeStr(title)}</span>
+          <span class="ws-summary-copy">Click to view proof items, upload missing files, or replace attached documents.</span>
+          <span class="ws-proof-mini-list">${proofSummaryRows}</span>
+        </span>
+        <span style="display:inline-flex;gap:8px;align-items:center;">
+          ${blocking}
+          <span class="ws-summary-chevron">⌄</span>
+        </span>
       </summary>
 
       <div class="ws-proof-intro">${safeStr(intro)}</div>
@@ -20077,7 +20254,7 @@ function renderEditablePacketSection(opts){
     : `<span class="muted">No content yet.</span>`;
 
   return `
-    <div class="ws-section-card ws-clean-section">
+    <div class="ws-section-card ws-clean-section" data-inline-section="${safeStr(section_key)}">
       <div class="ws-section-head">
         <div>
           <div class="ws-section-title">${safeStr(title)}</div>
@@ -20085,21 +20262,21 @@ function renderEditablePacketSection(opts){
         </div>
       </div>
 
-      <div class="ws-section-body">${showPreview}</div>
+      <div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing');">
+        ${showPreview}
+        <div class="muted small" style="margin-top:8px;">Click this section to edit.</div>
+      </div>
 
-      <details class="ws-section-editor" ${compact ? "" : ""}>
-        <summary>Edit section</summary>
-
-        <form class="ws-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview">
-          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
-          <input type="hidden" name="channel" value="${safeStr(channel)}"/>
-          <input type="hidden" name="section_key" value="${safeStr(section_key)}"/>
-          <textarea name="value">${escapeHtml(value)}</textarea>
-          <div class="ws-inline-save">
-            <button class="btn secondary" type="submit">Save Section</button>
-          </div>
-        </form>
-      </details>
+      <form class="ws-edit-form ws-inline-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview">
+        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+        <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+        <input type="hidden" name="section_key" value="${safeStr(section_key)}"/>
+        <textarea name="value">${escapeHtml(value)}</textarea>
+        <div class="ws-inline-save">
+          <button class="btn secondary" type="submit">Save Section</button>
+          <button class="btn secondary" type="button" onclick="this.closest('.ws-clean-section').classList.remove('editing');">Cancel</button>
+        </div>
+      </form>
     </div>
   `;
 }
@@ -20294,6 +20471,7 @@ function renderWorkspacePreview(opts){
 
           ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_action", title:"Requested Action", value: packetSections.requested_action, description: sectionDescriptions.requested_action, exportMode })}
           ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"attachments_index", title:"Attachments Index", value: buildAttachmentsIndex(ws), description: sectionDescriptions.attachments_index, exportMode })}
+          ${!exportMode ? renderWorkspacePacketExhibits(ws, claim, channel) : ""}
           ${renderSignatureSection({
             billed_id: claim.billed_id,
             channel,
@@ -20301,6 +20479,18 @@ function renderWorkspacePreview(opts){
             signature_image: ws.signature_image || savedSignature,
             exportMode
           })}
+
+          ${!exportMode ? `
+            <div class="ws-bottom-actions">
+              <div>
+                <strong>Ready to export?</strong>
+                <div class="muted small">Download again from here after reviewing the full packet.</div>
+              </div>
+              <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">
+                Download PDF
+              </a>
+            </div>
+          ` : ""}
         </div>
       </div>
     </div>
