@@ -32489,7 +32489,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           return {
             ...c,
             __derived: d,
-            __risk: computeClaimRiskScore(c)
+            __risk: computeClaimRiskScore(c),
+            __why: explainClaimFlag(c.org_id || "", c, d)
           };
         })
       ).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026")}</script>
@@ -32545,6 +32546,31 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             stage === "Underpaid" ? "Initiate negotiation" :
             stage === "Awaiting Payment" ? "Monitor for payer response or upload posted payment" :
             "No action needed";
+          const why = claim.__why || {};
+          const whyAmounts = why.amounts || {};
+          const whyEvidence = Array.isArray(why.evidence) ? why.evidence : [];
+          const whyMissing = Array.isArray(why.missingSupport) ? why.missingSupport : [];
+          const whyDetails = ''
+            + '<details style="border:1px solid #e5e7eb;border-left:4px solid #111827;border-radius:12px;padding:12px;margin:12px 0;background:#fff;">'
+            +   '<summary style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
+            +     '<span>'
+            +       '<strong>Why this claim is flagged</strong>'
+            +       '<span class="muted small" style="display:block;margin-top:4px;font-weight:700;">' + panelEsc(why.headline || "Review this claim") + '</span>'
+            +     '</span>'
+            +     '<span class="badge ' + panelEsc(why.badge || "warn") + '">' + panelEsc(why.stage || stage || "Review") + '</span>'
+            +   '</summary>'
+            +   '<p class="muted small" style="margin-top:10px;">' + panelEsc(why.reason || "") + '</p>'
+            +   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">'
+            +     '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:8px;"><div class="muted small">Expected</div><strong>' + (whyAmounts.expected != null ? panelMoney(whyAmounts.expected) : "-") + '</strong></div>'
+            +     '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:8px;"><div class="muted small">Paid</div><strong>' + panelMoney(whyAmounts.paid || 0) + '</strong></div>'
+            +   '</div>'
+            +   '<div style="margin-top:8px;">'
+            +     '<strong class="small">Recommended next step</strong>'
+            +     '<p class="muted small" style="margin:4px 0 0;">' + panelEsc(why.recommendation || nextAction || "") + '</p>'
+            +   '</div>'
+            +   (whyEvidence.length ? '<details style="margin-top:8px;"><summary class="small" style="cursor:pointer;font-weight:800;">Evidence used</summary><ul style="margin:6px 0 0 18px;">' + whyEvidence.map(function(x){ return '<li>' + panelEsc(x) + '</li>'; }).join("") + '</ul></details>' : '')
+            +   (whyMissing.length ? '<details style="margin-top:8px;"><summary class="small" style="cursor:pointer;font-weight:800;">Missing support / caution</summary><ul style="margin:6px 0 0 18px;">' + whyMissing.map(function(x){ return '<li>' + panelEsc(x) + '</li>'; }).join("") + '</ul></details>' : '')
+            + '</details>';
           const actionButton =
             stage === "Denied"
               ? '<a class="btn" href="/ai-appeal?billed_id=' + encodeURIComponent(claim.billed_id) + '">Submit Appeal →</a>'
@@ -32569,6 +32595,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             +   '<span class="muted small">' + panelEsc(networkStatus) + '</span>'
             + '</div>'
             + '<div class="hr"></div>'
+            + whyDetails
             + '<div>'
             +   '<strong>Claim Insight</strong>'
             +   '<p class="muted small">' + panelEsc(insight) + '</p>'
@@ -36810,23 +36837,26 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
         const whyEvidence = Array.isArray(why.evidence) ? why.evidence : [];
         const whyMissing = Array.isArray(why.missingSupport) ? why.missingSupport : [];
         const whyHtml = ''
-          + '<div style="border:1px solid #e5e7eb;border-left:4px solid #111827;border-radius:12px;padding:12px;margin:12px 0;background:#fff;">'
-          +   '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">'
-          +     '<div>'
+          + '<details style="border:1px solid #e5e7eb;border-left:4px solid #111827;border-radius:12px;padding:12px;margin:12px 0;background:#fff;">'
+          +   '<summary style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">'
+          +     '<span>'
           +       '<strong>Why this claim is flagged</strong>'
-          +       '<div class="muted small" style="margin-top:4px;font-weight:700;">' + panelEsc(why.headline || 'Review this claim') + '</div>'
-          +     '</div>'
+          +       '<span class="muted small" style="display:block;margin-top:4px;font-weight:700;">' + panelEsc(why.headline || 'Review this claim') + '</span>'
+          +     '</span>'
           +     '<span class="badge ' + panelEsc(why.badge || 'warn') + '">' + panelEsc(why.stage || normalizedDisplayStage) + '</span>'
-          +   '</div>'
-          +   '<p class="muted small" style="margin-top:8px;">' + panelEsc(why.reason || '') + '</p>'
+          +   '</summary>'
+          +   '<p class="muted small" style="margin-top:10px;">' + panelEsc(why.reason || '') + '</p>'
           +   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">'
           +     '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:8px;"><div class="muted small">Expected</div><strong>' + (whyAmounts.expected != null ? panelMoney(whyAmounts.expected) : '-') + '</strong></div>'
           +     '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:8px;"><div class="muted small">Paid</div><strong>' + panelMoney(whyAmounts.paid || 0) + '</strong></div>'
           +   '</div>'
-          +   '<div style="margin-top:8px;"><strong class="small">Recommended next step</strong><p class="muted small" style="margin:4px 0 0;">' + panelEsc(why.recommendation || '') + '</p></div>'
+          +   '<div style="margin-top:8px;">'
+          +     '<strong class="small">Recommended next step</strong>'
+          +     '<p class="muted small" style="margin:4px 0 0;">' + panelEsc(why.recommendation || '') + '</p>'
+          +   '</div>'
           +   (whyEvidence.length ? '<details style="margin-top:8px;"><summary class="small" style="cursor:pointer;font-weight:800;">Evidence used</summary><ul style="margin:6px 0 0 18px;">' + whyEvidence.map(function(x){ return '<li>' + panelEsc(x) + '</li>'; }).join('') + '</ul></details>' : '')
           +   (whyMissing.length ? '<details style="margin-top:8px;"><summary class="small" style="cursor:pointer;font-weight:800;">Missing support / caution</summary><ul style="margin:6px 0 0 18px;">' + whyMissing.map(function(x){ return '<li>' + panelEsc(x) + '</li>'; }).join('') + '</ul></details>' : '')
-          + '</div>';
+          + '</details>';
 
         ui.content.innerHTML = ''
           + '<div style="font-size:20px;font-weight:900;margin-bottom:10px;">Claim #' + panelEsc(claim.claim_number || "") + '</div>'
