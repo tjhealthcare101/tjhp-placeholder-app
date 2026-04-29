@@ -15688,11 +15688,11 @@ function outcomeEvidenceActionText(key, channel){
   const k = String(key || "");
 
   if (k === "denial_letter") {
-    return "Upload the payer denial letter in Document & Proof Center.";
+    return "Upload the payer denial letter.";
   }
 
   if (k === "eob") {
-    return "Upload or attach the actual EOB / ERA / remittance source document, even if payment data is already in the system.";
+    return "Upload or attach the actual EOB / ERA / remittance source document.";
   }
 
   if (k === "claim_form") {
@@ -15710,6 +15710,39 @@ function outcomeEvidenceActionText(key, channel){
   }
 
   return "Add supporting evidence before final submission.";
+}
+
+function outcomeRecommendationDocKey(key){
+  const k = String(key || "").trim();
+  if (k === "denial_letter") return "denial_letter";
+  if (k === "eob") return "eob_era";
+  if (k === "claim_form") return "claim_form";
+  if (k === "policy") return "payer_policy";
+  if (k === "contract") return "contract_excerpt";
+  return k;
+}
+
+function outcomeRecommendationUploadDoc(key){
+  const docKey = outcomeRecommendationDocKey(key);
+  return { key: docKey, label: outcomeEvidenceLabel(key), required: true };
+}
+
+function outcomeRecommendationEvidenceState(ws, claim, key, channel){
+  const doc = outcomeRecommendationUploadDoc(key);
+  const rawRow = workspaceDocAutomationStatus(ws, doc, claim, channel);
+  const row = workspaceUiAutomationRow(ws, claim, rawRow);
+  const hasSourceProof = workspaceIsSubmissionProof(row);
+  const hasDraftEvidence = workspaceIsDraftEvidence(row);
+
+  return {
+    doc,
+    row,
+    hasSourceProof,
+    hasDraftEvidence,
+    statusLabel: hasSourceProof ? "Already attached" : (hasDraftEvidence ? "Found in system" : "Missing"),
+    badgeClass: hasSourceProof ? "ok" : (hasDraftEvidence ? "warn" : "err"),
+    uploadLabel: hasSourceProof ? "Replace File" : (hasDraftEvidence ? "Upload Source Proof" : "Upload")
+  };
 }
 
 function getWorkspaceOutcomeEvidenceFlags(org_id, ws, claim, channel){
@@ -15999,6 +16032,8 @@ function renderOutcomeRecommendationsCard(org_id, ws, claim, channel){
   return `
     <div class="card outcome-recommendation-card" style="margin-top:12px;border-left:4px solid #f59e0b;">
       <h3>Outcome-Based Recommendations</h3>
+      <div class="muted small" style="margin-top:-4px;margin-bottom:8px;">Upload, preview, or replace the exact source proof needed for this packet.</div>
+
       <p class="muted">
         These recommendations compare the current packet against evidence patterns that have helped prior appeals and negotiations.
       </p>
@@ -16017,6 +16052,41 @@ function renderOutcomeRecommendationsCard(org_id, ws, claim, channel){
             <div style="margin-top:8px;font-size:12px;">
               <strong>Next step:</strong> ${safeStr(r.action)}
             </div>
+
+            ${(() => {
+              const state = outcomeRecommendationEvidenceState(ws, claim, r.key, channel);
+              const preview = (state.hasSourceProof || state.hasDraftEvidence)
+                ? renderWorkspaceEvidencePreview(ws, claim, state.doc, state.row, channel)
+                : "";
+
+              return `
+                <div class="outcome-rec-proof-box">
+                  <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+                    <div>
+                      <strong>${safeStr(state.doc.label || workspaceDocLabel(state.doc.key))}</strong>
+                      <div class="muted small" style="margin-top:3px;">
+                        ${state.hasSourceProof
+                          ? "Source proof is attached. Preview it below or replace it if needed."
+                          : state.hasDraftEvidence
+                            ? "The system found draft evidence. Upload source proof if payer submission requires the actual document."
+                            : "No source proof is attached yet."
+                        }
+                      </div>
+                    </div>
+                    <span class="badge ${safeStr(state.badgeClass)}">${safeStr(state.statusLabel)}</span>
+                  </div>
+
+                  ${preview}
+
+                  <div style="margin-top:10px;">
+                    ${renderWorkspaceDocUploadForm(ws, claim, state.doc, state.row, channel, {
+                      buttonLabel: state.uploadLabel,
+                      compact: true
+                    })}
+                  </div>
+                </div>
+              `;
+            })()}
 
             <div class="muted small" style="margin-top:6px;">
               Source: ${safeStr(r.source)}
@@ -17413,6 +17483,57 @@ function renderWorkspaceIntelligence(ws, claim, derived, channel){
   `;
 }
 
+function renderWorkspaceIntelligenceStrip(ws, claim, derived, channel, outcomeInsightText=""){
+  const score = computeWorkspaceQuickScore(ws, claim, derived, channel);
+  const auto = buildWorkspaceAutomationReadiness(ws, claim, channel);
+  const completeness = workspaceEnhancedCompleteness(ws, channel, claim);
+  const lines = String(outcomeInsightText || "")
+    .split("\n")
+    .map(x => x.trim())
+    .filter(Boolean);
+
+  const missingCount = Number(auto.requiredMissing || 0);
+  const proofReady = Number(auto.requiredPresent || 0);
+  const proofTotal = Math.max(1, Number(auto.required?.length || 0));
+
+  const confidence =
+    score.probability >= 80 ? "High confidence" :
+    score.probability >= 60 ? "Moderate confidence" :
+    "Needs strengthening";
+
+  return `
+    <details class="ws-intel-strip">
+      <summary>
+        <div>
+          <strong>Outcome Intelligence <span class="tooltip" data-tip="Shows learning from prior appeal and negotiation outcomes. When there is not enough history, this uses baseline packet guidance until completed outcomes are available.">ⓘ</span></strong>
+          <div class="muted small">${safeStr(confidence)} · ${safeStr(channel === "negotiation" ? "Negotiation" : "Appeal")} packet</div>
+        </div>
+        <div class="ws-intel-strip-metrics">
+          <span>${Number(score.probability || 0)}% success</span>
+          <span>${formatMoneyUI(score.estimatedRecovery || 0)} est. recovery</span>
+          <span>${proofReady}/${proofTotal} proof ready</span>
+        </div>
+      </summary>
+
+      <div class="ws-intel-strip-body">
+        <div class="ws-intel-mini-grid">
+          <div><strong>${Number(completeness.pct || 0)}%</strong><span>Packet readiness</span></div>
+          <div><strong>${Number(score.probability || 0)}%</strong><span>Success probability</span></div>
+          <div><strong>${formatMoneyUI(score.estimatedRecovery || 0)}</strong><span>Estimated recovery</span></div>
+          <div><strong>${missingCount}</strong><span>Missing required proof</span></div>
+        </div>
+
+        <div class="muted small" style="margin-top:10px;">
+          ${lines.length
+            ? lines.slice(0, 4).map(x => `• ${safeStr(x)}`).join("<br/>")
+            : "Outcome learning will become more specific as appeals and negotiations are completed and tracked."
+          }
+        </div>
+      </div>
+    </details>
+  `;
+}
+
 function renderWorkspaceStrategyPanel(ws, claim, derived, channel){
   const isNegotiation = channel === "negotiation";
   const docs = workspaceRequiredDocConfig(channel);
@@ -18147,6 +18268,106 @@ function workspacePolishStyles(){
         }
       }
       /* Combined Document & Proof Center */
+      .packet-workspace-shell .ws-intel-strip{
+        border:1px solid var(--ws-border);
+        border-radius:16px;
+        background:#fff;
+        box-shadow:0 10px 28px rgba(15,23,42,.05);
+        margin:12px 0;
+        padding:0;
+      }
+
+      .packet-workspace-shell .ws-intel-strip > summary{
+        cursor:pointer;
+        display:flex;
+        justify-content:space-between;
+        gap:12px;
+        align-items:flex-start;
+        padding:14px;
+        list-style:none;
+      }
+
+      .packet-workspace-shell .ws-intel-strip > summary::-webkit-details-marker{
+        display:none;
+      }
+
+      .packet-workspace-shell .ws-intel-strip > summary::after{
+        content:"⌄";
+        font-weight:900;
+        margin-left:auto;
+      }
+
+      .packet-workspace-shell .ws-intel-strip[open] > summary::after{
+        transform:rotate(180deg);
+      }
+
+      .packet-workspace-shell .ws-intel-strip-metrics{
+        display:flex;
+        flex-wrap:wrap;
+        gap:8px;
+        justify-content:flex-end;
+      }
+
+      .packet-workspace-shell .ws-intel-strip-metrics span{
+        border:1px solid var(--ws-border);
+        border-radius:999px;
+        padding:5px 8px;
+        font-size:12px;
+        font-weight:800;
+        background:#f8fafc;
+        white-space:nowrap;
+      }
+
+      .packet-workspace-shell .ws-intel-strip-body{
+        border-top:1px solid var(--ws-border);
+        padding:12px 14px 14px;
+      }
+
+      .packet-workspace-shell .ws-intel-mini-grid{
+        display:grid;
+        grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+        gap:8px;
+      }
+
+      .packet-workspace-shell .ws-intel-mini-grid > div{
+        border:1px solid var(--ws-border);
+        border-radius:12px;
+        padding:10px;
+        background:#f8fafc;
+      }
+      .packet-workspace-shell .ws-full-preview{
+        margin-top:14px;
+      }
+
+      .packet-workspace-shell .ws-more-tools{
+        margin-top:16px;
+      }
+
+      .packet-workspace-shell .ws-more-tools > summary{
+        cursor:pointer;
+        font-weight:900;
+        display:flex;
+        justify-content:space-between;
+        gap:10px;
+        align-items:center;
+      }
+
+      .packet-workspace-shell .ws-more-tools > summary::after{
+        content:"⌄";
+        font-weight:900;
+      }
+
+      .packet-workspace-shell .ws-more-tools[open] > summary::after{
+        transform:rotate(180deg);
+      }
+
+      .packet-workspace-shell .ws-tools-grid{
+        display:grid;
+        grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+        gap:12px;
+        margin-top:12px;
+      }
+
       .packet-workspace-shell .ws-proof-center{
         border:1px solid #e5e7eb;
         border-radius:18px;
@@ -18283,6 +18504,29 @@ function workspacePolishStyles(){
         border-color:#64748b;
         background:#eef2ff;
       }
+
+      .packet-workspace-shell .outcome-rec-proof-box{
+        margin-top:10px;
+        border:1px solid #e5e7eb;
+        border-radius:12px;
+        background:#fff;
+        padding:10px;
+      }
+
+      .packet-workspace-shell .outcome-rec-proof-box .ws-drop-zone{
+        padding:10px;
+      }
+      .packet-workspace-shell .ws-ai-assist-launcher{ border-left:4px solid #4f46e5; }
+      .ws-ai-drawer-backdrop{ position:fixed; inset:0; background:rgba(15,23,42,.38); opacity:0; pointer-events:none; transition:opacity .18s ease; z-index:9998; }
+      .ws-ai-drawer-backdrop.open{ opacity:1; pointer-events:auto; }
+      .ws-ai-drawer{ position:fixed; top:0; right:-520px; width:min(520px,94vw); height:100vh; background:#fff; border-left:1px solid #e5e7eb; box-shadow:-18px 0 45px rgba(15,23,42,.2); z-index:9999; transition:right .22s ease; overflow:auto; padding:18px; }
+      .ws-ai-drawer.open{ right:0; }
+      .ws-ai-drawer-head{ display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:12px; }
+      .ws-ai-drawer-close{ border:1px solid #e5e7eb; background:#f8fafc; border-radius:999px; width:34px; height:34px; cursor:pointer; font-weight:900; }
+      .ws-ai-preset-grid{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+      .ws-ai-drawer textarea{ min-height:150px; }
+      body.ws-ai-drawer-open{ overflow:hidden; }
+      @media(max-width:760px){ .packet-workspace-shell .ws-intel-strip > summary{ flex-direction:column; } .packet-workspace-shell .ws-intel-strip-metrics{ justify-content:flex-start; } }
 
       .packet-workspace-shell .ws-drop-zone.has-file{
         border-color:#16a34a;
@@ -18916,24 +19160,26 @@ function renderWorkspaceEvidencePreview(ws, claim, doc, row, channel){
   `;
 }
 
-function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel){
+function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, opts={}){
   const billed_id = claim?.billed_id || ws?.billed_id || "";
   const docKey = doc?.key || row?.key || "";
+  const buttonLabel = opts.buttonLabel || "Upload";
+  const compactClass = opts.compact ? " compact" : "";
 
   return `
-    <form class="ws-drop-upload" method="POST" action="/ai-workspace/upload" enctype="multipart/form-data">
+    <form class="ws-drop-upload${compactClass}" method="POST" action="/ai-workspace/upload" enctype="multipart/form-data">
       <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
       <input type="hidden" name="channel" value="${safeStr(channel)}"/>
       <input type="hidden" name="doc_key" value="${safeStr(docKey)}"/>
 
       <label class="ws-drop-zone">
-        <input class="ws-doc-file-input" type="file" name="file" />
+        <input class="ws-doc-file-input" type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.csv,.txt,.doc,.docx,.xls,.xlsx" />
         <span class="ws-drop-title">Drop document here or choose file</span>
-        <span class="ws-drop-sub">PDF, image, CSV, or supporting document</span>
+        <span class="ws-drop-sub">PDF, image, CSV, Excel, Word, TXT, or supporting document</span>
         <span class="ws-file-name muted small"></span>
       </label>
 
-      <button class="btn secondary small" type="submit">Upload</button>
+      <button class="btn secondary small" type="submit">${safeStr(buttonLabel)}</button>
     </form>
   `;
 }
@@ -19089,7 +19335,7 @@ function renderWorkspaceProofCenter(ws, claim, channel){
     : `<span class="badge ok">Required ready</span>`;
 
   return `
-    <details class="ws-panel ws-proof-center" open>
+    <details class="ws-panel ws-proof-center">
       <summary class="ws-clean-summary">
         <span>📄 ${safeStr(title)}</span>
         ${blocking}
@@ -19688,16 +19934,19 @@ function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
 
 function renderInlineAIAssist(billed_id, channel){
   const isNegotiation = channel === "negotiation";
+  const safeId = String(`${channel || "workspace"}-${billed_id || ""}`).replace(/[^a-zA-Z0-9_-]/g, "_");
+  const drawerId = `wsAiAssistDrawer_${safeId}`;
+  const backdropId = `${drawerId}_backdrop`;
 
   const helperText = isNegotiation
     ? `
-      Ask AI to improve this negotiation packet:
+      Use AI to improve this negotiation packet without leaving the packet preview.
       <br/>• strengthen contract variance language
       <br/>• add reimbursement methodology
       <br/>• justify the requested payment amount
     `
     : `
-      Ask AI to improve this appeal packet:
+      Use AI to improve this appeal packet without leaving the packet preview.
       <br/>• strengthen denial reversal argument
       <br/>• add medical necessity or policy support
       <br/>• rewrite for appeal approval
@@ -19708,20 +19957,33 @@ function renderInlineAIAssist(billed_id, channel){
     : "e.g. Make this stronger for medical necessity or denial reversal";
 
   return `
-    <div class="ws-panel">
+    <div class="ws-panel ws-ai-assist-launcher">
       <h3>🤖 AI Assist</h3>
+      <p class="muted small" style="margin-top:0;">
+        Improve the ${safeStr(isNegotiation ? "negotiation" : "appeal")} language in a slide-out panel while keeping the packet preview visible.
+      </p>
+      <button class="btn secondary small" type="button" onclick="openWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">
+        Open AI Assist
+      </button>
+    </div>
+    <div id="${safeStr(backdropId)}" class="ws-ai-drawer-backdrop" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')"></div>
+    <aside id="${safeStr(drawerId)}" class="ws-ai-drawer" aria-hidden="true">
+      <div class="ws-ai-drawer-head">
+        <div><h3 style="margin:0;">🤖 AI Assist</h3><div class="muted small">Improve this ${safeStr(isNegotiation ? "negotiation" : "appeal")} packet, then apply the changes.</div></div>
+        <button class="ws-ai-drawer-close" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')" aria-label="Close AI Assist">×</button>
+      </div>
       <form method="POST" action="/ai-workspace/ai-edit">
         <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
         <input type="hidden" name="channel" value="${safeStr(channel)}" />
 
-        <div class="hint" style="margin-bottom:8px;">
+        <div class="hint" style="margin:10px 0 12px;">
           ${helperText}
         </div>
 
         <div style="margin-bottom:8px;">
           <div class="small muted">Quick Improvements:</div>
 
-          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+          <div class="ws-ai-preset-grid">
             ${isNegotiation ? `
               <button type="submit" class="btn small" name="preset" value="improve">Strengthen Variance Argument</button>
               <button type="submit" class="btn small" name="preset" value="contract">Add Contract / Fee Schedule Language</button>
@@ -19736,9 +19998,16 @@ function renderInlineAIAssist(billed_id, channel){
 
         <textarea name="prompt" placeholder="${safeStr(placeholder)}"></textarea>
 
-        <button class="btn">Apply AI Update</button>
+        <div class="btnRow" style="margin-top:10px;">
+          <button class="btn">Apply AI Update</button>
+          <button class="btn secondary" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">Cancel</button>
+        </div>
       </form>
-    </div>
+      <script>
+      window.openWorkspaceAiAssistDrawer = window.openWorkspaceAiAssistDrawer || function(id){ var drawer = document.getElementById(id); var backdrop = document.getElementById(id + "_backdrop"); if (!drawer) return; drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); if (backdrop) backdrop.classList.add("open"); document.body.classList.add("ws-ai-drawer-open"); };
+      window.closeWorkspaceAiAssistDrawer = window.closeWorkspaceAiAssistDrawer || function(id){ var drawer = document.getElementById(id); var backdrop = document.getElementById(id + "_backdrop"); if (!drawer) return; drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); if (backdrop) backdrop.classList.remove("open"); document.body.classList.remove("ws-ai-drawer-open"); };
+      </script>
+    </aside>
   `;
 }
 
@@ -21889,6 +22158,9 @@ function renderClaimWhyCard(explanation, opts={}){
   const a = e.amounts || {};
   const title = opts.title || "Why this claim is flagged";
   const compact = opts.compact === true;
+  const hideAction = opts.hideAction === true;
+  const hideRecommendation = opts.hideRecommendation === true;
+  const recommendationLabel = opts.recommendationLabel || "Recommended next step";
   const evidence = Array.isArray(e.evidence) ? e.evidence : [];
   const missing = Array.isArray(e.missingSupport) ? e.missingSupport : [];
 
@@ -21917,10 +22189,12 @@ function renderClaimWhyCard(explanation, opts={}){
         ${metric("At Risk", formatMoneyUI(a.atRisk || 0))}
       </div>
 
-      <div style="margin-top:12px;">
-        <strong>Recommended next step</strong>
-        <div class="muted" style="margin-top:4px;">${safeStr(e.recommendation || "Review claim details before taking action.")}</div>
-      </div>
+      ${hideRecommendation ? "" : `
+        <div style="margin-top:12px;">
+          <strong>${safeStr(recommendationLabel)}</strong>
+          <div class="muted" style="margin-top:4px;">${safeStr(e.recommendation || "Review claim details before taking action.")}</div>
+        </div>
+      `}
 
       ${compact ? "" : `
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:12px;">
@@ -21938,9 +22212,11 @@ function renderClaimWhyCard(explanation, opts={}){
         </div>
       `}
 
-      <div class="btnRow" style="margin-top:12px;">
-        <a class="btn small secondary" href="${safeStr(e.nextActionHref || "#")}">${safeStr(e.nextActionLabel || "Open next step")}</a>
-      </div>
+      ${hideAction ? "" : `
+        <div class="btnRow" style="margin-top:12px;">
+          <a class="btn small secondary" href="${safeStr(e.nextActionHref || "#")}">${safeStr(e.nextActionLabel || "Open next step")}</a>
+        </div>
+      `}
     </div>
   `;
 }
@@ -32734,8 +33010,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + panelMoney(d.atRiskAmount || 0) + '</div></div>'
             + '</div>'
             + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
-            +   '<span class="badge ' + panelEsc(badgeClass) + '">' + panelEsc(displayStage || "Unknown") + '</span>'
-            +   '<span class="badge">Risk ' + panelEsc(String(claim.__risk || 0)) + '</span>'
+            +   '<span class="badge">Risk Score ' + panelEsc(String(claim.__risk || 0)) + ' <span class="tooltip" data-tip="Priority score based on claim status, dollars at risk, age, and workflow urgency. 1 = low risk, 100 = high risk.">ⓘ</span></span>'
             + '</div>'
             + contractAlert
             + '<div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
@@ -33597,7 +33872,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
       <div style="overflow:auto;">
         <table>
-          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Risk Score</th><th>Status</th><th>Source</th></tr></thead>
+          <thead><tr><th>Claim #</th><th>DOS</th><th>Payer</th><th>Billed</th><th>Paid</th><th>At Risk</th><th>Risk Score <span class="tooltip" data-tip="Priority score based on claim status, dollars at risk, age, and workflow urgency. 1 = low risk, 100 = high risk.">ⓘ</span></th><th>Status</th><th>Source</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="9" class="muted">No claims found.</td></tr>`}</tbody>
         </table>
       </div>
@@ -36868,8 +37143,7 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
           +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + panelMoney(d.atRiskAmount || 0) + '</div></div>'
           + '</div>'
           + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
-          +   '<span class="badge ' + panelEsc(badgeClass) + '">' + panelEsc(normalizedDisplayStage) + '</span>'
-          +   '<span class="badge">Risk ' + panelEsc(String(claim.__risk || 0)) + '</span>'
+          +   '<span class="badge">Risk Score ' + panelEsc(String(claim.__risk || 0)) + ' <span class="tooltip" data-tip="Priority score based on claim status, dollars at risk, age, and workflow urgency. 1 = low risk, 100 = high risk.">ⓘ</span></span>'
           + '</div>'
           + whyHtml
           + contractAlert
@@ -46722,12 +46996,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       </div>
     ` : "";
     const outcomeInsightText = buildOutcomeInsightText(sess.org_id);
-    const outcomeInsightCard = `
-      <div class="card" style="margin-top:12px;">
-        <h3>Outcome Intelligence</h3>
-        <pre style="white-space:pre-wrap;font-size:12px;">${safeStr(outcomeInsightText)}</pre>
-      </div>
-    `;
+    const outcomeInsightCard = renderWorkspaceIntelligenceStrip(ws, claim, derived, channel, outcomeInsightText);
     const outcomeRecommendationCard = renderOutcomeRecommendationsCard(sess.org_id, ws, claim, channel);
 
     const pageContent = `
@@ -46735,7 +47004,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       <div class="ws-main packet-workspace-shell">
         <div class="ws-banner">
           <div class="ws-banner-title">${channel === "appeal" ? `Round ${currentRound} (Appeal)` : `Round ${currentRound} (Negotiation)`}</div>
-          <div class="ws-banner-sub">Edit directly from the packet preview, upload missing documents from the sidebar, and export a clean letter that matches this preview.</div>
+          <div class="ws-banner-sub">Use the recommendations to attach source proof, then review the full packet preview and export a clean letter.</div>
           <div class="ws-quick-actions">
             <a class="btn secondary" href="/claims">Back to Claims</a>
             <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(claim.billed_id)}">Open Claim Detail</a>
@@ -46747,10 +47016,13 @@ if (method === "GET" && pathname === "/agent-workspace") {
         ${renderWorkspaceCommandCenter(ws, claim, derived, channel)}
         ${renderClaimWhyCard(explainClaimFlag(org.org_id, claim, derived), {
           title: channel === "negotiation" ? "Why this negotiation exists" : "Why this appeal exists",
-          compact: true
+          compact: true,
+          hideAction: true,
+          hideRecommendation: true
         })}
         ${outcomeInsightCard}
         ${outcomeRecommendationCard}
+        ${renderInlineAIAssist(claim.billed_id, channel)}
 
         ${savedMsg}
         ${uploadedMsg}
@@ -46758,28 +47030,27 @@ if (method === "GET" && pathname === "/agent-workspace") {
         ${appliedMsg}
         ${diffUI}
 
-        <div class="ws-layout">
-          <div class="ws-side workspace-left">
-            <div class="hint" style="margin-bottom:8px;">Workspace Tools</div>
-            ${renderWorkspaceIntelligence(ws, claim, derived, channel)}
+        <div class="ws-full-preview">
+          ${renderWorkspacePreview({
+            org_id: sess.org_id,
+            claim,
+            derived,
+            ws,
+            channel,
+            exportMode: false
+          })}
+        </div>
+
+        <details class="ws-panel ws-more-tools">
+          <summary>Workspace tools and proof center</summary>
+          <div class="muted small" style="margin-top:8px;">Use these when you need deeper proof review, workflow submission controls, or packet readiness checks.</div>
+          <div class="ws-tools-grid">
             ${typeof renderWorkspaceStrategyPanel === "function" ? renderWorkspaceStrategyPanel(ws, claim, derived, channel) : ""}
             ${renderAutomationReadinessPanel(ws, claim, channel)}
             ${renderPacketMissingChecklist(ws, claim, derived, channel, claim.billed_id)}
-            ${renderInlineAIAssist(claim.billed_id, channel)}
             ${renderWorkflowPanel(ws, claim, channel)}
           </div>
-
-          <div class="ws-main workspace-right">
-            ${renderWorkspacePreview({
-              org_id: sess.org_id,
-              claim,
-              derived,
-              ws,
-              channel,
-              exportMode: false
-            })}
-          </div>
-        </div>
+        </details>
       </div>
     `;
 
