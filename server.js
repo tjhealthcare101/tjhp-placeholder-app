@@ -18148,11 +18148,30 @@ function workspacePolishStyles(){
       }
 
       .packet-workspace-shell .ws-section-body{
-        white-space:pre-wrap;
+        white-space:pre-line;
         line-height:1.55;
         font-size:14px;
         color:#1f2937;
         background:#ffffff;
+      }
+
+      .packet-workspace-shell .ws-full-workflow{
+        margin-top:16px;
+      }
+
+      .packet-workspace-shell .ws-full-workflow .ws-panel{
+        width:100%;
+      }
+
+      .packet-workspace-shell .ws-recommendation-exhibits{
+        border-left:4px solid #0ea5e9;
+      }
+
+      .packet-workspace-shell .ws-recommendation-exhibits .ws-section-title{
+        display:flex;
+        align-items:center;
+        gap:8px;
+        flex-wrap:wrap;
       }
 
       .packet-workspace-shell .ws-section-editor{
@@ -19294,47 +19313,88 @@ function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, opts={}){
   `;
 }
 
-function renderWorkspacePacketExhibits(ws, claim, channel){
-  const docs = workspaceRequiredDocConfig(channel);
-  const rows = docs.map((doc, index) => {
-    const rawRow = workspaceDocAutomationStatus(ws, doc, claim, channel);
-    const row = workspaceUiAutomationRow(ws, claim, rawRow);
-    const hasSourceProof = workspaceIsSubmissionProof(row);
-    const hasDraftEvidence = workspaceIsDraftEvidence(row);
-    const label = workspaceDocLabel(doc.key);
+function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
+  const exportMode = !!opts.exportMode;
+  const org_id = String(ws?.org_id || claim?.org_id || "");
+  const recommendations = buildOutcomeRecommendations(org_id, ws, claim, channel);
+
+  const fallbackDocs = workspaceRequiredDocConfig(channel).map((doc, index) => ({
+    key:
+      doc.key === "eob_era" ? "eob" :
+      doc.key === "payer_policy" ? "policy" :
+      doc.key === "contract_excerpt" ? "contract" :
+      doc.key === "claim_form" ? "claim_form" :
+      doc.key === "denial_letter" ? "denial_letter" :
+      doc.key,
+    title: doc.label || workspaceDocLabel(doc.key),
+    reason: doc.why || "Supporting proof strengthens this packet.",
+    action: "Upload or replace source proof for this exhibit.",
+    priority: doc.required ? "Required" : "Optional",
+    source: "Packet Requirement",
+    __fallbackIndex: index
+  }));
+
+  const items = recommendations.length ? recommendations : fallbackDocs;
+
+
+  const rows = items.map((item, index) => {
+    const state = outcomeRecommendationEvidenceState(ws, claim, item.key, channel);
+    const doc = state.doc;
+    const row = state.row;
+    const hasSourceProof = state.hasSourceProof;
+    const hasDraftEvidence = state.hasDraftEvidence;
     const exhibitName = `Exhibit ${String.fromCharCode(65 + index)}`;
-    const status = hasSourceProof ? "Attached" : (hasDraftEvidence ? "Found in system" : "Missing");
-    const badge = hasSourceProof ? "ok" : (hasDraftEvidence ? "warn" : (doc.required ? "err" : "optional"));
     const preview = (hasSourceProof || hasDraftEvidence)
       ? renderWorkspaceEvidencePreview(ws, claim, doc, row, channel)
       : "";
+
+    const statusCopy = hasSourceProof
+      ? "Attached to packet. Preview it below or replace it if needed."
+      : hasDraftEvidence
+        ? "Found in system as draft evidence. Upload source proof if payer submission requires the actual document."
+        : "Missing. Upload this document so it can support the packet.";
 
     return `
       <div class="ws-exhibit-card">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
           <div>
-            <div class="ws-exhibit-title">${safeStr(exhibitName)} · ${safeStr(label)}</div>
-            <div class="muted small">${safeStr(row.detail || doc.why || "")}</div>
+            <div class="ws-exhibit-title">${safeStr(exhibitName)} · ${safeStr(state.doc.label || workspaceDocLabel(state.doc.key))}</div>
+            <div class="muted small" style="margin-top:3px;">${safeStr(item.reason || row.detail || doc.why || "")}</div>
           </div>
-          <span class="badge ${safeStr(badge)}">${safeStr(status)}</span>
+          <span class="badge ${safeStr(state.badgeClass)}">${safeStr(state.statusLabel)}</span>
         </div>
+
+        <div class="muted small" style="margin-top:8px;">${safeStr(statusCopy)}</div>
         ${preview}
-        <div style="margin-top:8px;">
-          ${renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, {
-            compact: true,
-            buttonLabel: hasSourceProof ? "Replace" : "Upload"
-          })}
+
+        ${exportMode ? "" : `
+          <div style="margin-top:8px;">
+            ${renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, {
+              compact: true,
+              buttonLabel: hasSourceProof ? "Replace" : (hasDraftEvidence ? "Upload Source Proof" : "Upload")
+            })}
+          </div>
+        `}
+
+        <div class="muted small" style="margin-top:8px;">
+          Source: ${safeStr(item.source || "Packet Requirement")}
+          ${item.priority ? ` · ${safeStr(item.priority)}` : ""}
         </div>
       </div>
     `;
   }).join("");
 
   return `
-    <div class="ws-section-card ws-packet-exhibits">
+    <div class="ws-section-card ws-packet-exhibits ws-recommendation-exhibits">
       <div class="ws-section-head">
         <div>
-          <div class="ws-section-title">Supporting Documents / Exhibits</div>
-          <div class="muted small" style="margin-top:3px;">Uploaded and system-found proof that will support this packet.</div>
+          <div class="ws-section-title">
+            Outcome-Based Recommendations / Packet Exhibits
+            <span class="badge">${safeStr(channel === "negotiation" ? "Negotiation" : "Appeal")}</span>
+          </div>
+          <div class="muted small" style="margin-top:3px;">
+            Documents uploaded here, or already found in the system, are tracked as supporting exhibits for the packet.
+          </div>
         </div>
       </div>
       <div class="ws-exhibit-grid">${rows}</div>
@@ -20227,6 +20287,22 @@ function renderInlineAiSuggestions(channel, claim, derived, ws){
   `;
 }
 
+function workspaceCleanPacketText(value){
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map(line => line.trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function workspacePacketTextHtml(value, emptyHtml){
+  const cleaned = workspaceCleanPacketText(value);
+  if (!cleaned) return emptyHtml || `<span class="muted">No content yet.</span>`;
+  return safeStr(cleaned);
+}
+
 function renderEditablePacketSection(opts){
   const billed_id = String(opts.billed_id || "");
   const channel = String(opts.channel || "appeal");
@@ -20244,14 +20320,12 @@ function renderEditablePacketSection(opts){
           <div class="ws-section-title">${safeStr(title)}</div>
         </div>
         ${description ? `<div class="muted small" style="margin-bottom:8px;">${safeStr(description)}</div>` : ``}
-        <div class="ws-section-body">${safeStr(value || "—")}</div>
+        <div class="ws-section-body">${workspacePacketTextHtml(value, "—")}</div>
       </div>
     `;
   }
 
-  const showPreview = String(value || "").trim()
-    ? safeStr(value)
-    : `<span class="muted">No content yet.</span>`;
+  const showPreview = workspacePacketTextHtml(value, `<span class="muted">No content yet.</span>`);
 
   return `
     <div class="ws-section-card ws-clean-section" data-inline-section="${safeStr(section_key)}">
@@ -20471,7 +20545,7 @@ function renderWorkspacePreview(opts){
 
           ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_action", title:"Requested Action", value: packetSections.requested_action, description: sectionDescriptions.requested_action, exportMode })}
           ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"attachments_index", title:"Attachments Index", value: buildAttachmentsIndex(ws), description: sectionDescriptions.attachments_index, exportMode })}
-          ${!exportMode ? renderWorkspacePacketExhibits(ws, claim, channel) : ""}
+          ${renderWorkspacePacketExhibits(ws, claim, channel, { exportMode })}
           ${renderSignatureSection({
             billed_id: claim.billed_id,
             channel,
@@ -20484,10 +20558,10 @@ function renderWorkspacePreview(opts){
             <div class="ws-bottom-actions">
               <div>
                 <strong>Ready to export?</strong>
-                <div class="muted small">Download again from here after reviewing the full packet.</div>
+                <div class="muted small">Preview the final PDF, then download from the preview screen.</div>
               </div>
-              <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">
-                Download PDF
+              <a class="btn" href="/ai-workspace/pdf-preview?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">
+                Preview PDF
               </a>
             </div>
           ` : ""}
@@ -47193,7 +47267,6 @@ if (method === "GET" && pathname === "/agent-workspace") {
     ` : "";
     const outcomeInsightText = buildOutcomeInsightText(sess.org_id);
     const outcomeInsightCard = renderWorkspaceIntelligenceStrip(ws, claim, derived, channel, outcomeInsightText);
-    const outcomeRecommendationCard = renderOutcomeRecommendationsCard(sess.org_id, ws, claim, channel);
 
     const pageContent = `
       ${workspacePolishStyles()}
@@ -47217,7 +47290,6 @@ if (method === "GET" && pathname === "/agent-workspace") {
           hideRecommendation: true
         })}
         ${outcomeInsightCard}
-        ${outcomeRecommendationCard}
         ${renderInlineAIAssist(claim.billed_id, channel)}
 
         ${savedMsg}
@@ -47237,16 +47309,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
           })}
         </div>
 
-        <details class="ws-panel ws-more-tools">
-          <summary>Workspace tools and proof center</summary>
-          <div class="muted small" style="margin-top:8px;">Use these when you need deeper proof review, workflow submission controls, or packet readiness checks.</div>
-          <div class="ws-tools-grid">
-            ${typeof renderWorkspaceStrategyPanel === "function" ? renderWorkspaceStrategyPanel(ws, claim, derived, channel) : ""}
-            ${renderAutomationReadinessPanel(ws, claim, channel)}
-            ${renderPacketMissingChecklist(ws, claim, derived, channel, claim.billed_id)}
-            ${renderWorkflowPanel(ws, claim, channel)}
-          </div>
-        </details>
+        <div class="ws-full-workflow">
+          ${renderWorkflowPanel(ws, claim, channel)}
+        </div>
       </div>
     `;
 
@@ -47714,6 +47779,51 @@ if (method === "GET" && pathname === "/agent-workspace") {
       channel,
       res
     });
+  }
+
+  if (method === "GET" && pathname === "/ai-workspace/pdf-preview") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+
+    const billed_id = String(parsed.query.billed_id || "").trim();
+    const channel = String(parsed.query.channel || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return send(res, 404, "Claim not found");
+
+    const ctx = buildClaimContext(sess.org_id);
+    const derived = evaluateClaimDerived(claim, ctx);
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    ensureWorkspacePacket(ws);
+    ensurePacketSections(ws, claim);
+
+    const title = channel === "negotiation" ? "Negotiation PDF Preview" : "Appeal PDF Preview";
+    const backPath = channel === "negotiation"
+      ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}`
+      : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}`;
+
+    return send(res, 200, renderPage(title, `
+      ${workspacePolishStyles()}
+      <div class="ws-main packet-workspace-shell">
+        <div class="ws-banner">
+          <div>
+            <div class="ws-banner-title">${safeStr(title)}</div>
+            <div class="ws-banner-sub">Review the formatted packet before downloading the final PDF.</div>
+          </div>
+          <div class="ws-quick-actions">
+            <a class="btn secondary" href="${safeStr(backPath)}">Back to Workspace</a>
+            <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">Download PDF</a>
+          </div>
+        </div>
+        ${renderWorkspacePreview({
+          org_id: sess.org_id,
+          claim,
+          derived,
+          ws,
+          channel,
+          exportMode: true
+        })}
+      </div>
+    `, navUser(), { showChat:true, orgName: getOrg(sess.org_id)?.org_name || "" }));
   }
 
   if (method === "POST" && pathname === "/agent-workspace/generate") {
