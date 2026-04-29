@@ -17899,9 +17899,14 @@ function workspacePolishStyles(){
 
       .packet-workspace-shell .ws-progress-fill{
         height:100%;
-        background:linear-gradient(90deg,#111827,#4f46e5);
+        background:linear-gradient(90deg,#ef4444,#f97316);
         border-radius:999px;
+        transition:width .2s ease, background .2s ease;
       }
+
+      .packet-workspace-shell .ws-progress-fill.low{background:linear-gradient(90deg,#991b1b,#ef4444);}
+      .packet-workspace-shell .ws-progress-fill.mid{background:linear-gradient(90deg,#f59e0b,#f97316);}
+      .packet-workspace-shell .ws-progress-fill.high{background:linear-gradient(90deg,#16a34a,#22c55e);}
 
       .packet-workspace-shell .ws-auto-grid{
         display:grid;
@@ -18637,6 +18642,28 @@ function workspacePolishStyles(){
         background:#f8fafc;
       }
       .packet-workspace-shell .ws-exhibit-title{ font-weight:900; margin-bottom:4px; }
+      .packet-workspace-shell .ws-exhibit-section-list{
+        display:grid;
+        gap:12px;
+        margin-top:12px;
+      }
+      .packet-workspace-shell .ws-exhibit-section{
+        border-left:4px solid #0ea5e9;
+        box-shadow:none;
+        margin:0;
+      }
+      .packet-workspace-shell .ws-exhibit-section .ws-section-body{
+        white-space:normal;
+      }
+      .packet-workspace-shell .ws-exhibit-export-page{
+        page-break-before:always;
+        break-before:page;
+        border-left:4px solid #0ea5e9;
+      }
+      .packet-workspace-shell .ws-exhibit-export-page:first-child{
+        page-break-before:auto;
+        break-before:auto;
+      }
       .packet-workspace-shell .ws-bottom-actions{
         display:flex;
         justify-content:space-between;
@@ -19336,7 +19363,6 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
 
   const items = recommendations.length ? recommendations : fallbackDocs;
 
-
   const rows = items.map((item, index) => {
     const state = outcomeRecommendationEvidenceState(ws, claim, item.key, channel);
     const doc = state.doc;
@@ -19354,21 +19380,13 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
         ? "Found in system as draft evidence. Upload source proof if payer submission requires the actual document."
         : "Missing. Upload this document so it can support the packet.";
 
-    return `
-      <div class="ws-exhibit-card">
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
-          <div>
-            <div class="ws-exhibit-title">${safeStr(exhibitName)} · ${safeStr(state.doc.label || workspaceDocLabel(state.doc.key))}</div>
-            <div class="muted small" style="margin-top:3px;">${safeStr(item.reason || row.detail || doc.why || "")}</div>
-          </div>
-          <span class="badge ${safeStr(state.badgeClass)}">${safeStr(state.statusLabel)}</span>
-        </div>
-
-        <div class="muted small" style="margin-top:8px;">${safeStr(statusCopy)}</div>
+    const body = `
+      <div class="ws-section-body">
+        <p style="margin:0 0 8px;">${safeStr(item.reason || row.detail || doc.why || "")}</p>
+        <p class="muted small" style="margin:0 0 10px;">${safeStr(statusCopy)}</p>
         ${preview}
-
         ${exportMode ? "" : `
-          <div style="margin-top:8px;">
+          <div style="margin-top:10px;">
             ${renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, {
               compact: true,
               buttonLabel: hasSourceProof ? "Replace" : (hasDraftEvidence ? "Upload Source Proof" : "Upload")
@@ -19382,6 +19400,34 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
         </div>
       </div>
     `;
+
+    if (exportMode) {
+      return `
+        <div class="ws-section-card ws-clean-section ws-exhibit-export-page">
+          <div class="ws-section-head">
+            <div>
+              <div class="ws-section-title">${safeStr(exhibitName)} · ${safeStr(state.doc.label || workspaceDocLabel(state.doc.key))}</div>
+              <div class="muted small" style="margin-top:3px;">Supporting exhibit page for the ${safeStr(channel === "negotiation" ? "negotiation" : "appeal")} packet.</div>
+            </div>
+            <span class="badge ${safeStr(state.badgeClass)}">${safeStr(state.statusLabel)}</span>
+          </div>
+          ${body}
+        </div>
+      `;
+    }
+
+    return `
+      <div class="ws-section-card ws-clean-section ws-exhibit-section">
+        <div class="ws-section-head">
+          <div>
+            <div class="ws-section-title">${safeStr(exhibitName)} · ${safeStr(state.doc.label || workspaceDocLabel(state.doc.key))}</div>
+            <div class="muted small" style="margin-top:3px;">Packet exhibit generated from outcome-based recommendations.</div>
+          </div>
+          <span class="badge ${safeStr(state.badgeClass)}">${safeStr(state.statusLabel)}</span>
+        </div>
+        ${body}
+      </div>
+    `;
   }).join("");
 
   return `
@@ -19393,11 +19439,11 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
             <span class="badge">${safeStr(channel === "negotiation" ? "Negotiation" : "Appeal")}</span>
           </div>
           <div class="muted small" style="margin-top:3px;">
-            Documents uploaded here, or already found in the system, are tracked as supporting exhibits for the packet.
+            Documents uploaded here, or already found in the system, are included as supporting packet exhibits${exportMode ? " on separate exhibit pages" : " below"}.
           </div>
         </div>
       </div>
-      <div class="ws-exhibit-grid">${rows}</div>
+      <div class="ws-exhibit-section-list">${rows}</div>
     </div>
   `;
 }
@@ -20090,6 +20136,13 @@ function renderAutomationReadinessPanel(ws, claim, channel){
   return renderWorkspaceProofCenter(ws, claim, channel);
 }
 
+function workspaceProgressClass(pct){
+  const n = Math.max(0, Math.min(100, Number(pct || 0)));
+  if (n >= 80) return "high";
+  if (n >= 45) return "mid";
+  return "low";
+}
+
 function renderWorkspaceCommandCenter(ws, claim, derived, channel){
   const isNegotiation = channel === "negotiation";
   const completeness = workspaceEnhancedCompleteness(ws, channel, claim);
@@ -20102,6 +20155,8 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
   const expected = Number(derived?.expectedInsurance || claim?.expected_amount || claim?.expected_insurance || 0);
   const paid = Number(derived?.paidAmount || claim?.paid_amount || claim?.insurance_paid || 0);
   const opportunity = Number(derived?.underpaidAmount || derived?.atRiskAmount || claim?.underpaid_amount || claim?.at_risk_amount || 0);
+  const progressPct = Math.max(0, Math.min(100, Number(completeness.pct || 0)));
+  const progressClass = workspaceProgressClass(progressPct);
 
   const title = isNegotiation
     ? "Negotiation Packet Command Center"
@@ -20151,7 +20206,7 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
       </div>
 
       <div class="ws-progress-track" aria-label="Packet readiness">
-        <div class="ws-progress-fill" style="width:${Math.max(0, Math.min(100, Number(completeness.pct || 0)))}%;"></div>
+        <div class="ws-progress-fill ${safeStr(progressClass)}" style="width:${progressPct}%;"></div>
       </div>
 
       <div class="muted small" style="margin-top:10px;">
@@ -20189,20 +20244,21 @@ function renderInlineAIAssist(billed_id, channel){
   const placeholder = isNegotiation
     ? "e.g. Make this stronger using contract variance and expected-vs-paid reimbursement logic"
     : "e.g. Make this stronger for medical necessity or denial reversal";
+  const assistantName = isNegotiation ? "AI Negotiation Assistant" : "AI Appeal Assistant";
 
   return `
     <div class="ws-panel ws-ai-assist-launcher">
-      <h3>🤖 AI Assist</h3>
+      <h3>${safeStr(assistantName)}</h3>
       <p class="muted small" style="margin-top:0;">
         Improve the ${safeStr(isNegotiation ? "negotiation" : "appeal")} language in a floating panel while keeping the packet preview scrollable.
       </p>
       <button class="btn secondary small" type="button" onclick="openWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">
-        Open AI Assist
+        Open ${safeStr(assistantName)}
       </button>
     </div>
     <aside id="${safeStr(drawerId)}" class="ws-ai-drawer" aria-hidden="true">
       <div class="ws-ai-drawer-head">
-        <div><h3 style="margin:0;">🤖 AI Assist</h3><div class="muted small">Improve this ${safeStr(isNegotiation ? "negotiation" : "appeal")} packet, then apply the changes.</div></div>
+        <div><h3 style="margin:0;">${safeStr(assistantName)}</h3><div class="muted small">Improve this ${safeStr(isNegotiation ? "negotiation" : "appeal")} packet, then apply the changes.</div></div>
         <button class="ws-ai-drawer-close" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')" aria-label="Close AI Assist">×</button>
       </div>
       <form method="POST" action="/ai-workspace/ai-edit">
@@ -20560,7 +20616,7 @@ function renderWorkspacePreview(opts){
                 <strong>Ready to export?</strong>
                 <div class="muted small">Preview the final PDF, then download from the preview screen.</div>
               </div>
-              <a class="btn" href="/ai-workspace/pdf-preview?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">
+              <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}&preview=1" target="_blank">
                 Preview PDF
               </a>
             </div>
@@ -21501,6 +21557,112 @@ function buildPacketHTML({ org_id, type, claim, derived, ws }){
   return applyTemplate(org_id, channel, wrapped);
 }
 
+function workspaceAttachmentFilename(att){
+  return String(att?.filename || att?.original_filename || att?.originalName || att?.name || (att?.stored_path ? path.basename(String(att.stored_path)) : "") || "attachment").trim();
+}
+
+function workspaceAttachmentStoredPath(att){
+  const raw = String(att?.stored_path || att?.absPath || att?.path || att?.file_path || "").trim();
+  if (!raw) return "";
+  return path.isAbsolute(raw) ? raw : path.join(process.cwd(), raw);
+}
+
+function workspaceExhibitKeyFromRecommendationKey(key){
+  if (typeof outcomeRecommendationDocKey === "function") return outcomeRecommendationDocKey(key);
+  const k = String(key || "").trim();
+  if (k === "eob") return "eob_era";
+  if (k === "policy") return "payer_policy";
+  if (k === "contract") return "contract_excerpt";
+  return k;
+}
+
+function workspaceBuildExportExhibitItems(ws, claim, channel){
+  const attachments = Array.isArray(ws?.attachments) ? ws.attachments.slice() : [];
+  const byKey = new Map();
+  attachments.forEach((att, index) => {
+    const key = String(att?.doc_key || att?.key || "").trim();
+    if (!key) return;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push({ ...att, __attachment_index: index });
+  });
+  const org_id = String(ws?.org_id || claim?.org_id || "");
+  let recommendationRows = [];
+  try {
+    recommendationRows = typeof buildOutcomeRecommendations === "function" ? buildOutcomeRecommendations(org_id, ws, claim, channel) : [];
+  } catch (e) { recommendationRows = []; }
+  const fallbackRows = (typeof workspaceRequiredDocConfig === "function" ? workspaceRequiredDocConfig(channel) : []).map(doc => ({
+    key: doc.key, title: doc.label || (typeof workspaceDocLabel === "function" ? workspaceDocLabel(doc.key) : doc.key), reason: doc.why || "Supporting proof strengthens this packet.", source: "Packet Requirement", priority: doc.required ? "Required" : "Optional"
+  }));
+  const baseRows = recommendationRows.length ? recommendationRows : fallbackRows;
+  const usedAttachmentIndexes = new Set();
+  const items = [];
+  baseRows.forEach(row => {
+    const docKey = workspaceExhibitKeyFromRecommendationKey(row.key);
+    const attached = (byKey.get(docKey) || [])[0] || null;
+    if (attached && attached.__attachment_index !== undefined) usedAttachmentIndexes.add(attached.__attachment_index);
+    items.push({ docKey, label: typeof workspaceDocLabel === "function" ? workspaceDocLabel(docKey) : (row.title || docKey || "Supporting Document"), reason: row.reason || "Supporting proof strengthens this packet.", source: row.source || "Outcome-Based Recommendation", priority: row.priority || "", attachment: attached });
+  });
+  attachments.forEach((att, index) => {
+    if (usedAttachmentIndexes.has(index)) return;
+    const docKey = String(att?.doc_key || att?.key || "supporting_document").trim() || "supporting_document";
+    items.push({ docKey, label: typeof workspaceDocLabel === "function" ? workspaceDocLabel(docKey) : docKey, reason: "Additional uploaded supporting document.", source: "Uploaded Evidence", priority: "", attachment: { ...att, __attachment_index: index } });
+  });
+  return items.map((item, index) => ({ ...item, exhibitName: `Exhibit ${String.fromCharCode(65 + index)}` }));
+}
+
+function workspacePdfKitBuffer(renderFn){
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFKitDocument({ margin: 50, bufferPages: true });
+      const chunks = [];
+      doc.on("data", chunk => chunks.push(chunk));
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
+      renderFn(doc);
+      doc.end();
+    } catch (e) { reject(e); }
+  });
+}
+async function workspaceAppendPdfKitPage(mergedPdf, renderFn){
+  const buffer = await workspacePdfKitBuffer(renderFn);
+  const tempDoc = await PDFDocument.load(buffer);
+  const pages = await mergedPdf.copyPages(tempDoc, tempDoc.getPageIndices());
+  pages.forEach(page => mergedPdf.addPage(page));
+}
+async function workspaceAppendExhibitCoverPage(mergedPdf, exhibit, fileStatus){
+  await workspaceAppendPdfKitPage(mergedPdf, (doc) => {
+    const CONTENT_WIDTH = doc.page.width - 100;
+    doc.font("Helvetica-Bold").fontSize(18).text(exhibit.exhibitName || "Exhibit", { width: CONTENT_WIDTH });
+    doc.moveDown(0.4);
+    doc.font("Helvetica-Bold").fontSize(14).text(exhibit.label || "Supporting Document", { width: CONTENT_WIDTH });
+    doc.moveDown(1);
+    doc.font("Helvetica").fontSize(11).text(exhibit.reason || "Supporting proof for this packet.", { width: CONTENT_WIDTH, lineGap: 4 });
+    doc.moveDown(0.8);
+    doc.font("Helvetica-Bold").fontSize(11).text("Status", { width: CONTENT_WIDTH });
+    doc.font("Helvetica").fontSize(10).text(fileStatus || "No uploaded source file attached.", { width: CONTENT_WIDTH, lineGap: 3 });
+    doc.moveDown(0.6);
+    if (exhibit.attachment) {
+      doc.font("Helvetica-Bold").fontSize(11).text("Uploaded File", { width: CONTENT_WIDTH });
+      doc.font("Helvetica").fontSize(10).text(workspaceAttachmentFilename(exhibit.attachment), { width: CONTENT_WIDTH, lineGap: 3 });
+    }
+    if (exhibit.source) {
+      doc.moveDown(0.6);
+      doc.font("Helvetica-Bold").fontSize(11).text("Source", { width: CONTENT_WIDTH });
+      doc.font("Helvetica").fontSize(10).text(String(exhibit.source || ""), { width: CONTENT_WIDTH, lineGap: 3 });
+    }
+  });
+}
+async function workspaceAppendTextAttachmentPage(mergedPdf, exhibit, storedPath){
+  const raw = fs.readFileSync(storedPath, "utf8");
+  const clean = String(raw || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").slice(0, 12000);
+  await workspaceAppendPdfKitPage(mergedPdf, (doc) => {
+    const CONTENT_WIDTH = doc.page.width - 100;
+    doc.font("Helvetica-Bold").fontSize(14).text(`${exhibit.exhibitName} Source Text`, { width: CONTENT_WIDTH });
+    doc.moveDown(0.5);
+    doc.font("Helvetica").fontSize(9).text(clean || "(No readable text found.)", { width: CONTENT_WIDTH, lineGap: 2 });
+  });
+}
+
 function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   const doc = docOverride || new PDFKitDocument({ margin: 50, bufferPages: true });
   doc.page.margins = { top: 50, bottom: 50, left: 50, right: 50 };
@@ -21658,6 +21820,28 @@ The reimbursement received does not align with the expected amount based on appl
   doc.text("Sincerely,", { width: CONTENT_WIDTH, align: "left" });
   doc.text(identity.legal_name || "Your Practice", { width: CONTENT_WIDTH, align: "left" });
 
+  const recommendedExhibits = buildOutcomeRecommendations(claim.org_id, ws, claim, channel);
+  const exhibitDocs = recommendedExhibits.length
+    ? recommendedExhibits.map(r => ({ key: outcomeRecommendationDocKey(r.key), label: outcomeEvidenceLabel(r.key), source: r.source || "Outcome-Based Recommendation" }))
+    : workspaceRequiredDocConfig(channel).map(d => ({ key: d.key, label: d.label || workspaceDocLabel(d.key), source: "Packet Requirement" }));
+
+  if (exhibitDocs.length) {
+    doc.addPage();
+    doc.font("Helvetica-Bold").fontSize(16).text("Packet Exhibits", { width: CONTENT_WIDTH, align: "left" });
+    doc.moveDown(0.5);
+    doc.font("Helvetica").fontSize(10).text("The following supporting exhibits are included or recommended for this packet. Uploaded source files are merged after the letter packet when available.", { width: CONTENT_WIDTH, lineGap: 3 });
+    doc.moveDown(1);
+
+    exhibitDocs.forEach((exhibit, index) => {
+      const attached = (Array.isArray(ws.attachments) ? ws.attachments : []).find(a => String(a.doc_key || "") === String(exhibit.key || ""));
+      doc.font("Helvetica-Bold").fontSize(12).text(`Exhibit ${String.fromCharCode(65 + index)}: ${workspaceDocLabel(exhibit.key)}`, { width: CONTENT_WIDTH });
+      doc.font("Helvetica").fontSize(10).text(`Status: ${attached ? "Attached" : "Recommended / not attached"}`, { width: CONTENT_WIDTH });
+      if (attached?.filename) doc.text(`File: ${attached.filename}`, { width: CONTENT_WIDTH });
+      if (exhibit.source) doc.text(`Source: ${exhibit.source}`, { width: CONTENT_WIDTH });
+      doc.moveDown(0.8);
+    });
+  }
+
   // =========================
   // 🔥 ATTACHMENTS PAGE
   // =========================
@@ -21739,7 +21923,7 @@ The reimbursement received does not align with the expected amount based on appl
   doc.end();
 }
 
-async function buildMergedPacketPDF({ claim, derived, ws, channel, res }) {
+async function buildMergedPacketPDF({ claim, derived, ws, channel, res, preview=false }) {
   const buffers = [];
   const doc = new PDFKitDocument({ margin: 50, bufferPages: true });
   doc.on("data", chunk => buffers.push(chunk));
@@ -21768,33 +21952,17 @@ async function buildMergedPacketPDF({ claim, derived, ws, channel, res }) {
   const letterPages = await mergedPdf.copyPages(letterDoc, letterDoc.getPageIndices());
   letterPages.forEach(page => mergedPdf.addPage(page));
 
-  const attachments = Array.isArray(ws?.attachments) ? ws.attachments.slice() : [];
-  const order = [
-    "denial_letter",
-    "eob_era",
-    "claim_form",
-    "contract_excerpt",
-    "payer_policy",
-    "lmn",
-    "office_notes",
-    "labs_imaging"
-  ];
-  const orderIndex = (key) => {
-    const idx = order.indexOf(key);
-    return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
-  };
-
-  const sorted = attachments.sort((a, b) => orderIndex(a.doc_key) - orderIndex(b.doc_key));
-
-  for (const att of sorted) {
+  const exhibits = workspaceBuildExportExhibitItems(ws, claim, channel);
+  for (const exhibit of exhibits) {
     try {
-      if (!att?.stored_path) continue;
-      const storedPath = path.isAbsolute(att.stored_path)
-        ? att.stored_path
-        : path.join(process.cwd(), att.stored_path);
-      if (!fs.existsSync(storedPath)) continue;
-
-      const ext = path.extname(String(att.filename || storedPath)).toLowerCase();
+      const att = exhibit.attachment || null;
+      const storedPath = att ? workspaceAttachmentStoredPath(att) : "";
+      const hasFile = !!(storedPath && fs.existsSync(storedPath));
+      const ext = hasFile ? path.extname(String(workspaceAttachmentFilename(att) || storedPath)).toLowerCase() : "";
+      await workspaceAppendExhibitCoverPage(mergedPdf, exhibit, hasFile
+        ? "Attached source file follows this cover page."
+        : "No uploaded source file is attached yet. This exhibit is listed as recommended or system-found evidence only.");
+      if (!hasFile) continue;
 
       if (ext === ".pdf") {
         const pdfBytes = fs.readFileSync(storedPath);
@@ -21819,18 +21987,51 @@ async function buildMergedPacketPDF({ claim, derived, ws, channel, res }) {
           width: drawWidth,
           height: drawHeight
         });
+      } else if ([".txt", ".csv"].includes(ext)) {
+        await workspaceAppendTextAttachmentPage(mergedPdf, exhibit, storedPath);
+      } else {
+        await workspaceAppendPdfKitPage(mergedPdf, (fallbackDoc) => {
+          const CONTENT_WIDTH = fallbackDoc.page.width - 100;
+          fallbackDoc.font("Helvetica-Bold").fontSize(14).text(`${exhibit.exhibitName} Uploaded File`, { width: CONTENT_WIDTH });
+          fallbackDoc.moveDown(0.5);
+          fallbackDoc.font("Helvetica").fontSize(10).text([
+            `File: ${workspaceAttachmentFilename(att)}`,
+            `Type: ${ext || "Unknown"}`,
+            "",
+            "This file is tracked as part of the packet, but this file type cannot be embedded directly into the PDF without a document conversion service.",
+            "Attach or review the original uploaded file separately if payer submission requires the exact document."
+          ].join("\n"), { width: CONTENT_WIDTH, lineGap: 3 });
+        });
       }
     } catch (e) {
-      console.error("Attachment merge error:", e);
+      console.error("Exhibit merge error:", e);
+      try {
+        await workspaceAppendPdfKitPage(mergedPdf, (fallbackDoc) => {
+          const CONTENT_WIDTH = fallbackDoc.page.width - 100;
+          fallbackDoc.font("Helvetica-Bold").fontSize(14).text(`${exhibit.exhibitName || "Exhibit"} Merge Error`, { width: CONTENT_WIDTH });
+          fallbackDoc.moveDown(0.5);
+          fallbackDoc.font("Helvetica").fontSize(10).text([
+            `Evidence: ${exhibit.label || "Supporting Document"}`,
+            exhibit.attachment ? `File: ${workspaceAttachmentFilename(exhibit.attachment)}` : "File: Not attached",
+            "",
+            "The exhibit was included in the packet index, but the uploaded file could not be embedded automatically.",
+            "Review or attach the source file separately before payer submission."
+          ].join("\n"), { width: CONTENT_WIDTH, lineGap: 3 });
+        });
+      } catch (_) {}
     }
   }
 
   const finalBytes = await mergedPdf.save();
   const filename = `${channel}_${(claim.claim_number || claim.billed_id || "packet").replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
 
+  const disposition = preview ? "inline" : "attachment";
   res.writeHead(200, {
     "Content-Type": "application/pdf",
-    "Content-Disposition": `attachment; filename="${filename}"`
+    "Content-Disposition": `${disposition}; filename="${filename}"`,
+    "Cache-Control": "no-store, no-cache, must-revalidate, private",
+    "Pragma": "no-cache",
+    "Expires": "0"
   });
 
   return res.end(Buffer.from(finalBytes));
@@ -47277,8 +47478,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
           <div class="ws-quick-actions">
             <a class="btn secondary" href="/claims">Back to Claims</a>
             <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(claim.billed_id)}">Open Claim Detail</a>
-            <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">
-              Download PDF
+            <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(claim.billed_id)}&channel=${encodeURIComponent(channel)}&preview=1" target="_blank">
+              Preview PDF
             </a>
           </div>
         </div>
@@ -47764,6 +47965,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
     const billed_id = String(parsed.query.billed_id || "").trim();
     const channel = String(parsed.query.channel || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const previewMode = String(parsed.query.preview || "") === "1" && String(parsed.query.download || "") !== "1";
     const claim = getBilledById(sess.org_id, billed_id);
     if (!claim) return send(res, 404, "Claim not found");
 
@@ -47777,7 +47979,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
       derived,
       ws,
       channel,
-      res
+      res,
+      preview: previewMode
     });
   }
 
@@ -47800,6 +48003,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const backPath = channel === "negotiation"
       ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}`
       : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}`;
+    const inlinePdfUrl = `/ai-workspace/export?billed_id=${encodeURIComponent(billed_id)}&channel=${encodeURIComponent(channel)}&preview=1`;
+    const downloadPdfUrl = `/ai-workspace/export?billed_id=${encodeURIComponent(billed_id)}&channel=${encodeURIComponent(channel)}&download=1`;
 
     return send(res, 200, renderPage(title, `
       ${workspacePolishStyles()}
@@ -47807,21 +48012,24 @@ if (method === "GET" && pathname === "/agent-workspace") {
         <div class="ws-banner">
           <div>
             <div class="ws-banner-title">${safeStr(title)}</div>
-            <div class="ws-banner-sub">Review the formatted packet before downloading the final PDF.</div>
+            <div class="ws-banner-sub">Review the generated PDF in the browser viewer before downloading.</div>
           </div>
           <div class="ws-quick-actions">
             <a class="btn secondary" href="${safeStr(backPath)}">Back to Workspace</a>
-            <a class="btn" href="/ai-workspace/export?billed_id=${encodeURIComponent(billed_id)}&channel=${encodeURIComponent(channel)}" target="_blank">Download PDF</a>
+            <a class="btn" href="${safeStr(downloadPdfUrl)}" target="_blank">Download PDF</a>
           </div>
         </div>
-        ${renderWorkspacePreview({
-          org_id: sess.org_id,
-          claim,
-          derived,
-          ws,
-          channel,
-          exportMode: true
-        })}
+        <div class="card" style="padding:0;overflow:hidden;">
+          <iframe
+            src="${safeStr(inlinePdfUrl)}"
+            title="${safeStr(title)}"
+            style="width:100%;height:82vh;border:0;background:#111827;"
+          ></iframe>
+        </div>
+        <div class="btnRow" style="margin-top:12px;">
+          <a class="btn secondary" href="${safeStr(backPath)}">Back to Workspace</a>
+          <a class="btn" href="${safeStr(downloadPdfUrl)}" target="_blank">Download PDF</a>
+        </div>
       </div>
     `, navUser(), { showChat:true, orgName: getOrg(sess.org_id)?.org_name || "" }));
   }
