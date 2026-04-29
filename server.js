@@ -15118,10 +15118,90 @@ function defaultAppealPacketSections(){
     claim_summary: "",
     financial_summary: "",
     argument: "",
+    letter_of_medical_necessity: "",
     requested_action: "",
     attachments_index: "",
     signature: ""
   };
+}
+
+function workspaceFirstValue(...values){
+  for (const value of values) {
+    const v = String(value ?? "").trim();
+    if (v) return v;
+  }
+  return "";
+}
+
+function workspaceClaimValue(claim, keys, fallback=""){
+  for (const key of keys) {
+    const v = String(claim?.[key] ?? "").trim();
+    if (v) return v;
+  }
+  return fallback;
+}
+
+function buildWorkspaceLetterOfMedicalNecessityTemplate({ org_id, claim, ws } = {}){
+  const orgRecord = org_id && typeof getOrg === "function" ? getOrg(org_id) : null;
+  const settings = org_id && typeof getOrgSettings === "function" ? getOrgSettings(org_id) : {};
+  const identity = settings?.identity || {};
+
+  const orgName = workspaceFirstValue(identity.legal_name, settings?.practice_name, settings?.legal_name, orgRecord?.legal_name, orgRecord?.org_name, "[Provider Letterhead]");
+  const practiceAddress = workspaceFirstValue(identity.address, settings?.practice_address, settings?.mailing_address, settings?.address, orgRecord?.practice_address, orgRecord?.address, "[Practice Address]");
+  const contactLine = workspaceFirstValue([identity.phone, identity.email].filter(Boolean).join(" / "), settings?.phone_email, [settings?.phone, settings?.email].filter(Boolean).join(" / "), [orgRecord?.phone, orgRecord?.email].filter(Boolean).join(" / "), "[Phone Number and/or Email]");
+  const physicianName = workspaceFirstValue(workspaceClaimValue(claim, ["physician_name", "provider_name", "rendering_provider", "ordering_provider"]), settings?.provider_name, settings?.physician_name, "[Physician Name and Credentials]");
+  const npi = workspaceFirstValue(workspaceClaimValue(claim, ["provider_npi", "rendering_npi", "npi"]), identity.npi, settings?.npi, settings?.provider_npi, orgRecord?.npi, "[NPI Number]");
+  const payer = workspaceFirstValue(workspaceClaimValue(claim, ["payer", "payer_name", "insurance", "insurance_company"]), "[Insurance Company Name]");
+  const payerAddress = workspaceFirstValue(workspaceClaimValue(claim, ["payer_address", "insurance_address"]), "[Address]");
+  const patientName = workspaceFirstValue(workspaceClaimValue(claim, ["patient_name", "patient", "member_name", "patient_full_name"]), "[Patient Name]");
+  const policyNumber = workspaceFirstValue(workspaceClaimValue(claim, ["policy_number", "member_id", "subscriber_id", "plan_id"]), "[Policy Number]");
+  const caseReference = workspaceFirstValue(workspaceClaimValue(claim, ["denial_case_id", "case_reference", "reference_number", "auth_reference"]), workspaceClaimValue(claim, ["claim_number", "claim_id"]), "[If applicable]");
+  const claimNumber = workspaceFirstValue(workspaceClaimValue(claim, ["claim_number", "claim_id"]), "[Claim Number]");
+  const treatment = workspaceFirstValue(workspaceClaimValue(claim, ["procedure_description", "service_description", "treatment_name", "product_name", "equipment_name"]), workspaceClaimValue(claim, ["procedure_code", "cpt_code", "cpt", "hcpcs"]), "[Name of treatment/product/equipment]");
+  const diagnosis = workspaceFirstValue(workspaceClaimValue(claim, ["diagnosis", "diagnosis_description", "condition"]), "[Diagnosis/Condition]");
+  const diagnosisCode = workspaceFirstValue(workspaceClaimValue(claim, ["icd10_code", "diagnosis_code", "dx_code", "dx"]), "[ICD-10 Code]");
+  const dateOfService = workspaceFirstValue(workspaceClaimValue(claim, ["dos", "date_of_service", "service_date"]), "[Date of Service]");
+  const patientAge = workspaceFirstValue(workspaceClaimValue(claim, ["patient_age", "age"]), "[Age]");
+  const patientSex = workspaceFirstValue(workspaceClaimValue(claim, ["patient_sex", "sex", "gender"]), "[male/female]");
+  const careSince = workspaceFirstValue(workspaceClaimValue(claim, ["care_since", "first_seen_date", "treatment_start_date"]), "[Date]");
+
+  return `${orgName}
+${practiceAddress}
+${contactLine}
+
+${nowISO().slice(0, 10)}
+
+${payer}
+${payerAddress}
+
+Re: Letter of Medical Necessity for ${patientName}
+Policy Number: ${policyNumber}
+Case/Reference Number: ${caseReference}
+Claim Number: ${claimNumber}
+Date of Service: ${dateOfService}
+
+To Whom It May Concern,
+
+I am writing on behalf of my patient, ${patientName}, to document the medical necessity of ${treatment} to treat ${diagnosis} ${diagnosisCode}.
+
+Patient Clinical History
+${patientName} is a ${patientAge}-year-old ${patientSex} who has been in my care since ${careSince}. The patient has been diagnosed with ${diagnosis} and is experiencing [list symptoms]. Previous treatments for this condition have included [list previous medications, therapies, or conservative measures], which were [unsuccessful, insufficient, contraindicated, or caused adverse effects].
+
+Treatment Rationale
+Based on the patient’s clinical history, ${treatment} is medically necessary to [explain treatment purpose, such as reduce pain, improve function, prevent deterioration, or treat the diagnosed condition]. Without this intervention, the patient’s condition may worsen or require additional care. Clinical evidence, payer guidelines, and the patient’s documented history support the medical necessity of this treatment.
+
+Treatment Plan
+The recommended plan is to provide ${treatment} for [duration/frequency], with follow-up and monitoring as clinically appropriate.
+
+Conclusion
+I believe ${treatment} is medically necessary for ${patientName}'s care and well-being. Please provide coverage or reconsider the denial for this treatment.
+
+Please contact my office at ${contactLine} with any questions.
+
+Sincerely,
+${physicianName}
+NPI: ${npi}
+${practiceAddress}`;
 }
 
 function defaultNegotiationPacketSections(){
@@ -15192,6 +15272,14 @@ function ensurePacketSections(ws, claim){
     if (String(ws.appeal.draft_text || "").trim()) ws.appeal.packet_sections.argument = String(ws.appeal.draft_text || "").trim();
   }
   ws.appeal.packet_sections = { ...appealDefaults, ...(ws.appeal.packet_sections || {}) };
+
+  if (!String(ws.appeal.packet_sections.letter_of_medical_necessity || "").trim()) {
+    ws.appeal.packet_sections.letter_of_medical_necessity = buildWorkspaceLetterOfMedicalNecessityTemplate({
+      org_id: ws.org_id,
+      claim: claimContext,
+      ws
+    });
+  }
 
   const negotiationDefaults = defaultNegotiationPacketSections();
   if (!ws.negotiation.packet_sections || typeof ws.negotiation.packet_sections !== "object") {
@@ -15441,6 +15529,7 @@ function packetSectionDescriptions(channel){
     claim_summary: "Claim context, denial reason, and payer details.",
     financial_summary: "Billed vs expected vs paid snapshot.",
     argument: "Core appeal argument and medical/contract basis.",
+    letter_of_medical_necessity: "Editable provider letter explaining medical necessity, diagnosis, treatment rationale, treatment plan, and supporting clinical basis.",
     requested_action: "Specific reversal/reprocessing actions requested.",
     attachments_index: "Attachment index and missing-item hints.",
     signature: "Organization signature/contact block."
@@ -19384,9 +19473,9 @@ function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, opts={}){
       <input type="hidden" name="doc_key" value="${safeStr(docKey)}"/>
 
       <label class="ws-drop-zone">
-        <input class="ws-doc-file-input" type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.csv,.txt,.doc,.docx,.xls,.xlsx" />
-        <span class="ws-drop-title">Drop document here or choose file</span>
-        <span class="ws-drop-sub">PDF, image, CSV, Excel, Word, TXT, or supporting document</span>
+        <input class="ws-doc-file-input" type="file" name="file" multiple accept=".pdf,.png,.jpg,.jpeg,.csv,.txt,.doc,.docx,.xls,.xlsx" />
+        <span class="ws-drop-title">Drop documents here or choose files</span>
+        <span class="ws-drop-sub">PDF, image, CSV, Excel, Word, TXT, or supporting documents. Multiple files supported.</span>
         <span class="ws-file-name muted small"></span>
       </label>
 
