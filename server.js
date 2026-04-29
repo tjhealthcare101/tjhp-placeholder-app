@@ -15674,11 +15674,18 @@ function buildOutcomeInsightText(org_id){
 
 function outcomeEvidenceLabel(key){
   const labels = {
-    denial_letter: "Denial Letter",
-    eob: "EOB / ERA",
+    denial_letter: "Original Denial Letter / Explanation of Benefits",
+    eob: "Explanation of Benefits / ERA / Remittance",
     claim_form: "Claim Form / Itemized Bill",
-    policy: "Payer Policy Citation",
-    contract: "Contract / Fee Schedule"
+    lmn: "Letter of Medical Necessity",
+    clinical_documentation: "Clinical Documentation",
+    authorization_evidence: "Evidence of Authorization",
+    provider_authorization: "Provider Authorization Form",
+    policy: "Policy References / Guidelines",
+    contract: "Contract / Fee Schedule",
+    payment_history: "Payment History",
+    variance_calc: "Expected vs Paid Variance Calculation",
+    payer_correspondence: "Payer Correspondence"
   };
 
   return labels[String(key || "")] || String(key || "Evidence");
@@ -15688,19 +15695,35 @@ function outcomeEvidenceActionText(key, channel){
   const k = String(key || "");
 
   if (k === "denial_letter") {
-    return "Upload the payer denial letter.";
+    return "Upload the payer denial letter or Explanation of Benefits.";
   }
 
   if (k === "eob") {
-    return "Upload or attach the actual EOB / ERA / remittance source document.";
+    return "Upload or attach the actual Explanation of Benefits, ERA, or remittance source document.";
   }
 
   if (k === "claim_form") {
     return "Upload the claim form or itemized bill.";
   }
 
+  if (k === "lmn") {
+    return "Upload or attach the treating provider's Letter of Medical Necessity.";
+  }
+
+  if (k === "clinical_documentation") {
+    return "Upload relevant medical records, test results, imaging reports, or progress notes.";
+  }
+
+  if (k === "authorization_evidence") {
+    return "Upload prior authorization approval, request history, or proof that authorization was not required.";
+  }
+
+  if (k === "provider_authorization") {
+    return "Upload the patient/provider authorization form when the payer requires it.";
+  }
+
   if (k === "policy") {
-    return "Add payer policy citation evidence or attach the payer policy source.";
+    return "Add payer policy, clinical guideline, or coverage reference support.";
   }
 
   if (k === "contract") {
@@ -15717,8 +15740,15 @@ function outcomeRecommendationDocKey(key){
   if (k === "denial_letter") return "denial_letter";
   if (k === "eob") return "eob_era";
   if (k === "claim_form") return "claim_form";
+  if (k === "lmn") return "lmn";
+  if (k === "clinical_documentation") return "clinical_documentation";
+  if (k === "authorization_evidence") return "prior_auth";
+  if (k === "provider_authorization") return "provider_authorization";
   if (k === "policy") return "payer_policy";
   if (k === "contract") return "contract_excerpt";
+  if (k === "payment_history") return "payment_history";
+  if (k === "variance_calc") return "variance_calc";
+  if (k === "payer_correspondence") return "payer_correspondence";
   return k;
 }
 
@@ -15743,6 +15773,31 @@ function outcomeRecommendationEvidenceState(ws, claim, key, channel){
     badgeClass: hasSourceProof ? "ok" : (hasDraftEvidence ? "warn" : "err"),
     uploadLabel: hasSourceProof ? "Replace File" : (hasDraftEvidence ? "Upload Source Proof" : "Upload")
   };
+}
+
+function workspacePacketAttachmentPlan(channel){
+  if (channel === "negotiation") {
+    return [
+      { key: "eob", title: "Explanation of Benefits / ERA / Remittance", reason: "Shows the payer payment, adjustment, denial, or remittance details that support the payment dispute.", action: outcomeEvidenceActionText("eob", channel), priority: "Baseline", source: "Negotiation Packet Standard" },
+      { key: "contract", title: "Contract / Fee Schedule / Allowed Amount Rule", reason: "Supports the expected reimbursement and explains why the payer payment is short.", action: outcomeEvidenceActionText("contract", channel), priority: "High Impact", source: "Negotiation Packet Standard" },
+      { key: "claim_form", title: "Claim Form / Itemized Bill", reason: "Shows the billed service, units, charges, coding, and submitted claim detail.", action: outcomeEvidenceActionText("claim_form", channel), priority: "Baseline", source: "Negotiation Packet Standard" },
+      { key: "payment_history", title: "Payment History", reason: "Helps prove inconsistent payment, prior payment patterns, or underpayment across similar claims.", action: "Upload payment history or supporting remittance history.", priority: "Recommended", source: "Negotiation Packet Standard" },
+      { key: "variance_calc", title: "Expected vs Paid Variance Calculation", reason: "Shows the expected reimbursement compared with the posted payer payment.", action: "Attach the expected-vs-paid calculation or supporting variance worksheet.", priority: "Recommended", source: "Negotiation Packet Standard" },
+      { key: "policy", title: "Payer Policy / Reimbursement Guidelines", reason: "Adds payer policy, reimbursement methodology, or guideline support for the requested correction.", action: outcomeEvidenceActionText("policy", channel), priority: "Recommended", source: "Negotiation Packet Standard" },
+      { key: "payer_correspondence", title: "Payer Correspondence", reason: "Supports prior communication, reconsideration history, or payer acknowledgement.", action: "Upload payer correspondence if it supports the negotiation.", priority: "Optional", source: "Negotiation Packet Standard" }
+    ];
+  }
+
+  return [
+    { key: "denial_letter", title: "Original Denial Letter / Explanation of Benefits", reason: "Shows the payer's stated denial reason and establishes the appeal basis.", action: outcomeEvidenceActionText("denial_letter", channel), priority: "Baseline", source: "Appeal Packet Standard" },
+    { key: "lmn", title: "Letter of Medical Necessity", reason: "A treating provider letter explains why the service was medically necessary, including diagnosis, treatment plan, and failed alternatives when relevant.", action: outcomeEvidenceActionText("lmn", channel), priority: "High Impact", source: "Appeal Packet Standard" },
+    { key: "clinical_documentation", title: "Clinical Documentation", reason: "Medical records, test results, imaging reports, progress notes, and related clinical support strengthen medical necessity and coverage arguments.", action: outcomeEvidenceActionText("clinical_documentation", channel), priority: "High Impact", source: "Appeal Packet Standard" },
+    { key: "authorization_evidence", title: "Evidence of Authorization", reason: "Prior authorization approval, request history, or proof that authorization was not required helps address authorization-related denials.", action: outcomeEvidenceActionText("authorization_evidence", channel), priority: "Recommended", source: "Appeal Packet Standard" },
+    { key: "provider_authorization", title: "Provider Authorization Form", reason: "A signed patient/provider authorization supports the provider's ability to act on the patient's behalf when required by the payer.", action: outcomeEvidenceActionText("provider_authorization", channel), priority: "Recommended", source: "Appeal Packet Standard" },
+    { key: "policy", title: "Policy References / Guidelines", reason: "Payer policies, clinical guidelines, coverage criteria, and relevant state or federal mandates strengthen the appeal rationale.", action: outcomeEvidenceActionText("policy", channel), priority: "Recommended", source: "Appeal Packet Standard" },
+    { key: "claim_form", title: "Claim Form / Itemized Bill", reason: "Shows the submitted claim, billed services, coding, and charge detail when payer review requires billing support.", action: outcomeEvidenceActionText("claim_form", channel), priority: "Optional", source: "Appeal Packet Standard" },
+    { key: "contract", title: "Contract / Fee Schedule Support", reason: "Useful when the appeal also involves expected reimbursement, allowed amount, or contracted terms.", action: outcomeEvidenceActionText("contract", channel), priority: "Optional", source: "Appeal Packet Standard" }
+  ];
 }
 
 function getWorkspaceOutcomeEvidenceFlags(org_id, ws, claim, channel){
@@ -16882,7 +16937,7 @@ function buildAttachmentsIndex(ws){
 function workspaceDocLabel(key){
   const labels = {
     denial_letter: "Denial Letter",
-    eob_era: "EOB / ERA / Remittance",
+    eob_era: "Explanation of Benefits / ERA / Remittance",
     claim_form: "Claim Form / Itemized Bill",
     lmn: "Letter of Medical Necessity",
     office_notes: "Office / Operative Notes",
@@ -17057,7 +17112,7 @@ function workspaceDocSearchTerms(docKey){
   const key = String(docKey || "");
 
   if (key === "denial_letter") return ["denial", "denial letter", "payer denial"];
-  if (key === "eob_era") return ["eob", "era", "remittance", "payment"];
+  if (key === "eob_era") return ["explanation of benefits", "eob", "era", "remittance", "payment"];
   if (key === "claim_form") return ["claim form", "cms1500", "ub04", "itemized bill"];
   if (key === "office_notes") return ["office note", "clinical note", "progress note"];
   if (key === "labs_imaging") return ["lab", "imaging", "radiology", "result"];
@@ -19342,42 +19397,21 @@ function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, opts={}){
 
 function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
   const exportMode = !!opts.exportMode;
-  const org_id = String(ws?.org_id || claim?.org_id || "");
-  const recommendations = buildOutcomeRecommendations(org_id, ws, claim, channel);
-
-  const fallbackDocs = workspaceRequiredDocConfig(channel).map((doc, index) => ({
-    key:
-      doc.key === "eob_era" ? "eob" :
-      doc.key === "payer_policy" ? "policy" :
-      doc.key === "contract_excerpt" ? "contract" :
-      doc.key === "claim_form" ? "claim_form" :
-      doc.key === "denial_letter" ? "denial_letter" :
-      doc.key,
-    title: doc.label || workspaceDocLabel(doc.key),
-    reason: doc.why || "Supporting proof strengthens this packet.",
-    action: "Upload or replace source proof for this exhibit.",
-    priority: doc.required ? "Required" : "Optional",
-    source: "Packet Requirement",
-    __fallbackIndex: index
-  }));
-
-  const items = recommendations.length ? recommendations : fallbackDocs;
-
-  const rows = items.map((item, index) => {
+  const items = workspacePacketAttachmentPlan(channel);
+  const rows = items.map((item) => {
     const state = outcomeRecommendationEvidenceState(ws, claim, item.key, channel);
     const doc = state.doc;
     const row = state.row;
     const hasSourceProof = state.hasSourceProof;
     const hasDraftEvidence = state.hasDraftEvidence;
-    const exhibitName = `Exhibit ${String.fromCharCode(65 + index)}`;
     const preview = (hasSourceProof || hasDraftEvidence)
       ? renderWorkspaceEvidencePreview(ws, claim, doc, row, channel)
       : "";
 
     const statusCopy = hasSourceProof
-      ? "Attached to packet. Preview it below or replace it if needed."
+      ? "Attached to the packet. Preview it below or replace it if needed."
       : hasDraftEvidence
-        ? "Found in system as draft evidence. Upload source proof if payer submission requires the actual document."
+        ? "Found in the system as draft evidence. Upload source proof if payer submission requires the actual document."
         : "Missing. Upload this document so it can support the packet.";
 
     const body = `
@@ -19395,33 +19429,20 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
         `}
 
         <div class="muted small" style="margin-top:8px;">
-          Source: ${safeStr(item.source || "Packet Requirement")}
+          Source: ${safeStr(item.source || "Packet Standard")}
           ${item.priority ? ` · ${safeStr(item.priority)}` : ""}
         </div>
       </div>
     `;
 
-    if (exportMode) {
-      return `
-        <div class="ws-section-card ws-clean-section ws-exhibit-export-page">
-          <div class="ws-section-head">
-            <div>
-              <div class="ws-section-title">${safeStr(exhibitName)} · ${safeStr(state.doc.label || workspaceDocLabel(state.doc.key))}</div>
-              <div class="muted small" style="margin-top:3px;">Supporting exhibit page for the ${safeStr(channel === "negotiation" ? "negotiation" : "appeal")} packet.</div>
-            </div>
-            <span class="badge ${safeStr(state.badgeClass)}">${safeStr(state.statusLabel)}</span>
-          </div>
-          ${body}
-        </div>
-      `;
-    }
+    if (exportMode) return "";
 
     return `
       <div class="ws-section-card ws-clean-section ws-exhibit-section">
         <div class="ws-section-head">
           <div>
-            <div class="ws-section-title">${safeStr(exhibitName)} · ${safeStr(state.doc.label || workspaceDocLabel(state.doc.key))}</div>
-            <div class="muted small" style="margin-top:3px;">Packet exhibit generated from outcome-based recommendations.</div>
+            <div class="ws-section-title">${safeStr(item.title || state.doc.label || workspaceDocLabel(state.doc.key))}</div>
+            <div class="muted small" style="margin-top:3px;">Packet attachment generated from outcome-based recommendations.</div>
           </div>
           <span class="badge ${safeStr(state.badgeClass)}">${safeStr(state.statusLabel)}</span>
         </div>
@@ -19435,11 +19456,11 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
       <div class="ws-section-head">
         <div>
           <div class="ws-section-title">
-            Outcome-Based Recommendations / Packet Exhibits
+            Outcome-Based Recommendations / Packet Attachments
             <span class="badge">${safeStr(channel === "negotiation" ? "Negotiation" : "Appeal")}</span>
           </div>
           <div class="muted small" style="margin-top:3px;">
-            Documents uploaded here, or already found in the system, are included as supporting packet exhibits${exportMode ? " on separate exhibit pages" : " below"}.
+            Documents uploaded here, or already found in the system, are tracked as supporting documents for the packet. In the PDF, uploaded source files are placed on their own supporting-document pages after the letter.
           </div>
         </div>
       </div>
@@ -21579,6 +21600,7 @@ function workspaceExhibitKeyFromRecommendationKey(key){
 function workspaceBuildExportExhibitItems(ws, claim, channel){
   const attachments = Array.isArray(ws?.attachments) ? ws.attachments.slice() : [];
   const byKey = new Map();
+
   attachments.forEach((att, index) => {
     const key = String(att?.doc_key || att?.key || "").trim();
     if (!key) return;
@@ -21632,11 +21654,9 @@ async function workspaceAppendPdfKitPage(mergedPdf, renderFn){
 async function workspaceAppendExhibitCoverPage(mergedPdf, exhibit, fileStatus){
   await workspaceAppendPdfKitPage(mergedPdf, (doc) => {
     const CONTENT_WIDTH = doc.page.width - 100;
-    doc.font("Helvetica-Bold").fontSize(18).text(exhibit.exhibitName || "Exhibit", { width: CONTENT_WIDTH });
+    doc.font("Helvetica-Bold").fontSize(18).text(exhibit.label || "Supporting Document", { width: CONTENT_WIDTH });
     doc.moveDown(0.4);
-    doc.font("Helvetica-Bold").fontSize(14).text(exhibit.label || "Supporting Document", { width: CONTENT_WIDTH });
-    doc.moveDown(1);
-    doc.font("Helvetica").fontSize(11).text(exhibit.reason || "Supporting proof for this packet.", { width: CONTENT_WIDTH, lineGap: 4 });
+        doc.font("Helvetica").fontSize(11).text(exhibit.reason || "Supporting proof for this packet.", { width: CONTENT_WIDTH, lineGap: 4 });
     doc.moveDown(0.8);
     doc.font("Helvetica-Bold").fontSize(11).text("Status", { width: CONTENT_WIDTH });
     doc.font("Helvetica").fontSize(10).text(fileStatus || "No uploaded source file attached.", { width: CONTENT_WIDTH, lineGap: 3 });
@@ -21657,7 +21677,7 @@ async function workspaceAppendTextAttachmentPage(mergedPdf, exhibit, storedPath)
   const clean = String(raw || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").slice(0, 12000);
   await workspaceAppendPdfKitPage(mergedPdf, (doc) => {
     const CONTENT_WIDTH = doc.page.width - 100;
-    doc.font("Helvetica-Bold").fontSize(14).text(`${exhibit.exhibitName} Source Text`, { width: CONTENT_WIDTH });
+    doc.font("Helvetica-Bold").fontSize(14).text(`${exhibit.label || "Supporting Document"} Source Text`, { width: CONTENT_WIDTH });
     doc.moveDown(0.5);
     doc.font("Helvetica").fontSize(9).text(clean || "(No readable text found.)", { width: CONTENT_WIDTH, lineGap: 2 });
   });
@@ -21992,7 +22012,7 @@ async function buildMergedPacketPDF({ claim, derived, ws, channel, res, preview=
       } else {
         await workspaceAppendPdfKitPage(mergedPdf, (fallbackDoc) => {
           const CONTENT_WIDTH = fallbackDoc.page.width - 100;
-          fallbackDoc.font("Helvetica-Bold").fontSize(14).text(`${exhibit.exhibitName} Uploaded File`, { width: CONTENT_WIDTH });
+          fallbackDoc.font("Helvetica-Bold").fontSize(14).text(`${exhibit.label || "Supporting Document"} Uploaded File`, { width: CONTENT_WIDTH });
           fallbackDoc.moveDown(0.5);
           fallbackDoc.font("Helvetica").fontSize(10).text([
             `File: ${workspaceAttachmentFilename(att)}`,
@@ -22008,7 +22028,7 @@ async function buildMergedPacketPDF({ claim, derived, ws, channel, res, preview=
       try {
         await workspaceAppendPdfKitPage(mergedPdf, (fallbackDoc) => {
           const CONTENT_WIDTH = fallbackDoc.page.width - 100;
-          fallbackDoc.font("Helvetica-Bold").fontSize(14).text(`${exhibit.exhibitName || "Exhibit"} Merge Error`, { width: CONTENT_WIDTH });
+          fallbackDoc.font("Helvetica-Bold").fontSize(14).text(`${exhibit.label || "Supporting Document"} Merge Error`, { width: CONTENT_WIDTH });
           fallbackDoc.moveDown(0.5);
           fallbackDoc.font("Helvetica").fontSize(10).text([
             `Evidence: ${exhibit.label || "Supporting Document"}`,
