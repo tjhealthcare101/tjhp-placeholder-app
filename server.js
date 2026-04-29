@@ -21760,6 +21760,191 @@ function computeClaimFinancials(claim){
   };
 }
 
+
+function explainClaimFlag(org_id, claim, derivedInput=null){
+  const ctx = org_id ? buildClaimContext(org_id) : buildClaimContext(claim?.org_id || "");
+  const derived = derivedInput && derivedInput.lifecycleStage ? derivedInput : evaluateClaimDerived(claim || {}, ctx);
+  const financials = computeClaimFinancials(claim || {});
+
+  const stage = normalizeLifecycleDisplayStage(String(derived.lifecycleStage || claim?.lifecycleStage || claim?.status || "Pending"));
+  const billed = Math.max(0, num(derived.billedAmount || claim?.amount_billed || claim?.billed_amount || 0));
+  const expectedRaw = (derived.expectedInsurance !== null && derived.expectedInsurance !== undefined)
+    ? num(derived.expectedInsurance)
+    : (financials.expectedInsurance !== null && financials.expectedInsurance !== undefined ? num(financials.expectedInsurance) : null);
+  const hasExpected = expectedRaw !== null && Number.isFinite(expectedRaw) && expectedRaw > 0;
+  const expected = hasExpected ? expectedRaw : null;
+  const paid = Math.max(0, num(derived.paidAmount || financials.paidInsurance || claim?.paid_amount || claim?.insurance_paid || 0));
+  const insuranceWriteOff = Math.max(0, num(derived.insuranceWriteOff || financials.insuranceWriteOff || claim?.write_off_amount || claim?.contractual_adjustment || 0));
+  const payerRemaining = hasExpected
+    ? Math.max(0, expected - paid - insuranceWriteOff)
+    : Math.max(0, num(derived.underpaidAmount || claim?.underpaid_amount || 0));
+  const patientRemaining = Math.max(0, num(derived.patientBalanceRemaining || 0));
+  const atRisk = Math.max(0, num(derived.atRiskAmount || payerRemaining + patientRemaining || claim?.at_risk_amount || 0));
+  const variance = hasExpected ? Math.max(0, expected - paid - insuranceWriteOff) : Math.max(0, billed - paid);
+  const payer = String(claim?.payer || "the payer").trim() || "the payer";
+  const claimNo = String(claim?.claim_number || claim?.claim_id || "").trim();
+
+  const evidence = ["Claim record"];
+  if (paid > 0 || derived.hasPaymentResponse) evidence.push("Matched payment / ERA data");
+  if (hasExpected) evidence.push("Expected reimbursement calculation");
+  if (claim?.denial_code || claim?.denial_reason || derived.hasDenialContext || stage === "Denied") evidence.push("Denial / payer response context");
+  if (claim?.current_round || claim?.last_submission_date || claim?.submitted_at) evidence.push("Submission / follow-up history");
+
+  const missingSupport = [];
+  if (!hasExpected && ["Underpaid", "Denied", "In Appeal/Negotiation"].includes(stage)) {
+    missingSupport.push("No reimbursement rule found. Add a contract or fee schedule rule to strengthen expected-vs-paid support.");
+  }
+  if (stage === "Denied" && !(claim?.denial_doc_attached || claim?.denial_document || claim?.denial_file)) {
+    missingSupport.push("Attach denial letter / EOB before final appeal submission.");
+  }
+  if (stage === "Underpaid" && !hasExpected) {
+    missingSupport.push("Contract or allowed-rule proof is needed before payer-facing negotiation.");
+  }
+
+  let headline = "Review this claim";
+  let reason = "This claim should be reviewed using the claim financials, lifecycle status, and available payment data.";
+  let recommendation = "Review the claim details and continue in Action Center if work is needed.";
+  let nextActionLabel = "Open Action Center";
+  let nextActionHref = `/actions?q=${encodeURIComponent(claimNo)}`;
+  let badge = "warn";
+
+  if (stage === "Denied") {
+    headline = `${formatMoneyUI(atRisk || Math.max(0, billed - paid))} at risk from denial / non-payment`;
+    reason = `${payer} denied or has not paid this claim. Paid insurance is ${formatMoneyUI(paid)}${billed ? ` on ${formatMoneyUI(billed)} billed` : ""}, leaving ${formatMoneyUI(atRisk || Math.max(0, billed - paid))} at risk.`;
+    recommendation = "Open the appeal workspace, confirm denial/EOB support, and prepare the appeal packet for staff review.";
+    nextActionLabel = "Open Appeal Workspace";
+    nextActionHref = `/ai-appeal?billed_id=${encodeURIComponent(claim?.billed_id || "")}`;
+    badge = "err";
+  } else if (stage === "Underpaid") {
+    headline = hasExpected
+      ? `${formatMoneyUI(variance)} expected-vs-paid variance`
+      : `${formatMoneyUI(atRisk)} possible underpayment`;
+    reason = hasExpected
+      ? `${payer} paid ${formatMoneyUI(paid)} against expected insurance of ${formatMoneyUI(expected)}, leaving ${formatMoneyUI(variance)} potentially recoverable.`
+      : `${payer} paid ${formatMoneyUI(paid)}. Expected reimbursement is not fully supported yet, so the claim is flagged for underpayment review.`;
+    recommendation = hasExpected
+      ? "Open the negotiation workspace and prepare an underpayment packet with EOB/ERA plus contract or fee schedule support."
+      : "Add a contract rule or fee schedule, then use the negotiation workspace if the variance remains.";
+    nextActionLabel = hasExpected ? "Open Negotiation Workspace" : "Add Contract Rule";
+    nextActionHref = hasExpected
+      ? `/ai-negotiation?billed_id=${encodeURIComponent(claim?.billed_id || "")}`
+      : `/data-management?tab=reimbursement`;
+    badge = "underpaid";
+  } else if (stage === "In Appeal/Negotiation") {
+    headline = `${formatMoneyUI(atRisk)} still pending recovery`;
+    reason = "Recovery work has already started for this claim. The remaining amount is still open until an outcome or payment is posted.";
+    recommendation = "Continue the active workspace, update packet proof, and track submission / follow-up status.";
+    const channel = workspaceChannelForClaim(claim, derived);
+    nextActionLabel = channel === "negotiation" ? "Continue Negotiation Workspace" : "Continue Appeal Workspace";
+    nextActionHref = workspacePagePath(claim?.billed_id || "", channel);
+    badge = "warn";
+  } else if (stage === "Patient Follow-Up") {
+    headline = `${formatMoneyUI(patientRemaining)} patient follow-up remaining`;
+    reason = `Patient responsibility is not fully collected or written off. Remaining patient balance is ${formatMoneyUI(patientRemaining)}.`;
+    recommendation = "Review patient responsibility, collection status, or write-off decision before closing the claim.";
+    nextActionLabel = "Adjust Patient Responsibility";
+    nextActionHref = `/claim-action?billed_id=${encodeURIComponent(claim?.billed_id || "")}&action=patient_resp`;
+    badge = "warn";
+  } else if (stage === "Awaiting Payment" || stage === "Submitted" || stage === "Waiting Payment") {
+    headline = "Waiting for payer payment response";
+    reason = "This claim appears submitted and is waiting for payer response or payment posting.";
+    recommendation = "Monitor for payer response, upload payment data when available, and follow up if the response window has passed.";
+    nextActionLabel = "Upload / Review Payments";
+    nextActionHref = "/data-management?tab=upload";
+    badge = "warn";
+  } else if (isResolvedLifecycleStage(stage)) {
+    headline = "No active recovery flag";
+    reason = "This claim appears resolved based on the current lifecycle and payment data.";
+    recommendation = "No recovery action is needed unless a payer correction, recoupment, or late denial occurs.";
+    nextActionLabel = "Edit Claim If Needed";
+    nextActionHref = `/claim-edit?claim_id=${encodeURIComponent(claim?.billed_id || "")}`;
+    badge = "ok";
+  }
+
+  return {
+    stage,
+    badge,
+    headline,
+    reason,
+    recommendation,
+    evidence,
+    missingSupport,
+    nextActionLabel,
+    nextActionHref,
+    amounts: {
+      billed,
+      expected,
+      paid,
+      insuranceWriteOff,
+      payerRemaining,
+      patientRemaining,
+      atRisk,
+      variance
+    }
+  };
+}
+
+function renderClaimWhyCard(explanation, opts={}){
+  const e = explanation || {};
+  const a = e.amounts || {};
+  const title = opts.title || "Why this claim is flagged";
+  const compact = opts.compact === true;
+  const evidence = Array.isArray(e.evidence) ? e.evidence : [];
+  const missing = Array.isArray(e.missingSupport) ? e.missingSupport : [];
+
+  const metric = (label, value) => `
+    <div style="border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff;">
+      <div class="muted small">${safeStr(label)}</div>
+      <div style="font-weight:900;margin-top:4px;">${value}</div>
+    </div>
+  `;
+
+  return `
+    <div class="card" style="border-left:4px solid #111827;box-shadow:none;margin:14px 0;">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+        <div>
+          <h3 style="margin:0 0 6px;">${safeStr(title)}</h3>
+          <div style="font-weight:900;">${safeStr(e.headline || "Review this claim")}</div>
+          <div class="muted" style="margin-top:6px;">${safeStr(e.reason || "")}</div>
+        </div>
+        <span class="badge ${safeStr(e.badge || "warn")}">${safeStr(e.stage || "Review")}</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:12px;">
+        ${metric("Billed", formatMoneyUI(a.billed || 0))}
+        ${metric("Expected", a.expected !== null && a.expected !== undefined ? formatMoneyUI(a.expected || 0) : "-")}
+        ${metric("Paid", formatMoneyUI(a.paid || 0))}
+        ${metric("At Risk", formatMoneyUI(a.atRisk || 0))}
+      </div>
+
+      <div style="margin-top:12px;">
+        <strong>Recommended next step</strong>
+        <div class="muted" style="margin-top:4px;">${safeStr(e.recommendation || "Review claim details before taking action.")}</div>
+      </div>
+
+      ${compact ? "" : `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:12px;">
+          <div>
+            <strong>Evidence used</strong>
+            <ul style="margin:6px 0 0 18px;">${(evidence.length ? evidence : ["Claim record"]).map(x => `<li>${safeStr(x)}</li>`).join("")}</ul>
+          </div>
+          <div>
+            <strong>Missing support / caution</strong>
+            ${missing.length
+              ? `<ul style="margin:6px 0 0 18px;">${missing.map(x => `<li>${safeStr(x)}</li>`).join("")}</ul>`
+              : `<div class="muted" style="margin-top:6px;">No major missing support detected from current structured data.</div>`
+            }
+          </div>
+        </div>
+      `}
+
+      <div class="btnRow" style="margin-top:12px;">
+        <a class="btn small secondary" href="${safeStr(e.nextActionHref || "#")}">${safeStr(e.nextActionLabel || "Open next step")}</a>
+      </div>
+    </div>
+  `;
+}
+
 function isResolvedLifecycleStage(stage){
   const s = String(stage || "").trim();
   return ["Resolved", "Write-Off", "Revenue Collected", "Closed", "Contractual"].includes(s);
@@ -36404,7 +36589,8 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
       return {
         ...claim,
         __derived: derived,
-        __risk: computeClaimRiskScore(claim)
+        __risk: computeClaimRiskScore(claim),
+        __why: explainClaimFlag(claim.org_id || "", claim, derived)
       };
     })
   ).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
@@ -36619,6 +36805,29 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
           ? '<div style="margin:12px 0;padding:10px;border-radius:12px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;">No contract match found for this claim. Review matching before taking reimbursement action.</div>'
           : '';
 
+        const why = claim.__why || {};
+        const whyAmounts = why.amounts || {};
+        const whyEvidence = Array.isArray(why.evidence) ? why.evidence : [];
+        const whyMissing = Array.isArray(why.missingSupport) ? why.missingSupport : [];
+        const whyHtml = ''
+          + '<div style="border:1px solid #e5e7eb;border-left:4px solid #111827;border-radius:12px;padding:12px;margin:12px 0;background:#fff;">'
+          +   '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">'
+          +     '<div>'
+          +       '<strong>Why this claim is flagged</strong>'
+          +       '<div class="muted small" style="margin-top:4px;font-weight:700;">' + panelEsc(why.headline || 'Review this claim') + '</div>'
+          +     '</div>'
+          +     '<span class="badge ' + panelEsc(why.badge || 'warn') + '">' + panelEsc(why.stage || normalizedDisplayStage) + '</span>'
+          +   '</div>'
+          +   '<p class="muted small" style="margin-top:8px;">' + panelEsc(why.reason || '') + '</p>'
+          +   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">'
+          +     '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:8px;"><div class="muted small">Expected</div><strong>' + (whyAmounts.expected != null ? panelMoney(whyAmounts.expected) : '-') + '</strong></div>'
+          +     '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:8px;"><div class="muted small">Paid</div><strong>' + panelMoney(whyAmounts.paid || 0) + '</strong></div>'
+          +   '</div>'
+          +   '<div style="margin-top:8px;"><strong class="small">Recommended next step</strong><p class="muted small" style="margin:4px 0 0;">' + panelEsc(why.recommendation || '') + '</p></div>'
+          +   (whyEvidence.length ? '<details style="margin-top:8px;"><summary class="small" style="cursor:pointer;font-weight:800;">Evidence used</summary><ul style="margin:6px 0 0 18px;">' + whyEvidence.map(function(x){ return '<li>' + panelEsc(x) + '</li>'; }).join('') + '</ul></details>' : '')
+          +   (whyMissing.length ? '<details style="margin-top:8px;"><summary class="small" style="cursor:pointer;font-weight:800;">Missing support / caution</summary><ul style="margin:6px 0 0 18px;">' + whyMissing.map(function(x){ return '<li>' + panelEsc(x) + '</li>'; }).join('') + '</ul></details>' : '')
+          + '</div>';
+
         ui.content.innerHTML = ''
           + '<div style="font-size:20px;font-weight:900;margin-bottom:10px;">Claim #' + panelEsc(claim.claim_number || "") + '</div>'
           + '<div class="muted small" style="margin-bottom:14px;">' + panelEsc(claim.payer || "") + ' • ' + panelEsc(claim.dos || "No DOS") + '</div>'
@@ -36632,6 +36841,7 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
           +   '<span class="badge ' + panelEsc(badgeClass) + '">' + panelEsc(normalizedDisplayStage) + '</span>'
           +   '<span class="badge">Risk ' + panelEsc(String(claim.__risk || 0)) + '</span>'
           + '</div>'
+          + whyHtml
           + contractAlert
           + '<div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
           +   '<a class="btn small secondary" href="/claim-detail?billed_id=' + encodeURIComponent(claim.billed_id) + '">Open Full Claim</a>'
@@ -37450,6 +37660,8 @@ if (method === "GET" && pathname === "/claim-edit") {
     </p>
 
     <div class="hr"></div>
+
+    ${renderClaimWhyCard(explainClaimFlag(org.org_id, b, d), { title: "Why this claim is flagged" })}
 
     ${renderClaimFinancialContext(b, d)}
 
@@ -46503,6 +46715,10 @@ if (method === "GET" && pathname === "/agent-workspace") {
           </div>
         </div>
         ${renderWorkspaceCommandCenter(ws, claim, derived, channel)}
+        ${renderClaimWhyCard(explainClaimFlag(org.org_id, claim, derived), {
+          title: channel === "negotiation" ? "Why this negotiation exists" : "Why this appeal exists",
+          compact: true
+        })}
         ${outcomeInsightCard}
         ${outcomeRecommendationCard}
 
@@ -47694,6 +47910,8 @@ if (method === "GET" && pathname === "/claim-detail") {
   const html = renderPage("Claim Detail", `
     <h2>Claim Detail</h2>
     ${submitBanner}
+
+    ${renderClaimWhyCard(explainClaimFlag(org.org_id, b, d), { title: "Why this claim is flagged" })}
 
     <h3>Claim Overview</h3>
     <table>
