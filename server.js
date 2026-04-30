@@ -18859,6 +18859,9 @@ function workspacePolishStyles(){
         resize:vertical;
         white-space:pre-wrap;
       }
+      .packet-workspace-shell .ai-target-section{
+        box-shadow:0 0 0 3px rgba(79,70,229,.12);
+      }
 
       .packet-workspace-shell .ws-ai-queue-note{
         display:flex;
@@ -19564,6 +19567,7 @@ function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, opts={}){
 
 function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
   const exportMode = !!opts.exportMode;
+  const aiPreview = opts.aiPreview || null;
   const items = workspacePacketAttachmentPlan(channel);
   const rows = items.map((item) => {
     if (channel === "appeal" && item.key === "lmn") {
@@ -19583,7 +19587,8 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
             title: "Letter of Medical Necessity",
             value: packetSections.letter_of_medical_necessity,
             description: descriptions.letter_of_medical_necessity,
-            exportMode
+            exportMode,
+            aiPreview
           })}
         </div>
       `;
@@ -20476,19 +20481,214 @@ function workspaceAiSectionOptions(channel){
 }
 
 function workspaceAiSectionLabel(channel, section_key){
-  const found = workspaceAiSectionOptions(channel).find(x => x.key === section_key);
-  return found ? found.label : String(section_key || "Packet Section");
+  const key = String(section_key || "").trim();
+
+  const appealLabels = {
+    argument: "Appeal Narrative",
+    letter_of_medical_necessity: "Letter of Medical Necessity",
+    requested_action: "Requested Action",
+    financial_summary: "Financial Summary",
+    claim_summary: "Claim Summary",
+    header: "Header",
+    attachments_index: "Attachments Index",
+    signature: "Signature"
+  };
+
+  const negotiationLabels = {
+    variance_explanation: "Negotiation Narrative / Variance Explanation",
+    requested_amount: "Requested Amount",
+    requested_action: "Requested Action",
+    financial_summary: "Financial Summary",
+    claim_summary: "Claim Summary",
+    attachments_index: "Attachments Index",
+    signature: "Signature"
+  };
+
+  const labels = channel === "negotiation" ? negotiationLabels : appealLabels;
+  return labels[key] || key || "Packet Section";
+}
+
+function workspaceDetectAiTargetSection(prompt, preset, channel, selectedSection){
+  const selected = String(selectedSection || "auto").trim();
+  const appealAllowed = new Set([
+    "argument",
+    "letter_of_medical_necessity",
+    "requested_action",
+    "financial_summary",
+    "claim_summary",
+    "header",
+    "attachments_index",
+    "signature"
+  ]);
+
+  const negotiationAllowed = new Set([
+    "variance_explanation",
+    "requested_amount",
+    "financial_summary",
+    "claim_summary",
+    "requested_action",
+    "attachments_index",
+    "signature"
+  ]);
+
+  const allowed = channel === "negotiation" ? negotiationAllowed : appealAllowed;
+  if (selected && selected !== "auto" && allowed.has(selected)) return selected;
+
+  const q = String(prompt || "").toLowerCase();
+
+  if (channel === "negotiation") {
+    if (preset === "justify" || q.includes("requested amount") || q.includes("justify amount") || q.includes("payment amount") || q.includes("dollar amount")) return "requested_amount";
+    if (q.includes("financial") || q.includes("billed") || q.includes("paid") || q.includes("expected") || q.includes("at risk")) return "financial_summary";
+    if (q.includes("claim summary") || q.includes("claim context") || q.includes("payer") || q.includes("date of service") || q.includes("dos")) return "claim_summary";
+    if (q.includes("requested action") || q.includes("reprocess") || q.includes("corrected payment") || q.includes("remit")) return "requested_action";
+    return "variance_explanation";
+  }
+
+  if (preset === "justify" || q.includes("letter of medical necessity") || q.includes("medical necessity") || q.includes("medical justification") || q.includes("clinical") || q.includes("diagnosis") || q.includes("treatment plan") || q.includes("provider letter")) return "letter_of_medical_necessity";
+  if (q.includes("requested action") || q.includes("reverse") || q.includes("reprocess") || q.includes("overturn") || q.includes("what we are asking")) return "requested_action";
+  if (q.includes("financial") || q.includes("billed") || q.includes("paid") || q.includes("expected") || q.includes("at risk")) return "financial_summary";
+  if (q.includes("claim summary") || q.includes("claim context") || q.includes("denial reason") || q.includes("payer") || q.includes("date of service") || q.includes("dos")) return "claim_summary";
+  if (q.includes("attachments") || q.includes("documents") || q.includes("proof") || q.includes("evidence index")) return "attachments_index";
+  return "argument";
 }
 
 function workspaceDetectAiTargetSections(prompt, preset, channel, selectedSection){
   const selected = String(selectedSection || "auto").trim();
-  const allowed = new Set(workspaceAiSectionOptions(channel).map(x => x.key).filter(x => x !== "auto"));
+  const allowed = new Set(
+    (channel === "negotiation"
+      ? ["variance_explanation","requested_amount","financial_summary","claim_summary","requested_action","attachments_index","signature"]
+      : ["argument","letter_of_medical_necessity","requested_action","financial_summary","claim_summary","header","attachments_index","signature"])
+  );
   if (selected && selected !== "auto" && allowed.has(selected)) return [selected];
-  return [channel === "negotiation" ? "variance_explanation" : (preset === "justify" ? "letter_of_medical_necessity" : "argument")];
+
+  const q = String(prompt || "").toLowerCase();
+  const matches = [];
+  const addMatch = (key, patterns) => {
+    if (!allowed.has(key)) return;
+    let best = -1;
+    patterns.forEach(pattern => {
+      const idx = q.indexOf(pattern);
+      if (idx >= 0 && (best < 0 || idx < best)) best = idx;
+    });
+    if (best >= 0 && !matches.some(m => m.key === key)) matches.push({ key, pos: best });
+  };
+
+  if (channel === "negotiation") {
+    addMatch("claim_summary", ["claim summary","claim context","payer","date of service","dos"]);
+    addMatch("financial_summary", ["financial summary","financial","billed","paid","expected","at risk","payment summary"]);
+    addMatch("requested_amount", ["requested amount","amount requested","justify amount","payment amount","dollar amount","requested payment"]);
+    addMatch("variance_explanation", ["negotiation argument","negotiation narrative","variance","underpayment","underpaid","expected vs paid","expected-vs-paid","contract","fee schedule","allowed amount","reimbursement","strengthen argument","improve argument"]);
+    addMatch("requested_action", ["requested action","ask the payer","reprocess","corrected payment","remit","what we are asking"]);
+    addMatch("attachments_index", ["attachments","documents","proof","evidence index","supporting documents"]);
+    if (!matches.length) {
+      if (preset === "justify") return ["requested_amount", "variance_explanation"];
+      return [workspaceDetectAiTargetSection(prompt, preset, channel, selectedSection)];
+    }
+  } else {
+    addMatch("claim_summary", ["claim summary","claim context","denial reason","payer","date of service","dos"]);
+    addMatch("financial_summary", ["financial summary","financial","billed","paid","expected","at risk","payment summary"]);
+    addMatch("argument", ["appeal argument","appeal narrative","denial reversal","argument","approval","persuasive","appeal approval","improve appeal","strengthen appeal"]);
+    addMatch("letter_of_medical_necessity", ["letter of medical necessity","medical necessity","medical justification","clinical","diagnosis","treatment plan","symptoms","provider letter","medical rationale"]);
+    addMatch("requested_action", ["requested action","ask the payer","reverse","reprocess","overturn","written rationale","what we are asking"]);
+    addMatch("attachments_index", ["attachments","documents","proof","evidence index","supporting documents"]);
+    if (!matches.length) return [workspaceDetectAiTargetSection(prompt, preset, channel, selectedSection)];
+  }
+
+  return matches.sort((a,b)=>a.pos-b.pos).map(x=>x.key).filter((k,i,arr)=>k && arr.indexOf(k)===i).slice(0,5);
+}
+
+function workspaceAiSafePromptForPreset(prompt, preset, channel){
+  let p = String(prompt || "").trim();
+  if (p) return p;
+  if (preset === "improve") {
+    return channel === "negotiation"
+      ? "Strengthen the negotiation narrative and payment variance argument."
+      : "Improve the appeal argument and make the denial reversal language stronger.";
+  }
+  if (preset === "contract") return "Add policy, contract, fee schedule, or reimbursement-methodology language where appropriate. Do not invent unsupported facts.";
+  if (preset === "justify") {
+    return channel === "negotiation"
+      ? "Justify the requested payment amount using expected-versus-paid logic."
+      : "Strengthen the Letter of Medical Necessity and medical justification without inventing clinical facts.";
+  }
+  return p;
+}
+
+async function workspaceGenerateAiSectionPreview({ sess, claim, ws, channel, prompt, preset, targetSections }){
+  const queue = (Array.isArray(targetSections) ? targetSections : []).map(x => String(x || "").trim()).filter(Boolean);
+  const sectionKey = queue[0] || (channel === "negotiation" ? "variance_explanation" : "argument");
+  const pendingSections = queue.slice(1);
+  const sectionLabel = workspaceAiSectionLabel(channel, sectionKey);
+  ws[channel] = ws[channel] || {};
+  ws[channel].packet_sections = ws[channel].packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
+  const currentText = String(ws[channel].packet_sections[sectionKey] || "").trim();
+  const evidenceContext = workspaceAiEvidenceContext(ws, claim, channel);
+  const finalPrompt = workspaceAiSafePromptForPreset(prompt, preset, channel);
+
+  const ai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const completion = await ai.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0.25,
+    messages: [
+      { role: "system", content: "You are the TJ Healthcare Pro packet section editor. Rewrite only the targeted editable packet section. Do not invent clinical facts, symptoms, diagnoses, authorization history, payer policy terms, contract terms, payment details, or uploaded evidence. If proof is missing, use careful language or bracketed placeholders. Return clean plain text only. No markdown, no code fences, and no explanation outside the revised section text." },
+      { role: "user", content: `Workspace: ${channel}\nTarget section: ${sectionLabel}\nUser request: ${finalPrompt}\n\nEvidence context:\n${evidenceContext}\n\nCurrent ${sectionLabel} text:\n${currentText || "[This section is currently blank. Draft it using only safe known facts and bracketed placeholders where information is missing.]"}` }
+    ]
+  });
+  const improvedText = workspaceCleanAiSectionOutput(completion.choices?.[0]?.message?.content || "");
+  ws[channel].preview_diff = {
+    section_key: sectionKey,
+    section_label: sectionLabel,
+    before: currentText,
+    after: improvedText || currentText,
+    prompt: finalPrompt,
+    preset,
+    pending_sections: pendingSections,
+    section_queue: queue,
+    created_at: nowISO()
+  };
+  ws[channel].updated_at = nowISO();
+  saveAgentWorkspace(sess.org_id, ws);
+  return sectionKey;
 }
 
 function workspaceCleanAiSectionOutput(text){
-  return String(text || "").replace(/```[a-zA-Z]*\n?/g, "").replace(/```/g, "").replace(/\*\*(.*?)\*\*/g, "$1").trim();
+  return String(text || "")
+    .replace(/```[a-zA-Z]*\n?/g, "")
+    .replace(/```/g, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/^\s*Here is (the )?(revised|updated).*?:\s*/i, "")
+    .replace(/^\s*Updated section:\s*/i, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function workspaceAiEvidenceContext(ws, claim, channel){
+  const attachments = Array.isArray(ws?.attachments) ? ws.attachments : [];
+  const attachmentLines = attachments.slice(0, 12).map(a =>
+    `- ${workspaceDocLabel(a.doc_key || a.key || "supporting_document")}: ${a.filename || "attached file"}`
+  );
+
+  const sectionData = ws?.[channel]?.packet_sections || {};
+  const sectionLines = Object.keys(sectionData)
+    .filter(key => String(sectionData[key] || "").trim())
+    .map(key => `- ${workspaceAiSectionLabel(channel, key)}`);
+
+  return [
+    `Claim number: ${claim?.claim_number || claim?.claim_id || ""}`,
+    `Payer: ${claim?.payer || ""}`,
+    `Date of service: ${claim?.dos || claim?.date_of_service || claim?.service_date || ""}`,
+    `Billed: ${claim?.amount_billed || claim?.billed_amount || ""}`,
+    `Expected: ${claim?.expected_amount || claim?.expected_insurance || ""}`,
+    `Paid: ${claim?.paid_amount || claim?.insurance_paid || ""}`,
+    `Status: ${claim?.status || claim?.lifecycleStage || ""}`,
+    "",
+    "Attached or available proof:",
+    attachmentLines.length ? attachmentLines.join("\n") : "- No manually uploaded source proof is attached yet.",
+    "",
+    "Current packet sections available:",
+    sectionLines.length ? sectionLines.join("\n") : "- None"
+  ].join("\n");
 }
 
 function renderInlineAIAssist(billed_id, channel){
@@ -20514,12 +20714,34 @@ function renderInlineAIAssist(billed_id, channel){
     ? "e.g. Make this stronger using contract variance and expected-vs-paid reimbursement logic"
     : "e.g. Make this stronger for medical necessity or denial reversal";
   const assistantName = isNegotiation ? "AI Negotiation Assistant" : "AI Appeal Assistant";
+  const targetSectionOptions = isNegotiation
+    ? `
+      <option value="auto">Auto-detect section</option>
+      <option value="variance_explanation">Negotiation Narrative / Variance Explanation</option>
+      <option value="requested_amount">Requested Amount</option>
+      <option value="financial_summary">Financial Summary</option>
+      <option value="claim_summary">Claim Summary</option>
+      <option value="requested_action">Requested Action</option>
+      <option value="attachments_index">Attachments Index</option>
+      <option value="signature">Signature</option>
+    `
+    : `
+      <option value="auto">Auto-detect section</option>
+      <option value="argument">Appeal Narrative</option>
+      <option value="letter_of_medical_necessity">Letter of Medical Necessity</option>
+      <option value="requested_action">Requested Action</option>
+      <option value="financial_summary">Financial Summary</option>
+      <option value="claim_summary">Claim Summary</option>
+      <option value="header">Header</option>
+      <option value="attachments_index">Attachments Index</option>
+      <option value="signature">Signature</option>
+    `;
 
   return `
     <div class="ws-panel ws-ai-assist-launcher">
       <h3>${safeStr(assistantName)}</h3>
       <p class="muted small" style="margin-top:0;">
-        Improve the ${safeStr(isNegotiation ? "negotiation" : "appeal")} language in a floating panel while keeping the packet preview scrollable.
+        Improve editable ${safeStr(isNegotiation ? "negotiation" : "appeal")} packet sections. Choose a section or let the assistant auto-detect one. The proposed update will appear inside that editable section.
       </p>
       <button class="btn secondary small" type="button" onclick="openWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">
         Open ${safeStr(assistantName)}
@@ -20527,15 +20749,30 @@ function renderInlineAIAssist(billed_id, channel){
     </div>
     <aside id="${safeStr(drawerId)}" class="ws-ai-drawer" aria-hidden="true">
       <div class="ws-ai-drawer-head">
-        <div><h3 style="margin:0;">${safeStr(assistantName)}</h3><div class="muted small">Improve this ${safeStr(isNegotiation ? "negotiation" : "appeal")} packet, then apply the changes.</div></div>
+        <div>
+          <h3 style="margin:0;">${safeStr(assistantName)}</h3>
+          <div class="muted small">
+            Choose a packet section or use Auto-detect. The assistant will prepare a clean section update for review.
+          </div>
+        </div>
         <button class="ws-ai-drawer-close" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')" aria-label="Close AI Assist">×</button>
       </div>
-      <form method="POST" action="/ai-workspace/ai-edit">
+      <form method="POST" action="/ai-workspace/ai-edit" onsubmit="return submitWorkspaceAiAssistForm(this);">
         <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
         <input type="hidden" name="channel" value="${safeStr(channel)}" />
 
         <div class="hint" style="margin:10px 0 12px;">
-          ${helperText}
+          ${isNegotiation
+            ? `Use AI to improve editable negotiation packet sections. Choose a section or let the assistant auto-detect one. The proposed update appears inside that editable section.`
+            : `Use AI to improve editable appeal packet sections. Choose a section or let the assistant auto-detect one. The proposed update appears inside that editable section.`
+          }
+        </div>
+
+        <div style="margin-bottom:8px;">
+          <label class="small muted" for="${safeStr(drawerId)}_target_section">Target Section:</label>
+          <select id="${safeStr(drawerId)}_target_section" name="target_section" style="width:100%;margin-top:4px;">
+            ${targetSectionOptions}
+          </select>
         </div>
 
         <div style="margin-bottom:8px;">
@@ -20555,9 +20792,12 @@ function renderInlineAIAssist(billed_id, channel){
         </div>
 
         <textarea name="prompt" placeholder="${safeStr(placeholder)}"></textarea>
+        <div class="ws-ai-working" data-ai-working>
+          Working on editable packet section… The page will open at the section being improved.
+        </div>
 
         <div class="btnRow" style="margin-top:10px;">
-          <button class="btn">Apply AI Update</button>
+          <button class="btn" type="submit" data-default-label="Generate Section Update">Generate Section Update</button>
           <button class="btn secondary" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">Cancel</button>
         </div>
       </form>
@@ -20573,6 +20813,18 @@ function renderInlineAIAssist(billed_id, channel){
         if (!drawer) return;
         drawer.classList.remove("open");
         drawer.setAttribute("aria-hidden", "true");
+      };
+      window.submitWorkspaceAiAssistForm = window.submitWorkspaceAiAssistForm || function(form){
+        if (!form) return false;
+        if (form.dataset.submitting === "true") return false;
+        form.dataset.submitting = "true";
+        var submitButtons = form.querySelectorAll('button[type="submit"]');
+        submitButtons.forEach(function(btn){
+          if (!btn.dataset.defaultLabel) btn.dataset.defaultLabel = btn.textContent || "Submit";
+          btn.disabled = true;
+          btn.textContent = "Generating Section Update...";
+        });
+        return true;
       };
       </script>
     </aside>
@@ -20637,6 +20889,11 @@ function renderEditablePacketSection(opts){
   const description = String(opts.description || "");
   const compact = !!opts.compact;
   const exportMode = !!opts.exportMode;
+  const aiPreview = opts.aiPreview || null;
+  const hasAiPreview = !!(aiPreview && String(aiPreview.section_key || "") === section_key);
+  const pending = hasAiPreview && Array.isArray(aiPreview.pending_sections) ? aiPreview.pending_sections : [];
+  const aiQueue = hasAiPreview && Array.isArray(aiPreview.section_queue) ? aiPreview.section_queue : [];
+  const anchorId = workspaceSectionAnchor(section_key);
 
   if (exportMode){
     return `
@@ -20651,9 +20908,50 @@ function renderEditablePacketSection(opts){
   }
 
   const showPreview = workspacePacketTextHtml(value, `<span class="muted">No content yet.</span>`);
+  const aiProposalHtml = hasAiPreview ? `
+    <div class="ws-ai-section-proposal">
+      <strong>AI proposed update for ${safeStr(title)}</strong>
+      <div class="muted small" style="margin-top:4px;">
+        Review the proposed text below. Apply it to this section, or cancel and keep the current section unchanged.
+      </div>
+      ${aiQueue.length > 1 ? `
+        <div class="ws-ai-queue-note">
+          <div>
+            <strong>Queue:</strong>
+            <div class="muted small">
+              ${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}
+            </div>
+          </div>
+          ${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(workspaceAiSectionLabel(channel, pending[0]))}</div>` : ""}
+        </div>
+      ` : ""}
+      <form method="POST" action="/ai-workspace/apply-diff" style="margin-top:10px;">
+        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+        <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+        <input type="hidden" name="section_key" value="${safeStr(section_key)}"/>
+        <textarea name="after">${escapeHtml(aiPreview.after || "")}</textarea>
+        <div class="ws-inline-save">
+          <button class="btn" type="submit">Apply to ${safeStr(title)}</button>
+        </div>
+      </form>
+      <form method="POST" action="/ai-workspace/cancel-diff" style="margin-top:8px;">
+        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+        <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+        <button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button>
+      </form>
+      ${pending.length > 0 ? `
+        <form method="POST" action="/ai-workspace/cancel-diff" style="margin-top:8px;">
+          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+          <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+          <input type="hidden" name="cancel_all" value="1"/>
+          <button class="btn secondary small" type="submit">Cancel AI Queue</button>
+        </form>
+      ` : ""}
+    </div>
+  ` : "";
 
   return `
-    <div class="ws-section-card ws-clean-section" data-inline-section="${safeStr(section_key)}">
+    <div class="ws-section-card ws-clean-section ${hasAiPreview ? "ai-target-section" : ""}" id="${safeStr(anchorId)}" data-inline-section="${safeStr(section_key)}">
       <div class="ws-section-head">
         <div>
           <div class="ws-section-title">${safeStr(title)}</div>
@@ -20665,6 +20963,8 @@ function renderEditablePacketSection(opts){
         ${showPreview}
         <div class="muted small" style="margin-top:8px;">Click this section to edit.</div>
       </div>
+
+      ${aiProposalHtml}
 
       <form class="ws-edit-form ws-inline-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview">
         <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
@@ -20862,6 +21162,7 @@ function renderWorkspacePreview(opts){
   const savedSignature = String(orgSettings.signature_image || "");
   const channel = opts.channel === "negotiation" ? "negotiation" : "appeal";
   const exportMode = !!opts.exportMode;
+  const aiPreview = !exportMode ? (ws?.[channel]?.preview_diff || null) : null;
 
   ensureWorkspacePacket(ws);
   ensurePacketSections(ws, claim);
@@ -20907,25 +21208,25 @@ function renderWorkspacePreview(opts){
           ${!ready.ok ? `<div class="ws-callout warn">Missing required documents before final review: ${ready.missing.map(workspaceDocLabel).join(", ")}.</div>` : ``}
           ${topMeta}
 
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"header", title:"Header", value: packetSections.header, description: sectionDescriptions.header, compact:true, exportMode })}
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"claim_summary", title:"Claim Summary", value: packetSections.claim_summary, description: sectionDescriptions.claim_summary, compact:true, exportMode })}
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"financial_summary", title:"Financial Summary", value: packetSections.financial_summary, description: sectionDescriptions.financial_summary, exportMode })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"header", title:"Header", value: packetSections.header, description: sectionDescriptions.header, compact:true, exportMode, aiPreview })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"claim_summary", title:"Claim Summary", value: packetSections.claim_summary, description: sectionDescriptions.claim_summary, compact:true, exportMode, aiPreview })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"financial_summary", title:"Financial Summary", value: packetSections.financial_summary, description: sectionDescriptions.financial_summary, exportMode, aiPreview })}
 
           ${
             channel === "appeal"
-              ? renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"argument", title:"Appeal Narrative", value: packetSections.argument, description: sectionDescriptions.argument, exportMode })
-              : renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"variance_explanation", title:"Variance Explanation", value: packetSections.variance_explanation, description: sectionDescriptions.variance_explanation, exportMode })
+              ? renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"argument", title:"Appeal Narrative", value: packetSections.argument, description: sectionDescriptions.argument, exportMode, aiPreview })
+              : renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"variance_explanation", title:"Variance Explanation", value: packetSections.variance_explanation, description: sectionDescriptions.variance_explanation, exportMode, aiPreview })
           }
 
           ${
             channel === "negotiation"
-              ? renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_amount", title:"Requested Amount", value: packetSections.requested_amount, description: sectionDescriptions.requested_amount, compact:true, exportMode })
+              ? renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_amount", title:"Requested Amount", value: packetSections.requested_amount, description: sectionDescriptions.requested_amount, compact:true, exportMode, aiPreview })
               : ""
           }
 
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_action", title:"Requested Action", value: packetSections.requested_action, description: sectionDescriptions.requested_action, exportMode })}
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"attachments_index", title:"Attachments Index", value: buildAttachmentsIndex(ws), description: sectionDescriptions.attachments_index, exportMode })}
-          ${renderWorkspacePacketExhibits(ws, claim, channel, { exportMode })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_action", title:"Requested Action", value: packetSections.requested_action, description: sectionDescriptions.requested_action, exportMode, aiPreview })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"attachments_index", title:"Attachments Index", value: buildAttachmentsIndex(ws), description: sectionDescriptions.attachments_index, exportMode, aiPreview })}
+          ${renderWorkspacePacketExhibits(ws, claim, channel, { exportMode, aiPreview })}
           ${renderSignatureSection({
             billed_id: claim.billed_id,
             channel,
@@ -47771,51 +48072,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const appliedMsg = parsed.query.applied
       ? `<div class="ws-callout ok">Changes applied successfully</div>`
       : ``;
-    const preview = ws?.[channel]?.preview_diff;
-    const diffUI = preview ? `
-      <div class="ws-panel" style="border:1px solid #6366f1;">
-        <h3>AI Improvement Preview</h3>
-
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          
-          <div style="flex:1;min-width:280px;">
-            <div class="small muted">Before</div>
-            <div style="background:#f9fafb;padding:10px;border-radius:8px;font-size:13px;white-space:pre-wrap;">
-              ${(() => {
-                const diff = simpleDiff(preview.before, preview.after);
-                return diff.before;
-              })()}
-            </div>
-          </div>
-
-          <div style="flex:1;min-width:280px;">
-            <div class="small muted">After</div>
-            <div style="background:#ecfdf5;padding:10px;border-radius:8px;font-size:13px;white-space:pre-wrap;">
-              ${(() => {
-                const diff = simpleDiff(preview.before, preview.after);
-                return diff.after;
-              })()}
-            </div>
-          </div>
-
-        </div>
-
-        <div class="btnRow" style="margin-top:10px;">
-          <form method="POST" action="/ai-workspace/apply-diff">
-            <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
-            <input type="hidden" name="channel" value="${safeStr(channel)}"/>
-            <button class="btn">Apply Changes</button>
-          </form>
-
-          <form method="POST" action="/ai-workspace/cancel-diff">
-            <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
-            <input type="hidden" name="channel" value="${safeStr(channel)}"/>
-            <button class="btn secondary">Cancel</button>
-          </form>
-        </div>
-
-      </div>
-    ` : "";
+    const diffUI = "";
     const outcomeInsightText = buildOutcomeInsightText(sess.org_id);
     const outcomeInsightCard = renderWorkspaceIntelligenceStrip(ws, claim, derived, channel, outcomeInsightText);
 
@@ -47925,8 +48182,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
     incrementWorkspaceEditsUsage(sess.org_id);
 
     const back = channel === "negotiation"
-      ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}&saved=1`
-      : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}&saved=1`;
+      ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}&saved=1#${workspaceSectionAnchor(section_key)}`
+      : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}&saved=1#${workspaceSectionAnchor(section_key)}`;
 
     return redirect(res, back);
   }
@@ -48231,18 +48488,10 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
     const billed_id = String(params.get("billed_id") || "").trim();
     const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const targetSection = String(params.get("target_section") || "auto").trim();
     let prompt = String(params.get("prompt") || "").trim();
     const preset = String(params.get("preset") || "").trim();
-
-    if (preset && !prompt) {
-      if (preset === "improve") {
-        prompt = "Make this argument stronger and more persuasive for approval";
-      } else if (preset === "contract") {
-        prompt = "Add contract-based justification and strengthen reimbursement argument";
-      } else if (preset === "justify") {
-        prompt = "Strengthen justification using medical necessity and payer logic";
-      }
-    }
+    prompt = workspaceAiSafePromptForPreset(prompt, preset, channel);
 
     if (!billed_id || !prompt) return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
 
@@ -48252,33 +48501,19 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const ws = ensureAgentWorkspace(sess.org_id, claim);
     ensurePacketSections(ws, claim);
 
-    const current = ws[channel]?.packet_sections || {};
-    const sourceText = String(current.argument || current.variance_explanation || "").trim();
-    if (!sourceText) return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
+    const targetSections = workspaceDetectAiTargetSections(prompt, preset, channel, targetSection);
 
     try {
-      const ai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY
+      const sectionKey = await workspaceGenerateAiSectionPreview({
+        sess,
+        claim,
+        ws,
+        channel,
+        prompt,
+        preset,
+        targetSections
       });
-
-      const completion = await ai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role:"system", content:"You are rewriting healthcare appeal letters." },
-          { role:"user", content: `Rewrite this:\n\n${sourceText}\n\nInstruction: ${prompt}` }
-        ]
-      });
-
-      const improvedText = String(completion.choices?.[0]?.message?.content || "").trim();
-
-      ws[channel] = ws[channel] || {};
-      ws[channel].preview_diff = {
-        before: sourceText,
-        after: improvedText
-      };
-
-      saveAgentWorkspace(sess.org_id, ws);
-      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1`);
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1&ai_section=${encodeURIComponent(sectionKey)}#${workspaceSectionAnchor(sectionKey)}`);
     } catch (e) {
       console.error(e);
       return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
@@ -48295,6 +48530,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
     const billed_id = String(params.get("billed_id") || "").trim();
     const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const postedSectionKey = String(params.get("section_key") || "").trim();
+    const postedAfter = String(params.get("after") || "");
 
     const claim = getBilledById(sess.org_id, billed_id);
     if (!claim) return redirect(res, "/claims");
@@ -48303,15 +48540,54 @@ if (method === "GET" && pathname === "/agent-workspace") {
     ensurePacketSections(ws, claim);
 
     const preview = ws?.[channel]?.preview_diff;
-    if (preview?.after) {
-      const key = channel === "negotiation" ? "variance_explanation" : "argument";
-      ws[channel].packet_sections[key] = preview.after;
+    if (preview) {
+      ws[channel] = ws[channel] || {};
+      ws[channel].packet_sections = ws[channel].packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
+      const pendingSections = Array.isArray(preview.pending_sections) ? preview.pending_sections : [];
+      const key = postedSectionKey || preview.section_key || (channel === "negotiation" ? "variance_explanation" : "argument");
+      const before = String(ws[channel]?.packet_sections?.[key] || "");
+      const after = workspaceCleanAiSectionOutput(postedAfter || preview.after || "");
+      ws[channel].packet_sections[key] = after;
+      ws[channel].last_ai_undo = {
+        section_key: key,
+        before,
+        after,
+        prompt: preview.prompt || "",
+        created_at: nowISO()
+      };
+      if (channel === "appeal" && key === "argument") ws[channel].draft_text = after;
+      if (channel === "appeal" && key === "letter_of_medical_necessity") {
+        ws.packet = ws.packet || {};
+        ws.packet.clinical_support = Array.isArray(ws.packet.clinical_support) ? ws.packet.clinical_support : [];
+        let foundLmn = false;
+        ws.packet.clinical_support = ws.packet.clinical_support.map(item => {
+          if (item.key === "lmn") {
+            foundLmn = true;
+            return { ...item, lmn_text: after, status: "present", updated_at: nowISO() };
+          }
+          return item;
+        });
+        if (!foundLmn) ws.packet.clinical_support.push({ key:"lmn", lmn_text: after, status:"present", updated_at: nowISO() });
+      }
+      if (channel === "negotiation" && key === "variance_explanation") ws[channel].draft_text = after;
+      if (channel === "negotiation" && key === "requested_amount") ws[channel].requested_amount = num(after);
+      delete ws[channel].preview_diff;
+      saveAgentWorkspace(sess.org_id, ws);
+      if (pendingSections.length) {
+        const nextKey = await workspaceGenerateAiSectionPreview({
+          sess,
+          claim,
+          ws,
+          channel,
+          prompt: preview.prompt || "",
+          preset: preview.preset || "",
+          targetSections: pendingSections
+        });
+        return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1&ai_section=${encodeURIComponent(nextKey)}#${workspaceSectionAnchor(nextKey)}`);
+      }
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&applied=1&ai_section=${encodeURIComponent(key)}#${workspaceSectionAnchor(key)}`);
     }
-
-    delete ws[channel].preview_diff;
-    saveAgentWorkspace(sess.org_id, ws);
-
-    return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&applied=1`);
+    return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
   }
 
   // CANCEL DIFF
@@ -48321,6 +48597,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
+    const cancelAll = String(params.get("cancel_all") || "") === "1";
 
     const billed_id = String(params.get("billed_id") || "").trim();
     const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
@@ -48329,10 +48606,24 @@ if (method === "GET" && pathname === "/agent-workspace") {
     if (!claim) return redirect(res, "/claims");
 
     const ws = ensureAgentWorkspace(sess.org_id, claim);
-
+    const preview = ws?.[channel]?.preview_diff;
+    const pendingSections = !cancelAll && Array.isArray(preview?.pending_sections) ? preview.pending_sections : [];
+    const sectionKey = String(preview?.section_key || "").trim();
     delete ws[channel].preview_diff;
     saveAgentWorkspace(sess.org_id, ws);
-
+    if (pendingSections.length > 0) {
+      const nextKey = await workspaceGenerateAiSectionPreview({
+        sess,
+        claim,
+        ws,
+        channel,
+        prompt: preview?.prompt || "",
+        preset: preview?.preset || "",
+        targetSections: pendingSections
+      });
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1&ai_section=${encodeURIComponent(nextKey)}#${workspaceSectionAnchor(nextKey)}`);
+    }
+    if (sectionKey) return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}#${workspaceSectionAnchor(sectionKey)}`);
     return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
   }
 
