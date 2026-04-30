@@ -62,6 +62,67 @@ function simpleDiff(before, after){
   };
 }
 
+
+function workspaceDiffTokenize(text){
+  return String(text || "").match(/\s+|[^\s]+/g) || [];
+}
+
+function workspaceAiTrackChangesHtml(before, after){
+  const a = workspaceDiffTokenize(before);
+  const b = workspaceDiffTokenize(after);
+
+  const maxTokens = 900;
+  if (a.length > maxTokens || b.length > maxTokens) {
+    return `
+      <div class="ws-track-block">
+        <div class="ws-track-label removed">Previous version</div>
+        <div class="ws-track-old">${safeStr(before || "No previous text.")}</div>
+        <div class="ws-track-label added">AI proposed version</div>
+        <div class="ws-track-new">${safeStr(after || "")}</div>
+      </div>
+    `;
+  }
+
+  const dp = Array(a.length + 1).fill(null).map(() => Array(b.length + 1).fill(0));
+
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      if (a[i] === b[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
+      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  const out = [];
+  let i = 0;
+  let j = 0;
+
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      out.push(safeStr(a[i]));
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push(`<span class="ws-diff-removed">${safeStr(a[i])}</span>`);
+      i++;
+    } else {
+      out.push(`<span class="ws-diff-added">${safeStr(b[j])}</span>`);
+      j++;
+    }
+  }
+
+  while (i < a.length) {
+    out.push(`<span class="ws-diff-removed">${safeStr(a[i])}</span>`);
+    i++;
+  }
+
+  while (j < b.length) {
+    out.push(`<span class="ws-diff-added">${safeStr(b[j])}</span>`);
+    j++;
+  }
+
+  return out.join("");
+}
+
 // ===== Server =====
 const HOST = "0.0.0.0";
 const PORT = process.env.PORT || 8080;
@@ -18897,6 +18958,26 @@ function workspacePolishStyles(){
       }
 
       .packet-workspace-shell .ws-ai-working.show{display:block;}
+
+      .packet-workspace-shell .ws-ai-review-mode{border:1px solid #c7d2fe;border-left:4px solid #4f46e5;border-radius:16px;background:#f8fafc;padding:14px;margin-top:10px;}
+      .packet-workspace-shell .ws-ai-review-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;}
+      .packet-workspace-shell .ws-ai-review-title{font-weight:950;color:#111827;}
+      .packet-workspace-shell .ws-ai-review-copy{color:#64748b;font-size:12px;margin-top:3px;}
+      .packet-workspace-shell .ws-track-changes{border:1px solid #e5e7eb;border-radius:14px;background:#fff;padding:14px;line-height:1.7;white-space:pre-wrap;font-size:14px;color:#111827;}
+      .packet-workspace-shell .ws-diff-removed{color:#991b1b;background:#fee2e2;text-decoration:line-through;text-decoration-thickness:2px;border-radius:4px;padding:0 2px;}
+      .packet-workspace-shell .ws-diff-added{color:#065f46;background:#dcfce7;border-radius:4px;padding:0 2px;}
+      .packet-workspace-shell .ws-track-label{font-weight:950;font-size:12px;margin:8px 0 4px;}
+      .packet-workspace-shell .ws-track-label.removed{ color:#991b1b; }
+      .packet-workspace-shell .ws-track-label.added{ color:#065f46; }
+      .packet-workspace-shell .ws-track-old,.packet-workspace-shell .ws-track-new{border:1px solid #e5e7eb;border-radius:12px;padding:10px;white-space:pre-wrap;margin-bottom:8px;}
+      .packet-workspace-shell .ws-track-old{background:#fff1f2;color:#991b1b;}
+      .packet-workspace-shell .ws-track-new{background:#ecfdf5;color:#065f46;}
+      .packet-workspace-shell .ws-ai-proposed-edit{margin-top:10px;}
+      .packet-workspace-shell .ws-ai-proposed-edit summary{cursor:pointer;font-weight:900;color:#334155;}
+      .packet-workspace-shell .ws-ai-proposed-edit textarea{margin-top:8px;width:100%;min-height:260px;border:1px solid #dbe3ef;border-radius:12px;background:#fff;padding:12px;font-family:inherit;line-height:1.55;resize:vertical;white-space:pre-wrap;}
+      .packet-workspace-shell .ws-ai-next-status{display:none;margin-top:10px;border:1px solid #bfdbfe;background:#eff6ff;color:#1e3a8a;border-radius:12px;padding:10px;font-weight:900;}
+      .packet-workspace-shell .ws-ai-next-status.show{display:block;}
+
       @media(max-width:760px){
         .packet-workspace-shell .ws-intel-strip > summary{ flex-direction:column; }
         .packet-workspace-shell .ws-intel-strip-metrics{ justify-content:flex-start; }
@@ -20695,141 +20776,32 @@ function renderInlineAIAssist(billed_id, channel){
   const isNegotiation = channel === "negotiation";
   const safeId = String(`${channel || "workspace"}-${billed_id || ""}`).replace(/[^a-zA-Z0-9_-]/g, "_");
   const drawerId = `wsAiAssistDrawer_${safeId}`;
-
-  const helperText = isNegotiation
-    ? `
-      Use AI while the packet remains visible behind this floating panel.
-      <br/>• strengthen contract variance language
-      <br/>• add reimbursement methodology
-      <br/>• justify the requested payment amount
-    `
-    : `
-      Use AI while the packet remains visible behind this floating panel.
-      <br/>• strengthen denial reversal argument
-      <br/>• add medical necessity or policy support
-      <br/>• rewrite for appeal approval
-    `;
-
-  const placeholder = isNegotiation
-    ? "e.g. Make this stronger using contract variance and expected-vs-paid reimbursement logic"
-    : "e.g. Make this stronger for medical necessity or denial reversal";
+  const placeholder = isNegotiation ? "e.g. Make this stronger using contract variance and expected-vs-paid reimbursement logic" : "e.g. Make this stronger for medical necessity or denial reversal";
   const assistantName = isNegotiation ? "AI Negotiation Assistant" : "AI Appeal Assistant";
-  const targetSectionOptions = isNegotiation
-    ? `
-      <option value="auto">Auto-detect section</option>
-      <option value="variance_explanation">Negotiation Narrative / Variance Explanation</option>
-      <option value="requested_amount">Requested Amount</option>
-      <option value="financial_summary">Financial Summary</option>
-      <option value="claim_summary">Claim Summary</option>
-      <option value="requested_action">Requested Action</option>
-      <option value="attachments_index">Attachments Index</option>
-      <option value="signature">Signature</option>
-    `
-    : `
-      <option value="auto">Auto-detect section</option>
-      <option value="argument">Appeal Narrative</option>
-      <option value="letter_of_medical_necessity">Letter of Medical Necessity</option>
-      <option value="requested_action">Requested Action</option>
-      <option value="financial_summary">Financial Summary</option>
-      <option value="claim_summary">Claim Summary</option>
-      <option value="header">Header</option>
-      <option value="attachments_index">Attachments Index</option>
-      <option value="signature">Signature</option>
-    `;
-
+  const targetSectionOptions = isNegotiation ? `<option value="auto">Auto-detect section</option><option value="variance_explanation">Negotiation Narrative / Variance Explanation</option><option value="requested_amount">Requested Amount</option><option value="financial_summary">Financial Summary</option><option value="claim_summary">Claim Summary</option><option value="requested_action">Requested Action</option><option value="attachments_index">Attachments Index</option><option value="signature">Signature</option>` : `<option value="auto">Auto-detect section</option><option value="argument">Appeal Narrative</option><option value="letter_of_medical_necessity">Letter of Medical Necessity</option><option value="requested_action">Requested Action</option><option value="financial_summary">Financial Summary</option><option value="claim_summary">Claim Summary</option><option value="header">Header</option><option value="attachments_index">Attachments Index</option><option value="signature">Signature</option>`;
+  const quickButtons = isNegotiation
+    ? `<button type="button" class="btn small" data-ai-preset="improve" data-ai-target="variance_explanation" data-ai-prompt="Strengthen the negotiation narrative and payment variance argument." data-loading-label="Generating Section Update...">Strengthen Variance Argument</button><button type="button" class="btn small" data-ai-preset="contract" data-ai-target="variance_explanation" data-ai-prompt="Add policy, contract, fee schedule, or reimbursement-methodology language where appropriate. Do not invent unsupported facts." data-loading-label="Generating Section Update...">Add Contract / Fee Schedule Language</button><button type="button" class="btn small" data-ai-preset="justify" data-ai-target="requested_amount" data-ai-prompt="Justify the requested payment amount using expected-versus-paid logic." data-loading-label="Generating Section Update...">Justify Requested Amount</button>`
+    : `<button type="button" class="btn small" data-ai-preset="improve" data-ai-target="argument" data-ai-prompt="Improve the appeal argument and make the denial reversal language stronger." data-loading-label="Generating Section Update...">Improve Appeal Argument</button><button type="button" class="btn small" data-ai-preset="contract" data-ai-target="argument" data-ai-prompt="Add policy, contract, fee schedule, or reimbursement-methodology language where appropriate. Do not invent unsupported facts." data-loading-label="Generating Section Update...">Add Policy / Contract Language</button><button type="button" class="btn small" data-ai-preset="justify" data-ai-target="letter_of_medical_necessity" data-ai-prompt="Strengthen the Letter of Medical Necessity and medical justification without inventing clinical facts." data-loading-label="Generating Section Update...">Strengthen Medical Justification</button>`;
   return `
-    <div class="ws-panel ws-ai-assist-launcher">
-      <h3>${safeStr(assistantName)}</h3>
-      <p class="muted small" style="margin-top:0;">
-        Improve editable ${safeStr(isNegotiation ? "negotiation" : "appeal")} packet sections. Choose a section or let the assistant auto-detect one. The proposed update will appear inside that editable section.
-      </p>
-      <button class="btn secondary small" type="button" onclick="openWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">
-        Open ${safeStr(assistantName)}
-      </button>
-    </div>
+    <div class="ws-panel ws-ai-assist-launcher"><h3>${safeStr(assistantName)}</h3><button class="btn secondary small" type="button" onclick="openWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">Open ${safeStr(assistantName)}</button></div>
     <aside id="${safeStr(drawerId)}" class="ws-ai-drawer" aria-hidden="true">
-      <div class="ws-ai-drawer-head">
-        <div>
-          <h3 style="margin:0;">${safeStr(assistantName)}</h3>
-          <div class="muted small">
-            Choose a packet section or use Auto-detect. The assistant will prepare a clean section update for review.
-          </div>
-        </div>
-        <button class="ws-ai-drawer-close" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')" aria-label="Close AI Assist">×</button>
-      </div>
-      <form method="POST" action="/ai-workspace/ai-edit" onsubmit="return submitWorkspaceAiAssistForm(this);">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" />
-        <input type="hidden" name="channel" value="${safeStr(channel)}" />
-
-        <div class="hint" style="margin:10px 0 12px;">
-          ${isNegotiation
-            ? `Use AI to improve editable negotiation packet sections. Choose a section or let the assistant auto-detect one. The proposed update appears inside that editable section.`
-            : `Use AI to improve editable appeal packet sections. Choose a section or let the assistant auto-detect one. The proposed update appears inside that editable section.`
-          }
-        </div>
-
-        <div style="margin-bottom:8px;">
-          <label class="small muted" for="${safeStr(drawerId)}_target_section">Target Section:</label>
-          <select id="${safeStr(drawerId)}_target_section" name="target_section" style="width:100%;margin-top:4px;">
-            ${targetSectionOptions}
-          </select>
-        </div>
-
-        <div style="margin-bottom:8px;">
-          <div class="small muted">Quick Improvements:</div>
-
-          <div class="ws-ai-preset-grid">
-            ${isNegotiation ? `
-              <button type="submit" class="btn small" name="preset" value="improve">Strengthen Variance Argument</button>
-              <button type="submit" class="btn small" name="preset" value="contract">Add Contract / Fee Schedule Language</button>
-              <button type="submit" class="btn small" name="preset" value="justify">Justify Requested Amount</button>
-            ` : `
-              <button type="submit" class="btn small" name="preset" value="improve">Improve Appeal Argument</button>
-              <button type="submit" class="btn small" name="preset" value="contract">Add Policy / Contract Language</button>
-              <button type="submit" class="btn small" name="preset" value="justify">Strengthen Medical Justification</button>
-            `}
-          </div>
-        </div>
-
-        <textarea name="prompt" placeholder="${safeStr(placeholder)}"></textarea>
-        <div class="ws-ai-working" data-ai-working>
-          Working on editable packet section… The page will open at the section being improved.
-        </div>
-
-        <div class="btnRow" style="margin-top:10px;">
-          <button class="btn" type="submit" data-default-label="Generate Section Update">Generate Section Update</button>
-          <button class="btn secondary" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">Cancel</button>
-        </div>
+      <div class="ws-ai-drawer-head"><div><h3 style="margin:0;">${safeStr(assistantName)}</h3></div><button class="ws-ai-drawer-close" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">×</button></div>
+      <form method="POST" action="/ai-workspace/ai-edit" data-ai-workspace-form="1" onsubmit="return submitWorkspaceAiAssistForm(this, event && event.submitter ? event.submitter : this.__tjhpSubmitter);">
+        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="channel" value="${safeStr(channel)}" /><input type="hidden" name="preset" value="" data-ai-preset-input />
+        <select name="target_section" style="width:100%;margin-top:4px;">${targetSectionOptions}</select>
+        <div class="ws-ai-preset-grid">${quickButtons}</div>
+        <textarea name="prompt" placeholder="${safeStr(placeholder)}"></textarea><div class="ws-ai-working" data-ai-working>Working on editable packet section… The page will open at the section being improved.</div>
+        <div class="btnRow" style="margin-top:10px;"><button class="btn" type="submit" data-loading-label="Generating Section Update...">Generate Section Update</button><button class="btn secondary" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">Cancel</button></div>
       </form>
       <script>
-      window.openWorkspaceAiAssistDrawer = window.openWorkspaceAiAssistDrawer || function(id){
-        var drawer = document.getElementById(id);
-        if (!drawer) return;
-        drawer.classList.add("open");
-        drawer.setAttribute("aria-hidden", "false");
-      };
-      window.closeWorkspaceAiAssistDrawer = window.closeWorkspaceAiAssistDrawer || function(id){
-        var drawer = document.getElementById(id);
-        if (!drawer) return;
-        drawer.classList.remove("open");
-        drawer.setAttribute("aria-hidden", "true");
-      };
-      window.submitWorkspaceAiAssistForm = window.submitWorkspaceAiAssistForm || function(form){
-        if (!form) return false;
-        if (form.dataset.submitting === "true") return false;
-        form.dataset.submitting = "true";
-        var submitButtons = form.querySelectorAll('button[type="submit"]');
-        submitButtons.forEach(function(btn){
-          if (!btn.dataset.defaultLabel) btn.dataset.defaultLabel = btn.textContent || "Submit";
-          btn.disabled = true;
-          btn.textContent = "Generating Section Update...";
-        });
-        return true;
-      };
+      window.openWorkspaceAiAssistDrawer = window.openWorkspaceAiAssistDrawer || function(id){ var d=document.getElementById(id); if(d){ d.classList.add("open"); d.setAttribute("aria-hidden","false"); } };
+      window.closeWorkspaceAiAssistDrawer = window.closeWorkspaceAiAssistDrawer || function(id){ var d=document.getElementById(id); if(d){ d.classList.remove("open"); d.setAttribute("aria-hidden","true"); } };
+      window.submitWorkspaceAiAssistForm = function(form, clickedButton){ if(!form) return true; var working=form.querySelector("[data-ai-working]"); if(working) working.classList.add("show"); var active=clickedButton||form.__tjhpSubmitter||form.querySelector("button[type='submit']"); form.querySelectorAll("button").forEach(function(btn){btn.disabled=true;}); if(active){ active.dataset.originalText=active.dataset.originalText||active.textContent; active.textContent=active.getAttribute("data-loading-label")||"Generating Section Update...";} return true; };
+      (function(){ if(window.__tjhpAiWorkspaceButtonBound) return; window.__tjhpAiWorkspaceButtonBound=true; document.addEventListener("click", function(e){ var btn=e.target&&e.target.closest?e.target.closest("[data-ai-preset]"):null; if(!btn) return; var form=btn.closest("form"); if(!form) return; e.preventDefault(); var p=form.querySelector("[data-ai-preset-input]"); if(p) p.value=btn.getAttribute("data-ai-preset")||""; var target=btn.getAttribute("data-ai-target")||""; var sel=form.querySelector("select[name='target_section']"); if(sel&&target) sel.value=target; var prompt=btn.getAttribute("data-ai-prompt")||""; var ta=form.querySelector("textarea[name='prompt']"); if(ta && !String(ta.value||"").trim()) ta.value=prompt; form.__tjhpSubmitter=btn; if(typeof form.requestSubmit==="function") form.requestSubmit(); else { window.submitWorkspaceAiAssistForm(form, btn); form.submit(); } }); document.addEventListener("submit", function(e){ var form=e.target&&e.target.matches&&e.target.matches("[data-ai-workspace-form='1']")?e.target:null; if(!form) return; window.submitWorkspaceAiAssistForm(form, form.__tjhpSubmitter||(e.submitter||null)); });})();
       </script>
-    </aside>
-  `;
+    </aside>`;
 }
+
 
 function renderInlineAiSuggestions(channel, claim, derived, ws){
   const suggestions = [];
@@ -20894,146 +20866,14 @@ function renderEditablePacketSection(opts){
   const pending = hasAiPreview && Array.isArray(aiPreview.pending_sections) ? aiPreview.pending_sections : [];
   const aiQueue = hasAiPreview && Array.isArray(aiPreview.section_queue) ? aiPreview.section_queue : [];
   const anchorId = workspaceSectionAnchor(section_key);
-
-  if (exportMode){
-    return `
-      <div class="ws-section-card">
-        <div class="ws-section-head">
-          <div class="ws-section-title">${safeStr(title)}</div>
-        </div>
-        ${description ? `<div class="muted small" style="margin-bottom:8px;">${safeStr(description)}</div>` : ``}
-        <div class="ws-section-body">${workspacePacketTextHtml(value, "—")}</div>
-      </div>
-    `;
-  }
-
+  if (exportMode){ return `<div class="ws-section-card"><div class="ws-section-head"><div class="ws-section-title">${safeStr(title)}</div></div>${description ? `<div class="muted small" style="margin-bottom:8px;">${safeStr(description)}</div>` : ``}<div class="ws-section-body">${workspacePacketTextHtml(value, "—")}</div></div>`; }
   const showPreview = workspacePacketTextHtml(value, `<span class="muted">No content yet.</span>`);
-  const aiProposalHtml = hasAiPreview ? `
-    <div class="ws-ai-section-proposal">
-      <strong>AI proposed update for ${safeStr(title)}</strong>
-      <div class="muted small" style="margin-top:4px;">
-        Review the proposed text below. Apply it to this section, or cancel and keep the current section unchanged.
-      </div>
-      ${aiQueue.length > 1 ? `
-        <div class="ws-ai-queue-note">
-          <div>
-            <strong>Queue:</strong>
-            <div class="muted small">
-              ${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}
-            </div>
-          </div>
-          ${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(workspaceAiSectionLabel(channel, pending[0]))}</div>` : ""}
-        </div>
-      ` : ""}
-      <form method="POST" action="/ai-workspace/apply-diff" style="margin-top:10px;">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
-        <input type="hidden" name="channel" value="${safeStr(channel)}"/>
-        <input type="hidden" name="section_key" value="${safeStr(section_key)}"/>
-        <textarea name="after">${escapeHtml(aiPreview.after || "")}</textarea>
-        <div class="ws-inline-save">
-          <button class="btn" type="submit">Apply to ${safeStr(title)}</button>
-        </div>
-      </form>
-      <form method="POST" action="/ai-workspace/cancel-diff" style="margin-top:8px;">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
-        <input type="hidden" name="channel" value="${safeStr(channel)}"/>
-        <button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button>
-      </form>
-      ${pending.length > 0 ? `
-        <form method="POST" action="/ai-workspace/cancel-diff" style="margin-top:8px;">
-          <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
-          <input type="hidden" name="channel" value="${safeStr(channel)}"/>
-          <input type="hidden" name="cancel_all" value="1"/>
-          <button class="btn secondary small" type="submit">Cancel AI Queue</button>
-        </form>
-      ` : ""}
-    </div>
-  ` : "";
-
-  return `
-    <div class="ws-section-card ws-clean-section ${hasAiPreview ? "ai-target-section" : ""}" id="${safeStr(anchorId)}" data-inline-section="${safeStr(section_key)}">
-      <div class="ws-section-head">
-        <div>
-          <div class="ws-section-title">${safeStr(title)}</div>
-          ${description ? `<div class="muted small" style="margin-top:3px;">${safeStr(description)}</div>` : ``}
-        </div>
-      </div>
-
-      <div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing'); setTimeout(function(){ if(window.__tjhpAutoSizeWorkspaceEditors) window.__tjhpAutoSizeWorkspaceEditors(); }, 0);">
-        ${showPreview}
-        <div class="muted small" style="margin-top:8px;">Click this section to edit.</div>
-      </div>
-
-      ${aiProposalHtml}
-
-      <form class="ws-edit-form ws-inline-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
-        <input type="hidden" name="channel" value="${safeStr(channel)}"/>
-        <input type="hidden" name="section_key" value="${safeStr(section_key)}"/>
-        <textarea name="value">${escapeHtml(value)}</textarea>
-        <div class="ws-inline-save">
-          <button class="btn secondary" type="submit">Save Section</button>
-          <button class="btn secondary" type="button" onclick="this.closest('.ws-clean-section').classList.remove('editing');">Cancel</button>
-        </div>
-      </form>
-
-      <script>
-        (function(){
-          if (window.__tjhpWorkspaceEditAutosizeBound) return;
-          window.__tjhpWorkspaceEditAutosizeBound = true;
-
-          function autoSizeOne(textarea){
-            if (!textarea) return;
-
-            var section = textarea.closest(".ws-clean-section");
-            if (section && !section.classList.contains("editing")) return;
-
-            textarea.style.height = "auto";
-
-            var minHeight = 260;
-            var sectionKey = section ? String(section.getAttribute("data-inline-section") || "") : "";
-            if (sectionKey === "letter_of_medical_necessity") minHeight = 520;
-
-            var nextHeight = Math.max(minHeight, textarea.scrollHeight + 8);
-            textarea.style.height = nextHeight + "px";
-            textarea.style.overflow = "hidden";
-          }
-
-          window.__tjhpAutoSizeWorkspaceEditors = function(root){
-            var scope = root && root.querySelectorAll ? root : document;
-            scope.querySelectorAll(".packet-workspace-shell .ws-inline-edit-form textarea").forEach(autoSizeOne);
-          };
-
-          document.addEventListener("input", function(e){
-            if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {
-              autoSizeOne(e.target);
-            }
-          });
-
-          document.addEventListener("focusin", function(e){
-            if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {
-              setTimeout(function(){ autoSizeOne(e.target); }, 0);
-            }
-          });
-
-          document.addEventListener("click", function(e){
-            var section = e.target && e.target.closest ? e.target.closest(".packet-workspace-shell .ws-clean-section") : null;
-            if (!section) return;
-            setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(section); }, 0);
-          });
-
-          if (document.readyState === "loading") {
-            document.addEventListener("DOMContentLoaded", function(){
-              window.__tjhpAutoSizeWorkspaceEditors();
-            });
-          } else {
-            setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(); }, 0);
-          }
-        })();
-      </script>
-    </div>
-  `;
+  const nextLabel = pending.length ? workspaceAiSectionLabel(channel, pending[0]) : "";
+  const aiReviewHtml = hasAiPreview ? `<div class="ws-section-body ws-ai-review-mode"><div class="ws-ai-review-head"><div><div class="ws-ai-review-title">AI proposed update for ${safeStr(title)}</div><div class="ws-ai-review-copy">Review the highlighted changes inside this original section. Red text is removed. Green text is added.</div></div>${pending.length ? `<span class="badge warn">Next: ${safeStr(nextLabel)}</span>` : `<span class="badge ok">Final item</span>`}</div>${aiQueue.length > 1 ? `<div class="ws-ai-queue-note"><div><strong>AI section queue</strong><div class="muted small">${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}</div></div>${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(nextLabel)}</div>` : ""}</div>` : ""}<div class="ws-track-changes">${workspaceAiTrackChangesHtml(aiPreview.before || "", aiPreview.after || "")}</div><form method="POST" action="/ai-workspace/apply-diff" class="ws-ai-action-form" data-ai-action="apply" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><details class="ws-ai-proposed-edit"><summary>Edit proposed text before applying</summary><textarea name="after">${escapeHtml(aiPreview.after || "")}</textarea></details><div class="ws-inline-save"><button class="btn" type="submit">Apply to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="btnRow" style="margin-top:8px;"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
+  return `<div class="ws-section-card ws-clean-section ${hasAiPreview ? "ai-target-section" : ""}" id="${safeStr(anchorId)}" data-inline-section="${safeStr(section_key)}"><div class="ws-section-head"><div><div class="ws-section-title">${safeStr(title)}</div>${description ? `<div class="muted small" style="margin-top:3px;">${safeStr(description)}</div>` : ``}</div></div>${hasAiPreview ? aiReviewHtml : `<div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing'); setTimeout(function(){ if(window.__tjhpAutoSizeWorkspaceEditors) window.__tjhpAutoSizeWorkspaceEditors(); }, 0);">${showPreview}<div class="muted small" style="margin-top:8px;">Click this section to edit.</div></div>`}${hasAiPreview ? "" : `<form class="ws-edit-form ws-inline-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea name="value">${escapeHtml(value)}</textarea><div class="ws-inline-save"><button class="btn secondary" type="submit">Save Section</button><button class="btn secondary" type="button" onclick="this.closest('.ws-clean-section').classList.remove('editing');">Cancel</button></div></form>`}
+      <script>(function(){if (window.__tjhpWorkspaceEditAutosizeBound) return;window.__tjhpWorkspaceEditAutosizeBound = true;function autoSizeOne(textarea){if (!textarea) return;var section = textarea.closest(".ws-clean-section");if (section && !section.classList.contains("editing")) return;textarea.style.height = "auto";var minHeight = 260;var sectionKey = section ? String(section.getAttribute("data-inline-section") || "") : "";if (sectionKey === "letter_of_medical_necessity") minHeight = 520;var nextHeight = Math.max(minHeight, textarea.scrollHeight + 8);textarea.style.height = nextHeight + "px";textarea.style.overflow = "hidden";}window.__tjhpAutoSizeWorkspaceEditors = function(root){var scope = root && root.querySelectorAll ? root : document;scope.querySelectorAll(".packet-workspace-shell .ws-inline-edit-form textarea").forEach(autoSizeOne);};document.addEventListener("input", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {autoSizeOne(e.target);}});document.addEventListener("focusin", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {setTimeout(function(){ autoSizeOne(e.target); }, 0);}});document.addEventListener("click", function(e){var section = e.target && e.target.closest ? e.target.closest(".packet-workspace-shell .ws-clean-section") : null;if (!section) return;setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(section); }, 0);});if (document.readyState === "loading") {document.addEventListener("DOMContentLoaded", function(){window.__tjhpAutoSizeWorkspaceEditors();});} else {setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(); }, 0);}})();</script></div>`;
 }
+
 
 function renderSignatureSection(opts){
   const billed_id = String(opts.billed_id || "");
