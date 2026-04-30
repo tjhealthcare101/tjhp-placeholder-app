@@ -67,6 +67,10 @@ function workspaceDiffTokenize(text){
   return String(text || "").match(/\s+|[^\s]+/g) || [];
 }
 
+function workspaceIsWhitespaceToken(token){
+  return /^\s+$/.test(String(token || ""));
+}
+
 function workspaceAiTrackChangesHtml(before, after){
   const a = workspaceDiffTokenize(before);
   const b = workspaceDiffTokenize(after);
@@ -102,25 +106,83 @@ function workspaceAiTrackChangesHtml(before, after){
       i++;
       j++;
     } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      out.push(`<span class="ws-diff-removed">${safeStr(a[i])}</span>`);
+      out.push(workspaceIsWhitespaceToken(a[i]) ? safeStr(a[i]) : `<span class="ws-diff-removed">${safeStr(a[i])}</span>`);
       i++;
     } else {
-      out.push(`<span class="ws-diff-added">${safeStr(b[j])}</span>`);
+      out.push(workspaceIsWhitespaceToken(b[j]) ? safeStr(b[j]) : `<span class="ws-diff-added">${safeStr(b[j])}</span>`);
       j++;
     }
   }
 
   while (i < a.length) {
-    out.push(`<span class="ws-diff-removed">${safeStr(a[i])}</span>`);
+    out.push(workspaceIsWhitespaceToken(a[i]) ? safeStr(a[i]) : `<span class="ws-diff-removed">${safeStr(a[i])}</span>`);
     i++;
   }
 
   while (j < b.length) {
-    out.push(`<span class="ws-diff-added">${safeStr(b[j])}</span>`);
+    out.push(workspaceIsWhitespaceToken(b[j]) ? safeStr(b[j]) : `<span class="ws-diff-added">${safeStr(b[j])}</span>`);
     j++;
   }
 
   return out.join("");
+}
+
+function workspaceAiDiffOps(before, after){
+  const a = workspaceDiffTokenize(before);
+  const b = workspaceDiffTokenize(after);
+  const maxTokens = 900;
+  if (a.length > maxTokens || b.length > maxTokens) return null;
+  const dp = Array(a.length + 1).fill(null).map(() => Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      if (a[i] === b[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
+      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const raw = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      raw.push({ type:"same", text:a[i] }); i++; j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      raw.push({ type:"removed", text:a[i] }); i++;
+    } else {
+      raw.push({ type:"added", text:b[j] }); j++;
+    }
+  }
+  while (i < a.length) { raw.push({ type:"removed", text:a[i] }); i++; }
+  while (j < b.length) { raw.push({ type:"added", text:b[j] }); j++; }
+  const grouped = [];
+  let current = null;
+  let changeCounter = 0;
+  const flush = () => { if (!current) return; grouped.push(current); current = null; };
+  raw.forEach(op => {
+    const type = String(op.type || "same");
+    const text = String(op.text || "");
+    if (type === "same" || workspaceIsWhitespaceToken(text)) {
+      flush(); grouped.push({ type:"same", text }); return;
+    }
+    if (current && current.type === type) current.text += text;
+    else { flush(); current = { type, text, change_id: `chg_${changeCounter++}` }; }
+  });
+  flush();
+  return grouped;
+}
+
+function workspaceAiInteractiveTrackChangesHtml(before, after){
+  const ops = workspaceAiDiffOps(before, after);
+  if (!ops) return workspaceAiTrackChangesHtml(before, after);
+  const html = ops.map((op) => {
+    const type = String(op.type || "same");
+    const text = String(op.text || "");
+    if (type === "same") return `<span data-ai-part="same">${safeStr(text)}</span>`;
+    const isAdded = type === "added";
+    const label = isAdded ? "Addition" : "Removal";
+    const cls = isAdded ? "ws-diff-added" : "ws-diff-removed";
+    return `<span class="ws-ai-change-wrap" data-ai-change-id="${safeStr(op.change_id)}" data-change-status="accepted"><span class="${safeStr(cls)} ws-ai-change-text is-accepted" data-ai-part="${safeStr(type)}" data-change-id="${safeStr(op.change_id)}" data-status="accepted" contenteditable="true" spellcheck="true" title="Edit this highlighted change inline">${safeStr(text)}</span><span class="ws-ai-change-actions" contenteditable="false"><span class="ws-ai-change-label">${safeStr(label)}</span><button type="button" class="ws-ai-change-btn accept" data-ai-change-action="accept" data-change-id="${safeStr(op.change_id)}">Accept</button><button type="button" class="ws-ai-change-btn reject" data-ai-change-action="reject" data-change-id="${safeStr(op.change_id)}">Reject</button></span></span>`;
+  }).join("");
+  return `<div class="ws-ai-change-toolbar" contenteditable="false"><button type="button" class="btn secondary small" data-ai-review-action="accept_all">Accept All</button><button type="button" class="btn secondary small" data-ai-review-action="reject_all">Reject All</button><span class="muted small">Tip: click highlighted text to edit it inline before applying.</span></div><div class="ws-ai-interactive-diff" data-ai-interactive-diff>${html}</div>`;
 }
 
 // ===== Server =====
@@ -18958,12 +19020,17 @@ function workspacePolishStyles(){
       }
 
       .packet-workspace-shell .ws-ai-working.show{display:block;}
+      .packet-workspace-shell .ws-ai-form.is-submitting .ws-ai-form-controls{display:none;}
+      .packet-workspace-shell .ws-ai-form.is-submitting .ws-ai-working{display:block;}
+      .packet-workspace-shell .ws-ai-help-card{border:1px solid #dbeafe;background:#eff6ff;border-radius:12px;padding:10px 12px;margin:2px 0 8px;}
+      .packet-workspace-shell .ws-ai-help-card strong{display:block;margin-bottom:6px;}
+      .packet-workspace-shell .ws-ai-help-card ul{margin:0 0 6px 18px;padding:0;}
 
       .packet-workspace-shell .ws-ai-review-mode{border:1px solid #c7d2fe;border-left:4px solid #4f46e5;border-radius:16px;background:#f8fafc;padding:14px;margin-top:10px;}
       .packet-workspace-shell .ws-ai-review-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;}
       .packet-workspace-shell .ws-ai-review-title{font-weight:950;color:#111827;}
       .packet-workspace-shell .ws-ai-review-copy{color:#64748b;font-size:12px;margin-top:3px;}
-      .packet-workspace-shell .ws-track-changes{border:1px solid #e5e7eb;border-radius:14px;background:#fff;padding:14px;line-height:1.7;white-space:pre-wrap;font-size:14px;color:#111827;}
+      .packet-workspace-shell .ws-track-changes{border:1px solid #e5e7eb;border-radius:14px;background:#fff;padding:14px;line-height:1.7;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;font-size:14px;color:#111827;}
       .packet-workspace-shell .ws-diff-removed{color:#991b1b;background:#fee2e2;text-decoration:line-through;text-decoration-thickness:2px;border-radius:4px;padding:0 2px;}
       .packet-workspace-shell .ws-diff-added{color:#065f46;background:#dcfce7;border-radius:4px;padding:0 2px;}
       .packet-workspace-shell .ws-track-label{font-weight:950;font-size:12px;margin:8px 0 4px;}
@@ -18972,11 +19039,33 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-track-old,.packet-workspace-shell .ws-track-new{border:1px solid #e5e7eb;border-radius:12px;padding:10px;white-space:pre-wrap;margin-bottom:8px;}
       .packet-workspace-shell .ws-track-old{background:#fff1f2;color:#991b1b;}
       .packet-workspace-shell .ws-track-new{background:#ecfdf5;color:#065f46;}
-      .packet-workspace-shell .ws-ai-proposed-edit{margin-top:10px;}
-      .packet-workspace-shell .ws-ai-proposed-edit summary{cursor:pointer;font-weight:900;color:#334155;}
-      .packet-workspace-shell .ws-ai-proposed-edit textarea{margin-top:8px;width:100%;min-height:260px;border:1px solid #dbe3ef;border-radius:12px;background:#fff;padding:12px;font-family:inherit;line-height:1.55;resize:vertical;white-space:pre-wrap;}
+      .packet-workspace-shell .ws-ai-editable-proposed{margin-top:12px;}
+      .packet-workspace-shell .ws-ai-editable-proposed label{display:block;font-weight:900;margin-bottom:6px;}
+      .packet-workspace-shell .ws-ai-editable-proposed label span{display:block;font-weight:700;margin-top:2px;}
+      .packet-workspace-shell .ws-ai-editable-proposed textarea{width:100%;min-height:320px;border:1px solid #dbe3ef;border-radius:12px;background:#ffffff;padding:12px;font-family:inherit;line-height:1.55;resize:vertical;white-space:pre-wrap;}
+      .packet-workspace-shell [data-inline-section="letter_of_medical_necessity"] .ws-ai-editable-proposed textarea{min-height:520px;}
+      .packet-workspace-shell .ws-local-status{border-radius:12px;padding:10px 12px;margin:8px 0 12px;font-weight:900;}
+      .packet-workspace-shell .ws-local-status.ok{border:1px solid #86efac;background:#ecfdf5;color:#065f46;}
+      .packet-workspace-shell .ws-local-status.info{border:1px solid #bfdbfe;background:#eff6ff;color:#1e3a8a;}
+      .packet-workspace-shell .ws-local-undo-form{margin:8px 0 12px;}
+      .packet-workspace-shell .ws-local-undo-form .btn{width:auto;}
       .packet-workspace-shell .ws-ai-next-status{display:none;margin-top:10px;border:1px solid #bfdbfe;background:#eff6ff;color:#1e3a8a;border-radius:12px;padding:10px;font-weight:900;}
       .packet-workspace-shell .ws-ai-next-status.show{display:block;}
+      .packet-workspace-shell .ws-ai-change-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;}
+      .packet-workspace-shell .ws-ai-interactive-diff{white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;line-height:1.8;}
+      .packet-workspace-shell .ws-ai-change-wrap{display:inline;position:relative;}
+      .packet-workspace-shell .ws-ai-change-text{cursor:text;outline:none;}
+      .packet-workspace-shell .ws-ai-change-text:focus{box-shadow:0 0 0 2px rgba(79,70,229,.22);}
+      .packet-workspace-shell .ws-ai-change-text.is-rejected{opacity:.45;}
+      .packet-workspace-shell .ws-ai-change-text[data-ai-part="added"].is-rejected{text-decoration:line-through;}
+      .packet-workspace-shell .ws-ai-change-text[data-ai-part="removed"].is-rejected{text-decoration:none;background:#fef3c7;color:#92400e;}
+      .packet-workspace-shell .ws-ai-change-actions{display:inline-flex;align-items:center;gap:4px;margin:0 4px;padding:2px 4px;border:1px solid #e5e7eb;border-radius:999px;background:#ffffff;vertical-align:middle;}
+      .packet-workspace-shell .ws-ai-change-label{font-size:10px;font-weight:900;color:#64748b;text-transform:uppercase;letter-spacing:.04em;}
+      .packet-workspace-shell .ws-ai-change-btn{border:1px solid #dbe3ef;background:#f8fafc;border-radius:999px;padding:2px 6px;font-size:11px;font-weight:900;cursor:pointer;}
+      .packet-workspace-shell .ws-ai-change-btn.accept{color:#065f46;border-color:#bbf7d0;background:#ecfdf5;}
+      .packet-workspace-shell .ws-ai-change-btn.reject{color:#991b1b;border-color:#fecaca;background:#fff1f2;}
+      .packet-workspace-shell .ws-ai-change-wrap[data-change-status="accepted"] .ws-ai-change-btn.accept{box-shadow:0 0 0 2px rgba(16,185,129,.18);}
+      .packet-workspace-shell .ws-ai-change-wrap[data-change-status="rejected"] .ws-ai-change-btn.reject{box-shadow:0 0 0 2px rgba(239,68,68,.18);}
 
       @media(max-width:760px){
         .packet-workspace-shell .ws-intel-strip > summary{ flex-direction:column; }
@@ -19649,6 +19738,10 @@ function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, opts={}){
 function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
   const exportMode = !!opts.exportMode;
   const aiPreview = opts.aiPreview || null;
+  const appliedSection = String(opts.appliedSection || "").trim();
+  const appliedPrevSection = String(opts.appliedPrevSection || "").trim();
+  const undoneSection = String(opts.undoneSection || "").trim();
+  const lastAiUndo = opts.lastAiUndo || null;
   const items = workspacePacketAttachmentPlan(channel);
   const rows = items.map((item) => {
     if (channel === "appeal" && item.key === "lmn") {
@@ -19669,7 +19762,11 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
             value: packetSections.letter_of_medical_necessity,
             description: descriptions.letter_of_medical_necessity,
             exportMode,
-            aiPreview
+            aiPreview,
+            appliedSection,
+            appliedPrevSection,
+            undoneSection,
+            lastAiUndo
           })}
         </div>
       `;
@@ -20778,6 +20875,9 @@ function renderInlineAIAssist(billed_id, channel){
   const drawerId = `wsAiAssistDrawer_${safeId}`;
   const placeholder = isNegotiation ? "e.g. Make this stronger using contract variance and expected-vs-paid reimbursement logic" : "e.g. Make this stronger for medical necessity or denial reversal";
   const assistantName = isNegotiation ? "AI Negotiation Assistant" : "AI Appeal Assistant";
+  const helperCard = isNegotiation
+    ? `<div class="ws-ai-help-card"><strong>What this assistant can do</strong><ul><li>Improve editable negotiation packet sections.</li><li>Auto-detect the right section from your prompt.</li><li>Let you target a specific section with the dropdown.</li><li>Show proposed changes in the packet before you apply them.</li></ul><div class="muted small">Nothing is saved until you review and apply a section update.</div></div>`
+    : `<div class="ws-ai-help-card"><strong>What this assistant can do</strong><ul><li>Improve editable appeal packet sections.</li><li>Auto-detect the right section from your prompt.</li><li>Let you target a specific section with the dropdown.</li><li>Show proposed changes in the packet before you apply them.</li></ul><div class="muted small">Nothing is saved until you review and apply a section update.</div></div>`;
   const targetSectionOptions = isNegotiation ? `<option value="auto">Auto-detect section</option><option value="variance_explanation">Negotiation Narrative / Variance Explanation</option><option value="requested_amount">Requested Amount</option><option value="financial_summary">Financial Summary</option><option value="claim_summary">Claim Summary</option><option value="requested_action">Requested Action</option><option value="attachments_index">Attachments Index</option><option value="signature">Signature</option>` : `<option value="auto">Auto-detect section</option><option value="argument">Appeal Narrative</option><option value="letter_of_medical_necessity">Letter of Medical Necessity</option><option value="requested_action">Requested Action</option><option value="financial_summary">Financial Summary</option><option value="claim_summary">Claim Summary</option><option value="header">Header</option><option value="attachments_index">Attachments Index</option><option value="signature">Signature</option>`;
   const quickButtons = isNegotiation
     ? `<button type="button" class="btn small" data-ai-preset="improve" data-ai-target="variance_explanation" data-ai-prompt="Strengthen the negotiation narrative and payment variance argument." data-loading-label="Generating Section Update...">Strengthen Variance Argument</button><button type="button" class="btn small" data-ai-preset="contract" data-ai-target="variance_explanation" data-ai-prompt="Add policy, contract, fee schedule, or reimbursement-methodology language where appropriate. Do not invent unsupported facts." data-loading-label="Generating Section Update...">Add Contract / Fee Schedule Language</button><button type="button" class="btn small" data-ai-preset="justify" data-ai-target="requested_amount" data-ai-prompt="Justify the requested payment amount using expected-versus-paid logic." data-loading-label="Generating Section Update...">Justify Requested Amount</button>`
@@ -20786,17 +20886,17 @@ function renderInlineAIAssist(billed_id, channel){
     <div class="ws-panel ws-ai-assist-launcher"><h3>${safeStr(assistantName)}</h3><button class="btn secondary small" type="button" onclick="openWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">Open ${safeStr(assistantName)}</button></div>
     <aside id="${safeStr(drawerId)}" class="ws-ai-drawer" aria-hidden="true">
       <div class="ws-ai-drawer-head"><div><h3 style="margin:0;">${safeStr(assistantName)}</h3></div><button class="ws-ai-drawer-close" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">×</button></div>
-      <form method="POST" action="/ai-workspace/ai-edit" data-ai-workspace-form="1" onsubmit="return submitWorkspaceAiAssistForm(this, event && event.submitter ? event.submitter : this.__tjhpSubmitter);">
+      <form method="POST" action="/ai-workspace/ai-edit" class="ws-ai-form" data-ai-workspace-form="1" onsubmit="return submitWorkspaceAiAssistForm(this, event && event.submitter ? event.submitter : this.__tjhpSubmitter);">
         <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="channel" value="${safeStr(channel)}" /><input type="hidden" name="preset" value="" data-ai-preset-input />
-        <select name="target_section" style="width:100%;margin-top:4px;">${targetSectionOptions}</select>
+        <div class="ws-ai-form-controls">${helperCard}<select name="target_section" style="width:100%;margin-top:4px;">${targetSectionOptions}</select>
         <div class="ws-ai-preset-grid">${quickButtons}</div>
-        <textarea name="prompt" placeholder="${safeStr(placeholder)}"></textarea><div class="ws-ai-working" data-ai-working>Working on editable packet section… The page will open at the section being improved.</div>
-        <div class="btnRow" style="margin-top:10px;"><button class="btn" type="submit" data-loading-label="Generating Section Update...">Generate Section Update</button><button class="btn secondary" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">Cancel</button></div>
+        <textarea name="prompt" placeholder="${safeStr(placeholder)}"></textarea>
+        <div class="btnRow" style="margin-top:10px;"><button class="btn" type="submit" data-loading-label="Generating Section Update...">Generate Section Update</button><button class="btn secondary" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">Cancel</button></div></div><div class="ws-ai-working" data-ai-working>Working on editable packet section… The page will open at the section being improved.</div>
       </form>
       <script>
       window.openWorkspaceAiAssistDrawer = window.openWorkspaceAiAssistDrawer || function(id){ var d=document.getElementById(id); if(d){ d.classList.add("open"); d.setAttribute("aria-hidden","false"); } };
       window.closeWorkspaceAiAssistDrawer = window.closeWorkspaceAiAssistDrawer || function(id){ var d=document.getElementById(id); if(d){ d.classList.remove("open"); d.setAttribute("aria-hidden","true"); } };
-      window.submitWorkspaceAiAssistForm = function(form, clickedButton){ if(!form) return true; var working=form.querySelector("[data-ai-working]"); if(working) working.classList.add("show"); var active=clickedButton||form.__tjhpSubmitter||form.querySelector("button[type='submit']"); form.querySelectorAll("button").forEach(function(btn){btn.disabled=true;}); if(active){ active.dataset.originalText=active.dataset.originalText||active.textContent; active.textContent=active.getAttribute("data-loading-label")||"Generating Section Update...";} return true; };
+      window.submitWorkspaceAiAssistForm = function(form, clickedButton){ if(!form) return true; form.classList.add("is-submitting"); var working=form.querySelector("[data-ai-working]"); if(working) working.classList.add("show"); var active=clickedButton||form.__tjhpSubmitter||(window.event&&window.event.submitter?window.event.submitter:null)||form.querySelector("button[type='submit']"); form.querySelectorAll("button").forEach(function(btn){btn.disabled=true;}); if(active){ active.dataset.originalText=active.dataset.originalText||active.textContent; active.textContent=active.getAttribute("data-loading-label")||"Generating Section Update...";} return true; };
       (function(){ if(window.__tjhpAiWorkspaceButtonBound) return; window.__tjhpAiWorkspaceButtonBound=true; document.addEventListener("click", function(e){ var btn=e.target&&e.target.closest?e.target.closest("[data-ai-preset]"):null; if(!btn) return; var form=btn.closest("form"); if(!form) return; e.preventDefault(); var p=form.querySelector("[data-ai-preset-input]"); if(p) p.value=btn.getAttribute("data-ai-preset")||""; var target=btn.getAttribute("data-ai-target")||""; var sel=form.querySelector("select[name='target_section']"); if(sel&&target) sel.value=target; var prompt=btn.getAttribute("data-ai-prompt")||""; var ta=form.querySelector("textarea[name='prompt']"); if(ta && !String(ta.value||"").trim()) ta.value=prompt; form.__tjhpSubmitter=btn; if(typeof form.requestSubmit==="function") form.requestSubmit(); else { window.submitWorkspaceAiAssistForm(form, btn); form.submit(); } }); document.addEventListener("submit", function(e){ var form=e.target&&e.target.matches&&e.target.matches("[data-ai-workspace-form='1']")?e.target:null; if(!form) return; window.submitWorkspaceAiAssistForm(form, form.__tjhpSubmitter||(e.submitter||null)); });})();
       </script>
     </aside>`;
@@ -20857,6 +20957,10 @@ function renderEditablePacketSection(opts){
   const channel = String(opts.channel || "appeal");
   const section_key = String(opts.section_key || "");
   const title = String(opts.title || section_key);
+  const appliedSection = String(opts.appliedSection || "").trim();
+  const appliedPrevSection = String(opts.appliedPrevSection || "").trim();
+  const undoneSection = String(opts.undoneSection || "").trim();
+  const lastAiUndo = opts.lastAiUndo || null;
   const value = String(opts.value || "");
   const description = String(opts.description || "");
   const compact = !!opts.compact;
@@ -20869,9 +20973,14 @@ function renderEditablePacketSection(opts){
   if (exportMode){ return `<div class="ws-section-card"><div class="ws-section-head"><div class="ws-section-title">${safeStr(title)}</div></div>${description ? `<div class="muted small" style="margin-bottom:8px;">${safeStr(description)}</div>` : ``}<div class="ws-section-body">${workspacePacketTextHtml(value, "—")}</div></div>`; }
   const showPreview = workspacePacketTextHtml(value, `<span class="muted">No content yet.</span>`);
   const nextLabel = pending.length ? workspaceAiSectionLabel(channel, pending[0]) : "";
-  const aiReviewHtml = hasAiPreview ? `<div class="ws-section-body ws-ai-review-mode"><div class="ws-ai-review-head"><div><div class="ws-ai-review-title">AI proposed update for ${safeStr(title)}</div><div class="ws-ai-review-copy">Review the highlighted changes inside this original section. Red text is removed. Green text is added.</div></div>${pending.length ? `<span class="badge warn">Next: ${safeStr(nextLabel)}</span>` : `<span class="badge ok">Final item</span>`}</div>${aiQueue.length > 1 ? `<div class="ws-ai-queue-note"><div><strong>AI section queue</strong><div class="muted small">${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}</div></div>${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(nextLabel)}</div>` : ""}</div>` : ""}<div class="ws-track-changes">${workspaceAiTrackChangesHtml(aiPreview.before || "", aiPreview.after || "")}</div><form method="POST" action="/ai-workspace/apply-diff" class="ws-ai-action-form" data-ai-action="apply" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><details class="ws-ai-proposed-edit"><summary>Edit proposed text before applying</summary><textarea name="after">${escapeHtml(aiPreview.after || "")}</textarea></details><div class="ws-inline-save"><button class="btn" type="submit">Apply to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="btnRow" style="margin-top:8px;"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
-  return `<div class="ws-section-card ws-clean-section ${hasAiPreview ? "ai-target-section" : ""}" id="${safeStr(anchorId)}" data-inline-section="${safeStr(section_key)}"><div class="ws-section-head"><div><div class="ws-section-title">${safeStr(title)}</div>${description ? `<div class="muted small" style="margin-top:3px;">${safeStr(description)}</div>` : ``}</div></div>${hasAiPreview ? aiReviewHtml : `<div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing'); setTimeout(function(){ if(window.__tjhpAutoSizeWorkspaceEditors) window.__tjhpAutoSizeWorkspaceEditors(); }, 0);">${showPreview}<div class="muted small" style="margin-top:8px;">Click this section to edit.</div></div>`}${hasAiPreview ? "" : `<form class="ws-edit-form ws-inline-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea name="value">${escapeHtml(value)}</textarea><div class="ws-inline-save"><button class="btn secondary" type="submit">Save Section</button><button class="btn secondary" type="button" onclick="this.closest('.ws-clean-section').classList.remove('editing');">Cancel</button></div></form>`}
-      <script>(function(){if (window.__tjhpWorkspaceEditAutosizeBound) return;window.__tjhpWorkspaceEditAutosizeBound = true;function autoSizeOne(textarea){if (!textarea) return;var section = textarea.closest(".ws-clean-section");if (section && !section.classList.contains("editing")) return;textarea.style.height = "auto";var minHeight = 260;var sectionKey = section ? String(section.getAttribute("data-inline-section") || "") : "";if (sectionKey === "letter_of_medical_necessity") minHeight = 520;var nextHeight = Math.max(minHeight, textarea.scrollHeight + 8);textarea.style.height = nextHeight + "px";textarea.style.overflow = "hidden";}window.__tjhpAutoSizeWorkspaceEditors = function(root){var scope = root && root.querySelectorAll ? root : document;scope.querySelectorAll(".packet-workspace-shell .ws-inline-edit-form textarea").forEach(autoSizeOne);};document.addEventListener("input", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {autoSizeOne(e.target);}});document.addEventListener("focusin", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {setTimeout(function(){ autoSizeOne(e.target); }, 0);}});document.addEventListener("click", function(e){var section = e.target && e.target.closest ? e.target.closest(".packet-workspace-shell .ws-clean-section") : null;if (!section) return;setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(section); }, 0);});if (document.readyState === "loading") {document.addEventListener("DOMContentLoaded", function(){window.__tjhpAutoSizeWorkspaceEditors();});} else {setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(); }, 0);}})();</script></div>`;
+  const localSuccessHtml = appliedSection === section_key ? `<div class="ws-local-status ok">Section updated successfully.</div>` : ``;
+  const localUndoSuccessHtml = undoneSection === section_key ? `<div class="ws-local-status ok">AI change undone. Previous section text restored.</div>` : ``;
+  const canUndoAi = !!(lastAiUndo && String(lastAiUndo.section_key || "") === section_key && String(lastAiUndo.before || "") !== String(lastAiUndo.after || ""));
+  const undoAiHtml = canUndoAi ? `<form method="POST" action="/ai-workspace/undo-ai-change" class="ws-local-undo-form"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><button class="btn secondary small" type="submit">Undo AI Change</button></form>` : "";
+  const localQueueInfoHtml = hasAiPreview && appliedPrevSection ? `<div class="ws-local-status info">Previous section updated. Now reviewing ${safeStr(title)}.</div>` : ``;
+  const aiReviewHtml = hasAiPreview ? `<div class="ws-section-body ws-ai-review-mode">${localQueueInfoHtml}<div class="ws-ai-review-head"><div><div class="ws-ai-review-title">AI proposed update for ${safeStr(title)}</div><div class="ws-ai-review-copy">Review changes below. You can accept/reject each highlighted change, edit highlighted text inline, or edit the final text before applying.</div></div>${pending.length ? `<span class="badge warn">Next: ${safeStr(nextLabel)}</span>` : `<span class="badge ok">Final item</span>`}</div>${aiQueue.length > 1 ? `<div class="ws-ai-queue-note"><div><strong>AI section queue</strong><div class="muted small">${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}</div></div>${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(nextLabel)}</div>` : ""}</div>` : ""}<div class="ws-track-changes">${workspaceAiInteractiveTrackChangesHtml(aiPreview.before || "", aiPreview.after || "")}</div><form method="POST" action="/ai-workspace/apply-diff" class="ws-ai-action-form" data-ai-action="apply" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><div class="ws-ai-editable-proposed"><label>Final text to apply<span class="muted small">Updates automatically as you accept/reject changes. You can also edit it directly.</span></label><textarea name="after" data-ai-final-text>${escapeHtml(aiPreview.after || "")}</textarea></div><div class="ws-inline-save"><button class="btn" type="submit">Apply to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="btnRow" style="margin-top:8px;"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
+  return `<div class="ws-section-card ws-clean-section ${hasAiPreview ? "ai-target-section" : ""}" id="${safeStr(anchorId)}" data-inline-section="${safeStr(section_key)}"><div class="ws-section-head"><div><div class="ws-section-title">${safeStr(title)}</div>${description ? `<div class="muted small" style="margin-top:3px;">${safeStr(description)}</div>` : ``}</div></div>${localSuccessHtml}${localUndoSuccessHtml}${undoAiHtml}${hasAiPreview ? aiReviewHtml : `<div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing'); setTimeout(function(){ if(window.__tjhpAutoSizeWorkspaceEditors) window.__tjhpAutoSizeWorkspaceEditors(); }, 0);">${showPreview}<div class="muted small" style="margin-top:8px;">Click this section to edit.</div></div>`}${hasAiPreview ? "" : `<form class="ws-edit-form ws-inline-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea name="value">${escapeHtml(value)}</textarea><div class="ws-inline-save"><button class="btn secondary" type="submit">Save Section</button><button class="btn secondary" type="button" onclick="this.closest('.ws-clean-section').classList.remove('editing');">Cancel</button></div></form>`}
+      <script>(function(){if (window.__tjhpWorkspaceEditAutosizeBound) return;window.__tjhpWorkspaceEditAutosizeBound = true;function autoSizeOne(textarea){if (!textarea) return;var section = textarea.closest(".ws-clean-section");if (section && !section.classList.contains("editing")) return;textarea.style.height = "auto";var minHeight = 260;var sectionKey = section ? String(section.getAttribute("data-inline-section") || "") : "";if (sectionKey === "letter_of_medical_necessity") minHeight = 520;var nextHeight = Math.max(minHeight, textarea.scrollHeight + 8);textarea.style.height = nextHeight + "px";textarea.style.overflow = "hidden";}window.__tjhpAutoSizeWorkspaceEditors = function(root){var scope = root && root.querySelectorAll ? root : document;scope.querySelectorAll(".packet-workspace-shell .ws-inline-edit-form textarea").forEach(autoSizeOne);};document.addEventListener("input", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {autoSizeOne(e.target);}});document.addEventListener("focusin", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {setTimeout(function(){ autoSizeOne(e.target); }, 0);}});document.addEventListener("click", function(e){var section = e.target && e.target.closest ? e.target.closest(".packet-workspace-shell .ws-clean-section") : null;if (!section) return;setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(section); }, 0);});if (document.readyState === "loading") {document.addEventListener("DOMContentLoaded", function(){window.__tjhpAutoSizeWorkspaceEditors();});} else {setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(); }, 0);}})();</script><script>(function(){if(window.__tjhpAiInteractiveReviewBound) return;window.__tjhpAiInteractiveReviewBound=true;function getReviewRoot(el){return el&&el.closest?el.closest(".ws-ai-review-mode"):null;}function setChangeStatus(review,changeId,status){if(!review||!changeId) return;review.querySelectorAll("[data-change-id]").forEach(function(el){if(String(el.getAttribute("data-change-id")||"")!==String(changeId)) return;if(el.classList&&el.classList.contains("ws-ai-change-text")){el.dataset.status=status;el.classList.toggle("is-accepted",status==="accepted");el.classList.toggle("is-rejected",status==="rejected");}var wrap=el.closest?el.closest(".ws-ai-change-wrap"):null;if(wrap) wrap.setAttribute("data-change-status",status);});}function setAll(review,status){if(!review) return;review.querySelectorAll(".ws-ai-change-text[data-change-id]").forEach(function(el){setChangeStatus(review,el.getAttribute("data-change-id"),status);});}function textFromNode(node){return node?String(node.textContent||""):"";}function buildFinalText(review){if(!review) return "";var out=[];review.querySelectorAll("[data-ai-part]").forEach(function(part){var type=String(part.getAttribute("data-ai-part")||"same");var text=textFromNode(part);if(type==="same"){out.push(text);return;}var status=String(part.getAttribute("data-status")||"accepted");if(type==="added"){if(status==="accepted") out.push(text);return;}if(type==="removed"){if(status==="rejected") out.push(text);}});return out.join("");}function syncFinalText(review){if(!review) return;var textarea=review.querySelector("textarea[data-ai-final-text]");if(!textarea) return;textarea.value=buildFinalText(review);}document.addEventListener("click",function(e){var btn=e.target&&e.target.closest?e.target.closest("[data-ai-change-action]"):null;if(btn){e.preventDefault();var review=getReviewRoot(btn);var changeId=btn.getAttribute("data-change-id")||"";var action=btn.getAttribute("data-ai-change-action")||"";setChangeStatus(review,changeId,action==="reject"?"rejected":"accepted");syncFinalText(review);return;}var allBtn=e.target&&e.target.closest?e.target.closest("[data-ai-review-action]"):null;if(allBtn){e.preventDefault();var root=getReviewRoot(allBtn);var action=allBtn.getAttribute("data-ai-review-action")||"";setAll(root,action==="reject_all"?"rejected":"accepted");syncFinalText(root);}});document.addEventListener("input",function(e){var el=e.target;if(!el||!el.matches||!el.matches(".ws-ai-change-text")) return;var review=getReviewRoot(el);syncFinalText(review);});document.addEventListener("submit",function(e){var form=e.target;if(!form||!form.matches||!form.matches(".ws-ai-action-form")) return;var review=getReviewRoot(form);syncFinalText(review);});document.querySelectorAll(".ws-ai-review-mode").forEach(syncFinalText);})();</script></div>`;
 }
 
 
@@ -21003,6 +21112,10 @@ function renderWorkspacePreview(opts){
   const channel = opts.channel === "negotiation" ? "negotiation" : "appeal";
   const exportMode = !!opts.exportMode;
   const aiPreview = !exportMode ? (ws?.[channel]?.preview_diff || null) : null;
+  const appliedSection = String(opts.appliedSection || "").trim();
+  const appliedPrevSection = String(opts.appliedPrevSection || "").trim();
+  const undoneSection = String(opts.undoneSection || "").trim();
+  const lastAiUndo = !exportMode ? (ws?.[channel]?.last_ai_undo || null) : null;
 
   ensureWorkspacePacket(ws);
   ensurePacketSections(ws, claim);
@@ -21048,25 +21161,25 @@ function renderWorkspacePreview(opts){
           ${!ready.ok ? `<div class="ws-callout warn">Missing required documents before final review: ${ready.missing.map(workspaceDocLabel).join(", ")}.</div>` : ``}
           ${topMeta}
 
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"header", title:"Header", value: packetSections.header, description: sectionDescriptions.header, compact:true, exportMode, aiPreview })}
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"claim_summary", title:"Claim Summary", value: packetSections.claim_summary, description: sectionDescriptions.claim_summary, compact:true, exportMode, aiPreview })}
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"financial_summary", title:"Financial Summary", value: packetSections.financial_summary, description: sectionDescriptions.financial_summary, exportMode, aiPreview })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"header", title:"Header", value: packetSections.header, description: sectionDescriptions.header, compact:true, exportMode, aiPreview, appliedSection, appliedPrevSection, undoneSection, lastAiUndo })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"claim_summary", title:"Claim Summary", value: packetSections.claim_summary, description: sectionDescriptions.claim_summary, compact:true, exportMode, aiPreview, appliedSection, appliedPrevSection, undoneSection, lastAiUndo })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"financial_summary", title:"Financial Summary", value: packetSections.financial_summary, description: sectionDescriptions.financial_summary, exportMode, aiPreview, appliedSection, appliedPrevSection, undoneSection, lastAiUndo })}
 
           ${
             channel === "appeal"
-              ? renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"argument", title:"Appeal Narrative", value: packetSections.argument, description: sectionDescriptions.argument, exportMode, aiPreview })
-              : renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"variance_explanation", title:"Variance Explanation", value: packetSections.variance_explanation, description: sectionDescriptions.variance_explanation, exportMode, aiPreview })
+              ? renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"argument", title:"Appeal Narrative", value: packetSections.argument, description: sectionDescriptions.argument, exportMode, aiPreview, appliedSection, appliedPrevSection, undoneSection, lastAiUndo })
+              : renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"variance_explanation", title:"Variance Explanation", value: packetSections.variance_explanation, description: sectionDescriptions.variance_explanation, exportMode, aiPreview, appliedSection, appliedPrevSection, undoneSection, lastAiUndo })
           }
 
           ${
             channel === "negotiation"
-              ? renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_amount", title:"Requested Amount", value: packetSections.requested_amount, description: sectionDescriptions.requested_amount, compact:true, exportMode, aiPreview })
+              ? renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_amount", title:"Requested Amount", value: packetSections.requested_amount, description: sectionDescriptions.requested_amount, compact:true, exportMode, aiPreview, appliedSection, appliedPrevSection, undoneSection, lastAiUndo })
               : ""
           }
 
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_action", title:"Requested Action", value: packetSections.requested_action, description: sectionDescriptions.requested_action, exportMode, aiPreview })}
-          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"attachments_index", title:"Attachments Index", value: buildAttachmentsIndex(ws), description: sectionDescriptions.attachments_index, exportMode, aiPreview })}
-          ${renderWorkspacePacketExhibits(ws, claim, channel, { exportMode, aiPreview })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"requested_action", title:"Requested Action", value: packetSections.requested_action, description: sectionDescriptions.requested_action, exportMode, aiPreview, appliedSection, appliedPrevSection, undoneSection, lastAiUndo })}
+          ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"attachments_index", title:"Attachments Index", value: buildAttachmentsIndex(ws), description: sectionDescriptions.attachments_index, exportMode, aiPreview, appliedSection, appliedPrevSection, undoneSection, lastAiUndo })}
+          ${renderWorkspacePacketExhibits(ws, claim, channel, { exportMode, aiPreview, appliedSection, appliedPrevSection, undoneSection, lastAiUndo })}
           ${renderSignatureSection({
             billed_id: claim.billed_id,
             channel,
@@ -47903,13 +48016,16 @@ if (method === "GET" && pathname === "/agent-workspace") {
     saveAgentWorkspace(sess.org_id, ws);
 
     const channel = pathname === "/ai-negotiation" ? "negotiation" : "appeal";
+    const appliedSection = String(parsed.query.ai_section || "").trim();
+    const appliedPrevSection = String(parsed.query.applied_prev || "").trim();
+    const undoneSection = String(parsed.query.undone ? (parsed.query.ai_section || "") : "").trim();
     const currentRound = Number(ws[channel]?.round || 1) || 1;
     const savedMsg = parsed.query.saved ? `<div class="ws-callout ok">Section saved. The live preview has been updated.</div>` : ``;
     const uploadedMsg = parsed.query.uploaded ? `<div class="ws-callout ok">Document uploaded and linked into the packet preview.</div>` : ``;
     const submittedMsg = parsed.query.submitted
       ? `<div class="ws-callout ok">Marked as submitted and moved to tracking workflow.</div>`
       : ``;
-    const appliedMsg = parsed.query.applied
+    const appliedMsg = parsed.query.applied && !appliedSection
       ? `<div class="ws-callout ok">Changes applied successfully</div>`
       : ``;
     const diffUI = "";
@@ -47953,7 +48069,10 @@ if (method === "GET" && pathname === "/agent-workspace") {
             derived,
             ws,
             channel,
-            exportMode: false
+            exportMode: false,
+            appliedSection,
+            appliedPrevSection,
+            undoneSection
           })}
         </div>
 
@@ -48423,11 +48542,60 @@ if (method === "GET" && pathname === "/agent-workspace") {
           preset: preview.preset || "",
           targetSections: pendingSections
         });
-        return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1&ai_section=${encodeURIComponent(nextKey)}#${workspaceSectionAnchor(nextKey)}`);
+        return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1&ai_section=${encodeURIComponent(nextKey)}&applied_prev=${encodeURIComponent(key)}#${workspaceSectionAnchor(nextKey)}`);
       }
       return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&applied=1&ai_section=${encodeURIComponent(key)}#${workspaceSectionAnchor(key)}`);
     }
     return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
+  }
+
+  if (method === "POST" && pathname === "/ai-workspace/undo-ai-change") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+    if (!isAccessEnabled(sess.org_id)) return send(res, 403, "Access disabled");
+
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+
+    const billed_id = String(params.get("billed_id") || "").trim();
+    const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const sectionKey = String(params.get("section_key") || "").trim();
+
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return redirect(res, "/claims");
+
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    ensurePacketSections(ws, claim);
+
+    const undo = ws?.[channel]?.last_ai_undo || null;
+    const undoKey = String(undo?.section_key || "").trim();
+    if (!undo || !undoKey || (sectionKey && sectionKey !== undoKey)) {
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}#${workspaceSectionAnchor(sectionKey || undoKey || "")}`);
+    }
+
+    ws[channel] = ws[channel] || {};
+    ws[channel].packet_sections = ws[channel].packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
+    ws[channel].packet_sections[undoKey] = String(undo.before || "");
+
+    if (channel === "appeal" && undoKey === "argument") ws[channel].draft_text = String(undo.before || "");
+    if (channel === "appeal" && undoKey === "letter_of_medical_necessity") {
+      ws.packet = ws.packet || {};
+      ws.packet.clinical_support = Array.isArray(ws.packet.clinical_support) ? ws.packet.clinical_support : [];
+      ws.packet.clinical_support = ws.packet.clinical_support.map(item => item.key === "lmn" ? { ...item, lmn_text: String(undo.before || ""), status: String(undo.before || "").trim() ? "present" : item.status, updated_at: nowISO() } : item);
+    }
+    if (channel === "negotiation" && undoKey === "variance_explanation") ws[channel].draft_text = String(undo.before || "");
+    if (channel === "negotiation" && undoKey === "requested_amount") ws[channel].requested_amount = num(undo.before);
+
+    ws[channel].last_ai_redo = { section_key: undoKey, before: undo.before, after: undo.after, prompt: undo.prompt || "", created_at: nowISO() };
+    delete ws[channel].last_ai_undo;
+    delete ws[channel].preview_diff;
+
+    ws[channel].updated_at = nowISO();
+    ws[channel].version = Number(ws[channel].version || 0) + 1;
+    ws.updated_at = nowISO();
+    saveAgentWorkspace(sess.org_id, ws);
+
+    return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&undone=1&ai_section=${encodeURIComponent(undoKey)}#${workspaceSectionAnchor(undoKey)}`);
   }
 
   // CANCEL DIFF
