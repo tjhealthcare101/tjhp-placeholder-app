@@ -18341,12 +18341,23 @@ function workspacePolishStyles(){
       }
 
       .packet-workspace-shell .ws-edit-form textarea{
-        min-height:120px;
+        min-height:260px;
+        height:auto;
+        max-height:none;
+        overflow:hidden;
         resize:vertical;
         background:#fbfdff;
         border:1px solid #dbe3ef;
         font-family:inherit;
         line-height:1.45;
+      }
+
+      .packet-workspace-shell .ws-clean-section.editing .ws-edit-form textarea{
+        min-height:min(620px, 75vh);
+      }
+
+      .packet-workspace-shell .ws-clean-section.editing[data-inline-section="letter_of_medical_necessity"] .ws-edit-form textarea{
+        min-height:min(760px, 82vh);
       }
 
       .packet-workspace-shell .ws-edit-form.compact textarea{
@@ -18820,13 +18831,23 @@ function workspacePolishStyles(){
       }
       .packet-workspace-shell .ws-ai-assist-launcher{ border-left:4px solid #4f46e5; }
       .ws-ai-drawer-backdrop{display:none;}
-      .ws-ai-drawer{position:fixed;right:20px;bottom:20px;width:min(430px,92vw);max-height:min(680px,82vh);height:auto;min-width:min(320px,92vw);min-height:260px;background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 18px 55px rgba(15,23,42,.24);z-index:9999;transform:translateY(16px) scale(.98);opacity:0;pointer-events:none;transition:opacity .18s ease, transform .18s ease;overflow:auto;padding:18px;resize:both;}
+      .ws-ai-drawer{position:fixed;right:20px;bottom:96px;width:min(430px,92vw);max-height:min(640px,calc(100vh - 130px));height:auto;min-width:min(320px,92vw);min-height:260px;background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 18px 55px rgba(15,23,42,.24);z-index:9999;transform:translateY(16px) scale(.98);opacity:0;pointer-events:none;transition:opacity .18s ease, transform .18s ease;overflow:auto;padding:18px;resize:both;}
       .ws-ai-drawer.open{opacity:1;pointer-events:auto;transform:translateY(0) scale(1);}
       .ws-ai-drawer-head{ display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:12px; }
       .ws-ai-drawer-close{ border:1px solid #e5e7eb; background:#f8fafc; border-radius:999px; width:34px; height:34px; cursor:pointer; font-weight:900; }
       .ws-ai-preset-grid{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
       .ws-ai-drawer textarea{min-height:150px;}
-      @media(max-width:760px){ .packet-workspace-shell .ws-intel-strip > summary{ flex-direction:column; } .packet-workspace-shell .ws-intel-strip-metrics{ justify-content:flex-start; } }
+      @media(max-width:760px){
+        .packet-workspace-shell .ws-intel-strip > summary{ flex-direction:column; }
+        .packet-workspace-shell .ws-intel-strip-metrics{ justify-content:flex-start; }
+        .ws-ai-drawer{
+          right:12px;
+          bottom:88px;
+          width:calc(100vw - 24px);
+          min-width:0;
+          max-height:calc(100vh - 120px);
+        }
+      }
 
       .packet-workspace-shell .ws-drop-zone.has-file{
         border-color:#16a34a;
@@ -20536,7 +20557,7 @@ function renderEditablePacketSection(opts){
         </div>
       </div>
 
-      <div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing');">
+      <div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing'); setTimeout(function(){ if(window.__tjhpAutoSizeWorkspaceEditors) window.__tjhpAutoSizeWorkspaceEditors(); }, 0);">
         ${showPreview}
         <div class="muted small" style="margin-top:8px;">Click this section to edit.</div>
       </div>
@@ -20551,6 +20572,61 @@ function renderEditablePacketSection(opts){
           <button class="btn secondary" type="button" onclick="this.closest('.ws-clean-section').classList.remove('editing');">Cancel</button>
         </div>
       </form>
+
+      <script>
+        (function(){
+          if (window.__tjhpWorkspaceEditAutosizeBound) return;
+          window.__tjhpWorkspaceEditAutosizeBound = true;
+
+          function autoSizeOne(textarea){
+            if (!textarea) return;
+
+            var section = textarea.closest(".ws-clean-section");
+            if (section && !section.classList.contains("editing")) return;
+
+            textarea.style.height = "auto";
+
+            var minHeight = 260;
+            var sectionKey = section ? String(section.getAttribute("data-inline-section") || "") : "";
+            if (sectionKey === "letter_of_medical_necessity") minHeight = 520;
+
+            var nextHeight = Math.max(minHeight, textarea.scrollHeight + 8);
+            textarea.style.height = nextHeight + "px";
+            textarea.style.overflow = "hidden";
+          }
+
+          window.__tjhpAutoSizeWorkspaceEditors = function(root){
+            var scope = root && root.querySelectorAll ? root : document;
+            scope.querySelectorAll(".packet-workspace-shell .ws-inline-edit-form textarea").forEach(autoSizeOne);
+          };
+
+          document.addEventListener("input", function(e){
+            if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {
+              autoSizeOne(e.target);
+            }
+          });
+
+          document.addEventListener("focusin", function(e){
+            if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {
+              setTimeout(function(){ autoSizeOne(e.target); }, 0);
+            }
+          });
+
+          document.addEventListener("click", function(e){
+            var section = e.target && e.target.closest ? e.target.closest(".packet-workspace-shell .ws-clean-section") : null;
+            if (!section) return;
+            setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(section); }, 0);
+          });
+
+          if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", function(){
+              window.__tjhpAutoSizeWorkspaceEditors();
+            });
+          } else {
+            setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(); }, 0);
+          }
+        })();
+      </script>
     </div>
   `;
 }
