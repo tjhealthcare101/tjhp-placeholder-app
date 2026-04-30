@@ -18837,6 +18837,63 @@ function workspacePolishStyles(){
       .ws-ai-drawer-close{ border:1px solid #e5e7eb; background:#f8fafc; border-radius:999px; width:34px; height:34px; cursor:pointer; font-weight:900; }
       .ws-ai-preset-grid{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
       .ws-ai-drawer textarea{min-height:150px;}
+
+      .packet-workspace-shell .ws-ai-section-proposal{
+        margin-top:14px;
+        border:1px solid #6366f1;
+        border-left:4px solid #4f46e5;
+        border-radius:16px;
+        background:#f8fafc;
+        padding:14px;
+      }
+
+      .packet-workspace-shell .ws-ai-section-proposal textarea{
+        width:100%;
+        min-height:320px;
+        border:1px solid #dbe3ef;
+        border-radius:12px;
+        background:#ffffff;
+        padding:12px;
+        font-family:inherit;
+        line-height:1.55;
+        resize:vertical;
+        white-space:pre-wrap;
+      }
+
+      .packet-workspace-shell .ws-ai-queue-note{
+        display:flex;
+        justify-content:space-between;
+        gap:10px;
+        flex-wrap:wrap;
+        align-items:center;
+        border:1px solid #e0e7ff;
+        background:#eef2ff;
+        border-radius:12px;
+        padding:10px;
+        margin:10px 0;
+      }
+
+      .packet-workspace-shell .ws-ai-target-select{
+        width:100%;
+        padding:10px;
+        border:1px solid #dbe3ef;
+        border-radius:12px;
+        background:#fff;
+        margin-top:6px;
+      }
+
+      .packet-workspace-shell .ws-ai-working{
+        display:none;
+        margin-top:10px;
+        border:1px solid #bfdbfe;
+        background:#eff6ff;
+        color:#1e3a8a;
+        border-radius:12px;
+        padding:10px;
+        font-weight:800;
+      }
+
+      .packet-workspace-shell .ws-ai-working.show{display:block;}
       @media(max-width:760px){
         .packet-workspace-shell .ws-intel-strip > summary{ flex-direction:column; }
         .packet-workspace-shell .ws-intel-strip-metrics{ justify-content:flex-start; }
@@ -20385,6 +20442,53 @@ function renderPacketMissingChecklist(ws, claim, derived, channel, billed_id){
   // Combined into renderWorkspaceProofCenter() so users do not see duplicate
   // Document Readiness + Documents & Missing Items sections.
   return "";
+}
+
+function workspaceSectionAnchor(section_key){
+  return `section-${String(section_key || "").replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
+function workspaceAiSectionOptions(channel){
+  if (channel === "negotiation") {
+    return [
+      { key:"auto", label:"Auto-detect section" },
+      { key:"variance_explanation", label:"Negotiation Narrative / Variance Explanation" },
+      { key:"requested_amount", label:"Requested Amount" },
+      { key:"financial_summary", label:"Financial Summary" },
+      { key:"claim_summary", label:"Claim Summary" },
+      { key:"requested_action", label:"Requested Action" },
+      { key:"attachments_index", label:"Attachments Index" },
+      { key:"signature", label:"Signature" }
+    ];
+  }
+
+  return [
+    { key:"auto", label:"Auto-detect section" },
+    { key:"argument", label:"Appeal Narrative" },
+    { key:"letter_of_medical_necessity", label:"Letter of Medical Necessity" },
+    { key:"requested_action", label:"Requested Action" },
+    { key:"financial_summary", label:"Financial Summary" },
+    { key:"claim_summary", label:"Claim Summary" },
+    { key:"header", label:"Header" },
+    { key:"attachments_index", label:"Attachments Index" },
+    { key:"signature", label:"Signature" }
+  ];
+}
+
+function workspaceAiSectionLabel(channel, section_key){
+  const found = workspaceAiSectionOptions(channel).find(x => x.key === section_key);
+  return found ? found.label : String(section_key || "Packet Section");
+}
+
+function workspaceDetectAiTargetSections(prompt, preset, channel, selectedSection){
+  const selected = String(selectedSection || "auto").trim();
+  const allowed = new Set(workspaceAiSectionOptions(channel).map(x => x.key).filter(x => x !== "auto"));
+  if (selected && selected !== "auto" && allowed.has(selected)) return [selected];
+  return [channel === "negotiation" ? "variance_explanation" : (preset === "justify" ? "letter_of_medical_necessity" : "argument")];
+}
+
+function workspaceCleanAiSectionOutput(text){
+  return String(text || "").replace(/```[a-zA-Z]*\n?/g, "").replace(/```/g, "").replace(/\*\*(.*?)\*\*/g, "$1").trim();
 }
 
 function renderInlineAIAssist(billed_id, channel){
