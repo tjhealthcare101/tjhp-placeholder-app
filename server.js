@@ -171,25 +171,50 @@ function workspaceAiDiffOps(before, after){
 }
 
 function workspaceAiInteractiveTrackChangesHtml(before, after){
-  const ops = workspaceAiDiffOps(before, after);
-  if (!ops) return workspaceAiTrackChangesHtml(before, after);
-  const suggestions = [];
-  const html = ops.map((op) => {
-    const type = String(op.type || "same");
-    const text = String(op.text || "");
-    if (type === "same") return `<span data-ai-part="same">${safeStr(text)}</span>`;
-    const isAdded = type === "added";
-    const label = isAdded ? "Addition" : "Removal";
-    const previewText = text.length > 140 ? text.slice(0, 140) + "..." : text;
-    suggestions.push(`<div class="ws-ai-suggestion-card" data-change-id="${safeStr(op.change_id)}" data-change-status="accepted" role="button" tabindex="0"><div class="ws-ai-suggestion-top"><span class="ws-ai-suggestion-type ${isAdded ? "added" : "removed"}">${safeStr(label)}</span></div><div class="ws-ai-suggestion-text">${safeStr(previewText)}</div><div class="ws-ai-suggestion-actions"><button type="button" class="ws-ai-change-btn accept" data-ai-change-action="accept" data-change-id="${safeStr(op.change_id)}">Accept</button><button type="button" class="ws-ai-change-btn reject" data-ai-change-action="reject" data-change-id="${safeStr(op.change_id)}">Reject</button></div></div>`);
-    const cls = isAdded ? "ws-diff-added" : "ws-diff-removed";
-    const title = isAdded ? "Edit this added text inline" : "Edit this removed text inline";
-    return `<span class="${safeStr(cls)} ws-ai-change-text is-accepted" data-ai-part="${safeStr(type)}" data-change-id="${safeStr(op.change_id)}" data-status="accepted" contenteditable="true" spellcheck="true" title="${safeStr(title)}">${safeStr(text)}</span>`;
-  }).join("");
-  const suggestionsHtml = suggestions.length
-    ? `<div class="ws-ai-suggestion-list">${suggestions.join("")}</div>`
-    : `<div class="muted small">No individual changes detected. You can still edit the final text before applying.</div>`;
-  return `<div class="ws-ai-change-toolbar" contenteditable="false"><button type="button" class="btn secondary small" data-ai-review-action="accept_all">Accept All</button><button type="button" class="btn secondary small" data-ai-review-action="reject_all">Reject All</button><span class="muted small">Review each suggestion below, or edit highlighted text directly.</span></div><div class="ws-ai-review-layout"><div><div class="ws-ai-interactive-diff" data-ai-interactive-diff contenteditable="true" spellcheck="true" role="textbox" aria-label="Editable AI proposed packet section">${html}</div></div><div class="ws-ai-suggestions-panel" contenteditable="false"><div class="ws-ai-suggestions-head"><strong>Review suggestions</strong><span class="muted small">Accept or reject each change. Click a card to find it in the text.</span></div>${suggestionsHtml}</div></div>`;
+  const beforeTokens = workspaceDiffTokenize(before);
+  const afterTokens = workspaceDiffTokenize(after);
+
+  const maxTokens = 1200;
+
+  const beforeWordSet = new Set(
+    beforeTokens
+      .filter(t => !workspaceIsWhitespaceToken(t))
+      .map(t => String(t || "").toLowerCase())
+  );
+
+  let html = "";
+
+  if (afterTokens.length > maxTokens || beforeTokens.length > maxTokens) {
+    html = safeStr(after || "");
+  } else {
+    html = afterTokens.map(token => {
+      const raw = String(token || "");
+      if (!raw) return "";
+      if (workspaceIsWhitespaceToken(raw)) return safeStr(raw);
+
+      const normalized = raw.toLowerCase();
+      const isAdded = !beforeWordSet.has(normalized);
+
+      return isAdded
+        ? `<span class="ws-diff-added ws-ai-added-text">${safeStr(raw)}</span>`
+        : safeStr(raw);
+    }).join("");
+  }
+
+  return `
+    <div class="ws-ai-simple-review-note" contenteditable="false">
+      AI additions are highlighted in green. You can edit this section directly before applying.
+    </div>
+
+    <div
+      class="ws-ai-interactive-diff ws-ai-simple-editor"
+      data-ai-interactive-diff
+      contenteditable="true"
+      spellcheck="true"
+      role="textbox"
+      aria-label="Editable AI proposed packet section"
+    >${html}</div>
+  `;
 }
 
 // ===== Server =====
@@ -18961,13 +18986,14 @@ function workspacePolishStyles(){
       }
       .packet-workspace-shell .ws-ai-assist-launcher{ border-left:4px solid #4f46e5; }
       .ws-ai-drawer-backdrop{display:none;}
-      .ws-ai-drawer{position:fixed;right:20px;top:78px;bottom:18px;width:min(460px,92vw);max-height:none;height:auto;min-width:min(320px,92vw);min-height:420px;background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 18px 55px rgba(15,23,42,.24);z-index:9999;transform:translateY(16px) scale(.98);opacity:0;pointer-events:none;transition:opacity .18s ease, transform .18s ease;overflow:auto;padding:18px;resize:both;}
+      .ws-ai-drawer{position:fixed;right:20px;bottom:18px;width:min(430px,92vw);max-height:min(620px,calc(100vh - 110px));height:auto;min-height:0;background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 18px 55px rgba(15,23,42,.24);z-index:9999;transform:translateY(16px) scale(.98);opacity:0;pointer-events:none;transition:opacity .18s ease, transform .18s ease;overflow:auto;padding:18px;resize:both;}
       .ws-ai-drawer.open{opacity:1;pointer-events:auto;transform:translateY(0) scale(1);}
+      .ws-ai-drawer.is-working{max-height:220px;min-height:0;resize:none;}
       .ws-ai-drawer-head{ display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:12px; }
       .ws-ai-drawer-close{ border:1px solid #e5e7eb; background:#f8fafc; border-radius:999px; width:34px; height:34px; cursor:pointer; font-weight:900; }
       .ws-ai-preset-grid{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
       .ws-ai-drawer textarea{min-height:150px;}
-      .packet-workspace-shell .ws-ai-form{min-height:100%;display:flex;flex-direction:column;}
+      .packet-workspace-shell .ws-ai-form{min-height:0;display:flex;flex-direction:column;}
       .packet-workspace-shell .ws-ai-form-controls{display:flex;flex-direction:column;gap:10px;}
       .packet-workspace-shell .ws-ai-form-actions{position:sticky;bottom:-18px;background:#fff;border-top:1px solid #eef2f7;padding-top:10px;margin-top:10px;}
       .packet-workspace-shell .ws-ai-info-icon{font-size:13px;color:#64748b;cursor:help;margin-left:4px;}
@@ -19026,7 +19052,7 @@ function workspacePolishStyles(){
 
       .packet-workspace-shell .ws-ai-working{
         display:none;
-        margin-top:10px;
+        margin-top:0;
         border:1px solid #bfdbfe;
         background:#eff6ff;
         color:#1e3a8a;
@@ -19062,11 +19088,7 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-track-old,.packet-workspace-shell .ws-track-new{border:1px solid #e5e7eb;border-radius:12px;padding:10px;white-space:pre-wrap;margin-bottom:8px;}
       .packet-workspace-shell .ws-track-old{background:#fff1f2;color:#991b1b;}
       .packet-workspace-shell .ws-track-new{background:#ecfdf5;color:#065f46;}
-      .packet-workspace-shell .ws-ai-editable-proposed{margin-top:12px;}
-      .packet-workspace-shell .ws-ai-editable-proposed label{display:block;font-weight:900;margin-bottom:6px;}
-      .packet-workspace-shell .ws-ai-editable-proposed label span{display:block;font-weight:700;margin-top:2px;}
-      .packet-workspace-shell .ws-ai-editable-proposed textarea{width:100%;min-height:320px;border:1px solid #dbe3ef;border-radius:12px;background:#ffffff;padding:12px;font-family:inherit;line-height:1.55;resize:vertical;white-space:pre-wrap;}
-      .packet-workspace-shell [data-inline-section="letter_of_medical_necessity"] .ws-ai-editable-proposed textarea{min-height:520px;}
+      .packet-workspace-shell .ws-ai-final-hidden{position:absolute !important;left:-99999px !important;width:1px !important;height:1px !important;opacity:0 !important;pointer-events:none !important;}
       .packet-workspace-shell .ws-local-status{border-radius:12px;padding:10px 12px;margin:8px 0 12px;font-weight:900;}
       .packet-workspace-shell .ws-local-status.ok{border:1px solid #86efac;background:#ecfdf5;color:#065f46;}
       .packet-workspace-shell .ws-local-status.info{border:1px solid #bfdbfe;background:#eff6ff;color:#1e3a8a;}
@@ -19074,12 +19096,18 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-local-undo-form .btn{width:auto;}
       .packet-workspace-shell .ws-ai-next-status{display:none;margin-top:10px;border:1px solid #bfdbfe;background:#eff6ff;color:#1e3a8a;border-radius:12px;padding:10px;font-weight:900;}
       .packet-workspace-shell .ws-ai-next-status.show{display:block;}
-      .packet-workspace-shell .ws-ai-change-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;}
+      .packet-workspace-shell .ws-ai-change-toolbar{display:none !important;}
       .packet-workspace-shell .ws-ai-review-layout{display:block;}
       .packet-workspace-shell .ws-ai-review-layout > div:first-child{width:100%;}
-      .packet-workspace-shell .ws-ai-interactive-diff{width:100%;min-height:420px;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;line-height:1.75;border:1px solid #e5e7eb;border-radius:14px;background:#ffffff;padding:18px;outline:none;}
-      .packet-workspace-shell .ws-ai-interactive-diff:focus{box-shadow:0 0 0 3px rgba(79,70,229,.14);border-color:#6366f1;}
-      .packet-workspace-shell .ws-ai-suggestions-panel{position:fixed;right:24px;top:108px;width:min(360px, calc(100vw - 48px));max-height:calc(100vh - 140px);overflow:auto;z-index:9000;border:1px solid #e5e7eb;border-radius:16px;background:#ffffff;padding:12px;box-shadow:0 18px 45px rgba(15,23,42,.16);}
+      .packet-workspace-shell .ws-ai-suggestions-panel,
+      .packet-workspace-shell .ws-ai-suggestion-card,
+      .packet-workspace-shell .ws-ai-suggestion-list,
+      .packet-workspace-shell .ws-ai-suggestion-actions,
+      .packet-workspace-shell .ws-ai-change-btn{display:none !important;}
+      .packet-workspace-shell .ws-ai-simple-review-note{border:1px solid #bbf7d0;background:#ecfdf5;color:#065f46;border-radius:12px;padding:10px 12px;font-weight:800;margin:10px 0;}
+      .packet-workspace-shell .ws-ai-simple-editor{width:100%;min-height:420px;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;line-height:1.75;border:1px solid #e5e7eb;border-radius:14px;background:#ffffff;padding:18px;outline:none;}
+      .packet-workspace-shell .ws-ai-simple-editor:focus{box-shadow:0 0 0 3px rgba(34,197,94,.16);border-color:#22c55e;}
+      .packet-workspace-shell .ws-ai-added-text{background:#dcfce7;color:#065f46;border-radius:4px;padding:0 2px;}
       .packet-workspace-shell .ws-ai-suggestions-panel .ws-ai-suggestions-head{position:sticky;top:0;background:#fff;z-index:1;border-bottom:1px solid #eef2f7;padding-bottom:8px;margin-bottom:8px;}
       .packet-workspace-shell .ws-ai-suggestions-head{display:flex;flex-direction:column;gap:3px;border-bottom:1px solid #eef2f7;padding-bottom:8px;margin-bottom:8px;}
       .packet-workspace-shell .ws-ai-suggestion-list{display:grid;gap:8px;}
@@ -19103,14 +19131,13 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-ai-change-text[data-ai-part="removed"].is-accepted{display:none;}
       .packet-workspace-shell .ws-ai-change-text[data-ai-part="removed"].is-rejected{text-decoration:none;background:#fef3c7;color:#92400e;}
 
-      @media (max-width: 1100px){.packet-workspace-shell .ws-ai-suggestions-panel{position:static;width:100%;max-height:420px;box-shadow:none;margin-top:12px;} .page-shell:has(.packet-workspace-shell .ws-ai-review-mode) .packet-workspace-shell{max-width:100%;margin-left:auto;margin-right:auto;} html.ws-has-ai-review .packet-workspace-shell{max-width:100%;margin-left:auto;margin-right:auto;} .packet-workspace-shell .ws-workspace-ai-float{right:14px;bottom:14px;}}
+      @media (max-width: 1100px){.page-shell:has(.packet-workspace-shell .ws-ai-review-mode) .packet-workspace-shell{max-width:100%;margin-left:auto;margin-right:auto;} html.ws-has-ai-review .packet-workspace-shell{max-width:100%;margin-left:auto;margin-right:auto;} .packet-workspace-shell .ws-workspace-ai-float{right:14px;bottom:14px;}}
 
       @media(max-width:760px){
         .packet-workspace-shell .ws-intel-strip > summary{ flex-direction:column; }
         .packet-workspace-shell .ws-intel-strip-metrics{ justify-content:flex-start; }
         .ws-ai-drawer{
           right:12px;
-          top:78px;
           bottom:12px;
           width:calc(100vw - 24px);
           min-width:0;
@@ -20847,8 +20874,8 @@ async function workspaceGenerateAiSectionPreview({ sess, claim, ws, channel, pro
     model: "gpt-4o-mini",
     temperature: 0.25,
     messages: [
-      { role: "system", content: "You are the TJ Healthcare Pro packet section editor. Rewrite only the targeted editable packet section. Do not invent clinical facts, symptoms, diagnoses, authorization history, payer policy terms, contract terms, payment details, or uploaded evidence. If proof is missing, use careful language or bracketed placeholders. Return clean plain text only. No markdown, no code fences, and no explanation outside the revised section text." },
-      { role: "user", content: `Workspace: ${channel}\nTarget section: ${sectionLabel}\nUser request: ${finalPrompt}\n\nEvidence context:\n${evidenceContext}\n\nCurrent ${sectionLabel} text:\n${currentText || "[This section is currently blank. Draft it using only safe known facts and bracketed placeholders where information is missing.]"}` }
+      { role: "system", content: "You are the TJ Healthcare Pro packet section editor. Rewrite only the targeted editable packet section. Do not invent clinical facts, symptoms, diagnoses, authorization history, payer policy terms, contract terms, payment details, or uploaded evidence. If proof is missing, use careful language or bracketed placeholders. Use the current section text as the source of truth. Preserve staff edits, staff wording, and section structure unless the user specifically asks to rewrite them. Improve and enhance the existing text; do not wipe out or replace the section wholesale. Return the full revised section text. Return clean plain text only. No markdown, no code fences, and no explanation outside the revised section text." },
+      { role: "user", content: `Workspace: ${channel}\nTarget section: ${sectionLabel}\nUser request: ${finalPrompt}\n\nEvidence context:\n${evidenceContext}\n\nThe current section text below may include staff edits. Build on it and preserve those edits unless they are clearly incorrect or the user asks for a rewrite.\n\nCurrent ${sectionLabel} text:\n${currentText || "[This section is currently blank. Draft it using only safe known facts and bracketed placeholders where information is missing.]"}` }
     ]
   });
   const improvedText = workspaceCleanAiSectionOutput(completion.choices?.[0]?.message?.content || "");
@@ -20936,7 +20963,7 @@ function renderInlineAIAssist(billed_id, channel){
       <script>
       window.openWorkspaceAiAssistDrawer = window.openWorkspaceAiAssistDrawer || function(id){ var d=document.getElementById(id); if(d){ d.classList.add("open"); d.setAttribute("aria-hidden","false"); } };
       window.closeWorkspaceAiAssistDrawer = window.closeWorkspaceAiAssistDrawer || function(id){ var d=document.getElementById(id); if(d){ d.classList.remove("open"); d.setAttribute("aria-hidden","true"); } };
-      window.submitWorkspaceAiAssistForm = function(form, clickedButton){ if(!form) return true; form.classList.add("is-submitting"); var working=form.querySelector("[data-ai-working]"); if(working) working.classList.add("show"); var active=clickedButton||form.__tjhpSubmitter||(window.event&&window.event.submitter?window.event.submitter:null)||form.querySelector("button[type='submit']"); form.querySelectorAll("button").forEach(function(btn){btn.disabled=true;}); if(active){ active.dataset.originalText=active.dataset.originalText||active.textContent; active.textContent=active.getAttribute("data-loading-label")||"Generating Section Update...";} return true; };
+      window.submitWorkspaceAiAssistForm = function(form, clickedButton){ if(!form) return true; form.classList.add("is-submitting");var drawer = form.closest(".ws-ai-drawer");if (drawer) drawer.classList.add("is-working"); var working=form.querySelector("[data-ai-working]"); if(working) working.classList.add("show"); var active=clickedButton||form.__tjhpSubmitter||(window.event&&window.event.submitter?window.event.submitter:null)||form.querySelector("button[type='submit']"); form.querySelectorAll("button").forEach(function(btn){btn.disabled=true;}); if(active){ active.dataset.originalText=active.dataset.originalText||active.textContent; active.textContent=active.getAttribute("data-loading-label")||"Generating Section Update...";} return true; };
       (function(){ if(window.__tjhpAiWorkspaceButtonBound) return; window.__tjhpAiWorkspaceButtonBound=true; document.addEventListener("click", function(e){ var btn=e.target&&e.target.closest?e.target.closest("[data-ai-preset]"):null; if(!btn) return; var form=btn.closest("form"); if(!form) return; e.preventDefault(); var p=form.querySelector("[data-ai-preset-input]"); if(p) p.value=btn.getAttribute("data-ai-preset")||""; var target=btn.getAttribute("data-ai-target")||""; var sel=form.querySelector("select[name='target_section']"); if(sel&&target) sel.value=target; var prompt=btn.getAttribute("data-ai-prompt")||""; var ta=form.querySelector("textarea[name='prompt']"); if(ta && !String(ta.value||"").trim()) ta.value=prompt; form.__tjhpSubmitter=btn; if(typeof form.requestSubmit==="function") form.requestSubmit(); else { window.submitWorkspaceAiAssistForm(form, btn); form.submit(); } }); document.addEventListener("submit", function(e){ var form=e.target&&e.target.matches&&e.target.matches("[data-ai-workspace-form='1']")?e.target:null; if(!form) return; window.submitWorkspaceAiAssistForm(form, form.__tjhpSubmitter||(e.submitter||null)); });})();
       try { var genericCopilot = document.getElementById("aiChat"); if (genericCopilot) genericCopilot.style.display = "none"; } catch(e) {}
       </script>
@@ -21020,9 +21047,73 @@ function renderEditablePacketSection(opts){
   const canUndoAi = !!(lastAiUndo && String(lastAiUndo.section_key || "") === section_key && String(lastAiUndo.before || "") !== String(lastAiUndo.after || ""));
   const undoAiHtml = canUndoAi ? `<form method="POST" action="/ai-workspace/undo-ai-change" class="ws-local-undo-form"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><button class="btn secondary small" type="submit">Undo AI Change</button></form>` : "";
   const localQueueInfoHtml = hasAiPreview && appliedPrevSection ? `<div class="ws-local-status info">Previous section updated. Now reviewing ${safeStr(title)}.</div>` : ``;
-  const aiReviewHtml = hasAiPreview ? `<div class="ws-section-body ws-ai-review-mode">${localQueueInfoHtml}<div class="ws-ai-review-head"><div><div class="ws-ai-review-title">AI proposed update for ${safeStr(title)}</div><div class="ws-ai-review-copy">Review suggestions below. The packet text is highlighted, and the suggestion list lets you accept or reject each change without cluttering the document. You can also edit highlighted text or the final text before applying.</div></div>${pending.length ? `<span class="badge warn">Next: ${safeStr(nextLabel)}</span>` : `<span class="badge ok">Final item</span>`}</div>${aiQueue.length > 1 ? `<div class="ws-ai-queue-note"><div><strong>AI section queue</strong><div class="muted small">${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}</div></div>${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(nextLabel)}</div>` : ""}</div>` : ""}<div class="ws-track-changes">${workspaceAiInteractiveTrackChangesHtml(aiPreview.before || "", aiPreview.after || "")}</div><form method="POST" action="/ai-workspace/apply-diff" class="ws-ai-action-form" data-ai-action="apply" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><div class="ws-ai-editable-proposed"><label>Final text to apply<span class="muted small">Updates automatically as you accept/reject suggestions. You can also edit it directly.</span></label><textarea name="after" data-ai-final-text>${escapeHtml(aiPreview.after || "")}</textarea></div><div class="ws-inline-save"><button class="btn" type="submit">Apply to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="btnRow" style="margin-top:8px;"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
+  const aiReviewHtml = hasAiPreview ? `<div class="ws-section-body ws-ai-review-mode">${localQueueInfoHtml}<div class="ws-ai-review-head"><div><div class="ws-ai-review-title">AI proposed update for ${safeStr(title)}</div><div class="ws-ai-review-copy">Review the AI-updated section below. New AI text is highlighted in green. You can type directly in the section before applying.</div></div>${pending.length ? `<span class="badge warn">Next: ${safeStr(nextLabel)}</span>` : `<span class="badge ok">Final item</span>`}</div>${aiQueue.length > 1 ? `<div class="ws-ai-queue-note"><div><strong>AI section queue</strong><div class="muted small">${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}</div></div>${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(nextLabel)}</div>` : ""}</div>` : ""}<div class="ws-track-changes">${workspaceAiInteractiveTrackChangesHtml(aiPreview.before || "", aiPreview.after || "")}</div><form method="POST" action="/ai-workspace/apply-diff" class="ws-ai-action-form" data-ai-action="apply" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea
+  name="after"
+  data-ai-final-text
+  class="ws-ai-final-hidden"
+>${escapeHtml(aiPreview.after || "")}</textarea><div class="ws-inline-save"><button class="btn" type="submit">Apply AI Update to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="btnRow" style="margin-top:8px;"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
   return `<div class="ws-section-card ws-clean-section ${hasAiPreview ? "ai-target-section" : ""}" id="${safeStr(anchorId)}" data-inline-section="${safeStr(section_key)}"><div class="ws-section-head"><div><div class="ws-section-title">${safeStr(title)}</div>${description ? `<div class="muted small" style="margin-top:3px;">${safeStr(description)}</div>` : ``}</div></div>${localSuccessHtml}${localUndoSuccessHtml}${undoAiHtml}${hasAiPreview ? aiReviewHtml : `<div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing'); setTimeout(function(){ if(window.__tjhpAutoSizeWorkspaceEditors) window.__tjhpAutoSizeWorkspaceEditors(); }, 0);">${showPreview}<div class="muted small" style="margin-top:8px;">Click this section to edit.</div></div>`}${hasAiPreview ? "" : `<form class="ws-edit-form ws-inline-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea name="value">${escapeHtml(value)}</textarea><div class="ws-inline-save"><button class="btn secondary" type="submit">Save Section</button><button class="btn secondary" type="button" onclick="this.closest('.ws-clean-section').classList.remove('editing');">Cancel</button></div></form>`}
-      <script>(function(){if (window.__tjhpWorkspaceEditAutosizeBound) return;window.__tjhpWorkspaceEditAutosizeBound = true;function autoSizeOne(textarea){if (!textarea) return;var section = textarea.closest(".ws-clean-section");if (section && !section.classList.contains("editing")) return;textarea.style.height = "auto";var minHeight = 260;var sectionKey = section ? String(section.getAttribute("data-inline-section") || "") : "";if (sectionKey === "letter_of_medical_necessity") minHeight = 520;var nextHeight = Math.max(minHeight, textarea.scrollHeight + 8);textarea.style.height = nextHeight + "px";textarea.style.overflow = "hidden";}window.__tjhpAutoSizeWorkspaceEditors = function(root){var scope = root && root.querySelectorAll ? root : document;scope.querySelectorAll(".packet-workspace-shell .ws-inline-edit-form textarea").forEach(autoSizeOne);};document.addEventListener("input", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {autoSizeOne(e.target);}});document.addEventListener("focusin", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {setTimeout(function(){ autoSizeOne(e.target); }, 0);}});document.addEventListener("click", function(e){var section = e.target && e.target.closest ? e.target.closest(".packet-workspace-shell .ws-clean-section") : null;if (!section) return;setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(section); }, 0);});if (document.readyState === "loading") {document.addEventListener("DOMContentLoaded", function(){window.__tjhpAutoSizeWorkspaceEditors();});} else {setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(); }, 0);}})();</script><script>(function(){if(window.__tjhpAiInteractiveReviewBound) return;window.__tjhpAiInteractiveReviewBound=true;function getReviewRoot(el){return el&&el.closest?el.closest(".ws-ai-review-mode"):null;}function setChangeStatus(review,changeId,status){if(!review||!changeId) return;review.querySelectorAll(".ws-ai-change-text[data-change-id]").forEach(function(el){if(String(el.getAttribute("data-change-id")||"")!==String(changeId)) return;el.dataset.status=status;el.classList.toggle("is-accepted",status==="accepted");el.classList.toggle("is-rejected",status==="rejected");});review.querySelectorAll(".ws-ai-suggestion-card[data-change-id]").forEach(function(card){if(String(card.getAttribute("data-change-id")||"")!==String(changeId)) return;card.setAttribute("data-change-status",status);card.classList.toggle("is-rejected",status==="rejected");});}function focusChange(review,changeId){if(!review||!changeId) return;review.querySelectorAll(".ws-ai-change-text.is-active,.ws-ai-suggestion-card.is-active").forEach(function(el){el.classList.remove("is-active");});var target=null;review.querySelectorAll(".ws-ai-change-text[data-change-id]").forEach(function(el){if(!target&&String(el.getAttribute("data-change-id")||"")===String(changeId)) target=el;});review.querySelectorAll(".ws-ai-suggestion-card[data-change-id]").forEach(function(card){if(String(card.getAttribute("data-change-id")||"")===String(changeId)) card.classList.add("is-active");});if(target){target.classList.add("is-active");target.scrollIntoView({behavior:"smooth",block:"center"});}}function setAll(review,status){if(!review) return;review.querySelectorAll(".ws-ai-change-text[data-change-id]").forEach(function(el){setChangeStatus(review,el.getAttribute("data-change-id"),status);});}function buildFinalText(review){if(!review) return "";var editor=review.querySelector("[data-ai-interactive-diff]");if(!editor){var textareaFallback=review.querySelector("textarea[data-ai-final-text]");return textareaFallback?String(textareaFallback.value||""):"";}var clone=editor.cloneNode(true);clone.querySelectorAll("[data-ai-part]").forEach(function(part){var type=String(part.getAttribute("data-ai-part")||"same");var status=String(part.getAttribute("data-status")||"accepted");if(type==="added"&&status!=="accepted"){part.remove();return;}if(type==="removed"&&status==="accepted"){part.remove();return;}});return String(clone.textContent||"").replace(/\u00a0/g," ").replace(/[ \t]+\n/g,"\n").replace(/\n{4,}/g,"\n\n\n").trim();}function syncFinalText(review){if(!review) return;var textarea=review.querySelector("textarea[data-ai-final-text]");if(!textarea) return;textarea.value=buildFinalText(review);}document.addEventListener("click",function(e){var btn=e.target&&e.target.closest?e.target.closest("[data-ai-change-action]"):null;if(btn){e.preventDefault();var review=getReviewRoot(btn);var changeId=btn.getAttribute("data-change-id")||"";var action=btn.getAttribute("data-ai-change-action")||"";setChangeStatus(review,changeId,action==="reject"?"rejected":"accepted");syncFinalText(review);focusChange(review,changeId);return;}var card=e.target&&e.target.closest?e.target.closest(".ws-ai-suggestion-card[data-change-id]"):null;if(card){if(e.target&&e.target.closest&&e.target.closest("[data-ai-change-action]")) return;var reviewFromCard=getReviewRoot(card);focusChange(reviewFromCard,card.getAttribute("data-change-id")||"");return;}var allBtn=e.target&&e.target.closest?e.target.closest("[data-ai-review-action]"):null;if(allBtn){e.preventDefault();var root=getReviewRoot(allBtn);var actionAll=allBtn.getAttribute("data-ai-review-action")||"";setAll(root,actionAll==="reject_all"?"rejected":"accepted");syncFinalText(root);}});document.addEventListener("input",function(e){var review=e.target&&e.target.closest?e.target.closest(".ws-ai-review-mode"):null;if(!review) return;if((e.target.matches&&e.target.matches("[data-ai-interactive-diff]"))||(e.target.closest&&e.target.closest("[data-ai-interactive-diff]"))||(e.target.matches&&e.target.matches(".ws-ai-change-text"))){syncFinalText(review);}});document.addEventListener("submit",function(e){var form=e.target;if(!form||!form.matches||!form.matches(".ws-ai-action-form")) return;var review=getReviewRoot(form);syncFinalText(review);});document.documentElement.classList.toggle("ws-has-ai-review",!!document.querySelector(".packet-workspace-shell .ws-ai-review-mode"));document.querySelectorAll(".ws-ai-review-mode").forEach(syncFinalText);})();</script></div>`;
+      <script>(function(){if (window.__tjhpWorkspaceEditAutosizeBound) return;window.__tjhpWorkspaceEditAutosizeBound = true;function autoSizeOne(textarea){if (!textarea) return;var section = textarea.closest(".ws-clean-section");if (section && !section.classList.contains("editing")) return;textarea.style.height = "auto";var minHeight = 260;var sectionKey = section ? String(section.getAttribute("data-inline-section") || "") : "";if (sectionKey === "letter_of_medical_necessity") minHeight = 520;var nextHeight = Math.max(minHeight, textarea.scrollHeight + 8);textarea.style.height = nextHeight + "px";textarea.style.overflow = "hidden";}window.__tjhpAutoSizeWorkspaceEditors = function(root){var scope = root && root.querySelectorAll ? root : document;scope.querySelectorAll(".packet-workspace-shell .ws-inline-edit-form textarea").forEach(autoSizeOne);};document.addEventListener("input", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {autoSizeOne(e.target);}});document.addEventListener("focusin", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {setTimeout(function(){ autoSizeOne(e.target); }, 0);}});document.addEventListener("click", function(e){var section = e.target && e.target.closest ? e.target.closest(".packet-workspace-shell .ws-clean-section") : null;if (!section) return;setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(section); }, 0);});if (document.readyState === "loading") {document.addEventListener("DOMContentLoaded", function(){window.__tjhpAutoSizeWorkspaceEditors();});} else {setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(); }, 0);}})();</script><script>
+(function(){
+  if (window.__tjhpAiInteractiveReviewBound) return;
+  window.__tjhpAiInteractiveReviewBound = true;
+
+  function getReviewRoot(el){
+    return el && el.closest ? el.closest(".ws-ai-review-mode") : null;
+  }
+
+  function normalizeText(text){
+    return String(text || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{4,}/g, "\n\n\n")
+      .trim();
+  }
+
+  function buildFinalText(review){
+    if (!review) return "";
+
+    var editor = review.querySelector("[data-ai-interactive-diff]");
+    if (!editor) {
+      var textareaFallback = review.querySelector("textarea[data-ai-final-text]");
+      return textareaFallback ? String(textareaFallback.value || "") : "";
+    }
+
+    return normalizeText(editor.textContent || "");
+  }
+
+  function syncFinalText(review){
+    if (!review) return;
+    var textarea = review.querySelector("textarea[data-ai-final-text]");
+    if (!textarea) return;
+    textarea.value = buildFinalText(review);
+  }
+
+  document.addEventListener("input", function(e){
+    var target = e.target;
+    if (!target || !target.closest) return;
+
+    var review = target.closest(".ws-ai-review-mode");
+    if (!review) return;
+
+    if (
+      target.matches("[data-ai-interactive-diff]") ||
+      target.closest("[data-ai-interactive-diff]")
+    ) {
+      syncFinalText(review);
+    }
+  });
+
+  document.addEventListener("submit", function(e){
+    var form = e.target;
+    if (!form || !form.matches || !form.matches(".ws-ai-action-form")) return;
+    var review = getReviewRoot(form);
+    syncFinalText(review);
+  });
+
+  document.querySelectorAll(".ws-ai-review-mode").forEach(syncFinalText);
+})();
+</script></div>`;
 }
 
 
