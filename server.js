@@ -11676,14 +11676,10 @@ function getOrgDisplayName(settings, orgRecord) {
 }
 
 function formatOrgMailingBlock(settings) {
-  const identity = settings?.identity || {};
-  const mailingSame = typeof identity.mailing_same_as_primary === "boolean" ? identity.mailing_same_as_primary : true;
-  const src = mailingSame ? (identity.addr_primary || {}) : (identity.addr_mailing || {});
-  return [
-    String(src.line1 || "").trim(),
-    String(src.line2 || "").trim(),
-    [String(src.city || "").trim(), String(src.state || "").trim(), String(src.zip || "").trim()].filter(Boolean).join(", "),
-  ].filter(Boolean).join("\n");
+  const orgId = settings?.org_id || "";
+  const orgRecord = orgId && typeof getOrg === "function" ? (getOrg(orgId) || {}) : {};
+  return workspaceFormatOrgAddressBlock(settings, orgRecord, "mailing")
+    || workspaceFormatOrgAddressBlock(settings, orgRecord, "primary");
 }
 
 function getLetterDefaults(settings) {
@@ -15292,17 +15288,130 @@ function workspaceClaimValue(claim, keys, fallback=""){
   return fallback;
 }
 
-function buildWorkspaceLetterOfMedicalNecessityTemplate({ org_id, claim, ws } = {}){
-  const orgRecord = org_id && typeof getOrg === "function" ? getOrg(org_id) : null;
-  const settings = org_id && typeof getOrgSettings === "function" ? getOrgSettings(org_id) : {};
-  const identity = settings?.identity || {};
+function workspaceFormatCityStateZip(city, state, zip){
+  const c = String(city || "").trim();
+  const s = String(state || "").trim();
+  const z = String(zip || "").trim();
 
-  const orgName = workspaceFirstValue(identity.legal_name, settings?.practice_name, settings?.legal_name, orgRecord?.legal_name, orgRecord?.org_name, "[Provider Letterhead]");
-  const practiceAddress = workspaceFirstValue(identity.address, settings?.practice_address, settings?.mailing_address, settings?.address, orgRecord?.practice_address, orgRecord?.address, "[Practice Address]");
-  const phoneNumber = workspaceFirstValue(identity.phone, identity.practice_phone, settings?.phone, settings?.practice_phone, settings?.billing_phone, orgRecord?.phone, orgRecord?.practice_phone, orgRecord?.billing_phone, "[Phone Number]");
-  const emailAddress = workspaceFirstValue(identity.email, identity.practice_email, settings?.email, settings?.practice_email, settings?.billing_email, orgRecord?.email, orgRecord?.practice_email, orgRecord?.billing_email, "[Email]");
-  const physicianName = workspaceFirstValue(workspaceClaimValue(claim, ["physician_name", "provider_name", "rendering_provider", "ordering_provider"]), settings?.provider_name, settings?.physician_name, "[Physician Name and Credentials]");
-  const npi = workspaceFirstValue(workspaceClaimValue(claim, ["provider_npi", "rendering_npi", "npi"]), identity.npi, settings?.npi, settings?.provider_npi, orgRecord?.npi, "[NPI Number]");
+  if (c && (s || z)) return `${c}, ${[s, z].filter(Boolean).join(" ")}`;
+  return [c, s, z].filter(Boolean).join(" ");
+}
+
+function workspaceFormatOrgAddressBlock(settings, orgRecord, mode){
+  const identity = settings?.identity || {};
+  const primary = identity.addr_primary || {};
+  const mailing = identity.addr_mailing || {};
+  const mailingSame = typeof identity.mailing_same_as_primary === "boolean"
+    ? identity.mailing_same_as_primary
+    : true;
+
+  let src = primary;
+  if (mode === "mailing") src = mailingSame ? primary : mailing;
+
+  const line1 = workspaceFirstValue(
+    src.line1,
+    mode === "mailing" ? orgRecord?.addr_mailing_line1 : orgRecord?.addr_primary_line1,
+    orgRecord?.address_line1,
+    orgRecord?.address
+  );
+
+  const line2 = workspaceFirstValue(
+    src.line2,
+    mode === "mailing" ? orgRecord?.addr_mailing_line2 : orgRecord?.addr_primary_line2,
+    orgRecord?.address_line2
+  );
+
+  const city = workspaceFirstValue(
+    src.city,
+    mode === "mailing" ? orgRecord?.addr_mailing_city : orgRecord?.addr_primary_city,
+    orgRecord?.city
+  );
+
+  const state = workspaceFirstValue(
+    src.state,
+    mode === "mailing" ? orgRecord?.addr_mailing_state : orgRecord?.addr_primary_state,
+    orgRecord?.state
+  );
+
+  const zip = workspaceFirstValue(
+    src.zip,
+    mode === "mailing" ? orgRecord?.addr_mailing_zip : orgRecord?.addr_primary_zip,
+    orgRecord?.zip
+  );
+
+  return [
+    line1,
+    line2,
+    workspaceFormatCityStateZip(city, state, zip)
+  ].filter(Boolean).join("\n");
+}
+
+function workspaceResolveOrgLogoPath(settings){
+  const candidates = [
+    settings?.logo_pdf_path,
+    settings?.logo_path
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const raw = String(candidate || "").trim();
+    if (!raw) continue;
+
+    const resolved = path.isAbsolute(raw)
+      ? raw
+      : path.join(process.cwd(), raw);
+
+    if (fs.existsSync(resolved)) return resolved;
+  }
+
+  return "";
+}
+
+function workspacePdfKitSupportedLogoPath(settings){
+  const resolved = workspaceResolveOrgLogoPath(settings);
+  if (!resolved) return "";
+
+  const ext = path.extname(resolved).toLowerCase();
+  if ([".png", ".jpg", ".jpeg"].includes(ext)) return resolved;
+
+  return "";
+}
+
+function workspaceOrgIdentityContext(org_id){
+  const orgRecord = org_id && typeof getOrg === "function" ? (getOrg(org_id) || {}) : {};
+  const settings = org_id && typeof getOrgSettings === "function" ? (getOrgSettings(org_id) || {}) : {};
+  const identity = settings.identity || {};
+
+  const primaryAddress = workspaceFormatOrgAddressBlock(settings, orgRecord, "primary");
+  const mailingAddress = workspaceFormatOrgAddressBlock(settings, orgRecord, "mailing");
+
+  const orgName = workspaceFirstValue(
+    identity.legal_name,
+    identity.dba_name,
+    settings.practice_name,
+    settings.legal_name,
+    orgRecord.legal_name,
+    orgRecord.org_name,
+    "Practice"
+  );
+
+  const phone = workspaceFirstValue(identity.phone, identity.practice_phone, settings.phone, settings.practice_phone, settings.billing_phone, orgRecord.phone, orgRecord.main_phone, orgRecord.practice_phone, orgRecord.billing_phone);
+  const email = workspaceFirstValue(identity.email, identity.practice_email, settings.email, settings.practice_email, settings.billing_email, orgRecord.org_email, orgRecord.billing_email, orgRecord.email, orgRecord.practice_email);
+  const npi = workspaceFirstValue(identity.npi, settings.npi, settings.provider_npi, orgRecord.org_npi, orgRecord.npi_number, orgRecord.npi);
+  const taxId = workspaceFirstValue(identity.tax_id, settings.tax_id, orgRecord.tax_id, orgRecord.tin, orgRecord.tax_identifier);
+  const fax = workspaceFirstValue(identity.fax, settings.fax, orgRecord.fax);
+
+  return { settings, orgRecord, identity, orgName, primaryAddress, mailingAddress, addressBlock: primaryAddress || mailingAddress, phone, email, fax, npi, taxId, logoPath: workspaceResolveOrgLogoPath(settings), pdfLogoPath: workspacePdfKitSupportedLogoPath(settings) };
+}
+
+
+function buildWorkspaceLetterOfMedicalNecessityTemplate({ org_id, claim, ws } = {}){
+  const orgCtx = workspaceOrgIdentityContext(org_id);
+  const orgName = workspaceFirstValue(orgCtx.orgName, "[Provider Letterhead]");
+  const practiceAddress = workspaceFirstValue(orgCtx.addressBlock, "[Practice Address]");
+  const phoneNumber = workspaceFirstValue(orgCtx.phone, "[Phone Number]");
+  const emailAddress = workspaceFirstValue(orgCtx.email, "[Email]");
+  const physicianName = workspaceFirstValue(workspaceClaimValue(claim, ["physician_name", "provider_name", "rendering_provider", "ordering_provider"]), orgCtx.settings?.provider_name, orgCtx.settings?.physician_name, "[Physician Name and Credentials]");
+  const npi = workspaceFirstValue(workspaceClaimValue(claim, ["provider_npi", "rendering_npi", "npi"]), orgCtx.npi, "[NPI Number]");
   const payer = workspaceFirstValue(workspaceClaimValue(claim, ["payer", "payer_name", "insurance", "insurance_company"]), "[Insurance Company Name]");
   const payerAddress = workspaceFirstValue(workspaceClaimValue(claim, ["payer_address", "insurance_address"]), "[Address]");
   const patientName = workspaceFirstValue(workspaceClaimValue(claim, ["patient_name", "patient", "member_name", "patient_full_name"]), "[Patient Name]");
@@ -15409,6 +15518,43 @@ function incrementWorkspaceEditsUsage(org_id){
 }
 
 
+function workspaceTextHasOrgPlaceholders(text){
+  const t = String(text || "");
+  return (
+    t.includes("[Provider Letterhead]") ||
+    t.includes("[Practice Address]") ||
+    t.includes("[Phone Number]") ||
+    t.includes("[Email]") ||
+    t.includes("Your Practice")
+  );
+}
+
+function workspaceTextMissingOrgIdentity(text, orgCtx){
+  const t = String(text || "");
+  if (!t.trim()) return true;
+  const checks = [orgCtx?.phone, orgCtx?.email, orgCtx?.npi, orgCtx?.taxId].filter(Boolean);
+  const addressLines = String(orgCtx?.addressBlock || "").split("\n").map(x => x.trim()).filter(Boolean);
+  checks.push(...addressLines);
+  return checks.some(value => value && !t.includes(String(value)));
+}
+
+function workspaceReplaceLmnProviderBlock(existingText, generatedText){
+  const existing = String(existingText || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const generated = String(generatedText || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const existingLines = existing.split("\n");
+  const generatedLines = generated.split("\n");
+  const findDateLine = (lines) => lines.findIndex(line => /^\d{4}-\d{2}-\d{2}$/.test(String(line || "").trim()));
+  const existingDateIdx = findDateLine(existingLines);
+  const generatedDateIdx = findDateLine(generatedLines);
+  if (existingDateIdx > 0 && generatedDateIdx > 0) {
+    const newHeader = generatedLines.slice(0, generatedDateIdx);
+    const oldFromDateForward = existingLines.slice(existingDateIdx);
+    return [...newHeader, ...oldFromDateForward].join("\n").trim();
+  }
+  return generated.trim();
+}
+
+
 function ensurePacketSections(ws, claim){
   ws.appeal = ws.appeal || {};
   ws.negotiation = ws.negotiation || {};
@@ -15426,12 +15572,16 @@ function ensurePacketSections(ws, claim){
   }
   ws.appeal.packet_sections = { ...appealDefaults, ...(ws.appeal.packet_sections || {}) };
 
-  if (!String(ws.appeal.packet_sections.letter_of_medical_necessity || "").trim()) {
-    ws.appeal.packet_sections.letter_of_medical_necessity = buildWorkspaceLetterOfMedicalNecessityTemplate({
-      org_id: ws.org_id,
-      claim: claimContext,
-      ws
-    });
+  const orgCtxForPacket = workspaceOrgIdentityContext(ws.org_id);
+  const generatedLmn = buildWorkspaceLetterOfMedicalNecessityTemplate({ org_id: ws.org_id, claim: claimContext, ws });
+  const currentLmn = String(ws.appeal.packet_sections.letter_of_medical_necessity || "").trim();
+  if (!currentLmn) {
+    ws.appeal.packet_sections.letter_of_medical_necessity = generatedLmn;
+  } else if (
+    workspaceTextHasOrgPlaceholders(currentLmn) ||
+    workspaceTextMissingOrgIdentity(currentLmn.split("\n").slice(0, 8).join("\n"), orgCtxForPacket)
+  ) {
+    ws.appeal.packet_sections.letter_of_medical_necessity = workspaceReplaceLmnProviderBlock(currentLmn, generatedLmn);
   }
 
   const negotiationDefaults = defaultNegotiationPacketSections();
@@ -15441,8 +15591,10 @@ function ensurePacketSections(ws, claim){
   }
   ws.negotiation.packet_sections = { ...negotiationDefaults, ...(ws.negotiation.packet_sections || {}) };
 
-  if (!String(ws.appeal.packet_sections.header || "").trim()) ws.appeal.packet_sections.header = hdr;
-  if (!String(ws.negotiation.packet_sections.header || "").trim()) ws.negotiation.packet_sections.header = hdr;
+  const appealHeader = String(ws.appeal.packet_sections.header || "").trim();
+  const negotiationHeader = String(ws.negotiation.packet_sections.header || "").trim();
+  if (!appealHeader || workspaceTextHasOrgPlaceholders(appealHeader) || workspaceTextMissingOrgIdentity(appealHeader, orgCtxForPacket)) ws.appeal.packet_sections.header = hdr;
+  if (!negotiationHeader || workspaceTextHasOrgPlaceholders(negotiationHeader) || workspaceTextMissingOrgIdentity(negotiationHeader, orgCtxForPacket)) ws.negotiation.packet_sections.header = hdr;
   if (!String(ws.appeal.packet_sections.signature || "").trim()) ws.appeal.packet_sections.signature = sig;
   if (!String(ws.negotiation.packet_sections.signature || "").trim()) ws.negotiation.packet_sections.signature = sig;
   if (letterDefaults.appeal_opening && ws.appeal.packet_sections.argument && !ws.appeal.packet_sections.argument.startsWith(letterDefaults.appeal_opening)) {
@@ -16937,16 +17089,28 @@ function claimFinancialSnapshot(derived, claim){
 }
 
 function packetHeaderFromSettings(orgSettings, orgRecord, claim){
-  const identity = (orgSettings || {}).identity || {};
-  const orgName = getOrgDisplayName(orgSettings, orgRecord);
-  const mailing = formatOrgMailingBlock(orgSettings);
+  const orgId = orgSettings?.org_id || claim?.org_id || orgRecord?.org_id || "";
+  const ctx = orgId ? workspaceOrgIdentityContext(orgId) : {
+    orgName: getOrgDisplayName(orgSettings, orgRecord),
+    addressBlock: formatOrgMailingBlock(orgSettings),
+    phone: orgSettings?.identity?.phone || orgRecord?.phone || "",
+    fax: orgSettings?.identity?.fax || orgRecord?.fax || "",
+    email: orgSettings?.identity?.email || orgRecord?.org_email || "",
+    npi: orgSettings?.identity?.npi || orgRecord?.org_npi || orgRecord?.npi_number || "",
+    taxId: orgSettings?.identity?.tax_id || orgRecord?.tax_id || ""
+  };
+
   const contact = [
-    identity.phone ? `Phone: ${identity.phone}` : "",
-    identity.fax ? `Fax: ${identity.fax}` : "",
+    ctx.npi ? `NPI: ${ctx.npi}` : "",
+    ctx.taxId ? `TIN: ${ctx.taxId}` : "",
+    ctx.phone ? `Phone: ${ctx.phone}` : "",
+    ctx.fax ? `Fax: ${ctx.fax}` : "",
+    ctx.email ? `Email: ${ctx.email}` : "",
     `Date: ${nowISO().slice(0,10)}`,
     `Claim #: ${claim?.claim_number || "N/A"}`
   ].filter(Boolean).join("\n");
-  return [orgName, mailing, contact].filter(Boolean).join("\n");
+
+  return [ctx.orgName, ctx.addressBlock, contact].filter(Boolean).join("\n");
 }
 
 function signatureFromSettings(orgSettings, orgRecord){
@@ -21275,6 +21439,29 @@ function renderSignatureSection(opts){
   `;
 }
 
+function renderWorkspaceOrgBrandHtml(org_id){
+  const ctx = workspaceOrgIdentityContext(org_id);
+  const logo = ctx.logoPath
+    ? `<img src="/file?path=${encodeURIComponent(ctx.logoPath)}" alt="Organization logo" style="max-height:58px;max-width:130px;object-fit:contain;border-radius:8px;border:1px solid #e5e7eb;background:#fff;padding:4px;"/>`
+    : "";
+
+  const details = [
+    ctx.orgName ? `<strong>${safeStr(ctx.orgName)}</strong>` : "",
+    ctx.npi ? `NPI: ${safeStr(ctx.npi)}` : "",
+    ctx.taxId ? `TIN: ${safeStr(ctx.taxId)}` : "",
+    ctx.addressBlock ? safeStr(ctx.addressBlock).replace(/\n/g, "<br/>") : "",
+    ctx.phone ? `Phone: ${safeStr(ctx.phone)}` : "",
+    ctx.email ? `Email: ${safeStr(ctx.email)}` : ""
+  ].filter(Boolean).join("<br/>");
+
+  return `
+    <div class="ws-org-brand" style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:14px;border-bottom:1px solid #e5e7eb;padding-bottom:12px;">
+      <div>${logo}</div>
+      <div style="text-align:right;font-size:12px;line-height:1.45;color:#374151;">${details}</div>
+    </div>
+  `;
+}
+
 function renderWorkspacePreview(opts){
   const org_id = opts.org_id;
   const claim = opts.claim || {};
@@ -21326,6 +21513,7 @@ function renderWorkspacePreview(opts){
       <div class="ws-preview-body">
         <div class="ws-letter">
           <div class="ws-letterhead">
+            ${renderWorkspaceOrgBrandHtml(org_id)}
             <div style="font-size:22px;font-weight:900;">${safeStr(channel === "appeal" ? "Appeal Letter Packet" : "Negotiation Letter Packet")}</div>
             <div class="muted" style="margin-top:6px;">Formatted packet preview for payer-facing export.</div>
             <div style="font-size:12px;color:#6b7280;margin-top:6px;">Generated by TJ Healthcare Pro • Revenue Intelligence System</div>
@@ -22439,35 +22627,26 @@ function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   // ===== LETTER LAYOUT =====
 
   const orgSettings = getOrgSettings(claim.org_id) || {};
-  const identity = orgSettings.identity || {};
+  const orgCtx = workspaceOrgIdentityContext(claim.org_id);
+  const identity = orgCtx.identity || {};
   const sections = ws[channel]?.packet_sections || {};
 
   // ----- Logo -----
-  const logoPath = orgSettings.logo_path;
+  const logoPath = orgCtx.pdfLogoPath;
   if (logoPath) {
-    try {
-      const resolved = path.isAbsolute(logoPath)
-        ? logoPath
-        : path.join(process.cwd(), logoPath);
-
-      if (fs.existsSync(resolved)) {
-        doc.image(resolved, 50, 40, { width: 100 });
-      }
-    } catch(e){}
+    try { doc.image(logoPath, 50, 40, { width: 90 }); } catch(e) {}
   }
 
   // ----- Provider Info (Top Right) -----
   doc
     .font("Helvetica")
     .fontSize(10)
-    .text(identity.legal_name || "Your Practice", { align: "right" });
-
-  if (identity.npi) doc.text(`NPI: ${identity.npi}`, { align: "right" });
-  if (identity.tax_id) doc.text(`TIN: ${identity.tax_id}`, { align: "right" });
-
-  doc
-    .text(identity.address || "", { align: "right" })
-    .text(identity.phone || "", { align: "right" });
+    .text(orgCtx.orgName || "Your Practice", { align: "right" });
+  if (orgCtx.npi) doc.text(`NPI: ${orgCtx.npi}`, { align: "right" });
+  if (orgCtx.taxId) doc.text(`TIN: ${orgCtx.taxId}`, { align: "right" });
+  String(orgCtx.addressBlock || "").split("\n").filter(Boolean).forEach(line => doc.text(line, { align: "right" }));
+  if (orgCtx.phone) doc.text(orgCtx.phone, { align: "right" });
+  if (orgCtx.email) doc.text(orgCtx.email, { align: "right" });
 
   // ----- Move below header -----
   doc.moveDown(3);
@@ -22494,7 +22673,7 @@ function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   // ----- RE: LINE -----
   doc
     .font("Helvetica-Bold")
-    .text(`RE: Claim # \${claim.claim_number || ""}`);
+    .text(`RE: Claim #${claim.claim_number || claim.claim_id || ""}`);
 
   doc.moveDown(1.5);
 
@@ -22576,7 +22755,7 @@ The reimbursement received does not align with the expected amount based on appl
   doc.moveDown();
 
   doc.text("Sincerely,", { width: CONTENT_WIDTH, align: "left" });
-  doc.text(identity.legal_name || "Your Practice", { width: CONTENT_WIDTH, align: "left" });
+  doc.text(orgCtx.orgName || "Your Practice", { width: CONTENT_WIDTH, align: "left" });
 
   const lmnText = String(ws?.appeal?.packet_sections?.letter_of_medical_necessity || "").trim();
   if (channel === "appeal" && lmnText) {
@@ -46362,6 +46541,7 @@ function renderTemplateEditor(org, user){
               <input type="file" name="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif"/>
               <button class="btn secondary">Upload Logo</button>
             </form>
+            <div class="muted small" style="margin-top:6px;">PDF export supports PNG/JPG logos. WebP/GIF may display in the web app but may not appear in PDF exports unless converted.</div>
           </div>
         `;
       }
@@ -47317,7 +47497,8 @@ function renderTemplateEditor(org, user){
       },
       placeholders: existingPlaceholders,
       logo_path: existingSettings.logo_path || "",
-      logo_filename: existingSettings.logo_filename || ""
+      logo_filename: existingSettings.logo_filename || "",
+      logo_pdf_path: existingSettings.logo_pdf_path || ""
     };
 
     if (!patch.identity.legal_name) return redirect(res, `/account?tab=org&err=${encodeURIComponent("Legal name is required.")}`);
@@ -47461,6 +47642,22 @@ function renderTemplateEditor(org, user){
     const settings = getOrgSettings(sess.org_id) || {};
     settings.logo_path = stored.stored_path;
     settings.logo_filename = stored.filename;
+
+    try {
+      const ext = path.extname(String(stored.stored_path || stored.filename || "")).toLowerCase();
+      if ([".webp", ".gif"].includes(ext)) {
+        let sharp = null;
+        try { sharp = require("sharp"); } catch(e) { sharp = null; }
+        if (sharp) {
+          const pdfLogoPath = `${stored.stored_path}.pdf.png`;
+          await sharp(stored.stored_path).png().toFile(pdfLogoPath);
+          settings.logo_pdf_path = pdfLogoPath;
+        }
+      } else if ([".png", ".jpg", ".jpeg"].includes(ext)) {
+        settings.logo_pdf_path = stored.stored_path;
+      }
+    } catch(e) {}
+
     settings.updated_at = nowISO();
 
     saveOrgSettings(sess.org_id, settings);
