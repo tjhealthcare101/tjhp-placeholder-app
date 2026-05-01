@@ -15349,7 +15349,7 @@ The recommended plan is to provide ${treatment} for [duration/frequency], with f
 Conclusion
 I believe ${treatment} is medically necessary for ${patientName}'s care and well-being. Please provide coverage or reconsider the denial for this treatment.
 
-Please contact my office at ${contactLine} with any questions.
+Please contact my office using the phone number or email address listed above with any questions.
 
 Sincerely,
 ${physicianName}
