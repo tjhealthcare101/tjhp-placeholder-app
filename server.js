@@ -28964,7 +28964,7 @@ const server = http.createServer(async (req, res) => {
               <input name="secondary_cta_href" value="${safeStr(content.homepage.hero.secondary_cta_href)}" />
 
               <label>Hero Image Upload</label>
-              <input type="file" name="hero_image" accept="image/*" />
+              <input type="file" name="hero_image" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" />
 
               ${content.homepage.hero.hero_media_url ? `
                 <img src="${safeStr(content.homepage.hero.hero_media_url)}"
@@ -29055,7 +29055,7 @@ ${(content.homepage.testimonials || []).map(t =>
               <input name="video_url" value="${safeStr(content.demo.video_url)}" />
 
               <label>Cover Image Upload</label>
-              <input type="file" name="demo_cover_image" accept="image/*" />
+              <input type="file" name="demo_cover_image" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" />
 
               ${content.demo.cover_image_url ? `
                 <img src="${safeStr(content.demo.cover_image_url)}"
@@ -29156,7 +29156,7 @@ ${(content.demo.steps || []).map(s =>
                 <textarea name="founder_bio">${safeStr(content.about.founder_bio)}</textarea>
 
                 <label>Upload Founder Image</label>
-                <input type="file" name="founder_image" accept="image/*" />
+                <input type="file" name="founder_image" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" />
 
                 ${content.about.founder_image_url ? `
                   <img src="${safeStr(content.about.founder_image_url)}"
@@ -46213,6 +46213,9 @@ function renderTemplateEditor(org, user){
     const usage = getUsage(org.org_id);
     const savedBanner = (tab === "org" && String(parsed.query.saved || "") === "1") ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;">Saved ✓ Organization Settings updated.</div>` : "";
     const errBanner = parsed.query.err ? `<div class="alert">${safeStr(parsed.query.err)}</div>` : "";
+    const logoBanner = (tab === "org" && String(parsed.query.logo || "") === "uploaded")
+      ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;">Logo uploaded successfully.</div>`
+      : "";
 
     const planKey = orgPlanKey(org);
     const planAccess = getPlanFeatureAccess(planKey, org.org_id);
@@ -46301,9 +46304,10 @@ function renderTemplateEditor(org, user){
         const targets = orgSettings.recovery_targets || {};
         return `
           ${savedBanner}
+          ${logoBanner}
           ${errBanner}
           <h3>Organization Settings</h3>
-          <p class="muted">Set organization identity, letter defaults, contract/allowed rules, workflows, KPI targets, and enterprise placeholders in one place.</p>
+          <p class="muted">Set organization identity and recovery intelligence targets. Letter templates, contract rules, appeal/negotiation workflows, integrations, and security controls are managed in their dedicated areas.</p>
           <p class="muted">Last updated: ${safeStr(orgSettings.updated_at ? new Date(orgSettings.updated_at).toLocaleString() : "-")}</p>
           <form method="POST" action="/account/org-settings/save" style="margin-top:10px;display:flex;flex-direction:column;gap:10px;">
             <details open class="card" style="padding:0;">
@@ -46331,35 +46335,7 @@ function renderTemplateEditor(org, user){
               </div>
             </details>
 
-            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">2) Letter Defaults</summary>
-              <div style="padding:0 14px 14px;" class="row">
-                <div class="col"><label>Appeal Tone ${infoIcon("Professional, Firm, or Aggressive. Deterministic wording changes are applied automatically.")}</label><select name="appeal_tone"><option ${letter.appeal_tone==="Professional"?"selected":""}>Professional</option><option ${letter.appeal_tone==="Firm"?"selected":""}>Firm</option><option ${letter.appeal_tone==="Aggressive"?"selected":""}>Aggressive</option></select></div>
-                <div class="col"><label>Signature Block</label><textarea name="signature_block" style="min-height:90px;">${safeStr(letter.signature_block||"")}</textarea></div>
-                <div class="col"><label>Appeal Opening</label><textarea name="appeal_opening" style="min-height:90px;">${safeStr(letter.appeal_opening||"")}</textarea></div>
-                <div class="col"><label>Appeal Footer</label><textarea name="appeal_footer" style="min-height:90px;">${safeStr(letter.appeal_footer||"")}</textarea></div>
-                <div class="col"><label>Negotiation Opening</label><textarea name="negotiation_opening" style="min-height:90px;">${safeStr(letter.negotiation_opening||"")}</textarea></div>
-                <div class="col"><label>Negotiation Footer</label><textarea name="negotiation_footer" style="min-height:90px;">${safeStr(letter.negotiation_footer||"")}</textarea></div>
-              </div></details>
-
-            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">3) Contract & Allowed Rules</summary>
-              <div style="padding:0 14px 14px;" class="row">
-                <div class="col"><label>Default Method ${infoIcon("Controls allowed amount baseline used by underpayment detection.")}</label><select name="allowed_default_method"><option value="percent_billed" ${allowed.default_method==="percent_billed"?"selected":""}>Percent of billed</option><option value="fixed_fee" ${allowed.default_method==="fixed_fee"?"selected":""}>Fixed fee</option><option value="fee_schedule" ${allowed.default_method==="fee_schedule"?"selected":""}>Fee schedule</option></select></div>
-                <div class="col"><label>Default Value</label><input type="number" step="0.01" name="allowed_default_value" value="${safeStr(String(allowed.default_value ?? 65))}" /></div>
-                <div class="col"><label>UCR Multiplier ${infoIcon("Used when method/override references UCR multiplier logic.")}</label><input type="number" step="0.01" name="allowed_ucr_multiplier" value="${safeStr(String(allowed.ucr_multiplier ?? 1))}" /></div>
-                <div class="col"><label>Tolerance % ${infoIcon("Ignore small differences below this percent variance.")}</label><input type="number" step="0.01" name="allowed_tolerance_percent" value="${safeStr(String(allowed.tolerance_percent ?? 1))}" /></div>
-                <div class="col"><label>Tolerance $ ${infoIcon("Ignore small dollar variances under this amount.")}</label><input type="number" step="0.01" name="allowed_tolerance_min_dollars" value="${safeStr(String(allowed.tolerance_min_dollars ?? 5))}" /></div>
-              </div></details>
-
-            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">4) Appeals/Negotiations Defaults</summary>
-              <div style="padding:0 14px 14px;" class="row">
-                <div class="col" style="display:flex;align-items:flex-end;"><label><input type="checkbox" name="wf_auto_create_denial_cases" value="1" ${workflow.auto_create_denial_cases?"checked":""}/> Auto-create denial cases</label></div>
-                <div class="col" style="display:flex;align-items:flex-end;"><label><input type="checkbox" name="wf_auto_draft_denials" value="1" ${workflow.auto_draft_denials?"checked":""}/> Auto-draft denials ${infoIcon("Automatically creates/upgrades appeal draft text when claims update.")}</label></div>
-                <div class="col" style="display:flex;align-items:flex-end;"><label><input type="checkbox" name="wf_auto_draft_underpayments" value="1" ${workflow.auto_draft_underpayments?"checked":""}/> Auto-draft underpayments ${infoIcon("Automatically creates/upgrades negotiation draft text when underpaid claims update.")}</label></div>
-                <div class="col"><label>Default Follow-up Days ${infoIcon("Initial follow-up date offset from submission date.")}</label><input type="number" min="1" step="1" name="wf_default_followup_days" value="${safeStr(String(workflow.default_followup_days ?? 14))}" /></div>
-                <div class="col" style="display:flex;align-items:flex-end;"><label><input type="checkbox" name="wf_require_confirmation_before_submitted" value="1" ${workflow.require_confirmation_before_submitted?"checked":""}/> Require confirmation before submitted</label></div>
-              </div></details>
-
-            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">5) Recovery Intelligence Targets</summary>
+            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">2) Recovery Intelligence Targets</summary>
               <div style="padding:0 14px 14px;" class="row">
                 <div class="col"><label>Appeal Success Rate % ${infoIcon("Executive KPI target for approved/partial appeal outcomes.")}</label><input type="number" step="0.01" name="target_appeal_success_rate" value="${safeStr(String(targets.target_appeal_success_rate ?? 60))}" /></div>
                 <div class="col"><label>Negotiation ROI % ${infoIcon("Recovered cash as % of requested amount.")}</label><input type="number" step="0.01" name="target_negotiation_roi" value="${safeStr(String(targets.target_negotiation_roi ?? 60))}" /></div>
@@ -46367,13 +46343,6 @@ function renderTemplateEditor(org, user){
                 <div class="col"><label>AR90 Rate % ${infoIcon("Target percentage of receivables that age beyond 90 days.")}</label><input type="number" step="0.01" name="target_ar90_rate" value="${safeStr(String(targets.target_ar90_rate ?? 15))}" /></div>
                 <div class="col"><label>AI Case Readiness % ${infoIcon("Internal cadence adherence target across follow-up tasks.")}</label><input type="number" step="0.01" name="target_operational_discipline" value="${safeStr(String(targets.target_operational_discipline ?? 80))}" /></div>
               </div></details>
-
-            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">6) Integrations (Placeholder)</summary>
-              <div style="padding:0 14px 14px;"><p class="muted">Enterprise connectors will appear here (PM/EHR, clearinghouse, and payer portals). This section is non-operable in current build.</p></div>
-            </details>
-            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">7) Security (Placeholder)</summary>
-              <div style="padding:0 14px 14px;"><p class="muted">Security posture controls (SSO, MFA policy, IP restrictions, audit exports) will be configurable here in enterprise mode.</p></div>
-            </details>
 
             <div class="btnRow"><button class="btn" type="submit">Save Organization Settings</button></div>
           </form>
@@ -46390,7 +46359,7 @@ function renderTemplateEditor(org, user){
             }
 
             <form method="POST" action="/org/upload-logo" enctype="multipart/form-data">
-              <input type="file" name="file" accept="image/*"/>
+              <input type="file" name="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif"/>
               <button class="btn secondary">Upload Logo</button>
             </form>
           </div>
@@ -47258,6 +47227,36 @@ function renderTemplateEditor(org, user){
       const n = Number(raw);
       return Number.isFinite(n) ? n : fallback;
     };
+    const existingSettings = getOrgSettings(org.org_id) || {};
+    const existingLetterDefaults = existingSettings.letter_defaults || getLetterDefaults(existingSettings);
+    const existingAllowedRules = existingSettings.allowed_rules || getAllowedRulesFromSettings(existingSettings);
+    const existingWorkflowDefaults = existingSettings.workflow_defaults || getWorkflowDefaults(existingSettings);
+    const existingPlaceholders = existingSettings.placeholders || { integrations_enabled:false, security_mode:"standard" };
+
+    const hasLetterFields = [
+      "appeal_tone",
+      "signature_block",
+      "appeal_opening",
+      "appeal_footer",
+      "negotiation_opening",
+      "negotiation_footer"
+    ].some(name => params.has(name));
+
+    const hasAllowedFields = [
+      "allowed_default_method",
+      "allowed_default_value",
+      "allowed_ucr_multiplier",
+      "allowed_tolerance_percent",
+      "allowed_tolerance_min_dollars"
+    ].some(name => params.has(name));
+
+    const hasWorkflowFields = [
+      "wf_auto_create_denial_cases",
+      "wf_auto_draft_denials",
+      "wf_auto_draft_underpayments",
+      "wf_default_followup_days",
+      "wf_require_confirmation_before_submitted"
+    ].some(name => params.has(name));
     const identity = {
       legal_name: String(params.get("identity_legal_name") || "").trim(),
       dba_name: String(params.get("identity_dba_name") || "").trim(),
@@ -47287,28 +47286,28 @@ function renderTemplateEditor(org, user){
 
     const patch = {
       identity,
-      letter_defaults: {
-        appeal_tone: String(params.get("appeal_tone") || "Professional").trim() || "Professional",
-        signature_block: String(params.get("signature_block") || "").trim(),
-        appeal_opening: String(params.get("appeal_opening") || "").trim(),
-        appeal_footer: String(params.get("appeal_footer") || "").trim(),
-        negotiation_opening: String(params.get("negotiation_opening") || "").trim(),
-        negotiation_footer: String(params.get("negotiation_footer") || "").trim(),
-      },
-      allowed_rules: {
-        default_method: String(params.get("allowed_default_method") || "percent_billed").trim() || "percent_billed",
-        default_value: numberOr("allowed_default_value", 65),
-        ucr_multiplier: numberOr("allowed_ucr_multiplier", 1),
-        tolerance_percent: numberOr("allowed_tolerance_percent", 1),
-        tolerance_min_dollars: numberOr("allowed_tolerance_min_dollars", 5),
-      },
-      workflow_defaults: {
+      letter_defaults: hasLetterFields ? {
+        appeal_tone: String(params.get("appeal_tone") || existingLetterDefaults.appeal_tone || "Professional").trim() || "Professional",
+        signature_block: String(params.get("signature_block") || existingLetterDefaults.signature_block || "").trim(),
+        appeal_opening: String(params.get("appeal_opening") || existingLetterDefaults.appeal_opening || "").trim(),
+        appeal_footer: String(params.get("appeal_footer") || existingLetterDefaults.appeal_footer || "").trim(),
+        negotiation_opening: String(params.get("negotiation_opening") || existingLetterDefaults.negotiation_opening || "").trim(),
+        negotiation_footer: String(params.get("negotiation_footer") || existingLetterDefaults.negotiation_footer || "").trim(),
+      } : existingLetterDefaults,
+      allowed_rules: hasAllowedFields ? {
+        default_method: String(params.get("allowed_default_method") || existingAllowedRules.default_method || "percent_billed").trim() || "percent_billed",
+        default_value: numberOr("allowed_default_value", Number(existingAllowedRules.default_value ?? 65)),
+        ucr_multiplier: numberOr("allowed_ucr_multiplier", Number(existingAllowedRules.ucr_multiplier ?? 1)),
+        tolerance_percent: numberOr("allowed_tolerance_percent", Number(existingAllowedRules.tolerance_percent ?? 1)),
+        tolerance_min_dollars: numberOr("allowed_tolerance_min_dollars", Number(existingAllowedRules.tolerance_min_dollars ?? 5)),
+      } : existingAllowedRules,
+      workflow_defaults: hasWorkflowFields ? {
         auto_create_denial_cases: params.get("wf_auto_create_denial_cases") === "1",
         auto_draft_denials: params.get("wf_auto_draft_denials") === "1",
         auto_draft_underpayments: params.get("wf_auto_draft_underpayments") === "1",
-        default_followup_days: Math.max(1, numberOr("wf_default_followup_days", 14)),
+        default_followup_days: Math.max(1, numberOr("wf_default_followup_days", Number(existingWorkflowDefaults.default_followup_days ?? 14))),
         require_confirmation_before_submitted: params.get("wf_require_confirmation_before_submitted") === "1",
-      },
+      } : existingWorkflowDefaults,
       recovery_targets: {
         target_appeal_success_rate: numberOr("target_appeal_success_rate", 60),
         target_negotiation_roi: numberOr("target_negotiation_roi", 60),
@@ -47316,15 +47315,16 @@ function renderTemplateEditor(org, user){
         target_ar90_rate: numberOr("target_ar90_rate", 15),
         target_operational_discipline: numberOr("target_operational_discipline", 80),
       },
-      placeholders: {
-        integrations_enabled: false,
-        security_mode: "standard"
-      }
+      placeholders: existingPlaceholders,
+      logo_path: existingSettings.logo_path || "",
+      logo_filename: existingSettings.logo_filename || ""
     };
 
     if (!patch.identity.legal_name) return redirect(res, `/account?tab=org&err=${encodeURIComponent("Legal name is required.")}`);
     saveOrgSettings(org.org_id, patch);
-    saveAllowedAmountRules(org.org_id, patch.allowed_rules);
+    if (hasAllowedFields) {
+      saveAllowedAmountRules(org.org_id, patch.allowed_rules);
+    }
 
     const orgs = readJSON(FILES.orgs, []);
     const oidx = orgs.findIndex(o => o.org_id === org.org_id);
@@ -47357,13 +47357,15 @@ function renderTemplateEditor(org, user){
       writeJSON(FILES.orgs, orgs);
     }
 
-    savePracticeSettings(org.org_id, {
-      auto_create_denial_cases: patch.workflow_defaults.auto_create_denial_cases,
-      auto_draft_denials: patch.workflow_defaults.auto_draft_denials,
-      auto_draft_underpayments: patch.workflow_defaults.auto_draft_underpayments,
-      default_followup_days: patch.workflow_defaults.default_followup_days,
-      require_confirmation_before_submitted: patch.workflow_defaults.require_confirmation_before_submitted,
-    });
+    if (hasWorkflowFields) {
+      savePracticeSettings(org.org_id, {
+        auto_create_denial_cases: patch.workflow_defaults.auto_create_denial_cases,
+        auto_draft_denials: patch.workflow_defaults.auto_draft_denials,
+        auto_draft_underpayments: patch.workflow_defaults.auto_draft_underpayments,
+        default_followup_days: patch.workflow_defaults.default_followup_days,
+        require_confirmation_before_submitted: patch.workflow_defaults.require_confirmation_before_submitted,
+      });
+    }
     rebuildOrgDerivedData(org.org_id, { resyncDenials:true, autodraft:true });
 
     auditLog({ actor:"user", action:"update_org_settings_v2", org_id: org.org_id, user_id: user.user_id });
@@ -47416,21 +47418,59 @@ function renderTemplateEditor(org, user){
     if (!sess || !sess.org_id) return redirect(res, "/login");
 
     const contentType = req.headers["content-type"] || "";
-    const m = contentType.match(/boundary=(.+)$/);
-    if (!m) return send(res, 400, "Expected multipart form data");
+    const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+    const boundary = boundaryMatch && (boundaryMatch[1] || boundaryMatch[2]);
 
-    const { files } = await parseMultipart(req, m[1]);
-    const uploadedFiles = (files || []).filter(file =>
-      file && file.buffer && String(file.filename || "").trim()
+    if (!boundary) {
+      return send(res, 400, "Expected multipart form data");
+    }
+
+    const { files } = await parseMultipart(req, boundary);
+
+    const uploadedFiles = (files || []).filter(uploaded =>
+      uploaded &&
+      uploaded.buffer &&
+      String(uploaded.filename || "").trim()
     );
-    if (!file) return send(res, 400, "No file uploaded");
+
+    const file = uploadedFiles.find(uploaded => String(uploaded.fieldName || "") === "file") || uploadedFiles[0];
+
+    if (!file) {
+      return send(res, 400, "No file uploaded");
+    }
+
+    const cleanName = String(file.filename || "").toLowerCase();
+    const mime = String(file.mime || file.mimeType || "").toLowerCase();
+
+    const allowedLogo = (
+      mime.startsWith("image/") ||
+      /\.(png|jpe?g|webp|gif)$/i.test(cleanName)
+    );
+
+    if (!allowedLogo) {
+      return send(res, 400, "Logo must be an image file.");
+    }
+
+    const maxLogoBytes = 5 * 1024 * 1024;
+    if (file.buffer.length > maxLogoBytes) {
+      return send(res, 400, "Logo file is too large. Max size is 5 MB.");
+    }
 
     const stored = storeWorkspaceUpload(sess.org_id, file);
 
     const settings = getOrgSettings(sess.org_id) || {};
     settings.logo_path = stored.stored_path;
+    settings.logo_filename = stored.filename;
+    settings.updated_at = nowISO();
 
     saveOrgSettings(sess.org_id, settings);
+
+    auditLog({
+      actor: "user",
+      action: "upload_org_logo",
+      org_id: sess.org_id,
+      user_id: sess.user_id
+    });
 
     return redirect(res, "/account?tab=org&logo=uploaded");
   }
