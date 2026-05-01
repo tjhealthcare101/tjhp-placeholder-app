@@ -15410,7 +15410,7 @@ function buildWorkspaceLetterOfMedicalNecessityTemplate({ org_id, claim, ws } = 
   const practiceAddress = workspaceFirstValue(orgCtx.addressBlock, "[Practice Address]");
   const phoneNumber = workspaceFirstValue(orgCtx.phone, "[Phone Number]");
   const emailAddress = workspaceFirstValue(orgCtx.email, "[Email]");
-  const physicianName = workspaceFirstValue(workspaceClaimValue(claim, ["physician_name", "provider_name", "rendering_provider", "ordering_provider"]), orgCtx.settings?.provider_name, orgCtx.settings?.physician_name, "[Physician Name and Credentials]");
+  const physicianName = workspaceFirstValue(workspaceClaimValue(claim, ["physician_name", "provider_name", "rendering_provider", "ordering_provider"]), orgCtx.settings?.provider_name, orgCtx.settings?.physician_name, orgCtx.identity?.provider_name, orgCtx.identity?.legal_name, orgCtx.identity?.dba_name, orgCtx.orgName, "[Physician Name and Credentials]");
   const npi = workspaceFirstValue(workspaceClaimValue(claim, ["provider_npi", "rendering_npi", "npi"]), orgCtx.npi, "[NPI Number]");
   const payer = workspaceFirstValue(workspaceClaimValue(claim, ["payer", "payer_name", "insurance", "insurance_company"]), "[Insurance Company Name]");
   const payerAddress = workspaceFirstValue(workspaceClaimValue(claim, ["payer_address", "insurance_address"]), "[Address]");
@@ -15554,6 +15554,44 @@ function workspaceReplaceLmnProviderBlock(existingText, generatedText){
   return generated.trim();
 }
 
+function workspaceReplaceLmnClosingBlock(existingText, generatedText){
+  const existing = String(existingText || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const generated = String(generatedText || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  const existingLines = existing.split("\n");
+  const generatedLines = generated.split("\n");
+
+  const findClosing = (lines) => {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = String(lines[i] || "").trim().toLowerCase();
+      if (line === "sincerely," || line === "respectfully,") return i;
+    }
+    return -1;
+  };
+
+  const existingIdx = findClosing(existingLines);
+  const generatedIdx = findClosing(generatedLines);
+
+  if (existingIdx >= 0 && generatedIdx >= 0) {
+    const beforeClosing = existingLines.slice(0, existingIdx);
+    const generatedClosing = generatedLines.slice(generatedIdx);
+    return [...beforeClosing, ...generatedClosing].join("\n").trim();
+  }
+
+  return existing.trim();
+}
+
+function workspaceLmnClosingHasPlaceholders(text){
+  const t = String(text || "");
+  const lower = t.toLowerCase();
+  return (
+    t.includes("[Physician Name and Credentials]") ||
+    t.includes("[NPI Number]") ||
+    t.includes("[Practice Address]") ||
+    lower.includes("npi: [npi number]")
+  );
+}
+
 
 function ensurePacketSections(ws, claim){
   ws.appeal = ws.appeal || {};
@@ -15577,11 +15615,18 @@ function ensurePacketSections(ws, claim){
   const currentLmn = String(ws.appeal.packet_sections.letter_of_medical_necessity || "").trim();
   if (!currentLmn) {
     ws.appeal.packet_sections.letter_of_medical_necessity = generatedLmn;
-  } else if (
-    workspaceTextHasOrgPlaceholders(currentLmn) ||
-    workspaceTextMissingOrgIdentity(currentLmn.split("\n").slice(0, 8).join("\n"), orgCtxForPacket)
-  ) {
-    ws.appeal.packet_sections.letter_of_medical_necessity = workspaceReplaceLmnProviderBlock(currentLmn, generatedLmn);
+  } else {
+    let refreshedLmn = currentLmn;
+    if (
+      workspaceTextHasOrgPlaceholders(currentLmn) ||
+      workspaceTextMissingOrgIdentity(currentLmn.split("\n").slice(0, 8).join("\n"), orgCtxForPacket)
+    ) {
+      refreshedLmn = workspaceReplaceLmnProviderBlock(refreshedLmn, generatedLmn);
+    }
+    if (workspaceLmnClosingHasPlaceholders(refreshedLmn)) {
+      refreshedLmn = workspaceReplaceLmnClosingBlock(refreshedLmn, generatedLmn);
+    }
+    ws.appeal.packet_sections.letter_of_medical_necessity = refreshedLmn;
   }
 
   const negotiationDefaults = defaultNegotiationPacketSections();
@@ -19233,7 +19278,13 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-ai-help-card strong{display:block;margin-bottom:6px;}
       .packet-workspace-shell .ws-ai-help-card ul{margin:0 0 6px 18px;padding:0;}
 
-      .packet-workspace-shell .ws-ai-review-mode{border:1px solid #c7d2fe;border-left:4px solid #4f46e5;border-radius:16px;background:#f8fafc;padding:14px;margin-top:10px;}
+      .packet-workspace-shell .ws-ai-review-mode{position:relative;border:1px solid #c7d2fe;border-left:4px solid #4f46e5;border-radius:16px;background:#f8fafc;padding:14px;margin-top:10px;}
+      .packet-workspace-shell .ws-org-logo-preview{max-height:72px;max-width:170px;object-fit:contain;border-radius:8px;border:1px solid #e5e7eb;background:#fff;padding:5px;}
+      .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-track-changes,
+      .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-review-footer-note,
+      .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-review-actions{opacity:.35;filter:blur(1px);pointer-events:none;}
+      .packet-workspace-shell .ws-ai-regenerating-overlay{display:none;position:absolute;inset:14px;z-index:5;align-items:center;justify-content:center;text-align:center;border:1px solid #bfdbfe;background:rgba(239,246,255,.94);color:#1e3a8a;border-radius:16px;font-weight:950;padding:18px;}
+      .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerating-overlay{display:flex;}
       .packet-workspace-shell .ws-ai-review-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;}
       .packet-workspace-shell .ws-ai-review-title{font-weight:950;color:#111827;}
       .packet-workspace-shell .ws-ai-review-copy{color:#64748b;font-size:12px;margin-top:3px;}
@@ -21043,6 +21094,7 @@ async function workspaceGenerateAiSectionPreview({ sess, claim, ws, channel, pro
   const overrideText = String(currentTextOverride || "").trim();
   const currentText = overrideText || storedText;
   const evidenceContext = workspaceAiEvidenceContext(ws, claim, channel);
+  const successfulLanguageGuidance = buildSuccessfulAiLanguageGuidance(sess.org_id, channel, sectionKey, claim);
   const finalPrompt = workspaceAiSafePromptForPreset(prompt, preset, channel);
 
   const ai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -21051,7 +21103,7 @@ async function workspaceGenerateAiSectionPreview({ sess, claim, ws, channel, pro
     temperature: 0.25,
     messages: [
       { role: "system", content: "You are the TJ Healthcare Pro packet section editor. Rewrite only the targeted editable packet section. Do not invent clinical facts, symptoms, diagnoses, authorization history, payer policy terms, contract terms, payment details, or uploaded evidence. If proof is missing, use careful language or bracketed placeholders. Use the current section text as the source of truth. Preserve staff edits, staff wording, and section structure unless the user specifically asks to rewrite them. Improve and enhance the existing text; do not wipe out or replace the section wholesale. Return the full revised section text. Return clean plain text only. No markdown, no code fences, and no explanation outside the revised section text." },
-      { role: "user", content: `Workspace: ${channel}\nTarget section: ${sectionLabel}\nUser request: ${finalPrompt}\n\nEvidence context:\n${evidenceContext}\n\nThe current section text below may include staff edits. Build on it and preserve those edits unless they are clearly incorrect or the user asks for a rewrite.\n\nCurrent ${sectionLabel} text:\n${currentText || "[This section is currently blank. Draft it using only safe known facts and bracketed placeholders where information is missing.]"}` }
+      { role: "user", content: `Workspace: ${channel}\nTarget section: ${sectionLabel}\nUser request: ${finalPrompt}\n\nEvidence context:\n${evidenceContext}${successfulLanguageGuidance ? `\n\nOutcome learning context:\n${successfulLanguageGuidance}` : ""}\n\nThe current section text below may include staff edits. Build on it and preserve those edits unless they are clearly incorrect or the user asks for a rewrite.\n\nCurrent ${sectionLabel} text:\n${currentText || "[This section is currently blank. Draft it using only safe known facts and bracketed placeholders where information is missing.]"}` }
     ]
   });
   const improvedText = workspaceCleanAiSectionOutput(completion.choices?.[0]?.message?.content || "");
@@ -21081,6 +21133,54 @@ function workspaceCleanAiSectionOutput(text){
     .replace(/\r\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function workspaceEnsureAiEditStore(ws, channel){
+  ws[channel] = ws[channel] || {};
+  ws[channel].ai_section_edits = Array.isArray(ws[channel].ai_section_edits) ? ws[channel].ai_section_edits : [];
+  return ws[channel].ai_section_edits;
+}
+
+function workspaceRecordAiSectionEdit(ws, channel, data){
+  const edits = workspaceEnsureAiEditStore(ws, channel);
+  const record = { ai_edit_id: uuid(), channel, section_key: String(data.section_key || ""), section_label: String(data.section_label || ""), prompt: String(data.prompt || ""), preset: String(data.preset || ""), before: String(data.before || ""), after: String(data.after || ""), payer: String(data.payer || ""), claim_number: String(data.claim_number || ""), denial_reason: String(data.denial_reason || ""), applied_at: nowISO(), outcome_status: "pending", recovered_amount: null, outcome_recorded_at: null };
+  edits.push(record);
+  while (edits.length > 50) edits.shift();
+  ws[channel].ai_section_edits = edits;
+  return record;
+}
+
+function workspaceAiOutcomeLearningSnapshot(ws, channel){
+  const edits = Array.isArray(ws?.[channel]?.ai_section_edits) ? ws[channel].ai_section_edits : [];
+  return edits.slice(-20).map(e => ({ ai_edit_id: e.ai_edit_id, channel: e.channel, section_key: e.section_key, section_label: e.section_label, prompt: e.prompt, preset: e.preset, before_excerpt: String(e.before || "").slice(0, 900), after_excerpt: String(e.after || "").slice(0, 1200), applied_at: e.applied_at, outcome_status: e.outcome_status || "pending", recovered_amount: e.recovered_amount ?? null, payer: e.payer || "" }));
+}
+
+function workspaceMarkAiEditsWithOutcome(ws, channel, outcome){
+  const edits = workspaceEnsureAiEditStore(ws, channel);
+  const status = String(outcome?.outcome_status || outcome?.status || outcome?.result || "none");
+  const recovered = Number(outcome?.paid_posted_amount || outcome?.recovered_amount || outcome?.approved_amount || 0);
+  ws[channel].ai_section_edits = edits.map(e => (e.outcome_status && e.outcome_status !== "pending") ? e : ({ ...e, outcome_status: status, recovered_amount: Number.isFinite(recovered) ? recovered : 0, outcome_recorded_at: nowISO() }));
+}
+
+function buildSuccessfulAiLanguageGuidance(org_id, channel, sectionKey, claim){
+  const rows = readJSON(FILES.workspace_outcomes, []).filter(r => r && r.org_id === org_id);
+  const successStatuses = new Set(["approved", "partial", "partially_approved", "won", "paid", "recovered"]);
+  const payer = String(claim?.payer || "").trim().toLowerCase();
+  const matches = [];
+  rows.forEach(row => {
+    const status = String(row.outcome_status || row.result || row.status || "").trim().toLowerCase();
+    if (!successStatuses.has(status)) return;
+    const edits = Array.isArray(row.ai_section_edits) ? row.ai_section_edits : [];
+    edits.forEach(edit => {
+      if (String(edit.section_key || "") !== String(sectionKey || "")) return;
+      const editPayer = String(edit.payer || row.payer || "").trim().toLowerCase();
+      const payerMatch = payer && editPayer && payer === editPayer;
+      matches.push({ payerMatch, section_key: edit.section_key, prompt: edit.prompt || "", text: String(edit.after_excerpt || edit.after || "").trim() });
+    });
+  });
+  const selected = matches.sort((a,b)=>(b.payerMatch?1:0)-(a.payerMatch?1:0)).slice(0,3).map((m, idx) => `${idx + 1}. ${m.payerMatch ? "Same payer successful pattern" : "Successful pattern"}: ${String(m.text || "").replace(/\s+/g, " ").slice(0, 650)}`).filter(Boolean);
+  if (!selected.length) return "";
+  return ["Prior successful AI-assisted language patterns:", selected.join("\n"), "Use these as tone/structure guidance only. Do not copy patient-specific facts, payer-specific facts, clinical facts, authorization history, policy terms, contract terms, or evidence unless those facts are present in the current workspace."].join("\n");
 }
 
 function workspaceAiEvidenceContext(ws, claim, channel){
@@ -21218,12 +21318,12 @@ function renderEditablePacketSection(opts){
   if (exportMode){ return `<div class="ws-section-card"><div class="ws-section-head"><div class="ws-section-title">${safeStr(title)}</div></div>${description ? `<div class="muted small" style="margin-bottom:8px;">${safeStr(description)}</div>` : ``}<div class="ws-section-body">${workspacePacketTextHtml(value, "—")}</div></div>`; }
   const showPreview = workspacePacketTextHtml(value, `<span class="muted">No content yet.</span>`);
   const nextLabel = pending.length ? workspaceAiSectionLabel(channel, pending[0]) : "";
-  const localSuccessHtml = appliedSection === section_key ? `<div class="ws-local-status ok">Section updated successfully.</div>` : ``;
+  const localSuccessHtml = appliedSection === section_key && !hasAiPreview ? `<div class="ws-local-status ok">Section updated successfully.</div>` : ``;
   const localUndoSuccessHtml = undoneSection === section_key ? `<div class="ws-local-status ok">AI change undone. Previous section text restored.</div>` : ``;
   const canUndoAi = !!(lastAiUndo && String(lastAiUndo.section_key || "") === section_key && String(lastAiUndo.before || "") !== String(lastAiUndo.after || ""));
   const undoAiHtml = canUndoAi ? `<form method="POST" action="/ai-workspace/undo-ai-change" class="ws-local-undo-form"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><button class="btn secondary small" type="submit">Undo AI Change</button></form>` : "";
   const localQueueInfoHtml = hasAiPreview && appliedPrevSection ? `<div class="ws-local-status info">Previous section updated. Now reviewing ${safeStr(title)}.</div>` : ``;
-  const aiReviewHtml = hasAiPreview ? `<div class="ws-section-body ws-ai-review-mode">${localQueueInfoHtml}<div class="ws-ai-review-head"><div><div class="ws-ai-review-title">AI proposed update for ${safeStr(title)}</div><div class="ws-ai-review-copy">Review the AI-updated section below. New AI text is highlighted in green. You can type directly in the section before applying.</div></div>${pending.length ? `<span class="badge warn">Next: ${safeStr(nextLabel)}</span>` : `<span class="badge ok">Final item</span>`}</div>${aiQueue.length > 1 ? `<div class="ws-ai-queue-note"><div><strong>AI section queue</strong><div class="muted small">${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}</div></div>${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(nextLabel)}</div>` : ""}</div>` : ""}<div class="ws-track-changes">${workspaceAiInteractiveTrackChangesHtml(aiPreview.before || "", aiPreview.after || "")}</div><form method="POST" action="/ai-workspace/apply-diff" class="ws-ai-action-form" data-ai-action="apply" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea
+  const aiReviewHtml = hasAiPreview ? `<div class="ws-section-body ws-ai-review-mode">${localQueueInfoHtml}<div class="ws-ai-regenerating-overlay">Regenerating a new version… Keep this page open.</div><div class="ws-ai-review-head"><div><div class="ws-ai-review-title">AI proposed update for ${safeStr(title)}</div><div class="ws-ai-review-copy">Review the AI-updated section below. New AI text is highlighted in green. You can type directly in the section before applying.</div></div>${pending.length ? `<span class="badge warn">Next: ${safeStr(nextLabel)}</span>` : `<span class="badge ok">Final item</span>`}</div>${aiQueue.length > 1 ? `<div class="ws-ai-queue-note"><div><strong>AI section queue</strong><div class="muted small">${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}</div></div>${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(nextLabel)}</div>` : ""}</div>` : ""}<div class="ws-track-changes">${workspaceAiInteractiveTrackChangesHtml(aiPreview.before || "", aiPreview.after || "")}</div><form method="POST" action="/ai-workspace/apply-diff" class="ws-ai-action-form" data-ai-action="apply" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea
   name="after"
   data-ai-final-text
   class="ws-ai-final-hidden"
@@ -21285,6 +21385,18 @@ function renderEditablePacketSection(opts){
     if (!form || !form.matches || !form.matches(".ws-ai-action-form")) return;
     var review = getReviewRoot(form);
     syncFinalText(review);
+    try {
+      var submitter = e.submitter || document.activeElement;
+      var action = "";
+      if (submitter && submitter.getAttribute) {
+        action = String(submitter.getAttribute("formaction") || "");
+      }
+      if (action.indexOf("/ai-workspace/regenerate-diff") >= 0 && review) {
+        review.classList.add("is-regenerating");
+        form.querySelectorAll("button").forEach(function(btn){ btn.disabled = true; });
+        if (submitter && submitter.textContent) submitter.textContent = "Regenerating...";
+      }
+    } catch(err) {}
   });
 
   document.querySelectorAll(".ws-ai-review-mode").forEach(syncFinalText);
@@ -21442,7 +21554,7 @@ function renderSignatureSection(opts){
 function renderWorkspaceOrgBrandHtml(org_id){
   const ctx = workspaceOrgIdentityContext(org_id);
   const logo = ctx.logoPath
-    ? `<img src="/file?path=${encodeURIComponent(ctx.logoPath)}" alt="Organization logo" style="max-height:58px;max-width:130px;object-fit:contain;border-radius:8px;border:1px solid #e5e7eb;background:#fff;padding:4px;"/>`
+    ? `<img src="/file?path=${encodeURIComponent(ctx.logoPath)}" alt="Organization logo" class="ws-org-logo-preview"/>`
     : "";
 
   const details = [
@@ -22634,19 +22746,21 @@ function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   // ----- Logo -----
   const logoPath = orgCtx.pdfLogoPath;
   if (logoPath) {
-    try { doc.image(logoPath, 50, 40, { width: 90 }); } catch(e) {}
+    try {
+      doc.image(logoPath, 50, 38, { width: 110 });
+    } catch(e) {}
   }
 
   // ----- Provider Info (Top Right) -----
   doc
     .font("Helvetica")
     .fontSize(10)
-    .text(orgCtx.orgName || "Your Practice", { align: "right" });
-  if (orgCtx.npi) doc.text(`NPI: ${orgCtx.npi}`, { align: "right" });
-  if (orgCtx.taxId) doc.text(`TIN: ${orgCtx.taxId}`, { align: "right" });
-  String(orgCtx.addressBlock || "").split("\n").filter(Boolean).forEach(line => doc.text(line, { align: "right" }));
-  if (orgCtx.phone) doc.text(orgCtx.phone, { align: "right" });
-  if (orgCtx.email) doc.text(orgCtx.email, { align: "right" });
+    .text(orgCtx.orgName || "Your Practice", 50, 48, { width: CONTENT_WIDTH, align: "right" });
+  if (orgCtx.npi) doc.text(`NPI: ${orgCtx.npi}`, { width: CONTENT_WIDTH, align: "right" });
+  if (orgCtx.taxId) doc.text(`TIN: ${orgCtx.taxId}`, { width: CONTENT_WIDTH, align: "right" });
+  String(orgCtx.addressBlock || "").split("\n").filter(Boolean).forEach(line => doc.text(line, { width: CONTENT_WIDTH, align: "right" }));
+  if (orgCtx.phone) doc.text(orgCtx.phone, { width: CONTENT_WIDTH, align: "right" });
+  if (orgCtx.email) doc.text(orgCtx.email, { width: CONTENT_WIDTH, align: "right" });
 
   // ----- Move below header -----
   doc.moveDown(3);
@@ -48917,11 +49031,23 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const before = String(ws[channel]?.packet_sections?.[key] || "");
       const after = workspaceCleanAiSectionOutput(postedAfter || preview.after || "");
       ws[channel].packet_sections[key] = after;
+      const aiEditRecord = workspaceRecordAiSectionEdit(ws, channel, {
+        section_key: key,
+        section_label: workspaceAiSectionLabel(channel, key),
+        prompt: preview.prompt || "",
+        preset: preview.preset || "",
+        before,
+        after,
+        payer: claim?.payer || "",
+        claim_number: claim?.claim_number || claim?.claim_id || "",
+        denial_reason: claim?.denial_reason || claim?.issue_reason || ""
+      });
       ws[channel].last_ai_undo = {
         section_key: key,
         before,
         after,
         prompt: preview.prompt || "",
+        ai_edit_id: aiEditRecord.ai_edit_id,
         created_at: nowISO()
       };
       if (channel === "appeal" && key === "argument") ws[channel].draft_text = after;
@@ -49439,6 +49565,11 @@ if (method === "GET" && pathname === "/agent-workspace") {
         ws.status = "closed";
         ws.follow_up.due_at = null;
       }
+      workspaceMarkAiEditsWithOutcome(ws, channel, {
+        outcome_status: ws.outcome.outcome_status,
+        paid_posted_amount: ws.outcome.paid_posted_amount,
+        approved_amount: ws.outcome.approved_amount
+      });
       ws.follow_up.last_touched_at = nowISO();
       saveAgentWorkspace(org.org_id, ws);
 
@@ -49464,6 +49595,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const recoveredAmount = num(ws.outcome?.paid_posted_amount || ws.outcome?.approved_amount || 0);
       const rawStatus = String(ws.outcome?.outcome_status || "none");
       const statusMap = { approved:"approved", partially_approved:"partial", denied:"denied", closed:"no_change", none:"no_change", needs_info:"no_change" };
+      const aiLearningSnapshot = workspaceAiOutcomeLearningSnapshot(ws, channel);
       saveWorkspaceOutcome({
         org_id: org.org_id,
         billed_id,
@@ -49476,7 +49608,10 @@ if (method === "GET" && pathname === "/agent-workspace") {
         requested_amount: requestedAmount,
         recovered_amount: recoveredAmount,
         days_to_payment: daysToPayment,
-        outcome_status: statusMap[rawStatus] || "no_change"
+        outcome_status: statusMap[rawStatus] || "no_change",
+        ai_section_edits: aiLearningSnapshot,
+        ai_assisted_sections: aiLearningSnapshot.map(e => e.section_key),
+        ai_assisted_section_count: aiLearningSnapshot.length
       });
 
       const outcomeTask = getAgentTasks(org.org_id).find(t => t.billed_id === billed_id && t.stage_type === channel && String(t.status || "") !== "closed");
