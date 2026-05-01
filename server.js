@@ -202,10 +202,6 @@ function workspaceAiInteractiveTrackChangesHtml(before, after){
   }
 
   return `
-    <div class="ws-ai-simple-review-note" contenteditable="false">
-      AI additions are highlighted in green. You can edit this section directly before applying.
-    </div>
-
     <div
       class="ws-ai-interactive-diff ws-ai-simple-editor"
       data-ai-interactive-diff
@@ -15303,7 +15299,8 @@ function buildWorkspaceLetterOfMedicalNecessityTemplate({ org_id, claim, ws } = 
 
   const orgName = workspaceFirstValue(identity.legal_name, settings?.practice_name, settings?.legal_name, orgRecord?.legal_name, orgRecord?.org_name, "[Provider Letterhead]");
   const practiceAddress = workspaceFirstValue(identity.address, settings?.practice_address, settings?.mailing_address, settings?.address, orgRecord?.practice_address, orgRecord?.address, "[Practice Address]");
-  const contactLine = workspaceFirstValue([identity.phone, identity.email].filter(Boolean).join(" / "), settings?.phone_email, [settings?.phone, settings?.email].filter(Boolean).join(" / "), [orgRecord?.phone, orgRecord?.email].filter(Boolean).join(" / "), "[Phone Number and/or Email]");
+  const phoneNumber = workspaceFirstValue(identity.phone, identity.practice_phone, settings?.phone, settings?.practice_phone, settings?.billing_phone, orgRecord?.phone, orgRecord?.practice_phone, orgRecord?.billing_phone, "[Phone Number]");
+  const emailAddress = workspaceFirstValue(identity.email, identity.practice_email, settings?.email, settings?.practice_email, settings?.billing_email, orgRecord?.email, orgRecord?.practice_email, orgRecord?.billing_email, "[Email]");
   const physicianName = workspaceFirstValue(workspaceClaimValue(claim, ["physician_name", "provider_name", "rendering_provider", "ordering_provider"]), settings?.provider_name, settings?.physician_name, "[Physician Name and Credentials]");
   const npi = workspaceFirstValue(workspaceClaimValue(claim, ["provider_npi", "rendering_npi", "npi"]), identity.npi, settings?.npi, settings?.provider_npi, orgRecord?.npi, "[NPI Number]");
   const payer = workspaceFirstValue(workspaceClaimValue(claim, ["payer", "payer_name", "insurance", "insurance_company"]), "[Insurance Company Name]");
@@ -15322,7 +15319,8 @@ function buildWorkspaceLetterOfMedicalNecessityTemplate({ org_id, claim, ws } = 
 
   return `${orgName}
 ${practiceAddress}
-${contactLine}
+Phone Number: ${phoneNumber}
+Email: ${emailAddress}
 
 ${nowISO().slice(0, 10)}
 
@@ -18206,6 +18204,9 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-progress-fill.low{background:linear-gradient(90deg,#991b1b,#ef4444);}
       .packet-workspace-shell .ws-progress-fill.mid{background:linear-gradient(90deg,#f59e0b,#f97316);}
       .packet-workspace-shell .ws-progress-fill.high{background:linear-gradient(90deg,#16a34a,#22c55e);}
+      .packet-workspace-shell .ws-readiness-bar-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:12px;font-size:12px;}
+      .packet-workspace-shell .ws-readiness-bar-sub{margin-top:7px;}
+      .packet-workspace-shell .ws-clean-section{scroll-margin-top:120px;}
 
       .packet-workspace-shell .ws-auto-grid{
         display:grid;
@@ -19104,7 +19105,8 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-ai-suggestion-list,
       .packet-workspace-shell .ws-ai-suggestion-actions,
       .packet-workspace-shell .ws-ai-change-btn{display:none !important;}
-      .packet-workspace-shell .ws-ai-simple-review-note{border:1px solid #bbf7d0;background:#ecfdf5;color:#065f46;border-radius:12px;padding:10px 12px;font-weight:800;margin:10px 0;}
+      .packet-workspace-shell .ws-ai-review-footer-note{border:1px solid #bbf7d0;background:#ecfdf5;color:#065f46;border-radius:12px;padding:8px 10px;font-size:12px;font-weight:800;line-height:1.35;margin:10px 0;}
+      .packet-workspace-shell .ws-ai-review-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;}
       .packet-workspace-shell .ws-ai-simple-editor{width:100%;min-height:420px;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;line-height:1.75;border:1px solid #e5e7eb;border-radius:14px;background:#ffffff;padding:18px;outline:none;}
       .packet-workspace-shell .ws-ai-simple-editor:focus{box-shadow:0 0 0 3px rgba(34,197,94,.16);border-color:#22c55e;}
       .packet-workspace-shell .ws-ai-added-text{background:#dcfce7;color:#065f46;border-radius:4px;padding:0 2px;}
@@ -20676,12 +20678,20 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
         </div>
       </div>
 
-      <div class="ws-progress-track" aria-label="Packet readiness">
+      <div class="ws-readiness-bar-head">
+        <div>
+          <strong>Readiness progress</strong>
+          <span class="tooltip" data-tip="Measures packet completeness and required proof readiness. This does not guarantee payer approval or payment.">ⓘ</span>
+        </div>
+        <div class="muted small">${progressPct}% packet ready</div>
+      </div>
+
+      <div class="ws-progress-track" aria-label="Packet readiness progress">
         <div class="ws-progress-fill ${safeStr(progressClass)}" style="width:${progressPct}%;"></div>
       </div>
 
-      <div class="muted small" style="margin-top:10px;">
-        Expected ${formatMoneyUI(expected)} · Paid ${formatMoneyUI(paid)} · Required present ${auto.requiredPresent}${integrationsEnabled ? ` · Pull available ${auto.requiredPullAvailable}` : ``} · Missing ${auto.requiredMissing}
+      <div class="ws-readiness-bar-sub muted small">
+        Required proof: ${auto.requiredPresent}/${Math.max(1, auto.required.length)} ready · Missing: ${auto.requiredMissing}
       </div>
     </div>
   `;
@@ -20858,14 +20868,16 @@ function workspaceAiSafePromptForPreset(prompt, preset, channel){
   return p;
 }
 
-async function workspaceGenerateAiSectionPreview({ sess, claim, ws, channel, prompt, preset, targetSections }){
+async function workspaceGenerateAiSectionPreview({ sess, claim, ws, channel, prompt, preset, targetSections, currentTextOverride }){
   const queue = (Array.isArray(targetSections) ? targetSections : []).map(x => String(x || "").trim()).filter(Boolean);
   const sectionKey = queue[0] || (channel === "negotiation" ? "variance_explanation" : "argument");
   const pendingSections = queue.slice(1);
   const sectionLabel = workspaceAiSectionLabel(channel, sectionKey);
   ws[channel] = ws[channel] || {};
   ws[channel].packet_sections = ws[channel].packet_sections || (channel === "negotiation" ? defaultNegotiationPacketSections() : defaultAppealPacketSections());
-  const currentText = String(ws[channel].packet_sections[sectionKey] || "").trim();
+  const storedText = String(ws[channel].packet_sections[sectionKey] || "").trim();
+  const overrideText = String(currentTextOverride || "").trim();
+  const currentText = overrideText || storedText;
   const evidenceContext = workspaceAiEvidenceContext(ws, claim, channel);
   const finalPrompt = workspaceAiSafePromptForPreset(prompt, preset, channel);
 
@@ -21051,7 +21063,7 @@ function renderEditablePacketSection(opts){
   name="after"
   data-ai-final-text
   class="ws-ai-final-hidden"
->${escapeHtml(aiPreview.after || "")}</textarea><div class="ws-inline-save"><button class="btn" type="submit">Apply AI Update to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="btnRow" style="margin-top:8px;"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
+>${escapeHtml(aiPreview.after || "")}</textarea><div class="ws-ai-review-footer-note">AI additions are highlighted in green. Edit the section directly, then apply when ready.</div><div class="ws-ai-review-actions"><button class="btn secondary small" type="submit" formaction="/ai-workspace/regenerate-diff" formmethod="POST" name="regenerate" value="1">Regenerate</button><button class="btn" type="submit">Apply AI Update to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="ws-ai-review-actions"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
   return `<div class="ws-section-card ws-clean-section ${hasAiPreview ? "ai-target-section" : ""}" id="${safeStr(anchorId)}" data-inline-section="${safeStr(section_key)}"><div class="ws-section-head"><div><div class="ws-section-title">${safeStr(title)}</div>${description ? `<div class="muted small" style="margin-top:3px;">${safeStr(description)}</div>` : ``}</div></div>${localSuccessHtml}${localUndoSuccessHtml}${undoAiHtml}${hasAiPreview ? aiReviewHtml : `<div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing'); setTimeout(function(){ if(window.__tjhpAutoSizeWorkspaceEditors) window.__tjhpAutoSizeWorkspaceEditors(); }, 0);">${showPreview}<div class="muted small" style="margin-top:8px;">Click this section to edit.</div></div>`}${hasAiPreview ? "" : `<form class="ws-edit-form ws-inline-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea name="value">${escapeHtml(value)}</textarea><div class="ws-inline-save"><button class="btn secondary" type="submit">Save Section</button><button class="btn secondary" type="button" onclick="this.closest('.ws-clean-section').classList.remove('editing');">Cancel</button></div></form>`}
       <script>(function(){if (window.__tjhpWorkspaceEditAutosizeBound) return;window.__tjhpWorkspaceEditAutosizeBound = true;function autoSizeOne(textarea){if (!textarea) return;var section = textarea.closest(".ws-clean-section");if (section && !section.classList.contains("editing")) return;textarea.style.height = "auto";var minHeight = 260;var sectionKey = section ? String(section.getAttribute("data-inline-section") || "") : "";if (sectionKey === "letter_of_medical_necessity") minHeight = 520;var nextHeight = Math.max(minHeight, textarea.scrollHeight + 8);textarea.style.height = nextHeight + "px";textarea.style.overflow = "hidden";}window.__tjhpAutoSizeWorkspaceEditors = function(root){var scope = root && root.querySelectorAll ? root : document;scope.querySelectorAll(".packet-workspace-shell .ws-inline-edit-form textarea").forEach(autoSizeOne);};document.addEventListener("input", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {autoSizeOne(e.target);}});document.addEventListener("focusin", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {setTimeout(function(){ autoSizeOne(e.target); }, 0);}});document.addEventListener("click", function(e){var section = e.target && e.target.closest ? e.target.closest(".packet-workspace-shell .ws-clean-section") : null;if (!section) return;setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(section); }, 0);});if (document.readyState === "loading") {document.addEventListener("DOMContentLoaded", function(){window.__tjhpAutoSizeWorkspaceEditors();});} else {setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(); }, 0);}})();</script><script>
 (function(){
@@ -21112,6 +21124,34 @@ function renderEditablePacketSection(opts){
   });
 
   document.querySelectorAll(".ws-ai-review-mode").forEach(syncFinalText);
+})();
+</script><script>
+(function(){
+  if (window.__tjhpWorkspaceAnchorScrollBound) return;
+  window.__tjhpWorkspaceAnchorScrollBound = true;
+
+  function scrollToWorkspaceSection(){
+    try {
+      var params = new URLSearchParams(window.location.search || "");
+      var key = params.get("ai_section") || "";
+      var hashId = window.location.hash ? window.location.hash.slice(1) : "";
+      var id = hashId || (key ? "section-" + key : "");
+      if (!id) return;
+
+      var target = document.getElementById(id);
+      if (!target) return;
+
+      setTimeout(function(){
+        target.scrollIntoView({ behavior:"auto", block:"start" });
+      }, 80);
+    } catch(e) {}
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", scrollToWorkspaceSection);
+  } else {
+    scrollToWorkspaceSection();
+  }
 })();
 </script></div>`;
 }
@@ -48680,6 +48720,45 @@ if (method === "GET" && pathname === "/agent-workspace") {
       return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&applied=1&ai_section=${encodeURIComponent(key)}#${workspaceSectionAnchor(key)}`);
     }
     return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}`);
+  }
+
+  if (method === "POST" && pathname === "/ai-workspace/regenerate-diff") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const billed_id = String(params.get("billed_id") || "").trim();
+    const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const sectionKey = String(params.get("section_key") || "").trim();
+    const currentTextOverride = String(params.get("after") || "").trim();
+
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return redirect(res, "/claims");
+
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    ensurePacketSections(ws, claim);
+    const preview = ws?.[channel]?.preview_diff || {};
+    const pending = Array.isArray(preview.pending_sections) ? preview.pending_sections : [];
+    const targetSections = [sectionKey].concat(pending).filter(Boolean);
+    const regeneratePrompt = `${preview.prompt || ""}\n\nGenerate a different version of this same section. Preserve staff edits and keep the section structure unless the user asked to rewrite it.`;
+
+    try {
+      const regeneratedKey = await workspaceGenerateAiSectionPreview({
+        sess,
+        claim,
+        ws,
+        channel,
+        prompt: regeneratePrompt,
+        preset: preview.preset || "",
+        targetSections,
+        currentTextOverride
+      });
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1&ai_section=${encodeURIComponent(regeneratedKey)}&regenerated=1#${workspaceSectionAnchor(regeneratedKey)}`);
+    } catch (e) {
+      console.error(e);
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1&ai_section=${encodeURIComponent(sectionKey)}#${workspaceSectionAnchor(sectionKey)}`);
+    }
   }
 
   if (method === "POST" && pathname === "/ai-workspace/undo-ai-change") {
