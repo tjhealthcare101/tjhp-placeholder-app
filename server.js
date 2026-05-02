@@ -15366,12 +15366,82 @@ function workspaceResolveOrgLogoPath(settings){
   return "";
 }
 
-function workspacePdfKitSupportedLogoPath(settings){
-  const resolved = workspaceResolveOrgLogoPath(settings);
-  if (!resolved) return "";
+function workspaceIsPdfSafeImagePath(filePath){
+  const ext = path.extname(String(filePath || "")).toLowerCase();
+  return [".png", ".jpg", ".jpeg"].includes(ext);
+}
+
+async function workspaceTryCreatePdfSafeLogoPath(sourcePath){
+  const raw = String(sourcePath || "").trim();
+  if (!raw) return "";
+
+  const resolved = path.isAbsolute(raw) ? raw : path.join(process.cwd(), raw);
+  if (!fs.existsSync(resolved)) return "";
+
+  if (workspaceIsPdfSafeImagePath(resolved)) return resolved;
 
   const ext = path.extname(resolved).toLowerCase();
-  if ([".png", ".jpg", ".jpeg"].includes(ext)) return resolved;
+  if (![".webp", ".gif"].includes(ext)) return "";
+
+  let sharp = null;
+  try { sharp = require("sharp"); } catch(e) { sharp = null; }
+  if (!sharp) return "";
+
+  const outPath = `${resolved}.pdf.png`;
+
+  try {
+    await sharp(resolved).png().toFile(outPath);
+    if (fs.existsSync(outPath)) return outPath;
+  } catch(e) {
+    return "";
+  }
+
+  return "";
+}
+
+async function workspaceEnsurePdfLogoForOrg(org_id){
+  const settings = getOrgSettings(org_id) || {};
+
+  const existingPdf = String(settings.logo_pdf_path || "").trim();
+  if (existingPdf) {
+    const resolvedPdf = path.isAbsolute(existingPdf) ? existingPdf : path.join(process.cwd(), existingPdf);
+    if (fs.existsSync(resolvedPdf) && workspaceIsPdfSafeImagePath(resolvedPdf)) {
+      return resolvedPdf;
+    }
+  }
+
+  const rawLogo = String(settings.logo_path || "").trim();
+  if (!rawLogo) return "";
+
+  const pdfLogoPath = await workspaceTryCreatePdfSafeLogoPath(rawLogo);
+
+  if (pdfLogoPath) {
+    saveOrgSettings(org_id, {
+      logo_pdf_path: pdfLogoPath,
+      logo_pdf_updated_at: nowISO()
+    });
+    return pdfLogoPath;
+  }
+
+  return "";
+}
+
+function workspacePdfKitSupportedLogoPath(settings){
+  const candidates = [
+    settings?.logo_pdf_path,
+    settings?.logo_path
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const raw = String(candidate || "").trim();
+    if (!raw) continue;
+
+    const resolved = path.isAbsolute(raw) ? raw : path.join(process.cwd(), raw);
+
+    if (fs.existsSync(resolved) && workspaceIsPdfSafeImagePath(resolved)) {
+      return resolved;
+    }
+  }
 
   return "";
 }
@@ -19282,7 +19352,8 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-org-logo-preview{max-height:72px;max-width:170px;object-fit:contain;border-radius:8px;border:1px solid #e5e7eb;background:#fff;padding:5px;}
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-track-changes,
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-review-footer-note,
-      .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-review-actions{opacity:.35;filter:blur(1px);pointer-events:none;}
+      .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-review-actions,
+      .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerate-prompt{opacity:.35;filter:blur(1px);pointer-events:none;}
       .packet-workspace-shell .ws-ai-regenerating-overlay{display:none;position:absolute;inset:14px;z-index:5;align-items:center;justify-content:center;text-align:center;border:1px solid #bfdbfe;background:rgba(239,246,255,.94);color:#1e3a8a;border-radius:16px;font-weight:950;padding:18px;}
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerating-overlay{display:flex;}
       .packet-workspace-shell .ws-ai-review-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;}
@@ -19321,6 +19392,7 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-ai-suggestion-actions,
       .packet-workspace-shell .ws-ai-change-btn{display:none !important;}
       .packet-workspace-shell .ws-ai-review-footer-note{border:1px solid #bbf7d0;background:#ecfdf5;color:#065f46;border-radius:12px;padding:8px 10px;font-size:12px;font-weight:800;line-height:1.35;margin:10px 0;}
+      .packet-workspace-shell .ws-ai-regenerate-prompt{width:100%;border:1px solid #dbe3ef;border-radius:12px;padding:10px 12px;margin-top:10px;font:inherit;background:#fff;}
       .packet-workspace-shell .ws-ai-review-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;}
       .packet-workspace-shell .ws-ai-simple-editor{width:100%;min-height:420px;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;line-height:1.75;border:1px solid #e5e7eb;border-radius:14px;background:#ffffff;padding:18px;outline:none;}
       .packet-workspace-shell .ws-ai-simple-editor:focus{box-shadow:0 0 0 3px rgba(34,197,94,.16);border-color:#22c55e;}
@@ -21103,7 +21175,7 @@ async function workspaceGenerateAiSectionPreview({ sess, claim, ws, channel, pro
     temperature: 0.25,
     messages: [
       { role: "system", content: "You are the TJ Healthcare Pro packet section editor. Rewrite only the targeted editable packet section. Do not invent clinical facts, symptoms, diagnoses, authorization history, payer policy terms, contract terms, payment details, or uploaded evidence. If proof is missing, use careful language or bracketed placeholders. Use the current section text as the source of truth. Preserve staff edits, staff wording, and section structure unless the user specifically asks to rewrite them. Improve and enhance the existing text; do not wipe out or replace the section wholesale. Return the full revised section text. Return clean plain text only. No markdown, no code fences, and no explanation outside the revised section text." },
-      { role: "user", content: `Workspace: ${channel}\nTarget section: ${sectionLabel}\nUser request: ${finalPrompt}\n\nEvidence context:\n${evidenceContext}${successfulLanguageGuidance ? `\n\nOutcome learning context:\n${successfulLanguageGuidance}` : ""}\n\nThe current section text below may include staff edits. Build on it and preserve those edits unless they are clearly incorrect or the user asks for a rewrite.\n\nCurrent ${sectionLabel} text:\n${currentText || "[This section is currently blank. Draft it using only safe known facts and bracketed placeholders where information is missing.]"}` }
+      { role: "user", content: `Workspace: ${channel}\nTarget section: ${sectionLabel}\nUser request: ${finalPrompt}\n\nEvidence context:\n${evidenceContext}${successfulLanguageGuidance ? `\n\nOutcome learning context:\n${successfulLanguageGuidance}` : ""}\n\nThe current section text below may include staff edits. Build on it and preserve those edits unless they are clearly incorrect or the user asks for a rewrite. If this text came from the active review editor, it may include unsaved staff edits. Treat it as the latest source of truth.\n\nCurrent ${sectionLabel} text:\n${currentText || "[This section is currently blank. Draft it using only safe known facts and bracketed placeholders where information is missing.]"}` }
     ]
   });
   const improvedText = workspaceCleanAiSectionOutput(completion.choices?.[0]?.message?.content || "");
@@ -21230,7 +21302,7 @@ function renderInlineAIAssist(billed_id, channel){
     <aside id="${safeStr(drawerId)}" class="ws-ai-drawer" aria-hidden="true">
       <div class="ws-ai-drawer-head"><div><h3 style="margin:0;">${safeStr(assistantName)} <span class="tooltip ws-ai-info-icon" data-tip="${safeStr(assistantInfoTip)}">ⓘ</span></h3></div><button class="ws-ai-drawer-close" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">×</button></div>
       <form method="POST" action="/ai-workspace/ai-edit" class="ws-ai-form" data-ai-workspace-form="1" onsubmit="return submitWorkspaceAiAssistForm(this, event && event.submitter ? event.submitter : this.__tjhpSubmitter);">
-        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="channel" value="${safeStr(channel)}" /><input type="hidden" name="preset" value="" data-ai-preset-input />
+        <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="channel" value="${safeStr(channel)}" /><input type="hidden" name="preset" value="" data-ai-preset-input /><input type="hidden" name="current_text_override" data-ai-current-text-override /><input type="hidden" name="current_section_override" data-ai-current-section-override />
         <div class="ws-ai-form-controls">${helperCard}<select name="target_section" style="width:100%;margin-top:4px;">${targetSectionOptions}</select>
         <div class="ws-ai-preset-grid">${quickButtons}</div>
         <textarea name="prompt" placeholder="${safeStr(placeholder)}"></textarea>
@@ -21239,7 +21311,9 @@ function renderInlineAIAssist(billed_id, channel){
       <script>
       window.openWorkspaceAiAssistDrawer = window.openWorkspaceAiAssistDrawer || function(id){ var d=document.getElementById(id); if(d){ d.classList.add("open"); d.setAttribute("aria-hidden","false"); } };
       window.closeWorkspaceAiAssistDrawer = window.closeWorkspaceAiAssistDrawer || function(id){ var d=document.getElementById(id); if(d){ d.classList.remove("open"); d.setAttribute("aria-hidden","true"); } };
-      window.submitWorkspaceAiAssistForm = function(form, clickedButton){ if(!form) return true; form.classList.add("is-submitting");var drawer = form.closest(".ws-ai-drawer");if (drawer) drawer.classList.add("is-working"); var working=form.querySelector("[data-ai-working]"); if(working) working.classList.add("show"); var active=clickedButton||form.__tjhpSubmitter||(window.event&&window.event.submitter?window.event.submitter:null)||form.querySelector("button[type='submit']"); form.querySelectorAll("button").forEach(function(btn){btn.disabled=true;}); if(active){ active.dataset.originalText=active.dataset.originalText||active.textContent; active.textContent=active.getAttribute("data-loading-label")||"Generating Section Update...";} return true; };
+      function findActiveWorkspaceAiDraft(){ var out = { section:"", text:"" }; try { var params = new URLSearchParams(window.location.search || ""); var section = params.get("ai_section") || ""; var active = null; if (section) { active = document.querySelector("#section-" + section + " [data-ai-interactive-diff]"); } if (!active) { active = document.querySelector(".ws-clean-section.ai-target-section [data-ai-interactive-diff]"); } if (!active) { active = document.querySelector(".ws-ai-review-mode [data-ai-interactive-diff]"); } if (active) { var card = active.closest(".ws-clean-section"); if (card && card.getAttribute("data-inline-section")) { section = card.getAttribute("data-inline-section"); } out.section = section || ""; out.text = String(active.textContent || "").trim(); } } catch(e) {} return out; }
+      function syncActiveWorkspaceAiDraftToForm(form){ if (!form) return; var draft = findActiveWorkspaceAiDraft(); var textInput = form.querySelector("[data-ai-current-text-override]"); var sectionInput = form.querySelector("[data-ai-current-section-override]"); if (textInput) textInput.value = draft.text || ""; if (sectionInput) sectionInput.value = draft.section || ""; }
+      window.submitWorkspaceAiAssistForm = function(form, clickedButton){ if(!form) return true; syncActiveWorkspaceAiDraftToForm(form); form.classList.add("is-submitting");var drawer = form.closest(".ws-ai-drawer");if (drawer) drawer.classList.add("is-working"); var working=form.querySelector("[data-ai-working]"); if(working) working.classList.add("show"); var active=clickedButton||form.__tjhpSubmitter||(window.event&&window.event.submitter?window.event.submitter:null)||form.querySelector("button[type='submit']"); form.querySelectorAll("button").forEach(function(btn){btn.disabled=true;}); if(active){ active.dataset.originalText=active.dataset.originalText||active.textContent; active.textContent=active.getAttribute("data-loading-label")||"Generating Section Update...";} return true; };
       (function(){ if(window.__tjhpAiWorkspaceButtonBound) return; window.__tjhpAiWorkspaceButtonBound=true; document.addEventListener("click", function(e){ var btn=e.target&&e.target.closest?e.target.closest("[data-ai-preset]"):null; if(!btn) return; var form=btn.closest("form"); if(!form) return; e.preventDefault(); var p=form.querySelector("[data-ai-preset-input]"); if(p) p.value=btn.getAttribute("data-ai-preset")||""; var target=btn.getAttribute("data-ai-target")||""; var sel=form.querySelector("select[name='target_section']"); if(sel&&target) sel.value=target; var prompt=btn.getAttribute("data-ai-prompt")||""; var ta=form.querySelector("textarea[name='prompt']"); if(ta && !String(ta.value||"").trim()) ta.value=prompt; form.__tjhpSubmitter=btn; if(typeof form.requestSubmit==="function") form.requestSubmit(); else { window.submitWorkspaceAiAssistForm(form, btn); form.submit(); } }); document.addEventListener("submit", function(e){ var form=e.target&&e.target.matches&&e.target.matches("[data-ai-workspace-form='1']")?e.target:null; if(!form) return; window.submitWorkspaceAiAssistForm(form, form.__tjhpSubmitter||(e.submitter||null)); });})();
       try { var genericCopilot = document.getElementById("aiChat"); if (genericCopilot) genericCopilot.style.display = "none"; } catch(e) {}
       </script>
@@ -21327,7 +21401,7 @@ function renderEditablePacketSection(opts){
   name="after"
   data-ai-final-text
   class="ws-ai-final-hidden"
->${escapeHtml(aiPreview.after || "")}</textarea><div class="ws-ai-review-footer-note">AI additions are highlighted in green. Edit the section directly, then apply when ready.</div><div class="ws-ai-review-actions"><button class="btn secondary small" type="submit" formaction="/ai-workspace/regenerate-diff" formmethod="POST" name="regenerate" value="1">Regenerate</button><button class="btn" type="submit">Apply AI Update to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="ws-ai-review-actions"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
+>${escapeHtml(aiPreview.after || "")}</textarea><input class="ws-ai-regenerate-prompt" name="regenerate_prompt" placeholder="Optional: tell AI what to change in the regenerated version" autocomplete="off"/><div class="ws-ai-review-footer-note">AI additions are highlighted in green. Edit the section directly, then apply when ready.</div><div class="ws-ai-review-actions"><button class="btn secondary small" type="submit" formaction="/ai-workspace/regenerate-diff" formmethod="POST" name="regenerate" value="1">Regenerate</button><button class="btn" type="submit">Apply AI Update to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="ws-ai-review-actions"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
   return `<div class="ws-section-card ws-clean-section ${hasAiPreview ? "ai-target-section" : ""}" id="${safeStr(anchorId)}" data-inline-section="${safeStr(section_key)}"><div class="ws-section-head"><div><div class="ws-section-title">${safeStr(title)}</div>${description ? `<div class="muted small" style="margin-top:3px;">${safeStr(description)}</div>` : ``}</div></div>${localSuccessHtml}${localUndoSuccessHtml}${undoAiHtml}${hasAiPreview ? aiReviewHtml : `<div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing'); setTimeout(function(){ if(window.__tjhpAutoSizeWorkspaceEditors) window.__tjhpAutoSizeWorkspaceEditors(); }, 0);">${showPreview}<div class="muted small" style="margin-top:8px;">Click this section to edit.</div></div>`}${hasAiPreview ? "" : `<form class="ws-edit-form ws-inline-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea name="value">${escapeHtml(value)}</textarea><div class="ws-inline-save"><button class="btn secondary" type="submit">Save Section</button><button class="btn secondary" type="button" onclick="this.closest('.ws-clean-section').classList.remove('editing');">Cancel</button></div></form>`}
       <script>(function(){if (window.__tjhpWorkspaceEditAutosizeBound) return;window.__tjhpWorkspaceEditAutosizeBound = true;function autoSizeOne(textarea){if (!textarea) return;var section = textarea.closest(".ws-clean-section");if (section && !section.classList.contains("editing")) return;textarea.style.height = "auto";var minHeight = 260;var sectionKey = section ? String(section.getAttribute("data-inline-section") || "") : "";if (sectionKey === "letter_of_medical_necessity") minHeight = 520;var nextHeight = Math.max(minHeight, textarea.scrollHeight + 8);textarea.style.height = nextHeight + "px";textarea.style.overflow = "hidden";}window.__tjhpAutoSizeWorkspaceEditors = function(root){var scope = root && root.querySelectorAll ? root : document;scope.querySelectorAll(".packet-workspace-shell .ws-inline-edit-form textarea").forEach(autoSizeOne);};document.addEventListener("input", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {autoSizeOne(e.target);}});document.addEventListener("focusin", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {setTimeout(function(){ autoSizeOne(e.target); }, 0);}});document.addEventListener("click", function(e){var section = e.target && e.target.closest ? e.target.closest(".packet-workspace-shell .ws-clean-section") : null;if (!section) return;setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(section); }, 0);});if (document.readyState === "loading") {document.addEventListener("DOMContentLoaded", function(){window.__tjhpAutoSizeWorkspaceEditors();});} else {setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(); }, 0);}})();</script><script>
 (function(){
@@ -21392,9 +21466,28 @@ function renderEditablePacketSection(opts){
         action = String(submitter.getAttribute("formaction") || "");
       }
       if (action.indexOf("/ai-workspace/regenerate-diff") >= 0 && review) {
+        e.preventDefault();
         review.classList.add("is-regenerating");
         form.querySelectorAll("button").forEach(function(btn){ btn.disabled = true; });
-        if (submitter && submitter.textContent) submitter.textContent = "Regenerating...";
+        if (submitter && submitter.textContent) {
+          submitter.textContent = "Regenerating...";
+        }
+        var fd = new FormData(form);
+        fetch(action, {
+          method: "POST",
+          body: fd,
+          credentials: "same-origin",
+          redirect: "follow"
+        })
+        .then(function(resp){
+          var url = resp && resp.url ? resp.url : "";
+          if (url) window.location.href = url;
+          else window.location.reload();
+        })
+        .catch(function(){
+          form.submit();
+        });
+        return;
       }
     } catch(err) {}
   });
@@ -47756,25 +47849,13 @@ function renderTemplateEditor(org, user){
     const settings = getOrgSettings(sess.org_id) || {};
     settings.logo_path = stored.stored_path;
     settings.logo_filename = stored.filename;
-
-    try {
-      const ext = path.extname(String(stored.stored_path || stored.filename || "")).toLowerCase();
-      if ([".webp", ".gif"].includes(ext)) {
-        let sharp = null;
-        try { sharp = require("sharp"); } catch(e) { sharp = null; }
-        if (sharp) {
-          const pdfLogoPath = `${stored.stored_path}.pdf.png`;
-          await sharp(stored.stored_path).png().toFile(pdfLogoPath);
-          settings.logo_pdf_path = pdfLogoPath;
-        }
-      } else if ([".png", ".jpg", ".jpeg"].includes(ext)) {
-        settings.logo_pdf_path = stored.stored_path;
-      }
-    } catch(e) {}
-
     settings.updated_at = nowISO();
 
     saveOrgSettings(sess.org_id, settings);
+
+    try {
+      await workspaceEnsurePdfLogoForOrg(sess.org_id);
+    } catch(e) {}
 
     auditLog({
       actor: "user",
@@ -48984,7 +49065,23 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const ws = ensureAgentWorkspace(sess.org_id, claim);
     ensurePacketSections(ws, claim);
 
-    const targetSections = workspaceDetectAiTargetSections(prompt, preset, channel, targetSection);
+    const currentTextOverride = String(params.get("current_text_override") || "").trim();
+    const currentSectionOverride = String(params.get("current_section_override") || "").trim();
+
+    let targetSections = workspaceDetectAiTargetSections(prompt, preset, channel, targetSection);
+
+    if (currentTextOverride && currentSectionOverride) {
+      if (targetSection === "auto") {
+        targetSections = [currentSectionOverride];
+      } else if (targetSections.includes(currentSectionOverride)) {
+      }
+    }
+
+    const firstTarget = targetSections[0] || "";
+    const overrideForGeneration =
+      currentTextOverride && currentSectionOverride && String(firstTarget) === String(currentSectionOverride)
+        ? currentTextOverride
+        : "";
 
     try {
       const sectionKey = await workspaceGenerateAiSectionPreview({
@@ -48994,7 +49091,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
         channel,
         prompt,
         preset,
-        targetSections
+        targetSections,
+        currentTextOverride: overrideForGeneration
       });
       return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1&ai_section=${encodeURIComponent(sectionKey)}#${workspaceSectionAnchor(sectionKey)}`);
     } catch (e) {
@@ -49095,6 +49193,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
     const sectionKey = String(params.get("section_key") || "").trim();
     const currentTextOverride = String(params.get("after") || "").trim();
+    const regenerateInstruction = String(params.get("regenerate_prompt") || "").trim();
 
     const claim = getBilledById(sess.org_id, billed_id);
     if (!claim) return redirect(res, "/claims");
@@ -49104,7 +49203,13 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const preview = ws?.[channel]?.preview_diff || {};
     const pending = Array.isArray(preview.pending_sections) ? preview.pending_sections : [];
     const targetSections = [sectionKey].concat(pending).filter(Boolean);
-    const regeneratePrompt = `${preview.prompt || ""}\n\nGenerate a different version of this same section. Preserve staff edits and keep the section structure unless the user asked to rewrite it.`;
+    const regeneratePrompt = [
+      preview.prompt || "",
+      regenerateInstruction
+        ? `Additional staff instruction for this regeneration: ${regenerateInstruction}`
+        : "",
+      "Generate a different version of this same section. Preserve staff edits and keep the section structure unless the user asked to rewrite it."
+    ].filter(Boolean).join("\n\n");
 
     try {
       const regeneratedKey = await workspaceGenerateAiSectionPreview({
@@ -49225,6 +49330,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const ws = ensureAgentWorkspace(sess.org_id, claim);
     ensureWorkspacePacket(ws);
     ensurePacketSections(ws, claim);
+    await workspaceEnsurePdfLogoForOrg(sess.org_id);
     return buildMergedPacketPDF({
       claim,
       derived,
