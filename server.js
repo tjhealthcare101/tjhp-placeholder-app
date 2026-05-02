@@ -19356,8 +19356,15 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-review-actions,
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerate-controls,
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerate-prompt{opacity:.35;filter:blur(1px);pointer-events:none;}
-      .packet-workspace-shell .ws-ai-regenerate-controls{display:flex;gap:10px;align-items:center;margin:10px 0;flex-wrap:wrap;}
-      .packet-workspace-shell .ws-ai-regenerate-controls .ws-ai-regenerate-prompt{flex:1 1 320px;min-width:260px;}
+      .packet-workspace-shell .ws-ai-regenerate-controls{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;margin:10px 0;}
+      .packet-workspace-shell .ws-ai-regenerate-controls .ws-ai-regenerate-prompt{min-width:0;width:100%;box-sizing:border-box;height:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .packet-workspace-shell .ws-ai-regenerate-controls [data-ai-regenerate-button]{white-space:nowrap;min-height:44px;}
+      @media (max-width:760px){.packet-workspace-shell .ws-ai-regenerate-controls{grid-template-columns:1fr;}.packet-workspace-shell .ws-ai-regenerate-controls [data-ai-regenerate-button]{width:100%;}}
+      .packet-workspace-shell .ws-ai-section-working-banner{display:none;border:1px solid #bfdbfe;background:#eff6ff;color:#1e3a8a;border-radius:14px;font-weight:950;padding:12px 14px;margin:10px 0 12px;text-align:center;box-sizing:border-box;}
+      .packet-workspace-shell .ws-clean-section.is-ai-adjusting .ws-ai-section-working-banner{display:block;}
+      .packet-workspace-shell .ws-clean-section.is-ai-adjusting > .ws-section-body,
+      .packet-workspace-shell .ws-clean-section.is-ai-adjusting > .ws-edit-form{opacity:.35;filter:blur(1px);pointer-events:none;}
+      .packet-workspace-shell .ws-clean-section.is-ai-adjusting .ws-ai-section-working-banner{opacity:1;filter:none;pointer-events:auto;}
       .packet-workspace-shell .ws-ai-regenerating-overlay{display:none;position:static;inset:auto;z-index:1;align-items:center;justify-content:center;text-align:center;border:1px solid #bfdbfe;background:#eff6ff;color:#1e3a8a;border-radius:14px;font-weight:950;padding:12px 14px;margin:0 0 12px 0;box-shadow:none;pointer-events:auto;width:100%;box-sizing:border-box;}
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerating-overlay{display:flex !important;}
       .packet-workspace-shell .ws-ai-review-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;}
@@ -21305,7 +21312,7 @@ function renderInlineAIAssist(billed_id, channel){
     <div class="ws-panel ws-ai-assist-launcher"><h3>${safeStr(assistantName)} <span class="tooltip ws-ai-info-icon" data-tip="${safeStr(assistantInfoTip)}">ⓘ</span></h3><button class="btn secondary small" type="button" onclick="openWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">Open ${safeStr(assistantName)}</button></div>
     <aside id="${safeStr(drawerId)}" class="ws-ai-drawer" aria-hidden="true">
       <div class="ws-ai-drawer-head"><div><h3 style="margin:0;">${safeStr(assistantName)} <span class="tooltip ws-ai-info-icon" data-tip="${safeStr(assistantInfoTip)}">ⓘ</span></h3></div><button class="ws-ai-drawer-close" type="button" onclick="closeWorkspaceAiAssistDrawer('${safeStr(drawerId)}')">×</button></div>
-      <form method="POST" action="/ai-workspace/ai-edit" class="ws-ai-form" data-ai-workspace-form="1" onsubmit="return submitWorkspaceAiAssistForm(this, event && event.submitter ? event.submitter : this.__tjhpSubmitter);">
+      <form method="POST" action="/ai-workspace/ai-edit" class="ws-ai-form" data-ai-workspace-form="1" onsubmit="return submitWorkspaceAiAssistForm(this, event && event.submitter ? event.submitter : this.__tjhpSubmitter, event);">
         <input type="hidden" name="billed_id" value="${safeStr(billed_id)}" /><input type="hidden" name="channel" value="${safeStr(channel)}" /><input type="hidden" name="preset" value="" data-ai-preset-input /><input type="hidden" name="current_text_override" data-ai-current-text-override /><input type="hidden" name="current_section_override" data-ai-current-section-override />
         <div class="ws-ai-form-controls">${helperCard}<select name="target_section" style="width:100%;margin-top:4px;">${targetSectionOptions}</select>
         <div class="ws-ai-preset-grid">${quickButtons}</div>
@@ -21317,8 +21324,76 @@ function renderInlineAIAssist(billed_id, channel){
       window.closeWorkspaceAiAssistDrawer = window.closeWorkspaceAiAssistDrawer || function(id){ var d=document.getElementById(id); if(d){ d.classList.remove("open"); d.setAttribute("aria-hidden","true"); } };
       function findActiveWorkspaceAiDraft(){ var out = { section:"", text:"" }; try { var params = new URLSearchParams(window.location.search || ""); var section = params.get("ai_section") || ""; var active = null; if (section) { active = document.querySelector("#section-" + section + " [data-ai-interactive-diff]"); } if (!active) { active = document.querySelector(".ws-clean-section.ai-target-section [data-ai-interactive-diff]"); } if (!active) { active = document.querySelector(".ws-ai-review-mode [data-ai-interactive-diff]"); } if (active) { var card = active.closest(".ws-clean-section"); if (card && card.getAttribute("data-inline-section")) { section = card.getAttribute("data-inline-section"); } out.section = section || ""; out.text = String(active.textContent || "").trim(); } } catch(e) {} return out; }
       function syncActiveWorkspaceAiDraftToForm(form){ if (!form) return; var draft = findActiveWorkspaceAiDraft(); var textInput = form.querySelector("[data-ai-current-text-override]"); var sectionInput = form.querySelector("[data-ai-current-section-override]"); if (textInput) textInput.value = draft.text || ""; if (sectionInput) sectionInput.value = draft.section || ""; }
-      window.submitWorkspaceAiAssistForm = function(form, clickedButton){ if(!form) return true; syncActiveWorkspaceAiDraftToForm(form); form.classList.add("is-submitting");var drawer = form.closest(".ws-ai-drawer");if (drawer) drawer.classList.add("is-working"); var working=form.querySelector("[data-ai-working]"); if(working) working.classList.add("show"); var active=clickedButton||form.__tjhpSubmitter||(window.event&&window.event.submitter?window.event.submitter:null)||form.querySelector("button[type='submit']"); form.querySelectorAll("button").forEach(function(btn){btn.disabled=true;}); if(active){ active.dataset.originalText=active.dataset.originalText||active.textContent; active.textContent=active.getAttribute("data-loading-label")||"Generating Section Update...";} return true; };
-      (function(){ if(window.__tjhpAiWorkspaceButtonBound) return; window.__tjhpAiWorkspaceButtonBound=true; document.addEventListener("click", function(e){ var btn=e.target&&e.target.closest?e.target.closest("[data-ai-preset]"):null; if(!btn) return; var form=btn.closest("form"); if(!form) return; e.preventDefault(); var p=form.querySelector("[data-ai-preset-input]"); if(p) p.value=btn.getAttribute("data-ai-preset")||""; var target=btn.getAttribute("data-ai-target")||""; var sel=form.querySelector("select[name='target_section']"); if(sel&&target) sel.value=target; var prompt=btn.getAttribute("data-ai-prompt")||""; var ta=form.querySelector("textarea[name='prompt']"); if(ta && !String(ta.value||"").trim()) ta.value=prompt; form.__tjhpSubmitter=btn; if(typeof form.requestSubmit==="function") form.requestSubmit(); else { window.submitWorkspaceAiAssistForm(form, btn); form.submit(); } }); document.addEventListener("submit", function(e){ var form=e.target&&e.target.matches&&e.target.matches("[data-ai-workspace-form='1']")?e.target:null; if(!form) return; window.submitWorkspaceAiAssistForm(form, form.__tjhpSubmitter||(e.submitter||null)); });})();
+      function workspaceAiSelectedTargetSection(form, clickedButton){
+        var target = "";
+        try {
+          if (clickedButton && clickedButton.getAttribute) {
+            target = String(clickedButton.getAttribute("data-ai-target") || "").trim();
+          }
+          if (!target && form) {
+            var sel = form.querySelector("select[name='target_section']");
+            if (sel) target = String(sel.value || "").trim();
+          }
+        } catch(e) {}
+        return target;
+      }
+      function workspaceAiTargetLabel(form, target){
+        try {
+          var sel = form ? form.querySelector("select[name='target_section']") : null;
+          if (sel) {
+            var opt = Array.prototype.slice.call(sel.options || []).find(function(o){
+              return String(o.value || "") === String(target || "");
+            });
+            if (opt && String(opt.textContent || "").trim()) return String(opt.textContent || "").trim();
+          }
+        } catch(e) {}
+        return String(target || "this section").replace(/_/g, " ");
+      }
+      function workspaceAiFindSectionByKey(sectionKey){
+        var key = String(sectionKey || "").trim();
+        if (!key) return null;
+        var byId = document.getElementById("section-" + key);
+        if (byId) return byId;
+        var found = null;
+        document.querySelectorAll(".packet-workspace-shell [data-inline-section]").forEach(function(el){
+          if (!found && String(el.getAttribute("data-inline-section") || "") === key) found = el;
+        });
+        return found;
+      }
+      function showWorkspaceAiSectionWorking(form, clickedButton){
+        var target = workspaceAiSelectedTargetSection(form, clickedButton);
+        var section = workspaceAiFindSectionByKey(target);
+        if (!section) return;
+        var label = workspaceAiTargetLabel(form, target);
+        var banner = section.querySelector("[data-ai-section-working-banner]");
+        if (!banner) {
+          banner = document.createElement("div");
+          banner.className = "ws-ai-section-working-banner";
+          banner.setAttribute("data-ai-section-working-banner", "1");
+          banner.setAttribute("role", "status");
+          banner.setAttribute("aria-live", "assertive");
+          var head = section.querySelector(".ws-section-head");
+          if (head && head.nextSibling) section.insertBefore(banner, head.nextSibling);
+          else section.insertBefore(banner, section.firstChild);
+        }
+        banner.textContent = "Improving " + label + "… Keep this page open.";
+        section.classList.add("is-ai-adjusting");
+        section.setAttribute("aria-busy", "true");
+        try {
+          section.scrollIntoView({ behavior: "smooth", block: "center" });
+        } catch(e) {}
+      }
+      function waitForAiSectionPaintThenSubmit(form){
+        requestAnimationFrame(function(){
+          requestAnimationFrame(function(){
+            setTimeout(function(){
+              form.submit();
+            }, 140);
+          });
+        });
+      }
+      window.submitWorkspaceAiAssistForm = function(form, clickedButton, submitEvent){ if (!form) return true; if (form.dataset.aiSubmittingReady === "1") { return true; } if (submitEvent && typeof submitEvent.preventDefault === "function") { submitEvent.preventDefault(); } syncActiveWorkspaceAiDraftToForm(form); form.classList.add("is-submitting"); var drawer = form.closest(".ws-ai-drawer"); if (drawer) { drawer.classList.add("is-working"); drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); } var working = form.querySelector("[data-ai-working]"); if (working) { working.textContent = "Working on editable packet section… Keep this page open."; working.classList.add("show"); } var active = clickedButton || form.__tjhpSubmitter || (submitEvent && submitEvent.submitter ? submitEvent.submitter : null) || form.querySelector("button[type='submit']"); form.querySelectorAll("button").forEach(function(btn){btn.disabled=true;}); if(active){ active.dataset.originalText=active.dataset.originalText||active.textContent; active.textContent=active.getAttribute("data-loading-label")||"Generating Section Update...";} showWorkspaceAiSectionWorking(form, active); try { void document.body.offsetHeight; } catch(e) {} form.dataset.aiSubmittingReady = "1"; waitForAiSectionPaintThenSubmit(form); return false; };
+      (function(){ if(window.__tjhpAiWorkspaceButtonBound) return; window.__tjhpAiWorkspaceButtonBound=true; document.addEventListener("click", function(e){ var btn=e.target&&e.target.closest?e.target.closest("[data-ai-preset]"):null; if(!btn) return; var form=btn.closest("form"); if(!form) return; e.preventDefault(); var p=form.querySelector("[data-ai-preset-input]"); if(p) p.value=btn.getAttribute("data-ai-preset")||""; var target=btn.getAttribute("data-ai-target")||""; var sel=form.querySelector("select[name='target_section']"); if(sel&&target) sel.value=target; var prompt=btn.getAttribute("data-ai-prompt")||""; var ta=form.querySelector("textarea[name='prompt']"); if(ta && !String(ta.value||"").trim()) ta.value=prompt; form.__tjhpSubmitter=btn; if (typeof form.requestSubmit === "function") { form.requestSubmit(); } else { window.submitWorkspaceAiAssistForm(form, btn, null); } }); document.addEventListener("submit", function(e){ var form=e.target&&e.target.matches&&e.target.matches("[data-ai-workspace-form='1']")?e.target:null; if(!form) return; window.submitWorkspaceAiAssistForm(form, form.__tjhpSubmitter||(e.submitter||null)); });})();
       try { var genericCopilot = document.getElementById("aiChat"); if (genericCopilot) genericCopilot.style.display = "none"; } catch(e) {}
       </script>
     </aside>
@@ -21401,7 +21476,7 @@ function renderEditablePacketSection(opts){
   const canUndoAi = !!(lastAiUndo && String(lastAiUndo.section_key || "") === section_key && String(lastAiUndo.before || "") !== String(lastAiUndo.after || ""));
   const undoAiHtml = canUndoAi ? `<form method="POST" action="/ai-workspace/undo-ai-change" class="ws-local-undo-form"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><button class="btn secondary small" type="submit">Undo AI Change</button></form>` : "";
   const localQueueInfoHtml = hasAiPreview && appliedPrevSection ? `<div class="ws-local-status info">Previous section updated. Now reviewing ${safeStr(title)}.</div>` : ``;
-  const aiReviewHtml = hasAiPreview ? `<div class="ws-section-body ws-ai-review-mode" data-ai-review-root data-billed-id="${safeStr(billed_id)}" data-channel="${safeStr(channel)}" data-section-key="${safeStr(section_key)}" data-regenerate-action="/ai-workspace/regenerate-diff">${localQueueInfoHtml}<div class="ws-ai-regenerating-overlay" role="status" aria-live="assertive">Regenerating a new version… Keep this page open.</div><div class="ws-ai-review-head"><div><div class="ws-ai-review-title">AI proposed update for ${safeStr(title)}</div><div class="ws-ai-review-copy">Review the AI-updated section below. New AI text is highlighted in green. You can type directly in the section before applying.</div></div>${pending.length ? `<span class="badge warn">Next: ${safeStr(nextLabel)}</span>` : `<span class="badge ok">Final item</span>`}</div>${aiQueue.length > 1 ? `<div class="ws-ai-queue-note"><div><strong>AI section queue</strong><div class="muted small">${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}</div></div>${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(nextLabel)}</div>` : ""}</div>` : ""}<div class="ws-track-changes">${workspaceAiInteractiveTrackChangesHtml(aiPreview.before || "", aiPreview.after || "")}</div><div class="ws-ai-regenerate-controls" data-ai-regenerate-controls><input class="ws-ai-regenerate-prompt" data-ai-regenerate-prompt name="regenerate_prompt" placeholder="Optional: tell AI what to change in the regenerated version — press Enter or click Regenerate" title="Press Enter or click Regenerate to create a new version using this instruction." autocomplete="off"/><button class="btn secondary small" type="button" name="regenerate" value="1" data-ai-regenerate-button data-regenerate-action="/ai-workspace/regenerate-diff">Regenerate</button></div><form method="POST" action="/ai-workspace/apply-diff" class="ws-ai-action-form" data-ai-action="apply" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea
+  const aiReviewHtml = hasAiPreview ? `<div class="ws-section-body ws-ai-review-mode" data-ai-review-root data-billed-id="${safeStr(billed_id)}" data-channel="${safeStr(channel)}" data-section-key="${safeStr(section_key)}" data-regenerate-action="/ai-workspace/regenerate-diff">${localQueueInfoHtml}<div class="ws-ai-regenerating-overlay" role="status" aria-live="assertive">Regenerating a new version… Keep this page open.</div><div class="ws-ai-review-head"><div><div class="ws-ai-review-title">AI proposed update for ${safeStr(title)}</div><div class="ws-ai-review-copy">Review the AI-updated section below. New AI text is highlighted in green. You can type directly in the section before applying.</div></div>${pending.length ? `<span class="badge warn">Next: ${safeStr(nextLabel)}</span>` : `<span class="badge ok">Final item</span>`}</div>${aiQueue.length > 1 ? `<div class="ws-ai-queue-note"><div><strong>AI section queue</strong><div class="muted small">${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}</div></div>${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(nextLabel)}</div>` : ""}</div>` : ""}<div class="ws-track-changes">${workspaceAiInteractiveTrackChangesHtml(aiPreview.before || "", aiPreview.after || "")}</div><div class="ws-ai-regenerate-controls" data-ai-regenerate-controls><input class="ws-ai-regenerate-prompt" data-ai-regenerate-prompt name="regenerate_prompt" placeholder="Optional instruction for regenerated version" title="Click Regenerate to create a new version. Add an instruction only if you want specific changes." aria-label="Optional instruction for regenerated version" autocomplete="off"/><button class="btn secondary small" type="button" name="regenerate" value="1" data-ai-regenerate-button data-regenerate-action="/ai-workspace/regenerate-diff">Regenerate</button></div><form method="POST" action="/ai-workspace/apply-diff" class="ws-ai-action-form" data-ai-action="apply" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea
   name="after"
   data-ai-final-text
   class="ws-ai-final-hidden"
@@ -22709,8 +22784,7 @@ function workspaceBuildExportExhibitItems(ws, claim, channel){
 
 function workspaceExhibitHasSourceFile(exhibit){
   const att = exhibit && exhibit.attachment ? exhibit.attachment : null;
-  return !!workspaceAttachmentStoredFileStat(att) &&
-    !workspaceAttachmentLooksPlaceholder(att, workspaceAttachmentStoredPath(att));
+  return !!(att && workspaceAttachmentIsRealSourceExhibit(att, exhibit.docKey));
 }
 
 function workspaceAttachmentStoredFileStat(att){
@@ -22754,29 +22828,35 @@ function workspaceAttachmentHasExplicitSourceProof(att){
   const sourceType = String(att?.source_type || att?.source || att?.source_system || "").toLowerCase();
   const sourceStatus = String(att?.source_status || "").toLowerCase();
   const proofLevel = String(att?.proof_level || "").toLowerCase();
+  const sourceLabel = String(att?.source_label || "").toLowerCase();
+  const sourceSystem = String(att?.source_system || "").toLowerCase();
 
   const manualUpload =
     sourceType === "manual_upload" ||
     sourceType.includes("manual") ||
-    String(att?.source_label || "").toLowerCase().includes("manual upload") ||
-    String(att?.source_system || "").toLowerCase().includes("user upload");
+    sourceLabel.includes("manual upload") ||
+    sourceSystem.includes("user upload");
 
-  const pulledSource =
-    ["ehr", "clearinghouse", "payer_portal"].some(t => sourceType.includes(t)) &&
+  const manualProof =
+    manualUpload &&
     (
-      sourceStatus === "pulled" ||
-      proofLevel === "pulled_source_document" ||
+      proofLevel === "manual_source_document" ||
+      sourceStatus === "attached" ||
       att?.is_source_document === true
     );
 
-  const explicitSource =
-    att?.is_source_document === true ||
-    proofLevel === "manual_source_document" ||
-    proofLevel === "pulled_source_document" ||
-    sourceStatus === "attached" ||
-    sourceStatus === "pulled";
+  const pulledSource =
+    ["ehr", "clearinghouse", "payer_portal"].some(t => sourceType.includes(t));
 
-  return !!(manualUpload || pulledSource || explicitSource);
+  const pulledProof =
+    pulledSource &&
+    (
+      proofLevel === "pulled_source_document" ||
+      sourceStatus === "pulled"
+    ) &&
+    att?.is_source_document === true;
+
+  return !!(manualProof || pulledProof);
 }
 
 function workspaceAttachmentLooksGeneratedPacketFile(att, storedPath){
@@ -22811,44 +22891,82 @@ function workspaceAttachmentLooksGeneratedPacketFile(att, storedPath){
 }
 
 function workspaceAttachmentLooksPlaceholder(att, storedPath){
-  if (workspaceAttachmentHasExplicitSourceProof(att)) return false;
   if (workspaceAttachmentLooksGeneratedPacketFile(att, storedPath)) return true;
-  const meta = [att?.filename, att?.originalName, att?.source_type, att?.source_status, att?.proof_level, att?.source_label, att?.source_system, att?.reason, att?.message, att?.note, att?.generated_reason].filter(Boolean).join(" ").toLowerCase();
+
+  const meta = [
+    att?.filename,
+    att?.originalName,
+    att?.source_type,
+    att?.source_status,
+    att?.proof_level,
+    att?.source_label,
+    att?.source_system,
+    att?.reason,
+    att?.message,
+    att?.note,
+    att?.generated_reason
+  ].filter(Boolean).join(" ").toLowerCase();
+
   if (/placeholder|fallback|draft_evidence|draft evidence|draft evidence pdf|not_found|unavailable|missing source|source_document_required|generated packet|packet export|system evidence summary|source proof placeholder|adapter did not return source file/.test(meta)) return true;
   if (/system-derived|system derived|generated\/pulled|generated evidence|adapter did not return|did not return a source file/.test(meta)) return true;
+
   try {
     const ext = path.extname(String(workspaceAttachmentFilename(att) || storedPath || "")).toLowerCase();
     if (storedPath && [".txt", ".csv", ".json", ".html", ".htm"].includes(ext)) {
       const sample = fs.readFileSync(storedPath, "utf8").slice(0, 4000).toLowerCase();
-      if (sample.includes("this placeholder was created because the integration connection exists but did not return a source file") || sample.includes("upload the original source document if payer submission requires") || sample.includes("source document required") || sample.includes("missing source document")) return true;
+      if (
+        sample.includes("this placeholder was created because the integration connection exists but did not return a source file") ||
+        sample.includes("upload the original source document if payer submission requires") ||
+        sample.includes("source document required") ||
+        sample.includes("missing source document")
+      ) return true;
     }
   } catch (e) {}
+
   return false;
 }
-function workspaceAttachmentIsRealSourceExhibit(att, docKey=""){
+function workspaceAttachmentStoredPathLooksUserOrPulled(storedPath){
+  const raw = String(storedPath || "");
+  if (!raw) return false;
+
+  const normalized = raw.replace(/\\/g, "/").toLowerCase();
+
+  return (
+    normalized.includes("/agent_workspace/") ||
+    normalized.includes("/workspace_pulled/") ||
+    normalized.includes("/support/")
+  );
+}
+
+function workspaceAttachmentEligibleForMergedPdf(att, docKey=""){
   const fileInfo = workspaceAttachmentStoredFileStat(att);
   if (!fileInfo) return false;
 
   const storedPath = fileInfo.storedPath;
+  const key = workspaceAttachmentDocKey(att, docKey);
+
+  if (!workspaceAttachmentStoredPathLooksUserOrPulled(storedPath)) return false;
+  if (workspaceAttachmentLooksGeneratedPacketFile(att, storedPath)) return false;
   if (workspaceAttachmentLooksPlaceholder(att, storedPath)) return false;
 
-  const key = workspaceAttachmentDocKey(att, docKey);
-  const knownEvidenceKeys = workspaceKnownEvidenceDocKeys();
-  const ext = path.extname(String(workspaceAttachmentFilename(att) || storedPath || "")).toLowerCase();
+  if (key === "lmn" || key === "letter_of_medical_necessity") return false;
 
   if (workspaceAttachmentHasExplicitSourceProof(att)) return true;
-
-  if (key && knownEvidenceKeys.has(key)) return false;
-  if (ext === ".pdf") return false;
 
   const sourceType = String(att?.source_type || att?.source || att?.source_system || "").toLowerCase();
   const sourceStatus = String(att?.source_status || "").toLowerCase();
   const proofLevel = String(att?.proof_level || "").toLowerCase();
-
   const noSourceMetadata = !sourceType && !sourceStatus && !proofLevel;
-  const hasLegacyUploadClue = !!(att?.uploaded_at || att?.filename || att?.originalName);
+  const knownEvidenceKeys = workspaceKnownEvidenceDocKeys();
 
-  return !!(noSourceMetadata && hasLegacyUploadClue);
+  if (noSourceMetadata && key && !knownEvidenceKeys.has(key)) return true;
+  if (noSourceMetadata && key === "supporting_document") return true;
+
+  return false;
+}
+
+function workspaceAttachmentIsRealSourceExhibit(att, docKey=""){
+  return workspaceAttachmentEligibleForMergedPdf(att, docKey);
 }
 
 function workspaceBuildAttachedExportExhibitItems(ws, claim, channel){
