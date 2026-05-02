@@ -19349,7 +19349,7 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-ai-help-card ul{margin:0 0 6px 18px;padding:0;}
 
       .packet-workspace-shell .ws-ai-review-mode{position:relative;border:1px solid #c7d2fe;border-left:4px solid #4f46e5;border-radius:16px;background:#f8fafc;padding:14px;margin-top:10px;}
-      .packet-workspace-shell .ws-ai-review-mode.is-regenerating{min-height:240px;}
+      .packet-workspace-shell .ws-ai-review-mode.is-regenerating{min-height:0;}
       .packet-workspace-shell .ws-org-logo-preview{max-height:72px;max-width:170px;object-fit:contain;border-radius:8px;border:1px solid #e5e7eb;background:#fff;padding:5px;}
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-track-changes,
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-review-footer-note,
@@ -19358,7 +19358,7 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerate-prompt{opacity:.35;filter:blur(1px);pointer-events:none;}
       .packet-workspace-shell .ws-ai-regenerate-controls{display:flex;gap:10px;align-items:center;margin:10px 0;flex-wrap:wrap;}
       .packet-workspace-shell .ws-ai-regenerate-controls .ws-ai-regenerate-prompt{flex:1 1 320px;min-width:260px;}
-      .packet-workspace-shell .ws-ai-regenerating-overlay{display:none;position:absolute;inset:14px;z-index:999;align-items:center;justify-content:center;text-align:center;border:1px solid #bfdbfe;background:rgba(239,246,255,.97);color:#1e3a8a;border-radius:16px;font-weight:950;padding:18px;box-shadow:0 18px 45px rgba(15,23,42,.12);pointer-events:auto;}
+      .packet-workspace-shell .ws-ai-regenerating-overlay{display:none;position:static;inset:auto;z-index:1;align-items:center;justify-content:center;text-align:center;border:1px solid #bfdbfe;background:#eff6ff;color:#1e3a8a;border-radius:14px;font-weight:950;padding:12px 14px;margin:0 0 12px 0;box-shadow:none;pointer-events:auto;width:100%;box-sizing:border-box;}
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerating-overlay{display:flex !important;}
       .packet-workspace-shell .ws-ai-review-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;}
       .packet-workspace-shell .ws-ai-review-title{font-weight:950;color:#111827;}
@@ -21425,7 +21425,7 @@ function renderEditablePacketSection(opts){
   function syncFinalText(review){ if (!review) return; var textarea = review.querySelector("textarea[data-ai-final-text]"); if (!textarea) return; textarea.value = buildFinalText(review); }
   function firstValue(review, name, dataAttr){ if (!review) return ""; var fromData = dataAttr ? String(review.getAttribute(dataAttr) || "").trim() : ""; if (fromData) return fromData; var form = review.querySelector(".ws-ai-action-form[data-ai-action='apply']"); var field = form ? form.querySelector("[name='" + name + "']") : null; return field ? String(field.value || "").trim() : ""; }
   function buildRegeneratePayload(button){ var review = getReviewRoot(button); syncFinalText(review); var promptInput = review ? review.querySelector("[data-ai-regenerate-prompt]") : null; var prompt = promptInput ? String(promptInput.value || "") : ""; var payload = new URLSearchParams(); payload.set("billed_id", firstValue(review, "billed_id", "data-billed-id")); payload.set("channel", firstValue(review, "channel", "data-channel") || "appeal"); payload.set("section_key", firstValue(review, "section_key", "data-section-key")); payload.set("after", buildFinalText(review)); payload.set("regenerate_prompt", prompt); payload.set("regenerate", "1"); return { review: review, payload: payload, action: String((button && button.getAttribute("data-regenerate-action")) || (review && review.getAttribute("data-regenerate-action")) || "/ai-workspace/regenerate-diff") }; }
-  function setRegenerateUiState(button, review){ if (review) { review.classList.add("is-regenerating"); review.setAttribute("aria-busy", "true"); var overlay = review.querySelector(".ws-ai-regenerating-overlay"); if (overlay) { overlay.textContent = "Regenerating a new version… Keep this page open."; overlay.style.display = "flex"; overlay.style.visibility = "visible"; overlay.style.opacity = "1"; overlay.style.zIndex = "999"; } review.querySelectorAll("button, input, textarea").forEach(function(el){ if (!el || el.type === "hidden") return; el.disabled = true; }); review.querySelectorAll("[contenteditable='true'], [data-ai-interactive-diff]").forEach(function(el){ el.setAttribute("aria-disabled", "true"); el.setAttribute("contenteditable", "false"); }); } if (button) { button.dataset.regenerating = "1"; button.disabled = true; button.textContent = "Regenerating..."; } try { if (review) void review.offsetHeight; } catch(e) {} }
+  function setRegenerateUiState(button, review){ if (review) { review.classList.add("is-regenerating"); review.setAttribute("aria-busy", "true"); var overlay = review.querySelector(".ws-ai-regenerating-overlay"); if (overlay) { overlay.textContent = "Regenerating a new version… Keep this page open."; overlay.style.display = "flex"; overlay.style.visibility = "visible"; overlay.style.opacity = "1"; overlay.style.position = "static"; overlay.style.zIndex = "1"; } review.querySelectorAll("button, input, textarea").forEach(function(el){ if (!el || el.type === "hidden") return; el.disabled = true; }); review.querySelectorAll("[contenteditable='true'], [data-ai-interactive-diff]").forEach(function(el){ el.setAttribute("aria-disabled", "true"); el.setAttribute("contenteditable", "false"); }); } if (button) { button.dataset.regenerating = "1"; button.disabled = true; button.textContent = "Regenerating..."; } try { if (review) void review.offsetHeight; } catch(e) {} }
   function waitForPaintThenFetch(fn){ requestAnimationFrame(function(){ requestAnimationFrame(function(){ setTimeout(fn, 180); }); }); }
   function submitRegenerateWithOverlay(button){ if (!button || button.dataset.regenerating === "1") return false; var built = buildRegeneratePayload(button); if (!built.review) return false; setRegenerateUiState(button, built.review); waitForPaintThenFetch(function(){ fetch(built.action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: built.payload.toString(), credentials: "same-origin", redirect: "follow" }).then(function(resp){ if (resp && resp.url) window.location.href = resp.url; else window.location.reload(); }).catch(function(){ var tmp = document.createElement("form"); tmp.method = "POST"; tmp.action = built.action; tmp.style.display = "none"; built.payload.forEach(function(value, key){ var input = document.createElement("input"); input.type = "hidden"; input.name = key; input.value = value; tmp.appendChild(input); }); document.body.appendChild(tmp); tmp.submit(); }); }); return false; }
   function handleRegenerateClick(e, btn){ if (e) { e.preventDefault(); e.stopPropagation(); if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation(); } submitRegenerateWithOverlay(btn); return false; }
@@ -22709,7 +22709,8 @@ function workspaceBuildExportExhibitItems(ws, claim, channel){
 
 function workspaceExhibitHasSourceFile(exhibit){
   const att = exhibit && exhibit.attachment ? exhibit.attachment : null;
-  return !!workspaceAttachmentStoredFileStat(att);
+  return !!workspaceAttachmentStoredFileStat(att) &&
+    !workspaceAttachmentLooksPlaceholder(att, workspaceAttachmentStoredPath(att));
 }
 
 function workspaceAttachmentStoredFileStat(att){
@@ -22721,9 +22722,99 @@ function workspaceAttachmentStoredFileStat(att){
     return { storedPath, stat };
   } catch (e) { return null; }
 }
+function workspaceAttachmentDocKey(att, fallback="") {
+  return String(att?.doc_key || att?.key || att?.document_key || fallback || "").trim();
+}
+
+function workspaceKnownEvidenceDocKeys(){
+  return new Set([
+    "denial_letter",
+    "eob",
+    "eob_era",
+    "claim_form",
+    "itemized_bill",
+    "medical_records",
+    "clinical_documentation",
+    "prior_auth",
+    "authorization",
+    "provider_authorization",
+    "payer_policy",
+    "policy",
+    "contract",
+    "contract_excerpt",
+    "fee_schedule",
+    "payer_correspondence",
+    "payment_history",
+    "variance_calc",
+    "lmn"
+  ]);
+}
+
+function workspaceAttachmentHasExplicitSourceProof(att){
+  const sourceType = String(att?.source_type || att?.source || att?.source_system || "").toLowerCase();
+  const sourceStatus = String(att?.source_status || "").toLowerCase();
+  const proofLevel = String(att?.proof_level || "").toLowerCase();
+
+  const manualUpload =
+    sourceType === "manual_upload" ||
+    sourceType.includes("manual") ||
+    String(att?.source_label || "").toLowerCase().includes("manual upload") ||
+    String(att?.source_system || "").toLowerCase().includes("user upload");
+
+  const pulledSource =
+    ["ehr", "clearinghouse", "payer_portal"].some(t => sourceType.includes(t)) &&
+    (
+      sourceStatus === "pulled" ||
+      proofLevel === "pulled_source_document" ||
+      att?.is_source_document === true
+    );
+
+  const explicitSource =
+    att?.is_source_document === true ||
+    proofLevel === "manual_source_document" ||
+    proofLevel === "pulled_source_document" ||
+    sourceStatus === "attached" ||
+    sourceStatus === "pulled";
+
+  return !!(manualUpload || pulledSource || explicitSource);
+}
+
+function workspaceAttachmentLooksGeneratedPacketFile(att, storedPath){
+  const meta = [
+    att?.filename,
+    att?.originalName,
+    att?.source_type,
+    att?.source_status,
+    att?.proof_level,
+    att?.source_label,
+    att?.source_system,
+    att?.reason,
+    att?.message,
+    att?.note,
+    att?.generated_reason,
+    storedPath
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  if (!meta) return false;
+
+  if (/packet_exports|packet export|generated_packet|generated packet|appeal packet|appeal_letter|appeal letter|cover_letter|cover letter|letter_of_medical_necessity|system-found evidence|system_found_evidence|system evidence summary|evidence summary|source proof placeholder|generated source proof|draft evidence/.test(meta)) return true;
+
+  try {
+    if (typeof PACKET_EXPORT_DIR !== "undefined" && storedPath) {
+      const resolved = path.resolve(storedPath);
+      const exportDir = path.resolve(PACKET_EXPORT_DIR);
+      if (resolved.startsWith(exportDir)) return true;
+    }
+  } catch(e) {}
+
+  return false;
+}
+
 function workspaceAttachmentLooksPlaceholder(att, storedPath){
+  if (workspaceAttachmentHasExplicitSourceProof(att)) return false;
+  if (workspaceAttachmentLooksGeneratedPacketFile(att, storedPath)) return true;
   const meta = [att?.filename, att?.originalName, att?.source_type, att?.source_status, att?.proof_level, att?.source_label, att?.source_system, att?.reason, att?.message, att?.note, att?.generated_reason].filter(Boolean).join(" ").toLowerCase();
-  if (/placeholder|fallback|draft_evidence|draft evidence|not_found|unavailable|missing source|source_document_required/.test(meta)) return true;
+  if (/placeholder|fallback|draft_evidence|draft evidence|draft evidence pdf|not_found|unavailable|missing source|source_document_required|generated packet|packet export|system evidence summary|source proof placeholder|adapter did not return source file/.test(meta)) return true;
   if (/system-derived|system derived|generated\/pulled|generated evidence|adapter did not return|did not return a source file/.test(meta)) return true;
   try {
     const ext = path.extname(String(workspaceAttachmentFilename(att) || storedPath || "")).toLowerCase();
@@ -22734,25 +22825,36 @@ function workspaceAttachmentLooksPlaceholder(att, storedPath){
   } catch (e) {}
   return false;
 }
-function workspaceAttachmentIsRealSourceExhibit(att){
+function workspaceAttachmentIsRealSourceExhibit(att, docKey=""){
   const fileInfo = workspaceAttachmentStoredFileStat(att);
   if (!fileInfo) return false;
+
   const storedPath = fileInfo.storedPath;
   if (workspaceAttachmentLooksPlaceholder(att, storedPath)) return false;
+
+  const key = workspaceAttachmentDocKey(att, docKey);
+  const knownEvidenceKeys = workspaceKnownEvidenceDocKeys();
+  const ext = path.extname(String(workspaceAttachmentFilename(att) || storedPath || "")).toLowerCase();
+
+  if (workspaceAttachmentHasExplicitSourceProof(att)) return true;
+
+  if (key && knownEvidenceKeys.has(key)) return false;
+  if (ext === ".pdf") return false;
+
   const sourceType = String(att?.source_type || att?.source || att?.source_system || "").toLowerCase();
   const sourceStatus = String(att?.source_status || "").toLowerCase();
   const proofLevel = String(att?.proof_level || "").toLowerCase();
-  const explicitSource = att?.is_source_document === true || proofLevel === "manual_source_document" || proofLevel === "pulled_source_document" || sourceStatus === "attached" || sourceStatus === "pulled";
-  const manualUpload = sourceType === "manual_upload" || sourceType.includes("manual") || String(att?.source_label || "").toLowerCase().includes("manual upload") || String(att?.source_system || "").toLowerCase().includes("user upload");
-  const pulledSource = ["ehr", "clearinghouse", "payer_portal"].some(t => sourceType.includes(t)) && (sourceStatus === "pulled" || proofLevel === "pulled_source_document" || att?.is_source_document === true);
-  const legacyUploadedFile = !sourceType && !proofLevel && !sourceStatus && !!storedPath;
-  return !!(manualUpload || pulledSource || explicitSource || legacyUploadedFile);
+
+  const noSourceMetadata = !sourceType && !sourceStatus && !proofLevel;
+  const hasLegacyUploadClue = !!(att?.uploaded_at || att?.filename || att?.originalName);
+
+  return !!(noSourceMetadata && hasLegacyUploadClue);
 }
 
 function workspaceBuildAttachedExportExhibitItems(ws, claim, channel){
   const seen = new Set();
   return workspaceBuildExportExhibitItems(ws, claim, channel)
-    .filter(item => item && item.attachment && workspaceAttachmentIsRealSourceExhibit(item.attachment))
+    .filter(item => item && item.attachment && workspaceAttachmentIsRealSourceExhibit(item.attachment, item.docKey))
     .filter(item => {
       const att = item && item.attachment ? item.attachment : null;
       const storedPath = att ? workspaceAttachmentStoredPath(att) : "";
@@ -23066,22 +23168,35 @@ The reimbursement received does not align with the expected amount based on appl
 
   const systemEvidenceItems = workspaceBuildSystemEvidenceExportItems(ws, claim, channel);
   if (systemEvidenceItems.length) {
-    doc.addPage();
-    doc.font("Helvetica-Bold").fontSize(16).text("System-Found Evidence Summaries", { width: CONTENT_WIDTH, align: "left" });
-    doc.moveDown(0.5);
-    doc.font("Helvetica").fontSize(10).text(
-      "The following evidence was found in claim, payment, contract, or payer-policy data already in the system. These summaries are included for packet context. Upload the actual source document when the payer requires attachment proof.",
-      { width: CONTENT_WIDTH, lineGap: 3 }
-    );
-    doc.moveDown(1);
-
     systemEvidenceItems.forEach((item) => {
-      doc.font("Helvetica-Bold").fontSize(12).text(item.label || workspaceDocLabel(item.docKey), { width: CONTENT_WIDTH });
+      const evidenceLabel = item.label || workspaceDocLabel(item.docKey) || "System-Found Evidence";
+
+      doc.addPage();
+      doc.font("Helvetica-Bold").fontSize(16).text(`System-Found Evidence — ${evidenceLabel}`, {
+        width: CONTENT_WIDTH,
+        align: "left"
+      });
+
+      doc.moveDown(0.5);
+      doc.font("Helvetica").fontSize(10).text(
+        "This evidence was found in claim, payment, contract, or payer-policy data already in the system. It is included as readable packet context. Upload or pull the actual source document separately when payer submission requires source-file proof.",
+        { width: CONTENT_WIDTH, lineGap: 3 }
+      );
+
+      doc.moveDown(0.8);
+      doc.font("Helvetica-Bold").fontSize(11).text("Evidence Status", { width: CONTENT_WIDTH });
       doc.font("Helvetica").fontSize(10).text(`Status: ${item.statusLabel || "Found in System"}`, { width: CONTENT_WIDTH });
       if (item.source) doc.text(`Source: ${item.source}`, { width: CONTENT_WIDTH });
-      doc.moveDown(0.35);
-      workspacePdfTextBlock(doc, item.previewText, { width: CONTENT_WIDTH, fontSize: 9, lineGap: 2 });
+      if (item.reason) doc.text(`Reason: ${item.reason}`, { width: CONTENT_WIDTH });
+
       doc.moveDown(0.8);
+      doc.font("Helvetica-Bold").fontSize(11).text("Evidence Details", { width: CONTENT_WIDTH });
+      doc.moveDown(0.25);
+      workspacePdfTextBlock(doc, item.previewText, {
+        width: CONTENT_WIDTH,
+        fontSize: 9,
+        lineGap: 2
+      });
     });
   }
 
@@ -23141,7 +23256,8 @@ async function buildMergedPacketPDF({ claim, derived, ws, channel, res, preview=
   for (const exhibit of exhibits) {
     try {
       const att = exhibit.attachment || null;
-      if (!att || !workspaceAttachmentIsRealSourceExhibit(att)) continue;
+      if (!att) continue;
+      if (!workspaceAttachmentIsRealSourceExhibit(att, exhibit.docKey)) continue;
       const fileInfo = workspaceAttachmentStoredFileStat(att);
       const storedPath = fileInfo ? fileInfo.storedPath : "";
       const hasFile = !!storedPath;
