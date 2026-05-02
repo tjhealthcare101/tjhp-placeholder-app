@@ -19354,8 +19354,11 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-track-changes,
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-review-footer-note,
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-review-actions,
+      .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerate-controls,
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerate-prompt{opacity:.35;filter:blur(1px);pointer-events:none;}
-      .packet-workspace-shell .ws-ai-regenerating-overlay{display:none;position:absolute;inset:14px;z-index:50;align-items:center;justify-content:center;text-align:center;border:1px solid #bfdbfe;background:rgba(239,246,255,.96);color:#1e3a8a;border-radius:16px;font-weight:950;padding:18px;box-shadow:0 18px 45px rgba(15,23,42,.12);}
+      .packet-workspace-shell .ws-ai-regenerate-controls{display:flex;gap:10px;align-items:center;margin:10px 0;flex-wrap:wrap;}
+      .packet-workspace-shell .ws-ai-regenerate-controls .ws-ai-regenerate-prompt{flex:1 1 320px;min-width:260px;}
+      .packet-workspace-shell .ws-ai-regenerating-overlay{display:none;position:absolute;inset:14px;z-index:999;align-items:center;justify-content:center;text-align:center;border:1px solid #bfdbfe;background:rgba(239,246,255,.97);color:#1e3a8a;border-radius:16px;font-weight:950;padding:18px;box-shadow:0 18px 45px rgba(15,23,42,.12);pointer-events:auto;}
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerating-overlay{display:flex !important;}
       .packet-workspace-shell .ws-ai-review-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;}
       .packet-workspace-shell .ws-ai-review-title{font-weight:950;color:#111827;}
@@ -21398,202 +21401,43 @@ function renderEditablePacketSection(opts){
   const canUndoAi = !!(lastAiUndo && String(lastAiUndo.section_key || "") === section_key && String(lastAiUndo.before || "") !== String(lastAiUndo.after || ""));
   const undoAiHtml = canUndoAi ? `<form method="POST" action="/ai-workspace/undo-ai-change" class="ws-local-undo-form"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><button class="btn secondary small" type="submit">Undo AI Change</button></form>` : "";
   const localQueueInfoHtml = hasAiPreview && appliedPrevSection ? `<div class="ws-local-status info">Previous section updated. Now reviewing ${safeStr(title)}.</div>` : ``;
-  const aiReviewHtml = hasAiPreview ? `<div class="ws-section-body ws-ai-review-mode">${localQueueInfoHtml}<div class="ws-ai-regenerating-overlay">Regenerating a new version… Keep this page open.</div><div class="ws-ai-review-head"><div><div class="ws-ai-review-title">AI proposed update for ${safeStr(title)}</div><div class="ws-ai-review-copy">Review the AI-updated section below. New AI text is highlighted in green. You can type directly in the section before applying.</div></div>${pending.length ? `<span class="badge warn">Next: ${safeStr(nextLabel)}</span>` : `<span class="badge ok">Final item</span>`}</div>${aiQueue.length > 1 ? `<div class="ws-ai-queue-note"><div><strong>AI section queue</strong><div class="muted small">${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}</div></div>${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(nextLabel)}</div>` : ""}</div>` : ""}<div class="ws-track-changes">${workspaceAiInteractiveTrackChangesHtml(aiPreview.before || "", aiPreview.after || "")}</div><form method="POST" action="/ai-workspace/apply-diff" class="ws-ai-action-form" data-ai-action="apply" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea
+  const aiReviewHtml = hasAiPreview ? `<div class="ws-section-body ws-ai-review-mode" data-ai-review-root data-billed-id="${safeStr(billed_id)}" data-channel="${safeStr(channel)}" data-section-key="${safeStr(section_key)}" data-regenerate-action="/ai-workspace/regenerate-diff">${localQueueInfoHtml}<div class="ws-ai-regenerating-overlay" role="status" aria-live="assertive">Regenerating a new version… Keep this page open.</div><div class="ws-ai-review-head"><div><div class="ws-ai-review-title">AI proposed update for ${safeStr(title)}</div><div class="ws-ai-review-copy">Review the AI-updated section below. New AI text is highlighted in green. You can type directly in the section before applying.</div></div>${pending.length ? `<span class="badge warn">Next: ${safeStr(nextLabel)}</span>` : `<span class="badge ok">Final item</span>`}</div>${aiQueue.length > 1 ? `<div class="ws-ai-queue-note"><div><strong>AI section queue</strong><div class="muted small">${safeStr(aiQueue.map(k => workspaceAiSectionLabel(channel, k)).join(" → "))}</div></div>${pending.length ? `<div class="muted small"><strong>Next:</strong> ${safeStr(nextLabel)}</div>` : ""}</div>` : ""}<div class="ws-track-changes">${workspaceAiInteractiveTrackChangesHtml(aiPreview.before || "", aiPreview.after || "")}</div><div class="ws-ai-regenerate-controls" data-ai-regenerate-controls><input class="ws-ai-regenerate-prompt" data-ai-regenerate-prompt name="regenerate_prompt" placeholder="Optional: tell AI what to change in the regenerated version — press Enter or click Regenerate" title="Press Enter or click Regenerate to create a new version using this instruction." autocomplete="off"/><button class="btn secondary small" type="button" name="regenerate" value="1" data-ai-regenerate-button data-regenerate-action="/ai-workspace/regenerate-diff">Regenerate</button></div><form method="POST" action="/ai-workspace/apply-diff" class="ws-ai-action-form" data-ai-action="apply" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin-top:10px;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea
   name="after"
   data-ai-final-text
   class="ws-ai-final-hidden"
->${escapeHtml(aiPreview.after || "")}</textarea><input class="ws-ai-regenerate-prompt" data-ai-regenerate-prompt name="regenerate_prompt" placeholder="Optional: tell AI what to change in the regenerated version — press Enter or click Regenerate" title="Press Enter or click Regenerate to create a new version using this instruction." autocomplete="off"/><div class="ws-ai-review-footer-note">AI additions are highlighted in green. Edit the section directly, then apply when ready.</div><div class="ws-ai-review-actions"><button class="btn secondary small" type="button" name="regenerate" value="1" data-ai-regenerate-button data-regenerate-action="/ai-workspace/regenerate-diff">Regenerate</button><button class="btn" type="submit">Apply AI Update to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="ws-ai-review-actions"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
+>${escapeHtml(aiPreview.after || "")}</textarea><div class="ws-ai-review-footer-note">AI additions are highlighted in green. Edit the section directly, then apply when ready.</div><div class="ws-ai-review-actions"><button class="btn" type="submit">Apply AI Update to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="ws-ai-review-actions"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
   return `<div class="ws-section-card ws-clean-section ${hasAiPreview ? "ai-target-section" : ""}" id="${safeStr(anchorId)}" data-inline-section="${safeStr(section_key)}"><div class="ws-section-head"><div><div class="ws-section-title">${safeStr(title)}</div>${description ? `<div class="muted small" style="margin-top:3px;">${safeStr(description)}</div>` : ``}</div></div>${localSuccessHtml}${localUndoSuccessHtml}${undoAiHtml}${hasAiPreview ? aiReviewHtml : `<div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing'); setTimeout(function(){ if(window.__tjhpAutoSizeWorkspaceEditors) window.__tjhpAutoSizeWorkspaceEditors(); }, 0);">${showPreview}<div class="muted small" style="margin-top:8px;">Click this section to edit.</div></div>`}${hasAiPreview ? "" : `<form class="ws-edit-form ws-inline-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea name="value">${escapeHtml(value)}</textarea><div class="ws-inline-save"><button class="btn secondary" type="submit">Save Section</button><button class="btn secondary" type="button" onclick="this.closest('.ws-clean-section').classList.remove('editing');">Cancel</button></div></form>`}
       <script>(function(){if (window.__tjhpWorkspaceEditAutosizeBound) return;window.__tjhpWorkspaceEditAutosizeBound = true;function autoSizeOne(textarea){if (!textarea) return;var section = textarea.closest(".ws-clean-section");if (section && !section.classList.contains("editing")) return;textarea.style.height = "auto";var minHeight = 260;var sectionKey = section ? String(section.getAttribute("data-inline-section") || "") : "";if (sectionKey === "letter_of_medical_necessity") minHeight = 520;var nextHeight = Math.max(minHeight, textarea.scrollHeight + 8);textarea.style.height = nextHeight + "px";textarea.style.overflow = "hidden";}window.__tjhpAutoSizeWorkspaceEditors = function(root){var scope = root && root.querySelectorAll ? root : document;scope.querySelectorAll(".packet-workspace-shell .ws-inline-edit-form textarea").forEach(autoSizeOne);};document.addEventListener("input", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {autoSizeOne(e.target);}});document.addEventListener("focusin", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {setTimeout(function(){ autoSizeOne(e.target); }, 0);}});document.addEventListener("click", function(e){var section = e.target && e.target.closest ? e.target.closest(".packet-workspace-shell .ws-clean-section") : null;if (!section) return;setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(section); }, 0);});if (document.readyState === "loading") {document.addEventListener("DOMContentLoaded", function(){window.__tjhpAutoSizeWorkspaceEditors();});} else {setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(); }, 0);}})();</script><script>
 (function(){
   if (window.__tjhpAiInteractiveReviewBound) return;
   window.__tjhpAiInteractiveReviewBound = true;
-
-  function getReviewRoot(el){
-    return el && el.closest ? el.closest(".ws-ai-review-mode") : null;
-  }
-
+  function getReviewRoot(el){ return el && el.closest ? el.closest("[data-ai-review-root], .ws-ai-review-mode") : null; }
   function normalizeText(text){
+    var NL = String.fromCharCode(10);
+    var TAB = String.fromCharCode(9);
     return String(text || "")
       .replace(/\u00a0/g, " ")
-      .replace(/[ \t]+\n/g, "\n")
-      .replace(/\n{4,}/g, "\n\n\n")
+      .replace(new RegExp("[ " + TAB + "]+" + NL, "g"), NL)
+      .replace(new RegExp(NL + "{4,}", "g"), NL + NL + NL)
       .trim();
   }
-
-  function buildFinalText(review){
-    if (!review) return "";
-
-    var editor = review.querySelector("[data-ai-interactive-diff]");
-    if (!editor) {
-      var textareaFallback = review.querySelector("textarea[data-ai-final-text]");
-      return textareaFallback ? String(textareaFallback.value || "") : "";
-    }
-
-    return normalizeText(editor.textContent || "");
-  }
-
-  function syncFinalText(review){
-    if (!review) return;
-    var textarea = review.querySelector("textarea[data-ai-final-text]");
-    if (!textarea) return;
-    textarea.value = buildFinalText(review);
-  }
-
-  function buildRegeneratePayload(form, review){
-    syncFinalText(review);
-
-    var fd = new FormData(form);
-    var currentText = buildFinalText(review);
-    var promptInput = form.querySelector("[data-ai-regenerate-prompt]");
-    var prompt = promptInput ? String(promptInput.value || "") : "";
-
-    fd.set("after", currentText);
-    fd.set("regenerate_prompt", prompt);
-    fd.set("regenerate", "1");
-
-    return new URLSearchParams(fd);
-  }
-
-  function setRegenerateUiState(button, review){
-    if (review) {
-      review.classList.add("is-regenerating");
-      review.setAttribute("aria-busy", "true");
-      var overlay = review.querySelector(".ws-ai-regenerating-overlay");
-      if (overlay) {
-        overlay.textContent = "Regenerating a new version… Keep this page open.";
-        overlay.style.display = "flex";
-        overlay.style.visibility = "visible";
-        overlay.setAttribute("role", "status");
-        overlay.setAttribute("aria-live", "assertive");
-      }
-      review.querySelectorAll("button, input, textarea").forEach(function(el){
-        if (el && el.type !== "hidden") el.disabled = true;
-      });
-      review.querySelectorAll("[contenteditable='true'], [data-ai-interactive-diff]").forEach(function(el){
-        el.setAttribute("aria-disabled", "true");
-        el.setAttribute("contenteditable", "false");
-      });
-    }
-
-    if (button) {
-      button.dataset.regenerating = "1";
-      button.disabled = true;
-      button.textContent = "Regenerating...";
-    }
-
-    try { if (review) void review.offsetHeight; } catch(e) {}
-  }
-
-  function waitForPaintThenFetch(fn){
-    requestAnimationFrame(function(){
-      requestAnimationFrame(function(){
-        setTimeout(fn, 60);
-      });
-    });
-  }
-
-  function submitRegenerateWithOverlay(button){
-    if (!button || button.dataset.regenerating === "1") return false;
-    var form = button.closest ? button.closest(".ws-ai-action-form") : null;
-    if (!form) return false;
-
-    var review = getReviewRoot(form);
-    var action = String(button.getAttribute("data-regenerate-action") || form.getAttribute("data-regenerate-action") || "/ai-workspace/regenerate-diff");
-    var payload = buildRegeneratePayload(form, review);
-    setRegenerateUiState(button, review);
-
-    waitForPaintThenFetch(function(){
-      fetch(action, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-        body: payload.toString(),
-        credentials: "same-origin",
-        redirect: "follow"
-      })
-      .then(function(resp){
-        if (resp && resp.url) window.location.href = resp.url;
-        else window.location.reload();
-      })
-      .catch(function(){
-        var tmp = document.createElement("form");
-        tmp.method = "POST";
-        tmp.action = action;
-        tmp.style.display = "none";
-        payload.forEach(function(value, key){
-          var input = document.createElement("input");
-          input.type = "hidden";
-          input.name = key;
-          input.value = value;
-          tmp.appendChild(input);
-        });
-        document.body.appendChild(tmp);
-        tmp.submit();
-      });
-    });
-
-    return false;
-  }
-
+  function buildFinalText(review){ if (!review) return ""; var editor = review.querySelector("[data-ai-interactive-diff]"); if (!editor) { var textareaFallback = review.querySelector("textarea[data-ai-final-text]"); return textareaFallback ? String(textareaFallback.value || "") : ""; } return normalizeText(editor.textContent || ""); }
+  function syncFinalText(review){ if (!review) return; var textarea = review.querySelector("textarea[data-ai-final-text]"); if (!textarea) return; textarea.value = buildFinalText(review); }
+  function firstValue(review, name, dataAttr){ if (!review) return ""; var fromData = dataAttr ? String(review.getAttribute(dataAttr) || "").trim() : ""; if (fromData) return fromData; var form = review.querySelector(".ws-ai-action-form[data-ai-action='apply']"); var field = form ? form.querySelector("[name='" + name + "']") : null; return field ? String(field.value || "").trim() : ""; }
+  function buildRegeneratePayload(button){ var review = getReviewRoot(button); syncFinalText(review); var promptInput = review ? review.querySelector("[data-ai-regenerate-prompt]") : null; var prompt = promptInput ? String(promptInput.value || "") : ""; var payload = new URLSearchParams(); payload.set("billed_id", firstValue(review, "billed_id", "data-billed-id")); payload.set("channel", firstValue(review, "channel", "data-channel") || "appeal"); payload.set("section_key", firstValue(review, "section_key", "data-section-key")); payload.set("after", buildFinalText(review)); payload.set("regenerate_prompt", prompt); payload.set("regenerate", "1"); return { review: review, payload: payload, action: String((button && button.getAttribute("data-regenerate-action")) || (review && review.getAttribute("data-regenerate-action")) || "/ai-workspace/regenerate-diff") }; }
+  function setRegenerateUiState(button, review){ if (review) { review.classList.add("is-regenerating"); review.setAttribute("aria-busy", "true"); var overlay = review.querySelector(".ws-ai-regenerating-overlay"); if (overlay) { overlay.textContent = "Regenerating a new version… Keep this page open."; overlay.style.display = "flex"; overlay.style.visibility = "visible"; overlay.style.opacity = "1"; overlay.style.zIndex = "999"; } review.querySelectorAll("button, input, textarea").forEach(function(el){ if (!el || el.type === "hidden") return; el.disabled = true; }); review.querySelectorAll("[contenteditable='true'], [data-ai-interactive-diff]").forEach(function(el){ el.setAttribute("aria-disabled", "true"); el.setAttribute("contenteditable", "false"); }); } if (button) { button.dataset.regenerating = "1"; button.disabled = true; button.textContent = "Regenerating..."; } try { if (review) void review.offsetHeight; } catch(e) {} }
+  function waitForPaintThenFetch(fn){ requestAnimationFrame(function(){ requestAnimationFrame(function(){ setTimeout(fn, 180); }); }); }
+  function submitRegenerateWithOverlay(button){ if (!button || button.dataset.regenerating === "1") return false; var built = buildRegeneratePayload(button); if (!built.review) return false; setRegenerateUiState(button, built.review); waitForPaintThenFetch(function(){ fetch(built.action, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: built.payload.toString(), credentials: "same-origin", redirect: "follow" }).then(function(resp){ if (resp && resp.url) window.location.href = resp.url; else window.location.reload(); }).catch(function(){ var tmp = document.createElement("form"); tmp.method = "POST"; tmp.action = built.action; tmp.style.display = "none"; built.payload.forEach(function(value, key){ var input = document.createElement("input"); input.type = "hidden"; input.name = key; input.value = value; tmp.appendChild(input); }); document.body.appendChild(tmp); tmp.submit(); }); }); return false; }
+  function handleRegenerateClick(e, btn){ if (e) { e.preventDefault(); e.stopPropagation(); if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation(); } submitRegenerateWithOverlay(btn); return false; }
   window.__tjhpSubmitAiRegenerate = submitRegenerateWithOverlay;
-
-  document.addEventListener("click", function(e){
-    var btn = e.target && e.target.closest ? e.target.closest("[data-ai-regenerate-button]") : null;
-    if (!btn) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-    if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
-
-    submitRegenerateWithOverlay(btn);
-  }, true);
-
-  document.addEventListener("input", function(e){
-    var target = e.target;
-    if (!target || !target.closest) return;
-
-    var review = target.closest(".ws-ai-review-mode");
-    if (!review) return;
-
-    if (
-      target.matches("[data-ai-interactive-diff]") ||
-      target.closest("[data-ai-interactive-diff]")
-    ) {
-      syncFinalText(review);
-    }
-  });
-
-  document.addEventListener("submit", function(e){
-    var form = e.target;
-    if (!form || !form.matches || !form.matches(".ws-ai-action-form")) return;
-
-    var review = getReviewRoot(form);
-    if (document.activeElement && document.activeElement.matches && document.activeElement.matches("[data-ai-regenerate-prompt]")) {
-      e.preventDefault();
-      var btn = form.querySelector("[data-ai-regenerate-button]");
-      if (btn && typeof btn.click === "function") btn.click();
-      return;
-    }
-
-    syncFinalText(review);
-  }, true);
-
-  document.addEventListener("keydown", function(e){
-    var target = e.target;
-    if (!target || !target.matches || !target.matches("[data-ai-regenerate-prompt]")) return;
-
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      e.stopPropagation();
-      var form = target.closest(".ws-ai-action-form");
-      if (!form) return;
-      var btn = form.querySelector("[data-ai-regenerate-button]");
-      if (btn && typeof btn.click === "function") btn.click();
-    }
-  });
-
-  document.querySelectorAll(".ws-ai-review-mode").forEach(syncFinalText);
-})();
+  function bindRegenerateControls(root){ var scope = root && root.querySelectorAll ? root : document; scope.querySelectorAll("[data-ai-regenerate-button]").forEach(function(btn){ if (btn.dataset.regenerateBound === "1") return; btn.dataset.regenerateBound = "1"; btn.setAttribute("type", "button"); btn.addEventListener("click", function(e){ return handleRegenerateClick(e, btn); }, true); btn.onclick = function(e){ return handleRegenerateClick(e || window.event, btn); }; }); scope.querySelectorAll("[data-ai-regenerate-prompt]").forEach(function(input){ if (input.dataset.regeneratePromptBound === "1") return; input.dataset.regeneratePromptBound = "1"; input.addEventListener("keydown", function(e){ if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation(); var review = getReviewRoot(input); var btn = review ? review.querySelector("[data-ai-regenerate-button]") : null; if (btn) submitRegenerateWithOverlay(btn); return false; } }, true); }); }
+  document.addEventListener("click", function(e){ var btn = e.target && e.target.closest ? e.target.closest("[data-ai-regenerate-button]") : null; if (!btn) return; handleRegenerateClick(e, btn); }, true);
+  document.addEventListener("keydown", function(e){ var target = e.target; if (!target || !target.matches || !target.matches("[data-ai-regenerate-prompt]")) return; if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation(); var review = getReviewRoot(target); var btn = review ? review.querySelector("[data-ai-regenerate-button]") : null; if (btn) submitRegenerateWithOverlay(btn); return false; } }, true);
+  document.addEventListener("input", function(e){ var target = e.target; if (!target || !target.closest) return; var review = target.closest("[data-ai-review-root], .ws-ai-review-mode"); if (!review) return; if (target.matches("[data-ai-interactive-diff]") || target.closest("[data-ai-interactive-diff]")) syncFinalText(review); });
+  document.addEventListener("submit", function(e){ var form = e.target; if (!form || !form.matches || !form.matches(".ws-ai-action-form")) return; var review = getReviewRoot(form); if (document.activeElement && document.activeElement.matches && document.activeElement.matches("[data-ai-regenerate-prompt]")) { e.preventDefault(); var btn = review ? review.querySelector("[data-ai-regenerate-button]") : null; if (btn) submitRegenerateWithOverlay(btn); return false; } syncFinalText(review); }, true);
+  bindRegenerateControls(document);
+  document.querySelectorAll("[data-ai-review-root], .ws-ai-review-mode").forEach(syncFinalText);
+})();;
 </script><script>
 (function(){
   if (window.__tjhpWorkspaceAnchorScrollBound) return;
@@ -22864,29 +22708,55 @@ function workspaceBuildExportExhibitItems(ws, claim, channel){
 }
 
 function workspaceExhibitHasSourceFile(exhibit){
+  const att = exhibit && exhibit.attachment ? exhibit.attachment : null;
+  return !!workspaceAttachmentStoredFileStat(att);
+}
+
+function workspaceAttachmentStoredFileStat(att){
   try {
-    const att = exhibit && exhibit.attachment ? exhibit.attachment : null;
-    if (!att) return false;
     const storedPath = workspaceAttachmentStoredPath(att);
-    if (!storedPath) return false;
-    if (!fs.existsSync(storedPath)) return false;
+    if (!storedPath || !fs.existsSync(storedPath)) return null;
     const stat = fs.statSync(storedPath);
-    if (!stat || !stat.isFile()) return false;
-    if (typeof stat.size === "number" && stat.size <= 0) return false;
-    return true;
-  } catch (e) {
-    return false;
-  }
+    if (!stat || !stat.isFile() || (typeof stat.size === "number" && stat.size <= 0)) return null;
+    return { storedPath, stat };
+  } catch (e) { return null; }
+}
+function workspaceAttachmentLooksPlaceholder(att, storedPath){
+  const meta = [att?.filename, att?.originalName, att?.source_type, att?.source_status, att?.proof_level, att?.source_label, att?.source_system, att?.reason, att?.message, att?.note, att?.generated_reason].filter(Boolean).join(" ").toLowerCase();
+  if (/placeholder|fallback|draft_evidence|draft evidence|not_found|unavailable|missing source|source_document_required/.test(meta)) return true;
+  if (/system-derived|system derived|generated\/pulled|generated evidence|adapter did not return|did not return a source file/.test(meta)) return true;
+  try {
+    const ext = path.extname(String(workspaceAttachmentFilename(att) || storedPath || "")).toLowerCase();
+    if (storedPath && [".txt", ".csv", ".json", ".html", ".htm"].includes(ext)) {
+      const sample = fs.readFileSync(storedPath, "utf8").slice(0, 4000).toLowerCase();
+      if (sample.includes("this placeholder was created because the integration connection exists but did not return a source file") || sample.includes("upload the original source document if payer submission requires") || sample.includes("source document required") || sample.includes("missing source document")) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+function workspaceAttachmentIsRealSourceExhibit(att){
+  const fileInfo = workspaceAttachmentStoredFileStat(att);
+  if (!fileInfo) return false;
+  const storedPath = fileInfo.storedPath;
+  if (workspaceAttachmentLooksPlaceholder(att, storedPath)) return false;
+  const sourceType = String(att?.source_type || att?.source || att?.source_system || "").toLowerCase();
+  const sourceStatus = String(att?.source_status || "").toLowerCase();
+  const proofLevel = String(att?.proof_level || "").toLowerCase();
+  const explicitSource = att?.is_source_document === true || proofLevel === "manual_source_document" || proofLevel === "pulled_source_document" || sourceStatus === "attached" || sourceStatus === "pulled";
+  const manualUpload = sourceType === "manual_upload" || sourceType.includes("manual") || String(att?.source_label || "").toLowerCase().includes("manual upload") || String(att?.source_system || "").toLowerCase().includes("user upload");
+  const pulledSource = ["ehr", "clearinghouse", "payer_portal"].some(t => sourceType.includes(t)) && (sourceStatus === "pulled" || proofLevel === "pulled_source_document" || att?.is_source_document === true);
+  const legacyUploadedFile = !sourceType && !proofLevel && !sourceStatus && !!storedPath;
+  return !!(manualUpload || pulledSource || explicitSource || legacyUploadedFile);
 }
 
 function workspaceBuildAttachedExportExhibitItems(ws, claim, channel){
   const seen = new Set();
   return workspaceBuildExportExhibitItems(ws, claim, channel)
-    .filter(item => workspaceExhibitHasSourceFile(item))
+    .filter(item => item && item.attachment && workspaceAttachmentIsRealSourceExhibit(item.attachment))
     .filter(item => {
       const att = item && item.attachment ? item.attachment : null;
       const storedPath = att ? workspaceAttachmentStoredPath(att) : "";
-      const dedupeKey = [att?.id || att?.attachment_id || "", storedPath || "", item?.docKey || ""].join("|");
+      const dedupeKey = storedPath || String(att?.attachment_id || att?.id || att?.file_id || "") || String(item?.docKey || "");
       if (seen.has(dedupeKey)) return false;
       seen.add(dedupeKey);
       return true;
@@ -22894,18 +22764,19 @@ function workspaceBuildAttachedExportExhibitItems(ws, claim, channel){
 }
 
 function workspaceBuildSystemEvidenceExportItems(ws, claim, channel){
+  const allowedSystemSummaryKeys = new Set(["denial_letter","eob_era","payment_history","payer_policy","contract_excerpt","fee_schedule","variance_calc","payer_correspondence"]);
   const plan = workspacePacketAttachmentPlan(channel)
     .filter(row => !(channel === "appeal" && row.key === "lmn"));
   const attachedItems = workspaceBuildAttachedExportExhibitItems(ws, claim, channel);
   const attachedDocKeys = new Set(attachedItems.map(item => String(item.docKey || "").trim()).filter(Boolean));
   const readiness = buildWorkspaceAutomationReadiness(ws, claim, channel);
   const rows = Array.isArray(readiness?.rows) ? readiness.rows : [];
-  const hasEvidenceSignals = /\b(payer|claim\s*#?|claim\s*number|paid\s*amount|expected\s*amount|allowed\s*amount|denial\s*code|remark\s*code|contract\s*rule|policy\s*source|cached\s*source|payment\s*history)\b/i;
-  const missingLike = /\b(no supporting documents uploaded|no source document|not uploaded|missing|n\/a|not available|not_found|unavailable|recommended|optional|absent|placeholder)\b/i;
+  const hasEvidenceSignals = /\b(payer|claim\s*#?|claim\s*number|paid\s*amount|expected\s*amount|allowed\s*amount|denial\s*code|remark\s*code|adjustment\s*code|contract\s*rule|policy\s*source|cached\s*source|payment\s*history|EOB|ERA|remittance|reimbursement\s*policy|fee\s*schedule)\b/i;
+  const missingLike = /\b(no supporting documents uploaded|no source document|not uploaded|missing|n\/a|not available|not_found|unavailable|recommended|optional|absent|placeholder|pull_available)\b/i;
 
   return plan.map((row, index) => {
     const docKey = workspaceExhibitKeyFromRecommendationKey(row.key);
-    if (attachedDocKeys.has(String(docKey || ""))) return null;
+    if (!allowedSystemSummaryKeys.has(docKey) || attachedDocKeys.has(String(docKey || ""))) return null;
 
     const readinessRow = rows.find(r => String(r.key || "") === String(docKey || row.key || ""));
     const status = String(readinessRow?.status || "").toLowerCase();
@@ -22913,7 +22784,7 @@ function workspaceBuildSystemEvidenceExportItems(ws, claim, channel){
     const sourceType = String(readinessRow?.sourceType || "").toLowerCase();
     const sourceLabel = String(readinessRow?.sourceLabel || "").toLowerCase();
 
-    if (/(missing|recommended|optional|absent|not_found|unavailable|placeholder)/.test(status)) return null;
+    if (/(missing|recommended|optional|absent|not_found|unavailable|placeholder|pull_available)/.test(status)) return null;
     const isSystemFound = (
       status === "present" ||
       proofLevel === "draft_evidence" ||
@@ -22927,6 +22798,7 @@ function workspaceBuildSystemEvidenceExportItems(ws, claim, channel){
 
     const previewText = String(workspaceEvidencePreviewText(ws, claim, { key: docKey, label: row.title }, readinessRow, channel) || "").trim();
     if (!previewText) return null;
+    if (docKey === "payer_correspondence" && !/(payer|correspondence|portal|call|email|letter|fax)/i.test(previewText)) return null;
     if (missingLike.test(previewText) && !hasEvidenceSignals.test(previewText)) return null;
 
     return {
@@ -22938,7 +22810,7 @@ function workspaceBuildSystemEvidenceExportItems(ws, claim, channel){
       attachment: null,
       position: index + 1,
       statusLabel: readinessRow?.statusLabel || readinessRow?.proofLabel || "Found in System",
-      previewText
+      previewText: previewText.slice(0, 1800)
     };
   }).filter(Boolean);
 }
@@ -23178,7 +23050,7 @@ The reimbursement received does not align with the expected amount based on appl
     doc.font("Helvetica-Bold").fontSize(16).text("Attached Supporting Documents", { width: CONTENT_WIDTH, align: "left" });
     doc.moveDown(0.5);
     doc.font("Helvetica").fontSize(10).text(
-      "The following uploaded source files are attached to this packet. Missing recommended documents are tracked in the workspace readiness view but are not included as blank PDF pages.",
+      "Only real uploaded or pulled source files are listed here. Missing recommended documents remain tracked in the workspace but are not included as blank PDF pages.",
       { width: CONTENT_WIDTH, lineGap: 3 }
     );
     doc.moveDown(1);
@@ -23269,8 +23141,10 @@ async function buildMergedPacketPDF({ claim, derived, ws, channel, res, preview=
   for (const exhibit of exhibits) {
     try {
       const att = exhibit.attachment || null;
-      const storedPath = att ? workspaceAttachmentStoredPath(att) : "";
-      const hasFile = !!(storedPath && fs.existsSync(storedPath));
+      if (!att || !workspaceAttachmentIsRealSourceExhibit(att)) continue;
+      const fileInfo = workspaceAttachmentStoredFileStat(att);
+      const storedPath = fileInfo ? fileInfo.storedPath : "";
+      const hasFile = !!storedPath;
       const ext = hasFile ? path.extname(String(workspaceAttachmentFilename(att) || storedPath)).toLowerCase() : "";
       if (!hasFile) continue;
 
