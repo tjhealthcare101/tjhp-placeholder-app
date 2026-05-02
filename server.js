@@ -21402,7 +21402,7 @@ function renderEditablePacketSection(opts){
   name="after"
   data-ai-final-text
   class="ws-ai-final-hidden"
->${escapeHtml(aiPreview.after || "")}</textarea><input class="ws-ai-regenerate-prompt" data-ai-regenerate-prompt name="regenerate_prompt" placeholder="Optional: tell AI what to change in the regenerated version — press Enter or click Regenerate" title="Press Enter or click Regenerate to create a new version using this instruction." autocomplete="off"/><div class="ws-ai-review-footer-note">AI additions are highlighted in green. Edit the section directly, then apply when ready.</div><div class="ws-ai-review-actions"><button class="btn secondary small" type="button" name="regenerate" value="1" data-ai-regenerate-button data-regenerate-action="/ai-workspace/regenerate-diff" onclick="return window.__tjhpSubmitAiRegenerate ? window.__tjhpSubmitAiRegenerate(this) : false;">Regenerate</button><button class="btn" type="submit">Apply AI Update to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="ws-ai-review-actions"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
+>${escapeHtml(aiPreview.after || "")}</textarea><input class="ws-ai-regenerate-prompt" data-ai-regenerate-prompt name="regenerate_prompt" placeholder="Optional: tell AI what to change in the regenerated version — press Enter or click Regenerate" title="Press Enter or click Regenerate to create a new version using this instruction." autocomplete="off"/><div class="ws-ai-review-footer-note">AI additions are highlighted in green. Edit the section directly, then apply when ready.</div><div class="ws-ai-review-actions"><button class="btn secondary small" type="button" name="regenerate" value="1" data-ai-regenerate-button data-regenerate-action="/ai-workspace/regenerate-diff">Regenerate</button><button class="btn" type="submit">Apply AI Update to ${safeStr(title)}</button></div><div class="ws-ai-next-status" data-ai-next-status></div></form><div class="ws-ai-review-actions"><form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="skip" data-current-label="${safeStr(title)}" data-next-label="${safeStr(nextLabel)}" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary small" type="submit">${pending.length ? "Skip and Continue" : "Cancel AI Update"}</button><div class="ws-ai-next-status" data-ai-next-status></div></form>${pending.length ? `<form method="POST" action="/ai-workspace/cancel-diff" class="ws-ai-action-form" data-ai-action="cancel_all" data-current-label="${safeStr(title)}" data-next-label="" style="margin:0;"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="cancel_all" value="1"/><button class="btn secondary small" type="submit">Cancel AI Queue</button><div class="ws-ai-next-status" data-ai-next-status></div></form>` : ""}</div></div>` : "";
   return `<div class="ws-section-card ws-clean-section ${hasAiPreview ? "ai-target-section" : ""}" id="${safeStr(anchorId)}" data-inline-section="${safeStr(section_key)}"><div class="ws-section-head"><div><div class="ws-section-title">${safeStr(title)}</div>${description ? `<div class="muted small" style="margin-top:3px;">${safeStr(description)}</div>` : ``}</div></div>${localSuccessHtml}${localUndoSuccessHtml}${undoAiHtml}${hasAiPreview ? aiReviewHtml : `<div class="ws-section-body click-edit" role="button" tabindex="0" onclick="this.closest('.ws-clean-section').classList.add('editing'); setTimeout(function(){ if(window.__tjhpAutoSizeWorkspaceEditors) window.__tjhpAutoSizeWorkspaceEditors(); }, 0);">${showPreview}<div class="muted small" style="margin-top:8px;">Click this section to edit.</div></div>`}${hasAiPreview ? "" : `<form class="ws-edit-form ws-inline-edit-form ${compact ? "compact" : ""}" method="POST" action="/ai-workspace/save-preview"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><textarea name="value">${escapeHtml(value)}</textarea><div class="ws-inline-save"><button class="btn secondary" type="submit">Save Section</button><button class="btn secondary" type="button" onclick="this.closest('.ws-clean-section').classList.remove('editing');">Cancel</button></div></form>`}
       <script>(function(){if (window.__tjhpWorkspaceEditAutosizeBound) return;window.__tjhpWorkspaceEditAutosizeBound = true;function autoSizeOne(textarea){if (!textarea) return;var section = textarea.closest(".ws-clean-section");if (section && !section.classList.contains("editing")) return;textarea.style.height = "auto";var minHeight = 260;var sectionKey = section ? String(section.getAttribute("data-inline-section") || "") : "";if (sectionKey === "letter_of_medical_necessity") minHeight = 520;var nextHeight = Math.max(minHeight, textarea.scrollHeight + 8);textarea.style.height = nextHeight + "px";textarea.style.overflow = "hidden";}window.__tjhpAutoSizeWorkspaceEditors = function(root){var scope = root && root.querySelectorAll ? root : document;scope.querySelectorAll(".packet-workspace-shell .ws-inline-edit-form textarea").forEach(autoSizeOne);};document.addEventListener("input", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {autoSizeOne(e.target);}});document.addEventListener("focusin", function(e){if (e.target && e.target.matches && e.target.matches(".packet-workspace-shell .ws-inline-edit-form textarea")) {setTimeout(function(){ autoSizeOne(e.target); }, 0);}});document.addEventListener("click", function(e){var section = e.target && e.target.closest ? e.target.closest(".packet-workspace-shell .ws-clean-section") : null;if (!section) return;setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(section); }, 0);});if (document.readyState === "loading") {document.addEventListener("DOMContentLoaded", function(){window.__tjhpAutoSizeWorkspaceEditors();});} else {setTimeout(function(){ window.__tjhpAutoSizeWorkspaceEditors(); }, 0);}})();</script><script>
 (function(){
@@ -21440,81 +21440,113 @@ function renderEditablePacketSection(opts){
     textarea.value = buildFinalText(review);
   }
 
-  function markAiRegenerating(button){
-    var form = button && button.closest ? button.closest(".ws-ai-action-form") : null;
-    if (!form) return null;
-
-    var review = getReviewRoot(form);
+  function buildRegeneratePayload(form, review){
     syncFinalText(review);
 
+    var fd = new FormData(form);
+    var currentText = buildFinalText(review);
+    var promptInput = form.querySelector("[data-ai-regenerate-prompt]");
+    var prompt = promptInput ? String(promptInput.value || "") : "";
+
+    fd.set("after", currentText);
+    fd.set("regenerate_prompt", prompt);
+    fd.set("regenerate", "1");
+
+    return new URLSearchParams(fd);
+  }
+
+  function setRegenerateUiState(button, review){
     if (review) {
       review.classList.add("is-regenerating");
       review.setAttribute("aria-busy", "true");
       var overlay = review.querySelector(".ws-ai-regenerating-overlay");
       if (overlay) {
-        overlay.style.display = "flex";
         overlay.textContent = "Regenerating a new version… Keep this page open.";
+        overlay.style.display = "flex";
+        overlay.style.visibility = "visible";
+        overlay.setAttribute("role", "status");
+        overlay.setAttribute("aria-live", "assertive");
       }
+      review.querySelectorAll("button, input, textarea").forEach(function(el){
+        if (el && el.type !== "hidden") el.disabled = true;
+      });
+      review.querySelectorAll("[contenteditable='true'], [data-ai-interactive-diff]").forEach(function(el){
+        el.setAttribute("aria-disabled", "true");
+        el.setAttribute("contenteditable", "false");
+      });
     }
 
-    form.querySelectorAll("button").forEach(function(btn){
-      btn.disabled = true;
-    });
-
     if (button) {
+      button.dataset.regenerating = "1";
       button.disabled = true;
       button.textContent = "Regenerating...";
     }
 
-    return { form: form, review: review };
+    try { if (review) void review.offsetHeight; } catch(e) {}
+  }
+
+  function waitForPaintThenFetch(fn){
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        setTimeout(fn, 60);
+      });
+    });
   }
 
   function submitRegenerateWithOverlay(button){
-    var state = markAiRegenerating(button);
-    if (!state || !state.form) return false;
+    if (!button || button.dataset.regenerating === "1") return false;
+    var form = button.closest ? button.closest(".ws-ai-action-form") : null;
+    if (!form) return false;
 
-    var form = state.form;
-    var action = "";
+    var review = getReviewRoot(form);
+    var action = String(button.getAttribute("data-regenerate-action") || form.getAttribute("data-regenerate-action") || "/ai-workspace/regenerate-diff");
+    var payload = buildRegeneratePayload(form, review);
+    setRegenerateUiState(button, review);
 
-    try {
-      action =
-        String(button.getAttribute("data-regenerate-action") || "") ||
-        String(button.getAttribute("formaction") || "") ||
-        "/ai-workspace/regenerate-diff";
-    } catch(e) {
-      action = "/ai-workspace/regenerate-diff";
-    }
-
-    var fd = new FormData(form);
-    fd.set("regenerate", "1");
-
-    setTimeout(function(){
+    waitForPaintThenFetch(function(){
       fetch(action, {
         method: "POST",
-        body: fd,
+        headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body: payload.toString(),
         credentials: "same-origin",
         redirect: "follow"
       })
       .then(function(resp){
-        var url = resp && resp.url ? resp.url : "";
-        if (url) window.location.href = url;
+        if (resp && resp.url) window.location.href = resp.url;
         else window.location.reload();
       })
       .catch(function(){
-        try {
-          form.setAttribute("action", action);
-          form.setAttribute("method", "POST");
-          form.submit();
-        } catch(e) {
-          window.location.reload();
-        }
+        var tmp = document.createElement("form");
+        tmp.method = "POST";
+        tmp.action = action;
+        tmp.style.display = "none";
+        payload.forEach(function(value, key){
+          var input = document.createElement("input");
+          input.type = "hidden";
+          input.name = key;
+          input.value = value;
+          tmp.appendChild(input);
+        });
+        document.body.appendChild(tmp);
+        tmp.submit();
       });
-    }, 80);
+    });
 
     return false;
   }
 
   window.__tjhpSubmitAiRegenerate = submitRegenerateWithOverlay;
+
+  document.addEventListener("click", function(e){
+    var btn = e.target && e.target.closest ? e.target.closest("[data-ai-regenerate-button]") : null;
+    if (!btn) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+
+    submitRegenerateWithOverlay(btn);
+  }, true);
 
   document.addEventListener("input", function(e){
     var target = e.target;
@@ -21534,9 +21566,17 @@ function renderEditablePacketSection(opts){
   document.addEventListener("submit", function(e){
     var form = e.target;
     if (!form || !form.matches || !form.matches(".ws-ai-action-form")) return;
+
     var review = getReviewRoot(form);
+    if (document.activeElement && document.activeElement.matches && document.activeElement.matches("[data-ai-regenerate-prompt]")) {
+      e.preventDefault();
+      var btn = form.querySelector("[data-ai-regenerate-button]");
+      if (btn && typeof btn.click === "function") btn.click();
+      return;
+    }
+
     syncFinalText(review);
-  });
+  }, true);
 
   document.addEventListener("keydown", function(e){
     var target = e.target;
@@ -21544,6 +21584,7 @@ function renderEditablePacketSection(opts){
 
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      e.stopPropagation();
       var form = target.closest(".ws-ai-action-form");
       if (!form) return;
       var btn = form.querySelector("[data-ai-regenerate-button]");
@@ -22823,62 +22864,79 @@ function workspaceBuildExportExhibitItems(ws, claim, channel){
 }
 
 function workspaceExhibitHasSourceFile(exhibit){
-  const att = exhibit && exhibit.attachment ? exhibit.attachment : null;
-  if (!att) return false;
-  const storedPath = workspaceAttachmentStoredPath(att);
-  return !!(storedPath && fs.existsSync(storedPath));
+  try {
+    const att = exhibit && exhibit.attachment ? exhibit.attachment : null;
+    if (!att) return false;
+    const storedPath = workspaceAttachmentStoredPath(att);
+    if (!storedPath) return false;
+    if (!fs.existsSync(storedPath)) return false;
+    const stat = fs.statSync(storedPath);
+    if (!stat || !stat.isFile()) return false;
+    if (typeof stat.size === "number" && stat.size <= 0) return false;
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 function workspaceBuildAttachedExportExhibitItems(ws, claim, channel){
+  const seen = new Set();
   return workspaceBuildExportExhibitItems(ws, claim, channel)
-    .filter(item => workspaceExhibitHasSourceFile(item));
+    .filter(item => workspaceExhibitHasSourceFile(item))
+    .filter(item => {
+      const att = item && item.attachment ? item.attachment : null;
+      const storedPath = att ? workspaceAttachmentStoredPath(att) : "";
+      const dedupeKey = [att?.id || att?.attachment_id || "", storedPath || "", item?.docKey || ""].join("|");
+      if (seen.has(dedupeKey)) return false;
+      seen.add(dedupeKey);
+      return true;
+    });
 }
 
 function workspaceBuildSystemEvidenceExportItems(ws, claim, channel){
   const plan = workspacePacketAttachmentPlan(channel)
     .filter(row => !(channel === "appeal" && row.key === "lmn"));
-
+  const attachedItems = workspaceBuildAttachedExportExhibitItems(ws, claim, channel);
+  const attachedDocKeys = new Set(attachedItems.map(item => String(item.docKey || "").trim()).filter(Boolean));
   const readiness = buildWorkspaceAutomationReadiness(ws, claim, channel);
   const rows = Array.isArray(readiness?.rows) ? readiness.rows : [];
-  const exportItems = workspaceBuildExportExhibitItems(ws, claim, channel);
+  const hasEvidenceSignals = /\b(payer|claim\s*#?|claim\s*number|paid\s*amount|expected\s*amount|allowed\s*amount|denial\s*code|remark\s*code|contract\s*rule|policy\s*source|cached\s*source|payment\s*history)\b/i;
+  const missingLike = /\b(no supporting documents uploaded|no source document|not uploaded|missing|n\/a|not available|not_found|unavailable|recommended|optional|absent|placeholder)\b/i;
 
   return plan.map((row, index) => {
     const docKey = workspaceExhibitKeyFromRecommendationKey(row.key);
-    const exhibitBase = {
-      docKey,
-      label: row.title || (typeof workspaceDocLabel === "function" ? workspaceDocLabel(docKey) : docKey),
-      reason: row.reason || "System-found evidence supports packet drafting.",
-      source: row.source || "System Evidence",
-      priority: row.priority || "",
-      attachment: null,
-      position: index + 1
-    };
-
-    const fileItem = exportItems.find(item => item.docKey === docKey && workspaceExhibitHasSourceFile(item));
-    if (fileItem) return null;
+    if (attachedDocKeys.has(String(docKey || ""))) return null;
 
     const readinessRow = rows.find(r => String(r.key || "") === String(docKey || row.key || ""));
     const status = String(readinessRow?.status || "").toLowerCase();
     const proofLevel = String(readinessRow?.proofLevel || "").toLowerCase();
     const sourceType = String(readinessRow?.sourceType || "").toLowerCase();
+    const sourceLabel = String(readinessRow?.sourceLabel || "").toLowerCase();
 
+    if (/(missing|recommended|optional|absent|not_found|unavailable|placeholder)/.test(status)) return null;
     const isSystemFound = (
       status === "present" ||
       proofLevel === "draft_evidence" ||
       sourceType === "system" ||
       sourceType === "contract_rules" ||
-      sourceType === "payer_policy_library"
+      sourceType === "payer_policy_library" ||
+      sourceType === "cached" ||
+      /system|contract|policy|payment|claim/.test(sourceLabel)
     );
     if (!isSystemFound) return null;
 
-    const previewText = String(
-      workspaceEvidencePreviewText(ws, claim, { key: docKey, label: exhibitBase.label }, readinessRow, channel) || ""
-    ).trim();
+    const previewText = String(workspaceEvidencePreviewText(ws, claim, { key: docKey, label: row.title }, readinessRow, channel) || "").trim();
     if (!previewText) return null;
+    if (missingLike.test(previewText) && !hasEvidenceSignals.test(previewText)) return null;
 
     return {
-      ...exhibitBase,
-      source: readinessRow?.sourceLabel || readinessRow?.sourceType || exhibitBase.source,
+      docKey,
+      label: row.title || (typeof workspaceDocLabel === "function" ? workspaceDocLabel(docKey) : docKey),
+      reason: row.reason || "System-found evidence supports packet drafting.",
+      source: readinessRow?.sourceLabel || readinessRow?.sourceType || row.source || "System Evidence",
+      priority: row.priority || "",
+      attachment: null,
+      position: index + 1,
       statusLabel: readinessRow?.statusLabel || readinessRow?.proofLabel || "Found in System",
       previewText
     };
@@ -23061,6 +23119,8 @@ Variance: ${formatMoneyUI((derived.expectedInsurance || 0) - (derived.paidAmount
 The reimbursement received does not align with the expected amount based on applicable reimbursement policies and/or contractual agreements.`
   );
 
+  const packetAttachments = workspaceBuildAttachedExportExhibitItems(ws, claim, channel);
+
   // Narrative
   if (channel === "appeal") {
     paragraph((sections.argument || "").split("Claim Financial Snapshot")[0]);
@@ -23068,10 +23128,8 @@ The reimbursement received does not align with the expected amount based on appl
     paragraph(sections.variance_explanation);
   }
 
-  if (ws.attachments && ws.attachments.length) {
-    paragraph(
-      `Supporting documentation has been included with this request, including ${ws.attachments.map(a => workspaceDocLabel(a.doc_key)).join(", ")}.`
-    );
+  if (packetAttachments.length) {
+    paragraph("Supporting uploaded source files are included after this letter.");
   }
 
   // Requested action
@@ -23114,8 +23172,6 @@ The reimbursement received does not align with the expected amount based on appl
       lineGap: 3
     });
   }
-
-  const packetAttachments = workspaceBuildAttachedExportExhibitItems(ws, claim, channel);
 
   if (packetAttachments.length) {
     doc.addPage();
