@@ -15767,6 +15767,8 @@ function defaultWorkspacePacket(){
 
     clinical_support: [
       { key:"lmn", label:"Letter of Medical Necessity", required:false, status:"missing", attachment_id:null, lmn_text:"", updated_at:null },
+      { key:"clinical_documentation", label:"Clinical Documentation", required:false, status:"missing", attachment_id:null, updated_at:null },
+      { key:"provider_authorization", label:"Provider Authorization Form", required:false, status:"missing", attachment_id:null, updated_at:null },
       { key:"office_notes", label:"Office Notes / Op Note", required:false, status:"missing", attachment_id:null, updated_at:null },
       { key:"labs_imaging", label:"Labs / Imaging", required:false, status:"missing", attachment_id:null, updated_at:null },
       { key:"prior_auth", label:"Prior Authorization Proof", required:false, status:"missing", attachment_id:null, updated_at:null },
@@ -15806,12 +15808,16 @@ function ensureWorkspacePacket(ws){
 }
 
 function getWorkspacePacketItem(ws, key){
+  const aliases = new Set(workspaceDocKeyAliases(key));
   const all = [
     ...(ws.packet?.required_appeal || []),
     ...(ws.packet?.clinical_support || []),
     ...(ws.packet?.contract_policy || [])
   ];
-  return all.find(i => i.key === key) || null;
+  return all.find(i => {
+    const itemAliases = workspaceDocKeyAliases(i.key || "");
+    return itemAliases.some(a => aliases.has(a));
+  }) || null;
 }
 
 function requiredPacketKeysForChannel(channel){
@@ -15822,7 +15828,10 @@ function requiredPacketKeysForChannel(channel){
 
 function packetHasKey(ws, key){
   const item = getWorkspacePacketItem(ws, key);
-  return !!(item && item.status === "present" && item.attachment_id);
+  if (!item || workspacePacketItemIsIgnored(item)) return false;
+  const att = workspaceFindAttachmentByPacketKey(ws, key);
+  if (item.status === "present" && att) return true;
+  return !!att;
 }
 
 function packetMissingKeys(ws, channel){
@@ -16262,12 +16271,111 @@ function outcomeRecommendationDocKey(key){
 }
 
 function outcomeRecommendationUploadDoc(key){
-  const docKey = outcomeRecommendationDocKey(key);
+  const docKey = workspaceCanonicalDocKey(key);
   return { key: docKey, label: outcomeEvidenceLabel(key), required: true };
+}
+
+function workspaceCanonicalDocKey(key){
+  const raw = String(key || "").trim();
+  if (!raw) return "";
+  if (typeof outcomeRecommendationDocKey === "function") {
+    try {
+      const mapped = String(outcomeRecommendationDocKey(raw) || "").trim();
+      if (mapped) return mapped;
+    } catch(e) {}
+  }
+
+  const map = {
+    eob: "eob_era",
+    era: "eob_era",
+    remittance: "eob_era",
+    policy: "payer_policy",
+    contract: "contract_excerpt",
+    authorization_evidence: "prior_auth",
+    authorization: "prior_auth",
+    medical_records: "clinical_documentation",
+    office_notes: "clinical_documentation",
+    labs_imaging: "clinical_documentation",
+    itemized_bill: "claim_form"
+  };
+
+  return map[raw] || raw;
+}
+
+function workspaceDocKeyAliases(key){
+  const raw = String(key || "").trim();
+  const canonical = workspaceCanonicalDocKey(raw);
+  const aliases = new Set([raw, canonical].filter(Boolean));
+
+  if (canonical === "eob_era") ["eob","era","remittance","remit"].forEach(k => aliases.add(k));
+  if (canonical === "payer_policy") ["policy","payer_policy"].forEach(k => aliases.add(k));
+  if (canonical === "contract_excerpt") ["contract","contract_excerpt"].forEach(k => aliases.add(k));
+  if (canonical === "prior_auth") ["authorization_evidence","authorization","prior_auth"].forEach(k => aliases.add(k));
+  if (canonical === "clinical_documentation") ["clinical_documentation","medical_records","office_notes","labs_imaging"].forEach(k => aliases.add(k));
+  if (canonical === "claim_form") ["claim_form","itemized_bill"].forEach(k => aliases.add(k));
+  if (canonical === "provider_authorization") ["provider_authorization","provider_auth"].forEach(k => aliases.add(k));
+
+  return Array.from(aliases).filter(Boolean);
+}
+
+function workspacePacketGroupForDocKey(key){
+  const canonical = workspaceCanonicalDocKey(key);
+
+  if (["contract_excerpt","payer_policy","fee_schedule"].includes(canonical)) return "contract_policy";
+
+  if ([
+    "lmn",
+    "clinical_documentation",
+    "provider_authorization",
+    "prior_auth",
+    "office_notes",
+    "labs_imaging",
+    "medical_records",
+    "coding_support"
+  ].includes(canonical)) return "clinical_support";
+
+  return "required_appeal";
+}
+
+function workspacePacketItemIsIgnored(item){
+  return !!(
+    item &&
+    (
+      item.ignored === true ||
+      item.exclude_from_packet === true ||
+      String(item.status || "").toLowerCase() === "ignored" ||
+      String(item.source_status || "").toLowerCase() === "ignored"
+    )
+  );
+}
+
+function workspaceAttachmentIsActive(att){
+  return !!(
+    att &&
+    att.active !== false &&
+    att.deleted !== true &&
+    att.exclude_from_packet !== true &&
+    String(att.source_status || "").toLowerCase() !== "ignored" &&
+    String(att.source_status || "").toLowerCase() !== "replaced" &&
+    String(att.status || "").toLowerCase() !== "ignored"
+  );
 }
 
 function outcomeRecommendationEvidenceState(ws, claim, key, channel){
   const doc = outcomeRecommendationUploadDoc(key);
+  const packetItem = getWorkspacePacketItem(ws, doc.key);
+  if (workspacePacketItemIsIgnored(packetItem)) {
+    return {
+      doc,
+      row: null,
+      hasSourceProof: false,
+      hasDraftEvidence: false,
+      ignored: true,
+      statusLabel: "Excluded",
+      badgeClass: "warn",
+      uploadLabel: "Restore to packet"
+    };
+  }
   const rawRow = workspaceDocAutomationStatus(ws, doc, claim, channel);
   const row = workspaceUiAutomationRow(ws, claim, rawRow);
   const hasSourceProof = workspaceIsSubmissionProof(row);
@@ -16278,9 +16386,10 @@ function outcomeRecommendationEvidenceState(ws, claim, key, channel){
     row,
     hasSourceProof,
     hasDraftEvidence,
+    ignored: false,
     statusLabel: hasSourceProof ? "Already attached" : (hasDraftEvidence ? "Found in system" : "Missing"),
     badgeClass: hasSourceProof ? "ok" : (hasDraftEvidence ? "warn" : "err"),
-    uploadLabel: hasSourceProof ? "Replace File" : (hasDraftEvidence ? "Upload Source Proof" : "Upload")
+    uploadLabel: hasSourceProof ? "Replace Source Proof" : (hasDraftEvidence ? "Upload Source Proof" : "Upload Files")
   };
 }
 
@@ -16576,6 +16685,29 @@ function buildOutcomeRecommendations(org_id, ws, claim, channel){
     .slice(0, 5);
 }
 
+function renderWorkspacePacketEvidencePreferenceForm(ws, claim, doc, channel, ignored){
+  const billed_id = claim?.billed_id || ws?.billed_id || "";
+  const docKey = workspaceCanonicalDocKey(doc?.key || "");
+  if (!billed_id || !docKey) return "";
+  if (ignored) {
+    return `<form method="POST" action="/ai-workspace/packet-evidence-preference" style="margin-top:8px;">
+      <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+      <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+      <input type="hidden" name="doc_key" value="${safeStr(docKey)}"/>
+      <input type="hidden" name="action" value="restore"/>
+      <button class="btn secondary small" type="submit">Restore to packet</button>
+    </form>`;
+  }
+  return `<form method="POST" action="/ai-workspace/packet-evidence-preference" style="margin-top:8px;">
+    <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+    <input type="hidden" name="channel" value="${safeStr(channel)}"/>
+    <input type="hidden" name="doc_key" value="${safeStr(docKey)}"/>
+    <input type="hidden" name="action" value="ignore"/>
+    <button class="btn secondary small" type="submit">Exclude from packet</button>
+    <div class="muted small" style="margin-top:4px;">Excluded items are not added to the PDF and may reduce packet strength.</div>
+  </form>`;
+}
+
 function renderOutcomeRecommendationsCard(org_id, ws, claim, channel){
   const recommendations = buildOutcomeRecommendations(org_id, ws, claim, channel);
 
@@ -16624,29 +16756,32 @@ function renderOutcomeRecommendationsCard(org_id, ws, claim, channel){
                 : "";
 
               return `
-                <div class="outcome-rec-proof-box">
+                <div class="outcome-rec-proof-box" id="packet-attachment-${safeStr(state.doc.key)}">
                   <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">
                     <div>
                       <strong>${safeStr(state.doc.label || workspaceDocLabel(state.doc.key))}</strong>
                       <div class="muted small" style="margin-top:3px;">
-                        ${state.hasSourceProof
-                          ? "Source proof is attached. Preview it below or replace it if needed."
-                          : state.hasDraftEvidence
-                            ? "The system found draft evidence. Upload source proof if payer submission requires the actual document."
-                            : "No source proof is attached yet."
+                        ${state.ignored
+                          ? "Excluded from packet. It will not be included in the PDF. This may reduce packet strength."
+                          : state.hasSourceProof
+                            ? "Uploaded source proof is attached. Preview it below or replace it if needed."
+                            : state.hasDraftEvidence
+                              ? "Found in the system as draft evidence. It can be included as readable packet context, or you can upload source proof to replace it."
+                              : "Missing. Upload this document so it can support the packet, or exclude it if you want to proceed without it."
                         }
                       </div>
                     </div>
                     <span class="badge ${safeStr(state.badgeClass)}">${safeStr(state.statusLabel)}</span>
                   </div>
 
-                  ${preview}
+                  ${state.ignored ? "" : preview}
 
                   <div style="margin-top:10px;">
-                    ${renderWorkspaceDocUploadForm(ws, claim, state.doc, state.row, channel, {
+                    ${state.ignored ? "" : renderWorkspaceDocUploadForm(ws, claim, state.doc, state.row, channel, {
                       buttonLabel: state.uploadLabel,
                       compact: true
                     })}
+                    ${renderWorkspacePacketEvidencePreferenceForm(ws, claim, state.doc, channel, state.ignored)}
                   </div>
                 </div>
               `;
@@ -17472,6 +17607,8 @@ function workspaceDocLabel(key){
     variance_calc: "Expected vs Paid Variance Calculation",
     fee_schedule: "Fee Schedule / Reimbursement Rule",
     prior_auth: "Prior Authorization Proof",
+    clinical_documentation: "Clinical Documentation",
+    provider_authorization: "Provider Authorization Form",
     coding_support: "Coding / Modifier Support"
   };
 
@@ -17527,7 +17664,10 @@ function workspaceHasAutoContract(ws, claim){
 // Final submission readiness must use workspaceDocHasSubmissionProof(), not this helper.
 function workspaceDocPresent(ws, doc, claim){
   if (!doc || !doc.key) return false;
+  const item = getWorkspacePacketItem(ws, doc.key);
+  if (workspacePacketItemIsIgnored(item)) return false;
   if (packetHasKey(ws, doc.key)) return true;
+  if (workspaceFindAttachmentByPacketKey(ws, doc.key)) return true;
   if (doc.key === "contract_excerpt" && workspaceHasAutoContract(ws, claim)) return true;
   if (doc.key === "eob_era" && workspaceHasAutoEob(ws)) return true;
   if (doc.key === "variance_calc" && String(ws?.negotiation?.packet_sections?.variance_explanation || "").trim()) return true;
@@ -17535,20 +17675,50 @@ function workspaceDocPresent(ws, doc, claim){
 }
 
 function workspaceFindAttachmentByPacketKey(ws, key){
+  const aliases = new Set(workspaceDocKeyAliases(key));
   const item = getWorkspacePacketItem(ws, key);
+  const attachments = Array.isArray(ws?.attachments) ? ws.attachments : [];
+
+  const findById = (id) => {
+    const raw = String(id || "");
+    if (!raw) return null;
+    return attachments.find(a =>
+      workspaceAttachmentIsActive(a) &&
+      String(a.attachment_id || a.id || a.file_id || "") === raw
+    ) || null;
+  };
+
   if (item && item.attachment_id) {
-    const found = (ws.attachments || []).find(a => String(a.attachment_id || "") === String(item.attachment_id || ""));
+    const found = findById(item.attachment_id);
     if (found) return found;
   }
-  return null;
+
+  const ids = Array.isArray(item?.attachment_ids) ? item.attachment_ids.slice().reverse() : [];
+  for (const id of ids) {
+    const found = findById(id);
+    if (found) return found;
+  }
+
+  const direct = attachments
+    .filter(workspaceAttachmentIsActive)
+    .filter(a => {
+      const rawKey = String(a?.doc_key || a?.key || a?.document_key || "");
+      const k = workspaceCanonicalDocKey(rawKey);
+      return aliases.has(k) || aliases.has(rawKey);
+    })
+    .sort((a,b) => new Date(b.uploaded_at || b.pulled_at || b.created_at || 0) - new Date(a.uploaded_at || a.pulled_at || a.created_at || 0));
+
+  return direct[0] || null;
 }
 
 function workspaceUpsertPacketItem(ws, key, patch){
   ensureWorkspacePacket(ws);
+  const canonical = workspaceCanonicalDocKey(key);
+  const aliases = new Set(workspaceDocKeyAliases(canonical));
   const groups = ["required_appeal","clinical_support","contract_policy"];
   for (const g of groups){
     const arr = ws.packet[g] || [];
-    const idx = arr.findIndex(x => x.key === key);
+    const idx = arr.findIndex(x => workspaceDocKeyAliases(x.key || "").some(a => aliases.has(a)));
     if (idx >= 0){
       arr[idx] = { ...arr[idx], ...(patch || {}) };
       ws.packet[g] = arr;
@@ -17556,7 +17726,21 @@ function workspaceUpsertPacketItem(ws, key, patch){
       return arr[idx];
     }
   }
-  return null;
+  const group = workspacePacketGroupForDocKey(canonical);
+  ws.packet[group] = Array.isArray(ws.packet[group]) ? ws.packet[group] : [];
+  const created = {
+    key: canonical,
+    label: workspaceDocLabel(canonical),
+    required: patch?.required === true,
+    status: "missing",
+    attachment_id: null,
+    updated_at: nowISO(),
+    ...(patch || {})
+  };
+  if (!created.updated_at) created.updated_at = nowISO();
+  ws.packet[group].push(created);
+  ws.packet.completeness = computePacketCompleteness(ws);
+  return created;
 }
 
 function workspaceAttachmentKindForDocKey(key){
@@ -20484,6 +20668,7 @@ function workspaceProofLabel(proofLevel){
 }
 
 function workspaceProofPillClass(proofLevel){
+  if (proofLevel === "ignored") return "warn";
   if (
     proofLevel === "source_document" ||
     proofLevel === "pulled_source_document" ||
@@ -20562,19 +20747,21 @@ function workspaceAttachmentSourceType(att){
 }
 
 function workspaceSafeFindAttachment(ws, key){
+  const aliases = new Set(workspaceDocKeyAliases(key));
   try {
     if (typeof workspaceFindAttachmentByPacketKey === "function") {
-      return workspaceFindAttachmentByPacketKey(ws, key);
+      const found = workspaceFindAttachmentByPacketKey(ws, key);
+      if (found) return found;
     }
   } catch {}
 
   try {
-    const item = getWorkspacePacketItem(ws, key);
-    if (item && item.attachment_id) {
-      return (ws.attachments || []).find(a =>
-        String(a.attachment_id || "") === String(item.attachment_id || "")
-      ) || null;
-    }
+    const attachments = Array.isArray(ws?.attachments) ? ws.attachments : [];
+    const direct = attachments
+      .filter(workspaceAttachmentIsActive)
+      .filter(a => aliases.has(workspaceCanonicalDocKey(a?.doc_key || a?.key || a?.document_key || "")))
+      .sort((a,b) => new Date(b.uploaded_at || b.pulled_at || b.created_at || 0) - new Date(a.uploaded_at || a.pulled_at || a.created_at || 0));
+    return direct[0] || null;
   } catch {}
 
   return null;
@@ -20636,7 +20823,24 @@ function workspaceSafeAutoContract(ws, claim){
 }
 
 function workspaceDocAutomationStatus(ws, doc, claim, channel){
-  const key = String(doc?.key || "");
+  const key = workspaceCanonicalDocKey(doc?.key || "");
+  const packetItem = getWorkspacePacketItem(ws, key);
+  if (workspacePacketItemIsIgnored(packetItem)) {
+    return {
+      key,
+      label: doc.label || workspaceDocLabel(key),
+      required: !!doc.required,
+      status: "ignored",
+      statusLabel: "Excluded by User",
+      proofLevel: "ignored",
+      proofLabel: "Excluded",
+      pillClass: "warn",
+      sourceType: "ignored",
+      sourceLabel: "Excluded",
+      detail: "Excluded from the payer-facing packet by the user.",
+      nextAction: "Restore it if this evidence should be included."
+    };
+  }
   const preferred = workspacePreferredAutomationSource(key, channel);
   const attachment = workspaceSafeFindAttachment(ws, key);
 
@@ -22838,8 +23042,11 @@ function workspaceBuildExportExhibitItems(ws, claim, channel){
   const byKey = new Map();
 
   attachments.forEach((att, index) => {
-    const key = String(att?.doc_key || att?.key || "").trim();
+    if (!workspaceAttachmentIsActive(att)) return;
+    const key = workspaceCanonicalDocKey(att?.doc_key || att?.key || "");
     if (!key) return;
+    const packetItem = getWorkspacePacketItem(ws, key);
+    if (workspacePacketItemIsIgnored(packetItem)) return;
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key).push({ ...att, __attachment_index: index });
   });
@@ -22847,8 +23054,10 @@ function workspaceBuildExportExhibitItems(ws, claim, channel){
   const items = workspacePacketAttachmentPlan(channel)
     .filter(row => !(channel === "appeal" && row.key === "lmn"))
     .map((row, index) => {
-    const docKey = workspaceExhibitKeyFromRecommendationKey(row.key);
-    const attached = (byKey.get(docKey) || [])[0] || null;
+    const docKey = workspaceCanonicalDocKey(workspaceExhibitKeyFromRecommendationKey(row.key));
+    const packetItem = getWorkspacePacketItem(ws, docKey);
+    if (workspacePacketItemIsIgnored(packetItem)) return null;
+    const attached = workspaceFindAttachmentByPacketKey(ws, docKey);
     if (attached && attached.__attachment_index !== undefined) usedAttachmentIndexes.add(attached.__attachment_index);
     return {
       docKey,
@@ -22859,10 +23068,13 @@ function workspaceBuildExportExhibitItems(ws, claim, channel){
       attachment: attached,
       position: index + 1
     };
-  });
+  }).filter(Boolean);
   attachments.forEach((att, index) => {
+    if (!workspaceAttachmentIsActive(att)) return;
     if (usedAttachmentIndexes.has(index)) return;
-    const docKey = String(att?.doc_key || att?.key || "supporting_document").trim() || "supporting_document";
+    const docKey = workspaceCanonicalDocKey(att?.doc_key || att?.key || "supporting_document") || "supporting_document";
+    const packetItem = getWorkspacePacketItem(ws, docKey);
+    if (workspacePacketItemIsIgnored(packetItem)) return;
     items.push({
       docKey,
       label: typeof workspaceDocLabel === "function" ? workspaceDocLabel(docKey) : docKey,
@@ -23131,6 +23343,11 @@ async function workspaceAttachmentEligibleForMergedPdfAsync(att, docKey=""){
 function workspaceAttachmentEligibleForMergedPdf(att, docKey=""){
   const fileInfo = workspaceAttachmentStoredFileStat(att);
   if (!fileInfo) return false;
+  if (!workspaceAttachmentIsActive(att)) return false;
+  if (String(att?.source_status || "").toLowerCase() === "replaced") return false;
+  if (String(att?.source_status || "").toLowerCase() === "ignored") return false;
+  if (String(att?.status || "").toLowerCase() === "ignored") return false;
+  if (att?.exclude_from_packet === true) return false;
 
   const storedPath = fileInfo.storedPath;
   const key = workspaceAttachmentDocKey(att, docKey);
@@ -23159,6 +23376,19 @@ function workspaceAttachmentEligibleForMergedPdf(att, docKey=""){
   return false;
 }
 
+function workspacePacketItemForAttachmentDocKey(ws, att, docKey=""){
+  const key = workspaceCanonicalDocKey(docKey || att?.doc_key || att?.key || att?.document_key || "");
+  return getWorkspacePacketItem(ws, key);
+}
+
+function workspaceAttachmentEligibleForMergedPdfForWorkspace(ws, att, docKey=""){
+  if (!workspaceAttachmentIsActive(att)) return false;
+  if (String(att?.source_status || "").toLowerCase() === "replaced") return false;
+  const item = workspacePacketItemForAttachmentDocKey(ws, att, docKey);
+  if (workspacePacketItemIsIgnored(item)) return false;
+  return workspaceAttachmentEligibleForMergedPdf(att, docKey);
+}
+
 function workspaceAttachmentIsRealSourceExhibit(att, docKey=""){
   return workspaceAttachmentEligibleForMergedPdf(att, docKey);
 }
@@ -23166,7 +23396,7 @@ function workspaceAttachmentIsRealSourceExhibit(att, docKey=""){
 function workspaceBuildAttachedExportExhibitItems(ws, claim, channel){
   const seen = new Set();
   return workspaceBuildExportExhibitItems(ws, claim, channel)
-    .filter(item => item && item.attachment && workspaceAttachmentIsRealSourceExhibit(item.attachment, item.docKey))
+    .filter(item => item && item.attachment && workspaceAttachmentEligibleForMergedPdfForWorkspace(ws, item.attachment, item.docKey))
     .filter(item => {
       const att = item && item.attachment ? item.attachment : null;
       const storedPath = att ? workspaceAttachmentStoredPath(att) : "";
@@ -23178,7 +23408,7 @@ function workspaceBuildAttachedExportExhibitItems(ws, claim, channel){
 }
 
 function workspaceBuildSystemEvidenceExportItems(ws, claim, channel){
-  const allowedSystemSummaryKeys = new Set(["denial_letter","eob_era","payment_history","payer_policy","contract_excerpt","fee_schedule","variance_calc","payer_correspondence"]);
+  const allowedSystemSummaryKeys = new Set(["denial_letter","eob_era","claim_form","payment_history","payer_policy","contract_excerpt","fee_schedule","variance_calc","payer_correspondence"]);
   const plan = workspacePacketAttachmentPlan(channel)
     .filter(row => !(channel === "appeal" && row.key === "lmn"));
   const attachedItems = workspaceBuildAttachedExportExhibitItems(ws, claim, channel);
@@ -23189,7 +23419,9 @@ function workspaceBuildSystemEvidenceExportItems(ws, claim, channel){
   const missingLike = /\b(no supporting documents uploaded|no source document|not uploaded|missing|n\/a|not available|not_found|unavailable|recommended|optional|absent|placeholder|pull_available)\b/i;
 
   return plan.map((row, index) => {
-    const docKey = workspaceExhibitKeyFromRecommendationKey(row.key);
+    const docKey = workspaceCanonicalDocKey(workspaceExhibitKeyFromRecommendationKey(row.key));
+    const packetItem = getWorkspacePacketItem(ws, docKey);
+    if (workspacePacketItemIsIgnored(packetItem)) return null;
     if (!allowedSystemSummaryKeys.has(docKey) || attachedDocKeys.has(String(docKey || ""))) return null;
 
     const readinessRow = rows.find(r => String(r.key || "") === String(docKey || row.key || ""));
@@ -23609,6 +23841,7 @@ async function buildMergedPacketPDF({ claim, derived, ws, channel, res, preview=
     try {
       const att = exhibit.attachment || null;
       if (!att) continue;
+      if (!workspaceAttachmentEligibleForMergedPdfForWorkspace(ws, att, exhibit.docKey)) continue;
       if (!(await workspaceAttachmentEligibleForMergedPdfAsync(att, exhibit.docKey))) {
         debugLog("Skipping non-source/generated PDF exhibit", {
           docKey: exhibit.docKey,
@@ -49365,7 +49598,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const { files, fields } = await parseMultipart(req, m[1]);
     const billed_id = String(fields.billed_id || "").trim();
     const channel = String(fields.channel || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
-    const doc_key = String(fields.doc_key || "").trim();
+    const rawDocKey = String(fields.doc_key || "").trim();
+    const doc_key = workspaceCanonicalDocKey(rawDocKey);
     const uploadedFiles = (files || []).filter(file =>
       file && file.buffer && String(file.filename || "").trim()
     );
@@ -49385,6 +49619,17 @@ if (method === "GET" && pathname === "/agent-workspace") {
     ws.attachments = Array.isArray(ws.attachments) ? ws.attachments : [];
     const savedAttachments = [];
 
+    const replaceAliases = new Set(workspaceDocKeyAliases(doc_key));
+    ws.attachments.forEach(att => {
+      if (!workspaceAttachmentIsActive(att)) return;
+      const attKey = workspaceCanonicalDocKey(att?.doc_key || att?.key || att?.document_key || "");
+      if (replaceAliases.has(attKey)) {
+        att.active = false;
+        att.replaced_at = nowISO();
+        att.source_status = "replaced";
+      }
+    });
+
     for (const file of uploadedFiles) {
       const stored = storeWorkspaceUpload(sess.org_id, file);
       const attachment = {
@@ -49396,6 +49641,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
         channel,
         doc_key,
         key: doc_key,
+        original_doc_key: rawDocKey,
+        active: true,
 
         // Source tracking for Automation Readiness.
         source_type: "manual_upload",
@@ -49412,16 +49659,18 @@ if (method === "GET" && pathname === "/agent-workspace") {
       savedAttachments.push(attachment);
     }
 
-    const currentItem = getWorkspacePacketItem(ws, doc_key);
-    const existingAttachmentIds = Array.isArray(currentItem?.attachment_ids)
-      ? currentItem.attachment_ids
-      : (currentItem?.attachment_id ? [currentItem.attachment_id] : []);
     const newAttachmentIds = savedAttachments.map(a => a.attachment_id);
 
     workspaceUpsertPacketItem(ws, doc_key, {
       status: "present",
-      attachment_id: currentItem?.attachment_id || savedAttachments[0].attachment_id,
-      attachment_ids: [...existingAttachmentIds, ...newAttachmentIds],
+      attachment_id: savedAttachments[0].attachment_id,
+      attachment_ids: newAttachmentIds,
+      ignored: false,
+      exclude_from_packet: false,
+      source_status: "attached",
+      source_type: "manual_upload",
+      proof_level: "manual_source_document",
+      is_source_document: true,
       updated_at: nowISO()
     });
 
@@ -49441,9 +49690,37 @@ if (method === "GET" && pathname === "/agent-workspace") {
     saveAgentWorkspace(sess.org_id, ws);
 
     const back = channel === "negotiation"
-      ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}&uploaded=1`
-      : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}&uploaded=1`;
+      ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}&uploaded=1#packet-attachment-${encodeURIComponent(doc_key)}`
+      : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}&uploaded=1#packet-attachment-${encodeURIComponent(doc_key)}`;
 
+    return redirect(res, back);
+  }
+
+  if (method === "POST" && pathname === "/ai-workspace/packet-evidence-preference") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return redirect(res, "/login");
+    if (!isAccessEnabled(sess.org_id)) return send(res, 403, "Access disabled");
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const billed_id = String(params.get("billed_id") || "").trim();
+    const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
+    const doc_key = workspaceCanonicalDocKey(String(params.get("doc_key") || "").trim());
+    const action = String(params.get("action") || "").trim();
+    const claim = getBilledById(sess.org_id, billed_id);
+    if (!claim) return send(res, 404, "Claim not found");
+    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    ensureWorkspacePacket(ws); ensurePacketSections(ws, claim); ensureWorkspaceRounds(ws, channel);
+    ws.audit = Array.isArray(ws.audit) ? ws.audit : [];
+    if (action === "ignore") {
+      workspaceUpsertPacketItem(ws, doc_key, { status:"ignored", ignored:true, exclude_from_packet:true, source_status:"ignored", ignored_at: nowISO(), updated_at: nowISO() });
+      ws.audit.push({ event_id: uuid(), type:"packet_evidence_ignored", doc_key, channel, created_at: nowISO() });
+    } else if (action === "restore") {
+      const att = workspaceFindAttachmentByPacketKey(ws, doc_key);
+      workspaceUpsertPacketItem(ws, doc_key, { status: att ? "present" : "missing", attachment_id: att ? att.attachment_id : null, ignored:false, exclude_from_packet:false, source_status:"restored", restored_at: nowISO(), updated_at: nowISO() });
+      ws.audit.push({ event_id: uuid(), type:"packet_evidence_restored", doc_key, channel, created_at: nowISO() });
+    }
+    saveAgentWorkspace(sess.org_id, ws);
+    const back = channel === "negotiation" ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}#packet-attachment-${encodeURIComponent(doc_key)}` : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}#packet-attachment-${encodeURIComponent(doc_key)}`;
     return redirect(res, back);
   }
 
