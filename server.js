@@ -21393,7 +21393,7 @@ function renderInlineAIAssist(billed_id, channel){
         });
       }
       window.submitWorkspaceAiAssistForm = function(form, clickedButton, submitEvent){ if (!form) return true; if (form.dataset.aiSubmittingReady === "1") { return true; } if (submitEvent && typeof submitEvent.preventDefault === "function") { submitEvent.preventDefault(); } syncActiveWorkspaceAiDraftToForm(form); form.classList.add("is-submitting"); var drawer = form.closest(".ws-ai-drawer"); if (drawer) { drawer.classList.add("is-working"); drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); } var working = form.querySelector("[data-ai-working]"); if (working) { working.textContent = "Working on editable packet section… Keep this page open."; working.classList.add("show"); } var active = clickedButton || form.__tjhpSubmitter || (submitEvent && submitEvent.submitter ? submitEvent.submitter : null) || form.querySelector("button[type='submit']"); form.querySelectorAll("button").forEach(function(btn){btn.disabled=true;}); if(active){ active.dataset.originalText=active.dataset.originalText||active.textContent; active.textContent=active.getAttribute("data-loading-label")||"Generating Section Update...";} showWorkspaceAiSectionWorking(form, active); try { void document.body.offsetHeight; } catch(e) {} form.dataset.aiSubmittingReady = "1"; waitForAiSectionPaintThenSubmit(form); return false; };
-      (function(){ if(window.__tjhpAiWorkspaceButtonBound) return; window.__tjhpAiWorkspaceButtonBound=true; document.addEventListener("click", function(e){ var btn=e.target&&e.target.closest?e.target.closest("[data-ai-preset]"):null; if(!btn) return; var form=btn.closest("form"); if(!form) return; e.preventDefault(); var p=form.querySelector("[data-ai-preset-input]"); if(p) p.value=btn.getAttribute("data-ai-preset")||""; var target=btn.getAttribute("data-ai-target")||""; var sel=form.querySelector("select[name='target_section']"); if(sel&&target) sel.value=target; var prompt=btn.getAttribute("data-ai-prompt")||""; var ta=form.querySelector("textarea[name='prompt']"); if(ta && !String(ta.value||"").trim()) ta.value=prompt; form.__tjhpSubmitter=btn; if (typeof form.requestSubmit === "function") { form.requestSubmit(); } else { window.submitWorkspaceAiAssistForm(form, btn, null); } }); document.addEventListener("submit", function(e){ var form=e.target&&e.target.matches&&e.target.matches("[data-ai-workspace-form='1']")?e.target:null; if(!form) return; window.submitWorkspaceAiAssistForm(form, form.__tjhpSubmitter||(e.submitter||null)); });})();
+      (function(){ if(window.__tjhpAiWorkspaceButtonBound) return; window.__tjhpAiWorkspaceButtonBound=true; document.addEventListener("click", function(e){ var btn=e.target&&e.target.closest?e.target.closest("[data-ai-preset]"):null; if(!btn) return; var form=btn.closest("form"); if(!form) return; e.preventDefault(); var p=form.querySelector("[data-ai-preset-input]"); if(p) p.value=btn.getAttribute("data-ai-preset")||""; var target=btn.getAttribute("data-ai-target")||""; var sel=form.querySelector("select[name='target_section']"); if(sel&&target) sel.value=target; var prompt=btn.getAttribute("data-ai-prompt")||""; var ta=form.querySelector("textarea[name='prompt']"); if(ta && !String(ta.value||"").trim()) ta.value=prompt; form.__tjhpSubmitter=btn; if (typeof form.requestSubmit === "function") { form.requestSubmit(); } else { window.submitWorkspaceAiAssistForm(form, btn, null); } }); document.addEventListener("keydown", function(e){ var target = e.target; if (!target || !target.matches || !target.matches("[data-ai-workspace-form='1'] textarea[name='prompt']")) return; if (e.key !== "Enter" || e.shiftKey) return; var form = target.closest("[data-ai-workspace-form='1']"); if (!form || form.dataset.aiSubmittingReady === "1") return; e.preventDefault(); e.stopPropagation(); if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation(); var submitBtn = form.querySelector("button[type='submit']"); form.__tjhpSubmitter = submitBtn || null; if (typeof form.requestSubmit === "function") { if (submitBtn) form.requestSubmit(submitBtn); else form.requestSubmit(); } else { window.submitWorkspaceAiAssistForm(form, submitBtn, e); } return false; }, true); document.addEventListener("submit", function(e){ var form=e.target&&e.target.matches&&e.target.matches("[data-ai-workspace-form='1']")?e.target:null; if(!form) return; window.submitWorkspaceAiAssistForm(form, form.__tjhpSubmitter||(e.submitter||null)); });})();
       try { var genericCopilot = document.getElementById("aiChat"); if (genericCopilot) genericCopilot.style.display = "none"; } catch(e) {}
       </script>
     </aside>
@@ -21529,9 +21529,16 @@ function renderEditablePacketSection(opts){
       var target = document.getElementById(id);
       if (!target) return;
 
-      setTimeout(function(){
-        target.scrollIntoView({ behavior:"auto", block:"start" });
-      }, 80);
+      function doScroll(){
+        try {
+          target.scrollIntoView({ behavior:"auto", block:"center" });
+        } catch(e) {
+          target.scrollIntoView();
+        }
+      }
+
+      setTimeout(doScroll, 80);
+      setTimeout(doScroll, 350);
     } catch(e) {}
   }
 
@@ -21790,6 +21797,38 @@ function renderWorkspacePreview(opts){
   `;
 }
 
+function workspaceEnsureSectionOverrides(ws, channel){
+  if (!ws || !["appeal","negotiation"].includes(String(channel || ""))) return {};
+  ws[channel] = ws[channel] || {};
+  ws[channel].section_overrides = ws[channel].section_overrides && typeof ws[channel].section_overrides === "object"
+    ? ws[channel].section_overrides
+    : {};
+  return ws[channel].section_overrides;
+}
+
+function workspaceMarkSectionOverride(ws, channel, sectionKey){
+  const key = String(sectionKey || "").trim();
+  if (!key) return;
+  const overrides = workspaceEnsureSectionOverrides(ws, channel);
+  overrides[key] = {
+    source: "staff_or_ai_edit",
+    updated_at: nowISO()
+  };
+}
+
+function workspaceHasSectionOverride(ws, channel, sectionKey){
+  const key = String(sectionKey || "").trim();
+  if (!key || !ws || !ws[channel]) return false;
+  const overrides = ws[channel].section_overrides || {};
+  return !!overrides[key];
+}
+
+function workspaceFinancialSummaryForAutodraft(ws, channel, derived, claim){
+  const existing = String(ws?.[channel]?.packet_sections?.financial_summary || "").trim();
+  if (workspaceHasSectionOverride(ws, channel, "financial_summary") && existing) return existing;
+  return financialSummaryFromClaim(derived, claim);
+}
+
 function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
   if (!org_id || !claim?.billed_id) return 0;
   const ws = ensureAgentWorkspace(org_id, claim);
@@ -21820,7 +21859,7 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
       ...(ws.appeal.packet_sections || {}),
       header: ws.appeal.packet_sections?.header || `${safeStr(getOrg(org_id)?.org_name || "Practice")} - ${nowISO().slice(0,10)} - Claim #${claim?.claim_number || "N/A"}`,
       claim_summary: ws.appeal.packet_sections?.claim_summary || `Claim #${claim?.claim_number || "N/A"} | Payer: ${claim?.payer || "Unknown"} | DOS: ${claim?.dos || "N/A"}`,
-      financial_summary: financialSummaryFromClaim(currentDerived, claim),
+      financial_summary: workspaceFinancialSummaryForAutodraft(ws, "appeal", currentDerived, claim),
       argument: narrative,
       requested_action: ws.appeal.packet_sections?.requested_action || `- Reverse denial determination.\n- Reprocess claim per benefits/contract.\n- Provide written rationale if denial remains.`,
       attachments_index: buildAttachmentsIndex(ws),
@@ -21836,7 +21875,7 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
       ...(ws.negotiation.packet_sections || {}),
       header: ws.negotiation.packet_sections?.header || `${safeStr(getOrg(org_id)?.org_name || "Practice")} - ${nowISO().slice(0,10)} - Claim #${claim?.claim_number || "N/A"}`,
       claim_summary: ws.negotiation.packet_sections?.claim_summary || `Claim #${claim?.claim_number || "N/A"} | Payer: ${claim?.payer || "Unknown"} | DOS: ${claim?.dos || "N/A"}`,
-      financial_summary: financialSummaryFromClaim(currentDerived, claim),
+      financial_summary: workspaceFinancialSummaryForAutodraft(ws, "negotiation", currentDerived, claim),
       variance_explanation: narrative,
       requested_amount: String(ws.negotiation.packet_sections?.requested_amount || currentDerived?.underpaidAmount || ""),
       requested_action: ws.negotiation.packet_sections?.requested_action || `- Recalculate reimbursement per contract terms.\n- Remit corrected payment and ERA.\n- Confirm adjustment timeline.`,
@@ -21847,9 +21886,13 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
     generated += 1;
   }
   ws.appeal.packet_sections.attachments_index = buildAttachmentsIndex(ws);
-  ws.appeal.packet_sections.financial_summary = financialSummaryFromClaim(currentDerived, claim);
+  if (!workspaceHasSectionOverride(ws, "appeal", "financial_summary")) {
+    ws.appeal.packet_sections.financial_summary = financialSummaryFromClaim(currentDerived, claim);
+  }
   ws.negotiation.packet_sections.attachments_index = buildAttachmentsIndex(ws);
-  ws.negotiation.packet_sections.financial_summary = financialSummaryFromClaim(currentDerived, claim);
+  if (!workspaceHasSectionOverride(ws, "negotiation", "financial_summary")) {
+    ws.negotiation.packet_sections.financial_summary = financialSummaryFromClaim(currentDerived, claim);
+  }
   ws.negotiation.packet_sections.requested_amount = String(ws.negotiation.packet_sections.requested_amount || currentDerived?.underpaidAmount || "");
   saveAgentWorkspace(org_id, ws);
   if (generated > 0) {
@@ -22824,7 +22867,7 @@ function workspaceKnownEvidenceDocKeys(){
   ]);
 }
 
-function workspaceAttachmentHasExplicitSourceProof(att){
+function workspaceAttachmentExplicitSourceProofKind(att){
   const sourceType = String(att?.source_type || att?.source || att?.source_system || "").toLowerCase();
   const sourceStatus = String(att?.source_status || "").toLowerCase();
   const proofLevel = String(att?.proof_level || "").toLowerCase();
@@ -22856,7 +22899,13 @@ function workspaceAttachmentHasExplicitSourceProof(att){
     ) &&
     att?.is_source_document === true;
 
-  return !!(manualProof || pulledProof);
+  if (manualProof) return "manual";
+  if (pulledProof) return "pulled";
+  return "";
+}
+
+function workspaceAttachmentHasExplicitSourceProof(att){
+  return !!workspaceAttachmentExplicitSourceProofKind(att);
 }
 
 function workspaceAttachmentLooksGeneratedPacketFile(att, storedPath){
@@ -22927,15 +22976,17 @@ function workspaceAttachmentLooksPlaceholder(att, storedPath){
 }
 function workspaceAttachmentStoredPathLooksUserOrPulled(storedPath){
   const raw = String(storedPath || "");
-  if (!raw) return false;
+  if (!raw) return "";
 
   const normalized = raw.replace(/\\/g, "/").toLowerCase();
 
-  return (
-    normalized.includes("/agent_workspace/") ||
-    normalized.includes("/workspace_pulled/") ||
-    normalized.includes("/support/")
-  );
+  if (normalized.includes("/agent_workspace/")) return "agent_workspace";
+  if (normalized.includes("/workspace_pulled/")) return "workspace_pulled";
+  return "";
+}
+
+function workspaceAttachmentStorageKind(storedPath){
+  return workspaceAttachmentStoredPathLooksUserOrPulled(storedPath);
 }
 
 function workspaceAttachmentEligibleForMergedPdf(att, docKey=""){
@@ -22944,14 +22995,18 @@ function workspaceAttachmentEligibleForMergedPdf(att, docKey=""){
 
   const storedPath = fileInfo.storedPath;
   const key = workspaceAttachmentDocKey(att, docKey);
+  const storageKind = workspaceAttachmentStorageKind(storedPath);
 
-  if (!workspaceAttachmentStoredPathLooksUserOrPulled(storedPath)) return false;
+  if (!storageKind) return false;
   if (workspaceAttachmentLooksGeneratedPacketFile(att, storedPath)) return false;
   if (workspaceAttachmentLooksPlaceholder(att, storedPath)) return false;
 
   if (key === "lmn" || key === "letter_of_medical_necessity") return false;
 
-  if (workspaceAttachmentHasExplicitSourceProof(att)) return true;
+  const proofKind = workspaceAttachmentExplicitSourceProofKind(att);
+
+  if (proofKind === "manual") return storageKind === "agent_workspace";
+  if (proofKind === "pulled") return storageKind === "workspace_pulled";
 
   const sourceType = String(att?.source_type || att?.source || att?.source_system || "").toLowerCase();
   const sourceStatus = String(att?.source_status || "").toLowerCase();
@@ -22959,8 +23014,8 @@ function workspaceAttachmentEligibleForMergedPdf(att, docKey=""){
   const noSourceMetadata = !sourceType && !sourceStatus && !proofLevel;
   const knownEvidenceKeys = workspaceKnownEvidenceDocKeys();
 
-  if (noSourceMetadata && key && !knownEvidenceKeys.has(key)) return true;
-  if (noSourceMetadata && key === "supporting_document") return true;
+  if (storageKind === "agent_workspace" && noSourceMetadata && key && !knownEvidenceKeys.has(key)) return true;
+  if (storageKind === "agent_workspace" && noSourceMetadata && key === "supporting_document") return true;
 
   return false;
 }
@@ -23101,6 +23156,44 @@ async function workspaceAppendTextAttachmentPage(mergedPdf, exhibit, storedPath)
     doc.moveDown(0.5);
     doc.font("Helvetica").fontSize(9).text(clean || "(No readable text found.)", { width: CONTENT_WIDTH, lineGap: 2 });
   });
+}
+
+function workspaceLmnTextForPacketPdf(lmnText){
+  const raw = String(lmnText || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!raw) return "";
+
+  const lines = raw.split("\n");
+  const startPatterns = [
+    /^patient clinical history\b/i,
+    /^treatment rationale\b/i,
+    /^treatment plan\b/i,
+    /^conclusion\b/i,
+    /^i am writing\b/i,
+    /^based on the patient/i,
+    /^the recommended plan/i
+  ];
+
+  let startIdx = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = String(lines[i] || "").trim();
+    if (startPatterns.some(function(re){ return re.test(line); })) {
+      startIdx = i;
+      break;
+    }
+  }
+
+  if (startIdx >= 0) return lines.slice(startIdx).join("\n").trim();
+
+  const greetingIdx = lines.findIndex(function(line){
+    return /to whom it may concern/i.test(String(line || ""));
+  });
+
+  if (greetingIdx >= 0 && greetingIdx + 1 < lines.length) {
+    return lines.slice(greetingIdx + 1).join("\n").trim();
+  }
+
+  return raw;
 }
 
 function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
@@ -23254,11 +23347,12 @@ The reimbursement received does not align with the expected amount based on appl
   doc.text(orgCtx.orgName || "Your Practice", { width: CONTENT_WIDTH, align: "left" });
 
   const lmnText = String(ws?.appeal?.packet_sections?.letter_of_medical_necessity || "").trim();
-  if (channel === "appeal" && lmnText) {
+  const lmnPacketText = workspaceLmnTextForPacketPdf(lmnText);
+  if (channel === "appeal" && lmnPacketText) {
     doc.addPage();
     doc.font("Helvetica-Bold").fontSize(16).text("Letter of Medical Necessity", { width: CONTENT_WIDTH, align: "left" });
     doc.moveDown(0.75);
-    doc.font("Helvetica").fontSize(10).text(lmnText, {
+    doc.font("Helvetica").fontSize(10).text(lmnPacketText, {
       width: CONTENT_WIDTH,
       align: "left",
       lineGap: 3
@@ -48988,6 +49082,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     ws[channel].updated_at = nowISO();
     ws[channel].version = Number(ws[channel].version || 0) + 1;
     ws[channel].user_modified = true;
+    workspaceMarkSectionOverride(ws, channel, section_key);
 
     if (channel === "appeal" && section_key === "argument") ws[channel].draft_text = value;
     if (channel === "appeal" && section_key === "letter_of_medical_necessity") {
@@ -49392,6 +49487,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
       const before = String(ws[channel]?.packet_sections?.[key] || "");
       const after = workspaceCleanAiSectionOutput(postedAfter || preview.after || "");
       ws[channel].packet_sections[key] = after;
+      workspaceMarkSectionOverride(ws, channel, key);
+      ws[channel].updated_at = nowISO();
+      ws[channel].version = Number(ws[channel].version || 0) + 1;
       const aiEditRecord = workspaceRecordAiSectionEdit(ws, channel, {
         section_key: key,
         section_label: workspaceAiSectionLabel(channel, key),
@@ -49704,9 +49802,13 @@ if (method === "GET" && pathname === "/agent-workspace") {
         pushWorkspaceHistorySnapshot(ws, "negotiation", user.user_id);
       }
       ws.appeal.packet_sections.attachments_index = buildAttachmentsIndex(ws);
-      ws.appeal.packet_sections.financial_summary = financialSummaryFromClaim(d, b);
+      if (!workspaceHasSectionOverride(ws, "appeal", "financial_summary")) {
+        ws.appeal.packet_sections.financial_summary = financialSummaryFromClaim(d, b);
+      }
       ws.negotiation.packet_sections.attachments_index = buildAttachmentsIndex(ws);
-      ws.negotiation.packet_sections.financial_summary = financialSummaryFromClaim(d, b);
+      if (!workspaceHasSectionOverride(ws, "negotiation", "financial_summary")) {
+        ws.negotiation.packet_sections.financial_summary = financialSummaryFromClaim(d, b);
+      }
       ws.negotiation.packet_sections.requested_amount = String(ws.negotiation.packet_sections.requested_amount || d.underpaidAmount || "");
       ws.status = "draft";
       ws.follow_up.last_touched_at = ts;
