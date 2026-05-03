@@ -19365,6 +19365,8 @@ function workspacePolishStyles(){
       .packet-workspace-shell .ws-clean-section.is-ai-adjusting > .ws-section-body,
       .packet-workspace-shell .ws-clean-section.is-ai-adjusting > .ws-edit-form{opacity:.35;filter:blur(1px);pointer-events:none;}
       .packet-workspace-shell .ws-clean-section.is-ai-adjusting .ws-ai-section-working-banner{opacity:1;filter:none;pointer-events:auto;}
+      .packet-workspace-shell .ws-clean-section.is-ai-adjusting [data-ai-local-status="applied"]{display:none !important;}
+      .packet-workspace-shell .ws-clean-section.is-ai-adjusting .ws-local-undo-form{opacity:.35;filter:blur(1px);pointer-events:none;}
       .packet-workspace-shell .ws-ai-regenerating-overlay{display:none;position:static;inset:auto;z-index:1;align-items:center;justify-content:center;text-align:center;border:1px solid #bfdbfe;background:#eff6ff;color:#1e3a8a;border-radius:14px;font-weight:950;padding:12px 14px;margin:0 0 12px 0;box-shadow:none;pointer-events:auto;width:100%;box-sizing:border-box;}
       .packet-workspace-shell .ws-ai-review-mode.is-regenerating .ws-ai-regenerating-overlay{display:flex !important;}
       .packet-workspace-shell .ws-ai-review-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;}
@@ -21386,6 +21388,23 @@ function renderInlineAIAssist(billed_id, channel){
         });
         return found;
       }
+      function hideWorkspaceAiStaleSectionStatus(section){
+        if (!section || !section.querySelectorAll) return;
+
+        section.querySelectorAll("[data-ai-local-status='applied']").forEach(function(el){
+          el.style.display = "none";
+          el.setAttribute("aria-hidden", "true");
+        });
+
+        section.querySelectorAll(".ws-local-status.ok").forEach(function(el){
+          var text = String(el.textContent || "").toLowerCase();
+          if (text.indexOf("section updated successfully") >= 0) {
+            el.style.display = "none";
+            el.setAttribute("aria-hidden", "true");
+          }
+        });
+      }
+
       function showWorkspaceAiSectionWorking(form, clickedButton){
         var target = workspaceAiSelectedTargetSection(form, clickedButton);
         var section = workspaceAiFindSectionByKey(target);
@@ -21501,7 +21520,9 @@ function renderEditablePacketSection(opts){
   if (exportMode){ return `<div class="ws-section-card"><div class="ws-section-head"><div class="ws-section-title">${safeStr(title)}</div></div>${description ? `<div class="muted small" style="margin-bottom:8px;">${safeStr(description)}</div>` : ``}<div class="ws-section-body">${workspacePacketTextHtml(value, "—")}</div></div>`; }
   const showPreview = workspacePacketTextHtml(value, `<span class="muted">No content yet.</span>`);
   const nextLabel = pending.length ? workspaceAiSectionLabel(channel, pending[0]) : "";
-  const localSuccessHtml = appliedSection === section_key && !hasAiPreview ? `<div class="ws-local-status ok">Section updated successfully.</div>` : ``;
+  const localSuccessHtml = appliedSection === section_key && !hasAiPreview
+  ? `<div class="ws-local-status ok" data-ai-local-status="applied">Section updated successfully.</div>`
+  : ``;
   const localUndoSuccessHtml = undoneSection === section_key ? `<div class="ws-local-status ok">AI change undone. Previous section text restored.</div>` : ``;
   const canUndoAi = !!(lastAiUndo && String(lastAiUndo.section_key || "") === section_key && String(lastAiUndo.before || "") !== String(lastAiUndo.after || ""));
   const undoAiHtml = canUndoAi ? `<form method="POST" action="/ai-workspace/undo-ai-change" class="ws-local-undo-form"><input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="section_key" value="${safeStr(section_key)}"/><button class="btn secondary small" type="submit">Undo AI Change</button></form>` : "";
@@ -23019,6 +23040,94 @@ function workspaceAttachmentStorageKind(storedPath){
   return workspaceAttachmentStoredPathLooksUserOrPulled(storedPath);
 }
 
+function workspacePdfExtractedTextIsOnlyPageNumbers(text, pageCount=0){
+  const normalized = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return false;
+
+  const pageNumberOnly = /^(page\s+\d+\s+of\s+\d+\s*)+$/i.test(normalized);
+  if (pageNumberOnly) return true;
+
+  const count = Number(pageCount || 0);
+  if (
+    count > 1 &&
+    /page\s+1\s+of\s+\d+/i.test(normalized) &&
+    normalized.length <= Math.max(40, count * 28)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+async function workspacePdfSourceLooksGeneratedOrBlank(storedPath, att=null, docKey=""){
+  const ext = path.extname(String(workspaceAttachmentFilename(att) || storedPath || "")).toLowerCase();
+  if (ext !== ".pdf") return false;
+
+  const meta = [
+    att?.filename,
+    att?.originalName,
+    att?.source_type,
+    att?.source_status,
+    att?.proof_level,
+    att?.source_label,
+    att?.source_system,
+    att?.reason,
+    att?.message,
+    att?.note,
+    att?.generated_reason,
+    docKey,
+    storedPath
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  if (
+    /packet_exports|packet export|generated_packet|generated packet|packet preview|pdf preview|system evidence summary|system-found evidence|source proof placeholder|generated source proof|draft evidence/.test(meta)
+  ) {
+    return true;
+  }
+
+  try {
+    const pdfParse = require("pdf-parse");
+    const parsed = await pdfParse(fs.readFileSync(storedPath));
+    const extractedText = String(parsed?.text || "");
+    const pageCount = Number(parsed?.numpages || 0);
+
+    if (workspacePdfExtractedTextIsOnlyPageNumbers(extractedText, pageCount)) {
+      return true;
+    }
+
+    const compact = extractedText.replace(/\s+/g, " ").trim().toLowerCase();
+
+    if (
+      compact.includes("system-found evidence") &&
+      compact.includes("letter of medical necessity") &&
+      compact.includes("to whom it may concern") &&
+      compact.includes("claim #")
+    ) {
+      return true;
+    }
+  } catch (e) {
+    return false;
+  }
+
+  return false;
+}
+
+async function workspaceAttachmentEligibleForMergedPdfAsync(att, docKey=""){
+  if (!workspaceAttachmentIsRealSourceExhibit(att, docKey)) return false;
+
+  const fileInfo = workspaceAttachmentStoredFileStat(att);
+  if (!fileInfo || !fileInfo.storedPath) return false;
+
+  if (await workspacePdfSourceLooksGeneratedOrBlank(fileInfo.storedPath, att, docKey)) {
+    return false;
+  }
+
+  return true;
+}
+
 function workspaceAttachmentEligibleForMergedPdf(att, docKey=""){
   const fileInfo = workspaceAttachmentStoredFileStat(att);
   if (!fileInfo) return false;
@@ -23522,12 +23631,19 @@ async function buildMergedPacketPDF({ claim, derived, ws, channel, res, preview=
     try {
       const att = exhibit.attachment || null;
       if (!att) continue;
-      if (!workspaceAttachmentIsRealSourceExhibit(att, exhibit.docKey)) continue;
+      if (!(await workspaceAttachmentEligibleForMergedPdfAsync(att, exhibit.docKey))) {
+        debugLog("Skipping non-source/generated PDF exhibit", {
+          docKey: exhibit.docKey,
+          label: exhibit.label,
+          filename: workspaceAttachmentFilename(att),
+          storedPath: workspaceAttachmentStoredPath(att)
+        });
+        continue;
+      }
       const fileInfo = workspaceAttachmentStoredFileStat(att);
       const storedPath = fileInfo ? fileInfo.storedPath : "";
-      const hasFile = !!storedPath;
-      const ext = hasFile ? path.extname(String(workspaceAttachmentFilename(att) || storedPath)).toLowerCase() : "";
-      if (!hasFile) continue;
+      if (!storedPath) continue;
+      const ext = path.extname(String(workspaceAttachmentFilename(att) || storedPath)).toLowerCase();
 
       await workspaceAppendExhibitCoverPage(
         mergedPdf,
