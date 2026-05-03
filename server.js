@@ -23570,28 +23570,6 @@ The reimbursement received does not align with the expected amount based on appl
     });
   }
 
-  // =========================
-  // PAGE NUMBERS
-  // =========================
-
-  const range = doc.bufferedPageRange();
-
-  for (let i = range.start; i < range.start + range.count; i++) {
-    doc.switchToPage(i);
-    const footerText = `Page ${i + 1} of ${range.count}`;
-    const footerY = doc.page.height - 36;
-
-    doc
-      .font("Helvetica")
-      .fontSize(9)
-      .fillColor("gray")
-      .text(
-        footerText,
-        50,
-        footerY,
-        { align: "center", width: doc.page.width - 100, lineBreak: false }
-      );
-  }
   doc.fillColor("black");
 
   doc.end();
