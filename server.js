@@ -21324,6 +21324,24 @@ function renderInlineAIAssist(billed_id, channel){
       window.closeWorkspaceAiAssistDrawer = window.closeWorkspaceAiAssistDrawer || function(id){ var d=document.getElementById(id); if(d){ d.classList.remove("open"); d.setAttribute("aria-hidden","true"); } };
       function findActiveWorkspaceAiDraft(){ var out = { section:"", text:"" }; try { var params = new URLSearchParams(window.location.search || ""); var section = params.get("ai_section") || ""; var active = null; if (section) { active = document.querySelector("#section-" + section + " [data-ai-interactive-diff]"); } if (!active) { active = document.querySelector(".ws-clean-section.ai-target-section [data-ai-interactive-diff]"); } if (!active) { active = document.querySelector(".ws-ai-review-mode [data-ai-interactive-diff]"); } if (active) { var card = active.closest(".ws-clean-section"); if (card && card.getAttribute("data-inline-section")) { section = card.getAttribute("data-inline-section"); } out.section = section || ""; out.text = String(active.textContent || "").trim(); } } catch(e) {} return out; }
       function syncActiveWorkspaceAiDraftToForm(form){ if (!form) return; var draft = findActiveWorkspaceAiDraft(); var textInput = form.querySelector("[data-ai-current-text-override]"); var sectionInput = form.querySelector("[data-ai-current-section-override]"); if (textInput) textInput.value = draft.text || ""; if (sectionInput) sectionInput.value = draft.section || ""; }
+      function workspaceAiInferTargetSectionFromPrompt(form){
+        var prompt = "";
+        try {
+          var ta = form ? form.querySelector("textarea[name='prompt']") : null;
+          prompt = String(ta && ta.value ? ta.value : "").toLowerCase();
+        } catch(e) {}
+        if (!prompt) return "";
+        if (/financial|patient follow|follow-up|follow up|paid amount|amount paid|expected|underpaid|billed|balance|reimbursement|variance/.test(prompt)) return "financial_summary";
+        if (/medical necessity|medical justification|clinical|treatment|diagnosis|provider letter|lmn|necessity/.test(prompt)) return "letter_of_medical_necessity";
+        if (/requested action|ask|reverse|reprocess|overturn|written rationale|denial remains/.test(prompt)) return "requested_action";
+        if (/claim summary|payer|dos|date of service|denial reason|claim context/.test(prompt)) return "claim_summary";
+        if (/attachment|document|proof|evidence index|supporting/.test(prompt)) return "attachments_index";
+        if (/signature|signoff|sincerely|contact block/.test(prompt)) return "signature";
+        if (/negotiation|variance explanation|contract argument/.test(prompt)) return "variance_explanation";
+        if (/requested amount|target amount|ask amount|payment amount/.test(prompt)) return "requested_amount";
+        if (/appeal|argument|denial reversal|stronger|policy|contract language|rationale/.test(prompt)) return "argument";
+        return "";
+      }
       function workspaceAiSelectedTargetSection(form, clickedButton){
         var target = "";
         try {
@@ -21333,6 +21351,14 @@ function renderInlineAIAssist(billed_id, channel){
           if (!target && form) {
             var sel = form.querySelector("select[name='target_section']");
             if (sel) target = String(sel.value || "").trim();
+          }
+          if (!target || target === "auto") {
+            target = workspaceAiInferTargetSectionFromPrompt(form);
+          }
+          if (!target || target === "auto") {
+            var channelInput = form ? form.querySelector("input[name='channel']") : null;
+            var channel = String(channelInput && channelInput.value ? channelInput.value : "appeal");
+            target = channel === "negotiation" ? "variance_explanation" : "argument";
           }
         } catch(e) {}
         return target;
@@ -21380,20 +21406,24 @@ function renderInlineAIAssist(billed_id, channel){
         section.classList.add("is-ai-adjusting");
         section.setAttribute("aria-busy", "true");
         try {
-          section.scrollIntoView({ behavior: "smooth", block: "center" });
+          section.scrollIntoView({ behavior: "auto", block: "center" });
+          setTimeout(function(){
+            try { section.scrollIntoView({ behavior: "auto", block: "center" }); } catch(e) {}
+          }, 30);
         } catch(e) {}
+        try { void section.offsetHeight; } catch(e) {}
       }
       function waitForAiSectionPaintThenSubmit(form){
         requestAnimationFrame(function(){
           requestAnimationFrame(function(){
             setTimeout(function(){
               form.submit();
-            }, 140);
+            }, 550);
           });
         });
       }
       window.submitWorkspaceAiAssistForm = function(form, clickedButton, submitEvent){ if (!form) return true; if (form.dataset.aiSubmittingReady === "1") { return true; } if (submitEvent && typeof submitEvent.preventDefault === "function") { submitEvent.preventDefault(); } syncActiveWorkspaceAiDraftToForm(form); form.classList.add("is-submitting"); var drawer = form.closest(".ws-ai-drawer"); if (drawer) { drawer.classList.add("is-working"); drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); } var working = form.querySelector("[data-ai-working]"); if (working) { working.textContent = "Working on editable packet section… Keep this page open."; working.classList.add("show"); } var active = clickedButton || form.__tjhpSubmitter || (submitEvent && submitEvent.submitter ? submitEvent.submitter : null) || form.querySelector("button[type='submit']"); form.querySelectorAll("button").forEach(function(btn){btn.disabled=true;}); if(active){ active.dataset.originalText=active.dataset.originalText||active.textContent; active.textContent=active.getAttribute("data-loading-label")||"Generating Section Update...";} showWorkspaceAiSectionWorking(form, active); try { void document.body.offsetHeight; } catch(e) {} form.dataset.aiSubmittingReady = "1"; waitForAiSectionPaintThenSubmit(form); return false; };
-      (function(){ if(window.__tjhpAiWorkspaceButtonBound) return; window.__tjhpAiWorkspaceButtonBound=true; document.addEventListener("click", function(e){ var btn=e.target&&e.target.closest?e.target.closest("[data-ai-preset]"):null; if(!btn) return; var form=btn.closest("form"); if(!form) return; e.preventDefault(); var p=form.querySelector("[data-ai-preset-input]"); if(p) p.value=btn.getAttribute("data-ai-preset")||""; var target=btn.getAttribute("data-ai-target")||""; var sel=form.querySelector("select[name='target_section']"); if(sel&&target) sel.value=target; var prompt=btn.getAttribute("data-ai-prompt")||""; var ta=form.querySelector("textarea[name='prompt']"); if(ta && !String(ta.value||"").trim()) ta.value=prompt; form.__tjhpSubmitter=btn; if (typeof form.requestSubmit === "function") { form.requestSubmit(); } else { window.submitWorkspaceAiAssistForm(form, btn, null); } }); document.addEventListener("keydown", function(e){ var target = e.target; if (!target || !target.matches || !target.matches("[data-ai-workspace-form='1'] textarea[name='prompt']")) return; if (e.key !== "Enter" || e.shiftKey) return; var form = target.closest("[data-ai-workspace-form='1']"); if (!form || form.dataset.aiSubmittingReady === "1") return; e.preventDefault(); e.stopPropagation(); if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation(); var submitBtn = form.querySelector("button[type='submit']"); form.__tjhpSubmitter = submitBtn || null; if (typeof form.requestSubmit === "function") { if (submitBtn) form.requestSubmit(submitBtn); else form.requestSubmit(); } else { window.submitWorkspaceAiAssistForm(form, submitBtn, e); } return false; }, true); document.addEventListener("submit", function(e){ var form=e.target&&e.target.matches&&e.target.matches("[data-ai-workspace-form='1']")?e.target:null; if(!form) return; window.submitWorkspaceAiAssistForm(form, form.__tjhpSubmitter||(e.submitter||null)); });})();
+      (function(){ if(window.__tjhpAiWorkspaceButtonBound) return; window.__tjhpAiWorkspaceButtonBound=true; document.addEventListener("click", function(e){ var btn=e.target&&e.target.closest?e.target.closest("[data-ai-preset]"):null; if(!btn) return; var form=btn.closest("form"); if(!form) return; e.preventDefault(); var p=form.querySelector("[data-ai-preset-input]"); if(p) p.value=btn.getAttribute("data-ai-preset")||""; var target=btn.getAttribute("data-ai-target")||""; var sel=form.querySelector("select[name='target_section']"); if(sel&&target) sel.value=target; var prompt=btn.getAttribute("data-ai-prompt")||""; var ta=form.querySelector("textarea[name='prompt']"); if(ta && !String(ta.value||"").trim()) ta.value=prompt; form.__tjhpSubmitter=btn; if (typeof form.requestSubmit === "function") { form.requestSubmit(); } else { window.submitWorkspaceAiAssistForm(form, btn, null); } }); document.addEventListener("keydown", function(e){ var target = e.target; if (!target || !target.matches || !target.matches("[data-ai-workspace-form='1'] textarea[name='prompt']")) return; if (e.key !== "Enter" || e.shiftKey) return; var form = target.closest("[data-ai-workspace-form='1']"); if (!form || form.dataset.aiSubmittingReady === "1") return; e.preventDefault(); e.stopPropagation(); if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation(); var submitBtn = form.querySelector("button[type='submit']"); form.__tjhpSubmitter = submitBtn || null; if (window.submitWorkspaceAiAssistForm) { window.submitWorkspaceAiAssistForm(form, submitBtn, e); } return false; }, true); document.addEventListener("submit", function(e){ var form=e.target&&e.target.matches&&e.target.matches("[data-ai-workspace-form='1']")?e.target:null; if(!form) return; window.submitWorkspaceAiAssistForm(form, form.__tjhpSubmitter||(e.submitter||null)); });})();
       try { var genericCopilot = document.getElementById("aiChat"); if (genericCopilot) genericCopilot.style.display = "none"; } catch(e) {}
       </script>
     </aside>
@@ -23196,6 +23226,22 @@ function workspaceLmnTextForPacketPdf(lmnText){
   return raw;
 }
 
+function workspacePdfPracticeHeaderLines(orgCtx){
+  const addressLines = String(orgCtx?.addressBlock || orgCtx?.mailingAddress || "")
+    .split("\n")
+    .map(line => String(line || "").trim())
+    .filter(Boolean);
+
+  return [
+    orgCtx?.orgName || "Your Practice",
+    ...(addressLines.length ? addressLines : ["[Practice Address]"]),
+    `Phone: ${orgCtx?.phone || "[Phone Number]"}`,
+    `Email: ${orgCtx?.email || "[Email]"}`,
+    `NPI: ${orgCtx?.npi || "[NPI Number]"}`,
+    `Tax ID: ${orgCtx?.taxId || "[Tax ID]"}`
+  ].filter(Boolean);
+}
+
 function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   const doc = docOverride || new PDFKitDocument({ margin: 50, bufferPages: true });
   doc.page.margins = { top: 50, bottom: 50, left: 50, right: 50 };
@@ -23227,18 +23273,21 @@ function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   }
 
   // ----- Provider Info (Top Right) -----
-  doc
-    .font("Helvetica")
-    .fontSize(10)
-    .text(orgCtx.orgName || "Your Practice", 50, 48, { width: CONTENT_WIDTH, align: "right" });
-  if (orgCtx.npi) doc.text(`NPI: ${orgCtx.npi}`, { width: CONTENT_WIDTH, align: "right" });
-  if (orgCtx.taxId) doc.text(`TIN: ${orgCtx.taxId}`, { width: CONTENT_WIDTH, align: "right" });
-  String(orgCtx.addressBlock || "").split("\n").filter(Boolean).forEach(line => doc.text(line, { width: CONTENT_WIDTH, align: "right" }));
-  if (orgCtx.phone) doc.text(orgCtx.phone, { width: CONTENT_WIDTH, align: "right" });
-  if (orgCtx.email) doc.text(orgCtx.email, { width: CONTENT_WIDTH, align: "right" });
-
-  // ----- Move below header -----
-  doc.moveDown(3);
+  const practiceHeaderLines = workspacePdfPracticeHeaderLines(orgCtx);
+  doc.font("Helvetica").fontSize(9.5);
+  practiceHeaderLines.forEach((line, idx) => {
+    doc.text(
+      line,
+      50,
+      idx === 0 ? 48 : undefined,
+      {
+        width: CONTENT_WIDTH,
+        align: "right",
+        lineGap: 1
+      }
+    );
+  });
+  doc.y = Math.max(doc.y + 12, 126);
 
   // ----- Date -----
   doc
@@ -23420,17 +23469,21 @@ The reimbursement received does not align with the expected amount based on appl
 
   for (let i = range.start; i < range.start + range.count; i++) {
     doc.switchToPage(i);
+    const footerText = `Page ${i + 1} of ${range.count}`;
+    const footerY = doc.page.height - 36;
 
     doc
+      .font("Helvetica")
       .fontSize(9)
       .fillColor("gray")
       .text(
-        `Page ${i + 1} of ${range.count}`,
+        footerText,
         50,
-        doc.page.height - 50,
-        { align: "center", width: doc.page.width - 100 }
+        footerY,
+        { align: "center", width: doc.page.width - 100, lineBreak: false }
       );
   }
+  doc.fillColor("black");
 
   doc.end();
 }
