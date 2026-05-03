@@ -16692,6 +16692,7 @@ function renderWorkspacePacketEvidencePreferenceForm(ws, claim, doc, channel, ig
   if (ignored) {
     return `<form method="POST" action="/ai-workspace/packet-evidence-preference" style="margin-top:8px;">
       <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+      <input type="hidden" name="workspace_id" value="${safeStr(ws?.workspace_id || "")}"/>
       <input type="hidden" name="channel" value="${safeStr(channel)}"/>
       <input type="hidden" name="doc_key" value="${safeStr(docKey)}"/>
       <input type="hidden" name="action" value="restore"/>
@@ -16700,6 +16701,7 @@ function renderWorkspacePacketEvidencePreferenceForm(ws, claim, doc, channel, ig
   }
   return `<form method="POST" action="/ai-workspace/packet-evidence-preference" style="margin-top:8px;">
     <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+    <input type="hidden" name="workspace_id" value="${safeStr(ws?.workspace_id || "")}"/>
     <input type="hidden" name="channel" value="${safeStr(channel)}"/>
     <input type="hidden" name="doc_key" value="${safeStr(docKey)}"/>
     <input type="hidden" name="action" value="ignore"/>
@@ -16771,7 +16773,7 @@ function renderOutcomeRecommendationsCard(org_id, ws, claim, channel){
                         }
                       </div>
                     </div>
-                    <span class="badge ${safeStr(state.badgeClass)}">${safeStr(state.statusLabel)}</span>
+                    <span class="badge ${safeStr(state.ignored ? "warn" : state.badgeClass)}">${safeStr(state.ignored ? "Excluded" : state.statusLabel)}</span>
                   </div>
 
                   ${state.ignored ? "" : preview}
@@ -20263,8 +20265,56 @@ function renderWorkspaceEvidencePreview(ws, claim, doc, row, channel){
   `;
 }
 
+
+function workspaceResolveUploadClaimFromFields(sess, fields, req){
+  const org_id = sess && sess.org_id ? sess.org_id : "";
+  let billed_id = String(fields?.billed_id || "").trim();
+  const workspace_id = String(fields?.workspace_id || "").trim();
+
+  let ws = null;
+  let claim = billed_id ? getBilledById(org_id, billed_id) : null;
+
+  if (!claim && workspace_id) {
+    try {
+      ws = readJSON(FILES.agent_workspaces, []).find(w =>
+        w &&
+        w.org_id === org_id &&
+        String(w.workspace_id || "") === workspace_id
+      ) || null;
+
+      if (ws && ws.billed_id) {
+        billed_id = String(ws.billed_id || "").trim();
+        claim = getBilledById(org_id, billed_id);
+      }
+    } catch (e) {}
+  }
+
+  if (!claim) {
+    try {
+      const ref = String(req?.headers?.referer || req?.headers?.referrer || "").trim();
+      if (ref) {
+        const refUrl = new URL(ref, APP_BASE_URL || "http://localhost");
+        const refBilled = String(refUrl.searchParams.get("billed_id") || "").trim();
+        if (refBilled) {
+          const refClaim = getBilledById(org_id, refBilled);
+          if (refClaim) {
+            billed_id = refBilled;
+            claim = refClaim;
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  if (!ws && claim) {
+    ws = getAgentWorkspace(org_id, claim.billed_id) || null;
+  }
+
+  return { billed_id, claim, ws };
+}
+
 function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, opts={}){
-  const billed_id = claim?.billed_id || ws?.billed_id || "";
+  const billed_id = workspaceFirstValue(claim?.billed_id, ws?.billed_id);
   const docKey = doc?.key || row?.key || "";
   const buttonLabel = opts.buttonLabel || "Upload";
   const compactClass = opts.compact ? " compact" : "";
@@ -20272,6 +20322,7 @@ function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, opts={}){
   return `
     <form class="ws-drop-upload${compactClass}" method="POST" action="/ai-workspace/upload" enctype="multipart/form-data">
       <input type="hidden" name="billed_id" value="${safeStr(billed_id)}"/>
+      <input type="hidden" name="workspace_id" value="${safeStr(ws?.workspace_id || "")}"/>
       <input type="hidden" name="channel" value="${safeStr(channel)}"/>
       <input type="hidden" name="doc_key" value="${safeStr(docKey)}"/>
 
@@ -20280,6 +20331,7 @@ function renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, opts={}){
         <span class="ws-drop-title">Drop documents here or choose files</span>
         <span class="ws-drop-sub">PDF, image, CSV, Excel, Word, TXT, or supporting documents. Multiple files supported.</span>
         <span class="ws-file-name muted small"></span>
+        <span class="muted small">Choose a file, then click the upload button to attach it to this packet item.</span>
       </label>
 
       <button class="btn secondary small" type="submit">${safeStr(buttonLabel === "Upload" ? "Upload Files" : buttonLabel)}</button>
@@ -20333,25 +20385,31 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
       ? renderWorkspaceEvidencePreview(ws, claim, doc, row, channel)
       : "";
 
-    const statusCopy = hasSourceProof
-      ? "Attached to the packet. Preview it below or replace it if needed."
-      : hasDraftEvidence
-        ? "Found in the system as draft evidence. Upload source proof if payer submission requires the actual document."
-        : "Missing. Upload this document so it can support the packet.";
+    const badgeLabel = state.ignored
+      ? "Excluded"
+      : (hasSourceProof ? (state.statusLabel || "Attached") : (hasDraftEvidence ? "Found in system" : "Missing"));
+    const statusCopy = state.ignored
+      ? "Excluded from packet. It will not be included in the PDF. This may reduce packet strength."
+      : hasSourceProof
+        ? "Uploaded source proof is attached. Preview it below or replace it if needed."
+        : hasDraftEvidence
+          ? "Found in the system as draft evidence. It can be included as readable packet context, or you can upload source proof to replace it."
+          : "Missing. Upload this document so it can support the packet, or exclude it if you want to proceed without it.";
 
     const body = `
       <div class="ws-section-body">
         <p style="margin:0 0 8px;">${safeStr(item.reason || row.detail || doc.why || "")}</p>
         <p class="muted small" style="margin:0 0 10px;">${safeStr(statusCopy)}</p>
-        ${preview}
-        ${exportMode ? "" : `
+        ${state.ignored ? "" : preview}
+        ${exportMode || state.ignored ? "" : `
           <div style="margin-top:10px;">
             ${renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, {
               compact: true,
-              buttonLabel: hasSourceProof ? "Replace / Add Files" : (hasDraftEvidence ? "Upload Source Proof" : "Upload Files")
+              buttonLabel: hasSourceProof ? "Replace Source Proof" : (hasDraftEvidence ? "Upload Source Proof" : "Upload Files")
             })}
           </div>
         `}
+        ${exportMode ? "" : `<div style="margin-top:10px;">${renderWorkspacePacketEvidencePreferenceForm(ws, claim, doc, channel, !!state.ignored)}</div>`}
 
         <div class="muted small" style="margin-top:8px;">
           Source: ${safeStr(item.source || "Packet Standard")}
@@ -20363,13 +20421,13 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
     if (exportMode) return "";
 
     return `
-      <div class="ws-section-card ws-clean-section ws-exhibit-section">
+      <div id="packet-attachment-${safeStr(state.doc.key)}" class="ws-section-card ws-clean-section ws-exhibit-section">
         <div class="ws-section-head">
           <div>
             <div class="ws-section-title">${safeStr(item.title || state.doc.label || workspaceDocLabel(state.doc.key))}</div>
             <div class="muted small" style="margin-top:3px;">Packet attachment generated from outcome-based recommendations.</div>
           </div>
-          <span class="badge ${safeStr(state.badgeClass)}">${safeStr(state.statusLabel)}</span>
+          <span class="badge ${safeStr(state.ignored ? "warn" : state.badgeClass)}">${safeStr(badgeLabel)}</span>
         </div>
         ${body}
       </div>
@@ -21127,13 +21185,19 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
   const auto = buildWorkspaceAutomationReadiness(ws, claim, channel);
   const ready = canMarkReady(ws, channel);
   const integrationsEnabled = !!auto.integrationsEnabled;
-  const commandSourceLabel = integrationsEnabled ? "Automation" : "Source Proof";
+  const commandSourceLabel = integrationsEnabled ? "Automation" : "Required source proof";
 
   const expected = Number(derived?.expectedInsurance || claim?.expected_amount || claim?.expected_insurance || 0);
   const paid = Number(derived?.paidAmount || claim?.paid_amount || claim?.insurance_paid || 0);
   const opportunity = Number(derived?.underpaidAmount || derived?.atRiskAmount || claim?.underpaid_amount || claim?.at_risk_amount || 0);
   const progressPct = Math.max(0, Math.min(100, Number(completeness.pct || 0)));
   const progressClass = workspaceProgressClass(progressPct);
+  const recommendationEvidence = workspaceRecommendationEvidenceCounts(ws, claim, channel);
+  const recommendationSegments = [];
+  if (recommendationEvidence.uploaded) recommendationSegments.push(`${recommendationEvidence.uploaded} uploaded`);
+  if (recommendationEvidence.system) recommendationSegments.push(`${recommendationEvidence.system} found in system`);
+  if (recommendationEvidence.missing) recommendationSegments.push(`${recommendationEvidence.missing} missing`);
+  if (recommendationEvidence.ignored) recommendationSegments.push(`${recommendationEvidence.ignored} excluded`);
 
   const title = isNegotiation
     ? "Negotiation Packet Command Center"
@@ -21145,7 +21209,7 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
 
   const statusBadge = ready.ok
     ? `<span class="badge ok">Ready for final review</span>`
-    : `<span class="badge warn">Needs ${ready.missing.length} required item${ready.missing.length === 1 ? "" : "s"}</span>`;
+    : `<span class="badge warn">Needs ${ready.missing.length} required source proof item${ready.missing.length === 1 ? "" : "s"}</span>`;
 
   return `
     <div class="ws-command-card">
@@ -21195,7 +21259,7 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
       </div>
 
       <div class="ws-readiness-bar-sub muted small">
-        Required proof: ${auto.requiredPresent}/${Math.max(1, auto.required.length)} ready · Missing: ${auto.requiredMissing}
+        Required source proof: ${auto.requiredPresent}/${Math.max(1, auto.required.length)} ready · Missing required: ${auto.requiredMissing}${recommendationSegments.length ? `<br/>Recommendation evidence: ${safeStr(recommendationSegments.join(" · "))}` : ""}
       </div>
     </div>
   `;
@@ -49596,7 +49660,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
     if (!m) return send(res, 400, "Expected multipart form data");
 
     const { files, fields } = await parseMultipart(req, m[1]);
-    const billed_id = String(fields.billed_id || "").trim();
+    let billed_id = String(fields.billed_id || "").trim();
     const channel = String(fields.channel || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
     const rawDocKey = String(fields.doc_key || "").trim();
     const doc_key = workspaceCanonicalDocKey(rawDocKey);
@@ -49608,10 +49672,23 @@ if (method === "GET" && pathname === "/agent-workspace") {
       return send(res, 400, "Missing billed_id, doc_key, or file");
     }
 
-    const claim = getBilledById(sess.org_id, billed_id);
-    if (!claim) return send(res, 404, "Claim not found");
+    const resolved = workspaceResolveUploadClaimFromFields(sess, fields, req);
+    billed_id = resolved.billed_id;
+    const claim = resolved.claim;
+    let ws = resolved.ws;
 
-    const ws = ensureAgentWorkspace(sess.org_id, claim);
+    if (!claim) {
+      debugLog("Workspace upload claim resolution failed", {
+        org_id: sess.org_id,
+        billed_id: String(fields.billed_id || ""),
+        workspace_id: String(fields.workspace_id || ""),
+        doc_key: String(fields.doc_key || ""),
+        referer: String(req.headers.referer || "")
+      });
+      return send(res, 404, "Claim not found for this packet upload. Return to the workspace and try again.");
+    }
+
+    ws = ws || ensureAgentWorkspace(sess.org_id, claim);
     ensureWorkspacePacket(ws);
     ensurePacketSections(ws, claim);
     ensureWorkspaceRounds(ws, channel);
