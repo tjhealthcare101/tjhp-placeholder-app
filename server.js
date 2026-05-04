@@ -15913,14 +15913,14 @@ function flowStageActionMeta(stage){
   };
 }
 
-function renderFlowBridgeCard(title, body, primaryHref, primaryLabel, secondaryHref="", secondaryLabel=""){
+function renderFlowBridgeCard(title, body, primaryHref, primaryLabel, secondaryHref="", secondaryLabel="", primaryAttrs="", secondaryAttrs=""){
   return `
     <div class="insight-card flow-bridge" style="margin-top:10px;">
       <div class="flow-bridge-title" style="font-weight:800;">${safeStr(title || "")}</div>
       <div class="flow-bridge-body muted" style="margin-top:6px;">${safeStr(body || "")}</div>
       <div class="btnRow" style="margin-top:10px;">
-        <a class="btn" href="${safeStr(primaryHref || "#")}">${safeStr(primaryLabel || "Open")}</a>
-        ${secondaryHref ? `<a class="btn secondary" href="${safeStr(secondaryHref)}">${safeStr(secondaryLabel || "Back")}</a>` : ``}
+        <a class="btn" href="${safeStr(primaryHref || "#")}" ${primaryAttrs}>${safeStr(primaryLabel || "Open")}</a>
+        ${secondaryHref ? `<a class="btn secondary" href="${safeStr(secondaryHref)}" ${secondaryAttrs}>${safeStr(secondaryLabel || "Back")}</a>` : ``}
       </div>
     </div>
   `;
@@ -15987,12 +15987,13 @@ function claimRecoveryWorkflowState(org_id, claim, derived){
   let nextAction = suggestedChannel === "negotiation" ? "Start Negotiation" : "Start Appeal";
   let primaryLabel = nextAction;
   let primaryHref = workspacePagePath(claim.billed_id, suggestedChannel);
+  const responseHref = `/claim-payer-response?billed_id=${encodeURIComponent(claim.billed_id || "")}&channel=${encodeURIComponent(suggestedChannel || "")}`;
   if (responseReceived) { workflowStage = "response_received"; workflowLabel = `${channelLabel} response received`; nextAction = "Review payer response"; primaryLabel = "Start Next Round"; }
   else if (hasSubmitted && !hasFollowUpDate) { workflowStage = "submitted_needs_followup_date"; workflowLabel = `${latestSubmission?.label || `${channelLabel} submitted`} — follow-up date needed`; nextAction = "Set follow-up date"; primaryLabel = "Set Follow-Up"; }
   else if (hasSubmitted && followUpDue) { workflowStage = "followup_due"; workflowLabel = `${latestSubmission?.label || `${channelLabel} submitted`} — follow-up due`; nextAction = "Follow Up with Payer"; primaryLabel = "Follow Up with Payer"; }
-  else if (hasSubmitted) { workflowStage = "submitted_monitor"; workflowLabel = `${latestSubmission?.label || `${channelLabel} submitted`} — awaiting payer response`; nextAction = "Monitor payer response"; primaryLabel = "View Submitted Packet"; primaryHref = claim.packet_export_url || latestSubmission?.packet_export_url || latestSubmission?.packet_view_url || workspacePagePath(claim.billed_id, suggestedChannel); }
+  else if (hasSubmitted) { workflowStage = "submitted_monitor"; workflowLabel = `${latestSubmission?.label || `${channelLabel} submitted`} — awaiting payer response`; nextAction = "Upload Payer Response"; primaryLabel = "View Submitted Packet"; primaryHref = claim.packet_export_url || latestSubmission?.packet_export_url || latestSubmission?.packet_view_url || workspacePagePath(claim.billed_id, suggestedChannel); }
   else if (hasDraft || hasWorkspace || hasPacketHistory) { workflowStage = "draft"; workflowLabel = `${channelLabel} draft in progress`; nextAction = `Continue ${channelLabel} Draft`; primaryLabel = `Continue ${channelLabel} Draft`; }
-  return { ws, channel: suggestedChannel, channelLabel, latestSubmission, hasWorkspace, hasSubmitted, hasDraft, hasPacketHistory, followUpDate, followUpDue, responseReceived, workflowStage, workflowLabel, nextAction, primaryLabel, primaryHref };
+  return { ws, channel: suggestedChannel, channelLabel, latestSubmission, hasWorkspace, hasSubmitted, hasDraft, hasPacketHistory, followUpDate, followUpDue, responseReceived, workflowStage, workflowLabel, nextAction, primaryLabel, primaryHref, responseHref };
 }
 
 function packetNarrativeKey(channel){
@@ -39898,6 +39899,17 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
 }
 
 if (method === "GET" && pathname === "/actions") {
+  function actionCenterEditClaimButton(b){
+    return `<a class="btn secondary small edit-claim-btn" href="/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}">Edit Claim</a>`;
+  }
+  function removeActionCenterEditClaimButtons(html){
+    return String(html || "")
+      .replace(/<a\b[^>]*class="[^"]*\bedit-claim-btn\b[^"]*"[^>]*>[\s\S]*?Edit Claim[\s\S]*?<\/a>/gi, "")
+      .replace(/<a\b[^>]*href="\/claim-edit\?claim_id=[^"]*"[^>]*>[\s\S]*?Edit Claim[\s\S]*?<\/a>/gi, "");
+  }
+  function ensureActionCenterEditClaimLast(html, b){
+    return `${removeActionCenterEditClaimButtons(html).trim()}\n${actionCenterEditClaimButton(b)}`;
+  }
   const selectedClaimId = String(parsed.query.claim || "").trim();
   const actionType = String(parsed.query.type || "").toLowerCase();
   const tabAliasFromType = ({
@@ -40327,19 +40339,21 @@ if (method === "GET" && pathname === "/actions") {
         workflowState.latestSubmission?.packet_view_url ||
         "";
       const claimFollowUpHref = `/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}#recovery-timeline`;
+      const responseHref = workflowState.responseHref || `/claim-payer-response?billed_id=${encodeURIComponent(b.billed_id)}&channel=${encodeURIComponent(workflowState.channel)}`;
+      const nextRoundLabel = workflowState.channel === "negotiation" ? "Start Next Round of Negotiation" : "Start Next Round of Appeal";
       const workflowStageActionHtml =
         workflowState.workflowStage === "submitted_needs_followup_date"
           ? `<a class="btn secondary small" href="${claimFollowUpHref}">Set Follow-Up</a>`
           : workflowState.workflowStage === "followup_due"
-            ? `<a class="btn secondary small" href="${claimFollowUpHref}">Follow Up with Payer</a>`
+            ? `<a class="btn secondary small" href="${claimFollowUpHref}">Follow Up with Payer</a><a class="btn secondary small" href="${responseHref}">Upload Payer Response</a>`
             : workflowState.workflowStage === "response_received"
-              ? `<a class="btn secondary small" href="${workspacePagePath(b.billed_id, workflowState.channel)}">Start Next Round</a>`
+              ? `<a class="btn secondary small" href="${workspacePagePath(b.billed_id, workflowState.channel)}">${nextRoundLabel}</a><a class="btn secondary small" href="${responseHref}">Upload Payer Response</a><a class="btn secondary small" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=writeoff">Write Off</a>`
               : workflowState.workflowStage === "submitted_monitor"
-                ? `<a class="btn secondary small" href="${claimFollowUpHref}">Monitor Payer Response</a>`
+                ? `<a class="btn secondary small" href="${responseHref}">Upload Payer Response</a>`
                 : ``;
       actionsHtml = `${viewButtonHtml}
-      ${submittedPacketUrl ? `<a class="btn secondary small" href="${safeStr(submittedPacketUrl)}">View Submitted Packet</a>` : ``}
-      <a class="btn secondary small" href="${workspacePagePath(b.billed_id, workflowState.channel)}">Open ${workflowState.channelLabel} Workspace</a>
+      ${submittedPacketUrl ? `<a class="btn secondary small" href="${safeStr(submittedPacketUrl)}" target="_blank" rel="noopener">View Submitted Packet</a>` : ``}
+      <a class="btn secondary small" href="${workspacePagePath(b.billed_id, workflowState.channel)}">${nextRoundLabel}</a>
       ${workflowStageActionHtml}`;
     } else if (hasActiveWorkflow && workflowState.workflowStage === "draft") {
       actionsHtml = `${viewButtonHtml}
@@ -40389,6 +40403,7 @@ if (method === "GET" && pathname === "/actions") {
         `;
       }
     }
+    actionsHtml = ensureActionCenterEditClaimLast(actionsHtml, b);
 
     return `<tr data-claim="${safeStr(String(b.billed_id || ""))}"${rowStyleAttr}>
       <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
@@ -41102,6 +41117,83 @@ if (method === "POST" && pathname === "/claim-action") {
   writeJSON(FILES.billed, billedAll);
   rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });
   return redirect(res, `/actions?q=${encodeURIComponent(b.claim_number || "")}`);
+}
+
+if (method === "GET" && pathname === "/claim-payer-response") {
+  const billedId = String(parsed.query?.billed_id || "").trim();
+  const channel = String(parsed.query?.channel || "").trim();
+  if (!billedId) return redirect(res, "/actions");
+  const billedAll = readJSON(FILES.billed, []);
+  const b = billedAll.find(x => String(x.billed_id) === billedId && x.org_id === org.org_id);
+  if (!b) return redirect(res, "/actions");
+  const html = renderPage("Upload Payer Response", `
+    <h2>Upload Payer Response</h2>
+    <form method="POST" action="/claim-payer-response" enctype="multipart/form-data">
+      <input type="hidden" name="billed_id" value="${safeStr(billedId)}" />
+      <input type="hidden" name="channel" value="${safeStr(channel)}" />
+      <label>Payer Response File (optional)</label>
+      <input type="file" name="payer_response_file" />
+      <label>Response Outcome</label>
+      <select name="response_outcome">
+        <option value="unfavorable">Unfavorable / Continue Fighting</option>
+        <option value="approved">Approved / Appeal Won</option>
+        <option value="partial">Partial Approval / Review Balance</option>
+        <option value="upheld">Denial Upheld</option>
+        <option value="other">Other</option>
+      </select>
+      <label>Response Note</label>
+      <textarea name="response_note" rows="4"></textarea>
+      <div class="btnRow">
+        <button class="btn" type="submit">Save Payer Response</button>
+        <a class="btn secondary" href="/claim-detail?billed_id=${encodeURIComponent(billedId)}">Back to Claim Detail</a>
+      </div>
+    </form>
+  `, navUser(), {showChat:true, orgName: org.org_name});
+  return send(res, 200, html);
+}
+
+if (method === "POST" && pathname === "/claim-payer-response") {
+  return parseMultipartForm(req, (err, form) => {
+    if (err) return send(res, 500, "Failed to process payer response form");
+    const billedId = String(form?.fields?.billed_id || "").trim();
+    if (!billedId) return redirect(res, "/actions");
+    const billedAll = readJSON(FILES.billed, []);
+    const idx = billedAll.findIndex(x => String(x.billed_id) === billedId && x.org_id === org.org_id);
+    if (idx < 0) return redirect(res, "/actions");
+    const b = billedAll[idx];
+    const now = nowISO();
+    const outcome = String(form?.fields?.response_outcome || "other").trim() || "other";
+    const note = String(form?.fields?.response_note || "").trim();
+    b.payer_response_status = "received";
+    b.packet_response_status = "response_received";
+    b.response_status = "payer_response_received";
+    b.payer_response_outcome = outcome;
+    b.payer_response_note = note;
+    b.payer_response_received_at = now;
+    b.last_payer_response_at = now;
+    b.packet_follow_up_status = "response_received";
+    if (!Array.isArray(b.payer_response_files)) b.payer_response_files = [];
+    const uploaded = Array.isArray(form?.files) ? form.files : [];
+    uploaded.forEach(f => {
+      const fileFieldName = String(f?.fieldName || f?.fieldname || f?.field || "");
+      if (fileFieldName === "payer_response_file") {
+        b.payer_response_files.push({ ...f, uploaded_at: now });
+      }
+    });
+    billedAll[idx] = b;
+    writeJSON(FILES.billed, billedAll);
+    const ws = getAgentWorkspace(org.org_id, billedId);
+    if (ws) {
+      ws.follow_up = ws.follow_up || {};
+      ws.follow_up.status = "response_received";
+      ws.follow_up.response_received_at = now;
+      ws.follow_up.response_outcome = outcome;
+      ws.follow_up.response_note = note;
+      saveAgentWorkspace(org.org_id, ws);
+    }
+    auditLog({ actor:"user", action:"claim_payer_response_uploaded", org_id: org.org_id, billed_id: billedId, response_outcome: outcome });
+    return redirect(res, `/claim-detail?billed_id=${encodeURIComponent(billedId)}&payer_response_uploaded=1`);
+  });
 }
 
 // ==============================
@@ -51281,8 +51373,8 @@ if (method === "GET" && pathname === "/claim-detail") {
       suggested = "Follow Up with Payer";
       nextStepBody = `${workflowRoundText} was submitted and follow-up is due. Contact the payer and record the response.`;
     } else if (workflowState.workflowStage === "submitted_monitor") {
-      suggested = "Monitor payer response";
-      nextStepBody = `${workflowRoundText} has been submitted. Monitor payer response and prepare the next action if the response is unfavorable.`;
+      suggested = "Upload Payer Response";
+      nextStepBody = `${workflowRoundText} has been submitted. Upload the payer response when it arrives, then prepare the next action if the response is unfavorable.`;
     } else if (workflowState.workflowStage === "response_received") {
       suggested = "Review payer response";
       nextStepBody = "A payer response was received. Review the outcome, then start the next round, accept the result, write off, or resolve the claim.";
@@ -51292,6 +51384,14 @@ if (method === "GET" && pathname === "/claim-detail") {
     }
     nextStepPrimaryHref = workflowState.primaryHref;
     nextStepPrimaryLabel = workflowState.primaryLabel;
+    if (workflowState.workflowStage === "submitted_monitor" || workflowState.workflowStage === "followup_due") {
+      nextStepPrimaryHref = workflowState.responseHref || `/claim-payer-response?billed_id=${encodeURIComponent(b.billed_id)}&channel=${encodeURIComponent(workflowState.channel)}`;
+      nextStepPrimaryLabel = "Upload Payer Response";
+    }
+    if (workflowState.workflowStage === "response_received") {
+      nextStepPrimaryHref = workspacePagePath(b.billed_id, workflowState.channel);
+      nextStepPrimaryLabel = workflowState.channel === "negotiation" ? "Start Next Round of Negotiation" : "Start Next Round of Appeal";
+    }
   }
 
   const detailContract = findContractForClaim(org.org_id, b);
@@ -51334,7 +51434,7 @@ if (method === "GET" && pathname === "/claim-detail") {
       .sort((a,b) => new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0));
     if (!submissions.length) return `<div class="card"><h3>${label}</h3><p class="muted">No submitted ${packetChannel} packets yet.</p></div>`;
     const latest = submissions[0] || {};
-    const rows = submissions.map(s => { const proofAttached = Number(s.required_source_proof_attached ?? ((s.source_proof_incomplete ? 0 : 1))); const proofTotal = Math.max(Number(s.required_source_proof_total || 1), proofAttached); const packetUrl = s.packet_export_url || s.packet_view_url || `/ai-workspace/export?billed_id=${encodeURIComponent(b.billed_id)}&channel=${encodeURIComponent(packetChannel)}&preview=1`; return `<tr><td>Round ${Number(s.round||1)}</td><td>v${Number(s.version||1)}</td><td>${safeStr(s.submitted_at || "-")}</td><td>${safeStr(s.method || "-")}</td><td>${safeStr(s.status || "submitted")}</td><td>${proofAttached}/${proofTotal} attached</td><td>${safeStr(s.follow_up_date || "-")}</td><td><a class="btn small secondary" href="${safeStr(packetUrl)}">View packet</a></td></tr>`; }).join("");
+    const rows = submissions.map(s => { const proofAttached = Number(s.required_source_proof_attached ?? ((s.source_proof_incomplete ? 0 : 1))); const proofTotal = Math.max(Number(s.required_source_proof_total || 1), proofAttached); const packetUrl = s.packet_export_url || s.packet_view_url || `/ai-workspace/export?billed_id=${encodeURIComponent(b.billed_id)}&channel=${encodeURIComponent(packetChannel)}&preview=1`; return `<tr><td>Round ${Number(s.round||1)}</td><td>v${Number(s.version||1)}</td><td>${safeStr(s.submitted_at || "-")}</td><td>${safeStr(s.method || "-")}</td><td>${safeStr(s.status || "submitted")}</td><td>${proofAttached}/${proofTotal} attached</td><td>${safeStr(s.follow_up_date || "-")}</td><td><a class="btn small secondary" href="${safeStr(packetUrl)}" target="_blank" rel="noopener">View packet</a></td></tr>`; }).join("");
     return `<div class="card"><h3>${label}</h3><div>Status: <span class="badge ok">Submitted</span></div><div>Latest: ${safeStr(latest.label || `${packetChannel} Round ${Number(latest.round||1)} v${Number(latest.version||1)}`)}</div><table style="margin-top:8px;"><thead><tr><th>Round</th><th>Version</th><th>Submitted</th><th>Method</th><th>Status</th><th>Source Proof</th><th>Follow-up</th><th>Packet</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   const negotiationSummary = renderClaimPacketSubmissionSummary("negotiation");
@@ -51377,7 +51477,17 @@ if (method === "GET" && pathname === "/claim-detail") {
     <h2>Claim Detail</h2>
     ${submitBanner}
 
-    ${renderClaimWhyCard(explainClaimFlag(org.org_id, b, d), { title: "Why this claim is flagged" })}
+    ${(() => {
+      const workflowSubmission = workflowState.latestSubmission || latestPacketSubmission || {};
+      const workflowResponseHref = workflowState.responseHref || `/claim-payer-response?billed_id=${encodeURIComponent(b.billed_id)}&channel=${encodeURIComponent(workflowState.channel)}`;
+      const claimWhy = explainClaimFlag(org.org_id, b, d);
+      if (workflowState.workflowStage === "submitted_needs_followup_date") { claimWhy.recommendation = `${workflowRoundText} has been submitted. Set a follow-up date and upload the payer response when it arrives.`; claimWhy.nextActionLabel = "Set Follow-Up"; claimWhy.nextActionHref = `/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}#recovery-timeline`; }
+      if (workflowState.workflowStage === "followup_due") { claimWhy.recommendation = `${workflowRoundText} was submitted and follow-up is due. Contact the payer, then upload the payer response when received.`; claimWhy.nextActionLabel = "Upload Payer Response"; claimWhy.nextActionHref = workflowResponseHref; }
+      if (workflowState.workflowStage === "submitted_monitor") { claimWhy.recommendation = `${workflowRoundText} has been submitted. Upload the payer response when it arrives, then decide whether to start the next round, accept the outcome, write off, or resolve.`; claimWhy.nextActionLabel = "Upload Payer Response"; claimWhy.nextActionHref = workflowResponseHref; }
+      if (workflowState.workflowStage === "response_received") { claimWhy.recommendation = "A payer response was received. Review the outcome, then start the next round, accept the result, write off, or resolve the claim."; claimWhy.nextActionLabel = workflowState.channel === "negotiation" ? "Start Next Round of Negotiation" : "Start Next Round of Appeal"; claimWhy.nextActionHref = workspacePagePath(b.billed_id, workflowState.channel); }
+      if (workflowState.workflowStage === "draft") { claimWhy.recommendation = "This claim already has an appeal/negotiation draft in progress. Continue the draft instead of starting over."; claimWhy.nextActionLabel = `Continue ${workflowState.channelLabel} Draft`; claimWhy.nextActionHref = workspacePagePath(b.billed_id, workflowState.channel); }
+      return renderClaimWhyCard(claimWhy, { title: "Why this claim is flagged" });
+    })()}
 
     <h3>Claim Overview</h3>
     <table>
@@ -51418,8 +51528,16 @@ if (method === "GET" && pathname === "/claim-detail") {
       nextStepBody,
       nextStepPrimaryHref,
       nextStepPrimaryLabel,
-      `/claims?view=table&q=${encodeURIComponent(b.claim_number || "")}`,
-      "View In Claims Lifecycle"
+      (workflowState.workflowStage === "submitted_monitor" || workflowState.workflowStage === "submitted_needs_followup_date" || workflowState.workflowStage === "followup_due" || workflowState.workflowStage === "response_received")
+        ? (workflowSubmission.packet_export_url || workflowSubmission.packet_view_url || "")
+        : `/claims?view=table&q=${encodeURIComponent(b.claim_number || "")}`,
+      (workflowState.workflowStage === "submitted_monitor" || workflowState.workflowStage === "submitted_needs_followup_date" || workflowState.workflowStage === "followup_due" || workflowState.workflowStage === "response_received")
+        ? "View Submitted Packet"
+        : "View In Claims Lifecycle",
+      "",
+      (workflowState.workflowStage === "submitted_monitor" || workflowState.workflowStage === "submitted_needs_followup_date" || workflowState.workflowStage === "followup_due" || workflowState.workflowStage === "response_received")
+        ? `target="_blank" rel="noopener"`
+        : ""
     )}
     <div class="btnRow">
       <a class="btn secondary" href="/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}">Edit Claim</a>
@@ -51428,9 +51546,10 @@ if (method === "GET" && pathname === "/claim-detail") {
       ${suggested === "Adjust Patient Responsibility" ? `<a class="btn secondary" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Perform Suggested Action</a>` : ``}
       ${suggested === "Review Claim" ? `<a class="btn secondary" href="/claims?view=all&q=${encodeURIComponent(b.claim_number || "")}">View In Claims Lifecycle</a>` : ``}
       ${(workflowState.workflowStage === "submitted_monitor" || workflowState.workflowStage === "submitted_needs_followup_date" || workflowState.workflowStage === "followup_due" || workflowState.workflowStage === "response_received")
-        ? `<a class="btn secondary" href="${safeStr(workflowSubmission.packet_export_url || workflowSubmission.packet_view_url || workspacePagePath(b.billed_id, workflowState.channel))}">View Submitted Packet</a>`
+        ? `<a class="btn secondary" href="${safeStr(workflowSubmission.packet_export_url || workflowSubmission.packet_view_url || workspacePagePath(b.billed_id, workflowState.channel))}" target="_blank" rel="noopener">View Submitted Packet</a>`
         : ``}
-      <a class="btn secondary" href="${workspacePagePath(b.billed_id, workflowState.channel)}">${workflowState.channel === "negotiation" ? "Open Negotiation Workspace" : "Open Appeal Workspace"}</a>
+      ${(workflowState.workflowStage === "submitted_monitor" || workflowState.workflowStage === "submitted_needs_followup_date" || workflowState.workflowStage === "followup_due" || workflowState.workflowStage === "response_received") ? `<a class="btn secondary" href="${workflowState.responseHref || `/claim-payer-response?billed_id=${encodeURIComponent(b.billed_id)}&channel=${encodeURIComponent(workflowState.channel)}`}">Upload Payer Response</a>` : ``}
+      <a class="btn secondary" href="${workspacePagePath(b.billed_id, workflowState.channel)}">${workflowState.channel === "negotiation" ? "Start Next Round of Negotiation" : "Start Next Round of Appeal"}</a>
       <a class="btn secondary" href="/actions?q=${encodeURIComponent(b.claim_number || "")}">View In Action Center</a>
     </div>
 
