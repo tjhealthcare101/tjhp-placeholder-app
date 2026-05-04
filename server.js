@@ -21178,6 +21178,41 @@ function workspaceProgressClass(pct){
   return "low";
 }
 
+function workspaceRecommendationEvidenceCounts(ws, claim, channel){
+  const counts = { uploaded:0, system:0, missing:0, ignored:0, total:0 };
+
+  let plan = [];
+  try {
+    plan = typeof workspacePacketAttachmentPlan === "function"
+      ? workspacePacketAttachmentPlan(channel)
+      : [];
+  } catch (e) {
+    plan = [];
+  }
+
+  plan
+    .filter(row => !(String(channel || "") === "appeal" && String(row?.key || "") === "lmn"))
+    .forEach(item => {
+      try {
+        const key = String(item?.key || "").trim();
+        if (!key) return;
+
+        const state = outcomeRecommendationEvidenceState(ws, claim, key, channel);
+        counts.total++;
+
+        if (state && state.ignored) counts.ignored++;
+        else if (state && state.hasSourceProof) counts.uploaded++;
+        else if (state && state.hasDraftEvidence) counts.system++;
+        else counts.missing++;
+      } catch (e) {
+        counts.total++;
+        counts.missing++;
+      }
+    });
+
+  return counts;
+}
+
 function renderWorkspaceCommandCenter(ws, claim, derived, channel){
   const isNegotiation = channel === "negotiation";
   const completeness = workspaceEnhancedCompleteness(ws, channel, claim);
