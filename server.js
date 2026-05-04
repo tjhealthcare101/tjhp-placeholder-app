@@ -40118,7 +40118,7 @@ if (method === "GET" && pathname === "/actions") {
 
     const atRisk = Number(derived.atRiskAmount || computeClaimAtRisk(b));
     const riskScore = computeClaimRiskScore({ ...b, status: st });
-    items.push({ b, derived, st, opStatus, kind, atRisk, riskScore, secondaryStatus, tabKey, isSubmittedClaim, isFollowupNeededClaim, postSubmissionStatus, followUpDate: b.follow_up_date || "" });
+    items.push({ b, derived, st, opStatus, kind, atRisk, riskScore, secondaryStatus, tabKey, isSubmittedClaim: !!isSubmittedPacketClaim, isSubmittedPacketClaim: !!isSubmittedPacketClaim, isFollowupNeededClaim: !!isFollowupNeededClaim, postSubmissionStatus, followUpDate: b.follow_up_date || "" });
   }
 
   const wsAll = readJSON(FILES.agent_workspaces, []).filter(w => w.org_id === org.org_id);
