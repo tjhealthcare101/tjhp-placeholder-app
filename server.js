@@ -18263,7 +18263,7 @@ function renderWorkspaceIntelligenceStrip(ws, claim, derived, channel, outcomeIn
     .map(x => x.trim())
     .filter(Boolean);
 
-  const missingCount = Number(auto.requiredMissing || 0);
+  const missingCount = Number(auto.requiredSourceProofNeeded || 0);
   const confidence =
     score.probability >= 80 ? "High confidence" :
     score.probability >= 60 ? "Moderate confidence" :
@@ -18477,11 +18477,11 @@ function renderWorkflowPanel(ws, claim, channel){
       <div class="ws-score">
         <div class="ws-score-num">${autoReadiness.submissionPct}%</div>
         <div class="ws-score-sub">
-          Submission readiness · Draft readiness ${autoReadiness.draftPct}% · ${enhanced.complete} of ${enhanced.total} preview elements completed
+          Source proof readiness ${autoReadiness.submissionPct}% · Draft readiness ${autoReadiness.draftPct}% · ${enhanced.complete} of ${enhanced.total} preview elements completed
         </div>
       </div>
       <div class="ws-chip-row">
-        <span class="ws-chip ${isSubmitted ? "ok" : tone}">${isSubmitted ? "Submitted" : (ready.ok ? "Ready for Review" : "Missing Required Items")}</span>
+        <span class="ws-chip ${isSubmitted ? "ok" : tone}">${isSubmitted ? "Submitted" : (ready.ok ? "Ready for Review" : "Source proof needed")}</span>
         <span class="ws-chip ${submission.status === "submitted" ? "ok" : "warn"}">${submission.status || "Draft"}</span>
         <span class="ws-chip">Round ${currentRound}</span>
       </div>
@@ -18492,9 +18492,14 @@ function renderWorkflowPanel(ws, claim, channel){
           ? (
               autoReadiness.submissionPct >= 100
                 ? `<div class="ws-callout ok" style="margin-top:10px;">Packet has required source documents attached or pulled for submission proof.</div>`
-                : `<div class="ws-callout warn" style="margin-top:10px;">Packet can be drafted, but submission proof is incomplete. Pull/upload source documents or proceed with documented override if appropriate.</div>`
+                : (() => {
+                    const missingSourceProofLabels = (autoReadiness.required || [])
+                      .filter(r => !workspaceIsSubmissionProof(r))
+                      .map(r => r.label || workspaceDocLabel(r.key));
+                    return `<div class="ws-callout warn" style="margin-top:10px;">Source proof still needed before payer submission: ${safeStr(missingSourceProofLabels.join(", "))}. System-found evidence can help draft the packet, but uploaded or pulled source files are stronger when the payer requires actual document proof.</div>`;
+                  })()
             )
-          : `<div class="ws-callout warn" style="margin-top:10px;">Missing required documents: ${ready.missing.map(workspaceDocLabel).join(", ")}.</div>`
+          : `<div class="ws-callout warn" style="margin-top:10px;">Source proof needed: ${ready.missing.map(workspaceDocLabel).join(", ")}.</div>`
       }
 
       ${submission.status === "submitted" ? `
@@ -18515,27 +18520,33 @@ function renderWorkflowPanel(ws, claim, channel){
         </div>
       ` : ``}
 
-      <form method="POST" action="/ai-workspace/submit" style="margin-top:10px;">
+      <form method="POST" action="/ai-workspace/submit" class="ws-submit-form">
         <input type="hidden" name="billed_id" value="${safeStr(claim.billed_id)}"/>
         <input type="hidden" name="channel" value="${safeStr(channel)}"/>
 
-        <label class="small">Method</label>
-        <select name="method">
-          <option>Portal</option>
-          <option>Fax</option>
-          <option>Mail</option>
-          <option>Phone</option>
-        </select>
+        <div class="ws-submit-grid">
+          <div class="ws-submit-field">
+            <label class="small">Method</label>
+            <select name="method">
+              <option>Portal</option>
+              <option>Fax</option>
+              <option>Mail</option>
+              <option>Phone</option>
+            </select>
+          </div>
+          <div class="ws-submit-field">
+            <label class="small">Follow-up Date</label>
+            <input type="date" name="follow_up_date"/>
+          </div>
+          <div class="ws-submit-field" style="grid-column:1 / -1;">
+            <label class="small">Reason for submitting without source proof</label>
+            <textarea name="override_reason" placeholder="Required when source proof is incomplete. Explain why you are proceeding with system-found evidence or missing source proof." style="min-height:84px;"></textarea>
+          </div>
+        </div>
 
-        <label class="small">Follow-up Date</label>
-        <input type="date" name="follow_up_date"/>
-
-        <label class="small">Override Reason if Source Proof Missing</label>
-        <textarea name="override_reason" placeholder="Optional. Required if you submit with auto-filled/system-derived evidence instead of attached source documents." style="min-height:80px;"></textarea>
-
-        <label class="small" style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+        <label class="small ws-submit-confirm">
           <input type="checkbox" name="confirm_missing_source_docs" value="1"/>
-          Continue with draft evidence / missing source documents if needed
+          Proceed with system-found evidence or missing source proof
         </label>
 
         <button class="btn secondary" style="margin-top:8px;">
@@ -18601,6 +18612,11 @@ function workspacePolishStyles(){
         font-size:15px;
         letter-spacing:.01em;
       }
+
+      .packet-workspace-shell .ws-submit-form{margin-top:12px;display:grid;gap:10px;}
+      .packet-workspace-shell .ws-submit-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+      .packet-workspace-shell .ws-submit-field{display:grid;gap:6px;}
+      .packet-workspace-shell .ws-submit-confirm{display:flex;gap:8px;align-items:flex-start;padding:10px;border:1px solid #e5e7eb;border-radius:10px;background:#f8fafc;font-weight:600;}
 
       .policy-source-preview pre,
       .ws-evidence-preview pre{
@@ -20618,8 +20634,8 @@ function renderWorkspaceProofCenter(ws, claim, channel){
     ? "Review what is attached, what can be pulled from connected sources, what is draft-only, and what still needs source proof."
     : "Manual workspace mode. Upload source documents here and review system-derived draft evidence where available.";
 
-  const blocking = auto.requiredMissing > 0
-    ? `<span class="badge warn">Source proof needed: ${Number(auto.requiredMissing || 0)} required</span>`
+  const blocking = auto.requiredSourceProofNeeded > 0
+    ? `<span class="badge warn">Source proof needed: ${Number(auto.requiredSourceProofNeeded || 0)} required</span>`
     : `<span class="badge ok">Required source proof attached</span>`;
 
   const proofSummaryRows = requiredDocs.map(doc => {
@@ -20637,7 +20653,7 @@ function renderWorkspaceProofCenter(ws, claim, channel){
   }).join("");
 
   return `
-    <details class="ws-panel ws-proof-center" ${auto.requiredMissing > 0 ? "open" : ""}>
+    <details class="ws-panel ws-proof-center" ${auto.requiredSourceProofNeeded > 0 ? "open" : ""}>
       <summary class="ws-clean-summary">
         <span style="display:block;min-width:0;flex:1;">
           <span>📄 ${safeStr(title)}</span>
@@ -20663,7 +20679,7 @@ function renderWorkspaceProofCenter(ws, claim, channel){
         </div>
         <div>
           <div class="muted small">Source Proof Needed</div>
-          <strong>${Number(auto.requiredMissing || 0)}</strong>
+          <strong>${Number(auto.requiredSourceProofNeeded || 0)}</strong>
         </div>
       </div>
 
@@ -21200,6 +21216,9 @@ function buildWorkspaceAutomationReadiness(ws, claim, channel){
     ? required.filter(r => r.status === "pull_available").length
     : 0;
   const requiredMissing = required.filter(r => r.status === "missing").length;
+  const requiredTotal = required.length;
+  const requiredSourceProofAttached = requiredSubmissionReady;
+  const requiredSourceProofNeeded = Math.max(0, requiredTotal - requiredSourceProofAttached);
 
   const draftPct = required.length
     ? Math.round((requiredDraftReady / required.length) * 100)
@@ -21230,6 +21249,9 @@ function buildWorkspaceAutomationReadiness(ws, claim, channel){
     requiredSubmissionReady,
     requiredPullAvailable,
     requiredMissing,
+    requiredTotal,
+    requiredSourceProofAttached,
+    requiredSourceProofNeeded,
     draftPct,
     submissionPct,
     connected
@@ -21363,7 +21385,7 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
       </div>
 
       <div class="ws-readiness-bar-sub muted small">
-        Required source proof attached: ${auto.requiredPresent}/${Math.max(1, auto.required.length)} · Source proof still needed: ${auto.requiredMissing}${recommendationSegments.length ? `<br/>Evidence checklist: ${safeStr(recommendationSegments.join(" · "))}` : ""}
+        Required source proof attached: ${auto.requiredPresent}/${Math.max(1, auto.required.length)} · Source proof still needed: ${auto.requiredSourceProofNeeded}${recommendationSegments.length ? `<br/>Evidence checklist: ${safeStr(recommendationSegments.join(" · "))}` : ""}
       </div>
     </div>
   `;
@@ -39897,14 +39919,22 @@ if (method === "GET" && pathname === "/actions") {
     const followUpDue = b.follow_up_date ? new Date(b.follow_up_date) : null;
     const hasPaymentResponse = !!derived.hasPaymentResponse;
     const displayLifecycleStage = normalizeLifecycleDisplayStage(String(derived.lifecycleStage || b.lifecycleStage || b.status || ""));
+    const hasPacketSubmissions = Array.isArray(b.packet_submissions) && b.packet_submissions.length > 0;
+    const latestPacketSubmission = hasPacketSubmissions ? b.packet_submissions[b.packet_submissions.length - 1] : null;
+    const packetFollowUpStatus = String(b.packet_follow_up_status || "").trim();
     const isSubmittedClaim =
       !!derived.submittedFlag ||
-      displayLifecycleStage === "Awaiting Payment";
+      displayLifecycleStage === "Awaiting Payment" ||
+      hasPacketSubmissions;
     const isAwaitingPaymentClaim = displayLifecycleStage === "Awaiting Payment";
     const isFollowupNeededClaim = isSubmittedClaim && followUpDue && !Number.isNaN(followUpDue.getTime()) && followUpDue <= now;
-    const postSubmissionStatus = isFollowupNeededClaim ? "Follow-Up Needed" : (isAwaitingPaymentClaim ? "Awaiting Payment" : "");
+    const postSubmissionStatus = hasPacketSubmissions ? (isFollowupNeededClaim ? "Follow-Up Needed" : (isAwaitingPaymentClaim ? "Awaiting Payment" : "Submitted Packet")) : (isFollowupNeededClaim ? "Follow-Up Needed" : (isAwaitingPaymentClaim ? "Awaiting Payment" : ""));
     const isPostSubmissionClaim = !!postSubmissionStatus;
-    const requiresFollowUp = Boolean(b.requires_follow_up || isFollowupNeededClaim);
+    const requiresFollowUp = Boolean(
+      b.requires_follow_up ||
+      isFollowupNeededClaim ||
+      (hasPacketSubmissions && (!b.follow_up_date || packetFollowUpStatus === "awaiting_payer_response"))
+    );
 
     if (tab === "postsubmission" && !isPostSubmissionClaim) continue;
     if (tab === "postsubmission" && filterPostSubmissionClaims([b], subTab).length === 0) continue;
@@ -39963,7 +39993,11 @@ if (method === "GET" && pathname === "/actions") {
       continue;
     }
 
-    if (isFollowupNeededClaim) {
+    if (requiresFollowUp && hasPacketSubmissions && !b.follow_up_date) {
+      group = "Post-Submission";
+      kind = "other";
+      secondaryStatus = "Follow-up date not set";
+    } else if (isFollowupNeededClaim) {
       group = "Post-Submission";
       kind = "other";
       secondaryStatus = secondaryStatus || `Follow-up due ${b.follow_up_date}`;
@@ -49933,11 +49967,11 @@ if (method === "GET" && pathname === "/agent-workspace") {
       ws.submission = ws.submission || {};
       ws.submission.status = "blocked";
       ws.submission.blocked_at = nowISO();
-      ws.submission.blocked_reason = "missing_source_documents";
+      ws.submission.blocked_reason = "confirm_missing_source_docs_required";
       ws.submission.submission_readiness_pct = autoReadiness.submissionPct;
       saveAgentWorkspace(sess.org_id, ws);
 
-      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&submit_blocked=missing_source_docs`);
+      return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&submit_blocked=confirm_missing_source_docs_required`);
     }
 
     if (sourceProofIncomplete && confirmMissingSourceDocs && !overrideReason) {
@@ -49952,9 +49986,17 @@ if (method === "GET" && pathname === "/agent-workspace") {
     }
 
     const submittedAt = nowISO();
-
-    ws.submission = {
-      status: "submitted",
+    const submittedRound = Number(ws[channel]?.round || 1) || 1;
+    const submittedVersion = Number(ws[channel]?.version || 1) || 1;
+    const nextRound = submittedRound + 1;
+    const nextVersion = submittedVersion + 1;
+    const submissionLabel = `${channel === "negotiation" ? "Negotiation" : "Appeal"} Round ${submittedRound} · v${submittedVersion}`;
+    const packetSubmission = {
+      submission_id: uuid(),
+      channel,
+      round: submittedRound,
+      version: submittedVersion,
+      label: submissionLabel,
       method: submissionMethod,
       follow_up_date,
       submitted_at: submittedAt,
@@ -49962,15 +50004,24 @@ if (method === "GET" && pathname === "/agent-workspace") {
       submission_readiness_pct: autoReadiness.submissionPct,
       draft_readiness_pct: autoReadiness.draftPct,
       override_reason: overrideReason,
-      override_missing_source_docs: confirmMissingSourceDocs
+      override_missing_source_docs: confirmMissingSourceDocs,
+      required_source_proof_attached: Number(autoReadiness.requiredSourceProofAttached || autoReadiness.requiredSubmissionReady || 0),
+      required_source_proof_total: Number(autoReadiness.requiredTotal || (autoReadiness.required || []).length || 0),
+      packet_export_url: `/ai-workspace/export?billed_id=${encodeURIComponent(billed_id)}&channel=${encodeURIComponent(channel)}&preview=1`,
+      packet_view_url: `/packet/export?billed_id=${encodeURIComponent(billed_id)}&type=${channel}`
+    };
+
+    ws.packet_submissions = Array.isArray(ws.packet_submissions) ? ws.packet_submissions : [];
+    ws.packet_submissions.push(packetSubmission);
+
+    ws.submission = {
+      ...packetSubmission,
+      status: "submitted"
     };
     ws.history = Array.isArray(ws.history) ? ws.history : [];
     ws.history.push({
-      round: Number(ws[channel]?.round || 1) || 1,
-      channel,
-      submitted_at: submittedAt,
-      method: submissionMethod,
-      follow_up_date
+      event: "packet_submitted",
+      ...packetSubmission
     });
 
     ws.audit = Array.isArray(ws.audit) ? ws.audit : [];
@@ -49985,7 +50036,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
       created_at: nowISO()
     });
 
-    ws[channel].round = Number(ws[channel].round || 1) + 1;
+    ws[channel].round = nextRound;
+    ws[channel].version = Math.max(nextVersion, Number(ws[channel].version || 0));
 
     saveAgentWorkspace(sess.org_id, ws);
 
@@ -49997,12 +50049,19 @@ if (method === "GET" && pathname === "/agent-workspace") {
       claims[idx].follow_up_date = follow_up_date || "";
       claims[idx].submitted_at = submittedAt;
       claims[idx].last_submission_date = submittedAt;
-      claims[idx].current_round = (Number(claims[idx].current_round || 0) || 0) + 1;
+      claims[idx].current_round = submittedRound;
+      claims[idx].next_round = nextRound;
       claims[idx].last_submission_type = channel;
+      claims[idx].last_submission_round = submittedRound;
+      claims[idx].last_submission_version = submittedVersion;
+      claims[idx].last_submission_label = submissionLabel;
+      claims[idx].packet_follow_up_status = follow_up_date ? "awaiting_payer_response" : "follow_up_date_missing";
+      claims[idx].packet_submissions = Array.isArray(claims[idx].packet_submissions) ? claims[idx].packet_submissions : [];
+      claims[idx].packet_submissions.push(packetSubmission);
       writeJSON(FILES.billed, claims);
     }
 
-    return redirect(res, `/claim-detail?billed_id=${encodeURIComponent(billed_id)}&submitted=1`);
+    return redirect(res, `/actions?tab=appeals&postsub=all&q=${encodeURIComponent(claim.claim_number || billed_id)}&submitted=1`);
   }
 
   if (method === "POST" && pathname === "/ai-workspace/ai-edit") {
@@ -50998,32 +51057,17 @@ if (method === "GET" && pathname === "/claim-detail") {
       ✅ Packet submitted successfully
     </div>
   ` : "";
-  const negotiationSummary = (submissionTypeRaw === "negotiation") ? `
-    <div class="card">
-      <h3>Negotiation Packet Summary</h3>
-      <div>Status: <span class="badge ok">Submitted</span></div>
-      <div>Round: ${currentRound || 1}</div>
-      <div>Submitted: ${safeStr(submittedDisplayDate)}</div>
-      <div>Follow-up Date: ${safeStr(followUpDisplayDate)}</div>
-      <div class="btnRow" style="margin-top:10px;">
-        <a class="btn small secondary" href="/packet/export?billed_id=${encodeURIComponent(b.billed_id)}&type=negotiation">View Packet</a>
-        <a class="btn small" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Open Negotiation Workspace</a>
-      </div>
-    </div>
-  ` : "";
-  const appealSummary = (submissionTypeRaw === "appeal") ? `
-    <div class="card">
-      <h3>Appeal Packet Summary</h3>
-      <div>Status: <span class="badge ok">Submitted</span></div>
-      <div>Round: ${currentRound || 1}</div>
-      <div>Submitted: ${safeStr(submittedDisplayDate)}</div>
-      <div>Follow-up Date: ${safeStr(followUpDisplayDate)}</div>
-      <div class="btnRow" style="margin-top:10px;">
-        <a class="btn small secondary" href="/packet/export?billed_id=${encodeURIComponent(b.billed_id)}&type=appeal">View Packet</a>
-        <a class="btn small" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Open Appeal Workspace</a>
-      </div>
-    </div>
-  ` : "";
+
+  function renderClaimPacketSubmissionSummary(packetChannel){
+    const label = packetChannel === "negotiation" ? "Negotiation Packet Summary" : "Appeal Packet Summary";
+    const submissions = (Array.isArray(b.packet_submissions) ? b.packet_submissions : []).filter(x => String(x.channel||"") === packetChannel);
+    if (!submissions.length) return `<div class="card"><h3>${label}</h3><p class="muted">No submitted ${packetChannel} packets yet.</p></div>`;
+    const latest = submissions[submissions.length - 1] || {};
+    const rows = submissions.slice().reverse().map(s => { const proofAttached = Number(s.required_source_proof_attached ?? ((s.source_proof_incomplete ? 0 : 1))); const proofTotal = Math.max(Number(s.required_source_proof_total || 1), proofAttached); const packetUrl = s.packet_export_url || s.packet_view_url || `/packet/export?billed_id=${encodeURIComponent(b.billed_id)}&type=${encodeURIComponent(packetChannel)}`; return `<tr><td>Round ${Number(s.round||1)}</td><td>v${Number(s.version||1)}</td><td>${safeStr(s.submitted_at || "-")}</td><td>${safeStr(s.method || "-")}</td><td>${safeStr(s.status || "submitted")}</td><td>${proofAttached}/${proofTotal} attached</td><td>${safeStr(s.follow_up_date || "-")}</td><td><a class="btn small secondary" href="${safeStr(packetUrl)}">View packet</a></td></tr>`; }).join("");
+    return `<div class="card"><h3>${label}</h3><div>Status: <span class="badge ok">Submitted</span></div><div>Latest: ${safeStr(latest.label || `${packetChannel} Round ${Number(latest.round||1)} v${Number(latest.version||1)}`)}</div><table style="margin-top:8px;"><thead><tr><th>Round</th><th>Version</th><th>Submitted</th><th>Method</th><th>Status</th><th>Source Proof</th><th>Follow-up</th><th>Packet</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  const negotiationSummary = renderClaimPacketSubmissionSummary("negotiation");
+  const appealSummary = renderClaimPacketSubmissionSummary("appeal");
 
   const negHistoryHtml = negHistory.length
     ? `<table>
