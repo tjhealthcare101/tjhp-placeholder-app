@@ -16387,7 +16387,7 @@ function outcomeRecommendationEvidenceState(ws, claim, key, channel){
     hasSourceProof,
     hasDraftEvidence,
     ignored: false,
-    statusLabel: hasSourceProof ? "Already attached" : (hasDraftEvidence ? "Found in system" : "Missing"),
+    statusLabel: hasSourceProof ? "Uploaded Source Proof" : (hasDraftEvidence ? "Found in System" : "Source Proof Needed"),
     badgeClass: hasSourceProof ? "ok" : (hasDraftEvidence ? "warn" : "err"),
     uploadLabel: hasSourceProof ? "Replace Source Proof" : (hasDraftEvidence ? "Upload Source Proof" : "Upload Files")
   };
@@ -16719,7 +16719,7 @@ function renderOutcomeRecommendationsCard(org_id, ws, claim, channel){
   if (!recommendations.length) {
     return `
       <div class="card outcome-recommendation-card" style="margin-top:12px;border-left:4px solid #10b981;">
-        <h3>Outcome-Based Recommendations</h3>
+        <h3>Evidence Checklist / Packet Attachments</h3>
         <p class="muted" style="margin-bottom:0;">
           No major evidence gaps detected for this ${safeStr(channel)} packet. Current supporting evidence aligns with the available outcome history${enoughHistory ? "" : " and baseline packet standards"}.
         </p>
@@ -16729,11 +16729,11 @@ function renderOutcomeRecommendationsCard(org_id, ws, claim, channel){
 
   return `
     <div class="card outcome-recommendation-card" style="margin-top:12px;border-left:4px solid #f59e0b;">
-      <h3>Outcome-Based Recommendations</h3>
-      <div class="muted small" style="margin-top:-4px;margin-bottom:8px;">Upload, preview, or replace the exact source proof needed for this packet.</div>
+      <h3>Evidence Checklist / Packet Attachments</h3>
+      <div class="muted small" style="margin-top:-4px;margin-bottom:8px;">Track evidence for this packet. Uploaded source files are included as real PDF exhibits. System-found evidence may appear as readable packet context. Missing checklist items are not exported as blank pages.</div>
 
       <p class="muted">
-        These recommendations compare the current packet against evidence patterns that have helped prior appeals and negotiations.
+        Use this checklist to upload source proof, review system-found evidence, or exclude evidence you do not want tracked for this packet.
       </p>
 
       <div style="display:grid;gap:10px;margin-top:10px;">
@@ -16753,6 +16753,13 @@ function renderOutcomeRecommendationsCard(org_id, ws, claim, channel){
 
             ${(() => {
               const state = outcomeRecommendationEvidenceState(ws, claim, r.key, channel);
+              const statusRowForCopy = {
+                ...(state.row || {}),
+                required: !!(state.row?.required || state.doc?.required),
+                proofLevel: state.ignored ? "ignored" : state.row?.proofLevel,
+                status: state.ignored ? "ignored" : state.row?.status
+              };
+              const statusCopy = workspaceEvidenceChecklistStatusCopy(statusRowForCopy, state.doc || {});
               const preview = (state.hasSourceProof || state.hasDraftEvidence)
                 ? renderWorkspaceEvidencePreview(ws, claim, state.doc, state.row, channel)
                 : "";
@@ -16764,23 +16771,25 @@ function renderOutcomeRecommendationsCard(org_id, ws, claim, channel){
                       <strong>${safeStr(state.doc.label || workspaceDocLabel(state.doc.key))}</strong>
                       <div class="muted small" style="margin-top:3px;">
                         ${state.ignored
-                          ? "Excluded from packet. It will not be included in the PDF. This may reduce packet strength."
-                          : state.hasSourceProof
-                            ? "Uploaded source proof is attached. Preview it below or replace it if needed."
-                            : state.hasDraftEvidence
-                              ? "Found in the system as draft evidence. It can be included as readable packet context, or you can upload source proof to replace it."
-                              : "Missing. Upload this document so it can support the packet, or exclude it if you want to proceed without it."
+                          ? "Excluded from packet. It is tracked here but not included in the PDF."
+                          : state.hasDraftEvidence
+                          ? "Found in the system as readable evidence context. It may appear as a system-found evidence page in the PDF, but it is not uploaded source proof."
+                          : (state.row?.required || state.doc?.required) && !state.hasSourceProof && !state.ignored
+                            ? "Required source proof has not been uploaded or pulled. This item is tracked here, but it will not be exported as a blank PDF page."
+                            : !(state.row?.required || state.doc?.required) && !state.hasSourceProof && !state.ignored
+                              ? "Recommended evidence has not been uploaded. This item is tracked here, but it will not be exported as a blank PDF page."
+                              : safeStr(statusCopy.detail || "")
                         }
                       </div>
                     </div>
-                    <span class="badge ${safeStr(state.ignored ? "warn" : state.badgeClass)}">${safeStr(state.ignored ? "Excluded" : state.statusLabel)}</span>
+                    <span class="badge ${safeStr(statusCopy.pillClass || (state.ignored ? "warn" : state.badgeClass))}">${safeStr(statusCopy.label || (state.ignored ? "Excluded" : state.statusLabel))}</span>
                   </div>
 
                   ${state.ignored ? "" : preview}
 
                   <div style="margin-top:10px;">
                     ${state.ignored ? "" : renderWorkspaceDocUploadForm(ws, claim, state.doc, state.row, channel, {
-                      buttonLabel: state.uploadLabel,
+                      buttonLabel: state.hasSourceProof ? "Replace Source Proof" : "Upload Source Proof",
                       compact: true
                     })}
                     ${renderWorkspacePacketEvidencePreferenceForm(ws, claim, state.doc, channel, state.ignored)}
@@ -20385,16 +20394,16 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
       ? renderWorkspaceEvidencePreview(ws, claim, doc, row, channel)
       : "";
 
-    const badgeLabel = state.ignored
-      ? "Excluded"
-      : (hasSourceProof ? (state.statusLabel || "Attached") : (hasDraftEvidence ? "Found in system" : "Missing"));
-    const statusCopy = state.ignored
-      ? "Excluded from packet. It will not be included in the PDF. This may reduce packet strength."
-      : hasSourceProof
-        ? "Uploaded source proof is attached. Preview it below or replace it if needed."
-        : hasDraftEvidence
-          ? "Found in the system as draft evidence. It can be included as readable packet context, or you can upload source proof to replace it."
-          : "Missing. Upload this document so it can support the packet, or exclude it if you want to proceed without it.";
+    const statusRowForCopy = {
+      ...(row || {}),
+      required: !!(row?.required || doc?.required),
+      proofLevel: state.ignored ? "ignored" : row?.proofLevel,
+      status: state.ignored ? "ignored" : row?.status
+    };
+    const checklistStatus = workspaceEvidenceChecklistStatusCopy(statusRowForCopy, doc || {});
+    const badgeLabel = checklistStatus.label || state.statusLabel || workspaceProofLabel(row?.proofLevel);
+    const badgeClass = checklistStatus.pillClass || (state.ignored ? "warn" : state.badgeClass) || "";
+    const statusCopy = checklistStatus.detail || "";
 
     const body = `
       <div class="ws-section-body">
@@ -20405,7 +20414,7 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
           <div style="margin-top:10px;">
             ${renderWorkspaceDocUploadForm(ws, claim, doc, row, channel, {
               compact: true,
-              buttonLabel: hasSourceProof ? "Replace Source Proof" : (hasDraftEvidence ? "Upload Source Proof" : "Upload Files")
+              buttonLabel: state.hasSourceProof ? "Replace Source Proof" : "Upload Source Proof"
             })}
           </div>
         `}
@@ -20425,9 +20434,9 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
         <div class="ws-section-head">
           <div>
             <div class="ws-section-title">${safeStr(item.title || state.doc.label || workspaceDocLabel(state.doc.key))}</div>
-            <div class="muted small" style="margin-top:3px;">Packet attachment generated from outcome-based recommendations.</div>
+            <div class="muted small" style="margin-top:3px;">Evidence checklist item for this packet.</div>
           </div>
-          <span class="badge ${safeStr(state.ignored ? "warn" : state.badgeClass)}">${safeStr(badgeLabel)}</span>
+          <span class="badge ${safeStr(badgeClass)}">${safeStr(badgeLabel)}</span>
         </div>
         ${body}
       </div>
@@ -20439,11 +20448,11 @@ function renderWorkspacePacketExhibits(ws, claim, channel, opts={}){
       <div class="ws-section-head">
         <div>
           <div class="ws-section-title">
-            Outcome-Based Recommendations / Packet Attachments
+            Evidence Checklist / Packet Attachments
             <span class="badge">${safeStr(channel === "negotiation" ? "Negotiation" : "Appeal")}</span>
           </div>
           <div class="muted small" style="margin-top:3px;">
-            Documents uploaded here, or already found in the system, are tracked as supporting documents for the packet. In the PDF, uploaded source files are placed on their own supporting-document pages after the letter.
+            Use this checklist to manage evidence for the packet. Uploaded or pulled source files are included as real PDF exhibits. System-found evidence may appear as readable packet context. Missing checklist items are not exported as blank pages.
           </div>
         </div>
       </div>
@@ -20523,7 +20532,7 @@ function renderWorkspaceProofCard(ws, claim, doc, channel){
           ${renderWorkspaceDocUploadForm(ws, claim, doc, row, channel)}
         </div>
       ` : `
-        <div class="ws-proof-ready">✓ Source proof attached.</div>
+        <div class="ws-proof-ready">✓ Uploaded or pulled source proof attached.</div>
       `}
     </div>
   `;
@@ -20610,16 +20619,20 @@ function renderWorkspaceProofCenter(ws, claim, channel){
     : "Manual workspace mode. Upload source documents here and review system-derived draft evidence where available.";
 
   const blocking = auto.requiredMissing > 0
-    ? `<span class="badge warn">${auto.requiredMissing} required missing</span>`
-    : `<span class="badge ok">Required ready</span>`;
+    ? `<span class="badge warn">Source proof needed: ${Number(auto.requiredMissing || 0)} required</span>`
+    : `<span class="badge ok">Required source proof attached</span>`;
 
   const proofSummaryRows = requiredDocs.map(doc => {
     const rawRow = workspaceDocAutomationStatus(ws, doc, claim, channel);
     const row = workspaceUiAutomationRow(ws, claim, rawRow);
     const cls = workspaceProofStatusClass({ ...row, required: !!doc.required });
     const status = workspaceIsSubmissionProof(row)
-      ? "Attached"
-      : (row.proofLevel === "draft_evidence" ? "Draft" : "Missing");
+      ? "Source Proof Attached"
+      : row.proofLevel === "draft_evidence"
+        ? "Found in System"
+        : row.proofLevel === "pull_available"
+          ? "Available to Pull"
+          : "Source Proof Needed";
     return `<div class="ws-proof-mini-row"><span>${safeStr(doc.label || workspaceDocLabel(doc.key))}</span><span class="badge ${safeStr(cls)}">${safeStr(status)}</span></div>`;
   }).join("");
 
@@ -20649,7 +20662,7 @@ function renderWorkspaceProofCenter(ws, claim, channel){
           <strong>${Number(auto.submissionPct || 0)}%</strong>
         </div>
         <div>
-          <div class="muted small">Required Missing</div>
+          <div class="muted small">Source Proof Needed</div>
           <strong>${Number(auto.requiredMissing || 0)}</strong>
         </div>
       </div>
@@ -20714,12 +20727,13 @@ function workspacePreferredAutomationSource(docKey, channel){
 
 function workspaceProofLabel(proofLevel){
   const labels = {
-    source_document: "Attached Source Document",
-    pulled_source_document: "Pulled Source Document",
-    manual_source_document: "Manual Source Document",
-    draft_evidence: "Draft Evidence Only",
-    pull_available: "Ready to Pull",
-    missing: "Missing Source"
+    source_document: "Uploaded Source Proof",
+    pulled_source_document: "Pulled Source Proof",
+    manual_source_document: "Uploaded Source Proof",
+    draft_evidence: "Found in System",
+    pull_available: "Source Proof Available to Pull",
+    missing: "Source Proof Needed",
+    ignored: "Excluded"
   };
 
   return labels[proofLevel] || proofLevel || "Unknown";
@@ -20736,6 +20750,61 @@ function workspaceProofPillClass(proofLevel){
   if (proofLevel === "draft_evidence" || proofLevel === "pull_available") return "warn";
 
   return "err";
+}
+
+function workspaceEvidenceChecklistStatusCopy(row, doc = {}){
+  const proofLevel = String(row?.proofLevel || "").trim();
+  const status = String(row?.status || "").trim();
+  const required = !!(row?.required || doc?.required);
+
+  if (proofLevel === "ignored" || status === "ignored") {
+    return {
+      label: "Excluded",
+      detail: "Excluded from packet. It is tracked here but not included in the PDF.",
+      pillClass: "warn"
+    };
+  }
+
+  if (proofLevel === "manual_source_document" || proofLevel === "source_document") {
+    return {
+      label: "Uploaded Source Proof",
+      detail: "Uploaded source proof is attached. It will be included as a real source-file exhibit in the PDF.",
+      pillClass: "ok"
+    };
+  }
+  if (proofLevel === "pulled_source_document") {
+    return {
+      label: "Pulled Source Proof",
+      detail: "Pulled source proof is attached. It will be included as a real source-file exhibit in the PDF.",
+      pillClass: "ok"
+    };
+  }
+  if (proofLevel === "draft_evidence") {
+    return {
+      label: "Found in System",
+      detail: "Readable evidence context is available from system data. Upload or pull source proof if the payer requires the actual document.",
+      pillClass: "warn"
+    };
+  }
+  if (proofLevel === "pull_available") {
+    return {
+      label: "Source Proof Available to Pull",
+      detail: "A source document may be available through an integration. Pull it or upload a file to attach source proof.",
+      pillClass: "warn"
+    };
+  }
+  if (required) {
+    return {
+      label: "Required — Source Proof Needed",
+      detail: "Required source proof has not been uploaded or pulled. It is tracked here but not exported as a blank PDF page.",
+      pillClass: "err"
+    };
+  }
+  return {
+    label: "Recommended — Not Uploaded",
+    detail: "Recommended evidence has not been uploaded. It is tracked here but not exported as a blank PDF page.",
+    pillClass: "warn"
+  };
 }
 
 function workspaceIsSubmissionProof(row){
@@ -20912,14 +20981,14 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
       label: doc.label || workspaceDocLabel(key),
       required: !!doc.required,
       status: "present",
-      statusLabel: pulled ? "Pulled + Attached" : "Attached",
+      statusLabel: pulled ? "Pulled Source Proof" : "Uploaded Source Proof",
       proofLevel: pulled ? "pulled_source_document" : (manual ? "manual_source_document" : "source_document"),
-      proofLabel: pulled ? "Pulled Source Document" : (manual ? "Manual Source Document" : "Attached Source Document"),
+      proofLabel: pulled ? "Pulled Source Proof" : "Uploaded Source Proof",
       pillClass: "ok",
       sourceType: type,
       sourceLabel: attachment.source_label || workspaceSourceLabel(type),
-      detail: attachment.filename ? `Source document attached: ${attachment.filename}` : "Source document is attached.",
-      nextAction: "Ready for submission proof"
+      detail: attachment.filename ? `Source proof attached: ${attachment.filename}. It will be included as a real source-file exhibit in the PDF.` : "Uploaded source proof is attached. It will be included as a real source-file exhibit in the PDF.",
+      nextAction: "Source proof attached and ready for payer submission."
     };
   }
 
@@ -20929,14 +20998,14 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
       label: doc.label || workspaceDocLabel(key),
       required: !!doc.required,
       status: "draft_evidence",
-      statusLabel: "Auto-filled Draft Evidence",
+      statusLabel: "Found in System",
       proofLevel: "draft_evidence",
-      proofLabel: "Draft Evidence Only",
+      proofLabel: "Readable Context Only",
       pillClass: "warn",
       sourceType: "clearinghouse",
       sourceLabel: "Claim Payment Data",
-      detail: "Auto-filled from claim payment/remittance data. This helps draft the packet, but a source EOB/ERA document is still recommended for payer submission.",
-      nextAction: "Pull from Clearinghouse or upload source EOB/ERA."
+      detail: "Readable evidence context is available from system payment/remittance data, but this is not uploaded source proof.",
+      nextAction: "Upload or pull source proof when payer submission requires the actual document."
     };
   }
 
@@ -20946,14 +21015,14 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
       label: doc.label || workspaceDocLabel(key),
       required: !!doc.required,
       status: "draft_evidence",
-      statusLabel: "Denial Evidence Found",
+      statusLabel: "Found in System",
       proofLevel: "draft_evidence",
-      proofLabel: "Draft Evidence Only",
+      proofLabel: "Readable Context Only",
       pillClass: "warn",
       sourceType: "system",
       sourceLabel: "Denial Data",
-      detail: "Denial information exists in claim/payment data, but no separate payer denial letter is attached.",
-      nextAction: "Upload the payer denial letter if available. EOB/ERA denial evidence can support drafting but should not be mislabeled as a separate denial letter."
+      detail: "Readable denial context is available from system claim/payment data, but this is not uploaded source proof.",
+      nextAction: "Upload or pull source proof when payer submission requires the actual document."
     };
   }
 
@@ -20963,14 +21032,14 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
       label: doc.label || workspaceDocLabel(key),
       required: !!doc.required,
       status: "draft_evidence",
-      statusLabel: "Claim Data Found",
+      statusLabel: "Found in System",
       proofLevel: "draft_evidence",
-      proofLabel: "Draft Evidence Only",
+      proofLabel: "Readable Context Only",
       pillClass: "warn",
       sourceType: "system",
       sourceLabel: "Billing Upload Data",
-      detail: "Claim data exists in the system, but the submitted claim form or itemized bill source document is not attached.",
-      nextAction: "Upload the claim form or itemized bill if payer submission requires source proof."
+      detail: "Readable claim context is available from system data, but this is not uploaded source proof.",
+      nextAction: "Upload or pull source proof when payer submission requires the actual document."
     };
   }
 
@@ -20984,9 +21053,9 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
         label: doc.label || workspaceDocLabel(key),
         required: !!doc.required,
         status: "draft_evidence",
-        statusLabel: "Calculated",
+        statusLabel: "Found in System",
         proofLevel: "draft_evidence",
-        proofLabel: "Draft Evidence Only",
+        proofLabel: "Readable Context Only",
         pillClass: "warn",
         sourceType: "system",
         sourceLabel: "System-derived",
@@ -21002,9 +21071,9 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
       label: doc.label || workspaceDocLabel(key),
       required: !!doc.required,
       status: "draft_evidence",
-      statusLabel: "Payment Data Found",
+      statusLabel: "Found in System",
       proofLevel: "draft_evidence",
-      proofLabel: "Draft Evidence Only",
+      proofLabel: "Readable Context Only",
       pillClass: "warn",
       sourceType: "system",
       sourceLabel: "Claim Payment Data",
@@ -21019,9 +21088,9 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
       label: doc.label || workspaceDocLabel(key),
       required: !!doc.required,
       status: "draft_evidence",
-      statusLabel: "Auto-filled Draft Evidence",
+      statusLabel: "Found in System",
       proofLevel: "draft_evidence",
-      proofLabel: "Draft Evidence Only",
+      proofLabel: "Readable Context Only",
       pillClass: "warn",
       sourceType: "contract_rules",
       sourceLabel: "Contract / Rules Upload",
@@ -21036,9 +21105,9 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
       label: doc.label || workspaceDocLabel(key),
       required: !!doc.required,
       status: "draft_evidence",
-      statusLabel: "System-derived Draft Evidence",
+      statusLabel: "Found in System",
       proofLevel: "draft_evidence",
-      proofLabel: "Draft Evidence Only",
+      proofLabel: "Readable Context Only",
       pillClass: "warn",
       sourceType: "system",
       sourceLabel: "System-derived",
@@ -21060,9 +21129,9 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
       label: doc.label || workspaceDocLabel(key),
       required: !!doc.required,
       status: "pull_available",
-      statusLabel: "Ready to Pull",
+      statusLabel: "Source Proof Available to Pull",
       proofLevel: "pull_available",
-      proofLabel: "Ready to Pull",
+      proofLabel: "Source Proof Available to Pull",
       pillClass: "info",
       sourceType: preferred,
       sourceLabel: workspaceSourceLabel(preferred),
@@ -21084,9 +21153,9 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
         label: doc.label || workspaceDocLabel(key),
         required: !!doc.required,
         status: "draft_evidence",
-        statusLabel: "Policy Source Cached",
+        statusLabel: "Found in System",
         proofLevel: "draft_evidence",
-        proofLabel: "Draft Evidence Only",
+        proofLabel: "Readable Context Only",
         pillClass: "warn",
         sourceType: "payer_policy_library",
         sourceLabel: "Payer Policy Library",
@@ -21101,9 +21170,9 @@ function workspaceDocAutomationStatus(ws, doc, claim, channel){
     label: doc.label || workspaceDocLabel(key),
     required: !!doc.required,
     status: "missing",
-    statusLabel: doc.required ? "Missing Required" : "Missing Optional",
+    statusLabel: doc.required ? "Required — Source Proof Needed" : "Recommended — Not Uploaded",
     proofLevel: "missing",
-    proofLabel: "Missing Source",
+    proofLabel: doc.required ? "Source Proof Needed" : "Recommended Evidence",
     pillClass: doc.required ? "err" : "warn",
     sourceType: "missing",
     sourceLabel: preferred === "contract_rules" ? "Contract / Rules Upload" : workspaceSourceLabel(preferred),
@@ -21231,7 +21300,7 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
   const recommendationSegments = [];
   if (recommendationEvidence.uploaded) recommendationSegments.push(`${recommendationEvidence.uploaded} uploaded`);
   if (recommendationEvidence.system) recommendationSegments.push(`${recommendationEvidence.system} found in system`);
-  if (recommendationEvidence.missing) recommendationSegments.push(`${recommendationEvidence.missing} missing`);
+  if (recommendationEvidence.missing) recommendationSegments.push(`${recommendationEvidence.missing} not uploaded`);
   if (recommendationEvidence.ignored) recommendationSegments.push(`${recommendationEvidence.ignored} excluded`);
 
   const title = isNegotiation
@@ -21243,8 +21312,8 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
     : `Denial reversal workspace for ${claim?.payer || "payer"} claim #${claim?.claim_number || ""}.`;
 
   const statusBadge = ready.ok
-    ? `<span class="badge ok">Ready for final review</span>`
-    : `<span class="badge warn">Needs ${ready.missing.length} required source proof item${ready.missing.length === 1 ? "" : "s"}</span>`;
+    ? `<span class="badge ok">Required source proof attached</span>`
+    : `<span class="badge warn">Source proof needed: ${ready.missing.length} required</span>`;
 
   return `
     <div class="ws-command-card">
@@ -21276,8 +21345,8 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
         </div>
 
         <div class="ws-command-metric">
-          <div class="ws-command-label">${safeStr(commandSourceLabel)}</div>
-          <div class="ws-command-value">${auto.requiredPresent}/${Math.max(1, auto.required.length)} required</div>
+          <div class="ws-command-label">SOURCE PROOF ATTACHED</div>
+          <div class="ws-command-value">${auto.requiredPresent}/${Math.max(1, auto.required.length)} attached</div>
         </div>
       </div>
 
@@ -21294,7 +21363,7 @@ function renderWorkspaceCommandCenter(ws, claim, derived, channel){
       </div>
 
       <div class="ws-readiness-bar-sub muted small">
-        Required source proof: ${auto.requiredPresent}/${Math.max(1, auto.required.length)} ready · Missing required: ${auto.requiredMissing}${recommendationSegments.length ? `<br/>Recommendation evidence: ${safeStr(recommendationSegments.join(" · "))}` : ""}
+        Required source proof attached: ${auto.requiredPresent}/${Math.max(1, auto.required.length)} · Source proof still needed: ${auto.requiredMissing}${recommendationSegments.length ? `<br/>Evidence checklist: ${safeStr(recommendationSegments.join(" · "))}` : ""}
       </div>
     </div>
   `;
@@ -22104,7 +22173,7 @@ function renderWorkspacePreview(opts){
             <div style="font-size:12px;color:#6b7280;margin-top:6px;">Generated by TJ Healthcare Pro • Revenue Intelligence System</div>
           </div>
 
-          ${!ready.ok ? `<div class="ws-callout warn">Missing required documents before final review: ${ready.missing.map(workspaceDocLabel).join(", ")}.</div>` : ``}
+          ${!ready.ok ? `<div class="ws-callout warn">Source proof still needed before final payer submission: ${ready.missing.map(workspaceDocLabel).join(", ")}. System-found evidence may be included as readable context, but uploaded or pulled source files are stronger when the payer requires actual document proof.</div>` : ``}
           ${topMeta}
 
           ${renderEditablePacketSection({ billed_id: claim.billed_id, channel, section_key:"header", title:"Header", value: packetSections.header, description: sectionDescriptions.header, compact:true, exportMode, aiPreview, appliedSection, appliedPrevSection, undoneSection, lastAiUndo })}
