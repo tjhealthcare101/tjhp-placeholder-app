@@ -6705,8 +6705,8 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   function safeOpenClaimPanel(id) {
     if (typeof window.openClaimPanel === "function") {
       try {
-        window.openClaimPanel(id);
-        normalizePanelActionsAfterOpen(id);
+        const opened = window.openClaimPanel(id);
+        if (opened) return true;
 
         const panel = document.getElementById("claimSidePanel");
         if (panel && panel.getAttribute("aria-hidden") === "false") {
@@ -6720,25 +6720,44 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     return openFallbackPanel(id) || false;
   }
 
-  document.addEventListener("click", (event) => {
-    const btn = event.target.closest(".view-claim-btn");
-    if (!btn) return;
+  if (!window.__tjhpClaimPanelClickBound) {
+    window.__tjhpClaimPanelClickBound = true;
 
-    const id = resolveButtonClaimId(btn);
-    if (!id) return;
+    document.addEventListener("click", function(event){
+      const trigger = event.target && event.target.closest
+        ? event.target.closest("[data-open-claim-panel], [data-claim-panel-open], [data-claim-panel-id], .view-claim-btn")
+        : null;
+      if (!trigger) return;
 
-    window.__tjhpLastOpenedClaimId = id;
+      const id =
+        trigger.getAttribute("data-open-claim-panel") ||
+        trigger.getAttribute("data-claim-panel-open") ||
+        trigger.getAttribute("data-claim-panel-id") ||
+        trigger.getAttribute("data-billed-id") ||
+        trigger.getAttribute("data-claim-id") ||
+        resolveButtonClaimId(trigger) ||
+        "";
+      if (!id) return;
 
-    event.preventDefault();
-    event.stopPropagation();
-    if (typeof event.stopImmediatePropagation === "function") {
-      event.stopImmediatePropagation();
-    }
+      window.__tjhpLastOpenedClaimId = id;
 
-    if (!safeOpenClaimPanel(id)) {
-      window.location.assign(resolveFallbackHref(btn, id));
-    }
-  }, true);
+      const opened = safeOpenClaimPanel(id);
+      if (opened) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+        normalizePanelActionsAfterOpen(id);
+        return false;
+      }
+
+      const isAnchor = String(trigger.tagName || "").toLowerCase() === "a";
+      if (!isAnchor) {
+        event.preventDefault();
+        window.location.assign(resolveFallbackHref(trigger, id));
+        return false;
+      }
+    }, true);
+  }
 
   document.addEventListener("click", function(e){
     const btn = e.target.closest(".view-claim-btn");
@@ -34647,7 +34666,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           ${isTopRisk ? `<div class="pipeline-risk-badge">🔥 Highest Risk</div>` : ``}
           <div style="margin-top:8px;display:flex;gap:6px;">
             <a class="btn small" href="/actions?tab=${actionTab}&claim=${encodeURIComponent(b.billed_id)}" onclick="event.stopPropagation();">Open Action Center</a>
-            <a class="btn small secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}" onclick="event.stopPropagation();">View</a>
+            <a class="btn small secondary view-claim-btn" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}" data-open-claim-panel="${safeStr(b.billed_id)}" data-billed-id="${safeStr(b.billed_id)}" onclick="event.stopPropagation();">View</a>
           </div>
         </div>
       `;
@@ -34775,7 +34794,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                       : ""
                   }
 
-                  <a class="btn small secondary" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}">
+                  <a class="btn small secondary view-claim-btn" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}" data-open-claim-panel="${safeStr(b.billed_id)}" data-billed-id="${safeStr(b.billed_id)}">
                     View
                   </a>
                 </div>
@@ -35650,9 +35669,20 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           console.error("Unable to parse lifecycle claim payload.", err);
           lifecycleClaims = [];
         }
-        const claimMap = new Map(lifecycleClaims.map(function(claim){
-          return [String(claim.billed_id || ""), claim];
-        }));
+        const claimMap = new Map();
+        (lifecycleClaims || []).forEach(function(claim){
+          if (!claim) return;
+          const billedId = String(claim.billed_id || "").trim();
+          const claimNumber = String(claim.claim_number || "").trim();
+          if (billedId) {
+            claimMap.set(billedId, claim);
+            claimMap.set(encodeURIComponent(billedId), claim);
+          }
+          if (claimNumber) {
+            claimMap.set(claimNumber, claim);
+            claimMap.set(encodeURIComponent(claimNumber), claim);
+          }
+        });
 
         function ensureClaimPanel(){
           let backdrop = document.getElementById("claimSidePanelBackdrop");
@@ -35725,8 +35755,14 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         window.openClaimPanel = function(id){
           const ui = ensureClaimPanel();
           const decodedId = decodeURIComponent(String(id || ""));
-          const claim = claimMap.get(decodedId);
-          if (!ui.panel || !ui.content || !claim) return;
+          const claim =
+            claimMap.get(decodedId) ||
+            claimMap.get(String(id || "")) ||
+            Array.from(claimMap.values()).find(function(c){
+              return String(c?.billed_id || "") === decodedId ||
+                     String(c?.claim_number || "") === decodedId;
+            });
+          if (!ui.panel || !ui.content || !claim) return false;
 
           const d = claim.__derived || {};
           const displayStage = normalizeLifecycleDisplayStage(d.lifecycleStage || claim.lifecycleStage || claim.status || "");
@@ -35783,6 +35819,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             ui.backdrop.style.opacity = "1";
             ui.panel.style.right = "0";
           });
+          return true;
         };
 
         window.closeClaimPanel = function(){
@@ -35803,14 +35840,30 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         document.addEventListener("click", function(e){
           const btn = e.target.closest(".view-claim-btn");
           if (!btn) return;
-          e.preventDefault();
-          e.stopPropagation();
+          const href = btn.getAttribute("href") || "";
+          const hrefMatch = href.match(/[?&]billed_id=([^&]+)/);
+          const id = btn.getAttribute("data-open-claim-panel") || btn.getAttribute("data-id") || btn.getAttribute("data-billed-id") || (hrefMatch ? decodeURIComponent(hrefMatch[1]) : "");
+          if (!id) return;
+          let opened = false;
           if (typeof window.openClaimPanel === "function") {
-            window.openClaimPanel(btn.getAttribute("data-id") || "");
-            return;
+            opened = !!window.openClaimPanel(id);
+            if (!opened) {
+              const panel = document.getElementById("claimSidePanel");
+              opened = !!(panel && panel.getAttribute("aria-hidden") === "false");
+            }
+          }
+          if (opened) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+            return false;
           }
           const fallbackHref = btn.getAttribute("data-fallback-href");
-          if (fallbackHref) window.location.href = fallbackHref;
+          if (fallbackHref && String(btn.tagName || "").toLowerCase() !== "a") {
+            e.preventDefault();
+            window.location.href = fallbackHref;
+            return false;
+          }
         });
 
         // ==============================
@@ -39938,14 +39991,30 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
         if (e.defaultPrevented) return;
         const btn = e.target.closest(".view-claim-btn");
         if (!btn) return;
-        e.preventDefault();
-        e.stopPropagation();
+        const href = btn.getAttribute("href") || "";
+        const hrefMatch = href.match(/[?&]billed_id=([^&]+)/);
+        const id = btn.getAttribute("data-open-claim-panel") || btn.getAttribute("data-id") || btn.getAttribute("data-billed-id") || (hrefMatch ? decodeURIComponent(hrefMatch[1]) : "");
+        if (!id) return;
+        let opened = false;
         if (typeof window.openClaimPanel === "function") {
-          window.openClaimPanel(btn.getAttribute("data-id") || "");
-          return;
+          opened = !!window.openClaimPanel(id);
+          if (!opened) {
+            const panel = document.getElementById("claimSidePanel");
+            opened = !!(panel && panel.getAttribute("aria-hidden") === "false");
+          }
+        }
+        if (opened) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+          return false;
         }
         const fallbackHref = btn.getAttribute("data-fallback-href");
-        if (fallbackHref) window.location.href = fallbackHref;
+        if (fallbackHref && String(btn.tagName || "").toLowerCase() !== "a") {
+          e.preventDefault();
+          window.location.href = fallbackHref;
+          return false;
+        }
       });
 
       document.addEventListener("keydown", function(e){
@@ -40632,16 +40701,33 @@ if (method === "GET" && pathname === "/actions") {
           const btn = e.target.closest(".view-claim-btn");
           if (!btn) return;
 
-          e.preventDefault();
-          e.stopPropagation();
+          const href = btn.getAttribute("href") || "";
+          const hrefMatch = href.match(/[?&]billed_id=([^&]+)/);
+          const id = btn.getAttribute("data-open-claim-panel") || btn.getAttribute("data-id") || btn.getAttribute("data-billed-id") || (hrefMatch ? decodeURIComponent(hrefMatch[1]) : "");
+          if (!id) return;
 
+          let opened = false;
           if (typeof window.openClaimPanel === "function") {
-            window.openClaimPanel(btn.getAttribute("data-id") || "");
-            return;
+            opened = !!window.openClaimPanel(id);
+            if (!opened) {
+              const panel = document.getElementById("claimSidePanel");
+              opened = !!(panel && panel.getAttribute("aria-hidden") === "false");
+            }
+          }
+
+          if (opened) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+            return false;
           }
 
           const fallbackHref = btn.getAttribute("data-fallback-href");
-          if (fallbackHref) window.location.href = fallbackHref;
+          if (fallbackHref && String(btn.tagName || "").toLowerCase() !== "a") {
+            e.preventDefault();
+            window.location.href = fallbackHref;
+            return false;
+          }
         });
       })();
     </script>
@@ -50295,7 +50381,10 @@ if (method === "GET" && pathname === "/agent-workspace") {
     const billed_id = String(params.get("billed_id") || "").trim();
     const channel = String(params.get("channel") || "appeal").trim() === "negotiation" ? "negotiation" : "appeal";
     const submissionMethod = String(params.get("method") || "").trim();
-    const follow_up_date = String(params.get("follow_up_date") || "").trim();
+    const submittedAt = nowISO();
+    const requestedFollowUpDate = String(params.get("follow_up_date") || "").trim();
+    const follow_up_date = requestedFollowUpDate || defaultPacketFollowUpDate(submittedAt);
+    const followUpDateAutoDefaulted = !requestedFollowUpDate;
     const overrideReason = String(params.get("override_reason") || "").trim();
     const confirmMissingSourceDocs = params.get("confirm_missing_source_docs") === "1";
 
@@ -50320,7 +50409,6 @@ if (method === "GET" && pathname === "/agent-workspace") {
       return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&submit_blocked=confirm_missing_source_docs_required#workflow`);
     }
 
-    const submittedAt = nowISO();
     const submittedRound = Number(ws[channel]?.round || 1) || 1;
     const submittedVersion = Number(ws[channel]?.version || 1) || 1;
     const nextRound = submittedRound + 1;
