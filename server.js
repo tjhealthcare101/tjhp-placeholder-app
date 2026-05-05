@@ -6720,6 +6720,59 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     return openFallbackPanel(id) || false;
   }
 
+  window.__tjhpOpenClaimPanelOrNavigate = function(event, trigger){
+    try {
+      const el = trigger || (event && event.currentTarget) || (event && event.target);
+      if (!el) return true;
+      const id =
+        el.getAttribute("data-open-claim-panel") ||
+        el.getAttribute("data-claim-panel-open") ||
+        el.getAttribute("data-claim-panel-id") ||
+        el.getAttribute("data-billed-id") ||
+        el.getAttribute("data-claim-id") ||
+        el.getAttribute("data-id") ||
+        (typeof resolveButtonClaimId === "function" ? resolveButtonClaimId(el) : "") ||
+        "";
+      const href =
+        el.getAttribute("href") ||
+        el.getAttribute("data-fallback-href") ||
+        (typeof resolveFallbackHref === "function" ? resolveFallbackHref(el, id) : "") ||
+        (id ? "/claim-detail?billed_id=" + encodeURIComponent(id) : "");
+      if (!id) return true;
+      window.__tjhpLastOpenedClaimId = id;
+      let opened = false;
+      if (typeof safeOpenClaimPanel === "function") {
+        opened = !!safeOpenClaimPanel(id);
+      } else if (typeof window.openClaimPanel === "function") {
+        opened = !!window.openClaimPanel(id);
+        const panel = document.getElementById("claimSidePanel");
+        if (!opened && panel && panel.getAttribute("aria-hidden") === "false") opened = true;
+      }
+      if (opened) {
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+        }
+        try {
+          if (typeof normalizePanelActionsAfterOpen === "function") normalizePanelActionsAfterOpen(id);
+        } catch(e) {}
+        return false;
+      }
+      const isAnchor = String(el.tagName || "").toLowerCase() === "a";
+      if (isAnchor) return true;
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      }
+      if (href) window.location.assign(href);
+      return false;
+    } catch(err) {
+      return true;
+    }
+  };
+
   if (!window.__tjhpClaimPanelClickBound) {
     window.__tjhpClaimPanelClickBound = true;
 
@@ -6729,33 +6782,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         : null;
       if (!trigger) return;
 
-      const id =
-        trigger.getAttribute("data-open-claim-panel") ||
-        trigger.getAttribute("data-claim-panel-open") ||
-        trigger.getAttribute("data-claim-panel-id") ||
-        trigger.getAttribute("data-billed-id") ||
-        trigger.getAttribute("data-claim-id") ||
-        resolveButtonClaimId(trigger) ||
-        "";
-      if (!id) return;
-
-      window.__tjhpLastOpenedClaimId = id;
-
-      const opened = safeOpenClaimPanel(id);
-      if (opened) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-        normalizePanelActionsAfterOpen(id);
-        return false;
-      }
-
-      const isAnchor = String(trigger.tagName || "").toLowerCase() === "a";
-      if (!isAnchor) {
-        event.preventDefault();
-        window.location.assign(resolveFallbackHref(trigger, id));
-        return false;
-      }
+      return window.__tjhpOpenClaimPanelOrNavigate(event, trigger);
     }, true);
   }
 
@@ -34666,7 +34693,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           ${isTopRisk ? `<div class="pipeline-risk-badge">🔥 Highest Risk</div>` : ``}
           <div style="margin-top:8px;display:flex;gap:6px;">
             <a class="btn small" href="/actions?tab=${actionTab}&claim=${encodeURIComponent(b.billed_id)}" onclick="event.stopPropagation();">Open Action Center</a>
-            <a class="btn small secondary view-claim-btn" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}" data-open-claim-panel="${safeStr(b.billed_id)}" data-billed-id="${safeStr(b.billed_id)}" onclick="event.stopPropagation();">View</a>
+            <a class="btn small secondary view-claim-btn" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}" data-open-claim-panel="${safeStr(b.billed_id)}" data-billed-id="${safeStr(b.billed_id)}" data-fallback-href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}" onclick="return window.__tjhpOpenClaimPanelOrNavigate ? window.__tjhpOpenClaimPanelOrNavigate(event, this) : true;">View</a>
           </div>
         </div>
       `;
@@ -34794,7 +34821,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                       : ""
                   }
 
-                  <a class="btn small secondary view-claim-btn" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}" data-open-claim-panel="${safeStr(b.billed_id)}" data-billed-id="${safeStr(b.billed_id)}">
+                  <a class="btn small secondary view-claim-btn" href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}" data-open-claim-panel="${safeStr(b.billed_id)}" data-billed-id="${safeStr(b.billed_id)}" data-fallback-href="/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}" onclick="return window.__tjhpOpenClaimPanelOrNavigate ? window.__tjhpOpenClaimPanelOrNavigate(event, this) : true;">
                     View
                   </a>
                 </div>
@@ -35355,13 +35382,16 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 
               const actionParts = [
                 `
-                  <button
-                    type="button"
+                  <a
                     class="btn small secondary view-claim-btn"
+                    href="/claim-detail?billed_id=${encodeURIComponent(String(c.billed_id || ""))}"
+                    data-open-claim-panel="${safeStr(String(c.billed_id || ""))}"
+                    data-billed-id="${safeStr(String(c.billed_id || ""))}"
                     data-id="${encodeURIComponent(String(c.billed_id || ""))}"
-                    data-fallback-href="/claim-detail?billed_id=${encodeURIComponent(String(c.billed_id || ""))}">
+                    data-fallback-href="/claim-detail?billed_id=${encodeURIComponent(String(c.billed_id || ""))}"
+                    onclick="return window.__tjhpOpenClaimPanelOrNavigate ? window.__tjhpOpenClaimPanelOrNavigate(event, this) : true;">
                     View
-                  </button>
+                  </a>
                 `
               ];
 
@@ -39691,6 +39721,46 @@ function renderClaimFinancialContext(billedClaim, derived){
   `;
 }
 
+function renderClaimEditWorkflowContext(org_id, claim, derived){
+  const workflowState = claimRecoveryWorkflowState(org_id, claim, derived);
+  const ws = workflowState.ws;
+  const latest = workflowState.latestSubmission || workspaceLatestPacketSubmissionFromClaimAndWorkspace(claim, ws);
+  const channel = workflowState.channel || workspaceChannelForClaim(claim, derived);
+  const channelLabel = workflowState.channelLabel || (channel === "negotiation" ? "Negotiation" : "Appeal");
+  const nextDraftRound =
+    Number(ws?.[channel]?.round || claim.next_round || 0) ||
+    (latest ? Number(latest.round || 1) + 1 : 1);
+  const packetUrl =
+    latest?.packet_export_url ||
+    latest?.packet_view_url ||
+    claim.packet_export_url ||
+    "";
+  const responseStatus =
+    claim.payer_response_status ||
+    claim.packet_response_status ||
+    claim.response_status ||
+    (workflowState.responseReceived ? "response_received" : "Not received");
+  const followUpStatus =
+    claim.packet_follow_up_status ||
+    (workflowState.followUpDue ? "Follow-up due" : (workflowState.followUpDate ? "Awaiting payer response" : "N/A"));
+  return `
+    <div class="card" style="box-shadow:none;margin-top:14px;">
+      <h3>Appeal / Negotiation Workflow Context</h3>
+      <p class="muted small">These workflow details explain how the financial values relate to the current recovery round.</p>
+      <table>
+        <tr><th>Workflow Status</th><td>${safeStr(workflowState.workflowLabel || "Not started")}</td></tr>
+        <tr><th>Latest Submitted Packet</th><td>${latest ? safeStr(latest.label || `${channelLabel} Round ${latest.round || ""} / Version ${latest.version || ""}`) : "N/A"}</td></tr>
+        <tr><th>Next Draft Round</th><td>${safeStr(`${channelLabel} Round ${nextDraftRound}`)}</td></tr>
+        <tr><th>Submission Date</th><td>${safeStr(latest?.submitted_at || claim.last_submission_date || "N/A")}</td></tr>
+        <tr><th>Follow-up Date</th><td>${safeStr(workflowState.followUpDate || claim.follow_up_date || "N/A")}</td></tr>
+        <tr><th>Follow-up Status</th><td>${safeStr(followUpStatus || "N/A")}</td></tr>
+        <tr><th>Payer Response</th><td>${safeStr(responseStatus || "Not received")}</td></tr>
+        <tr><th>Next Workflow Action</th><td>${safeStr(workflowState.nextAction || "N/A")}</td></tr>
+      </table>
+    </div>
+  `;
+}
+
 function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
   const safeScriptId = safeStr(scriptId || "claimPanelData");
   const safePanelTitle = safeStr(panelTitle || "Claim View");
@@ -39805,9 +39875,20 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
         panelClaims = [];
       }
 
-      const claimMap = new Map(panelClaims.map(function(claim){
-        return [String(claim.billed_id || ""), claim];
-      }));
+      const claimMap = new Map();
+      (panelClaims || []).forEach(function(claim){
+        if (!claim) return;
+        const billedId = String(claim.billed_id || "").trim();
+        const claimNumber = String(claim.claim_number || "").trim();
+        if (billedId) {
+          claimMap.set(billedId, claim);
+          claimMap.set(encodeURIComponent(billedId), claim);
+        }
+        if (claimNumber) {
+          claimMap.set(claimNumber, claim);
+          claimMap.set(encodeURIComponent(claimNumber), claim);
+        }
+      });
 
       function ensureClaimPanel(){
         let backdrop = document.getElementById("claimSidePanelBackdrop");
@@ -39878,10 +39959,18 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
       }
 
       window.openClaimPanel = function(id){
+        if (!id) return false;
         const ui = ensureClaimPanel();
+        if (!ui || !ui.panel || !ui.content) return false;
         const decodedId = decodeURIComponent(String(id || ""));
-        const claim = claimMap.get(decodedId);
-        if (!ui.panel || !ui.content || !claim) return;
+        const claim =
+          claimMap.get(decodedId) ||
+          claimMap.get(String(id || "")) ||
+          Array.from(claimMap.values()).find(function(c){
+            return String(c?.billed_id || "") === decodedId ||
+                   String(c?.claim_number || "") === decodedId;
+          });
+        if (!claim) return false;
 
         const d = claim.__derived || {};
         const displayStage = normalizeStage(d.lifecycleStage || claim.lifecycleStage || claim.status || "");
@@ -39970,6 +40059,7 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
           ui.backdrop.style.opacity = "1";
           ui.panel.style.right = "0";
         });
+        return true;
       };
 
       window.closeClaimPanel = function(){
@@ -39991,30 +40081,7 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
         if (e.defaultPrevented) return;
         const btn = e.target.closest(".view-claim-btn");
         if (!btn) return;
-        const href = btn.getAttribute("href") || "";
-        const hrefMatch = href.match(/[?&]billed_id=([^&]+)/);
-        const id = btn.getAttribute("data-open-claim-panel") || btn.getAttribute("data-id") || btn.getAttribute("data-billed-id") || (hrefMatch ? decodeURIComponent(hrefMatch[1]) : "");
-        if (!id) return;
-        let opened = false;
-        if (typeof window.openClaimPanel === "function") {
-          opened = !!window.openClaimPanel(id);
-          if (!opened) {
-            const panel = document.getElementById("claimSidePanel");
-            opened = !!(panel && panel.getAttribute("aria-hidden") === "false");
-          }
-        }
-        if (opened) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
-          return false;
-        }
-        const fallbackHref = btn.getAttribute("data-fallback-href");
-        if (fallbackHref && String(btn.tagName || "").toLowerCase() !== "a") {
-          e.preventDefault();
-          window.location.href = fallbackHref;
-          return false;
-        }
+        return window.__tjhpOpenClaimPanelOrNavigate(e, btn);
       });
 
       document.addEventListener("keydown", function(e){
@@ -40453,13 +40520,9 @@ if (method === "GET" && pathname === "/actions") {
 
     let actionsHtml = '';
     const viewButtonHtml = `
-      <button
-        type="button"
-        class="btn small secondary view-claim-btn"
-        data-id="${encodeURIComponent(String(b.billed_id || ""))}"
-        data-fallback-href="${claimLink}">
+      <a class="btn small secondary view-claim-btn" href="${claimLink}" data-open-claim-panel="${safeStr(b.billed_id)}" data-billed-id="${safeStr(b.billed_id)}" data-fallback-href="${claimLink}" onclick="return window.__tjhpOpenClaimPanelOrNavigate ? window.__tjhpOpenClaimPanelOrNavigate(event, this) : true;">
         View
-      </button>
+      </a>
     `;
     if (hasActiveWorkflow && workflowState.hasSubmitted) {
       const submittedPacketUrl =
@@ -40695,39 +40758,11 @@ if (method === "GET" && pathname === "/actions") {
           });
         });
 
-        // 🔥 FIX: Make View button open panel in Action Center
         document.addEventListener("click", function(e){
           if (e.defaultPrevented) return;
           const btn = e.target.closest(".view-claim-btn");
           if (!btn) return;
-
-          const href = btn.getAttribute("href") || "";
-          const hrefMatch = href.match(/[?&]billed_id=([^&]+)/);
-          const id = btn.getAttribute("data-open-claim-panel") || btn.getAttribute("data-id") || btn.getAttribute("data-billed-id") || (hrefMatch ? decodeURIComponent(hrefMatch[1]) : "");
-          if (!id) return;
-
-          let opened = false;
-          if (typeof window.openClaimPanel === "function") {
-            opened = !!window.openClaimPanel(id);
-            if (!opened) {
-              const panel = document.getElementById("claimSidePanel");
-              opened = !!(panel && panel.getAttribute("aria-hidden") === "false");
-            }
-          }
-
-          if (opened) {
-            e.preventDefault();
-            e.stopPropagation();
-            if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
-            return false;
-          }
-
-          const fallbackHref = btn.getAttribute("data-fallback-href");
-          if (fallbackHref && String(btn.tagName || "").toLowerCase() !== "a") {
-            e.preventDefault();
-            window.location.href = fallbackHref;
-            return false;
-          }
+          return window.__tjhpOpenClaimPanelOrNavigate ? window.__tjhpOpenClaimPanelOrNavigate(e, btn) : true;
         });
       })();
     </script>
@@ -40835,6 +40870,12 @@ if (method === "GET" && pathname === "/claim-edit") {
   const b = resolved.claim;
   const claimCtx = buildClaimContext(org.org_id);
   const d = evaluateClaimDerived(b, claimCtx);
+  const workflowState = claimRecoveryWorkflowState(org.org_id, b, d);
+  const latestPacketSubmission = workflowState.latestSubmission || workspaceLatestPacketSubmissionFromClaimAndWorkspace(b, workflowState.ws);
+  const workflowSubmission = latestPacketSubmission || {};
+  const workflowRoundText = workflowSubmission.label || `${workflowState.channelLabel || "Appeal"} Round ${workflowSubmission.round || b.last_submission_round || b.current_round || 1} / Version ${workflowSubmission.version || b.last_submission_version || 1}`;
+  const workflowResponseHref = workflowState.responseHref || `/claim-payer-response?billed_id=${encodeURIComponent(b.billed_id)}&channel=${encodeURIComponent(workflowState.channel)}`;
+  const resolvedForRecovery = claimIsResolvedForRecovery(b, d) || workflowState.workflowStage === "resolved";
   const patient = computePatientBalance(b);
 
   const currentStatus = normalizeClaimEditStatus(
@@ -40890,9 +40931,19 @@ if (method === "GET" && pathname === "/claim-edit") {
 
     <div class="hr"></div>
 
-    ${renderClaimWhyCard(explainClaimFlag(org.org_id, b, d), { title: "Why this claim is flagged" })}
+    ${(() => {
+      const claimWhy = explainClaimFlag(org.org_id, b, d);
+      const claimWhyTitle = resolvedForRecovery ? "Claim resolved" : "Why this claim is flagged";
+      if (workflowState.workflowStage === "submitted_needs_followup_date") { claimWhy.recommendation = `${workflowRoundText} has been submitted. Set a follow-up date and upload the payer response when it arrives.`; claimWhy.nextActionLabel = "Upload Payer Response"; claimWhy.nextActionHref = workflowResponseHref; }
+      if (workflowState.workflowStage === "followup_due") { claimWhy.recommendation = `${workflowRoundText} was submitted and follow-up is due. Contact the payer, then upload the payer response when received.`; claimWhy.nextActionLabel = "Upload Payer Response"; claimWhy.nextActionHref = workflowResponseHref; }
+      if (workflowState.workflowStage === "submitted_monitor") { claimWhy.recommendation = `${workflowRoundText} has been submitted. Upload the payer response when it arrives, then decide whether to start the next round, accept the outcome, write off, or resolve.`; claimWhy.nextActionLabel = "Upload Payer Response"; claimWhy.nextActionHref = workflowResponseHref; }
+      if (workflowState.workflowStage === "response_received") { claimWhy.recommendation = "A payer response was received. Review the outcome, then start the next round, accept the result, write off, or resolve the claim."; claimWhy.nextActionLabel = workflowState.channel === "negotiation" ? "Start Next Round of Negotiation" : "Start Next Round of Appeal"; claimWhy.nextActionHref = workspacePagePath(b.billed_id, workflowState.channel); }
+      if (workflowState.workflowStage === "draft") { claimWhy.recommendation = "This claim already has an appeal/negotiation draft in progress. Continue the draft instead of starting over."; claimWhy.nextActionLabel = `Continue ${workflowState.channelLabel} Draft`; claimWhy.nextActionHref = workspacePagePath(b.billed_id, workflowState.channel); }
+      if (resolvedForRecovery) { claimWhy.title = "No active recovery flag"; claimWhy.summary = "This claim appears resolved based on current lifecycle and payment data."; claimWhy.recommendation = "No action needed."; claimWhy.nextActionLabel = "Edit Claim"; claimWhy.nextActionHref = `/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}`; }
+      return renderClaimWhyCard(claimWhy, { title: claimWhyTitle });
+    })()}
 
-    ${renderClaimFinancialContext(b, d)}
+    ${renderClaimFinancialContext(b, d)}${renderClaimEditWorkflowContext(org.org_id, b, d)}
 
     <form method="POST" action="/claim-edit">
       <input type="hidden" name="billed_id" value="${safeStr(b.billed_id)}"/>
