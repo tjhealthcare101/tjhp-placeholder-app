@@ -6713,17 +6713,18 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
           return true;
         }
       } catch (err) {
-        console.warn("openClaimPanel failed; falling back.", err);
+        console.warn("openClaimPanel failed.", err);
       }
     }
 
-    return openFallbackPanel(id) || false;
+    return false;
   }
 
   window.__tjhpOpenClaimPanelOrNavigate = function(event, trigger){
     try {
       const el = trigger || (event && event.currentTarget) || (event && event.target);
       if (!el) return true;
+
       const id =
         el.getAttribute("data-open-claim-panel") ||
         el.getAttribute("data-claim-panel-open") ||
@@ -6731,55 +6732,64 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         el.getAttribute("data-billed-id") ||
         el.getAttribute("data-claim-id") ||
         el.getAttribute("data-id") ||
-        (typeof resolveButtonClaimId === "function" ? resolveButtonClaimId(el) : "") ||
         "";
-      const href =
-        el.getAttribute("href") ||
-        el.getAttribute("data-fallback-href") ||
-        (typeof resolveFallbackHref === "function" ? resolveFallbackHref(el, id) : "") ||
-        (id ? "/claim-detail?billed_id=" + encodeURIComponent(id) : "");
+
       if (!id) return true;
-      window.__tjhpLastOpenedClaimId = id;
-      let opened = false;
-      if (typeof safeOpenClaimPanel === "function") {
-        opened = !!safeOpenClaimPanel(id);
-      } else if (typeof window.openClaimPanel === "function") {
-        opened = !!window.openClaimPanel(id);
-        const panel = document.getElementById("claimSidePanel");
-        if (!opened && panel && panel.getAttribute("aria-hidden") === "false") opened = true;
-      }
-      if (opened) {
-        if (event) {
-          event.preventDefault();
-          event.stopPropagation();
-          if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-        }
-        try {
-          if (typeof normalizePanelActionsAfterOpen === "function") normalizePanelActionsAfterOpen(id);
-        } catch(e) {}
-        return false;
-      }
-      const isAnchor = String(el.tagName || "").toLowerCase() === "a";
-      if (isAnchor) return true;
+
+      const fallbackHref =
+        el.getAttribute("data-fallback-href") ||
+        el.getAttribute("href") ||
+        "/claim-detail?billed_id=" + encodeURIComponent(id);
+
       if (event) {
         event.preventDefault();
         event.stopPropagation();
-        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+        if (typeof event.stopImmediatePropagation === "function") {
+          event.stopImmediatePropagation();
+        }
       }
-      if (href) window.location.assign(href);
+
+      window.__tjhpLastOpenedClaimId = id;
+
+      let opened = false;
+      if (typeof window.openClaimPanel === "function") {
+        opened = !!window.openClaimPanel(id);
+      }
+
+      const panel = document.getElementById("claimSidePanel");
+      if (!opened && panel && panel.getAttribute("aria-hidden") === "false") {
+        opened = true;
+      }
+
+      if (opened) {
+        try {
+          if (typeof normalizePanelActionsAfterOpen === "function") {
+            normalizePanelActionsAfterOpen(id);
+          }
+        } catch(e) {}
+        return false;
+      }
+
+      window.location.assign(fallbackHref);
       return false;
     } catch(err) {
-      return true;
+      try {
+        const el = trigger || (event && event.currentTarget) || (event && event.target);
+        const href = el && (el.getAttribute("data-fallback-href") || el.getAttribute("href"));
+        if (href) window.location.assign(href);
+      } catch(e) {}
+      return false;
     }
   };
 
-  if (!window.__tjhpClaimPanelClickBound) {
-    window.__tjhpClaimPanelClickBound = true;
+  if (!window.__tjhpClaimPanelClickBoundV2) {
+    window.__tjhpClaimPanelClickBoundV2 = true;
 
     document.addEventListener("click", function(event){
       const trigger = event.target && event.target.closest
         ? event.target.closest("[data-open-claim-panel], [data-claim-panel-open], [data-claim-panel-id], .view-claim-btn")
         : null;
+
       if (!trigger) return;
 
       return window.__tjhpOpenClaimPanelOrNavigate(event, trigger);
@@ -39876,19 +39886,30 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
       }
 
       const claimMap = new Map();
-      (panelClaims || []).forEach(function(claim){
+      window.__tjhpClaimPanelRegistry = window.__tjhpClaimPanelRegistry || new Map();
+
+      function registerClaimPanelClaim(claim){
         if (!claim) return;
+
         const billedId = String(claim.billed_id || "").trim();
         const claimNumber = String(claim.claim_number || "").trim();
+
         if (billedId) {
           claimMap.set(billedId, claim);
           claimMap.set(encodeURIComponent(billedId), claim);
+          window.__tjhpClaimPanelRegistry.set(billedId, claim);
+          window.__tjhpClaimPanelRegistry.set(encodeURIComponent(billedId), claim);
         }
+
         if (claimNumber) {
           claimMap.set(claimNumber, claim);
           claimMap.set(encodeURIComponent(claimNumber), claim);
+          window.__tjhpClaimPanelRegistry.set(claimNumber, claim);
+          window.__tjhpClaimPanelRegistry.set(encodeURIComponent(claimNumber), claim);
         }
-      });
+      }
+
+      (panelClaims || []).forEach(registerClaimPanelClaim);
 
       function ensureClaimPanel(){
         let backdrop = document.getElementById("claimSidePanelBackdrop");
@@ -39963,10 +39984,20 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
         const ui = ensureClaimPanel();
         if (!ui || !ui.panel || !ui.content) return false;
         const decodedId = decodeURIComponent(String(id || ""));
+        const registry = window.__tjhpClaimPanelRegistry instanceof Map
+          ? window.__tjhpClaimPanelRegistry
+          : new Map();
+        const rawId = String(id || "");
         const claim =
           claimMap.get(decodedId) ||
-          claimMap.get(String(id || "")) ||
+          claimMap.get(rawId) ||
+          registry.get(decodedId) ||
+          registry.get(rawId) ||
           Array.from(claimMap.values()).find(function(c){
+            return String(c?.billed_id || "") === decodedId ||
+                   String(c?.claim_number || "") === decodedId;
+          }) ||
+          Array.from(registry.values()).find(function(c){
             return String(c?.billed_id || "") === decodedId ||
                    String(c?.claim_number || "") === decodedId;
           });
