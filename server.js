@@ -6593,8 +6593,26 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   }
 
   function openFallbackPanel(id) {
-    const claims = buildClaimRegistry();
-    const claim = claims.get(String(id || ""));
+    const rawId = String(id || "").trim();
+    if (!rawId) return false;
+    const decodedId = decodeURIComponent(rawId);
+    const claims = typeof buildClaimRegistry === "function" ? buildClaimRegistry() : new Map();
+    const registry = window.__tjhpClaimPanelRegistry instanceof Map
+      ? window.__tjhpClaimPanelRegistry
+      : new Map();
+    const claim =
+      claims.get(rawId) ||
+      claims.get(decodedId) ||
+      registry.get(rawId) ||
+      registry.get(decodedId) ||
+      Array.from(claims.values()).find(function(c){
+        return String(c?.billed_id || c?.billedId || "") === decodedId ||
+               String(c?.claim_number || c?.claimNumber || "") === decodedId;
+      }) ||
+      Array.from(registry.values()).find(function(c){
+        return String(c?.billed_id || c?.billedId || "") === decodedId ||
+               String(c?.claim_number || c?.claimNumber || "") === decodedId;
+      });
     if (!claim) return false;
 
     const ui = ensureFallbackPanel();
@@ -6703,20 +6721,32 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   }
 
   function safeOpenClaimPanel(id) {
+    const rawId = String(id || "").trim();
+    if (!rawId) return false;
     if (typeof window.openClaimPanel === "function") {
       try {
-        const opened = window.openClaimPanel(id);
+        const opened = !!window.openClaimPanel(rawId);
         if (opened) return true;
-
         const panel = document.getElementById("claimSidePanel");
         if (panel && panel.getAttribute("aria-hidden") === "false") {
           return true;
         }
       } catch (err) {
-        console.warn("openClaimPanel failed.", err);
+        console.warn("openClaimPanel failed; trying fallback panel.", err);
       }
     }
-
+    if (typeof openFallbackPanel === "function") {
+      try {
+        const fallbackOpened = !!openFallbackPanel(rawId);
+        if (fallbackOpened) return true;
+        const fallbackPanel = document.querySelector("[data-tjhp-panel], #tjhpClaimPanel, #claimFallbackPanel");
+        if (fallbackPanel && fallbackPanel.getAttribute("aria-hidden") === "false") {
+          return true;
+        }
+      } catch (err) {
+        console.warn("openFallbackPanel failed.", err);
+      }
+    }
     return false;
   }
 
@@ -6732,6 +6762,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         el.getAttribute("data-billed-id") ||
         el.getAttribute("data-claim-id") ||
         el.getAttribute("data-id") ||
+        (typeof resolveButtonClaimId === "function" ? resolveButtonClaimId(el) : "") ||
         "";
 
       if (!id) return true;
@@ -6751,15 +6782,9 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
 
       window.__tjhpLastOpenedClaimId = id;
 
-      let opened = false;
-      if (typeof window.openClaimPanel === "function") {
-        opened = !!window.openClaimPanel(id);
-      }
-
-      const panel = document.getElementById("claimSidePanel");
-      if (!opened && panel && panel.getAttribute("aria-hidden") === "false") {
-        opened = true;
-      }
+      const opened = typeof safeOpenClaimPanel === "function"
+        ? !!safeOpenClaimPanel(id)
+        : false;
 
       if (opened) {
         try {
