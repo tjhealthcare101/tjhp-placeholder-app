@@ -2253,6 +2253,118 @@ function attemptAutoMatch(org_id, payment) {
   };
 }
 
+function paymentOnlyClaimKey(value) {
+  if (typeof normalizeClaimKey === "function") return normalizeClaimKey(value);
+  return String(value || "").replace(/[^0-9]/g, "");
+}
+
+function findExistingClaimForPaymentOnly(org_id, billedAll, claimNumber) {
+  const key = paymentOnlyClaimKey(claimNumber);
+  if (!key) return null;
+  return (billedAll || []).find(b =>
+    b.org_id === org_id &&
+    paymentOnlyClaimKey(b.claim_number || b.claim_id || "") === key
+  ) || null;
+}
+
+function paymentOnlyAmountFrom(row, names) {
+  const raw = pickField(row || {}, names);
+  return raw == null || String(raw).trim() === "" ? null : num(raw);
+}
+
+function buildPaymentOnlyClaimPatchFromRow(row, sourceFile) {
+  const claimNumber = String(
+    pickField(row || {}, ["claim_number", "claim", "claim#", "claim id", "claim_id", "clm", "id"]) ||
+    row?.claim_number || row?.claim_id || ""
+  ).trim();
+  if (!claimNumber) return null;
+
+  const paidAmount = paymentOnlyAmountFrom(row, ["paid_amount", "amount_paid", "paid", "payment", "payment amount", "amount"]) || 0;
+  const explicitBilled = paymentOnlyAmountFrom(row, ["billed_amount", "amount_billed", "billed", "billed amount", "charge", "charge amount", "total charge", "amount billed"]);
+  const allowedAmount = paymentOnlyAmountFrom(row, ["allowed_amount", "allowed", "allowed amount"]);
+  const amountBilled = explicitBilled != null ? explicitBilled : (allowedAmount != null ? allowedAmount : paidAmount);
+
+  const statusRaw = String(pickField(row || {}, ["status", "denied_approved"]) || row?.status || "").toLowerCase();
+  const denialSignal = String(pickField(row || {}, ["remark", "remark code", "denial code", "denial reason", "adjustment reason", "eob_reason"]) || "").trim();
+  let status = "Waiting Payment";
+  if (paidAmount > 0 && !statusRaw.includes("denied") && !denialSignal) status = "Resolved";
+  else if (paidAmount <= 0 && (statusRaw.includes("denied") || denialSignal)) status = "Denied";
+
+  const procedure = String(pickField(row || {}, ["procedure_code", "procedure code", "cpt", "cpt_code", "cpt code", "service code"]) || row?.procedure_code || row?.cpt_code || "").trim();
+  return {
+    claim_number: claimNumber,
+    claim_id: claimNumber,
+    payer: String(pickField(row || {}, ["payer", "payer_name", "insurance", "carrier", "plan"]) || row?.payer || row?.payer_name || "").trim(),
+    procedure_code: procedure,
+    cpt_code: procedure,
+    dos: String(pickField(row || {}, ["dos", "date of service", "service date"]) || row?.dos || "").trim(),
+    amount_billed: amountBilled,
+    billed_amount: amountBilled,
+    allowed_amount: allowedAmount != null ? allowedAmount : undefined,
+    patient_responsibility: paymentOnlyAmountFrom(row, ["patient_responsibility", "patient responsibility", "patient_resp", "copay", "coinsurance", "deductible"]),
+    paid_amount: paidAmount,
+    insurance_paid: paidAmount,
+    paid_at: String(pickField(row || {}, ["date_paid", "payment date", "paid date", "remit date", "date"]) || row?.date_paid || row?.paid_at || "").trim(),
+    status,
+    source: "payment_only_upload",
+    payment_only_claim: true,
+    provisional_claim: true,
+    needs_billed_claim: true,
+    payment_bootstrap_source_file: sourceFile || "",
+    updated_at: nowISO()
+  };
+}
+
+function upsertPaymentOnlyClaim(org_id, billedAll, paymentLike, opts = {}) {
+  const patch = buildPaymentOnlyClaimPatchFromRow(paymentLike || {}, opts.sourceFile || paymentLike?.source_file || "");
+  if (!patch || !patch.claim_number) return null;
+
+  const existing = findExistingClaimForPaymentOnly(org_id, billedAll, patch.claim_number);
+  if (existing) {
+    if (!existing.payment_only_claim && !existing.provisional_claim && !existing.needs_billed_claim) {
+      return { claim: existing, created: false, updated: false };
+    }
+    Object.assign(existing, Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined && v !== "")));
+    existing.updated_at = nowISO();
+    return { claim: existing, created: false, updated: true };
+  }
+
+  const claim = {
+    billed_id: uuid(),
+    org_id,
+    ...patch,
+    created_at: nowISO()
+  };
+  billedAll.push(claim);
+  return { claim, created: true, updated: false };
+}
+
+function hydrateProvisionalPaymentClaimWithBilledRow(existing, mapped, rawRow, meta = {}) {
+  if (!existing) return false;
+  if (!(existing.payment_only_claim || existing.provisional_claim || existing.needs_billed_claim)) return false;
+  const rr = rawRow || {};
+  existing.payer = String(mapped?.payer || existing.payer || "").trim();
+  existing.procedure_code = mapped?.procedure_code || existing.procedure_code || "";
+  existing.cpt_code = mapped?.procedure_code || existing.cpt_code || "";
+  existing.amount_billed = num(mapped?.amount_billed);
+  existing.billed_amount = num(mapped?.amount_billed);
+  existing.dos = String(rr.dos || rr["date of service"] || rr["service date"] || mapped?.dos || existing.dos || "").trim();
+  existing.patient_name = String(rr.patient_name || rr["patient name"] || rr.patient || existing.patient_name || "").trim();
+  const pr = pickField(rr, ["patient responsibility", "patient_resp", "copay", "coinsurance", "deductible"]);
+  if (String(pr || "").trim() !== "") existing.patient_responsibility = num(pr);
+  if (meta.source_file) existing.source_file = meta.source_file;
+  if (meta.upload_id) existing.upload_id = meta.upload_id;
+  if (meta.submission_id) existing.submission_id = meta.submission_id;
+  existing.provisional_claim = false;
+  existing.needs_billed_claim = false;
+  existing.payment_only_claim = false;
+  existing.original_payment_only_claim = true;
+  existing.hydrated_from_billed_upload_at = nowISO();
+  existing.source = "billed_upload";
+  existing.updated_at = nowISO();
+  return true;
+}
+
 // ==============================
 // ACTION CENTER TASK ENGINE
 // ==============================
@@ -4332,18 +4444,32 @@ function extractPatientResponsibilityFromPayment(payment, claim){
 }
 
 function applyPaymentToClaim(org_id, payment) {
+  const paidValue = num(
+    payment.paid_amount ??
+    payment.amount_paid ??
+    payment.payment_amount ??
+    payment.amount ??
+    0
+  );
+  const billedValue = num(
+    payment.billed_amount ??
+    payment.amount_billed ??
+    payment.charge_amount ??
+    payment.total_charge ??
+    0
+  );
   const canonical = {
     claim_id: payment.claim_id || payment.claim_number || "",
-    paid_amount: Number(payment.paid_amount || 0),
+    paid_amount: paidValue,
     payer: payment.payer || payment.payer_name || "",
-    billed_amount: Number(payment.billed_amount || 0),
+    billed_amount: billedValue,
     source: payment.source || "835"
   };
 
   const billed = readJSON(FILES.billed, []);
   const unmatched = readJSON(FILES.unmatched_payments, []);
 
-  const claim = billed.find(b =>
+  let claim = billed.find(b =>
     b.org_id === org_id &&
     String(b.claim_id || b.claim_number || b.billed_id || "") === String(canonical.claim_id)
   );
@@ -4360,37 +4486,43 @@ function applyPaymentToClaim(org_id, payment) {
       };
     }
 
-    unmatched.push({
-      unmatched_id: uuid(),
-      org_id,
-      claim_id: canonical.claim_id,
-      payer: canonical.payer,
-      billed_amount: canonical.billed_amount,
-      paid_amount: canonical.paid_amount,
-      source: canonical.source,
-      status: "unmatched",
-      auto_match_score: auto.score,
-      created_at: nowISO()
-    });
+    const upserted = canonical.claim_id
+      ? upsertPaymentOnlyClaim(org_id, billed, { ...payment, ...canonical }, { sourceFile: payment.source_file || payment.source || "integration_payment" })
+      : null;
+    if (!upserted || !upserted.claim) {
+      unmatched.push({
+        unmatched_id: uuid(),
+        org_id,
+        claim_id: canonical.claim_id,
+        payer: canonical.payer,
+        billed_amount: canonical.billed_amount,
+        paid_amount: canonical.paid_amount,
+        source: canonical.source,
+        status: "unmatched",
+        auto_match_score: auto.score,
+        created_at: nowISO()
+      });
 
-    writeJSON(FILES.unmatched_payments, unmatched);
+      writeJSON(FILES.unmatched_payments, unmatched);
 
-    return {
-      matched: false,
-      reason: "claim_not_found",
-      auto_match_score: auto.score
-    };
+      return {
+        matched: false,
+        reason: "claim_not_found",
+        auto_match_score: auto.score
+      };
+    }
+    claim = upserted.claim;
   }
 
-  const paid = Number(canonical.paid_amount || 0);
+  const paid = paidValue;
   const pr = extractPatientResponsibilityFromPayment(payment, claim);
 
   const priorPaid = Number(claim.paid_amount || 0);
 
   applyClaimEditAndRecalculate(org_id, claim, {
     payer: payment.payer || claim.payer || "",
-    paid_amount: Number(payment.paid_amount || 0),
-    insurance_paid: Number(payment.paid_amount || 0),
+    paid_amount: paidValue,
+    insurance_paid: paidValue,
     ...(pr !== null ? { patient_responsibility: pr } : {}),
     // A new real payment/import should become the new source of truth.
     manual_financial_override: false,
@@ -4405,7 +4537,7 @@ function applyPaymentToClaim(org_id, payment) {
 
   claim.payment_debug = {
     expected_amount: expected,
-    paid_amount: paid,
+    paid_amount: paidValue,
     previous_paid_amount: priorPaid,
     decision: newStatus
   };
@@ -23057,6 +23189,129 @@ function mapBilledClaimRow(row){
   };
 }
 
+const SUPPORTED_PAYMENT_EXTS = [".csv", ".txt", ".xls", ".xlsx", ".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png"];
+const SUPPORTED_INGEST_EXTS = [".csv", ".txt", ".xls", ".xlsx", ".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png"];
+function tryParseDelimitedRowsFromBuffer(buffer) {
+  try { return (parseCSV((buffer || Buffer.from("")).toString("utf8")).rows || []); } catch { return []; }
+}
+function tryParseExcelRowsFromBuffer(buffer) {
+  try {
+    const xlsx = require("xlsx");
+    const wb = xlsx.read(buffer, { type: "buffer" });
+    const rows = [];
+    for (const n of (wb.SheetNames || [])) rows.push(...xlsx.utils.sheet_to_json(wb.Sheets[n] || {}, { defval: "" }));
+    return { rows, parsed: rows.length > 0, notes: rows.length ? "" : "Excel had no structured rows." };
+  } catch {
+    return { rows: [], parsed: false, notes: "Excel parser unavailable; stored for extraction/review." };
+  }
+}
+function extractTextRowsFromDocumentFile(f) {
+  try {
+    const ext = path.extname(String(f?.filename || "")).toLowerCase();
+    if (ext === ".txt") return tryParseDelimitedRowsFromBuffer(f.buffer);
+    if ([".pdf", ".doc", ".docx"].includes(ext) && typeof extractTextFromBuffer === "function") {
+      const t = extractTextFromBuffer(f.buffer, f.filename);
+      return tryParseDelimitedRowsFromBuffer(Buffer.from(String(t || ""), "utf8"));
+    }
+  } catch {}
+  return [];
+}
+function normalizeUploadExtractResult({ rows, parsed, status, notes, ext }) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const isParsed = !!parsed && safeRows.length > 0;
+  const fallbackStatus = isParsed ? "Parsed" : (status || (process.env.OPENAI_API_KEY ? "Queued For Extraction" : "Pending Extraction (AI Not Enabled)"));
+  return { rows: safeRows, parsed: isParsed, storedOnly: !isParsed, status: fallbackStatus, notes: String(notes || ""), ext: String(ext || "") };
+}
+function paymentClaimIdHeaders() {
+  return ["claim", "claim#", "claim number", "claimnumber", "claim_number", "claim id", "claim_id", "clm", "id"];
+}
+function paymentColumnHeaders() {
+  return {
+    claim: paymentClaimIdHeaders(),
+    payer: ["payer", "payer_name", "insurance", "carrier", "plan"],
+    paid: ["paid_amount", "amount_paid", "paid", "amount", "payment", "payment amount", "paid amount"],
+    date: ["date_paid", "date", "paid date", "payment date", "remit date"],
+    billed: ["billed_amount", "amount_billed", "billed", "billed amount", "charge", "charge amount", "total charge", "amount billed"],
+    allowed: ["allowed_amount", "allowed", "allowed amount"],
+    procedure: ["procedure_code", "procedure code", "cpt", "cpt_code", "cpt code", "service code"],
+    dos: ["dos", "date of service", "service date"],
+    patientResp: ["patient_responsibility", "patient responsibility", "patient_resp", "copay", "coinsurance", "deductible"],
+    status: ["status", "remark", "remark code", "denial code", "denial reason", "adjustment reason"]
+  };
+}
+function normalizePaymentRowFromRaw(raw, sourceFile) {
+  const h = paymentColumnHeaders();
+  const claim = String(pickField(raw || {}, h.claim) || "").trim();
+  const payer = String(pickField(raw || {}, h.payer) || "").trim();
+  const paid = num(pickField(raw || {}, h.paid));
+  const date = String(pickField(raw || {}, h.date) || "").trim();
+  const billed = num(pickField(raw || {}, h.billed));
+  const allowed = num(pickField(raw || {}, h.allowed));
+  const procedure = String(pickField(raw || {}, h.procedure) || "").trim();
+  const dos = String(pickField(raw || {}, h.dos) || "").trim();
+  const patientResp = num(pickField(raw || {}, h.patientResp));
+  const status = String(pickField(raw || {}, h.status) || "").trim();
+  return { claim_number: claim, claim_id: claim, raw_claim_number: claim, payer, amount_paid: paid, paid_amount: paid, date_paid: date, billed_amount: billed, allowed_amount: allowed, procedure_code: procedure, cpt_code: procedure, dos, patient_responsibility: patientResp, status, remark: status, source_file: sourceFile || "", _raw_row: raw || {} };
+}
+async function extractPaymentRowsFromUploadFile(f, opts = {}) {
+  try {
+    const ext = path.extname(String(f?.filename || "")).toLowerCase();
+    if (!SUPPORTED_PAYMENT_EXTS.includes(ext)) return { rows: [], parsed: false, storedOnly: true, status: "Unsupported", notes: "Unsupported payment file type.", ext };
+    if (ext === ".csv" || ext === ".txt") {
+      const parsed = parseCSV((f.buffer || Buffer.from("")).toString("utf8"));
+      const rows = (parsed.rows || []).map(r => normalizePaymentRowFromRaw(r, opts.sourceFile || f.filename || "")).filter(r => r.claim_number || num(r.amount_paid) > 0);
+      return { rows, parsed: rows.length > 0, storedOnly: rows.length === 0, status: rows.length > 0 ? "Parsed" : "Stored (unparsed)", notes: rows.length > 0 ? "" : "No structured payment rows detected in text file.", ext };
+    }
+    if (ext === ".xls" || ext === ".xlsx") {
+      const ex = tryParseExcelRowsFromBuffer(f.buffer);
+      const rows = (ex.rows || [])
+        .map(r => normalizePaymentRowFromRaw(r, opts.sourceFile || f.filename || ""))
+        .filter(r => r.claim_number || num(r.amount_paid) > 0);
+      return {
+        rows,
+        parsed: rows.length > 0,
+        storedOnly: rows.length === 0,
+        status: rows.length > 0 ? "Parsed" : "Stored (unparsed)",
+        notes: rows.length > 0 ? "" : (ex.notes || "No structured payment rows detected in Excel file."),
+        ext
+      };
+    }
+    return { rows: [], parsed: false, storedOnly: true, status: process.env.OPENAI_API_KEY ? "Queued For Extraction" : "Pending Extraction (AI Not Enabled)", notes: process.env.OPENAI_API_KEY ? "Stored for document extraction." : "Stored for review; extraction unavailable.", ext };
+  } catch (e) {
+    return { rows: [], parsed: false, storedOnly: true, status: "Stored (unparsed)", notes: `Parser fallback: ${String(e?.message || e)}`, ext: path.extname(String(f?.filename || "")).toLowerCase() };
+  }
+}
+async function extractBilledClaimRowsFromUploadFile(f, opts = {}) {
+  const ext = path.extname(String(f?.filename || "")).toLowerCase();
+  if (!SUPPORTED_INGEST_EXTS.includes(ext)) return normalizeUploadExtractResult({ rows: [], parsed: false, status: "Unsupported", notes: "Unsupported file type.", ext });
+  let rawRows = [];
+  if (ext === ".csv" || ext === ".txt") rawRows = tryParseDelimitedRowsFromBuffer(f.buffer);
+  else if (ext === ".xls" || ext === ".xlsx") {
+    const ex = tryParseExcelRowsFromBuffer(f.buffer);
+    rawRows = ex.rows || [];
+    if (!rawRows.length) return normalizeUploadExtractResult({ rows: [], parsed: false, status: "Stored (unparsed)", notes: ex.notes, ext });
+  } else {
+    rawRows = extractTextRowsFromDocumentFile(f);
+    if (!rawRows.length) return normalizeUploadExtractResult({ rows: [], parsed: false, status: process.env.OPENAI_API_KEY ? "Queued For Extraction" : "Pending Extraction (AI Not Enabled)", notes: "Stored for extraction/review.", ext });
+  }
+  const rows = rawRows.map(r => ({ ...mapBilledClaimRow(r), _raw_row: r })).filter(x => x.claim_number);
+  return normalizeUploadExtractResult({ rows, parsed: rows.length > 0, status: rows.length ? "Parsed" : "Stored (unparsed)", notes: rows.length ? "" : "No structured claim rows detected.", ext });
+}
+
+async function extractReimbursementRowsFromUploadFile(f, opts = {}) {
+  const ext = path.extname(String(f?.filename || "")).toLowerCase();
+  if (ext === ".csv" || ext === ".txt") return normalizeUploadExtractResult({ rows: tryParseDelimitedRowsFromBuffer(f.buffer), parsed: true, status: "Parsed", ext });
+  if (ext === ".xls" || ext === ".xlsx") {
+    const ex = tryParseExcelRowsFromBuffer(f.buffer);
+    return normalizeUploadExtractResult({ rows: ex.rows, parsed: ex.parsed, status: ex.parsed ? "Parsed" : "Stored (unparsed)", notes: ex.notes, ext });
+  }
+  if ([".pdf", ".doc", ".docx"].includes(ext)) {
+    const text = typeof extractTextFromBuffer === "function" ? extractTextFromBuffer(f.buffer, f.filename) : "";
+    return normalizeUploadExtractResult({ rows: [{ __text: text }], parsed: !!text, status: !!text ? "Parsed" : "Stored (unparsed)", notes: !!text ? "" : "No text extracted.", ext });
+  }
+  return normalizeUploadExtractResult({ rows: [], parsed: false, status: process.env.OPENAI_API_KEY ? "Queued For Extraction" : "Pending Extraction (AI Not Enabled)", notes: "Stored for extraction/review.", ext });
+}
+
 // normalize ANY contract row correctly
 function mapContractUploadRow(row){
   const payer = pickFirst(row, [
@@ -39571,9 +39826,9 @@ if (method === "POST" && pathname === "/upload-router") {
 
     try {
       if (tab === "claims") {
-        if (ext === ".csv") {
-          const parsedCSV = parseCSV(f.buffer.toString("utf8"));
-          const rows = parsedCSV.rows || [];
+        const extractedClaims = await extractBilledClaimRowsFromUploadFile(f, { sourceFile: ingest.original_filename || f.filename || "" });
+        if (extractedClaims.rows.length) {
+          const rows = extractedClaims.rows || [];
 
           const uploadId = uuid();
           const submissionUploadedAt = nowISO();
@@ -39582,26 +39837,30 @@ if (method === "POST" && pathname === "/upload-router") {
           let totalBilledForBatch = 0;
 
           for (const row of rows) {
-            const mapped = mapBilledClaimRow(row);
+            const mapped = mapBilledClaimRow(row._raw_row || row);
             const claim_number = normalizeClaimKey(mapped.claim_number);
             if (!claim_number) continue;
 
-            billedAll.push({
-              billed_id: uuid(),
-              org_id: org.org_id,
-              claim_number,
-              payer: String(mapped.payer || "").trim(),
-              procedure_code: mapped.procedure_code,
-              amount_billed: mapped.amount_billed,
-              patient_responsibility: num(pickField(row, [
-                "patient_resp",
-                "patient responsibility",
-                "copay",
-                "coinsurance"
-              ])),
-              upload_id: uploadId,
-              created_at: nowISO()
-            });
+            const existing = findExistingClaimForPaymentOnly(org.org_id, billedAll, claim_number);
+            if (existing && hydrateProvisionalPaymentClaimWithBilledRow(existing, mapped, row, { upload_id: uploadId })) {
+            } else {
+              billedAll.push({
+                billed_id: uuid(),
+                org_id: org.org_id,
+                claim_number,
+                payer: String(mapped.payer || "").trim(),
+                procedure_code: mapped.procedure_code,
+                amount_billed: mapped.amount_billed,
+                patient_responsibility: num(pickField(row, [
+                  "patient_resp",
+                  "patient responsibility",
+                  "copay",
+                  "coinsurance"
+                ])),
+                upload_id: uploadId,
+                created_at: nowISO()
+              });
+            }
 
             totalBilledForBatch += mapped.amount_billed;
             insertedClaims += 1;
@@ -39620,30 +39879,25 @@ if (method === "POST" && pathname === "/upload-router") {
           ingest.status = "Parsed";
           ingest.linked_claims_count = insertedClaims;
         } else {
-          ingest.status = "Unsupported for claims parsing";
-          ingest.notes = "Claims parsing currently supports CSV uploads.";
+          ingest.status = extractedClaims.status;
+          ingest.notes = extractedClaims.notes || "CSV/TXT parse immediately; Excel parses when available; other files are stored or queued for extraction.";
         }
       } else if (tab === "payments") {
-        if (ext === ".csv" || ext === ".txt") {
-          const parsedCSV = parseCSV(f.buffer.toString("utf8"));
-          for (const r of (parsedCSV.rows || [])) {
-            payments.push({
-              payment_id: uuid(),
-              org_id: org.org_id,
-              claim_number: String(pickField(r, ["claim", "claim#", "claim number", "clm"]) || ""),
-              payer: pickField(r, ["payer", "insurance", "carrier"]) || "",
-              amount_paid: num(pickField(r, ["paid", "amount", "payment", "paid amount"])),
-              date_paid: pickField(r, ["date", "paid date", "remit date"]) || "",
-              source_file: ingest.original_filename,
-              created_at: nowISO(),
-              denied_approved: false
-            });
+        const extracted = await extractPaymentRowsFromUploadFile(f, { sourceFile: ingest.original_filename || f.filename || "" });
+        if (extracted.rows.length) {
+          for (const row of extracted.rows) {
+            const paymentRow = {
+              payment_id: uuid(), org_id: org.org_id, ...row,
+              created_at: nowISO(), denied_approved: false
+            };
+            payments.push(paymentRow);
+            upsertPaymentOnlyClaim(org.org_id, billedAll, { ...(row._raw_row || {}), ...paymentRow }, { sourceFile: ingest.original_filename || f.filename || "" });
           }
           ingest.status = "Parsed";
-          ingest.linked_claims_count = (parsedCSV.rows || []).length;
+          ingest.linked_claims_count = extracted.rows.length;
         } else {
-          ingest.status = "Stored (unparsed)";
-          ingest.notes = "Payments parsing currently supports CSV/TXT uploads.";
+          ingest.status = extracted.status;
+          ingest.notes = extracted.notes || "Stored for extraction/review.";
         }
       } else if (tab === "denials") {
         ingest.status = "Stored For Denial Linking";
@@ -41752,12 +42006,24 @@ if (method === "POST" && pathname === "/payment-batch/delete") {
     }
   }
 
+  const deletedClaimKeys = new Set(
+    toDelete.map(p => paymentOnlyClaimKey(p.claim_number || p.claim_id || "")).filter(Boolean)
+  );
+  for (let i = billedOrg.length - 1; i >= 0; i--) {
+    const b = billedOrg[i];
+    if (!b.payment_only_claim || !b.provisional_claim || b.hydrated_from_billed_upload_at) continue;
+    if (String(b.payment_bootstrap_source_file || "") !== safeFile) continue;
+    const key = paymentOnlyClaimKey(b.claim_number || b.claim_id || "");
+    if (!deletedClaimKeys.has(key)) continue;
+    billedOrg.splice(i, 1);
+  }
+
   // Write billed updates
   const billedOut = billedAll.map(b => {
     if (b.org_id !== org.org_id) return b;
     const updated = billedOrg.find(x => x.billed_id === b.billed_id);
     return updated || b;
-  });
+  }).filter(Boolean).filter(b => b.org_id !== org.org_id || billedOrg.some(x => x.billed_id === b.billed_id));
   writeJSON(FILES.billed, billedOut);
 
   // Remove payments
@@ -42997,7 +43263,11 @@ const statusCell = (() => {
       const nameLower = (f.filename || "").toLowerCase();
       const isCSV = nameLower.endsWith(".csv");
       const isXLS = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx");
-      if (!isCSV && !isXLS) continue;
+      const isTXT = nameLower.endsWith(".txt");
+      const isDOC = nameLower.endsWith(".doc") || nameLower.endsWith(".docx");
+      const isPDF = nameLower.endsWith(".pdf");
+      const isIMG = [".jpg",".jpeg",".png"].some(x => nameLower.endsWith(x));
+      if (!isCSV && !isXLS && !isTXT && !isDOC && !isPDF && !isIMG) continue;
 
       const stored = path.join(dir, `${Date.now()}_${(f.filename || "billed").replace(/[^a-zA-Z0-9._-]/g,"_")}`);
       fs.writeFileSync(stored, f.buffer);
@@ -43016,19 +43286,22 @@ const statusCell = (() => {
       });
 
       let rowsAdded = 0;
-      if (isCSV) {
-        const text = f.buffer.toString("utf8");
-        const parsedCSV = parseCSV(text);
-        const rows = parsedCSV.rows;
-        for (const r of rows) {
-          const claim = (pickField(r, ["claim", "claim#", "claim number", "claimnumber", "clm"]) || "").trim();
+      const extractedClaims = await extractBilledClaimRowsFromUploadFile(f, { sourceFile: path.basename(stored) });
+      if (extractedClaims.rows.length) {
+        for (const r of extractedClaims.rows) {
+          const claim = String(r.claim_number || pickField(r, ["claim", "claim#", "claim number", "claimnumber", "claim_number", "claim id", "claim_id", "clm", "id"]) || "").trim();
           if (!claim) continue;
           const exists = billed.find(bx => bx.org_id === org.org_id && String(bx.claim_number || "") === claim);
-          if (exists) continue;
-          const payer = (pickField(r, ["payer", "insurance", "carrier", "plan"]) || "").trim();
-          const amt = (pickField(r, ["billed", "charge", "amount billed", "total charge", "charges"]) || "").trim();
-          const dos = (pickField(r, ["dos", "date of service", "service date"]) || "").trim();
-          const patient = (pickField(r, ["patient", "member", "name"]) || "").trim();
+          const payer = String(r.payer || pickField(r, ["payer", "insurance", "carrier", "plan"]) || "").trim();
+          const amt = String(r.amount_billed ?? pickField(r, ["billed", "charge", "amount billed", "total charge", "charges"]) ?? "").trim();
+          const dos = String(r.dos || pickField(r, ["dos", "date of service", "service date"]) || "").trim();
+          const patient = String(r.patient_name || pickField(r, ["patient", "member", "name"]) || "").trim();
+          if (exists) {
+            if (hydrateProvisionalPaymentClaimWithBilledRow(exists, { payer, amount_billed: Number(amt || 0) || 0, procedure_code: exists.procedure_code || "" }, { dos, patient_name: patient }, { submission_id, source_file: path.basename(stored) })) {
+              rowsAdded += 1;
+            }
+            continue;
+          }
           billed.push({
             billed_id: uuid(),
             org_id: org.org_id,
@@ -44811,17 +45084,17 @@ if (method === "POST" && pathname === "/case/mark-paid") {
         claims_extracted_count: 0
       };
 
-      if (ext === ".csv") {
-        const parsedCSV = parseCSV(f.buffer.toString("utf8"));
-        for (const r of (parsedCSV.rows || [])) {
+      if (SUPPORTED_PAYMENT_EXTS.includes(ext)) {
+        const extracted = await extractPaymentRowsFromUploadFile(f, { sourceFile: safeName });
+        for (const r of extracted.rows) {
           const claimObj = {
-            claim_number: (pickField(r, ["claim", "claim#", "claim number", "claimnumber"]) || "").trim(),
-            payer: (pickField(r, ["payer", "insurance", "carrier", "plan"]) || "").trim(),
-            dos: (pickField(r, ["dos", "date of service", "service date"]) || "").trim(),
-            billed_amount: num(pickField(r, ["billed", "charge", "amount billed", "total charge"])),
-            paid_amount: num(pickField(r, ["paid", "amount paid", "payment"])),
-            patient_responsibility: num(pickField(r, ["patient responsibility", "patient resp"])),
-            denial_code: (pickField(r, ["denial", "denial code"]) || "").trim()
+            claim_number: r.claim_number,
+            payer: r.payer,
+            dos: r.dos,
+            billed_amount: num(r.billed_amount),
+            paid_amount: num(r.paid_amount),
+            patient_responsibility: num(r.patient_responsibility),
+            denial_code: String(r.status || "").trim()
           };
           extractedClaims.push(claimObj);
           if (claimObj.paid_amount > 0 || claimObj.claim_number) {
@@ -44838,8 +45111,9 @@ if (method === "POST" && pathname === "/case/mark-paid") {
             });
           }
         }
-        ingest.status = "Extracted";
-        ingest.claims_extracted_count = extractedClaims.length;
+        ingest.status = extracted.rows.length ? "Extracted" : extracted.status;
+        ingest.notes = extracted.notes || ingest.notes;
+        ingest.claims_extracted_count = extracted.rows.length;
       } else if (process.env.OPENAI_API_KEY) {
         const data = runExtractionFromDocumentText();
         const claims = Array.isArray(data.claims) ? data.claims : [];
@@ -44921,14 +45195,16 @@ if (method === "POST" && pathname === "/case/mark-paid") {
     // validate extension
     const nameLower = (f.filename || "").toLowerCase();
     const isCSV = nameLower.endsWith(".csv");
+    const isTXT = nameLower.endsWith(".txt");
     const isXLS = nameLower.endsWith(".xls") || nameLower.endsWith(".xlsx");
     const isPDF = nameLower.endsWith(".pdf");
     const isDOC = nameLower.endsWith(".doc") || nameLower.endsWith(".docx");
+    const isIMG = [".jpg", ".jpeg", ".png"].some(x => nameLower.endsWith(x));
 
-    if (!isCSV && !isXLS && !isPDF && !isDOC) {
+    if (!isCSV && !isTXT && !isXLS && !isPDF && !isDOC && !isIMG) {
       const html = renderPage("Revenue Management", `
         <h2>Revenue Management</h2>
-        <p class="error">Allowed file types: CSV, Excel (.xls/.xlsx), PDF, Word (.doc/.docx).</p>
+        <p class="error">Allowed file types: CSV/TXT, Excel (.xls/.xlsx), PDF, Word (.doc/.docx), and images (.jpg/.jpeg/.png).</p>
         <div class="btnRow"><a class="btn secondary" href="/payments">Back</a></div>
       `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 400, html);
@@ -44954,10 +45230,9 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 
     // parse CSV now (rows count & limited record storage)
     let rowsAdded = 0;
-    if (isCSV) {
-      const text = f.buffer.toString("utf8");
-      const parsedCSV = parseCSV(text);
-      const rows = parsedCSV.rows;
+    const extractedPayments = await extractPaymentRowsFromUploadFile(f, { sourceFile: path.basename(stored) });
+    if (extractedPayments.rows.length) {
+      const rows = extractedPayments.rows;
 
       const allowance = paymentRowsAllowance(org.org_id);
       const remaining = allowance.remaining;
@@ -44971,21 +45246,28 @@ if (method === "POST" && pathname === "/case/mark-paid") {
 
       for (let i=0;i<storeLimit;i++){
         const r = rows[i];
-        const claim = pickField(r, ["claim", "claim#", "claim number", "claimnumber", "clm"]);
-        const payer = pickField(r, ["payer", "insurance", "carrier", "plan"]);
-        const amt = pickField(r, ["paid", "amount", "payment", "paid amount", "allowed"]);
-        const datePaid = pickField(r, ["date", "paid date", "payment date", "remit date"]);
 
         paymentsData.push({
           payment_id: uuid(),
           org_id: org.org_id,
-          claim_number: claim || "",
-          payer: payer || "",
-          amount_paid: amt || "",
-          date_paid: datePaid || "",
+          claim_number: r.claim_number || "",
+          claim_id: r.claim_id || "",
+          raw_claim_number: r.raw_claim_number || "",
+          payer: r.payer || "",
+          amount_paid: r.amount_paid || "",
+          date_paid: r.date_paid || "",
           source_file: path.basename(stored),
           created_at: nowISO(),
-          denied_approved: false
+          denied_approved: false,
+          billed_amount: r.billed_amount || "",
+          allowed_amount: r.allowed_amount || "",
+          procedure_code: r.procedure_code || "",
+          cpt_code: r.cpt_code || "",
+          dos: r.dos || "",
+          patient_responsibility: r.patient_responsibility || "",
+          status: r.status || "",
+          remark: r.remark || "",
+          _raw_row: r._raw_row || r
         });
         addedPayments.push(paymentsData[paymentsData.length-1]);
       }
@@ -45008,11 +45290,15 @@ for (const ap of addedPayments) {
   const normalizedClaim = normalizeClaimNum(ap.claim_number);
   if (!normalizedClaim) continue;
 
-  const billedClaim = billedAll_sync.find(b =>
+  let billedClaim = billedAll_sync.find(b =>
     b.org_id === org.org_id &&
     normalizeClaimNum(b.claim_number) === normalizedClaim
   );
 
+  if (!billedClaim) {
+    const upserted = upsertPaymentOnlyClaim(org.org_id, billedAll_sync, { ...(ap._raw_row || {}), ...ap }, { sourceFile: ap.source_file || path.basename(stored) });
+    billedClaim = upserted?.claim || null;
+  }
   if (!billedClaim) continue;
 
   const paid = num(ap.amount_paid);
@@ -45096,7 +45382,6 @@ if (changed_sync) {
 rowsAdded = toUse;
       consumePaymentRows(org.org_id, rowsAdded);
     } else {
-      // Excel stored but not parsed in v1 (still counts as 0 rows until CSV provided)
       rowsAdded = 0;
     }
 
@@ -45108,7 +45393,7 @@ rowsAdded = toUse;
       <p class="muted">Your file was uploaded successfully.</p>
       <ul class="muted">
         <li><strong>File:</strong> ${safeStr(f.filename)}</li>
-        <li><strong>Rows processed:</strong> ${isCSV ? rowsAdded : "File stored (not parsed - upload CSV for analytics extraction)"}</li>
+        <li><strong>Rows processed:</strong> ${rowsAdded > 0 ? rowsAdded : (extractedPayments.notes || "File stored for extraction/review")}</li>
       </ul>
       <div class="btnRow">
         <a class="btn" href="/payment-batch-detail?file=${encodeURIComponent(path.basename(stored))}">View Payment Batch</a>
@@ -46451,9 +46736,9 @@ function renderTemplateEditor(org, user){
       const ingest = addDocumentIngest(org.org_id, category, f, "Stored", 0, "");
 
       if (tab === "claims") {
-        if (ext === ".csv") {
-          const parsedCSV = parseCSV(f.buffer.toString("utf8"));
-          const rows = parsedCSV.rows || [];
+        const extractedClaims = await extractBilledClaimRowsFromUploadFile(f, { sourceFile: ingest.original_filename || f.filename || "" });
+        if (extractedClaims.rows.length) {
+          const rows = extractedClaims.rows || [];
 
           const uploadId = uuid();
           const submissionUploadedAt = nowISO();
@@ -46462,21 +46747,25 @@ function renderTemplateEditor(org, user){
           let totalBilledForBatch = 0;
 
           for (const row of rows) {
-            const mapped = mapBilledClaimRow(row);
+            const mapped = mapBilledClaimRow(row._raw_row || row);
             const claim_number = normalizeClaimKey(mapped.claim_number);
             if (!claim_number) continue;
 
-            billedAll.push({
-              billed_id: uuid(),
-              org_id: org.org_id,
-              claim_number,
-              payer: String(mapped.payer || "").trim(),
-              procedure_code: mapped.procedure_code,
-              amount_billed: mapped.amount_billed,
-              patient_responsibility: num(pickField(row, ["patient_resp","patient responsibility","copay","coinsurance"])),
-              upload_id: uploadId,
-              created_at: nowISO()
-            });
+            const existing = findExistingClaimForPaymentOnly(org.org_id, billedAll, claim_number);
+            if (existing && hydrateProvisionalPaymentClaimWithBilledRow(existing, mapped, row, { upload_id: uploadId })) {
+            } else {
+              billedAll.push({
+                billed_id: uuid(),
+                org_id: org.org_id,
+                claim_number,
+                payer: String(mapped.payer || "").trim(),
+                procedure_code: mapped.procedure_code,
+                amount_billed: mapped.amount_billed,
+                patient_responsibility: num(pickField(row, ["patient_resp","patient responsibility","copay","coinsurance"])),
+                upload_id: uploadId,
+                created_at: nowISO()
+              });
+            }
 
             totalBilledForBatch += mapped.amount_billed;
             insertedClaims += 1;
@@ -46495,18 +46784,19 @@ function renderTemplateEditor(org, user){
           ingest.status = "Parsed";
           ingest.linked_claims_count = insertedClaims;
         } else {
-          ingest.status = "Unsupported for claims parsing";
-          ingest.notes = "Claims parsing currently supports CSV/XLSX.";
+          ingest.status = extractedClaims.status;
+          ingest.notes = extractedClaims.notes || "CSV/TXT parse immediately; Excel parses when available; other files are stored or queued for extraction.";
         }
       } else if (tab === "payments") {
-        if (ext === ".csv" || ext === ".txt") {
-          const parsedCSV = parseCSV(f.buffer.toString("utf8"));
-          for (const r of (parsedCSV.rows || [])) {
-            payments.push({ payment_id: uuid(), org_id: org.org_id, claim_number: String(pickField(r,["claim","claim#","claim number","clm"]) || ""), payer: pickField(r,["payer","insurance","carrier"]) || "", amount_paid: num(pickField(r,["paid","amount","payment","paid amount"])), date_paid: pickField(r,["date","paid date","remit date"]) || "", source_file: ingest.original_filename, created_at: nowISO(), denied_approved: false });
-          }
-          ingest.status = "Parsed";
-          ingest.linked_claims_count = (parsedCSV.rows || []).length;
+        const extracted = await extractPaymentRowsFromUploadFile(f, { sourceFile: ingest.original_filename || f.filename || "" });
+        for (const row of extracted.rows) {
+          const paymentRow = { payment_id: uuid(), org_id: org.org_id, ...row, created_at: nowISO(), denied_approved: false };
+          payments.push(paymentRow);
+          upsertPaymentOnlyClaim(org.org_id, billedAll, { ...(row._raw_row || {}), ...paymentRow }, { sourceFile: ingest.original_filename || f.filename || "" });
         }
+        ingest.status = extracted.status;
+        ingest.notes = extracted.notes || ingest.notes || "";
+        ingest.linked_claims_count = extracted.rows.length;
       } else if (tab === "denials") {
         ingest.status = "Stored For Denial Linking";
         const filename = String(ingest.original_filename || "");
@@ -46702,7 +46992,7 @@ function renderTemplateEditor(org, user){
         continue;
       }
 
-      if (ext !== ".csv") {
+      if (![".csv", ".txt", ".xls", ".xlsx"].includes(ext)) {
         if (isSupportedUploadExt(filename || "")) {
           addDocumentIngest(
             org.org_id,
@@ -46710,10 +47000,10 @@ function renderTemplateEditor(org, user){
             f,
             "Stored",
             0,
-            "Stored as supporting reimbursement / payer policy document. Upload CSV to automatically create contract or fee schedule rules."
+            "Structured CSV/TXT/Excel files can create rules automatically. PDF/Word files are scanned for contract language when possible. Images are stored or queued for extraction/review."
           );
           storedSupportingDocs += 1;
-          warnings.push(`${filename} → Stored as a supporting reimbursement / payer policy document. CSV is only required for automatic rule creation.`);
+          warnings.push(`${filename} → Stored as supporting reimbursement documentation. Structured CSV/TXT/Excel files can create rules automatically; PDF/Word may be scanned for contract language; images are stored/queued for review.`);
           continue;
         }
 
@@ -46721,14 +47011,14 @@ function renderTemplateEditor(org, user){
         continue;
       }
 
-      const parsed = parseCSV(f.buffer.toString("utf8"));
-      const rows = parsed.rows || [];
+      const extractedReimb = await extractReimbursementRowsFromUploadFile(f, { sourceFile: f.filename || "" });
+      const rows = extractedReimb.rows || [];
       if (!rows.length) {
-        warnings.push(`${f.filename} → File contained no rows.`);
+        warnings.push(`${f.filename} → ${extractedReimb.notes || "File contained no structured rows."}`);
         continue;
       }
 
-      const kind = detectReimbursementUploadTypeFlexible(f, parsed);
+      const kind = detectReimbursementUploadTypeFlexible(f, { rows });
 
       // =========================
       // CONTRACT FILE
@@ -51954,6 +52244,98 @@ setInterval(() => {
   pollPacketStatuses();
 }, 2 * 60 * 1000);
 
-server.listen(PORT, HOST, () => {
-  debugLog(`TJHP server listening on ${HOST}:${PORT}`);
-});
+async function runUploadIngestSmokeTests() {
+  const os = require("os");
+  const assert = (ok, msg) => { if (!ok) throw new Error(msg); };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tjhp-smoke-"));
+  const keys = ["billed","payments","unmatched_payments","deleted_payment_batches","payer_contracts","allowed_amount_rules","fee_schedules","reimbursement_uploads","pending_reimbursement_uploads"];
+  const original = {};
+  for (const k of keys) { original[k] = FILES[k]; FILES[k] = path.join(tmp, `${k}.json`); writeJSON(FILES[k], []); }
+  try {
+    const orgId = "smoke-org";
+    const billedAll = [];
+    upsertPaymentOnlyClaim(orgId, billedAll, { claim_number:"CLM1001", payer:"Aetna", amount_paid:120, date_paid:"2026-05-01" }, { sourceFile:"payments.csv" });
+    assert(billedAll.length === 1, "T1 length");
+    assert(billedAll[0].payment_only_claim === true, "T1 payment_only_claim");
+    assert(billedAll[0].provisional_claim === true, "T1 provisional_claim");
+    assert(billedAll[0].needs_billed_claim === true, "T1 needs_billed_claim");
+    assert(num(billedAll[0].paid_amount || billedAll[0].insurance_paid) === 120, "T1 paid");
+    assert(num(billedAll[0].amount_billed) === 120, "T1 amount_billed");
+    assert(String(billedAll[0].status || "").toLowerCase() !== "underpaid", "T1 status");
+    upsertPaymentOnlyClaim(orgId, billedAll, { claim_number:"CLM1001", payer:"Aetna", amount_paid:130, date_paid:"2026-05-02" }, { sourceFile:"payments.csv" });
+    assert(billedAll.length === 1, "T2");
+    writeJSON(FILES.billed, []); writeJSON(FILES.payments, []); writeJSON(FILES.unmatched_payments, []);
+    const ap = applyPaymentToClaim(orgId, { claim_number:"CLM2001", amount_paid:250, payer:"Cigna", source:"smoke" });
+    assert(ap.matched === true && num(readJSON(FILES.payments, [])[0]?.paid_amount) === 250, "T3");
+    const p = upsertPaymentOnlyClaim(orgId, billedAll, { claim_number:"CLM3001", amount_paid:80, payer:"UHC" }, {});
+    const bid = p.claim.billed_id;
+    assert(hydrateProvisionalPaymentClaimWithBilledRow(p.claim, { claim_number:"CLM3001", payer:"UnitedHealthcare", procedure_code:"99213", amount_billed:300 }, {}, { upload_id:"u1", source_file:"billed.csv" }), "T4 hydrate");
+    assert(p.claim.billed_id === bid && p.claim.payment_only_claim === false && num(p.claim.paid_amount) === 80, "T4");
+    const real = { billed_id: uuid(), org_id: orgId, claim_number:"CLM4001", amount_billed:500 };
+    billedAll.push(real); upsertPaymentOnlyClaim(orgId, billedAll, { claim_number:"CLM4001", amount_paid:90 }, {});
+    assert(num(real.amount_billed) === 500, "T5");
+    for (const h of paymentClaimIdHeaders()) assert(normalizePaymentRowFromRaw({ [h]: "CLM5001", "paid amount":100 }, "x").claim_number, "T6");
+    const c = await extractPaymentRowsFromUploadFile({ filename:"payments.csv", buffer: Buffer.from("claim_id,payer,paid amount\nCLM6001,Aetna,111\n") }, {});
+    assert(c.parsed && c.rows.length === 1 && num(c.rows[0].amount_paid) === 111, "T7");
+    // T8 Excel payment extraction
+    let xlsx = null;
+    try { xlsx = require("xlsx"); } catch {}
+    if (xlsx) {
+      const wb = xlsx.utils.book_new();
+      const ws = xlsx.utils.json_to_sheet([{ claim_id:"CLM7001", payer:"Aetna", paid_amount:222 }]);
+      xlsx.utils.book_append_sheet(wb, ws, "Sheet1");
+      const buf = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+      const exPay = await extractPaymentRowsFromUploadFile({ filename:"payments.xlsx", buffer: buf }, {});
+      assert(exPay.parsed === true && exPay.rows.length === 1, "T8 parsed");
+      assert(String(exPay.rows[0].claim_number || exPay.rows[0].claim_id) === "CLM7001", "T8 claim");
+      assert(num(exPay.rows[0].amount_paid || exPay.rows[0].paid_amount) === 222, "T8 amount");
+    } else {
+      const exPay = await extractPaymentRowsFromUploadFile({ filename:"payments.xlsx", buffer: Buffer.from("x") }, {});
+      assert(exPay.parsed === false && exPay.storedOnly === true, "T8 fallback parsed");
+      assert(/excel|review|unavailable/i.test(String(exPay.notes || "")), "T8 fallback notes");
+    }
+    const b = await extractBilledClaimRowsFromUploadFile({ filename:"billed.csv", buffer: Buffer.from("claim_id,payer,cpt,billed amount\nCLM9001,Aetna,99213,333\n") }, {});
+    assert(b.parsed && b.rows.length === 1, "T9");
+    // T10 Excel billed extraction
+    if (xlsx) {
+      const wb = xlsx.utils.book_new();
+      const ws = xlsx.utils.json_to_sheet([{ claim_id:"CLM8001", payer:"Aetna", cpt:"99213", "billed amount":444 }]);
+      xlsx.utils.book_append_sheet(wb, ws, "Sheet1");
+      const buf = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+      const exBill = await extractBilledClaimRowsFromUploadFile({ filename:"billed.xlsx", buffer: buf }, {});
+      assert(exBill.parsed === true && exBill.rows.length === 1, "T10 parsed");
+      assert(String(exBill.rows[0].claim_number || "") === "CLM8001", "T10 claim");
+      assert(num(exBill.rows[0].amount_billed) === 444, "T10 amount");
+    } else {
+      const exBill = await extractBilledClaimRowsFromUploadFile({ filename:"billed.xlsx", buffer: Buffer.from("x") }, {});
+      assert(exBill.parsed === false && exBill.storedOnly === true, "T10 fallback parsed");
+      assert(/excel|review|unavailable/i.test(String(exBill.notes || "")), "T10 fallback notes");
+    }
+    const r = await extractReimbursementRowsFromUploadFile({ filename:"reimb.csv", buffer: Buffer.from("payer,cpt,rate\nAetna,99213,100\n") }, {});
+    assert(r.rows.length > 0, "T11");
+    const u = await extractPaymentRowsFromUploadFile({ filename:"x.png", buffer: Buffer.from("xx") }, {});
+    const u2 = await extractBilledClaimRowsFromUploadFile({ filename:"x.png", buffer: Buffer.from("xx") }, {});
+    const u3 = await extractReimbursementRowsFromUploadFile({ filename:"x.png", buffer: Buffer.from("xx") }, {});
+    assert(!u.parsed && u.rows.length === 0 && String(u.status || "").toLowerCase() !== "parsed", "T12 payment");
+    assert(!u2.parsed && u2.rows.length === 0 && String(u2.status || "").toLowerCase() !== "parsed", "T12 billed");
+    assert(!u3.parsed && u3.rows.length === 0 && String(u3.status || "").toLowerCase() !== "parsed", "T12 reimb");
+    const src = fs.readFileSync(__filename, "utf8");
+    ["function upsertPaymentOnlyClaim","function hydrateProvisionalPaymentClaimWithBilledRow","function extractPaymentRowsFromUploadFile","function extractBilledClaimRowsFromUploadFile","function extractReimbursementRowsFromUploadFile","process.env.TJHP_UPLOAD_SMOKE_TESTS","pathname === \"/billed/upload\"","extractBilledClaimRowsFromUploadFile(f","extractPaymentRowsFromUploadFile(f","extractReimbursementRowsFromUploadFile(f"].forEach(m => assert(src.includes(m), `marker ${m}`));
+  } finally { for (const k of keys) FILES[k] = original[k]; }
+}
+
+if (process.env.TJHP_UPLOAD_SMOKE_TESTS === "true") {
+  runUploadIngestSmokeTests()
+    .then(() => {
+      process.stdout.write("UPLOAD_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    })
+    .catch(err => {
+      process.stderr.write("UPLOAD_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    });
+} else {
+  server.listen(PORT, HOST, () => {
+    debugLog(`TJHP server listening on ${HOST}:${PORT}`);
+  });
+}
