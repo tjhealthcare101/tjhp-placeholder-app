@@ -359,6 +359,14 @@ function uuid() {
 
 function nowISO() { return new Date().toISOString(); }
 function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
+function dateInputFromISO(iso){
+  const d = new Date(iso || nowISO());
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString().slice(0, 10);
+}
+function defaultPacketFollowUpDate(submittedAt){
+  return dateInputFromISO(addDaysISO(submittedAt || nowISO(), 14));
+}
 
 function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
 function sanitizeUploadName(name) {
@@ -15952,12 +15960,42 @@ function workspaceLatestPacketSubmissionFromClaimAndWorkspace(claim, ws, channel
   }).sort((a,b) => new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0))[0] || null;
 }
 
+function claimIsResolvedForRecovery(claim, derived){
+  const d = derived && derived.lifecycleStage ? derived : evaluateClaimDerived(claim, buildClaimContext(claim?.org_id));
+  const atRisk = Number(d?.atRiskAmount || computeClaimAtRisk(claim) || 0);
+  const derivedStage = String(d?.lifecycleStage || d?.status || "").toLowerCase();
+
+  const statusBlob = [
+    claim?.status,
+    claim?.lifecycle_stage,
+    claim?.lifecycleStage,
+    claim?.payment_status,
+    claim?.packet_follow_up_status,
+    claim?.payer_response_status,
+    claim?.appeal_response_status,
+    claim?.negotiation_response_status,
+    claim?.response_status,
+    d?.lifecycleStage,
+    d?.status
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const resolvedStatus =
+    /resolved|closed|paid in full|payment completed|completed|complete/.test(statusBlob) ||
+    derivedStage === "resolved";
+
+  const activePostSubmissionStatus =
+    /appeal due|negotiation due|follow-up due|follow up due|awaiting payer response|response received|payer response received|pending payer response/.test(statusBlob);
+
+  return atRisk <= 0 && resolvedStatus && !activePostSubmissionStatus;
+}
+
 function claimRecoveryWorkflowState(org_id, claim, derived){
   const ws = getAgentWorkspace(org_id, claim.billed_id);
   const latestSubmission = workspaceLatestPacketSubmissionFromClaimAndWorkspace(claim, ws);
   const suggestedChannel = latestSubmission?.channel || claim.last_submission_channel || workspaceChannelForClaim(claim, derived);
   const channelLabel = suggestedChannel === "negotiation" ? "Negotiation" : "Appeal";
   const hasWorkspace = !!ws;
+  const resolvedForRecovery = claimIsResolvedForRecovery(claim, derived);
   const hasSubmitted = !!latestSubmission || claim.submission_status === "submitted" || claim.workspace_status === "submitted";
   const hasPacketHistory = Array.isArray(claim.packet_submissions) && claim.packet_submissions.length > 0;
   const hasDraft = hasWorkspace && !hasSubmitted;
@@ -15988,6 +16026,28 @@ function claimRecoveryWorkflowState(org_id, claim, derived){
   let primaryLabel = nextAction;
   let primaryHref = workspacePagePath(claim.billed_id, suggestedChannel);
   const responseHref = `/claim-payer-response?billed_id=${encodeURIComponent(claim.billed_id || "")}&channel=${encodeURIComponent(suggestedChannel || "")}`;
+  if (resolvedForRecovery) {
+    return {
+      ws,
+      channel: suggestedChannel,
+      channelLabel,
+      latestSubmission,
+      hasWorkspace,
+      hasSubmitted: false,
+      hasDraft: false,
+      hasPacketHistory,
+      followUpDate: "",
+      followUpDue: false,
+      responseReceived: false,
+      resolvedForRecovery: true,
+      workflowStage: "resolved",
+      workflowLabel: "Resolved — no active recovery work",
+      nextAction: "N/A",
+      primaryLabel: "Edit Claim",
+      primaryHref: `/claim-edit?claim_id=${encodeURIComponent(claim.billed_id || "")}`,
+      responseHref: ""
+    };
+  }
   if (responseReceived) { workflowStage = "response_received"; workflowLabel = `${channelLabel} response received`; nextAction = "Review payer response"; primaryLabel = "Start Next Round"; }
   else if (hasSubmitted && !hasFollowUpDate) { workflowStage = "submitted_needs_followup_date"; workflowLabel = `${latestSubmission?.label || `${channelLabel} submitted`} — follow-up date needed`; nextAction = "Set follow-up date"; primaryLabel = "Set Follow-Up"; }
   else if (hasSubmitted && followUpDue) { workflowStage = "followup_due"; workflowLabel = `${latestSubmission?.label || `${channelLabel} submitted`} — follow-up due`; nextAction = "Follow Up with Payer"; primaryLabel = "Follow Up with Payer"; }
@@ -18488,6 +18548,7 @@ function renderSubmissionPanel(ws, claim, channel){
 
         <label class="small">Follow-up Date</label>
         <input type="date" name="follow_up_date"/>
+        <div class="small muted" style="margin-top:4px;">If left blank, the system will set a default follow-up date 14 days after submission.</div>
 
         <button class="btn secondary" style="margin-top:8px;">
           Submit Round ${currentRound}
@@ -18649,6 +18710,7 @@ function renderWorkflowPanel(ws, claim, channel, opts = {}){
           <div class="ws-submit-field">
             <label class="small">Follow-up Date</label>
             <input type="date" name="follow_up_date"/>
+        <div class="small muted" style="margin-top:4px;">If left blank, the system will set a default follow-up date 14 days after submission.</div>
           </div>
           <div class="ws-submit-field" style="grid-column:1 / -1;">
             <label class="small">Optional reason for submitting without source proof</label>
@@ -35528,7 +35590,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             + '<details style="border:1px solid #e5e7eb;border-left:4px solid #111827;border-radius:12px;padding:12px;margin:12px 0;background:#fff;">'
             +   '<summary style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
             +     '<span>'
-            +       '<strong>Why this claim is flagged</strong>'
+            +       (Number(derived.atRiskAmount || 0) <= 0 && String(stage).toLowerCase() === 'resolved') ? '<strong>No active recovery flag</strong>' : '<strong>Why this claim is flagged</strong>'
             +       '<span class="muted small" style="display:block;margin-top:4px;font-weight:700;">' + panelEsc(why.headline || "Review this claim") + '</span>'
             +     '</span>'
             +     '<span class="badge ' + panelEsc(why.badge || "warn") + '">' + panelEsc(why.stage || stage || "Review") + '</span>'
@@ -35558,16 +35620,13 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             + '<div class="hr"></div>'
             + '<div>'
             +   '<strong>Submission Date:</strong><br/>'
-            +   '<span class="muted small">' + panelEsc(claim.submitted_at || claim.created_at || "-") + '</span>'
-            + '</div>'
+            +   '<span class="muted small">' + panelEsc(claim.submitted_at || claim.created_at || "-") + '</span></div>')
             + '<div style="margin-top:10px;">'
             +   '<strong>Last Activity Date:</strong><br/>'
-            +   '<span class="muted small">' + panelEsc(claim.updated_at || "-") + '</span>'
-            + '</div>'
+            +   '<span class="muted small">' + panelEsc(claim.updated_at || "-") + '</span></div>')
             + '<div style="margin-top:10px;">'
             +   '<strong>Network Status:</strong><br/>'
-            +   '<span class="muted small">' + panelEsc(networkStatus) + '</span>'
-            + '</div>'
+            +   '<span class="muted small">' + panelEsc(networkStatus) + '</span></div>')
             + '<div class="hr"></div>'
             + whyDetails
             + '<div>'
@@ -35576,7 +35635,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             + '</div>'
             + '<div style="margin-top:10px;">'
             +   '<strong>Next Best Action</strong>'
-            +   '<p class="muted small">' + panelEsc(nextAction) + '</p>'
+            +   '<p class="muted small">' + panelEsc((Number(derived.atRiskAmount||0)<=0 && String(stage).toLowerCase()==='resolved') ? 'No action needed' : nextAction) + '</p>'
             + '</div>'
             + '<div style="margin-top:12px;">'
             +   actionButton
@@ -35707,8 +35766,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Paid</div><div style="font-weight:900;">' + panelMoney(d.paidAmount || 0) + '</div></div>'
             +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + panelMoney(d.atRiskAmount || 0) + '</div></div>'
             + '</div>'
-            + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
-            +   '<span class="badge">Risk Score ' + panelEsc(String(claim.__risk || 0)) + ' <span class="tooltip" data-tip="Priority score based on claim status, dollars at risk, age, and workflow urgency. 1 = low risk, 100 = high risk.">ⓘ</span></span>'
+            + ((Number(d.atRiskAmount||0)<=0 && String(normalizedDisplayStage||'').toLowerCase()==='resolved') ? '' : '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;"><span class="badge">Risk Score ' + panelEsc(String(claim.__risk || 0)) + ' <span class="tooltip" data-tip="Priority score based on claim status, dollars at risk, age, and workflow urgency. 1 = low risk, 100 = high risk.">ⓘ</span></span>'
             + '</div>'
             + contractAlert
             + '<div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
@@ -39813,7 +39871,7 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
           + '<details style="border:1px solid #e5e7eb;border-left:4px solid #111827;border-radius:12px;padding:12px;margin:12px 0;background:#fff;">'
           +   '<summary style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">'
           +     '<span>'
-          +       '<strong>Why this claim is flagged</strong>'
+          +       (Number(derived.atRiskAmount || 0) <= 0 && String(stage).toLowerCase() === 'resolved') ? '<strong>No active recovery flag</strong>' : '<strong>Why this claim is flagged</strong>'
           +       '<span class="muted small" style="display:block;margin-top:4px;font-weight:700;">' + panelEsc(why.headline || 'Review this claim') + '</span>'
           +     '</span>'
           +     '<span class="badge ' + panelEsc(why.badge || 'warn') + '">' + panelEsc(why.stage || normalizedDisplayStage) + '</span>'
@@ -40059,6 +40117,7 @@ if (method === "GET" && pathname === "/actions") {
     }
     const actionWs = getAgentWorkspace(org.org_id, b.billed_id);
     const workflowState = claimRecoveryWorkflowState(org.org_id, b, derived);
+    const resolvedForRecovery = claimIsResolvedForRecovery(b, derived);
     const latestPacketSubmission = workflowState.latestSubmission;
     const hasActiveWorkflow = workflowState.hasWorkspace || workflowState.hasSubmitted || workflowState.hasDraft || workflowState.hasPacketHistory;
     const hasPacketSubmissions = Array.isArray(b.packet_submissions) && b.packet_submissions.length > 0;
@@ -40099,6 +40158,9 @@ if (method === "GET" && pathname === "/actions") {
     const requiresFollowUp = Boolean(b.requires_follow_up || isFollowupNeededClaim);
 
     if (tab === "followup" && !(requiresFollowUp || requiresPacketFollowUp || workflowState.responseReceived)) continue;
+    if (resolvedForRecovery && !q) {
+      continue;
+    }
 
     // Determine action center grouping (PRIORITY ORDER FIXED)
     let group = null;
@@ -50279,6 +50341,8 @@ if (method === "GET" && pathname === "/agent-workspace") {
       status: "submitted",
       method: submissionMethod,
       follow_up_date,
+      follow_up_date_auto_defaulted: followUpDateAutoDefaulted,
+      follow_up_date_source: followUpDateAutoDefaulted ? "default_14_days" : "user_entered",
       submitted_at: submittedAt,
       source_proof_incomplete: sourceProofIncomplete,
       submission_readiness_pct: autoReadiness.submissionPct,
@@ -50294,14 +50358,15 @@ if (method === "GET" && pathname === "/agent-workspace") {
 
     ws.follow_up = {
       ...(ws.follow_up || {}),
-      status: follow_up_date ? "awaiting_payer_response" : "follow_up_date_needed",
+      status: "awaiting_payer_response",
       due_at: follow_up_date ? new Date(follow_up_date).toISOString() : "",
       last_touched_at: submittedAt,
       submitted_at: submittedAt,
       channel,
       round: submittedRound,
       version: submittedVersion,
-      packet_label: submissionLabel
+      packet_label: submissionLabel,
+      follow_up_date_auto_defaulted: followUpDateAutoDefaulted
     };
 
     ws.status = "submitted";
@@ -50357,7 +50422,9 @@ if (method === "GET" && pathname === "/agent-workspace") {
       claims[idx].last_submission_round = submittedRound;
       claims[idx].last_submission_version = submittedVersion;
       claims[idx].last_submission_label = submissionLabel;
-      claims[idx].packet_follow_up_status = follow_up_date ? "awaiting_payer_response" : "follow_up_date_needed";
+      claims[idx].packet_follow_up_status = "awaiting_payer_response";
+      claims[idx].follow_up_date_auto_defaulted = followUpDateAutoDefaulted;
+      claims[idx].follow_up_date_source = followUpDateAutoDefaulted ? "default_14_days" : "user_entered";
       claims[idx].source_proof_incomplete = sourceProofIncomplete;
       claims[idx].submission_readiness_pct = autoReadiness.submissionPct;
       claims[idx].draft_readiness_pct = autoReadiness.draftPct;
@@ -51340,6 +51407,8 @@ if (method === "GET" && pathname === "/claim-detail") {
   const derivedStatus = String(d.lifecycleStage || b.status || "Pending");
   const isResolvedDetailClaim = String(derivedStatus || "").toLowerCase().includes("resolved");
   const workflowState = claimRecoveryWorkflowState(org.org_id, b, d);
+  const resolvedForRecovery = claimIsResolvedForRecovery(b, d) || workflowState.workflowStage === "resolved";
+  const hasSubmittedPacketHistory = Array.isArray(mergedPacketSubmissions) && mergedPacketSubmissions.length > 0;
   const workflowSubmission = workflowState.latestSubmission || {};
   const workflowRoundText = `${workflowState.channelLabel} Round ${Number(workflowSubmission.round || 1)} / Version ${Number(workflowSubmission.version || 1)}`;
   let nextStepBody = isResolvedDetailClaim
@@ -51437,8 +51506,8 @@ if (method === "GET" && pathname === "/claim-detail") {
     const rows = submissions.map(s => { const proofAttached = Number(s.required_source_proof_attached ?? ((s.source_proof_incomplete ? 0 : 1))); const proofTotal = Math.max(Number(s.required_source_proof_total || 1), proofAttached); const packetUrl = s.packet_export_url || s.packet_view_url || `/ai-workspace/export?billed_id=${encodeURIComponent(b.billed_id)}&channel=${encodeURIComponent(packetChannel)}&preview=1`; return `<tr><td>Round ${Number(s.round||1)}</td><td>v${Number(s.version||1)}</td><td>${safeStr(s.submitted_at || "-")}</td><td>${safeStr(s.method || "-")}</td><td>${safeStr(s.status || "submitted")}</td><td>${proofAttached}/${proofTotal} attached</td><td>${safeStr(s.follow_up_date || "-")}</td><td><a class="btn small secondary" href="${safeStr(packetUrl)}" target="_blank" rel="noopener">View packet</a></td></tr>`; }).join("");
     return `<div class="card"><h3>${label}</h3><div>Status: <span class="badge ok">Submitted</span></div><div>Latest: ${safeStr(latest.label || `${packetChannel} Round ${Number(latest.round||1)} v${Number(latest.version||1)}`)}</div><table style="margin-top:8px;"><thead><tr><th>Round</th><th>Version</th><th>Submitted</th><th>Method</th><th>Status</th><th>Source Proof</th><th>Follow-up</th><th>Packet</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
-  const negotiationSummary = renderClaimPacketSubmissionSummary("negotiation");
-  const appealSummary = renderClaimPacketSubmissionSummary("appeal");
+  const negotiationSummary = resolvedForRecovery && !hasSubmittedPacketHistory ? `<div class="card"><h4>Negotiation Packet Summary</h4><p class="muted">N/A — this claim resolved without a submitted negotiation packet.</p></div>` : renderClaimPacketSubmissionSummary("negotiation");
+  const appealSummary = resolvedForRecovery && !hasSubmittedPacketHistory ? `<div class="card"><h4>Appeal Packet Summary</h4><p class="muted">N/A — this claim resolved without a submitted appeal packet.</p></div>` : renderClaimPacketSubmissionSummary("appeal");
 
   const negHistoryHtml = negHistory.length
     ? `<table>
@@ -51481,12 +51550,14 @@ if (method === "GET" && pathname === "/claim-detail") {
       const workflowSubmission = workflowState.latestSubmission || latestPacketSubmission || {};
       const workflowResponseHref = workflowState.responseHref || `/claim-payer-response?billed_id=${encodeURIComponent(b.billed_id)}&channel=${encodeURIComponent(workflowState.channel)}`;
       const claimWhy = explainClaimFlag(org.org_id, b, d);
+      const claimWhyTitle = resolvedForRecovery ? "Claim resolved" : "Why this claim is flagged";
       if (workflowState.workflowStage === "submitted_needs_followup_date") { claimWhy.recommendation = `${workflowRoundText} has been submitted. Set a follow-up date and upload the payer response when it arrives.`; claimWhy.nextActionLabel = "Set Follow-Up"; claimWhy.nextActionHref = `/claim-detail?billed_id=${encodeURIComponent(b.billed_id)}#recovery-timeline`; }
       if (workflowState.workflowStage === "followup_due") { claimWhy.recommendation = `${workflowRoundText} was submitted and follow-up is due. Contact the payer, then upload the payer response when received.`; claimWhy.nextActionLabel = "Upload Payer Response"; claimWhy.nextActionHref = workflowResponseHref; }
       if (workflowState.workflowStage === "submitted_monitor") { claimWhy.recommendation = `${workflowRoundText} has been submitted. Upload the payer response when it arrives, then decide whether to start the next round, accept the outcome, write off, or resolve.`; claimWhy.nextActionLabel = "Upload Payer Response"; claimWhy.nextActionHref = workflowResponseHref; }
       if (workflowState.workflowStage === "response_received") { claimWhy.recommendation = "A payer response was received. Review the outcome, then start the next round, accept the result, write off, or resolve the claim."; claimWhy.nextActionLabel = workflowState.channel === "negotiation" ? "Start Next Round of Negotiation" : "Start Next Round of Appeal"; claimWhy.nextActionHref = workspacePagePath(b.billed_id, workflowState.channel); }
       if (workflowState.workflowStage === "draft") { claimWhy.recommendation = "This claim already has an appeal/negotiation draft in progress. Continue the draft instead of starting over."; claimWhy.nextActionLabel = `Continue ${workflowState.channelLabel} Draft`; claimWhy.nextActionHref = workspacePagePath(b.billed_id, workflowState.channel); }
-      return renderClaimWhyCard(claimWhy, { title: "Why this claim is flagged" });
+      if (resolvedForRecovery) { claimWhy.title = "No active recovery flag"; claimWhy.summary = "This claim appears resolved based on current lifecycle and payment data."; claimWhy.recommendation = "No action needed."; claimWhy.nextActionLabel = "Edit Claim"; claimWhy.nextActionHref = `/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}`; }
+      return renderClaimWhyCard(claimWhy, { title: claimWhyTitle });
     })()}
 
     <h3>Claim Overview</h3>
@@ -51519,11 +51590,11 @@ if (method === "GET" && pathname === "/claim-detail") {
     <div class="hr"></div>
     <h3>Action Center Status Panel</h3>
     <table>
-      <tr><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><td><span class="badge ${riskBand.cls}">${riskScore} / 100 (${riskBand.label})</span></td></tr>
-      <tr><th>At Risk $</th><td>${formatMoneyUI(atRisk)}</td></tr>
-      <tr><th>Suggested Next Action</th><td>${safeStr(suggested)}</td></tr>
+      ${resolvedForRecovery ? "" : `<tr><th>Risk Score <span class="tooltip" data-tip="1 = low risk (good), 100 = high risk (bad).">ⓘ</span></th><td><span class="badge ${riskBand.cls}">${riskScore} / 100 (${riskBand.label})</span></td></tr>`}
+      <tr><th>At Risk $</th><td>${resolvedForRecovery ? "$0.00" : formatMoneyUI(atRisk)}</td></tr>
+      <tr><th>Suggested Next Action</th><td>${resolvedForRecovery ? "N/A" : safeStr(suggested)}</td></tr>
     </table>
-    ${renderFlowBridgeCard(
+    ${resolvedForRecovery ? renderFlowBridgeCard("Next Step", "No action needed. This claim is currently resolved. Use Edit Claim only if a payer recoupment, late denial, correction, or financial adjustment changes the claim.", `/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}`, "Edit Claim", "", "", "", "") : renderFlowBridgeCard(
       "Next Step",
       nextStepBody,
       nextStepPrimaryHref,
@@ -51540,7 +51611,7 @@ if (method === "GET" && pathname === "/claim-detail") {
         : ""
     )}
     <div class="btnRow">
-      <a class="btn secondary" href="/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}">Edit Claim</a>
+      ${resolvedForRecovery ? `<a class="btn secondary" href="/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}">Edit Claim</a>` : `<a class="btn secondary" href="/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}">Edit Claim</a>
       ${suggested === "Appeal" ? `<a class="btn secondary" href="/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}">Open Appeal Workspace</a>` : ``}
       ${suggested === "Negotiate" ? `<a class="btn secondary" href="/ai-negotiation?billed_id=${encodeURIComponent(b.billed_id)}">Open Negotiation Workspace</a>` : ``}
       ${suggested === "Adjust Patient Responsibility" ? `<a class="btn secondary" href="/claim-action?billed_id=${encodeURIComponent(b.billed_id)}&action=patient_resp">Perform Suggested Action</a>` : ``}
@@ -51550,16 +51621,13 @@ if (method === "GET" && pathname === "/claim-detail") {
         : ``}
       ${(workflowState.workflowStage === "submitted_monitor" || workflowState.workflowStage === "submitted_needs_followup_date" || workflowState.workflowStage === "followup_due" || workflowState.workflowStage === "response_received") ? `<a class="btn secondary" href="${workflowState.responseHref || `/claim-payer-response?billed_id=${encodeURIComponent(b.billed_id)}&channel=${encodeURIComponent(workflowState.channel)}`}">Upload Payer Response</a>` : ``}
       <a class="btn secondary" href="${workspacePagePath(b.billed_id, workflowState.channel)}">${workflowState.channel === "negotiation" ? "Start Next Round of Negotiation" : "Start Next Round of Appeal"}</a>
-      <a class="btn secondary" href="/actions?q=${encodeURIComponent(b.claim_number || "")}">View In Action Center</a>
+      <a class="btn secondary" href="/actions?q=${encodeURIComponent(b.claim_number || "")}">View In Action Center</a>`}
     </div>
 
     <div class="hr"></div>
     <h3>Recovery Timeline</h3>
     <table>
-      <tr><th>Submitted</th><td>${safeStr(b.submitted_at || b.last_submission_date || "-")}</td></tr>
-      <tr><th>Current Round</th><td>${safeStr(currentRoundDisplay)}</td></tr>
-      <tr><th>Follow-up Date</th><td>${safeStr(followUpDisplayDate)}</td></tr>
-      <tr><th>Last Submission Type</th><td>${safeStr(submissionTypeLabel || "-")}</td></tr>
+            ${resolvedForRecovery && !hasSubmittedPacketHistory ? `<tr><th>Submitted</th><td>N/A</td></tr><tr><th>Current Round</th><td>N/A</td></tr><tr><th>Follow-up Date</th><td>N/A</td></tr><tr><th>Last Submission Type</th><td>N/A</td></tr>` : `<tr><th>Submitted</th><td>${safeStr(b.submitted_at || b.last_submission_date || "-")}</td></tr><tr><th>Current Round</th><td>${safeStr(currentRoundDisplay)}</td></tr><tr><th>Follow-up Date</th><td>${safeStr(followUpDisplayDate)}</td></tr><tr><th>Last Submission Type</th><td>${safeStr(submissionTypeLabel || "-")}</td></tr>`}
     </table>
 
     <div class="hr"></div>
