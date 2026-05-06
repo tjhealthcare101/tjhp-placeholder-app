@@ -2254,8 +2254,14 @@ function attemptAutoMatch(org_id, payment) {
 }
 
 function paymentOnlyClaimKey(value) {
-  if (typeof normalizeClaimKey === "function") return normalizeClaimKey(value);
-  return String(value || "").replace(/[^0-9]/g, "");
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  let normalized = "";
+  try {
+    normalized = typeof normalizeClaimKey === "function" ? String(normalizeClaimKey(raw) || "").trim() : "";
+  } catch {}
+  if (normalized) return normalized;
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
 }
 
 function findExistingClaimForPaymentOnly(org_id, billedAll, claimNumber) {
@@ -2263,48 +2269,64 @@ function findExistingClaimForPaymentOnly(org_id, billedAll, claimNumber) {
   if (!key) return null;
   return (billedAll || []).find(b =>
     b.org_id === org_id &&
-    paymentOnlyClaimKey(b.claim_number || b.claim_id || "") === key
+    [b.claim_number, b.claim_id, b.raw_claim_number, b.billed_id].some(v => paymentOnlyClaimKey(v) === key)
   ) || null;
 }
 
 function paymentOnlyAmountFrom(row, names) {
-  const raw = pickField(row || {}, names);
+  const raw = paymentPickNonEmpty(row || {}, names);
   return raw == null || String(raw).trim() === "" ? null : num(raw);
 }
 
+function claimIdentityFromPaymentLike(row) {
+  const banned = new Set(["payment_id", "upload_id", "ingest_id", "batch_id", "source_file"]);
+  const direct = [row?.claim_number, row?.claim_id, row?.raw_claim_number];
+  for (const v of direct) {
+    const s = String(v || "").trim();
+    if (s) return s;
+  }
+  const rawRow = (row && row._raw_row && typeof row._raw_row === "object") ? row._raw_row : {};
+  const fromRaw = String(paymentPickClaimIdentity(rawRow) || "").trim();
+  if (fromRaw) return fromRaw;
+  const merged = paymentMergeRawAndNormalized(row || {});
+  const fromMerged = String(paymentPickClaimIdentity(merged) || "").trim();
+  if (!fromMerged) return "";
+  if (banned.has(String(fromMerged || "").trim().toLowerCase())) return "";
+  return fromMerged;
+}
+
 function buildPaymentOnlyClaimPatchFromRow(row, sourceFile) {
-  const claimNumber = String(
-    pickField(row || {}, ["claim_number", "claim", "claim#", "claim id", "claim_id", "clm", "id"]) ||
-    row?.claim_number || row?.claim_id || ""
-  ).trim();
+  const merged = paymentMergeRawAndNormalized(row || {});
+  const claimNumber = String(claimIdentityFromPaymentLike(row || {})).trim();
   if (!claimNumber) return null;
 
-  const paidAmount = paymentOnlyAmountFrom(row, ["paid_amount", "amount_paid", "paid", "payment", "payment amount", "amount"]) || 0;
-  const explicitBilled = paymentOnlyAmountFrom(row, ["billed_amount", "amount_billed", "billed", "billed amount", "charge", "charge amount", "total charge", "amount billed"]);
-  const allowedAmount = paymentOnlyAmountFrom(row, ["allowed_amount", "allowed", "allowed amount"]);
+  const paidAmount = paymentOnlyAmountFrom(merged, ["paid_amount", "amount_paid", "paid", "payment", "payment amount", "amount"]) || 0;
+  const explicitBilled = paymentOnlyAmountFrom(merged, ["billed_amount", "amount_billed", "billed", "billed amount", "charge", "charge amount", "total charge", "amount billed"]);
+  const allowedAmount = paymentOnlyAmountFrom(merged, ["allowed_amount", "allowed", "allowed amount"]);
   const amountBilled = explicitBilled != null ? explicitBilled : (allowedAmount != null ? allowedAmount : paidAmount);
 
-  const statusRaw = String(pickField(row || {}, ["status", "denied_approved"]) || row?.status || "").toLowerCase();
-  const denialSignal = String(pickField(row || {}, ["remark", "remark code", "denial code", "denial reason", "adjustment reason", "eob_reason"]) || "").trim();
+  const statusRaw = String(paymentPickNonEmpty(merged, ["status", "denied_approved"]) || row?.status || "").toLowerCase();
+  const denialSignal = String(paymentPickNonEmpty(merged, ["remark", "remark code", "denial code", "denial reason", "adjustment reason", "eob_reason"]) || "").trim();
   let status = "Waiting Payment";
   if (paidAmount > 0 && !statusRaw.includes("denied") && !denialSignal) status = "Resolved";
   else if (paidAmount <= 0 && (statusRaw.includes("denied") || denialSignal)) status = "Denied";
 
-  const procedure = String(pickField(row || {}, ["procedure_code", "procedure code", "cpt", "cpt_code", "cpt code", "service code"]) || row?.procedure_code || row?.cpt_code || "").trim();
+  const procedure = String(paymentPickNonEmpty(merged, ["procedure_code", "procedure code", "cpt", "cpt_code", "cpt code", "service code"]) || row?.procedure_code || row?.cpt_code || "").trim();
   return {
     claim_number: claimNumber,
     claim_id: claimNumber,
-    payer: String(pickField(row || {}, ["payer", "payer_name", "insurance", "carrier", "plan"]) || row?.payer || row?.payer_name || "").trim(),
+    raw_claim_number: claimNumber,
+    payer: String(paymentPickNonEmpty(merged, ["payer", "payer_name", "insurance", "carrier", "plan"]) || row?.payer || row?.payer_name || "").trim(),
     procedure_code: procedure,
     cpt_code: procedure,
-    dos: String(pickField(row || {}, ["dos", "date of service", "service date"]) || row?.dos || "").trim(),
+    dos: String(paymentPickNonEmpty(merged, ["dos", "date of service", "service date"]) || row?.dos || "").trim(),
     amount_billed: amountBilled,
     billed_amount: amountBilled,
     allowed_amount: allowedAmount != null ? allowedAmount : undefined,
-    patient_responsibility: paymentOnlyAmountFrom(row, ["patient_responsibility", "patient responsibility", "patient_resp", "copay", "coinsurance", "deductible"]),
+    patient_responsibility: paymentOnlyAmountFrom(merged, ["patient_responsibility", "patient responsibility", "patient_resp", "copay", "coinsurance", "deductible"]),
     paid_amount: paidAmount,
     insurance_paid: paidAmount,
-    paid_at: String(pickField(row || {}, ["date_paid", "payment date", "paid date", "remit date", "date"]) || row?.date_paid || row?.paid_at || "").trim(),
+    paid_at: String(paymentPickNonEmpty(merged, ["date_paid", "payment date", "paid date", "remit date", "date"]) || row?.date_paid || row?.paid_at || "").trim(),
     status,
     source: "payment_only_upload",
     payment_only_claim: true,
@@ -2379,7 +2401,7 @@ function findClaimByPaymentIdentity(org_id, billedAll, identity) {
   if (!identity || !identity.claimKey) return null;
   return (billedAll || []).find(b =>
     String(b.org_id || "") === String(org_id) &&
-    paymentClaimMatchKey(b.claim_number || b.claim_id || "") === identity.claimKey
+    [b.claim_number, b.claim_id, b.raw_claim_number, b.billed_id].some(v => paymentClaimMatchKey(v) === identity.claimKey)
   ) || null;
 }
 
@@ -2399,11 +2421,19 @@ function normalizeStoredPaymentForBootstrap(paymentRow, opts = {}) {
 function bootstrapStoredPaymentsIntoClaimsForOrg(org_id, opts = {}) {
   const payments = Array.isArray(opts.payments) ? opts.payments : readJSON(FILES.payments, []);
   const billedAll = Array.isArray(opts.billedAll) ? opts.billedAll : readJSON(FILES.billed, []);
-  const summary = { scanned: 0, created: 0, updated: 0, matchedExisting: 0, skippedNoClaimId: 0, skippedNoPaidAmount: 0, changed: false };
+  const summary = { scanned: 0, created: 0, updated: 0, matchedExisting: 0, skippedNoClaimId: 0, skippedNoPaidAmount: 0, paymentRowsRepaired: 0, changed: false, changedPayments: false };
 
   for (const payment of payments) {
     if (String(payment?.org_id || "") !== String(org_id)) continue;
     summary.scanned += 1;
+    const extractedIdentity = claimIdentityFromPaymentLike(payment || {});
+    if ((!String(payment?.claim_number || "").trim() || !String(payment?.claim_id || "").trim()) && extractedIdentity) {
+      payment.claim_number = extractedIdentity;
+      payment.claim_id = extractedIdentity;
+      payment.raw_claim_number = extractedIdentity;
+      summary.paymentRowsRepaired += 1;
+      summary.changedPayments = true;
+    }
     const normalized = normalizeStoredPaymentForBootstrap(payment, opts);
 
     if (!normalized.claimId || !normalized.identity.claimKey) { summary.skippedNoClaimId += 1; continue; }
@@ -2435,9 +2465,12 @@ function bootstrapStoredPaymentsIntoClaimsForOrg(org_id, opts = {}) {
     if (upserted.created || upserted.updated) summary.changed = true;
   }
 
-  if (summary.changed && opts.write !== false) {
-    writeJSON(FILES.billed, billedAll);
-    if (typeof recalculateContractsForOrg === 'function') { try { recalculateContractsForOrg(org_id); } catch {} }
+  if (opts.write !== false) {
+    if (summary.changed) writeJSON(FILES.billed, billedAll);
+    if (summary.changedPayments) writeJSON(FILES.payments, payments);
+    if (summary.changed || summary.changedPayments) {
+      if (typeof recalculateContractsForOrg === 'function') { try { recalculateContractsForOrg(org_id); } catch {} }
+    }
   }
   return summary;
 }
@@ -23305,7 +23338,60 @@ function normalizeUploadExtractResult({ rows, parsed, status, notes, ext }) {
   return { rows: safeRows, parsed: isParsed, storedOnly: !isParsed, status: fallbackStatus, notes: String(notes || ""), ext: String(ext || "") };
 }
 function paymentClaimIdHeaders() {
-  return ["claim", "claim#", "claim number", "claimnumber", "claim_number", "claim id", "claim_id", "clm", "id"];
+  return ["claim","claim#","claim number","claimnumber","claim_number","claim no","claim no.","claim num","claim id","claim_id","claim identifier","claim control number","payer claim number","payer claim id","claim reference","claim ref","clm","clm id","icn","internal control number","document control number","dcn","patient account number","patient account","account number","account #","encounter","encounter id","visit id","bill number","invoice number"];
+}
+function normalizePaymentHeaderName(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
+}
+function paymentPickNonEmpty(row, candidates = []) {
+  const r = row || {};
+  const entries = Object.keys(r).map(k => ({ key: k, norm: normalizePaymentHeaderName(k), lower: String(k || "").toLowerCase(), value: r[k] }));
+  const isNonEmpty = (v) => !(v == null || String(v).trim() === "");
+  for (const c of candidates) {
+    const cn = normalizePaymentHeaderName(c);
+    const exact = entries.find(e => e.norm === cn && isNonEmpty(e.value));
+    if (exact) return exact.value;
+  }
+  for (const c of candidates) {
+    const cn = normalizePaymentHeaderName(c);
+    const partial = entries.find(e => e.norm.includes(cn) && isNonEmpty(e.value));
+    if (partial) return partial.value;
+  }
+  for (const c of candidates) {
+    const cl = String(c || "").toLowerCase();
+    const loose = entries.find(e => e.lower.includes(cl) && isNonEmpty(e.value));
+    if (loose) return loose.value;
+  }
+  return "";
+}
+function paymentPickClaimIdentity(row) {
+  const r = row || {};
+  const entries = Object.keys(r).map(k => ({ norm: normalizePaymentHeaderName(k), value: r[k] }));
+  const isNonEmpty = (v) => !(v == null || String(v).trim() === "");
+  const strongLoose = ["claimnumber","claimno","claimnum","claimid","claimidentifier","claimcontrolnumber","payerclaimnumber","payerclaimid","claimreference","claimref","clmid","icn","internalcontrolnumber","documentcontrolnumber","dcn","patientaccountnumber","patientaccount","accountnumber","encounterid","visitid","billnumber","invoicenumber"];
+  const blockedParts = ["status","type","amount","paid","payment","date","payer","plan","remark","reason","denial","adjustment"];
+  const hasStrongToken = (normKey) => strongLoose.some(token => String(normKey || "").includes(token));
+  const isBlocked = (normKey) => blockedParts.some(part => String(normKey || "").includes(part)) && !hasStrongToken(normKey);
+  const exactNorms = paymentClaimIdHeaders().map(normalizePaymentHeaderName);
+  for (const target of exactNorms) {
+    const hit = entries.find(e => e.norm === target && isNonEmpty(e.value) && !isBlocked(e.norm));
+    if (hit) return String(hit.value).trim();
+  }
+  for (const token of strongLoose) {
+    const hit = entries.find(e => e.norm.includes(token) && isNonEmpty(e.value) && !isBlocked(e.norm));
+    if (hit) return String(hit.value).trim();
+  }
+  return "";
+}
+function paymentMergeRawAndNormalized(row) {
+  const normalized = { ...(row || {}) };
+  const raw = (row && row._raw_row && typeof row._raw_row === "object") ? row._raw_row : {};
+  const merged = { ...raw, ...normalized };
+  for (const [k, v] of Object.entries(raw)) {
+    const existing = merged[k];
+    if ((existing == null || String(existing).trim() === "") && String(v || "").trim() !== "") merged[k] = v;
+  }
+  return merged;
 }
 function paymentColumnHeaders() {
   return {
@@ -23323,17 +23409,22 @@ function paymentColumnHeaders() {
 }
 function normalizePaymentRowFromRaw(raw, sourceFile) {
   const h = paymentColumnHeaders();
-  const claim = String(pickField(raw || {}, h.claim) || "").trim();
-  const payer = String(pickField(raw || {}, h.payer) || "").trim();
-  const paid = num(pickField(raw || {}, h.paid));
-  const date = String(pickField(raw || {}, h.date) || "").trim();
-  const billed = num(pickField(raw || {}, h.billed));
-  const allowed = num(pickField(raw || {}, h.allowed));
-  const procedure = String(pickField(raw || {}, h.procedure) || "").trim();
-  const dos = String(pickField(raw || {}, h.dos) || "").trim();
-  const patientResp = num(pickField(raw || {}, h.patientResp));
-  const status = String(pickField(raw || {}, h.status) || "").trim();
-  return { claim_number: claim, claim_id: claim, raw_claim_number: claim, payer, amount_paid: paid, paid_amount: paid, date_paid: date, billed_amount: billed, allowed_amount: allowed, procedure_code: procedure, cpt_code: procedure, dos, patient_responsibility: patientResp, status, remark: status, source_file: sourceFile || "", _raw_row: raw || {} };
+  const claim = String(paymentPickClaimIdentity(raw || {}) || "").trim();
+  const payer = String(paymentPickNonEmpty(raw || {}, h.payer) || "").trim();
+  const paid = num(paymentPickNonEmpty(raw || {}, h.paid));
+  const date = String(paymentPickNonEmpty(raw || {}, h.date) || "").trim();
+  const billed = num(paymentPickNonEmpty(raw || {}, h.billed));
+  const allowed = num(paymentPickNonEmpty(raw || {}, h.allowed));
+  const procedure = String(paymentPickNonEmpty(raw || {}, h.procedure) || "").trim();
+  const dos = String(paymentPickNonEmpty(raw || {}, h.dos) || "").trim();
+  const patientResp = num(paymentPickNonEmpty(raw || {}, h.patientResp));
+  const status = String(paymentPickNonEmpty(raw || {}, h.status) || "").trim();
+  const out = { claim_number: claim, claim_id: claim, raw_claim_number: claim, payer, amount_paid: paid, paid_amount: paid, date_paid: date, billed_amount: billed, allowed_amount: allowed, procedure_code: procedure, cpt_code: procedure, dos, patient_responsibility: patientResp, status, remark: status, source_file: sourceFile || "", _raw_row: raw || {} };
+  if (!claim && paid > 0) {
+    out.missing_claim_id = true;
+    out.extraction_warning = "Payment row has amount but no claim identifier";
+  }
+  return out;
 }
 async function extractPaymentRowsFromUploadFile(f, opts = {}) {
   try {
@@ -45377,6 +45468,9 @@ const paymentBootstrap = bootstrapStoredPaymentsIntoClaimsForOrg(org.org_id, {
 if (paymentBootstrap && paymentBootstrap.changed) {
   changed_sync = true;
 }
+if (paymentBootstrap && paymentBootstrap.changedPayments) {
+  writeJSON(FILES.payments, paymentsData);
+}
 const claimCtx_sync = buildClaimContext(org.org_id);
 
 for (const ap of addedPayments) {
@@ -46023,10 +46117,15 @@ function renderTemplateEditor(org, user){
       <form method="POST" action="/data-management/rebuild"><input type="hidden" name="action" value="lifecycle"/><button class="btn secondary" type="submit">Recalculate Lifecycle</button></form>
     `;
 
+    const paymentRowsMissingClaimId = readJSON(FILES.payments, [])
+      .filter(p => p.org_id === org.org_id)
+      .filter(p => num(p.amount_paid ?? p.paid_amount) > 0 && !claimIdentityFromPaymentLike(p))
+      .length;
     const paymentsContent = `
       ${uploadPanel}
       <div class="hr"></div>
       <h3>Payments Batch History</h3>
+      ${paymentRowsMissingClaimId > 0 ? `<p class="muted small">${paymentRowsMissingClaimId} payment rows are missing claim IDs and cannot populate claim metrics until a claim identifier is present.</p>` : ""}
       <div style="overflow:auto;"><table><thead><tr><th>File</th><th>Uploaded</th><th>Rows</th><th>Total Paid</th><th>Matched %</th><th>Actions</th></tr></thead><tbody>
       ${paymentBatches.map(p=>{const matchedPct=p.row_count?Math.round(((p.row_count-unmatchedPayments.filter(u=>u.source_file===p.source_file).length)/p.row_count)*100):0;return `<tr><td>${safeStr(p.source_file)}</td><td>${p.uploaded_at?new Date(p.uploaded_at).toLocaleString():"-"}</td><td>${p.row_count}</td><td>${formatMoneyUI(p.total_paid)}</td><td>${matchedPct}%</td><td style="white-space:nowrap;"><form method="POST" action="/data-management/rematch-payments" style="display:inline-block;"><button class="btn secondary small" type="submit">Re-match</button></form><form method="POST" action="/payment-batch-delete" onsubmit="return confirm('Are you sure you want to permanently delete this payment batch? This cannot be undone.');" style="display:inline-block;margin-left:6px;"><input type="hidden" name="source_file" value="${safeStr(p.source_file)}" /><button class="btn danger small" type="submit">Delete</button></form></td></tr>`;}).join("") || '<tr><td colspan="6" class="muted">No payment batches.</td></tr>'}
       </tbody></table></div>
@@ -46884,9 +46983,17 @@ function renderTemplateEditor(org, user){
       } else if (tab === "payments") {
         const extracted = await extractPaymentRowsFromUploadFile(f, { sourceFile: ingest.original_filename || f.filename || "" });
         for (const row of extracted.rows) {
-          const paymentRow = { payment_id: uuid(), org_id: org.org_id, ...row, created_at: nowISO(), denied_approved: false };
+          const paymentRow = { payment_id: uuid(), org_id: org.org_id, claim_number: row.claim_number || "", claim_id: row.claim_id || "", raw_claim_number: row.raw_claim_number || "", amount_paid: row.amount_paid || 0, paid_amount: row.paid_amount || row.amount_paid || 0, _raw_row: row._raw_row || row, missing_claim_id: !!row.missing_claim_id, extraction_warning: row.extraction_warning || "", ...row, created_at: nowISO(), denied_approved: false };
           payments.push(paymentRow);
-          upsertPaymentOnlyClaim(org.org_id, billedAll, { ...(row._raw_row || {}), ...paymentRow }, { sourceFile: ingest.original_filename || f.filename || "" });
+        }
+        const paymentBootstrap = bootstrapStoredPaymentsIntoClaimsForOrg(org.org_id, {
+          payments,
+          billedAll,
+          write: false,
+          source: "data_management_upload"
+        });
+        if (paymentBootstrap && paymentBootstrap.skippedNoClaimId > 0) {
+          ingest.notes = [String(ingest.notes || "").trim(), "Some payment rows had paid amounts but no claim identifier, so they were stored but could not create claim metrics."].filter(Boolean).join(" ");
         }
         ingest.status = extracted.status;
         ingest.notes = extracted.notes || ingest.notes || "";
@@ -52372,7 +52479,9 @@ async function runUploadIngestSmokeTests() {
     const real = { billed_id: uuid(), org_id: orgId, claim_number:"CLM4001", amount_billed:500 };
     billedAll.push(real); upsertPaymentOnlyClaim(orgId, billedAll, { claim_number:"CLM4001", amount_paid:90 }, {});
     assert(num(real.amount_billed) === 500, "T5");
-    for (const h of paymentClaimIdHeaders()) assert(normalizePaymentRowFromRaw({ [h]: "CLM5001", "paid amount":100 }, "x").claim_number, "T6");
+    for (const h of ["claim","claim#","claim number","claim no.","claim num","claim id","payer claim number","icn","document control number","patient account number","encounter id","invoice number"]) {
+      assert(normalizePaymentRowFromRaw({ [h]: "CLM5001", "paid amount":100 }, "x").claim_number, `T6 ${h}`);
+    }
     const c = await extractPaymentRowsFromUploadFile({ filename:"payments.csv", buffer: Buffer.from("claim_id,payer,paid amount\nCLM6001,Aetna,111\n") }, {});
     assert(c.parsed && c.rows.length === 1 && num(c.rows[0].amount_paid) === 111, "T7");
     // T8 Excel payment extraction
@@ -52469,6 +52578,63 @@ async function runUploadIngestSmokeTests() {
     if (changed_sync_t18) writeJSON(FILES.billed, billedAllT18);
     const billedAfterT18 = readJSON(FILES.billed, []);
     assert(billedAfterT18.some(x => x.org_id === orgId && paymentOnlyClaimKey(x.claim_number) === paymentOnlyClaimKey("3001") && x.provisional_claim === true), "T18 persisted provisional");
+    // T19 header variants
+    ["Claim No.","Claim Num","Payer Claim Number","ICN","Document Control Number","Patient Account Number","Account #","Encounter ID","Invoice Number"].forEach((h, i) => {
+      const n = normalizePaymentRowFromRaw({ [h]: `PX${i+1}`, "Paid Amount": 70 }, "x");
+      assert(String(n.claim_number || "").trim() === `PX${i+1}`, `T19 ${h}`);
+    });
+    // T20 repair blank normalized from raw
+    writeJSON(FILES.payments, [{ org_id: orgId, claim_number:"", claim_id:"", amount_paid:70, _raw_row:{ "Claim No.":"PX1001", "Paid Amount":"70", "Payer":"Aetna" } }]);
+    writeJSON(FILES.billed, []);
+    const t20 = bootstrapStoredPaymentsIntoClaimsForOrg(orgId, { source: "smoke_repair" });
+    const t20p = readJSON(FILES.payments, [])[0] || {};
+    const t20b = readJSON(FILES.billed, []);
+    assert(String(t20p.claim_number||"") === "PX1001", "T20 repaired payment claim");
+    assert(t20b.length === 1 && String(t20b[0].claim_number||"") === "PX1001", "T20 created provisional");
+    assert(num(t20b[0].amount_billed) === 70 && num(t20b[0].paid_amount) === 70 && num(t20b[0].insurance_paid) === 70, "T20 amounts");
+    assert((t20.paymentRowsRepaired || 0) >= 1, "T20 repaired summary");
+    // T21 payment_id not used
+    writeJSON(FILES.payments, [{ org_id: orgId, payment_id:"pay_123", amount_paid:80, _raw_row:{ "Paid Amount":"80" } }]);
+    writeJSON(FILES.billed, []);
+    const t21 = bootstrapStoredPaymentsIntoClaimsForOrg(orgId, { write: false, payments: readJSON(FILES.payments, []), billedAll: [] });
+    assert((t21.skippedNoClaimId || 0) >= 1, "T21 skipped");
+    assert(!readJSON(FILES.billed, []).some(x => String(x.claim_number||"") === "pay_123"), "T21 no fake claim");
+    // T22 read repair metrics path
+    writeJSON(FILES.payments, [1,2,3,4,5].map((i) => ({ org_id: orgId, claim_number:"", claim_id:"", amount_paid: 40 + i * 10, _raw_row: { "Claim No.": `${1000+i}`, "Paid Amount": String(40 + i * 10) } })));
+    writeJSON(FILES.billed, []);
+    ensurePaymentOnlyClaimsBackfilledForRead(orgId);
+    const t22b = readJSON(FILES.billed, []);
+    assert(t22b.length === 5, "T22 created 5");
+    assert(t22b.reduce((s,x)=>s+num(x.paid_amount),0) === 350, "T22 paid total");
+    const d22 = computeDashboardMetrics(orgId, new Date("2026-01-01"), new Date("2026-12-31"), "custom");
+    assert(num(d22?.kpis?.totalBilled) > 0 && num(d22?.kpis?.collectedTotal) > 0, "T22 metrics nonzero");
+    assert(!t22b.some(x => String(x.status || "").toLowerCase() === "underpaid"), "T22 no forced underpaid");
+    // T23 upload-like write:false flow
+    const paymentsT23 = [];
+    const billedT23 = [];
+    paymentsT23.push({ payment_id: uuid(), org_id: orgId, ...normalizePaymentRowFromRaw({ "Claim No.":"UX1001", "Paid Amount":"55" }, "u.csv"), created_at: nowISO(), denied_approved: false });
+    bootstrapStoredPaymentsIntoClaimsForOrg(orgId, { payments: paymentsT23, billedAll: billedT23, write: false, source: "data_management_upload" });
+    assert(billedT23.some(x => paymentOnlyClaimKey(x.claim_number) === paymentOnlyClaimKey("UX1001")), "T23 billed anchor");
+    assert(String(paymentsT23[0].claim_number || "") === "UX1001", "T23 repaired claim id");
+    // T24 claim status is not a claim id
+    const t24n = normalizePaymentRowFromRaw({ "Claim Status": "Paid", "Paid Amount": "80", "Payer": "Aetna" }, "x");
+    assert(!String(t24n.claim_number || "").trim(), "T24 normalize no fake claim");
+    const t24pay = [{ org_id: orgId, ...t24n }];
+    const t24billed = [];
+    bootstrapStoredPaymentsIntoClaimsForOrg(orgId, { payments: t24pay, billedAll: t24billed, write: false, source: "smoke" });
+    assert(!t24billed.some(x => String(x.claim_number || "").toLowerCase() === "paid"), "T24 skipped no fake claim");
+    // T25 broad claim exact works
+    const t25n = normalizePaymentRowFromRaw({ "Claim": "CLM123", "Paid Amount": "80" }, "x");
+    assert(String(t25n.claim_number || "") === "CLM123", "T25 normalize");
+    const t25billed = [];
+    bootstrapStoredPaymentsIntoClaimsForOrg(orgId, { payments: [{ org_id: orgId, ...t25n }], billedAll: t25billed, write: false, source: "smoke" });
+    assert(t25billed.some(x => paymentOnlyClaimKey(x.claim_number) === paymentOnlyClaimKey("CLM123")), "T25 provisional");
+    // T26 strong loose claim header works
+    const t26n = normalizePaymentRowFromRaw({ "Payer Claim Number / ICN": "ICN777", "Paid Amount": "90" }, "x");
+    assert(String(t26n.claim_number || "") === "ICN777", "T26 normalize");
+    const t26billed = [];
+    bootstrapStoredPaymentsIntoClaimsForOrg(orgId, { payments: [{ org_id: orgId, ...t26n }], billedAll: t26billed, write: false, source: "smoke" });
+    assert(t26billed.some(x => paymentOnlyClaimKey(x.claim_number) === paymentOnlyClaimKey("ICN777")), "T26 provisional");
 
     const src = fs.readFileSync(__filename, "utf8");
     ["function upsertPaymentOnlyClaim","function hydrateProvisionalPaymentClaimWithBilledRow","function extractPaymentRowsFromUploadFile","function extractBilledClaimRowsFromUploadFile","function extractReimbursementRowsFromUploadFile","process.env.TJHP_UPLOAD_SMOKE_TESTS","pathname === \"/billed/upload\"","extractBilledClaimRowsFromUploadFile(f","extractPaymentRowsFromUploadFile(f","extractReimbursementRowsFromUploadFile(f"].forEach(m => assert(src.includes(m), `marker ${m}`));
