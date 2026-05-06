@@ -2365,6 +2365,88 @@ function hydrateProvisionalPaymentClaimWithBilledRow(existing, mapped, rawRow, m
   return true;
 }
 
+
+function paymentClaimIdentityFromPaymentRow(paymentRow) {
+  const claimId = String(paymentRow?.claim_id || paymentRow?.claim_number || paymentRow?.raw_claim_number || "").trim();
+  return { claimId, claimKey: paymentOnlyClaimKey(claimId) };
+}
+
+function paymentClaimMatchKey(value) {
+  return paymentOnlyClaimKey(value);
+}
+
+function findClaimByPaymentIdentity(org_id, billedAll, identity) {
+  if (!identity || !identity.claimKey) return null;
+  return (billedAll || []).find(b =>
+    String(b.org_id || "") === String(org_id) &&
+    paymentClaimMatchKey(b.claim_number || b.claim_id || "") === identity.claimKey
+  ) || null;
+}
+
+function normalizeStoredPaymentForBootstrap(paymentRow, opts = {}) {
+  const identity = paymentClaimIdentityFromPaymentRow(paymentRow);
+  const paid = num(paymentRow?.amount_paid ?? paymentRow?.paid_amount);
+  return {
+    row: paymentRow || {},
+    identity,
+    claimId: identity.claimId,
+    paidAmount: paid,
+    sourceFile: paymentRow?.source_file || opts.source || "payments_upload",
+    paidAt: String(paymentRow?.date_paid || paymentRow?.paid_at || "").trim() || nowISO()
+  };
+}
+
+function bootstrapStoredPaymentsIntoClaimsForOrg(org_id, opts = {}) {
+  const payments = Array.isArray(opts.payments) ? opts.payments : readJSON(FILES.payments, []);
+  const billedAll = Array.isArray(opts.billedAll) ? opts.billedAll : readJSON(FILES.billed, []);
+  const summary = { scanned: 0, created: 0, updated: 0, matchedExisting: 0, skippedNoClaimId: 0, skippedNoPaidAmount: 0, changed: false };
+
+  for (const payment of payments) {
+    if (String(payment?.org_id || "") !== String(org_id)) continue;
+    summary.scanned += 1;
+    const normalized = normalizeStoredPaymentForBootstrap(payment, opts);
+
+    if (!normalized.claimId || !normalized.identity.claimKey) { summary.skippedNoClaimId += 1; continue; }
+    if (!(normalized.paidAmount > 0)) { summary.skippedNoPaidAmount += 1; continue; }
+
+    const existing = findClaimByPaymentIdentity(org_id, billedAll, normalized.identity);
+    if (existing) {
+      const before = JSON.stringify([existing.paid_amount, existing.insurance_paid, existing.paid_at, existing.payment_source, existing.last_payment_sync_at]);
+      existing.paid_amount = normalized.paidAmount;
+      existing.insurance_paid = normalized.paidAmount;
+      existing.paid_at = normalized.paidAt;
+      existing.payment_source = normalized.sourceFile;
+      existing.last_payment_sync_at = nowISO();
+      existing.updated_at = nowISO();
+      const after = JSON.stringify([existing.paid_amount, existing.insurance_paid, existing.paid_at, existing.payment_source]);
+      if (before !== after) { summary.updated += 1; summary.changed = true; }
+      else summary.matchedExisting += 1;
+      continue;
+    }
+
+    const upserted = upsertPaymentOnlyClaim(org_id, billedAll, { ...normalized.row, claim_number: normalized.claimId, claim_id: normalized.claimId }, { sourceFile: normalized.sourceFile });
+    if (!upserted || !upserted.claim) continue;
+    if (num(upserted.claim.amount_billed) <= 0 && num(upserted.claim.billed_amount) <= 0) {
+      upserted.claim.amount_billed = normalized.paidAmount;
+      upserted.claim.billed_amount = normalized.paidAmount;
+    }
+    if (upserted.created) summary.created += 1;
+    if (upserted.updated) summary.updated += 1;
+    if (upserted.created || upserted.updated) summary.changed = true;
+  }
+
+  if (summary.changed && opts.write !== false) {
+    writeJSON(FILES.billed, billedAll);
+    if (typeof recalculateContractsForOrg === 'function') { try { recalculateContractsForOrg(org_id); } catch {} }
+  }
+  return summary;
+}
+
+function ensurePaymentOnlyClaimsBackfilledForRead(org_id) {
+  if (!org_id) return { changed: false };
+  return bootstrapStoredPaymentsIntoClaimsForOrg(org_id, { write: true, source: 'read_repair' });
+}
+
 // ==============================
 // ACTION CENTER TASK ENGINE
 // ==============================
@@ -33900,6 +33982,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 }
   // dashboard with empty-state previews and tooltips
   if (method === "GET" && (pathname === "/" || pathname === "/dashboard" || pathname === "/revenue-overview")) {
+    ensurePaymentOnlyClaimsBackfilledForRead(org.org_id);
     const showWelcome = parsed.query.welcome === "1";
     const selectedPlan = parsed.query.plan || "";
 
@@ -34786,6 +34869,7 @@ if (method === "GET" && pathname === "/negotiations/workspace") {
 }
 
 if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecycle")) {
+  ensurePaymentOnlyClaimsBackfilledForRead(org.org_id);
 
   // Sub-tabs: billed | payments | denials | negotiations | all
   const qs = parsed.query || {};
@@ -40403,6 +40487,7 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
 }
 
 if (method === "GET" && pathname === "/actions") {
+  ensurePaymentOnlyClaimsBackfilledForRead(org.org_id);
   function actionCenterEditClaimButton(b){
     return `<a class="btn secondary small edit-claim-btn" href="/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}">Edit Claim</a>`;
   }
@@ -45283,6 +45368,15 @@ let casesChanged_sync = false;
 function normalizeClaimNum(x) { return String(x || "").replace(/[^0-9]/g, ""); }
 
 let changed_sync = false;
+const paymentBootstrap = bootstrapStoredPaymentsIntoClaimsForOrg(org.org_id, {
+  payments: paymentsData,
+  billedAll: billedAll_sync,
+  write: false,
+  source: "payments_upload"
+});
+if (paymentBootstrap && paymentBootstrap.changed) {
+  changed_sync = true;
+}
 const claimCtx_sync = buildClaimContext(org.org_id);
 
 for (const ap of addedPayments) {
@@ -46836,6 +46930,7 @@ function renderTemplateEditor(org, user){
   }
 
   if (method === "POST" && pathname === "/data-management/rematch-payments") {
+    bootstrapStoredPaymentsIntoClaimsForOrg(org.org_id, { write: true, source: "rematch_payments" });
     const billedAll = readJSON(FILES.billed, []);
     const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
     const paymentsByClaim = {};
@@ -46887,6 +46982,9 @@ function renderTemplateEditor(org, user){
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const op = String(params.get("action") || params.get("op") || "").trim();
+    if (["payments", "revenue", "lifecycle", "claims", "all", ""].includes(op)) {
+      bootstrapStoredPaymentsIntoClaimsForOrg(org.org_id, { write: true, source: "data_management_rebuild" });
+    }
     rebuildOrgDerivedData(org.org_id, { resyncDenials: op === "denials" || op === "lifecycle", autodraft: op === "denials" || op === "lifecycle" || op === "revenue" || op === "payments" });
     const tabForOp = (op === "revenue") ? "payments" : (op === "denials" ? "denials" : "claims");
     return redirect(res, `/data-management?tab=${tabForOp}`);
@@ -52319,6 +52417,59 @@ async function runUploadIngestSmokeTests() {
     assert(!u.parsed && u.rows.length === 0 && String(u.status || "").toLowerCase() !== "parsed", "T12 payment");
     assert(!u2.parsed && u2.rows.length === 0 && String(u2.status || "").toLowerCase() !== "parsed", "T12 billed");
     assert(!u3.parsed && u3.rows.length === 0 && String(u3.status || "").toLowerCase() !== "parsed", "T12 reimb");
+    // T13 stored payment backfill creates provisional claims and paid total
+    writeJSON(FILES.billed, []);
+    writeJSON(FILES.payments, [1,2,3,4,5].map(i => ({ org_id: orgId, claim_number: `B${i}`, amount_paid: 70 })));
+    const t13Billed = readJSON(FILES.billed, []);
+    const t13 = bootstrapStoredPaymentsIntoClaimsForOrg(orgId, { payments: readJSON(FILES.payments, []), billedAll: t13Billed, write: false, source: "smoke" });
+    assert(t13.created === 5, "T13 created provisional");
+    assert(t13Billed.filter(x => x.provisional_claim).length === 5, "T13 provisional count");
+    assert(t13Billed.reduce((s,x)=>s+num(x.paid_amount),0) === 350, "T13 total paid");
+
+    // T14 read repair idempotent
+    writeJSON(FILES.billed, t13Billed);
+    const t14a = ensurePaymentOnlyClaimsBackfilledForRead(orgId);
+    const t14b = ensurePaymentOnlyClaimsBackfilledForRead(orgId);
+    assert((t14a.scanned||0) >= 5 && (t14b.created||0) === 0, "T14 idempotent");
+
+    // T15 real billed claim amount intact but paid syncs
+    const realT15 = { billed_id: uuid(), org_id: orgId, claim_number: "R15", amount_billed: 999, billed_amount: 999 };
+    writeJSON(FILES.billed, [realT15]);
+    writeJSON(FILES.payments, [{ org_id: orgId, claim_number: "R15", amount_paid: 123 }]);
+    const t15Billed = readJSON(FILES.billed, []);
+    const t15 = bootstrapStoredPaymentsIntoClaimsForOrg(orgId, { payments: readJSON(FILES.payments, []), billedAll: t15Billed, write: false, source: "smoke" });
+    assert(t15.updated >= 1, "T15 updated");
+    assert(num(t15Billed[0].amount_billed) === 999 && num(t15Billed[0].paid_amount) === 123 && num(t15Billed[0].insurance_paid) === 123, "T15 sync paid no overwrite");
+
+    // T16 missing claim id skipped
+    writeJSON(FILES.billed, []);
+    writeJSON(FILES.payments, [{ org_id: orgId, claim_number: "", amount_paid: 12 }]);
+    const t16 = bootstrapStoredPaymentsIntoClaimsForOrg(orgId, { payments: readJSON(FILES.payments, []), billedAll: readJSON(FILES.billed, []), write: false, source: "smoke" });
+    assert(t16.skippedNoClaimId >= 1, "T16 skipped no claim id");
+
+    // T17 dashboard data sanity nonzero billed/collected
+    writeJSON(FILES.billed, [{ org_id: orgId, claim_number: "D17", amount_billed: 300, paid_amount: 150, insurance_paid: 150, status: "Underpaid", dos: "2026-03-01", created_at: "2026-03-01T00:00:00.000Z" }]);
+    const d17 = computeDashboardMetrics(orgId, new Date("2026-01-01"), new Date("2026-12-31"), "custom");
+    assert(num(d17?.kpis?.totalBilled) > 0 && num(d17?.kpis?.collectedTotal) > 0, "T17 dashboard sanity");
+
+    // T18 payment bootstrap persistence for /payments-style write:false flow
+    writeJSON(FILES.payments, [{ org_id: orgId, claim_number: "3001", amount_paid: 123 }]);
+    writeJSON(FILES.billed, []);
+    const paymentsDataT18 = readJSON(FILES.payments, []);
+    const billedAllT18 = readJSON(FILES.billed, []);
+    const summaryT18 = bootstrapStoredPaymentsIntoClaimsForOrg(orgId, {
+      payments: paymentsDataT18,
+      billedAll: billedAllT18,
+      write: false,
+      source: "payments_upload"
+    });
+    assert(summaryT18 && summaryT18.changed === true, "T18 changed");
+    let changed_sync_t18 = false;
+    if (summaryT18.changed) changed_sync_t18 = true;
+    if (changed_sync_t18) writeJSON(FILES.billed, billedAllT18);
+    const billedAfterT18 = readJSON(FILES.billed, []);
+    assert(billedAfterT18.some(x => x.org_id === orgId && paymentOnlyClaimKey(x.claim_number) === paymentOnlyClaimKey("3001") && x.provisional_claim === true), "T18 persisted provisional");
+
     const src = fs.readFileSync(__filename, "utf8");
     ["function upsertPaymentOnlyClaim","function hydrateProvisionalPaymentClaimWithBilledRow","function extractPaymentRowsFromUploadFile","function extractBilledClaimRowsFromUploadFile","function extractReimbursementRowsFromUploadFile","process.env.TJHP_UPLOAD_SMOKE_TESTS","pathname === \"/billed/upload\"","extractBilledClaimRowsFromUploadFile(f","extractPaymentRowsFromUploadFile(f","extractReimbursementRowsFromUploadFile(f"].forEach(m => assert(src.includes(m), `marker ${m}`));
   } finally { for (const k of keys) FILES[k] = original[k]; }
