@@ -2442,67 +2442,123 @@ function upsertPaymentMetricAnchorForMissingClaimId(org_id, billedAll, payment, 
   return { claim, created: true, updated: false };
 }
 
-function bootstrapStoredPaymentsIntoClaimsForOrg(org_id, opts = {}) {
+function reconcilePaymentsToClaimsForOrg(org_id, opts = {}) {
   const payments = Array.isArray(opts.payments) ? opts.payments : readJSON(FILES.payments, []);
   const billedAll = Array.isArray(opts.billedAll) ? opts.billedAll : readJSON(FILES.billed, []);
-  const summary = { scanned: 0, created: 0, updated: 0, matchedExisting: 0, skippedNoClaimId: 0, skippedNoPaidAmount: 0, paymentRowsRepaired: 0, createdMetricAnchors: 0, changed: false, changedPayments: false };
-
+  const summary = { scanned: 0, realClaims: 0, matchedPayments: 0, updatedClaims: 0, createdPaymentOnlyClaims: 0, createdMetricAnchors: 0, ignoredMetricAnchors: 0, skippedNoAmount: 0, skippedNoClaimId: 0, changed: false, changedPayments: false, created: 0, updated: 0, paymentRowsRepaired: 0 };
+  const orgClaims = billedAll.filter(b => String(b?.org_id || "") === String(org_id));
+  const realClaims = orgClaims.filter(b => !(b.payment_metric_anchor || b.payment_identity_missing));
+  const metricAnchors = orgClaims.filter(b => (b.payment_metric_anchor || b.payment_identity_missing));
+  summary.realClaims = realClaims.length;
+  const claimMap = new Map();
+  for (const claim of realClaims) {
+    [claim.claim_number, claim.claim_id, claim.raw_claim_number, claim.billed_id].forEach(v => {
+      const k = paymentOnlyClaimKey(v);
+      if (k && !claimMap.has(k)) claimMap.set(k, claim);
+    });
+  }
+  const agg = new Map();
   for (const payment of payments) {
     if (String(payment?.org_id || "") !== String(org_id)) continue;
     summary.scanned += 1;
-    const extractedIdentity = claimIdentityFromPaymentLike(payment || {});
-    if ((!String(payment?.claim_number || "").trim() || !String(payment?.claim_id || "").trim()) && extractedIdentity) {
-      payment.claim_number = extractedIdentity;
-      payment.claim_id = extractedIdentity;
-      payment.raw_claim_number = extractedIdentity;
-      summary.paymentRowsRepaired += 1;
-      summary.changedPayments = true;
-    }
-    const normalized = normalizeStoredPaymentForBootstrap(payment, opts);
-    const paidAmount = num(payment?.amount_paid ?? payment?.paid_amount ?? payment?.payment_amount ?? payment?.amount ?? normalized.paidAmount ?? 0);
-    if (!(paidAmount > 0)) { summary.skippedNoPaidAmount += 1; continue; }
-    if (!normalized.claimId || !normalized.identity.claimKey) {
-      const metric = upsertPaymentMetricAnchorForMissingClaimId(org_id, billedAll, payment, { index: summary.scanned - 1, sourceFile: normalized.sourceFile });
+    const paidAmount = num(payment?.amount_paid ?? payment?.paid_amount ?? payment?.payment_amount ?? payment?.amount);
+    const identityValue = String(claimIdentityFromPaymentLike(payment || {}) || "").trim();
+    const claimKey = paymentOnlyClaimKey(identityValue);
+    if (!claimKey && !(paidAmount > 0)) { summary.skippedNoAmount += 1; continue; }
+    if (!claimKey && realClaims.length > 0) { summary.skippedNoClaimId += 1; continue; }
+    const sourceFile = payment?.source_file || payment?.source || opts.source || "payments_upload";
+    if (claimKey && !String(payment?.claim_number || "").trim()) { payment.claim_number = identityValue; summary.changedPayments = true; summary.paymentRowsRepaired += 1; }
+    if (claimKey && !String(payment?.claim_id || "").trim()) { payment.claim_id = identityValue; summary.changedPayments = true; }
+    const parsedPaidAt = String(payment?.date_paid || payment?.paid_at || payment?.remittance_date || "").trim();
+    const bucket = agg.get(claimKey || `__missing__${summary.scanned}`) || { sum: 0, latestPaidAt: "", payment_source: sourceFile, paymentRows: [] };
+    bucket.sum += num(paidAmount);
+    if (parsedPaidAt && (!bucket.latestPaidAt || new Date(parsedPaidAt).getTime() > new Date(bucket.latestPaidAt).getTime())) bucket.latestPaidAt = parsedPaidAt;
+    if (sourceFile) bucket.payment_source = sourceFile;
+    bucket.paymentRows.push(payment);
+    agg.set(claimKey || `__missing__${summary.scanned}`, bucket);
+    if (!claimKey && realClaims.length === 0 && paidAmount > 0) {
+      const metric = upsertPaymentMetricAnchorForMissingClaimId(org_id, billedAll, payment, { index: summary.scanned - 1, sourceFile });
       if (metric?.created) { summary.createdMetricAnchors += 1; summary.created += 1; summary.changed = true; }
-      if (metric?.updated) { summary.updated += 1; summary.changed = true; }
+      if (metric?.updated) { summary.updatedClaims += 1; summary.updated += 1; summary.changed = true; }
       summary.skippedNoClaimId += 1;
-      continue;
     }
-
-    const existing = findClaimByPaymentIdentity(org_id, billedAll, normalized.identity);
-    if (existing) {
-      const before = JSON.stringify([existing.paid_amount, existing.insurance_paid, existing.paid_at, existing.payment_source, existing.last_payment_sync_at]);
-      existing.paid_amount = paidAmount;
-      existing.insurance_paid = paidAmount;
-      existing.paid_at = normalized.paidAt;
-      existing.payment_source = normalized.sourceFile;
-      existing.last_payment_sync_at = nowISO();
-      existing.updated_at = nowISO();
-      const after = JSON.stringify([existing.paid_amount, existing.insurance_paid, existing.paid_at, existing.payment_source]);
-      if (before !== after) { summary.updated += 1; summary.changed = true; }
-      else summary.matchedExisting += 1;
-      continue;
-    }
-
-    const upserted = upsertPaymentOnlyClaim(org_id, billedAll, { ...normalized.row, claim_number: normalized.claimId, claim_id: normalized.claimId }, { sourceFile: normalized.sourceFile });
-    if (!upserted || !upserted.claim) continue;
-    if (num(upserted.claim.amount_billed) <= 0 && num(upserted.claim.billed_amount) <= 0) {
-      upserted.claim.amount_billed = paidAmount;
-      upserted.claim.billed_amount = paidAmount;
-    }
-    if (upserted.created) summary.created += 1;
-    if (upserted.updated) summary.updated += 1;
-    if (upserted.created || upserted.updated) summary.changed = true;
   }
-
-  if (opts.write !== false) {
-    if (summary.changed) writeJSON(FILES.billed, billedAll);
-    if (summary.changedPayments) writeJSON(FILES.payments, payments);
-    if (summary.changed || summary.changedPayments) {
-      if (typeof recalculateContractsForOrg === 'function') { try { recalculateContractsForOrg(org_id); } catch {} }
+  for (const [key, rowAgg] of agg.entries()) {
+    if (key.startsWith("__missing__")) continue;
+    const matched = claimMap.get(key);
+    if (matched) {
+      matched.paid_amount = num(rowAgg.sum);
+      matched.insurance_paid = num(rowAgg.sum);
+      matched.paid_at = rowAgg.latestPaidAt || matched.paid_at || nowISO();
+      matched.last_payment_sync_at = nowISO();
+      matched.payment_response_received_at = matched.payment_response_received_at || matched.paid_at || nowISO();
+      matched.payment_source = rowAgg.payment_source || matched.payment_source || "";
+      matched.updated_at = nowISO();
+      for (const p of rowAgg.paymentRows) {
+        p.billed_id = matched.billed_id;
+        if (!String(p.claim_number || "").trim()) p.claim_number = String(matched.claim_number || matched.claim_id || "");
+        if (!String(p.claim_id || "").trim()) p.claim_id = String(matched.claim_id || matched.claim_number || "");
+      }
+      summary.matchedPayments += rowAgg.paymentRows.length;
+      summary.updatedClaims += 1; summary.updated += 1;
+      summary.changed = true;
+      summary.changedPayments = true;
+      continue;
     }
+    if (realClaims.length > 0) { summary.ignoredMetricAnchors += rowAgg.paymentRows.length; continue; }
+    const payment = rowAgg.paymentRows[0] || {};
+    const upserted = upsertPaymentOnlyClaim(org_id, billedAll, { ...payment, claim_number: payment.claim_number || payment.claim_id, claim_id: payment.claim_id || payment.claim_number }, { sourceFile: rowAgg.payment_source });
+    if (upserted?.claim) {
+      upserted.claim.paid_amount = num(rowAgg.sum);
+      upserted.claim.insurance_paid = num(rowAgg.sum);
+      upserted.claim.paid_at = rowAgg.latestPaidAt || upserted.claim.paid_at || nowISO();
+      upserted.claim.payment_source = rowAgg.payment_source || upserted.claim.payment_source || "";
+      upserted.claim.last_payment_sync_at = nowISO();
+      upserted.claim.payment_response_received_at = upserted.claim.payment_response_received_at || upserted.claim.paid_at || nowISO();
+      if (num(upserted.claim.amount_billed) <= 0) upserted.claim.amount_billed = num(rowAgg.sum);
+      if (num(upserted.claim.billed_amount) <= 0) upserted.claim.billed_amount = num(upserted.claim.amount_billed);
+      if (num(rowAgg.sum) > 0) upserted.claim.status = "Resolved";
+      upserted.claim.updated_at = nowISO();
+      if (upserted.created) { summary.createdPaymentOnlyClaims += 1; summary.created += 1; }
+      if (upserted.created || upserted.updated) { summary.updatedClaims += 1; if (upserted.updated) summary.updated += 1; summary.changed = true; }
+    }
+  }
+  if (realClaims.length > 0) {
+    for (const anchor of metricAnchors) {
+      if (!anchor.excluded_from_claim_metrics || !anchor.archived_payment_metric_anchor) {
+        anchor.excluded_from_claim_metrics = true;
+        anchor.archived_payment_metric_anchor = true;
+        anchor.updated_at = nowISO();
+        summary.changed = true;
+      }
+    }
+  }
+  if (opts.write !== false) {
+    if (summary.changedPayments) writeJSON(FILES.payments, payments);
+    if (summary.changed) writeJSON(FILES.billed, billedAll);
+    if ((summary.changed || summary.changedPayments) && typeof recalculateContractsForOrg === "function") { try { recalculateContractsForOrg(org_id); } catch {} }
+  }
+  if (process.env.TJHP_RECONCILE_DEBUG === "true") {
+    process.stderr.write(`[reconcile] route=${opts.source||"unknown"} org=${org_id} scanned=${summary.scanned} matched=${summary.matchedPayments||0} updated=${summary.updatedClaims||0} createdPaymentOnly=${summary.createdPaymentOnlyClaims||0} anchors=${summary.createdMetricAnchors||0} changed=${summary.changed}\n`);
   }
   return summary;
+}
+
+function bootstrapStoredPaymentsIntoClaimsForOrg(org_id, opts = {}) {
+  return reconcilePaymentsToClaimsForOrg(org_id, opts);
+}
+
+function getClaimsVisibleForMetrics(org_id, billedAll) {
+  const source = Array.isArray(billedAll) ? billedAll : readJSON(FILES.billed, []);
+  const orgClaims = (source || []).filter(b => String(b.org_id || "") === String(org_id));
+  const real = orgClaims.filter(isRealBilledClaimForMetrics);
+  const visible = real.length > 0 ? real : orgClaims.filter(b => !b.excluded_from_claim_metrics);
+  if (process.env.TJHP_RECONCILE_DEBUG === "true") {
+    const anchors = orgClaims.filter(c => c.payment_metric_anchor || c.payment_identity_missing).length;
+    const excluded = orgClaims.filter(c => c.excluded_from_claim_metrics).length;
+    process.stderr.write(`[visible-claims] route=metrics org=${org_id} total=${orgClaims.length} visible=${visible.length} anchors=${anchors} excluded=${excluded}\n`);
+  }
+  return visible;
 }
 
 function ensurePaymentOnlyClaimsBackfilledForRead(org_id) {
@@ -17484,6 +17540,7 @@ function enqueueRecoveryTasksForOrg(org_id){
   for (const claim of billedAll) {
     if (claim.org_id !== org_id) continue;
     const d = evaluateClaimDerived(claim, ctx);
+    if (!claimCanDriveRecoveryWorkflow(claim, d)) continue;
     if (!['Denied','Underpaid'].includes(String(d.lifecycleStage || ''))) continue;
     const stage_type = d.lifecycleStage === 'Denied' ? 'appeal' : 'negotiation';
     const base = stage_type === 'appeal' ? 90 : 80;
@@ -25092,6 +25149,59 @@ function normalizeCode(v){
 function normalizeClaimKey(v){
   return String(v || "").replace(/[^0-9]/g, "");
 }
+function isPaymentDerivedOnlyClaim(claim){
+  const c = claim || {};
+  return !!(c.payment_metric_anchor || c.payment_identity_missing || c.payment_only_claim || c.provisional_claim || c.needs_billed_claim);
+}
+function isRealBilledClaimForMetrics(claim){
+  const c = claim || {};
+  if (c.excluded_from_claim_metrics) return false;
+  return !isPaymentDerivedOnlyClaim(c);
+}
+function claimPaymentMatchKeys(claim){
+  const out = new Set();
+  [claim?.claim_number, claim?.claim_id, claim?.raw_claim_number, claim?.billed_id].forEach(v => {
+    const k = paymentOnlyClaimKey(v);
+    if (k) out.add(k);
+  });
+  return Array.from(out);
+}
+function paymentIdentityKeyFromRow(row){
+  return paymentOnlyClaimKey(claimIdentityFromPaymentLike(row || {}));
+}
+function claimCanDriveRecoveryWorkflow(claim){
+  if (!isRealBilledClaimForMetrics(claim)) return false;
+  if (claim?.excluded_from_action_center) return false;
+  return true;
+}
+function paymentRowsForClaim(claim, ctx){
+  const map = ctx?.paymentsByClaim || {};
+  const seen = new Set();
+  const rows = [];
+  for (const key of claimPaymentMatchKeys(claim || {})) {
+    for (const p of (map[key] || [])) {
+      const id = String(p?.payment_id || `${p?.source_file||""}:${p?.created_at||""}:${p?.amount_paid||p?.paid_amount||""}`);
+      if (seen.has(id)) continue;
+      seen.add(id); rows.push(p);
+    }
+  }
+  return rows;
+}
+function aggregatePaymentRows(rows){
+  const r = rows || [];
+  let totalPaid = 0, latestPaidAt = "", latestSourceFile = "", payer = "";
+  let anyZeroPaidResponse = false;
+  for (const p of r) {
+    const amt = num(p?.amount_paid ?? p?.paid_amount ?? p?.payment_amount ?? p?.amount);
+    totalPaid += amt;
+    if (amt <= 0.0001) anyZeroPaidResponse = true;
+    const paidAt = String(p?.date_paid || p?.paid_at || p?.remittance_date || "").trim();
+    if (paidAt && (!latestPaidAt || new Date(paidAt).getTime() > new Date(latestPaidAt).getTime())) latestPaidAt = paidAt;
+    if (!latestSourceFile) latestSourceFile = String(p?.source_file || p?.source || "");
+    if (!payer) payer = String(p?.payer || p?.payer_name || "");
+  }
+  return { totalPaid, latestPaidAt, latestSourceFile, payer, anyZeroPaidResponse, hasAnyResponse: r.length > 0 };
+}
 
 function buildClaimContext(org_id){
   const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
@@ -25099,7 +25209,7 @@ function buildClaimContext(org_id){
   const negotiations = getNegotiations(org_id).map(n => normalizeNegotiation(n));
   const paymentsByClaim = {};
   payments.forEach(p => {
-    const k = normalizeClaimKey(p.claim_number || "");
+    const k = paymentIdentityKeyFromRow(p);
     if (!k) return;
     if (!paymentsByClaim[k]) paymentsByClaim[k] = [];
     paymentsByClaim[k].push(p);
@@ -25175,8 +25285,7 @@ function evaluateClaimDerived(claim, ctx={}){
   const patientWriteOff = patient.patientWriteOff;
   const patientBalanceRemaining = patient.patientBalanceRemaining;
 
-  const key = normalizeClaimKey(claim.claim_number || "");
-  const paymentRows = key && claimCtx.paymentsByClaim ? (claimCtx.paymentsByClaim[key] || []) : [];
+  const paymentRows = paymentRowsForClaim(claim, claimCtx);
   const paidFieldAmount = Math.max(
     num(claim.insurance_paid || 0),
     num(claim.paid_amount || 0)
@@ -25223,22 +25332,27 @@ function evaluateClaimDerived(claim, ctx={}){
     !!hasDenialContext ||
     !!responseStatus;
 
-  const expectedAmount = expectedForLifecycle;
+  const expectedFieldFallback = num(claim.expected_amount || claim.expected_insurance || claim.contract_expected_amount || 0);
+  const expectedKnown = (expectedInsurance !== null && expectedInsurance !== undefined && Number(expectedInsurance) > 0) || expectedFieldFallback > 0;
+  const paymentDerivedOnly = isPaymentDerivedOnlyClaim(claim);
+  const expectedAmount = expectedInsurance != null && Number(expectedInsurance) > 0 ? Number(expectedInsurance) : (expectedFieldFallback > 0 ? expectedFieldFallback : 0);
 
   let lifecycleStage = "Paid";
   if (hasActiveAppealOrNegotiation) {
     lifecycleStage = "In Appeal/Negotiation";
   } else if (submittedFlag && !hasPaymentRecord) {
     lifecycleStage = "Waiting Payment";
-  } else if (hasPaymentRecord && paidAmount <= 0.0001 && expectedAmount > 0) {
+  } else if (hasPaymentRecord && paidAmount <= 0.0001 && (expectedKnown || hasDenialContext)) {
     lifecycleStage = "Denied";
     const settings = getPracticeSettings(claim.org_id);
     if (settings.auto_create_denial_cases === true) ensureDenialCaseForClaim(claim);
-  } else if (hasPaymentRecord && paidAmount > 0 && paidAmount + 0.0001 < expectedAmount) {
+  } else if (hasPaymentRecord && paidAmount > 0 && expectedKnown && paidAmount + 0.0001 < expectedAmount) {
     lifecycleStage = "Underpaid";
-  } else if (remainingForLifecycle <= 0.0001 && patientBalanceRemaining > 0.0001) {
+  } else if (hasPaymentRecord && paidAmount > 0 && patientBalanceRemaining > 0.0001 && (!expectedKnown || paidAmount + 0.0001 >= expectedAmount)) {
     lifecycleStage = "Patient Follow-Up";
-  } else if (remainingForLifecycle <= 0.0001 && patientBalanceRemaining <= 0.0001) {
+  } else if (hasPaymentRecord && paidAmount > 0) {
+    lifecycleStage = "Resolved";
+  } else if (paymentDerivedOnly && paidAmount > 0) {
     lifecycleStage = "Resolved";
   } else if (!submittedFlag) {
     lifecycleStage = "Submitted";
@@ -25247,11 +25361,11 @@ function evaluateClaimDerived(claim, ctx={}){
   }
 
   let atRiskAmount = 0;
-  if (lifecycleStage === "Denied") atRiskAmount = Math.max(0, expectedForLifecycle - paidAmount);
-  else if (lifecycleStage === "Underpaid") atRiskAmount = Math.max(0, remainingForLifecycle);
-  else if (lifecycleStage === "Waiting Payment" || lifecycleStage === "Submitted") atRiskAmount = Math.max(0, expectedForLifecycle - paidAmount);
+  if (lifecycleStage === "Denied") atRiskAmount = expectedKnown ? Math.max(0, expectedAmount - paidAmount) : (hasDenialContext && !paymentDerivedOnly ? Math.max(0, billedAmount - paidAmount) : 0);
+  else if (lifecycleStage === "Underpaid") atRiskAmount = expectedKnown ? Math.max(0, expectedAmount - paidAmount - insuranceWriteOff) : 0;
+  else if (lifecycleStage === "Waiting Payment" || lifecycleStage === "Submitted") atRiskAmount = expectedKnown ? Math.max(0, expectedAmount - paidAmount) : 0;
   else if (lifecycleStage === "Patient Follow-Up") atRiskAmount = patientBalanceRemaining;
-  else if (lifecycleStage === "In Appeal/Negotiation") atRiskAmount = Math.max(0, remainingForLifecycle) + patientBalanceRemaining;
+  else if (lifecycleStage === "In Appeal/Negotiation") atRiskAmount = (expectedKnown ? Math.max(0, expectedAmount - paidAmount - insuranceWriteOff) : 0) + patientBalanceRemaining;
 
   return {
     lifecycleStage,
@@ -25297,9 +25411,8 @@ function computeInsuranceBalance(claim, ctx={}){
     hasManualOverride && manualExpected > 0
       ? manualExpected
       : (hasContract ? num(expectedInsuranceRaw.amount) : null);
-  const key = normalizeClaimKey(claim.claim_number || "");
-  const paymentRows = key && claimCtx.paymentsByClaim ? (claimCtx.paymentsByClaim[key] || []) : [];
-  const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid || p.paid_amount || 0), 0);
+  const paymentRows = paymentRowsForClaim(claim, claimCtx);
+  const paymentFromRows = paymentRows.reduce((s, p) => s + num(p.amount_paid || p.paid_amount || p.payment_amount || p.amount || 0), 0);
   const paidFromClaim = num(
     claim.insurance_paid !== undefined && claim.insurance_paid !== null && String(claim.insurance_paid).trim() !== ""
       ? claim.insurance_paid
@@ -25781,7 +25894,7 @@ function getPaymentBatchHistory(org_id){
 
 function getUnmatchedPayments(org_id, billed){
   const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
-  return payments.filter(p => !findBilledByClaim(org_id, billed, p.claim_number));
+  return payments.filter(p => !findBilledByClaim(org_id, billed, claimIdentityFromPaymentLike(p)));
 }
 
 function runAIRecoveryEngine(org_id){
@@ -25792,6 +25905,7 @@ function runAIRecoveryEngine(org_id){
   for (const claim of billedAll) {
     if (claim.org_id !== org_id) continue;
     const d = evaluateClaimDerived(claim, ctx);
+    if (!claimCanDriveRecoveryWorkflow(claim, d)) continue;
 
     if (d.lifecycleStage === "Denied") {
       const ws = ensureAgentWorkspace(org_id, claim);
@@ -26904,9 +27018,9 @@ function logDeletedPaymentBatch(rec){
 }
 function normalizeClaimDigits(x){ return String(x || "").replace(/[^0-9]/g, ""); }
 function findBilledByClaim(org_id, billedAll, claimNumber){
-  const norm = normalizeClaimDigits(claimNumber);
+  const norm = paymentOnlyClaimKey(claimNumber);
   if (!norm) return null;
-  return billedAll.find(b => b.org_id === org_id && normalizeClaimDigits(b.claim_number) === norm) || null;
+  return billedAll.find(b => b.org_id === org_id && claimPaymentMatchKeys(b).includes(norm)) || null;
 }
 const AI_RESPONSE_STYLES = [
   { key:"exec", label:"Executive Summary + Action Plan" },
@@ -34107,7 +34221,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
 }
   // dashboard with empty-state previews and tooltips
   if (method === "GET" && (pathname === "/" || pathname === "/dashboard" || pathname === "/revenue-overview")) {
-    ensurePaymentOnlyClaimsBackfilledForRead(org.org_id);
+    reconcilePaymentsToClaimsForOrg(org.org_id, { write: true, source: "read_reconcile" });
     const showWelcome = parsed.query.welcome === "1";
     const selectedPlan = parsed.query.plan || "";
 
@@ -34994,7 +35108,7 @@ if (method === "GET" && pathname === "/negotiations/workspace") {
 }
 
 if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecycle")) {
-  ensurePaymentOnlyClaimsBackfilledForRead(org.org_id);
+  reconcilePaymentsToClaimsForOrg(org.org_id, { write: true, source: "read_reconcile" });
 
   // Sub-tabs: billed | payments | denials | negotiations | all
   const qs = parsed.query || {};
@@ -35019,7 +35133,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   const hasClaimIdsFilter = claimIdsFilterSet.size > 0;
   const claimIdsFilterCsv = claimIdsFilterList.join(",");
 
-  const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
+  const billedAll = getClaimsVisibleForMetrics(org.org_id, readJSON(FILES.billed, []));
   const subsAll = readJSON(FILES.billed_submissions, []).filter(s => s.org_id === org.org_id);
   const claimCtx = buildClaimContext(org.org_id);
   const executiveRevenue = computeExecutiveRevenueMetrics(org.org_id);
@@ -35394,7 +35508,10 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
     const raw =
       claim.denied_at ||
       claim.paid_at ||
+      claim.payment_response_received_at ||
+      claim.last_payment_sync_at ||
       claim.remittance_date ||
+      claim.updated_at ||
       claim.last_submission_at ||
       claim.submitted_at ||
       claim.submitted_date ||
@@ -35462,6 +35579,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       ? Number(d.expectedInsurance)
       : Number(claim.amount_billed || 0);
     const paid = Number(d.paidAmount || 0);
+    if ((claim.payment_metric_anchor || claim.payment_identity_missing) && paid > 0) return "Resolved";
 
     if (d.hasPaymentResponse) {
       if (paid <= 0.0001 && expected > 0) return "Denied";
@@ -40113,8 +40231,8 @@ if (method === "POST" && pathname === "/upload-router") {
             };
             payments.push(paymentRow);
           }
-          const paymentBootstrap = bootstrapStoredPaymentsIntoClaimsForOrg(org.org_id, { payments, billedAll, write: false, source: "data_management_upload" });
-          if ((paymentBootstrap?.skippedNoClaimId || 0) > 0 || (paymentBootstrap?.createdMetricAnchors || 0) > 0) {
+          const reconcileSummary = reconcilePaymentsToClaimsForOrg(org.org_id, { payments, billedAll, write: false, source: "data_management_upload" });
+          if ((reconcileSummary?.skippedNoClaimId || 0) > 0 || (reconcileSummary?.createdMetricAnchors || 0) > 0) {
             ingest.notes = [String(ingest.notes || "").trim(), "Some payment rows did not include a claim identifier. The app created payment-only metric anchors so revenue totals can display; upload billed claims or add claim IDs later to fully reconcile."].filter(Boolean).join(" ");
           }
           ingest.status = "Parsed";
@@ -40627,7 +40745,7 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
 }
 
 if (method === "GET" && pathname === "/actions") {
-  ensurePaymentOnlyClaimsBackfilledForRead(org.org_id);
+  reconcilePaymentsToClaimsForOrg(org.org_id, { write: true, source: "read_reconcile" });
   function actionCenterEditClaimButton(b){
     return `<a class="btn secondary small edit-claim-btn" href="/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}">Edit Claim</a>`;
   }
@@ -45508,24 +45626,21 @@ let casesChanged_sync = false;
 function normalizeClaimNum(x) { return String(x || "").replace(/[^0-9]/g, ""); }
 
 let changed_sync = false;
-const paymentBootstrap = bootstrapStoredPaymentsIntoClaimsForOrg(org.org_id, {
+const reconcileSummary = reconcilePaymentsToClaimsForOrg(org.org_id, {
   payments: paymentsData,
   billedAll: billedAll_sync,
   write: false,
   source: "payments_upload"
 });
-if (paymentBootstrap && paymentBootstrap.changed) {
+if (reconcileSummary && reconcileSummary.changed) {
   changed_sync = true;
 }
-if (paymentBootstrap && (paymentBootstrap.createdMetricAnchors || 0) > 0) {
-  changed_sync = true;
-}
-if (paymentBootstrap && paymentBootstrap.changedPayments) {
+if (reconcileSummary && reconcileSummary.changedPayments) {
   writeJSON(FILES.payments, paymentsData);
 }
 const claimCtx_sync = buildClaimContext(org.org_id);
-
-for (const ap of addedPayments) {
+const reconcilerHandledPayments = !!reconcileSummary;
+if (!reconcilerHandledPayments) for (const ap of addedPayments) {
 
   const normalizedClaim = normalizeClaimNum(ap.claim_number);
   if (!normalizedClaim) continue;
@@ -47038,13 +47153,13 @@ function renderTemplateEditor(org, user){
           const paymentRow = { payment_id: uuid(), org_id: org.org_id, claim_number: row.claim_number || "", claim_id: row.claim_id || "", raw_claim_number: row.raw_claim_number || "", amount_paid: row.amount_paid || 0, paid_amount: row.paid_amount || row.amount_paid || 0, _raw_row: row._raw_row || row, missing_claim_id: !!row.missing_claim_id, extraction_warning: row.extraction_warning || "", ...row, created_at: nowISO(), denied_approved: false };
           payments.push(paymentRow);
         }
-        const paymentBootstrap = bootstrapStoredPaymentsIntoClaimsForOrg(org.org_id, {
+        const reconcileSummary = reconcilePaymentsToClaimsForOrg(org.org_id, {
           payments,
           billedAll,
           write: false,
           source: "data_management_upload"
         });
-        if (paymentBootstrap && paymentBootstrap.skippedNoClaimId > 0) {
+        if (reconcileSummary && reconcileSummary.skippedNoClaimId > 0) {
           ingest.notes = [String(ingest.notes || "").trim(), "Some payment rows had paid amounts but no claim identifier, so they were stored but could not create claim metrics."].filter(Boolean).join(" ");
         }
         ingest.status = extracted.status;
@@ -47089,19 +47204,20 @@ function renderTemplateEditor(org, user){
   }
 
   if (method === "POST" && pathname === "/data-management/rematch-payments") {
-    bootstrapStoredPaymentsIntoClaimsForOrg(org.org_id, { write: true, source: "rematch_payments" });
+    reconcilePaymentsToClaimsForOrg(org.org_id, { write: true, source: "rematch_payments" });
     const billedAll = readJSON(FILES.billed, []);
     const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org.org_id);
     const paymentsByClaim = {};
     for (const p of payments) {
-      const key = normalizeClaimKey(p.claim_number);
+      const key = paymentIdentityKeyFromRow(p);
       if (!key) continue;
       if (!paymentsByClaim[key]) paymentsByClaim[key] = 0;
       paymentsByClaim[key] += num(p.amount_paid);
     }
     for (const claim of billedAll) {
       if (claim.org_id !== org.org_id) continue;
-      const key = normalizeClaimKey(claim.claim_number);
+      const keys = claimPaymentMatchKeys(claim);
+      const key = keys[0] || "";
       if (!key) continue;
       const totalPaid = paymentsByClaim[key] || 0;
       claim.insurance_paid = totalPaid;
@@ -47142,7 +47258,7 @@ function renderTemplateEditor(org, user){
     const params = new URLSearchParams(body);
     const op = String(params.get("action") || params.get("op") || "").trim();
     if (["payments", "revenue", "lifecycle", "claims", "all", ""].includes(op)) {
-      bootstrapStoredPaymentsIntoClaimsForOrg(org.org_id, { write: true, source: "data_management_rebuild" });
+      reconcilePaymentsToClaimsForOrg(org.org_id, { write: true, source: "data_management_rebuild" });
     }
     rebuildOrgDerivedData(org.org_id, { resyncDenials: op === "denials" || op === "lifecycle", autodraft: op === "denials" || op === "lifecycle" || op === "revenue" || op === "payments" });
     const tabForOp = (op === "revenue") ? "payments" : (op === "denials" ? "denials" : "claims");
@@ -52719,6 +52835,135 @@ async function runUploadIngestSmokeTests() {
     const t30existing = t30b.find(x => paymentOnlyClaimKey(x.claim_number) === paymentOnlyClaimKey("CLM1001"));
     hydrateProvisionalPaymentClaimWithBilledRow(t30existing, { claim_number:"CLM1001", amount_billed:500, payer:"Aetna" }, {}, { source_file:"billed.csv" });
     assert(num(t30existing.paid_amount) === 100 && num(t30existing.amount_billed) === 500 && t30existing.payment_only_claim === false && t30existing.provisional_claim === false && t30existing.original_payment_only_claim === true, "T30 hydration");
+    // T31 payment-only numeric claim IDs
+    writeJSON(FILES.billed, []);
+    writeJSON(FILES.payments, [50,60,70,80,90].map((amt, i) => ({ org_id: orgId, claim_number: String(1001+i), amount_paid: amt, date_paid: nowISO() })));
+    const t31 = reconcilePaymentsToClaimsForOrg(orgId, { write: true });
+    const t31b = readJSON(FILES.billed, []).filter(x => x.org_id === orgId);
+    assert(t31b.length === 5 && t31.createdPaymentOnlyClaims >= 5, "T31 created");
+    assert(t31b.reduce((s,x)=>s+num(x.paid_amount),0) === 350, "T31 total paid");
+    assert(t31b.every(x => x.payment_only_claim === true && x.provisional_claim === true && String(x.status||"").toLowerCase() !== "underpaid"), "T31 status");
+    const t31m = computeDashboardMetrics(orgId, new Date("2026-01-01"), new Date("2026-12-31"), "custom");
+    assert(num(t31m?.kpis?.collectedTotal) > 0, "T31 metrics");
+    // T32 payment-only missing claim IDs
+    writeJSON(FILES.billed, []);
+    writeJSON(FILES.payments, [50,60,70,80,90].map((amt, i) => ({ org_id: orgId, payment_id: `t32_${i}`, amount_paid: amt })));
+    reconcilePaymentsToClaimsForOrg(orgId, { write: true });
+    const t32b = readJSON(FILES.billed, []).filter(x => x.org_id === orgId);
+    assert(t32b.length === 5 && t32b.every(x => x.payment_metric_anchor === true && x.payment_identity_missing === true && x.needs_claim_identifier === true), "T32 anchors");
+    assert(!t32b.some(x => num(evaluateClaimDerived(x, buildClaimContext(orgId)).atRiskAmount) > 0), "T32 no risk");
+    // T33 billed + payments + expected
+    const now = nowISO();
+    const real33 = [
+      { n:"1001", payer:"Aetna", exp:110, paid:0 },
+      { n:"1002", payer:"UnitedHealthcare", exp:160, paid:100 },
+      { n:"1003", payer:"Cigna", exp:210, paid:210 },
+      { n:"1004", payer:"Aetna", exp:85, paid:40 },
+      { n:"1005", payer:"BlueCross", exp:115, paid:0 }
+    ];
+    writeJSON(FILES.billed, real33.map(r => ({ billed_id: uuid(), org_id: orgId, claim_number:r.n, claim_id:r.n, raw_claim_number:r.n, payer:r.payer, amount_billed:r.exp, expected_amount:r.exp, contract_expected_amount:r.exp, created_at:now })));
+    writeJSON(FILES.payments, real33.map(r => ({ org_id: orgId, claim_number:r.n, amount_paid:r.paid, date_paid:now })));
+    reconcilePaymentsToClaimsForOrg(orgId, { write: true });
+    const t33claims = getClaimsVisibleForMetrics(orgId, readJSON(FILES.billed, []));
+    const t33ctx = buildClaimContext(orgId);
+    const t33st = t33claims.map(c => evaluateClaimDerived(c, t33ctx).lifecycleStage);
+    assert(t33st.filter(s=>s==="Denied").length === 2, "T33 denied");
+    assert(t33st.filter(s=>s==="Underpaid").length === 2, "T33 underpaid");
+    assert(t33st.filter(s=>s==="Resolved").length === 1, "T33 resolved");
+    const t33risk = t33claims.reduce((s,c)=>s+num(evaluateClaimDerived(c, t33ctx).atRiskAmount),0);
+    assert(Math.round(t33risk) === 330, "T33 risk");
+    assert(!t33claims.some(c => c.payment_metric_anchor), "T33 no anchors");
+    // T34 lifecycle range anchor signals current
+    const t34claims = readJSON(FILES.billed, []).filter(c => c.org_id === orgId);
+    assert(t34claims.every(c => String(c.last_payment_sync_at || c.paid_at || "").trim()), "T34 anchor fields");
+    const t34st = t34claims.map(c => evaluateClaimDerived(c, t33ctx).lifecycleStage);
+    assert(t34st.filter(s=>s==="Denied").length === 2 && t34st.filter(s=>s==="Underpaid").length === 2 && t34st.filter(s=>s==="Resolved").length === 1, "T34 counts");
+    // T35 no overwrite billed fields
+    writeJSON(FILES.billed, [{ billed_id: uuid(), org_id: orgId, claim_number:"T35", amount_billed:500, expected_amount:500 }]);
+    writeJSON(FILES.payments, [{ org_id: orgId, claim_number:"T35", amount_paid:100 }]);
+    reconcilePaymentsToClaimsForOrg(orgId, { write: true });
+    const t35 = readJSON(FILES.billed, [])[0] || {};
+    assert(num(t35.amount_billed) === 500 && num(t35.paid_amount) === 100 && num(t35.insurance_paid) === 100, "T35 no overwrite");
+    // T36 stale metric anchors ignored
+    writeJSON(FILES.billed, [
+      { billed_id: uuid(), org_id: orgId, claim_number:"REAL1", amount_billed:100 },
+      { billed_id: uuid(), org_id: orgId, claim_number:"PAYMENT-old", payment_metric_anchor:true, payment_identity_missing:true, amount_billed:50, paid_amount:50 }
+    ]);
+    writeJSON(FILES.payments, [{ org_id: orgId, claim_number:"REAL1", amount_paid:25 }]);
+    reconcilePaymentsToClaimsForOrg(orgId, { write: true });
+    const t36all = readJSON(FILES.billed, []);
+    const t36visible = getClaimsVisibleForMetrics(orgId, t36all);
+    assert(t36visible.length === 1 && String(t36visible[0].claim_number) === "REAL1", "T36 visible real only");
+    assert(!t36visible.some(c => String(c.claim_number||"").startsWith("PAYMENT-")), "T36 action source no anchors");
+    // T37 legacy loop does not undo reconciler outcomes
+    const t37fixture = [
+      { n:"1001", exp:110, paid:[0] },
+      { n:"1002", exp:160, paid:[60,40] },
+      { n:"1003", exp:210, paid:[210] },
+      { n:"1004", exp:85, paid:[20,20] },
+      { n:"1005", exp:115, paid:[0] }
+    ];
+    writeJSON(FILES.billed, t37fixture.map(r => ({ billed_id: uuid(), org_id: orgId, claim_number:r.n, claim_id:r.n, amount_billed:r.exp, expected_amount:r.exp })));
+    writeJSON(FILES.payments, t37fixture.flatMap(r => r.paid.map((amt, i) => ({ org_id: orgId, claim_number:r.n, amount_paid:amt, source_file:`t37_${r.n}_${i}` }))));
+    const t37payments = readJSON(FILES.payments, []);
+    const t37billed = readJSON(FILES.billed, []);
+    const t37summary = reconcilePaymentsToClaimsForOrg(orgId, { payments: t37payments, billedAll: t37billed, write:false, source:"payments_upload" });
+    const t37handled = !!t37summary;
+    if (!t37handled) { throw new Error("T37 expected reconciler summary"); }
+    const t37ctx = buildClaimContext(orgId);
+    const t37stages = t37billed.map(c => evaluateClaimDerived(c, t37ctx).lifecycleStage);
+    assert(t37stages.filter(s => s === "Denied").length === 2, "T37 denied");
+    assert(t37stages.filter(s => s === "Underpaid").length === 2, "T37 underpaid");
+    assert(t37stages.filter(s => s === "Resolved").length === 1, "T37 resolved");
+    const c1002 = t37billed.find(c => String(c.claim_number) === "1002");
+    assert(num(c1002?.paid_amount) === 100, "T37 aggregated paid not last-row");
+    const c1001 = t37billed.find(c => String(c.claim_number) === "1001");
+    assert(String(evaluateClaimDerived(c1001, t37ctx).lifecycleStage) === "Denied", "T37 zero-paid remains denied");
+    // T38 browser-like payment-only read flow
+    writeJSON(FILES.billed, []);
+    writeJSON(FILES.payments, [50,60,70,80,90].map((amt, i) => ({ org_id: orgId, claim_number:String(1001+i), amount_paid:amt })));
+    reconcilePaymentsToClaimsForOrg(orgId, { write:true, source:"smoke_read" });
+    const t38all = readJSON(FILES.billed, []);
+    const t38vis = getClaimsVisibleForMetrics(orgId, t38all);
+    assert(t38vis.length === 5 && t38vis.reduce((s,c)=>s+num(c.paid_amount||c.insurance_paid),0) === 350, "T38 visible totals");
+    assert(computeDashboardMetrics(orgId, new Date("2026-01-01"), new Date("2026-12-31"), "custom")?.kpis?.collectedTotal > 0, "T38 metrics");
+    assert(t38vis.filter(c => ["Denied","Underpaid"].includes(evaluateClaimDerived(c, buildClaimContext(orgId)).lifecycleStage)).length === 0, "T38 no forced risk");
+    // T39 browser-like missing-id payment-only flow
+    writeJSON(FILES.billed, []);
+    writeJSON(FILES.payments, [50,60,70,80,90].map((amt)=>({ org_id: orgId, amount_paid:amt })));
+    reconcilePaymentsToClaimsForOrg(orgId, { write:true, source:"smoke_read" });
+    const t39vis = getClaimsVisibleForMetrics(orgId, readJSON(FILES.billed, []));
+    assert(t39vis.length === 5 && t39vis.every(c => c.payment_metric_anchor && c.payment_identity_missing), "T39 anchors");
+    assert(t39vis.reduce((s,c)=>s+num(c.paid_amount),0) === 350, "T39 paid");
+    // T40 exact mixed billed/payments/contracts scenario
+    writeJSON(FILES.billed, [
+      { billed_id: uuid(), org_id: orgId, claim_number:"1001", amount_billed:150, expected_amount:110, contract_expected_amount:110 },
+      { billed_id: uuid(), org_id: orgId, claim_number:"1002", amount_billed:220, expected_amount:160, contract_expected_amount:160 },
+      { billed_id: uuid(), org_id: orgId, claim_number:"1003", amount_billed:210, expected_amount:210, contract_expected_amount:210 },
+      { billed_id: uuid(), org_id: orgId, claim_number:"1004", amount_billed:120, expected_amount:85, contract_expected_amount:85 },
+      { billed_id: uuid(), org_id: orgId, claim_number:"1005", amount_billed:150, expected_amount:115, contract_expected_amount:115 }
+    ]);
+    writeJSON(FILES.payments, [{org_id:orgId,claim_number:"1001",amount_paid:0},{org_id:orgId,claim_number:"1002",amount_paid:100},{org_id:orgId,claim_number:"1003",amount_paid:210},{org_id:orgId,claim_number:"1004",amount_paid:40},{org_id:orgId,claim_number:"1005",amount_paid:0}]);
+    reconcilePaymentsToClaimsForOrg(orgId, { write:true });
+    const t40vis = getClaimsVisibleForMetrics(orgId, readJSON(FILES.billed, []));
+    const t40ctx = buildClaimContext(orgId);
+    const t40st = t40vis.map(c => evaluateClaimDerived(c, t40ctx).lifecycleStage);
+    assert(t40st.filter(s=>s==="Denied").length===2 && t40st.filter(s=>s==="Underpaid").length===2 && t40st.filter(s=>s==="Resolved").length===1, "T40 2/2/1");
+    assert(Math.round(t40vis.reduce((s,c)=>s+num(evaluateClaimDerived(c, t40ctx).atRiskAmount),0))===330, "T40 risk");
+    // T41 idempotence
+    reconcilePaymentsToClaimsForOrg(orgId, { write:true }); rebuildOrgDerivedData(orgId, { resyncDenials:true, autodraft:true }); reconcilePaymentsToClaimsForOrg(orgId, { write:true });
+    const t41vis = getClaimsVisibleForMetrics(orgId, readJSON(FILES.billed, []));
+    assert(t41vis.length===5 && t41vis.filter(c=>String(c.claim_number||"").startsWith("PAYMENT-")).length===0, "T41 stable visible");
+    // T42 alphanumeric claim id
+    writeJSON(FILES.billed, [{ billed_id: uuid(), org_id: orgId, claim_number:"ABCDXYZ", amount_billed:140, expected_amount:100, contract_expected_amount:100 }]);
+    writeJSON(FILES.payments, [{ org_id: orgId, claim_number:"", amount_paid:40, _raw_row:{"Claim No.":"ABCDXYZ","Paid Amount":"40"} }]);
+    reconcilePaymentsToClaimsForOrg(orgId, { write:true });
+    const t42 = readJSON(FILES.billed, [])[0] || {};
+    assert(num(t42.paid_amount)===40 && !t42.payment_metric_anchor && evaluateClaimDerived(t42, buildClaimContext(orgId)).lifecycleStage==="Underpaid", "T42 alphanumeric match");
+    // T43 /payments fallback skipped when reconciler handled
+    const t43summary = reconcilePaymentsToClaimsForOrg(orgId, { write:false, payments: readJSON(FILES.payments, []), billedAll: readJSON(FILES.billed, []) });
+    const t43handled = !!(t43summary && (t43summary.matchedPayments>0 || t43summary.updatedClaims>0 || t43summary.createdPaymentOnlyClaims>0 || t43summary.createdMetricAnchors>0 || t43summary.changed));
+    assert(t43handled === true, "T43 handled true");
 
     const src = fs.readFileSync(__filename, "utf8");
     ["function upsertPaymentOnlyClaim","function hydrateProvisionalPaymentClaimWithBilledRow","function extractPaymentRowsFromUploadFile","function extractBilledClaimRowsFromUploadFile","function extractReimbursementRowsFromUploadFile","process.env.TJHP_UPLOAD_SMOKE_TESTS","pathname === \"/billed/upload\"","extractBilledClaimRowsFromUploadFile(f","extractPaymentRowsFromUploadFile(f","extractReimbursementRowsFromUploadFile(f"].forEach(m => assert(src.includes(m), `marker ${m}`));
