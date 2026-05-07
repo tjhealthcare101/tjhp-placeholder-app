@@ -25161,18 +25161,58 @@ function tjhpClaimKeysForBilled(claim) {
   return Array.from(out);
 }
 
-function tjhpPaymentIdentity(payment) {
-  const direct = [payment?.billed_id,payment?.claim_number,payment?.claim_id,payment?.raw_claim_number,payment?.payer_claim_number,payment?.icn,payment?.dcn,payment?.patient_account_number,payment?.account_number].map(v => String(v || "").trim()).find(Boolean);
-  if (direct) return direct;
+function tjhpLooksLikeUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || "").trim());
+}
+
+function tjhpPaymentClaimIdentifier(payment) {
+  if (!payment) return "";
+
   const raw = payment && payment._raw_row && typeof payment._raw_row === "object" ? payment._raw_row : {};
+  const directFields = [
+    payment.raw_claim_number,
+    payment.claim_number,
+    payment.payer_claim_number,
+    payment.icn,
+    payment.dcn,
+    payment.patient_account_number,
+    payment.account_number,
+    payment.claim_id
+  ];
+
+  for (const v of directFields) {
+    const sv = String(v || "").trim();
+    if (!sv) continue;
+    if (String(payment.payment_id || "").trim() && sv === String(payment.payment_id || "").trim()) continue;
+    if (tjhpLooksLikeUuid(sv) && !String(raw["claim number"] || raw.claim_number || raw.claim || "").trim()) continue;
+    return sv;
+  }
+
   const headers = ["claim","claim#","claim number","claim_number","claim no","claim no.","claim id","claim_id","payer claim number","payer claim id","claim control number","icn","dcn","document control number","patient account number","account number","account #","encounter id","visit id","invoice number"];
   for (const h of headers) {
     let v = "";
     try { v = typeof paymentPickNonEmpty === "function" ? paymentPickNonEmpty(raw, [h]) : (typeof pickField === "function" ? pickField(raw, [h]) : raw[h]); } catch (_) { v = raw[h]; }
     const sv = String(v || "").trim();
-    if (sv) return sv;
+    if (!sv) continue;
+    if (String(payment.payment_id || "").trim() && sv === String(payment.payment_id || "").trim()) continue;
+    return sv;
   }
+
   return "";
+}
+
+function tjhpPaymentDisplayIdentifier(payment) {
+  const id = tjhpPaymentClaimIdentifier(payment);
+  if (id) return id;
+  const pid = String(payment?.payment_id || "").trim();
+  return pid ? `Payment ${pid.slice(0, 8)}` : "Payment row";
+}
+
+function tjhpPaymentIdentity(payment) {
+  const identifier = tjhpPaymentClaimIdentifier(payment);
+  if (identifier) return identifier;
+  const pid = String(payment?.payment_id || "").trim();
+  return pid || "";
 }
 
 function tjhpPaymentKeys(payment) {
@@ -25915,77 +25955,107 @@ function getPaymentBatchHistory(org_id){
 }
 
 function getUnmatchedPayments(org_id, billed){
+  tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id, { write: true });
   const billedAll = Array.isArray(billed) ? billed : readJSON(FILES.billed, []);
-  const payments = readJSON(FILES.payments, []).filter(p =>
-    String(p.org_id || "") === String(org_id || "") &&
-    String(p.payment_review_status || "").toLowerCase() !== "ignored"
-  );
-  return payments.filter(p => !tjhpFindRealBilledForPayment(org_id, billedAll, p));
+  const payments = readJSON(FILES.payments, []).filter(p => String(p.org_id || "") === String(org_id || ""));
+  return payments.filter(p => String(p.payment_review_status || "").toLowerCase() !== "ignored" && String(p.payment_review_status || "").toLowerCase() !== "matched" && !tjhpFindRealBilledForPayment(org_id, billedAll, p));
+}
+
+function tjhpLinkPaymentToClaim(payment, claim) {
+  if (!payment || !claim) return false;
+  let changed = false;
+  const set = (key, value) => {
+    if (value === undefined || value === null) return;
+    if (String(payment[key] || "") !== String(value || "")) {
+      payment[key] = value;
+      changed = true;
+    }
+  };
+  set("billed_id", claim.billed_id);
+  set("claim_number", claim.claim_number || payment.claim_number || claim.claim_id || "");
+  set("claim_id", claim.claim_id || claim.claim_number || payment.claim_id || "");
+  set("raw_claim_number", claim.raw_claim_number || claim.claim_number || payment.raw_claim_number || "");
+  if (String(payment.payment_review_status || "").toLowerCase() !== "matched") { payment.payment_review_status = "matched"; changed = true; }
+  if (payment.ignored_at) { delete payment.ignored_at; changed = true; }
+  payment.matched_at = payment.matched_at || nowISO();
+  payment.updated_at = nowISO();
+  return changed;
+}
+
+function tjhpOperationalClaimForPaymentId(org_id, billedAll, paymentId) {
+  return (billedAll || []).find(c =>
+    String(c.org_id || "") === String(org_id || "") &&
+    tjhpIsPaymentOnlyOperationalClaim(c) &&
+    String(c.source_payment_id || c.payment_id || "") === String(paymentId || "")
+  ) || null;
+}
+
+function tjhpRemoveOperationalClaimForPayment(org_id, billedAll, payment) {
+  const paymentId = String(payment?.payment_id || "").trim();
+  const sourceFile = String(payment?.source_file || payment?.source || "").trim();
+  let changed = false;
+  for (let i = billedAll.length - 1; i >= 0; i--) {
+    const c = billedAll[i];
+    if (String(c?.org_id || "") !== String(org_id || "")) continue;
+    if (!tjhpIsPaymentOnlyOperationalClaim(c)) continue;
+    const sourcePaymentId = String(c.source_payment_id || c.payment_id || "").trim();
+    const claimSource = String(c.source_file || c.payment_source || "").trim();
+    if ((paymentId && sourcePaymentId === paymentId) || (paymentId && String(c.billed_id || "") === `PAYMENT-${paymentId}`) || (sourceFile && claimSource === sourceFile && sourcePaymentId === paymentId)) {
+      billedAll.splice(i, 1); changed = true;
+    }
+  }
+  return changed;
+}
+
+function tjhpCreateOrUpdateOperationalClaimFromPayment(org_id, billedAll, payment, opts = {}) {
+  if (!payment) return { changed: false, claim: null };
+  const paymentId = String(payment.payment_id || "").trim() || uuid();
+  if (!payment.payment_id) payment.payment_id = paymentId;
+  const paid = tjhpPaymentAmount(payment);
+  const identity = tjhpPaymentClaimIdentifier(payment);
+  const displayId = identity || `PAYMENT-${paymentId.slice(0, 8)}`;
+  const sourceFile = payment.source_file || payment.source || "";
+  let claim = tjhpOperationalClaimForPaymentId(org_id, billedAll, paymentId);
+  let changed = false;
+  if (!claim) {
+    claim = { billed_id: `PAYMENT-${paymentId}`, org_id, claim_number: displayId, claim_id: displayId, payer: payment.payer || payment.payer_name || "", amount_billed: Math.max(0, paid), billed_amount: Math.max(0, paid), expected_insurance: Math.max(0, paid), expected_amount: Math.max(0, paid), paid_amount: Math.max(0, paid), insurance_paid: Math.max(0, paid), paid_at: tjhpPaymentDate(payment) || nowISO(), status: paid > 0 ? "Resolved" : "Payment Review", payment_only_operational: true, payment_only_claim: true, derived_from_payment_only: true, provisional_claim: true, payment_identity_missing: !identity, payment_metric_anchor: !identity, excluded_from_action_center: true, source_payment_id: paymentId, source_file: sourceFile, payment_source: sourceFile || "payment_upload", created_at: payment.created_at || nowISO(), updated_at: nowISO() };
+    billedAll.push(claim); changed = true;
+  } else {
+    const before = JSON.stringify(claim);
+    claim.claim_number = displayId; claim.claim_id = displayId; claim.payer = payment.payer || payment.payer_name || claim.payer || "";
+    claim.amount_billed = Math.max(0, paid); claim.billed_amount = Math.max(0, paid); claim.expected_insurance = Math.max(0, paid); claim.expected_amount = Math.max(0, paid); claim.paid_amount = Math.max(0, paid); claim.insurance_paid = Math.max(0, paid);
+    claim.paid_at = tjhpPaymentDate(payment) || claim.paid_at || nowISO(); claim.status = paid > 0 ? "Resolved" : "Payment Review";
+    claim.payment_only_operational = true; claim.payment_only_claim = true; claim.derived_from_payment_only = true; claim.provisional_claim = true; claim.excluded_from_action_center = true;
+    claim.payment_identity_missing = !identity; claim.payment_metric_anchor = !identity; claim.source_payment_id = paymentId; claim.source_file = sourceFile || claim.source_file || ""; claim.payment_source = sourceFile || claim.payment_source || "payment_upload"; claim.updated_at = nowISO();
+    changed = JSON.stringify(claim) !== before;
+  }
+  if (String(payment.payment_review_status || "").toLowerCase() !== "provisional_claim") { payment.payment_review_status = opts.reviewStatus || "provisional_claim"; payment.updated_at = nowISO(); changed = true; }
+  return { changed, claim };
 }
 
 function tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id, opts = {}) {
   const billedAll = Array.isArray(opts.billedAll) ? opts.billedAll : readJSON(FILES.billed, []);
   const payments = Array.isArray(opts.payments) ? opts.payments : readJSON(FILES.payments, []);
-  const orgPayments = payments.filter(p => String(p.org_id || "") === String(org_id || "") && String(p.payment_review_status || "").toLowerCase() !== "ignored");
+  const orgPaymentsAll = payments.filter(p => String(p.org_id || "") === String(org_id || ""));
   let changed = false;
+  for (const p of orgPaymentsAll) { if (!String(p.payment_id || "").trim()) { p.payment_id = uuid(); p.updated_at = nowISO(); changed = true; } }
+  for (const p of orgPaymentsAll) {
+    const realClaim = tjhpFindRealBilledForPayment(org_id, billedAll, p);
+    if (realClaim) { if (tjhpLinkPaymentToClaim(p, realClaim)) changed = true; if (tjhpRemoveOperationalClaimForPayment(org_id, billedAll, p)) changed = true; }
+  }
   const realClaims = tjhpRealBilledClaims(org_id, billedAll);
-  if (realClaims.length > 0) {
-    for (let i = billedAll.length - 1; i >= 0; i--) {
-      const c = billedAll[i];
-      if (String(c?.org_id || "") === String(org_id || "") && tjhpIsPaymentOnlyOperationalClaim(c)) { billedAll.splice(i, 1); changed = true; }
-    }
-    for (const p of orgPayments) {
-      const claim = tjhpFindRealBilledForPayment(org_id, billedAll, p);
-      if (!claim) continue;
-      if (String(p.billed_id || "") !== String(claim.billed_id || "")) { p.billed_id = claim.billed_id; changed = true; }
-      if (!String(p.claim_number || "").trim() && claim.claim_number) { p.claim_number = claim.claim_number; changed = true; }
-      if (!String(p.claim_id || "").trim() && (claim.claim_id || claim.claim_number)) { p.claim_id = claim.claim_id || claim.claim_number; changed = true; }
-    }
-    const recompute = tjhpRecomputeClaimPaymentsFromLedgerForOrg(org_id, { billedAll, payments, write: false });
-    changed = changed || !!recompute.changed;
-    if (opts.write !== false && changed) { writeJSON(FILES.billed, billedAll); writeJSON(FILES.payments, payments); }
-    return { changed, mode: "real_claims" };
+  const hasAnyRealClaims = realClaims.length > 0;
+  for (const p of orgPaymentsAll) {
+    const status = String(p.payment_review_status || "").toLowerCase();
+    const hasRealMatch = !!tjhpFindRealBilledForPayment(org_id, billedAll, p);
+    if (hasRealMatch) continue;
+    if (status === "ignored") { if (tjhpRemoveOperationalClaimForPayment(org_id, billedAll, p)) changed = true; continue; }
+    if (!hasAnyRealClaims || status === "provisional_claim") {
+      const result = tjhpCreateOrUpdateOperationalClaimFromPayment(org_id, billedAll, p, { reviewStatus: status === "provisional_claim" ? "provisional_claim" : "payment_only_review" });
+      if (result.changed) changed = true;
+    } else { if (tjhpRemoveOperationalClaimForPayment(org_id, billedAll, p)) changed = true; }
   }
-  const existingByPaymentId = new Map();
-  billedAll.forEach(c => { if (String(c?.org_id || "") === String(org_id || "") && tjhpIsPaymentOnlyOperationalClaim(c)) existingByPaymentId.set(String(c.source_payment_id || c.payment_id || "").trim(), c); });
-  for (const p of orgPayments) {
-    const paid = tjhpPaymentAmount(p);
-    const paymentId = String(p.payment_id || "").trim() || uuid();
-    if (!p.payment_id) { p.payment_id = paymentId; changed = true; }
-    const identity = tjhpPaymentIdentity(p);
-    const claimNo = identity || `PAYMENT-${paymentId}`;
-    let claim = existingByPaymentId.get(paymentId);
-    if (!claim) {
-      billedAll.push({ billed_id: `PAYMENT-${paymentId}`, org_id, claim_number: claimNo, claim_id: identity || claimNo, payer: p.payer || p.payer_name || "", amount_billed: Math.max(0, paid), billed_amount: Math.max(0, paid), expected_insurance: Math.max(0, paid), expected_amount: Math.max(0, paid), paid_amount: Math.max(0, paid), insurance_paid: Math.max(0, paid), paid_at: tjhpPaymentDate(p) || nowISO(), status: paid > 0 ? "Resolved" : "Payment Review", payment_only_operational: true, payment_only_claim: true, derived_from_payment_only: true, payment_identity_missing: !identity, payment_metric_anchor: !identity, excluded_from_action_center: true, source_payment_id: paymentId, source_file: p.source_file || p.source || "", payment_source: p.source_file || p.source || "payment_upload", created_at: p.created_at || nowISO(), updated_at: nowISO() });
-      claim = billedAll[billedAll.length - 1];
-      existingByPaymentId.set(paymentId, claim);
-      changed = true;
-    } else {
-      const before = JSON.stringify(claim);
-      claim.claim_number = claimNo;
-      claim.claim_id = identity || claimNo;
-      claim.payer = p.payer || p.payer_name || claim.payer || "";
-      claim.amount_billed = Math.max(0, paid);
-      claim.billed_amount = Math.max(0, paid);
-      claim.expected_insurance = Math.max(0, paid);
-      claim.expected_amount = Math.max(0, paid);
-      claim.paid_amount = Math.max(0, paid);
-      claim.insurance_paid = Math.max(0, paid);
-      claim.paid_at = tjhpPaymentDate(p) || claim.paid_at || nowISO();
-      claim.status = paid > 0 ? "Resolved" : "Payment Review";
-      claim.payment_only_operational = true;
-      claim.payment_only_claim = true;
-      claim.derived_from_payment_only = true;
-      claim.excluded_from_action_center = true;
-      claim.payment_identity_missing = !identity;
-      claim.payment_metric_anchor = !identity;
-      claim.payment_source = p.source_file || p.source || claim.payment_source || "payment_upload";
-      claim.source_file = p.source_file || claim.source_file || "";
-      claim.updated_at = nowISO();
-      if (JSON.stringify(claim) !== before) changed = true;
-    }
-  }
-  const livePaymentIds = new Set(orgPayments.map(p => String(p.payment_id || "").trim()).filter(Boolean));
+  const livePaymentIds = new Set(orgPaymentsAll.map(p => String(p.payment_id || "").trim()).filter(Boolean));
   for (let i = billedAll.length - 1; i >= 0; i--) {
     const c = billedAll[i];
     if (String(c?.org_id || "") !== String(org_id || "")) continue;
@@ -25993,8 +26063,10 @@ function tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id, opts = {}) {
     const sourcePaymentId = String(c.source_payment_id || c.payment_id || "").trim();
     if (sourcePaymentId && !livePaymentIds.has(sourcePaymentId)) { billedAll.splice(i, 1); changed = true; }
   }
+  const recompute = tjhpRecomputeClaimPaymentsFromLedgerForOrg(org_id, { billedAll, payments, write: false });
+  changed = changed || !!recompute.changed;
   if (opts.write !== false && changed) { writeJSON(FILES.billed, billedAll); writeJSON(FILES.payments, payments); }
-  return { changed, mode: "payment_only" };
+  return { changed };
 }
 
 function tjhpRecomputeClaimPaymentsFromLedgerForOrg(org_id, opts = {}) {
@@ -26034,21 +26106,24 @@ function tjhpRecomputeClaimPaymentsFromLedgerForOrg(org_id, opts = {}) {
   return { changed };
 }
 
-function tjhpBuildUploadMatchingDiagnostic(org_id) {
+function tjhpBuildUploadMatchingDiagnostic(org_id, opts = {}) {
+  if (!opts.skipSync) tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id, { write: true });
   const billedAll = readJSON(FILES.billed, []);
   const paymentsAll = readJSON(FILES.payments, []);
   const billed = tjhpRealBilledClaims(org_id, billedAll);
-  const payments = paymentsAll.filter(p => String(p.org_id || "") === String(org_id || "") && String(p.payment_review_status || "").toLowerCase() !== "ignored");
+  const orgPayments = paymentsAll.filter(p => String(p.org_id || "") === String(org_id || ""));
   const matchedPaymentRows = [];
   const unmatchedPayments = [];
   const matchedClaimIds = new Set();
-  for (const p of payments) {
+  for (const p of orgPayments) {
     const claim = tjhpFindRealBilledForPayment(org_id, billedAll, p);
-    if (claim) { matchedPaymentRows.push({ payment: p, claim }); matchedClaimIds.add(String(claim.billed_id || claim.claim_number || claim.claim_id || "")); }
-    else unmatchedPayments.push(p);
+    if (claim) { matchedPaymentRows.push({ payment: p, claim }); matchedClaimIds.add(String(claim.billed_id || claim.claim_number || claim.claim_id || "")); continue; }
+    if (String(p.payment_review_status || "").toLowerCase() === "ignored") continue;
+    if (String(p.payment_review_status || "").toLowerCase() === "matched") continue;
+    unmatchedPayments.push(p);
   }
-  const unmatchedClaims = payments.length ? billed.filter(c => !matchedClaimIds.has(String(c.billed_id || c.claim_number || c.claim_id || ""))) : [];
-  return { billedCount: billed.length, paymentCount: payments.length, matchedCount: matchedPaymentRows.length, unmatchedClaims, unmatchedPayments, note: payments.length ? "" : (billed.length ? `${billed.length} billed claims are awaiting payment. No payment file has been uploaded yet.` : "") };
+  const unmatchedClaims = orgPayments.length ? billed.filter(c => !matchedClaimIds.has(String(c.billed_id || c.claim_number || c.claim_id || ""))) : [];
+  return { billedCount: billed.length, paymentCount: orgPayments.length, matchedCount: matchedPaymentRows.length, unmatchedClaims, unmatchedPayments, note: orgPayments.length ? "" : (billed.length ? `${billed.length} billed claims are awaiting payment. No payment file has been uploaded yet.` : "") };
 }
 
 function runAIRecoveryEngine(org_id){
@@ -46110,67 +46185,32 @@ function renderTemplateEditor(org, user){
 
   
   if (method === "GET" && pathname === "/data-management/matching-review") {
+    tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id, { write: true });
     const billedAll = readJSON(FILES.billed, []);
     const payments = readJSON(FILES.payments, []);
     const realClaims = tjhpRealBilledClaims(org.org_id, billedAll);
-    const diag = tjhpBuildUploadMatchingDiagnostic(org.org_id);
+    const diag = tjhpBuildUploadMatchingDiagnostic(org.org_id, { skipSync: true });
     const unmatchedPayments = diag.unmatchedPayments || [];
-    const orgPayments = payments.filter(p => String(p.org_id || "") === String(org.org_id || "") && String(p.payment_review_status || "").toLowerCase() !== "ignored");
+    const orgPayments = payments.filter(p => String(p.org_id || "") === String(org.org_id || ""));
     const awaitingClaims = realClaims.filter(c => tjhpPaymentRowsForClaimFromList(c, orgPayments).length === 0);
     const rows = unmatchedPayments.map(p => {
-      const identity = tjhpPaymentIdentity(p);
+      const identity = tjhpPaymentDisplayIdentifier(p);
       const bestCandidate = tjhpFindRealBilledForPayment(org.org_id, billedAll, p);
-      return `<tr>
-        <td>${safeStr(identity || "-")}</td>
-        <td>${safeStr(p.payer || p.payer_name || "-")}</td>
-        <td>${formatMoneyUI(tjhpPaymentAmount(p))}</td>
-        <td>${safeStr(tjhpPaymentDate(p) || "-")}</td>
-        <td>${safeStr(p.source_file || p.source || "-")}</td>
-        <td>${safeStr(bestCandidate ? (bestCandidate.claim_number || bestCandidate.claim_id || bestCandidate.billed_id || "-") : "-")}</td>
-        <td>
-          <form method="POST" action="/data-management/matching-review/match" style="display:inline-block;">
-            <input type="hidden" name="payment_id" value="${safeStr(p.payment_id || "")}" />
-            <select name="billed_id">${realClaims.map(c => `<option value="${safeStr(c.billed_id || "")}">${safeStr(c.claim_number || c.claim_id || c.billed_id || "")} - ${safeStr(c.payer || "-")} - ${formatMoneyUI(num(c.amount_billed || c.billed_amount || 0))}</option>`).join("")}</select>
-            <button class="btn small" type="submit">Match</button>
-          </form>
-          <form method="POST" action="/data-management/matching-review/create-provisional" style="display:inline-block;"><input type="hidden" name="payment_id" value="${safeStr(p.payment_id || "")}" /><button class="btn secondary small" type="submit">Create Provisional</button></form>
-          <form method="POST" action="/data-management/matching-review/ignore" style="display:inline-block;"><input type="hidden" name="payment_id" value="${safeStr(p.payment_id || "")}" /><button class="btn danger small" type="submit">Ignore</button></form>
-        </td>
-      </tr>`;
+      const disableMatch = realClaims.length === 0;
+      return `<tr><td>${safeStr(identity || "-")}</td><td>${safeStr(p.payer || p.payer_name || "-")}</td><td>${formatMoneyUI(tjhpPaymentAmount(p))}</td><td>${safeStr(tjhpPaymentDate(p) || "-")}</td><td>${safeStr(p.source_file || p.source || "-")}</td><td>${safeStr(bestCandidate ? (bestCandidate.claim_number || bestCandidate.claim_id || bestCandidate.billed_id || "-") : "-")}</td><td><form method="POST" action="/data-management/matching-review/match" style="display:inline-block;"><input type="hidden" name="payment_id" value="${safeStr(p.payment_id || "")}" /><select name="billed_id" ${disableMatch ? "disabled" : ""}>${realClaims.map(c => `<option value="${safeStr(c.billed_id || "")}">${safeStr(c.claim_number || c.claim_id || c.billed_id || "")} - ${safeStr(c.payer || "-")} - ${formatMoneyUI(num(c.amount_billed || c.billed_amount || 0))}</option>`).join("") || '<option value="">Upload billed claims to match.</option>'}</select><button class="btn small" type="submit" ${disableMatch ? "disabled" : ""}>Match</button></form><form method="POST" action="/data-management/matching-review/create-provisional" style="display:inline-block;"><input type="hidden" name="payment_id" value="${safeStr(p.payment_id || "")}" /><button class="btn secondary small" type="submit">Create Provisional</button></form><form method="POST" action="/data-management/matching-review/ignore" style="display:inline-block;"><input type="hidden" name="payment_id" value="${safeStr(p.payment_id || "")}" /><button class="btn danger small" type="submit">Ignore</button></form></td></tr>`;
     }).join("");
-    return send(res, 200, renderPage("Review & Fix Matches", `
-      <div class="card">
-        <h3>Review & Fix Matches</h3>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;">
-          <div class="card"><div class="muted small">Billed Claims</div><div style="font-weight:900;">${diag.billedCount}</div></div>
-          <div class="card"><div class="muted small">Payment Rows</div><div style="font-weight:900;">${diag.paymentCount}</div></div>
-          <div class="card"><div class="muted small">Matched</div><div style="font-weight:900;">${diag.matchedCount}</div></div>
-          <div class="card"><div class="muted small">Unmatched Payments</div><div style="font-weight:900;">${diag.unmatchedPayments.length}</div></div>
-          <div class="card"><div class="muted small">Claims Awaiting Payment</div><div style="font-weight:900;">${awaitingClaims.length}</div></div>
-        </div>
-        ${diag.note ? `<div class="muted small" style="margin-top:10px;">${safeStr(diag.note)}</div>` : ""}
-        <div class="btnRow" style="margin-top:10px;">
-          <a class="btn secondary" href="/data-management?tab=upload&matching=1">Back to Data Management</a>
-          <form method="POST" action="/data-management/matching-review/bulk-exact" style="display:inline-block;"><button class="btn" type="submit">Bulk Exact Match</button></form>
-        </div>
-        <div style="overflow:auto;margin-top:12px;">
-          <table><thead><tr><th>Claim Identifier</th><th>Payer</th><th>Paid</th><th>Date</th><th>Source File</th><th>Best Candidate</th><th>Actions</th></tr></thead>
-            <tbody>${rows || '<tr><td colspan="7" class="muted">No unmatched payments need review.</td></tr>'}</tbody>
-          </table>
-        </div>
-      </div>
-    `, navUser(), { showChat: true, orgName: org.org_name }));
+    return send(res, 200, renderPage("Review & Fix Matches", `<div class="card"><h3>Review & Fix Matches</h3><p class="muted small">Ignore: excludes this payment from matching and metrics unless a future billed claim clearly matches it.<br/>Create Provisional: creates a temporary payment-derived claim so payment-only data appears in Revenue Overview and Claims Lifecycle.</p><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;"><div class="card"><div class="muted small">Billed Claims</div><div style="font-weight:900;">${diag.billedCount}</div></div><div class="card"><div class="muted small">Payment Rows</div><div style="font-weight:900;">${diag.paymentCount}</div></div><div class="card"><div class="muted small">Matched</div><div style="font-weight:900;">${diag.matchedCount}</div></div><div class="card"><div class="muted small">Unmatched Payments</div><div style="font-weight:900;">${diag.unmatchedPayments.length}</div></div><div class="card"><div class="muted small">Claims Awaiting Payment</div><div style="font-weight:900;">${awaitingClaims.length}</div></div></div>${diag.note ? `<div class="muted small" style="margin-top:10px;">${safeStr(diag.note)}</div>` : ""}<div class="btnRow" style="margin-top:10px;"><a class="btn secondary" href="/data-management?tab=upload&matching=1">Back to Data Management</a><form method="POST" action="/data-management/matching-review/bulk-exact" style="display:inline-block;"><button class="btn" type="submit">Bulk Exact Match</button></form></div><div style="overflow:auto;margin-top:12px;"><table><thead><tr><th>Claim Identifier</th><th>Payer</th><th>Paid</th><th>Date</th><th>Source File</th><th>Best Candidate</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="muted">No unmatched payments need review.</td></tr>'}</tbody></table></div></div>`, navUser(), { showChat: true, orgName: org.org_name }));
   }
   if (method === "POST" && pathname === "/data-management/matching-review/match") {
     const body = await parseBody(req); const ps = new URLSearchParams(body); const payment_id = String(ps.get("payment_id")||""); const billed_id = String(ps.get("billed_id")||"");
     const payments = readJSON(FILES.payments, []); const billedAll = readJSON(FILES.billed, []);
     const p = payments.find(x=>String(x.org_id||"")===String(org.org_id||"") && String(x.payment_id||"")===payment_id); const c = billedAll.find(x=>String(x.org_id||"")===String(org.org_id||"") && String(x.billed_id||"")===billed_id);
-    if (p && c) { p.billed_id = c.billed_id; p.claim_number = c.claim_number || p.claim_number; p.claim_id = c.claim_id || c.claim_number || p.claim_id; p.payment_review_status = "matched"; p.matched_at = nowISO(); writeJSON(FILES.payments,payments); tjhpRecomputeClaimPaymentsFromLedgerForOrg(org.org_id,{billedAll,payments,write:true}); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id,{write:true}); }
+    if (p && c) { tjhpLinkPaymentToClaim(p, c); tjhpRemoveOperationalClaimForPayment(org.org_id, billedAll, p); writeJSON(FILES.payments,payments); writeJSON(FILES.billed,billedAll); tjhpRecomputeClaimPaymentsFromLedgerForOrg(org.org_id,{billedAll,payments,write:true}); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id,{write:true}); }
     return redirect(res, "/data-management/matching-review");
   }
-  if (method === "POST" && pathname === "/data-management/matching-review/ignore") { const body = await parseBody(req); const payment_id = String(new URLSearchParams(body).get("payment_id")||""); const payments = readJSON(FILES.payments, []); const p = payments.find(x=>String(x.org_id||"")===String(org.org_id||"") && String(x.payment_id||"")===payment_id); if (p) { p.payment_review_status = "ignored"; p.ignored_at = nowISO(); writeJSON(FILES.payments,payments); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id,{write:true}); } return redirect(res, "/data-management/matching-review"); }
-  if (method === "POST" && pathname === "/data-management/matching-review/create-provisional") { const body = await parseBody(req); const payment_id = String(new URLSearchParams(body).get("payment_id")||""); const payments = readJSON(FILES.payments, []); const p = payments.find(x=>String(x.org_id||"")===String(org.org_id||"") && String(x.payment_id||"")===payment_id); if (p) { p.payment_review_status = "provisional_claim"; writeJSON(FILES.payments,payments); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id,{write:true}); } return redirect(res, "/data-management/matching-review"); }
-  if (method === "POST" && pathname === "/data-management/matching-review/bulk-exact") { const payments = readJSON(FILES.payments, []); const billedAll = readJSON(FILES.billed, []); let changed = false; for (const p of payments.filter(x=>String(x.org_id||"")===String(org.org_id||"") && String(x.payment_review_status||"").toLowerCase()!=="ignored")) { const c = tjhpFindRealBilledForPayment(org.org_id,billedAll,p); if (!c) continue; p.billed_id = c.billed_id; p.claim_number = c.claim_number || p.claim_number; p.claim_id = c.claim_id || c.claim_number || p.claim_id; p.payment_review_status = "matched"; p.matched_at = nowISO(); changed = true; } if (changed) writeJSON(FILES.payments,payments); tjhpRecomputeClaimPaymentsFromLedgerForOrg(org.org_id,{billedAll,payments,write:true}); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id,{write:true}); return redirect(res, "/data-management/matching-review"); }
+  if (method === "POST" && pathname === "/data-management/matching-review/ignore") { const body = await parseBody(req); const payment_id = String(new URLSearchParams(body).get("payment_id")||""); const payments = readJSON(FILES.payments, []); const billedAll = readJSON(FILES.billed, []); const p = payments.find(x=>String(x.org_id||"")===String(org.org_id||"") && String(x.payment_id||"")===payment_id); if (p) { p.payment_review_status = "ignored"; p.ignored_at = nowISO(); p.updated_at = nowISO(); tjhpRemoveOperationalClaimForPayment(org.org_id, billedAll, p); writeJSON(FILES.payments,payments); writeJSON(FILES.billed,billedAll); tjhpRecomputeClaimPaymentsFromLedgerForOrg(org.org_id,{billedAll,payments,write:true}); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id,{write:true}); } return redirect(res, "/data-management/matching-review"); }
+  if (method === "POST" && pathname === "/data-management/matching-review/create-provisional") { const body = await parseBody(req); const payment_id = String(new URLSearchParams(body).get("payment_id")||""); const payments = readJSON(FILES.payments, []); const billedAll = readJSON(FILES.billed, []); const p = payments.find(x=>String(x.org_id||"")===String(org.org_id||"") && String(x.payment_id||"")===payment_id); if (p) { const realClaim = tjhpFindRealBilledForPayment(org.org_id, billedAll, p); if (realClaim) { tjhpLinkPaymentToClaim(p, realClaim); tjhpRemoveOperationalClaimForPayment(org.org_id, billedAll, p); } else { p.payment_review_status = "provisional_claim"; if (p.ignored_at) delete p.ignored_at; p.updated_at = nowISO(); tjhpCreateOrUpdateOperationalClaimFromPayment(org.org_id, billedAll, p, { reviewStatus: "provisional_claim" }); } writeJSON(FILES.payments,payments); writeJSON(FILES.billed,billedAll); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id,{write:true}); } return redirect(res, "/data-management/matching-review"); }
+  if (method === "POST" && pathname === "/data-management/matching-review/bulk-exact") { const payments = readJSON(FILES.payments, []); const billedAll = readJSON(FILES.billed, []); let changed = false; for (const p of payments.filter(x=>String(x.org_id||"")===String(org.org_id||""))) { const c = tjhpFindRealBilledForPayment(org.org_id,billedAll,p); if (!c) continue; if (tjhpLinkPaymentToClaim(p, c)) changed = true; if (tjhpRemoveOperationalClaimForPayment(org.org_id, billedAll, p)) changed = true; } if (changed) writeJSON(FILES.payments,payments); tjhpRecomputeClaimPaymentsFromLedgerForOrg(org.org_id,{billedAll,payments,write:true}); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id,{write:true}); return redirect(res, "/data-management/matching-review"); }
 if (method === "GET" && pathname === "/data-management") {
     tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id, { write: true });
     const tab = String(parsed.query.tab || "upload").toLowerCase();
@@ -46297,7 +46337,14 @@ if (method === "GET" && pathname === "/data-management") {
 
     const diag = tjhpBuildUploadMatchingDiagnostic(org.org_id);
     const unmatchedClaims = diag.unmatchedClaims;
-    const showMatchingReview = String(parsed.query.matching || "").toLowerCase() === "1" || uploadStatus === "done";
+    const hasMatchingExceptions =
+  diag.unmatchedPayments.length > 0 ||
+  diag.unmatchedClaims.length > 0 ||
+  (diag.paymentCount > 0 && diag.billedCount === 0);
+const showMatchingReview =
+  String(parsed.query.matching || "").toLowerCase() === "1" ||
+  uploadStatus === "done" ||
+  hasMatchingExceptions;
     const matchingPanel = showMatchingReview ? `
       <details class="card" style="margin-bottom:16px;" open>
         <summary style="cursor:pointer;font-weight:900;">Advanced Matching Review</summary>
@@ -52813,6 +52860,27 @@ function runPaymentMatchingSmokeTests(){
   writeJSON(FILES.billed,[1,2,3,4,5].map(i=>({org_id,billed_id:'r'+i,claim_number:String(2000+i),claim_id:String(2000+i)}))); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id,{write:true}); bb=readJSON(FILES.billed,[]).filter(c=>c.org_id===org_id); assert(bb.length===5 && bb.every(tjhpIsRealBilledClaim),'T73');
   writeJSON(FILES.billed,billed); writeJSON(FILES.payments,[{org_id,payment_id:'d1',claim_number:'1001',amount_paid:100,source_file:'del.csv'}]); tjhpRecomputeClaimPaymentsFromLedgerForOrg(org_id,{write:true}); writeJSON(FILES.payments,[]); tjhpRecomputeClaimPaymentsFromLedgerForOrg(org_id,{write:true}); bb=readJSON(FILES.billed,[]).filter(c=>c.claim_number==='1001')[0]; assert(num(bb.paid_amount)===0,'T74');
   writeJSON(FILES.billed,billed.map((c,i)=>({...c,amount_billed:[110,160,210,85,115][i],paid_amount:[0,100,210,40,0][i],insurance_paid:[0,100,210,40,0][i],payment_response_received_at:'x',submission_id:'s1',marked_denied:([0,4].includes(i))}))); writeJSON(FILES.payments,[]); let real=readJSON(FILES.billed,[]).filter(c=>c.org_id===org_id && tjhpIsRealBilledClaim(c)); let denied=0, underpaid=0, resolved=0, at=0; real.forEach(c=>{const expected=num(c.amount_billed||0); const paid=num(c.paid_amount||c.insurance_paid||0); if (paid<=0.0001) { denied++; at += Math.max(0, expected - paid); } else if (paid + 0.0001 < expected) { underpaid++; at += Math.max(0, expected - paid); } else { resolved++; }}); const paymentOnlyCount = readJSON(FILES.billed,[]).filter(c=>c.org_id===org_id && tjhpIsPaymentOnlyOperationalClaim(c)).length; assert(real.length===5 && denied===2 && underpaid===2 && resolved===1 && Math.round(at)===330 && paymentOnlyCount===0,'T75');
+  writeJSON(FILES.billed,[]); writeJSON(FILES.payments,[50,60,70,80,90].map((a,i)=>({org_id,payment_id:'t76'+i,claim_number:String(3001+i),amount_paid:a,source_file:'t76.csv'})));
+  tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id,{write:true});
+  bb=readJSON(FILES.billed,[]).filter(c=>c.org_id===org_id && tjhpIsPaymentOnlyOperationalClaim(c)); assert(bb.length===5 && Math.round(bb.reduce((s,c)=>s+num(c.paid_amount),0))===350 && bb.every(c=>c.excluded_from_action_center===true),'T76');
+
+  writeJSON(FILES.billed,[]); writeJSON(FILES.payments,[{org_id,payment_id:'ig1',claim_number:'1001',amount_paid:100,source_file:'ig.csv',payment_review_status:'ignored',ignored_at:nowISO()}]); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id,{write:true});
+  assert(readJSON(FILES.billed,[]).filter(c=>c.org_id===org_id && tjhpIsPaymentOnlyOperationalClaim(c)).length===0,'T77A');
+  writeJSON(FILES.billed,[{org_id,billed_id:'real1001',claim_number:'1001',claim_id:'1001'}]); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id,{write:true});
+  let p77=readJSON(FILES.payments,[]).find(x=>x.org_id===org_id && x.payment_id==='ig1'); assert(String(p77.payment_review_status||'').toLowerCase()==='matched' && !p77.ignored_at && p77.billed_id==='real1001','T77');
+
+  writeJSON(FILES.billed,[]); writeJSON(FILES.payments,[{org_id,payment_id:'pv1',claim_number:'9001',amount_paid:20,source_file:'pv.csv'}]);
+  let p78=readJSON(FILES.payments,[])[0]; let b78=readJSON(FILES.billed,[]); tjhpCreateOrUpdateOperationalClaimFromPayment(org_id,b78,p78,{reviewStatus:'provisional_claim'}); writeJSON(FILES.payments,[p78]); writeJSON(FILES.billed,b78);
+  bb=readJSON(FILES.billed,[]).filter(c=>c.org_id===org_id && tjhpIsPaymentOnlyOperationalClaim(c)); assert(bb.length===1 && bb[0].excluded_from_action_center===true,'T78');
+
+  writeJSON(FILES.billed,[{org_id,billed_id:'PAYMENT-pv2',claim_number:'1002',claim_id:'1002',payment_only_operational:true,source_payment_id:'pv2',excluded_from_action_center:true},{org_id,billed_id:'real1002',claim_number:'1002',claim_id:'1002'}]);
+  writeJSON(FILES.payments,[{org_id,payment_id:'pv2',claim_number:'1002',amount_paid:30,payment_review_status:'provisional_claim'}]); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id,{write:true});
+  let b79=readJSON(FILES.billed,[]).filter(c=>c.org_id===org_id); let p79=readJSON(FILES.payments,[])[0]; assert(b79.filter(tjhpIsRealBilledClaim).length===1 && b79.filter(tjhpIsPaymentOnlyOperationalClaim).length===0 && String(p79.payment_review_status||'').toLowerCase()==='matched','T79');
+
+  assert(src.includes('showMatchingReview =') && src.includes('hasMatchingExceptions'),'T80A');
+  assert(src.includes('diag.unmatchedPayments.length > 0'),'T80B');
+  assert(src.includes('tjhpCreateOrUpdateOperationalClaimFromPayment(org.org_id, billedAll, p'),'T80C');
+
   } finally {
     writeJSON(FILES.billed, originalBilled);
     writeJSON(FILES.payments, originalPayments);
