@@ -6304,9 +6304,16 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   function getClaimIdFromHref(href) {
     if (!href) return "";
     try {
-      return new URL(href, window.location.origin).searchParams.get("billed_id") || "";
+      const u = new URL(href, window.location.origin);
+      return (
+        u.searchParams.get("billed_id") ||
+        u.searchParams.get("claim_id") ||
+        u.searchParams.get("claim") ||
+        u.searchParams.get("id") ||
+        ""
+      );
     } catch (_) {
-      const m = String(href).match(/[?&]billed_id=([^&#]+)/);
+      const m = String(href).match(/[?&](?:billed_id|claim_id|claim|id)=([^&#]+)/);
       return m ? decodeId(m[1]) : "";
     }
   }
@@ -6314,14 +6321,21 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   function resolveButtonClaimId(btn) {
     if (!btn) return "";
     const row = btn.closest("tr");
+    const card = btn.closest(".pipeline-card");
+    const directHref = btn.getAttribute("href") || "";
+    const scopedLink =
+      row?.querySelector('a[href*="billed_id="],a[href*="claim_id="],a[href*="claim="],a[href*="id="]') ||
+      card?.querySelector('a[href*="billed_id="],a[href*="claim_id="],a[href*="claim="],a[href*="id="]');
     return decodeId(
+      btn.getAttribute("data-open-claim-panel") ||
+      btn.getAttribute("data-billed-id") ||
+      btn.getAttribute("data-claim-panel-id") ||
+      btn.getAttribute("data-claim-id") ||
       btn.getAttribute("data-id") ||
       (row && row.getAttribute("data-claim")) ||
-      getClaimIdFromHref(
-        row &&
-        row.querySelector('a[href*="billed_id="]') &&
-        row.querySelector('a[href*="billed_id="]').getAttribute("href")
-      ) ||
+      (card && card.getAttribute("data-claim")) ||
+      getClaimIdFromHref(directHref) ||
+      getClaimIdFromHref(scopedLink && scopedLink.getAttribute("href")) ||
       ""
     );
   }
@@ -6471,6 +6485,27 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     });
   }
 
+  function forceViewClaimPanelWiring() {
+    document.querySelectorAll(".view-claim-btn").forEach(function(el){
+      const id = resolveButtonClaimId(el);
+      if (!id) return;
+
+      el.setAttribute("data-open-claim-panel", id);
+      el.setAttribute("data-billed-id", id);
+      el.setAttribute("data-id", id);
+
+      if (!el.getAttribute("data-fallback-href")) {
+        const href = el.getAttribute("href") || resolveFallbackHref(el, id);
+        el.setAttribute("data-fallback-href", href || ("/claim-detail?billed_id=" + encodeURIComponent(id)));
+      }
+
+      el.setAttribute(
+        "onclick",
+        "return window.__tjhpOpenClaimPanelOrNavigate ? window.__tjhpOpenClaimPanelOrNavigate(event, this) : false;"
+      );
+    });
+  }
+
   function buildClaimRegistry() {
     const map = new Map();
 
@@ -6502,6 +6537,31 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       };
 
       map.set(id, record);
+    });
+
+    document.querySelectorAll(".pipeline-card").forEach((card) => {
+      const viewBtn = card.querySelector(".view-claim-btn");
+      if (!viewBtn) return;
+      const id = resolveButtonClaimId(viewBtn);
+      if (!id) return;
+      const claimHref =
+        viewBtn.getAttribute("data-fallback-href") ||
+        viewBtn.getAttribute("href") ||
+        resolveFallbackHref(viewBtn, id);
+
+      map.set(id, {
+        id,
+        claimHref,
+        claimNumber: card.querySelector(".pipeline-card-title")?.textContent?.trim() || "",
+        payer: card.querySelector(".pipeline-card-sub")?.textContent?.trim() || "",
+        billed: "-",
+        expected: "-",
+        paid: "-",
+        atRisk: "-",
+        risk: "-",
+        agingOrDays: "-",
+        status: card.querySelector(".badge")?.textContent?.trim() || "Unknown"
+      });
     });
 
     return map;
@@ -6721,30 +6781,37 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
   }
 
   function safeOpenClaimPanel(id) {
-    const rawId = String(id || "").trim();
-    if (!rawId) return false;
+    const attempts = [...new Set([
+      String(id || "").trim(),
+      decodeId(id),
+      encodeURIComponent(decodeId(id))
+    ].filter(Boolean))];
+    if (!attempts.length) return false;
+
     if (typeof window.openClaimPanel === "function") {
-      try {
-        const opened = !!window.openClaimPanel(rawId);
-        if (opened) return true;
-        const panel = document.getElementById("claimSidePanel");
-        if (panel && panel.getAttribute("aria-hidden") === "false") {
-          return true;
+      for (const attempt of attempts) {
+        try {
+          window.openClaimPanel(attempt);
+          const panel = document.getElementById("claimSidePanel");
+          if (panel && panel.getAttribute("aria-hidden") === "false") {
+            return true;
+          }
+        } catch (err) {
+          console.warn("openClaimPanel failed; trying fallback panel.", err);
         }
-      } catch (err) {
-        console.warn("openClaimPanel failed; trying fallback panel.", err);
       }
     }
     if (typeof openFallbackPanel === "function") {
-      try {
-        const fallbackOpened = !!openFallbackPanel(rawId);
-        if (fallbackOpened) return true;
-        const fallbackPanel = document.querySelector("[data-tjhp-panel], #tjhpClaimPanel, #claimFallbackPanel");
-        if (fallbackPanel && fallbackPanel.getAttribute("aria-hidden") === "false") {
-          return true;
+      for (const attempt of attempts) {
+        try {
+          openFallbackPanel(attempt);
+          const fallbackPanel = document.getElementById("tjhpClaimPanel");
+          if (fallbackPanel && fallbackPanel.getAttribute("aria-hidden") === "false") {
+            return true;
+          }
+        } catch (err) {
+          console.warn("openFallbackPanel failed.", err);
         }
-      } catch (err) {
-        console.warn("openFallbackPanel failed.", err);
       }
     }
     return false;
@@ -6754,6 +6821,14 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     try {
       const el = trigger || (event && event.currentTarget) || (event && event.target);
       if (!el) return true;
+
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === "function") {
+          event.stopImmediatePropagation();
+        }
+      }
 
       const id =
         el.getAttribute("data-open-claim-panel") ||
@@ -6765,20 +6840,12 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         (typeof resolveButtonClaimId === "function" ? resolveButtonClaimId(el) : "") ||
         "";
 
-      if (!id) return true;
+      if (!id) return false;
 
       const fallbackHref =
         el.getAttribute("data-fallback-href") ||
         el.getAttribute("href") ||
         "/claim-detail?billed_id=" + encodeURIComponent(id);
-
-      if (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (typeof event.stopImmediatePropagation === "function") {
-          event.stopImmediatePropagation();
-        }
-      }
 
       window.__tjhpLastOpenedClaimId = id;
 
@@ -6819,6 +6886,12 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
 
       return window.__tjhpOpenClaimPanelOrNavigate(event, trigger);
     }, true);
+
+    document.addEventListener("click", function(event){
+      const view = event.target && event.target.closest ? event.target.closest(".view-claim-btn") : null;
+      if (!view) return;
+      return window.__tjhpOpenClaimPanelOrNavigate(event, view);
+    }, true);
   }
 
   document.addEventListener("click", function(e){
@@ -6851,7 +6924,13 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
 
   patchRiskHeaderAndTooltip();
   ensureMissingActionCenterViewButtons();
+  forceViewClaimPanelWiring();
   applyClaimIdsLifecycleFilter();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", forceViewClaimPanelWiring, { once: true });
+  } else {
+    forceViewClaimPanelWiring();
+  }
 
   // ==============================
   // 🔥 FINAL CLAIMS LIFECYCLE FIX (STABLE)
@@ -6892,6 +6971,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         btn.setAttribute("data-fallback-href", "/claim-detail?billed_id=" + encodedId);
         row.setAttribute("data-claim", id);
       });
+      forceViewClaimPanelWiring();
 
       // =========================
       // 2. STATUS PILL (STRUCTURE SAFE FIX)
@@ -7174,6 +7254,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       fixLifecycle();
       fixResolvedLifecycleActionButtonsStrong();
       fixPanel();
+      forceViewClaimPanelWiring();
 
       const livePanel =
         document.getElementById("claimSidePanel") ||
