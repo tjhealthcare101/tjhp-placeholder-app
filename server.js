@@ -6652,49 +6652,81 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     return '<a class="btn small secondary" href="/actions?claim=' + encodeURIComponent(id) + '">Open in Action Center</a>';
   }
 
-  function openFallbackPanel(id) {
+  function openFallbackPanel(id, trigger) {
     const rawId = String(id || "").trim();
     if (!rawId) return false;
-    const decodedId = decodeURIComponent(rawId);
+    let decodedId = rawId;
+    try { decodedId = decodeURIComponent(rawId); } catch (_) {}
     const claims = typeof buildClaimRegistry === "function" ? buildClaimRegistry() : new Map();
     const registry = window.__tjhpClaimPanelRegistry instanceof Map
       ? window.__tjhpClaimPanelRegistry
       : new Map();
+    const lookupAttempts = Array.from(new Set([
+      rawId,
+      decodedId,
+      encodeURIComponent(decodedId)
+    ].filter(Boolean)));
     const claim =
-      claims.get(rawId) ||
-      claims.get(decodedId) ||
-      registry.get(rawId) ||
-      registry.get(decodedId) ||
+      lookupAttempts.map((attempt) => claims.get(attempt)).find(Boolean) ||
+      lookupAttempts.map((attempt) => registry.get(attempt)).find(Boolean) ||
       Array.from(claims.values()).find(function(c){
-        return String(c?.billed_id || c?.billedId || "") === decodedId ||
-               String(c?.claim_number || c?.claimNumber || "") === decodedId;
+        return lookupAttempts.some((attempt) =>
+          String(c?.billed_id || c?.billedId || "") === attempt ||
+          String(c?.claim_number || c?.claimNumber || "") === attempt ||
+          String(c?.claim_id || "") === attempt ||
+          String(c?.id || "") === attempt
+        );
       }) ||
       Array.from(registry.values()).find(function(c){
-        return String(c?.billed_id || c?.billedId || "") === decodedId ||
-               String(c?.claim_number || c?.claimNumber || "") === decodedId;
+        return lookupAttempts.some((attempt) =>
+          String(c?.billed_id || c?.billedId || "") === attempt ||
+          String(c?.claim_number || c?.claimNumber || "") === attempt ||
+          String(c?.claim_id || "") === attempt ||
+          String(c?.id || "") === attempt
+        );
       });
-    if (!claim) return false;
+    const row = trigger && trigger.closest ? trigger.closest("tr") : null;
+    const card = trigger && trigger.closest ? trigger.closest(".pipeline-card") : null;
+    const cells = row ? Array.from(row.children || []) : [];
+    const fallbackHref =
+      trigger?.getAttribute("data-fallback-href") ||
+      trigger?.getAttribute("href") ||
+      (decodedId ? "/claim-detail?billed_id=" + encodeURIComponent(decodedId) : "/claims-lifecycle");
+    const fallbackClaim = {
+      id: decodedId,
+      claimHref: fallbackHref,
+      claimNumber: cells[0]?.textContent?.trim() || card?.querySelector(".pipeline-card-title")?.textContent?.trim() || ("Claim " + decodedId),
+      payer: cells[1]?.textContent?.trim() || card?.querySelector(".pipeline-card-sub")?.textContent?.trim() || "",
+      billed: cells[2]?.textContent?.trim() || "-",
+      expected: cells[3]?.textContent?.trim() || "-",
+      paid: cells[4]?.textContent?.trim() || "-",
+      atRisk: cells[5]?.textContent?.trim() || cells[7]?.textContent?.trim() || "-",
+      risk: cells[6]?.textContent?.trim() || cells[8]?.textContent?.trim() || "-",
+      agingOrDays: cells[7]?.textContent?.trim() || cells[10]?.textContent?.trim() || "-",
+      status: row?.querySelector(".badge")?.textContent?.trim() || card?.querySelector(".badge")?.textContent?.trim() || "View Only"
+    };
+    const panelClaim = claim || fallbackClaim;
 
     const ui = ensureFallbackPanel();
-    const badgeCls = badgeClassForStatusText(claim.status);
+    const badgeCls = badgeClassForStatusText(panelClaim.status);
 
     ui.body.innerHTML = ""
-      + '<div style="font-size:20px;font-weight:900;margin-bottom:10px;">' + esc(claim.claimNumber || ("Claim #" + id)) + "</div>"
-      + '<div class="muted small" style="margin-bottom:14px;">' + esc(claim.payer || "") + "</div>"
+      + '<div style="font-size:20px;font-weight:900;margin-bottom:10px;">' + esc(panelClaim.claimNumber || ("Claim #" + decodedId)) + "</div>"
+      + '<div class="muted small" style="margin-bottom:14px;">' + esc(panelClaim.payer || "") + "</div>"
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">'
-      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Billed</div><div style="font-weight:900;">' + esc(claim.billed) + "</div></div>"
-      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Expected</div><div style="font-weight:900;">' + esc(claim.expected) + "</div></div>"
-      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Paid</div><div style="font-weight:900;">' + esc(claim.paid) + "</div></div>"
-      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + esc(claim.atRisk) + "</div></div>"
+      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Billed</div><div style="font-weight:900;">' + esc(panelClaim.billed) + "</div></div>"
+      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Expected</div><div style="font-weight:900;">' + esc(panelClaim.expected) + "</div></div>"
+      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Paid</div><div style="font-weight:900;">' + esc(panelClaim.paid) + "</div></div>"
+      +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + esc(panelClaim.atRisk) + "</div></div>"
       + '</div>'
       + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
-      +   '<span class="badge ' + esc(badgeCls) + '">' + esc(claim.status || "Unknown") + "</span>"
-      +   '<span class="badge">Risk Score ' + esc(claim.risk || "-") + "</span>"
+      +   '<span class="badge ' + esc(badgeCls) + '">' + esc(panelClaim.status || "Unknown") + "</span>"
+      +   '<span class="badge">Risk Score ' + esc(panelClaim.risk || "-") + "</span>"
       + '</div>'
-      + '<div class="muted small" style="margin-bottom:12px;">Age / timing: ' + esc(claim.agingOrDays || "-") + "</div>"
+      + '<div class="muted small" style="margin-bottom:12px;">Age / timing: ' + esc(panelClaim.agingOrDays || "-") + "</div>"
       + '<div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
-      +   '<a class="btn small secondary" href="' + esc(claim.claimHref) + '">Open Full Claim</a>'
-      +   renderPrimaryAction(id, claim.status)
+      +   '<a class="btn small secondary" href="' + esc(panelClaim.claimHref) + '">Open Full Claim</a>'
+      +   renderPrimaryAction(decodedId, panelClaim.status)
       + '</div>';
 
     document.body.style.overflow = "hidden";
@@ -6780,7 +6812,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     }
   }
 
-  function safeOpenClaimPanel(id) {
+  function safeOpenClaimPanel(id, trigger) {
     const attempts = [...new Set([
       String(id || "").trim(),
       decodeId(id),
@@ -6804,7 +6836,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     if (typeof openFallbackPanel === "function") {
       for (const attempt of attempts) {
         try {
-          openFallbackPanel(attempt);
+          openFallbackPanel(attempt, trigger);
           const fallbackPanel = document.getElementById("tjhpClaimPanel");
           if (fallbackPanel && fallbackPanel.getAttribute("aria-hidden") === "false") {
             return true;
@@ -6840,17 +6872,16 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         (typeof resolveButtonClaimId === "function" ? resolveButtonClaimId(el) : "") ||
         "";
 
-      if (!id) return false;
-
+      const isViewClaimButton = el.classList?.contains("view-claim-btn") || !!el.closest?.(".view-claim-btn");
       const fallbackHref =
         el.getAttribute("data-fallback-href") ||
         el.getAttribute("href") ||
         "/claim-detail?billed_id=" + encodeURIComponent(id);
 
+      if (!id) return isViewClaimButton ? false : true;
       window.__tjhpLastOpenedClaimId = id;
-
       const opened = typeof safeOpenClaimPanel === "function"
-        ? !!safeOpenClaimPanel(id)
+        ? !!safeOpenClaimPanel(id, el)
         : false;
 
       if (opened) {
@@ -6862,6 +6893,12 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         return false;
       }
 
+      if (isViewClaimButton) {
+        const fallbackOpened = typeof openFallbackPanel === "function"
+          ? !!openFallbackPanel(id, el)
+          : false;
+        if (fallbackOpened) return false;
+      }
       window.location.assign(fallbackHref);
       return false;
     } catch(err) {
@@ -6902,7 +6939,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     let tries = 0;
 
     const interval = setInterval(() => {
-      fixPanel();
+      if (typeof fixPanel === "function") fixPanel();
       tries++;
 
       if (tries > 8) clearInterval(interval);
@@ -35766,11 +35803,18 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
           const whyAmounts = why.amounts || {};
           const whyEvidence = Array.isArray(why.evidence) ? why.evidence : [];
           const whyMissing = Array.isArray(why.missingSupport) ? why.missingSupport : [];
+          const panelAtRiskAmount = Number(derived && derived.atRiskAmount ? derived.atRiskAmount : 0);
+          const panelStageLabel = String(stage || "");
+          const panelStageLower = panelStageLabel.toLowerCase();
+          const whyTitle =
+            (panelAtRiskAmount <= 0 && panelStageLower === "resolved")
+              ? "No active recovery flag"
+              : "Why this claim is flagged";
           const whyDetails = ''
             + '<details style="border:1px solid #e5e7eb;border-left:4px solid #111827;border-radius:12px;padding:12px;margin:12px 0;background:#fff;">'
             +   '<summary style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
             +     '<span>'
-            +       (Number(derived.atRiskAmount || 0) <= 0 && String(stage).toLowerCase() === 'resolved') ? '<strong>No active recovery flag</strong>' : '<strong>Why this claim is flagged</strong>'
+            +       '<strong>' + panelEsc(whyTitle) + '</strong>'
             +       '<span class="muted small" style="display:block;margin-top:4px;font-weight:700;">' + panelEsc(why.headline || "Review this claim") + '</span>'
             +     '</span>'
             +     '<span class="badge ' + panelEsc(why.badge || "warn") + '">' + panelEsc(why.stage || stage || "Review") + '</span>'
@@ -35815,7 +35859,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             + '</div>'
             + '<div style="margin-top:10px;">'
             +   '<strong>Next Best Action</strong>'
-            +   '<p class="muted small">' + panelEsc((Number(derived.atRiskAmount||0)<=0 && String(stage).toLowerCase()==='resolved') ? 'No action needed' : nextAction) + '</p>'
+            +   '<p class="muted small">' + panelEsc((panelAtRiskAmount <= 0 && panelStageLower === "resolved") ? "No action needed" : nextAction) + '</p>'
             + '</div>'
             + '<div style="margin-top:12px;">'
             +   actionButton
@@ -40011,23 +40055,22 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
 
       function registerClaimPanelClaim(claim){
         if (!claim) return;
+        const keys = [
+          claim.billed_id,
+          claim.claim_number,
+          claim.claim_id,
+          claim.id
+        ].map((v) => String(v || "").trim()).filter(Boolean);
 
-        const billedId = String(claim.billed_id || "").trim();
-        const claimNumber = String(claim.claim_number || "").trim();
-
-        if (billedId) {
-          claimMap.set(billedId, claim);
-          claimMap.set(encodeURIComponent(billedId), claim);
-          window.__tjhpClaimPanelRegistry.set(billedId, claim);
-          window.__tjhpClaimPanelRegistry.set(encodeURIComponent(billedId), claim);
-        }
-
-        if (claimNumber) {
-          claimMap.set(claimNumber, claim);
-          claimMap.set(encodeURIComponent(claimNumber), claim);
-          window.__tjhpClaimPanelRegistry.set(claimNumber, claim);
-          window.__tjhpClaimPanelRegistry.set(encodeURIComponent(claimNumber), claim);
-        }
+        keys.forEach((key) => {
+          const variants = new Set([key, encodeURIComponent(key)]);
+          try { variants.add(decodeURIComponent(key)); } catch (_) {}
+          variants.forEach((variant) => {
+            if (!variant) return;
+            claimMap.set(variant, claim);
+            window.__tjhpClaimPanelRegistry.set(variant, claim);
+          });
+        });
       }
 
       (panelClaims || []).forEach(registerClaimPanelClaim);
@@ -40104,23 +40147,35 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
         if (!id) return false;
         const ui = ensureClaimPanel();
         if (!ui || !ui.panel || !ui.content) return false;
-        const decodedId = decodeURIComponent(String(id || ""));
+        const rawId = String(id || "").trim();
+        let decodedId = rawId;
+        try { decodedId = decodeURIComponent(rawId); } catch (_) {}
+        const lookupAttempts = Array.from(new Set([
+          rawId,
+          decodedId,
+          encodeURIComponent(decodedId)
+        ].filter(Boolean)));
         const registry = window.__tjhpClaimPanelRegistry instanceof Map
           ? window.__tjhpClaimPanelRegistry
           : new Map();
-        const rawId = String(id || "");
         const claim =
-          claimMap.get(decodedId) ||
-          claimMap.get(rawId) ||
-          registry.get(decodedId) ||
-          registry.get(rawId) ||
+          lookupAttempts.map((attempt) => claimMap.get(attempt)).find(Boolean) ||
+          lookupAttempts.map((attempt) => registry.get(attempt)).find(Boolean) ||
           Array.from(claimMap.values()).find(function(c){
-            return String(c?.billed_id || "") === decodedId ||
-                   String(c?.claim_number || "") === decodedId;
+            return lookupAttempts.some((attempt) =>
+              String(c?.billed_id || "") === attempt ||
+              String(c?.claim_number || "") === attempt ||
+              String(c?.claim_id || "") === attempt ||
+              String(c?.id || "") === attempt
+            );
           }) ||
           Array.from(registry.values()).find(function(c){
-            return String(c?.billed_id || "") === decodedId ||
-                   String(c?.claim_number || "") === decodedId;
+            return lookupAttempts.some((attempt) =>
+              String(c?.billed_id || "") === attempt ||
+              String(c?.claim_number || "") === attempt ||
+              String(c?.claim_id || "") === attempt ||
+              String(c?.id || "") === attempt
+            );
           });
         if (!claim) return false;
 
@@ -40161,11 +40216,18 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
         const whyAmounts = why.amounts || {};
         const whyEvidence = Array.isArray(why.evidence) ? why.evidence : [];
         const whyMissing = Array.isArray(why.missingSupport) ? why.missingSupport : [];
+        const panelAtRiskAmount = Number(d && d.atRiskAmount ? d.atRiskAmount : 0);
+        const panelStageLabel = String(normalizedDisplayStage || displayStage || "");
+        const panelStageLower = panelStageLabel.toLowerCase();
+        const whyTitle =
+          (panelAtRiskAmount <= 0 && panelStageLower === "resolved")
+            ? "No active recovery flag"
+            : "Why this claim is flagged";
         const whyHtml = ''
           + '<details style="border:1px solid #e5e7eb;border-left:4px solid #111827;border-radius:12px;padding:12px;margin:12px 0;background:#fff;">'
           +   '<summary style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">'
           +     '<span>'
-          +       (Number(derived.atRiskAmount || 0) <= 0 && String(stage).toLowerCase() === 'resolved') ? '<strong>No active recovery flag</strong>' : '<strong>Why this claim is flagged</strong>'
+          +       '<strong>' + panelEsc(whyTitle) + '</strong>'
           +       '<span class="muted small" style="display:block;margin-top:4px;font-weight:700;">' + panelEsc(why.headline || 'Review this claim') + '</span>'
           +     '</span>'
           +     '<span class="badge ' + panelEsc(why.badge || 'warn') + '">' + panelEsc(why.stage || normalizedDisplayStage) + '</span>'
