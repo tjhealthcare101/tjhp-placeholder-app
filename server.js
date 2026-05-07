@@ -21914,8 +21914,20 @@ function workspaceRecordAiSectionEdit(ws, channel, data){
 
 function workspaceAiOutcomeLearningSnapshot(ws, channel){
   const edits = Array.isArray(ws?.[channel]?.ai_section_edits) ? ws[channel].ai_section_edits : [];
-  return edits.slice(-20).map(e => ({ ai_edit_id: e.ai_edit_id, channel: e.channel, section_key: e.section_key, section_label: e.s
-ection_label, prompt: e.prompt, preset: e.preset, before_excerpt: String(e.before || "").slice(0, 900), after_excerpt: String(e.after || "").slice(0, 1200), applied_at: e.applied_at, outcome_status: e.outcome_status || "pending", recovered_amount: e.recovered_amount ?? null, payer: e.payer || "" }));
+  return edits.slice(-20).map(e => ({
+    ai_edit_id: e.ai_edit_id,
+    channel: e.channel,
+    section_key: e.section_key,
+    section_label: e.section_label,
+    prompt: e.prompt,
+    preset: e.preset,
+    before_excerpt: String(e.before || "").slice(0, 900),
+    after_excerpt: String(e.after || "").slice(0, 1200),
+    applied_at: e.applied_at,
+    outcome_status: e.outcome_status || "pending",
+    recovered_amount: e.recovered_amount ?? null,
+    payer: e.payer || ""
+  }));
 }
 
 function workspaceMarkAiEditsWithOutcome(ws, channel, outcome){
@@ -40346,8 +40358,7 @@ if (method === "GET" && pathname === "/actions") {
         packetFollowUpStatus.includes("awaiting_payer_response") ||
         isFollowUpDue(b.follow_up_date)
       );
-    const isAwaitingPaymentClaim = displayLifecycleStage =
-== "Awaiting Payment";
+    const isAwaitingPaymentClaim = displayLifecycleStage === "Awaiting Payment";
     const isFollowupNeededClaim = isSubmittedPacketClaim && isFollowUpDue(b.follow_up_date);
     const postSubmissionStatus = isSubmittedPacketClaim ? "Submitted Packet" : (isFollowupNeededClaim ? "Follow-Up Needed" : (isAwaitingPaymentClaim ? "Awaiting Payment" : ""));
     const isPostSubmissionClaim = !!postSubmissionStatus || isSubmittedPacketClaim;
@@ -51604,8 +51615,7 @@ if (method === "GET" && pathname === "/claim-detail") {
   const riskBand = claimRiskBand(riskScore);
   const atRisk = num(d.atRiskAmount);
   let suggested = suggestedNextActionForClaim(b);
-  c
-onst derivedStatus = String(d.lifecycleStage || b.status || "Pending");
+  const derivedStatus = String(d.lifecycleStage || b.status || "Pending");
   const isResolvedDetailClaim = String(derivedStatus || "").toLowerCase().includes("resolved");
   const workflowState = claimRecoveryWorkflowState(org.org_id, b, d);
   const resolvedForRecovery = claimIsResolvedForRecovery(b, d) || workflowState.workflowStage === "resolved";
