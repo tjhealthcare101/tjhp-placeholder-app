@@ -8387,8 +8387,7 @@ function isRiskDriverPrompt(question){
 
   return (
     score.risk >= 2 ||
-    q.inclu
-des("risk driver") ||
+    q.includes("risk driver") ||
     q.includes("risk factor") ||
     q.includes("top risks") ||
     q.includes("biggest risks")
