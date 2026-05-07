@@ -51961,6 +51961,59 @@ setInterval(() => {
   pollPacketStatuses();
 }, 2 * 60 * 1000);
 
-server.listen(PORT, HOST, () => {
-  debugLog(`TJHP server listening on ${HOST}:${PORT}`);
-});
+const IS_RAILWAY_RUNTIME = !!(
+  process.env.RAILWAY_ENVIRONMENT ||
+  process.env.RAILWAY_PROJECT_ID ||
+  process.env.RAILWAY_SERVICE_ID ||
+  process.env.RAILWAY_DEPLOYMENT_ID
+);
+
+const WANTS_UPLOAD_SMOKE_TESTS = process.env.TJHP_UPLOAD_SMOKE_TESTS === "true";
+const FORCE_UPLOAD_SMOKE_TESTS = process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true";
+
+const SHOULD_RUN_UPLOAD_SMOKE_TESTS =
+  WANTS_UPLOAD_SMOKE_TESTS &&
+  (
+    FORCE_UPLOAD_SMOKE_TESTS ||
+    (!IS_PROD && !IS_RAILWAY_RUNTIME)
+  );
+
+function startHttpServer() {
+  server.on("error", (err) => {
+    process.stderr.write(
+      "TJHP_SERVER_LISTEN_FAILED " +
+      String(err && err.stack ? err.stack : err) +
+      "\n"
+    );
+    process.exit(1);
+  });
+
+  server.listen(PORT, HOST, () => {
+    debugLog(`TJHP server listening on ${HOST}:${PORT}`);
+  });
+}
+
+if (SHOULD_RUN_UPLOAD_SMOKE_TESTS) {
+  runUploadIngestSmokeTests()
+    .then(() => {
+      process.stdout.write("UPLOAD_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    })
+    .catch(err => {
+      process.stderr.write(
+        "UPLOAD_SMOKE_TESTS_FAILED " +
+        String(err && err.stack ? err.stack : err) +
+        "\n"
+      );
+      process.exit(1);
+    });
+} else {
+  if (WANTS_UPLOAD_SMOKE_TESTS && !SHOULD_RUN_UPLOAD_SMOKE_TESTS) {
+    process.stderr.write(
+      "TJHP_UPLOAD_SMOKE_TESTS ignored in production/Railway runtime; starting web server. " +
+      "Unset TJHP_UPLOAD_SMOKE_TESTS or set TJHP_FORCE_UPLOAD_SMOKE_TESTS=true only for intentional non-web test runs.\n"
+    );
+  }
+
+  startHttpServer();
+}
