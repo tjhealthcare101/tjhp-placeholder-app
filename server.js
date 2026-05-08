@@ -8135,7 +8135,7 @@ async function safeAIRequest(executorFn) {
   }
 }
 
-  async function requestOpenAIChatCompletion({ messages, temperature = 0.2 }) {
+async function requestOpenAIChatCompletion({ messages, temperature = 0.2 }) {
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
   return safeAIRequest(async () => {
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -25152,6 +25152,105 @@ function tjhpPaymentDate(p) {
   ).trim();
 }
 
+function tjhpPickPaymentRawField(payment, keys) {
+  const raw = payment && payment._raw_row && typeof payment._raw_row === "object" ? payment._raw_row : {};
+  for (const key of keys || []) {
+    const direct = payment && payment[key] !== undefined ? payment[key] : "";
+    if (String(direct || "").trim()) return direct;
+
+    try {
+      const picked = typeof paymentPickNonEmpty === "function"
+        ? paymentPickNonEmpty(raw, [key])
+        : (typeof pickField === "function" ? pickField(raw, [key]) : raw[key]);
+      if (String(picked || "").trim()) return picked;
+    } catch (_) {
+      if (String(raw[key] || "").trim()) return raw[key];
+    }
+  }
+  return "";
+}
+
+function tjhpPaymentKnownBilledAmount(payment) {
+  const v = tjhpPickPaymentRawField(payment, [
+    "billed_amount", "amount_billed", "billed", "charge", "charge_amount", "charges",
+    "submitted_charge", "submitted_amount", "claim_charge", "total_charge", "provider_charge", "allowed_billed"
+  ]);
+  const n = num(v);
+  return n > 0 ? n : null;
+}
+
+function tjhpCopyPaymentClinicalContractFieldsToClaim(claim, payment) {
+  if (!claim || !payment) return;
+  const pick = (keys) => String(tjhpPickPaymentRawField(payment, keys) || "").trim();
+  const cpt = pick(["procedure_code","cpt","cpt_code","hcpcs","hcpcs_code","service_code","proc_code"]);
+  const dx = pick(["diagnosis_code","dx","dx_code","icd10","icd_10","diagnosis"]);
+  const network = pick(["network_status","network","in_network","contract_network"]);
+  const dos = pick(["dos","date_of_service","service_date","from_date","service_from"]);
+  if (cpt) { claim.procedure_code = cpt; claim.cpt_code = cpt; claim.cpt = cpt; }
+  if (dx) { claim.diagnosis_code = dx; claim.dx_code = dx; claim.dx = dx; }
+  if (network) claim.network_status = network;
+  if (dos) claim.dos = dos;
+}
+
+function tjhpPaymentOnlyExpectedFromContract(claim) {
+  if (!claim || !claim.org_id) return null;
+  try {
+    const expected = computeExpectedInsuranceForClaim(claim);
+    if (expected && expected.source === "contract" && num(expected.amount) > 0) {
+      return { amount: num(expected.amount), source: "contract", contract_id: expected.contract_id || "", network_status: expected.network_status || "" };
+    }
+  } catch (_) {}
+  return null;
+}
+
+function tjhpPaymentOnlyStageFromPaidExpected(paid, expectedInfo) {
+  const expectedKnown = !!(expectedInfo && num(expectedInfo.amount) > 0);
+  const expected = expectedKnown ? num(expectedInfo.amount) : null;
+  if (paid <= 0.0001) return "Denied";
+  if (expectedKnown && paid + 0.0001 < expected) return "Underpaid";
+  return "Resolved";
+}
+
+function tjhpApplyPaymentOnlyFinancialUnknowns(claim, payment) {
+  if (!claim || !payment) return claim;
+  const paid = tjhpPaymentAmount(payment);
+  const knownBilled = tjhpPaymentKnownBilledAmount(payment);
+  tjhpCopyPaymentClinicalContractFieldsToClaim(claim, payment);
+  if (knownBilled !== null) {
+    claim.amount_billed = knownBilled;
+    claim.billed_amount = knownBilled;
+    claim.payment_only_billed_unknown = false;
+  } else {
+    claim.amount_billed = 0;
+    claim.billed_amount = 0;
+    claim.payment_only_billed_unknown = true;
+  }
+  const expectedInfo = tjhpPaymentOnlyExpectedFromContract(claim);
+  if (expectedInfo) {
+    claim.expected_insurance = expectedInfo.amount;
+    claim.expected_amount = expectedInfo.amount;
+    claim.contract_expected_amount = expectedInfo.amount;
+    claim.contract_rule_id = expectedInfo.contract_id || claim.contract_rule_id || "";
+    claim.contract_applied = true;
+    claim.payment_only_expected_unknown = false;
+    claim.expected_source = "contract";
+    if (expectedInfo.network_status) claim.network_status = expectedInfo.network_status;
+  } else {
+    claim.expected_insurance = null;
+    claim.expected_amount = null;
+    claim.contract_expected_amount = null;
+    claim.payment_only_expected_unknown = true;
+    claim.expected_source = "";
+  }
+  claim.paid_amount = Math.max(0, paid);
+  claim.insurance_paid = Math.max(0, paid);
+  claim.status = tjhpPaymentOnlyStageFromPaidExpected(paid, expectedInfo);
+  claim.payment_only_zero_paid_denial = paid <= 0.0001;
+  claim.at_risk_amount = expectedInfo ? Math.max(0, expectedInfo.amount - paid) : 0;
+  claim.excluded_from_action_center = !(claim.status === "Denied" || claim.status === "Underpaid");
+  return claim;
+}
+
 function tjhpClaimKeysForBilled(claim) {
   const out = new Set();
   [claim?.billed_id, claim?.claim_number, claim?.claim_id, claim?.raw_claim_number, claim?.payer_claim_number, claim?.icn, claim?.dcn].forEach(v => {
@@ -25424,12 +25523,20 @@ function evaluateClaimDerived(claim, ctx={}){
     !!responseStatus;
 
   const expectedAmount = expectedForLifecycle;
+  const isPaymentOnlyOperational = typeof tjhpIsPaymentOnlyOperationalClaim === "function" && tjhpIsPaymentOnlyOperationalClaim(claim);
+  const paymentOnlyExpectedUnknown = isPaymentOnlyOperational && (claim.payment_only_expected_unknown === true || expectedInsurance === null || expectedInsurance === undefined);
 
   let lifecycleStage = "Paid";
   if (hasActiveAppealOrNegotiation) {
     lifecycleStage = "In Appeal/Negotiation";
   } else if (submittedFlag && !hasPaymentRecord) {
     lifecycleStage = "Waiting Payment";
+  } else if (isPaymentOnlyOperational && paidAmount <= 0.0001) {
+    lifecycleStage = "Denied";
+  } else if (isPaymentOnlyOperational && expectedInsurance !== null && expectedInsurance !== undefined && paidAmount > 0 && paidAmount + 0.0001 < Number(expectedInsurance)) {
+    lifecycleStage = "Underpaid";
+  } else if (isPaymentOnlyOperational && paidAmount > 0) {
+    lifecycleStage = "Resolved";
   } else if (hasPaymentRecord && paidAmount <= 0.0001 && expectedAmount > 0) {
     lifecycleStage = "Denied";
     const settings = getPracticeSettings(claim.org_id);
@@ -25447,7 +25554,10 @@ function evaluateClaimDerived(claim, ctx={}){
   }
 
   let atRiskAmount = 0;
-  if (lifecycleStage === "Denied") atRiskAmount = Math.max(0, expectedForLifecycle - paidAmount);
+  if (isPaymentOnlyOperational) {
+    if (paymentOnlyExpectedUnknown) atRiskAmount = 0;
+    else atRiskAmount = Math.max(0, Number(expectedInsurance || 0) - paidAmount);
+  } else if (lifecycleStage === "Denied") atRiskAmount = Math.max(0, expectedForLifecycle - paidAmount);
   else if (lifecycleStage === "Underpaid") atRiskAmount = Math.max(0, remainingForLifecycle);
   else if (lifecycleStage === "Waiting Payment" || lifecycleStage === "Submitted") atRiskAmount = Math.max(0, expectedForLifecycle - paidAmount);
   else if (lifecycleStage === "Patient Follow-Up") atRiskAmount = patientBalanceRemaining;
@@ -26046,7 +26156,8 @@ function getClaimsVisibleForMetrics(org_id, billedAll) {
     const displayId = identity || `PAYMENT-${paymentId.slice(0, 8)}`;
     const activityAt = tjhpPaymentUploadActivityDate(p);
     const actualPaidAt = tjhpPaymentDate(p) || activityAt;
-    return { billed_id: `PAYMENT-${paymentId}`, org_id, claim_number: displayId, claim_id: displayId, payer: p.payer || p.payer_name || "", amount_billed: Math.max(0, paid), billed_amount: Math.max(0, paid), expected_insurance: Math.max(0, paid), expected_amount: Math.max(0, paid), paid_amount: Math.max(0, paid), insurance_paid: Math.max(0, paid), paid_at: actualPaidAt, payment_activity_at: activityAt, payment_uploaded_at: activityAt, last_payment_sync_at: activityAt, status: paid > 0 ? "Resolved" : "Payment Review", payment_only_operational: true, payment_only_claim: true, derived_from_payment_only: true, provisional_claim: true, payment_identity_missing: !identity, payment_metric_anchor: !identity, excluded_from_action_center: true, source_payment_id: paymentId, source_file: p.source_file || p.source || "", payment_source: p.source_file || p.source || "payment_upload", created_at: p.created_at || activityAt, updated_at: activityAt };
+    const baseClaim = { billed_id: `PAYMENT-${paymentId}`, org_id, claim_number: displayId, claim_id: displayId, payer: p.payer || p.payer_name || "", amount_billed: 0, billed_amount: 0, expected_insurance: null, expected_amount: null, paid_amount: Math.max(0, paid), insurance_paid: Math.max(0, paid), paid_at: actualPaidAt, payment_activity_at: activityAt, payment_uploaded_at: activityAt, last_payment_sync_at: activityAt, status: paid <= 0.0001 ? "Denied" : "Resolved", payment_only_operational: true, payment_only_claim: true, derived_from_payment_only: true, provisional_claim: true, payment_identity_missing: !identity, payment_metric_anchor: !identity, excluded_from_action_center: paid > 0, source_payment_id: paymentId, source_file: p.source_file || p.source || "", payment_source: p.source_file || p.source || "payment_upload", created_at: p.created_at || activityAt, updated_at: activityAt };
+    return tjhpApplyPaymentOnlyFinancialUnknowns(baseClaim, p);
   });
 }
 
@@ -26063,14 +26174,15 @@ function tjhpCreateOrUpdateOperationalClaimFromPayment(org_id, billedAll, paymen
   let claim = tjhpOperationalClaimForPaymentId(org_id, billedAll, paymentId);
   let changed = false;
   if (!claim) {
-    claim = { billed_id: `PAYMENT-${paymentId}`, org_id, claim_number: displayId, claim_id: displayId, payer: payment.payer || payment.payer_name || "", amount_billed: Math.max(0, paid), billed_amount: Math.max(0, paid), expected_insurance: Math.max(0, paid), expected_amount: Math.max(0, paid), paid_amount: Math.max(0, paid), insurance_paid: Math.max(0, paid), paid_at: actualPaidAt, payment_activity_at: paymentActivityAt, payment_uploaded_at: paymentActivityAt, last_payment_sync_at: nowISO(), status: paid > 0 ? "Resolved" : "Payment Review", payment_only_operational: true, payment_only_claim: true, derived_from_payment_only: true, provisional_claim: true, payment_identity_missing: !identity, payment_metric_anchor: !identity, excluded_from_action_center: true, source_payment_id: paymentId, source_file: sourceFile, payment_source: sourceFile || "payment_upload", created_at: payment.created_at || paymentActivityAt || nowISO(), updated_at: nowISO() };
+    claim = { billed_id: `PAYMENT-${paymentId}`, org_id, claim_number: displayId, claim_id: displayId, payer: payment.payer || payment.payer_name || "", amount_billed: 0, billed_amount: 0, expected_insurance: null, expected_amount: null, contract_expected_amount: null, paid_amount: Math.max(0, paid), insurance_paid: Math.max(0, paid), paid_at: actualPaidAt, payment_activity_at: paymentActivityAt, payment_uploaded_at: paymentActivityAt, last_payment_sync_at: nowISO(), status: paid <= 0.0001 ? "Denied" : "Resolved", payment_only_operational: true, payment_only_claim: true, derived_from_payment_only: true, provisional_claim: true, payment_only_billed_unknown: true, payment_only_expected_unknown: true, payment_only_zero_paid_denial: paid <= 0.0001, payment_identity_missing: !identity, payment_metric_anchor: !identity, excluded_from_action_center: paid > 0, source_payment_id: paymentId, source_file: sourceFile, payment_source: sourceFile || "payment_upload", created_at: payment.created_at || paymentActivityAt || nowISO(), updated_at: nowISO() };
+    tjhpApplyPaymentOnlyFinancialUnknowns(claim, payment);
     billedAll.push(claim); changed = true;
   } else {
     const before = JSON.stringify(claim);
     claim.claim_number = displayId; claim.claim_id = displayId; claim.payer = payment.payer || payment.payer_name || claim.payer || "";
-    claim.amount_billed = Math.max(0, paid); claim.billed_amount = Math.max(0, paid); claim.expected_insurance = Math.max(0, paid); claim.expected_amount = Math.max(0, paid); claim.paid_amount = Math.max(0, paid); claim.insurance_paid = Math.max(0, paid);
-    claim.paid_at = actualPaidAt || claim.paid_at || nowISO(); claim.payment_activity_at = paymentActivityAt || claim.payment_activity_at || claim.created_at || nowISO(); claim.payment_uploaded_at = paymentActivityAt || claim.payment_uploaded_at || claim.created_at || nowISO(); claim.last_payment_sync_at = nowISO(); claim.status = paid > 0 ? "Resolved" : "Payment Review";
-    claim.payment_only_operational = true; claim.payment_only_claim = true; claim.derived_from_payment_only = true; claim.provisional_claim = true; claim.excluded_from_action_center = true;
+    claim.paid_amount = Math.max(0, paid); claim.insurance_paid = Math.max(0, paid); tjhpApplyPaymentOnlyFinancialUnknowns(claim, payment);
+    claim.paid_at = actualPaidAt || claim.paid_at || nowISO(); claim.payment_activity_at = paymentActivityAt || claim.payment_activity_at || claim.created_at || nowISO(); claim.payment_uploaded_at = paymentActivityAt || claim.payment_uploaded_at || claim.created_at || nowISO(); claim.last_payment_sync_at = nowISO();
+    claim.payment_only_operational = true; claim.payment_only_claim = true; claim.derived_from_payment_only = true; claim.provisional_claim = true;
     claim.payment_identity_missing = !identity; claim.payment_metric_anchor = !identity; claim.source_payment_id = paymentId; claim.source_file = sourceFile || claim.source_file || ""; claim.payment_source = sourceFile || claim.payment_source || "payment_upload"; claim.updated_at = nowISO();
     changed = JSON.stringify(claim) !== before;
   }
@@ -36264,6 +36376,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                   ? d.hasPaymentResponse
                   : ((paid > 0) || statusLabel === "Denied" || statusLabel === "Underpaid" || statusLabel === "Resolved");
               const hasExpectedMatch = d.expectedInsurance !== null && d.expectedInsurance !== undefined;
+              const rowPaymentOnly = typeof tjhpIsPaymentOnlyOperationalClaim === "function" && tjhpIsPaymentOnlyOperationalClaim(c);
+              const rowBilledDisplay = rowPaymentOnly && c.payment_only_billed_unknown === true ? "Unknown" : money(c.amount_billed || c.billed_amount || 0);
+              const rowExpectedDisplay = rowPaymentOnly && c.payment_only_expected_unknown === true ? "Unknown" : (d.expectedInsurance !== null && d.expectedInsurance !== undefined ? money(d.expectedInsurance) : "-");
 
               const actionParts = [
                 `
@@ -36287,8 +36402,10 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
         </a>
                 `);
               } else {
-                if (!hasExpectedMatch) {
-                  actionParts.push(`<button class="btn secondary small" type="button">Fix Match</button>`);
+                if (rowPaymentOnly) {
+                  actionParts.push(`<a class="btn secondary small" href="/data-management/matching-review">Review Payment</a>`);
+                } else if (!hasExpectedMatch) {
+                  actionParts.push(`<a class="btn secondary small" href="/data-management?tab=reimbursement&focus_payer=${encodeURIComponent(c.payer || "")}">Add Contract Rule</a>`);
                 }
 
                 if (statusLabel === "Denied") {
@@ -36316,8 +36433,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                     </a>
                   </td>
                   <td>${safeStr(c.payer || "")}</td>
-                  <td>${formatMoneyUI(c.amount_billed || 0)}</td>
-                  <td>${d.expectedInsurance ? formatMoneyUI(d.expectedInsurance) : "-"}</td>
+                  <td>${rowBilledDisplay}</td>
+                  <td>${rowExpectedDisplay}</td>
                   <td>${formatMoneyUI(d.paidAmount || 0)}</td>
                   <td>${formatMoneyUI(d.atRiskAmount || 0)}</td>
                   <td style="font-weight:800;color:${riskColor};">
@@ -36698,6 +36815,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             displayStage === "Underpaid" ? "underpaid" :
             "";
           const hasExpected = d.expectedInsurance !== null && d.expectedInsurance !== undefined;
+        const paymentOnly = typeof tjhpIsPaymentOnlyOperationalClaim === "function" && tjhpIsPaymentOnlyOperationalClaim(claim);
+        const panelBilledDisplay = paymentOnly && claim.payment_only_billed_unknown === true ? "Unknown" : panelMoney(claim.amount_billed || claim.billed_amount || 0);
+        const panelExpectedDisplay = paymentOnly && claim.payment_only_expected_unknown === true ? "Unknown" : (d.expectedInsurance !== null && d.expectedInsurance !== undefined ? panelMoney(d.expectedInsurance) : "-");
           const primaryAction = (
               normalizedDisplayStage === "Resolved" ||
               normalizedDisplayStage === "Paid" ||
@@ -36719,8 +36839,8 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
             + '<div style="font-size:20px;font-weight:900;margin-bottom:10px;">Claim #' + panelEsc(claim.claim_number || "") + '</div>'
             + '<div class="muted small" style="margin-bottom:14px;">' + panelEsc(claim.payer || "") + ' • ' + panelEsc(claim.dos || "No DOS") + '</div>'
             + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">'
-            +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Billed</div><div style="font-weight:900;">' + panelMoney(claim.amount_billed || 0) + '</div></div>'
-            +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Expected</div><div style="font-weight:900;">' + (hasExpected ? panelMoney(d.expectedInsurance) : "-") + '</div></div>'
+            +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Billed</div><div style="font-weight:900;">' + panelBilledDisplay + '</div></div>'
+            +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Expected</div><div style="font-weight:900;">' + panelExpectedDisplay + '</div></div>
             +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Paid</div><div style="font-weight:900;">' + panelMoney(d.paidAmount || 0) + '</div></div>'
             +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + panelMoney(d.atRiskAmount || 0) + '</div></div>'
             + '</div>'
@@ -40917,6 +41037,9 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
           displayStage === "Underpaid" ? "underpaid" :
           "";
         const hasExpected = d.expectedInsurance !== null && d.expectedInsurance !== undefined;
+        const paymentOnly = typeof tjhpIsPaymentOnlyOperationalClaim === "function" && tjhpIsPaymentOnlyOperationalClaim(claim);
+        const panelBilledDisplay = paymentOnly && claim.payment_only_billed_unknown === true ? "Unknown" : panelMoney(claim.amount_billed || claim.billed_amount || 0);
+        const panelExpectedDisplay = paymentOnly && claim.payment_only_expected_unknown === true ? "Unknown" : (d.expectedInsurance !== null && d.expectedInsurance !== undefined ? panelMoney(d.expectedInsurance) : "-");
         const isActionCenter = window.location.pathname.includes("/actions");
 
         const primaryAction = (
@@ -40975,8 +41098,8 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
           + '<div style="font-size:20px;font-weight:900;margin-bottom:10px;">Claim #' + panelEsc(claim.claim_number || "") + '</div>'
           + '<div class="muted small" style="margin-bottom:14px;">' + panelEsc(claim.payer || "") + ' • ' + panelEsc(claim.dos || "No DOS") + '</div>'
           + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">'
-          +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Billed</div><div style="font-weight:900;">' + panelMoney(claim.amount_billed || 0) + '</div></div>'
-          +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Expected</div><div style="font-weight:900;">' + (hasExpected ? panelMoney(d.expectedInsurance) : "-") + '</div></div>'
+          +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Billed</div><div style="font-weight:900;">' + panelBilledDisplay + '</div></div>'
+          +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Expected</div><div style="font-weight:900;">' + panelExpectedDisplay + '</div></div>'
           +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Paid</div><div style="font-weight:900;">' + panelMoney(d.paidAmount || 0) + '</div></div>'
           +   '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">' + panelMoney(d.atRiskAmount || 0) + '</div></div>'
           + '</div>'
@@ -41544,18 +41667,14 @@ if (method === "GET" && pathname === "/actions") {
     return `<tr data-claim="${safeStr(String(b.billed_id || ""))}"${rowStyleAttr}>
       <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
       <td>${safeStr(b.payer||"")}</td>
-      <td class="num">${formatMoneyUI(b.amount_billed || 0)}</td>
+      <td class="num">${(typeof tjhpIsPaymentOnlyOperationalClaim === "function" && tjhpIsPaymentOnlyOperationalClaim(b) && b.payment_only_billed_unknown === true) ? "Unknown" : formatMoneyUI(b.amount_billed || b.billed_amount || 0)}</td>
       <td class="num">
         ${
-          expectedAmount !== null
-            ? formatMoneyUI(expectedAmount)
-            : `
+          expectedDisplay !== "-" ? expectedDisplay : `
               -
               <div class="muted small">
-                No reimbursement rule found.
-                <a href="/data-management?tab=reimbursement&focus_payer=${encodeURIComponent(b.payer || "")}">
-                  Add Contract Rule
-                </a>
+                ${paymentOnly ? "No billed claim or contract match is available yet. Expected reimbursement is unknown until a billed claim or matching contract details are available." : "No reimbursement rule found."}
+                ${paymentOnly ? "" : `<a href="/data-management?tab=reimbursement&focus_payer=${encodeURIComponent(b.payer || "")}">Add Contract Rule</a>`}
               </div>
             `
         }
@@ -47207,7 +47326,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
     const batch = batches.find(b => String(b.upload_id || "") === uploadId);
     if (!batch) return redirect(res, "/data-management?tab=upload");
     const claims = readJSON(FILES.billed, []).filter(c => c.org_id === org.org_id && String(c.upload_id || "") === uploadId);
-    const claimRows = claims.map(c => `<tr><td>${safeStr(c.billed_id || c.claim_number || "")}</td><td>${safeStr(c.payer || "")}</td><td>${formatMoneyUI(c.amount_billed || 0)}</td></tr>`).join("") || '<tr><td colspan="3" class="muted">No claims for this batch.</td></tr>';
+    const claimRows = claims.map(c => `<tr><td>${safeStr(c.billed_id || c.claim_number || "")}</td><td>${safeStr(c.payer || "")}</td><td>${formatMoneyUI(c.amount_billed || c.billed_amount || 0)}</td></tr>`).join("") || '<tr><td colspan="3" class="muted">No claims for this batch.</td></tr>';
     const html = renderPage("Batch Detail", `
       <h2>Batch Detail</h2>
       <table>
@@ -52936,7 +53055,44 @@ function runPaymentMatchingSmokeTests(){
   v81=getClaimsVisibleForMetrics(org_id,readJSON(FILES.billed,[])); assert(v81.length===4,'T81E');
   assert(src.includes('claim.payment_activity_at || claim.payment_uploaded_at'),'T81F');
   assert(src.includes('const paymentRows = tjhpPaymentOnlyActivityRowsForOrg(org_id);'),'T81G');
-  assert(src.includes('if (opts.reviewStatus) { const nextStatus = String(opts.reviewStatus || ).trim();'),'T81H');
+  assert(src.includes('if (opts.reviewStatus) { const nextStatus = String(opts.reviewStatus || "").trim();'),'T81H');
+
+  // T82-T86 payment-only unknown/contract behavior
+  writeJSON(FILES.billed,[]);
+  writeJSON(FILES.payments,[{org_id,payment_id:'t82',payer:'Cigna',amount_paid:210,source_file:'t82.csv'}]);
+  tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id,{write:true});
+  let t82=readJSON(FILES.billed,[]).find(c=>c.org_id===org_id && c.source_payment_id==='t82');
+  assert(t82 && t82.payment_only_billed_unknown===true && t82.payment_only_expected_unknown===true && num(t82.amount_billed)===0 && num(t82.billed_amount)===0 && t82.expected_insurance==null && t82.expected_amount==null && num(t82.paid_amount)===210 && t82.status==='Resolved','T82');
+
+  writeJSON(FILES.billed,[]);
+  writeJSON(FILES.payments,[{org_id,payment_id:'t83',payer:'BlueCross',amount_paid:0,source_file:'t83.csv'}]);
+  tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id,{write:true});
+  let t83=readJSON(FILES.billed,[]).find(c=>c.org_id===org_id && c.source_payment_id==='t83');
+  assert(t83 && t83.status==='Denied' && t83.payment_only_zero_paid_denial===true && t83.payment_only_expected_unknown===true && num(t83.at_risk_amount)===0,'T83');
+
+  writeJSON(FILES.billed,[]);
+  writeJSON(FILES.payments,[{org_id,payment_id:'t84',payer:'UHC',amount_paid:40,billed_amount:120,source_file:'t84.csv'}]);
+  tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id,{write:true});
+  let t84=readJSON(FILES.billed,[]).find(c=>c.org_id===org_id && c.source_payment_id==='t84');
+  assert(t84 && t84.payment_only_billed_unknown===false && num(t84.amount_billed)===120 && num(t84.billed_amount)===120 && t84.payment_only_expected_unknown===true,'T84');
+
+  const prevComputeExpectedInsuranceForClaim = computeExpectedInsuranceForClaim;
+  computeExpectedInsuranceForClaim = function(claim){
+    if (String(claim.payer||'').toLowerCase()==='aetna' && String(claim.procedure_code||claim.cpt_code||'')==='99213' && String(claim.diagnosis_code||claim.dx_code||'')==='Z00.00') return { source:'contract', amount:110, contract_id:'T85', network_status:'In Network' };
+    return null;
+  };
+  writeJSON(FILES.billed,[]);
+  writeJSON(FILES.payments,[{org_id,payment_id:'t85',payer:'Aetna',procedure_code:'99213',diagnosis_code:'Z00.00',amount_paid:40,source_file:'t85.csv'}]);
+  tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id,{write:true});
+  let t85=readJSON(FILES.billed,[]).find(c=>c.org_id===org_id && c.source_payment_id==='t85');
+  assert(t85 && num(t85.expected_insurance)===110 && t85.payment_only_expected_unknown===false && t85.status==='Underpaid' && num(t85.at_risk_amount)===70,'T85');
+
+  writeJSON(FILES.billed,[]);
+  writeJSON(FILES.payments,[{org_id,payment_id:'t86',payer:'Aetna',procedure_code:'99213',diagnosis_code:'Z00.00',amount_paid:0,source_file:'t86.csv'}]);
+  tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id,{write:true});
+  let t86=readJSON(FILES.billed,[]).find(c=>c.org_id===org_id && c.source_payment_id==='t86');
+  assert(t86 && t86.status==='Denied' && num(t86.at_risk_amount)===110,'T86');
+  computeExpectedInsuranceForClaim = prevComputeExpectedInsuranceForClaim;
 
   } finally {
     writeJSON(FILES.billed, originalBilled);
@@ -52954,7 +53110,26 @@ function runViewPanelStaticSmokeTests(){
   assert(src.includes("vpClosestViewButton(event, null)"), "missing View capture targeting");
   assert(src.includes("btn.setAttribute(\"href\", \"#\")"), "View anchors are not neutralized");
   assert(src.includes("data-fallback-href"), "missing preserved full-claim href");
+  assert(src.includes("const baseClaim = { billed_id: `PAYMENT-${paymentId}`") && src.includes("return tjhpApplyPaymentOnlyFinancialUnknowns(baseClaim, p);"), "payment fallback is not using payment-only unknown helper");
+  assert(src.includes("claim.paid_amount = Math.max(0, paid); claim.insurance_paid = Math.max(0, paid); tjhpApplyPaymentOnlyFinancialUnknowns(claim, payment);"), "operational payment update missing payment-only unknown helper");
+  assert(src.includes("function tjhpApplyPaymentOnlyFinancialUnknowns"), "missing payment-only unknown financial helper");
+
+  assert(src.includes("payment_only_billed_unknown"), "missing payment-only billed unknown flag");
+  assert(src.includes("payment_only_expected_unknown"), "missing payment-only expected unknown flag");
+  assert(src.includes("panelBilledDisplay"), "missing panel billed display variable");
+  assert(src.includes("panelExpectedDisplay"), "missing panel expected display variable");
+  assert(src.includes("rowBilledDisplay"), "missing lifecycle row billed display variable");
+  assert(src.includes("rowExpectedDisplay"), "missing lifecycle row expected display variable");
+  assert(src.includes('Review Payment'), "payment-only review action label missing");
+  const forbiddenExpectedInsurance = "expected_insurance: Math.max(0, " + "paid)";
+  const forbiddenExpectedAmount = "expected_amount: Math.max(0, " + "paid)";
+  assert(!src.includes(forbiddenExpectedInsurance), "payment-only expected still fakes paid amount");
+  assert(!src.includes(forbiddenExpectedAmount), "payment-only expected_amount still fakes paid amount");
+  assert(!src.includes("\n  async function requestOpenAIChatCompletion"), "requestOpenAIChatCompletion has accidental leading spaces");
+  assert(src.includes("function getCoreLifecycleStageForCards") && src.includes("if (paymentOnly) {") && src.includes("if (paid <= 0.0001) return \"Denied\";"), "missing card payment-only denied logic");
+  assert(src.includes("? \"Unknown\""), "missing Unknown billed/expected display for payment-only");
   assert(src.includes("Open Full Claim"), "missing full-claim link inside panel");
+  assert(src.includes("<div class=\"muted small\">Billed</div><div style=\"font-weight:900;\">' + panelBilledDisplay +") && src.includes("<div class=\"muted small\">Expected</div><div style=\"font-weight:900;\">' + panelExpectedDisplay +"), "panel financial cards not using panel display variables");
 
   assert(src.includes('currentHref && currentHref !== "#"'), "View href # can overwrite fallback href");
   assert(src.includes('existingFallback && existingFallback !== "#"'), "existing fallback href is not preserved");
