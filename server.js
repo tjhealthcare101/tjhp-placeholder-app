@@ -41611,6 +41611,26 @@ if (method === "GET" && pathname === "/actions") {
     const expectedAmount = financials.expectedInsurance !== null
       ? Number(financials.expectedInsurance)
       : null;
+    const actionPaymentOnly =
+      typeof tjhpIsPaymentOnlyOperationalClaim === "function" &&
+      tjhpIsPaymentOnlyOperationalClaim(b);
+    const actionBilledDisplay =
+      actionPaymentOnly && b.payment_only_billed_unknown === true
+        ? "Unknown"
+        : formatMoneyUI(b.amount_billed || b.billed_amount || 0);
+    const actionExpectedDisplay =
+      actionPaymentOnly && b.payment_only_expected_unknown === true
+        ? "Unknown"
+        : (
+            expectedAmount !== null && expectedAmount !== undefined
+              ? formatMoneyUI(expectedAmount)
+              : "-"
+          );
+    const actionExpectedHelp = actionPaymentOnly
+      ? "No billed claim or contract match is available yet. Expected reimbursement is unknown until a billed claim or matching contract details are available."
+      : "No reimbursement rule found.";
+    const actionExpectedContractHref =
+      "/data-management?tab=reimbursement&focus_payer=" + encodeURIComponent(b.payer || "");
     const atRiskAmount =
       financials.insuranceRemaining !== null
         ? Number(financials.insuranceRemaining)
@@ -41721,14 +41741,16 @@ if (method === "GET" && pathname === "/actions") {
     return `<tr data-claim="${safeStr(String(b.billed_id || ""))}"${rowStyleAttr}>
       <td><a href="${claimLink}">${safeStr(b.claim_number||"")}</a></td>
       <td>${safeStr(b.payer||"")}</td>
-      <td class="num">${(typeof tjhpIsPaymentOnlyOperationalClaim === "function" && tjhpIsPaymentOnlyOperationalClaim(b) && b.payment_only_billed_unknown === true) ? "Unknown" : formatMoneyUI(b.amount_billed || b.billed_amount || 0)}</td>
+      <td class="num">${actionBilledDisplay}</td>
       <td class="num">
         ${
-          expectedDisplay !== "-" ? expectedDisplay : `
-              -
+          actionExpectedDisplay !== "Unknown" && actionExpectedDisplay !== "-"
+            ? actionExpectedDisplay
+            : `
+              ${actionExpectedDisplay}
               <div class="muted small">
-                ${paymentOnly ? "No billed claim or contract match is available yet. Expected reimbursement is unknown until a billed claim or matching contract details are available." : "No reimbursement rule found."}
-                ${paymentOnly ? "" : `<a href="/data-management?tab=reimbursement&focus_payer=${encodeURIComponent(b.payer || "")}">Add Contract Rule</a>`}
+                ${safeStr(actionExpectedHelp)}
+                <a href="${actionExpectedContractHref}">Add Contract Rule</a>
               </div>
             `
         }
@@ -53191,6 +53213,25 @@ function runPaymentMatchingSmokeTests(){
   const rowBranchEnd = rowBranchStart >= 0 ? src.indexOf("} else if (!hasExpectedMatch)", rowBranchStart) : -1;
   const rowBranch = rowBranchStart >= 0 && rowBranchEnd > rowBranchStart ? src.slice(rowBranchStart, rowBranchEnd) : "";
   assert(rowBranch.includes("Continue Appeal Draft") && rowBranch.includes("Edit Claim") && !rowBranch.includes("Review Payment") && !rowBranch.includes("Fix Match"),'T89');
+  const actionsMapStart = src.indexOf("const rows = pageItems.map(x=>{");
+  const actionsMapEnd = actionsMapStart >= 0 ? src.indexOf("  }).join(\"\\n\");", actionsMapStart) : -1;
+  const actionsMapBlock = actionsMapStart >= 0 && actionsMapEnd > actionsMapStart ? src.slice(actionsMapStart, actionsMapEnd) : "";
+  assert(actionsMapBlock.includes("const actionPaymentOnly ="), "T90A");
+  assert(actionsMapBlock.includes("const actionExpectedDisplay ="), "T90B");
+  assert(!actionsMapBlock.includes("expectedDisplay !=="), "T90C");
+  assert(!actionsMapBlock.includes("${paymentOnly ?"), "T90D");
+  assert(actionsMapBlock.includes("Add Contract Rule"), "T90E");
+  assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__ = true"), "T90F");
+  const t90Claim = { org_id, billed_id:'t90', payment_only_operational:true, payment_only_billed_unknown:true, payment_only_expected_unknown:true, paid_amount:0, insurance_paid:0, status:"Denied", payer:"Acme" };
+  const t90Financials = computeClaimFinancials(t90Claim);
+  const t90PaidAmount = Number(t90Financials.paidInsurance || 0);
+  const t90ExpectedAmount = t90Financials.expectedInsurance !== null ? Number(t90Financials.expectedInsurance) : null;
+  const t90ActionPaymentOnly = typeof tjhpIsPaymentOnlyOperationalClaim === "function" && tjhpIsPaymentOnlyOperationalClaim(t90Claim);
+  const t90ActionBilledDisplay = t90ActionPaymentOnly && t90Claim.payment_only_billed_unknown === true ? "Unknown" : formatMoneyUI(t90Claim.amount_billed || t90Claim.billed_amount || 0);
+  const t90ActionExpectedDisplay = t90ActionPaymentOnly && t90Claim.payment_only_expected_unknown === true ? "Unknown" : (t90ExpectedAmount !== null && t90ExpectedAmount !== undefined ? formatMoneyUI(t90ExpectedAmount) : "-");
+  const t90ActionExpectedHelp = t90ActionPaymentOnly ? "No billed claim or contract match is available yet. Expected reimbursement is unknown until a billed claim or matching contract details are available." : "No reimbursement rule found.";
+  const t90ActionExpectedContractHref = "/data-management?tab=reimbursement&focus_payer=" + encodeURIComponent(t90Claim.payer || "");
+  assert(t90PaidAmount === 0 && t90ActionPaymentOnly === true && t90ActionBilledDisplay === "Unknown" && t90ActionExpectedDisplay === "Unknown" && t90ActionExpectedHelp.includes("Expected reimbursement is unknown") && t90ActionExpectedContractHref.includes("focus_payer=Acme"), "T90G");
 
   } finally {
     writeJSON(FILES.billed, originalBilled);
