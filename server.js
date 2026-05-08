@@ -25349,6 +25349,38 @@ function tjhpPaymentKeys(payment) {
 
 function tjhpIsPaymentOnlyOperationalClaim(claim) { return !!(claim && (claim.payment_only_operational === true || claim.payment_metric_anchor === true || claim.payment_only_claim === true || claim.derived_from_payment_only === true || claim.payment_identity_missing === true || String(claim.source || "") === "payment_only_anchor")); }
 function tjhpIsRealBilledClaim(claim) { return !!(claim && !tjhpIsPaymentOnlyOperationalClaim(claim)); }
+function tjhpPaymentOnlyDisplayValue(claim, field, fallbackMoneyFn) {
+  const isPaymentOnly =
+    typeof tjhpIsPaymentOnlyOperationalClaim === "function" &&
+    tjhpIsPaymentOnlyOperationalClaim(claim);
+  if (!isPaymentOnly) return null;
+  if (field === "billed" && claim.payment_only_billed_unknown === true) return "Unknown";
+  if (field === "expected" && claim.payment_only_expected_unknown === true) return "Unknown";
+  return null;
+}
+function tjhpPaymentOnlyDerivedStage(claim, derived) {
+  const isPaymentOnly =
+    typeof tjhpIsPaymentOnlyOperationalClaim === "function" &&
+    tjhpIsPaymentOnlyOperationalClaim(claim);
+  if (!isPaymentOnly) return "";
+  const d = derived || {};
+  const paid = Number(d.paidAmount ?? claim.paid_amount ?? claim.insurance_paid ?? 0);
+  const expectedKnown =
+    d.expectedInsurance !== null &&
+    d.expectedInsurance !== undefined &&
+    Number(d.expectedInsurance) > 0;
+  if (paid <= 0.0001) return "Denied";
+  if (expectedKnown && paid + 0.0001 < Number(d.expectedInsurance)) return "Underpaid";
+  return "Resolved";
+}
+function tjhpPaymentOnlyNeedsFinancialEdit(claim) {
+  return !!(
+    claim &&
+    typeof tjhpIsPaymentOnlyOperationalClaim === "function" &&
+    tjhpIsPaymentOnlyOperationalClaim(claim) &&
+    (claim.payment_only_billed_unknown === true || claim.payment_only_expected_unknown === true)
+  );
+}
 function tjhpOrgClaims(org_id, billedAll) { return (billedAll || []).filter(c => String(c.org_id || "") === String(org_id || "")); }
 function tjhpRealBilledClaims(org_id, billedAll) { return tjhpOrgClaims(org_id, billedAll).filter(tjhpIsRealBilledClaim); }
 function tjhpFindRealBilledForPayment(org_id, billedAll, payment) {
@@ -25827,6 +25859,7 @@ function renderClaimWhyCard(explanation, opts={}){
       ${hideAction ? "" : `
         <div class="btnRow" style="margin-top:12px;">
           <a class="btn small secondary" href="${safeStr(e.nextActionHref || "#")}">${safeStr(e.nextActionLabel || "Open next step")}</a>
+          ${e.secondaryActionLabel && e.secondaryActionHref ? `<a class="btn small secondary" href="${safeStr(e.secondaryActionHref)}">${safeStr(e.secondaryActionLabel)}</a>` : ""}
         </div>
       `}
     </div>
@@ -35957,9 +35990,11 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       : Number(claim.amount_billed || 0);
     const paid = Number(d.paidAmount || 0);
 
-    if (typeof tjhpIsPaymentOnlyOperationalClaim === "function" && tjhpIsPaymentOnlyOperationalClaim(claim) && paid > 0) {
-      return "Resolved";
-    }
+    const paymentOnlyStage =
+      typeof tjhpPaymentOnlyDerivedStage === "function"
+        ? tjhpPaymentOnlyDerivedStage(claim, d)
+        : "";
+    if (paymentOnlyStage) return paymentOnlyStage;
 
     if (d.hasPaymentResponse) {
       if (paid <= 0.0001 && expected > 0) return "Denied";
@@ -36360,7 +36395,13 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                 risk > 60 ? "#f59e0b" :
                 "#16a34a";
               const paid = Number(d.paidAmount || 0);
-              const statusLabel = normalizeLifecycleDisplayStage(getCoreLifecycleStageForCards(c, d));
+              const paymentOnlyStageForRow =
+                typeof tjhpPaymentOnlyDerivedStage === "function"
+                  ? tjhpPaymentOnlyDerivedStage(c, d)
+                  : "";
+              const statusLabel = normalizeLifecycleDisplayStage(
+                paymentOnlyStageForRow || getCoreLifecycleStageForCards(c, d)
+              );
               const agingDays = getLifecycleAgeDays(c);
               const showAging =
                 (statusLabel === "Denied") ||
@@ -36403,19 +36444,32 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                 `);
               } else {
                 if (rowPaymentOnly) {
-                  actionParts.push(`<a class="btn secondary small" href="/data-management/matching-review">Review Payment</a>`);
+                  const editHref = "/claim-edit?claim_id=" + encodeURIComponent(c.billed_id);
+                  const appealHref = "/ai-appeal?billed_id=" + encodeURIComponent(c.billed_id);
+                  const negotiationHref = "/ai-negotiation?billed_id=" + encodeURIComponent(c.billed_id);
+                  if (statusLabel === "Denied") {
+                    actionParts.push(`<a href="${appealHref}" class="btn secondary small">Continue Appeal Draft</a>`);
+                    actionParts.push(`<a href="${editHref}" class="btn secondary small edit-claim-btn">Edit Claim</a>`);
+                  } else if (statusLabel === "Underpaid") {
+                    actionParts.push(`<a href="${negotiationHref}" class="btn secondary small">Continue Negotiation Draft</a>`);
+                    actionParts.push(`<a href="${editHref}" class="btn secondary small edit-claim-btn">Edit Claim</a>`);
+                  } else {
+                    actionParts.push(`<a href="${editHref}" class="btn secondary small edit-claim-btn">Edit Claim</a>`);
+                  }
                 } else if (!hasExpectedMatch) {
                   actionParts.push(`<a class="btn secondary small" href="/data-management?tab=reimbursement&focus_payer=${encodeURIComponent(c.payer || "")}">Add Contract Rule</a>`);
                 }
 
-                if (statusLabel === "Denied") {
-                  actionParts.push(`<a href="/ai-appeal?billed_id=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Appeal</a>`);
-                } else if (statusLabel === "Underpaid") {
-                  actionParts.push(`<a href="/ai-negotiation?billed_id=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Negotiate</a>`);
-                } else if (isResolvedLikeStage(statusLabel)) {
-                  actionParts.push(`<a href="/claim-edit?claim_id=${encodeURIComponent(c.billed_id)}" class="btn secondary small edit-claim-btn">Edit Claim</a>`);
-                } else {
-                  actionParts.push(`<a href="/actions?claim=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Action</a>`);
+                if (!rowPaymentOnly) {
+                  if (statusLabel === "Denied") {
+                    actionParts.push(`<a href="/ai-appeal?billed_id=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Appeal</a>`);
+                  } else if (statusLabel === "Underpaid") {
+                    actionParts.push(`<a href="/ai-negotiation?billed_id=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Negotiate</a>`);
+                  } else if (isResolvedLikeStage(statusLabel)) {
+                    actionParts.push(`<a href="/claim-edit?claim_id=${encodeURIComponent(c.billed_id)}" class="btn secondary small edit-claim-btn">Edit Claim</a>`);
+                  } else {
+                    actionParts.push(`<a href="/actions?claim=${encodeURIComponent(c.billed_id)}" class="btn secondary small">Action</a>`);
+                  }
                 }
               }
 
@@ -42001,6 +42055,17 @@ if (method === "GET" && pathname === "/claim-edit") {
       if (workflowState.workflowStage === "response_received") { claimWhy.recommendation = "A payer response was received. Review the outcome, then start the next round, accept the result, write off, or resolve the claim."; claimWhy.nextActionLabel = workflowState.channel === "negotiation" ? "Start Next Round of Negotiation" : "Start Next Round of Appeal"; claimWhy.nextActionHref = workspacePagePath(b.billed_id, workflowState.channel); }
       if (workflowState.workflowStage === "draft") { claimWhy.recommendation = "This claim already has an appeal/negotiation draft in progress. Continue the draft instead of starting over."; claimWhy.nextActionLabel = `Continue ${workflowState.channelLabel} Draft`; claimWhy.nextActionHref = workspacePagePath(b.billed_id, workflowState.channel); }
       if (resolvedForRecovery) { claimWhy.title = "No active recovery flag"; claimWhy.summary = "This claim appears resolved based on current lifecycle and payment data."; claimWhy.recommendation = "No action needed."; claimWhy.nextActionLabel = "Edit Claim"; claimWhy.nextActionHref = `/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}`; }
+      const detailPaymentOnly = typeof tjhpIsPaymentOnlyOperationalClaim === "function" && tjhpIsPaymentOnlyOperationalClaim(b);
+      const detailPaymentOnlyStage = typeof tjhpPaymentOnlyDerivedStage === "function" ? tjhpPaymentOnlyDerivedStage(b, d) : "";
+      if (detailPaymentOnly && detailPaymentOnlyStage === "Denied") {
+        claimWhy.title = "Why this claim is flagged";
+        claimWhy.summary = "The payer response shows no insurance payment for this payment-only record.";
+        claimWhy.recommendation = "Continue the appeal draft, then edit the claim to add billed amount, expected reimbursement, or contract details when available.";
+        claimWhy.nextActionLabel = "Continue Appeal Draft";
+        claimWhy.nextActionHref = `/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}`;
+        claimWhy.secondaryActionLabel = "Edit Claim";
+        claimWhy.secondaryActionHref = `/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}`;
+      }
       return renderClaimWhyCard(claimWhy, { title: claimWhyTitle });
     })()}
 
@@ -52610,6 +52675,17 @@ if (method === "GET" && pathname === "/claim-detail") {
   const expectedInsuranceDisplay = expectedInsurancePayment !== null
     ? formatMoneyUI(expectedInsurancePayment)
     : "Not Available (No Contract Match)";
+  const detailPaymentOnly =
+    typeof tjhpIsPaymentOnlyOperationalClaim === "function" &&
+    tjhpIsPaymentOnlyOperationalClaim(b);
+  const detailBilledDisplay =
+    detailPaymentOnly && b.payment_only_billed_unknown === true
+      ? "Unknown"
+      : formatMoneyUI(billedAmount);
+  const detailExpectedDisplay =
+    detailPaymentOnly && b.payment_only_expected_unknown === true
+      ? "Unknown"
+      : expectedInsuranceDisplay;
   const insuranceRemaining = num(d.underpaidAmount);
   const patient = computePatientBalance(b);
   const variance = (expectedInsurancePayment !== null ? expectedInsurancePayment : 0) - paidAmount;
@@ -52770,6 +52846,16 @@ if (method === "GET" && pathname === "/claim-detail") {
       if (workflowState.workflowStage === "response_received") { claimWhy.recommendation = "A payer response was received. Review the outcome, then start the next round, accept the result, write off, or resolve the claim."; claimWhy.nextActionLabel = workflowState.channel === "negotiation" ? "Start Next Round of Negotiation" : "Start Next Round of Appeal"; claimWhy.nextActionHref = workspacePagePath(b.billed_id, workflowState.channel); }
       if (workflowState.workflowStage === "draft") { claimWhy.recommendation = "This claim already has an appeal/negotiation draft in progress. Continue the draft instead of starting over."; claimWhy.nextActionLabel = `Continue ${workflowState.channelLabel} Draft`; claimWhy.nextActionHref = workspacePagePath(b.billed_id, workflowState.channel); }
       if (resolvedForRecovery) { claimWhy.title = "No active recovery flag"; claimWhy.summary = "This claim appears resolved based on current lifecycle and payment data."; claimWhy.recommendation = "No action needed."; claimWhy.nextActionLabel = "Edit Claim"; claimWhy.nextActionHref = `/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}`; }
+      const detailPaymentOnlyStage = typeof tjhpPaymentOnlyDerivedStage === "function" ? tjhpPaymentOnlyDerivedStage(b, d) : "";
+      if (detailPaymentOnly && detailPaymentOnlyStage === "Denied") {
+        claimWhy.title = "Why this claim is flagged";
+        claimWhy.summary = "The payer response shows no insurance payment for this payment-only record.";
+        claimWhy.recommendation = "Continue the appeal draft, then edit the claim to add billed amount, expected reimbursement, or contract details when available.";
+        claimWhy.nextActionLabel = "Continue Appeal Draft";
+        claimWhy.nextActionHref = `/ai-appeal?billed_id=${encodeURIComponent(b.billed_id)}`;
+        claimWhy.secondaryActionLabel = "Edit Claim";
+        claimWhy.secondaryActionHref = `/claim-edit?claim_id=${encodeURIComponent(b.billed_id)}`;
+      }
       return renderClaimWhyCard(claimWhy, { title: claimWhyTitle });
     })()}
 
@@ -52788,9 +52874,9 @@ if (method === "GET" && pathname === "/claim-detail") {
     <div class="hr"></div>
     <h3>Financial Intelligence</h3>
     <table>
-      <tr><th>Billed</th><td>${formatMoneyUI(billedAmount)}</td></tr>
+      <tr><th>Billed</th><td>${detailBilledDisplay}</td></tr>
       <tr><th>Paid (Insurance)</th><td>${formatMoneyUI(paidAmount)}</td></tr>
-      <tr><th>Expected Insurance</th><td>${expectedInsuranceDisplay}</td></tr>
+      <tr><th>Expected Insurance</th><td>${detailExpectedDisplay}</td></tr>
       <tr><th>Insurance Remaining</th><td>${formatMoneyUI(insuranceRemaining)}</td></tr>
       <tr><th>Insurance Write-Off</th><td>${formatMoneyUI(num(d.insuranceWriteOff))}</td></tr>
       <tr><th>Patient Responsibility</th><td>${formatMoneyUI(patient.patientResp)}</td></tr>
@@ -53093,6 +53179,18 @@ function runPaymentMatchingSmokeTests(){
   let t86=readJSON(FILES.billed,[]).find(c=>c.org_id===org_id && c.source_payment_id==='t86');
   assert(t86 && t86.status==='Denied' && num(t86.at_risk_amount)===110,'T86');
   computeExpectedInsuranceForClaim = prevComputeExpectedInsuranceForClaim;
+  assert(src.includes("tjhpPaymentOnlyDerivedStage") && src.includes("Continue Appeal Draft") && src.includes("Edit Claim") && src.includes("detailBilledDisplay") && src.includes("detailExpectedDisplay") && src.includes("rowBilledDisplay") && src.includes("rowExpectedDisplay") && src.includes("panelBilledDisplay") && src.includes("panelExpectedDisplay"),'T87');
+  const detailOverrideStart = src.indexOf("if (detailPaymentOnly && detailPaymentOnlyStage === \"Denied\")");
+  const detailOverrideEnd = detailOverrideStart >= 0 ? src.indexOf("return renderClaimWhyCard(claimWhy, { title: claimWhyTitle });", detailOverrideStart) : -1;
+  const detailOverrideBlock = detailOverrideStart >= 0 && detailOverrideEnd > detailOverrideStart ? src.slice(detailOverrideStart, detailOverrideEnd) : "";
+  assert(detailOverrideBlock && !detailOverrideBlock.includes("Review Payment"),'T87B');
+  const t88 = { org_id, billed_id:'t88', payment_only_operational:true, payment_only_billed_unknown:true, payment_only_expected_unknown:true, paid_amount:0, insurance_paid:0 };
+  const d88 = evaluateClaimDerived(t88, buildClaimContext(org_id));
+  assert(tjhpPaymentOnlyDerivedStage(t88, d88)==='Denied' && tjhpPaymentOnlyDisplayValue(t88, "billed")==="Unknown" && tjhpPaymentOnlyDisplayValue(t88, "expected")==="Unknown",'T88');
+  const rowBranchStart = src.indexOf("if (rowPaymentOnly)");
+  const rowBranchEnd = rowBranchStart >= 0 ? src.indexOf("} else if (!hasExpectedMatch)", rowBranchStart) : -1;
+  const rowBranch = rowBranchStart >= 0 && rowBranchEnd > rowBranchStart ? src.slice(rowBranchStart, rowBranchEnd) : "";
+  assert(rowBranch.includes("Continue Appeal Draft") && rowBranch.includes("Edit Claim") && !rowBranch.includes("Review Payment") && !rowBranch.includes("Fix Match"),'T89');
 
   } finally {
     writeJSON(FILES.billed, originalBilled);
@@ -53120,7 +53218,8 @@ function runViewPanelStaticSmokeTests(){
   assert(src.includes("panelExpectedDisplay"), "missing panel expected display variable");
   assert(src.includes("rowBilledDisplay"), "missing lifecycle row billed display variable");
   assert(src.includes("rowExpectedDisplay"), "missing lifecycle row expected display variable");
-  assert(src.includes('Review Payment'), "payment-only review action label missing");
+  assert(src.includes("detailBilledDisplay"), "full detail billed display not patched");
+  assert(src.includes("detailExpectedDisplay"), "full detail expected display not patched");
   const forbiddenExpectedInsurance = "expected_insurance: Math.max(0, " + "paid)";
   const forbiddenExpectedAmount = "expected_amount: Math.max(0, " + "paid)";
   assert(!src.includes(forbiddenExpectedInsurance), "payment-only expected still fakes paid amount");
