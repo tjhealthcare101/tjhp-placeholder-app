@@ -25628,6 +25628,118 @@ function tjhpPaymentRowsForClaimFromContext(claim, claimCtx) {
   }
   return rows;
 }
+
+function tjhpDateMs(value) {
+  if (value === undefined || value === null || value === "") return 0;
+
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+
+  const dt = new Date(value).getTime();
+  return Number.isFinite(dt) && dt > 0 ? dt : 0;
+}
+
+function tjhpFirstDateMs(values) {
+  for (const v of values || []) {
+    const dt = tjhpDateMs(v);
+    if (dt > 0) return dt;
+  }
+  return 0;
+}
+
+function tjhpPaymentUploadOrActivityMs(payment) {
+  if (!payment) return 0;
+
+  return tjhpFirstDateMs([
+    payment.uploaded_at,
+    payment.ingested_at,
+    payment.created_at,
+    payment.batch_uploaded_at,
+    payment.imported_at,
+    payment.updated_at,
+    payment.matched_at,
+    payment.paid_at,
+    payment.date_paid,
+    payment.remittance_date,
+    payment.payment_date
+  ]);
+}
+
+function tjhpLatestMatchedPaymentActivityMsForClaim(claim, claimCtx) {
+  if (!claim) return 0;
+
+  let rows = [];
+  try {
+    rows = typeof tjhpPaymentRowsForClaimFromContext === "function"
+      ? tjhpPaymentRowsForClaimFromContext(claim, claimCtx || {})
+      : [];
+  } catch (_) {
+    rows = [];
+  }
+
+  let latest = 0;
+  for (const p of rows || []) {
+    latest = Math.max(latest, tjhpPaymentUploadOrActivityMs(p));
+  }
+
+  return latest;
+}
+
+function tjhpClaimUploadOrActivityMs(claim) {
+  if (!claim) return 0;
+
+  return tjhpFirstDateMs([
+    claim.uploaded_at,
+    claim.ingested_at,
+    claim.batch_uploaded_at,
+    claim.imported_at,
+    claim.created_at,
+    claim.updated_at
+  ]);
+}
+
+function tjhpLifecycleAnchorDateMsForClaim(claim, claimCtx) {
+  if (!claim) return 0;
+
+  const isPaymentOnly =
+    typeof tjhpIsPaymentOnlyOperationalClaim === "function" &&
+    tjhpIsPaymentOnlyOperationalClaim(claim);
+
+  if (isPaymentOnly) {
+    return tjhpFirstDateMs([
+      claim.payment_activity_at,
+      claim.payment_uploaded_at,
+      claim.last_payment_sync_at,
+      claim.created_at,
+      claim.updated_at,
+      claim.paid_at,
+      claim.remittance_date,
+      claim.dos
+    ]);
+  }
+
+  const matchedPaymentActivityMs =
+    tjhpLatestMatchedPaymentActivityMsForClaim(claim, claimCtx);
+
+  const claimUploadActivityMs =
+    tjhpClaimUploadOrActivityMs(claim);
+
+  return tjhpFirstDateMs([
+    claim.last_payment_sync_at,
+    matchedPaymentActivityMs,
+    claimUploadActivityMs,
+    claim.payment_response_received_at,
+    claim.denied_at,
+    claim.paid_at,
+    claim.remittance_date,
+    claim.last_submission_at,
+    claim.submitted_at,
+    claim.submitted_date,
+    claim.dos
+  ]);
+}
+
 function buildClaimContext(org_id){
   const payments = readJSON(FILES.payments, []).filter(p => p.org_id === org_id);
   const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
@@ -36129,12 +36241,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
   }
 
   function getLifecycleAnchorDateMs(claim){
-    const paymentOnly = typeof tjhpIsPaymentOnlyOperationalClaim === "function" && tjhpIsPaymentOnlyOperationalClaim(claim);
-    const raw = paymentOnly
-      ? (claim.payment_activity_at || claim.payment_uploaded_at || claim.last_payment_sync_at || claim.created_at || claim.updated_at || claim.paid_at || claim.remittance_date || claim.dos || 0)
-      : (claim.denied_at || claim.paid_at || claim.payment_response_received_at || claim.last_payment_sync_at || claim.remittance_date || claim.updated_at || claim.last_submission_at || claim.submitted_at || claim.submitted_date || claim.created_at || claim.dos || 0);
-    const dt = new Date(raw).getTime();
-    return Number.isFinite(dt) && dt > 0 ? dt : 0;
+    return tjhpLifecycleAnchorDateMsForClaim(claim, claimCtx);
   }
 
   function getLifecycleAgeDays(claim){
@@ -53449,6 +53556,73 @@ function runPaymentMatchingSmokeTests(){
   assert(src.includes('claim.payment_activity_at || claim.payment_uploaded_at'),'T81F');
   assert(src.includes('const paymentRows = tjhpPaymentOnlyActivityRowsForOrg(org_id);'),'T81G');
   assert(src.includes('if (opts.reviewStatus) { const nextStatus = String(opts.reviewStatus || "").trim();'),'T81H');
+
+  // T100 lifecycle anchor uses matched payment/upload activity for real billed claims
+  const orgLifecycle = "smoke-lifecycle-real";
+  const oldDate = "2026-02-01";
+  const oldCreated = "2026-02-01T00:00:00.000Z";
+  const billedLifecycle = [
+    { n:"1001", amount:150 },
+    { n:"1002", amount:220 },
+    { n:"1003", amount:210 },
+    { n:"1004", amount:120 },
+    { n:"1005", amount:150 }
+  ].map((x,i)=>({
+    org_id: orgLifecycle,
+    billed_id: `lc-${i+1}`,
+    claim_id: x.n,
+    claim_number: x.n,
+    amount_billed: x.amount,
+    dos: oldDate,
+    created_at: oldCreated,
+    submission_id: `lc-sub-${i+1}`
+  }));
+  const now = nowISO();
+  const paymentsLifecycle = [
+    { n:"1001", paid:0 },
+    { n:"1002", paid:100 },
+    { n:"1003", paid:210 },
+    { n:"1004", paid:40 },
+    { n:"1005", paid:0 }
+  ].map((x,i)=>({
+    org_id: orgLifecycle,
+    payment_id: `lcp-${i+1}`,
+    claim_number: x.n,
+    amount_paid: x.paid,
+    paid_amount: x.paid,
+    date_paid: oldDate,
+    remittance_date: oldDate,
+    created_at: now,
+    uploaded_at: now,
+    source_file: "t100.csv"
+  }));
+  writeJSON(FILES.billed, billedLifecycle);
+  writeJSON(FILES.payments, paymentsLifecycle);
+  const t100Ctx = buildClaimContext(orgLifecycle);
+  const t100Visible = getClaimsVisibleForMetrics(orgLifecycle, readJSON(FILES.billed, []));
+  assert(t100Visible.length===5,'T100A');
+  assert(t100Visible.every(c=>tjhpIsRealBilledClaim(c) && !tjhpIsPaymentOnlyOperationalClaim(c)),'T100B');
+  const t100NowMs = Date.now();
+  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+  assert(t100Visible.every(c=>{ const a=tjhpLifecycleAnchorDateMsForClaim(c,t100Ctx); return a>0 && (t100NowMs-a)<=thirtyDaysMs; }),'T100C');
+  const t100Stages = t100Visible.map(c => evaluateClaimDerived(c, t100Ctx).lifecycleStage);
+  assert(t100Stages.filter(s=>s==='Denied').length===2 && t100Stages.filter(s=>s==='Underpaid').length===2 && t100Stages.filter(s=>s==='Resolved').length===1,'T100D');
+  const t100PaymentOnly = readJSON(FILES.billed,[]).filter(c=>c.org_id===orgLifecycle && tjhpIsPaymentOnlyOperationalClaim(c));
+  assert(t100PaymentOnly.length===0,'T100E');
+  assert(src.includes("function tjhpLifecycleAnchorDateMsForClaim"),'T100F');
+  assert(src.includes("tjhpLatestMatchedPaymentActivityMsForClaim"),'T100G');
+  assert(src.includes("tjhpPaymentRowsForClaimFromContext(claim, claimCtx") || src.includes("tjhpPaymentRowsForClaimFromContext(claim, claimCtx || {})"),'T100H');
+  assert(src.includes("return tjhpLifecycleAnchorDateMsForClaim(claim, claimCtx);") ,'T100I');
+
+  // T101 payment-only lifecycle anchor remains unchanged
+  const t101Claim = { org_id, billed_id:'t101', payment_only_operational:true, payment_activity_at:nowISO(), paid_amount:25, insurance_paid:25, payment_only_expected_unknown:true };
+  const t101Anchor = tjhpLifecycleAnchorDateMsForClaim(t101Claim, buildClaimContext(org_id));
+  assert(t101Anchor>0 && (Date.now()-t101Anchor)<=thirtyDaysMs,'T101A');
+  const t101Resolved = tjhpPaymentOnlyDerivedStage(t101Claim, evaluateClaimDerived(t101Claim, buildClaimContext(org_id)));
+  assert(t101Resolved==='Resolved','T101B');
+  const t101DeniedClaim = { ...t101Claim, billed_id:'t101b', paid_amount:0, insurance_paid:0 };
+  const t101Denied = tjhpPaymentOnlyDerivedStage(t101DeniedClaim, evaluateClaimDerived(t101DeniedClaim, buildClaimContext(org_id)));
+  assert(t101Denied==='Denied','T101C');
 
   // T82-T86 payment-only unknown/contract behavior
   writeJSON(FILES.billed,[]);
