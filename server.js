@@ -7700,6 +7700,9 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
 
     return {
       id: id,
+      source: inLifecycle ? "lifecycle" : (inAction ? "action" : "unknown"),
+      isLifecycle: inLifecycle,
+      isAction: inAction,
       claimNumber: vpCellText(cells, 0) || titleFromCard || ("Claim " + id),
       payer: vpCellText(cells, 1) || subFromCard || "",
       billed: vpCellText(cells, 2) || "-",
@@ -7720,6 +7723,107 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     if (s.includes("resolved") || s.includes("paid")) return "ok";
     if (s.includes("awaiting") || s.includes("waiting") || s.includes("submitted")) return "pending";
     return "";
+  }
+
+  function vpIsUnknownValue(v){
+    return /^unknown$/i.test(String(v || "").trim());
+  }
+
+  function vpIsPaymentOnlyFallbackSnapshot(s){
+    if (!s) return false;
+
+    const status = String(s.status || "").toLowerCase();
+    const source = String(s.source || "").toLowerCase();
+
+    return (
+      source === "lifecycle" &&
+      (
+        vpIsUnknownValue(s.billed) ||
+        vpIsUnknownValue(s.expected) ||
+        status.includes("denied") ||
+        status.includes("resolved") ||
+        status.includes("underpaid")
+      )
+    );
+  }
+
+  function vpPaymentOnlyMissingContextNotice(s){
+    if (!vpIsPaymentOnlyFallbackSnapshot(s)) return "";
+
+    const missingBilled = vpIsUnknownValue(s.billed);
+    const missingExpected = vpIsUnknownValue(s.expected);
+    if (!missingBilled && !missingExpected) return "";
+
+    const status = String(s.status || "").toLowerCase();
+    const lead = status.includes("resolved")
+      ? "This payment-only record is marked Resolved because payment was posted."
+      : (
+          status.includes("denied")
+            ? "This payment-only record is flagged because the payer response shows no insurance payment."
+            : "This payment-only record is missing supporting billing or reimbursement context."
+        );
+
+    const parts = [];
+    if (missingBilled) parts.push("No billed claim found for this payment.");
+    if (missingExpected) parts.push("No reimbursement contract match found.");
+
+    const links = [];
+    if (missingBilled) links.push('<a href="/data-management?tab=upload">Upload billed claims</a>');
+    if (missingExpected) links.push('<a href="/data-management?tab=reimbursement">Add contract rule</a>');
+
+    return ''
+      + '<div class="notice warn" style="margin:12px 0;padding:10px;border-radius:12px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;">'
+      +   '<div>' + vpEsc(lead + " " + parts.join(" ") + " Add missing billing or contract details for more accurate expected reimbursement and recovery metrics.") + '</div>'
+      +   (links.length ? '<div style="margin-top:6px;">' + links.join(' · ') + '</div>' : '')
+      + '</div>';
+  }
+
+  function vpLifecycleRichContextHtml(s){
+    if (!s || String(s.source || "") !== "lifecycle") return "";
+
+    const status = String(s.status || "").toLowerCase();
+    const paymentOnly = vpIsPaymentOnlyFallbackSnapshot(s);
+    if (!paymentOnly) return "";
+
+    const missingBilled = vpIsUnknownValue(s.billed);
+    const missingExpected = vpIsUnknownValue(s.expected);
+    let why = "";
+    let insight = "";
+    let next = "";
+
+    if (status.includes("denied")) {
+      why = "The payer response shows no insurance payment for this payment-only record.";
+      insight = "This payment-only record is visible because payment data was uploaded before a matching billed claim. Billing and contract details improve expected reimbursement and recovery metrics.";
+      next = "Continue the appeal draft, then edit the claim to add billed amount, expected reimbursement, or contract details when available.";
+    } else if (status.includes("resolved")) {
+      why = "Payment has been posted for this payment-only record.";
+      insight = "Payment has been posted, so this payment-only record is currently marked Resolved.";
+      next = "Edit the claim or add missing billing/contract details if more accurate reimbursement metrics are needed.";
+    } else if (status.includes("underpaid")) {
+      why = "Payment was posted below the expected reimbursement calculated from available contract details.";
+      insight = "This payment-only record has a payment below expected reimbursement based on current contract context.";
+      next = "Continue negotiation, then edit the claim or contract details if supporting information is incomplete.";
+    } else {
+      why = "This payment-only record needs additional billing or reimbursement context.";
+      insight = "The record is visible because payment data was uploaded before a matching billed claim.";
+      next = "Edit the claim or add missing billing and contract details for more accurate metrics.";
+    }
+
+    const context = [];
+    if (missingBilled && missingExpected) context.push("Billed claim and reimbursement contract context are still missing.");
+    else if (missingBilled) context.push("Billed claim context is still missing.");
+    else if (missingExpected) context.push("Reimbursement contract context is still missing.");
+
+    return ''
+      + '<div style="border-top:1px solid #e5e7eb;margin-top:14px;padding-top:14px;">'
+      +   '<div style="font-weight:900;margin-bottom:6px;">Why this claim is flagged</div>'
+      +   '<div class="muted" style="margin-bottom:12px;">' + vpEsc(why) + '</div>'
+      +   '<div style="font-weight:900;margin-bottom:6px;">Claim Insight</div>'
+      +   '<div class="muted" style="margin-bottom:12px;">' + vpEsc(insight) + '</div>'
+      +   (context.length ? '<div class="muted small" style="margin-bottom:12px;">' + vpEsc(context.join(" ")) + '</div>' : '')
+      +   '<div style="font-weight:900;margin-bottom:6px;">Next Best Action</div>'
+      +   '<div class="muted">' + vpEsc(next) + '</div>'
+      + '</div>';
   }
 
   function vpPrimaryAction(id, status){
@@ -7790,6 +7894,8 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
 
     const s = vpSnapshotFromDom(id, el);
     const badge = vpBadgeClass(s.status);
+    const missingContextNotice = vpPaymentOnlyMissingContextNotice(s);
+    const lifecycleRichContext = vpLifecycleRichContextHtml(s);
 
     ui.body.innerHTML =
       '<div style="font-size:20px;font-weight:900;margin-bottom:10px;">' + vpEsc(s.claimNumber || ("Claim " + id)) + '</div>' +
@@ -7805,6 +7911,8 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
         '<span class="badge">Risk Score ' + vpEsc(s.risk || "-") + '</span>' +
       '</div>' +
       '<div class="muted small" style="margin-bottom:12px;">Last activity date: ' + vpEsc(s.lastActivity || s.timing || "-") + '</div>' +
+      missingContextNotice +
+      lifecycleRichContext +
       '<div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">' +
         '<a class="btn small secondary" href="' + vpEsc(s.href) + '">Open Full Claim</a>' +
         vpPrimaryAction(id, s.status) +
@@ -53481,6 +53589,19 @@ function runViewPanelStaticSmokeTests(){
   assert(src.includes('existingFallback && existingFallback !== "#"'), "existing fallback href is not preserved");
   assert(src.includes('if (stored && stored !== "#") return stored;'), "vpFullClaimHref does not preserve stored fallback href");
   assert(src.includes('if (href && href !== "#") return href;'), "vpFullClaimHref does not ignore # href");
+  assert(src.includes("function vpLifecycleRichContextHtml"), "T99A");
+  assert(src.includes("function vpPaymentOnlyMissingContextNotice"), "T99B");
+  assert(src.includes("Why this claim is flagged"), "T99C");
+  assert(src.includes("Claim Insight"), "T99D");
+  assert(src.includes("Next Best Action"), "T99E");
+  assert(src.includes("This payment-only record is marked Resolved because payment was posted."), "T99F");
+  assert(src.includes("The payer response shows no insurance payment for this payment-only record."), "T99G");
+  assert(src.includes("Add missing billing or contract details for more accurate expected reimbursement and recovery metrics."), "T99H");
+  assert(src.includes("const missingContextNotice = vpPaymentOnlyMissingContextNotice(s);"), "T99I");
+  assert(src.includes("const lifecycleRichContext = vpLifecycleRichContextHtml(s);"), "T99J");
+  assert(src.includes("missingContextNotice +") && src.includes("lifecycleRichContext +"), "T99K");
+  assert(src.includes("vpEsc(s.billed || \"-\")") && src.includes("vpEsc(s.expected || \"-\")") && src.includes("vpEsc(s.paid || \"-\")") && src.includes("vpEsc(s.atRisk || \"-\")"), "T99L");
+  assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__ = true") && src.includes("__tjhpOpenClaimPanelOrNavigate") && src.includes("Open Full Claim") && src.includes("data-fallback-href"), "T99M");
 
   const hardStopStart = src.indexOf("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__ = true");
   const hardStopEnd = src.indexOf("${chatScript}", hardStopStart);
