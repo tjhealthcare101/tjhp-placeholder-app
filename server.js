@@ -26576,6 +26576,179 @@ function tjhpSyncPaymentOnlyOperationalClaimsForOrg(org_id, opts = {}) {
   return { changed };
 }
 
+
+function tjhpPaymentBatchTouchesClaim(claim, payments) {
+  if (!claim || !Array.isArray(payments) || !payments.length) return false;
+
+  const claimKeys = new Set(tjhpClaimKeysForBilled(claim));
+  if (!claimKeys.size) return false;
+
+  return payments.some(p => {
+    const paymentKeys = tjhpPaymentKeys(p);
+    return paymentKeys.some(k => claimKeys.has(k));
+  });
+}
+
+function tjhpRemainingPaymentRowsForClaim(claim, remainingPayments, org_id) {
+  const payments = Array.isArray(remainingPayments) ? remainingPayments : [];
+  const orgPayments = payments.filter(p =>
+    String(p.org_id || "") === String(org_id || "") &&
+    String(p.payment_review_status || "").toLowerCase() !== "ignored"
+  );
+
+  return tjhpPaymentRowsForClaimFromList(claim, orgPayments);
+}
+
+function tjhpHasNonPaymentDenialSupport(claim, claimCtx = {}) {
+  if (!claim) return false;
+
+  const appealCase = claim.denial_case_id && claimCtx.caseById
+    ? claimCtx.caseById.get(String(claim.denial_case_id))
+    : null;
+
+  const denialDocAttached = !!(
+    claim.denial_doc_attached ||
+    claim.denial_document ||
+    claim.denial_file ||
+    claim.denial_uploaded_at ||
+    claim.denial_batch_id ||
+    claim.manual_denial === true ||
+    claim.manually_denied === true ||
+    (appealCase && (((appealCase.files || []).length > 0) || ((appealCase.appeal_attachments || []).length > 0)))
+  );
+
+  const denialSource = String(
+    claim.denial_source ||
+    claim.denial_origin ||
+    appealCase?.source ||
+    appealCase?.created_from ||
+    ""
+  ).toLowerCase();
+
+  const sourceLooksPaymentDerived =
+    denialSource.includes("payment") ||
+    denialSource.includes("era") ||
+    denialSource.includes("eob") ||
+    denialSource.includes("remittance");
+
+  if (denialDocAttached && !sourceLooksPaymentDerived) return true;
+
+  return false;
+}
+
+function tjhpClearPaymentBatchEffectsForRealClaim(claim, opts = {}) {
+  if (!claim || !tjhpIsRealBilledClaim(claim)) return false;
+
+  const claimCtx = opts.claimCtx || {};
+  const keepDenial = tjhpHasNonPaymentDenialSupport(claim, claimCtx);
+
+  const before = JSON.stringify({
+    paid_amount: claim.paid_amount,
+    insurance_paid: claim.insurance_paid,
+    paid_at: claim.paid_at,
+    payment_response_received_at: claim.payment_response_received_at,
+    last_payment_sync_at: claim.last_payment_sync_at,
+    payment_source: claim.payment_source,
+    payment_source_file: claim.payment_source_file,
+    payment_batch_file: claim.payment_batch_file,
+    payment_file: claim.payment_file,
+    remittance_status: claim.remittance_status,
+    payment_status: claim.payment_status,
+    eob_status: claim.eob_status,
+    has_zero_payment_record: claim.has_zero_payment_record,
+    marked_denied: claim.marked_denied,
+    denial_status: claim.denial_status,
+    denial_reason: claim.denial_reason,
+    denial_code: claim.denial_code,
+    denied_at: claim.denied_at,
+    status: claim.status
+  });
+
+  claim.paid_amount = 0;
+  claim.insurance_paid = 0;
+  claim.paid_at = null;
+  claim.payment_response_received_at = "";
+  claim.last_payment_sync_at = "";
+  claim.payment_source = "";
+  claim.payment_source_file = "";
+  claim.payment_batch_file = "";
+  claim.payment_file = "";
+  claim.source_payment_id = "";
+  claim.payment_id = "";
+  claim.remittance_status = "";
+  claim.payment_status = "";
+  claim.eob_status = "";
+  claim.era_status = "";
+  claim.has_zero_payment_record = false;
+  claim.payment_denial = false;
+  claim.payment_only_zero_paid_denial = false;
+
+  if (!keepDenial) {
+    claim.marked_denied = false;
+    claim.denial_status = "";
+    claim.denial_reason = "";
+    claim.denial_code = "";
+    claim.denied_at = "";
+  }
+
+  claim.underpaid_amount = 0;
+  claim.insurance_remaining = null;
+
+  if (!keepDenial) {
+    claim.status = "Awaiting Payment";
+    claim.lifecycle_stage = "Awaiting Payment";
+  }
+
+  claim.updated_at = nowISO();
+
+  return before !== JSON.stringify({
+    paid_amount: claim.paid_amount,
+    insurance_paid: claim.insurance_paid,
+    paid_at: claim.paid_at,
+    payment_response_received_at: claim.payment_response_received_at,
+    last_payment_sync_at: claim.last_payment_sync_at,
+    payment_source: claim.payment_source,
+    payment_source_file: claim.payment_source_file,
+    payment_batch_file: claim.payment_batch_file,
+    payment_file: claim.payment_file,
+    remittance_status: claim.remittance_status,
+    payment_status: claim.payment_status,
+    eob_status: claim.eob_status,
+    has_zero_payment_record: claim.has_zero_payment_record,
+    marked_denied: claim.marked_denied,
+    denial_status: claim.denial_status,
+    denial_reason: claim.denial_reason,
+    denial_code: claim.denial_code,
+    denied_at: claim.denied_at,
+    status: claim.status
+  });
+}
+
+function tjhpClearDeletedPaymentBatchEffectsForOrg(org_id, billedAll, deletedPayments, remainingPayments, opts = {}) {
+  const claims = Array.isArray(billedAll) ? billedAll : [];
+  const deleted = Array.isArray(deletedPayments) ? deletedPayments : [];
+  const remaining = Array.isArray(remainingPayments) ? remainingPayments : [];
+  const claimCtx = opts.claimCtx || buildClaimContext(org_id);
+
+  let changed = false;
+
+  for (const claim of claims) {
+    if (String(claim.org_id || "") !== String(org_id || "")) continue;
+    if (!tjhpIsRealBilledClaim(claim)) continue;
+    if (claim.manual_financial_override === true) continue;
+
+    const touchedByDeletedBatch = tjhpPaymentBatchTouchesClaim(claim, deleted);
+    if (!touchedByDeletedBatch) continue;
+
+    const remainingRows = tjhpRemainingPaymentRowsForClaim(claim, remaining, org_id);
+    if (remainingRows.length > 0) continue;
+
+    if (tjhpClearPaymentBatchEffectsForRealClaim(claim, { claimCtx })) changed = true;
+  }
+
+  return { changed };
+}
+
 function tjhpRecomputeClaimPaymentsFromLedgerForOrg(org_id, opts = {}) {
   const billedAll = Array.isArray(opts.billedAll) ? opts.billedAll : readJSON(FILES.billed, []);
   const payments = Array.isArray(opts.payments) ? opts.payments : readJSON(FILES.payments, []);
@@ -26595,15 +26768,52 @@ function tjhpRecomputeClaimPaymentsFromLedgerForOrg(org_id, opts = {}) {
       claim.last_payment_sync_at = nowISO();
       claim.payment_source = rows[0]?.source_file || rows[0]?.source || claim.payment_source || "payment_upload";
       claim.has_zero_payment_record = rows.some(p => tjhpPaymentAmount(p) <= 0.0001);
-    } else if (claim.last_payment_sync_at || claim.payment_response_received_at || claim.payment_source) {
+    } else if (
+      claim.last_payment_sync_at ||
+      claim.payment_response_received_at ||
+      claim.payment_source ||
+      claim.payment_source_file ||
+      claim.payment_batch_file ||
+      claim.payment_file ||
+      claim.paid_at ||
+      num(claim.paid_amount || 0) > 0 ||
+      num(claim.insurance_paid || 0) > 0 ||
+      claim.has_zero_payment_record ||
+      claim.remittance_status ||
+      claim.payment_status ||
+      claim.eob_status ||
+      claim.era_status
+    ) {
       claim.paid_amount = 0;
       claim.insurance_paid = 0;
       claim.paid_at = null;
       claim.payment_response_received_at = "";
       claim.last_payment_sync_at = "";
       claim.payment_source = "";
+      claim.payment_source_file = "";
+      claim.payment_batch_file = "";
+      claim.payment_file = "";
+      claim.source_payment_id = "";
+      claim.payment_id = "";
       claim.has_zero_payment_record = false;
-      if (!claim.denial_code && !claim.denial_reason && !claim.marked_denied) claim.status = "Awaiting Payment";
+      claim.remittance_status = "";
+      claim.payment_status = "";
+      claim.eob_status = "";
+      claim.era_status = "";
+      claim.payment_denial = false;
+      claim.payment_only_zero_paid_denial = false;
+      claim.underpaid_amount = 0;
+      claim.insurance_remaining = null;
+      const keepDenial = tjhpHasNonPaymentDenialSupport(claim, buildClaimContext(org_id));
+      if (!keepDenial) {
+        claim.marked_denied = false;
+        claim.denial_status = "";
+        claim.denial_reason = "";
+        claim.denial_code = "";
+        claim.denied_at = "";
+        claim.status = "Awaiting Payment";
+        claim.lifecycle_stage = "Awaiting Payment";
+      }
     }
     try { if (typeof recalculateClaimState === "function") recalculateClaimState(org_id, claim); } catch (_) {}
     const after = JSON.stringify({paid_amount:claim.paid_amount,insurance_paid:claim.insurance_paid,paid_at:claim.paid_at,payment_response_received_at:claim.payment_response_received_at,last_payment_sync_at:claim.last_payment_sync_at,has_zero_payment_record:claim.has_zero_payment_record,status:claim.status,payment_source:claim.payment_source});
@@ -43216,11 +43426,27 @@ if (method === "POST" && pathname === "/payment-batch/delete") {
     const sourceFile = String(c.source_file || c.payment_source || "");
     if ((sourcePaymentId && deletedPaymentIds.has(sourcePaymentId)) || sourceFile === safeFile) billedAll.splice(i, 1);
   }
+  const deleteCleanup = tjhpClearDeletedPaymentBatchEffectsForOrg(
+    org.org_id,
+    billedAll,
+    toDelete,
+    remaining,
+    { claimCtx: buildClaimContext(org.org_id) }
+  );
   writeJSON(FILES.billed, billedAll);
   tjhpRecomputeClaimPaymentsFromLedgerForOrg(org.org_id, { billedAll, payments: remaining, write: true });
+  const afterRecompute = readJSON(FILES.billed, []);
+  tjhpClearDeletedPaymentBatchEffectsForOrg(
+    org.org_id,
+    afterRecompute,
+    toDelete,
+    remaining,
+    { claimCtx: buildClaimContext(org.org_id) }
+  );
+  writeJSON(FILES.billed, afterRecompute);
   tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id, { billedAll: readJSON(FILES.billed, []), payments: remaining, write: true });
   try { if (typeof recalculateContractsForOrg === "function") recalculateContractsForOrg(org.org_id); } catch (_) {}
-  try { if (typeof rebuildOrgDerivedData === "function") rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true }); } catch (_) {}
+  try { if (typeof rebuildOrgDerivedData === "function") rebuildOrgDerivedData(org.org_id, { resyncDenials: false, autodraft: false }); } catch (_) {}
 
   // Log soft delete
   logDeletedPaymentBatch({
@@ -53504,6 +53730,18 @@ function runPaymentMatchingSmokeTests(){
   const subtractSignature = "Reverse:" + " subtract each payment amount";
   assert(!src.includes(subtractSignature), "payment batch delete still subtracts instead of recomputing");
   assert(src.includes("tjhpRecomputeClaimPaymentsFromLedgerForOrg(org.org_id"), "payment batch delete does not recompute ledger");
+  assert(src.includes("function tjhpClearDeletedPaymentBatchEffectsForOrg"), 'TSTATIC1');
+  assert(src.includes("function tjhpClearPaymentBatchEffectsForRealClaim"), 'TSTATIC2');
+  assert(src.includes("function tjhpPaymentBatchTouchesClaim"), 'TSTATIC3');
+  assert(src.includes('payment_response_received_at = ""'), 'TSTATIC4');
+  assert(src.includes('has_zero_payment_record = false'), 'TSTATIC5');
+  assert(src.includes('remittance_status = ""'), 'TSTATIC6');
+  assert(src.includes('payment_status = ""'), 'TSTATIC7');
+  assert(src.includes('eob_status = ""'), 'TSTATIC8');
+  assert(src.includes('rebuildOrgDerivedData(org.org_id, { resyncDenials: false, autodraft: false })') || !src.includes('if (typeof rebuildOrgDerivedData === "function") rebuildOrgDerivedData(org.org_id, { resyncDenials: true, autodraft: true });'), 'TSTATIC9');
+  assert(src.includes('writeJSON(FILES.payments, remaining);'), 'TSTATIC10');
+  assert(src.includes('tjhpIsPaymentOnlyOperationalClaim(c)'), 'TSTATIC11');
+
   assert(src.includes("tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id"), "payment batch delete does not sync payment-only operational rows");
   const originalBilled = readJSON(FILES.billed, []);
   const originalPayments = readJSON(FILES.payments, []);
@@ -53623,6 +53861,59 @@ function runPaymentMatchingSmokeTests(){
   const t101DeniedClaim = { ...t101Claim, billed_id:'t101b', paid_amount:0, insurance_paid:0 };
   const t101Denied = tjhpPaymentOnlyDerivedStage(t101DeniedClaim, evaluateClaimDerived(t101DeniedClaim, buildClaimContext(org_id)));
   assert(t101Denied==='Denied','T101C');
+
+  const org102 = "smoke-delete-batch";
+  const claims102 = [
+    { n:"1001", b:150 }, { n:"1002", b:220 }, { n:"1003", b:300 }, { n:"1004", b:120 }, { n:"1005", b:150 }
+  ].map((x,i)=>({ org_id:org102, billed_id:`t102-${i+1}`, claim_id:x.n, claim_number:x.n, amount_billed:x.b, billed_amount:x.b, created_at:nowISO() }));
+  const payments102 = [
+    { n:"1001", paid:0 }, { n:"1002", paid:100 }, { n:"1003", paid:210 }, { n:"1004", paid:40 }, { n:"1005", paid:0 }
+  ].map((x,i)=>({ org_id:org102, payment_id:`t102p-${i+1}`, claim_number:x.n, amount_paid:x.paid, source_file:"delete_me.csv", created_at:nowISO(), date_paid:"2026-02-01" }));
+  writeJSON(FILES.billed, claims102);
+  writeJSON(FILES.payments, payments102);
+  tjhpRecomputeClaimPaymentsFromLedgerForOrg(org102,{write:true});
+  let before102 = readJSON(FILES.billed,[]).filter(c=>c.org_id===org102);
+  assert(before102.length===5 && before102.every(c=>tjhpIsRealBilledClaim(c) && !tjhpIsPaymentOnlyOperationalClaim(c)), 'T102A');
+  assert(before102.some(c=>num(c.paid_amount)>0) && before102.some(c=>num(c.paid_amount)===0), 'T102B');
+  const deleted102 = readJSON(FILES.payments,[]).filter(p=>p.org_id===org102 && p.source_file==='delete_me.csv');
+  const remaining102 = readJSON(FILES.payments,[]).filter(p=>!(p.org_id===org102 && p.source_file==='delete_me.csv'));
+  let billed102 = readJSON(FILES.billed,[]);
+  const deletedIds102 = new Set(deleted102.map(p=>String(p.payment_id||'')));
+  for (let i=billed102.length-1;i>=0;i--){
+    const c=billed102[i]; if (c.org_id!==org102 || !tjhpIsPaymentOnlyOperationalClaim(c)) continue;
+    const sp=String(c.source_payment_id||c.payment_id||''); const sf=String(c.source_file||c.payment_source||'');
+    if ((sp&&deletedIds102.has(sp)) || sf==='delete_me.csv') billed102.splice(i,1);
+  }
+  tjhpClearDeletedPaymentBatchEffectsForOrg(org102,billed102,deleted102,remaining102,{claimCtx:buildClaimContext(org102)});
+  tjhpRecomputeClaimPaymentsFromLedgerForOrg(org102,{billedAll:billed102,payments:remaining102,write:false});
+  tjhpClearDeletedPaymentBatchEffectsForOrg(org102,billed102,deleted102,remaining102,{claimCtx:buildClaimContext(org102)});
+  const real102 = billed102.filter(c=>c.org_id===org102 && tjhpIsRealBilledClaim(c));
+  const paymentOnly102 = billed102.filter(c=>c.org_id===org102 && tjhpIsPaymentOnlyOperationalClaim(c));
+  assert(real102.length===5 && paymentOnly102.length===0,'T102C');
+  assert(real102.every(c=>num(c.paid_amount)===0 && num(c.insurance_paid)===0),'T102D');
+  assert(real102.every(c=>(!c.paid_at) && String(c.payment_response_received_at||'')==='' && String(c.last_payment_sync_at||'')==='' && String(c.payment_source||'')===''),'T102E');
+  assert(real102.every(c=>c.has_zero_payment_record===false && String(c.remittance_status||'')==='' && String(c.payment_status||'')==='' && String(c.eob_status||'')===''),'T102F');
+  assert(real102.every(c=>String(c.status||'')==='Awaiting Payment' && String(c.lifecycle_stage||'')==='Awaiting Payment'),'T102G');
+
+  const org103 = "smoke-delete-partial";
+  const claims103 = [{ org_id:org103, billed_id:'t103-1', claim_id:'2001', claim_number:'2001', amount_billed:150, billed_amount:150, created_at:nowISO() }];
+  const payments103 = [
+    { org_id:org103, payment_id:'t103-keep', claim_number:'2001', amount_paid:50, source_file:'keep.csv', created_at:nowISO(), date_paid:'2026-02-01' },
+    { org_id:org103, payment_id:'t103-del', claim_number:'2001', amount_paid:30, source_file:'delete_me.csv', created_at:nowISO(), date_paid:'2026-02-01' }
+  ];
+  writeJSON(FILES.billed, claims103); writeJSON(FILES.payments, payments103);
+  tjhpRecomputeClaimPaymentsFromLedgerForOrg(org103,{write:true});
+  const deleted103 = payments103.filter(p=>p.source_file==='delete_me.csv');
+  const remaining103 = payments103.filter(p=>p.source_file!=='delete_me.csv');
+  let billed103 = readJSON(FILES.billed,[]);
+  tjhpClearDeletedPaymentBatchEffectsForOrg(org103,billed103,deleted103,remaining103,{claimCtx:buildClaimContext(org103)});
+  tjhpRecomputeClaimPaymentsFromLedgerForOrg(org103,{billedAll:billed103,payments:remaining103,write:false});
+  tjhpClearDeletedPaymentBatchEffectsForOrg(org103,billed103,deleted103,remaining103,{claimCtx:buildClaimContext(org103)});
+  const claim103 = billed103.find(c=>c.org_id===org103 && tjhpIsRealBilledClaim(c));
+  assert(claim103 && num(claim103.paid_amount)===50,'T103A');
+  assert(claim103 && claim103.paid_at && String(claim103.payment_response_received_at||'')!=='','T103B');
+  assert(claim103 && String(claim103.status||'')!=='Awaiting Payment','T103C');
+  assert(billed103.filter(c=>c.org_id===org103 && tjhpIsPaymentOnlyOperationalClaim(c)).length===0,'T103D');
 
   // T82-T86 payment-only unknown/contract behavior
   writeJSON(FILES.billed,[]);
