@@ -7689,6 +7689,13 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
 
     const inLifecycle = !!(row && row.closest(".lifecycle-claims-table"));
     const inAction = !!(row && row.closest("#actionTableSync"));
+    const isPaymentOnlyRow =
+      !!(row && (
+        row.getAttribute("data-payment-only") === "1" ||
+        row.dataset?.paymentOnly === "1" ||
+        row.getAttribute("data-payment-only") === "true" ||
+        row.dataset?.paymentOnly === "true"
+      ));
 
     const titleFromCard = card && card.querySelector(".pipeline-card-title") ? card.querySelector(".pipeline-card-title").textContent.trim() : "";
     const subFromCard = card && card.querySelector(".pipeline-card-sub") ? card.querySelector(".pipeline-card-sub").textContent.trim() : "";
@@ -7703,6 +7710,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       source: inLifecycle ? "lifecycle" : (inAction ? "action" : "unknown"),
       isLifecycle: inLifecycle,
       isAction: inAction,
+      isPaymentOnly: isPaymentOnlyRow,
       claimNumber: vpCellText(cells, 0) || titleFromCard || ("Claim " + id),
       payer: vpCellText(cells, 1) || subFromCard || "",
       billed: vpCellText(cells, 2) || "-",
@@ -7731,20 +7739,14 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
 
   function vpIsPaymentOnlyFallbackSnapshot(s){
     if (!s) return false;
-
-    const status = String(s.status || "").toLowerCase();
     const source = String(s.source || "").toLowerCase();
+    if (source !== "lifecycle") return false;
 
-    return (
-      source === "lifecycle" &&
-      (
-        vpIsUnknownValue(s.billed) ||
-        vpIsUnknownValue(s.expected) ||
-        status.includes("denied") ||
-        status.includes("resolved") ||
-        status.includes("underpaid")
-      )
-    );
+    if (s.isPaymentOnly === true || String(s.isPaymentOnly || "").toLowerCase() === "true" || String(s.isPaymentOnly || "") === "1") {
+      return true;
+    }
+
+    return vpIsUnknownValue(s.billed);
   }
 
   function vpPaymentOnlyMissingContextNotice(s){
@@ -7844,7 +7846,28 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     return false;
   }
 
-  function vpEnsureFallbackPanel(){
+  
+
+  function vpLifecycleBilledClaimContextHtml(s){
+    if (!s || String(s.source || "") !== "lifecycle") return "";
+    if (vpIsPaymentOnlyFallbackSnapshot(s)) return "";
+
+    const status = String(s.status || "").toLowerCase();
+    if (!(status.includes("awaiting") || status.includes("waiting") || status.includes("submitted"))) {
+      return "";
+    }
+
+    return ''
+      + '<div style="border-top:1px solid #e5e7eb;margin-top:14px;padding-top:14px;">'
+      +   '<div style="font-weight:900;margin-bottom:6px;">Why this claim is pending</div>'
+      +   '<div class="muted" style="margin-bottom:12px;">This billed claim has been uploaded, but no payment or payer response is currently linked.</div>'
+      +   '<div style="font-weight:900;margin-bottom:6px;">Claim Insight</div>'
+      +   '<div class="muted" style="margin-bottom:12px;">The claim is waiting for payment activity. Upload payment or ERA data when received, or add a contract rule if expected reimbursement is missing.</div>'
+      +   '<div style="font-weight:900;margin-bottom:6px;">Next Best Action</div>'
+      +   '<div class="muted">Upload payment/ERA when received, add a contract rule if expected reimbursement is missing, or edit the claim if billing details need correction.</div>'
+      + '</div>';
+  }
+function vpEnsureFallbackPanel(){
     let backdrop = document.getElementById("tjhpClaimPanelBackdrop");
     let panel = document.getElementById("tjhpClaimPanel");
     if (!backdrop) {
@@ -7896,6 +7919,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     const badge = vpBadgeClass(s.status);
     const missingContextNotice = vpPaymentOnlyMissingContextNotice(s);
     const lifecycleRichContext = vpLifecycleRichContextHtml(s);
+    const billedClaimContext = vpLifecycleBilledClaimContextHtml(s);
 
     ui.body.innerHTML =
       '<div style="font-size:20px;font-weight:900;margin-bottom:10px;">' + vpEsc(s.claimNumber || ("Claim " + id)) + '</div>' +
@@ -7913,6 +7937,7 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
       '<div class="muted small" style="margin-bottom:12px;">Last activity date: ' + vpEsc(s.lastActivity || s.timing || "-") + '</div>' +
       missingContextNotice +
       lifecycleRichContext +
+      billedClaimContext +
       '<div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">' +
         '<a class="btn small secondary" href="' + vpEsc(s.href) + '">Open Full Claim</a>' +
         vpPrimaryAction(id, s.status) +
@@ -26636,11 +26661,181 @@ function tjhpHasNonPaymentDenialSupport(claim, claimCtx = {}) {
   return false;
 }
 
+function tjhpCaseHasUserDenialEvidence(caseObj) {
+  if (!caseObj) return false;
+
+  return !!(
+    (Array.isArray(caseObj.files) && caseObj.files.length > 0) ||
+    (Array.isArray(caseObj.appeal_attachments) && caseObj.appeal_attachments.length > 0) ||
+    caseObj.denial_doc_attached ||
+    caseObj.denial_document ||
+    caseObj.denial_file ||
+    caseObj.submitted_at ||
+    caseObj.exported_at ||
+    caseObj.packet_submitted_at ||
+    caseObj.outcome_status ||
+    String(caseObj.status || "").toLowerCase().match(/submitted|approved|overturned|upheld|paid|closed/)
+  );
+}
+
+function tjhpClaimHasUserDenialEvidence(claim) {
+  if (!claim) return false;
+
+  return !!(
+    claim.manual_denial === true ||
+    claim.manually_denied === true ||
+    claim.denial_doc_attached ||
+    claim.denial_document ||
+    claim.denial_file ||
+    claim.denial_uploaded_at ||
+    claim.denial_batch_id
+  );
+}
+
+function tjhpCaseLooksAutoPaymentDerived(caseObj) {
+  if (!caseObj) return false;
+
+  const blob = [
+    caseObj.source,
+    caseObj.created_from,
+    caseObj.origin,
+    caseObj.case_source,
+    caseObj.denial_source,
+    caseObj.issue_reason,
+    caseObj.denial_reason,
+    caseObj.stage,
+    caseObj.status
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  if (/payment|era|eob|remittance|zero[_\s-]*pay|zero payment|payer response/.test(blob)) {
+    return true;
+  }
+
+  const simpleOpenDraft =
+    (!String(caseObj.source || caseObj.created_from || caseObj.origin || "").trim()) &&
+    /open|draft|drafted|in review|/.test(String(caseObj.status || "Open").toLowerCase()) &&
+    !tjhpCaseHasUserDenialEvidence(caseObj);
+
+  return simpleOpenDraft;
+}
+
+function tjhpRemovePaymentDerivedDenialCaseForClaim(org_id, claim, opts = {}) {
+  if (!claim || !claim.billed_id) return { changed: false, removedCaseIds: [] };
+
+  if (tjhpClaimHasUserDenialEvidence(claim)) {
+    return { changed: false, removedCaseIds: [] };
+  }
+
+  const allCases = readJSON(FILES.cases, []);
+  const removedCaseIds = [];
+  let changed = false;
+
+  const claimCaseIds = new Set(
+    [
+      claim.denial_case_id,
+      claim.case_id,
+      claim.recovery_case_id
+    ].map(v => String(v || "").trim()).filter(Boolean)
+  );
+
+  const remainingCases = allCases.filter(caseObj => {
+    if (String(caseObj.org_id || "") !== String(org_id || "")) return true;
+
+    const sameClaim =
+      String(caseObj.billed_id || "") === String(claim.billed_id || "") ||
+      (claimCaseIds.size && claimCaseIds.has(String(caseObj.case_id || "")));
+
+    if (!sameClaim) return true;
+
+    const isDenialLike =
+      String(caseObj.type || caseObj.case_type || "denial").toLowerCase() !== "underpayment";
+
+    if (!isDenialLike) return true;
+
+    if (tjhpCaseHasUserDenialEvidence(caseObj)) return true;
+    if (!tjhpCaseLooksAutoPaymentDerived(caseObj)) return true;
+
+    removedCaseIds.push(String(caseObj.case_id || ""));
+    changed = true;
+    return false;
+  });
+
+  if (changed) {
+    writeJSON(FILES.cases, remainingCases);
+  }
+
+  if (
+    claim.denial_case_id ||
+    claim.case_id ||
+    claim.recovery_case_id
+  ) {
+    claim.denial_case_id = "";
+    claim.case_id = "";
+    claim.recovery_case_id = "";
+    changed = true;
+  }
+
+  return { changed, removedCaseIds };
+}
+
+function tjhpClearPaymentDerivedWorkspaceFieldsForClaim(claim) {
+  if (!claim) return false;
+
+  const before = JSON.stringify({
+    last_submission_channel: claim.last_submission_channel,
+    submission_status: claim.submission_status,
+    workspace_status: claim.workspace_status,
+    follow_up_status: claim.follow_up_status,
+    packet_follow_up_status: claim.packet_follow_up_status,
+    payer_response_status: claim.payer_response_status,
+    appeal_response_status: claim.appeal_response_status,
+    negotiation_response_status: claim.negotiation_response_status,
+    response_status: claim.response_status,
+    packet_response_status: claim.packet_response_status,
+    follow_up_date: claim.follow_up_date,
+    next_action: claim.next_action
+  });
+
+  claim.last_submission_channel = "";
+  claim.submission_status = "";
+  claim.workspace_status = "";
+  claim.follow_up_status = "";
+  claim.packet_follow_up_status = "";
+  claim.payer_response_status = "";
+  claim.appeal_response_status = "";
+  claim.negotiation_response_status = "";
+  claim.response_status = "";
+  claim.packet_response_status = "";
+  claim.follow_up_date = "";
+  claim.next_action = "";
+
+  return before !== JSON.stringify({
+    last_submission_channel: claim.last_submission_channel,
+    submission_status: claim.submission_status,
+    workspace_status: claim.workspace_status,
+    follow_up_status: claim.follow_up_status,
+    packet_follow_up_status: claim.packet_follow_up_status,
+    payer_response_status: claim.payer_response_status,
+    appeal_response_status: claim.appeal_response_status,
+    negotiation_response_status: claim.negotiation_response_status,
+    response_status: claim.response_status,
+    packet_response_status: claim.packet_response_status,
+    follow_up_date: claim.follow_up_date,
+    next_action: claim.next_action
+  });
+}
+
 function tjhpClearPaymentBatchEffectsForRealClaim(claim, opts = {}) {
   if (!claim || !tjhpIsRealBilledClaim(claim)) return false;
 
   const claimCtx = opts.claimCtx || {};
   const keepDenial = tjhpHasNonPaymentDenialSupport(claim, claimCtx);
+  const org_id = opts.org_id || claim.org_id || "";
+  let artifactCleanup = { changed: false, removedCaseIds: [] };
+
+  if (!keepDenial) {
+    artifactCleanup = tjhpRemovePaymentDerivedDenialCaseForClaim(org_id, claim, opts);
+  }
 
   const before = JSON.stringify({
     paid_amount: claim.paid_amount,
@@ -26689,6 +26884,16 @@ function tjhpClearPaymentBatchEffectsForRealClaim(claim, opts = {}) {
     claim.denial_reason = "";
     claim.denial_code = "";
     claim.denied_at = "";
+    claim.denial_case_id = "";
+    claim.case_id = "";
+    claim.recovery_case_id = "";
+    claim.denial_source = "";
+    claim.denial_origin = "";
+    claim.payment_denial_source = "";
+    claim.appeal_status = "";
+    claim.appeal_stage = "";
+    claim.appeal_draft_status = "";
+    tjhpClearPaymentDerivedWorkspaceFieldsForClaim(claim);
   }
 
   claim.underpaid_amount = 0;
@@ -26701,7 +26906,7 @@ function tjhpClearPaymentBatchEffectsForRealClaim(claim, opts = {}) {
 
   claim.updated_at = nowISO();
 
-  return before !== JSON.stringify({
+  return artifactCleanup.changed || before !== JSON.stringify({
     paid_amount: claim.paid_amount,
     insurance_paid: claim.insurance_paid,
     paid_at: claim.paid_at,
@@ -26743,7 +26948,25 @@ function tjhpClearDeletedPaymentBatchEffectsForOrg(org_id, billedAll, deletedPay
     const remainingRows = tjhpRemainingPaymentRowsForClaim(claim, remaining, org_id);
     if (remainingRows.length > 0) continue;
 
-    if (tjhpClearPaymentBatchEffectsForRealClaim(claim, { claimCtx })) changed = true;
+    if (tjhpClearPaymentBatchEffectsForRealClaim(claim, { claimCtx, org_id })) changed = true;
+
+    if (remainingRows.length === 0 && !tjhpHasNonPaymentDenialSupport(claim, claimCtx)) {
+      claim.paid_amount = 0;
+      claim.insurance_paid = 0;
+      claim.has_zero_payment_record = false;
+      claim.payment_response_received_at = "";
+      claim.last_payment_sync_at = "";
+      claim.payment_source = "";
+      claim.payment_status = "";
+      claim.remittance_status = "";
+      claim.eob_status = "";
+      claim.denial_case_id = "";
+      claim.case_id = "";
+      claim.recovery_case_id = "";
+      claim.status = "Awaiting Payment";
+      claim.lifecycle_stage = "Awaiting Payment";
+      changed = true;
+    }
   }
 
   return { changed };
@@ -26811,6 +27034,16 @@ function tjhpRecomputeClaimPaymentsFromLedgerForOrg(org_id, opts = {}) {
         claim.denial_reason = "";
         claim.denial_code = "";
         claim.denied_at = "";
+    claim.denial_case_id = "";
+    claim.case_id = "";
+    claim.recovery_case_id = "";
+    claim.denial_source = "";
+    claim.denial_origin = "";
+    claim.payment_denial_source = "";
+    claim.appeal_status = "";
+    claim.appeal_stage = "";
+    claim.appeal_draft_status = "";
+    tjhpClearPaymentDerivedWorkspaceFieldsForClaim(claim);
         claim.status = "Awaiting Payment";
         claim.lifecycle_stage = "Awaiting Payment";
       }
@@ -37004,7 +37237,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
                 : "";
 
               return `
-                <tr${rowStyle}>
+                <tr${rowStyle} data-payment-only="${rowPaymentOnly ? "1" : "0"}">
                   <td>
                     <a href="/claim-detail?billed_id=${encodeURIComponent(c.billed_id)}">
                       ${safeStr(c.claim_number || "")}
@@ -53915,6 +54148,40 @@ function runPaymentMatchingSmokeTests(){
   assert(claim103 && String(claim103.status||'')!=='Awaiting Payment','T103C');
   assert(billed103.filter(c=>c.org_id===org103 && tjhpIsPaymentOnlyOperationalClaim(c)).length===0,'T103D');
 
+  const org104 = "smoke-delete-stale-denial";
+  const claims104 = Array.from({length:5}).map((_,i)=>({ org_id:org104, billed_id:`t104-${i+1}`, claim_id:String(3000+i), claim_number:String(3000+i), amount_billed:200, billed_amount:200, created_at:nowISO() }));
+  const payments104 = claims104.map((c,i)=>({ org_id:org104, payment_id:`t104-p-${i+1}`, claim_number:c.claim_number, amount_paid:i<2?0:120, source_file:'t104.csv', created_at:nowISO(), date_paid:'2026-02-01' }));
+  writeJSON(FILES.billed, claims104); writeJSON(FILES.payments, payments104); writeJSON(FILES.cases, []);
+  tjhpRecomputeClaimPaymentsFromLedgerForOrg(org104,{write:true});
+  let billed104 = readJSON(FILES.billed,[]);
+  const cases104 = readJSON(FILES.cases,[]);
+  billed104.filter(c=>c.org_id===org104).slice(0,2).forEach((claim,idx)=>{
+    const cid=`t104-case-${idx+1}`;
+    cases104.push({ org_id:org104, case_id:cid, billed_id:claim.billed_id, type:'denial', status:'Open', stage:'Drafted', source:'payment_zero' });
+    claim.denial_case_id=cid; claim.denial_reason='Payment zero'; claim.payment_status='Denied'; claim.remittance_status='Denied';
+  });
+  writeJSON(FILES.cases,cases104); writeJSON(FILES.billed,billed104);
+  const deleted104 = payments104.slice();
+  const remaining104 = [];
+  tjhpClearDeletedPaymentBatchEffectsForOrg(org104,billed104,deleted104,remaining104,{claimCtx:buildClaimContext(org104)});
+  tjhpRecomputeClaimPaymentsFromLedgerForOrg(org104,{billedAll:billed104,payments:remaining104,write:false});
+  tjhpClearDeletedPaymentBatchEffectsForOrg(org104,billed104,deleted104,remaining104,{claimCtx:buildClaimContext(org104)});
+  const real104 = billed104.filter(c=>c.org_id===org104 && tjhpIsRealBilledClaim(c));
+  const d104 = real104.reduce((a,c)=>{ const st=String(c.status||''); a[st]=(a[st]||0)+1; return a; },{});
+  const remainingCases104 = readJSON(FILES.cases,[]).filter(x=>x.org_id===org104);
+  assert(real104.length===5 && (d104["Awaiting Payment"]||0)===5 && (d104["Denied"]||0)===0 && (d104["Underpaid"]||0)===0 && (d104["Resolved"]||0)===0,'T104A');
+  assert(real104.every(c=>num(c.paid_amount)===0 && num(c.insurance_paid)===0 && String(c.denial_case_id||'')==='' && String(c.payment_response_received_at||'')==='' && String(c.last_payment_sync_at||'')==='' && String(c.payment_source||'')==='' && (!c.paid_at) && String(c.remittance_status||'')==='' && String(c.payment_status||'')==='' && String(c.eob_status||'')===''),'T104B');
+  assert(remainingCases104.length===0 || remainingCases104.every(x=>!String(x.source||'').includes('payment_zero')),'T104C');
+
+  const org105 = "smoke-delete-manual-denial";
+  const claim105 = { org_id:org105, billed_id:'t105-1', claim_id:'4001', claim_number:'4001', amount_billed:200, billed_amount:200, manual_denial:true, denial_doc_attached:true, denial_case_id:'t105-case-1', status:'Denied', created_at:nowISO() };
+  writeJSON(FILES.billed,[claim105]); writeJSON(FILES.payments,[]); writeJSON(FILES.cases,[{ org_id:org105, case_id:'t105-case-1', billed_id:'t105-1', type:'denial', status:'Submitted', files:['denial.pdf'] }]);
+  let billed105 = readJSON(FILES.billed,[]);
+  tjhpClearDeletedPaymentBatchEffectsForOrg(org105,billed105,[{org_id:org105,claim_number:'4001',amount_paid:0}],[],{claimCtx:buildClaimContext(org105)});
+  const c105 = billed105.find(c=>c.org_id===org105);
+  assert(c105 && String(c105.denial_case_id||'')==='t105-case-1' && c105.manual_denial===true && c105.denial_doc_attached===true,'T105A');
+  assert(c105 && String(c105.status||'')==='Denied','T105B');
+
   // T82-T86 payment-only unknown/contract behavior
   writeJSON(FILES.billed,[]);
   writeJSON(FILES.payments,[{org_id,payment_id:'t82',payer:'Cigna',amount_paid:210,source_file:'t82.csv'}]);
@@ -54063,8 +54330,14 @@ function runViewPanelStaticSmokeTests(){
   assert(src.includes("The payer response shows no insurance payment for this payment-only record."), "T99G");
   assert(src.includes("Add missing billing or contract details for more accurate expected reimbursement and recovery metrics."), "T99H");
   assert(src.includes("const missingContextNotice = vpPaymentOnlyMissingContextNotice(s);"), "T99I");
-  assert(src.includes("const lifecycleRichContext = vpLifecycleRichContextHtml(s);"), "T99J");
+  assert(src.includes("const lifecycleRichContext = vpLifecycleRichContextHtml(s);") && src.includes("const billedClaimContext = vpLifecycleBilledClaimContextHtml(s);"), "T99J");
   assert(src.includes("missingContextNotice +") && src.includes("lifecycleRichContext +"), "T99K");
+  assert(src.includes('data-payment-only="${rowPaymentOnly ? "1" : "0"}"'), "T106A");
+  assert(src.includes("isPaymentOnly: isPaymentOnlyRow"), "T106B");
+  assert(src.includes("function vpLifecycleBilledClaimContextHtml"), "T106C");
+  assert(src.includes("Why this claim is pending"), "T106D");
+  assert(src.includes("This billed claim has been uploaded, but no payment or payer response is currently linked."), "T106E");
+  assert(!src.includes("status.includes(\"denied\") ||\n        status.includes(\"resolved\") ||\n        status.includes(\"underpaid\")"), "T106F");
   assert(src.includes("vpEsc(s.billed || \"-\")") && src.includes("vpEsc(s.expected || \"-\")") && src.includes("vpEsc(s.paid || \"-\")") && src.includes("vpEsc(s.atRisk || \"-\")"), "T99L");
   assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__ = true") && src.includes("__tjhpOpenClaimPanelOrNavigate") && src.includes("Open Full Claim") && src.includes("data-fallback-href"), "T99M");
 
