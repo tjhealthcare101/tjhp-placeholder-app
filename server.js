@@ -8137,6 +8137,240 @@ function vpEnsureFallbackPanel(){
 })();
 </script>
 
+<script>
+(function(){
+  if (window.__TJHP_VIEW_PANEL_OPENER_RESCUE_READY__) return;
+  window.__TJHP_VIEW_PANEL_OPENER_RESCUE_READY__ = true;
+
+  function rescueEsc(v){
+    return String(v == null ? "" : v).replace(/[&<>"']/g, function(ch){
+      return ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[ch];
+    });
+  }
+
+  function rescueDecode(v){
+    try { return decodeURIComponent(String(v || "")); }
+    catch(e){ return String(v || ""); }
+  }
+
+  function rescueParamFromHref(href){
+    if (!href) return "";
+    try {
+      const u = new URL(href, window.location.origin);
+      return (
+        u.searchParams.get("billed_id") ||
+        u.searchParams.get("claim_id") ||
+        u.searchParams.get("claim") ||
+        u.searchParams.get("id") ||
+        ""
+      );
+    } catch(e) {
+      const m = String(href || "").match(/[?&](?:billed_id|claim_id|claim|id)=([^&#]+)/);
+      return m ? rescueDecode(m[1]) : "";
+    }
+  }
+
+  function rescueClosestView(event, trigger){
+    if (trigger && trigger.closest) {
+      const fromTrigger = trigger.closest(".view-claim-btn");
+      if (fromTrigger) return fromTrigger;
+    }
+    const target = event && event.target;
+    return target && target.closest ? target.closest(".view-claim-btn") : null;
+  }
+
+  function rescueResolveId(el){
+    if (!el) return "";
+
+    const row = el.closest ? el.closest("tr") : null;
+    const card = el.closest ? el.closest(".pipeline-card") : null;
+
+    const attrs = [
+      el.getAttribute("data-open-claim-panel"),
+      el.getAttribute("data-claim-panel-open"),
+      el.getAttribute("data-claim-panel-id"),
+      el.getAttribute("data-billed-id"),
+      el.getAttribute("data-claim-id"),
+      el.getAttribute("data-id"),
+      row && (row.getAttribute("data-claim") || row.dataset.claim),
+      card && (card.getAttribute("data-claim") || card.dataset.claim),
+      rescueParamFromHref(el.getAttribute("data-fallback-href") || ""),
+      rescueParamFromHref(el.getAttribute("href") || "")
+    ];
+
+    for (const v of attrs) {
+      const s = rescueDecode(v || "").trim();
+      if (s) return s;
+    }
+
+    const scopedLink =
+      row && row.querySelector('a[href*="billed_id="],a[href*="claim_id="],a[href*="claim="],a[href*="id="]') ||
+      card && card.querySelector('a[href*="billed_id="],a[href*="claim_id="],a[href*="claim="],a[href*="id="]');
+
+    return rescueDecode(rescueParamFromHref(scopedLink && scopedLink.getAttribute("href"))).trim();
+  }
+
+  function rescueFullClaimHref(id, el){
+    const stored = el && el.getAttribute ? String(el.getAttribute("data-fallback-href") || "").trim() : "";
+    if (stored && stored !== "#") return stored;
+
+    const href = el && el.getAttribute ? String(el.getAttribute("href") || "").trim() : "";
+    if (href && href !== "#") return href;
+
+    return id ? "/claim-detail?billed_id=" + encodeURIComponent(id) : "/claims-lifecycle";
+  }
+
+  function rescuePanelIsOpen(){
+    const rich = document.getElementById("claimSidePanel");
+    if (rich && rich.getAttribute("aria-hidden") === "false") return true;
+
+    const fallback = document.getElementById("tjhpClaimPanel");
+    if (fallback && fallback.getAttribute("aria-hidden") === "false") return true;
+
+    return false;
+  }
+
+  function rescueEnsurePanel(){
+    let backdrop = document.getElementById("tjhpClaimPanelBackdrop");
+    let panel = document.getElementById("tjhpClaimPanel");
+
+    if (!backdrop) {
+      backdrop = document.createElement("div");
+      backdrop.id = "tjhpClaimPanelBackdrop";
+      backdrop.style.cssText =
+        "position:fixed;inset:0;background:rgba(15,23,42,.35);opacity:0;transition:opacity .2s ease;z-index:9998;display:none;";
+      document.body.appendChild(backdrop);
+    }
+
+    if (!panel) {
+      panel = document.createElement("aside");
+      panel.id = "tjhpClaimPanel";
+      panel.setAttribute("aria-hidden", "true");
+      panel.style.cssText =
+        "position:fixed;top:0;right:-440px;width:420px;max-width:96vw;height:100%;background:#fff;border-left:1px solid #e5e7eb;box-shadow:-8px 0 30px rgba(15,23,42,.18);z-index:9999;padding:18px;overflow-y:auto;transition:right .22s ease;";
+      panel.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+          '<div><div class="muted small" style="text-transform:uppercase;letter-spacing:.06em;">Claim Detail</div><strong style="font-size:16px;">Claim View</strong></div>' +
+          '<button type="button" data-tjhp-panel-close style="border:1px solid #111;background:#fff;color:#111;border-radius:10px;height:36px;padding:0 12px;cursor:pointer;font-weight:700;">Close</button>' +
+        '</div>' +
+        '<div data-tjhp-panel-body></div>';
+      document.body.appendChild(panel);
+    }
+
+    function close(){
+      panel.style.right = "-440px";
+      panel.setAttribute("aria-hidden", "true");
+      backdrop.style.opacity = "0";
+      setTimeout(function(){ backdrop.style.display = "none"; }, 200);
+      document.body.style.overflow = "";
+    }
+
+    if (!backdrop.dataset.rescueBound) {
+      backdrop.dataset.rescueBound = "1";
+      backdrop.addEventListener("click", close);
+    }
+
+    const closeBtn = panel.querySelector("[data-tjhp-panel-close]");
+    if (closeBtn && !closeBtn.dataset.rescueBound) {
+      closeBtn.dataset.rescueBound = "1";
+      closeBtn.addEventListener("click", close);
+    }
+
+    return {
+      backdrop: backdrop,
+      panel: panel,
+      body: panel.querySelector("[data-tjhp-panel-body]")
+    };
+  }
+
+  function rescueCellValue(cells, idx){
+    const cell = cells && cells[idx] ? cells[idx] : null;
+    if (!cell) return "";
+    const clean=(cell.getAttribute && (cell.getAttribute("data-panel-value") || cell.getAttribute("data-clean-value") || cell.dataset?.panelValue || cell.dataset?.cleanValue)) || "";
+    if (String(clean || "").trim()) return String(clean || "").replace(/\s+/g, " ").trim();
+    const raw = String(cell.textContent || "").replace(/\s+/g, " ").trim();
+    if (/^Unknown\b/i.test(raw)) return "Unknown";
+    const money = raw.match(/\$[\d,]+(?:\.\d{2})?/);
+    if (money) return money[0];
+    return raw;
+  }
+
+  function rescueSnapshot(id, el){ const row=el&&el.closest?el.closest("tr"):null; const card=el&&el.closest?el.closest(".pipeline-card"):null; const cells=row?Array.from(row.children||[]):[];
+    const inLifecycle=!!(row&&row.closest(".lifecycle-claims-table")); const inAction=!!(row&&row.closest("#actionTableSync"));
+    const titleFromCard=card&&card.querySelector(".pipeline-card-title")?card.querySelector(".pipeline-card-title").textContent.trim():"";
+    const subFromCard=card&&card.querySelector(".pipeline-card-sub")?card.querySelector(".pipeline-card-sub").textContent.trim():"";
+    const status=(row&&row.querySelector(".badge")?row.querySelector(".badge").textContent.trim():"")||(card&&card.querySelector(".badge")?card.querySelector(".badge").textContent.trim():"")||"View Only";
+    return {id:id,source:inLifecycle?"lifecycle":(inAction?"action":"unknown"),claimNumber:rescueCellValue(cells,0)||titleFromCard||("Claim "+id),payer:rescueCellValue(cells,1)||subFromCard||"",billed:rescueCellValue(cells,2)||"-",expected:rescueCellValue(cells,3)||"-",paid:rescueCellValue(cells,4)||"-",atRisk:inLifecycle?(rescueCellValue(cells,5)||"-"):(inAction?(rescueCellValue(cells,7)||"-"):"-"),risk:inLifecycle?(rescueCellValue(cells,6)||"-"):(inAction?(rescueCellValue(cells,8)||"-"):"-"),timing:inLifecycle?(rescueCellValue(cells,7)||"-"):(inAction?(rescueCellValue(cells,10)||"-"):"-"),status:status,href:rescueFullClaimHref(id,el)}; }
+
+  function rescueBadgeClass(status){ const s=String(status||"").toLowerCase(); if(s.includes("denied")) return "err"; if(s.includes("underpaid")) return "underpaid"; if(s.includes("resolved")||s.includes("paid")) return "ok"; if(s.includes("awaiting")||s.includes("waiting")||s.includes("submitted")) return "pending"; return ""; }
+  function rescueContextHtml(s){
+    const status = String(s.status || "").toLowerCase();
+    let heading = "Claim Insight";
+    let why = "This claim is visible based on current lifecycle data.";
+    let insight = "Review billed, expected, paid, and at-risk values to determine whether additional action is needed.";
+    let next = "Open the full claim, edit details, or continue the appropriate workflow if action is needed.";
+    if (status.includes("denied")) {
+      heading = "Why this claim is flagged";
+      why = "A payment or payer response indicates no insurance payment was posted, or reimbursement remains at risk.";
+      insight = "Review payment, contract, and claim details before continuing appeal work.";
+      next = "Continue the appeal workflow, review claim details, and add supporting documentation before submission.";
+    } else if (status.includes("underpaid")) {
+      heading = "Why this claim is flagged";
+      why = "The payer paid less than the expected reimbursement.";
+      insight = "Expected reimbursement is higher than the posted payment, creating a recoverable underpayment opportunity.";
+      next = "Continue negotiation and review contract/payment details before follow-up.";
+    } else if (status.includes("resolved") || status.includes("paid")) {
+      why = "Payment activity currently shows no active recovery risk.";
+      insight = "Payment meets expected reimbursement or there is no remaining recovery risk based on current data.";
+      next = "No recovery action is needed right now. Edit the claim if details need correction.";
+    } else if (status.includes("awaiting") || status.includes("waiting") || status.includes("submitted")) {
+      heading = "Why this claim is pending";
+      why = "This billed claim has been uploaded, but no payment or payer response is currently linked.";
+      insight = "The claim is waiting for payment activity.";
+      next = "Upload payment/ERA when received, add a contract rule if expected reimbursement is missing, or edit the claim if billing details need correction.";
+    }
+    return ''
+      + '<div style="border-top:1px solid #e5e7eb;margin-top:14px;padding-top:14px;">'
+      +   '<div style="font-weight:900;margin-bottom:6px;">' + rescueEsc(heading) + '</div>'
+      +   '<div class="muted" style="margin-bottom:12px;">' + rescueEsc(why) + '</div>'
+      +   '<div style="font-weight:900;margin-bottom:6px;">Claim Insight</div>'
+      +   '<div class="muted" style="margin-bottom:12px;">' + rescueEsc(insight) + '</div>'
+      +   '<div style="font-weight:900;margin-bottom:6px;">Next Best Action</div>'
+      +   '<div class="muted">' + rescueEsc(next) + '</div>'
+      + '</div>';
+  }
+  function rescuePrimaryAction(id,status){ const s=String(status||"").toLowerCase(); if(s.includes("resolved")||s==="paid") return '<a class="btn small secondary edit-claim-btn" href="/claim-edit?claim_id='+encodeURIComponent(id)+'">Edit Claim</a>'; if(s.includes("denied")) return '<a class="btn small secondary" href="/ai-appeal?billed_id='+encodeURIComponent(id)+'">Open Appeal Workspace</a>'; if(s.includes("underpaid")) return '<a class="btn small secondary" href="/ai-negotiation?billed_id='+encodeURIComponent(id)+'">Open Negotiation Workspace</a>'; if(s.includes("awaiting")||s.includes("waiting")||s.includes("submitted")) return '<a class="btn small secondary" href="/data-management?tab=payments">Upload Payment</a>'; return ""; }
+
+  function rescueOpenPanel(id, el){ id=rescueDecode(id||"").trim(); if(!id) return false; const ui=rescueEnsurePanel(); if(!ui||!ui.panel||!ui.body) return false; const s=rescueSnapshot(id,el); const badge=rescueBadgeClass(s.status); const context=rescueContextHtml(s);
+    ui.body.innerHTML='<div style="font-size:20px;font-weight:900;margin-bottom:10px;">'+rescueEsc(s.claimNumber||("Claim "+id))+'</div>'+'<div class="muted small" style="margin-bottom:14px;">'+rescueEsc(s.payer||"")+'</div>'+'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">'+'<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Billed</div><div style="font-weight:900;">'+rescueEsc(s.billed||"-")+'</div></div>'+'<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Expected</div><div style="font-weight:900;">'+rescueEsc(s.expected||"-")+'</div></div>'+'<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">Paid</div><div style="font-weight:900;">'+rescueEsc(s.paid||"-")+'</div></div>'+'<div style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;"><div class="muted small">At Risk</div><div style="font-weight:900;">'+rescueEsc(s.atRisk||"-")+'</div></div>'+'</div>'+'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'+'<span class="badge '+rescueEsc(badge)+'">'+rescueEsc(s.status||"View Only")+'</span>'+'<span class="badge">Risk Score '+rescueEsc(s.risk||"-")+'</span>'+'</div>'+'<div class="muted small" style="margin-bottom:12px;">Last activity date: '+rescueEsc(s.timing||"-")+'</div>'+context+'<div class="btnRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'+'<a class="btn small secondary" href="'+rescueEsc(s.href)+'">Open Full Claim</a>'+rescuePrimaryAction(id,s.status)+'</div>';
+    document.body.style.overflow="hidden"; ui.backdrop.style.display="block"; ui.panel.setAttribute("aria-hidden","false"); requestAnimationFrame(function(){ui.backdrop.style.opacity="1"; ui.panel.style.right="0";}); return true; }
+
+  function rescueTryExisting(id, el){ const raw=String(id||"").trim(); const decoded=rescueDecode(raw); const attempts=Array.from(new Set([raw,decoded,encodeURIComponent(decoded)].filter(Boolean)));
+    if (typeof window.openClaimPanel === "function") for (const attempt of attempts) { try { const opened=!!window.openClaimPanel(attempt); if (opened || rescuePanelIsOpen()) return true; } catch(e) {} }
+    if (typeof window.openFallbackPanel === "function") for (const attempt of attempts) { try { const opened=!!window.openFallbackPanel(attempt, el); if (opened || rescuePanelIsOpen()) return true; } catch(e) {} }
+    if (typeof window.vpOpenEmergencyPanel === "function") for (const attempt of attempts) { try { const opened=!!window.vpOpenEmergencyPanel(attempt, el); if (opened || rescuePanelIsOpen()) return true; } catch(e) {} }
+    return false; }
+
+  function rescueHandle(event, trigger){ const view=rescueClosestView(event, trigger); if(!view) return false; if(event){ event.preventDefault(); event.stopPropagation(); if(typeof event.stopImmediatePropagation==="function") event.stopImmediatePropagation(); }
+    const id=rescueResolveId(view); if(!id) return false;
+    if (typeof window.__tjhpOpenClaimPanelOrNavigate === "function" && !window.__TJHP_RESCUE_CALL_ACTIVE__) { try { window.__TJHP_RESCUE_CALL_ACTIVE__ = true; const result = window.__tjhpOpenClaimPanelOrNavigate(event, view); window.__TJHP_RESCUE_CALL_ACTIVE__ = false; if (rescuePanelIsOpen()) return false; if (result === false && rescuePanelIsOpen()) return false; } catch(e) { window.__TJHP_RESCUE_CALL_ACTIVE__ = false; } }
+    if (rescueTryExisting(id, view)) return false; rescueOpenPanel(id, view); return false; }
+
+  window.__tjhpViewPanelOpenerRescue = rescueHandle;
+
+  function rescueWireButtons(){ document.querySelectorAll(".view-claim-btn").forEach(function(btn){ const id=rescueResolveId(btn); if(!id) return;
+      const existingFallback=String(btn.getAttribute("data-fallback-href")||"").trim(); const currentHref=String(btn.getAttribute("href")||"").trim(); const fallback=existingFallback&&existingFallback!=="#"?existingFallback:(currentHref&&currentHref!=="#"?currentHref:rescueFullClaimHref(id,btn));
+      btn.setAttribute("data-open-claim-panel", id); btn.setAttribute("data-billed-id", id); btn.setAttribute("data-id", id); if (fallback && fallback !== "#") btn.setAttribute("data-fallback-href", fallback);
+      if (btn.tagName && btn.tagName.toLowerCase() === "a") { btn.setAttribute("href", "#"); btn.setAttribute("role", "button"); }
+      btn.setAttribute("onclick", "return window.__tjhpViewPanelOpenerRescue ? window.__tjhpViewPanelOpenerRescue(event, this) : false;");
+    }); }
+
+  document.addEventListener("click", function(event){ const view = rescueClosestView(event, null); if (!view) return; return rescueHandle(event, view); }, true);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", rescueWireButtons, { once:true }); else rescueWireButtons();
+  setInterval(rescueWireButtons, 500);
+})();
+</script>
+
 
 ${chatScript}
 
@@ -54339,6 +54573,12 @@ function runViewPanelStaticSmokeTests(){
   function assert(cond, msg){ if (!cond) throw new Error(msg); }
 
   assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__ = true"), "missing hard-stop script");
+  assert(src.includes("window.__TJHP_VIEW_PANEL_OPENER_RESCUE_READY__ = true"), "missing view opener rescue script");
+  assert(src.includes("window.__tjhpViewPanelOpenerRescue"), "missing rescue opener function");
+  assert(src.includes("rescueOpenPanel"), "missing rescue fallback panel opener");
+  assert(src.includes("rescueWireButtons"), "missing rescue button wiring");
+  assert(src.includes("btn.setAttribute(\"onclick\", \"return window.__tjhpViewPanelOpenerRescue"), "View buttons not wired to rescue opener");
+  assert(src.includes("document.addEventListener(\"click\", function(event){") && src.includes("rescueClosestView(event, null)"), "missing rescue capture listener");
   assert(src.includes("function vpSnapshotFromDom"), "missing rich DOM snapshot fallback");
   assert(src.includes("data-panel-value"), "T95A");
   assert(src.includes("function vpCellText"), "T95B");
@@ -54419,6 +54659,11 @@ function runViewPanelStaticSmokeTests(){
   const isViewBlock = (isViewStart >= 0 && nonViewStart > isViewStart) ? hardStop.slice(isViewStart, nonViewStart) : hardStop;
   assert(!isViewBlock.includes("window.location.assign"), "View path can still navigate");
   assert(isViewBlock.includes("vpOpenEmergencyPanel"), "View path does not force emergency panel fallback");
+  const rescueStart = src.indexOf("window.__TJHP_VIEW_PANEL_OPENER_RESCUE_READY__ = true");
+  const rescueEnd = src.indexOf("${chatScript}", rescueStart);
+  const rescueBlock = rescueEnd > rescueStart ? src.slice(rescueStart, rescueEnd) : src.slice(rescueStart);
+  assert(!rescueBlock.includes("window.location.assign"), "rescue View path should not navigate via window.location.assign");
+  assert(rescueBlock.includes("Open Full Claim") && rescueBlock.includes("data-fallback-href"), "rescue full detail access must stay in Open Full Claim / stored href");
 
   return true;
 }
