@@ -7853,18 +7853,76 @@ document.querySelectorAll('input[type="password"]').forEach(input => {
     if (vpIsPaymentOnlyFallbackSnapshot(s)) return "";
 
     const status = String(s.status || "").toLowerCase();
-    if (!(status.includes("awaiting") || status.includes("waiting") || status.includes("submitted"))) {
-      return "";
+    const billed = String(s.billed || "").trim();
+    const expected = String(s.expected || "").trim();
+    const paid = String(s.paid || "").trim();
+    const atRisk = String(s.atRisk || "").trim();
+
+    const expectedMissing =
+      !expected ||
+      expected === "-" ||
+      /^unknown$/i.test(expected);
+
+    const paidZero =
+      !paid ||
+      paid === "-" ||
+      /^\$?0(?:\.00)?$/i.test(paid.replace(/,/g, ""));
+
+    let heading = "";
+    let why = "";
+    let insight = "";
+    let next = "";
+    const context = [];
+
+    if (expectedMissing) context.push("No reimbursement contract match is currently available for this claim.");
+
+    if (status.includes("denied")) {
+      heading = "Why this claim is flagged";
+      why = paidZero
+        ? "A payment or payer response indicates no insurance payment was posted for this real billed claim."
+        : "This real billed claim is flagged because payment activity indicates reimbursement remains at risk.";
+      insight = expectedMissing
+        ? "The billed amount is available, but expected reimbursement is missing because no contract rule is matched. Add a contract rule to strengthen expected-versus-paid analysis."
+        : "The billed and expected reimbursement amounts are available, and the posted payment leaves reimbursement at risk.";
+      next = "Continue the appeal workflow, review the claim details, and add supporting documentation or contract context before submission.";
+    } else if (status.includes("underpaid")) {
+      heading = "Why this claim is flagged";
+      why = "The payer paid less than the expected reimbursement for this real billed claim.";
+      insight = "Expected reimbursement is higher than the posted payment, creating a recoverable underpayment opportunity.";
+      next = "Continue negotiation, review contract/payment details, and add supporting documentation before follow-up.";
+    } else if (status.includes("resolved") || status.includes("paid")) {
+      heading = "Claim Insight";
+      why = "Payment activity currently shows no active recovery risk for this real billed claim.";
+      insight = expectedMissing
+        ? "The claim is marked resolved based on posted payment activity, but expected reimbursement is not available until a contract rule is matched."
+        : "Payment meets expected reimbursement or there is no remaining recovery risk based on current claim data.";
+      next = "No recovery action is needed right now. Edit the claim if billing, payment, or contract details need correction.";
+    } else if (status.includes("awaiting") || status.includes("waiting") || status.includes("submitted")) {
+      heading = "Why this claim is pending";
+      why = "This billed claim has been uploaded, but no payment or payer response is currently linked.";
+      insight = "The claim is waiting for payment activity. Upload payment or ERA data when received, or add a contract rule if expected reimbursement is missing.";
+      next = "Upload payment/ERA when received, add a contract rule if expected reimbursement is missing, or edit the claim if billing details need correction.";
+    } else {
+      heading = "Claim Insight";
+      why = "This real billed claim is visible in the Claims Lifecycle based on current billing and payment data.";
+      insight = "Review billed, expected, paid, and at-risk values to determine whether additional payment, contract, or claim detail updates are needed.";
+      next = "Open the full claim, edit claim details, or continue the appropriate recovery workflow if action is needed.";
     }
+
+    if (billed) context.push("Billed amount: " + billed + ".");
+    if (expected && expected !== "-") context.push("Expected reimbursement: " + expected + ".");
+    if (paid) context.push("Paid amount: " + paid + ".");
+    if (atRisk && atRisk !== "$0.00" && atRisk !== "0") context.push("At-risk amount: " + atRisk + ".");
 
     return ''
       + '<div style="border-top:1px solid #e5e7eb;margin-top:14px;padding-top:14px;">'
-      +   '<div style="font-weight:900;margin-bottom:6px;">Why this claim is pending</div>'
-      +   '<div class="muted" style="margin-bottom:12px;">This billed claim has been uploaded, but no payment or payer response is currently linked.</div>'
+      +   '<div style="font-weight:900;margin-bottom:6px;">' + vpEsc(heading) + '</div>'
+      +   '<div class="muted" style="margin-bottom:12px;">' + vpEsc(why) + '</div>'
       +   '<div style="font-weight:900;margin-bottom:6px;">Claim Insight</div>'
-      +   '<div class="muted" style="margin-bottom:12px;">The claim is waiting for payment activity. Upload payment or ERA data when received, or add a contract rule if expected reimbursement is missing.</div>'
+      +   '<div class="muted" style="margin-bottom:12px;">' + vpEsc(insight) + '</div>'
+      +   (context.length ? '<div class="muted small" style="margin-bottom:12px;">' + vpEsc(context.join(" ")) + '</div>' : '')
       +   '<div style="font-weight:900;margin-bottom:6px;">Next Best Action</div>'
-      +   '<div class="muted">Upload payment/ERA when received, add a contract rule if expected reimbursement is missing, or edit the claim if billing details need correction.</div>'
+      +   '<div class="muted">' + vpEsc(next) + '</div>'
       + '</div>';
   }
 function vpEnsureFallbackPanel(){
@@ -54337,7 +54395,18 @@ function runViewPanelStaticSmokeTests(){
   assert(src.includes("function vpLifecycleBilledClaimContextHtml"), "T106C");
   assert(src.includes("Why this claim is pending"), "T106D");
   assert(src.includes("This billed claim has been uploaded, but no payment or payer response is currently linked."), "T106E");
-  assert(!src.includes("status.includes(\"denied\") ||\n        status.includes(\"resolved\") ||\n        status.includes(\"underpaid\")"), "T106F");
+  assert(src.includes("A payment or payer response indicates no insurance payment was posted for this real billed claim."), "T107A");
+  assert(src.includes("The payer paid less than the expected reimbursement for this real billed claim."), "T107B");
+  assert(src.includes("Payment meets expected reimbursement or there is no remaining recovery risk"), "T107C");
+  assert(src.includes("This billed claim has been uploaded, but no payment or payer response is currently linked."), "T107D");
+  assert(src.includes("No reimbursement contract match is currently available for this claim."), "T107E");
+  assert(src.includes("Continue the appeal workflow"), "T107F");
+  assert(src.includes("Continue negotiation"), "T107G");
+  assert(src.includes("No recovery action is needed right now"), "T107H");
+  assert(src.includes("Upload payment/ERA when received"), "T107I");
+  assert(src.includes("if (vpIsPaymentOnlyFallbackSnapshot(s)) return \"\";"), "T107J");
+  assert(src.includes("const billedClaimContext = vpLifecycleBilledClaimContextHtml(s);") && src.includes("billedClaimContext +"), "T107K");
+  assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__ = true") && src.includes("__tjhpOpenClaimPanelOrNavigate") && src.includes("Open Full Claim") && src.includes("data-fallback-href"), "T107L");
   assert(src.includes("vpEsc(s.billed || \"-\")") && src.includes("vpEsc(s.expected || \"-\")") && src.includes("vpEsc(s.paid || \"-\")") && src.includes("vpEsc(s.atRisk || \"-\")"), "T99L");
   assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__ = true") && src.includes("__tjhpOpenClaimPanelOrNavigate") && src.includes("Open Full Claim") && src.includes("data-fallback-href"), "T99M");
 
