@@ -25413,6 +25413,116 @@ function tjhpGetXlsx(){
   catch (_) { TJHP_XLSX = false; }
   return TJHP_XLSX;
 }
+
+function tjhpXmlDecode(text){
+  return String(text || "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+function tjhpXmlAttr(tag, name){
+  const src = String(tag || "");
+  const safe = String(name || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp('(?:^|\\s)' + safe + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\')');
+  const m = src.match(re);
+  return m ? (m[1] !== undefined ? m[1] : m[2]) : "";
+}
+function tjhpXlsxColumnIndex(cellRef){
+  const ref = String(cellRef || "").toUpperCase().replace(/[^A-Z]/g, "");
+  let idx = 0;
+  for (let i = 0; i < ref.length; i++) idx = idx * 26 + (ref.charCodeAt(i) - 64);
+  return Math.max(0, idx - 1);
+}
+function tjhpZipEntriesFromBuffer(buffer){
+  const zlib = require('zlib');
+  const b = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+  const out = {};
+  let eocd = -1;
+  for (let i = b.length - 22; i >= Math.max(0, b.length - 65557); i--) { if (b.readUInt32LE(i) === 0x06054b50) { eocd = i; break; } }
+  if (eocd < 0) return out;
+  const count = b.readUInt16LE(eocd + 10);
+  let cd = b.readUInt32LE(eocd + 16);
+  for (let i = 0; i < count; i++) {
+    if (cd + 46 > b.length || b.readUInt32LE(cd) !== 0x02014b50) break;
+    const method = b.readUInt16LE(cd + 10), csize = b.readUInt32LE(cd + 20), usize = b.readUInt32LE(cd + 24);
+    const nlen = b.readUInt16LE(cd + 28), xlen = b.readUInt16LE(cd + 30), clen = b.readUInt16LE(cd + 32), lhoff = b.readUInt32LE(cd + 42);
+    const name = b.slice(cd + 46, cd + 46 + nlen).toString('utf8');
+    cd += 46 + nlen + xlen + clen;
+    if (lhoff + 30 > b.length || b.readUInt32LE(lhoff) !== 0x04034b50) continue;
+    const ln = b.readUInt16LE(lhoff + 26), le = b.readUInt16LE(lhoff + 28), d0 = lhoff + 30 + ln + le;
+    const comp = b.slice(d0, d0 + csize);
+    try {
+      out[name] = method === 0 ? comp : (method === 8 ? zlib.inflateRawSync(comp) : null);
+      if (out[name] && out[name].length !== usize && usize > 0) {}
+    } catch (_) {}
+  }
+  return out;
+}
+function tjhpParseXlsxSharedStringsXml(xml){
+  const arr = [];
+  const re = /<si(?:\s[^>]*)?>[\s\S]*?<\/si>/g;
+  for (const si of String(xml || "").match(re) || []) {
+    const parts = [...si.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map((m)=>tjhpXmlDecode(m[1]));
+    arr.push(parts.join(""));
+  }
+  return arr;
+}
+function tjhpParseXlsxSheetXml(sheetXml, sharedStrings){
+  const byRow = new Map();
+  const rowMatches = String(sheetXml || "").match(/<row(?:\s[^>]*)?>[\s\S]*?<\/row>/g) || [];
+  for (let rix = 0; rix < rowMatches.length; rix++) {
+    const rowXml = rowMatches[rix];
+    const rowNum = Number(tjhpXmlAttr((rowXml.match(/<row(?:\s[^>]*)?>/) || [""])[0], "r")) || (rix + 1);
+    const row = [];
+    for (const cellXml of rowXml.match(/<c(?:\s[^>]*)?>[\s\S]*?<\/c>/g) || []) {
+      const ctag = (cellXml.match(/<c(?:\s[^>]*)?>/) || [""])[0];
+      const ref = tjhpXmlAttr(ctag, "r");
+      const typ = tjhpXmlAttr(ctag, "t");
+      const col = ref ? tjhpXlsxColumnIndex(ref) : row.length;
+      let v = "";
+      if (typ === "inlineStr") {
+        const tParts = [...cellXml.matchAll(/<is(?:\s[^>]*)?>[\s\S]*?<t(?:\s[^>]*)?>([\s\S]*?)<\/t>[\s\S]*?<\/is>/g)];
+        v = tParts.length ? tjhpXmlDecode(tParts.map((m)=>m[1]).join("")) : "";
+      } else {
+        const raw = (cellXml.match(/<v>([\s\S]*?)<\/v>/) || [,""])[1];
+        if (typ === "s") { const idx = Number(raw); v = Number.isFinite(idx) ? (sharedStrings[idx] || "") : ""; }
+        else if (typ === "str") v = tjhpXmlDecode(raw);
+        else if (typ === "b") v = String(raw).trim() === "1" ? "true" : "false";
+        else v = tjhpXmlDecode(raw);
+      }
+      row[col] = String(v || "").trim();
+    }
+    byRow.set(rowNum, row);
+  }
+  const ordered = [...byRow.keys()].sort((a,b)=>a-b).map((k)=>byRow.get(k));
+  const headers = (ordered[0] || []).map((h)=>String(h||"").trim());
+  if (!headers.some(Boolean)) return { ok:false, headers:[], rows:[], structured:false, reason:"missing headers" };
+  const rows=[];
+  for (let i=1;i<ordered.length;i++){
+    const r=ordered[i]||[]; const obj={}; let any=false;
+    for (let c=0;c<headers.length;c++){ const h=headers[c]; if(!h) continue; const val=String(r[c]||"").trim(); obj[h]=val; if(val) any=true; }
+    if (any) rows.push(obj);
+  }
+  if (!rows.length) return { ok:false, headers:[], rows:[], structured:false, reason:"no data rows" };
+  return { ok:true, headers, rows, structured:true };
+}
+function tjhpParseXlsxRowsWithoutDependency(buffer){
+  try {
+    const entries = tjhpZipEntriesFromBuffer(buffer);
+    if (!entries || !Object.keys(entries).length) return { ok:false, headers:[], rows:[], structured:false, reason:"zip entries missing" };
+    const shared = entries['xl/sharedStrings.xml'] ? tjhpParseXlsxSharedStringsXml(entries['xl/sharedStrings.xml'].toString('utf8')) : [];
+    const sheetName = entries['xl/worksheets/sheet1.xml'] ? 'xl/worksheets/sheet1.xml' : Object.keys(entries).find((n)=>/^xl\/worksheets\/[^/]+\.xml$/.test(n));
+    if (!sheetName || !entries[sheetName]) return { ok:false, headers:[], rows:[], structured:false, reason:'worksheet missing' };
+    const parsed = tjhpParseXlsxSheetXml(entries[sheetName].toString('utf8'), shared);
+    if (!parsed.ok && !parsed.reason) parsed.reason = "worksheet parse failed";
+    return parsed;
+  } catch (err) {
+    return { ok:false, headers:[], rows:[], structured:false, reason:String(err && err.message ? err.message : err) };
+  }
+}
+
 function tjhpAllowedUploadExtensions(){ return [".csv",".xls",".xlsx",".txt",".pdf",".doc",".docx",".jpg",".jpeg",".png"]; }
 function tjhpUploadExt(filename){ return path.extname(String(filename || "").toLowerCase()); }
 function tjhpUploadKind(filename){
@@ -25478,12 +25588,22 @@ function tjhpParseRowsFromUploadedFile(file, opts = {}){
   if (kind === "EXCEL") {
     if (opts.allowExcelStructured === false) return { ...out, needs_review:true, status:"Stored", outcome:"stored_for_review", notes:"Excel stored for review for this route." };
     const xlsx = tjhpGetXlsx();
-    if (!xlsx) return { ...out, needs_review:true, status:"Stored", outcome:"stored_for_review", notes:"Excel parser unavailable; stored for review." };
-    const wb = xlsx.read(file.buffer, { type:"buffer" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = xlsx.utils.sheet_to_json(ws, { defval:"" });
-    const headers = rows.length ? Object.keys(rows[0]) : [];
-    return { ...out, rows, headers, parsed:true, structured:true, status:"Parsed", outcome:"parsed_structured" };
+    try {
+      if (xlsx) {
+        const wb = xlsx.read(file.buffer, { type:"buffer" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = xlsx.utils.sheet_to_json(ws, { defval:"" });
+        if (rows.length) {
+          const headers = Object.keys(rows[0] || {});
+          return { ...out, rows, headers, parsed:true, structured:true, status:"Parsed", outcome:"parsed_structured" };
+        }
+      }
+    } catch (_) {}
+    const fallback = tjhpParseXlsxRowsWithoutDependency(file.buffer);
+    if (fallback.ok && Array.isArray(fallback.rows) && fallback.rows.length) {
+      return { ...out, rows:fallback.rows, headers:fallback.headers || [], parsed:true, structured:true, status:"Parsed", outcome:"parsed_structured" };
+    }
+    return { ...out, needs_review:true, status:"Stored", outcome:"stored_for_review", notes:"Excel file accepted but structured rows could not be extracted; stored for review." };
   }
   if (kind === "TXT") {
     const p = tjhpParseDelimitedTextToRows(file.buffer.toString("utf8"));
@@ -54756,6 +54876,18 @@ function runViewPanelStaticSmokeTests(){
   return true;
 }
 
+function tjhpSmokeBuildMinimalXlsx(headers, rows){
+  function esc(v){ return String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  function crc32(buf){ let c=-1; for(const b of buf){ c^=b; for(let k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);} return (c^(-1))>>>0; }
+  const files=[];
+  const sheetRows=[[...headers], ...rows];
+  const sheetXml=`<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetRows.map((r,ri)=>`<row r="${ri+1}">${r.map((v,ci)=>`<c r="${String.fromCharCode(65+ci)}${ri+1}" t="inlineStr"><is><t>${esc(v)}</t></is></c>`).join("")}</row>`).join("")}</sheetData></worksheet>`;
+  const manifest={"[Content_Types].xml":`<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`,"_rels/.rels":`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,"xl/workbook.xml":`<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>` ,"xl/_rels/workbook.xml.rels":`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>` ,"xl/worksheets/sheet1.xml":sheetXml};
+  let offset=0; const local=[]; const central=[];
+  for (const [name,text] of Object.entries(manifest)){ const data=Buffer.from(text); const nb=Buffer.from(name); const lh=Buffer.alloc(30); lh.writeUInt32LE(0x04034b50,0); lh.writeUInt16LE(20,4); lh.writeUInt16LE(0,6); lh.writeUInt16LE(0,8); lh.writeUInt32LE(crc32(data),14); lh.writeUInt32LE(data.length,18); lh.writeUInt32LE(data.length,22); lh.writeUInt16LE(nb.length,26); local.push(lh,nb,data); const ch=Buffer.alloc(46); ch.writeUInt32LE(0x02014b50,0); ch.writeUInt16LE(20,4); ch.writeUInt16LE(20,6); ch.writeUInt16LE(0,8); ch.writeUInt16LE(0,10); ch.writeUInt32LE(crc32(data),16); ch.writeUInt32LE(data.length,20); ch.writeUInt32LE(data.length,24); ch.writeUInt16LE(nb.length,28); ch.writeUInt32LE(offset,42); central.push(ch,nb); offset += 30+nb.length+data.length; }
+  const cdb=Buffer.concat(central); const eocd=Buffer.alloc(22); eocd.writeUInt32LE(0x06054b50,0); eocd.writeUInt16LE(Object.keys(manifest).length,8); eocd.writeUInt16LE(Object.keys(manifest).length,10); eocd.writeUInt32LE(cdb.length,12); eocd.writeUInt32LE(offset,16);
+  return Buffer.concat([...local,cdb,eocd]);
+}
 function runUploadCompatSmokeTests(){
   const src = fs.readFileSync(__filename, "utf8");
   function assert(c,m){ if(!c) throw new Error(m); }
@@ -54764,8 +54896,11 @@ function runUploadCompatSmokeTests(){
   assert(src.includes("function tjhpUpdateDocumentIngestOutcome"), "missing ingest outcome helper");
   assert(src.includes("function tjhpUploadKind"), "missing upload kind helper");
   assert(src.includes("function tjhpGetXlsx"), "missing xlsx loader helper");
-  assert(src.includes("require(\"xlsx\")"), "missing xlsx require");
-  assert(src.includes("Excel parser unavailable; stored for review."), "missing excel fallback note");
+  assert(src.includes("require(\"xlsx\")"), "missing xlsx lazy require");
+  assert(src.includes("function tjhpParseXlsxRowsWithoutDependency"), "missing dependency-free xlsx parser");
+  assert(src.includes("function tjhpZipEntriesFromBuffer"), "missing zip parser helper");
+  assert(src.includes("inflateRawSync"), "missing zip inflate fallback");
+  assert(src.includes("Excel file accepted but structured rows could not be extracted; stored for review."), "missing excel fallback note");
   assert(src.includes("TJHP_UPLOAD_COMPAT_SMOKE_TESTS"), "missing compat gate");
   assert(src.includes("/upload-router") && src.includes("/data-management/upload") && src.includes("/data-management/reimbursement/upload"), "missing upload routes");
   assert(src.includes("/claim-payer-response") && src.includes("/packet-template/upload"), "missing support/template routes");
@@ -54774,18 +54909,19 @@ function runUploadCompatSmokeTests(){
   assert(csvClaims.parsed === true, "csv claims parse");
   const txtPay = tjhpParseRowsFromUploadedFile({ filename:"payments.txt", buffer:Buffer.from("claim_number\\tpayer\\tamount_paid\\nC1\\tAetna\\t90") }, { purpose:"payments" });
   assert(txtPay.ok === true, "txt structured parse");
-  const xlsx = tjhpGetXlsx();
-  if (xlsx) {
-    const wb = xlsx.utils.book_new();
-    const ws = xlsx.utils.aoa_to_sheet([["claim_number","payer","amount_paid"],["C1","Aetna",95]]);
-    xlsx.utils.book_append_sheet(wb, ws, "Sheet1");
-    const excelBuf = xlsx.write(wb, { type:"buffer", bookType:"xlsx" });
-    const excelParsed = tjhpParseRowsFromUploadedFile({ filename:"payments.xlsx", buffer:excelBuf }, { purpose:"payments", allowExcelStructured:true });
-    assert(excelParsed.parsed === true && Array.isArray(excelParsed.rows) && excelParsed.rows.length >= 1, "excel parse with xlsx");
-  } else {
-    const excelFallback = tjhpParseRowsFromUploadedFile({ filename:"payments.xlsx", buffer:Buffer.from("fake excel") }, { purpose:"payments", allowExcelStructured:true });
-    assert(excelFallback.needs_review === true && String(excelFallback.notes || "").includes("Excel parser unavailable"), "excel fallback without xlsx");
-  }
+  const excelBuf = tjhpSmokeBuildMinimalXlsx(["claim_number","payer","amount_paid"], [["C1","Aetna","95"],["C2","UHC","80"],["C3","BCBS","77"],["C4","Cigna","65"],["C5","Humana","50"]]);
+  const directXlsx = tjhpParseXlsxRowsWithoutDependency(excelBuf);
+  assert(directXlsx.ok === true, "xlsx direct fallback ok: " + String(directXlsx.reason || ""));
+  assert(Array.isArray(directXlsx.rows) && directXlsx.rows.length >= 5, "xlsx direct fallback rows");
+  assert(directXlsx.rows[0].claim_number === "C1", "xlsx direct header claim_number");
+  assert(directXlsx.rows[0].payer === "Aetna", "xlsx direct header payer");
+  const excelPay = tjhpParseRowsFromUploadedFile({ filename:"payments.xlsx", buffer:excelBuf }, { purpose:"payments", allowExcelStructured:true });
+  assert(excelPay.parsed === true && Array.isArray(excelPay.rows) && excelPay.rows.length >= 5, "xlsx payments parse fallback");
+  assert(excelPay.rows[0].claim_number === "C1" && excelPay.rows[0].payer === "Aetna", "xlsx payment headers map");
+  const excelClaims = tjhpParseRowsFromUploadedFile({ filename:"claims.xlsx", buffer:excelBuf }, { purpose:"claims", allowExcelStructured:true });
+  assert(excelClaims.parsed === true && excelClaims.rows.length >= 5, "xlsx claims parse fallback");
+  const excelReimb = tjhpParseRowsFromUploadedFile({ filename:"rules.xlsx", buffer:excelBuf }, { purpose:"reimbursement", allowExcelStructured:true });
+  assert(excelReimb.parsed === true && excelReimb.rows.length >= 5, "xlsx reimbursement parse fallback");
   const png = tjhpParseRowsFromUploadedFile({ filename:"evidence.png", buffer:Buffer.from([0x89,0x50,0x4e,0x47]) }, { purpose:"support" });
   assert(png.needs_review === true, "image review");
   const bin = tjhpParseRowsFromUploadedFile({ filename:"bad.bin", buffer:Buffer.from("x") }, {});
