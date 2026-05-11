@@ -25584,6 +25584,41 @@ function tjhpExtractReviewTextFromUploadedFile(file){
   try { return String(extractTextFromBuffer(tjhpUploadedFileBuffer(file), tjhpUploadedFileName(file)) || "").slice(0, 1200); } catch (_) { return ""; }
 }
 function tjhpUploadOutcomeRecord(base, patch){ return { ...(base || {}), ...(patch || {}) }; }
+function tjhpIsReviewUploadIngest(ingest) {
+  if (!ingest) return false;
+  const status = String(ingest.status || "").toLowerCase();
+  const outcome = String(ingest.outcome || "").toLowerCase();
+  const parseStatus = String(ingest.parse_status || "").toLowerCase();
+  return !!(
+    ingest.needs_review === true ||
+    parseStatus.includes("review") ||
+    outcome.includes("review") ||
+    status.includes("stored for claim review") ||
+    status.includes("stored for payment review") ||
+    status.includes("stored for review")
+  );
+}
+function tjhpReviewUploadTypeLabel(ingest) {
+  const category = String(ingest.category || "").toLowerCase();
+  const outcome = String(ingest.outcome || "").toLowerCase();
+  const status = String(ingest.status || "").toLowerCase();
+  if (category === "claims" || outcome.includes("claim") || status.includes("claim")) return "Claim Documents";
+  if (category === "payments" || outcome.includes("payment") || status.includes("payment")) return "Payment Documents";
+  if (category === "reimbursement" || category === "contracts" || outcome.includes("reimbursement") || outcome.includes("contract")) return "Reimbursement Documents";
+  if (category === "denials") return "Denials";
+  return "Documents";
+}
+function tjhpReviewUploadFilterType(ingest) {
+  const label = tjhpReviewUploadTypeLabel(ingest).toLowerCase();
+  if (label.includes("claim")) return "claims";
+  if (label.includes("payment")) return "payments";
+  if (label.includes("denial")) return "denials";
+  if (label.includes("reimbursement")) return "reimbursement";
+  return "documents";
+}
+function tjhpReviewUploadDetails(ingest) {
+  return String(ingest.status || ingest.outcome || ingest.parse_status || "Stored For Review");
+}
 
 async function tjhpExtractTextFromUploadedFileForParsing(file){
   const kind = tjhpUploadKindFromFile(file);
@@ -41928,8 +41963,25 @@ if (method === "POST" && pathname === "/upload-router") {
     const tab = await detectUploadTypeFromFileOrName(f);
 
     if (!tab) {
-      skipped += 1;
-      errors.push(`${String(f.filename || "file")}: unable to auto-detect type`);
+      if (!isSupportedUploadExt(f.filename || "")) {
+        skipped += 1;
+        errors.push(`${String(f.filename || "file")}: unable to auto-detect type`);
+        continue;
+      }
+      const ingest = addDocumentIngest(org.org_id, "support", f, "Stored For Review", 0, "Upload accepted but could not be classified.");
+      tjhpUpdateDocumentIngestOutcome(ingest.ingest_id, {
+        status: "Stored For Review",
+        parse_status: "stored_for_review",
+        outcome: "stored_for_review",
+        needs_review: true,
+        review_reason: "Upload accepted but could not be classified.",
+        notes: "Upload accepted but could not be classified.",
+        upload_purpose: "support",
+        file_type: tjhpUploadKindFromFile(f),
+        parsed_row_count: 0,
+        source_route: pathname
+      });
+      processed += 1;
       continue;
     }
 
@@ -41948,7 +42000,7 @@ if (method === "POST" && pathname === "/upload-router") {
         if (tjhpClaimRouteUploadExts().includes(ext)) {
           const parsedUpload = await tjhpParseRowsFromUploadedFileForRoute(f, { purpose:"claims", allowTxtStructured:true, allowExcelStructured:true });
           const rows = parsedUpload.rows || [];
-          if (!parsedUpload.parsed) { ingest.status = "Stored For Claim Review"; ingest.parse_status="stored_for_review"; ingest.outcome="stored_for_claim_review"; ingest.needs_review=true; ingest.review_reason=parsedUpload.notes || parsedUpload.reason || "Could not extract structured claim rows."; ingest.notes = tjhpImageExts().includes(ext) ? "Image accepted and stored for claim review. OCR/table extraction is not available yet." : "Could not extract structured claim rows. File stored for claim review."; tjhpUpdateDocumentIngestOutcome(ingest.ingest_id, { parse_status: ingest.parse_status, outcome: ingest.outcome, needs_review: true, review_reason: ingest.review_reason, upload_purpose:"claims", file_type: parsedUpload.kind, parsed_row_count:0, source_route: pathname }); continue; }
+          if (!parsedUpload.parsed) { ingest.status = "Stored For Claim Review"; ingest.parse_status="stored_for_review"; ingest.outcome="stored_for_claim_review"; ingest.needs_review=true; ingest.review_reason=parsedUpload.notes || parsedUpload.reason || "Could not extract structured claim rows."; ingest.notes = tjhpImageExts().includes(ext) ? "Image accepted and stored for claim review. OCR/table extraction is not available yet." : "Could not extract structured claim rows. File stored for claim review."; tjhpUpdateDocumentIngestOutcome(ingest.ingest_id, { status: ingest.status, parse_status: ingest.parse_status, outcome: ingest.outcome, needs_review: true, review_reason: ingest.review_reason, notes: ingest.notes, upload_purpose:"claims", file_type: parsedUpload.kind, parsed_row_count:0, source_route: pathname }); processed += 1; continue; }
 
           const uploadId = uuid();
           const submissionUploadedAt = nowISO();
@@ -41998,7 +42050,7 @@ if (method === "POST" && pathname === "/upload-router") {
       } else if (tab === "payments") {
         if (tjhpPaymentRouteUploadExts().includes(ext)) {
           const parsedUpload = await tjhpParseRowsFromUploadedFileForRoute(f, { purpose:"payments", allowTxtStructured:true, allowExcelStructured:true });
-          if (!parsedUpload.parsed) { ingest.status = "Stored For Payment Review"; ingest.parse_status="stored_for_review"; ingest.outcome="stored_for_payment_review"; ingest.needs_review=true; ingest.review_reason=parsedUpload.notes || parsedUpload.reason || "Could not extract structured payment rows."; ingest.notes = tjhpImageExts().includes(ext) ? "Image accepted and stored for payment review. OCR/table extraction is not available yet." : "Could not extract structured payment rows. File stored for payment review."; continue; }
+          if (!parsedUpload.parsed) { ingest.status = "Stored For Payment Review"; ingest.parse_status="stored_for_review"; ingest.outcome="stored_for_payment_review"; ingest.needs_review=true; ingest.review_reason=parsedUpload.notes || parsedUpload.reason || "Could not extract structured payment rows."; ingest.notes = tjhpImageExts().includes(ext) ? "Image accepted and stored for payment review. OCR/table extraction is not available yet." : "Could not extract structured payment rows. File stored for payment review."; tjhpUpdateDocumentIngestOutcome(ingest.ingest_id, { status: ingest.status, parse_status: ingest.parse_status, outcome: ingest.outcome, needs_review: true, review_reason: ingest.review_reason, notes: ingest.notes, upload_purpose:"payments", file_type: parsedUpload.kind, parsed_row_count:0, source_route: pathname }); processed += 1; continue; }
           for (const r of (parsedUpload.rows || [])) {
             payments.push({
               payment_id: uuid(),
@@ -48139,6 +48191,29 @@ const showMatchingReview =
                   </tr>
                 `).join("")
             }
+            ${
+              (() => {
+                const reviewIngestRows = ingests
+                  .filter(i => tjhpIsReviewUploadIngest(i))
+                  .filter(i => String(i.category || "").toLowerCase() !== "denials" || String(i.outcome || "").toLowerCase().includes("review"));
+                return reviewIngestRows.map(ingest => `
+                  <tr data-batch-type="${tjhpReviewUploadFilterType(ingest)}" data-uploaded-at="${safeStr(ingest.uploaded_at || ingest.created_at || "")}">
+                    <td>${safeStr(tjhpReviewUploadTypeLabel(ingest))}</td>
+                    <td>${safeStr(ingest.original_filename || ingest.file_name || "uploaded document")}</td>
+                    <td>-</td>
+                    <td>${ingest.uploaded_at ? new Date(ingest.uploaded_at).toLocaleString() : "-"}</td>
+                    <td>${safeStr(tjhpReviewUploadDetails(ingest))}</td>
+                    <td>
+                      <form method="POST" action="/data-management/ingest/delete" onsubmit="return confirm('Delete this uploaded document?');">
+                        <input type="hidden" name="ingest_id" value="${safeStr(ingest.ingest_id || "")}"/>
+                        <input type="hidden" name="tab" value="upload"/>
+                        <button class="btn danger small" type="submit">Delete</button>
+                      </form>
+                    </td>
+                  </tr>
+                `).join("");
+              })()
+            }
           </tbody>
         </table>
       </div>
@@ -48967,7 +49042,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         if (tjhpClaimRouteUploadExts().includes(ext)) {
           const parsedUpload = await tjhpParseRowsFromUploadedFileForRoute(f, { purpose:"claims", allowTxtStructured:true, allowExcelStructured:true });
           const rows = parsedUpload.rows || [];
-          if (!parsedUpload.parsed) { ingest.status = "Stored For Claim Review"; ingest.parse_status="stored_for_review"; ingest.outcome="stored_for_claim_review"; ingest.needs_review=true; ingest.review_reason=parsedUpload.notes || parsedUpload.reason || "Could not extract structured claim rows."; ingest.notes = tjhpImageExts().includes(ext) ? "Image accepted and stored for claim review. OCR/table extraction is not available yet." : "Could not extract structured claim rows. File stored for claim review."; const allIngests = readJSON(FILES.document_ingests, []); const idx = allIngests.findIndex(x => x.ingest_id === ingest.ingest_id); if (idx >= 0) { allIngests[idx] = ingest; writeJSON(FILES.document_ingests, allIngests); } continue; }
+          if (!parsedUpload.parsed) { ingest.status = "Stored For Claim Review"; ingest.parse_status="stored_for_review"; ingest.outcome="stored_for_claim_review"; ingest.needs_review=true; ingest.review_reason=parsedUpload.notes || parsedUpload.reason || "Could not extract structured claim rows."; ingest.notes = tjhpImageExts().includes(ext) ? "Image accepted and stored for claim review. OCR/table extraction is not available yet." : "Could not extract structured claim rows. File stored for claim review."; const allIngests = readJSON(FILES.document_ingests, []); const idx = allIngests.findIndex(x => x.ingest_id === ingest.ingest_id); if (idx >= 0) { allIngests[idx] = ingest; writeJSON(FILES.document_ingests, allIngests); } tjhpUpdateDocumentIngestOutcome(ingest.ingest_id, { status: ingest.status, parse_status: ingest.parse_status, outcome: ingest.outcome, needs_review: true, review_reason: ingest.review_reason, notes: ingest.notes, upload_purpose:"claims", file_type: parsedUpload.kind, parsed_row_count:0, source_route: pathname }); continue; }
 
           const uploadId = uuid();
           const submissionUploadedAt = nowISO();
@@ -49012,7 +49087,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
       } else if (tab === "payments") {
         if (tjhpPaymentRouteUploadExts().includes(ext)) {
           const parsedUpload = await tjhpParseRowsFromUploadedFileForRoute(f, { purpose:"payments", allowTxtStructured:true, allowExcelStructured:true });
-          if (!parsedUpload.parsed) { ingest.status = "Stored For Payment Review"; ingest.parse_status="stored_for_review"; ingest.outcome="stored_for_payment_review"; ingest.needs_review=true; ingest.review_reason=parsedUpload.notes || parsedUpload.reason || "Could not extract structured payment rows."; ingest.notes = tjhpImageExts().includes(ext) ? "Image accepted and stored for payment review. OCR/table extraction is not available yet." : "Could not extract structured payment rows. File stored for payment review."; const allIngests = readJSON(FILES.document_ingests, []); const idx = allIngests.findIndex(x => x.ingest_id === ingest.ingest_id); if (idx >= 0) { allIngests[idx] = ingest; writeJSON(FILES.document_ingests, allIngests); } continue; }
+          if (!parsedUpload.parsed) { ingest.status = "Stored For Payment Review"; ingest.parse_status="stored_for_review"; ingest.outcome="stored_for_payment_review"; ingest.needs_review=true; ingest.review_reason=parsedUpload.notes || parsedUpload.reason || "Could not extract structured payment rows."; ingest.notes = tjhpImageExts().includes(ext) ? "Image accepted and stored for payment review. OCR/table extraction is not available yet." : "Could not extract structured payment rows. File stored for payment review."; const allIngests = readJSON(FILES.document_ingests, []); const idx = allIngests.findIndex(x => x.ingest_id === ingest.ingest_id); if (idx >= 0) { allIngests[idx] = ingest; writeJSON(FILES.document_ingests, allIngests); } tjhpUpdateDocumentIngestOutcome(ingest.ingest_id, { status: ingest.status, parse_status: ingest.parse_status, outcome: ingest.outcome, needs_review: true, review_reason: ingest.review_reason, notes: ingest.notes, upload_purpose:"payments", file_type: parsedUpload.kind, parsed_row_count:0, source_route: pathname }); continue; }
           for (const r of (parsedUpload.rows || [])) {
             payments.push({ payment_id: uuid(), org_id: org.org_id, claim_number: String(pickField(r,["claim","claim#","claim number","clm"]) || ""), payer: pickField(r,["payer","insurance","carrier"]) || "", amount_paid: num(pickField(r,["paid","amount","payment","paid amount"])), date_paid: pickField(r,["date","paid date","remit date"]) || "", source_file: ingest.original_filename, created_at: nowISO(), denied_approved: false });
           }
@@ -55012,6 +55087,21 @@ async function runUploadCompatSmokeTests(){
   assert(imgPay.parsed===false && imgPay.needs_review===true && /OCR|review/i.test(String(imgPay.notes||"")), "payment image review parse");
   assert(src.includes("Stored For Claim Review"), "claim review status present");
   assert(src.includes("Stored For Payment Review"), "payment review status present");
+  assert(src.includes("processed += 1") && src.includes("stored_for_claim_review"), "claim review processed increment present");
+  assert(src.includes("processed += 1") && src.includes("stored_for_payment_review"), "payment review processed increment present");
+  assert(src.includes("function tjhpIsReviewUploadIngest"), "review ingest helper present");
+  assert(src.includes("function tjhpReviewUploadTypeLabel"), "review label helper present");
+  assert(src.includes("Claim Documents"), "claim documents label present");
+  assert(src.includes("Payment Documents"), "payment documents label present");
+  assert(src.includes("/data-management/ingest/delete"), "review delete route present");
+  const fakeClaimReview = { category:"claims", status:"Stored For Claim Review", outcome:"stored_for_claim_review", needs_review:true };
+  assert(tjhpIsReviewUploadIngest(fakeClaimReview) === true, "claim review ingest detect");
+  assert(tjhpReviewUploadTypeLabel(fakeClaimReview) === "Claim Documents", "claim review label");
+  assert(tjhpReviewUploadFilterType(fakeClaimReview) === "claims", "claim review filter type");
+  const fakePaymentReview = { category:"payments", status:"Stored For Payment Review", outcome:"stored_for_payment_review", needs_review:true };
+  assert(tjhpReviewUploadTypeLabel(fakePaymentReview) === "Payment Documents", "payment review label");
+  const fakeGenericReview = { category:"support", status:"Stored For Review", outcome:"stored_for_review", needs_review:true };
+  assert(tjhpReviewUploadTypeLabel(fakeGenericReview) === "Documents", "generic review label");
   const claimXlsx = tjhpSmokeBuildMinimalXlsx(["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"], [["C1","P1","Aetna","99213","100","65","2026-01-01"],["C2","P2","UHC","99214","200","140","2026-01-02"],["C3","P3","BCBS","99215","300","210","2026-01-03"],["C4","P4","Cigna","93000","150","90","2026-01-04"],["C5","P5","Humana","71020","190","120","2026-01-05"]]);
   const claimRouteParsed = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.xlsx", buffer:claimXlsx }, { purpose:"claims", allowTxtStructured:true, allowExcelStructured:true });
   assert(claimRouteParsed.parsed===true && claimRouteParsed.rows.length===5, "claims xlsx route parse");
