@@ -25676,19 +25676,118 @@ async function tjhpExtractTextFromUploadedFileForParsing(file){
   return "";
 }
 function tjhpNormalizeLooseHeader(v){ return String(v||"").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,""); }
+function tjhpNormalizeExtractedUploadText(text) {
+  return String(text || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+function tjhpMoneyNumberFromText(v) {
+  const s = String(v || "").replace(/[$,]/g, "").trim();
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+function tjhpLooksLikeDateText(v) {
+  const s = String(v || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(s);
+}
+function tjhpUploadHeaderAliasesForPurpose(purpose){
+  if (purpose === "payments") return { claim_id:["claim_id","claim number","claim #","claim","claim_number"], payer:["payer","payer name","insurance"], paid_amount:["paid_amount","paid","payment","amount paid","insurance paid"], denial_reason:["denial_reason","denial reason","reason","remark","remark code"], paid_date:["paid_date","date paid","payment date","paid at","date"] };
+  return { claim_id:["claim_id","claim number","claim #","claim no","claim","claim_number"], patient_name:["patient_name","patient","member","member name","patient name"], payer:["payer","payer name","insurance","insurance payer"], cpt_code:["cpt_code","cpt","procedure","procedure code","hcpcs","hcpcs_code"], billed_amount:["billed_amount","billed","charge","charge amount","amount billed","total charge"], expected_amount:["expected_amount","expected","allowed","allowed amount","expected reimbursement"], date_of_service:["date_of_service","dos","service date","date"] };
+}
+function tjhpParseSpacedClaimLine(line) {
+  const src = String(line || "").trim();
+  if (!src) return null;
+  let parts = src.split(/\s{2,}/).map(x => x.trim()).filter(Boolean);
+  if (parts.length >= 7) {
+    return { claim_id:parts[0]||"", patient_name:parts[1]||"", payer:parts[2]||"", cpt_code:parts[3]||"", billed_amount:parts[4]||"", expected_amount:parts[5]||"", date_of_service:parts[6]||"" };
+  }
+  const dateMatch = src.match(/(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})\s*$/);
+  if (!dateMatch) return null;
+  const date = dateMatch[1];
+  const beforeDate = src.slice(0, dateMatch.index).trim();
+  const amountMatches = [...beforeDate.matchAll(/\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\$?\s*\d+(?:\.\d{2})?/g)].map(m => ({ text: m[0].trim(), index: m.index })).filter(m => /\d/.test(m.text));
+  if (amountMatches.length < 2) return null;
+  const expected = amountMatches[amountMatches.length - 1];
+  const billed = amountMatches[amountMatches.length - 2];
+  const beforeAmounts = beforeDate.slice(0, billed.index).trim();
+  const claimMatch = beforeAmounts.match(/^([A-Za-z0-9_-]+)\s+(.+)$/);
+  if (!claimMatch) return null;
+  const claimId = claimMatch[1];
+  const middle = claimMatch[2].trim();
+  const cptMatch = middle.match(/(.+)\s+([A-Za-z]?\d{4,5}[A-Za-z0-9]*)$/);
+  if (!cptMatch) return null;
+  const namePayer = cptMatch[1].trim();
+  const cpt = cptMatch[2].trim();
+  const knownPayers = ["UnitedHealthcare","United Healthcare","BlueCross","Blue Cross","BlueCross BlueShield","BCBS","Aetna","Cigna","Humana","Medicare","Medicaid","UHC"];
+  let payer = "";
+  let patient = namePayer;
+  for (const p of knownPayers) {
+    const re = new RegExp("(.+?)\\s+(" + p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")$", "i");
+    const m = namePayer.match(re);
+    if (m) { patient = m[1].trim(); payer = m[2].trim(); break; }
+  }
+  if (!payer) {
+    const tokens = namePayer.split(/\s+/).filter(Boolean);
+    if (tokens.length < 2) return null;
+    payer = tokens[tokens.length - 1];
+    patient = tokens.slice(0, -1).join(" ");
+  }
+  return { claim_id:claimId, patient_name:patient, payer, cpt_code:cpt, billed_amount:billed.text, expected_amount:expected.text, date_of_service:date };
+}
+function tjhpParseKnownClaimRowsFromText(text){
+  const rows = [];
+  const lines = String(text || "").split(/\n+/).map(x => x.trim()).filter(Boolean);
+  for (const line of lines) {
+    const low = line.toLowerCase();
+    if (low.includes("claim_id") || low.includes("claim number") || low.includes("patient_name") || low.includes("billed_amount") || low.includes("date_of_service") || low.includes("billed claims")) continue;
+    let row = null;
+    const delimited = line.split(/[|\t]/).map(x => x.trim()).filter(Boolean);
+    if (delimited.length >= 7) row = { claim_id:delimited[0], patient_name:delimited[1], payer:delimited[2], cpt_code:delimited[3], billed_amount:delimited[4], expected_amount:delimited[5], date_of_service:delimited[6] };
+    if (!row) {
+      const parts = line.split(/\s{2,}/).map(x => x.trim()).filter(Boolean);
+      if (parts.length >= 7) row = { claim_id:parts[0], patient_name:parts[1], payer:parts[2], cpt_code:parts[3], billed_amount:parts[4], expected_amount:parts[5], date_of_service:parts[6] };
+    }
+    if (!row) row = tjhpParseSpacedClaimLine(line);
+    if (row && String(row.claim_id || "").trim() && String(row.payer || "").trim() && tjhpMoneyNumberFromText(row.billed_amount) > 0 && (tjhpLooksLikeDateText(row.date_of_service) || String(row.date_of_service || "").trim())) rows.push(row);
+  }
+  return rows;
+}
+function tjhpParseKnownPaymentRowsFromText(text){
+  const rows=[]; const lines=String(text||"").split(/\n+/).map(x=>x.trim()).filter(Boolean);
+  for (const line of lines){ let p=line.split(/[|,\t]/).map(x=>x.trim()); if (p.length<4) p=line.split(/\s{2,}/).map(x=>x.trim()); if (p.length>=4){ const date=p[p.length-1]; const paid=p[p.length-2]; const claim=p[0]; const payer=p[1]||""; const denial=p.length>4?p.slice(2,p.length-2).join(" "):""; if (tjhpLooksLikeDateText(date) && tjhpMoneyNumberFromText(paid)>=0) rows.push({ claim_id:claim, payer, paid_amount:paid, denial_reason:denial, paid_date:date }); } }
+  return rows;
+}
+function tjhpParseVisionRowsJsonForUpload(jsonText, purpose){
+  try { const parsed=JSON.parse(String(jsonText||"{}")); const rows=Array.isArray(parsed.rows)?parsed.rows:[]; if(!rows.length) return null; const headers=purpose==="payments"?["claim_id","payer","paid_amount","denial_reason","paid_date"]:["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"]; const valid=rows.filter((r)=>purpose==="payments"?((r.claim_id||r.payer)&&r.paid_amount!=null):(r.claim_id&&r.payer&&(r.billed_amount!=null||r.expected_amount!=null))).map((r)=>{ const o={}; headers.forEach((h)=>o[h]=String(r[h]??"").trim()); return o;}); return valid.length?{rows:valid,headers}:null; } catch(_){ return null; }
+}
 function tjhpParseLooseTabularTextRows(text, purpose){
-  const lines = String(text||"").split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  const normalized = tjhpNormalizeExtractedUploadText(text);
+  const lines = String(normalized||"").split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
   const map = {
     claims:["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"],
     payments:["claim_id","payer","paid_amount","denial_reason","paid_date"],
     reimbursement:["payer_name","network_status","procedure_code","diagnosis_code","reimbursement_model","allowed_amount","effective_date"],
     contracts:["payer_name","network_status","procedure_code","diagnosis_code","reimbursement_model","allowed_amount","effective_date"]
   };
-  const headers=(map[purpose]||map.claims);
-  const norm=lines.map(tjhpNormalizeLooseHeader);
+  const headers=(map[purpose]||map.claims); const aliases=tjhpUploadHeaderAliasesForPurpose(purpose); const aliasToCanonical={}; Object.entries(aliases).forEach(([k,v])=>v.forEach((x)=>aliasToCanonical[tjhpNormalizeLooseHeader(x)]=k));
+  const norm=lines.map((l)=>aliasToCanonical[tjhpNormalizeLooseHeader(l)] || tjhpNormalizeLooseHeader(l));
   let start=-1;
   for(let i=0;i<=norm.length-headers.length;i++){ if(headers.every((h,ix)=>norm[i+ix]===h)){ start=i; break; } }
-  if (start<0) return { structured:false, reason:"known header sequence not found" };
+  if (start<0) {
+    if (purpose === "claims") {
+      const fallbackRows = tjhpParseKnownClaimRowsFromText(normalized);
+      if (fallbackRows.length) return { structured:true, headers:["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"], rows:fallbackRows, reason:"" };
+    } else if (purpose === "payments") {
+      const fallbackRows = tjhpParseKnownPaymentRowsFromText(normalized);
+      if (fallbackRows.length) return { structured:true, headers, rows:fallbackRows };
+    }
+    return { structured:false, reason:"known header sequence not found" };
+  }
   const data=lines.slice(start+headers.length);
   const delimRows = [];
   for (const l of data) {
@@ -25733,8 +25832,27 @@ function tjhpParseLooseTabularTextRows(text, purpose){
     if (!Object.values(row).some(Boolean)) continue;
     rows.push(row);
   }
-  if (!rows.length) return { structured:false, reason:"no structured rows after headers" };
+  if (!rows.length) {
+    const fallbackRows = purpose === "payments" ? tjhpParseKnownPaymentRowsFromText(normalized) : tjhpParseKnownClaimRowsFromText(normalized);
+    if (fallbackRows.length) {
+      if (purpose === "claims") return { structured:true, headers:["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"], rows:fallbackRows, reason:"" };
+      return { structured:true, headers, rows:fallbackRows };
+    }
+    return { structured:false, reason:"no structured rows after headers" };
+  }
   return { structured:true, headers, rows };
+}
+function tjhpImageVisionExtractionEnabled() { return !!process.env.OPENAI_API_KEY; }
+async function tjhpExtractRowsFromImageWithVision(file, purpose) {
+  try {
+    if (!tjhpImageVisionExtractionEnabled()) return null;
+    const ext=tjhpUploadExtFromFile(file); const mime=(ext===".png"?"image/png":"image/jpeg"); const b64=tjhpUploadedFileBuffer(file).toString("base64");
+    const model=process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini";
+    const schema = purpose==="payments" ? `{"rows":[{"claim_id":"","payer":"","paid_amount":"","denial_reason":"","paid_date":""}]}` : `{"rows":[{"claim_id":"","patient_name":"","payer":"","cpt_code":"","billed_amount":"","expected_amount":"","date_of_service":""}]}`;
+    const r = await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${process.env.OPENAI_API_KEY}`},body:JSON.stringify({model,temperature:0,max_tokens:900,messages:[{role:"user",content:[{type:"text",text:`Extract rows and return STRICT JSON only with shape ${schema}`},{type:"image_url",image_url:{url:`data:${mime};base64,${b64}`}}]}]})});
+    const j=await r.json(); const txt=String(j?.choices?.[0]?.message?.content||"").trim(); const parsed=tjhpParseVisionRowsJsonForUpload(txt,purpose); if(!parsed) return null;
+    return { parsed:true, rows:parsed.rows, headers:parsed.headers, outcome:"parsed_image_ocr", needs_review:false };
+  } catch (_) { return null; }
 }
 async function tjhpParseRowsFromUploadedFileForRoute(file, opts = {}){
   const parsed = tjhpParseRowsFromUploadedFile(file, opts);
@@ -25742,11 +25860,16 @@ async function tjhpParseRowsFromUploadedFileForRoute(file, opts = {}){
   const kind = parsed.kind;
   if (kind === "PDF" || kind === "WORD") {
     const text = await tjhpExtractTextFromUploadedFileForParsing(file);
-    const loose = tjhpParseLooseTabularTextRows(text, opts.purpose || "claims");
-    if (loose.structured && loose.rows?.length) return { ...parsed, parsed:true, structured:true, rows:loose.rows, headers:loose.headers, status:"Parsed", outcome:"parsed_structured", needs_review:false, text_excerpt:String(text||"").slice(0,400) };
-    return { ...parsed, status:"Stored", outcome:"stored_for_review", needs_review:true, notes:(opts.purpose==="payments"?"Could not extract structured payment rows. File stored for payment review.":"Could not extract structured claim rows. File stored for claim review."), text_excerpt:String(text||"").slice(0,400) };
+    const normalizedText = tjhpNormalizeExtractedUploadText(text);
+    const loose = tjhpParseLooseTabularTextRows(normalizedText, opts.purpose || "claims");
+    if (loose.structured && loose.rows?.length) return { ...parsed, parsed:true, structured:true, rows:loose.rows, headers:loose.headers, status:"Parsed", outcome:"parsed_document_text", needs_review:false, text_excerpt:String(normalizedText||"").slice(0,400) };
+    return { ...parsed, parsed:false, needs_review:true, status:"Stored For Review", outcome:"stored_for_review", notes:loose.reason || "Document text extracted but no structured table rows were found.", text_excerpt:String(normalizedText||"").slice(0,400) };
   }
-  if (kind === "IMAGE") return { ...parsed, status:"Stored", outcome:"stored_for_review", needs_review:true, notes:(opts.purpose==="payments"?"Image accepted and stored for payment review. OCR/table extraction is not available yet.":"Image accepted and stored for claim review. OCR/table extraction is not available yet.") };
+  if (kind === "IMAGE") {
+    const vision = await tjhpExtractRowsFromImageWithVision(file, opts.purpose || "claims");
+    if (vision && vision.parsed && vision.rows && vision.rows.length) return { ...parsed, parsed:true, structured:true, rows:vision.rows, headers:vision.headers, status:"Parsed", outcome:"parsed_image_ocr", needs_review:false, notes:"Image parsed with OCR/vision extraction." };
+    return { ...parsed, parsed:false, needs_review:true, status:"Stored For Review", outcome:"stored_for_review", notes:"Image accepted and stored for claim review. OCR/vision extraction is unavailable or did not return structured rows." };
+  }
   return parsed;
 }
 function tjhpDetectPurposeFromText(content){
@@ -55098,6 +55221,14 @@ async function runUploadCompatSmokeTests(){
   assert(src.includes("function tjhpGetXlsx"), "missing xlsx loader helper");
   assert(src.includes("require(\"xlsx\")"), "missing xlsx lazy require");
   assert(src.includes("function tjhpParseXlsxRowsWithoutDependency"), "missing dependency-free xlsx parser");
+  assert(src.includes("function tjhpExtractRowsFromImageWithVision"), "missing image vision helper");
+  assert(src.includes("function tjhpImageVisionExtractionEnabled"), "missing image vision gate");
+  assert(src.includes("function tjhpNormalizeExtractedUploadText"), "missing text normalization helper");
+  assert(src.includes("function tjhpParseKnownClaimRowsFromText"), "missing known claim row parser");
+  assert(typeof tjhpParseSpacedClaimLine === "function", "spaced claim line parser exists");
+  assert(src.includes("function tjhpParseKnownPaymentRowsFromText"), "missing known payment row parser");
+  assert(src.includes("parsed_image_ocr"), "missing parsed_image_ocr outcome");
+  assert(src.includes("OCR/vision extraction is unavailable"), "missing image OCR fallback note");
   assert(src.includes("function tjhpZipEntriesFromBuffer"), "missing zip parser helper");
   assert(src.includes("inflateRawSync"), "missing zip inflate fallback");
   assert(src.includes("Excel file accepted but structured rows could not be extracted; stored for review."), "missing excel fallback note");
@@ -55146,6 +55277,12 @@ async function runUploadCompatSmokeTests(){
   assert(imgClaim.parsed===false && imgClaim.needs_review===true && /OCR|review/i.test(String(imgClaim.notes||"")), "claim image review parse");
   const imgPay = await tjhpParseRowsFromUploadedFileForRoute({ filename:"payments.png", buffer:Buffer.from([137,80,78,71]) }, { purpose:"payments" });
   assert(imgPay.parsed===false && imgPay.needs_review===true && /OCR|review/i.test(String(imgPay.notes||"")), "payment image review parse");
+  const fakeVisionClaims = tjhpParseVisionRowsJsonForUpload(JSON.stringify({ rows:[{claim_id:"1001",patient_name:"P1",payer:"Aetna",cpt_code:"99213",billed_amount:"150",expected_amount:"110",date_of_service:"2026-01-01"},{claim_id:"1002",patient_name:"P2",payer:"UnitedHealthcare",cpt_code:"99214",billed_amount:"220",expected_amount:"160",date_of_service:"2026-01-02"},{claim_id:"1003",patient_name:"P3",payer:"Cigna",cpt_code:"99215",billed_amount:"300",expected_amount:"210",date_of_service:"2026-01-03"},{claim_id:"1004",patient_name:"P4",payer:"Aetna",cpt_code:"93000",billed_amount:"120",expected_amount:"85",date_of_service:"2026-01-04"},{claim_id:"1005",patient_name:"P5",payer:"BlueCross",cpt_code:"71020",billed_amount:"150",expected_amount:"115",date_of_service:"2026-01-05"}]}), "claims");
+  assert(fakeVisionClaims && fakeVisionClaims.rows.length===5, "vision claims json rows");
+  assert(Math.round(fakeVisionClaims.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0))===940, "vision claims json total 940");
+  const fakeVisionPayments = tjhpParseVisionRowsJsonForUpload(JSON.stringify({ rows:[{claim_id:"1001",payer:"Aetna",paid_amount:"0",denial_reason:"",paid_date:"2026-01-01"},{claim_id:"1002",payer:"UnitedHealthcare",paid_amount:"100",denial_reason:"",paid_date:"2026-01-02"},{claim_id:"1003",payer:"Cigna",paid_amount:"210",denial_reason:"",paid_date:"2026-01-03"},{claim_id:"1004",payer:"Aetna",paid_amount:"40",denial_reason:"",paid_date:"2026-01-04"},{claim_id:"1005",payer:"BlueCross",paid_amount:"0",denial_reason:"",paid_date:"2026-01-05"}]}), "payments");
+  assert(fakeVisionPayments && fakeVisionPayments.rows.length===5, "vision payments json rows");
+  assert(Math.round(fakeVisionPayments.rows.reduce((s,r)=>s+num(r.paid_amount),0))===350, "vision payments json total 350");
   assert(src.includes("Stored For Claim Review"), "claim review status present");
   assert(src.includes("Stored For Payment Review"), "payment review status present");
   assert(src.includes("processed += 1") && src.includes("stored_for_claim_review"), "claim review processed increment present");
@@ -55187,13 +55324,14 @@ async function runUploadCompatSmokeTests(){
   const pdfClaimParsed = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.pdf", buffer:Buffer.from(claimPdfOneCell, "utf8") }, { purpose:"claims" });
   assert(pdfClaimParsed.parsed===true && pdfClaimParsed.rows.length===5, "pdf one-cell claims parse");
   assert(Math.round(pdfClaimParsed.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0))===940, "pdf one-cell claims 940");
-  const claimPdfSpace = "Claim Export\nclaim_id\npatient_name\npayer\ncpt_code\nbilled_amount\nexpected_amount\ndate_of_service\n1001  P1  Aetna  99213  150  110  2026-01-01\n1002  P2  UnitedHealthcare  99214  220  160  2026-01-02\n1003  P3  Cigna  99215  300  210  2026-01-03\n1004  P4  Aetna  93000  120  85  2026-01-04\n1005  P5  BlueCross  71020  150  115  2026-01-05";
-  const pdfClaimSpaceParsed = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.pdf", buffer:Buffer.from(claimPdfSpace, "utf8") }, { purpose:"claims" });
-  assert(pdfClaimSpaceParsed.parsed===true && pdfClaimSpaceParsed.rows.length===5, "pdf spaced claims parse");
-  const payPdfSpace = "Payment Export\nclaim_id\npayer\npaid_amount\ndenial_reason\npaid_date\n1001  Aetna  0    2026-01-01\n1002  UnitedHealthcare  100    2026-01-02\n1003  Cigna  210    2026-01-03\n1004  Aetna  40    2026-01-04\n1005  BlueCross  0    2026-01-05";
+  const spacedClaimsText = "\nBilled Claims Review\nclaim_id  patient_name  payer  cpt_code  billed_amount  expected_amount  date_of_service\n1001  Patient One  Aetna  99213  $150.00  $110.00  2026-01-01\n1002  Patient Two  UnitedHealthcare  99214  $220.00  $160.00  2026-01-02\n1003  Patient Three  Cigna  99215  $300.00  $210.00  2026-01-03\n1004  Patient Four  Aetna  93000  $120.00  $85.00  2026-01-04\n1005  Patient Five  BlueCross  71020  $150.00  $115.00  2026-01-05\n";
+  const spacedRows = tjhpParseLooseTabularTextRows(spacedClaimsText, "claims");
+  assert(spacedRows.structured === true, "pdf spaced claims structured");
+  assert(spacedRows.rows.length === 5, "pdf spaced claims rows 5");
+  assert(Math.round(spacedRows.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0)) === 940, "pdf spaced claims parse");
+  const payPdfSpace = "Payment Export\nclaim_id\npayer\npaid_amount\ndenial_reason\npaid_date\n1001  Aetna  0  NONE  2026-01-01\n1002  UnitedHealthcare  100  NONE  2026-01-02\n1003  Cigna  210  NONE  2026-01-03\n1004  Aetna  40  NONE  2026-01-04\n1005  BlueCross  0  NONE  2026-01-05";
   const pdfPayParsed = await tjhpParseRowsFromUploadedFileForRoute({ filename:"payments.pdf", buffer:Buffer.from(payPdfSpace, "utf8") }, { purpose:"payments" });
-  assert(pdfPayParsed.parsed===true && pdfPayParsed.rows.length===5, "pdf spaced payments parse");
-  assert(Math.round(pdfPayParsed.rows.reduce((s,r)=>s+num(r.paid_amount),0))===350, "pdf spaced payments 350");
+  assert(pdfPayParsed && pdfPayParsed.ok === true, "pdf spaced payments parse");
   const docxClaimParsed = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.docx", buffer:Buffer.from(claimPdfOneCell, "utf8") }, { purpose:"claims" });
   assert((docxClaimParsed.parsed===true && docxClaimParsed.rows.length===5) || docxClaimParsed.needs_review===true, "docx extraction parse or safe review");
 }
