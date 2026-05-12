@@ -25652,11 +25652,38 @@ async function tjhpExtractTextFromUploadedFileForParsing(file){
   const kind = tjhpUploadKindFromFile(file);
   const buffer = tjhpUploadedFileBuffer(file);
   if (kind === "PDF") {
+    const looksUseful = (v)=>/[A-Za-z]{2,}|\d{3,}/.test(String(v||""));
+    const literalFallback = (buf)=>{
+      try {
+        const raw = Buffer.isBuffer(buf) ? buf.toString("latin1") : String(buf || "");
+        const decodeEsc = (v)=>String(v||"").replace(/\\n/g,"\n").replace(/\\r/g,"\r").replace(/\\t/g,"\t").replace(/\\\\/g,"\\").replace(/\\\(/g,"(").replace(/\\\)/g,")");
+        const chunks = [];
+        for (const m of raw.matchAll(/\(([^()]*(?:\\.[^()]*)*)\)/g)) {
+          const t = decodeEsc(m[1]).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, " ").trim();
+          if (t) chunks.push(t);
+        }
+        for (const m of raw.matchAll(/<([0-9A-Fa-f]{8,})>/g)) {
+          const hex = m[1];
+          if (hex.length % 2) continue;
+          const b = Buffer.from(hex, "hex");
+          let t = "";
+          if (b.length >= 2 && ((b[0] === 0xFE && b[1] === 0xFF) || (b[0] === 0xFF && b[1] === 0xFE))) {
+            for (let i = 2; i + 1 < b.length; i += 2) { const cp = b.readUInt16BE(i); if (cp >= 32 && cp <= 126) t += String.fromCharCode(cp); }
+          } else t = b.toString("latin1");
+          t = t.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, " ").trim();
+          if (looksUseful(t)) chunks.push(t);
+        }
+        const text = chunks.join("\n").replace(/[^\x09\x0A\x0D\x20-\x7E]/g, " ").replace(/\s{2,}/g," ").trim();
+        return looksUseful(text) ? text : "";
+      } catch (_) { return ""; }
+    };
     try {
       const pdfParse = require("pdf-parse");
       const data = await pdfParse(buffer);
-      if (data && typeof data.text === "string") return data.text;
+      if (data && typeof data.text === "string" && data.text.trim().length > 30) return data.text;
     } catch (_) {}
+    const literalText = literalFallback(buffer);
+    if (literalText) return literalText;
     return String(buffer.toString("utf8") || "").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, " ");
   }
   if (kind === "WORD") {
@@ -25762,8 +25789,44 @@ function tjhpParseKnownPaymentRowsFromText(text){
   for (const line of lines){ let p=line.split(/[|,\t]/).map(x=>x.trim()); if (p.length<4) p=line.split(/\s{2,}/).map(x=>x.trim()); if (p.length>=4){ const date=p[p.length-1]; const paid=p[p.length-2]; const claim=p[0]; const payer=p[1]||""; const denial=p.length>4?p.slice(2,p.length-2).join(" "):""; if (tjhpLooksLikeDateText(date) && tjhpMoneyNumberFromText(paid)>=0) rows.push({ claim_id:claim, payer, paid_amount:paid, denial_reason:denial, paid_date:date }); } }
   return rows;
 }
+function tjhpExtractJsonObjectFromText(text) {
+  const src = String(text || "").trim();
+  if (!src) return "";
+  const fenced = src.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const raw = fenced ? fenced[1].trim() : src;
+  if (/^\s*[{[]/.test(raw)) return raw;
+  const firstObj = raw.indexOf("{");
+  const lastObj = raw.lastIndexOf("}");
+  if (firstObj >= 0 && lastObj > firstObj) return raw.slice(firstObj, lastObj + 1);
+  const firstArr = raw.indexOf("[");
+  const lastArr = raw.lastIndexOf("]");
+  if (firstArr >= 0 && lastArr > firstArr) return `{"rows":${raw.slice(firstArr, lastArr + 1)}}`;
+  return raw;
+}
+function tjhpUploadAiParsingEnabled() { return !!process.env.OPENAI_API_KEY; }
 function tjhpParseVisionRowsJsonForUpload(jsonText, purpose){
-  try { const parsed=JSON.parse(String(jsonText||"{}")); const rows=Array.isArray(parsed.rows)?parsed.rows:[]; if(!rows.length) return null; const headers=purpose==="payments"?["claim_id","payer","paid_amount","denial_reason","paid_date"]:["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"]; const valid=rows.filter((r)=>purpose==="payments"?((r.claim_id||r.payer)&&r.paid_amount!=null):(r.claim_id&&r.payer&&(r.billed_amount!=null||r.expected_amount!=null))).map((r)=>{ const o={}; headers.forEach((h)=>o[h]=String(r[h]??"").trim()); return o;}); return valid.length?{rows:valid,headers}:null; } catch(_){ return null; }
+  try {
+    const canonical = purpose === "payments"
+      ? ["claim_id","payer","paid_amount","denial_reason","paid_date"]
+      : ["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"];
+    const aliases = purpose === "payments"
+      ? { claim_id:["claim_id","claim_number","claim"], payer:["payer","payer_name"], paid_amount:["paid_amount","paid","amount_paid","insurance_paid"], denial_reason:["denial_reason","reason","remark"], paid_date:["paid_date","date_paid","payment_date"] }
+      : { claim_id:["claim_id","claim_number","claim"], patient_name:["patient_name","patient","member"], payer:["payer","payer_name","insurance"], cpt_code:["cpt_code","cpt","procedure_code","hcpcs"], billed_amount:["billed_amount","billed","amount_billed","charge_amount"], expected_amount:["expected_amount","expected","allowed_amount"], date_of_service:["date_of_service","dos","service_date"] };
+    const parsed = JSON.parse(tjhpExtractJsonObjectFromText(jsonText || "{}"));
+    const rows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.rows) ? parsed.rows : (Array.isArray(parsed?.claims) ? parsed.claims : (Array.isArray(parsed?.payments) ? parsed.payments : [])));
+    if (!rows.length) return null;
+    const out = rows.map((r)=>{
+      const row = {};
+      canonical.forEach((h)=>{
+        const keys = [h, ...(aliases[h] || [])];
+        let val = "";
+        for (const k of keys) { if (r && r[k] != null && String(r[k]).trim()) { val = String(r[k]).trim(); break; } }
+        row[h] = val;
+      });
+      return row;
+    }).filter((r)=>purpose==="payments"?((r.claim_id||r.payer)&&r.paid_amount):(r.claim_id&&r.payer&&(r.billed_amount||r.expected_amount)));
+    return out.length ? { rows:out, headers:canonical } : null;
+  } catch(_) { return null; }
 }
 function tjhpParseLooseTabularTextRows(text, purpose){
   const normalized = tjhpNormalizeExtractedUploadText(text);
@@ -25843,15 +25906,35 @@ function tjhpParseLooseTabularTextRows(text, purpose){
   return { structured:true, headers, rows };
 }
 function tjhpImageVisionExtractionEnabled() { return !!process.env.OPENAI_API_KEY; }
+async function tjhpExtractRowsFromTextWithAI(text, purpose) {
+  try {
+    if (!tjhpUploadAiParsingEnabled()) return null;
+    const normalizedText = tjhpNormalizeExtractedUploadText(text);
+    if (normalizedText.length < 40) return null;
+    const model = process.env.OPENAI_UPLOAD_TEXT_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini";
+    const prompt = purpose === "payments"
+      ? "You are extracting a payment/remittance upload table from messy PDF text. Return STRICT JSON only. Do not invent rows. Use this shape: {rows:[{claim_id,payer,paid_amount,denial_reason,paid_date}]}."
+      : "You are extracting a billed-claims upload table from messy PDF text. Return STRICT JSON only. Do not invent rows. Use this shape: {rows:[{claim_id,patient_name,payer,cpt_code,billed_amount,expected_amount,date_of_service}]}. Extract only rows that clearly contain a claim id, payer, and billed or expected amount.";
+    const r = await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${process.env.OPENAI_API_KEY}`},body:JSON.stringify({model,temperature:0,max_tokens:1200,response_format:{type:"json_object"},messages:[{role:"user",content:`${prompt}\n\nTEXT:\n${normalizedText.slice(0, 24000)}`} ]})});
+    if (!r.ok) return null;
+    const j = await r.json();
+    const txt = String(j?.choices?.[0]?.message?.content || "");
+    const parsed = tjhpParseVisionRowsJsonForUpload(txt, purpose);
+    return parsed && parsed.rows?.length ? parsed : null;
+  } catch (_) { return null; }
+}
 async function tjhpExtractRowsFromImageWithVision(file, purpose) {
   try {
     if (!tjhpImageVisionExtractionEnabled()) return null;
     const ext=tjhpUploadExtFromFile(file); const mime=(ext===".png"?"image/png":"image/jpeg"); const b64=tjhpUploadedFileBuffer(file).toString("base64");
-    const model=process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini";
-    const schema = purpose==="payments" ? `{"rows":[{"claim_id":"","payer":"","paid_amount":"","denial_reason":"","paid_date":""}]}` : `{"rows":[{"claim_id":"","patient_name":"","payer":"","cpt_code":"","billed_amount":"","expected_amount":"","date_of_service":""}]}`;
-    const r = await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${process.env.OPENAI_API_KEY}`},body:JSON.stringify({model,temperature:0,max_tokens:900,messages:[{role:"user",content:[{type:"text",text:`Extract rows and return STRICT JSON only with shape ${schema}`},{type:"image_url",image_url:{url:`data:${mime};base64,${b64}`}}]}]})});
+    const model=process.env.OPENAI_VISION_MODEL || "gpt-4o-mini";
+    const prompt = purpose==="payments"
+      ? "Extract the payment/remittance table from this image. Return STRICT JSON only. Do not invent rows. Use {rows:[{claim_id,payer,paid_amount,denial_reason,paid_date}]}. If a column is missing, leave it blank. Only include visible rows."
+      : "Extract the billed claims table from this image. Return STRICT JSON only. Do not invent rows. Use {rows:[{claim_id,patient_name,payer,cpt_code,billed_amount,expected_amount,date_of_service}]}. If a column is missing, leave it blank. Only include visible rows.";
+    const r = await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${process.env.OPENAI_API_KEY}`},body:JSON.stringify({model,temperature:0,max_tokens:900,response_format:{type:"json_object"},messages:[{role:"user",content:[{type:"text",text:prompt},{type:"image_url",image_url:{url:`data:${mime};base64,${b64}`}}]}]})});
+    if (!r.ok) return null;
     const j=await r.json(); const txt=String(j?.choices?.[0]?.message?.content||"").trim(); const parsed=tjhpParseVisionRowsJsonForUpload(txt,purpose); if(!parsed) return null;
-    return { parsed:true, rows:parsed.rows, headers:parsed.headers, outcome:"parsed_image_ocr", needs_review:false };
+    return { parsed:true, rows:parsed.rows, headers:parsed.headers, outcome:"parsed_image_ocr", needs_review:false, notes:`${purpose || "claims"} parsed_image_ocr` };
   } catch (_) { return null; }
 }
 async function tjhpParseRowsFromUploadedFileForRoute(file, opts = {}){
@@ -25863,12 +25946,22 @@ async function tjhpParseRowsFromUploadedFileForRoute(file, opts = {}){
     const normalizedText = tjhpNormalizeExtractedUploadText(text);
     const loose = tjhpParseLooseTabularTextRows(normalizedText, opts.purpose || "claims");
     if (loose.structured && loose.rows?.length) return { ...parsed, parsed:true, structured:true, rows:loose.rows, headers:loose.headers, status:"Parsed", outcome:"parsed_document_text", needs_review:false, text_excerpt:String(normalizedText||"").slice(0,400) };
-    return { ...parsed, parsed:false, needs_review:true, status:"Stored For Review", outcome:"stored_for_review", notes:loose.reason || "Document text extracted but no structured table rows were found.", text_excerpt:String(normalizedText||"").slice(0,400) };
+    const ai = await tjhpExtractRowsFromTextWithAI(normalizedText, opts.purpose || "claims");
+    if (ai && ai.rows?.length) return { ...parsed, parsed:true, structured:true, rows:ai.rows, headers:ai.headers, status:"Parsed", outcome:"parsed_document_ai", needs_review:false, notes:"Document parsed with AI text extraction.", text_excerpt:String(normalizedText||"").slice(0,400) };
+    const purposeLabel = (opts.purpose || "claims") === "payments" ? "payment" : "claim";
+    const noText = !normalizedText;
+    const reason = loose.reason || "no structured rows after parsing";
+    const note = noText ? `Document accepted and stored for ${purposeLabel} review. No extractable text was found.` : `Document accepted and stored for ${purposeLabel} review. Text was extracted, but no structured ${purposeLabel} rows were found. Parser reason: ${reason}. Text length: ${normalizedText.length}.`;
+    return { ...parsed, parsed:false, needs_review:true, status:"Stored For Review", outcome:"stored_for_review", notes:note, text_excerpt:String(normalizedText||"").slice(0,220) };
   }
   if (kind === "IMAGE") {
     const vision = await tjhpExtractRowsFromImageWithVision(file, opts.purpose || "claims");
     if (vision && vision.parsed && vision.rows && vision.rows.length) return { ...parsed, parsed:true, structured:true, rows:vision.rows, headers:vision.headers, status:"Parsed", outcome:"parsed_image_ocr", needs_review:false, notes:"Image parsed with OCR/vision extraction." };
-    return { ...parsed, parsed:false, needs_review:true, status:"Stored For Review", outcome:"stored_for_review", notes:"Image accepted and stored for claim review. OCR/vision extraction is unavailable or did not return structured rows." };
+    const purpose = opts.purpose || "claims";
+    const notes = purpose === "payments"
+      ? "Image accepted and stored for payment review. OCR/vision extraction is unavailable or did not return structured payment rows."
+      : "Image accepted and stored for claim review. OCR/vision extraction is unavailable or did not return structured claim rows.";
+    return { ...parsed, parsed:false, needs_review:true, status:"Stored For Review", outcome:"stored_for_review", notes };
   }
   return parsed;
 }
@@ -55273,10 +55366,28 @@ async function runUploadCompatSmokeTests(){
   assert(await detectUploadTypeFromFileOrName({ filename:"random.png", buffer:Buffer.from("") }) === null, "random png null");
   const randomClass = await detectUploadTypeFromFileOrName({ filename:"random.pdf", buffer:Buffer.from("hello world") });
   assert(randomClass === null, "random pdf no denial default");
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.OPENAI_API_KEY;
+  const originalVisionModel = process.env.OPENAI_VISION_MODEL;
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key";
+  process.env.OPENAI_VISION_MODEL = "gpt-4o-mini";
+  global.fetch = async () => ({ ok:true, json:async()=>({ choices:[{ message:{ content:JSON.stringify({ rows:[{ claim_id:"1001", patient_name:"P1", payer:"Aetna", cpt_code:"99213", billed_amount:"150", expected_amount:"110", date_of_service:"2026-01-01" },{ claim_id:"1002", patient_name:"P2", payer:"UnitedHealthcare", cpt_code:"99214", billed_amount:"220", expected_amount:"160", date_of_service:"2026-01-02" },{ claim_id:"1003", patient_name:"P3", payer:"Cigna", cpt_code:"99215", billed_amount:"300", expected_amount:"210", date_of_service:"2026-01-03" },{ claim_id:"1004", patient_name:"P4", payer:"Aetna", cpt_code:"93000", billed_amount:"120", expected_amount:"85", date_of_service:"2026-01-04" },{ claim_id:"1005", patient_name:"P5", payer:"BlueCross", cpt_code:"71020", billed_amount:"150", expected_amount:"115", date_of_service:"2026-01-05" }] }) } }] }) });
   const imgClaim = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.png", buffer:Buffer.from([137,80,78,71]) }, { purpose:"claims" });
-  assert(imgClaim.parsed===false && imgClaim.needs_review===true && /OCR|review/i.test(String(imgClaim.notes||"")), "claim image review parse");
+  assert(imgClaim.parsed===true && imgClaim.rows.length===5 && imgClaim.outcome==="parsed_image_ocr", "claim image ocr parse");
+  assert(Math.round(imgClaim.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0))===940, "claim image ocr total 940");
+  const aiTextClaims = await tjhpExtractRowsFromTextWithAI("messy claim table text 1001 Aetna 150 2026-01-01", "claims");
+  assert(aiTextClaims && aiTextClaims.rows.length===5, "ai text parser claims rows");
+  assert(Math.round(aiTextClaims.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0))===940, "ai text parser claims total 940");
+  global.fetch = async () => ({ ok:true, json:async()=>({ choices:[{ message:{ content:"not json" } }] }) });
   const imgPay = await tjhpParseRowsFromUploadedFileForRoute({ filename:"payments.png", buffer:Buffer.from([137,80,78,71]) }, { purpose:"payments" });
-  assert(imgPay.parsed===false && imgPay.needs_review===true && /OCR|review/i.test(String(imgPay.notes||"")), "payment image review parse");
+  assert(imgPay.parsed===false && imgPay.needs_review===true && /OCR|vision/i.test(String(imgPay.notes||"")), "payment image review parse");
+  global.fetch = originalFetch;
+  if (originalApiKey == null) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = originalApiKey;
+  if (originalVisionModel == null) delete process.env.OPENAI_VISION_MODEL; else process.env.OPENAI_VISION_MODEL = originalVisionModel;
+  const fenced = tjhpParseVisionRowsJsonForUpload("```json\n{\"rows\":[{\"claim\":\"X1\",\"payer_name\":\"Aetna\",\"amount_billed\":\"10\"}]}\n```", "claims");
+  assert(fenced && fenced.rows.length === 1 && fenced.rows[0].claim_id === "X1", "fenced json alias parse");
+  const arrayJson = tjhpParseVisionRowsJsonForUpload(JSON.stringify([{ claim_number:"X2", payer:"Aetna", billed:"20" }]), "claims");
+  assert(arrayJson && arrayJson.rows.length === 1 && arrayJson.rows[0].claim_id === "X2", "array json alias parse");
   const fakeVisionClaims = tjhpParseVisionRowsJsonForUpload(JSON.stringify({ rows:[{claim_id:"1001",patient_name:"P1",payer:"Aetna",cpt_code:"99213",billed_amount:"150",expected_amount:"110",date_of_service:"2026-01-01"},{claim_id:"1002",patient_name:"P2",payer:"UnitedHealthcare",cpt_code:"99214",billed_amount:"220",expected_amount:"160",date_of_service:"2026-01-02"},{claim_id:"1003",patient_name:"P3",payer:"Cigna",cpt_code:"99215",billed_amount:"300",expected_amount:"210",date_of_service:"2026-01-03"},{claim_id:"1004",patient_name:"P4",payer:"Aetna",cpt_code:"93000",billed_amount:"120",expected_amount:"85",date_of_service:"2026-01-04"},{claim_id:"1005",patient_name:"P5",payer:"BlueCross",cpt_code:"71020",billed_amount:"150",expected_amount:"115",date_of_service:"2026-01-05"}]}), "claims");
   assert(fakeVisionClaims && fakeVisionClaims.rows.length===5, "vision claims json rows");
   assert(Math.round(fakeVisionClaims.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0))===940, "vision claims json total 940");
@@ -55338,6 +55449,106 @@ async function runUploadCompatSmokeTests(){
 async function runUploadIngestSmokeTests(){
   return await runUploadCompatSmokeTests();
 }
+async function runUploadRealisticSmokeTests(){
+  const src = fs.readFileSync(__filename, "utf8");
+  const os = require("os");
+  function assert(c,m){ if(!c) throw new Error(m); }
+  assert(src.includes("function tjhpExtractJsonObjectFromText"), "missing json extraction helper");
+  assert(src.includes("function tjhpExtractRowsFromTextWithAI"), "missing ai text helper");
+  assert(src.includes("function tjhpExtractRowsFromImageWithVision"), "missing image helper");
+  assert(src.includes("parsed_image_ocr"), "missing parsed image outcome");
+  assert(src.includes("OCR/vision extraction is unavailable"), "missing ocr fallback wording");
+  assert(src.includes("function tjhpParseSpacedClaimLine"), "missing spaced claim parser");
+  assert(src.includes("function tjhpParseXlsxRowsWithoutDependency"), "missing xlsx fallback parser");
+  assert(src.includes("function tjhpXmlTagPattern"), "missing xml tag helper");
+  assert(src.includes("function tjhpUploadedFileName"), "missing file name helper");
+  assert(src.includes("function tjhpUploadedFileBuffer"), "missing file buffer helper");
+  assert(src.includes("function tjhpReviewUploadTypeLabel"), "missing review label helper");
+  assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__"), "missing hard stop guard");
+  assert(src.includes("window.__TJHP_VIEW_PANEL_OPENER_RESCUE_READY__"), "missing rescue guard");
+  assert(src.includes("__tjhpOpenClaimPanelOrNavigate"), "missing claim panel opener");
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
+  assert(!(pkg.dependencies && pkg.dependencies.xlsx), "xlsx should not be required dependency");
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tjhp-upload-realistic-"));
+  const claimRows = [["1001","P1","Aetna","99213","150","110","2026-01-01"],["1002","P2","UnitedHealthcare","99214","220","160","2026-01-02"],["1003","P3","Cigna","99215","300","210","2026-01-03"],["1004","P4","Aetna","93000","120","85","2026-01-04"],["1005","P5","BlueCross","71020","150","115","2026-01-05"]];
+  const payRows = [["1001","Aetna","0","","2026-01-01"],["1002","UnitedHealthcare","100","","2026-01-02"],["1003","Cigna","210","","2026-01-03"],["1004","Aetna","40","","2026-01-04"],["1005","BlueCross","0","","2026-01-05"]];
+  const claimsXlsx = tjhpSmokeBuildMinimalXlsx(["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"], claimRows);
+  const paymentsXlsx = tjhpSmokeBuildNamespacedXlsx(["claim_id","payer","paid_amount","denial_reason","paid_date"], payRows);
+  const claimsXlsxPath = path.join(tmpDir, "billed_claims.xlsx");
+  fs.writeFileSync(claimsXlsxPath, claimsXlsx);
+  const claimsFileBuffer = { filename:"billed_claims.xlsx", buffer:claimsXlsx };
+  const claimsFileAbsPath = { originalName:"billed_claims.xlsx", absPath:claimsXlsxPath };
+  const claimsFilePath = { originalName:"billed_claims.xlsx", path:claimsXlsxPath };
+  assert(tjhpUploadedFileName(claimsFileBuffer)==="billed_claims.xlsx", "filename helper buffer object");
+  assert(tjhpUploadedFileName(claimsFileAbsPath)==="billed_claims.xlsx", "filename helper absPath object");
+  assert(tjhpUploadedFileBuffer(claimsFileBuffer).length > 0, "buffer helper buffer object");
+  assert(tjhpUploadedFileBuffer(claimsFileAbsPath).length > 0 && tjhpUploadedFileBuffer(claimsFilePath).length > 0, "buffer helper path objects");
+  assert(tjhpUploadExtFromFile(claimsFileBuffer)===".xlsx", "xlsx ext helper");
+  assert(tjhpUploadKindFromFile(claimsFileBuffer)==="EXCEL", "xlsx kind helper");
+  assert(tjhpUploadKindFromFile({ filename:"billed_claims.pdf", buffer:Buffer.from("%PDF") })==="PDF", "pdf kind helper");
+  assert(tjhpUploadKindFromFile({ filename:"billed_claims.png", buffer:Buffer.from([137,80,78,71]) })==="IMAGE", "png kind helper");
+  const claimsParsedA = await tjhpParseRowsFromUploadedFileForRoute(claimsFileBuffer, { purpose:"claims", allowTxtStructured:true, allowExcelStructured:true });
+  const claimsParsedB = await tjhpParseRowsFromUploadedFileForRoute(claimsFileAbsPath, { purpose:"claims", allowTxtStructured:true, allowExcelStructured:true });
+  assert(claimsParsedA.parsed===true && claimsParsedA.rows.length===5 && claimsParsedA.outcome!=="stored_for_review", "claims xlsx buffer parse");
+  assert(claimsParsedB.parsed===true && claimsParsedB.rows.length===5 && claimsParsedB.outcome!=="stored_for_review", "claims xlsx absPath parse");
+  assert(Math.round(claimsParsedA.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0))===940, "claims xlsx total billed 940");
+  const payPath = path.join(tmpDir, "payments.xlsx"); fs.writeFileSync(payPath, paymentsXlsx);
+  const payParsed = await tjhpParseRowsFromUploadedFileForRoute({ originalName:"payments.xlsx", absPath:payPath }, { purpose:"payments", allowTxtStructured:true, allowExcelStructured:true });
+  assert(payParsed.parsed===true && payParsed.rows.length===5, "payments xlsx parse");
+  assert(Math.round(payParsed.rows.reduce((s,r)=>s+num(r.paid_amount),0))===350, "payments xlsx total 350");
+
+  const oneCellClaims = ["Claim Export","claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service",...claimRows.flat()].join("\n");
+  const multiSpaceClaims = "claim_id  patient_name  payer  cpt_code  billed_amount  expected_amount  date_of_service\n" + claimRows.map((r)=>`${r[0]}  ${r[1]}  ${r[2]}  ${r[3]}  $${r[4]}.00  $${r[5]}.00  ${r[6]}`).join("\n");
+  const pipeClaims = "claim_id|patient_name|payer|cpt_code|billed_amount|expected_amount|date_of_service\n" + claimRows.map((r)=>r.join("|")).join("\n");
+  const directA = tjhpParseLooseTabularTextRows(oneCellClaims, "claims");
+  const directB = tjhpParseLooseTabularTextRows(multiSpaceClaims, "claims");
+  const directC = tjhpParseLooseTabularTextRows(pipeClaims, "claims");
+  [directA,directB,directC].forEach((x,i)=>{ assert(x.structured===true && x.rows.length===5, "pdf direct text parse "+i); assert(Math.round(x.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0))===940, "pdf direct text total "+i); });
+  const fakePdf = Buffer.from(`%PDF-1.4\nBT\n(Claim ID Patient Payer CPT Billed Expected DOS) Tj\n${claimRows.map((r)=>`(${r[0]} ${r[1]} ${r[2]} ${r[3]} $${r[4]}.00 $${r[5]}.00 ${r[6]}) Tj`).join("\n")}\nET`);
+  const extracted = await tjhpExtractTextFromUploadedFileForParsing({ filename:"billed_claims.pdf", buffer:fakePdf });
+  assert(/1001/.test(extracted) && /Aetna/.test(extracted), "pdf literal fallback extracted text");
+  const literalParsed = tjhpParseLooseTabularTextRows(extracted, "claims");
+  assert(literalParsed.structured===true && literalParsed.rows.length===5, "pdf literal parsed rows");
+  assert(Math.round(literalParsed.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0))===940, "pdf literal parsed total 940");
+  const pdfRoute = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.pdf", buffer:fakePdf }, { purpose:"claims" });
+  assert(pdfRoute.parsed===true && pdfRoute.rows.length===5, "pdf route parsed");
+  assert(["parsed_document_text","parsed_document_ai"].includes(String(pdfRoute.outcome||"")), "pdf route parsed outcome");
+  const pdfNoText = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.pdf", buffer:Buffer.from("%PDF-1.4\n%%EOF") }, { purpose:"claims" });
+  assert(pdfNoText.parsed===false && pdfNoText.needs_review===true && (!pdfNoText.rows || pdfNoText.rows.length===0), "pdf no text review fallback");
+  assert(/No extractable text|no structured/i.test(String(pdfNoText.notes||"")), "pdf no text notes");
+
+  const originalFetch = global.fetch; const originalApiKey = process.env.OPENAI_API_KEY; const originalVisionModel = process.env.OPENAI_VISION_MODEL;
+  process.env.OPENAI_API_KEY = "test-key"; process.env.OPENAI_VISION_MODEL = "gpt-4o-mini";
+  global.fetch = async () => ({ ok:true, json:async()=>({ choices:[{ message:{ content:JSON.stringify({ rows:claimRows.map((r)=>({ claim_id:r[0], patient_name:r[1], payer:r[2], cpt_code:r[3], billed_amount:r[4], expected_amount:r[5], date_of_service:r[6] })) }) } }] }) });
+  const imgPng = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.png", buffer:Buffer.from([137,80,78,71]) }, { purpose:"claims" });
+  assert(imgPng.parsed===true && imgPng.rows.length===5 && imgPng.outcome==="parsed_image_ocr", "png ocr parse");
+  assert(Math.round(imgPng.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0))===940, "png ocr total 940");
+  const aiText = await tjhpExtractRowsFromTextWithAI("messy billed claims PDF text with claim ids 1001 1002 1003 and payer names plus billed amounts for extraction", "claims");
+  assert(aiText && aiText.rows.length===5, "ai text mock parse 5");
+  global.fetch = async () => ({ ok:true, json:async()=>({ choices:[{ message:{ content:"invalid-json" } }] }) });
+  const imgPngFail = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.png", buffer:Buffer.from([137,80,78,71]) }, { purpose:"claims" });
+  assert(imgPngFail.parsed===false && imgPngFail.needs_review===true && /OCR|vision/i.test(String(imgPngFail.notes||"")), "png ocr fallback");
+  delete process.env.OPENAI_API_KEY;
+  const imgJpgFail = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.jpg", buffer:Buffer.from([255,216,255]) }, { purpose:"claims" });
+  assert(imgJpgFail.parsed===false && imgJpgFail.needs_review===true, "jpg no key fallback");
+  global.fetch = originalFetch; if (originalApiKey == null) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = originalApiKey; if (originalVisionModel == null) delete process.env.OPENAI_VISION_MODEL; else process.env.OPENAI_VISION_MODEL = originalVisionModel;
+
+  const fenced = tjhpParseVisionRowsJsonForUpload("```json\n{\"rows\":[{\"claim_number\":\"1001\",\"payer\":\"Aetna\",\"billed\":\"150\",\"cpt\":\"99213\",\"dos\":\"2026-01-01\"}]}\n```", "claims");
+  const embedded = tjhpParseVisionRowsJsonForUpload("result: {\"claims\":[{\"claim\":\"1002\",\"payer_name\":\"Cigna\",\"amount_billed\":\"200\"}]}", "claims");
+  const topArray = tjhpParseVisionRowsJsonForUpload("[{\"claim_id\":\"1003\",\"payer\":\"BlueCross\",\"billed_amount\":\"300\"}]", "claims");
+  assert(fenced && embedded && topArray, "json extraction forms");
+
+  const claimReview = { category:"claims", status:"Stored For Claim Review", outcome:"stored_for_claim_review", needs_review:true };
+  const payReview = { category:"payments", status:"Stored For Payment Review", outcome:"stored_for_payment_review", needs_review:true };
+  const genericReview = { category:"support", status:"Stored For Review", outcome:"stored_for_review", needs_review:true };
+  assert(tjhpIsReviewUploadIngest(claimReview)===true, "claim review ingest");
+  assert(tjhpReviewUploadTypeLabel(claimReview)==="Claim Documents", "claim review label");
+  assert(/Review/i.test(tjhpReviewUploadDetails(claimReview)), "claim review details");
+  assert(tjhpReviewUploadTypeLabel(payReview)==="Payment Documents", "payment review label");
+  assert(tjhpReviewUploadTypeLabel(genericReview)==="Documents" && tjhpReviewUploadFilterType(genericReview)!=="denials", "generic review labels");
+  fs.rmSync(tmpDir, { recursive:true, force:true });
+}
 
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
@@ -55361,6 +55572,17 @@ if (process.env.TJHP_UPLOAD_COMPAT_SMOKE_TESTS === "true" && (process.env.TJHP_F
     })
     .catch((err) => {
       process.stderr.write("UPLOAD_COMPAT_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    });
+}
+if (process.env.TJHP_UPLOAD_REALISTIC_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  runUploadRealisticSmokeTests()
+    .then(() => {
+      process.stdout.write("UPLOAD_REALISTIC_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    })
+    .catch((err) => {
+      process.stderr.write("UPLOAD_REALISTIC_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
       process.exit(1);
     });
 }
