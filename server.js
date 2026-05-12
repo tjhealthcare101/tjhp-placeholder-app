@@ -25732,6 +25732,17 @@ function tjhpLooksLikeDateText(v) {
 }
 function tjhpUploadHeaderAliasesForPurpose(purpose){
   if (purpose === "payments") return { claim_id:["claim_id","claim number","claim #","claim","claim_number"], payer:["payer","payer name","insurance"], paid_amount:["paid_amount","paid","payment","amount paid","insurance paid"], denial_reason:["denial_reason","denial reason","reason","remark","remark code"], paid_date:["paid_date","date paid","payment date","paid at","date"] };
+  if (purpose === "reimbursement" || purpose === "contracts") {
+    return {
+      payer_name:["payer_name","payer","payer name","insurance","insurance payer"],
+      network_status:["network_status","network","network type","in/out network","network level"],
+      procedure_code:["procedure_code","procedure","cpt","cpt_code","hcpcs","code"],
+      diagnosis_code:["diagnosis_code","diagnosis","dx","icd","icd10","diagnosis icd"],
+      reimbursement_model:["reimbursement_model","model","payment model","allowed model","contract model"],
+      allowed_amount:["allowed_amount","allowed","expected_amount","expected","rate","amount","fee"],
+      effective_date:["effective_date","effective","effective at","date","start_date","start"]
+    };
+  }
   return { claim_id:["claim_id","claim number","claim #","claim no","claim","claim_number"], patient_name:["patient_name","patient","member","member name","patient name"], payer:["payer","payer name","insurance","insurance payer"], cpt_code:["cpt_code","cpt","procedure","procedure code","hcpcs","hcpcs_code"], billed_amount:["billed_amount","billed","charge","charge amount","amount billed","total charge"], expected_amount:["expected_amount","expected","allowed","allowed amount","expected reimbursement"], date_of_service:["date_of_service","dos","service date","date"] };
 }
 function tjhpParseSpacedClaimLine(line) {
@@ -25814,12 +25825,26 @@ function tjhpExtractJsonObjectFromText(text) {
 function tjhpUploadAiParsingEnabled() { return !!process.env.OPENAI_API_KEY; }
 function tjhpParseVisionRowsJsonForUpload(jsonText, purpose){
   try {
-    const canonical = purpose === "payments"
+    const isPayments = purpose === "payments";
+    const isReimbursement = purpose === "reimbursement" || purpose === "contracts";
+    const canonical = isPayments
       ? ["claim_id","payer","paid_amount","denial_reason","paid_date"]
-      : ["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"];
-    const aliases = purpose === "payments"
+      : (isReimbursement
+        ? ["payer_name","network_status","procedure_code","diagnosis_code","reimbursement_model","allowed_amount","effective_date"]
+        : ["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"]);
+    const aliases = isPayments
       ? { claim_id:["claim_id","claim_number","claim"], payer:["payer","payer_name"], paid_amount:["paid_amount","paid","amount_paid","insurance_paid"], denial_reason:["denial_reason","reason","remark"], paid_date:["paid_date","date_paid","payment_date"] }
-      : { claim_id:["claim_id","claim_number","claim"], patient_name:["patient_name","patient","member"], payer:["payer","payer_name","insurance"], cpt_code:["cpt_code","cpt","procedure_code","hcpcs"], billed_amount:["billed_amount","billed","amount_billed","charge_amount"], expected_amount:["expected_amount","expected","allowed_amount"], date_of_service:["date_of_service","dos","service_date"] };
+      : (isReimbursement
+        ? {
+          payer_name:["payer_name","payer","payer_name_or_plan","insurance","insurance_payer"],
+          network_status:["network_status","network","network_type","in_network","out_network"],
+          procedure_code:["procedure_code","procedure","cpt","cpt_code","hcpcs","code"],
+          diagnosis_code:["diagnosis_code","diagnosis","dx","icd","icd10"],
+          reimbursement_model:["reimbursement_model","model","payment_model","allowed_model"],
+          allowed_amount:["allowed_amount","allowed","expected_amount","expected","rate","amount"],
+          effective_date:["effective_date","effective","effective_at","start_date","date"]
+        }
+        : { claim_id:["claim_id","claim_number","claim"], patient_name:["patient_name","patient","member"], payer:["payer","payer_name","insurance"], cpt_code:["cpt_code","cpt","procedure_code","hcpcs"], billed_amount:["billed_amount","billed","amount_billed","charge_amount"], expected_amount:["expected_amount","expected","allowed_amount"], date_of_service:["date_of_service","dos","service_date"] });
     const parsed = JSON.parse(tjhpExtractJsonObjectFromText(jsonText || "{}"));
     const rows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.rows) ? parsed.rows : (Array.isArray(parsed?.claims) ? parsed.claims : (Array.isArray(parsed?.payments) ? parsed.payments : [])));
     if (!rows.length) return null;
@@ -25832,7 +25857,11 @@ function tjhpParseVisionRowsJsonForUpload(jsonText, purpose){
         row[h] = val;
       });
       return row;
-    }).filter((r)=>purpose==="payments"?((r.claim_id||r.payer)&&r.paid_amount):(r.claim_id&&r.payer&&(r.billed_amount||r.expected_amount)));
+    }).filter((r)=>{
+      if (isPayments) return (r.claim_id || r.payer) && r.paid_amount;
+      if (isReimbursement) return r.payer_name && r.procedure_code && tjhpMoneyNumberFromText(r.allowed_amount) > 0;
+      return r.claim_id && r.payer && (r.billed_amount || r.expected_amount);
+    });
     return out.length ? { rows:out, headers:canonical } : null;
   } catch(_) { return null; }
 }
@@ -48800,6 +48829,10 @@ const showMatchingReview =
       </tbody></table></div>
     `;
 
+    const reimbursementReviewDocs = ingests.filter(i =>
+      tjhpIsReviewUploadIngest(i) &&
+      tjhpReviewUploadTypeLabel(i) === "Reimbursement Documents"
+    ).slice(0, 50);
     const reimbursementContent = `
 <h2>Reimbursement Contracts</h2>
 <p class="muted">Define how your claims should be reimbursed and how expected amounts are calculated.</p>
@@ -48830,8 +48863,33 @@ const showMatchingReview =
 
     <div class="btnRow">
       <button class="btn">Upload Files</button>
+      <button class="btn secondary" type="button" id="reimbursement-clear-files">Clear</button>
     </div>
   </form>
+</div>
+<div class="card" style="margin-top:14px;">
+  <h3>Supporting / Review Documents</h3>
+  <div style="overflow:auto;">
+    <table>
+      <thead><tr><th>Type</th><th>File</th><th>Details</th><th>Action</th></tr></thead>
+      <tbody>
+        ${reimbursementReviewDocs.length ? reimbursementReviewDocs.map(ingest => `
+          <tr>
+            <td>Reimbursement Documents</td>
+            <td>${safeStr(ingest.original_filename || ingest.file_name || "uploaded document")}</td>
+            <td>${safeStr(tjhpReviewUploadDetails(ingest))}</td>
+            <td>
+              <form method="POST" action="/data-management/ingest/delete" onsubmit="return confirm('Delete this review document?');">
+                <input type="hidden" name="ingest_id" value="${safeStr(ingest.ingest_id || "")}" />
+                <input type="hidden" name="tab" value="reimbursement" />
+                <button class="btn danger small" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+        `).join("") : `<tr><td colspan="4" class="muted">No reimbursement review documents.</td></tr>`}
+      </tbody>
+    </table>
+  </div>
 </div>
 
 <div class="card" style="margin-top:14px;">
@@ -49045,7 +49103,8 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
   const input = document.getElementById('reimbursement-files');
   const dropzone = document.getElementById('reimbursement-dropzone');
   const hints = document.getElementById('reimbursement-file-hints');
-  if (!input || !dropzone || !hints) return;
+  const clearBtn = document.getElementById('reimbursement-clear-files');
+  if (!input || !dropzone || !hints || !clearBtn) return;
 
   const detectType = (fileName) => {
     const n = String(fileName || '').toLowerCase();
@@ -49056,9 +49115,13 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
     return 'Auto-detect on upload';
   };
 
+  const esc = (s) => String(s || '').replace(/[<>&"]/g, c => c === "<" ? "&lt;" : (c === ">" ? "&gt;" : (c === "&" ? "&amp;" : "&quot;")));
   const renderHints = () => {
-    const lines = [...(input.files || [])].map(f => (f.name + ' → ' + detectType(f.name)));
-    hints.innerHTML = lines.join('<br/>') || 'Tip: CSV creates rules automatically. PDF, Excel, Word, TXT, and image files are stored as supporting documents.';
+    const selected = [...(input.files || [])];
+    dropzone.innerHTML = selected.length === 1 ? '1 file ready to upload' : (selected.length ? (selected.length + ' files ready to upload') : 'Drag & drop reimbursement files here, or click to choose files');
+    const lines = selected.map(f => esc(f.name) + ' • ' + ((f.name.split('.').pop() || '').toUpperCase()) + ' • Contract/reimbursement');
+    hints.innerHTML = lines.join('<br/>') || 'Tip: CSV creates rules automatically. PDF, Excel, Word, TXT, and image files are stored for reimbursement review when rows cannot be parsed.';
+    clearBtn.style.display = selected.length ? "inline-flex" : "none";
   };
 
   ['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, e => {
@@ -49076,6 +49139,11 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
     renderHints();
   });
   input.addEventListener('change', renderHints);
+  clearBtn.addEventListener('click', () => {
+    try { input.value = ''; } catch (_) {}
+    renderHints();
+  });
+  clearBtn.style.display = "none";
   renderHints();
 })();
 </script>
@@ -49630,20 +49698,48 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
       const lowerName = filename.toLowerCase();
       const ext = path.extname(lowerName);
 
-      if ([".pdf", ".doc", ".docx"].includes(ext)) {
-        const text = await tjhpExtractTextFromUploadedFileForParsing(f);
-        const extractedContracts = parseContractFromText(text);
-        addDocumentIngest(
-          org.org_id,
-          "contracts",
-          f,
-          "Stored",
-          extractedContracts.length,
-          extractedContracts.length ? "Stored and scanned for contract rules." : "Stored as supporting reimbursement document."
-        );
-
-        if (!extractedContracts.length) storedSupportingDocs += 1;
-
+      if ([".pdf", ".png", ".jpg", ".jpeg"].includes(ext)) {
+        let extractedContracts = [];
+        let parseReason = "";
+        if (ext === ".pdf") {
+          const text = await tjhpExtractTextFromUploadedFileForParsing(f);
+          extractedContracts = parseContractFromText(text);
+          if (!extractedContracts.length && process.env.OPENAI_API_KEY) {
+            const aiParsed = await tjhpExtractRowsFromPdfWithAI(f, "reimbursement");
+            if (aiParsed && aiParsed.parsed && Array.isArray(aiParsed.rows)) {
+              extractedContracts = aiParsed.rows.map((row) => mapContractUploadRow(row));
+            } else {
+              parseReason = aiParsed?.notes || "No reimbursement rows found in PDF.";
+            }
+          } else if (!extractedContracts.length) {
+            parseReason = "No reimbursement rows found in PDF text extraction.";
+          }
+        } else if (process.env.OPENAI_API_KEY) {
+          const imageParsed = await tjhpExtractRowsFromImageWithVision(f, "reimbursement");
+          if (imageParsed && imageParsed.parsed && Array.isArray(imageParsed.rows)) {
+            extractedContracts = imageParsed.rows
+              .filter((row) => String(row.payer_name || "").trim() && String(row.procedure_code || "").trim() && num(row.allowed_amount) > 0)
+              .map((row) => mapContractUploadRow(row));
+          } else {
+            parseReason = "OCR/vision could not extract reimbursement rows.";
+          }
+        } else {
+          parseReason = "OCR/vision unavailable (OPENAI_API_KEY not configured).";
+        }
+        if (!extractedContracts.length) {
+          const ingest = addDocumentIngest(org.org_id, "reimbursement", f, "Stored For Reimbursement Review", 0, parseReason || "Stored For Reimbursement Review");
+          tjhpUpdateDocumentIngestOutcome(ingest.ingest_id, {
+            category: "reimbursement",
+            status: "Stored For Reimbursement Review",
+            outcome: "stored_for_reimbursement_review",
+            needs_review: true,
+            notes: parseReason || "Stored For Reimbursement Review",
+            source_route: pathname
+          });
+          storedSupportingDocs += 1;
+          warnings.push(`${filename} → Stored For Reimbursement Review (${parseReason || "No valid reimbursement rows found."})`);
+          continue;
+        }
         for (const c of extractedContracts) {
           const candidateKey = contractRowKey(c);
           const dup =
@@ -49676,7 +49772,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         continue;
       }
 
-      if (![".csv",".xls",".xlsx",".txt"].includes(ext)) {
+      if (![".csv",".xls",".xlsx",".txt",".doc",".docx"].includes(ext)) {
         if (isSupportedUploadExt(filename || "")) {
           addDocumentIngest(
             org.org_id,
@@ -55753,6 +55849,18 @@ async function runUploadRealisticSmokeTests(){
   assert(tjhpReviewUploadTypeLabel(genericReview)==="Documents" && tjhpReviewUploadFilterType(genericReview)!=="denials", "generic review labels");
   fs.rmSync(tmpDir, { recursive:true, force:true });
 }
+async function runReimbursementUploadSmokeTests(){
+  const src = fs.readFileSync(__filename, "utf8");
+  function assert(c,m){ if(!c) throw new Error(m); }
+  assert(src.includes("reimbursement-clear-files"), "missing reimbursement clear button");
+  assert(src.includes("files ready to upload"), "missing selected-file wording");
+  assert(src.includes("Stored For Reimbursement Review"), "missing reimbursement review status wording");
+  assert(src.includes("Reimbursement Documents"), "missing reimbursement label");
+  assert(src.includes("/data-management/reimbursement/upload"), "missing reimbursement upload route");
+  assert(src.includes("/data-management/reimbursement/delete-upload"), "missing reimbursement delete-upload route");
+  assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__"), "missing view panel guard");
+  assert(src.includes("/upload-router"), "missing main upload parser markers");
+}
 
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
@@ -55787,6 +55895,17 @@ if (process.env.TJHP_UPLOAD_REALISTIC_SMOKE_TESTS === "true" && (process.env.TJH
     })
     .catch((err) => {
       process.stderr.write("UPLOAD_REALISTIC_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    });
+}
+if (process.env.TJHP_REIMBURSEMENT_UPLOAD_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  runReimbursementUploadSmokeTests()
+    .then(() => {
+      process.stdout.write("REIMBURSEMENT_UPLOAD_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    })
+    .catch((err) => {
+      process.stderr.write("REIMBURSEMENT_UPLOAD_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
       process.exit(1);
     });
 }
