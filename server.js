@@ -25645,7 +25645,13 @@ function tjhpReviewUploadFilterType(ingest) {
   return "documents";
 }
 function tjhpReviewUploadDetails(ingest) {
-  return String(ingest.status || ingest.outcome || ingest.parse_status || "Stored For Review");
+  const base = String(ingest.status || ingest.outcome || ingest.parse_status || "Stored For Review");
+  const notes = String(ingest.notes || "").toLowerCase();
+  if (!/stored for review/i.test(base)) return base;
+  if (notes.includes("no extractable text")) return `${base} — no extractable PDF text`;
+  if (notes.includes("pdf ai extraction was unavailable") || notes.includes("did not return structured rows")) return `${base} — PDF AI unavailable`;
+  if (notes.includes("no structured") || notes.includes("parser reason")) return `${base} — structured rows not found`;
+  return base;
 }
 
 async function tjhpExtractTextFromUploadedFileForParsing(file){
@@ -25905,6 +25911,48 @@ function tjhpParseLooseTabularTextRows(text, purpose){
   }
   return { structured:true, headers, rows };
 }
+
+function tjhpTextFromOpenAIResponsePayload(data) {
+  if (!data) return "";
+  if (typeof data.output_text === "string" && data.output_text.trim()) return data.output_text.trim();
+  const parts = [];
+  for (const item of data.output || []) {
+    if (typeof item?.content === "string") parts.push(item.content);
+    for (const c of item?.content || []) {
+      if (typeof c?.text === "string") parts.push(c.text);
+      if (typeof c?.output_text === "string") parts.push(c.output_text);
+      if (typeof c?.content === "string") parts.push(c.content);
+    }
+  }
+  const choiceText = data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "";
+  if (choiceText) parts.push(choiceText);
+  return parts.join("\n").trim();
+}
+function tjhpPdfFileAiExtractionEnabled() { return !!process.env.OPENAI_API_KEY; }
+async function tjhpExtractRowsFromPdfWithAI(file, purpose) {
+  try {
+    if (!tjhpPdfFileAiExtractionEnabled()) return null;
+    const buffer = tjhpUploadedFileBuffer(file);
+    if (!Buffer.isBuffer(buffer) || !buffer.length) return null;
+    const filename = tjhpUploadedFileName(file) || "uploaded.pdf";
+    const b64 = buffer.toString("base64");
+    const schemaText = purpose === "payments"
+      ? '{rows:[{claim_id,payer,paid_amount,denial_reason,paid_date}]}'
+      : '{rows:[{claim_id,patient_name,payer,cpt_code,billed_amount,expected_amount,date_of_service}]}';
+    const prompt = purpose === "payments"
+      ? "Extract the payment/remittance table from this PDF. Return STRICT JSON only. Do not invent rows. Use this exact shape: " + schemaText + ". If a column is missing, leave it blank. Only include visible rows."
+      : "Extract the billed claims table from this PDF. Return STRICT JSON only. Do not invent rows. Use this exact shape: " + schemaText + ". If a column is missing, leave it blank. Only include visible rows.";
+    const model = process.env.OPENAI_PDF_MODEL || process.env.OPENAI_VISION_MODEL || "gpt-4o-mini";
+    const responseBody = { model, temperature:0, max_output_tokens:1500, input:[{ role:"user", content:[{ type:"input_file", filename, file_data:b64 }, { type:"input_text", text:prompt }] }] };
+    const r = await fetch("https://api.openai.com/v1/responses", { method:"POST", headers:{ "Content-Type":"application/json", "Authorization":"Bearer " + process.env.OPENAI_API_KEY }, body:JSON.stringify(responseBody) });
+    if (!r.ok) return null;
+    const data = await r.json();
+    const txt = tjhpTextFromOpenAIResponsePayload(data);
+    const parsed = tjhpParseVisionRowsJsonForUpload(txt, purpose);
+    if (!parsed || !Array.isArray(parsed.rows) || !parsed.rows.length) return null;
+    return { parsed:true, rows:parsed.rows, headers:parsed.headers, outcome:"parsed_pdf_ai", needs_review:false, notes:"PDF parsed with AI file extraction." };
+  } catch (_) { return null; }
+}
 function tjhpImageVisionExtractionEnabled() { return !!process.env.OPENAI_API_KEY; }
 async function tjhpExtractRowsFromTextWithAI(text, purpose) {
   try {
@@ -25942,16 +25990,23 @@ async function tjhpParseRowsFromUploadedFileForRoute(file, opts = {}){
   if (parsed.parsed) return parsed;
   const kind = parsed.kind;
   if (kind === "PDF" || kind === "WORD") {
+    const purpose = opts.purpose || "claims";
     const text = await tjhpExtractTextFromUploadedFileForParsing(file);
     const normalizedText = tjhpNormalizeExtractedUploadText(text);
-    const loose = tjhpParseLooseTabularTextRows(normalizedText, opts.purpose || "claims");
+    const loose = tjhpParseLooseTabularTextRows(normalizedText, purpose);
     if (loose.structured && loose.rows?.length) return { ...parsed, parsed:true, structured:true, rows:loose.rows, headers:loose.headers, status:"Parsed", outcome:"parsed_document_text", needs_review:false, text_excerpt:String(normalizedText||"").slice(0,400) };
-    const ai = await tjhpExtractRowsFromTextWithAI(normalizedText, opts.purpose || "claims");
-    if (ai && ai.rows?.length) return { ...parsed, parsed:true, structured:true, rows:ai.rows, headers:ai.headers, status:"Parsed", outcome:"parsed_document_ai", needs_review:false, notes:"Document parsed with AI text extraction.", text_excerpt:String(normalizedText||"").slice(0,400) };
-    const purposeLabel = (opts.purpose || "claims") === "payments" ? "payment" : "claim";
+    if (normalizedText) {
+      const ai = await tjhpExtractRowsFromTextWithAI(normalizedText, purpose);
+      if (ai && ai.rows?.length) return { ...parsed, parsed:true, structured:true, rows:ai.rows, headers:ai.headers, status:"Parsed", outcome:"parsed_document_ai", needs_review:false, notes:"Document parsed with AI text extraction.", text_excerpt:String(normalizedText||"").slice(0,400) };
+    }
+    if (kind === "PDF") {
+      const pdfAi = await tjhpExtractRowsFromPdfWithAI(file, purpose);
+      if (pdfAi && pdfAi.rows?.length) return { ...parsed, parsed:true, structured:true, rows:pdfAi.rows, headers:pdfAi.headers, status:"Parsed", outcome:"parsed_pdf_ai", needs_review:false, notes:"PDF parsed with AI file extraction.", text_excerpt:String(normalizedText||"").slice(0,220) };
+    }
+    const purposeLabel = purpose === "payments" ? "payment" : "claim";
     const noText = !normalizedText;
     const reason = loose.reason || "no structured rows after parsing";
-    const note = noText ? `Document accepted and stored for ${purposeLabel} review. No extractable text was found.` : `Document accepted and stored for ${purposeLabel} review. Text was extracted, but no structured ${purposeLabel} rows were found. Parser reason: ${reason}. Text length: ${normalizedText.length}.`;
+    const note = noText ? `Document accepted and stored for ${purposeLabel} review. No extractable text was found, and PDF AI extraction was unavailable or did not return structured rows.` : `Document accepted and stored for ${purposeLabel} review. Text was extracted, but no structured ${purposeLabel} rows were found. Parser reason: ${reason}. Text length: ${normalizedText.length}.`;
     return { ...parsed, parsed:false, needs_review:true, status:"Stored For Review", outcome:"stored_for_review", notes:note, text_excerpt:String(normalizedText||"").slice(0,220) };
   }
   if (kind === "IMAGE") {
@@ -55315,6 +55370,12 @@ async function runUploadCompatSmokeTests(){
   assert(src.includes("require(\"xlsx\")"), "missing xlsx lazy require");
   assert(src.includes("function tjhpParseXlsxRowsWithoutDependency"), "missing dependency-free xlsx parser");
   assert(src.includes("function tjhpExtractRowsFromImageWithVision"), "missing image vision helper");
+  assert(src.includes("function tjhpExtractRowsFromPdfWithAI"), "missing pdf ai helper");
+  assert(src.includes("function tjhpTextFromOpenAIResponsePayload"), "missing responses payload text helper");
+  assert(src.includes("parsed_pdf_ai"), "missing parsed_pdf_ai outcome");
+  assert(src.includes("input_file"), "missing responses input_file");
+  assert(src.includes("https://api.openai.com/v1/responses"), "missing responses endpoint");
+  assert(src.includes("PDF parsed with AI file extraction"), "missing pdf ai parse note");
   assert(src.includes("function tjhpImageVisionExtractionEnabled"), "missing image vision gate");
   assert(src.includes("function tjhpNormalizeExtractedUploadText"), "missing text normalization helper");
   assert(src.includes("function tjhpParseKnownClaimRowsFromText"), "missing known claim row parser");
@@ -55456,6 +55517,11 @@ async function runUploadRealisticSmokeTests(){
   assert(src.includes("function tjhpExtractJsonObjectFromText"), "missing json extraction helper");
   assert(src.includes("function tjhpExtractRowsFromTextWithAI"), "missing ai text helper");
   assert(src.includes("function tjhpExtractRowsFromImageWithVision"), "missing image helper");
+  assert(src.includes("function tjhpExtractRowsFromPdfWithAI"), "missing pdf ai helper");
+  assert(src.includes("function tjhpTextFromOpenAIResponsePayload"), "missing responses payload text helper");
+  assert(src.includes("parsed_pdf_ai"), "missing parsed_pdf_ai outcome");
+  assert(src.includes("input_file"), "missing responses input_file");
+  assert(src.includes("https://api.openai.com/v1/responses"), "missing responses endpoint");
   assert(src.includes("parsed_image_ocr"), "missing parsed image outcome");
   assert(src.includes("OCR/vision extraction is unavailable"), "missing ocr fallback wording");
   assert(src.includes("function tjhpParseSpacedClaimLine"), "missing spaced claim parser");
@@ -55517,6 +55583,29 @@ async function runUploadRealisticSmokeTests(){
   const pdfNoText = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.pdf", buffer:Buffer.from("%PDF-1.4\n%%EOF") }, { purpose:"claims" });
   assert(pdfNoText.parsed===false && pdfNoText.needs_review===true && (!pdfNoText.rows || pdfNoText.rows.length===0), "pdf no text review fallback");
   assert(/No extractable text|no structured/i.test(String(pdfNoText.notes||"")), "pdf no text notes");
+  const originalFetchPdf = global.fetch; const originalApiKeyPdf = process.env.OPENAI_API_KEY; const originalPdfModel = process.env.OPENAI_PDF_MODEL;
+  process.env.OPENAI_API_KEY = "test-key"; process.env.OPENAI_PDF_MODEL = "gpt-4o-mini";
+  global.fetch = async (url, opts) => {
+    const body = JSON.parse(String(opts && opts.body || "{}"));
+    assert(String(url).includes("/v1/responses"), "pdf ai uses responses api");
+    const content = body.input?.[0]?.content || [];
+    assert(content.some(x => x.type === "input_file"), "pdf ai sends input_file");
+    assert(content.some(x => x.type === "input_text"), "pdf ai sends prompt text");
+    return { ok:true, json:async()=>({ output_text: JSON.stringify({ rows: claimRows.map((r)=>({ claim_id:r[0], patient_name:r[1], payer:r[2], cpt_code:r[3], billed_amount:r[4], expected_amount:r[5], date_of_service:r[6] })) }) }) };
+  };
+  const fakePdfNoText = Buffer.from("%PDF-1.4\n%binary-only-test\nstream\n\\x00\\x01\\x02\\x03\nendstream\n%%EOF", "utf8");
+  const pdfAiParsed = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.pdf", buffer:fakePdfNoText }, { purpose:"claims", allowTxtStructured:true, allowExcelStructured:true });
+  assert(pdfAiParsed.parsed === true && pdfAiParsed.rows.length === 5, "pdf ai parsed rows");
+  assert(Math.round(pdfAiParsed.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0)) === 940, "pdf ai total billed 940");
+  assert(pdfAiParsed.outcome === "parsed_pdf_ai", "pdf ai outcome");
+  global.fetch = async () => ({ ok:false });
+  const pdfAiFail = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.pdf", buffer:fakePdfNoText }, { purpose:"claims", allowTxtStructured:true, allowExcelStructured:true });
+  assert(pdfAiFail.parsed===false && pdfAiFail.needs_review===true, "pdf ai fail falls back review");
+  assert(!pdfAiFail.rows || pdfAiFail.rows.length===0, "pdf ai fail no fake rows");
+  assert(/no structured|parser reason|unavailable|did not return structured rows|stored/i.test(String(pdfAiFail.notes||"")), "pdf ai fail note");
+  global.fetch = originalFetchPdf;
+  if (originalApiKeyPdf == null) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = originalApiKeyPdf;
+  if (originalPdfModel == null) delete process.env.OPENAI_PDF_MODEL; else process.env.OPENAI_PDF_MODEL = originalPdfModel;
 
   const originalFetch = global.fetch; const originalApiKey = process.env.OPENAI_API_KEY; const originalVisionModel = process.env.OPENAI_VISION_MODEL;
   process.env.OPENAI_API_KEY = "test-key"; process.env.OPENAI_VISION_MODEL = "gpt-4o-mini";
