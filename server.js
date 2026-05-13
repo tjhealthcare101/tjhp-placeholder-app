@@ -16679,7 +16679,7 @@ function ensurePacketSections(ws, claim){
   const orgRecord = ws?.org_id ? getOrg(ws.org_id) : null;
   const letterDefaults = getLetterDefaults(orgSettings);
   const hdr = packetHeaderFromSettings(orgSettings, orgRecord, claimContext);
-  const sig = signatureFromSettings(orgSettings, orgRecord);
+  const sig = tjhpPracticeSignatureText(ws.org_id) || signatureFromSettings(orgSettings, orgRecord);
 
   const appealDefaults = defaultAppealPacketSections();
   if (!ws.appeal.packet_sections || typeof ws.appeal.packet_sections !== "object") {
@@ -18497,6 +18497,34 @@ function packetHeaderFromSettings(orgSettings, orgRecord, claim){
 function signatureFromSettings(orgSettings, orgRecord){
   const defaults = getLetterDefaults(orgSettings);
   return String(defaults.signature_block || "").trim() || getOrgDisplayName(orgSettings, orgRecord);
+}
+
+function tjhpPracticeSignatureText(org_id){
+  const settings = getOrgSettings(org_id) || {};
+  const practice = settings.practice_signature && typeof settings.practice_signature === "object" ? settings.practice_signature : {};
+  const lines = [practice.typed_name, practice.title, practice.contact_line].map(v => String(v || "").trim()).filter(Boolean);
+  if (lines.length) return lines.join("\n");
+  const defaults = getTemplateSettings(org_id);
+  const fromTemplate = String(defaults.signature_block || "").trim();
+  if (fromTemplate) return fromTemplate;
+  return getOrg(org_id)?.org_name || "Practice";
+}
+
+function tjhpPracticeSignatureImage(org_id){
+  const settings = getOrgSettings(org_id) || {};
+  return String(settings.signature_image || settings.signature_image_path || "").trim();
+}
+
+function tjhpPacketSignatureTextForWorkspace(org_id, packetValue){
+  const explicit = String(packetValue || "").trim();
+  if (explicit) return explicit;
+  return tjhpPracticeSignatureText(org_id);
+}
+
+function tjhpPacketSignatureImageForWorkspace(org_id, packetImage){
+  const explicit = String(packetImage || "").trim();
+  if (explicit) return explicit;
+  return tjhpPracticeSignatureImage(org_id);
 }
 
 function applyDefaultTone(text, tone, type){
@@ -23214,8 +23242,9 @@ function renderEditablePacketSection(opts){
 function renderSignatureSection(opts){
   const billed_id = String(opts.billed_id || "");
   const channel = String(opts.channel || "appeal");
-  const value = String(opts.value || "");
-  const signatureImage = String(opts.signature_image || "");
+  const explicitValue = String(opts.value || "");
+  const value = explicitValue || tjhpPracticeSignatureText(opts.org_id || opts.orgId || "");
+  const signatureImage = String(opts.signature_image || "") || tjhpPracticeSignatureImage(opts.org_id || opts.orgId || "");
   const exportMode = !!opts.exportMode;
 
   if (exportMode){
@@ -23433,9 +23462,10 @@ function renderWorkspacePreview(opts){
           ${renderWorkspacePacketExhibits(ws, claim, channel, { exportMode, aiPreview, appliedSection, appliedPrevSection, undoneSection, lastAiUndo })}
           ${renderSignatureSection({
             billed_id: claim.billed_id,
+            org_id,
             channel,
             value: packetSections.signature,
-            signature_image: ws.signature_image || savedSignature,
+            signature_image: tjhpPacketSignatureImageForWorkspace(org_id, ws.signature_image || savedSignature),
             exportMode
           })}
 
@@ -48202,21 +48232,40 @@ function renderTemplateEditor(org, user){
     .tpl-sub{font-weight:900;margin:0 0 6px;}
     .tpl-muted{color:var(--muted);font-size:12px;margin:0;}
     .tpl-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;}
+    .automation-check-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+    .automation-check-row{display:flex;align-items:flex-start;gap:10px;padding:10px;border:1px solid var(--border);border-radius:10px;}
+    .automation-check-row input{margin-top:3px;}
+    .automation-check-row small{display:block;color:var(--muted);font-size:12px;margin-top:2px;}
   </style>
 
   <h2>Revenue Automation</h2>
   <p class="muted">Set your default appeal, negotiation, follow-up, reimbursement, and letter language rules. Workspaces can still be edited before submission.</p>
 
   <div class="card" style="margin-top:16px;">
-    <h3>Appeals & Negotiations Automation</h3>
-    <form method="POST" action="/data-management/practice-settings/save" style="display:flex;flex-direction:column;gap:12px;max-width:900px;">
+    <h3>Reimbursement Defaults</h3>
+    <p class="muted small" style="margin-top:0;">Use these defaults only when no payer-specific reimbursement contract rule is found.</p>
+    <form method="POST" action="/data-management/allowed-rules/save" style="display:flex;flex-direction:column;gap:12px;max-width:900px;">
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <label style="flex:1;min-width:260px;"><input type="checkbox" name="auto_create_denial_cases" ${practice.auto_create_denial_cases ? "checked" : ""}/> Auto-create denial cases</label>
-        <label style="flex:1;min-width:260px;"><input type="checkbox" name="auto_create_negotiation_cases" ${practice.auto_create_negotiation_cases ? "checked" : ""}/> Auto-create negotiation cases</label>
+        <div style="flex:1;min-width:240px;"><label>Default Method</label><div class="tpl-muted">How the system estimates expected reimbursement when no contract rule matches.</div><select name="default_method"><option value="percent_medicare" ${rules.default_method==="percent_medicare"?"selected":""}>% of Medicare</option><option value="percent_billed" ${rules.default_method==="percent_billed"?"selected":""}>% of Billed</option><option value="flat" ${rules.default_method==="flat"?"selected":""}>Flat Amount</option><option value="ucr_multiplier" ${rules.default_method==="ucr_multiplier"?"selected":""}>UCR Multiplier</option></select></div>
+        <div style="flex:1;min-width:240px;"><label>Default Value</label><div class="tpl-muted">For % of Billed, 65 means expected reimbursement is estimated as 65% of the billed amount.</div><input name="default_value" value="${safeStr(String(rules.default_value || ""))}"/></div>
+        <div style="flex:1;min-width:240px;"><label>UCR Multiplier</label><div class="tpl-muted">Used only when the default method is based on usual/customary reimbursement.</div><input name="ucr_multiplier" value="${safeStr(String(rules.ucr_multiplier || 1))}"/></div>
       </div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <label style="flex:1;min-width:260px;"><input type="checkbox" name="auto_draft_denials" ${practice.auto_draft_denials ? "checked" : ""}/> Auto-draft denial appeal letters</label>
-        <label style="flex:1;min-width:260px;"><input type="checkbox" name="auto_draft_underpayments" ${practice.auto_draft_underpayments ? "checked" : ""}/> Auto-draft underpayment letters</label>
+        <div style="flex:1;min-width:240px;"><label>Tolerance %</label><div class="tpl-muted">Small differences the system should ignore before flagging an underpayment.</div><input name="tolerance_percent" value="${safeStr(String(rules.tolerance_percent || 1))}"/></div>
+        <div style="flex:1;min-width:240px;"><label>Tolerance $</label><div class="tpl-muted">Small differences the system should ignore before flagging an underpayment.</div><input name="tolerance_min_dollars" value="${safeStr(String(rules.tolerance_min_dollars || 5))}"/></div>
+      </div>
+      <button class="btn">Save Reimbursement Rules</button>
+    </form>
+  
+
+  <div class="card" style="margin-top:16px;">
+    <h3>Appeals & Negotiations Automation</h3>
+    <form method="POST" action="/data-management/practice-settings/save" style="display:flex;flex-direction:column;gap:12px;max-width:900px;">
+      <div class="automation-check-grid">
+      <label class="automation-check-row"><input type="checkbox" name="auto_create_denial_cases" ${practice.auto_create_denial_cases ? "checked" : ""}/><span><strong>Auto-create denial cases</strong><small>Creates appeal work when denied claims are detected.</small></span></label>
+        <label class="automation-check-row"><input type="checkbox" name="auto_create_negotiation_cases" ${practice.auto_create_negotiation_cases ? "checked" : ""}/><span><strong>Auto-create negotiation cases</strong><small>Creates negotiation work when underpayments are detected.</small></span></label>
+        <label class="automation-check-row"><input type="checkbox" name="auto_draft_denials" ${practice.auto_draft_denials ? "checked" : ""}/><span><strong>Auto-draft denial appeals</strong><small>Drafts appeal language for denied claims.</small></span></label>
+        <label class="automation-check-row"><input type="checkbox" name="auto_draft_underpayments" ${practice.auto_draft_underpayments ? "checked" : ""}/><span><strong>Auto-draft underpayment letters</strong><small>Drafts negotiation language for underpaid claims.</small></span></label>
       </div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
         <div style="flex:1;min-width:240px;"><label>Default Follow-up Days</label><input name="default_follow_up_days" value="${safeStr(String(practice.default_follow_up_days || practice.default_followup_days || 14))}"/></div>
@@ -48226,27 +48275,11 @@ function renderTemplateEditor(org, user){
     </form>
   </div>
 
-  <div class="card" style="margin-top:16px;">
-    <h3>Reimbursement Defaults</h3>
-    <form method="POST" action="/data-management/allowed-rules/save" style="display:flex;flex-direction:column;gap:12px;max-width:900px;">
-      <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:240px;"><label>Default Method</label><select name="default_method"><option value="percent_medicare" ${rules.default_method==="percent_medicare"?"selected":""}>% of Medicare</option><option value="percent_billed" ${rules.default_method==="percent_billed"?"selected":""}>% of Billed</option><option value="flat" ${rules.default_method==="flat"?"selected":""}>Flat Amount</option><option value="ucr_multiplier" ${rules.default_method==="ucr_multiplier"?"selected":""}>UCR Multiplier</option></select></div>
-        <div style="flex:1;min-width:240px;"><label>Default Value</label><input name="default_value" value="${safeStr(String(rules.default_value || ""))}"/></div>
-        <div style="flex:1;min-width:240px;"><label>UCR Multiplier</label><input name="ucr_multiplier" value="${safeStr(String(rules.ucr_multiplier || 1))}"/></div>
-      </div>
-      <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:240px;"><label>Tolerance %</label><input name="tolerance_percent" value="${safeStr(String(rules.tolerance_percent || 1))}"/></div>
-        <div style="flex:1;min-width:240px;"><label>Tolerance $</label><input name="tolerance_min_dollars" value="${safeStr(String(rules.tolerance_min_dollars || 5))}"/></div>
-      </div>
-      <button class="btn">Save Reimbursement Rules</button>
-    </form>
-  </div>
-
   <div class="tpl-wrap" style="margin-top:16px;">
     <div>
       <div class="tpl-card" style="margin-top:14px;">
-        <div class="tpl-sub">Default Letter Language</div>
-        <p class="tpl-muted">Use these fields to personalize built-in appeal and negotiation drafts without replacing the packet structure.</p>
+        <div class="tpl-sub">Optional Letter Personalization</div>
+        <p class="tpl-muted">Optional. Leave blank to use TJ Healthcare Pro's built-in appeal and negotiation language.</p>
         <form method="POST" action="/account/templates" style="margin-top:12px;">
           <div class="tpl-grid2">
             <div><label>Appeal Opening</label><textarea class="tpl-textarea tpl-edit" name="appeal_opening" id="appeal_opening">${safeStr(t.appeal_opening || "")}</textarea></div>
@@ -48254,16 +48287,29 @@ function renderTemplateEditor(org, user){
             <div><label>Negotiation Opening</label><textarea class="tpl-textarea tpl-edit" name="negotiation_opening" id="negotiation_opening">${safeStr(t.negotiation_opening || "")}</textarea></div>
             <div><label>Negotiation Footer</label><textarea class="tpl-textarea tpl-edit" name="negotiation_footer" id="negotiation_footer">${safeStr(t.negotiation_footer || "")}</textarea></div>
           </div>
-          <div style="margin-top:12px;"><label>Signature Block</label><textarea class="tpl-textarea tpl-edit" style="min-height:90px;" name="signature_block" id="signature_block">${safeStr(t.signature_block || "")}</textarea></div>
-          <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;"><button class="btn" type="submit">Save Templates</button></div>
+          <input type="hidden" name="signature_block" id="signature_block" value="${safeStr(t.signature_block || "")}"/>
+          <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;"><button class="btn" type="submit">Save Personalization</button></div>
         </form>
       </div>
     </div>
 
     <div>
+      <div class="tpl-card" style="margin-bottom:12px;">
+        <div class="tpl-sub">Practice Signature</div>
+        <p class="tpl-muted">Used by default in appeal and negotiation packets. You can still edit the signature inside an individual packet.</p>
+        <form method="POST" action="/data-management/revenue-automation/practice-signature/save" style="margin-top:8px;">
+          <label>Typed signature / name</label><input name="typed_name" id="practice_typed_name" value="${safeStr((getOrgSettings(org.org_id)?.practice_signature||{}).typed_name || "")}"/>
+          <label>Title / role</label><input name="title" id="practice_title" value="${safeStr((getOrgSettings(org.org_id)?.practice_signature||{}).title || "")}"/>
+          <label>Contact line</label><input name="contact_line" id="practice_contact_line" value="${safeStr((getOrgSettings(org.org_id)?.practice_signature||{}).contact_line || "")}"/>
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" type="submit">Save Practice Signature</button></div>
+        </form>
+        <div style="margin-top:10px;"><canvas id="practiceSigCanvas" width="800" height="200" style="width:100%;height:100px;border:1px dashed #d1d5db;border-radius:12px;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawing</button></div></div>
+        <div id="practice_signature_preview" class="tpl-preview" style="margin-top:10px;min-height:60px;">${safeStr(tjhpPracticeSignatureText(org.org_id))}</div>
+      </div>
+
       <div class="tpl-card">
         <div class="tpl-sub">Live Preview</div>
-        <p class="tpl-muted">Preview uses a sample claim (or defaults).</p>
+        <p class="tpl-muted">Preview how optional letter personalization and practice signature may appear in a sample appeal or negotiation draft.</p>
         <div style="margin-top:10px;"><label>Appeal Preview</label><div class="tpl-preview" id="previewAppeal"></div></div>
         <div style="margin-top:10px;"><label>Negotiation Preview</label><div class="tpl-preview" id="previewNegotiation"></div></div>
       </div>
@@ -48279,20 +48325,25 @@ function renderTemplateEditor(org, user){
         });
       }
       function updatePreviews(){
-        const appeal = [document.getElementById('appeal_opening')?.value||'', '', document.getElementById('signature_block')?.value||'', '', document.getElementById('appeal_footer')?.value||''].join('
+        const appeal = [document.getElementById('appeal_opening')?.value||'', '', document.getElementById('practice_signature_preview')?.textContent||'', '', document.getElementById('appeal_footer')?.value||''].join('
 ');
-        const nego = [document.getElementById('negotiation_opening')?.value||'', '', document.getElementById('signature_block')?.value||'', '', document.getElementById('negotiation_footer')?.value||''].join('
+        const nego = [document.getElementById('negotiation_opening')?.value||'', '', document.getElementById('practice_signature_preview')?.textContent||'', '', document.getElementById('negotiation_footer')?.value||''].join('
 ');
         const elA = document.getElementById('previewAppeal');
         const elN = document.getElementById('previewNegotiation');
-        if (elA) elA.textContent = (applyVars(appeal).trim() || '(empty)');
-        if (elN) elN.textContent = (applyVars(nego).trim() || '(empty)');
+        if (elA) elA.textContent = (applyVars(appeal).trim() || 'Leave fields blank to use built-in draft language.');
+        if (elN) elN.textContent = (applyVars(nego).trim() || 'Leave fields blank to use built-in draft language.');
       }
-      ["appeal_opening","appeal_footer","negotiation_opening","negotiation_footer","signature_block"].forEach(id=>{
+      ["appeal_opening","appeal_footer","negotiation_opening","negotiation_footer","practice_typed_name","practice_title","practice_contact_line"].forEach(id=>{
         const el = document.getElementById(id);
         if (!el) return;
         el.addEventListener("input", updatePreviews);
       });
+      window.clearPracticeSig = function(){ const c=document.getElementById("practiceSigCanvas"); if(!c) return; c.getContext("2d").clearRect(0,0,c.width,c.height); };
+      window.savePracticeSig = function(){ const c=document.getElementById("practiceSigCanvas"); if(!c) return; fetch("/org/save-signature",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({signature:c.toDataURL()})}).then(()=>location.reload()); };
+      function updatePracticePreview(){ const lines=[document.getElementById("practice_typed_name")?.value||"",document.getElementById("practice_title")?.value||"",document.getElementById("practice_contact_line")?.value||""].filter(Boolean).join("\n"); const el=document.getElementById("practice_signature_preview"); if(el) el.textContent=lines||""; }
+      updatePracticePreview();
+      ["practice_typed_name","practice_title","practice_contact_line"].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener("input", ()=>{ updatePracticePreview(); updatePreviews(); });});
       updatePreviews();
     })();
   </script>
@@ -52427,6 +52478,23 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
     return send(res, 200, "OK");
   }
 
+  if (method === "POST" && pathname === "/data-management/revenue-automation/practice-signature/save") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return send(res, 403, "Unauthorized");
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    const settings = getOrgSettings(sess.org_id) || {};
+    settings.practice_signature = settings.practice_signature && typeof settings.practice_signature === "object" ? settings.practice_signature : {};
+    settings.practice_signature.typed_name = String(params.get("typed_name") || "").trim();
+    settings.practice_signature.title = String(params.get("title") || "").trim();
+    settings.practice_signature.contact_line = String(params.get("contact_line") || "").trim();
+    settings.practice_signature.updated_at = nowISO();
+    settings.practice_signature.updated_by = String(sess.user_id || "");
+    settings.updated_at = nowISO();
+    saveOrgSettings(sess.org_id, settings);
+    return redirect(res, "/data-management?tab=revenue");
+  }
+
 if (method === "POST" && pathname === "/account/preferences") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
@@ -55863,17 +55931,41 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(!src.includes("Appeals & Negotiation Packet Temp" + "lates"), "packet template heading still rendered");
   assert(!src.includes('uploadCard("appeal", "Appeal", ' + "appealTpl)"), "appeal upload card still rendered");
   assert(!src.includes('uploadCard("negotiation", "Negotiation", ' + "negotiationTpl)"), "negotiation upload card still rendered");
-  assert(src.includes("Default Letter Language"), "missing Default Letter Language section");
+  assert(src.indexOf("Reimbursement Defaults") < src.indexOf("Appeals & Negotiations Automation"), "reimbursement section ordering");
+  assert(src.includes("Use these defaults only when no payer-specific reimbursement contract rule is found."), "missing reimbursement helper");
+  assert(src.includes("Optional Letter Personalization"), "missing Optional Letter Personalization section");
+  assert(src.includes("Leave blank to use TJ Healthcare Pro's built-in appeal and negotiation language."), "missing personalization helper");
+  assert(src.includes("Practice Signature"), "missing Practice Signature section");
+  assert(src.includes("Used by default in appeal and negotiation packets."), "missing practice signature helper");
+  assert(src.includes("Save Practice Signature"), "missing Save Practice Signature button");
+  assert(src.includes("Save Personalization"), "missing Save Personalization");
+  assert(!src.includes(">Save " + "Templates</button>"), "Save Templates still visible");
   assert(src.includes("Appeal Opening"), "missing Appeal Opening");
   assert(src.includes("Negotiation Opening"), "missing Negotiation Opening");
-  assert(src.includes("Signature Block"), "missing Signature Block");
+  assert(!src.includes("<label>Signature " + "Block</label><textarea"), "visible Signature Block still present");
+  assert(src.includes('type="hidden" name="signature_block" id="signature_block"'), "hidden signature_block preservation missing");
   assert(src.includes("Save Automation Settings"), "missing Save Automation Settings");
   assert(src.includes("Save Reimbursement Rules"), "missing Save Reimbursement Rules");
+  assert(src.includes("tjhpPracticeSignatureText"), "missing text fallback helper");
+  assert(src.includes("tjhpPracticeSignatureImage"), "missing image fallback helper");
+  assert(src.includes("/data-management/revenue-automation/practice-signature/save"), "missing practice signature save route");
+  assert(src.includes("/org/save-signature"), "missing org signature save route");
   assert(src.includes("/packet-template/upload"), "missing /packet-template/upload route");
   assert(src.includes("/packet-template/preview"), "missing /packet-template/preview route");
   assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__"), "missing hard stop guard");
   assert(src.includes("window.__TJHP_VIEW_PANEL_OPENER_RESCUE_READY__"), "missing opener rescue guard");
   assert(src.includes("__tjhpOpenClaimPanelOrNavigate"), "missing claim panel opener function");
+  const testOrg = "smoke-practice-signature";
+  const existingOrgSettings = getOrgSettings(testOrg) || {};
+  const existingTemplateSettings = getTemplateSettings(testOrg) || {};
+  saveOrgSettings(testOrg, { ...existingOrgSettings, practice_signature:{ typed_name:"Hoop", title:"Revenue Recovery Team", contact_line:"billing@example.com" }, signature_image:"data:image/png;base64,abc" });
+  saveTemplateSettings(testOrg, { ...existingTemplateSettings, org_id:testOrg, signature_block:"Legacy Signature Block" });
+  assert(tjhpPacketSignatureTextForWorkspace(testOrg, "") === "Hoop\nRevenue Recovery Team\nbilling@example.com", "practice signature text fallback");
+  assert(tjhpPacketSignatureTextForWorkspace(testOrg, "Packet Custom") === "Packet Custom", "packet signature text wins");
+  assert(tjhpPacketSignatureImageForWorkspace(testOrg, "") === "data:image/png;base64,abc", "practice signature image fallback");
+  assert(tjhpPacketSignatureImageForWorkspace(testOrg, "packet-image") === "packet-image", "packet image wins");
+  saveOrgSettings(testOrg, { ...getOrgSettings(testOrg), practice_signature:{ typed_name:"", title:"", contact_line:"" }, signature_image:"" });
+  assert(tjhpPacketSignatureTextForWorkspace(testOrg, "") === "Legacy Signature Block", "legacy signature_block fallback");
   process.stdout.write("REVENUE_AUTOMATION_UI_SMOKE_TESTS_PASSED\n");
   process.exit(0);
 }
