@@ -48178,12 +48178,19 @@ rowsAdded = toUse;
 
 
 function renderTemplateEditor(org, user){
-  const t = getTemplateSettings(org.org_id);
-  const practice = getPracticeSettings(org.org_id);
-  const rules = getAllowedAmountRules(org.org_id);
-  const appealTpl = getPacketTemplate(org.org_id, "appeal");
-  const negotiationTpl = getPacketTemplate(org.org_id, "negotiation");
-  const sample = getTemplatePreviewSample(org.org_id);
+  const orgId = String(org?.org_id || "");
+  const t = getTemplateSettings(orgId);
+  const practice = getPracticeSettings(orgId);
+  const rules = getAllowedAmountRules(orgId);
+  const appealTpl = getPacketTemplate(orgId, "appeal");
+  const negotiationTpl = getPacketTemplate(orgId, "negotiation");
+  const orgSettings = getOrgSettings(orgId) || {};
+  const practiceSignature =
+    orgSettings.practice_signature && typeof orgSettings.practice_signature === "object"
+      ? orgSettings.practice_signature
+      : {};
+  const practiceSignatureText = tjhpPracticeSignatureText(orgId);
+  const sample = getTemplatePreviewSample(orgId);
   const sampleB64 = Buffer.from(JSON.stringify(sample)).toString("base64");
 
   const uploadCard = (type, label, tpl) => `
@@ -48256,7 +48263,7 @@ function renderTemplateEditor(org, user){
       </div>
       <button class="btn">Save Reimbursement Rules</button>
     </form>
-  
+  </div>
 
   <div class="card" style="margin-top:16px;">
     <h3>Appeals & Negotiations Automation</h3>
@@ -48298,13 +48305,13 @@ function renderTemplateEditor(org, user){
         <div class="tpl-sub">Practice Signature</div>
         <p class="tpl-muted">Used by default in appeal and negotiation packets. You can still edit the signature inside an individual packet.</p>
         <form method="POST" action="/data-management/revenue-automation/practice-signature/save" style="margin-top:8px;">
-          <label>Typed signature / name</label><input name="typed_name" id="practice_typed_name" value="${safeStr((getOrgSettings(org.org_id)?.practice_signature||{}).typed_name || "")}"/>
-          <label>Title / role</label><input name="title" id="practice_title" value="${safeStr((getOrgSettings(org.org_id)?.practice_signature||{}).title || "")}"/>
-          <label>Contact line</label><input name="contact_line" id="practice_contact_line" value="${safeStr((getOrgSettings(org.org_id)?.practice_signature||{}).contact_line || "")}"/>
+          <label>Typed signature / name</label><input name="typed_name" id="practice_typed_name" value="${safeStr(practiceSignature.typed_name || "")}"/>
+          <label>Title / role</label><input name="title" id="practice_title" value="${safeStr(practiceSignature.title || "")}"/>
+          <label>Contact line</label><input name="contact_line" id="practice_contact_line" value="${safeStr(practiceSignature.contact_line || "")}"/>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" type="submit">Save Practice Signature</button></div>
         </form>
         <div style="margin-top:10px;"><canvas id="practiceSigCanvas" width="800" height="200" style="width:100%;height:100px;border:1px dashed #d1d5db;border-radius:12px;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawing</button></div></div>
-        <div id="practice_signature_preview" class="tpl-preview" style="margin-top:10px;min-height:60px;">${safeStr(tjhpPracticeSignatureText(org.org_id))}</div>
+        <div id="practice_signature_preview" class="tpl-preview" style="margin-top:10px;min-height:60px;">${safeStr(practiceSignatureText)}</div>
       </div>
 
       <div class="tpl-card">
@@ -48317,35 +48324,85 @@ function renderTemplateEditor(org, user){
   </div>
 
   <script>
-    (function(){
-      const sample = JSON.parse(atob("${sampleB64}"));
-      function applyVars(tpl){
-        return String(tpl||"").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (m,k)=>{
-          return Object.prototype.hasOwnProperty.call(sample,k) ? String(sample[k] ?? "") : m;
-        });
-      }
-      function updatePreviews(){
-        const appeal = [document.getElementById('appeal_opening')?.value||'', '', document.getElementById('practice_signature_preview')?.textContent||'', '', document.getElementById('appeal_footer')?.value||''].join('
-');
-        const nego = [document.getElementById('negotiation_opening')?.value||'', '', document.getElementById('practice_signature_preview')?.textContent||'', '', document.getElementById('negotiation_footer')?.value||''].join('
-');
-        const elA = document.getElementById('previewAppeal');
-        const elN = document.getElementById('previewNegotiation');
-        if (elA) elA.textContent = (applyVars(appeal).trim() || 'Leave fields blank to use built-in draft language.');
-        if (elN) elN.textContent = (applyVars(nego).trim() || 'Leave fields blank to use built-in draft language.');
-      }
-      ["appeal_opening","appeal_footer","negotiation_opening","negotiation_footer","practice_typed_name","practice_title","practice_contact_line"].forEach(id=>{
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.addEventListener("input", updatePreviews);
+(function(){
+  try {
+    let sample = {};
+    try { sample = JSON.parse(atob("${sampleB64}")); } catch (_) { sample = {}; }
+
+    function byId(id){ return document.getElementById(id); }
+
+    function applyVars(tpl){
+      return String(tpl || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, function(m,k){
+        return Object.prototype.hasOwnProperty.call(sample,k) ? String(sample[k] == null ? "" : sample[k]) : m;
       });
-      window.clearPracticeSig = function(){ const c=document.getElementById("practiceSigCanvas"); if(!c) return; c.getContext("2d").clearRect(0,0,c.width,c.height); };
-      window.savePracticeSig = function(){ const c=document.getElementById("practiceSigCanvas"); if(!c) return; fetch("/org/save-signature",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({signature:c.toDataURL()})}).then(()=>location.reload()); };
-      function updatePracticePreview(){ const lines=[document.getElementById("practice_typed_name")?.value||"",document.getElementById("practice_title")?.value||"",document.getElementById("practice_contact_line")?.value||""].filter(Boolean).join("\n"); const el=document.getElementById("practice_signature_preview"); if(el) el.textContent=lines||""; }
-      updatePracticePreview();
-      ["practice_typed_name","practice_title","practice_contact_line"].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener("input", ()=>{ updatePracticePreview(); updatePreviews(); });});
+    }
+
+    function updatePracticePreview(){
+      const lines = [
+        byId("practice_typed_name")?.value || "",
+        byId("practice_title")?.value || "",
+        byId("practice_contact_line")?.value || ""
+      ].map(function(x){ return String(x || "").trim(); }).filter(Boolean);
+
+      const preview = byId("practice_signature_preview");
+      if (preview && lines.length) preview.textContent = lines.join("\n");
       updatePreviews();
-    })();
+    }
+
+    function updatePreviews(){
+      const appeal = [
+        byId("appeal_opening")?.value || "",
+        "",
+        byId("practice_signature_preview")?.textContent || "",
+        "",
+        byId("appeal_footer")?.value || ""
+      ].join("\n");
+
+      const nego = [
+        byId("negotiation_opening")?.value || "",
+        "",
+        byId("practice_signature_preview")?.textContent || "",
+        "",
+        byId("negotiation_footer")?.value || ""
+      ].join("\n");
+
+      const elA = byId("previewAppeal");
+      const elN = byId("previewNegotiation");
+
+      if (elA) elA.textContent = applyVars(appeal).trim() || "Leave fields blank to use built-in draft language.";
+      if (elN) elN.textContent = applyVars(nego).trim() || "Leave fields blank to use built-in draft language.";
+    }
+
+    ["appeal_opening","appeal_footer","negotiation_opening","negotiation_footer"].forEach(function(id){
+      const el = byId(id);
+      if (el) el.addEventListener("input", updatePreviews);
+    });
+
+    ["practice_typed_name","practice_title","practice_contact_line"].forEach(function(id){
+      const el = byId(id);
+      if (el) el.addEventListener("input", updatePracticePreview);
+    });
+
+    window.clearPracticeSig = function(){
+      const c = byId("practiceSigCanvas");
+      if (!c || !c.getContext) return;
+      c.getContext("2d").clearRect(0,0,c.width,c.height);
+    };
+
+    window.savePracticeSig = function(){
+      const c = byId("practiceSigCanvas");
+      if (!c || !c.toDataURL) return;
+      fetch("/org/save-signature", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body:JSON.stringify({ signature:c.toDataURL() })
+      }).then(function(){ location.reload(); }).catch(function(){});
+    };
+
+    updatePracticePreview();
+    updatePreviews();
+  } catch (_) {}
+})();
   </script>
   `;
 }
@@ -49193,7 +49250,20 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
 })();
 </script>
 `
-    const revenueContent = renderTemplateEditor(org, user);
+    let revenueContent = "";
+    try {
+      revenueContent = renderTemplateEditor(org, user);
+    } catch (err) {
+      revenueContent = `
+        <div class="card">
+          <h2>Revenue Automation</h2>
+          <div class="alert warn">
+            Revenue Automation settings could not be loaded. Core claims, payments, and lifecycle features are unaffected.
+          </div>
+          <p class="muted small">${safeStr(String(err && err.message ? err.message : err).slice(0, 180))}</p>
+        </div>
+      `;
+    }
 
     const practiceContent = revenueContent;
     const section = ({
@@ -55955,6 +56025,36 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__"), "missing hard stop guard");
   assert(src.includes("window.__TJHP_VIEW_PANEL_OPENER_RESCUE_READY__"), "missing opener rescue guard");
   assert(src.includes("__tjhpOpenClaimPanelOrNavigate"), "missing claim panel opener function");
+  const smokeOrg = {
+    org_id: "smoke-revenue-render",
+    org_name: "Smoke Revenue Org"
+  };
+  const smokeUser = {
+    user_id: "smoke-user"
+  };
+  const renderFnStart = src.indexOf("function renderTemplateEditor(org, user){");
+  assert(renderFnStart !== -1, "renderTemplateEditor function source missing");
+  const renderFnEnd = src.indexOf('if (method === "GET" && pathname === "/data-management/matching-review")', renderFnStart);
+  assert(renderFnEnd !== -1, "renderTemplateEditor function boundary missing");
+  const renderFnSrc = src.slice(renderFnStart, renderFnEnd);
+  const renderTemplateEditorFn = Function(
+    "getTemplateSettings","getPracticeSettings","getAllowedAmountRules","getPacketTemplate","getOrgSettings","tjhpPracticeSignatureText","getTemplatePreviewSample","safeStr",
+    `${renderFnSrc}; return renderTemplateEditor;`
+  )(
+    getTemplateSettings,getPracticeSettings,getAllowedAmountRules,getPacketTemplate,getOrgSettings,tjhpPracticeSignatureText,getTemplatePreviewSample,safeStr
+  );
+  const rendered = renderTemplateEditorFn(smokeOrg, smokeUser);
+  assert(rendered && rendered.includes("Revenue Automation"), "renderTemplateEditor did not render Revenue Automation");
+  assert(rendered.includes("Reimbursement Defaults"), "render missing Reimbursement Defaults");
+  assert(rendered.includes("Appeals & Negotiations Automation"), "render missing automation section");
+  assert(rendered.includes("Optional Letter Personalization"), "render missing personalization section");
+  assert(rendered.includes("Practice Signature"), "render missing Practice Signature");
+  assert(rendered.includes("Live Preview"), "render missing Live Preview");
+  assert(rendered.includes('.join("\\n")') || rendered.includes('.join("\n")'), "preview JS should use escaped newline joins");
+  assert(!/\.join\('\s*\n\s*'\)/.test(rendered), "rendered preview JS contains literal newline inside single-quoted join");
+  assert(rendered.includes("try {"), "rendered preview script should be defensive");
+  assert(rendered.includes("clearPracticeSig"), "practice signature clear function missing");
+  assert(rendered.includes("savePracticeSig"), "practice signature save function missing");
   const testOrg = "smoke-practice-signature";
   const existingOrgSettings = getOrgSettings(testOrg) || {};
   const existingTemplateSettings = getTemplateSettings(testOrg) || {};
