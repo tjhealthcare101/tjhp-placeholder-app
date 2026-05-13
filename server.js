@@ -48204,8 +48204,8 @@ function renderTemplateEditor(org, user){
     .tpl-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;}
   </style>
 
-  <h2>Revenue Automation & Templates</h2>
-  <p class="muted">Centralize automation rules + templates. Workspaces can override, but these are your default packet templates.</p>
+  <h2>Revenue Automation</h2>
+  <p class="muted">Set your default appeal, negotiation, follow-up, reimbursement, and letter language rules. Workspaces can still be edited before submission.</p>
 
   <div class="card" style="margin-top:16px;">
     <h3>Appeals & Negotiations Automation</h3>
@@ -48244,15 +48244,9 @@ function renderTemplateEditor(org, user){
 
   <div class="tpl-wrap" style="margin-top:16px;">
     <div>
-      <div class="tpl-card">
-        <h2>Appeals & Negotiation Packet Templates</h2>
-        <p class="muted">Upload your practice’s appeal or negotiation template (optional). TJHP automatically generates packet content and formats it for export.</p>
-      </div>
-      ${uploadCard("appeal", "Appeal", appealTpl)}
-      ${uploadCard("negotiation", "Negotiation", negotiationTpl)}
-
       <div class="tpl-card" style="margin-top:14px;">
-        <div class="tpl-sub">Default Letter Language Overrides</div>
+        <div class="tpl-sub">Default Letter Language</div>
+        <p class="tpl-muted">Use these fields to personalize built-in appeal and negotiation drafts without replacing the packet structure.</p>
         <form method="POST" action="/account/templates" style="margin-top:12px;">
           <div class="tpl-grid2">
             <div><label>Appeal Opening</label><textarea class="tpl-textarea tpl-edit" name="appeal_opening" id="appeal_opening">${safeStr(t.appeal_opening || "")}</textarea></div>
@@ -48401,7 +48395,7 @@ if (method === "GET" && pathname === "/data-management") {
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
         ${tabBtn("upload","Upload")}
         ${tabBtn("reimbursement","Reimbursement Contracts")}
-        ${tabBtn("revenue","Revenue Automation & Templates")}
+        ${tabBtn("revenue","Revenue Automation")}
       </div>
     `;
 
@@ -55860,6 +55854,28 @@ async function runReimbursementUploadSmokeTests(){
   assert(src.includes("/data-management/reimbursement/delete-upload"), "missing reimbursement delete-upload route");
   assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__"), "missing view panel guard");
   assert(src.includes("/upload-router"), "missing main upload parser markers");
+}
+
+if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const src = fs.readFileSync(__filename, "utf8");
+  function assert(c,m){ if(!c) throw new Error(m); }
+  assert(src.includes("Revenue Automation"), "missing Revenue Automation label");
+  assert(!src.includes("Appeals & Negotiation Packet Temp" + "lates"), "packet template heading still rendered");
+  assert(!src.includes('uploadCard("appeal", "Appeal", ' + "appealTpl)"), "appeal upload card still rendered");
+  assert(!src.includes('uploadCard("negotiation", "Negotiation", ' + "negotiationTpl)"), "negotiation upload card still rendered");
+  assert(src.includes("Default Letter Language"), "missing Default Letter Language section");
+  assert(src.includes("Appeal Opening"), "missing Appeal Opening");
+  assert(src.includes("Negotiation Opening"), "missing Negotiation Opening");
+  assert(src.includes("Signature Block"), "missing Signature Block");
+  assert(src.includes("Save Automation Settings"), "missing Save Automation Settings");
+  assert(src.includes("Save Reimbursement Rules"), "missing Save Reimbursement Rules");
+  assert(src.includes("/packet-template/upload"), "missing /packet-template/upload route");
+  assert(src.includes("/packet-template/preview"), "missing /packet-template/preview route");
+  assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__"), "missing hard stop guard");
+  assert(src.includes("window.__TJHP_VIEW_PANEL_OPENER_RESCUE_READY__"), "missing opener rescue guard");
+  assert(src.includes("__tjhpOpenClaimPanelOrNavigate"), "missing claim panel opener function");
+  process.stdout.write("REVENUE_AUTOMATION_UI_SMOKE_TESTS_PASSED\n");
+  process.exit(0);
 }
 
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
