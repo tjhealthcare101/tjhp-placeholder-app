@@ -48253,7 +48253,7 @@ function renderTemplateEditor(org, user){
     <p class="muted small" style="margin-top:0;">Use these defaults only when no payer-specific reimbursement contract rule is found.</p>
     <form method="POST" action="/data-management/allowed-rules/save" style="display:flex;flex-direction:column;gap:12px;max-width:900px;">
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:240px;"><label>Default Method</label><div class="tpl-muted">How the system estimates expected reimbursement when no contract rule matches.</div><select name="default_method" id="reimbursement_default_method"><option value="percent_medicare" ${rules.default_method==="percent_medicare"?"selected":""}>% of Medicare</option><option value="percent_billed" ${rules.default_method==="percent_billed"?"selected":""}>% of Billed</option><option value="flat" ${rules.default_method==="flat"?"selected":""}>Flat Amount</option><option value="ucr_multiplier" ${rules.default_method==="ucr_multiplier"?"selected":""}>UCR Multiplier</option></select><div id="reimbursement_method_example" class="tpl-muted" style="margin-top:6px;">Example: $1,000 billed × 65% = $650 expected.</div></div>
+        <div style="flex:1;min-width:240px;"><label>Default Method</label><div class="tpl-muted">How the system estimates expected reimbursement when no contract rule matches.</div><select name="default_method" id="reimbursement_default_method" onchange="window.tjhpRevenueUpdateMethodHelp && window.tjhpRevenueUpdateMethodHelp()"><option value="percent_medicare" ${rules.default_method==="percent_medicare"?"selected":""}>% of Medicare</option><option value="percent_billed" ${rules.default_method==="percent_billed"?"selected":""}>% of Billed</option><option value="flat" ${rules.default_method==="flat"?"selected":""}>Flat Amount</option><option value="ucr_multiplier" ${rules.default_method==="ucr_multiplier"?"selected":""}>UCR Multiplier</option></select><div id="reimbursement_method_example" class="tpl-muted" style="margin-top:6px;">Example: $1,000 billed × 65% = $650 expected.</div><div class="tpl-muted" style="margin-top:6px;">Only the fields used by the selected default method are shown. Tolerance applies to every method.</div></div>
         <div id="reimbursement_default_value_wrap" data-method-field="default_value" style="flex:1;min-width:240px;"><label id="reimbursement_default_value_label">Default Value</label><div id="reimbursement_default_value_help" class="tpl-muted">For % of Billed, 65 means expected reimbursement is estimated as 65% of the billed amount.</div><input name="default_value" id="reimbursement_default_value_input" value="${safeStr(String(rules.default_value || ""))}"/></div>
         <div id="reimbursement_ucr_multiplier_wrap" data-method-field="ucr_multiplier" style="flex:1;min-width:240px;"><label>UCR Multiplier</label><div id="reimbursement_ucr_help" class="tpl-muted">Not used for % of Billed.</div><input name="ucr_multiplier" id="reimbursement_ucr_multiplier_input" value="${safeStr(String(rules.ucr_multiplier || 1))}"/></div>
       </div>
@@ -48310,8 +48310,9 @@ function renderTemplateEditor(org, user){
           <label>Contact line</label><input name="contact_line" id="practice_contact_line" value="${safeStr(practiceSignature.contact_line || "")}"/>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" type="submit">Save Practice Signature</button></div>
         </form>
-        <div style="margin-top:10px;"><div class="tpl-muted" style="margin-bottom:6px;">Draw your signature here, then click Save Drawing. This will be used by default in packets unless a packet has its own signature.</div><canvas id="practiceSigCanvas" width="800" height="200" style="width:100%;height:100px;border:1px dashed #d1d5db;border-radius:12px;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawing</button></div></div>
+        <div style="margin-top:10px;"><div class="tpl-muted" style="margin-bottom:6px;">Draw your signature here, then click Save Drawing. This will be used by default in packets unless a packet has its own signature.</div><canvas id="practiceSigCanvas" width="800" height="240" style="width:100%;height:140px;min-height:140px;border:1px dashed #d1d5db;border-radius:12px;touch-action:none;cursor:crosshair;background:#fff;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawing</button></div></div>
         <div id="practice_signature_preview" class="tpl-preview" style="margin-top:10px;min-height:60px;">${safeStr(practiceSignatureText)}</div>
+        <div id="revenueAutomationJsStatus" class="tpl-muted" style="display:none;">Revenue Automation JS ready</div>
       </div>
 
       <div class="tpl-card">
@@ -48393,36 +48394,31 @@ function renderTemplateEditor(org, user){
       const ucrHelp = byId("reimbursement_ucr_help");
       const ucrInput = byId("reimbursement_ucr_multiplier_input");
       const example = byId("reimbursement_method_example");
+      function show(el){ if (el) el.style.display = ""; }
+      function hide(el){ if (el) el.style.display = "none"; }
       if (!method || !valueWrap || !valueLabel || !valueHelp || !ucrWrap || !ucrHelp || !example) return;
-      valueWrap.style.opacity = "";
-      ucrWrap.style.opacity = "";
       if (method.value === "percent_medicare") {
+        show(valueWrap); hide(ucrWrap);
         valueLabel.textContent = "Medicare %";
         valueHelp.textContent = "For % of Medicare, 120 means expected reimbursement is estimated as 120% of the Medicare or fee schedule rate when available.";
-        ucrHelp.textContent = "Not used for % of Medicare.";
         example.textContent = "Example: $100 Medicare rate × 120% = $120 expected.";
-        ucrWrap.style.opacity = "0.6";
         if (valueInput && !String(valueInput.value || "").trim()) valueInput.placeholder = "120";
       } else if (method.value === "flat") {
+        show(valueWrap); hide(ucrWrap);
         valueLabel.textContent = "Flat Amount $";
         valueHelp.textContent = "For Flat Amount, 100 means expected reimbursement is estimated as $100 for matching claims.";
-        ucrHelp.textContent = "Not used for Flat Amount.";
         example.textContent = "Example: expected reimbursement defaults to $100.";
-        ucrWrap.style.opacity = "0.6";
         if (valueInput && !String(valueInput.value || "").trim()) valueInput.placeholder = "100";
       } else if (method.value === "ucr_multiplier") {
-        valueLabel.textContent = "Default Value (Not used)";
-        valueHelp.textContent = "Not used when method is UCR Multiplier.";
+        hide(valueWrap); show(ucrWrap);
         ucrHelp.textContent = "For UCR Multiplier, 1.25 means expected reimbursement is estimated as 1.25 × the usual/customary or fee schedule amount when available; if no fee schedule is available, the system uses billed amount as fallback.";
         example.textContent = "Example: $100 UCR/fee amount × 1.25 = $125 expected.";
-        valueWrap.style.opacity = "0.6";
         if (ucrInput && !String(ucrInput.value || "").trim()) ucrInput.placeholder = "1";
       } else {
+        show(valueWrap); hide(ucrWrap);
         valueLabel.textContent = "Default %";
         valueHelp.textContent = "For % of Billed, 65 means expected reimbursement is estimated as 65% of the billed amount.";
-        ucrHelp.textContent = "Not used for % of Billed.";
         example.textContent = "Example: $1,000 billed × 65% = $650 expected.";
-        ucrWrap.style.opacity = "0.6";
         if (valueInput && !String(valueInput.value || "").trim()) valueInput.placeholder = "65";
       }
     }
@@ -48432,45 +48428,104 @@ function renderTemplateEditor(org, user){
       if (!canvas || !canvas.getContext) return;
       if (canvas.dataset.bound === "1") return;
       canvas.dataset.bound = "1";
+
+      canvas.style.touchAction = "none";
+      canvas.style.cursor = "crosshair";
+      canvas.style.background = "#fff";
+      canvas.style.display = "block";
+
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      ctx.lineWidth = 2;
-      ctx.lineCap = "round";
-      ctx.strokeStyle = "#111827";
+
       let drawing = false;
-      function pos(evt){
+
+      function getCanvasPos(evt) {
         const rect = canvas.getBoundingClientRect();
         const point = evt.touches && evt.touches[0] ? evt.touches[0] : evt;
-        return { x: (point.clientX - rect.left) * (canvas.width / rect.width), y: (point.clientY - rect.top) * (canvas.height / rect.height) };
+        return {
+          x: (point.clientX - rect.left) * (canvas.width / rect.width),
+          y: (point.clientY - rect.top) * (canvas.height / rect.height)
+        };
       }
-      function start(evt){ drawing = true; ctx.beginPath(); const p = pos(evt); ctx.moveTo(p.x, p.y); if (evt.cancelable) evt.preventDefault(); }
-      function move(evt){ if (!drawing) return; const p = pos(evt); ctx.lineTo(p.x, p.y); ctx.stroke(); ctx.beginPath(); ctx.moveTo(p.x, p.y); if (evt.cancelable) evt.preventDefault(); }
-      function stop(){ drawing = false; ctx.beginPath(); }
+
+      function start(evt){
+        drawing = true;
+        ctx.beginPath();
+        const p = getCanvasPos(evt);
+        ctx.moveTo(p.x, p.y);
+        if (evt.cancelable) evt.preventDefault();
+      }
+
+      function draw(evt){
+        if (!drawing) return;
+
+        ctx.lineWidth = 2;
+        ctx.lineCap = "round";
+        ctx.strokeStyle = "#111827";
+
+        const p = getCanvasPos(evt);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+
+        if (evt.cancelable) evt.preventDefault();
+      }
+
+      function stop(){
+        drawing = false;
+        ctx.beginPath();
+      }
+
+      canvas.addEventListener("mousedown", start);
+      canvas.addEventListener("mousemove", draw);
+      canvas.addEventListener("mouseup", stop);
+      canvas.addEventListener("mouseleave", stop);
+
+      canvas.addEventListener("touchstart", start, { passive:false });
+      canvas.addEventListener("touchmove", draw, { passive:false });
+      canvas.addEventListener("touchend", stop);
+      canvas.addEventListener("touchcancel", stop);
+
       if (window.PointerEvent) {
-        canvas.addEventListener("pointerdown", start);
-        canvas.addEventListener("pointermove", move);
+        canvas.addEventListener("pointerdown", function(evt){
+          try { canvas.setPointerCapture && canvas.setPointerCapture(evt.pointerId); } catch (_) {}
+          start(evt);
+        });
+        canvas.addEventListener("pointermove", draw);
         canvas.addEventListener("pointerup", stop);
         canvas.addEventListener("pointercancel", stop);
         canvas.addEventListener("pointerleave", stop);
-      } else {
-        canvas.addEventListener("mousedown", start);
-        canvas.addEventListener("mousemove", move);
-        canvas.addEventListener("mouseup", stop);
-        canvas.addEventListener("mouseleave", stop);
-        canvas.addEventListener("touchstart", start, { passive:false });
-        canvas.addEventListener("touchmove", move, { passive:false });
-        canvas.addEventListener("touchend", stop);
-        canvas.addEventListener("touchcancel", stop);
       }
-      window.clearPracticeSig = function(){ ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.beginPath(); };
-      window.savePracticeSig = function(){ if (!canvas.toDataURL) return; fetch("/org/save-signature", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ signature: canvas.toDataURL() }) }).then(function(){ location.reload(); }).catch(function(){}); };
+
+      window.clearPracticeSig = function(){
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.beginPath();
+      };
+
+      window.savePracticeSig = function(){
+        if (!canvas.toDataURL) return;
+        fetch("/org/save-signature", {
+          method:"POST",
+          headers:{ "Content-Type":"application/json" },
+          body:JSON.stringify({ signature: canvas.toDataURL() })
+        }).then(function(){ location.reload(); }).catch(function(){});
+      };
     }
 
+    window.tjhpRevenueUpdateMethodHelp = updateReimbursementMethodHelp;
     const methodEl = byId("reimbursement_default_method");
     if (methodEl) methodEl.addEventListener("change", updateReimbursementMethodHelp);
 
     bindPracticeSignatureCanvas();
     updateReimbursementMethodHelp();
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", updateReimbursementMethodHelp, { once:true });
+    } else {
+      updateReimbursementMethodHelp();
+    }
+    const jsStatus = byId("revenueAutomationJsStatus");
+    if (jsStatus) jsStatus.dataset.ready = "1";
     updatePracticePreview();
     updatePreviews();
   } catch (_) {}
@@ -56089,6 +56144,12 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(src.includes("Save Automation Settings"), "missing Save Automation Settings");
   assert(src.includes("Save Reimbursement Rules"), "missing Save Reimbursement Rules");
   assert(src.includes('id="reimbursement_default_method"'), "missing reimbursement_default_method id");
+  assert(src.includes('onchange="window.tjhpRevenueUpdateMethodHelp'), "missing default method onchange hook");
+  assert(src.includes("window.tjhpRevenueUpdateMethodHelp = updateReimbursementMethodHelp"), "missing global method helper binding");
+  assert(src.includes('hide(valueWrap)') || src.includes('hide(ucrWrap)') || src.includes('style.display = "none"'), "missing hide/show method field behavior");
+  assert(src.includes("Only the fields used by the selected default method are shown"), "missing method shared note");
+  assert(src.includes('id="revenueAutomationJsStatus"'), "missing revenueAutomationJsStatus marker");
+  assert(src.includes('dataset.ready = "1"'), "missing revenueAutomationJsStatus ready marker");
   assert(src.includes('id="reimbursement_default_value_label"'), "missing reimbursement_default_value_label id");
   assert(src.includes('id="reimbursement_default_value_help"'), "missing reimbursement_default_value_help id");
   assert(src.includes('id="reimbursement_method_example"'), "missing reimbursement_method_example id");
@@ -56096,14 +56157,24 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(src.includes("Example: expected reimbursement defaults to $100."), "missing flat example");
   assert(src.includes("Used to calculate follow-up timing in the Action Center"), "missing follow-up helper");
   assert(src.includes("14 days after the last submission or payer activity"), "missing follow-up timing detail");
-  assert(src.includes("bindPracticeSignatureCanvas"), "missing practice signature canvas binder");
+  assert(src.includes("function bindPracticeSignatureCanvas"), "missing practice signature canvas binder");
   assert(src.includes("practiceSigCanvas"), "missing practiceSigCanvas reference");
-  assert(src.includes("pointerdown") || src.includes("mousedown"), "missing pointer or mouse draw events");
-  assert(src.includes("touchstart") || src.includes("PointerEvent"), "missing touch or pointer event support");
+  assert(src.includes("touch-action:none"), "missing touch-action:none on practice canvas");
+  assert(src.includes("cursor:crosshair"), "missing crosshair cursor on practice canvas");
+  assert(src.includes("mousedown"), "missing mousedown draw event");
+  assert(src.includes("mousemove"), "missing mousemove draw event");
+  assert(src.includes("mouseup"), "missing mouseup draw event");
+  assert(src.includes("touchstart"), "missing touchstart draw event");
+  assert(src.includes("setPointerCapture"), "missing setPointerCapture pointer support");
   assert(src.includes("tjhpPracticeSignatureText"), "missing text fallback helper");
   assert(src.includes("tjhpPracticeSignatureImage"), "missing image fallback helper");
   assert(src.includes("/data-management/revenue-automation/practice-signature/save"), "missing practice signature save route");
   assert(src.includes("/org/save-signature"), "missing org signature save route");
+  assert(src.includes("sigCanvas"), "workspace sigCanvas source missing");
+  assert(src.includes("clearSig"), "workspace clearSig missing");
+  assert(src.includes("saveSig"), "workspace saveSig missing");
+  assert(src.includes("clearPracticeSig"), "practice clearPracticeSig missing");
+  assert(src.includes("savePracticeSig"), "practice savePracticeSig missing");
   assert(src.includes('method === "percent_medicare"'), "missing percent_medicare branch");
   assert(src.includes('method === "percent_billed"'), "missing percent_billed branch");
   assert(src.includes('method === "fixed_fee"') || src.includes('method === "flat"'), "missing flat/fixed_fee branch");
@@ -56137,6 +56208,12 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("Appeals & Negotiations Automation"), "render missing automation section");
   assert(rendered.includes("Optional Letter Personalization"), "render missing personalization section");
   assert(rendered.includes("Practice Signature"), "render missing Practice Signature");
+  assert(rendered.includes("id=\"reimbursement_default_method\""), "render missing default method id");
+  assert(rendered.includes("onchange=\"window.tjhpRevenueUpdateMethodHelp"), "render missing onchange update hook");
+  assert(rendered.includes("window.tjhpRevenueUpdateMethodHelp = updateReimbursementMethodHelp"), "render missing global update function assignment");
+  assert(rendered.includes("Only the fields used by the selected default method are shown"), "render missing method usage note");
+  assert(rendered.includes("id=\"revenueAutomationJsStatus\""), "render missing JS status marker");
+  assert(rendered.includes("dataset.ready = \"1\""), "render missing JS status ready assignment");
   assert(rendered.includes("Live Preview"), "render missing Live Preview");
   assert(rendered.includes('.join("\\n")') || rendered.includes('.join("\n")'), "preview JS should use escaped newline joins");
   assert(!/\.join\('\s*\n\s*'\)/.test(rendered), "rendered preview JS contains literal newline inside single-quoted join");
