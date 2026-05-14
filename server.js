@@ -48310,7 +48310,7 @@ function renderTemplateEditor(org, user){
           <label>Contact line</label><input name="contact_line" id="practice_contact_line" value="${safeStr(practiceSignature.contact_line || "")}"/>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" type="submit">Save Practice Signature</button></div>
         </form>
-        <div style="margin-top:10px;"><div class="tpl-muted" style="margin-bottom:6px;">Draw your signature here, then click Save Drawing. This will be used by default in packets unless a packet has its own signature.</div><canvas id="practiceSigCanvas" width="800" height="240" style="width:100%;height:140px;min-height:140px;border:1px dashed #d1d5db;border-radius:12px;touch-action:none;cursor:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%23111827' d='M3 21l3.5-1 11-11-2.5-2.5-11 11L3 21zm14.2-13.8l1.1-1.1c.4-.4.4-1 0-1.4l-1-1c-.4-.4-1-.4-1.4 0l-1.1 1.1 2.4 2.4z'/%3E%3C/svg%3E&quot;) 2 22, auto;background:#fff;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawing</button></div></div>
+        <div style="margin-top:10px;"><div class="tpl-muted" style="margin-bottom:6px;">Draw your signature here, then click Save Drawing. This will be used by default in packets unless a packet has its own signature.</div><canvas id="practiceSigCanvas" width="800" height="240" style="width:100%;height:140px;min-height:140px;border:1px dashed #d1d5db;border-radius:12px;touch-action:none;cursor:auto;background:#fff;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawing</button></div></div>
         <div id="practice_signature_preview" class="tpl-preview" style="margin-top:10px;min-height:60px;">${safeStr(practiceSignatureText)}</div>
         <div id="revenueAutomationJsStatus" class="tpl-muted" style="display:none;">Revenue Automation JS ready</div>
       </div>
@@ -48332,7 +48332,7 @@ function renderTemplateEditor(org, user){
 
     function byId(id){ return document.getElementById(id); }
     const NL = String.fromCharCode(10);
-    const PRACTICE_SIG_PEN_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%23111827' d='M3 21l3.5-1 11-11-2.5-2.5-11 11L3 21zm14.2-13.8l1.1-1.1c.4-.4.4-1 0-1.4l-1-1c-.4-.4-1-.4-1.4 0l-1.1 1.1 2.4 2.4z'/%3E%3C/svg%3E\") 2 22, auto";
+    const PRACTICE_SIG_PEN_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%23111827' d='M2 14l2.6-.7 7.8-7.8-1.9-1.9-7.8 7.8L2 14zm9.7-9.7l.8-.8c.3-.3.3-.7 0-1l-.6-.6c-.3-.3-.7-.3-1 0l-.8.8 1.6 1.6z'/%3E%3C/svg%3E\") 1 15, auto";
 
     function applyVars(tpl){
       return String(tpl || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, function(m,k){
@@ -48541,6 +48541,128 @@ function renderTemplateEditor(org, user){
     }
     updatePracticePreview();
     updatePreviews();
+  } catch (_) {}
+})();
+  </script>
+  <script>
+(function(){
+  try {
+    window.__TJHP_PRACTICE_SIGNATURE_DRAW_RESCUE__ = true;
+
+    const canvas = document.getElementById("practiceSigCanvas");
+    if (!canvas || !canvas.getContext) return;
+
+    if (canvas.dataset.practiceRescueBound === "1") return;
+    canvas.dataset.practiceRescueBound = "1";
+
+    const PEN_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%23111827' d='M2 14l2.6-.7 7.8-7.8-1.9-1.9-7.8 7.8L2 14zm9.7-9.7l.8-.8c.3-.3.3-.7 0-1l-.6-.6c-.3-.3-.7-.3-1 0l-.8.8 1.6 1.6z'/%3E%3C/svg%3E\") 1 15, auto";
+
+    canvas.style.touchAction = "none";
+    canvas.style.background = "#fff";
+    canvas.style.cursor = PEN_CURSOR;
+    canvas.style.display = "block";
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#111827";
+    ctx.fillStyle = "#111827";
+
+    let drawing = false;
+
+    function getPoint(evt){
+      const rect = canvas.getBoundingClientRect();
+      const point =
+        evt.touches && evt.touches[0] ? evt.touches[0] :
+        evt.changedTouches && evt.changedTouches[0] ? evt.changedTouches[0] :
+        evt;
+      const w = rect.width || canvas.offsetWidth || canvas.width || 1;
+      const h = rect.height || canvas.offsetHeight || canvas.height || 1;
+      return {
+        x: (point.clientX - rect.left) * (canvas.width / w),
+        y: (point.clientY - rect.top) * (canvas.height / h)
+      };
+    }
+
+    function prevent(evt){
+      try {
+        if (evt && evt.cancelable) evt.preventDefault();
+      } catch (_) {}
+    }
+
+    function drawDot(p){
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+    }
+
+    function start(evt){
+      drawing = true;
+      const p = getPoint(evt);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      drawDot(p);
+      prevent(evt);
+    }
+
+    function move(evt){
+      if (!drawing) return;
+      const p = getPoint(evt);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      prevent(evt);
+    }
+
+    function stop(){
+      if (!drawing) return;
+      drawing = false;
+      ctx.beginPath();
+    }
+
+    canvas.addEventListener("mousedown", start);
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", stop);
+    canvas.addEventListener("touchstart", start, { passive:false });
+    document.addEventListener("touchmove", move, { passive:false });
+    document.addEventListener("touchend", stop);
+    document.addEventListener("touchcancel", stop);
+
+    if (window.PointerEvent) {
+      canvas.addEventListener("pointerdown", function(evt){
+        try { canvas.setPointerCapture && canvas.setPointerCapture(evt.pointerId); } catch (_) {}
+        start(evt);
+      });
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", stop);
+      document.addEventListener("pointercancel", stop);
+    }
+
+    window.clearPracticeSig = function(){
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.beginPath();
+    };
+
+    window.savePracticeSig = function(){
+      if (!canvas.toDataURL) return;
+      fetch("/org/save-signature", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body:JSON.stringify({ signature:canvas.toDataURL() })
+      }).then(function(){ location.reload(); }).catch(function(){});
+    };
+
+    const marker = document.getElementById("revenueAutomationJsStatus");
+    if (marker) {
+      marker.dataset.ready = "1";
+      marker.dataset.practiceSigRescueBound = "1";
+    }
   } catch (_) {}
 })();
   </script>
@@ -56233,11 +56355,22 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(!/\.join\('\s*\n\s*'\)/.test(rendered), "rendered preview JS contains literal newline inside single-quoted join");
   assert(rendered.includes("bindPracticeSignatureCanvas();"), "render missing practice signature bind call");
   assert(rendered.includes("practiceSigCanvas"), "render missing practiceSigCanvas reference");
+  assert(rendered.includes("__TJHP_PRACTICE_SIGNATURE_DRAW_RESCUE__"), "render missing practice signature rescue marker");
+  assert(rendered.includes("practiceRescueBound"), "render missing practiceRescueBound marker");
+  assert(rendered.includes("practiceSigRescueBound"), "render missing practiceSigRescueBound marker");
   assert(rendered.includes("mousedown"), "render missing mousedown draw event");
   assert(rendered.includes("mousemove"), "render missing mousemove draw event");
   assert(rendered.includes("mouseup"), "render missing mouseup draw event");
   assert(rendered.includes("touchstart"), "render missing touchstart draw event");
   assert(rendered.includes("setPointerCapture"), "render missing setPointerCapture support");
+  assert(rendered.includes("document.addEventListener(\"mousemove\", move)"), "render missing document mousemove binding");
+  assert(rendered.includes("document.addEventListener(\"mouseup\", stop)"), "render missing document mouseup binding");
+  assert(rendered.includes("document.addEventListener(\"touchmove\", move"), "render missing document touchmove binding");
+  assert(rendered.includes("document.addEventListener(\"pointermove\", move)"), "render missing document pointermove binding");
+  assert(rendered.includes("drawDot"), "render missing drawDot helper");
+  assert(rendered.includes("ctx.arc"), "render missing ctx.arc dot draw");
+  assert(rendered.includes("width='16' height='16'") || rendered.includes("width%3D'16'%20height%3D'16'"), "render missing 16x16 pen cursor");
+  assert(!rendered.includes("width='24' height='24'"), "render still includes oversized 24x24 pen cursor");
   assert(rendered.includes("clearPracticeSig"), "render missing clearPracticeSig");
   assert(rendered.includes("savePracticeSig"), "render missing savePracticeSig");
   assert(rendered.includes("/org/save-signature"), "render missing org signature save endpoint");
