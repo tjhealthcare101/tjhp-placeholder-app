@@ -48310,7 +48310,7 @@ function renderTemplateEditor(org, user){
           <label>Contact line</label><input name="contact_line" id="practice_contact_line" value="${safeStr(practiceSignature.contact_line || "")}"/>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" type="submit">Save Practice Signature</button></div>
         </form>
-        <div style="margin-top:10px;"><div class="tpl-muted" style="margin-bottom:6px;">Draw your signature here, then click Save Drawing. This will be used by default in packets unless a packet has its own signature.</div><canvas id="practiceSigCanvas" width="800" height="240" style="width:100%;height:140px;min-height:140px;border:1px dashed #d1d5db;border-radius:12px;touch-action:none;cursor:crosshair;background:#fff;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawing</button></div></div>
+        <div style="margin-top:10px;"><div class="tpl-muted" style="margin-bottom:6px;">Draw your signature here, then click Save Drawing. This will be used by default in packets unless a packet has its own signature.</div><canvas id="practiceSigCanvas" width="800" height="240" style="width:100%;height:140px;min-height:140px;border:1px dashed #d1d5db;border-radius:12px;touch-action:none;cursor:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%23111827' d='M3 21l3.5-1 11-11-2.5-2.5-11 11L3 21zm14.2-13.8l1.1-1.1c.4-.4.4-1 0-1.4l-1-1c-.4-.4-1-.4-1.4 0l-1.1 1.1 2.4 2.4z'/%3E%3C/svg%3E&quot;) 2 22, auto;background:#fff;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawing</button></div></div>
         <div id="practice_signature_preview" class="tpl-preview" style="margin-top:10px;min-height:60px;">${safeStr(practiceSignatureText)}</div>
         <div id="revenueAutomationJsStatus" class="tpl-muted" style="display:none;">Revenue Automation JS ready</div>
       </div>
@@ -48331,6 +48331,8 @@ function renderTemplateEditor(org, user){
     try { sample = JSON.parse(atob("${sampleB64}")); } catch (_) { sample = {}; }
 
     function byId(id){ return document.getElementById(id); }
+    const NL = String.fromCharCode(10);
+    const PRACTICE_SIG_PEN_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%23111827' d='M3 21l3.5-1 11-11-2.5-2.5-11 11L3 21zm14.2-13.8l1.1-1.1c.4-.4.4-1 0-1.4l-1-1c-.4-.4-1-.4-1.4 0l-1.1 1.1 2.4 2.4z'/%3E%3C/svg%3E\") 2 22, auto";
 
     function applyVars(tpl){
       return String(tpl || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, function(m,k){
@@ -48346,7 +48348,7 @@ function renderTemplateEditor(org, user){
       ].map(function(x){ return String(x || "").trim(); }).filter(Boolean);
 
       const preview = byId("practice_signature_preview");
-      if (preview && lines.length) preview.textContent = lines.join("\n");
+      if (preview && lines.length) preview.textContent = lines.join(NL);
       updatePreviews();
     }
 
@@ -48357,7 +48359,7 @@ function renderTemplateEditor(org, user){
         byId("practice_signature_preview")?.textContent || "",
         "",
         byId("appeal_footer")?.value || ""
-      ].join("\n");
+      ].join(NL);
 
       const nego = [
         byId("negotiation_opening")?.value || "",
@@ -48365,7 +48367,7 @@ function renderTemplateEditor(org, user){
         byId("practice_signature_preview")?.textContent || "",
         "",
         byId("negotiation_footer")?.value || ""
-      ].join("\n");
+      ].join(NL);
 
       const elA = byId("previewAppeal");
       const elN = byId("previewNegotiation");
@@ -48430,7 +48432,7 @@ function renderTemplateEditor(org, user){
       canvas.dataset.bound = "1";
 
       canvas.style.touchAction = "none";
-      canvas.style.cursor = "crosshair";
+      canvas.style.cursor = PRACTICE_SIG_PEN_CURSOR;
       canvas.style.background = "#fff";
       canvas.style.display = "block";
 
@@ -48518,6 +48520,14 @@ function renderTemplateEditor(org, user){
     if (methodEl) methodEl.addEventListener("change", updateReimbursementMethodHelp);
 
     bindPracticeSignatureCanvas();
+    function ensurePracticeCanvasBound(){
+      bindPracticeSignatureCanvas();
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", ensurePracticeCanvasBound, { once:true });
+    } else {
+      ensurePracticeCanvasBound();
+    }
     updateReimbursementMethodHelp();
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", updateReimbursementMethodHelp, { once:true });
@@ -48525,7 +48535,10 @@ function renderTemplateEditor(org, user){
       updateReimbursementMethodHelp();
     }
     const jsStatus = byId("revenueAutomationJsStatus");
-    if (jsStatus) jsStatus.dataset.ready = "1";
+    if (jsStatus) {
+      jsStatus.dataset.ready = "1";
+      jsStatus.dataset.practiceSigBound = byId("practiceSigCanvas")?.dataset?.bound || "0";
+    }
     updatePracticePreview();
     updatePreviews();
   } catch (_) {}
@@ -56160,7 +56173,7 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(src.includes("function bindPracticeSignatureCanvas"), "missing practice signature canvas binder");
   assert(src.includes("practiceSigCanvas"), "missing practiceSigCanvas reference");
   assert(src.includes("touch-action:none"), "missing touch-action:none on practice canvas");
-  assert(src.includes("cursor:crosshair"), "missing crosshair cursor on practice canvas");
+  assert(src.includes("data:image/svg+xml"), "missing pen cursor data uri on practice canvas");
   assert(src.includes("mousedown"), "missing mousedown draw event");
   assert(src.includes("mousemove"), "missing mousemove draw event");
   assert(src.includes("mouseup"), "missing mouseup draw event");
@@ -56214,9 +56227,24 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("Only the fields used by the selected default method are shown"), "render missing method usage note");
   assert(rendered.includes("id=\"revenueAutomationJsStatus\""), "render missing JS status marker");
   assert(rendered.includes("dataset.ready = \"1\""), "render missing JS status ready assignment");
-  assert(rendered.includes("Live Preview"), "render missing Live Preview");
-  assert(rendered.includes('.join("\\n")') || rendered.includes('.join("\n")'), "preview JS should use escaped newline joins");
+  assert(rendered.includes("const NL = String.fromCharCode(10)"), "render missing NL constant");
+  assert(rendered.includes(".join(NL)"), "render should use NL joins");
+  assert(!/\.join\("\s*\n\s*"\)/.test(rendered), "rendered preview JS contains literal newline inside double-quoted join");
   assert(!/\.join\('\s*\n\s*'\)/.test(rendered), "rendered preview JS contains literal newline inside single-quoted join");
+  assert(rendered.includes("bindPracticeSignatureCanvas();"), "render missing practice signature bind call");
+  assert(rendered.includes("practiceSigCanvas"), "render missing practiceSigCanvas reference");
+  assert(rendered.includes("mousedown"), "render missing mousedown draw event");
+  assert(rendered.includes("mousemove"), "render missing mousemove draw event");
+  assert(rendered.includes("mouseup"), "render missing mouseup draw event");
+  assert(rendered.includes("touchstart"), "render missing touchstart draw event");
+  assert(rendered.includes("setPointerCapture"), "render missing setPointerCapture support");
+  assert(rendered.includes("clearPracticeSig"), "render missing clearPracticeSig");
+  assert(rendered.includes("savePracticeSig"), "render missing savePracticeSig");
+  assert(rendered.includes("/org/save-signature"), "render missing org signature save endpoint");
+  assert(rendered.includes("practiceSigBound"), "render missing practiceSigBound js status marker");
+  assert(rendered.includes("data:image/svg+xml"), "render missing pen cursor data uri");
+  assert(!rendered.includes("cursor:crosshair"), "render should not include crosshair cursor on practice canvas");
+  assert(rendered.includes("Live Preview"), "render missing Live Preview");
   assert(rendered.includes("try {"), "rendered preview script should be defensive");
   assert(rendered.includes("clearPracticeSig"), "practice signature clear function missing");
   assert(rendered.includes("savePracticeSig"), "practice signature save function missing");
@@ -56235,6 +56263,16 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(tjhpPacketSignatureImageForWorkspace(testOrg, "packet-image") === "packet-image", "packet image wins");
   saveOrgSettings(testOrg, { ...getOrgSettings(testOrg), practice_signature:{ typed_name:"", title:"", contact_line:"" }, signature_image:"" });
   assert(tjhpPacketSignatureTextForWorkspace(testOrg, "") === "Legacy Signature Block", "legacy signature_block fallback");
+  assert(src.includes("sigCanvas"), "workspace sigCanvas source missing");
+  assert(src.includes("clearSig"), "workspace clearSig missing");
+  assert(src.includes("saveSig"), "workspace saveSig missing");
+  assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__"), "missing hard stop guard");
+  assert(src.includes("window.__TJHP_VIEW_PANEL_OPENER_RESCUE_READY__"), "missing opener rescue guard");
+  assert(src.includes("__tjhpOpenClaimPanelOrNavigate"), "missing claim panel opener function");
+  assert(src.includes('method === "percent_medicare"'), "missing percent_medicare branch");
+  assert(src.includes('method === "percent_billed"'), "missing percent_billed branch");
+  assert(src.includes('method === "fixed_fee"') || src.includes('method === "flat"'), "missing flat/fixed_fee branch");
+  assert(src.includes('method === "ucr_multiplier"'), "missing ucr_multiplier branch");
   process.stdout.write("REVENUE_AUTOMATION_UI_SMOKE_TESTS_PASSED\n");
   process.exit(0);
 }
