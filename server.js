@@ -48253,13 +48253,13 @@ function renderTemplateEditor(org, user){
     <p class="muted small" style="margin-top:0;">Use these defaults only when no payer-specific reimbursement contract rule is found.</p>
     <form method="POST" action="/data-management/allowed-rules/save" style="display:flex;flex-direction:column;gap:12px;max-width:900px;">
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:240px;"><label>Default Method</label><div class="tpl-muted">How the system estimates expected reimbursement when no contract rule matches.</div><select name="default_method"><option value="percent_medicare" ${rules.default_method==="percent_medicare"?"selected":""}>% of Medicare</option><option value="percent_billed" ${rules.default_method==="percent_billed"?"selected":""}>% of Billed</option><option value="flat" ${rules.default_method==="flat"?"selected":""}>Flat Amount</option><option value="ucr_multiplier" ${rules.default_method==="ucr_multiplier"?"selected":""}>UCR Multiplier</option></select></div>
-        <div style="flex:1;min-width:240px;"><label>Default Value</label><div class="tpl-muted">For % of Billed, 65 means expected reimbursement is estimated as 65% of the billed amount.</div><input name="default_value" value="${safeStr(String(rules.default_value || ""))}"/></div>
-        <div style="flex:1;min-width:240px;"><label>UCR Multiplier</label><div class="tpl-muted">Used only when the default method is based on usual/customary reimbursement.</div><input name="ucr_multiplier" value="${safeStr(String(rules.ucr_multiplier || 1))}"/></div>
+        <div style="flex:1;min-width:240px;"><label>Default Method</label><div class="tpl-muted">How the system estimates expected reimbursement when no contract rule matches.</div><select name="default_method" id="reimbursement_default_method"><option value="percent_medicare" ${rules.default_method==="percent_medicare"?"selected":""}>% of Medicare</option><option value="percent_billed" ${rules.default_method==="percent_billed"?"selected":""}>% of Billed</option><option value="flat" ${rules.default_method==="flat"?"selected":""}>Flat Amount</option><option value="ucr_multiplier" ${rules.default_method==="ucr_multiplier"?"selected":""}>UCR Multiplier</option></select><div id="reimbursement_method_example" class="tpl-muted" style="margin-top:6px;">Example: $1,000 billed × 65% = $650 expected.</div></div>
+        <div id="reimbursement_default_value_wrap" data-method-field="default_value" style="flex:1;min-width:240px;"><label id="reimbursement_default_value_label">Default Value</label><div id="reimbursement_default_value_help" class="tpl-muted">For % of Billed, 65 means expected reimbursement is estimated as 65% of the billed amount.</div><input name="default_value" id="reimbursement_default_value_input" value="${safeStr(String(rules.default_value || ""))}"/></div>
+        <div id="reimbursement_ucr_multiplier_wrap" data-method-field="ucr_multiplier" style="flex:1;min-width:240px;"><label>UCR Multiplier</label><div id="reimbursement_ucr_help" class="tpl-muted">Not used for % of Billed.</div><input name="ucr_multiplier" id="reimbursement_ucr_multiplier_input" value="${safeStr(String(rules.ucr_multiplier || 1))}"/></div>
       </div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:240px;"><label>Tolerance %</label><div class="tpl-muted">Small differences the system should ignore before flagging an underpayment.</div><input name="tolerance_percent" value="${safeStr(String(rules.tolerance_percent || 1))}"/></div>
-        <div style="flex:1;min-width:240px;"><label>Tolerance $</label><div class="tpl-muted">Small differences the system should ignore before flagging an underpayment.</div><input name="tolerance_min_dollars" value="${safeStr(String(rules.tolerance_min_dollars || 5))}"/></div>
+        <div id="reimbursement_tolerance_percent_wrap" style="flex:1;min-width:240px;"><label>Tolerance %</label><div class="tpl-muted">Tolerance controls when a small payment difference should be ignored before flagging an underpayment.</div><input name="tolerance_percent" value="${safeStr(String(rules.tolerance_percent || 1))}"/></div>
+        <div id="reimbursement_tolerance_dollars_wrap" style="flex:1;min-width:240px;"><label>Tolerance $</label><div class="tpl-muted">Tolerance controls when a small payment difference should be ignored before flagging an underpayment.</div><input name="tolerance_min_dollars" value="${safeStr(String(rules.tolerance_min_dollars || 5))}"/></div>
       </div>
       <button class="btn">Save Reimbursement Rules</button>
     </form>
@@ -48275,7 +48275,7 @@ function renderTemplateEditor(org, user){
         <label class="automation-check-row"><input type="checkbox" name="auto_draft_underpayments" ${practice.auto_draft_underpayments ? "checked" : ""}/><span><strong>Auto-draft underpayment letters</strong><small>Drafts negotiation language for underpaid claims.</small></span></label>
       </div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:240px;"><label>Default Follow-up Days</label><input name="default_follow_up_days" value="${safeStr(String(practice.default_follow_up_days || practice.default_followup_days || 14))}"/></div>
+        <div style="flex:1;min-width:240px;"><label>Default Follow-up Days</label><div class="tpl-muted">Used to calculate follow-up timing in the Action Center. For example, 14 means the work item is due for follow-up 14 days after the last submission or payer activity if no update has been recorded.</div><input name="default_follow_up_days" value="${safeStr(String(practice.default_follow_up_days || practice.default_followup_days || 14))}"/></div>
         <div style="flex:1;min-width:240px;"><label>Require Confirmation Before Submission</label><select name="require_confirmation_before_submission"><option value="yes" ${(practice.require_confirmation_before_submission || practice.require_confirmation_before_submitted) ? "selected" : ""}>Yes</option><option value="no" ${(practice.require_confirmation_before_submission || practice.require_confirmation_before_submitted) ? "" : "selected"}>No</option></select></div>
       </div>
       <button class="btn">Save Automation Settings</button>
@@ -48310,7 +48310,7 @@ function renderTemplateEditor(org, user){
           <label>Contact line</label><input name="contact_line" id="practice_contact_line" value="${safeStr(practiceSignature.contact_line || "")}"/>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" type="submit">Save Practice Signature</button></div>
         </form>
-        <div style="margin-top:10px;"><canvas id="practiceSigCanvas" width="800" height="200" style="width:100%;height:100px;border:1px dashed #d1d5db;border-radius:12px;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawing</button></div></div>
+        <div style="margin-top:10px;"><div class="tpl-muted" style="margin-bottom:6px;">Draw your signature here, then click Save Drawing. This will be used by default in packets unless a packet has its own signature.</div><canvas id="practiceSigCanvas" width="800" height="200" style="width:100%;height:100px;border:1px dashed #d1d5db;border-radius:12px;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawing</button></div></div>
         <div id="practice_signature_preview" class="tpl-preview" style="margin-top:10px;min-height:60px;">${safeStr(practiceSignatureText)}</div>
       </div>
 
@@ -48383,22 +48383,94 @@ function renderTemplateEditor(org, user){
       if (el) el.addEventListener("input", updatePracticePreview);
     });
 
-    window.clearPracticeSig = function(){
-      const c = byId("practiceSigCanvas");
-      if (!c || !c.getContext) return;
-      c.getContext("2d").clearRect(0,0,c.width,c.height);
-    };
+    function updateReimbursementMethodHelp(){
+      const method = byId("reimbursement_default_method");
+      const valueWrap = byId("reimbursement_default_value_wrap");
+      const valueLabel = byId("reimbursement_default_value_label");
+      const valueHelp = byId("reimbursement_default_value_help");
+      const valueInput = byId("reimbursement_default_value_input");
+      const ucrWrap = byId("reimbursement_ucr_multiplier_wrap");
+      const ucrHelp = byId("reimbursement_ucr_help");
+      const ucrInput = byId("reimbursement_ucr_multiplier_input");
+      const example = byId("reimbursement_method_example");
+      if (!method || !valueWrap || !valueLabel || !valueHelp || !ucrWrap || !ucrHelp || !example) return;
+      valueWrap.style.opacity = "";
+      ucrWrap.style.opacity = "";
+      if (method.value === "percent_medicare") {
+        valueLabel.textContent = "Medicare %";
+        valueHelp.textContent = "For % of Medicare, 120 means expected reimbursement is estimated as 120% of the Medicare or fee schedule rate when available.";
+        ucrHelp.textContent = "Not used for % of Medicare.";
+        example.textContent = "Example: $100 Medicare rate × 120% = $120 expected.";
+        ucrWrap.style.opacity = "0.6";
+        if (valueInput && !String(valueInput.value || "").trim()) valueInput.placeholder = "120";
+      } else if (method.value === "flat") {
+        valueLabel.textContent = "Flat Amount $";
+        valueHelp.textContent = "For Flat Amount, 100 means expected reimbursement is estimated as $100 for matching claims.";
+        ucrHelp.textContent = "Not used for Flat Amount.";
+        example.textContent = "Example: expected reimbursement defaults to $100.";
+        ucrWrap.style.opacity = "0.6";
+        if (valueInput && !String(valueInput.value || "").trim()) valueInput.placeholder = "100";
+      } else if (method.value === "ucr_multiplier") {
+        valueLabel.textContent = "Default Value (Not used)";
+        valueHelp.textContent = "Not used when method is UCR Multiplier.";
+        ucrHelp.textContent = "For UCR Multiplier, 1.25 means expected reimbursement is estimated as 1.25 × the usual/customary or fee schedule amount when available; if no fee schedule is available, the system uses billed amount as fallback.";
+        example.textContent = "Example: $100 UCR/fee amount × 1.25 = $125 expected.";
+        valueWrap.style.opacity = "0.6";
+        if (ucrInput && !String(ucrInput.value || "").trim()) ucrInput.placeholder = "1";
+      } else {
+        valueLabel.textContent = "Default %";
+        valueHelp.textContent = "For % of Billed, 65 means expected reimbursement is estimated as 65% of the billed amount.";
+        ucrHelp.textContent = "Not used for % of Billed.";
+        example.textContent = "Example: $1,000 billed × 65% = $650 expected.";
+        ucrWrap.style.opacity = "0.6";
+        if (valueInput && !String(valueInput.value || "").trim()) valueInput.placeholder = "65";
+      }
+    }
 
-    window.savePracticeSig = function(){
-      const c = byId("practiceSigCanvas");
-      if (!c || !c.toDataURL) return;
-      fetch("/org/save-signature", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body:JSON.stringify({ signature:c.toDataURL() })
-      }).then(function(){ location.reload(); }).catch(function(){});
-    };
+    function bindPracticeSignatureCanvas(){
+      const canvas = byId("practiceSigCanvas");
+      if (!canvas || !canvas.getContext) return;
+      if (canvas.dataset.bound === "1") return;
+      canvas.dataset.bound = "1";
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = "#111827";
+      let drawing = false;
+      function pos(evt){
+        const rect = canvas.getBoundingClientRect();
+        const point = evt.touches && evt.touches[0] ? evt.touches[0] : evt;
+        return { x: (point.clientX - rect.left) * (canvas.width / rect.width), y: (point.clientY - rect.top) * (canvas.height / rect.height) };
+      }
+      function start(evt){ drawing = true; ctx.beginPath(); const p = pos(evt); ctx.moveTo(p.x, p.y); if (evt.cancelable) evt.preventDefault(); }
+      function move(evt){ if (!drawing) return; const p = pos(evt); ctx.lineTo(p.x, p.y); ctx.stroke(); ctx.beginPath(); ctx.moveTo(p.x, p.y); if (evt.cancelable) evt.preventDefault(); }
+      function stop(){ drawing = false; ctx.beginPath(); }
+      if (window.PointerEvent) {
+        canvas.addEventListener("pointerdown", start);
+        canvas.addEventListener("pointermove", move);
+        canvas.addEventListener("pointerup", stop);
+        canvas.addEventListener("pointercancel", stop);
+        canvas.addEventListener("pointerleave", stop);
+      } else {
+        canvas.addEventListener("mousedown", start);
+        canvas.addEventListener("mousemove", move);
+        canvas.addEventListener("mouseup", stop);
+        canvas.addEventListener("mouseleave", stop);
+        canvas.addEventListener("touchstart", start, { passive:false });
+        canvas.addEventListener("touchmove", move, { passive:false });
+        canvas.addEventListener("touchend", stop);
+        canvas.addEventListener("touchcancel", stop);
+      }
+      window.clearPracticeSig = function(){ ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.beginPath(); };
+      window.savePracticeSig = function(){ if (!canvas.toDataURL) return; fetch("/org/save-signature", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ signature: canvas.toDataURL() }) }).then(function(){ location.reload(); }).catch(function(){}); };
+    }
 
+    const methodEl = byId("reimbursement_default_method");
+    if (methodEl) methodEl.addEventListener("change", updateReimbursementMethodHelp);
+
+    bindPracticeSignatureCanvas();
+    updateReimbursementMethodHelp();
     updatePracticePreview();
     updatePreviews();
   } catch (_) {}
@@ -56016,10 +56088,26 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(src.includes('type="hidden" name="signature_block" id="signature_block"'), "hidden signature_block preservation missing");
   assert(src.includes("Save Automation Settings"), "missing Save Automation Settings");
   assert(src.includes("Save Reimbursement Rules"), "missing Save Reimbursement Rules");
+  assert(src.includes('id="reimbursement_default_method"'), "missing reimbursement_default_method id");
+  assert(src.includes('id="reimbursement_default_value_label"'), "missing reimbursement_default_value_label id");
+  assert(src.includes('id="reimbursement_default_value_help"'), "missing reimbursement_default_value_help id");
+  assert(src.includes('id="reimbursement_method_example"'), "missing reimbursement_method_example id");
+  assert(src.includes("Example: $1,000 billed × 65% = $650 expected."), "missing billed example");
+  assert(src.includes("Example: expected reimbursement defaults to $100."), "missing flat example");
+  assert(src.includes("Used to calculate follow-up timing in the Action Center"), "missing follow-up helper");
+  assert(src.includes("14 days after the last submission or payer activity"), "missing follow-up timing detail");
+  assert(src.includes("bindPracticeSignatureCanvas"), "missing practice signature canvas binder");
+  assert(src.includes("practiceSigCanvas"), "missing practiceSigCanvas reference");
+  assert(src.includes("pointerdown") || src.includes("mousedown"), "missing pointer or mouse draw events");
+  assert(src.includes("touchstart") || src.includes("PointerEvent"), "missing touch or pointer event support");
   assert(src.includes("tjhpPracticeSignatureText"), "missing text fallback helper");
   assert(src.includes("tjhpPracticeSignatureImage"), "missing image fallback helper");
   assert(src.includes("/data-management/revenue-automation/practice-signature/save"), "missing practice signature save route");
   assert(src.includes("/org/save-signature"), "missing org signature save route");
+  assert(src.includes('method === "percent_medicare"'), "missing percent_medicare branch");
+  assert(src.includes('method === "percent_billed"'), "missing percent_billed branch");
+  assert(src.includes('method === "fixed_fee"') || src.includes('method === "flat"'), "missing flat/fixed_fee branch");
+  assert(src.includes('method === "ucr_multiplier"'), "missing ucr_multiplier branch");
   assert(src.includes("/packet-template/upload"), "missing /packet-template/upload route");
   assert(src.includes("/packet-template/preview"), "missing /packet-template/preview route");
   assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__"), "missing hard stop guard");
@@ -56055,6 +56143,10 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("try {"), "rendered preview script should be defensive");
   assert(rendered.includes("clearPracticeSig"), "practice signature clear function missing");
   assert(rendered.includes("savePracticeSig"), "practice signature save function missing");
+  assert(rendered.includes("Save Practice Signature"), "render missing Save Practice Signature");
+  assert(rendered.includes("Save Personalization"), "render missing Save Personalization");
+  assert(rendered.includes("Save Reimbursement Rules"), "render missing Save Reimbursement Rules");
+  assert(rendered.includes("Save Automation Settings"), "render missing Save Automation Settings");
   const testOrg = "smoke-practice-signature";
   const existingOrgSettings = getOrgSettings(testOrg) || {};
   const existingTemplateSettings = getTemplateSettings(testOrg) || {};
