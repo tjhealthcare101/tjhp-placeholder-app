@@ -23292,7 +23292,7 @@ function renderSignatureSection(opts){
 
         <div style="display:flex;gap:8px;margin-top:8px;">
           <button type="button" class="btn secondary" onclick="clearSig()">Clear</button>
-          <button type="button" class="btn" onclick="saveSig()">Save Drawing</button>
+          <button type="button" class="btn" onclick="saveSig()">Save Drawn Signature</button>
         </div>
       </div>
     </div>
@@ -48189,6 +48189,7 @@ function renderTemplateEditor(org, user){
     orgSettings.practice_signature && typeof orgSettings.practice_signature === "object"
       ? orgSettings.practice_signature
       : {};
+  const practiceSignatureImage = String(orgSettings.signature_image || orgSettings.practice_signature_image || practiceSignature.signature_image || (typeof tjhpPracticeSignatureImage === "function" ? (tjhpPracticeSignatureImage(orgId) || "") : "") || "");
   const practiceSignatureText = tjhpPracticeSignatureText(orgId);
   const sample = getTemplatePreviewSample(orgId);
   const sampleB64 = Buffer.from(JSON.stringify(sample)).toString("base64");
@@ -48303,15 +48304,15 @@ function renderTemplateEditor(org, user){
     <div>
       <div class="tpl-card" style="margin-bottom:12px;">
         <div class="tpl-sub">Practice Signature</div>
-        <p class="tpl-muted">Used by default in appeal and negotiation packets. You can still edit the signature inside an individual packet.</p>
+        <p class="tpl-muted">Use typed details, a drawn signature, or both. Packets use the drawn signature image when available, plus the typed details/contact line when needed.</p>
         <form method="POST" action="/data-management/revenue-automation/practice-signature/save" style="margin-top:8px;">
           <label>Typed signature / name</label><input name="typed_name" id="practice_typed_name" value="${safeStr(practiceSignature.typed_name || "")}"/>
           <label>Title / role</label><input name="title" id="practice_title" value="${safeStr(practiceSignature.title || "")}"/>
           <label>Contact line</label><input name="contact_line" id="practice_contact_line" value="${safeStr(practiceSignature.contact_line || "")}"/>
-          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" type="submit">Save Practice Signature</button></div>
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" type="submit">Save Signature Details</button></div>
         </form>
-        <div style="margin-top:10px;"><div class="tpl-muted" style="margin-bottom:6px;">Draw your signature here, then click Save Drawing. This will be used by default in packets unless a packet has its own signature.</div><canvas id="practiceSigCanvas" width="800" height="240" tabindex="0" onmousedown="window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" onmousemove="window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" onmouseup="window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" onmouseleave="window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" ontouchstart="window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" ontouchmove="window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" ontouchend="window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" onpointerdown="window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" onpointermove="window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" onpointerup="window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" style="width:100%;height:150px;min-height:150px;border:1px dashed #d1d5db;border-radius:12px;background:#fff;touch-action:none;pointer-events:auto;position:relative;z-index:20;user-select:none;-webkit-user-select:none;cursor:auto;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawing</button></div></div>
-        <div id="practice_signature_preview" class="tpl-preview" style="margin-top:10px;min-height:60px;">${safeStr(practiceSignatureText)}</div>
+        <div style="margin-top:10px;"><div class="tpl-muted" style="margin-bottom:6px;">Draw your signature here, then click Save Drawn Signature. Clear only clears the drawing box. To replace the saved signature, draw again and click Save Drawn Signature.</div><canvas id="practiceSigCanvas" width="800" height="240" tabindex="0" onmousedown="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" onmousemove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" onmouseup="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" onmouseleave="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" ontouchstart="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" ontouchmove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" ontouchend="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" onpointerdown="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" onpointermove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" onpointerup="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" style="width:100%;height:150px;min-height:150px;border:1px dashed #d1d5db;border-radius:12px;background:#fff;touch-action:none;pointer-events:auto;position:relative;z-index:20;user-select:none;-webkit-user-select:none;cursor:auto;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawn Signature</button></div></div>
+        <div style="margin-top:10px;"><label>Practice Signature Preview</label><div id="practice_signature_preview" class="tpl-preview practice-signature-preview" data-practice-signature-image-source="practiceSignatureImage" data-practice-signature-image-helper="tjhpPracticeSignatureImage" style="margin-top:6px;min-height:60px;">${practiceSignatureImage ? `<div class="tpl-muted" style="margin-bottom:6px;">Saved drawn signature</div><img src="${safeStr(practiceSignatureImage)}" alt="Saved practice signature" style="max-height:80px;max-width:100%;display:block;"/>${practiceSignatureText ? `<div class="tpl-muted" style="margin-top:8px;">Typed details:</div><div>${safeStr(practiceSignatureText).replace(/\n/g, "<br/>")}</div>` : ""}` : `<div class="tpl-muted" style="margin-bottom:6px;">Typed signature preview</div>${safeStr(practiceSignatureText).replace(/\n/g, "<br/>")}`}</div></div>
         <div id="revenueAutomationJsStatus" class="tpl-muted" style="display:none;">Revenue Automation JS ready</div>
       </div>
 
@@ -48424,7 +48425,8 @@ function renderTemplateEditor(org, user){
       }
     }
 
-    function bindPracticeSignatureCanvas(){
+    function bindPracticeSignatureCanvas(){ return; // no-op: final controller owns practice canvas binding
+
       const canvas = byId("practiceSigCanvas");
       if (!canvas || !canvas.getContext) return;
       if (canvas.dataset.bound === "1") return;
@@ -48670,14 +48672,15 @@ function renderTemplateEditor(org, user){
     function getCanvas(){ return document.getElementById("practiceSigCanvas"); }
     function getCtx(){ const c = getCanvas(); if (!c || !c.getContext) return null; const ctx = c.getContext("2d"); if (!ctx) return null; ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#111827"; ctx.fillStyle = "#111827"; return ctx; }
     function normalizePoint(evt){ const c = getCanvas(); if (!c) return { x:0, y:0 }; const rect = c.getBoundingClientRect(); const point = evt && evt.touches && evt.touches[0] ? evt.touches[0] : evt && evt.changedTouches && evt.changedTouches[0] ? evt.changedTouches[0] : evt || {}; let x; let y; if (evt && Number.isFinite(evt.offsetX) && Number.isFinite(evt.offsetY) && evt.target === c) { x = evt.offsetX * (c.width / (c.clientWidth || rect.width || c.width || 1)); y = evt.offsetY * (c.height / (c.clientHeight || rect.height || c.height || 1)); } else { const w = rect.width || c.clientWidth || c.offsetWidth || c.width || 1; const h = rect.height || c.clientHeight || c.offsetHeight || c.height || 1; x = ((point.clientX || 0) - rect.left) * (c.width / w); y = ((point.clientY || 0) - rect.top) * (c.height / h); } return { x, y }; }
-    function stopBrowser(evt){ try { if (evt && evt.cancelable) evt.preventDefault(); if (evt) evt.stopPropagation(); } catch (_) {} }
-    const state = { drawing:false, last:null };
-    window.__tjhpPracticeSigStart = function(evt){ const ctx = getCtx(); const c = getCanvas(); if (!ctx || !c) return false; state.drawing = true; const p = normalizePoint(evt); state.last = p; ctx.beginPath(); ctx.arc(p.x, p.y, 1.6, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.moveTo(p.x, p.y); try { if (evt && evt.pointerId != null && c.setPointerCapture) c.setPointerCapture(evt.pointerId); } catch (_) {} const marker = document.getElementById("revenueAutomationJsStatus"); if (marker) { marker.dataset.practiceSigStarted = "1"; marker.dataset.practiceSigLastX = String(Math.round(p.x)); marker.dataset.practiceSigLastY = String(Math.round(p.y)); } stopBrowser(evt); return false; };
-    window.__tjhpPracticeSigMove = function(evt){ if (!state.drawing) return false; const ctx = getCtx(); if (!ctx) return false; const p = normalizePoint(evt); ctx.lineTo(p.x, p.y); ctx.stroke(); ctx.beginPath(); ctx.moveTo(p.x, p.y); state.last = p; const marker = document.getElementById("revenueAutomationJsStatus"); if (marker) { marker.dataset.practiceSigMoved = "1"; marker.dataset.practiceSigLastX = String(Math.round(p.x)); marker.dataset.practiceSigLastY = String(Math.round(p.y)); } stopBrowser(evt); return false; };
-    window.__tjhpPracticeSigStop = function(evt){ state.drawing = false; state.last = null; const ctx = getCtx(); if (ctx) ctx.beginPath(); stopBrowser(evt); return false; };
+    function stopBrowser(evt){ try { if (evt && evt.cancelable) evt.preventDefault(); } catch (_) {} }
+    const state = { drawing: false, activePointerId: null, activeInput: "", lastPoint: null };
+    function forceStop(evt){ state.drawing = false; state.activePointerId = null; state.activeInput = ""; state.lastPoint = null; const ctx = getCtx(); if (ctx) ctx.beginPath(); try { const c = getCanvas(); if (evt && evt.pointerId != null && c && c.releasePointerCapture) c.releasePointerCapture(evt.pointerId); } catch (_) {} }
+    window.__tjhpPracticeSigStart = function(evt){ const ctx = getCtx(); const c = getCanvas(); if (!ctx || !c) return false; state.drawing = true; state.activePointerId = evt && evt.pointerId != null ? evt.pointerId : null; state.activeInput = evt && evt.type ? evt.type : ""; const p = normalizePoint(evt); state.lastPoint = p; ctx.beginPath(); ctx.arc(p.x, p.y, 1.6, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.moveTo(p.x, p.y); try { if (evt && evt.pointerId != null && c.setPointerCapture) c.setPointerCapture(evt.pointerId); } catch (_) {} const marker = document.getElementById("revenueAutomationJsStatus"); if (marker) marker.dataset.practiceSigStarted = "1"; stopBrowser(evt); return false; };
+    window.__tjhpPracticeSigMove = function(evt){ if (!state.drawing) return false; if (evt && (evt.type === "mousemove" || evt.type === "pointermove") && Number.isFinite(evt.buttons) && evt.buttons === 0) { forceStop(evt); return false; } if (evt && evt.type === "pointermove" && state.activePointerId != null && evt.pointerId != null && evt.pointerId !== state.activePointerId) return false; const ctx = getCtx(); if (!ctx) return false; const p = normalizePoint(evt); ctx.lineTo(p.x, p.y); ctx.stroke(); ctx.beginPath(); ctx.moveTo(p.x, p.y); state.lastPoint = p; const marker = document.getElementById("revenueAutomationJsStatus"); if (marker) marker.dataset.practiceSigMoved = "1"; stopBrowser(evt); return false; };
+    window.__tjhpPracticeSigStop = function(evt){ forceStop(evt); stopBrowser(evt); return false; };
     window.clearPracticeSig = function(){ const c = getCanvas(); const ctx = getCtx(); if (!c || !ctx) return; ctx.clearRect(0, 0, c.width, c.height); ctx.beginPath(); const marker = document.getElementById("revenueAutomationJsStatus"); if (marker) marker.dataset.practiceSigCleared = "1"; };
-    window.savePracticeSig = function(){ const c = getCanvas(); if (!c || !c.toDataURL) return; fetch("/org/save-signature", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ signature:c.toDataURL() }) }).then(function(){ location.reload(); }).catch(function(){}); };
-    function bindFinal(){ const c = getCanvas(); if (!c || c.dataset.practiceFinalBound === "1") return; c.dataset.practiceFinalBound = "1"; c.style.pointerEvents = "auto"; c.style.position = "relative"; c.style.zIndex = "20"; c.style.touchAction = "none"; c.style.userSelect = "none"; c.style.webkitUserSelect = "none"; c.style.background = "#fff"; c.style.cursor = "auto"; c.addEventListener("mousedown", window.__tjhpPracticeSigStart); c.addEventListener("mousemove", window.__tjhpPracticeSigMove); c.addEventListener("mouseup", window.__tjhpPracticeSigStop); c.addEventListener("mouseleave", window.__tjhpPracticeSigStop); c.addEventListener("touchstart", window.__tjhpPracticeSigStart, { passive:false }); c.addEventListener("touchmove", window.__tjhpPracticeSigMove, { passive:false }); c.addEventListener("touchend", window.__tjhpPracticeSigStop); c.addEventListener("touchcancel", window.__tjhpPracticeSigStop); c.addEventListener("pointerdown", window.__tjhpPracticeSigStart); c.addEventListener("pointermove", window.__tjhpPracticeSigMove); c.addEventListener("pointerup", window.__tjhpPracticeSigStop); c.addEventListener("pointercancel", window.__tjhpPracticeSigStop); c.addEventListener("pointerleave", window.__tjhpPracticeSigStop); document.addEventListener("mousemove", window.__tjhpPracticeSigMove); document.addEventListener("mouseup", window.__tjhpPracticeSigStop); document.addEventListener("touchmove", window.__tjhpPracticeSigMove, { passive:false }); document.addEventListener("touchend", window.__tjhpPracticeSigStop); document.addEventListener("pointermove", window.__tjhpPracticeSigMove); document.addEventListener("pointerup", window.__tjhpPracticeSigStop); const marker = document.getElementById("revenueAutomationJsStatus"); if (marker) { marker.dataset.ready = "1"; marker.dataset.practiceSigFinalBound = "1"; } }
+    window.savePracticeSig = function(){ const c = getCanvas(); if (!c || !c.toDataURL) return; const dataUrl = c.toDataURL(); const preview = document.getElementById("practice_signature_preview"); if (preview) { preview.innerHTML = '<div class="tpl-muted" style="margin-bottom:6px;">Saved drawn signature</div>' + '<img src="' + dataUrl + '" alt="Saved practice signature" style="max-height:80px;max-width:100%;display:block;"/>'; } fetch("/org/save-signature", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ signature:dataUrl }) }).then(function(){ location.reload(); }).catch(function(){}); };
+    function bindFinal(){ const c = getCanvas(); if (!c || c.dataset.practiceFinalBound === "1") return; c.dataset.practiceFinalBound = "1"; c.style.pointerEvents = "auto"; c.style.position = "relative"; c.style.zIndex = "20"; c.style.touchAction = "none"; c.style.userSelect = "none"; c.style.webkitUserSelect = "none"; c.style.background = "#fff"; c.style.cursor = "auto"; c.addEventListener("mousedown", window.__tjhpPracticeSigStart); c.addEventListener("mousemove", window.__tjhpPracticeSigMove); c.addEventListener("mouseup", window.__tjhpPracticeSigStop); c.addEventListener("mouseleave", window.__tjhpPracticeSigStop); c.addEventListener("touchstart", window.__tjhpPracticeSigStart, { passive:false }); c.addEventListener("touchmove", window.__tjhpPracticeSigMove, { passive:false }); c.addEventListener("touchend", window.__tjhpPracticeSigStop); c.addEventListener("touchcancel", window.__tjhpPracticeSigStop); c.addEventListener("pointerdown", window.__tjhpPracticeSigStart); c.addEventListener("pointermove", window.__tjhpPracticeSigMove); c.addEventListener("pointerup", window.__tjhpPracticeSigStop); c.addEventListener("pointercancel", window.__tjhpPracticeSigStop); c.addEventListener("lostpointercapture", window.__tjhpPracticeSigStop); c.addEventListener("pointerleave", window.__tjhpPracticeSigStop); document.addEventListener("mousemove", window.__tjhpPracticeSigMove); document.addEventListener("mouseup", window.__tjhpPracticeSigStop); window.addEventListener("mouseup", window.__tjhpPracticeSigStop); document.addEventListener("touchmove", window.__tjhpPracticeSigMove, { passive:false }); document.addEventListener("touchend", window.__tjhpPracticeSigStop); document.addEventListener("touchcancel", window.__tjhpPracticeSigStop); window.addEventListener("touchend", window.__tjhpPracticeSigStop); document.addEventListener("pointermove", window.__tjhpPracticeSigMove); document.addEventListener("pointerup", window.__tjhpPracticeSigStop); window.addEventListener("pointerup", window.__tjhpPracticeSigStop); document.addEventListener("pointercancel", window.__tjhpPracticeSigStop); window.addEventListener("blur", forceStop); document.addEventListener("visibilitychange", function(){ if (document.hidden) forceStop(); }); const marker = document.getElementById("revenueAutomationJsStatus"); if (marker) { marker.dataset.ready = "1"; marker.dataset.practiceSigFinalBound = "1"; } }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bindFinal, { once:true }); else bindFinal();
     setTimeout(bindFinal, 50); setTimeout(bindFinal, 500);
   } catch (_) {}
@@ -56286,7 +56289,8 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(src.includes("Leave blank to use TJ Healthcare Pro's built-in appeal and negotiation language."), "missing personalization helper");
   assert(src.includes("Practice Signature"), "missing Practice Signature section");
   assert(src.includes("Used by default in appeal and negotiation packets."), "missing practice signature helper");
-  assert(src.includes("Save Practice Signature"), "missing Save Practice Signature button");
+  assert(src.includes("Save Signature Details"), "missing Save Signature Details button");
+  assert(src.includes("Save Drawn Signature"), "missing Save Drawn Signature button");
   assert(src.includes("Save Personalization"), "missing Save Personalization");
   assert(!src.includes(">Save " + "Templates</button>"), "Save Templates still visible");
   assert(src.includes("Appeal Opening"), "missing Appeal Opening");
@@ -56379,9 +56383,9 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("practiceFinalBound"), "render missing practiceFinalBound marker");
   assert(rendered.includes("practiceSigStarted"), "render missing practiceSigStarted marker");
   assert(rendered.includes("practiceSigMoved"), "render missing practiceSigMoved marker");
-  assert(rendered.includes('onmousedown="window.__tjhpPracticeSigStart'), "render missing inline onmousedown fallback");
-  assert(rendered.includes('onmousemove="window.__tjhpPracticeSigMove'), "render missing inline onmousemove fallback");
-  assert(rendered.includes('onpointerdown="window.__tjhpPracticeSigStart'), "render missing inline onpointerdown fallback");
+  assert(rendered.includes('onmousedown="return window.__tjhpPracticeSigStart'), "render missing inline onmousedown fallback");
+  assert(rendered.includes('onmousemove="return window.__tjhpPracticeSigMove'), "render missing inline onmousemove fallback");
+  assert(rendered.includes('onpointerdown="return window.__tjhpPracticeSigStart'), "render missing inline onpointerdown fallback");
   assert(rendered.includes("pointer-events:auto"), "render missing pointer-events:auto");
   assert(rendered.includes("z-index:20"), "render missing z-index:20");
   assert(rendered.includes("offsetX"), "render missing offsetX normalization path");
@@ -56409,7 +56413,24 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("try {"), "rendered preview script should be defensive");
   assert(rendered.includes("clearPracticeSig"), "practice signature clear function missing");
   assert(rendered.includes("savePracticeSig"), "practice signature save function missing");
-  assert(rendered.includes("Save Practice Signature"), "render missing Save Practice Signature");
+  assert(rendered.includes("Save Signature Details"), "render missing Save Signature Details");
+  assert(rendered.includes("Save Drawn Signature"), "render missing Save Drawn Signature");
+  assert(rendered.includes("Practice Signature Preview"), "render missing Practice Signature Preview");
+  assert(rendered.includes("Saved drawn signature"), "render missing Saved drawn signature");
+  assert(rendered.includes("Typed signature preview"), "render missing Typed signature preview");
+  assert(rendered.includes("practiceSignatureImage"), "render missing practiceSignatureImage");
+  assert(rendered.includes("tjhpPracticeSignatureImage"), "render missing tjhpPracticeSignatureImage");
+  assert(rendered.includes("forceStop"), "render missing forceStop");
+  assert(rendered.includes("evt.buttons === 0"), "render missing evt.buttons guard");
+  assert(rendered.includes("window.addEventListener(\"blur\""), "render missing blur stop listener");
+  assert(rendered.includes("visibilitychange"), "render missing visibilitychange");
+  assert(rendered.includes("lostpointercapture"), "render missing lostpointercapture");
+  assert(rendered.includes("releasePointerCapture"), "render missing releasePointerCapture");
+  assert(rendered.includes("practice_signature_preview"), "render missing practice_signature_preview");
+  assert(rendered.includes("canvas.toDataURL()") || rendered.includes("c.toDataURL()"), "render missing canvas.toDataURL");
+  assert(rendered.includes("/org/save-signature"), "render missing /org/save-signature");
+  assert(!rendered.includes("Save Practice Signature"), "render should not include Save Practice Signature");
+  assert(!rendered.includes("Save Drawing"), "render should not include Save Drawing");
   assert(rendered.includes("Save Personalization"), "render missing Save Personalization");
   assert(rendered.includes("Save Reimbursement Rules"), "render missing Save Reimbursement Rules");
   assert(rendered.includes("Save Automation Settings"), "render missing Save Automation Settings");
