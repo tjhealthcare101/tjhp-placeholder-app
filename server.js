@@ -48354,7 +48354,7 @@ function renderTemplateEditor(org, user){
 
   return `
   <style>
-    .tpl-wrap{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;align-items:start;}
+    .tpl-wrap{display:grid;grid-template-columns:1fr;gap:14px;align-items:start;}
     .tpl-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;box-shadow:var(--shadow);}
     .tpl-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
     .tpl-textarea{width:100%;min-height:140px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;font-size:13px;outline:none;}
@@ -48406,6 +48406,11 @@ function renderTemplateEditor(org, user){
   </div>
 
   <div class="tpl-wrap" style="margin-top:16px;">
+    <div class="tpl-card">
+      <div class="tpl-sub">Default Packet Signature</div>
+      <p class="tpl-muted">Default packet signature is managed in Account → Organization Settings.</p>
+      <div style="margin-top:10px;"><a class="btn secondary" href="/account?tab=org#default-packet-signature">Manage Default Packet Signature</a></div>
+    </div>
     <div>
       <div class="tpl-card" style="margin-top:14px;">
         <div class="tpl-sub">Optional Letter Personalization</div>
@@ -48442,14 +48447,6 @@ function renderTemplateEditor(org, user){
       </div>
     </div>
 
-    <div>
-      <div class="tpl-card" style="margin-bottom:12px;">
-        <div class="tpl-sub">Default Packet Signature</div>
-        <p class="tpl-muted">Default packet signature is managed in Account → Organization Settings.</p>
-        <div style="margin-top:10px;"><a class="btn secondary" href="/account?tab=org#default-packet-signature">Manage Default Packet Signature</a></div>
-      </div>
-
-    </div>
   </div>
 
   <script>
@@ -51872,6 +51869,18 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
 
       if (tab === "org") {
         const settings = orgSettings;
+        const orgPracticeSignature =
+          orgSettings.practice_signature && typeof orgSettings.practice_signature === "object"
+            ? orgSettings.practice_signature
+            : {};
+        const orgPracticeSignatureImage = tjhpPracticeSignatureImage(org.org_id) || "";
+        const orgPracticeSignatureText = tjhpPracticeSignatureText(org.org_id) || "";
+        const hasOrgPracticeSignatureImage = !!String(orgPracticeSignatureImage || "").trim();
+        const signatureTypedName = String(orgPracticeSignature.typed_name || "").trim();
+        const signatureTitle = String(orgPracticeSignature.title || "").trim();
+        const signatureContactLine = String(orgPracticeSignature.contact_line || "").trim();
+        const signatureTypedLines = [signatureTypedName, signatureTitle, signatureContactLine].filter(Boolean);
+        const hasSignatureTypedDetails = signatureTypedLines.length > 0;
         const identity = orgSettings.identity || {};
         const letter = getLetterDefaults(orgSettings);
         const allowed = getAllowedRulesFromSettings(orgSettings);
@@ -51884,6 +51893,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
           <h3>Organization Settings</h3>
           <p class="muted">Set organization identity and recovery intelligence targets. Letter templates, contract rules, appeal/negotiation workflows, integrations, and security controls are managed in their dedicated areas.</p>
           <p class="muted">Last updated: ${safeStr(orgSettings.updated_at ? new Date(orgSettings.updated_at).toLocaleString() : "-")}</p>
+          <form id="defaultPacketSignatureDetailsForm" method="POST" action="/account/org-signature/save"></form>
           <form method="POST" action="/account/org-settings/save" style="margin-top:10px;display:flex;flex-direction:column;gap:10px;">
             <details open class="card" style="padding:0;">
               <summary style="padding:12px 14px;font-weight:800;cursor:pointer;">1) Organization Identity</summary>
@@ -51915,15 +51925,19 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
               <div style="padding:0 14px 14px;">
                 <p class="muted">Used by default in appeal, negotiation, and Letter of Medical Necessity packets. Packet-specific signatures still override this default.</p>
                 <p class="muted">Organization name, NPI, phone, email, and address come from the Organization Identity section above.</p>
-                <form method="POST" action="/account/org-signature/save">
-                  <label>Typed signature / name</label><input name="typed_name" value="${safeStr((orgSettings.practice_signature||{}).typed_name||"")}"/>
-                  <label>Title / role</label><input name="title" value="${safeStr((orgSettings.practice_signature||{}).title||"")}"/>
-                  <label>Optional contact line override</label><input name="contact_line" value="${safeStr((orgSettings.practice_signature||{}).contact_line||"")}"/>
-                  <div class="muted small">Optional. Leave blank to use the organization phone/email above.</div>
-                  <div class="btnRow" style="margin-top:8px;"><button class="btn" type="submit">Save Signature Details</button></div>
-                </form>
+                ${parsed.query && (parsed.query.signature === "saved" || parsed.query.saved === "1") ? `<div class="muted small" style="margin-bottom:8px;color:#166534;">Signature settings saved.</div>` : ""}
+                <label>Typed signature / name</label><input id="signature_typed_name" form="defaultPacketSignatureDetailsForm" name="typed_name" value="${safeStr((orgSettings.practice_signature||{}).typed_name||"")}"/>
+                <label>Title / role</label><input id="signature_title" form="defaultPacketSignatureDetailsForm" name="title" value="${safeStr((orgSettings.practice_signature||{}).title||"")}"/>
+                <label>Optional contact line override</label><input id="signature_contact_line" form="defaultPacketSignatureDetailsForm" name="contact_line" value="${safeStr((orgSettings.practice_signature||{}).contact_line||"")}"/>
+                <div class="muted small">Optional. Leave blank to use the organization phone/email above.</div>
+                <div class="btnRow" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+                  <button class="btn" type="submit" form="defaultPacketSignatureDetailsForm">Save Signature Details</button>
+                  <button class="btn secondary" type="button" id="clearSignatureDetailsBtn" onclick="window.clearSignatureDetails && window.clearSignatureDetails()">Clear Signature Details</button>
+                </div>
                 <div style="margin-top:10px;"><canvas id="practiceSigCanvas" width="800" height="240" tabindex="0" onmousedown="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" onmousemove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" onmouseup="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" onmouseleave="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" ontouchstart="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" ontouchmove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" ontouchend="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" onpointerdown="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" onpointermove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" onpointerup="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" style="width:100%;height:150px;min-height:150px;border:1px dashed #d1d5db;border-radius:12px;background:#fff;touch-action:none;pointer-events:auto;position:relative;z-index:20;user-select:none;-webkit-user-select:none;cursor:auto;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawn Signature</button></div></div>
-                <div style="margin-top:10px;"><label>Practice Signature Preview</label><div id="practice_signature_preview" class="tpl-preview" style="margin-top:6px;min-height:60px;">No default packet signature saved yet.</div></div>
+                <div class="muted small" style="margin-top:8px;">Clear only clears the drawing box. To replace the saved signature, draw again and click Save Drawn Signature.</div>
+                <div style="margin-top:10px;"><label>Practice Signature Preview</label><div id="practice_signature_preview" class="tpl-preview" style="margin-top:6px;min-height:60px;">${hasOrgPracticeSignatureImage ? `<div class="muted small" style="margin-bottom:6px;">Saved drawn signature</div><img src="${safeStr(orgPracticeSignatureImage)}" alt="Saved practice signature" style="max-height:90px;max-width:100%;display:block;margin-bottom:${hasSignatureTypedDetails ? "8px" : "0"};"/>${hasSignatureTypedDetails ? `<div class="muted small">Typed details</div><div>${signatureTypedLines.map(safeStr).join("<br>")}</div>` : ""}` : (hasSignatureTypedDetails ? `<div class="muted small">Typed signature details</div><div>${signatureTypedLines.map(safeStr).join("<br>")}</div>` : `No default packet signature saved yet.`)}${!signatureContactLine && (signatureTypedName || signatureTitle) ? `<div class="muted small" style="margin-top:6px;">Packet contact details will use Organization Identity phone/email.</div>` : ""}</div></div>
+                <div id="orgSignatureJsStatus" class="muted small" data-practice-sig-text="${safeStr(orgPracticeSignatureText)}" style="display:none;"></div>
               </div>
             </details>
 
@@ -51968,7 +51982,32 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
               function stop(){ drawing=false; ctx.beginPath(); return false; }
               window.__tjhpPracticeSigStart=start; window.__tjhpPracticeSigMove=move; window.__tjhpPracticeSigStop=stop;
               window.clearPracticeSig=function(){ ctx.clearRect(0,0,canvas.width,canvas.height); ctx.beginPath(); };
-              window.savePracticeSig=function(){ const dataUrl=canvas.toDataURL(); fetch('/org/save-signature',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signature:dataUrl})}).then(function(){ location.reload(); }).catch(function(){}); };
+              window.clearSignatureDetails=function(){
+                ["signature_typed_name","signature_title","signature_contact_line"].forEach(function(id){
+                  const el = document.getElementById(id);
+                  if (el) el.value = "";
+                });
+                const marker = document.getElementById("orgSignatureJsStatus");
+                if (marker) marker.dataset.detailsCleared = "1";
+              };
+              window.savePracticeSig=function(){
+                const dataUrl=canvas.toDataURL();
+                const preview = document.getElementById("practice_signature_preview");
+                if (preview) {
+                  const typed = [
+                    document.getElementById("signature_typed_name")?.value || "",
+                    document.getElementById("signature_title")?.value || "",
+                    document.getElementById("signature_contact_line")?.value || ""
+                  ].map(function(x){ return String(x || "").trim(); }).filter(Boolean);
+                  preview.innerHTML =
+                    '<div class="muted small" style="margin-bottom:6px;">Saved drawn signature</div>' +
+                    '<img src="' + dataUrl + '" alt="Saved practice signature" style="max-height:90px;max-width:100%;display:block;margin-bottom:8px;"/>' +
+                    (typed.length ? '<div class="muted small">Typed details</div><div>' + typed.map(function(x){ return x.replace(/[<>&]/g, ""); }).join("<br>") + '</div>' : '');
+                }
+                fetch('/org/save-signature',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signature:dataUrl})})
+                  .then(function(){ location.href = "/account?tab=org&signature=saved#default-packet-signature"; })
+                  .catch(function(){});
+              };
               window.addEventListener('blur', stop); document.addEventListener('visibilitychange', function(){ if(document.hidden) stop();}); canvas.addEventListener('lostpointercapture', stop);
             })();
           </script>
@@ -56566,11 +56605,7 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(src.indexOf("Reimbursement Defaults") < src.indexOf("Appeals & Negotiations Automation"), "reimbursement section ordering");
   assert(src.includes("Use these defaults only when no payer-specific reimbursement contract rule is found."), "missing reimbursement helper");
   assert(src.includes("Optional Letter Personalization"), "missing Optional Letter Personalization section");
-  assert(src.includes("Leave blank to use TJ Healthcare Pro's built-in appeal and negotiation language."), "missing personalization helper");
-  assert(src.includes("Practice Signature"), "missing Practice Signature section");
-  assert(src.includes("Used by default in appeal and negotiation packets."), "missing practice signature helper");
-  assert(src.includes("Save Signature Details"), "missing Save Signature Details button");
-  assert(src.includes("Save Drawn Signature"), "missing Save Drawn Signature button");
+  assert(src.includes("Leave blank to use TJ Healthcare Pro defaults."), "missing personalization helper");
   assert(src.includes("Save Personalization"), "missing Save Personalization");
   assert(!src.includes(">Save " + "Templates</button>"), "Save Templates still visible");
   assert(src.includes("Appeal Opening"), "missing Appeal Opening");
@@ -56594,13 +56629,6 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(src.includes("Used to calculate follow-up timing in the Action Center"), "missing follow-up helper");
   assert(src.includes("14 days after the last submission or payer activity"), "missing follow-up timing detail");
   assert(src.includes("function bindPracticeSignatureCanvas"), "missing practice signature canvas binder");
-  assert(src.includes("practiceSigCanvas"), "missing practiceSigCanvas reference");
-  assert(src.includes("touch-action:none"), "missing touch-action:none on practice canvas");
-  assert(src.includes("mousedown"), "missing mousedown draw event");
-  assert(src.includes("mousemove"), "missing mousemove draw event");
-  assert(src.includes("mouseup"), "missing mouseup draw event");
-  assert(src.includes("touchstart"), "missing touchstart draw event");
-  assert(src.includes("setPointerCapture"), "missing setPointerCapture pointer support");
   assert(src.includes("tjhpPracticeSignatureText"), "missing text fallback helper");
   assert(src.includes("tjhpPracticeSignatureImage"), "missing image fallback helper");
   assert(src.includes("/data-management/revenue-automation/practice-signature/save"), "missing practice signature save route");
@@ -56642,6 +56670,7 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("Reimbursement Defaults"), "render missing Reimbursement Defaults");
   assert(rendered.includes("Appeals & Negotiations Automation"), "render missing automation section");
   assert(rendered.includes("Optional Letter Personalization"), "render missing personalization section");
+  assert(rendered.includes(".tpl-wrap{display:grid;grid-template-columns:1fr;"), "render should use single-column tpl-wrap");
   assert(rendered.includes("id=\"reimbursement_default_method\""), "render missing default method id");
   assert(rendered.includes("onchange=\"window.tjhpRevenueUpdateMethodHelp"), "render missing onchange update hook");
   assert(rendered.includes("window.tjhpRevenueUpdateMethodHelp = updateReimbursementMethodHelp"), "render missing global update function assignment");
@@ -56707,6 +56736,7 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("Save Automation Settings"), "render missing Save Automation Settings");
   assert(rendered.includes("Manage Default Packet Signature"), "render missing Manage Default Packet Signature");
   assert(rendered.includes("/account?tab=org#default-packet-signature"), "render missing account signature link");
+  assert(!rendered.includes("Used by default in appeal and negotiation packets."), "render should not include right-column practice signature helper");
   assert(!rendered.includes('id="practiceSigCanvas"'), "render should not include practiceSigCanvas");
   assert(!rendered.includes('action="/data-management/revenue-automation/practice-signature/save"'), "render should not include old practice signature form action");
   assert(!rendered.includes("Save Signature Details"), "render should not include Save Signature Details");
@@ -56753,6 +56783,21 @@ if (process.env.TJHP_ORG_SIGNATURE_UI_SMOKE_TESTS === "true" && (process.env.TJH
   function assert(c,m){ if(!c) throw new Error(m); }
   assert(src.includes('/account/org-signature/save'), 'missing account org signature save route');
   assert(src.includes('id="default-packet-signature"'), 'missing default packet signature section');
+  assert(src.includes('id="defaultPacketSignatureDetailsForm"'), 'missing detached signature details form');
+  assert(src.includes('form="defaultPacketSignatureDetailsForm"'), 'missing form binding for detached signature details fields');
+  assert(src.includes('<form id="defaultPacketSignatureDetailsForm" method="POST" action="/account/org-signature/save"></form>'), 'detached org-signature save form missing');
+  assert(src.includes('id="signature_typed_name"'), 'missing signature_typed_name input id');
+  assert(src.includes('id="signature_title"'), 'missing signature_title input id');
+  assert(src.includes('id="signature_contact_line"'), 'missing signature_contact_line input id');
+  assert(src.includes('Clear Signature Details'), 'missing Clear Signature Details button');
+  assert(src.includes('clearSignatureDetails'), 'missing clearSignatureDetails helper');
+  assert(src.includes('Practice Signature Preview'), 'missing Practice Signature Preview');
+  assert(src.includes('Saved drawn signature'), 'missing saved drawn signature preview label');
+  assert(src.includes('Typed details'), 'missing typed details preview label');
+  assert(src.includes('Packet contact details will use Organization Identity phone/email'), 'missing packet contact fallback helper');
+  assert(src.includes('Save Drawn Signature'), 'missing Save Drawn Signature button');
+  assert(src.includes('/org/save-signature'), 'missing /org/save-signature usage');
+  assert(src.includes('location.href = "/account?tab=org&signature=saved#default-packet-signature"'), 'missing org signature redirect anchor');
   assert(src.includes('__TJHP_PRACTICE_SIGNATURE_DRAW_FINAL__'), 'missing signature draw final marker');
   const testOrg='org-sign-smoke';
   saveOrgSettings(testOrg, { signature_image:'data:image/png;base64,abc' });
