@@ -48290,14 +48290,20 @@ function renderTemplateEditor(org, user){
         <p class="tpl-muted">Optional. Leave blank to use TJ Healthcare Pro's built-in appeal and negotiation language.</p>
         <form method="POST" action="/account/templates" style="margin-top:12px;">
           <div class="tpl-grid2">
-            <div><label>Appeal Opening</label><textarea class="tpl-textarea tpl-edit" name="appeal_opening" id="appeal_opening">${safeStr(t.appeal_opening || "")}</textarea></div>
-            <div><label>Appeal Footer</label><textarea class="tpl-textarea tpl-edit" name="appeal_footer" id="appeal_footer">${safeStr(t.appeal_footer || "")}</textarea></div>
-            <div><label>Negotiation Opening</label><textarea class="tpl-textarea tpl-edit" name="negotiation_opening" id="negotiation_opening">${safeStr(t.negotiation_opening || "")}</textarea></div>
-            <div><label>Negotiation Footer</label><textarea class="tpl-textarea tpl-edit" name="negotiation_footer" id="negotiation_footer">${safeStr(t.negotiation_footer || "")}</textarea></div>
+            <div><label>Appeal Opening</label><div class="tpl-muted">Appears near the top of appeal letters before the claim-specific argument.</div><textarea class="tpl-textarea tpl-edit" name="appeal_opening" id="appeal_opening">${safeStr(t.appeal_opening || "")}</textarea></div>
+            <div><label>Appeal Footer</label><div class="tpl-muted">Appears near the end of appeal letters before the signature.</div><textarea class="tpl-textarea tpl-edit" name="appeal_footer" id="appeal_footer">${safeStr(t.appeal_footer || "")}</textarea></div>
+            <div><label>Negotiation Opening</label><div class="tpl-muted">Appears near the top of underpayment negotiation letters.</div><textarea class="tpl-textarea tpl-edit" name="negotiation_opening" id="negotiation_opening">${safeStr(t.negotiation_opening || "")}</textarea></div>
+            <div><label>Negotiation Footer</label><div class="tpl-muted">Appears near the end of negotiation letters before the signature.</div><textarea class="tpl-textarea tpl-edit" name="negotiation_footer" id="negotiation_footer">${safeStr(t.negotiation_footer || "")}</textarea></div>
           </div>
           <input type="hidden" name="signature_block" id="signature_block" value="${safeStr(t.signature_block || "")}"/>
           <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;"><button class="btn" type="submit">Save Personalization</button></div>
         </form>
+      </div>
+      <div class="tpl-card" style="margin-top:12px;">
+        <div class="tpl-sub">Default Packet Preview</div>
+        <p class="tpl-muted">Shows the built-in appeal and negotiation packet language. Optional personalization appears in the highlighted opening/footer areas as you type.</p>
+        <div style="margin-top:10px;"><label>Appeal Packet Preview</label><div class="tpl-muted">Default language shown · Your optional text appears where entered</div><div class="tpl-preview" id="previewAppeal"></div></div>
+        <div style="margin-top:10px;"><label>Negotiation Packet Preview</label><div class="tpl-muted">Default language shown · Your optional text appears where entered</div><div class="tpl-preview" id="previewNegotiation"></div></div>
       </div>
     </div>
 
@@ -48316,12 +48322,6 @@ function renderTemplateEditor(org, user){
         <div id="revenueAutomationJsStatus" class="tpl-muted" style="display:none;">Revenue Automation JS ready</div>
       </div>
 
-      <div class="tpl-card">
-        <div class="tpl-sub">Live Preview</div>
-        <p class="tpl-muted">Preview how optional letter personalization and practice signature may appear in a sample appeal or negotiation draft.</p>
-        <div style="margin-top:10px;"><label>Appeal Preview</label><div class="tpl-preview" id="previewAppeal"></div></div>
-        <div style="margin-top:10px;"><label>Negotiation Preview</label><div class="tpl-preview" id="previewNegotiation"></div></div>
-      </div>
     </div>
   </div>
 
@@ -48334,10 +48334,68 @@ function renderTemplateEditor(org, user){
     function byId(id){ return document.getElementById(id); }
     const NL = String.fromCharCode(10);
 
-    function applyVars(tpl){
-      return String(tpl || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, function(m,k){
-        return Object.prototype.hasOwnProperty.call(sample,k) ? String(sample[k] == null ? "" : sample[k]) : m;
-      });
+    function sampleValue(keys, fallback) {
+      for (const k of keys) {
+        if (sample && sample[k] != null && String(sample[k]).trim()) return String(sample[k]).trim();
+      }
+      return fallback;
+    }
+
+    function optionalText(id, fallback) {
+      const v = byId(id)?.value || "";
+      return String(v).trim() || fallback;
+    }
+
+    function buildDefaultAppealPreview() {
+      const claimNo = sampleValue(["claim_number","claim_id","claim","id"], "1001");
+      const payer = sampleValue(["payer","payer_name","insurance"], "Aetna");
+      const cpt = sampleValue(["cpt_code","procedure_code","procedure","cpt"], "99213");
+      const dos = sampleValue(["date_of_service","dos","service_date"], "01/01/2026");
+      return [
+        "APPEAL LETTER PREVIEW",
+        "",
+        optionalText("appeal_opening", "Built-in appeal opening: Please accept this appeal and review the claim identified below."),
+        "",
+        "Re: Claim #" + claimNo,
+        "Payer: " + payer,
+        "Date of Service: " + dos,
+        "Procedure: " + cpt,
+        "",
+        "Built-in claim argument:",
+        "TJ Healthcare Pro inserts the denial/non-payment issue, claim facts, supporting evidence, and requested resolution here.",
+        "",
+        optionalText("appeal_footer", "Built-in appeal footer: Thank you for your review. Please reconsider the claim and issue the appropriate reimbursement."),
+        "",
+        "Signature:",
+        "Practice signature appears in the packet signature section."
+      ].join(NL);
+    }
+
+    function buildDefaultNegotiationPreview() {
+      const claimNo = sampleValue(["claim_number","claim_id","claim","id"], "1002");
+      const payer = sampleValue(["payer","payer_name","insurance"], "UnitedHealthcare");
+      const billed = sampleValue(["billed","billed_amount","amount_billed"], "$220.00");
+      const paid = sampleValue(["paid","paid_amount","amount_paid"], "$100.00");
+      const expected = sampleValue(["expected","expected_amount","expected_insurance"], "$160.00");
+      return [
+        "NEGOTIATION LETTER PREVIEW",
+        "",
+        optionalText("negotiation_opening", "Built-in negotiation opening: Please review the reimbursement discrepancy for the claim identified below."),
+        "",
+        "Re: Claim #" + claimNo,
+        "Payer: " + payer,
+        "Billed: " + billed,
+        "Paid: " + paid,
+        "Expected: " + expected,
+        "",
+        "Built-in negotiation argument:",
+        "TJ Healthcare Pro inserts the underpayment explanation, expected-versus-paid comparison, contract context, and requested resolution here.",
+        "",
+        optionalText("negotiation_footer", "Built-in negotiation footer: Please review the payment and issue any additional reimbursement due."),
+        "",
+        "Signature:",
+        "Practice signature appears in the packet signature section."
+      ].join(NL);
     }
 
     function updatePracticePreview(){
@@ -48353,27 +48411,10 @@ function renderTemplateEditor(org, user){
     }
 
     function updatePreviews(){
-      const appeal = [
-        byId("appeal_opening")?.value || "",
-        "",
-        byId("practice_signature_preview")?.textContent || "",
-        "",
-        byId("appeal_footer")?.value || ""
-      ].join(NL);
-
-      const nego = [
-        byId("negotiation_opening")?.value || "",
-        "",
-        byId("practice_signature_preview")?.textContent || "",
-        "",
-        byId("negotiation_footer")?.value || ""
-      ].join(NL);
-
       const elA = byId("previewAppeal");
       const elN = byId("previewNegotiation");
-
-      if (elA) elA.textContent = applyVars(appeal).trim() || "Leave fields blank to use built-in draft language.";
-      if (elN) elN.textContent = applyVars(nego).trim() || "Leave fields blank to use built-in draft language.";
+      if (elA) elA.textContent = buildDefaultAppealPreview();
+      if (elN) elN.textContent = buildDefaultNegotiationPreview();
     }
 
     ["appeal_opening","appeal_footer","negotiation_opening","negotiation_footer"].forEach(function(id){
@@ -56409,7 +56450,25 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("/org/save-signature"), "render missing org signature save endpoint");
   assert(rendered.includes("practiceSigBound"), "render missing practiceSigBound js status marker");
   assert(!rendered.includes("cursor:crosshair"), "render should not include crosshair cursor on practice canvas");
-  assert(rendered.includes("Live Preview"), "render missing Live Preview");
+  assert(rendered.includes("Default Packet Preview"), "render missing Default Packet Preview");
+  assert(rendered.includes("Appeal Packet Preview"), "render missing Appeal Packet Preview");
+  assert(rendered.includes("Negotiation Packet Preview"), "render missing Negotiation Packet Preview");
+  assert(rendered.includes("APPEAL LETTER PREVIEW"), "render missing APPEAL LETTER PREVIEW");
+  assert(rendered.includes("NEGOTIATION LETTER PREVIEW"), "render missing NEGOTIATION LETTER PREVIEW");
+  assert(rendered.includes("Built-in claim argument"), "render missing Built-in claim argument");
+  assert(rendered.includes("Built-in negotiation argument"), "render missing Built-in negotiation argument");
+  assert(rendered.includes("Practice signature appears in the packet signature section."), "render missing packet signature section line");
+  assert(rendered.includes("Appears near the top of appeal letters"), "render missing appeal opening helper text");
+  assert(rendered.includes("Appears near the end of appeal letters"), "render missing appeal footer helper text");
+  assert(rendered.includes("Appears near the top of underpayment negotiation letters"), "render missing negotiation opening helper text");
+  assert(rendered.includes("Appears near the end of negotiation letters"), "render missing negotiation footer helper text");
+  assert(rendered.includes("buildDefaultAppealPreview"), "render/source missing buildDefaultAppealPreview");
+  assert(rendered.includes("buildDefaultNegotiationPreview"), "render/source missing buildDefaultNegotiationPreview");
+  assert(rendered.includes("sampleValue"), "render/source missing sampleValue");
+  assert(rendered.includes("optionalText"), "render/source missing optionalText");
+  assert(!rendered.includes('byId("practice_signature_preview")?.textContent'), "updatePreviews should not use practice_signature_preview text");
+  assert(!rendered.includes("Saved drawn signatureTyped details"), "render should not include merged Saved drawn signatureTyped details");
+  assert(!rendered.includes("Saved drawn signatureTyped"), "render should not include raw Saved drawn signatureTyped");
   assert(rendered.includes("try {"), "rendered preview script should be defensive");
   assert(rendered.includes("clearPracticeSig"), "practice signature clear function missing");
   assert(rendered.includes("savePracticeSig"), "practice signature save function missing");
