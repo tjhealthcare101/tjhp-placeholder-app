@@ -18005,7 +18005,7 @@ function renderOutcomeRecommendationsCard(org_id, ws, claim, channel){
 function renderWorkspaceEvidenceSummaryCard(ws, claim, channel){
   const rows = workspaceEvidenceSummaries(ws, { limit: 8 });
   if (!rows.length) return `<div class="card"><h3>Evidence Summary</h3><div class="muted small">Upload source proof or supporting documents to generate an evidence summary.</div></div>`;
-  return `<div class="card"><h3>Evidence Summary</h3><div style="display:grid;gap:8px;">${rows.map(r => `<div style="border:1px solid #e5e7eb;border-radius:10px;padding:8px;"><div style="display:flex;justify-content:space-between;gap:8px;"><strong>${safeStr(r.filename || "")}</strong><span class="badge ${r.status === "needs_review" ? "warn" : ""}">${safeStr((r.document_type || "Supporting Document") + " · " + (r.confidence || "low"))}</span></div><div class="muted small">${safeStr(r.summary || "")}</div>${(r.findings||[]).length ? `<div class="small"><strong>Key findings:</strong> ${safeStr(r.findings.slice(0,3).join(" • "))}</div>` : ""}${(r.suggested_uses||[]).length ? `<div class="small"><strong>Suggested use:</strong> ${safeStr(r.suggested_uses.slice(0,3).join(" • "))}</div>` : ""}<div class="small"><strong>Section targets:</strong> ${safeStr((r.section_targets||[]).join(", "))}</div>${(r.warnings||[]).length ? `<div class="small" style="color:#b45309;"><strong>Needs review:</strong> ${safeStr(r.warnings.join(" "))}</div>` : ""}<form method="POST" action="/ai-workspace/evidence-review-status" style="margin-top:6px;"><input type="hidden" name="billed_id" value="${safeStr(claim?.billed_id || ws?.billed_id || "")}"/><input type="hidden" name="channel" value="${safeStr(channel || "appeal")}"/><input type="hidden" name="attachment_id" value="${safeStr(r.attachment_id || "")}"/><button class="btn secondary small" name="status" value="reviewed" type="submit">Mark Evidence Reviewed</button> <button class="btn secondary small" name="status" value="needs_review" type="submit">Mark Needs Review</button></form></div>`).join("")}</div></div>`;
+  return `<div class="card"><h3>Evidence Summary</h3><div style="display:grid;gap:8px;">${rows.map(r => `<div style="border:1px solid #e5e7eb;border-radius:10px;padding:8px;"><div style="display:flex;justify-content:space-between;gap:8px;"><strong>${safeStr(r.filename || "")}</strong><span class="badge ${r.status === "needs_review" ? "warn" : ""}">${safeStr((r.document_type || "Supporting Document") + " · " + (r.confidence || "low"))}</span></div><div class="muted small">${safeStr(r.summary || "")}</div>${(r.findings||[]).length ? `<div class="small"><strong>Key findings:</strong> ${safeStr(r.findings.slice(0,3).join(" • "))}</div>` : ""}${(r.suggested_uses||[]).length ? `<div class="small"><strong>Suggested use:</strong> ${safeStr(r.suggested_uses.slice(0,3).join(" • "))}</div>` : ""}<div class="small"><strong>Section targets:</strong> ${safeStr((r.section_targets||[]).join(", "))}</div>${(r.warnings||[]).length ? `<div class="small" style="color:#b45309;"><strong>Needs review:</strong> ${safeStr(r.warnings.join(" "))}</div>` : ""}<form method="POST" action="/ai-workspace/evidence-review-status" style="margin-top:6px;"><input type="hidden" name="billed_id" value="${safeStr(claim?.billed_id || ws?.billed_id || "")}"/><input type="hidden" name="channel" value="${safeStr(channel || "appeal")}"/><input type="hidden" name="attachment_id" value="${safeStr(r.attachment_id || "")}"/><button class="btn secondary small" name="status" value="reviewed" type="submit">Mark Evidence Reviewed</button> <button class="btn secondary small" name="status" value="needs_review" type="submit">Mark Needs Review</button></form></div>`).join("")}</div></div>` + renderWorkspaceEvidenceDraftSuggestions(ws, channel, claim);;
 }
 
 function computePayerBehaviorIntelligence(org_id, payer){
@@ -19261,6 +19261,42 @@ function workspaceEvidenceSummaries(ws, opts = {}){
       section_targets: Array.isArray(a.evidence_extraction.section_targets) ? a.evidence_extraction.section_targets : [],
       warnings: Array.isArray(a.evidence_extraction.warnings) ? a.evidence_extraction.warnings : [], uploaded_at: a.uploaded_at || ""
     }));
+}
+
+
+function tjhpEvidenceSuggestionId() {
+  return "sug_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
+}
+function tjhpWorkspaceSectionLabel(sectionKey){
+  const k=String(sectionKey||"").toLowerCase();
+  const m={letter_of_medical_necessity:"Letter of Medical Necessity",medical_necessity:"Medical Necessity",lmn:"Letter of Medical Necessity",appeal_argument:"Appeal Argument",appeal_narrative:"Appeal Narrative",negotiation_argument:"Negotiation Argument",negotiation_narrative:"Negotiation Narrative",payer_policy_support:"Payer Policy Support",supporting_evidence:"Supporting Evidence",payment_discrepancy:"Payment Discrepancy"};
+  return m[k]||String(sectionKey||"").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase());
+}
+function tjhpWorkspaceSuggestionTargetsForEvidence(evidenceSummary, channel){
+  const c=String(channel||'appeal').toLowerCase(); const targets=new Set();
+  const st=(evidenceSummary?.section_targets||[]).map(v=>String(v||'').toLowerCase());
+  const dt=String(evidenceSummary?.document_type||'').toLowerCase();
+  const docKey=String(evidenceSummary?.doc_key||'').toLowerCase();
+  const sum=[evidenceSummary?.summary||'',...(evidenceSummary?.findings||[])].join(' ').toLowerCase();
+  const add=(t)=>targets.add(t);
+  if(st.some(v=>['letter_of_medical_necessity','lmn','medical_necessity'].includes(v))) add('letter_of_medical_necessity');
+  if(st.some(v=>['appeal_argument','denial_rebuttal','payer_response'].includes(v))) add('appeal_argument');
+  if(st.some(v=>['negotiation_argument','payment_discrepancy','underpayment'].includes(v))) add('negotiation_argument');
+  if(st.includes('payer_policy_support')) add('payer_policy_support');
+  if(c==='appeal' && /(clinical|medical necessity|office note|record)/.test(dt+' '+docKey+' '+sum)) add('letter_of_medical_necessity');
+  if(c==='appeal' && /(denial|payer response|denial reason|carc|rarc)/.test(dt+' '+docKey+' '+sum)) add('appeal_argument');
+  if(c==='negotiation' && /(eob|remittance|payment|contract|fee schedule|underpay|discrepancy)/.test(dt+' '+docKey+' '+sum)) add('negotiation_argument');
+  if(!targets.size && c==='appeal') add('appeal_argument');
+  return Array.from(targets);
+}
+function tjhpWorkspaceResolvePacketSectionKey(ws, channel, target){
+  const sections = channel==='negotiation' ? (ws?.negotiation?.packet_sections||{}) : (ws?.appeal?.packet_sections||{});
+  const keys=Object.keys(sections||{}); if(!keys.length) return null;
+  const bad=(k)=>/signature|attachment|source_proof|evidence_index/.test(String(k||'').toLowerCase());
+  const safe=keys.filter(k=>!bad(k));
+  const map={letter_of_medical_necessity:['letter_of_medical_necessity','medical_necessity','lmn','clinical_rationale','treatment_rationale'],appeal_argument:['appeal_argument','appeal_letter','appeal_narrative','denial_rebuttal','argument','narrative'],negotiation_argument:['negotiation_argument','negotiation_letter','negotiation_narrative','variance_explanation','payment_discrepancy','argument','narrative'],payer_policy_support:['payer_policy_support','supporting_evidence','evidence_summary','appeal_argument','negotiation_argument']};
+  for (const c of (map[target]||[])){ const hit=safe.find(k=>String(k).toLowerCase()===c); if(hit) return hit; }
+  return null;
 }
 
 function workspacePreferredPullSourceForDoc(docKey, channel){
@@ -23252,6 +23288,9 @@ function workspaceAiEvidenceContext(ws, claim, channel){
     .map(key => `- ${workspaceAiSectionLabel(channel, key)}`);
 
   const extractedRows = workspaceEvidenceSummaries(ws, { limit: 5 });
+  const suggestionRows = workspaceEvidenceDraftSuggestions(ws, channel, { includeDismissed: false }).slice(0, 5);
+  const suggestionLines = suggestionRows.map((row) => `- ${row.title || "Suggestion"} (${row.status || "pending"}) → ${row.target_section_label || row.target_section_key || "section"}`);
+
   const extractedLines = extractedRows.map((row) => {
     const findings = Array.isArray(row.findings) ? row.findings.slice(0, 2).join("; ") : "";
     const shortSummary = String(row.summary || "").slice(0, 180);
@@ -23274,9 +23313,54 @@ function workspaceAiEvidenceContext(ws, claim, channel){
     sectionLines.length ? sectionLines.join("\n") : "- None",
     "",
     "Extracted evidence summary (read-only context only):",
-    extractedLines.length ? extractedLines.join("\n") : "- No extracted evidence summary available yet."
+    extractedLines.length ? extractedLines.join("\n") : "- No extracted evidence summary available yet.",
+    "",
+    "Evidence draft suggestions (read-only status):",
+    suggestionLines.length ? suggestionLines.join("\n") : "- No evidence draft suggestions generated yet."
   ].join("\n");
 }
+
+
+function workspaceEvidenceDraftSuggestions(ws, channel, opts = {}){
+  const includeDismissed = !!opts.includeDismissed;
+  const all = Array.isArray(ws?.evidence_draft_suggestions) ? ws.evidence_draft_suggestions : [];
+  return all.filter(x=>x&&x.channel===channel&&(includeDismissed||x.status!=='dismissed')).sort((a,b)=>{
+    const rank={pending:0,applied:1,dismissed:2}; return (rank[a.status]??9)-(rank[b.status]??9) || new Date(b.created_at||0)-new Date(a.created_at||0);
+  });
+}
+function tjhpBuildDeterministicEvidenceSuggestion({ ws, channel, evidence, targetKey, claim }){
+  const ext=evidence?.extracted_fields||{}; const findings=Array.isArray(evidence?.findings)?evidence.findings:[]; const summary=String(evidence?.summary||'');
+  let suggested='Uploaded evidence supports this section. Reference the source proof and connect its documented findings to the requested review.';
+  if(targetKey==='letter_of_medical_necessity'){ const proc=ext.procedure_code||ext.requested_service||''; const dx=ext.diagnosis_code||''; suggested=proc&&dx?`Uploaded clinical documentation supports medical necessity for ${proc} related to ${dx}. The Letter of Medical Necessity should reference this source proof and explain how the documented clinical findings support the requested service.`:'Uploaded clinical documentation supports medical necessity for the requested service. The Letter of Medical Necessity should reference this source proof and connect the documented clinical findings to the requested procedure.'; }
+  if(targetKey==='appeal_argument'){ const dr=ext.denial_reason||ext.denial_code||findings.find(f=>/denial/i.test(String(f||'')))||''; suggested=dr?`The payer response identifies the denial issue as ${dr}. The appeal should directly address this reason and cite the uploaded payer response as source proof.`:'The payer response identifies a denial issue. The appeal should directly address the stated reason and cite the uploaded payer response as source proof.'; }
+  if(targetKey==='negotiation_argument'){ suggested='The uploaded payment evidence supports a reimbursement discrepancy. The negotiation should compare the billed, expected, and paid amounts and request review of the underpaid balance.'; }
+  const confidence=['high','medium','low'].includes(String(evidence?.confidence||''))?evidence.confidence:'low';
+  const warnings=[...(Array.isArray(evidence?.warnings)?evidence.warnings:[])]; if(confidence==='low') warnings.push('Review this suggestion before applying because extracted evidence confidence is low.');
+  return {title:`Evidence suggestion for ${tjhpWorkspaceSectionLabel(targetKey)}`,rationale:summary||'Based on extracted evidence findings.',suggested_text:suggested,confidence,warnings,source:'deterministic'};
+}
+function tjhpWorkspaceDraftSuggestionAiEnabled(){ return !!process.env.OPENAI_API_KEY; }
+async function tjhpBuildEvidenceSuggestionWithAI(){ return null; }
+async function tjhpGenerateWorkspaceEvidenceSuggestions({ org_id, billed_id, channel, user, force = false }){
+  const ws = getWorkspace(org_id, billed_id, channel); if(!ws) return [];
+  ws.evidence_draft_suggestions = Array.isArray(ws.evidence_draft_suggestions) ? ws.evidence_draft_suggestions : [];
+  const rows=workspaceEvidenceSummaries(ws); const out=[]; const claim=getClaimByBilledId(org_id,billed_id)||{};
+  for(const ev of rows){ if(!(['extracted','needs_review'].includes(ev.status))) continue; if(ev.status==='needs_review'&&!String(ev.summary||'').trim()&&!(ev.findings||[]).length) continue;
+    for(const t of tjhpWorkspaceSuggestionTargetsForEvidence(ev, channel)){
+      const section=tjhpWorkspaceResolvePacketSectionKey(ws, channel, t); if(!section) continue;
+      if(!force && ws.evidence_draft_suggestions.some(x=>x&&x.attachment_id===ev.attachment_id&&x.target_section_key===section&&['pending','applied'].includes(x.status))) continue;
+      const built=tjhpBuildDeterministicEvidenceSuggestion({ws,channel,evidence:ev,targetKey:t,claim});
+      const sug={suggestion_id:tjhpEvidenceSuggestionId(),org_id,billed_id,channel,target_section_key:section,target_section_label:tjhpWorkspaceSectionLabel(section),source_attachment_ids:[ev.attachment_id],source_filenames:[ev.filename],title:built.title,rationale:built.rationale,suggested_text:built.suggested_text,confidence:built.confidence,status:'pending',created_at:nowISO(),created_by:user?.email||user?.user_id||'user',updated_at:nowISO(),applied_at:'',applied_by:'',dismissed_at:'',dismissed_by:'',source:built.source,warnings:built.warnings||[],attachment_id:ev.attachment_id};
+      ws.evidence_draft_suggestions.push(sug); out.push(sug);
+    }
+  }
+  saveWorkspace(org_id,billed_id,channel,ws); return out;
+}
+function tjhpApplyEvidenceSuggestionToWorkspace(ws, suggestion, user){ if(!suggestion||suggestion.status!=='pending') return {ok:false}; const ch=suggestion.channel; const key=String(suggestion.target_section_key||''); if(/signature|attachment|source_proof/.test(key)) return {ok:false}; const obj=ws?.[ch]?.packet_sections||{}; if(!Object.prototype.hasOwnProperty.call(obj,key)) return {ok:false}; const add=`
+
+Evidence-supported addition:
+${suggestion.suggested_text}`; if(!String(obj[key]||'').includes(String(suggestion.suggested_text||''))) obj[key]=String(obj[key]||'')+add; suggestion.status='applied'; suggestion.applied_at=nowISO(); suggestion.applied_by=user?.email||user?.user_id||'user'; suggestion.updated_at=nowISO(); return {ok:true,text:obj[key]}; }
+function tjhpDismissEvidenceSuggestion(ws, suggestion_id, user){ const s=(ws?.evidence_draft_suggestions||[]).find(x=>x&&x.suggestion_id===suggestion_id&&x.status==='pending'); if(!s) return false; s.status='dismissed'; s.dismissed_at=nowISO(); s.dismissed_by=user?.email||user?.user_id||'user'; s.updated_at=nowISO(); return true; }
+function renderWorkspaceEvidenceDraftSuggestions(ws, channel, claim){ const rows=workspaceEvidenceDraftSuggestions(ws,channel); const billed=claim?.billed_id||ws?.billed_id||''; if(!rows.length) return `<div class="card" id="evidence-suggestions"><h3>Draft Suggestions from Evidence</h3><div class="muted small">Generate draft suggestions from extracted evidence. Nothing will be applied until you choose Apply.</div><form method="POST" action="/ai-workspace/evidence-suggestions/generate" style="margin-top:8px;"><input type="hidden" name="billed_id" value="${safeStr(billed)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><button class="btn secondary" type="submit">Generate Draft Suggestions</button></form></div>`; return `<div class="card" id="evidence-suggestions"><h3>Draft Suggestions from Evidence</h3><div style="display:grid;gap:8px;">${rows.map(s=>`<div class="ai-suggestion-card evidence-suggestion-card" style="border:1px solid #e5e7eb;border-radius:10px;padding:8px;"><div class="alert success">Evidence-supported additions are highlighted in green. Review the suggestion, then apply when ready.</div><div><strong>Target:</strong> ${safeStr(s.target_section_label||'')}</div><div><strong>Evidence:</strong> ${safeStr((s.source_filenames||[]).join(', '))}</div><div><strong>Why this helps:</strong> ${safeStr(s.rationale||'')}</div><div class="ai-diff-preview"><mark class="ai-addition evidence-addition">${safeStr(s.suggested_text||'')}</mark></div>${(s.status==='pending')?`<form method="POST" action="/ai-workspace/evidence-suggestions/apply"><input type="hidden" name="billed_id" value="${safeStr(billed)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="suggestion_id" value="${safeStr(s.suggestion_id)}"/><button class="btn small" type="submit">Apply Evidence Suggestion to ${safeStr(s.target_section_label||'Section')}</button></form><form method="POST" action="/ai-workspace/evidence-suggestions/dismiss" style="margin-top:6px;"><input type="hidden" name="billed_id" value="${safeStr(billed)}"/><input type="hidden" name="channel" value="${safeStr(channel)}"/><input type="hidden" name="suggestion_id" value="${safeStr(s.suggestion_id)}"/><button class="btn secondary small" type="submit">Dismiss Suggestion</button></form>`:`<div class="badge ok">Applied</div>`}</div>`).join('')}</div></div>`; }
 
 function renderInlineAIAssist(billed_id, channel){
   const isNegotiation = channel === "negotiation";
@@ -54546,6 +54630,24 @@ if (method === "GET" && pathname === "/agent-workspace") {
     return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}#packet-attachment-${encodeURIComponent(workspaceCanonicalDocKey(ws.attachments.find(a => String(a.attachment_id||"")===attachment_id)?.doc_key || "supporting_document"))}`);
   }
 
+  if (method === "POST" && pathname === "/ai-workspace/evidence-suggestions/generate") {
+    const sess = auth(req, res); if (!sess) return;
+    const body = await parseBody(req); const billed_id=String(body.billed_id||""); const channel=String(body.channel||"appeal")==="negotiation"?"negotiation":"appeal";
+    await tjhpGenerateWorkspaceEvidenceSuggestions({ org_id: sess.org_id, billed_id, channel, user: sess });
+    return redirect(res, channel === "negotiation" ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}#evidence-suggestions` : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}#evidence-suggestions`);
+  }
+  if (method === "POST" && pathname === "/ai-workspace/evidence-suggestions/apply") {
+    const sess = auth(req, res); if (!sess) return;
+    const body = await parseBody(req); const billed_id=String(body.billed_id||""); const channel=String(body.channel||"appeal")==="negotiation"?"negotiation":"appeal"; const id=String(body.suggestion_id||"");
+    const ws=getWorkspace(sess.org_id,billed_id,channel); if(ws){ ws.evidence_draft_suggestions=ws.evidence_draft_suggestions||[]; const sug=ws.evidence_draft_suggestions.find(x=>x&&x.suggestion_id===id); if(sug) tjhpApplyEvidenceSuggestionToWorkspace(ws,sug,sess); saveWorkspace(sess.org_id,billed_id,channel,ws); }
+    return redirect(res, channel === "negotiation" ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}#evidence-suggestions` : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}#evidence-suggestions`);
+  }
+  if (method === "POST" && pathname === "/ai-workspace/evidence-suggestions/dismiss") {
+    const sess = auth(req, res); if (!sess) return;
+    const body = await parseBody(req); const billed_id=String(body.billed_id||""); const channel=String(body.channel||"appeal")==="negotiation"?"negotiation":"appeal"; const id=String(body.suggestion_id||"");
+    const ws=getWorkspace(sess.org_id,billed_id,channel); if(ws){ ws.evidence_draft_suggestions=ws.evidence_draft_suggestions||[]; tjhpDismissEvidenceSuggestion(ws,id,sess); saveWorkspace(sess.org_id,billed_id,channel,ws); }
+    return redirect(res, channel === "negotiation" ? `/ai-negotiation?billed_id=${encodeURIComponent(billed_id)}#evidence-suggestions` : `/ai-appeal?billed_id=${encodeURIComponent(billed_id)}#evidence-suggestions`);
+  }
   if (method === "POST" && pathname === "/ai-workspace/packet-evidence-preference") {
     const sess = getAuth(req);
     if (!sess || !sess.org_id) return redirect(res, "/login");
@@ -57274,4 +57376,28 @@ if (SHOULD_RUN_UPLOAD_SMOKE_TESTS) {
   }
 
   startHttpServer();
+}
+
+if (process.env.TJHP_WORKSPACE_EVIDENCE_SUGGESTION_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    if (!(src.includes('/ai-workspace/evidence-suggestions/generate'))) throw new Error("assertion failed");
+    if (!(src.includes('/ai-workspace/evidence-suggestions/apply'))) throw new Error("assertion failed");
+    if (!(src.includes('/ai-workspace/evidence-suggestions/dismiss'))) throw new Error("assertion failed");
+    if (!(src.includes('Draft Suggestions from Evidence'))) throw new Error("assertion failed");
+    if (!(src.includes('Generate Draft Suggestions'))) throw new Error("assertion failed");
+    if (!(src.includes('Apply Evidence Suggestion'))) throw new Error("assertion failed");
+    if (!(src.includes('Dismiss Suggestion'))) throw new Error("assertion failed");
+    if (!(src.includes('Evidence-supported additions are highlighted in green'))) throw new Error("assertion failed");
+    if (!(src.includes('evidence-addition'))) throw new Error("assertion failed");
+    const ws={appeal:{packet_sections:{letter_of_medical_necessity:'A',appeal_argument:'B',signature:'S'}},attachments:[{attachment_id:'a1',filename:'clinical.pdf',active:true,uploaded_at:nowISO(),doc_key:'office_notes',evidence_extraction:{status:'extracted',confidence:'medium',summary:'clinical documentation',findings:[],section_targets:['letter_of_medical_necessity'],extracted_fields:{}}}]};
+    ws.evidence_draft_suggestions=[];
+    const det=tjhpBuildDeterministicEvidenceSuggestion({ws,channel:'appeal',evidence:workspaceEvidenceSummaries(ws)[0],targetKey:'letter_of_medical_necessity',claim:{}});
+    if (!(/medical necessity/i.test(det.suggested_text))) throw new Error("assertion failed");
+    const sug={suggestion_id:'x',channel:'appeal',status:'pending',target_section_key:'letter_of_medical_necessity',suggested_text:'hello'}; ws.evidence_draft_suggestions.push(sug); const before=ws.appeal.packet_sections.letter_of_medical_necessity; tjhpApplyEvidenceSuggestionToWorkspace(ws,sug,{email:'u'}); if (!(ws.appeal.packet_sections.letter_of_medical_necessity.includes('Evidence-supported addition'))) throw new Error("assertion failed"); const after=ws.appeal.packet_sections.letter_of_medical_necessity; tjhpApplyEvidenceSuggestionToWorkspace(ws,sug,{email:'u'}); if (!(ws.appeal.packet_sections.letter_of_medical_necessity===after)) throw new Error("assertion failed"); const s2={suggestion_id:'d',channel:'appeal',status:'pending',target_section_key:'appeal_argument',suggested_text:'x'}; ws.evidence_draft_suggestions.push(s2); const b2=ws.appeal.packet_sections.appeal_argument; if (!(tjhpDismissEvidenceSuggestion(ws,'d',{email:'u'})===true)) throw new Error("assertion failed"); if (!(ws.appeal.packet_sections.appeal_argument===b2)) throw new Error("assertion failed"); const sig={suggestion_id:'s',channel:'appeal',status:'pending',target_section_key:'signature',suggested_text:'bad'}; const sb=ws.appeal.packet_sections.signature; tjhpApplyEvidenceSuggestionToWorkspace(ws,sig,{email:'u'}); if (!(ws.appeal.packet_sections.signature===sb)) throw new Error("assertion failed");
+    if (!(src.includes('WORKSPACE_EVIDENCE_SMOKE_TESTS_PASSED'))) throw new Error("assertion failed");
+    if (!(src.includes('PACKET_SIGNATURE_SMOKE_TESTS_PASSED'))) throw new Error("assertion failed");
+    if (!(src.includes('VIEW_PANEL_STATIC_TESTS_PASSED'))) throw new Error("assertion failed");
+    process.stdout.write('WORKSPACE_EVIDENCE_SUGGESTION_SMOKE_TESTS_PASSED\n'); process.exit(0);
+  } catch (err) { process.stderr.write('WORKSPACE_EVIDENCE_SUGGESTION_SMOKE_TESTS_FAILED '+String(err&&err.stack?err.stack:err)+'\n'); process.exit(1); }
 }
