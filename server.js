@@ -18595,6 +18595,44 @@ function tjhpPacketSignatureImageForWorkspace(org_id, packetImage){
   return tjhpPracticeSignatureImage(org_id);
 }
 
+
+function tjhpSavePracticeSignatureDetails(org_id, details = {}, user = {}) {
+  const existing = getOrgSettings(org_id) || {};
+  const existingPractice = existing.practice_signature && typeof existing.practice_signature === "object"
+    ? existing.practice_signature
+    : {};
+
+  const practice_signature = {
+    ...existingPractice,
+    typed_name: String(details.typed_name || "").trim(),
+    title: String(details.title || "").trim(),
+    contact_line: String(details.contact_line || "").trim(),
+    updated_at: nowISO(),
+    updated_by: user?.user_id || user?.email || ""
+  };
+
+  saveOrgSettings(org_id, {
+    ...existing,
+    practice_signature,
+    signature_image: existing.signature_image || "",
+    signature_image_path: existing.signature_image_path || "",
+    signature_image_filename: existing.signature_image_filename || ""
+  });
+
+  return getOrgSettings(org_id) || {};
+}
+
+function tjhpSavePracticeSignatureImage(org_id, signature) {
+  const existing = getOrgSettings(org_id) || {};
+  saveOrgSettings(org_id, {
+    ...existing,
+    practice_signature: existing.practice_signature || {},
+    signature_image: String(signature || ""),
+    signature_image_updated_at: nowISO()
+  });
+  return getOrgSettings(org_id) || {};
+}
+
 function applyDefaultTone(text, tone, type){
   let out = String(text || "");
   const t = String(tone || "Professional");
@@ -48406,17 +48444,9 @@ function renderTemplateEditor(org, user){
 
     <div>
       <div class="tpl-card" style="margin-bottom:12px;">
-        <div class="tpl-sub">Practice Signature</div>
-        <p class="tpl-muted">Use typed details, a drawn signature, or both. Packets use the drawn signature image when available, plus the typed details/contact line when needed.</p>
-        <form method="POST" action="/data-management/revenue-automation/practice-signature/save" style="margin-top:8px;">
-          <label>Typed signature / name</label><input name="typed_name" id="practice_typed_name" value="${safeStr(practiceSignature.typed_name || "")}"/>
-          <label>Title / role</label><input name="title" id="practice_title" value="${safeStr(practiceSignature.title || "")}"/>
-          <label>Contact line</label><input name="contact_line" id="practice_contact_line" value="${safeStr(practiceSignature.contact_line || "")}"/>
-          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"><button class="btn" type="submit">Save Signature Details</button></div>
-        </form>
-        <div style="margin-top:10px;"><div class="tpl-muted" style="margin-bottom:6px;">Draw your signature here, then click Save Drawn Signature. Clear only clears the drawing box. To replace the saved signature, draw again and click Save Drawn Signature.</div><canvas id="practiceSigCanvas" width="800" height="240" tabindex="0" onmousedown="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" onmousemove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" onmouseup="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" onmouseleave="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" ontouchstart="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" ontouchmove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" ontouchend="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" onpointerdown="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" onpointermove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" onpointerup="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" style="width:100%;height:150px;min-height:150px;border:1px dashed #d1d5db;border-radius:12px;background:#fff;touch-action:none;pointer-events:auto;position:relative;z-index:20;user-select:none;-webkit-user-select:none;cursor:auto;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawn Signature</button></div></div>
-        <div style="margin-top:10px;"><label>Practice Signature Preview</label><div id="practice_signature_preview" class="tpl-preview practice-signature-preview" data-practice-signature-image-source="practiceSignatureImage" data-practice-signature-image-helper="tjhpPracticeSignatureImage" style="margin-top:6px;min-height:60px;">${practiceSignatureImage ? `<div class="tpl-muted" style="margin-bottom:6px;">Saved drawn signature</div><img src="${safeStr(practiceSignatureImage)}" alt="Saved practice signature" style="max-height:80px;max-width:100%;display:block;"/>${practiceSignatureText ? `<div class="tpl-muted" style="margin-top:8px;">Typed details:</div><div>${safeStr(practiceSignatureText).replace(/\n/g, "<br/>")}</div>` : ""}` : `<div class="tpl-muted" style="margin-bottom:6px;">Typed signature preview</div>${safeStr(practiceSignatureText).replace(/\n/g, "<br/>")}`}</div></div>
-        <div id="revenueAutomationJsStatus" class="tpl-muted" style="display:none;">Revenue Automation JS ready</div>
+        <div class="tpl-sub">Default Packet Signature</div>
+        <p class="tpl-muted">Default packet signature is managed in Account → Organization Settings.</p>
+        <div style="margin-top:10px;"><a class="btn secondary" href="/account?tab=org#default-packet-signature">Manage Default Packet Signature</a></div>
       </div>
 
     </div>
@@ -51880,7 +51910,24 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
               </div>
             </details>
 
-            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">2) Recovery Intelligence Targets</summary>
+            <details open class="card" id="default-packet-signature" style="padding:0;">
+              <summary style="padding:12px 14px;font-weight:800;cursor:pointer;">2) Default Packet Signature</summary>
+              <div style="padding:0 14px 14px;">
+                <p class="muted">Used by default in appeal, negotiation, and Letter of Medical Necessity packets. Packet-specific signatures still override this default.</p>
+                <p class="muted">Organization name, NPI, phone, email, and address come from the Organization Identity section above.</p>
+                <form method="POST" action="/account/org-signature/save">
+                  <label>Typed signature / name</label><input name="typed_name" value="${safeStr((orgSettings.practice_signature||{}).typed_name||"")}"/>
+                  <label>Title / role</label><input name="title" value="${safeStr((orgSettings.practice_signature||{}).title||"")}"/>
+                  <label>Optional contact line override</label><input name="contact_line" value="${safeStr((orgSettings.practice_signature||{}).contact_line||"")}"/>
+                  <div class="muted small">Optional. Leave blank to use the organization phone/email above.</div>
+                  <div class="btnRow" style="margin-top:8px;"><button class="btn" type="submit">Save Signature Details</button></div>
+                </form>
+                <div style="margin-top:10px;"><canvas id="practiceSigCanvas" width="800" height="240" tabindex="0" onmousedown="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" onmousemove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" onmouseup="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" onmouseleave="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" ontouchstart="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" ontouchmove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" ontouchend="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" onpointerdown="return window.__tjhpPracticeSigStart && window.__tjhpPracticeSigStart(event)" onpointermove="return window.__tjhpPracticeSigMove && window.__tjhpPracticeSigMove(event)" onpointerup="return window.__tjhpPracticeSigStop && window.__tjhpPracticeSigStop(event)" style="width:100%;height:150px;min-height:150px;border:1px dashed #d1d5db;border-radius:12px;background:#fff;touch-action:none;pointer-events:auto;position:relative;z-index:20;user-select:none;-webkit-user-select:none;cursor:auto;"></canvas><div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="btn secondary" onclick="clearPracticeSig()">Clear</button><button type="button" class="btn" onclick="savePracticeSig()">Save Drawn Signature</button></div></div>
+                <div style="margin-top:10px;"><label>Practice Signature Preview</label><div id="practice_signature_preview" class="tpl-preview" style="margin-top:6px;min-height:60px;">No default packet signature saved yet.</div></div>
+              </div>
+            </details>
+
+            <details class="card" style="padding:0;"><summary style="padding:12px 14px;font-weight:800;cursor:pointer;">3) Recovery Intelligence Targets</summary>
               <div style="padding:0 14px 14px;" class="row">
                 <div class="col"><label>Appeal Success Rate % ${infoIcon("Executive KPI target for approved/partial appeal outcomes.")}</label><input type="number" step="0.01" name="target_appeal_success_rate" value="${safeStr(String(targets.target_appeal_success_rate ?? 60))}" /></div>
                 <div class="col"><label>Negotiation ROI % ${infoIcon("Recovered cash as % of requested amount.")}</label><input type="number" step="0.01" name="target_negotiation_roi" value="${safeStr(String(targets.target_negotiation_roi ?? 60))}" /></div>
@@ -51909,6 +51956,22 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
             </form>
             <div class="muted small" style="margin-top:6px;">PDF export supports PNG/JPG logos. WebP/GIF may display in the web app but may not appear in PDF exports unless converted.</div>
           </div>
+          <script>
+            window.__TJHP_PRACTICE_SIGNATURE_DRAW_FINAL__ = true;
+            (function(){
+              function c(){ return document.getElementById("practiceSigCanvas"); }
+              function p(canvas,evt){ const r=canvas.getBoundingClientRect(); const t=(evt.touches&&evt.touches[0])?evt.touches[0]:evt; return {x:(t.clientX-r.left)*(canvas.width/r.width), y:(t.clientY-r.top)*(canvas.height/r.height)}; }
+              const canvas=c(); if(!canvas) return; const ctx=canvas.getContext("2d"); let drawing=false;
+              function drawDot(x,y){ ctx.beginPath(); ctx.arc(x,y,1.2,0,Math.PI*2); ctx.fillStyle="#111827"; ctx.fill(); ctx.beginPath(); ctx.moveTo(x,y); }
+              function start(evt){ drawing=true; const pt=p(canvas,evt); drawDot(pt.x,pt.y); evt.preventDefault&&evt.preventDefault(); return false; }
+              function move(evt){ if(!drawing) return false; if (evt.buttons === 0) { drawing=false; return false; } const pt=p(canvas,evt); ctx.lineWidth=2;ctx.lineCap="round";ctx.strokeStyle="#111827";ctx.lineTo(pt.x,pt.y);ctx.stroke();ctx.beginPath();ctx.moveTo(pt.x,pt.y); evt.preventDefault&&evt.preventDefault(); return false; }
+              function stop(){ drawing=false; ctx.beginPath(); return false; }
+              window.__tjhpPracticeSigStart=start; window.__tjhpPracticeSigMove=move; window.__tjhpPracticeSigStop=stop;
+              window.clearPracticeSig=function(){ ctx.clearRect(0,0,canvas.width,canvas.height); ctx.beginPath(); };
+              window.savePracticeSig=function(){ const dataUrl=canvas.toDataURL(); fetch('/org/save-signature',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signature:dataUrl})}).then(function(){ location.reload(); }).catch(function(){}); };
+              window.addEventListener('blur', stop); document.addEventListener('visibilitychange', function(){ if(document.hidden) stop();}); canvas.addEventListener('lostpointercapture', stop);
+            })();
+          </script>
         `;
       }
       if (tab === "billing") {
@@ -53033,12 +53096,22 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
     const body = await parseBody(req);
     const data = JSON.parse(body || "{}");
 
-    const settings = getOrgSettings(sess.org_id) || {};
-    settings.signature_image = String(data.signature || "");
-
-    saveOrgSettings(sess.org_id, settings);
+    tjhpSavePracticeSignatureImage(sess.org_id, data.signature);
 
     return send(res, 200, "OK");
+  }
+
+  if (method === "POST" && pathname === "/account/org-signature/save") {
+    const sess = getAuth(req);
+    if (!sess || !sess.org_id) return send(res, 403, "Unauthorized");
+    const body = await parseBody(req);
+    const params = new URLSearchParams(body);
+    tjhpSavePracticeSignatureDetails(sess.org_id, {
+      typed_name: params.get("typed_name"),
+      title: params.get("title"),
+      contact_line: params.get("contact_line")
+    }, sess);
+    return redirect(res, "/account?tab=org&signature=saved#default-packet-signature");
   }
 
   if (method === "POST" && pathname === "/data-management/revenue-automation/practice-signature/save") {
@@ -53046,16 +53119,12 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
     if (!sess || !sess.org_id) return send(res, 403, "Unauthorized");
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
-    const settings = getOrgSettings(sess.org_id) || {};
-    settings.practice_signature = settings.practice_signature && typeof settings.practice_signature === "object" ? settings.practice_signature : {};
-    settings.practice_signature.typed_name = String(params.get("typed_name") || "").trim();
-    settings.practice_signature.title = String(params.get("title") || "").trim();
-    settings.practice_signature.contact_line = String(params.get("contact_line") || "").trim();
-    settings.practice_signature.updated_at = nowISO();
-    settings.practice_signature.updated_by = String(sess.user_id || "");
-    settings.updated_at = nowISO();
-    saveOrgSettings(sess.org_id, settings);
-    return redirect(res, "/data-management?tab=revenue");
+    tjhpSavePracticeSignatureDetails(sess.org_id, {
+      typed_name: params.get("typed_name"),
+      title: params.get("title"),
+      contact_line: params.get("contact_line")
+    }, sess);
+    return redirect(res, "/account?tab=org&signature=saved#default-packet-signature");
   }
 
 if (method === "POST" && pathname === "/account/preferences") {
@@ -56573,52 +56642,17 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("Reimbursement Defaults"), "render missing Reimbursement Defaults");
   assert(rendered.includes("Appeals & Negotiations Automation"), "render missing automation section");
   assert(rendered.includes("Optional Letter Personalization"), "render missing personalization section");
-  assert(rendered.includes("Practice Signature"), "render missing Practice Signature");
   assert(rendered.includes("id=\"reimbursement_default_method\""), "render missing default method id");
   assert(rendered.includes("onchange=\"window.tjhpRevenueUpdateMethodHelp"), "render missing onchange update hook");
   assert(rendered.includes("window.tjhpRevenueUpdateMethodHelp = updateReimbursementMethodHelp"), "render missing global update function assignment");
   assert(rendered.includes("Only the fields used by the selected default method are shown"), "render missing method usage note");
-  assert(rendered.includes("id=\"revenueAutomationJsStatus\""), "render missing JS status marker");
-  assert(rendered.includes("dataset.ready = \"1\""), "render missing JS status ready assignment");
   assert(rendered.includes("const NL = String.fromCharCode(10)"), "render missing NL constant");
   assert(rendered.includes(".join(NL)"), "render should use NL joins");
   assert(!/\.join\("\s*\n\s*"\)/.test(rendered), "rendered preview JS contains literal newline inside double-quoted join");
   assert(!/\.join\('\s*\n\s*'\)/.test(rendered), "rendered preview JS contains literal newline inside single-quoted join");
-  assert(rendered.includes("bindPracticeSignatureCanvas();"), "render missing practice signature bind call");
-  assert(rendered.includes("practiceSigCanvas"), "render missing practiceSigCanvas reference");
   assert(rendered.includes("__TJHP_PRACTICE_SIGNATURE_DRAW_RESCUE__"), "render missing practice signature rescue marker");
-  assert(rendered.includes("__TJHP_PRACTICE_SIGNATURE_DRAW_FINAL__"), "render missing final practice signature draw marker");
-  assert(rendered.includes("__tjhpPracticeSigStart"), "render missing __tjhpPracticeSigStart");
-  assert(rendered.includes("__tjhpPracticeSigMove"), "render missing __tjhpPracticeSigMove");
-  assert(rendered.includes("__tjhpPracticeSigStop"), "render missing __tjhpPracticeSigStop");
-  assert(rendered.includes("practiceFinalBound"), "render missing practiceFinalBound marker");
-  assert(rendered.includes("practiceSigStarted"), "render missing practiceSigStarted marker");
-  assert(rendered.includes("practiceSigMoved"), "render missing practiceSigMoved marker");
-  assert(rendered.includes('onmousedown="return window.__tjhpPracticeSigStart'), "render missing inline onmousedown fallback");
-  assert(rendered.includes('onmousemove="return window.__tjhpPracticeSigMove'), "render missing inline onmousemove fallback");
-  assert(rendered.includes('onpointerdown="return window.__tjhpPracticeSigStart'), "render missing inline onpointerdown fallback");
-  assert(rendered.includes("pointer-events:auto"), "render missing pointer-events:auto");
-  assert(rendered.includes("z-index:20"), "render missing z-index:20");
-  assert(rendered.includes("offsetX"), "render missing offsetX normalization path");
-  assert(rendered.includes('document.addEventListener("mousemove", window.__tjhpPracticeSigMove)'), "render missing final document mousemove binder");
-  assert(rendered.includes("practiceRescueBound"), "render missing practiceRescueBound marker");
-  assert(rendered.includes("practiceSigRescueBound"), "render missing practiceSigRescueBound marker");
-  assert(rendered.includes("mousedown"), "render missing mousedown draw event");
-  assert(rendered.includes("mousemove"), "render missing mousemove draw event");
-  assert(rendered.includes("mouseup"), "render missing mouseup draw event");
-  assert(rendered.includes("touchstart"), "render missing touchstart draw event");
-  assert(rendered.includes("setPointerCapture"), "render missing setPointerCapture support");
-  assert(rendered.includes("document.addEventListener(\"mousemove\", move)"), "render missing document mousemove binding");
-  assert(rendered.includes("document.addEventListener(\"mouseup\", stop)"), "render missing document mouseup binding");
-  assert(rendered.includes("document.addEventListener(\"touchmove\", move"), "render missing document touchmove binding");
-  assert(rendered.includes("document.addEventListener(\"pointermove\", move)"), "render missing document pointermove binding");
-  assert(rendered.includes("drawDot"), "render missing drawDot helper");
-  assert(rendered.includes("ctx.arc"), "render missing ctx.arc dot draw");
   assert(!rendered.includes("width='24' height='24'"), "render still includes oversized 24x24 pen cursor");
-  assert(rendered.includes("clearPracticeSig"), "render missing clearPracticeSig");
-  assert(rendered.includes("savePracticeSig"), "render missing savePracticeSig");
   assert(rendered.includes("/org/save-signature"), "render missing org signature save endpoint");
-  assert(rendered.includes("practiceSigBound"), "render missing practiceSigBound js status marker");
   assert(!rendered.includes("cursor:crosshair"), "render should not include crosshair cursor on practice canvas");
   assert(rendered.includes("Default Packet Preview"), "render missing Default Packet Preview");
   assert(rendered.includes("Appeal Packet Preview"), "render missing Appeal Packet Preview");
@@ -56664,20 +56698,6 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("try {"), "rendered preview script should be defensive");
   assert(rendered.includes("clearPracticeSig"), "practice signature clear function missing");
   assert(rendered.includes("savePracticeSig"), "practice signature save function missing");
-  assert(rendered.includes("Save Signature Details"), "render missing Save Signature Details");
-  assert(rendered.includes("Save Drawn Signature"), "render missing Save Drawn Signature");
-  assert(rendered.includes("Practice Signature Preview"), "render missing Practice Signature Preview");
-  assert(rendered.includes("Saved drawn signature"), "render missing Saved drawn signature");
-  assert(rendered.includes("Typed signature preview"), "render missing Typed signature preview");
-  assert(rendered.includes("practiceSignatureImage"), "render missing practiceSignatureImage");
-  assert(rendered.includes("tjhpPracticeSignatureImage"), "render missing tjhpPracticeSignatureImage");
-  assert(rendered.includes("forceStop"), "render missing forceStop");
-  assert(rendered.includes("evt.buttons === 0"), "render missing evt.buttons guard");
-  assert(rendered.includes("window.addEventListener(\"blur\""), "render missing blur stop listener");
-  assert(rendered.includes("visibilitychange"), "render missing visibilitychange");
-  assert(rendered.includes("lostpointercapture"), "render missing lostpointercapture");
-  assert(rendered.includes("releasePointerCapture"), "render missing releasePointerCapture");
-  assert(rendered.includes("practice_signature_preview"), "render missing practice_signature_preview");
   assert(rendered.includes("canvas.toDataURL()") || rendered.includes("c.toDataURL()"), "render missing canvas.toDataURL");
   assert(rendered.includes("/org/save-signature"), "render missing /org/save-signature");
   assert(!rendered.includes("Save Practice Signature"), "render should not include Save Practice Signature");
@@ -56685,6 +56705,13 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("Save Personalization"), "render missing Save Personalization");
   assert(rendered.includes("Save Reimbursement Rules"), "render missing Save Reimbursement Rules");
   assert(rendered.includes("Save Automation Settings"), "render missing Save Automation Settings");
+  assert(rendered.includes("Manage Default Packet Signature"), "render missing Manage Default Packet Signature");
+  assert(rendered.includes("/account?tab=org#default-packet-signature"), "render missing account signature link");
+  assert(!rendered.includes('id="practiceSigCanvas"'), "render should not include practiceSigCanvas");
+  assert(!rendered.includes('action="/data-management/revenue-automation/practice-signature/save"'), "render should not include old practice signature form action");
+  assert(!rendered.includes("Save Signature Details"), "render should not include Save Signature Details");
+  assert(!rendered.includes("Save Drawn Signature"), "render should not include Save Drawn Signature");
+  assert(!rendered.includes("Practice Signature Preview"), "render should not include Practice Signature Preview");
   const testOrg = "smoke-practice-signature";
   const existingOrgSettings = getOrgSettings(testOrg) || {};
   const existingTemplateSettings = getTemplateSettings(testOrg) || {};
@@ -56717,6 +56744,35 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(src.includes('method === "fixed_fee"') || src.includes('method === "flat"'), "missing flat/fixed_fee branch");
   assert(src.includes('method === "ucr_multiplier"'), "missing ucr_multiplier branch");
   process.stdout.write("REVENUE_AUTOMATION_UI_SMOKE_TESTS_PASSED\n");
+  process.exit(0);
+}
+
+
+if (process.env.TJHP_ORG_SIGNATURE_UI_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const src = fs.readFileSync(__filename, "utf8");
+  function assert(c,m){ if(!c) throw new Error(m); }
+  assert(src.includes('/account/org-signature/save'), 'missing account org signature save route');
+  assert(src.includes('id="default-packet-signature"'), 'missing default packet signature section');
+  assert(src.includes('__TJHP_PRACTICE_SIGNATURE_DRAW_FINAL__'), 'missing signature draw final marker');
+  const testOrg='org-sign-smoke';
+  saveOrgSettings(testOrg, { signature_image:'data:image/png;base64,abc' });
+  tjhpSavePracticeSignatureDetails(testOrg, { typed_name:'Name', title:'Title', contact_line:'Line' }, { user_id:'u1' });
+  let st=getOrgSettings(testOrg)||{};
+  assert(st.signature_image==='data:image/png;base64,abc','details save should preserve signature image');
+  assert(st.practice_signature.typed_name==='Name','typed name not saved');
+  saveOrgSettings(testOrg, { ...st, practice_signature:{ typed_name:'A', title:'B', contact_line:'C' } });
+  tjhpSavePracticeSignatureImage(testOrg, 'data:image/png;base64,new');
+  st=getOrgSettings(testOrg)||{};
+  assert(st.practice_signature.typed_name==='A','image save should preserve typed details');
+  assert(st.signature_image==='data:image/png;base64,new','image save should update signature image');
+  saveTemplateSettings(testOrg, { ...(getTemplateSettings(testOrg)||{}), signature_block:'Legacy Signature Block' });
+  assert(tjhpPacketSignatureTextForWorkspace(testOrg, 'Packet Custom')==='Packet Custom','packet text should win');
+  assert(tjhpPacketSignatureImageForWorkspace(testOrg, 'packet-image')==='packet-image','packet image should win');
+  assert(tjhpPacketSignatureTextForWorkspace(testOrg, '')==='A\nB\nC','default signature text fallback');
+  assert(tjhpPacketSignatureImageForWorkspace(testOrg, '')==='data:image/png;base64,new','default signature image fallback');
+  saveOrgSettings(testOrg, { ...st, practice_signature:{ typed_name:'', title:'', contact_line:'' }, signature_image:'' });
+  assert(tjhpPacketSignatureTextForWorkspace(testOrg, '')==='Legacy Signature Block','legacy fallback missing');
+  process.stdout.write("ORG_SIGNATURE_UI_SMOKE_TESTS_PASSED\n");
   process.exit(0);
 }
 
