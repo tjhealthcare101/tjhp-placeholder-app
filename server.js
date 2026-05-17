@@ -368,6 +368,148 @@ function defaultPacketFollowUpDate(submittedAt){
   return dateInputFromISO(addDaysISO(submittedAt || nowISO(), 14));
 }
 
+function tjhpSafeBool(value) {
+  return !!value;
+}
+
+function tjhpMaskSecret(value) {
+  const s = String(value || "");
+  if (!s) return "";
+  if (s.length <= 8) return "[set]";
+  return s.slice(0, 4) + "..." + s.slice(-4);
+}
+
+function tjhpCheckFileWritable(filepath) {
+  try {
+    const dir = path.dirname(filepath);
+    fs.mkdirSync(dir, { recursive: true });
+    const testFile = path.join(dir, ".tjhp_write_test_" + Date.now());
+    fs.writeFileSync(testFile, "ok");
+    fs.unlinkSync(testFile);
+    return { ok: true, detail: "Writable" };
+  } catch (err) {
+    return { ok: false, detail: String(err && err.message ? err.message : err).slice(0, 180) };
+  }
+}
+
+function tjhpFileSizeSummary(filepath) {
+  try {
+    if (!fs.existsSync(filepath)) return { exists: false, size: 0 };
+    const stat = fs.statSync(filepath);
+    return { exists: true, size: stat.size || 0 };
+  } catch (_) {
+    return { exists: false, size: 0 };
+  }
+}
+
+function tjhpBuildLaunchReadinessReport() {
+  const env = process.env || {};
+  const node_env = String(env.NODE_ENV || "development");
+  const is_prod = node_env === "production";
+  const is_railway = tjhpSafeBool(env.RAILWAY_ENVIRONMENT || env.RAILWAY_STATIC_URL || env.RAILWAY_PROJECT_ID);
+  const host = String(env.HOST || HOST || "");
+  const port = String(env.PORT || PORT || "");
+  const app_base_url = String(env.APP_BASE_URL || env.PUBLIC_BASE_URL || env.BASE_URL || "");
+  const cookieSecret = String(env.COOKIE_SECRET || env.SESSION_SECRET || SESSION_SECRET || "");
+  const openaiKey = String(env.OPENAI_API_KEY || "");
+  const stripeKey = String(env.STRIPE_SECRET_KEY || "");
+  const stripeWebhook = String(env.STRIPE_WEBHOOK_SECRET || "");
+  const debugFlag = String(env.DEBUG || env.DEBUG_MODE || "").trim();
+  const verboseFlag = String(env.VERBOSE || env.LOG_LEVEL || "").trim();
+
+  const checks = [];
+  const pushCheck = (key, label, status, detail, severity) => checks.push({ key, label, status, detail, severity });
+
+  if (!node_env) pushCheck("node_env", "NODE_ENV", "warn", "NODE_ENV is not set.", "warning");
+  else pushCheck("node_env", "NODE_ENV", "pass", `NODE_ENV=${node_env}.`, "info");
+
+  if (is_prod && (!cookieSecret || cookieSecret.includes("CHANGE_ME"))) pushCheck("cookie_secret", "Session/Cookie Secret", "fail", "Production requires a strong non-default COOKIE_SECRET/SESSION_SECRET.", "critical");
+  else pushCheck("cookie_secret", "Session/Cookie Secret", cookieSecret ? "pass" : "warn", cookieSecret ? `Secret configured (${tjhpMaskSecret(cookieSecret)}).` : "Secret missing in non-production environment.", cookieSecret ? "info" : "warning");
+
+  pushCheck("openai", "AI/Extraction API Key", openaiKey ? "pass" : "warn", openaiKey ? `OPENAI_API_KEY configured (${tjhpMaskSecret(openaiKey)}).` : "OPENAI_API_KEY missing; non-AI fallback mode may still work.", openaiKey ? "info" : "warning");
+
+  const billingEnabled = tjhpSafeBool(stripeKey || stripeWebhook);
+  const stripeStatus = billingEnabled && (!stripeKey || !stripeWebhook) ? "warn" : (billingEnabled ? "pass" : "warn");
+  pushCheck("stripe", "Billing/Stripe", stripeStatus, billingEnabled ? `Stripe key ${stripeKey ? "present" : "missing"}; webhook secret ${stripeWebhook ? "present" : "missing"}.` : "Stripe keys not configured (acceptable if billing is disabled for pilot).", stripeStatus === "pass" ? "info" : "warning");
+
+  if (!app_base_url) pushCheck("base_url", "Base URL", "warn", "APP_BASE_URL / PUBLIC_BASE_URL / BASE_URL not set.", "warning");
+  else pushCheck("base_url", "Base URL", "pass", "Base URL configured.", "info");
+
+  if (is_prod && (debugFlag || /debug|trace|verbose/i.test(verboseFlag))) pushCheck("logging", "Logging Safety", "warn", "Review logs to avoid PHI exposure.", "warning");
+  else pushCheck("logging", "Logging Safety", "pass", "No obvious production verbose logging flags detected.", "info");
+
+  const dataWritable = tjhpCheckFileWritable(path.join(DATA_DIR, ".readiness_check"));
+  const uploadsWritable = tjhpCheckFileWritable(path.join(UPLOADS_DIR, ".readiness_check"));
+  const file_count_summary = Object.entries(FILES).slice(0, 18).map(([key, fp]) => {
+    const info = tjhpFileSizeSummary(fp);
+    let json_ok = null;
+    if (info.exists && path.extname(fp).toLowerCase() === ".json") {
+      try { JSON.parse(fs.readFileSync(fp, "utf8") || "null"); json_ok = true; } catch (_) { json_ok = false; }
+    }
+    return { key, exists: info.exists, size: info.size, json_ok };
+  });
+
+  if (!dataWritable.ok) pushCheck("data_writable", "Data Directory Writable", "fail", dataWritable.detail, "critical");
+  else pushCheck("data_writable", "Data Directory Writable", "pass", dataWritable.detail, "info");
+
+  if (!uploadsWritable.ok) pushCheck("uploads_writable", "Upload Directory Writable", "warn", uploadsWritable.detail, "warning");
+  else pushCheck("uploads_writable", "Upload Directory Writable", "pass", uploadsWritable.detail, "info");
+
+  const hasCritical = checks.some(c => c.status === "fail" && c.severity === "critical");
+  const hasWarnings = checks.some(c => c.status === "warn");
+  const launch_level = hasCritical ? "not_ready" : (hasWarnings ? "needs_attention" : "ready_for_pilot");
+
+  return {
+    generated_at: nowISO(),
+    environment: {
+      node_env, is_prod, is_railway, host, port,
+      secure_cookies_expected: is_prod,
+      app_base_url_present: tjhpSafeBool(app_base_url),
+      openai_configured: tjhpSafeBool(openaiKey),
+      stripe_configured: tjhpSafeBool(stripeKey && stripeWebhook),
+      cookie_secret_configured: tjhpSafeBool(cookieSecret && !cookieSecret.includes("CHANGE_ME")),
+      openai_model: String(env.OPENAI_MODEL || ""),
+      openai_vision_model: String(env.OPENAI_VISION_MODEL || ""),
+      openai_pdf_model: String(env.OPENAI_PDF_MODEL || ""),
+      stripe_secret_key_masked: tjhpMaskSecret(stripeKey),
+      stripe_webhook_secret_masked: tjhpMaskSecret(stripeWebhook),
+      openai_api_key_masked: tjhpMaskSecret(openaiKey)
+    },
+    checks,
+    storage: {
+      data_dir_exists: fs.existsSync(DATA_DIR),
+      data_dir_writable: dataWritable.ok,
+      upload_dir_exists: fs.existsSync(UPLOADS_DIR),
+      upload_dir_writable: uploadsWritable.ok,
+      file_count_summary
+    },
+    smoke_tests: { required_commands: [
+      "npm ci", "node -c server.js",
+      "TJHP_PAYMENT_MATCH_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_VIEW_PANEL_STATIC_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_UPLOAD_COMPAT_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_UPLOAD_REALISTIC_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_REIMBURSEMENT_UPLOAD_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_ORG_SIGNATURE_UI_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_PACKET_SIGNATURE_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_WORKSPACE_EVIDENCE_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_WORKSPACE_EVIDENCE_SUGGESTION_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_WORKSPACE_READINESS_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_SPECIALTY_PROFILE_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_OWNER_SPECIALTY_ANALYTICS_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_SPECIALTY_WORKSPACE_GUIDANCE_SMOKE_TESTS=true NODE_ENV=development node server.js",
+      "TJHP_SPECIALTY_PATTERN_ANALYTICS_SMOKE_TESTS=true NODE_ENV=development node server.js"
+    ]},
+    launch_level,
+    warnings: [
+      "JSON/file-backed storage is acceptable for development and controlled pilot only. Full production should use persistent database storage, backups, and retention controls.",
+      "Before production, configure backups for data storage and uploads.",
+      "Controlled pilot readiness only. Production hardening still recommended."
+    ]
+  };
+}
+
 function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
 function sanitizeUploadName(name) {
   return String(name || "file")
@@ -12483,7 +12625,7 @@ function navUser(active = "", user_id = "") {
 }
 function navAdmin() {
   const unreadCount = getAdminUnreadSupportCount();
-  return `<a href="/admin/dashboard">Admin</a><a href="/admin/simulation">Simulation</a><a href="/admin/website-content">Website Content</a><a href="/admin/insights">Insights</a><a href="/admin/specialty-analytics">Specialty Analytics</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages${unreadCount > 0 ? `<span class="support-unread-badge">${unreadCount}</span>` : ""}</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/simulation">Simulation</a><a href="/admin/website-content">Website Content</a><a href="/admin/insights">Insights</a><a href="/admin/specialty-analytics">Specialty Analytics</a><a href="/admin/launch-readiness">Launch Readiness</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages${unreadCount > 0 ? `<span class="support-unread-badge">${unreadCount}</span>` : ""}</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
 
 // ===== Models helpers =====
@@ -30136,6 +30278,9 @@ const server = http.createServer(async (req, res) => {
 
   // health
   if (method === "GET" && pathname === "/health") return send(res, 200, "ok", "text/plain");
+  if (method === "GET" && pathname === "/healthz") {
+    return send(res, 200, JSON.stringify({ ok: true, app: "TJ Healthcare Pro", at: nowISO() }), "application/json");
+  }
 
   // ==============================
   // PACKET ENDPOINTS
@@ -36007,6 +36152,15 @@ ${(content.demo.steps || []).map(s =>
       `, navAdmin());
       return send(res, 200, html);
     }
+    if (method === "GET" && pathname === "/admin/launch-readiness") {
+      const report = tjhpBuildLaunchReadinessReport();
+      const levelCopy = report.launch_level === "ready_for_pilot" ? "Ready for controlled pilot" : (report.launch_level === "needs_attention" ? "Needs attention before pilot" : "Not ready for production");
+      const checksRows = report.checks.map(c => `<tr><td>${safeStr(c.label)}</td><td>${safeStr(c.status)}</td><td>${safeStr(c.severity)}</td><td>${safeStr(c.detail)}</td></tr>`).join("");
+      const filesRows = report.storage.file_count_summary.map(f => `<tr><td>${safeStr(f.key)}</td><td>${f.exists ? "yes" : "no"}</td><td>${Number(f.size||0).toLocaleString()}</td><td>${f.json_ok === null ? "n/a" : (f.json_ok ? "ok" : "parse_error")}</td></tr>`).join("");
+      const cmdList = report.smoke_tests.required_commands.map(cmd => `<li><code>${safeStr(cmd)}</code></li>`).join("");
+      return send(res, 200, renderPage("Launch Readiness", `<h2>Launch Readiness</h2><p class="muted">Diagnostics are PHI-light. Patient/member-level details are not shown.</p><h3>Environment</h3><table><tr><th>Field</th><th>Value</th></tr><tr><td>NODE_ENV</td><td>${safeStr(report.environment.node_env)}</td></tr><tr><td>HOST</td><td>${safeStr(report.environment.host)}</td></tr><tr><td>PORT</td><td>${safeStr(report.environment.port)}</td></tr><tr><td>Railway Runtime</td><td>${report.environment.is_railway ? "yes" : "no"}</td></tr></table><h3>Storage</h3><p class="muted">JSON/file-backed storage is acceptable for development and controlled pilot only. Full production should use persistent database storage, backups, and retention controls.</p><table><tr><th>File Key</th><th>Exists</th><th>Size (bytes)</th><th>JSON parse</th></tr>${filesRows || '<tr><td colspan="4">No tracked files</td></tr>'}</table><h3>Smoke Test Checklist</h3><ul>${cmdList}</ul><h3>AI/Extraction Readiness</h3><p>OPENAI key configured: ${report.environment.openai_configured ? "yes" : "no"}</p><h3>Billing/Stripe Readiness</h3><p>Stripe configured: ${report.environment.stripe_configured ? "yes" : "no"}</p><h3>Security/Session Readiness</h3><p>Session secret configured: ${report.environment.cookie_secret_configured ? "yes" : "no"}</p><h3>Pilot Launch Status</h3><p><strong>${safeStr(levelCopy)}</strong></p><table><tr><th>Check</th><th>Status</th><th>Severity</th><th>Detail</th></tr>${checksRows}</table><h3>Production Launch Notes</h3><ul><li>Controlled pilot readiness only. Production hardening still recommended.</li><li>Before production, configure backups for data storage and uploads.</li><li>Review logs to avoid PHI exposure.</li></ul>`, navAdmin()));
+    }
+
     if (method === "GET" && pathname === "/admin/specialty-analytics") {
       const specialtyFilter = tjhpNormalizeSpecialtyProfile(parsed.query.specialty || "");
       const payerFilter = String(parsed.query.payer || "").trim().toLowerCase();
@@ -57808,6 +57962,24 @@ if (process.env.TJHP_OWNER_SPECIALTY_ANALYTICS_SMOKE_TESTS === "true" && (proces
     process.stdout.write("OWNER_SPECIALTY_ANALYTICS_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("OWNER_SPECIALTY_ANALYTICS_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
+if (process.env.TJHP_LAUNCH_READINESS_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m||"assertion failed"); };
+    ["tjhpBuildLaunchReadinessReport","/healthz","/admin/launch-readiness","Launch Readiness","Diagnostics are PHI-light","Ready for controlled pilot","JSON/file-backed storage is acceptable for development and controlled pilot only","tjhpMaskSecret","tjhpCheckFileWritable","LAUNCH_READINESS_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
+    const r = tjhpBuildLaunchReadinessReport();
+    assert(r && r.generated_at); assert(Array.isArray(r.checks)); assert(r.environment && r.storage && r.launch_level);
+    const reportText = JSON.stringify(r);
+    if (process.env.OPENAI_API_KEY) assert(!reportText.includes(process.env.OPENAI_API_KEY), "raw OPENAI key leaked");
+    if (process.env.STRIPE_SECRET_KEY) assert(!reportText.includes(process.env.STRIPE_SECRET_KEY), "raw Stripe key leaked");
+    assert(src.includes('pathname === "/healthz"'), "healthz route missing");
+    ["PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","UPLOAD_COMPAT_SMOKE_TESTS_PASSED","WORKSPACE_READINESS_SMOKE_TESTS_PASSED","SPECIALTY_PATTERN_ANALYTICS_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
+    process.stdout.write("LAUNCH_READINESS_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) {
+    process.stderr.write("LAUNCH_READINESS_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
+  }
+}
+
 if (process.env.TJHP_SPECIALTY_PATTERN_ANALYTICS_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try {
     const src = fs.readFileSync(__filename, "utf8"); const assert=(c,m)=>{if(!c) throw new Error(m)};
