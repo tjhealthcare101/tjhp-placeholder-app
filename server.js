@@ -12567,7 +12567,12 @@ function orgSettingsDefaults(org_id) {
       appeal_opening: "",
       appeal_footer: "",
       negotiation_opening: "",
-      negotiation_footer: ""
+      negotiation_footer: "",
+      lmn_opening: "",
+      lmn_clinical_history: "",
+      lmn_treatment_rationale: "",
+      lmn_treatment_plan: "",
+      lmn_conclusion: ""
     },
     allowed_rules: {
       default_method: "percent_billed",
@@ -12699,6 +12704,47 @@ function getWorkflowDefaults(settings) {
 
 function getAllowedRulesFromSettings(settings) {
   return { ...(orgSettingsDefaults("tmp").allowed_rules), ...((settings || {}).allowed_rules || {}) };
+}
+
+function tjhpLetterPersonalizationValues({ org_id, claim } = {}) {
+  const orgSettings = org_id ? getOrgSettings(org_id) : {};
+  return {
+    patient_name: workspaceFirstValue(workspaceClaimValue(claim, ["patient_name", "patient", "member_name", "patient_full_name"]), "Patient Name"),
+    diagnosis: workspaceFirstValue(workspaceClaimValue(claim, ["diagnosis", "diagnosis_description", "condition"]), "Diagnosis/Condition"),
+    diagnosis_code: workspaceFirstValue(workspaceClaimValue(claim, ["icd10_code", "diagnosis_code", "dx_code", "dx"]), "ICD-10 Code"),
+    procedure: workspaceFirstValue(workspaceClaimValue(claim, ["procedure_description", "service_description", "treatment_name", "product_name", "equipment_name"]), workspaceClaimValue(claim, ["procedure_code", "cpt_code", "cpt", "hcpcs"]), "Procedure"),
+    date_of_service: workspaceFirstValue(workspaceClaimValue(claim, ["dos", "date_of_service", "service_date"]), "Date of Service"),
+    payer: workspaceFirstValue(workspaceClaimValue(claim, ["payer", "payer_name", "insurance", "insurance_company"]), "Payer"),
+    claim_number: workspaceFirstValue(workspaceClaimValue(claim, ["claim_number", "claim_id"]), "Claim Number"),
+    practice_name: workspaceFirstValue(orgSettings?.identity?.legal_name, orgSettings?.identity?.dba_name, "Practice Name")
+  };
+}
+
+function tjhpApplyLetterPersonalizationPlaceholders(text, values = {}) {
+  let out = String(text || "");
+  const mapping = {
+    "Patient Name": String(values.patient_name || ""),
+    "Diagnosis": String(values.diagnosis || ""),
+    "Diagnosis Code": String(values.diagnosis_code || ""),
+    "Procedure": String(values.procedure || ""),
+    "Date of Service": String(values.date_of_service || ""),
+    "Payer": String(values.payer || ""),
+    "Claim Number": String(values.claim_number || ""),
+    "Practice Name": String(values.practice_name || "")
+  };
+  Object.keys(mapping).forEach((key) => {
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`\\[${escaped}\\]`, "g"), mapping[key]);
+  });
+  out = out.replace(/\{\{\s*patient_name\s*\}\}/gi, mapping["Patient Name"]);
+  out = out.replace(/\{\{\s*diagnosis\s*\}\}/gi, mapping["Diagnosis"]);
+  out = out.replace(/\{\{\s*diagnosis_code\s*\}\}/gi, mapping["Diagnosis Code"]);
+  out = out.replace(/\{\{\s*procedure\s*\}\}/gi, mapping["Procedure"]);
+  out = out.replace(/\{\{\s*date_of_service\s*\}\}/gi, mapping["Date of Service"]);
+  out = out.replace(/\{\{\s*payer\s*\}\}/gi, mapping["Payer"]);
+  out = out.replace(/\{\{\s*claim_number\s*\}\}/gi, mapping["Claim Number"]);
+  out = out.replace(/\{\{\s*practice_name\s*\}\}/gi, mapping["Practice Name"]);
+  return out;
 }
 
 function getUserByEmail(email) {
@@ -16503,6 +16549,28 @@ function buildWorkspaceLetterOfMedicalNecessityTemplate({ org_id, claim, ws } = 
   const patientAge = workspaceFirstValue(workspaceClaimValue(claim, ["patient_age", "age"]), "[Age]");
   const patientSex = workspaceFirstValue(workspaceClaimValue(claim, ["patient_sex", "sex", "gender"]), "[male/female]");
   const careSince = workspaceFirstValue(workspaceClaimValue(claim, ["care_since", "first_seen_date", "treatment_start_date"]), "[Date]");
+  const letterDefaults = getLetterDefaults(orgCtx.settings || getOrgSettings(org_id));
+  const lmnPersonalizationValues = tjhpLetterPersonalizationValues({ org_id, claim });
+  const defaultLmnOpening = `I am writing on behalf of my patient, ${patientName}, to document the medical necessity of ${treatment} to treat ${diagnosis} ${diagnosisCode}.`;
+  const defaultClinicalHistory = `${patientName} is a ${patientAge}-year-old ${patientSex} who has been in my care since ${careSince}. The patient has been diagnosed with ${diagnosis} and is experiencing [list symptoms]. Previous treatments for this condition have included [list previous medications, therapies, or conservative measures], which were [unsuccessful, insufficient, contraindicated, or caused adverse effects].`;
+  const defaultTreatmentRationale = `Based on the patient’s clinical history, ${treatment} is medically necessary to [explain treatment purpose, such as reduce pain, improve function, prevent deterioration, or treat the diagnosed condition]. Without this intervention, the patient’s condition may worsen or require additional care. Clinical evidence, payer guidelines, and the patient’s documented history support the medical necessity of this treatment.`;
+  const defaultTreatmentPlan = `The recommended plan is to provide ${treatment} for [duration/frequency], with follow-up and monitoring as clinically appropriate.`;
+  const defaultConclusion = `I believe ${treatment} is medically necessary for ${patientName}'s care and well-being. Please provide coverage or reconsider the denial for this treatment.`;
+  const lmnOpening = String(letterDefaults.lmn_opening || "").trim()
+    ? tjhpApplyLetterPersonalizationPlaceholders(letterDefaults.lmn_opening, lmnPersonalizationValues)
+    : defaultLmnOpening;
+  const lmnClinicalHistory = String(letterDefaults.lmn_clinical_history || "").trim()
+    ? tjhpApplyLetterPersonalizationPlaceholders(letterDefaults.lmn_clinical_history, lmnPersonalizationValues)
+    : defaultClinicalHistory;
+  const lmnTreatmentRationale = String(letterDefaults.lmn_treatment_rationale || "").trim()
+    ? tjhpApplyLetterPersonalizationPlaceholders(letterDefaults.lmn_treatment_rationale, lmnPersonalizationValues)
+    : defaultTreatmentRationale;
+  const lmnTreatmentPlan = String(letterDefaults.lmn_treatment_plan || "").trim()
+    ? tjhpApplyLetterPersonalizationPlaceholders(letterDefaults.lmn_treatment_plan, lmnPersonalizationValues)
+    : defaultTreatmentPlan;
+  const lmnConclusion = String(letterDefaults.lmn_conclusion || "").trim()
+    ? tjhpApplyLetterPersonalizationPlaceholders(letterDefaults.lmn_conclusion, lmnPersonalizationValues)
+    : defaultConclusion;
 
   return `${orgName}
 ${practiceAddress}
@@ -16522,19 +16590,19 @@ Date of Service: ${dateOfService}
 
 To Whom It May Concern,
 
-I am writing on behalf of my patient, ${patientName}, to document the medical necessity of ${treatment} to treat ${diagnosis} ${diagnosisCode}.
+${lmnOpening}
 
 Patient Clinical History
-${patientName} is a ${patientAge}-year-old ${patientSex} who has been in my care since ${careSince}. The patient has been diagnosed with ${diagnosis} and is experiencing [list symptoms]. Previous treatments for this condition have included [list previous medications, therapies, or conservative measures], which were [unsuccessful, insufficient, contraindicated, or caused adverse effects].
+${lmnClinicalHistory}
 
 Treatment Rationale
-Based on the patient’s clinical history, ${treatment} is medically necessary to [explain treatment purpose, such as reduce pain, improve function, prevent deterioration, or treat the diagnosed condition]. Without this intervention, the patient’s condition may worsen or require additional care. Clinical evidence, payer guidelines, and the patient’s documented history support the medical necessity of this treatment.
+${lmnTreatmentRationale}
 
 Treatment Plan
-The recommended plan is to provide ${treatment} for [duration/frequency], with follow-up and monitoring as clinically appropriate.
+${lmnTreatmentPlan}
 
 Conclusion
-I believe ${treatment} is medically necessary for ${patientName}'s care and well-being. Please provide coverage or reconsider the denial for this treatment.
+${lmnConclusion}
 
 Please contact my office using the phone number or email address listed above with any questions.
 
@@ -24273,6 +24341,11 @@ function getPracticeSettings(org_id){
     appeal_footer: String(letters.appeal_footer || ""),
     negotiation_opening: String(letters.negotiation_opening || ""),
     negotiation_footer: String(letters.negotiation_footer || ""),
+    lmn_opening: String(letters.lmn_opening || ""),
+    lmn_clinical_history: String(letters.lmn_clinical_history || ""),
+    lmn_treatment_rationale: String(letters.lmn_treatment_rationale || ""),
+    lmn_treatment_plan: String(letters.lmn_treatment_plan || ""),
+    lmn_conclusion: String(letters.lmn_conclusion || ""),
   };
 }
 
@@ -24286,16 +24359,22 @@ function getTemplateSettings(org_id){
   const all = readJSON(FILES.template_settings, []);
   const row = all.find(x => x.org_id === org_id);
   const letters = getLetterDefaults(getOrgSettings(org_id));
-  return row ? row : {
+  const base = {
     org_id,
     appeal_opening: String(letters.appeal_opening || ""),
     appeal_footer: String(letters.appeal_footer || ""),
     negotiation_opening: String(letters.negotiation_opening || ""),
     negotiation_footer: String(letters.negotiation_footer || ""),
+    lmn_opening: String(letters.lmn_opening || ""),
+    lmn_clinical_history: String(letters.lmn_clinical_history || ""),
+    lmn_treatment_rationale: String(letters.lmn_treatment_rationale || ""),
+    lmn_treatment_plan: String(letters.lmn_treatment_plan || ""),
+    lmn_conclusion: String(letters.lmn_conclusion || ""),
     signature_block: String(letters.signature_block || ""),
     updated_at: nowISO(),
     updated_by: ""
   };
+  return row ? { ...base, ...row } : base;
 }
 
 function saveTemplateSettings(org_id, settings){
@@ -24317,6 +24396,11 @@ function saveTemplateVersion(org_id, snapshot, meta={}){
       appeal_footer: String(snapshot.appeal_footer || ""),
       negotiation_opening: String(snapshot.negotiation_opening || ""),
       negotiation_footer: String(snapshot.negotiation_footer || ""),
+      lmn_opening: String(snapshot.lmn_opening || ""),
+      lmn_clinical_history: String(snapshot.lmn_clinical_history || ""),
+      lmn_treatment_rationale: String(snapshot.lmn_treatment_rationale || ""),
+      lmn_treatment_plan: String(snapshot.lmn_treatment_plan || ""),
+      lmn_conclusion: String(snapshot.lmn_conclusion || ""),
       signature_block: String(snapshot.signature_block || "")
     }
   });
@@ -48287,7 +48371,8 @@ function renderTemplateEditor(org, user){
     <div>
       <div class="tpl-card" style="margin-top:14px;">
         <div class="tpl-sub">Optional Letter Personalization</div>
-        <p class="tpl-muted">Optional. Leave blank to use TJ Healthcare Pro's built-in appeal and negotiation language.</p>
+        <p class="tpl-muted">Use these optional fields to personalize built-in packet language. Leave blank to use TJ Healthcare Pro defaults. For claim-specific values, use bracketed placeholders such as [Patient Name], [Diagnosis], [Procedure], [Date of Service], [Payer], and [Claim Number]. Text without placeholders is treated as reusable wording.</p>
+        <p class="tpl-muted" style="margin-top:8px;"><strong>Available placeholders:</strong> [Patient Name] · [Diagnosis] · [Diagnosis Code] · [Procedure] · [Date of Service] · [Payer] · [Claim Number] · [Practice Name]</p>
         <form method="POST" action="/account/templates" style="margin-top:12px;">
           <div class="tpl-grid2">
             <div><label>Appeal Opening</label><div class="tpl-muted">Appears near the top of appeal letters before the claim-specific argument.</div><textarea class="tpl-textarea tpl-edit" name="appeal_opening" id="appeal_opening">${safeStr(t.appeal_opening || "")}</textarea></div>
@@ -48295,15 +48380,27 @@ function renderTemplateEditor(org, user){
             <div><label>Negotiation Opening</label><div class="tpl-muted">Appears near the top of underpayment negotiation letters.</div><textarea class="tpl-textarea tpl-edit" name="negotiation_opening" id="negotiation_opening">${safeStr(t.negotiation_opening || "")}</textarea></div>
             <div><label>Negotiation Footer</label><div class="tpl-muted">Appears near the end of negotiation letters before the signature.</div><textarea class="tpl-textarea tpl-edit" name="negotiation_footer" id="negotiation_footer">${safeStr(t.negotiation_footer || "")}</textarea></div>
           </div>
+          <div style="margin-top:12px;">
+            <div class="tpl-sub">Letter of Medical Necessity Personalization</div>
+            <p class="tpl-muted">Optional. These fields personalize the Letter of Medical Necessity section in appeal packets. Use placeholders for claim-specific values; otherwise your text is used as default practice wording.</p>
+          </div>
+          <div class="tpl-grid2" style="margin-top:8px;">
+            <div><label>LMN Opening</label><div class="tpl-muted">Appears after ‘To Whom It May Concern’ before the clinical history section.</div><textarea class="tpl-textarea tpl-edit" name="lmn_opening" id="lmn_opening">${safeStr(t.lmn_opening || "")}</textarea></div>
+            <div><label>Clinical History Guidance</label><div class="tpl-muted">Appears in the Patient Clinical History section.</div><textarea class="tpl-textarea tpl-edit" name="lmn_clinical_history" id="lmn_clinical_history">${safeStr(t.lmn_clinical_history || "")}</textarea></div>
+            <div><label>Treatment Rationale Guidance</label><div class="tpl-muted">Appears in the Treatment Rationale section.</div><textarea class="tpl-textarea tpl-edit" name="lmn_treatment_rationale" id="lmn_treatment_rationale">${safeStr(t.lmn_treatment_rationale || "")}</textarea></div>
+            <div><label>Treatment Plan Guidance</label><div class="tpl-muted">Appears in the Treatment Plan section.</div><textarea class="tpl-textarea tpl-edit" name="lmn_treatment_plan" id="lmn_treatment_plan">${safeStr(t.lmn_treatment_plan || "")}</textarea></div>
+            <div><label>LMN Conclusion</label><div class="tpl-muted">Appears near the end of the Letter of Medical Necessity before contact/signature language.</div><textarea class="tpl-textarea tpl-edit" name="lmn_conclusion" id="lmn_conclusion">${safeStr(t.lmn_conclusion || "")}</textarea></div>
+          </div>
           <input type="hidden" name="signature_block" id="signature_block" value="${safeStr(t.signature_block || "")}"/>
           <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;"><button class="btn" type="submit">Save Personalization</button></div>
         </form>
       </div>
       <div class="tpl-card" style="margin-top:12px;">
         <div class="tpl-sub">Default Packet Preview</div>
-        <p class="tpl-muted">Shows the built-in appeal and negotiation packet language. Optional personalization appears in the highlighted opening/footer areas as you type.</p>
+        <p class="tpl-muted">Shows the built-in appeal, negotiation, and Letter of Medical Necessity language. Optional personalization appears in the matching section as you type.</p>
         <div style="margin-top:10px;"><label>Appeal Packet Preview</label><div class="tpl-muted">Default language shown · Your optional text appears where entered</div><div class="tpl-preview" id="previewAppeal"></div></div>
         <div style="margin-top:10px;"><label>Negotiation Packet Preview</label><div class="tpl-muted">Default language shown · Your optional text appears where entered</div><div class="tpl-preview" id="previewNegotiation"></div></div>
+        <div style="margin-top:10px;"><label>Letter of Medical Necessity Preview</label><div class="tpl-muted">Default language shown · Optional LMN personalization appears where entered</div><div class="tpl-preview" id="previewLmn"></div></div>
       </div>
     </div>
 
@@ -48344,6 +48441,37 @@ function renderTemplateEditor(org, user){
     function optionalText(id, fallback) {
       const v = byId(id)?.value || "";
       return String(v).trim() || fallback;
+    }
+    function applyPreviewPlaceholders(text) {
+      const values = {
+        "Patient Name": sampleValue(["patient_name","patient","member_name"], "Patient Name"),
+        "Diagnosis": sampleValue(["diagnosis","diagnosis_description","condition"], "Diagnosis/Condition"),
+        "Diagnosis Code": sampleValue(["diagnosis_code","icd10_code","dx_code","dx"], "ICD-10 Code"),
+        "Procedure": sampleValue(["procedure","procedure_code","cpt_code","cpt","service_description"], "99213"),
+        "Date of Service": sampleValue(["date_of_service","dos","service_date"], "01/01/2026"),
+        "Payer": sampleValue(["payer","payer_name","insurance"], "Aetna"),
+        "Claim Number": sampleValue(["claim_number","claim_id","claim","id"], "1001"),
+        "Practice Name": sampleValue(["practice_name","org_name","organization"], "Practice")
+      };
+      let out = String(text || "");
+      Object.keys(values).forEach(function(k){
+        const re = new RegExp("\\\\[" + k.replace(/[.*+?^$()|[\\]\\\\]/g, "\\\\$&") + "\\\\]", "g");
+        out = out.replace(re, values[k]);
+      });
+      out = out.replace(/\{\{\s*patient_name\s*\}\}/gi, values["Patient Name"]);
+      out = out.replace(/\{\{\s*diagnosis\s*\}\}/gi, values["Diagnosis"]);
+      out = out.replace(/\{\{\s*diagnosis_code\s*\}\}/gi, values["Diagnosis Code"]);
+      out = out.replace(/\{\{\s*procedure\s*\}\}/gi, values["Procedure"]);
+      out = out.replace(/\{\{\s*date_of_service\s*\}\}/gi, values["Date of Service"]);
+      out = out.replace(/\{\{\s*payer\s*\}\}/gi, values["Payer"]);
+      out = out.replace(/\{\{\s*claim_number\s*\}\}/gi, values["Claim Number"]);
+      out = out.replace(/\{\{\s*practice_name\s*\}\}/gi, values["Practice Name"]);
+      return out;
+    }
+    function optionalPersonalizedText(id, fallback) {
+      const v = byId(id)?.value || "";
+      const raw = String(v).trim() || fallback;
+      return applyPreviewPlaceholders(raw);
     }
 
     function buildDefaultAppealPreview() {
@@ -48397,6 +48525,21 @@ function renderTemplateEditor(org, user){
         "Practice signature appears in the packet signature section."
       ].join(NL);
     }
+    function buildDefaultLmnPreview() {
+      const diagnosis = sampleValue(["diagnosis","diagnosis_description","condition"], "Diagnosis/Condition");
+      const procedure = sampleValue(["procedure","procedure_code","cpt_code","cpt","service_description"], "99213");
+      const payer = sampleValue(["payer","payer_name","insurance"], "Aetna");
+      const claimNo = sampleValue(["claim_number","claim_id","claim","id"], "1001");
+      const dos = sampleValue(["date_of_service","dos","service_date"], "01/01/2026");
+      return [
+        "LETTER OF MEDICAL NECESSITY PREVIEW","","Re: Letter of Medical Necessity","Claim #: " + claimNo,"Payer: " + payer,"Date of Service: " + dos,"Procedure: " + procedure,"","To Whom It May Concern,","",
+        optionalPersonalizedText("lmn_opening", "Built-in LMN opening: I am writing on behalf of [Patient Name] to document the medical necessity of [Procedure] to treat [Diagnosis] [Diagnosis Code]."),"",
+        "Patient Clinical History",optionalPersonalizedText("lmn_clinical_history", "Built-in clinical history language: [Patient Name] has been diagnosed with [Diagnosis] and the clinical record supports the requested service."),"",
+        "Treatment Rationale",optionalPersonalizedText("lmn_treatment_rationale", "Built-in treatment rationale: [Procedure] is medically necessary based on the patient's condition, payer criteria, and supporting documentation."),"",
+        "Treatment Plan",optionalPersonalizedText("lmn_treatment_plan", "Built-in treatment plan: The recommended plan is to provide [Procedure] with follow-up and monitoring as clinically appropriate."),"",
+        "Conclusion",optionalPersonalizedText("lmn_conclusion", "Built-in conclusion: Please provide coverage or reconsider the denial for this medically necessary treatment."),"","Signature:","Practice signature appears in the packet signature section."
+      ].join(NL);
+    }
 
     function updatePracticePreview(){
       const lines = [
@@ -48413,11 +48556,13 @@ function renderTemplateEditor(org, user){
     function updatePreviews(){
       const elA = byId("previewAppeal");
       const elN = byId("previewNegotiation");
+      const elL = byId("previewLmn");
       if (elA) elA.textContent = buildDefaultAppealPreview();
       if (elN) elN.textContent = buildDefaultNegotiationPreview();
+      if (elL) elL.textContent = buildDefaultLmnPreview();
     }
 
-    ["appeal_opening","appeal_footer","negotiation_opening","negotiation_footer"].forEach(function(id){
+    ["appeal_opening","appeal_footer","negotiation_opening","negotiation_footer","lmn_opening","lmn_clinical_history","lmn_treatment_rationale","lmn_treatment_plan","lmn_conclusion"].forEach(function(id){
       const el = byId(id);
       if (el) el.addEventListener("input", updatePreviews);
     });
@@ -50717,6 +50862,11 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
       appeal_footer: String(params.get("appeal_footer") || ""),
       negotiation_opening: String(params.get("negotiation_opening") || ""),
       negotiation_footer: String(params.get("negotiation_footer") || ""),
+      lmn_opening: String(params.get("lmn_opening") || ""),
+      lmn_clinical_history: String(params.get("lmn_clinical_history") || ""),
+      lmn_treatment_rationale: String(params.get("lmn_treatment_rationale") || ""),
+      lmn_treatment_plan: String(params.get("lmn_treatment_plan") || ""),
+      lmn_conclusion: String(params.get("lmn_conclusion") || ""),
       signature_block: String(params.get("signature_block") || "")
     };
 
@@ -50970,6 +51120,11 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
       appeal_footer: String(params.get("appeal_footer") || "").trim(),
       negotiation_opening: String(params.get("negotiation_opening") || "").trim(),
       negotiation_footer: String(params.get("negotiation_footer") || "").trim(),
+      lmn_opening: String(params.get("lmn_opening") || "").trim(),
+      lmn_clinical_history: String(params.get("lmn_clinical_history") || "").trim(),
+      lmn_treatment_rationale: String(params.get("lmn_treatment_rationale") || "").trim(),
+      lmn_treatment_plan: String(params.get("lmn_treatment_plan") || "").trim(),
+      lmn_conclusion: String(params.get("lmn_conclusion") || "").trim(),
       signature_block: String(params.get("signature_block") || "").trim(),
       updated_at: nowISO(),
       updated_by: user.user_id
@@ -50985,6 +51140,11 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         appeal_footer: next.appeal_footer,
         negotiation_opening: next.negotiation_opening,
         negotiation_footer: next.negotiation_footer,
+        lmn_opening: next.lmn_opening,
+        lmn_clinical_history: next.lmn_clinical_history,
+        lmn_treatment_rationale: next.lmn_treatment_rationale,
+        lmn_treatment_plan: next.lmn_treatment_plan,
+        lmn_conclusion: next.lmn_conclusion,
         signature_block: next.signature_block,
       }
     });
@@ -51050,6 +51210,11 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         appeal_footer: String(next.appeal_footer || ""),
         negotiation_opening: String(next.negotiation_opening || ""),
         negotiation_footer: String(next.negotiation_footer || ""),
+        lmn_opening: String(next.lmn_opening || ""),
+        lmn_clinical_history: String(next.lmn_clinical_history || ""),
+        lmn_treatment_rationale: String(next.lmn_treatment_rationale || ""),
+        lmn_treatment_plan: String(next.lmn_treatment_plan || ""),
+        lmn_conclusion: String(next.lmn_conclusion || ""),
         signature_block: String(next.signature_block || ""),
       }
     });
@@ -51080,6 +51245,11 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
       appeal_footer: polish(current.appeal_footer),
       negotiation_opening: addIfMissing(polish(current.negotiation_opening), reminder),
       negotiation_footer: polish(current.negotiation_footer),
+      lmn_opening: polish(current.lmn_opening),
+      lmn_clinical_history: polish(current.lmn_clinical_history),
+      lmn_treatment_rationale: polish(current.lmn_treatment_rationale),
+      lmn_treatment_plan: polish(current.lmn_treatment_plan),
+      lmn_conclusion: polish(current.lmn_conclusion),
       signature_block: polish(current.signature_block),
       updated_at: nowISO(),
       updated_by: user.user_id
@@ -56453,8 +56623,27 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("Default Packet Preview"), "render missing Default Packet Preview");
   assert(rendered.includes("Appeal Packet Preview"), "render missing Appeal Packet Preview");
   assert(rendered.includes("Negotiation Packet Preview"), "render missing Negotiation Packet Preview");
+  assert(rendered.includes("Letter of Medical Necessity Personalization"), "render missing LMN personalization section");
+  assert(rendered.includes("LMN Opening"), "render missing LMN Opening");
+  assert(rendered.includes("Clinical History Guidance"), "render missing Clinical History Guidance");
+  assert(rendered.includes("Treatment Rationale Guidance"), "render missing Treatment Rationale Guidance");
+  assert(rendered.includes("Treatment Plan Guidance"), "render missing Treatment Plan Guidance");
+  assert(rendered.includes("LMN Conclusion"), "render missing LMN Conclusion");
+  assert(rendered.includes('name="lmn_opening"'), "render missing lmn_opening field");
+  assert(rendered.includes('name="lmn_clinical_history"'), "render missing lmn_clinical_history field");
+  assert(rendered.includes('name="lmn_treatment_rationale"'), "render missing lmn_treatment_rationale field");
+  assert(rendered.includes('name="lmn_treatment_plan"'), "render missing lmn_treatment_plan field");
+  assert(rendered.includes('name="lmn_conclusion"'), "render missing lmn_conclusion field");
+  assert(rendered.includes("Available placeholders"), "render missing placeholder guide");
+  assert(rendered.includes("[Patient Name]"), "render missing [Patient Name]");
+  assert(rendered.includes("[Diagnosis]"), "render missing [Diagnosis]");
+  assert(rendered.includes("[Procedure]"), "render missing [Procedure]");
+  assert(rendered.includes("Text without placeholders is treated as reusable wording"), "render missing reusable wording guidance");
+  assert(rendered.includes("Letter of Medical Necessity Preview"), "render missing LMN preview label");
+  assert(rendered.includes('id="previewLmn"'), "render missing previewLmn id");
   assert(rendered.includes("APPEAL LETTER PREVIEW"), "render missing APPEAL LETTER PREVIEW");
   assert(rendered.includes("NEGOTIATION LETTER PREVIEW"), "render missing NEGOTIATION LETTER PREVIEW");
+  assert(rendered.includes("LETTER OF MEDICAL NECESSITY PREVIEW"), "render missing LETTER OF MEDICAL NECESSITY PREVIEW");
   assert(rendered.includes("Built-in claim argument"), "render missing Built-in claim argument");
   assert(rendered.includes("Built-in negotiation argument"), "render missing Built-in negotiation argument");
   assert(rendered.includes("Practice signature appears in the packet signature section."), "render missing packet signature section line");
@@ -56464,6 +56653,9 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("Appears near the end of negotiation letters"), "render missing negotiation footer helper text");
   assert(rendered.includes("buildDefaultAppealPreview"), "render/source missing buildDefaultAppealPreview");
   assert(rendered.includes("buildDefaultNegotiationPreview"), "render/source missing buildDefaultNegotiationPreview");
+  assert(rendered.includes("buildDefaultLmnPreview"), "render/source missing buildDefaultLmnPreview");
+  assert(rendered.includes("applyPreviewPlaceholders"), "render/source missing applyPreviewPlaceholders");
+  assert(rendered.includes("optionalPersonalizedText"), "render/source missing optionalPersonalizedText");
   assert(rendered.includes("sampleValue"), "render/source missing sampleValue");
   assert(rendered.includes("optionalText"), "render/source missing optionalText");
   assert(!rendered.includes('byId("practice_signature_preview")?.textContent'), "updatePreviews should not use practice_signature_preview text");
@@ -56496,6 +56688,12 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   const testOrg = "smoke-practice-signature";
   const existingOrgSettings = getOrgSettings(testOrg) || {};
   const existingTemplateSettings = getTemplateSettings(testOrg) || {};
+  assert(Object.prototype.hasOwnProperty.call(orgSettingsDefaults("x").letter_defaults, "lmn_opening"), "orgSettingsDefaults letter_defaults missing lmn_opening");
+  assert(Object.prototype.hasOwnProperty.call(getTemplateSettings(testOrg), "lmn_opening"), "getTemplateSettings missing lmn_opening");
+  assert(src.includes("tjhpApplyLetterPersonalizationPlaceholders"), "source missing tjhpApplyLetterPersonalizationPlaceholders");
+  assert(src.includes("tjhpLetterPersonalizationValues"), "source missing tjhpLetterPersonalizationValues");
+  assert(src.includes("letterDefaults.lmn_opening") || src.includes("lmn_opening"), "LMN template builder missing lmn_opening reference");
+  assert(src.includes('params.get("lmn_opening")'), "/account/templates save route missing lmn_opening");
   saveOrgSettings(testOrg, { ...existingOrgSettings, practice_signature:{ typed_name:"Hoop", title:"Revenue Recovery Team", contact_line:"billing@example.com" }, signature_image:"data:image/png;base64,abc" });
   saveTemplateSettings(testOrg, { ...existingTemplateSettings, org_id:testOrg, signature_block:"Legacy Signature Block" });
   assert(tjhpPacketSignatureTextForWorkspace(testOrg, "") === "Hoop\nRevenue Recovery Team\nbilling@example.com", "practice signature text fallback");
@@ -56504,6 +56702,10 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(tjhpPacketSignatureImageForWorkspace(testOrg, "packet-image") === "packet-image", "packet image wins");
   saveOrgSettings(testOrg, { ...getOrgSettings(testOrg), practice_signature:{ typed_name:"", title:"", contact_line:"" }, signature_image:"" });
   assert(tjhpPacketSignatureTextForWorkspace(testOrg, "") === "Legacy Signature Block", "legacy signature_block fallback");
+  const snapshotProbe = { lmn_opening: "x" };
+  saveTemplateVersion(testOrg, snapshotProbe, { reason: "smoke_lmn_snapshot" });
+  const latestVersion = listTemplateVersions(testOrg)[0];
+  assert(latestVersion && latestVersion.snapshot && Object.prototype.hasOwnProperty.call(latestVersion.snapshot, "lmn_opening"), "saveTemplateVersion snapshot missing lmn_opening");
   assert(src.includes("sigCanvas"), "workspace sigCanvas source missing");
   assert(src.includes("clearSig"), "workspace clearSig missing");
   assert(src.includes("saveSig"), "workspace saveSig missing");
