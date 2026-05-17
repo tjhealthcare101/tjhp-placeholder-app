@@ -12483,7 +12483,7 @@ function navUser(active = "", user_id = "") {
 }
 function navAdmin() {
   const unreadCount = getAdminUnreadSupportCount();
-  return `<a href="/admin/dashboard">Admin</a><a href="/admin/simulation">Simulation</a><a href="/admin/website-content">Website Content</a><a href="/admin/insights">Insights</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages${unreadCount > 0 ? `<span class="support-unread-badge">${unreadCount}</span>` : ""}</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
+  return `<a href="/admin/dashboard">Admin</a><a href="/admin/simulation">Simulation</a><a href="/admin/website-content">Website Content</a><a href="/admin/insights">Insights</a><a href="/admin/specialty-analytics">Specialty Analytics</a><a href="/admin/orgs">Organizations</a><a href="/admin/jobs">Jobs</a><a href="/admin/applications">Applications</a><a href="/admin/contact-messages">Contact Messages${unreadCount > 0 ? `<span class="support-unread-badge">${unreadCount}</span>` : ""}</a><a href="/admin/audit">Audit</a><a href="/logout">Logout</a>`;
 }
 
 // ===== Models helpers =====
@@ -12603,6 +12603,66 @@ function orgSettingsDefaults(org_id) {
     updated_at: nowISO()
   };
 }
+
+
+const TJHP_SPECIALTY_PROFILES = [
+  { value: "ophthalmology", label: "Ophthalmology" },
+  { value: "orthopedics", label: "Orthopedics" },
+  { value: "other", label: "Other" },
+  { value: "primary_care", label: "Primary Care" },
+  { value: "radiology", label: "Radiology" }
+];
+function tjhpNormalizeSpecialtyProfile(value) {
+  const raw = String(value || "").trim().toLowerCase().replace(/\s+/g, "_").replace(/-/g, "_");
+  const aliases = {ophthalmology:"ophthalmology",eye:"ophthalmology",eye_care:"ophthalmology",retina:"ophthalmology",orthopedics:"orthopedics",orthopedic:"orthopedics",ortho:"orthopedics",primary_care:"primary_care",primarycare:"primary_care",family_medicine:"primary_care",internal_medicine:"primary_care",family_practice:"primary_care",pcp:"primary_care",radiology:"radiology",imaging:"radiology",other:"other"};
+  const normalized = aliases[raw] || raw;
+  return TJHP_SPECIALTY_PROFILES.some(x => x.value === normalized) ? normalized : "other";
+}
+function tjhpSpecialtyProfileLabel(value) {
+  const normalized = tjhpNormalizeSpecialtyProfile(value);
+  const found = TJHP_SPECIALTY_PROFILES.find(x => x.value === normalized);
+  return found ? found.label : "Other";
+}
+function tjhpSpecialtySelectOptions(selectedValue = "") {
+  const selected = tjhpNormalizeSpecialtyProfile(selectedValue || "other");
+  return TJHP_SPECIALTY_PROFILES.map(p => `<option value="${p.value}" ${p.value === selected ? "selected" : ""}>${safeStr(p.label)}</option>`).join("");
+}
+function tjhpOrgSpecialtyProfileValue(orgOrId) {
+  const org = typeof orgOrId === "string" ? getOrg(orgOrId) : (orgOrId || {});
+  const orgId = String(org?.org_id || orgOrId || "");
+  const settings = orgId ? (getOrgSettings(orgId) || {}) : {};
+  return tjhpNormalizeSpecialtyProfile(org?.specialty_profile || org?.practice_specialty || settings.practice_specialty || settings.specialty_profile || settings.identity?.practice_specialty || "other");
+}
+function tjhpOrgSpecialtyProfileLabel(orgOrId) { return tjhpSpecialtyProfileLabel(tjhpOrgSpecialtyProfileValue(orgOrId)); }
+function tjhpAnalyticsNumber(value){ const n=Number(value); return Number.isFinite(n)?n:0; }
+function tjhpAnalyticsClaimOrgId(row){ return String(row?.org_id || row?.organization_id || "").trim(); }
+function tjhpAnalyticsClaimPayer(row){ return String(row?.payer_name || row?.payer || row?.insurance_name || "Unknown").trim() || "Unknown"; }
+function tjhpAnalyticsClaimProcedure(row){ return String(row?.procedure_code || row?.cpt_code || row?.cpt || "Unknown").trim() || "Unknown"; }
+function tjhpAnalyticsClaimStatus(row){ return String(row?.status_category || row?.status || "").trim().toLowerCase(); }
+function tjhpAnalyticsClaimAtRisk(row){ return tjhpAnalyticsNumber(row?.at_risk_amount ?? row?.revenue_at_risk ?? row?.expected_insurance_delta); }
+function tjhpAnalyticsDenialReason(row){ return String(row?.denial_reason_category || row?.denial_reason || "Unknown").trim() || "Unknown"; }
+function tjhpAnalyticsTopMap(map, limit = 10){ return Object.entries(map||{}).sort((a,b)=>b[1]-a[1]).slice(0,limit).map(([key,count])=>({key,count})); }
+function tjhpBuildOwnerSpecialtyAnalytics(){
+  const safeRead = (key, fallback=[]) => {
+    try { return FILES[key] ? readJSON(FILES[key], fallback) : fallback; } catch (_) { return fallback; }
+  };
+  const orgs = safeRead("orgs", []); const claims = safeRead("claims", []); const payments = safeRead("payments", []); const workspaces = safeRead("workspaces", []);
+  const usage = safeRead("evidence_usage", []); const suggestions = safeRead("workspace_evidence_suggestions", []);
+  const specialties={}; TJHP_SPECIALTY_PROFILES.forEach(p=>specialties[p.value]={label:p.label,org_count:0,claim_count:0,payment_count:0,denied_count:0,underpaid_count:0,resolved_count:0,revenue_at_risk:0,billed_total:0,paid_total:0,appeal_workspace_count:0,negotiation_workspace_count:0,evidence_attachment_count:0,evidence_suggestion_count:0,evidence_applied_count:0,top_payers:[],top_denial_reasons:[],top_procedure_codes:[]});
+  const orgToSpec={}; orgs.forEach(o=>{const spec=tjhpOrgSpecialtyProfileValue(o);orgToSpec[String(o.org_id||"")]=spec;specialties[spec].org_count++;});
+  const payerMaps={},denialMaps={},procMaps={}; Object.keys(specialties).forEach(k=>{payerMaps[k]={};denialMaps[k]={};procMaps[k]={};});
+  claims.forEach(r=>{const orgId=tjhpAnalyticsClaimOrgId(r); const spec=specialties[orgToSpec[orgId]||'other']?orgToSpec[orgId]:'other'; const bucket=specialties[spec]; bucket.claim_count++; const st=tjhpAnalyticsClaimStatus(r); if(st.includes('den')) bucket.denied_count++; if(st.includes('under')) bucket.underpaid_count++; if(st.includes('resolv')||st.includes('paid')) bucket.resolved_count++; bucket.revenue_at_risk += tjhpAnalyticsClaimAtRisk(r); bucket.billed_total += tjhpAnalyticsNumber(r?.billed_amount ?? r?.charge_amount);
+    const payer=tjhpAnalyticsClaimPayer(r); payerMaps[spec][payer]=(payerMaps[spec][payer]||0)+1; const dr=tjhpAnalyticsDenialReason(r); denialMaps[spec][dr]=(denialMaps[spec][dr]||0)+1; const proc=tjhpAnalyticsClaimProcedure(r); procMaps[spec][proc]=(procMaps[spec][proc]||0)+1;});
+  payments.forEach(r=>{const spec=(orgToSpec[String(r?.org_id||"")]||'other'); const b=specialties[spec]||specialties.other; b.payment_count++; b.paid_total += tjhpAnalyticsNumber(r?.paid_amount ?? r?.payment_amount);});
+  workspaces.forEach(w=>{const spec=(orgToSpec[String(w?.org_id||"")]||'other'); const b=specialties[spec]||specialties.other; const t=String(w?.workspace_type||w?.type||'').toLowerCase(); if(t.includes('appeal')) b.appeal_workspace_count++; if(t.includes('negotiation')) b.negotiation_workspace_count++; b.evidence_attachment_count += Array.isArray(w?.attachments)?w.attachments.length:0;});
+  suggestions.forEach(x=>{const spec=(orgToSpec[String(x?.org_id||"")]||'other'); (specialties[spec]||specialties.other).evidence_suggestion_count++;});
+  usage.forEach(x=>{const spec=(orgToSpec[String(x?.org_id||"")]||'other'); (specialties[spec]||specialties.other).evidence_applied_count++;});
+  Object.keys(specialties).forEach(k=>{specialties[k].top_payers=tjhpAnalyticsTopMap(payerMaps[k]);specialties[k].top_denial_reasons=tjhpAnalyticsTopMap(denialMaps[k]);specialties[k].top_procedure_codes=tjhpAnalyticsTopMap(procMaps[k]);});
+  const overall={label:'Overall',org_count:0,claim_count:0,payment_count:0,denied_count:0,underpaid_count:0,resolved_count:0,revenue_at_risk:0,billed_total:0,paid_total:0,appeal_workspace_count:0,negotiation_workspace_count:0,evidence_attachment_count:0,evidence_suggestion_count:0,evidence_applied_count:0};
+  Object.values(specialties).forEach(v=>Object.keys(overall).forEach(k=>{if(k!=='label') overall[k]+=tjhpAnalyticsNumber(v[k]);}));
+  return {generated_at:nowISO(), specialties, overall};
+}
+function tjhpBuildOrgRevenueIntelligence(org_id){ const a=tjhpBuildOwnerSpecialtyAnalytics(); const spec=tjhpOrgSpecialtyProfileValue(org_id); return { specialty:tjhpSpecialtyProfileLabel(spec), ...(a.specialties[spec]||a.specialties.other) }; }
 
 function getOrgSettings(org_id) {
   const all = readJSON(FILES.org_settings, []);
@@ -33031,6 +33091,14 @@ section center">
 
       <label>Organization Name</label>
       <input name="org_name" required class="input"/>
+      <label>Practice Specialty</label>
+      <select name="practice_specialty" required class="input">
+        <option value="">Select specialty</option>
+        ${TJHP_SPECIALTY_PROFILES.map(p => `<option value="${p.value}">${safeStr(p.label)}</option>`).join("")}
+      </select>
+      <p class="muted small" style="margin-top:-8px;margin-bottom:12px;">
+        This helps TJ Healthcare Pro tailor future revenue insights by specialty.
+      </p>
 
       <label>What best describes you?</label>
       <select name="role" required class="input">
@@ -33088,6 +33156,7 @@ section center">
     const org_name = String(params.get("org_name") || "").trim();
     const role = String(params.get("role") || "unknown");
     const ack = params.get("ack");
+    const practice_specialty = tjhpNormalizeSpecialtyProfile(params.get("practice_specialty") || "other");
 
     // VALIDATION (restored UI)
     if (!email || !password || !org_name || !ack) {
@@ -33131,10 +33200,22 @@ section center">
       org_id,
       org_name,
       legal_name: org_name,
+      specialty_profile: practice_specialty,
+      practice_specialty,
       created_at: nowISO(),
       account_status: "active"
     });
     writeJSON(FILES.orgs, orgs);
+    const existingSettings = getOrgSettings(org_id) || {};
+    saveOrgSettings(org_id, {
+      ...existingSettings,
+      practice_specialty,
+      specialty_profile: practice_specialty,
+      identity: {
+        ...(existingSettings.identity || {}),
+        practice_specialty
+      }
+    });
 
     users.push({
       user_id: uuid(),
@@ -35859,6 +35940,15 @@ ${(content.demo.steps || []).map(s =>
       `, navAdmin());
       return send(res, 200, html);
     }
+    if (method === "GET" && pathname === "/admin/specialty-analytics") {
+      const analytics = tjhpBuildOwnerSpecialtyAnalytics();
+      const rows = TJHP_SPECIALTY_PROFILES.map(p => {
+        const r = analytics.specialties[p.value] || {};
+        return `<tr><td>${safeStr(p.label)}</td><td>${r.org_count||0}</td><td>${r.claim_count||0}</td><td>${fmtMoney(r.revenue_at_risk||0)}</td><td>${r.denied_count||0}</td><td>${r.underpaid_count||0}</td><td>${r.resolved_count||0}</td><td>${safeStr((r.top_payers||[])[0]?.key||"-")}</td><td>${safeStr((r.top_denial_reasons||[])[0]?.key||"-")}</td><td>${safeStr((r.top_procedure_codes||[])[0]?.key||"-")}</td><td>${r.evidence_applied_count||0}</td></tr>`;
+      }).join("");
+      const empty = (analytics.overall.claim_count||0)===0 && (analytics.overall.payment_count||0)===0;
+      return send(res, 200, renderPage("Specialty Analytics", `<h2>Specialty Analytics</h2><p class="muted">Aggregated owner-side intelligence by practice specialty. Avoids patient-level detail and focuses on revenue patterns.</p><h3>Specialty Overview</h3><div class="row"><div class="kpi-card"><h4>Total organizations</h4><p>${analytics.overall.org_count||0}</p></div><div class="kpi-card"><h4>Total claims</h4><p>${analytics.overall.claim_count||0}</p></div><div class="kpi-card"><h4>Total revenue at risk</h4><p>${fmtMoney(analytics.overall.revenue_at_risk||0)}</p></div><div class="kpi-card"><h4>Total denied/underpaid claims</h4><p>${(analytics.overall.denied_count||0)+(analytics.overall.underpaid_count||0)}</p></div><div class="kpi-card"><h4>Total applied evidence suggestions</h4><p>${analytics.overall.evidence_applied_count||0}</p></div></div><h3>Denial Patterns</h3><p class="muted">Aggregate denial reason counts by specialty.</p><h3>Payer Patterns</h3><p class="muted">Top payer concentration by specialty.</p><h3>Procedure/CPT Patterns</h3><p class="muted">Top procedure/CPT trends by specialty.</p><h3>Organization Drilldown</h3>${empty?`<p class="muted">No specialty analytics available yet. Data will appear as organizations upload claims, payments, and workspaces.</p>`:`<table><tr><th>Specialty</th><th>Organizations</th><th>Claims</th><th>Revenue at Risk</th><th>Denied</th><th>Underpaid</th><th>Resolved</th><th>Top Payer</th><th>Top Denial Reason</th><th>Top CPT/Procedure</th><th>Applied Evidence</th></tr>${rows}</table>`}`, navAdmin()));
+    }
 
     if (method === "POST" && pathname === "/admin/org/set-integrations-override") {
       const body = await parseBody(req);
@@ -35922,7 +36012,12 @@ ${(content.demo.steps || []).map(s =>
               <tr><th>Pilot payment rows</th><td>${usage.pilot_payment_rows_used || 0}/${PILOT_LIMITS.payment_records_included}</td></tr>
               <tr><th>Drafts generated</th><td>${a.drafts}</td></tr>
               <tr><th>Avg draft time</th><td>${a.avgDraftSeconds ? `${a.avgDraftSeconds}s` : "-"}</td></tr>
+              <tr><th>Specialty</th><td>${safeStr(tjhpOrgSpecialtyProfileLabel(org))}</td></tr>
             </table>
+            <div class="card" style="margin-top:14px;">
+              <h3>Organization Revenue Intelligence</h3>
+              ${(() => { const ri=tjhpBuildOrgRevenueIntelligence(org_id); return `<p class="muted">Specialty: ${safeStr(ri.specialty)}</p><p class="muted">Claims uploaded: ${ri.claim_count || 0} · Payments uploaded: ${ri.payment_count || 0} · Revenue at risk: ${fmtMoney(ri.revenue_at_risk || 0)}</p><p class="muted">Denied claims: ${ri.denied_count || 0} · Underpaid claims: ${ri.underpaid_count || 0} · Resolved claims: ${ri.resolved_count || 0}</p><p class="muted">Top payers: ${safeStr((ri.top_payers||[]).slice(0,3).map(x=>x.key).join(", ") || "-")}</p><p class="muted">Top denial reasons: ${safeStr((ri.top_denial_reasons||[]).slice(0,3).map(x=>x.key).join(", ") || "-")}</p><p class="muted">Top procedure codes: ${safeStr((ri.top_procedure_codes||[]).slice(0,3).map(x=>x.key).join(", ") || "-")}</p><p class="muted">Appeal workspaces: ${ri.appeal_workspace_count || 0} · Negotiation workspaces: ${ri.negotiation_workspace_count || 0} · Evidence applied count: ${ri.evidence_applied_count || 0}</p>`; })()}
+            </div>
 
             <h3>Actions</h3>
 <form method="POST" action="/admin/action">
@@ -52372,6 +52467,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
               <div style="padding:0 14px 14px;" class="row">
                 <div class="col"><label>Legal Name</label><input name="identity_legal_name" value="${safeStr(identity.legal_name||"")}" required /></div>
                 <div class="col"><label>DBA Name</label><input name="identity_dba_name" value="${safeStr(identity.dba_name||"")}" /></div>
+                <div class="col"><label>Practice Specialty</label><select name="practice_specialty">${tjhpSpecialtySelectOptions(tjhpOrgSpecialtyProfileValue(org))}</select><div class="muted small">Used for specialty-aware revenue intelligence and owner-side analytics.</div></div>
                 <div class="col"><label>Tax ID</label><input name="identity_tax_id" value="${safeStr(identity.tax_id||"")}" /></div>
                 <div class="col"><label>NPI</label><input name="identity_npi" value="${safeStr(identity.npi||"")}" /></div>
                 <div class="col"><label>Phone</label><input name="identity_phone" value="${safeStr(identity.phone||"")}" /></div>
@@ -53377,6 +53473,9 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
       "wf_default_followup_days",
       "wf_require_confirmation_before_submitted"
     ].some(name => params.has(name));
+    const practice_specialty = tjhpNormalizeSpecialtyProfile(params.get("practice_specialty") || "");
+    const existingSpecialty = tjhpOrgSpecialtyProfileValue(org.org_id);
+    const nextSpecialty = practice_specialty || existingSpecialty || "other";
     const identity = {
       legal_name: String(params.get("identity_legal_name") || "").trim(),
       dba_name: String(params.get("identity_dba_name") || "").trim(),
@@ -53403,9 +53502,12 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
       }
     };
     if (identity.mailing_same_as_primary) identity.addr_mailing = { ...identity.addr_primary };
+    identity.practice_specialty = nextSpecialty;
 
     const patch = {
       identity,
+      practice_specialty: nextSpecialty,
+      specialty_profile: nextSpecialty,
       letter_defaults: hasLetterFields ? {
         appeal_tone: String(params.get("appeal_tone") || existingLetterDefaults.appeal_tone || "Professional").trim() || "Professional",
         signature_block: String(params.get("signature_block") || existingLetterDefaults.signature_block || "").trim(),
@@ -53473,6 +53575,8 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         addr_mailing_city: patch.identity.addr_mailing.city,
         addr_mailing_state: patch.identity.addr_mailing.state,
         addr_mailing_zip: patch.identity.addr_mailing.zip,
+        specialty_profile: nextSpecialty,
+        practice_specialty: nextSpecialty,
         updated_at: nowISO(),
       };
       writeJSON(FILES.orgs, orgs);
@@ -57578,4 +57682,26 @@ if (process.env.TJHP_WORKSPACE_READINESS_SMOKE_TESTS === "true" && (process.env.
     if(!(src.includes('tjhpEvidenceUsageId')&&src.includes('tjhpRecordEvidenceUsageFromSuggestion')&&src.includes('tjhpEvidenceUsageStatusForAttachment')&&src.includes('workspacePacketReadiness')&&src.includes('renderWorkspacePacketReadiness')&&src.includes('Packet Readiness')&&src.includes('Evidence used')&&src.includes('WORKSPACE_EVIDENCE_SUGGESTION_SMOKE_TESTS_PASSED')&&src.includes('WORKSPACE_EVIDENCE_SMOKE_TESTS_PASSED')&&src.includes('VIEW_PANEL_STATIC_TESTS_PASSED')&&src.includes('PACKET_SIGNATURE_SMOKE_TESTS_PASSED'))) throw new Error('static checks');
     process.stdout.write("WORKSPACE_READINESS_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("WORKSPACE_READINESS_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+
+if (process.env.TJHP_SPECIALTY_PROFILE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8"); const assert=(c,m)=>{if(!c) throw new Error(m)};
+    ["Practice Specialty","Ophthalmology","Orthopedics","Other","Primary Care","Radiology","practice_specialty","specialty_profile","/account/org-settings/save","tjhpNormalizeSpecialtyProfile","tjhpOrgSpecialtyProfileValue","tjhpBuildOwnerSpecialtyAnalytics","/admin/specialty-analytics"].forEach(x=>assert(src.includes(x),x));
+    assert(tjhpNormalizeSpecialtyProfile("Ophthalmology")==="ophthalmology","norm1"); assert(tjhpNormalizeSpecialtyProfile("ortho")==="orthopedics","norm2"); assert(tjhpNormalizeSpecialtyProfile("Primary Care")==="primary_care","norm3"); assert(tjhpNormalizeSpecialtyProfile("Radiology")==="radiology","norm4"); assert(tjhpNormalizeSpecialtyProfile("unknown")==="other","norm5");
+    const o=tjhpSpecialtySelectOptions("other"); assert(o.indexOf("Ophthalmology")<o.indexOf("Orthopedics") && o.indexOf("Orthopedics")<o.indexOf("Other") && o.indexOf("Other")<o.indexOf("Primary Care") && o.indexOf("Primary Care")<o.indexOf("Radiology"),"order");
+    assert(tjhpOrgSpecialtyProfileValue({org_id:"", specialty_profile:""})==="other","fallback");
+    const a=tjhpBuildOwnerSpecialtyAnalytics(); ["ophthalmology","orthopedics","other","primary_care","radiology"].forEach(k=>assert(a.specialties[k],k)); assert(a.overall && typeof a.overall==="object","overall");
+    process.stdout.write("SPECIALTY_PROFILE_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("SPECIALTY_PROFILE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+if (process.env.TJHP_OWNER_SPECIALTY_ANALYTICS_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8"); const assert=(c,m)=>{if(!c) throw new Error(m)};
+    ["Specialty Analytics","/admin/specialty-analytics","Specialty Overview","Denial Patterns","Payer Patterns","Procedure/CPT Patterns","Organization Revenue Intelligence","No specialty analytics available yet","Aggregated owner-side intelligence by practice specialty","Total Organisations","Total Users","Active Trials","Active Subscriptions","Plan Override","Force Password Reset","Extend Trial"].forEach(x=>assert(src.includes(x),x));
+    assert(src.includes('Specialty Analytics</a>'), 'admin nav contains Specialty Analytics');
+    assert(src.includes("Specialty Analytics"), 'phi light static');
+    process.stdout.write("OWNER_SPECIALTY_ANALYTICS_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("OWNER_SPECIALTY_ANALYTICS_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
