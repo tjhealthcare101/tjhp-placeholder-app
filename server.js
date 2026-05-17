@@ -16784,13 +16784,15 @@ function ensurePacketSections(ws, claim){
   if (!appealHeader || workspaceTextHasOrgPlaceholders(appealHeader) || workspaceTextMissingOrgIdentity(appealHeader, orgCtxForPacket)) ws.appeal.packet_sections.header = hdr;
   if (!negotiationHeader || workspaceTextHasOrgPlaceholders(negotiationHeader) || workspaceTextMissingOrgIdentity(negotiationHeader, orgCtxForPacket)) ws.negotiation.packet_sections.header = hdr;
   const existingAppealSig = String(ws.appeal.packet_sections.signature || "").trim();
-  ws.appeal.packet_sections.signature = existingAppealSig && !tjhpIsLegacyOrgOnlyPacketSignature(ws.org_id, existingAppealSig)
-    ? existingAppealSig
-    : tjhpPacketClosingTextForWorkspace(ws.org_id, existingAppealSig || sig);
+  ws.appeal.packet_sections.signature =
+  existingAppealSig && !tjhpIsLegacyOrgOnlyPacketSignature(ws.org_id, existingAppealSig)
+    ? tjhpPacketSignerOnlyTextForWorkspace(ws.org_id, existingAppealSig)
+    : tjhpPacketSignerOnlyTextForWorkspace(ws.org_id, existingAppealSig || sig);
   const existingNegotiationSig = String(ws.negotiation.packet_sections.signature || "").trim();
-  ws.negotiation.packet_sections.signature = existingNegotiationSig && !tjhpIsLegacyOrgOnlyPacketSignature(ws.org_id, existingNegotiationSig)
-    ? existingNegotiationSig
-    : tjhpPacketClosingTextForWorkspace(ws.org_id, existingNegotiationSig || sig);
+  ws.negotiation.packet_sections.signature =
+  existingNegotiationSig && !tjhpIsLegacyOrgOnlyPacketSignature(ws.org_id, existingNegotiationSig)
+    ? tjhpPacketSignerOnlyTextForWorkspace(ws.org_id, existingNegotiationSig)
+    : tjhpPacketSignerOnlyTextForWorkspace(ws.org_id, existingNegotiationSig || sig);
   if (letterDefaults.appeal_opening && ws.appeal.packet_sections.argument && !ws.appeal.packet_sections.argument.startsWith(letterDefaults.appeal_opening)) {
     ws.appeal.packet_sections.argument = `${letterDefaults.appeal_opening}
 
@@ -18632,26 +18634,77 @@ function tjhpOrganizationClosingDetailsText(org_id){
   return lines.filter(Boolean).join("\n");
 }
 
-function tjhpPacketSignerTextForWorkspace(org_id, packetValue){
+function tjhpNormalizeSignatureLines(text) {
+  return String(text || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map(x => String(x || "").trim())
+    .filter(Boolean);
+}
+
+function tjhpOrgClosingLineSet(org_id) {
+  const orgCtx = workspaceOrgIdentityContext(org_id);
+  const raw = [
+    orgCtx.orgName,
+    orgCtx.npi ? `NPI: ${orgCtx.npi}` : "",
+    orgCtx.taxId ? `TIN: ${orgCtx.taxId}` : "",
+    orgCtx.addressBlock,
+    orgCtx.phone ? `Phone: ${orgCtx.phone}` : "",
+    orgCtx.email ? `Email: ${orgCtx.email}` : ""
+  ].filter(Boolean).join("\n");
+
+  return new Set(
+    tjhpNormalizeSignatureLines(raw).map(x => x.toLowerCase())
+  );
+}
+
+function tjhpSignatureContainsOrgClosingDetails(org_id, text) {
+  const lines = tjhpNormalizeSignatureLines(text);
+  if (!lines.length) return false;
+  const orgLines = tjhpOrgClosingLineSet(org_id);
+  return lines.some(line => orgLines.has(line.toLowerCase()));
+}
+
+function tjhpStripOrganizationClosingDetailsFromSignatureText(org_id, text) {
+  const lines = tjhpNormalizeSignatureLines(text);
+  if (!lines.length) return "";
+
+  const orgLines = tjhpOrgClosingLineSet(org_id);
+
+  const kept = [];
+  for (const line of lines) {
+    const low = line.toLowerCase();
+    if (orgLines.has(low)) continue;
+    if (/^npi\s*:/i.test(line) && orgLines.has(low)) continue;
+    if (/^tin\s*:/i.test(line) && orgLines.has(low)) continue;
+    if (/^phone\s*:/i.test(line) && orgLines.has(low)) continue;
+    if (/^email\s*:/i.test(line) && orgLines.has(low)) continue;
+    kept.push(line);
+  }
+
+  return kept.join("\n").trim();
+}
+
+function tjhpPacketSignerOnlyTextForWorkspace(org_id, packetValue){
   const explicit = String(packetValue || "").trim();
 
   if (explicit && !tjhpIsLegacyOrgOnlyPacketSignature(org_id, explicit)) {
-    return explicit;
+    const stripped = tjhpStripOrganizationClosingDetailsFromSignatureText(org_id, explicit);
+    if (stripped) return stripped;
   }
 
-  const signerDetails = tjhpPracticeSignerDetailsText(org_id);
-  if (signerDetails) return signerDetails;
-  return tjhpPracticeSignatureText(org_id);
+  return tjhpPracticeSignerDetailsText(org_id) || "";
 }
 
 function tjhpPacketClosingTextForWorkspace(org_id, packetValue){
-  const signer = tjhpPacketSignerTextForWorkspace(org_id, packetValue);
+  const signer = tjhpPacketSignerOnlyTextForWorkspace(org_id, packetValue);
   const orgDetails = tjhpOrganizationClosingDetailsText(org_id);
   return [signer, orgDetails].filter(Boolean).join("\n\n");
 }
 
 function tjhpPacketSignatureTextForWorkspace(org_id, packetValue){
-  return tjhpPacketSignerTextForWorkspace(org_id, packetValue);
+  return tjhpPacketSignerOnlyTextForWorkspace(org_id, packetValue) || tjhpPracticeSignatureText(org_id);
 }
 
 function tjhpPacketSignatureImageForWorkspace(org_id, packetImage){
@@ -23723,7 +23776,7 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
       argument: narrative,
       requested_action: ws.appeal.packet_sections?.requested_action || `- Reverse denial determination.\n- Reprocess claim per benefits/contract.\n- Provide written rationale if denial remains.`,
       attachments_index: buildAttachmentsIndex(ws),
-      signature: (() => { const existingAppealSig = String(ws.appeal.packet_sections?.signature || "").trim(); return existingAppealSig && !tjhpIsLegacyOrgOnlyPacketSignature(org_id, existingAppealSig) ? existingAppealSig : tjhpPacketClosingTextForWorkspace(org_id, existingAppealSig); })()
+      signature: (() => { const existingAppealSig = String(ws.appeal.packet_sections?.signature || "").trim(); return existingAppealSig && !tjhpIsLegacyOrgOnlyPacketSignature(org_id, existingAppealSig) ? tjhpPacketSignerOnlyTextForWorkspace(org_id, existingAppealSig) : tjhpPacketSignerOnlyTextForWorkspace(org_id, existingAppealSig); })()
     };
     ws.appeal = { ...(ws.appeal || {}), draft_text: ws.appeal.packet_sections.argument, updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
     generated += 1;
@@ -23740,7 +23793,7 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
       requested_amount: String(ws.negotiation.packet_sections?.requested_amount || currentDerived?.underpaidAmount || ""),
       requested_action: ws.negotiation.packet_sections?.requested_action || `- Recalculate reimbursement per contract terms.\n- Remit corrected payment and ERA.\n- Confirm adjustment timeline.`,
       attachments_index: buildAttachmentsIndex(ws),
-      signature: (() => { const existingNegotiationSig = String(ws.negotiation.packet_sections?.signature || "").trim(); return existingNegotiationSig && !tjhpIsLegacyOrgOnlyPacketSignature(org_id, existingNegotiationSig) ? existingNegotiationSig : tjhpPacketClosingTextForWorkspace(org_id, existingNegotiationSig); })()
+      signature: (() => { const existingNegotiationSig = String(ws.negotiation.packet_sections?.signature || "").trim(); return existingNegotiationSig && !tjhpIsLegacyOrgOnlyPacketSignature(org_id, existingNegotiationSig) ? tjhpPacketSignerOnlyTextForWorkspace(org_id, existingNegotiationSig) : tjhpPacketSignerOnlyTextForWorkspace(org_id, existingNegotiationSig); })()
     };
     ws.negotiation = { ...(ws.negotiation || {}), draft_text: ws.negotiation.packet_sections.variance_explanation, requested_amount: Number(ws.negotiation.packet_sections.requested_amount || currentDerived?.underpaidAmount || 0), updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
     generated += 1;
@@ -56908,17 +56961,42 @@ if (process.env.TJHP_PACKET_SIGNATURE_SMOKE_TESTS === "true" && (process.env.TJH
   function assert(c,m){ if(!c) throw new Error(m); }
   const testOrg='packet-signature-smoke';
   saveOrgSettings(testOrg, { ...(getOrgSettings(testOrg)||{}), identity:{ legal_name:'JUoo', npi:'1234567890', phone:'555-111-2222', email:'billing@example.com', primary_address1:'123 Main St', primary_city:'Austin', primary_state:'TX', primary_zip:'78701' }, practice_signature:{ typed_name:'Tyquon Jordan', title:'Administrator', contact_line:'billing@example.com' }, signature_image:'data:image/png;base64,abc' });
+  function countLine(text, line) {
+    return tjhpNormalizeSignatureLines(text).filter(x => x.toLowerCase() === String(line).toLowerCase()).length;
+  }
+  function textAfterLastSincerely(text){
+    const lines = String(text || "").replace(/\r\n/g,"\n").replace(/\r/g,"\n").split("\n");
+    let idx = -1;
+    for (let i=0;i<lines.length;i++) {
+      if (String(lines[i]||"").trim().toLowerCase() === "sincerely,") idx = i;
+    }
+    return idx >= 0 ? lines.slice(idx).join("\n") : "";
+  }
   const closing = tjhpPacketClosingTextForWorkspace(testOrg, '');
   assert(closing.includes('Tyquon Jordan') && closing.includes('Administrator') && closing.includes('billing@example.com') && closing.includes('JUoo') && closing.includes('NPI: 1234567890'), 'default closing missing signer/org details');
+  const combinedInput = ['Tyquon Jordan','Administrator','','JUoo','NPI: 1234567890','Phone: 555-111-2222'].join('\n');
+  const normalizedClosing = tjhpPacketClosingTextForWorkspace(testOrg, combinedInput);
+  assert(countLine(normalizedClosing, 'JUoo') === 1, 'org name duplicated in normalized closing');
+  assert(countLine(normalizedClosing, 'NPI: 1234567890') === 1, 'NPI duplicated in normalized closing');
+  assert(normalizedClosing.includes('Tyquon Jordan'), 'signer missing after normalization');
+  assert(normalizedClosing.includes('Administrator'), 'title missing after normalization');
   const customClosing = tjhpPacketClosingTextForWorkspace(testOrg, 'Custom Packet Signature');
-  assert(customClosing.includes('Custom Packet Signature') && customClosing.includes('JUoo'), 'custom signature should win and retain org details');
+  assert(customClosing.includes('Custom Packet Signature'), 'custom signature missing');
+  assert(countLine(customClosing, 'JUoo') === 1, 'custom closing duplicated org name');
   const legacyClosing = tjhpPacketClosingTextForWorkspace(testOrg, 'JUoo');
   assert(legacyClosing.includes('Tyquon Jordan') && legacyClosing.includes('JUoo'), 'legacy org-only signature should fallback');
+  const wsSig = { org_id:testOrg, appeal:{ packet_sections:{ signature: combinedInput } }, negotiation:{ packet_sections:{ signature: combinedInput } } };
+  ensurePacketSections(wsSig, {});
+  assert(!tjhpSignatureContainsOrgClosingDetails(testOrg, wsSig.appeal.packet_sections.signature), 'appeal packet_sections.signature should store signer-only');
+  assert(!tjhpSignatureContainsOrgClosingDetails(testOrg, wsSig.negotiation.packet_sections.signature), 'negotiation packet_sections.signature should store signer-only');
   assert(tjhpPacketSignatureImageForWorkspace(testOrg, '') === 'data:image/png;base64,abc', 'image fallback failed');
   assert(tjhpPacketSignatureImageForWorkspace(testOrg, 'packet-image') === 'packet-image', 'packet image should win');
-  const lmn = buildWorkspaceLetterOfMedicalNecessityTemplate({ org_id:testOrg, claim:{}, ws:{ appeal:{ packet_sections:{ signature:'' } } } });
-  assert(lmn.includes('Sincerely,') && lmn.includes('Tyquon Jordan') && lmn.includes('Administrator') && lmn.includes('JUoo') && lmn.includes('NPI: 1234567890'), 'LMN closing missing enhanced details');
+  const lmn = buildWorkspaceLetterOfMedicalNecessityTemplate({ org_id:testOrg, claim:{}, ws:{ appeal:{ packet_sections:{ signature:combinedInput } } } });
+  const lmnClosing = textAfterLastSincerely(lmn);
+  assert(countLine(lmnClosing, 'JUoo') === 1, 'LMN closing duplicated org name');
+  assert(countLine(lmnClosing, 'NPI: 1234567890') === 1, 'LMN closing duplicated NPI');
   assert(src.includes('workspaceWritePacketClosingOnPdf'), 'missing pdf closing helper');
+  assert(src.includes('tjhpPacketSignerOnlyTextForWorkspace'), 'missing signer-only helper');
   assert(src.includes('tjhpPacketSignatureImageForWorkspace'), 'missing packet signature image helper usage');
   assert(!src.includes('doc.text(\"Sincerely,\", { width: CONTENT_WIDTH, align: \"left\" });\n  doc.text(orgCtx.orgName || \"Your Practice\"'), 'old duplicate closing still present');
   assert(src.includes('sigCanvas') && src.includes('clearSig') && src.includes('saveSig'), 'workspace signature canvas helpers changed');
