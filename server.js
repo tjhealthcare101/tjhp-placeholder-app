@@ -16606,10 +16606,7 @@ ${lmnConclusion}
 
 Please contact my office using the phone number or email address listed above with any questions.
 
-Sincerely,
-${physicianName}
-NPI: ${npi}
-${practiceAddress}`;
+${["Sincerely,", "", tjhpPacketClosingTextForWorkspace(org_id, ws?.appeal?.packet_sections?.signature || "")].filter(Boolean).join("\n")}`;
 }
 
 function defaultNegotiationPacketSections(){
@@ -16786,8 +16783,14 @@ function ensurePacketSections(ws, claim){
   const negotiationHeader = String(ws.negotiation.packet_sections.header || "").trim();
   if (!appealHeader || workspaceTextHasOrgPlaceholders(appealHeader) || workspaceTextMissingOrgIdentity(appealHeader, orgCtxForPacket)) ws.appeal.packet_sections.header = hdr;
   if (!negotiationHeader || workspaceTextHasOrgPlaceholders(negotiationHeader) || workspaceTextMissingOrgIdentity(negotiationHeader, orgCtxForPacket)) ws.negotiation.packet_sections.header = hdr;
-  if (!String(ws.appeal.packet_sections.signature || "").trim()) ws.appeal.packet_sections.signature = sig;
-  if (!String(ws.negotiation.packet_sections.signature || "").trim()) ws.negotiation.packet_sections.signature = sig;
+  const existingAppealSig = String(ws.appeal.packet_sections.signature || "").trim();
+  ws.appeal.packet_sections.signature = existingAppealSig && !tjhpIsLegacyOrgOnlyPacketSignature(ws.org_id, existingAppealSig)
+    ? existingAppealSig
+    : tjhpPacketClosingTextForWorkspace(ws.org_id, existingAppealSig || sig);
+  const existingNegotiationSig = String(ws.negotiation.packet_sections.signature || "").trim();
+  ws.negotiation.packet_sections.signature = existingNegotiationSig && !tjhpIsLegacyOrgOnlyPacketSignature(ws.org_id, existingNegotiationSig)
+    ? existingNegotiationSig
+    : tjhpPacketClosingTextForWorkspace(ws.org_id, existingNegotiationSig || sig);
   if (letterDefaults.appeal_opening && ws.appeal.packet_sections.argument && !ws.appeal.packet_sections.argument.startsWith(letterDefaults.appeal_opening)) {
     ws.appeal.packet_sections.argument = `${letterDefaults.appeal_opening}
 
@@ -18583,10 +18586,72 @@ function tjhpPracticeSignatureImage(org_id){
   return String(settings.signature_image || settings.signature_image_path || "").trim();
 }
 
-function tjhpPacketSignatureTextForWorkspace(org_id, packetValue){
+function tjhpIsLegacyOrgOnlyPacketSignature(org_id, value){
+  const v = String(value || "").trim();
+  if (!v) return false;
+
+  const orgCtx = workspaceOrgIdentityContext(org_id);
+  const orgName = String(orgCtx.orgName || getOrg(org_id)?.org_name || "Practice").trim();
+
+  const legacy = [
+    orgName,
+    getOrg(org_id)?.org_name || "",
+    "Practice",
+    "Your Practice"
+  ].map(x => String(x || "").trim()).filter(Boolean);
+
+  return legacy.some(x => x && v.toLowerCase() === x.toLowerCase());
+}
+
+function tjhpPracticeSignerDetailsText(org_id){
+  const settings = getOrgSettings(org_id) || {};
+  const practice = settings.practice_signature && typeof settings.practice_signature === "object"
+    ? settings.practice_signature
+    : {};
+
+  const lines = [
+    practice.typed_name,
+    practice.title,
+    practice.contact_line
+  ].map(v => String(v || "").trim()).filter(Boolean);
+
+  return lines.join("\n");
+}
+
+function tjhpOrganizationClosingDetailsText(org_id){
+  const orgCtx = workspaceOrgIdentityContext(org_id);
+  const lines = [];
+
+  if (orgCtx.orgName) lines.push(orgCtx.orgName);
+  if (orgCtx.npi) lines.push(`NPI: ${orgCtx.npi}`);
+  if (orgCtx.taxId) lines.push(`TIN: ${orgCtx.taxId}`);
+  if (orgCtx.addressBlock) lines.push(orgCtx.addressBlock);
+  if (orgCtx.phone) lines.push(`Phone: ${orgCtx.phone}`);
+  if (orgCtx.email) lines.push(`Email: ${orgCtx.email}`);
+
+  return lines.filter(Boolean).join("\n");
+}
+
+function tjhpPacketSignerTextForWorkspace(org_id, packetValue){
   const explicit = String(packetValue || "").trim();
-  if (explicit) return explicit;
+
+  if (explicit && !tjhpIsLegacyOrgOnlyPacketSignature(org_id, explicit)) {
+    return explicit;
+  }
+
+  const signerDetails = tjhpPracticeSignerDetailsText(org_id);
+  if (signerDetails) return signerDetails;
   return tjhpPracticeSignatureText(org_id);
+}
+
+function tjhpPacketClosingTextForWorkspace(org_id, packetValue){
+  const signer = tjhpPacketSignerTextForWorkspace(org_id, packetValue);
+  const orgDetails = tjhpOrganizationClosingDetailsText(org_id);
+  return [signer, orgDetails].filter(Boolean).join("\n\n");
+}
+
+function tjhpPacketSignatureTextForWorkspace(org_id, packetValue){
+  return tjhpPacketSignerTextForWorkspace(org_id, packetValue);
 }
 
 function tjhpPacketSignatureImageForWorkspace(org_id, packetImage){
@@ -23658,7 +23723,7 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
       argument: narrative,
       requested_action: ws.appeal.packet_sections?.requested_action || `- Reverse denial determination.\n- Reprocess claim per benefits/contract.\n- Provide written rationale if denial remains.`,
       attachments_index: buildAttachmentsIndex(ws),
-      signature: ws.appeal.packet_sections?.signature || (getOrg(org_id)?.org_name || "Practice")
+      signature: (() => { const existingAppealSig = String(ws.appeal.packet_sections?.signature || "").trim(); return existingAppealSig && !tjhpIsLegacyOrgOnlyPacketSignature(org_id, existingAppealSig) ? existingAppealSig : tjhpPacketClosingTextForWorkspace(org_id, existingAppealSig); })()
     };
     ws.appeal = { ...(ws.appeal || {}), draft_text: ws.appeal.packet_sections.argument, updated_at: ts, last_run_at: ts, version: Number(ws.appeal?.version || 0) + 1 };
     generated += 1;
@@ -23675,7 +23740,7 @@ function autoDraftWorkspaceForClaim(org_id, claim, derived, claimCtx){
       requested_amount: String(ws.negotiation.packet_sections?.requested_amount || currentDerived?.underpaidAmount || ""),
       requested_action: ws.negotiation.packet_sections?.requested_action || `- Recalculate reimbursement per contract terms.\n- Remit corrected payment and ERA.\n- Confirm adjustment timeline.`,
       attachments_index: buildAttachmentsIndex(ws),
-      signature: ws.negotiation.packet_sections?.signature || (getOrg(org_id)?.org_name || "Practice")
+      signature: (() => { const existingNegotiationSig = String(ws.negotiation.packet_sections?.signature || "").trim(); return existingNegotiationSig && !tjhpIsLegacyOrgOnlyPacketSignature(org_id, existingNegotiationSig) ? existingNegotiationSig : tjhpPacketClosingTextForWorkspace(org_id, existingNegotiationSig); })()
     };
     ws.negotiation = { ...(ws.negotiation || {}), draft_text: ws.negotiation.packet_sections.variance_explanation, requested_amount: Number(ws.negotiation.packet_sections.requested_amount || currentDerived?.underpaidAmount || 0), updated_at: ts, last_run_at: ts, version: Number(ws.negotiation?.version || 0) + 1 };
     generated += 1;
@@ -25139,6 +25204,31 @@ function workspacePdfPracticeHeaderLines(orgCtx){
   ].filter(Boolean);
 }
 
+function workspaceDrawSignatureImageOnPdf(doc, signatureImage, fit = [200,80]) {
+  const image = String(signatureImage || "").trim();
+  if (!image) return false;
+  try {
+    const base64 = image.replace(/^data:image\/\w+;base64,/, "");
+    const imgBuffer = Buffer.from(base64, "base64");
+    doc.image(imgBuffer, { fit });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function workspaceWritePacketClosingOnPdf(doc, { org_id, packetSignatureText, packetSignatureImage, width }) {
+  const effectiveText = tjhpPacketClosingTextForWorkspace(org_id, packetSignatureText || "");
+  const effectiveImage = tjhpPacketSignatureImageForWorkspace(org_id, packetSignatureImage || "");
+  doc.text("Sincerely,", { width, align: "left" });
+  if (effectiveImage) {
+    doc.moveDown(0.25);
+    workspaceDrawSignatureImageOnPdf(doc, effectiveImage, [200, 80]);
+  }
+  doc.moveDown(0.5);
+  if (effectiveText) doc.text(effectiveText, { width, align: "left" });
+}
+
 function buildPacketPDF({ claim, derived, ws, channel, res, docOverride }) {
   const doc = docOverride || new PDFKitDocument({ margin: 50, bufferPages: true });
   doc.page.margins = { top: 50, bottom: 50, left: 50, right: 50 };
@@ -25277,20 +25367,12 @@ The reimbursement received does not align with the expected amount based on appl
   doc.moveDown(2);
 
   // ----- SIGNATURE -----
-  if (ws.signature_image) {
-    try {
-      const base64 = String(ws.signature_image).replace(/^data:image\/\w+;base64,/, "");
-      const imgBuffer = Buffer.from(base64, "base64");
-      doc.image(imgBuffer, { fit: [200, 80] });
-    } catch(e){}
-  } else {
-    doc.text(sections.signature || "", { width: CONTENT_WIDTH, align: "left" });
-  }
-
-  doc.moveDown();
-
-  doc.text("Sincerely,", { width: CONTENT_WIDTH, align: "left" });
-  doc.text(orgCtx.orgName || "Your Practice", { width: CONTENT_WIDTH, align: "left" });
+  workspaceWritePacketClosingOnPdf(doc, {
+    org_id: claim.org_id,
+    packetSignatureText: sections.signature || "",
+    packetSignatureImage: ws.signature_image || "",
+    width: CONTENT_WIDTH
+  });
 
   const lmnText = String(ws?.appeal?.packet_sections?.letter_of_medical_necessity || "").trim();
   const lmnPacketText = workspaceLmnTextForPacketPdf(lmnText);
@@ -56818,6 +56900,30 @@ if (process.env.TJHP_ORG_SIGNATURE_UI_SMOKE_TESTS === "true" && (process.env.TJH
   saveOrgSettings(testOrg, { ...st, practice_signature:{ typed_name:'', title:'', contact_line:'' }, signature_image:'' });
   assert(tjhpPacketSignatureTextForWorkspace(testOrg, '')==='Legacy Signature Block','legacy fallback missing');
   process.stdout.write("ORG_SIGNATURE_UI_SMOKE_TESTS_PASSED\n");
+  process.exit(0);
+}
+
+if (process.env.TJHP_PACKET_SIGNATURE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const src = fs.readFileSync(__filename, "utf8");
+  function assert(c,m){ if(!c) throw new Error(m); }
+  const testOrg='packet-signature-smoke';
+  saveOrgSettings(testOrg, { ...(getOrgSettings(testOrg)||{}), identity:{ legal_name:'JUoo', npi:'1234567890', phone:'555-111-2222', email:'billing@example.com', primary_address1:'123 Main St', primary_city:'Austin', primary_state:'TX', primary_zip:'78701' }, practice_signature:{ typed_name:'Tyquon Jordan', title:'Administrator', contact_line:'billing@example.com' }, signature_image:'data:image/png;base64,abc' });
+  const closing = tjhpPacketClosingTextForWorkspace(testOrg, '');
+  assert(closing.includes('Tyquon Jordan') && closing.includes('Administrator') && closing.includes('billing@example.com') && closing.includes('JUoo') && closing.includes('NPI: 1234567890'), 'default closing missing signer/org details');
+  const customClosing = tjhpPacketClosingTextForWorkspace(testOrg, 'Custom Packet Signature');
+  assert(customClosing.includes('Custom Packet Signature') && customClosing.includes('JUoo'), 'custom signature should win and retain org details');
+  const legacyClosing = tjhpPacketClosingTextForWorkspace(testOrg, 'JUoo');
+  assert(legacyClosing.includes('Tyquon Jordan') && legacyClosing.includes('JUoo'), 'legacy org-only signature should fallback');
+  assert(tjhpPacketSignatureImageForWorkspace(testOrg, '') === 'data:image/png;base64,abc', 'image fallback failed');
+  assert(tjhpPacketSignatureImageForWorkspace(testOrg, 'packet-image') === 'packet-image', 'packet image should win');
+  const lmn = buildWorkspaceLetterOfMedicalNecessityTemplate({ org_id:testOrg, claim:{}, ws:{ appeal:{ packet_sections:{ signature:'' } } } });
+  assert(lmn.includes('Sincerely,') && lmn.includes('Tyquon Jordan') && lmn.includes('Administrator') && lmn.includes('JUoo') && lmn.includes('NPI: 1234567890'), 'LMN closing missing enhanced details');
+  assert(src.includes('workspaceWritePacketClosingOnPdf'), 'missing pdf closing helper');
+  assert(src.includes('tjhpPacketSignatureImageForWorkspace'), 'missing packet signature image helper usage');
+  assert(!src.includes('doc.text(\"Sincerely,\", { width: CONTENT_WIDTH, align: \"left\" });\n  doc.text(orgCtx.orgName || \"Your Practice\"'), 'old duplicate closing still present');
+  assert(src.includes('sigCanvas') && src.includes('clearSig') && src.includes('saveSig'), 'workspace signature canvas helpers changed');
+  assert(src.includes('window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__'), 'view panel guard missing');
+  process.stdout.write("PACKET_SIGNATURE_SMOKE_TESTS_PASSED\n");
   process.exit(0);
 }
 
