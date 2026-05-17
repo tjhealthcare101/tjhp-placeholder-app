@@ -25979,6 +25979,39 @@ function tjhpZipEntriesFromBuffer(buffer){
   }
   return out;
 }
+function tjhpDocxTextFromCellXml(cellXml) {
+  const src = String(cellXml || "");
+  const chunks = [];
+  const normalized = src
+    .replace(/<[^>]*:tab\b[^>]*\/>/gi, "\t")
+    .replace(/<w:tab\b[^>]*\/>/gi, "\t")
+    .replace(/<[^>]*:br\b[^>]*\/>/gi, "\n")
+    .replace(/<w:br\b[^>]*\/>/gi, "\n");
+  for (const m of normalized.matchAll(/<(?:[A-Za-z0-9_]+:)?t\b[^>]*>([\s\S]*?)<\/(?:[A-Za-z0-9_]+:)?t>/g)) chunks.push(tjhpXmlDecode(m[1]));
+  return chunks.join("").replace(/\s+\n/g, "\n").replace(/\n\s+/g, "\n").trim();
+}
+function tjhpExtractDocxTableRowsFromBuffer(buffer) {
+  try {
+    if (!Buffer.isBuffer(buffer) || !buffer.length) return [];
+    const entries = tjhpZipEntriesFromBuffer(buffer);
+    const docXml = entries["word/document.xml"] ? entries["word/document.xml"].toString("utf8") : "";
+    if (!docXml) return [];
+    const tables = [];
+    const tableMatches = [...docXml.matchAll(/<((?:[A-Za-z0-9_]+:)?tbl)\b[\s\S]*?<\/\1>/g)];
+    const tableXmls = tableMatches.length ? tableMatches.map((m)=>m[0]) : [docXml];
+    for (const tableXml of tableXmls) {
+      const rows = [];
+      for (const rm of tableXml.matchAll(/<((?:[A-Za-z0-9_]+:)?tr)\b[\s\S]*?<\/\1>/g)) {
+        const rowXml = rm[0];
+        const cells = [];
+        for (const cm of rowXml.matchAll(/<((?:[A-Za-z0-9_]+:)?tc)\b[\s\S]*?<\/\1>/g)) cells.push(tjhpDocxTextFromCellXml(cm[0]));
+        if (cells.length) rows.push(cells);
+      }
+      if (rows.length) tables.push(rows);
+    }
+    return tables;
+  } catch (_) { return []; }
+}
 function tjhpParseXlsxSharedStringsXml(xml){
   const arr = [];
   const blocks = String(xml || "").match(tjhpXmlTagPattern("si")) || [];
@@ -26219,6 +26252,11 @@ async function tjhpExtractTextFromUploadedFileForParsing(file){
         const entries = tjhpZipEntriesFromBuffer(buffer);
         const docXml = entries["word/document.xml"] ? entries["word/document.xml"].toString("utf8") : "";
         if (docXml) {
+          const tables = tjhpExtractDocxTableRowsFromBuffer(buffer);
+          if (tables.length) {
+            const tableText = tables.flatMap((t)=>t.map((row)=>row.map((cell)=>String(cell || "").trim()).join(" | "))).join("\n");
+            if (tableText.trim()) return tableText;
+          }
           return [...docXml.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map((m)=>tjhpXmlDecode(m[1])).join("\n");
         }
       } catch (_) {}
@@ -26263,6 +26301,61 @@ function tjhpUploadHeaderAliasesForPurpose(purpose){
     };
   }
   return { claim_id:["claim_id","claim number","claim #","claim no","claim","claim_number"], patient_name:["patient_name","patient","member","member name","patient name"], payer:["payer","payer name","insurance","insurance payer"], cpt_code:["cpt_code","cpt","procedure","procedure code","hcpcs","hcpcs_code"], billed_amount:["billed_amount","billed","charge","charge amount","amount billed","total charge"], expected_amount:["expected_amount","expected","allowed","allowed amount","expected reimbursement"], date_of_service:["date_of_service","dos","service date","date"] };
+}
+function tjhpCanonicalHeaderFromUploadCell(value, purpose) {
+  const normalized = tjhpNormalizeLooseHeader(value);
+  const aliases = tjhpUploadHeaderAliasesForPurpose(purpose);
+  for (const [canonical, vals] of Object.entries(aliases)) {
+    const all = [canonical, ...(vals || [])].map(tjhpNormalizeLooseHeader);
+    if (all.includes(normalized)) return canonical;
+  }
+  return normalized;
+}
+function tjhpCanonicalHeadersForPurpose(purpose) {
+  if (purpose === "payments") return ["claim_id","payer","paid_amount","denial_reason","paid_date"];
+  if (purpose === "reimbursement" || purpose === "contracts") return ["payer_name","network_status","procedure_code","diagnosis_code","reimbursement_model","allowed_amount","effective_date"];
+  return ["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"];
+}
+function tjhpValidateParsedDocxPurposeRow(row, purpose) {
+  if (!row) return false;
+  if (purpose === "payments") {
+    const hasId = !!String(row.claim_id || row.payer || "").trim();
+    const paidText = String(row.paid_amount ?? "").trim();
+    const hasPaid = paidText !== "" && Number.isFinite(Number(paidText.replace(/[$,]/g, "")));
+    const hasDate = tjhpLooksLikeDateText(row.paid_date);
+    return hasId && hasPaid && hasDate;
+  }
+  if (purpose === "reimbursement" || purpose === "contracts") return !!String(row.payer_name || "").trim() && !!String(row.procedure_code || "").trim() && tjhpMoneyNumberFromText(row.allowed_amount) > 0;
+  return !!String(row.claim_id || "").trim() && !!String(row.payer || "").trim() && tjhpMoneyNumberFromText(row.billed_amount) > 0 && !!String(row.date_of_service || "").trim();
+}
+function tjhpParseDocxTableRowsForPurpose(file, purpose) {
+  try {
+    if (tjhpUploadExtFromFile(file) !== ".docx") return null;
+    const canonical = tjhpCanonicalHeadersForPurpose(purpose);
+    const tables = tjhpExtractDocxTableRowsFromBuffer(tjhpUploadedFileBuffer(file));
+    if (!tables.length) return null;
+    let best = null;
+    for (const table of tables) {
+      for (let ri = 0; ri < table.length; ri++) {
+        const cells = table[ri] || [];
+        const normalizedHeaders = cells.map((c)=>tjhpCanonicalHeaderFromUploadCell(c, purpose));
+        const headerIndexes = {};
+        canonical.forEach((h)=>{ const ix = normalizedHeaders.indexOf(h); if (ix >= 0) headerIndexes[h] = ix; });
+        const required = purpose === "payments" ? ["claim_id","payer","paid_amount","paid_date"] : ((purpose === "reimbursement" || purpose === "contracts") ? ["payer_name","procedure_code","allowed_amount"] : ["claim_id","payer","billed_amount","date_of_service"]);
+        if (!required.every((h)=>headerIndexes[h] != null)) continue;
+        const rows = [];
+        for (let rj = ri + 1; rj < table.length; rj++) {
+          const rowCells = table[rj] || [];
+          const row = {};
+          canonical.forEach((h)=>{ const ix = headerIndexes[h]; row[h] = ix == null ? "" : String(rowCells[ix] ?? "").trim(); });
+          if (purpose === "payments" && /^(none|null|n\/a|na|-|—)$/i.test(String(row.denial_reason || "").trim())) row.denial_reason = "";
+          if (tjhpValidateParsedDocxPurposeRow(row, purpose)) rows.push(row);
+        }
+        if (rows.length && (!best || rows.length > best.rows.length)) best = { parsed:true, structured:true, headers:canonical, rows, status:"Parsed", outcome:"parsed_docx_table", needs_review:false, notes:"DOCX table parsed with blank cells preserved." };
+      }
+    }
+    return best;
+  } catch (_) { return null; }
 }
 function tjhpParseSpacedClaimLine(line) {
   const src = String(line || "").trim();
@@ -26603,6 +26696,18 @@ async function tjhpParseRowsFromUploadedFileForRoute(file, opts = {}){
   const kind = parsed.kind;
   if (kind === "PDF" || kind === "WORD") {
     const purpose = opts.purpose || "claims";
+    if (kind === "WORD" && tjhpUploadExtFromFile(file) === ".docx") {
+      const docxTable = tjhpParseDocxTableRowsForPurpose(file, purpose);
+      if (docxTable && docxTable.parsed && docxTable.rows && docxTable.rows.length) {
+        return {
+          ...parsed,
+          ...docxTable,
+          kind,
+          ext: parsed.ext,
+          text_excerpt: docxTable.rows.slice(0, 3).map((r)=>docxTable.headers.map((h)=>r[h] || "").join(" | ")).join("\n").slice(0, 400)
+        };
+      }
+    }
     const text = await tjhpExtractTextFromUploadedFileForParsing(file);
     const normalizedText = tjhpNormalizeExtractedUploadText(text);
     const loose = tjhpParseLooseTabularTextRows(normalizedText, purpose);
@@ -56655,6 +56760,17 @@ function tjhpSmokeBuildMinimalXlsx(headers, rows){
   const cdb=Buffer.concat(central); const eocd=Buffer.alloc(22); eocd.writeUInt32LE(0x06054b50,0); eocd.writeUInt16LE(Object.keys(manifest).length,8); eocd.writeUInt16LE(Object.keys(manifest).length,10); eocd.writeUInt32LE(cdb.length,12); eocd.writeUInt32LE(offset,16);
   return Buffer.concat([...local,cdb,eocd]);
 }
+function tjhpSmokeBuildMinimalDocxTable(headers, rows){
+  function esc(v){ return String(v == null ? "" : v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  function crc32(buf){ let c=-1; for (const b of buf){ c^=b; for(let k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); } return (c^(-1))>>>0; }
+  const trXml=[[...headers],...rows].map((row)=>`<w:tr>${row.map((cell)=>{ const val=String(cell==null?"":cell); return `<w:tc><w:p><w:r>${val?`<w:t>${esc(val)}</w:t>`:""}</w:r></w:p></w:tc>`; }).join("")}</w:tr>`).join("");
+  const docXml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>TJHP Test File</w:t></w:r></w:p><w:tbl>${trXml}</w:tbl></w:body></w:document>`;
+  const manifest={"[Content_Types].xml":`<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,"_rels/.rels":`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,"word/document.xml":docXml};
+  let offset=0; const local=[]; const central=[];
+  for (const [name,text] of Object.entries(manifest)){ const data=Buffer.from(text); const nb=Buffer.from(name); const sum=crc32(data); const lh=Buffer.alloc(30); lh.writeUInt32LE(0x04034b50,0); lh.writeUInt16LE(20,4); lh.writeUInt16LE(0,6); lh.writeUInt16LE(0,8); lh.writeUInt32LE(sum,14); lh.writeUInt32LE(data.length,18); lh.writeUInt32LE(data.length,22); lh.writeUInt16LE(nb.length,26); local.push(lh,nb,data); const ch=Buffer.alloc(46); ch.writeUInt32LE(0x02014b50,0); ch.writeUInt16LE(20,4); ch.writeUInt16LE(20,6); ch.writeUInt16LE(0,8); ch.writeUInt16LE(0,10); ch.writeUInt32LE(sum,16); ch.writeUInt32LE(data.length,20); ch.writeUInt32LE(data.length,24); ch.writeUInt16LE(nb.length,28); ch.writeUInt32LE(offset,42); central.push(ch,nb); offset += 30+nb.length+data.length; }
+  const cdb=Buffer.concat(central); const eocd=Buffer.alloc(22); eocd.writeUInt32LE(0x06054b50,0); eocd.writeUInt16LE(Object.keys(manifest).length,8); eocd.writeUInt16LE(Object.keys(manifest).length,10); eocd.writeUInt32LE(cdb.length,12); eocd.writeUInt32LE(offset,16);
+  return Buffer.concat([...local,cdb,eocd]);
+}
 function tjhpSmokeBuildNamespacedXlsx(headers, rows){
   function esc(v){ return String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
   function crc32(buf){ let c=-1; for(const b of buf){ c^=b; for(let k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);} return (c^(-1))>>>0; }
@@ -56703,6 +56819,11 @@ async function runUploadCompatSmokeTests(){
   assert(src.includes("parsed_image_ocr"), "missing parsed_image_ocr outcome");
   assert(src.includes("OCR/vision extraction is unavailable"), "missing image OCR fallback note");
   assert(src.includes("function tjhpZipEntriesFromBuffer"), "missing zip parser helper");
+  assert(src.includes("function tjhpExtractDocxTableRowsFromBuffer"), "missing docx table extraction helper");
+  assert(src.includes("function tjhpParseDocxTableRowsForPurpose"), "missing docx table purpose parser");
+  assert(src.includes("parsed_docx_table"), "missing docx table outcome");
+  assert(src.includes("DOCX table parsed with blank cells preserved"), "missing docx preservation note");
+  assert(src.includes("function tjhpSmokeBuildMinimalDocxTable"), "missing docx smoke builder");
   assert(src.includes("inflateRawSync"), "missing zip inflate fallback");
   assert(src.includes("Excel file accepted but structured rows could not be extracted; stored for review."), "missing excel fallback note");
   assert(src.includes("TJHP_UPLOAD_COMPAT_SMOKE_TESTS"), "missing compat gate");
@@ -56823,8 +56944,24 @@ async function runUploadCompatSmokeTests(){
   const payPdfSpace = "Payment Export\nclaim_id\npayer\npaid_amount\ndenial_reason\npaid_date\n1001  Aetna  0  NONE  2026-01-01\n1002  UnitedHealthcare  100  NONE  2026-01-02\n1003  Cigna  210  NONE  2026-01-03\n1004  Aetna  40  NONE  2026-01-04\n1005  BlueCross  0  NONE  2026-01-05";
   const pdfPayParsed = await tjhpParseRowsFromUploadedFileForRoute({ filename:"payments.pdf", buffer:Buffer.from(payPdfSpace, "utf8") }, { purpose:"payments" });
   assert(pdfPayParsed && pdfPayParsed.ok === true, "pdf spaced payments parse");
-  const docxClaimParsed = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.docx", buffer:Buffer.from(claimPdfOneCell, "utf8") }, { purpose:"claims" });
-  assert((docxClaimParsed.parsed===true && docxClaimParsed.rows.length===5) || docxClaimParsed.needs_review===true, "docx extraction parse or safe review");
+  const paymentDocx = tjhpSmokeBuildMinimalDocxTable(["claim_id","payer","paid_amount","denial_reason","paid_date"], [["1001","Aetna","0","Medical Necessity","2026-02-01"],["1002","UnitedHealthcare","100","","2026-02-02"],["1003","Cigna","210","","2026-02-03"],["1004","Aetna","40","","2026-02-04"],["1005","BlueCross","0","Authorization Required","2026-02-05"]]);
+  const docxTables = tjhpExtractDocxTableRowsFromBuffer(paymentDocx);
+  assert(docxTables.length >= 1, "docx table extraction found table");
+  assert(docxTables[0][2][3] === "", "docx blank denial reason cell preserved for 1002");
+  const parsedPayDocx = await tjhpParseRowsFromUploadedFileForRoute({ filename:"payments.docx", buffer:paymentDocx }, { purpose:"payments", allowTxtStructured:true });
+  assert(parsedPayDocx.parsed === true, "payments docx parsed");
+  assert(parsedPayDocx.outcome === "parsed_docx_table", "payments docx uses table parser");
+  assert(parsedPayDocx.rows.length === 5, "payments docx rows 5");
+  assert(parsedPayDocx.rows[1].denial_reason === "", "payments docx blank denial preserved");
+  assert(Math.round(parsedPayDocx.rows.reduce((s,r)=>s+num(r.paid_amount),0)) === 350, "payments.docx total paid 350");
+  assert(parsedPayDocx.rows[0].denial_reason === "Medical Necessity", "payments docx denial reason row 1001");
+  assert(parsedPayDocx.rows[4].denial_reason === "Authorization Required", "payments docx denial reason row 1005");
+  const claimsDocx = tjhpSmokeBuildMinimalDocxTable(["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"], [["1001","John Smith","Aetna","99213","150","110","2026-01-10"],["1002","Sarah Lee","UnitedHealthcare","99214","220","160","2026-01-12"],["1003","Michael Brown","Cigna","99215","300","210","2026-01-15"],["1004","Emily Davis","Aetna","93000","120","85","2026-01-18"],["1005","Chris Johnson","BlueCross","99213","150","115","2026-01-20"]]);
+  const docxClaimParsed = await tjhpParseRowsFromUploadedFileForRoute({ filename:"billed_claims.docx", buffer:claimsDocx }, { purpose:"claims", allowTxtStructured:true });
+  assert(docxClaimParsed.parsed === true, "claims docx parsed");
+  assert(docxClaimParsed.rows.length === 5, "claims docx rows 5");
+  assert(Math.round(docxClaimParsed.rows.map(mapBilledClaimRow).reduce((s,r)=>s+num(r.amount_billed),0)) === 940, "claims docx total billed 940");
+  // Regression: billed_claims.jpg + payments.docx should not cause DOCX payment total $1,105.
 }
 async function runUploadIngestSmokeTests(){
   return await runUploadCompatSmokeTests();
