@@ -41092,13 +41092,6 @@ function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){
       </form>
 
       <div class="hr"></div>
-
-      <form method="GET" action="/revenue-intelligence" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 12px 0;">
-        <input type="hidden" name="tab" value="forecast"/>
-        <label class="muted small" for="forecast_horizon">Projection period</label>
-        <select id="forecast_horizon" name="horizon" onchange="this.form.submit()">${horizonOptions.map(h=>`<option value="${h.months}" ${Number(fc.horizonMonths||3)===h.months?"selected":""} ${h.available?"":"disabled"}>${safeStr(h.label)}${h.available&&!h.recommended?" — use with caution":""}</option>`).join("")}</select>
-        <span class="muted small">Longer projections need more historical activity. With ${detectedMonths} detected months, a ${tjhpForecastDefaultHorizon(detectedMonths)}-month forecast is recommended.</span>
-      </form>
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
           <div style="font-weight:900;">Comparison Scorecard ${infoIcon("Scores are computed per payer. Higher is better. At-risk includes underpaid + patient follow-up remaining.")}</div>
@@ -58022,6 +58015,49 @@ if (process.env.TJHP_WORKSPACE_EVIDENCE_SMOKE_TESTS === "true" && (process.env.T
     assert(src.includes("TJHP_PACKET_SIGNATURE_SMOKE_TESTS"));
     process.stdout.write("WORKSPACE_EVIDENCE_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("WORKSPACE_EVIDENCE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+
+if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m || "assertion failed"); };
+    const ddStart = src.indexOf("function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){");
+    const ddEnd = src.indexOf("function renderRevenueAIConsole");
+    const deepDiveFnSrc = src.slice(ddStart, ddEnd);
+    const forecastStart = src.indexOf("function renderForecastTab(org, m, forecastB64){");
+    const forecastEnd = src.indexOf("function renderDeepDiveTab");
+    const forecastFnSrc = src.slice(forecastStart, forecastEnd);
+
+    ["function renderDeepDiveTab", "Deep Dive Analytics", "Comparison Scorecard", "Exposure Breakdown", "Executive Board Analysis", "Payer Rankings", "REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x), x));
+
+    const fakeOrg = { org_id: "deep-dive-smoke-org" };
+    const fakeM = {};
+    const payerRanks = [
+      { payer:"Cigna", score:80, deniedExposure:100, underpaidExposure:50, atRisk:150, denialRate:10 },
+      { payer:"Humana", score:70, deniedExposure:200, underpaidExposure:25, atRisk:225, denialRate:20 }
+    ];
+
+    const renderDeepDive = eval("(" + deepDiveFnSrc.replace("function renderDeepDiveTab", "function") + ")");
+    const emptyHtml = renderDeepDive(fakeOrg, payerRanks, fakeM, "", "", "");
+    ["Select two payers to compare.", "<select name=\"p1\">", "<select name=\"p2\">", "Compare"].forEach(x=>assert(emptyHtml.includes(x), x));
+
+    const deepDiveObj = {
+      p1:"Cigna",
+      p2:"Humana",
+      i1:{ score:80, denialRate:10, underpaidExposure:50, deniedExposure:100, atRisk:150 },
+      i2:{ score:70, denialRate:20, underpaidExposure:25, deniedExposure:200, atRisk:225 }
+    };
+    const deepDiveB64 = Buffer.from(JSON.stringify(deepDiveObj), "utf8").toString("base64");
+    const compareHtml = renderDeepDive(fakeOrg, payerRanks, fakeM, deepDiveB64, "Cigna", "Humana");
+    ["Comparison Scorecard", "Exposure Breakdown", "Executive Board Analysis", "riCompareBars", "riExposureBars"].forEach(x=>assert(compareHtml.includes(x), x));
+
+    ["horizonOptions", "fc.horizonMonths", "forecast_horizon", "detectedMonths", "tjhpForecastDefaultHorizon(detectedMonths)", '<input type="hidden" name="tab" value="forecast"/>'].forEach(x=>assert(!deepDiveFnSrc.includes(x), x));
+
+    ["forecast_horizon", "tjhpForecastHorizonChange", "horizonOptions", "#forecast-engine"].forEach(x=>assert(forecastFnSrc.includes(x), x));
+
+    process.stdout.write("REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
 
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
