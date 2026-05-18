@@ -16486,6 +16486,22 @@ function tjhpForecastMonthLabel(month) {
   const d = new Date(Number(match[1]), Number(match[2]) - 1, 1);
   return d.toLocaleString("en-US", { month: "short", year: "numeric" });
 }
+function tjhpForecastNumberArray(values) { return Array.isArray(values) ? values.map(v => Number(v || 0)).filter(v => Number.isFinite(v)) : []; }
+function tjhpForecastLastValue(values) { const arr = tjhpForecastNumberArray(values); return arr.length ? arr[arr.length - 1] : 0; }
+function tjhpForecastFirstValue(values) { const arr = tjhpForecastNumberArray(values); return arr.length ? arr[0] : 0; }
+function tjhpForecastTrendDirection(values) {
+  const arr = tjhpForecastNumberArray(values);
+  if (arr.length < 2) return "flat";
+  const first = arr[0], last = arr[arr.length - 1], delta = last - first, threshold = Math.max(10, Math.abs(first) * 0.05);
+  if (delta > threshold) return "up";
+  if (delta < -threshold) return "down";
+  return "flat";
+}
+function tjhpForecastTrendLabel(values, noun = "trend") { const dir = tjhpForecastTrendDirection(values); return dir === "up" ? `${noun} is trending upward` : (dir === "down" ? `${noun} is trending downward` : `${noun} is relatively stable`); }
+function tjhpForecastShortMoney(value) { const n = Number(value || 0); if (!Number.isFinite(n)) return "$0"; if (Math.abs(n) >= 1000000) return "$" + (n / 1000000).toFixed(1) + "M"; if (Math.abs(n) >= 1000) return "$" + (n / 1000).toFixed(1) + "K"; return formatMoneyUI(n); }
+function tjhpForecastPlainMethodCopy(fc) { return "Trend-based projection using recent claim service dates and payment dates. This is directional planning guidance, not a guaranteed result."; }
+function renderForecastSvgChart({ title, labels, historical, forecast, valueLabel = "Value" } = {}) { const hist = tjhpForecastNumberArray(historical), fcst = tjhpForecastNumberArray(forecast), all = hist.concat(fcst), safeLabels = Array.isArray(labels) ? labels.map(x => String(x || "")) : []; if (!all.length) return `<div class="muted small" style="padding:18px;border:1px dashed var(--border);border-radius:12px;">No forecast data available yet.</div>`; const width=680,height=240,padL=54,padR=22,padT=18,padB=42,plotW=width-padL-padR,plotH=height-padT-padB,maxVal=Math.max(...all,1),minVal=Math.min(...all,0),span=Math.max(1,maxVal-minVal),count=all.length; const x=i=>padL+(count<=1?0:(i/(count-1))*plotW), y=v=>padT+(1-((Number(v||0)-minVal)/span))*plotH, points=(arr,offset=0)=>arr.map((v,i)=>`${x(i+offset).toFixed(1)},${y(v).toFixed(1)}`).join(" "); const histPoints=points(hist,0), fcstPoints=points(fcst,hist.length), joinLine=hist.length&&fcst.length?`<line x1="${x(hist.length-1).toFixed(1)}" y1="${y(hist[hist.length-1]).toFixed(1)}" x2="${x(hist.length).toFixed(1)}" y2="${y(fcst[0]).toFixed(1)}" stroke="currentColor" stroke-width="2" stroke-dasharray="4 4" opacity=".55"/>`:"", yMax=tjhpForecastShortMoney(maxVal), yMin=tjhpForecastShortMoney(minVal), firstLabel=safeLabels[0]||"", lastLabel=safeLabels[safeLabels.length-1]||""; return `<div class="forecast-svg-card" style="border:1px solid var(--border);border-radius:12px;padding:10px;background:var(--card);"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${safeStr(title || "Forecast chart")}" style="width:100%;height:auto;display:block;"><rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect><line x1="${padL}" y1="${padT}" x2="${padL}" y2="${height-padB}" stroke="currentColor" opacity=".18"></line><line x1="${padL}" y1="${height-padB}" x2="${width-padR}" y2="${height-padB}" stroke="currentColor" opacity=".18"></line><text x="${padL-8}" y="${padT+4}" text-anchor="end" font-size="11" fill="currentColor" opacity=".65">${safeStr(yMax)}</text><text x="${padL-8}" y="${height-padB+4}" text-anchor="end" font-size="11" fill="currentColor" opacity=".65">${safeStr(yMin)}</text>${histPoints ? `<polyline points="${histPoints}" fill="none" stroke="currentColor" stroke-width="3" opacity=".85"></polyline>` : ""}${joinLine}${fcstPoints ? `<polyline points="${fcstPoints}" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="7 6" opacity=".65"></polyline>` : ""}${all.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="${i < hist.length ? 3.5 : 3}" fill="currentColor" opacity="${i < hist.length ? ".85" : ".55"}"></circle>`).join("")}<text x="${padL}" y="${height-14}" font-size="11" fill="currentColor" opacity=".65">${safeStr(firstLabel)}</text><text x="${width-padR}" y="${height-14}" text-anchor="end" font-size="11" fill="currentColor" opacity=".65">${safeStr(lastLabel)}</text></svg><div class="muted small" style="display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;"><span><strong>Solid:</strong> historical</span><span><strong>Dashed:</strong> projected</span><span><strong>${safeStr(valueLabel)}:</strong> ${safeStr(tjhpForecastShortMoney(tjhpForecastLastValue(all)))}</span></div></div>`; }
+function buildForecastExecutiveInterpretation(fc, m) { const histCollected=tjhpForecastNumberArray(fc?.hist?.collected), fcstCollected=tjhpForecastNumberArray(fc?.fcst?.collected), histRisk=tjhpForecastNumberArray(fc?.hist?.atRisk), fcstRisk=tjhpForecastNumberArray(fc?.fcst?.atRisk), detectedMonths=Number(fc?.detectedMonths||(Array.isArray(fc?.labels)?fc.labels.length:0)||0), firstMonth=fc?.firstMonth?tjhpForecastMonthLabel(fc.firstMonth):"", lastMonth=fc?.lastMonth?tjhpForecastMonthLabel(fc.lastMonth):"", range=firstMonth&&lastMonth?`${firstMonth} – ${lastMonth}`:"", collectedTrend=tjhpForecastTrendDirection(histCollected.concat(fcstCollected)), riskTrend=tjhpForecastTrendDirection(histRisk.concat(fcstRisk)), currentRisk=Number(m?.kpis?.revenueAtRisk||0), denialRate=Number(m?.denialRate||0), latestCollected=tjhpForecastLastValue(histCollected), projectedCollected=tjhpForecastLastValue(fcstCollected), projectedRisk=tjhpForecastLastValue(fcstRisk), lines=[]; lines.push(`Based on ${detectedMonths} months of claim and payment activity${range ? ` (${range})` : ""}, this forecast provides directional planning guidance for collections and unresolved revenue risk.`); if (collectedTrend === "up") lines.push(`Collections are trending upward, with the latest historical collection level around ${tjhpForecastShortMoney(latestCollected)} and the ending projection around ${tjhpForecastShortMoney(projectedCollected)}.`); else if (collectedTrend === "down") lines.push("Collections are trending downward, so leadership should review payer mix, unresolved denials, and payment timing before relying on the projection."); else lines.push("Collections appear relatively stable across the detected activity window."); if (riskTrend === "up") lines.push(`At-risk revenue is projected to increase to about ${tjhpForecastShortMoney(projectedRisk)}, which suggests follow-up work should prioritize unresolved underpayments and denials.`); else if (riskTrend === "down") lines.push("At-risk revenue is trending downward, which may indicate improving follow-up or resolution activity."); else lines.push(`At-risk revenue is relatively stable, with current revenue at risk around ${tjhpForecastShortMoney(currentRisk)}.`); if (denialRate >= 20) lines.push(`The denial rate is ${denialRate.toFixed(1)}%, which is elevated. Review denial reasons, payer patterns, and appeal readiness before using the forecast for planning.`); else if (denialRate >= 10) lines.push(`The denial rate is ${denialRate.toFixed(1)}%, which should be monitored as additional claims and payments are uploaded.`); else lines.push(`The denial rate is ${denialRate.toFixed(1)}%, which appears manageable based on the current data.`); lines.push("Forecasts are estimates for planning. They may change as additional claim, payment, denial, and reimbursement data is uploaded."); return lines.join("\n\n"); }
 function tjhpBuildForecastSeriesFromRows(org_id) {
   const claims = readJSON(FILES.billed, []).filter(r => r && r.org_id === org_id);
   const payments = readJSON(FILES.payments, []).filter(r => r && r.org_id === org_id);
@@ -40806,7 +40822,6 @@ function renderForecastTab(org, m, forecastB64){
   const firstMonth = fc.firstMonth ? tjhpForecastMonthLabel(fc.firstMonth) : "";
   const lastMonth = fc.lastMonth ? tjhpForecastMonthLabel(fc.lastMonth) : "";
   let forecastConfidence = "Low";
-
   if (historicalPeriods >= 6) forecastConfidence = "High";
   else if (historicalPeriods >= 3) forecastConfidence = "Medium";
 
@@ -40814,218 +40829,66 @@ function renderForecastTab(org, m, forecastB64){
     return `
       <div class="executive-panel">
         <h3>Forecast Unavailable</h3>
-        <div class="muted" style="margin-top:6px;">
-          At least 3 months of claim or payment activity are needed to generate a reliable forecast.
-        </div>
-        <div class="muted small" style="margin-top:6px;">
-          Detected: ${detectedMonths} month(s) of activity.
-        </div>
+        <div class="muted" style="margin-top:6px;">At least 3 months of claim or payment activity are needed to generate a reliable forecast.</div>
+        <div class="muted small" style="margin-top:6px;">Detected: ${detectedMonths} month(s) of activity.</div>
         ${detectedMonths > 0 && firstMonth && lastMonth ? `<div class="muted small" style="margin-top:6px;">Detected activity range: ${safeStr(firstMonth)} – ${safeStr(lastMonth)}</div>` : ""}
-        <div class="muted small" style="margin-top:6px;">
-          Upload claims or payments with service dates or payment dates across at least 3 different months.
-        </div>
-        <div class="muted small" style="margin-top:6px;">
-          Tip: The forecast uses claim service dates and payment dates when available, not just the upload date.
-        </div>
+        <div class="muted small" style="margin-top:6px;">Upload claims or payments with service dates or payment dates across at least 3 different months.</div>
+        <div class="muted small" style="margin-top:6px;">Tip: The forecast uses claim service dates and payment dates when available, not just the upload date.</div>
       </div>
     `;
   }
+
+  const forecastLabels = fc.labelsAll || [];
+  const collectedChartHtml = renderForecastSvgChart({ title: "Collections Forecast", labels: forecastLabels, historical: fc?.hist?.collected || [], forecast: fc?.fcst?.collected || [], valueLabel: "Ending projected collections" });
+  const atRiskChartHtml = renderForecastSvgChart({ title: "At-Risk Forecast", labels: forecastLabels, historical: fc?.hist?.atRisk || [], forecast: fc?.fcst?.atRisk || [], valueLabel: "Ending projected risk" });
+  const forecastInterpretation = buildForecastExecutiveInterpretation(fc, m);
 
   return `
     <div class="executive-panel">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;">
         <div>
-          <h3 style="margin:0;">
-            Forecast Engine (Beta) ${infoIcon("Uses recent billed/collected/at-risk time-series. Simple linear model + smoothing. Horizon adapts to chart granularity.")}
-          </h3>
-          <div class="muted small" style="margin-top:6px;">
-            Designed for executive planning: projected collections + projected risk trend.
-          </div>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <a class="btn secondary small" href="/executive-export">Export Executive PDF</a>
+          <h3 style="margin:0;">Forecast Engine</h3>
+          <div class="muted small" style="margin-top:6px;">Uses recent claim and payment activity to estimate future collections and unresolved revenue risk. Forecasts are directional planning estimates and may change as more data is uploaded.</div>
+          <div class="muted small" style="margin-top:4px;">Executive planning view for projected collections and projected revenue risk.</div>
         </div>
       </div>
-
       <div class="hr"></div>
-
       <div class="kpi-strip" style="margin-top:0;">
-        ${renderKpiCard("Projected Trend", "Model-based", "Smoothing + linear forecast", "neutral")}
-        ${renderKpiCard("Current Revenue At Risk", formatMoneyUI(m.kpis.revenueAtRisk||0), "underpaid + patient follow-up remaining", (m.kpis.revenueAtRisk||0) > 0 ? "warn" : "good")}
-        ${renderKpiCard("AR 90+ Exposure", formatMoneyUI((m.arBuckets||{})["90+"]||0), "highest risk bucket", ((m.arBuckets||{})["90+"]||0) > 0 ? "warn" : "good")}
-        ${renderKpiCard("Denial Rate", Number(m.denialRate||0).toFixed(1)+"%", "lower is better", (m.denialRate||0) >= 20 ? "bad" : ((m.denialRate||0) >= 10 ? "warn" : "good"))}
+        ${renderKpiCard("Forecast Method", "Trend-based projection", "Uses recent claim and payment activity", "neutral")}
+        ${renderKpiCard("Current Revenue at Risk", formatMoneyUI(m.kpis.revenueAtRisk||0), "Unresolved underpaid + patient follow-up risk", "neutral")}
+        ${renderKpiCard("AR 90+ Exposure", formatMoneyUI((m.arBuckets||{})["90+"]||0), "Highest age-risk bucket", "neutral")}
+        ${renderKpiCard("Denial Rate", Number(m.denialRate||0).toFixed(1)+"%", "Lower is better", "neutral")}
       </div>
-
       <div class="hr"></div>
-
       <div style="margin-bottom:10px;">
-        <span class="badge ${forecastConfidence === "High" ? "ok" : forecastConfidence === "Medium" ? "warn" : "bad"}">
-          Forecast Confidence: ${forecastConfidence}
-        </span>
-        <div class="muted small" style="margin-top:8px;">
-          Detected activity months: ${detectedMonths}<br/>
-          ${firstMonth && lastMonth ? `Activity range: ${safeStr(firstMonth)} – ${safeStr(lastMonth)}<br/>` : ""}
-          Source: ${fc.source === "dashboard_series" ? "dashboard time series" : "claim service dates/payment dates"}
+        <div class="muted small" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <span class="badge ${forecastConfidence === "High" ? "ok" : forecastConfidence === "Medium" ? "warn" : "bad"}">Forecast Confidence: ${forecastConfidence}</span>
+          <span>Detected activity months: ${detectedMonths}</span>
+          ${firstMonth && lastMonth ? `<span>Activity range: ${safeStr(firstMonth)} – ${safeStr(lastMonth)}</span>` : ""}
+          <span>Source: ${fc.source === "dashboard_series" ? "dashboard time series" : "claim service dates/payment dates"}</span>
         </div>
       </div>
-
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
-          <div style="font-weight:900;margin-bottom:6px;">Collections Forecast ${infoIcon("Historical collected vs forecasted collected for the next horizon points.")}</div>
-          <div class="muted small">Forecast is trend-based (no seasonality yet). Use as a directional planning tool.</div>
+          <div style="font-weight:900;margin-bottom:6px;">Collections Forecast</div>
+          <div class="muted small">${safeStr(tjhpForecastPlainMethodCopy(fc))}</div>
           <div class="hr"></div>
-          <div class="chart-container trend" style="height:320px;max-height:320px;"><canvas id="riForecastCollected"></canvas></div>
+          ${collectedChartHtml}
         </div>
-
         <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
-          <div style="font-weight:900;margin-bottom:6px;">At-Risk Forecast ${infoIcon("Historical at-risk vs forecasted at-risk. Use to anticipate pressure on cash flow.")}</div>
-          <div class="muted small">At risk includes underpaid + patient follow-up remaining for non-resolved claims.</div>
+          <div style="font-weight:900;margin-bottom:6px;">At-Risk Forecast</div>
+          <div class="muted small">${safeStr(tjhpForecastTrendLabel((fc?.hist?.atRisk || []).concat(fc?.fcst?.atRisk || []), "At-risk revenue"))}</div>
           <div class="hr"></div>
-          <div class="chart-container trend" style="height:320px;max-height:320px;"><canvas id="riForecastAtRisk"></canvas></div>
+          ${atRiskChartHtml}
         </div>
       </div>
-
       <div class="exec-card" style="margin-top:18px;">
         <h3>Executive Forecast Interpretation</h3>
-        <div id="forecastNarrative" class="muted" style="margin-top:8px;line-height:1.6;"></div>
+        <div class="muted" style="margin-top:8px;line-height:1.6;white-space:pre-wrap;">${safeStr(forecastInterpretation)}</div>
       </div>
-
-      <script>
-        (function(){
-          if (!window.Chart) return;
-          const fc = JSON.parse(atob("${forecastB64}"));
-          const labels = fc.labelsAll || [];
-          const histC = (fc.hist && fc.hist.collected) ? fc.hist.collected : [];
-          const histR = (fc.hist && fc.hist.atRisk) ? fc.hist.atRisk : [];
-          const fC = (fc.fcst && fc.fcst.collected) ? fc.fcst.collected : [];
-          const fR = (fc.fcst && fc.fcst.atRisk) ? fc.fcst.atRisk : [];
-
-          // ensure we align as: [hist... , forecast...]
-          const collectedAll = histC.concat(fC);
-          const atRiskAll = histR.concat(fR);
-
-          // Build "forecast overlay" datasets: historical as solid, forecast as dashed
-          const histCount = histC.length;
-          const toOverlay = (allArr)=> {
-            const histPart = allArr.map((v,i)=> i < histCount ? v : null);
-            const fcstPart = allArr.map((v,i)=> i >= histCount ? v : null);
-            return { histPart, fcstPart };
-          };
-
-          const cO = toOverlay(collectedAll);
-          const rO = toOverlay(atRiskAll);
-
-          const baseOpts = {
-            responsive:true,
-            maintainAspectRatio:false,
-            plugins:{ legend:{ display:true } },
-            scales:{
-              y:{ ticks:{ callback:(v)=> (window.moneyFmt ? window.moneyFmt(v) : v) } }
-            }
-          };
-
-          new Chart(document.getElementById("riForecastCollected"), {
-            type:"line",
-            data:{
-              labels,
-              datasets:[
-                { label:"Collected (Historical)", data:cO.histPart, borderWidth:2 },
-                { label:"Collected (Forecast)", data:cO.fcstPart, borderWidth:2, borderDash:[6,4] }
-              ]
-            },
-            options: baseOpts
-          });
-
-          new Chart(document.getElementById("riForecastAtRisk"), {
-            type:"line",
-            data:{
-              labels,
-              datasets:[
-                { label:"At Risk (Historical)", data:rO.histPart, borderWidth:2 },
-                { label:"At Risk (Forecast)", data:rO.fcstPart, borderWidth:2, borderDash:[6,4] }
-              ]
-            },
-            options: baseOpts
-          });
-        })();
-      </script>
-
-      <script>
-        (function(){
-          const fc = JSON.parse(atob("${forecastB64}"));
-
-          // ===== Projection Calculations =====
-
-          const histCollected = (fc.hist && fc.hist.collected) ? fc.hist.collected : [];
-          const forecastCollected = (fc.fcst && fc.fcst.collected) ? fc.fcst.collected : [];
-          const histAtRisk = (fc.hist && fc.hist.atRisk) ? fc.hist.atRisk : [];
-          const forecastAtRisk = (fc.fcst && fc.fcst.atRisk) ? fc.fcst.atRisk : [];
-
-          // Sum projected next horizon
-          const projectedCollected = forecastCollected.reduce((sum,v)=> sum + Number(v||0),0);
-          const projectedAtRisk = forecastAtRisk.reduce((sum,v)=> sum + Number(v||0),0);
-
-          // 60-Day Cash Delta (vs recent historical avg)
-          let historicalAvg = 0;
-          if (histCollected.length > 0) {
-            historicalAvg = histCollected.reduce((s,v)=>s+Number(v||0),0) / histCollected.length;
-          }
-
-          const projectedAvg = forecastCollected.length > 0
-            ? forecastCollected.reduce((s,v)=>s+Number(v||0),0) / forecastCollected.length
-            : 0;
-
-          const sixtyDayDelta = (projectedAvg - historicalAvg) * 2; // approximate 60-day shift
-
-          // ===== Scenario Modeling =====
-
-          const denialRate = ${Number(m.denialRate || 0)};
-          const currentAtRisk = ${Number(m?.kpis?.revenueAtRisk || 0)};
-
-          // Expected = baseline forecast
-          const expectedScenario = projectedCollected;
-
-          // Best Case = denial improves by 5%
-          const bestCaseRecoveryLift = currentAtRisk * 0.05;
-          const bestScenario = projectedCollected + bestCaseRecoveryLift;
-
-          // Stress Case = denial worsens by 5%
-          const stressImpact = currentAtRisk * 0.05;
-          const stressScenario = Math.max(0, projectedCollected - stressImpact);
-
-          let narrative = "";
-
-          narrative += "Projected collections over the forecast horizon: $"
-            + projectedCollected.toLocaleString() + ". ";
-
-          if (sixtyDayDelta > 0) {
-            narrative += "60-day cash acceleration estimated at +$"
-              + Math.round(sixtyDayDelta).toLocaleString() + ". ";
-          } else {
-            narrative += "60-day cash deceleration estimated at $"
-              + Math.round(sixtyDayDelta).toLocaleString() + ". ";
-          }
-
-          narrative += "\n\nScenario Modeling:\n";
-
-          narrative += "• Best Case (5% denial improvement): $"
-            + Math.round(bestScenario).toLocaleString() + ".\n";
-
-          narrative += "• Expected Case: $"
-            + Math.round(expectedScenario).toLocaleString() + ".\n";
-
-          narrative += "• Stress Case (5% denial deterioration): $"
-            + Math.round(stressScenario).toLocaleString() + ".\n";
-
-          if (denialRate > 20) {
-            narrative += "\nDenial pressure remains elevated and is the primary forecast risk driver.";
-          } else {
-            narrative += "\nDenial pressure is stable; forecast primarily influenced by volume trend.";
-          }
-
-          document.getElementById("forecastNarrative").innerText = narrative;
-        })();
-      </script>
+      <div style="margin-top:14px;display:flex;justify-content:flex-end;">
+        <a class="btn secondary small" href="/executive-export">Export Executive PDF</a>
+      </div>
     </div>
   `;
 }
@@ -42194,7 +42057,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         <div class="muted ri-sub">Strategic revenue intelligence, payer analytics, forecasting, and executive decision support.</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <a class="btn secondary" href="/executive-export">Export Executive PDF</a>
+        ${tab === "forecast" ? "" : `<a class="btn secondary" href="/executive-export">Export Executive PDF</a>`}
       </div>
     </div>
     ${tabs}
@@ -58025,6 +57888,7 @@ if (process.env.TJHP_WORKSPACE_EVIDENCE_SMOKE_TESTS === "true" && (process.env.T
     const ws = { attachments: [{ attachment_id:"1", filename:"x.txt", uploaded_at:nowISO(), active:true, doc_key:"clinical_documentation", evidence_extraction: sum1 }, { attachment_id:"2", active:false, evidence_extraction: sum2 }] };
     assert(workspaceEvidenceSummaries(ws).length === 1);
     const src = fs.readFileSync(__filename, "utf8");
+    const forecastFnSrc = src.slice(src.indexOf("function renderForecastTab(org, m, forecastB64){"), src.indexOf("function renderDeepDiveTab"));
     assert(src.includes("tjhpExtractWorkspaceEvidenceForAttachment"));
     assert(src.includes("workspaceEvidenceSummaries"));
     assert(src.includes("Evidence Summary"));
@@ -58128,6 +57992,7 @@ if (SHOULD_RUN_UPLOAD_SMOKE_TESTS) {
 if (process.env.TJHP_WORKSPACE_EVIDENCE_SUGGESTION_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try {
     const src = fs.readFileSync(__filename, "utf8");
+    const forecastFnSrc = src.slice(src.indexOf("function renderForecastTab(org, m, forecastB64){"), src.indexOf("function renderDeepDiveTab"));
     if (!(src.includes('/ai-workspace/evidence-suggestions/generate'))) throw new Error("assertion failed");
     if (!(src.includes('/ai-workspace/evidence-suggestions/apply'))) throw new Error("assertion failed");
     if (!(src.includes('/ai-workspace/evidence-suggestions/dismiss'))) throw new Error("assertion failed");
@@ -58228,6 +58093,7 @@ if (process.env.TJHP_LAUNCH_READINESS_SMOKE_TESTS === "true" && (process.env.TJH
 if (process.env.TJHP_FORECAST_MONTH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try {
     const src = fs.readFileSync(__filename, "utf8");
+    const forecastFnSrc = src.slice(src.indexOf("function renderForecastTab(org, m, forecastB64){"), src.indexOf("function renderDeepDiveTab"));
     const assert = (c,m)=>{ if(!c) throw new Error(m || "assertion failed"); };
     assert(tjhpForecastNormalizeMonth("2026-01") === "2026-01");
     assert(tjhpForecastNormalizeMonth("2026-01-10") === "2026-01");
@@ -58274,6 +58140,31 @@ if (process.env.TJHP_FORECAST_MONTH_SMOKE_TESTS === "true" && (process.env.TJHP_
     process.stdout.write("FORECAST_MONTH_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) {
     process.stderr.write("FORECAST_MONTH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
+  }
+}
+if (process.env.TJHP_FORECAST_UI_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const forecastFnSrc = src.slice(src.indexOf("function renderForecastTab(org, m, forecastB64){"), src.indexOf("function renderDeepDiveTab"));
+    const assert = (c,m)=>{ if(!c) throw new Error(m || "assertion failed"); };
+    const fakeOrg = { org_name: "Smoke Org" };
+    const fakeM = { kpis:{ revenueAtRisk:12000 }, arBuckets:{ "90+":5000 }, denialRate:12 };
+    const fc = { labels:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026"], labelsAll:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026","Jul 2026","Aug 2026"], detectedMonths:6, firstMonth:"2026-01", lastMonth:"2026-06", source:"row_level_months", hist:{ collected:[100,150,200,210,220,240], atRisk:[300,280,260,240,220,210] }, fcst:{ collected:[250,260], atRisk:[200,180] } };
+    ["Forecast Engine","Trend-based projection","Forecasts are directional planning estimates","Detected activity months: ${detectedMonths}","Activity range: ${safeStr(firstMonth)} – ${safeStr(lastMonth)}","Executive Forecast Interpretation","Collections Forecast","At-Risk Forecast"].forEach(x=>assert(forecastFnSrc.includes(x),x));
+    ["Forecast Engine (Beta)","Model-based","Smoothing + linear forecast","id=\"riForecastCollected\"","id=\"riForecastAtRisk\"","if (!window.Chart) return","forecastNarrative"].forEach(x=>assert(!forecastFnSrc.includes(x),x));
+    assert(src.includes("tab === \"forecast\" ? \"\" : `<a class=\"btn secondary\" href=\"/executive-export\">Export Executive PDF</a>`"), "header export hidden in forecast tab");
+    ["At least 3 months of claim or payment activity","Detected: ${detectedMonths} month(s) of activity.","not just the upload date"].forEach(x=>assert(src.includes(x),x));
+    const interp = buildForecastExecutiveInterpretation(fc, fakeM);
+    assert(interp && interp.length > 20, "interpretation non-empty");
+    assert(interp.includes("denial rate"), "denial discussion");
+    assert(interp.includes("Forecasts are estimates for planning"), "planning estimate language");
+    const chart = renderForecastSvgChart({ title:"T", labels:["A","B"], historical:[10], forecast:[20] });
+    ["<svg","Solid:","Dashed:"].forEach(x=>assert(chart.includes(x),x));
+    assert(!chart.includes("canvas"), "no canvas");
+    ["renderForecastSvgChart","buildForecastExecutiveInterpretation","FORECAST_UI_SMOKE_TESTS_PASSED","FORECAST_MONTH_SMOKE_TESTS_PASSED","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","LAUNCH_READINESS_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
+    process.stdout.write("FORECAST_UI_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) {
+    process.stderr.write("FORECAST_UI_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
   }
 }
 
