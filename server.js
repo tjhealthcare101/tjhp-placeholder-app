@@ -16560,6 +16560,131 @@ function tjhpForecastTopEntries(mapObj, limit = 3) { return Object.entries(mapOb
 function tjhpBuildForecastPatternInsights(org_id, fc, m) { const claims = readJSON(FILES.billed, []).filter(r => r && r.org_id === org_id), payments = readJSON(FILES.payments, []).filter(r => r && r.org_id === org_id), denial={}, payerRisk={}, payerDenial={}, procRisk={}, procDenial={}; for (const row of claims.concat(payments)) { const denialReason = String(row?.denial_reason || row?.denialReason || row?.reason || row?.status_reason || row?.denial_code || "").trim(); const payer = String(row?.payer || row?.payer_name || row?.insurance || "").trim(); const procedure = String(row?.procedure_code || row?.cpt_code || row?.cpt || row?.service_code || "").trim(); const expected = num(row?.expected_amount ?? row?.expected_insurance ?? row?.expected ?? 0), paid = num(row?.amount_paid ?? row?.paid_amount ?? row?.paid ?? row?.payment_amount ?? 0), atRisk = num(row?.at_risk ?? row?.balance ?? row?.outstanding_amount ?? Math.max(0, expected - paid)); if (denialReason) denial[denialReason] = (denial[denialReason] || 0) + 1; if (payer && atRisk > 0) payerRisk[payer] = (payerRisk[payer] || 0) + atRisk; if (denialReason && payer) payerDenial[payer] = (payerDenial[payer] || 0) + 1; if (procedure && atRisk > 0) procRisk[procedure] = (procRisk[procedure] || 0) + atRisk; if (denialReason && procedure) procDenial[procedure] = (procDenial[procedure] || 0) + 1; } const topDenial = tjhpForecastTopEntries(denial, 3), topPayerRisk = tjhpForecastTopEntries(payerRisk, 3), topPayerDenial = tjhpForecastTopEntries(payerDenial, 3), topProcRisk = tjhpForecastTopEntries(procRisk, 3), topProcDenial = tjhpForecastTopEntries(procDenial, 3); const patternSummary=[]; if (topDenial[0]) patternSummary.push(`Top denial reason pattern: ${topDenial[0].key} appears most often in uploaded data.`); if (topPayerRisk[0]) patternSummary.push(`Highest payer risk concentration appears with ${topPayerRisk[0].key}.`); if (topProcRisk[0]) patternSummary.push(`Procedure ${topProcRisk[0].key} appears most often in unresolved or at-risk claims.`); if (!patternSummary.length) patternSummary.push("Upload more denial details, payer responses, and payment records to improve pattern detection."); return { top_denial_reasons: topDenial, top_payers_by_risk: topPayerRisk, top_payers_by_denials: topPayerDenial, top_procedure_codes_by_risk: topProcRisk, top_procedure_codes_by_denials: topProcDenial, risk_concentration: topPayerRisk[0] ? `Highest at-risk concentration: ${topPayerRisk[0].key}` : "", payment_pattern: tjhpForecastTrendDirection((fc?.hist?.collected || []).concat(fc?.fcst?.collected || [])), denial_pattern: topDenial[0] ? topDenial[0].key : "", pattern_summary: patternSummary, warnings: [] }; }
 function buildForecastExecutiveInterpretationSections(fc, m, patterns = {}) { const histCollected=tjhpForecastNumberArray(fc?.hist?.collected), fcstCollected=tjhpForecastNumberArray(fc?.fcst?.collected), histRisk=tjhpForecastNumberArray(fc?.hist?.atRisk), fcstRisk=tjhpForecastNumberArray(fc?.fcst?.atRisk), detectedMonths=Number(fc?.detectedMonths||(Array.isArray(fc?.labels)?fc.labels.length:0)||0), firstMonth=fc?.firstMonth?tjhpForecastMonthLabel(fc.firstMonth):"", lastMonth=fc?.lastMonth?tjhpForecastMonthLabel(fc.lastMonth):"", range=firstMonth&&lastMonth?`${firstMonth} – ${lastMonth}`:"", collectedTrend=tjhpForecastTrendDirection(histCollected.concat(fcstCollected)), riskTrend=tjhpForecastTrendDirection(histRisk.concat(fcstRisk)), currentRisk=Number(m?.kpis?.revenueAtRisk||0), denialRate=Number(m?.denialRate||0), ar90=Number((m?.arBuckets||{})["90+"]||0), confidence=detectedMonths>=6?"High":(detectedMonths>=3?"Medium":"Low"), topDenial=patterns?.top_denial_reasons?.[0]?.key || "", topPayer=patterns?.top_payers_by_risk?.[0]?.key || "", topProc=patterns?.top_procedure_codes_by_risk?.[0]?.key || ""; const trendWord=d=>d==="up"?"upward":(d==="down"?"downward":"stable"); return { what_this_means:[`Based on ${detectedMonths} months of historical activity${range?` (${range})`:""}, this ${Number(fc?.horizonMonths || 3)}-month projection estimates performance through ${fc?.projectionEndLabel || "the selected horizon"}.`,`Collections trend is ${trendWord(collectedTrend)} in this ${Number(fc?.horizonMonths || 3)}-month projection projected through ${fc?.projectionEndLabel || "the selected horizon"}.`,`At-risk revenue trend is ${trendWord(riskTrend)} with current revenue at risk at ${tjhpForecastShortMoney(currentRisk)}.`,`Denial rate is ${denialRate.toFixed(1)}%. Forecast confidence is ${confidence}.`], key_drivers:[topDenial?`Top denial reason observed in uploaded data: ${topDenial}.`:"Top denial reasons were not consistently available in uploaded data.",topPayer?`Highest at-risk payer concentration: ${topPayer}.`:"Payer concentration insight is limited until payer fields are complete.",topProc?`Top at-risk procedure pattern: ${topProc}.`:"Procedure-level pattern insight is limited until CPT/procedure codes are complete.",`Denial rate is ${denialRate.toFixed(1)}%${denialRate>=20?", which is elevated":""}.`,`Projected at-risk trend is ${riskTrend}; collections trend is ${collectedTrend}.`,`AR 90+ exposure is currently ${tjhpForecastShortMoney(ar90)}, suggesting ${ar90>0?"ongoing long-aging exposure":"long-aging exposure is controlled in the uploaded data"}.`], recommended_actions:["Prioritize high-dollar denied and underpaid claims in the Action Center.",topDenial?`Review the top denial reason: ${topDenial}.`:"Upload denial reasons and payer response data to improve pattern-specific recommendations.",topPayer?`Prioritize follow-up with ${topPayer}, which shows the highest at-risk concentration.`:"Confirm payer naming consistency in uploads to improve payer-specific targeting.",topProc?`Review documentation/reimbursement support for procedure ${topProc}.`:"Add CPT/procedure coding detail for stronger procedure-specific recommendations.","Continue uploading monthly claim/payment activity to improve forecast reliability."], next_30_day_priorities:[topPayer?`Work denied/underpaid claims tied to ${topPayer} first.`:"Work denied/underpaid claims with the highest revenue at risk first.",topDenial?`Review ${topDenial} cases for appeal readiness.`:"Review top denial cohorts for appeal readiness.",topProc?`Check ${topProc} claims for documentation and payment consistency.`:"Check top procedure cohorts for documentation and payment consistency.","Confirm payment postings for recent months.","Recheck forecast after the next payment cycle."], assumptions_watchouts:["Forecasts are directional estimates for planning.","They do not account for sudden payer policy changes, regulatory changes, contract updates, reimbursement schedule changes, changes in claim volume, staffing changes, seasonality, or large one-time claims unless those patterns are present in the uploaded data.","Pattern insights depend on the completeness of uploaded denial reasons, payer names, CPT/procedure codes, and payment postings.","Patterns that appear in uploaded data may not represent all payer activity if some files are missing.","Watch for missing or delayed payment postings and refresh forecasts as new data is uploaded."] }; }
 function buildForecastExecutiveInterpretation(fc, m) { const sections = buildForecastExecutiveInterpretationSections(fc, m); return ["What this means", ...(sections.what_this_means || []), "", "Key drivers", ...(sections.key_drivers || []), "", "Recommended actions", ...(sections.recommended_actions || []), "", "Next 30-day priorities", ...(sections.next_30_day_priorities || []), "", "Assumptions & watchouts", ...(sections.assumptions_watchouts || [])].join("\n"); }
+
+function buildExecutiveStrategyDecisionLayer(m, payerRanks = []) {
+  const kpis = (m && m.kpis) || {};
+  const cleanPayers = Array.isArray(payerRanks) ? payerRanks.filter(Boolean) : [];
+  const payerFromMetrics = Array.isArray(m?.topRiskPayers) && m.topRiskPayers.length ? m.topRiskPayers[0] : null;
+  const highestExposurePayer = m?.highestExposurePayer || payerFromMetrics || cleanPayers[0] || null;
+  const revenueAtRisk = Number(kpis.revenueAtRisk ?? m?.revenueAtRisk ?? 0) || 0;
+  const collected = Number(kpis.collectedTotal ?? kpis.collected ?? m?.collectedTotal ?? m?.collected ?? 0) || 0;
+  const totalUnderpaid = Number(kpis.totalUnderpaid ?? kpis.underpaymentExposure ?? m?.totalUnderpaid ?? m?.underpaymentExposure ?? 0) || 0;
+  const denialRate = Number(m?.denialRate || 0) || 0;
+  const ar90 = Number(kpis.ar90 ?? m?.ar90 ?? m?.ar90Rate ?? (m?.arBuckets && m.arBuckets["90+"]) ?? 0) || 0;
+  const riskConcentrationPct = Number(m?.riskConcentrationPct || 0) || 0;
+  const highestRiskPayer = highestExposurePayer?.payer || highestExposurePayer?.name || "No payer risk available";
+  const highestRiskAtRisk = Number(highestExposurePayer?.totalAtRisk ?? highestExposurePayer?.atRisk ?? highestExposurePayer?.revenueAtRisk ?? 0) || 0;
+  const hasMeaningfulData = revenueAtRisk > 0 || collected > 0 || totalUnderpaid > 0 || denialRate > 0 || ar90 > 0 || cleanPayers.length > 0;
+  const money = (n) => formatMoneyUI(Number(n || 0));
+  const pct = (n) => `${formatNumberUI(Number(n || 0))}%`;
+  const priorities = [];
+  const supporting = [];
+  let posture = "Healthy";
+  let posture_detail = "Revenue indicators are currently within monitoring range.";
+  let primary_revenue_risk = "No material revenue risk detected";
+  let highest_risk_reason = "No payer currently stands out by exposure.";
+
+  if (!hasMeaningfulData) {
+    return {
+      posture: "Insufficient Data",
+      posture_detail: "Upload claim and payment activity to activate strategy scoring.",
+      primary_revenue_risk: "Insufficient claim/payment activity",
+      highest_risk_payer: "No payer risk available",
+      highest_risk_payer_at_risk: 0,
+      highest_risk_reason: "No payer exposure has been detected yet.",
+      top_priority: "Upload claims and payments to activate executive strategy.",
+      strategy_brief: "Upload claims and payments to activate executive strategy.",
+      strategic_priorities: [{ title:"Activate executive strategy", detail:"Upload claims and payments so the platform can identify at-risk exposure, payer concentration, and recovery work.", action_label:"Open Data Management", action_href:"/data-management", severity:"low" }],
+      action_center_reason: "Action Center becomes useful after denied, underpaid, or follow-up claims are available.",
+      payer_hub_reason: "Payer Hub becomes useful after payer-level exposure is available.",
+      revenue_overview_reason: "Revenue Overview shows high-level performance once uploads are available.",
+      executive_export_reason: "Export the executive PDF after strategy data is available.",
+      supporting_insights: []
+    };
+  }
+
+  if (denialRate >= 30 || (revenueAtRisk >= 10000 && riskConcentrationPct >= 60)) {
+    posture = "High Risk";
+    posture_detail = "At-risk exposure or denial pressure requires immediate executive follow-up.";
+  } else if (denialRate >= 20 || revenueAtRisk > 0 || totalUnderpaid > 0 || ar90 > 15) {
+    posture = "Needs Attention";
+    posture_detail = "Revenue recovery work exists and should be prioritized this week.";
+  }
+
+  if (highestRiskAtRisk > 0 && highestRiskPayer !== "No payer risk available") {
+    primary_revenue_risk = "Payer concentration / unresolved at-risk exposure";
+    highest_risk_reason = `${highestRiskPayer} carries the largest current at-risk amount at ${money(highestRiskAtRisk)}.`;
+    priorities.push({
+      title: "Work highest-risk payer exposure",
+      detail: `${highestRiskPayer} carries the largest current at-risk amount at ${money(highestRiskAtRisk)}. Prioritize related denied and underpaid claims in Action Center.`,
+      action_label: "Open Action Center",
+      action_href: "/actions",
+      severity: highestRiskAtRisk >= 10000 ? "high" : "medium"
+    });
+    supporting.push(`${highestRiskPayer} is the highest-risk payer by exposure.`);
+  } else if (revenueAtRisk > 0) {
+    primary_revenue_risk = "Unresolved at-risk exposure";
+    priorities.push({ title:"Work at-risk exposure", detail:`There is ${money(revenueAtRisk)} in unresolved at-risk revenue. Start with the highest-value denied and underpaid claims.`, action_label:"Open Action Center", action_href:"/actions", severity:"medium" });
+  }
+
+  if (denialRate >= 20) {
+    priorities.push({ title:"Reduce denial root cause", detail:`Denial rate is ${pct(denialRate)}, above the target threshold. Review denial patterns and appeal readiness before more claims age.`, action_label:"Open Payer Hub", action_href:"/revenue-intelligence?tab=payers", severity:denialRate >= 30 ? "high" : "medium" });
+    supporting.push(`Denial rate is ${pct(denialRate)}.`);
+  } else if (denialRate > 0) {
+    supporting.push(`Denial rate is ${pct(denialRate)} and should remain on the monitoring cadence.`);
+  }
+
+  if (totalUnderpaid > 0) {
+    priorities.push({ title:"Work underpayment recovery", detail:`Underpayment exposure totals ${money(totalUnderpaid)}. Validate expected reimbursement and route recoverable balances to follow-up.`, action_label:"Open Action Center", action_href:"/actions?tab=underpayments", severity:totalUnderpaid >= 5000 ? "high" : "medium" });
+    supporting.push(`Underpayment exposure totals ${money(totalUnderpaid)}.`);
+  }
+
+  const missingContractValidation = Number(kpis.missingContractValidation ?? m?.missingContractValidation ?? m?.missingContractClaims ?? 0) || 0;
+  if (missingContractValidation > 0) {
+    priorities.push({ title:"Improve expected payment validation", detail:`${formatNumberUI(missingContractValidation)} claims may need contract validation so expected reimbursement can be trusted.`, action_label:"Open Reimbursement Rules", action_href:"/data-management?tab=reimbursement", severity:"medium" });
+  } else if (priorities.length < 3 && (revenueAtRisk > 0 || totalUnderpaid > 0)) {
+    priorities.push({ title:"Improve expected payment validation", detail:"Review reimbursement rules for high-value claims so expected reimbursement and underpayment decisions stay reliable.", action_label:"Open Reimbursement Rules", action_href:"/data-management?tab=reimbursement", severity:"low" });
+  }
+
+  if (ar90 > 15) {
+    priorities.push({ title:"Prevent aging exposure", detail:`AR 90+ is ${pct(ar90)}, above the target range. Work older unpaid balances before they become harder to recover.`, action_label:"Open Revenue Overview", action_href:"/dashboard", severity:"medium" });
+    supporting.push(`AR 90+ exposure is ${pct(ar90)}.`);
+  }
+
+  if (!priorities.length) {
+    priorities.push({ title:"Maintain monitoring cadence", detail:"Current indicators are controlled. Continue weekly monitoring for payer concentration, denials, and underpayment drift.", action_label:"Open Revenue Overview", action_href:"/dashboard", severity:"low" });
+  }
+
+  while (priorities.length < 3) {
+    if (!priorities.some(p => p.title === "Review payer behavior")) {
+      priorities.push({ title:"Review payer behavior", detail:"Use Payer Hub to confirm whether exposure is isolated or part of a payer pattern.", action_label:"Open Payer Hub", action_href:"/revenue-intelligence?tab=payers", severity:"low" });
+    } else {
+      priorities.push({ title:"Maintain monitoring cadence", detail:"Recheck uploaded activity weekly and refresh executive strategy after new payments post.", action_label:"Open Revenue Overview", action_href:"/dashboard", severity:"low" });
+    }
+  }
+
+  const firstPriority = priorities[0];
+  const payerPhrase = highestRiskAtRisk > 0 && highestRiskPayer !== "No payer risk available" ? `${highestRiskPayer} is the highest-risk payer by exposure` : "No single payer dominates current exposure";
+  const denialPhrase = denialRate >= 20 ? "denial rate is above target" : "denial pressure is currently controlled";
+  const strategy_brief = `Current posture is ${posture}. ${payerPhrase}, and ${denialPhrase}. Start with Action Center follow-up, then review payer patterns in Payer Hub.`;
+
+  return {
+    posture,
+    posture_detail,
+    primary_revenue_risk,
+    highest_risk_payer: highestRiskPayer,
+    highest_risk_payer_at_risk: highestRiskAtRisk,
+    highest_risk_reason,
+    top_priority: firstPriority ? `${firstPriority.title}: ${firstPriority.detail}` : "Maintain monitoring cadence.",
+    strategy_brief,
+    strategic_priorities: priorities.slice(0, 3),
+    action_center_reason: "Start with Action Center for current recovery work on denied, underpaid, and high-value at-risk claims.",
+    payer_hub_reason: "Use Payer Hub to understand the payer behavior behind the strategy.",
+    revenue_overview_reason: "Use Revenue Overview to validate business impact and monitor trend changes.",
+    executive_export_reason: "Export Executive PDF when leadership needs a shareable recovery brief.",
+    supporting_insights: supporting.slice(0, 5)
+  };
+}
 function tjhpBuildForecastSeriesFromRows(org_id) {
   const claims = readJSON(FILES.billed, []).filter(r => r && r.org_id === org_id);
   const payments = readJSON(FILES.payments, []).filter(r => r && r.org_id === org_id);
@@ -41497,6 +41622,26 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   const denialPriorityThreshold = Number(targets.target_denial_rate || 12);
   const highestAtRiskPayer = highestExposurePayer ? `${highestExposurePayer.payer} (${formatMoneyUI(highestExposurePayer.totalAtRisk || 0)} at risk)` : "No payer risk available";
   const missingContractClaims = Math.max(0, Number(m.statusCounts?.Underpaid || 0) + Number(m.statusCounts?.Appeal || 0));
+  const strategyDecision = buildExecutiveStrategyDecisionLayer({
+    ...m,
+    topRiskPayers,
+    highestExposurePayer,
+    riskConcentrationPct,
+    missingContractClaims
+  }, payerRanks);
+  const strategyHighestPayerLabel = strategyDecision.highest_risk_payer_at_risk > 0
+    ? `${strategyDecision.highest_risk_payer} — ${formatMoneyUI(strategyDecision.highest_risk_payer_at_risk)} at risk`
+    : strategyDecision.highest_risk_payer;
+  const strategyPriorityCardsHtml = (strategyDecision.strategic_priorities || []).slice(0, 3).map((priority, idx) => `
+    <div class="strategy-priority-card ${safeStr(priority.severity || "low")}">
+      <div class="strategy-priority-num">${idx + 1}</div>
+      <div style="min-width:0;">
+        <h4>${safeStr(priority.title)}</h4>
+        <p>${safeStr(priority.detail)}</p>
+        ${priority.action_label && priority.action_href ? `<a class="btn secondary small" href="${safeStr(priority.action_href)}">${safeStr(priority.action_label)}</a>` : ""}
+      </div>
+    </div>
+  `).join("");
   const executiveWeeklyPriorities = [
     `Prioritize ${highestAtRiskPayer}.`,
     missingContractClaims > 0
@@ -41594,6 +41739,18 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     .eb-bar{height:10px;border-radius:999px;background:rgba(17,24,39,.08);overflow:hidden;margin-top:8px;}
     .eb-bar > div{height:100%;border-radius:999px;background:rgba(17,24,39,.55);width:0%;}
     .eb-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:11px;font-weight:900;background:#fff;color:var(--text);}
+    .strategy-brief-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:12px;}
+    .strategy-brief-chip{border:1px solid var(--border);border-radius:14px;padding:14px;background:rgba(67,56,202,.05);min-width:0;}
+    .strategy-brief-chip .label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:900;}
+    .strategy-brief-chip .value{font-size:15px;font-weight:900;margin-top:6px;line-height:1.25;}
+    .strategy-priority-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px;}
+    .strategy-priority-card{display:flex;gap:12px;border:1px solid var(--border);border-radius:16px;padding:14px;background:rgba(17,24,39,.02);min-width:0;}
+    .strategy-priority-card.high{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.28);}
+    .strategy-priority-card.medium{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.28);}
+    .strategy-priority-card.low{background:rgba(34,197,94,.07);border-color:rgba(34,197,94,.24);}
+    .strategy-priority-num{flex:0 0 34px;width:34px;height:34px;border-radius:999px;background:#111827;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;}
+    .strategy-priority-card h4{margin:0;font-size:14px;font-weight:900;}
+    .strategy-priority-card p{margin:6px 0 10px;color:var(--muted);font-size:12px;line-height:1.35;}
 
     .exec-metrics-row{
       display:grid;
@@ -41694,12 +41851,26 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     .eb-bar > div.warn { background:#f59e0b; }
     .eb-bar > div.bad  { background:#ef4444; }
 
-    @media(max-width:980px){.eb-hero{grid-template-columns:1fr;} .eb-kpis{grid-template-columns:1fr;} .eb-grid2{grid-template-columns:1fr;} .eb-recovery{grid-template-columns:1fr 1fr;} .eb-targets{grid-template-columns:1fr 1fr;} .eb-split{grid-template-columns:1fr;}}
+    @media(max-width:980px){.eb-hero{grid-template-columns:1fr;} .eb-kpis{grid-template-columns:1fr;} .eb-grid2{grid-template-columns:1fr;} .eb-recovery{grid-template-columns:1fr 1fr;} .eb-targets{grid-template-columns:1fr 1fr;} .eb-split{grid-template-columns:1fr;} .strategy-brief-grid{grid-template-columns:1fr 1fr;} .strategy-priority-grid{grid-template-columns:1fr;}}
   </style>
   <div class="eb-wrap">
     <div class="strategy-header">
       <h2>Executive Strategy Layer</h2>
       <div class="muted">Strategic decision support and revenue risk prioritization.</div>
+    </div>
+    <div class="eb-card">
+      <div class="eb-sectionHead"><h3>Executive Strategy Brief</h3><div class="muted">Decision layer for this week's revenue recovery work.</div></div>
+      <div class="muted small" style="margin-top:8px;">This section turns uploaded claim/payment activity into an executive recovery plan. Supporting analytics below explain why these priorities were selected.</div>
+      <div class="strategy-brief-grid">
+        <div class="strategy-brief-chip"><div class="label">Current posture</div><div class="value">${safeStr(strategyDecision.posture)}</div><div class="eb-sub">${safeStr(strategyDecision.posture_detail)}</div></div>
+        <div class="strategy-brief-chip"><div class="label">Primary revenue risk</div><div class="value">${safeStr(strategyDecision.primary_revenue_risk)}</div><div class="eb-sub">Main revenue problem to monitor.</div></div>
+        <div class="strategy-brief-chip"><div class="label">Highest-risk payer</div><div class="value">${safeStr(strategyHighestPayerLabel)}</div><div class="eb-sub">${safeStr(strategyDecision.highest_risk_reason)}</div></div>
+        <div class="strategy-brief-chip"><div class="label">Recommended next action</div><div class="value">Open Action Center</div><div class="eb-sub">${safeStr(strategyDecision.action_center_reason)}</div></div>
+      </div>
+    </div>
+    <div class="eb-card">
+      <div class="eb-sectionHead"><h3>Top Strategic Priorities</h3><div class="muted">What to work first and why.</div></div>
+      <div class="strategy-priority-grid">${strategyPriorityCardsHtml}</div>
     </div>
     <div class="eb-hero">
       <div class="eb-card">
@@ -41715,7 +41886,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
               </div>
             </div>
           <div class="eb-scoreText">
-            <div class="eb-insight"><b>Executive Insight:</b> <span class="muted">Revenue risk is concentrated at the payer level. Prioritize the top at-risk payers and tighten denial follow-up cadence.</span></div>
+            <div class="eb-insight"><b>Executive Insight:</b> <span class="muted">${safeStr(strategyDecision.strategy_brief)}</span></div>
             <div class="exec-metrics-row">
               <div class="exec-metric">
                 <div class="metric-label">Collected</div>
@@ -41757,13 +41928,17 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         <div class="hr"></div>
         <div style="display:grid;gap:10px;">
           <a class="btn" href="/executive-export">Export Executive PDF</a>
-          <a class="btn secondary" href="/dashboard">Open Revenue Overview</a>
+          <a class="btn secondary" href="/actions">Open Action Center</a>
           <a class="btn secondary" href="/revenue-intelligence?tab=payers">Open Payer Hub</a>
-          <a class="btn secondary" href="/data-management?tab=revenue">Automation & Templates</a>
+          <a class="btn secondary" href="/dashboard">Open Revenue Overview</a>
         </div>
         <div class="hr"></div>
-        <div class="muted small">Tip: Use <b>Payer Hub</b> for follow-up strategy and deep dives by payer.</div>
+        <div class="muted small">Start with Action Center for current recovery work. Use Payer Hub to understand payer behavior behind the strategy.</div>
       </div>
+    </div>
+    <div class="eb-card">
+      <div class="eb-sectionHead"><h3>Supporting Analytics</h3><div class="muted">Evidence for the executive strategy above.</div></div>
+      <div class="muted small" style="margin-top:8px;">These metrics explain the strategy above. Use them to validate payer concentration, denial pressure, and recovery performance.</div>
     </div>
     <div class="executive-card">
       <h4>Revenue Risk Concentration</h4>
@@ -41789,7 +41964,10 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     </div>
     <div class="eb-card">
       <div class="eb-sectionHead">
-        <h3>Top Payers to Review</h3>
+        <div>
+          <h3>Top Payers to Review</h3>
+          <div class="muted small">Start with payers carrying the highest at-risk exposure.</div>
+        </div>
         <a class="btn secondary small" href="/revenue-intelligence?tab=payers">
           Open Full Payer Hub
         </a>
@@ -41982,9 +42160,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         <h2 style="margin:0;">Revenue Intelligence Command Center</h2>
         <div class="muted ri-sub">Strategic revenue intelligence, payer analytics, forecasting, and executive decision support.</div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        ${tab === "executive" ? `<a class="btn secondary" href="/executive-export">Export Executive PDF</a>` : ""}
-      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;"></div>
     </div>
     ${tabs}
     <div class="hr"></div>
@@ -57874,11 +58050,58 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS === "true" && (p
   } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
 
+if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m||"assertion failed"); };
+    ["buildExecutiveStrategyDecisionLayer", "Executive Strategy Brief", "Top Strategic Priorities", "Supporting Analytics", "Current posture", "Primary revenue risk", "Highest-risk payer", "Recommended next action", "REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x), x));
+    const fakeM = {
+      kpis: { revenueAtRisk: 2153, totalUnderpaid: 996, ar90: 0 },
+      denialRate: 20,
+      appealSuccessRate: 0,
+      negotiationROI: 0
+    };
+    const fakePayers = [
+      { payer:"Aetna", totalAtRisk:1157, atRisk:1157, score:60 },
+      { payer:"BlueCross", totalAtRisk:486, score:66 }
+    ];
+    const decision = buildExecutiveStrategyDecisionLayer(fakeM, fakePayers);
+    assert(decision.posture, "posture not empty");
+    assert(["Needs Attention", "High Risk"].includes(decision.posture), "posture risk level");
+    assert(decision.highest_risk_payer === "Aetna", "highest-risk payer");
+    assert(/Aetna|at-risk exposure/i.test(decision.top_priority || ""), "top priority mentions payer or exposure");
+    assert(Array.isArray(decision.strategic_priorities) && decision.strategic_priorities.length >= 3, "three strategic priorities");
+    assert(decision.strategic_priorities.some(p=>/denial/i.test(`${p.title} ${p.detail}`)), "denial priority");
+    assert(decision.strategic_priorities.some(p=>/underpayment|at-risk/i.test(`${p.title} ${p.detail}`)), "underpayment or at-risk priority");
+    assert(decision.strategic_priorities.some(p=>String(p.action_href||"").includes("/actions") || String(p.action_href||"").includes("tab=payers")), "contextual action priority");
+    const executiveStart = src.indexOf('const executiveBrief = `');
+    const executiveEnd = src.indexOf('const payerHubHtml = `', executiveStart);
+    const executiveSrc = src.slice(executiveStart, executiveEnd);
+    ["Executive Strategy Brief", "Top Strategic Priorities", "Supporting Analytics", "Open Action Center", "Open Payer Hub", "Open Revenue Overview", "Export Executive PDF", "Revenue Risk Concentration", "Revenue Flow (Funnel)", "Denials Trend", "Recovery Performance", "Top Payers to Review"].forEach(x=>assert(executiveSrc.includes(x), x));
+    assert(!executiveSrc.includes("Automation & Templates"), "automation templates removed");
+    const actionStart = executiveSrc.indexOf("<h3>Executive Actions</h3>");
+    const actionEnd = executiveSrc.indexOf("Start with Action Center for current recovery work", actionStart);
+    const actionSrc = executiveSrc.slice(actionStart, actionEnd);
+    assert(!actionSrc.includes("data-management?tab=revenue"), "revenue data management not in executive actions");
+    assert((executiveSrc.match(/Export Executive PDF/g)||[]).length === 1, "exactly one executive export in strategy content");
+    ["REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED","FORECAST_CHART_LABEL_CLEANUP_SMOKE_TESTS_PASSED","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED"].forEach(x=>assert(src.includes(x), x));
+    process.stdout.write("REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
 if (process.env.TJHP_REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try {
     const src = fs.readFileSync(__filename, "utf8");
     const assert = (c,m)=>{ if(!c) throw new Error(m||"assertion failed"); };
-    assert(src.includes('tab === "executive" ? `<a class="btn secondary" href="/executive-export">Export Executive PDF</a>` : ""'), 'header executive-only export');
+    const executiveStart = src.indexOf('const executiveBrief = `');
+    const executiveEnd = src.indexOf('const payerHubHtml = `', executiveStart);
+    const executiveSrc = src.slice(executiveStart, executiveEnd);
+    assert((executiveSrc.match(/Export Executive PDF/g)||[]).length === 1, 'executive in-tab export exactly once');
+    assert(executiveSrc.includes('Executive Actions') && executiveSrc.includes('Open Action Center'), 'executive contextual actions');
+    const routeStart = src.indexOf('if (method === "GET" && pathname === "/revenue-intelligence")');
+    const routeEnd = src.indexOf('// ===============================\n// AI COPILOT WORKSPACE', routeStart);
+    const routeSrc = src.slice(routeStart, routeEnd);
+    assert(!routeSrc.includes('tab === "executive" ? `<a class="btn secondary" href="/executive-export">Export Executive PDF</a>` : ""'), 'route header export removed');
     const forecastFnSrc = src.slice(src.indexOf("function renderForecastTab(org, m, forecastB64){"), src.indexOf("function renderDeepDiveTab"));
     assert(forecastFnSrc.includes("Export Forecast PDF"), 'forecast label');
     assert(!forecastFnSrc.includes("Export Executive PDF"), 'forecast no executive label');
@@ -58190,7 +58413,10 @@ if (process.env.TJHP_FORECAST_UI_SMOKE_TESTS === "true" && (process.env.TJHP_FOR
     const fc = { labels:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026"], labelsAll:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026","Jul 2026","Aug 2026"], detectedMonths:6, firstMonth:"2026-01", lastMonth:"2026-06", source:"row_level_months", hist:{ collected:[100,150,200,210,220,240], atRisk:[300,280,260,240,220,210] }, fcst:{ collected:[250,260], atRisk:[200,180] } };
     ["Forecast Engine","Trend-based projection","Forecasts are directional planning estimates","Historical data used: ${detectedMonths} months","Historical range: ${safeStr(firstMonth)} – ${safeStr(lastMonth)}","Executive Forecast Interpretation","Collections Forecast","At-Risk Forecast","Observed Forecast Patterns"].forEach(x=>assert(forecastFnSrc.includes(x),x));
     ["Forecast Engine (Beta)","Model-based","Smoothing + linear forecast","id=\"riForecastCollected\"","id=\"riForecastAtRisk\"","if (!window.Chart) return","forecastNarrative"].forEach(x=>assert(!forecastFnSrc.includes(x),x));
-    assert(src.includes("tab === \"executive\" ? `<a class=\"btn secondary\" href=\"/executive-export\">Export Executive PDF</a>` : \"\""), "header export only on executive tab");
+    const routeStartForForecastUi = src.indexOf('if (method === "GET" && pathname === "/revenue-intelligence")');
+    const routeEndForForecastUi = src.indexOf('// ===============================\n// AI COPILOT WORKSPACE', routeStartForForecastUi);
+    const routeSrcForForecastUi = src.slice(routeStartForForecastUi, routeEndForForecastUi);
+    assert(!routeSrcForForecastUi.includes('tab === "executive" ? `<a class="btn secondary" href="/executive-export">Export Executive PDF</a>` : ""'), "generic header executive export removed");
     ["At least 3 months of claim or payment activity","Detected: ${detectedMonths} month(s) of activity.","not just the upload date"].forEach(x=>assert(src.includes(x),x));
     const interp = buildForecastExecutiveInterpretation(fc, fakeM);
     assert(interp && interp.length > 20, "interpretation non-empty");
