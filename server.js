@@ -41009,247 +41009,52 @@ function renderForecastTab(org, m, forecastB64){
   `;
 }
 
+function tjhpDeepDiveNum(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? n : 0;
+}
+function tjhpDeepDiveMoney(value) { return formatMoneyUI(tjhpDeepDiveNum(value)); }
+function tjhpDeepDivePct(value) { const n = tjhpDeepDiveNum(value); return n.toFixed(1) + "%"; }
+function tjhpDeepDiveMetricValue(info, keys, fallback = 0) {
+  const obj = info || {};
+  for (const key of keys || []) if (obj[key] !== undefined && obj[key] !== null && obj[key] !== "") return obj[key];
+  return fallback;
+}
+function tjhpDeepDivePayerName(value) { return String(value || "Payer").trim() || "Payer"; }
+function tjhpDeepDiveSafeText(value) { return safeStr(String(value || "")); }
+function buildDeepDiveExecutiveInsights(deepDive) {
+  const dd = deepDive || {}, p1 = tjhpDeepDivePayerName(dd.p1), p2 = tjhpDeepDivePayerName(dd.p2), i1 = dd.i1 || {}, i2 = dd.i2 || {};
+  const a = x=>tjhpDeepDiveNum(x), mv=tjhpDeepDiveMetricValue;
+  const m1 = {score:a(mv(i1,["score"])),denialRate:a(mv(i1,["denialRate"])),underpaid:a(mv(i1,["underpaidExposure","totalUnderpaidDollars"])),denied:a(mv(i1,["deniedExposure","totalDeniedDollars"])),atRisk:a(mv(i1,["totalAtRisk","atRisk"])),d2pScore:a(mv(i1,["daysToPayScore"])),avgDays:a(mv(i1,["avgDaysToPay","averageDaysToPay"])),billed:a(mv(i1,["totalBilled"])),paid:a(mv(i1,["totalPaid"]))};
+  const m2 = {score:a(mv(i2,["score"])),denialRate:a(mv(i2,["denialRate"])),underpaid:a(mv(i2,["underpaidExposure","totalUnderpaidDollars"])),denied:a(mv(i2,["deniedExposure","totalDeniedDollars"])),atRisk:a(mv(i2,["totalAtRisk","atRisk"])),d2pScore:a(mv(i2,["daysToPayScore"])),avgDays:a(mv(i2,["avgDaysToPay","averageDaysToPay"])),billed:a(mv(i2,["totalBilled"])),paid:a(mv(i2,["totalPaid"]))};
+  const winner = m1.score >= m2.score ? p1 : p2, higherRiskPayer = m1.atRisk >= m2.atRisk ? p1 : p2, lowerRiskPayer = higherRiskPayer === p1 ? p2 : p1;
+  const riskDelta=Math.abs(m1.atRisk-m2.atRisk),scoreDelta=Math.abs(m1.score-m2.score),denialRateDelta=Math.abs(m1.denialRate-m2.denialRate),underpaidDelta=Math.abs(m1.underpaid-m2.underpaid),deniedDelta=Math.abs(m1.denied-m2.denied);
+  const daysToPayWinner=(m1.d2pScore||m2.d2pScore)?(m1.d2pScore>=m2.d2pScore?p1:p2):"";
+  const largest=Math.max(underpaidDelta,deniedDelta,denialRateDelta); let primaryRiskDriver="Mixed payer performance";
+  if(largest===underpaidDelta&&underpaidDelta>0) primaryRiskDriver="Underpayment exposure"; else if(largest===deniedDelta&&deniedDelta>0) primaryRiskDriver="Denied claim exposure"; else if(largest===denialRateDelta&&denialRateDelta>0&&Math.max(m1.denialRate,m2.denialRate)>=10) primaryRiskDriver="Denial rate";
+  const close = scoreDelta <= 3 && riskDelta <= 50;
+  let strategicRecommendation = `Prioritize ${higherRiskPayer} for underpayment review and contract enforcement.`;
+  if(primaryRiskDriver==="Denied claim exposure"||primaryRiskDriver==="Denial rate") strategicRecommendation = `Prioritize ${higherRiskPayer} denial prevention and appeal readiness.`;
+  if(close) strategicRecommendation = "Performance is comparable; focus on claim-level recovery opportunities.";
+  const keyDrivers=[`${higherRiskPayer} carries ${tjhpDeepDiveMoney(riskDelta)} more total at-risk exposure.`,`${winner} outperforms ${winner===p1?p2:p1} by ${scoreDelta.toFixed(1)} score points.`,`Denial rate difference is ${tjhpDeepDivePct(denialRateDelta)} percentage points.`,(underpaidDelta>0?`${m1.underpaid>=m2.underpaid?p1:p2} has higher underpayment exposure.`:"Underpayment exposure is similar."),(daysToPayWinner?`${daysToPayWinner} has stronger days-to-pay performance.`:"Days-to-pay performance is similar.")];
+  return {p1,p2,i1,i2,winner,lowerRiskPayer,higherRiskPayer,riskDelta,scoreDelta,denialRateDelta,underpaidDelta,deniedDelta,daysToPayWinner,primaryRiskDriver,decisionSummary:`${winner} is currently stronger overall, while ${higherRiskPayer} carries more risk.`,strategicRecommendation,kpis:[],keyDrivers,actionPlan:["Work the higher-risk payer first in Action Center.","Review underpaid claims for contract variance and expected payment differences.","Review denied claims for appeal readiness and missing source proof.","Check payer-specific denial patterns before generating new appeal packets.","Use negotiation workspace for high-value underpaid claims."],watchouts:["Deep Dive is based on uploaded claim/payment activity and may change as more data is added.","If denial reasons or payment rows are missing, payer patterns may be incomplete.","Use this as decision support; staff review is still required."],chartTakeaways:{scorecard:`Takeaway: ${winner} performs better overall, while ${higherRiskPayer} carries the larger recovery risk.`,exposure:`Takeaway: ${higherRiskPayer} drives most of the at-risk exposure, primarily from underpayment or denied exposure.`}};
+}
+
 function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){
-  p1 = String(p1 || "");
-  p2 = String(p2 || "");
-  const payerOptionsHtml = selected => (payerRanks||[])
-    .map(p=>`<option value="${safeStr(p.payer)}" ${String(selected||"") === String(p.payer) ? "selected" : ""}>${safeStr(p.payer)}</option>`)
-    .join("");
-  if (!p1 || !p2) {
-    return `
-      <div class="executive-panel">
-        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-          <div>
-            <h3 style="margin:0;">Deep Dive Analytics ${infoIcon("Compare two payers side-by-side. Uses live payer intelligence metrics (A–F) and exposure dollars.")}</h3>
-            <div class="muted small" style="margin-top:6px;">Enterprise-style payer comparison and decision support.</div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <a class="btn secondary small" href="/payer-rankings">Payer Rankings</a>
-          </div>
-        </div>
-
-        <div class="hr"></div>
-
-        <form method="GET" action="/revenue-intelligence" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;">
-          <input type="hidden" name="tab" value="deep-dive" />
-
-          <div>
-            <label>Payer 1</label>
-            <select name="p1">
-              ${payerOptionsHtml(p1)}
-            </select>
-          </div>
-
-          <div>
-            <label>Payer 2</label>
-            <select name="p2">
-              ${payerOptionsHtml(p2)}
-            </select>
-          </div>
-
-          <div>
-            <button class="btn" type="submit">Compare</button>
-          </div>
-        </form>
-
-        <div class="hr"></div>
-
-        <div class="muted">Select two payers to compare.</div>
-      </div>
-    `;
-  }
-  return `
-    <div class="executive-panel">
-      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-        <div>
-          <h3 style="margin:0;">Deep Dive Analytics ${infoIcon("Compare two payers side-by-side. Uses live payer intelligence metrics (A–F) and exposure dollars.")}</h3>
-          <div class="muted small" style="margin-top:6px;">Enterprise-style payer comparison and decision support.</div>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <a class="btn secondary small" href="/payer-rankings">Payer Rankings</a>
-        </div>
-      </div>
-
-      <div class="hr"></div>
-
-      <form method="GET" action="/revenue-intelligence" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;">
-        <input type="hidden" name="tab" value="deep-dive" />
-        <div>
-          <label>Payer 1</label>
-          <select name="p1">
-            ${payerOptionsHtml(p1)}
-          </select>
-        </div>
-        <div>
-          <label>Payer 2</label>
-          <select name="p2">
-            ${payerOptionsHtml(p2)}
-          </select>
-        </div>
-        <div>
-          <button class="btn" type="submit">Compare</button>
-        </div>
-      </form>
-
-      <div class="hr"></div>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;">
-        <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
-          <div style="font-weight:900;">Comparison Scorecard ${infoIcon("Scores are computed per payer. Higher is better. At-risk includes underpaid + patient follow-up remaining.")}</div>
-          <div class="hr"></div>
-          <div class="chart-container payer" style="height:320px;max-height:320px;"><canvas id="riCompareBars"></canvas></div>
-        </div>
-
-        <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
-          <div style="font-weight:900;">Exposure Breakdown ${infoIcon("Shows denied dollars vs underpaid dollars vs total at-risk for each payer.")}</div>
-          <div class="hr"></div>
-          <div class="chart-container payer" style="height:320px;max-height:320px;"><canvas id="riExposureBars"></canvas></div>
-        </div>
-      </div>
-
-      <div style="margin-top:18px;border:1px solid var(--border);border-radius:14px;padding:18px;background:var(--card);">
-        <div style="font-weight:900;font-size:15px;margin-bottom:10px;">
-          Executive Board Analysis
-        </div>
-        <div id="deepDiveNarrative" style="line-height:1.7;font-size:14px;"></div>
-      </div>
-
-      <script>
-        (function(){
-          const dd = JSON.parse(atob("${deepDiveB64}"));
-          const i1 = dd.i1 || null;
-          const i2 = dd.i2 || null;
-          if (!i1 || !i2) return;
-
-          const name1 = dd.p1;
-          const name2 = dd.p2;
-
-          const score1 = Number(i1.score || 0);
-          const score2 = Number(i2.score || 0);
-
-          const denial1 = Number(i1.denialRate || 0);
-          const denial2 = Number(i2.denialRate || 0);
-
-          const underpaid1 = Number(i1.underpaidExposure || 0);
-          const underpaid2 = Number(i2.underpaidExposure || 0);
-
-          const atRisk1 = Number(i1.totalAtRisk || 0);
-          const atRisk2 = Number(i2.totalAtRisk || 0);
-
-          const billed1 = Number(i1.totalBilled || 0);
-          const billed2 = Number(i2.totalBilled || 0);
-
-          let narrative = "";
-
-          // Overall score comparison
-          const scoreDiff = Math.abs(score1 - score2);
-          if (score1 > score2) {
-            narrative += "<b>" + name1 + "</b> outperforms " + name2 + " by " + scoreDiff + " score points. ";
-          } else if (score2 > score1) {
-            narrative += "<b>" + name2 + "</b> outperforms " + name1 + " by " + scoreDiff + " score points. ";
-          } else {
-            narrative += "Both payers are performing at equivalent overall score levels. ";
-          }
-
-          // At-risk delta
-          const riskDelta = Math.abs(atRisk1 - atRisk2);
-          if (riskDelta > 0) {
-            const higherRiskPayer = atRisk1 > atRisk2 ? name1 : name2;
-            narrative += "<br><br><b>" + higherRiskPayer + "</b> carries $" + riskDelta.toLocaleString() + " more total at-risk exposure.";
-          }
-
-          // Denial leverage opportunity
-          const higherDenial = denial1 > denial2 ? {name:name1, rate:denial1, billed:billed1} :
-                               denial2 > denial1 ? {name:name2, rate:denial2, billed:billed2} : null;
-
-          if (higherDenial) {
-            const improvementTarget = 0.03; // 3% reduction scenario
-            const potentialRecovery = higherDenial.billed * improvementTarget;
-            narrative += "<br><br>If " + higherDenial.name + " reduces denial rate by 3%, estimated annual recovery impact is approximately $" + Math.round(potentialRecovery).toLocaleString() + ".";
-          }
-
-          // Underpayment leverage
-          const underpaidDelta = Math.abs(underpaid1 - underpaid2);
-          if (underpaidDelta > 0) {
-            const higherUnderpaid = underpaid1 > underpaid2 ? name1 : name2;
-            narrative += "<br><br>" + higherUnderpaid + " has materially higher underpayment exposure, suggesting contract variance review is warranted.";
-          }
-
-          // Strategic recommendation
-          narrative += "<br><br><b>Strategic Recommendation:</b> Prioritize denial prevention workflows, tighten contract enforcement thresholds, and evaluate renegotiation leverage with the higher-risk payer.";
-
-          document.getElementById("deepDiveNarrative").innerHTML = narrative;
-        })();
-      </script>
-
-      <script>
-        (function(){
-          const dd = JSON.parse(atob("${deepDiveB64}"));
-          const i1 = dd.i1 || null;
-          const i2 = dd.i2 || null;
-
-          function initDeepDiveCharts(){
-            if (typeof Chart === "undefined") {
-              setTimeout(initDeepDiveCharts, 50);
-              return;
-            }
-            if (!i1 || !i2) return;
-
-            const ctx1 = document.getElementById("riCompareBars");
-            const ctx2 = document.getElementById("riExposureBars");
-            if (!ctx1 || !ctx2) return;
-
-            const labels = [i1.payerName, i2.payerName];
-
-            // Score bars: score, denialRate, avgDaysToPay (invert for visual "higher better" on days)
-            const scoreData = [Number(i1.score||0), Number(i2.score||0)];
-            const denialData = [Number(i1.denialRate||0), Number(i2.denialRate||0)];
-            const daysData = [Math.max(0, 100 - Math.min(100,(Number(i1.avgDaysToPay||0)/60)*100)),
-                              Math.max(0, 100 - Math.min(100,(Number(i2.avgDaysToPay||0)/60)*100))];
-
-            new Chart(ctx1, {
-              type:"bar",
-              data:{
-                labels,
-                datasets:[
-                  { label:"Score (0–100)", data:scoreData },
-                  { label:"Denial Rate % (lower better)", data:denialData },
-                  { label:"Days-to-Pay Score (higher better)", data:daysData }
-                ]
-              },
-              options:{ responsive:true, maintainAspectRatio:false }
-            });
-
-            const denied = [Number(i1.totalDeniedDollars||0), Number(i2.totalDeniedDollars||0)];
-            const underpaid = [Number(i1.totalUnderpaidDollars||0), Number(i2.totalUnderpaidDollars||0)];
-            const atRisk = [Number(i1.totalAtRisk||0), Number(i2.totalAtRisk||0)];
-
-            new Chart(ctx2, {
-              type:"bar",
-              data:{
-                labels,
-                datasets:[
-                  { label:"Denied $ (est.)", data:denied },
-                  { label:"Underpaid $ (est.)", data:underpaid },
-                  { label:"At Risk $ (total)", data:atRisk }
-                ]
-              },
-              options:{
-                responsive:true,
-                maintainAspectRatio:false,
-                scales:{ y:{ ticks:{ callback:(v)=> (window.moneyFmt ? window.moneyFmt(v) : v) } } }
-              }
-            });
-          }
-
-          if (document.readyState === "loading") {
-            document.addEventListener("DOMContentLoaded", initDeepDiveCharts);
-          } else {
-            initDeepDiveCharts();
-          }
-        })();
-      </script>
-    </div>
-  `;
+  p1 = String(p1 || ""); p2 = String(p2 || "");
+  const payerOptionsHtml = selected => (payerRanks||[]).map(p=>`<option value="${safeStr(p.payer)}" ${String(selected||"")===String(p.payer)?"selected":""}>${safeStr(p.payer)}</option>`).join("");
+  if (!p1 || !p2) return `<div class="executive-panel"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;"><div><h3 style="margin:0;">Deep Dive Analytics ${infoIcon("Compare two payers side-by-side. Uses live payer intelligence metrics (A–F) and exposure dollars.")}</h3><div class="muted small" style="margin-top:6px;">Enterprise-style payer comparison and decision support.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap;"><a class="btn secondary small" href="/payer-rankings">Payer Rankings</a></div></div><div class="hr"></div><form method="GET" action="/revenue-intelligence" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;"><input type="hidden" name="tab" value="deep-dive" /><div><label>Payer 1</label><select name="p1">${payerOptionsHtml(p1)}</select></div><div><label>Payer 2</label><select name="p2">${payerOptionsHtml(p2)}</select></div><div><button class="btn" type="submit">Compare</button></div></form><div class="hr"></div><div class="muted">Select two payers to compare performance, risk exposure, denial pressure, underpayment exposure, and follow-up priority.</div><ul class="muted small" style="margin-top:8px;line-height:1.7;"><li>Compare score and denial rates</li><li>Identify higher-risk payer</li><li>Find where appeals or negotiations should be prioritized</li></ul></div>`;
+  const dd = JSON.parse(Buffer.from(String(deepDiveB64||""), 'base64').toString('utf8') || '{}');
+  const insights = buildDeepDiveExecutiveInsights(dd);
+  const i1 = insights.i1 || {}, i2 = insights.i2 || {};
+  const payerCard=(name,i,tags)=>`<div style="flex:1;min-width:320px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;"><div style="font-weight:900;">${tjhpDeepDiveSafeText(name)}</div><div class="muted small">${tags.map(t=>`<span class="badge neutral" style="margin-left:4px;">${tjhpDeepDiveSafeText(t)}</span>`).join('')}</div></div><div class="hr"></div><div class="muted small" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;"><div><strong>Score:</strong> ${tjhpDeepDiveNum(i.score||0).toFixed(1)}</div><div><strong>Denial rate:</strong> ${tjhpDeepDivePct(i.denialRate||0)}</div><div><strong>Total at-risk:</strong> ${tjhpDeepDiveMoney(tjhpDeepDiveMetricValue(i,['totalAtRisk','atRisk']))}</div><div><strong>Denied exposure:</strong> ${tjhpDeepDiveMoney(tjhpDeepDiveMetricValue(i,['deniedExposure','totalDeniedDollars']))}</div><div><strong>Underpaid exposure:</strong> ${tjhpDeepDiveMoney(tjhpDeepDiveMetricValue(i,['underpaidExposure','totalUnderpaidDollars']))}</div><div><strong>${i.daysToPayScore!==undefined?'Days-to-pay score':'Avg days to pay'}:</strong> ${i.daysToPayScore!==undefined?tjhpDeepDiveNum(i.daysToPayScore).toFixed(1):tjhpDeepDiveNum(tjhpDeepDiveMetricValue(i,['avgDaysToPay','averageDaysToPay'])).toFixed(1)}</div><div><strong>Total billed:</strong> ${tjhpDeepDiveMoney(i.totalBilled||0)}</div><div><strong>Total paid:</strong> ${tjhpDeepDiveMoney(i.totalPaid||0)}</div></div></div>`;
+  return `<div class="executive-panel"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-end;flex-wrap:wrap;"><div><h3 style="margin:0;">Deep Dive Analytics ${infoIcon("Compare two payers side-by-side. Uses live payer intelligence metrics (A–F) and exposure dollars.")}</h3><div class="muted small" style="margin-top:6px;">Enterprise-style payer comparison and decision support.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap;"><a class="btn secondary small" href="/payer-rankings">Payer Rankings</a></div></div><div class="hr"></div><form method="GET" action="/revenue-intelligence" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;"><input type="hidden" name="tab" value="deep-dive" /><div><label>Payer 1</label><select name="p1">${payerOptionsHtml(p1)}</select></div><div><label>Payer 2</label><select name="p2">${payerOptionsHtml(p2)}</select></div><div><button class="btn" type="submit">Compare</button></div></form><div class="hr"></div>
+  <div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Executive Decision Summary</div><div class="muted small" style="display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:8px;margin-top:8px;"><div><strong>Overall stronger payer</strong><div>${tjhpDeepDiveSafeText(insights.winner)} (${insights.scoreDelta.toFixed(1)} point lead)</div><div>Higher score is better</div></div><div><strong>Higher-risk payer</strong><div>${tjhpDeepDiveSafeText(insights.higherRiskPayer)} (${tjhpDeepDiveMoney(insights.riskDelta)} delta)</div><div>Higher at-risk exposure needs follow-up</div></div><div><strong>Primary risk driver</strong><div>${tjhpDeepDiveSafeText(insights.primaryRiskDriver)}</div></div><div><strong>Recommended focus</strong><div>${tjhpDeepDiveSafeText(insights.strategicRecommendation)}</div></div></div></div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px;">${payerCard(insights.p1,i1,[insights.winner===insights.p1?'Stronger overall':'',insights.higherRiskPayer===insights.p1?'Higher risk':'',tjhpDeepDiveNum(i1.denialRate)>tjhpDeepDiveNum(i2.denialRate)?'Higher denial pressure':'',tjhpDeepDiveNum(i1.underpaidExposure)>tjhpDeepDiveNum(i2.underpaidExposure)?'Higher underpayment exposure':''].filter(Boolean))}${payerCard(insights.p2,i2,[insights.winner===insights.p2?'Stronger overall':'',insights.higherRiskPayer===insights.p2?'Higher risk':'',tjhpDeepDiveNum(i2.denialRate)>tjhpDeepDiveNum(i1.denialRate)?'Higher denial pressure':'',tjhpDeepDiveNum(i2.underpaidExposure)>tjhpDeepDiveNum(i1.underpaidExposure)?'Higher underpayment exposure':''].filter(Boolean))}</div>
+  <div style="margin-top:12px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Key Differences</div><ul class="muted small" style="line-height:1.7;"><li>${tjhpDeepDiveSafeText(insights.winner)} leads by ${insights.scoreDelta.toFixed(1)} score points.</li><li>${tjhpDeepDiveSafeText(insights.higherRiskPayer)} carries ${tjhpDeepDiveMoney(insights.riskDelta)} more total at-risk exposure.</li><li>Denial rate difference: ${tjhpDeepDivePct(insights.denialRateDelta)}.</li><li>Underpayment difference: ${tjhpDeepDiveMoney(insights.underpaidDelta)}.</li><li>Denied exposure difference: ${tjhpDeepDiveMoney(insights.deniedDelta)}.</li>${insights.daysToPayWinner?`<li>${tjhpDeepDiveSafeText(insights.daysToPayWinner)} has stronger days-to-pay score.</li>`:''}</ul></div>
+  <div style="margin-top:12px;"><div style="font-weight:900;margin-bottom:6px;">Visual Comparison</div><div class="muted small" style="margin-bottom:8px;">Charts support the summary above. Use the executive summary and key differences for the decision view.</div><div style="display:flex;gap:12px;flex-wrap:wrap;"><div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Comparison Scorecard</div><div class="hr"></div><div class="chart-container payer" style="height:260px;max-height:260px;"><canvas id="riCompareBars"></canvas></div><div class="muted small" style="margin-top:8px;">${tjhpDeepDiveSafeText(insights.chartTakeaways.scorecard)}</div></div><div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);"><div style="font-weight:900;">Exposure Breakdown</div><div class="hr"></div><div class="chart-container payer" style="height:260px;max-height:260px;"><canvas id="riExposureBars"></canvas></div><div class="muted small" style="margin-top:8px;">${tjhpDeepDiveSafeText(insights.chartTakeaways.exposure)}</div></div></div></div>
+  <div style="margin-top:18px;border:1px solid var(--border);border-radius:14px;padding:18px;background:var(--card);"><div style="font-weight:900;font-size:15px;margin-bottom:10px;">Executive Board Analysis</div><div><strong>What this means</strong><ul class="muted small"><li>${tjhpDeepDiveSafeText(insights.decisionSummary)}</li></ul><strong>Key drivers</strong><ul class="muted small">${(insights.keyDrivers||[]).map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul><strong>Recommended actions</strong><ul class="muted small">${(insights.actionPlan||[]).map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul><strong>Next 30-day priorities</strong><ul class="muted small"><li>Start with the higher-risk payer.</li><li>Review top denied and underpaid claims.</li><li>Move high-value issues into appeal/negotiation workflows.</li><li>Verify reimbursement rules/contracts for expected payment validation.</li></ul><strong>Watchouts</strong><ul class="muted small">${(insights.watchouts||[]).map(x=>`<li>${tjhpDeepDiveSafeText(x)}</li>`).join('')}</ul></div></div>
+  <script>(function(){const dd=JSON.parse(atob("${deepDiveB64}"));const i1=dd.i1||null;const i2=dd.i2||null;function initDeepDiveCharts(){if(typeof Chart==="undefined"){setTimeout(initDeepDiveCharts,50);return;}if(!i1||!i2)return;const ctx1=document.getElementById("riCompareBars");const ctx2=document.getElementById("riExposureBars");if(!ctx1||!ctx2)return;const labels=[i1.payerName||dd.p1,i2.payerName||dd.p2];new Chart(ctx1,{type:"bar",data:{labels,datasets:[{label:"Score (0–100)",data:[Number(i1.score||0),Number(i2.score||0)]},{label:"Denial Rate % (lower better)",data:[Number(i1.denialRate||0),Number(i2.denialRate||0)]},{label:"Days-to-Pay Score (higher better)",data:[Number(i1.daysToPayScore||0),Number(i2.daysToPayScore||0)]}]},options:{responsive:true,maintainAspectRatio:false}});new Chart(ctx2,{type:"bar",data:{labels,datasets:[{label:"Denied $ (est.)",data:[Number(i1.totalDeniedDollars||i1.deniedExposure||0),Number(i2.totalDeniedDollars||i2.deniedExposure||0)]},{label:"Underpaid $ (est.)",data:[Number(i1.totalUnderpaidDollars||i1.underpaidExposure||0),Number(i2.totalUnderpaidDollars||i2.underpaidExposure||0)]},{label:"At Risk $ (total)",data:[Number(i1.totalAtRisk||i1.atRisk||0),Number(i2.totalAtRisk||i2.atRisk||0)]}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{ticks:{callback:(v)=>(window.moneyFmt?window.moneyFmt(v):v)}}}}});}initDeepDiveCharts();})();</script></div>`;
 }
 
 function renderRevenueAIConsole({ org, parsed }){
@@ -58038,9 +57843,13 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS === "true" && (p
       { payer:"Humana", score:70, deniedExposure:200, underpaidExposure:25, atRisk:225, denialRate:20 }
     ];
 
+    const helperStart = src.indexOf("function tjhpDeepDiveNum(value) {");
+    const helperEnd = src.indexOf("function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){");
+    const helperSrc = src.slice(helperStart, helperEnd);
+    eval(helperSrc);
     const renderDeepDive = eval("(" + deepDiveFnSrc.replace("function renderDeepDiveTab", "function") + ")");
     const emptyHtml = renderDeepDive(fakeOrg, payerRanks, fakeM, "", "", "");
-    ["Select two payers to compare.", "<select name=\"p1\">", "<select name=\"p2\">", "Compare"].forEach(x=>assert(emptyHtml.includes(x), x));
+    ["Select two payers", "performance, risk exposure, denial pressure", "<select name=\"p1\">", "<select name=\"p2\">", "Compare"].forEach(x=>assert(emptyHtml.includes(x), x));
 
     const deepDiveObj = {
       p1:"Cigna",
@@ -58058,6 +57867,32 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS === "true" && (p
 
     process.stdout.write("REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m || "assertion failed"); };
+    ["buildDeepDiveExecutiveInsights","Executive Decision Summary","Key Differences","Visual Comparison","What this means","Recommended actions","Next 30-day priorities","Watchouts","REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
+    const helperStart = src.indexOf("function tjhpDeepDiveNum(value) {");
+    const helperEnd = src.indexOf("function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){");
+    eval(src.slice(helperStart, helperEnd));
+    const sample = {p1:"Cigna",p2:"BlueCross",i1:{ score:82, denialRate:8, underpaidExposure:20, deniedExposure:5, totalAtRisk:25, daysToPayScore:88, totalBilled:1000, totalPaid:800 },i2:{ score:66, denialRate:18, underpaidExposure:480, deniedExposure:0, totalAtRisk:480, daysToPayScore:87, totalBilled:1200, totalPaid:700 }};
+    const insights = buildDeepDiveExecutiveInsights(sample);
+    assert(insights.winner === "Cigna"); assert(insights.higherRiskPayer === "BlueCross"); assert(insights.riskDelta > 0); assert(insights.primaryRiskDriver.includes("Underpayment")); assert(insights.strategicRecommendation.includes("BlueCross")); assert((insights.keyDrivers||[]).join(" ").includes("BlueCross")); assert((insights.actionPlan||[]).length>0); assert((insights.watchouts||[]).length>0);
+    const ddStart = src.indexOf("function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){");
+    const ddEnd = src.indexOf("function renderRevenueAIConsole");
+    const renderDeepDive = eval("(" + src.slice(ddStart, ddEnd).replace("function renderDeepDiveTab", "function") + ")");
+    const html = renderDeepDive({org_id:"x"},[{payer:"Cigna"},{payer:"BlueCross"}],{},Buffer.from(JSON.stringify(sample),"utf8").toString("base64"),"Cigna","BlueCross");
+    ["Executive Decision Summary","Overall stronger payer","Higher-risk payer","Primary risk driver","Recommended focus","Key Differences","Visual Comparison","Comparison Scorecard","Exposure Breakdown","Executive Board Analysis","What this means","Key drivers","Recommended actions","Next 30-day priorities","Watchouts","Cigna","BlueCross"].forEach(x=>assert(html.includes(x),x));
+    const noSel = renderDeepDive({org_id:"x"},[{payer:"Cigna"},{payer:"BlueCross"}],{},"","","");
+    ["Select two payers","performance, risk exposure, denial pressure","Payer Rankings"].forEach(x=>assert(noSel.includes(x),x));
+    ["riCompareBars","riExposureBars","chart-container payer"].forEach(x=>assert(html.includes(x),x));
+    const ddFn = src.slice(src.indexOf("function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){"), src.indexOf("function renderRevenueAIConsole"));
+    ["horizonOptions","forecast_horizon","fc.horizonMonths","detectedMonths","tjhpForecastDefaultHorizon(detectedMonths)"].forEach(x=>assert(!ddFn.includes(x),x));
+    ["REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","FORECAST_CHART_LABEL_CLEANUP_SMOKE_TESTS_PASSED","LAUNCH_READINESS_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
+    process.stdout.write("REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
 
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
