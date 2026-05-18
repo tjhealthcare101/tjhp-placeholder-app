@@ -16449,13 +16449,96 @@ function computeLinearForecast(points, horizon=6){
   return { forecast, slope, intercept };
 }
 
-function buildForecastFromMetrics(m){
-  // Use time-series from computeDashboardMetrics (already returns m.series with keys/billed/collected/atRisk)
-  const series = m.series || {};
-  const keys = (series.keys || []).slice();
-  const billed = smoothSeries(series.billed || [], 3);
-  const collected = smoothSeries(series.collected || [], 3);
-  const atRisk = smoothSeries(series.atRisk || [], 3);
+function tjhpForecastNormalizeMonth(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const isoMonth = raw.match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/);
+  if (isoMonth) {
+    const y = isoMonth[1];
+    const m = String(Number(isoMonth[2])).padStart(2, "0");
+    if (Number(m) >= 1 && Number(m) <= 12) return `${y}-${m}`;
+  }
+  const us = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (us) {
+    const m = String(Number(us[1])).padStart(2, "0");
+    const y = us[3];
+    if (Number(m) >= 1 && Number(m) <= 12) return `${y}-${m}`;
+  }
+  const d = new Date(raw);
+  if (d && !isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  return "";
+}
+function tjhpForecastRowMonth(row, type = "") {
+  const r = row || {};
+  const candidates = type === "payment"
+    ? [r.reporting_period, r.paid_date, r.payment_date, r.posted_date, r.date_paid, r.eob_date, r.era_date, r.created_at, r.uploaded_at]
+    : [r.reporting_period, r.date_of_service, r.dos, r.service_date, r.statement_date, r.created_at, r.uploaded_at];
+  for (const v of candidates) {
+    const month = tjhpForecastNormalizeMonth(v);
+    if (month) return month;
+  }
+  return "";
+}
+function tjhpForecastMonthLabel(month) {
+  const m = String(month || "");
+  const match = m.match(/^(\d{4})-(\d{2})$/);
+  if (!match) return m || "Unknown";
+  const d = new Date(Number(match[1]), Number(match[2]) - 1, 1);
+  return d.toLocaleString("en-US", { month: "short", year: "numeric" });
+}
+function tjhpBuildForecastSeriesFromRows(org_id) {
+  const claims = readJSON(FILES.billed, []).filter(r => r && r.org_id === org_id);
+  const payments = readJSON(FILES.payments, []).filter(r => r && r.org_id === org_id);
+  const buckets = {};
+  function ensure(month) {
+    if (!month) return null;
+    if (!buckets[month]) buckets[month] = { month, billed: 0, collected: 0, atRisk: 0, claim_count: 0, payment_count: 0 };
+    return buckets[month];
+  }
+  for (const c of claims) {
+    const month = tjhpForecastRowMonth(c, "claim");
+    const b = ensure(month);
+    if (!b) continue;
+    const billed = num(c.amount_billed ?? c.billed_amount ?? c.billed ?? c.charge_amount ?? 0);
+    const paid = num(c.amount_paid ?? c.paid_amount ?? c.paid ?? 0);
+    const expected = num(c.expected_amount ?? c.expected_insurance ?? c.expected ?? 0);
+    const atRisk = num(c.at_risk ?? c.balance ?? c.outstanding_amount ?? Math.max(0, (expected || billed || 0) - paid));
+    b.billed += Math.max(0, billed);
+    b.atRisk += Math.max(0, atRisk);
+    b.claim_count += 1;
+  }
+  for (const p of payments) {
+    const month = tjhpForecastRowMonth(p, "payment");
+    const b = ensure(month);
+    if (!b) continue;
+    const paid = num(p.paid_amount ?? p.paid ?? p.payment_amount ?? p.amount_paid ?? 0);
+    b.collected += Math.max(0, paid);
+    b.payment_count += 1;
+  }
+  const months = Object.keys(buckets).sort();
+  return {
+    keys: months,
+    labels: months.map(tjhpForecastMonthLabel),
+    billed: months.map(m => Math.round(buckets[m].billed || 0)),
+    collected: months.map(m => Math.round(buckets[m].collected || 0)),
+    atRisk: months.map(m => Math.round(buckets[m].atRisk || 0)),
+    claimCounts: months.map(m => buckets[m].claim_count || 0),
+    paymentCounts: months.map(m => buckets[m].payment_count || 0),
+    detectedMonths: months.length,
+    firstMonth: months[0] || "",
+    lastMonth: months[months.length - 1] || "",
+    buckets
+  };
+}
+function buildForecastFromMetrics(m, opts = {}){
+  const rowSeries = opts.rowSeries && Array.isArray(opts.rowSeries.keys) ? opts.rowSeries : null;
+  const dashboardSeries = m.series || {};
+  const sourceSeries = rowSeries && rowSeries.keys.length >= 1 ? rowSeries : dashboardSeries;
+  const keys = (sourceSeries.keys || []).slice();
+  const displayLabels = (sourceSeries.labels || sourceSeries.keys || []).slice();
+  const billed = smoothSeries(sourceSeries.billed || [], 3);
+  const collected = smoothSeries(sourceSeries.collected || [], 3);
+  const atRisk = smoothSeries(sourceSeries.atRisk || [], 3);
 
   // Horizon: 6 points (works for day/week/month granularity)
   const horizon = 6;
@@ -16466,11 +16549,18 @@ function buildForecastFromMetrics(m){
 
   // Labels: add Future 1..horizon (keep simple)
   const futureLabels = Array.from({length:horizon}, (_,i)=>`Forecast ${i+1}`);
-  const labelsAll = keys.concat(futureLabels);
+  const labelsAll = displayLabels.concat(futureLabels);
 
   return {
-    gran: series.gran || "week",
+    gran: sourceSeries.gran || "week",
+    labels: keys,
+    displayLabels,
     labelsAll,
+    historicalMonthCount: keys.length,
+    detectedMonths: rowSeries?.detectedMonths || keys.length || 0,
+    firstMonth: rowSeries?.firstMonth || "",
+    lastMonth: rowSeries?.lastMonth || "",
+    source: rowSeries && rowSeries.keys.length ? "row_level_months" : "dashboard_series",
     hist: { billed: billed, collected: collected, atRisk: atRisk },
     fcst: { billed: fBilled.forecast, collected: fCollected.forecast, atRisk: fAtRisk.forecast },
     model: {
@@ -40712,6 +40802,9 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
 function renderForecastTab(org, m, forecastB64){
   const fc = JSON.parse(Buffer.from(String(forecastB64 || ""), "base64").toString("utf8") || "{}");
   const historicalPeriods = Array.isArray(fc?.labels) ? fc.labels.length : 0;
+  const detectedMonths = Number(fc.detectedMonths || historicalPeriods || 0);
+  const firstMonth = fc.firstMonth ? tjhpForecastMonthLabel(fc.firstMonth) : "";
+  const lastMonth = fc.lastMonth ? tjhpForecastMonthLabel(fc.lastMonth) : "";
   let forecastConfidence = "Low";
 
   if (historicalPeriods >= 6) forecastConfidence = "High";
@@ -40722,10 +40815,17 @@ function renderForecastTab(org, m, forecastB64){
       <div class="executive-panel">
         <h3>Forecast Unavailable</h3>
         <div class="muted" style="margin-top:6px;">
-          At least 3 reporting periods are required to generate a reliable projection.
+          At least 3 months of claim or payment activity are needed to generate a reliable forecast.
         </div>
         <div class="muted small" style="margin-top:6px;">
-          Upload additional claim and payment periods to activate the Forecast Engine.
+          Detected: ${detectedMonths} month(s) of activity.
+        </div>
+        ${detectedMonths > 0 && firstMonth && lastMonth ? `<div class="muted small" style="margin-top:6px;">Detected activity range: ${safeStr(firstMonth)} – ${safeStr(lastMonth)}</div>` : ""}
+        <div class="muted small" style="margin-top:6px;">
+          Upload claims or payments with service dates or payment dates across at least 3 different months.
+        </div>
+        <div class="muted small" style="margin-top:6px;">
+          Tip: The forecast uses claim service dates and payment dates when available, not just the upload date.
         </div>
       </div>
     `;
@@ -40762,6 +40862,11 @@ function renderForecastTab(org, m, forecastB64){
         <span class="badge ${forecastConfidence === "High" ? "ok" : forecastConfidence === "Medium" ? "warn" : "bad"}">
           Forecast Confidence: ${forecastConfidence}
         </span>
+        <div class="muted small" style="margin-top:8px;">
+          Detected activity months: ${detectedMonths}<br/>
+          ${firstMonth && lastMonth ? `Activity range: ${safeStr(firstMonth)} – ${safeStr(lastMonth)}<br/>` : ""}
+          Source: ${fc.source === "dashboard_series" ? "dashboard time series" : "claim service dates/payment dates"}
+        </div>
       </div>
 
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
@@ -41438,7 +41543,8 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   const r = rangeFromPreset(preset);
   const m = computeDashboardMetrics(org.org_id, r.start, r.end, preset);
   const payerRanks = computeAllPayerRankings(org.org_id);
-  const forecastData = buildForecastFromMetrics(m);
+  const forecastRowSeries = tjhpBuildForecastSeriesFromRows(sess.org_id || org.org_id);
+  const forecastData = buildForecastFromMetrics(m, { rowSeries: forecastRowSeries });
   const forecastB64 = Buffer.from(JSON.stringify(forecastData)).toString("base64");
 
   const p1 = parsed.query.p1 || "";
@@ -58117,6 +58223,57 @@ if (process.env.TJHP_LAUNCH_READINESS_SMOKE_TESTS === "true" && (process.env.TJH
     process.stdout.write("LAUNCH_READINESS_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) {
     process.stderr.write("LAUNCH_READINESS_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
+  }
+}
+if (process.env.TJHP_FORECAST_MONTH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m || "assertion failed"); };
+    assert(tjhpForecastNormalizeMonth("2026-01") === "2026-01");
+    assert(tjhpForecastNormalizeMonth("2026-01-10") === "2026-01");
+    assert(tjhpForecastNormalizeMonth("1/10/2026") === "2026-01");
+    assert(tjhpForecastNormalizeMonth("bad-date") === "");
+    assert(tjhpForecastRowMonth({ reporting_period: "2026-02", date_of_service: "2026-01-02" }, "claim") === "2026-02");
+    assert(tjhpForecastRowMonth({ date_of_service: "2026-03-15" }, "claim") === "2026-03");
+    assert(tjhpForecastRowMonth({ paid_date: "2026-04-10" }, "payment") === "2026-04");
+    const org_id = "__forecast_smoke_org__";
+    const oldBilled = readJSON(FILES.billed, []);
+    const oldPayments = readJSON(FILES.payments, []);
+    const months = ["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"];
+    const claims = [];
+    const payments = [];
+    for (let i=0;i<30;i++){
+      const m = months[i % months.length];
+      claims.push({ org_id, billed_id:`fc-${i}`, reporting_period:m, amount_billed:241, amount_paid:170, expected_amount:241, date_of_service:`${m}-10` });
+      payments.push({ org_id, payment_id:`fp-${i}`, reporting_period:m, paid_date:`${m}-15`, paid_amount:170 });
+    }
+    writeJSON(FILES.billed, oldBilled.concat(claims));
+    writeJSON(FILES.payments, oldPayments.concat(payments));
+    const series = tjhpBuildForecastSeriesFromRows(org_id);
+    writeJSON(FILES.billed, oldBilled);
+    writeJSON(FILES.payments, oldPayments);
+    assert(series.detectedMonths === 6);
+    months.forEach(m=>assert(series.keys.includes(m),m));
+    assert(series.billed.reduce((s,v)=>s+Number(v||0),0) === 7230);
+    assert(series.collected.reduce((s,v)=>s+Number(v||0),0) === 5100);
+    const fakeM = { series: { keys:["2026-06"], billed:[100], collected:[50], atRisk:[50] }, kpis:{ revenueAtRisk:100 }, arBuckets:{ "90+":0 }, denialRate:5 };
+    const forecast = buildForecastFromMetrics(fakeM, { rowSeries: series });
+    assert(forecast.labels.length === 6);
+    assert(forecast.detectedMonths === 6);
+    assert(forecast.source === "row_level_months");
+    assert(src.includes("Detected activity months"));
+    assert(src.includes("claim service dates/payment dates"));
+    assert(src.includes("At least 3 months of claim or payment activity"));
+    const oneSeries = { keys:["2026-01"], labels:["Jan 2026"], billed:[100], collected:[80], atRisk:[20], detectedMonths:1, firstMonth:"2026-01", lastMonth:"2026-01" };
+    const oneFc = buildForecastFromMetrics(fakeM, { rowSeries: oneSeries });
+    assert(oneFc.detectedMonths === 1);
+    assert(src.includes("Detected: ${detectedMonths} month(s) of activity."));
+    assert(src.includes("service dates or payment dates"));
+    assert(src.includes("not just the upload date"));
+    ["tjhpBuildForecastSeriesFromRows","tjhpForecastRowMonth","FORECAST_MONTH_SMOKE_TESTS_PASSED","buildForecastFromMetrics","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","UPLOAD_COMPAT_SMOKE_TESTS_PASSED","LAUNCH_READINESS_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
+    process.stdout.write("FORECAST_MONTH_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) {
+    process.stderr.write("FORECAST_MONTH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
   }
 }
 
