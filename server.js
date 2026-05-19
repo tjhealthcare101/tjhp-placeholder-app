@@ -16494,6 +16494,72 @@ function tjhpForecastRowMonth(row, type = "") {
   }
   return "";
 }
+
+function tjhpExecutiveDenialRowMonth(row, type = "") {
+  const r = row || {};
+  const candidates = [
+    r.reporting_period,
+    r.denial_date,
+    r.denied_date,
+    r.response_date,
+    r.paid_date,
+    r.payment_date,
+    r.posted_date,
+    r.date_of_service,
+    r.dos,
+    r.service_date,
+    r.created_at,
+    r.uploaded_at
+  ];
+  for (const v of candidates) {
+    const month = typeof tjhpForecastNormalizeMonth === "function" ? tjhpForecastNormalizeMonth(v) : "";
+    if (month) return month;
+  }
+  return "";
+}
+function tjhpRowHasDenialSignal(row) {
+  const r = row || {};
+  const reason = String(r.denial_reason || r.denialReason || r.reason || r.status_reason || r.denial_code || "").trim();
+  const status = String(r.status || r.claim_status || r.lifecycle_status || r.stage || "").toLowerCase();
+  const paid = Number(r.paid_amount ?? r.paid ?? r.amount_paid ?? 0) || 0;
+  const billed = Number(r.billed_amount ?? r.amount_billed ?? r.billed ?? r.charge_amount ?? 0) || 0;
+  return !!reason || status.includes("denied") || status.includes("appeal") || status.includes("denial") || (billed > 0 && paid === 0 && reason);
+}
+function tjhpBuildExecutiveDenialsTrendFromRows(org_id) {
+  const claims = readJSON(FILES.billed, []).filter(r => r && r.org_id === org_id);
+  const payments = readJSON(FILES.payments, []).filter(r => r && r.org_id === org_id);
+  const buckets = {};
+  function inc(month) { if (!month) return; buckets[month] = (buckets[month] || 0) + 1; }
+  for (const c of claims) { if (!tjhpRowHasDenialSignal(c)) continue; inc(tjhpExecutiveDenialRowMonth(c, "claim")); }
+  for (const pay of payments) { if (!tjhpRowHasDenialSignal(pay)) continue; inc(tjhpExecutiveDenialRowMonth(pay, "payment")); }
+  const keys = Object.keys(buckets).sort();
+  return {
+    keys,
+    labels: keys.map(k => typeof tjhpForecastMonthLabel === "function" ? tjhpForecastMonthLabel(k) : k),
+    values: keys.map(k => buckets[k] || 0),
+    detectedMonths: keys.length,
+    firstMonth: keys[0] || "",
+    lastMonth: keys[keys.length - 1] || "",
+    source: keys.length ? "row_level_denial_dates" : "dashboard_series"
+  };
+}
+function tjhpRiPayerAtRiskValue(payerRow) {
+  const p = payerRow || {};
+  return Number(p.totalAtRisk ?? p.atRisk ?? p.revenueAtRisk ?? p.deniedExposure ?? p.underpaidExposure ?? 0) || 0;
+}
+function tjhpRiRiskRankedPayers(payerRanks = []) {
+  return (Array.isArray(payerRanks) ? payerRanks : [])
+    .filter(Boolean)
+    .map(p => ({ ...p, totalAtRisk: tjhpRiPayerAtRiskValue(p) }))
+    .sort((a, b) => {
+      const riskDelta = tjhpRiPayerAtRiskValue(b) - tjhpRiPayerAtRiskValue(a);
+      if (riskDelta !== 0) return riskDelta;
+      return String(a.payer || "").localeCompare(String(b.payer || ""));
+    });
+}
+function tjhpRiBestPerformingPayer(payerRanks = []) {
+  return (Array.isArray(payerRanks) ? payerRanks : []).filter(Boolean).slice().sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || null;
+}
 function tjhpForecastMonthLabel(month) {
   const m = String(month || "");
   const match = m.match(/^(\d{4})-(\d{2})$/);
@@ -16564,8 +16630,9 @@ function buildForecastExecutiveInterpretation(fc, m) { const sections = buildFor
 function buildExecutiveStrategyDecisionLayer(m, payerRanks = []) {
   const kpis = (m && m.kpis) || {};
   const cleanPayers = Array.isArray(payerRanks) ? payerRanks.filter(Boolean) : [];
-  const payerFromMetrics = Array.isArray(m?.topRiskPayers) && m.topRiskPayers.length ? m.topRiskPayers[0] : null;
-  const highestExposurePayer = m?.highestExposurePayer || payerFromMetrics || cleanPayers[0] || null;
+  const riskRankedPayers = tjhpRiRiskRankedPayers(m?.topRiskPayers || payerRanks || []);
+  const highestExposurePayer = m?.highestExposurePayer && tjhpRiPayerAtRiskValue(m.highestExposurePayer) > 0 ? m.highestExposurePayer : (riskRankedPayers[0] || null);
+  const bestPayer = tjhpRiBestPerformingPayer(payerRanks || []);
   const revenueAtRisk = Number(kpis.revenueAtRisk ?? m?.revenueAtRisk ?? 0) || 0;
   const collected = Number(kpis.collectedTotal ?? kpis.collected ?? m?.collectedTotal ?? m?.collected ?? 0) || 0;
   const totalUnderpaid = Number(kpis.totalUnderpaid ?? kpis.underpaymentExposure ?? m?.totalUnderpaid ?? m?.underpaymentExposure ?? 0) || 0;
@@ -16573,7 +16640,7 @@ function buildExecutiveStrategyDecisionLayer(m, payerRanks = []) {
   const ar90 = Number(kpis.ar90 ?? m?.ar90 ?? m?.ar90Rate ?? (m?.arBuckets && m.arBuckets["90+"]) ?? 0) || 0;
   const riskConcentrationPct = Number(m?.riskConcentrationPct || 0) || 0;
   const highestRiskPayer = highestExposurePayer?.payer || highestExposurePayer?.name || "No payer risk available";
-  const highestRiskAtRisk = Number(highestExposurePayer?.totalAtRisk ?? highestExposurePayer?.atRisk ?? highestExposurePayer?.revenueAtRisk ?? 0) || 0;
+  const highestRiskAtRisk = tjhpRiPayerAtRiskValue(highestExposurePayer);
   const hasMeaningfulData = revenueAtRisk > 0 || collected > 0 || totalUnderpaid > 0 || denialRate > 0 || ar90 > 0 || cleanPayers.length > 0;
   const money = (n) => formatMoneyUI(Number(n || 0));
   const pct = (n) => `${formatNumberUI(Number(n || 0))}%`;
@@ -16592,6 +16659,8 @@ function buildExecutiveStrategyDecisionLayer(m, payerRanks = []) {
       highest_risk_payer: "No payer risk available",
       highest_risk_payer_at_risk: 0,
       highest_risk_reason: "No payer exposure has been detected yet.",
+      best_performing_payer: "",
+      best_performing_payer_score: 0,
       top_priority: "Upload claims and payments to activate executive strategy.",
       strategy_brief: "Upload claims and payments to activate executive strategy.",
       strategic_priorities: [{ title:"Activate executive strategy", detail:"Upload claims and payments so the platform can identify at-risk exposure, payer concentration, and recovery work.", action_label:"Open Data Management", action_href:"/data-management", severity:"low" }],
@@ -16675,6 +16744,8 @@ function buildExecutiveStrategyDecisionLayer(m, payerRanks = []) {
     highest_risk_payer: highestRiskPayer,
     highest_risk_payer_at_risk: highestRiskAtRisk,
     highest_risk_reason,
+    best_performing_payer: String(bestPayer?.payer || bestPayer?.name || "").trim(),
+    best_performing_payer_score: Number(bestPayer?.score || 0),
     top_priority: firstPriority ? `${firstPriority.title}: ${firstPriority.detail}` : "Maintain monitoring cadence.",
     strategy_brief,
     strategic_priorities: priorities.slice(0, 3),
@@ -41534,7 +41605,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     ${tabLink("/revenue-intelligence", tab, "deep-dive", "Deep Dive", "Compare payers, CPT drivers, and time windows.")}
   </div>`;
 
-  const top5 = payerRanks.slice(0, 5);
+  const top5 = tjhpRiRiskRankedPayers(payerRanks || []).slice(0, 5);
   const topPayersToReviewHtml = `
   <div class="eb-table-wrap">
       <table class="eb-table">
@@ -41944,13 +42015,13 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       <h4>Revenue Risk Concentration</h4>
       <div id="riskConcentrationPanel">
         Revenue risk is ${riskConcentrationPct}% concentrated in ${topRiskPayers.length} payers.<br/>
-        Top exposure: ${safeStr(highestExposurePayer?.payer || "N/A")} – ${formatMoneyUI(highestExposurePayer?.totalAtRisk || 0)}.<br/>
+        Top exposure payer: ${safeStr(highestExposurePayer?.payer || "N/A")} — ${formatMoneyUI(tjhpRiPayerAtRiskValue(highestExposurePayer))} at risk.<br/>
         Top payer concentration dollars: ${formatMoneyUI(topRiskTotal)}.
       </div>
     </div>
     <div class="eb-grid2">
       <div class="eb-card eb-chart"><h4>Revenue Flow (Funnel)</h4><canvas id="ebFunnel"></canvas><div class="muted small" style="margin-top:8px;">Billed → Expected → Paid → At Risk</div></div>
-      <div class="eb-card eb-chart"><h4>Denials Trend</h4><canvas id="ebDenials"></canvas><div class="muted small" style="margin-top:8px;">Recent periods based on available claim/payment history.</div></div>
+      <div class="eb-card eb-chart"><h4>Denials Trend</h4><canvas id="ebDenials"></canvas><div class="muted small" style="margin-top:8px;">${useRowLevelDenials ? "Denials by row-level service/payment/denial dates." : "Recent periods based on available claim/payment history."}${useRowLevelDenials ? ` Denial months detected: ${executiveDenialsTrend.detectedMonths}.` : ""}</div></div>
     </div>
     <div class="eb-card">
       <div class="eb-sectionHead"><h3>Recovery Performance</h3><div class="muted">Appeals + negotiations KPIs for executive tracking.</div></div>
@@ -42033,7 +42104,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     const totalExpected = Number(funnel.expected || 0);
     const totalPaid = Number(funnel.paid || 0);
     const revenueAtRisk = Number(funnel.atRisk || 0);
-    const denialTrendData = (eb.denialTotals||[]).slice(-12);
+    const denialTrendData = (Array.isArray(eb.denialValues) ? eb.denialValues : (eb.denialTotals||[])).slice(-12);
     const fCtx = document.getElementById("ebFunnel");
     const dCtx = document.getElementById("ebDenials");
 
@@ -58048,6 +58119,46 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS === "true" && (p
 
     process.stdout.write("REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m || "assertion failed"); };
+    const payerRanks = [
+      { payer:"Cigna", score:82, grade:"B", totalAtRisk:24 },
+      { payer:"Aetna", score:60, grade:"D", totalAtRisk:1157 },
+      { payer:"BlueCross", score:66, grade:"D", totalAtRisk:486 },
+      { payer:"Humana", score:66, grade:"D", totalAtRisk:264 },
+      { payer:"UnitedHealthcare", score:67, grade:"D", totalAtRisk:222 }
+    ];
+    const ranked = tjhpRiRiskRankedPayers(payerRanks); assert(ranked[0].payer === "Aetna", "risk rank");
+    const best = tjhpRiBestPerformingPayer(payerRanks); assert(best && best.payer === "Cigna", "best payer");
+    const m = { topRiskPayers: ranked, highestExposurePayer: ranked[0], kpis:{revenueAtRisk:2200}, arBuckets:{"90+":300}, denialRate:12, actionCenter:{openCount:1}, series:{ keys:["2026-01"], denials:[1] }, collections:{ expected:3000, paid:1500 } };
+    const decision = buildExecutiveStrategyDecisionLayer(m, payerRanks);
+    assert(decision.highest_risk_payer === "Aetna", "decision risk payer");
+    assert(decision.best_performing_payer === "Cigna", "decision best payer");
+    assert(Number(decision.highest_risk_payer_at_risk || 0) > 1000, "decision risk amount");
+    assert(String(decision.highest_risk_payer || "") === "Aetna", "risk payer aetna");
+    const fnSrc = src.slice(src.indexOf("function renderExecutiveTab(org, m, payerRanks, q){"), src.indexOf("function renderForecastTab"));
+    ["Top exposure payer", "Best-performing payer", "tjhpRiRiskRankedPayers", "tjhpBuildExecutiveDenialsTrendFromRows", "row_level_denial_dates", "ebDenials", "Denial months detected"].forEach(x=>assert(src.includes(x), x));
+    assert(src.indexOf("const top5 = tjhpRiRiskRankedPayers") > -1, "top payer ordering source");
+    const org_id = "__executive_denial_trend_smoke_org__" + Date.now().toString(36);
+    const oldBilled = readJSON(FILES.billed, []), oldPayments = readJSON(FILES.payments, []);
+    const cleanBilled = oldBilled.filter(r => !String(r?.org_id || "").startsWith("__executive_denial_trend_smoke_org__"));
+    const cleanPayments = oldPayments.filter(r => !String(r?.org_id || "").startsWith("__executive_denial_trend_smoke_org__"));
+    const months = ["2026-01","2026-03","2026-04","2026-06"]; let trend;
+    try {
+      const claims = months.map((mm, i) => ({ org_id, billed_id:"edc"+i, reporting_period:mm, date_of_service:mm+"-11", status:"denied", denial_reason:"missing auth", billed_amount:100, paid_amount:0 }));
+      const pays = months.map((mm, i) => ({ org_id, payment_id:"edp"+i, paid_date:mm+"-20", denial_reason:"late filing", paid_amount:0, billed_amount:90 }));
+      writeJSON(FILES.billed, cleanBilled.concat(claims)); writeJSON(FILES.payments, cleanPayments.concat(pays));
+      trend = tjhpBuildExecutiveDenialsTrendFromRows(org_id);
+    } finally { writeJSON(FILES.billed, cleanBilled); writeJSON(FILES.payments, cleanPayments); }
+    assert(trend.detectedMonths >= 3, "detected months"); assert(trend.keys.includes("2026-01") && trend.keys.includes("2026-06"), "month bounds");
+    assert(trend.source === "row_level_denial_dates", "row source"); assert(trend.values.reduce((s,v)=>s+Number(v||0),0) === 8, "denial sum");
+    ["REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_PASSED","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","FORECAST_MONTH_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
+    process.stdout.write("REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
 
 if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
