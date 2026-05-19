@@ -36246,12 +36246,6 @@ ${(content.demo.steps || []).map(s =>
 
         <h3 style="margin-top:20px;">Admin Control Center</h3>
 
-        <form method="GET" action="/revenue-intelligence" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 12px 0;">
-        <input type="hidden" name="tab" value="forecast"/>
-        <label class="muted small" for="forecast_horizon">Projection period</label>
-        <select id="forecast_horizon" name="horizon" onchange="return window.tjhpForecastHorizonChange(this)">${horizonOptions.map(h=>`<option value="${h.months}" ${Number(fc.horizonMonths||3)===h.months?"selected":""} ${h.available?"":"disabled"}>${safeStr(h.months===12&&!h.available?"12 months — requires 12 months of history":h.label)}${h.available&&!h.recommended?" — use with caution":""}</option>`).join("")}</select>
-        <span class="muted small">Longer projections need more historical activity. With ${detectedMonths} detected months, a ${tjhpForecastDefaultHorizon(detectedMonths)}-month forecast is recommended.</span>
-      </form>
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
           <div style="flex:1;min-width:260px;border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--card);">
             <h4>Announcements</h4>
@@ -42431,12 +42425,27 @@ if (method === "GET" && pathname === "/ai-copilot") {
     </div>
   `;
 
-  const copilotExportHref = workspace?.workspace_id
-    ? `/ai-copilot/export?workspace_id=${encodeURIComponent(workspace.workspace_id)}`
+  const activeCopilotWorkspaceId = String(
+    workspace?.workspace_id ||
+    workspace_id ||
+    parsed.query.workspace ||
+    parsed.query.workspace_id ||
+    ""
+  ).trim();
+  const activeCopilotWorkspace = activeCopilotWorkspaceId
+    ? (workspace || getCopilotWorkspace(org.org_id, activeCopilotWorkspaceId))
+    : null;
+
+  const copilotExportHref = activeCopilotWorkspace?.workspace_id
+    ? `/ai-copilot/export?workspace_id=${encodeURIComponent(activeCopilotWorkspace.workspace_id)}`
     : "";
-  const copilotExportButton = workspace?.workspace_id
-    ? `<a class="btn secondary small" href="${copilotExportHref}">Export PDF</a>`
+  const copilotExportButton = activeCopilotWorkspace?.workspace_id
+    ? `<a class="btn secondary small" data-copilot-export-active="1" href="${copilotExportHref}">Export PDF</a>`
     : `<button type="button" class="btn secondary small" disabled title="Export available after this analysis is saved." aria-disabled="true">Export PDF</button>`;
+
+  const exportNotice = ["missing_workspace", "workspace_not_found"].includes(String(parsed.query.export || ""))
+    ? `<div class="alert" style="margin-bottom:10px;">Export PDF is available after selecting or saving an analysis.</div>`
+    : "";
 
   const html = renderPage("AI Copilot", `
     <style>
@@ -43298,11 +43307,11 @@ if (method === "POST" && pathname === "/ai-copilot/followup") {
 if (method === "GET" && pathname === "/ai-copilot/export") {
   // Export is allowed for signed-in users who own the requested workspace.
   // Do not block export behind the Copilot feature gate.
-  const workspace_id = String(parsed.query.workspace_id || "").trim();
-  if (!workspace_id) return redirect(res, "/ai-copilot");
+  const workspace_id = String(parsed.query.workspace_id || parsed.query.workspace || "").trim();
+  if (!workspace_id) return redirect(res, "/ai-copilot?export=missing_workspace");
 
   const workspace = getCopilotWorkspace(org.org_id, workspace_id);
-  if (!workspace) return redirect(res, "/ai-copilot");
+  if (!workspace) return redirect(res, "/ai-copilot?export=workspace_not_found");
 
   const thread = Array.isArray(workspace.messages) ? workspace.messages : [];
   const brief = workspace.latest_brief || null;
@@ -57956,6 +57965,27 @@ if (process.env.TJHP_ORG_SIGNATURE_UI_SMOKE_TESTS === "true" && (process.env.TJH
   process.exit(0);
 }
 
+if (process.env.TJHP_ADMIN_DASHBOARD_FORECAST_LEAK_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c, m) => { if (!c) throw new Error(m || "assertion failed"); };
+    assert(src.includes("ADMIN_DASHBOARD_FORECAST_LEAK_SMOKE_TESTS_PASSED"), "pass marker missing");
+    assert(src.includes("Admin Control Center"), "admin control center label missing");
+    assert(src.includes('pathname === "/admin/dashboard"'), "admin dashboard route missing");
+    const adminStart = src.indexOf("const adminControlCenterHtml = `");
+    const adminEnd = src.indexOf("const html = renderPage(\"Admin Dashboard\"", adminStart);
+    assert(adminStart >= 0 && adminEnd > adminStart, "admin control center source segment missing");
+    const adminFrag = src.slice(adminStart, adminEnd);
+    ["horizonOptions", "fc.horizonMonths", "detectedMonths", "forecast_horizon", "tjhpForecastHorizonChange", "tjhpForecastDefaultHorizon", '<input type="hidden" name="tab" value="forecast"/>'].forEach(x=>assert(!adminFrag.includes(x), `admin leak: ${x}`));
+    const forecastStart = src.indexOf("function renderForecastTab(org, m, forecastB64){");
+    const forecastEnd = src.indexOf("function renderDeepDiveTab", forecastStart);
+    assert(forecastStart >= 0 && forecastEnd > forecastStart, "forecast tab source segment missing");
+    const forecastFrag = src.slice(forecastStart, forecastEnd);
+    ["horizonOptions", "forecast_horizon", "tjhpForecastHorizonChange", "#forecast-engine", "Projection period"].forEach(x=>assert(forecastFrag.includes(x), `forecast missing: ${x}`));
+    process.stdout.write("ADMIN_DASHBOARD_FORECAST_LEAK_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("ADMIN_DASHBOARD_FORECAST_LEAK_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
 if (process.env.TJHP_SPECIALTY_VALIDATION_LEAK_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try {
     const src = fs.readFileSync(__filename, "utf8");
@@ -57983,7 +58013,13 @@ if (process.env.TJHP_AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS === "true" && (process
     const src = fs.readFileSync(__filename, "utf8");
     const assert = (c, m) => { if (!c) throw new Error(m || "assertion failed"); };
     assert(src.includes("copilotExportButton"), "missing always-render export button variable");
+    assert(src.includes("activeCopilotWorkspaceId"), "missing active workspace id resolver");
+    assert(src.includes("activeCopilotWorkspace"), "missing active workspace resolver");
+    assert(src.includes('data-copilot-export-active="1"'), "missing active export marker");
     assert(src.includes('/ai-copilot/export?workspace_id='), "missing export route href");
+    assert(src.includes("parsed.query.workspace_id || parsed.query.workspace"), "missing export query alias");
+    assert(src.includes("export=missing_workspace"), "missing missing_workspace redirect");
+    assert(src.includes("export=workspace_not_found"), "missing workspace_not_found redirect");
     assert(src.includes("Export available after this analysis is saved."), "missing disabled export helper");
     assert(src.includes("AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED"), "pass marker missing");
     assert(src.includes("wsExpandBtn"), "wsExpandBtn missing");
@@ -57992,8 +58028,8 @@ if (process.env.TJHP_AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS === "true" && (process
     assert(src.includes("New Analysis"), "new analysis label missing");
     assert(src.includes("Refresh"), "refresh button missing");
     assert(src.includes("Export PDF"), "export label missing");
-    const activeHtml = `<div class="ws-topbar-actions">${`<a class="btn secondary small" href="/ai-copilot/export?workspace_id=${encodeURIComponent("ws-1")}">Export PDF</a>`}<a class="btn secondary small" href="/ai-copilot">Refresh</a></div>`;
-    assert(activeHtml.includes("Export PDF") && activeHtml.includes("/ai-copilot/export?workspace_id=") && activeHtml.includes("Refresh"), "active workspace render check failed");
+    const activeHtml = `<div class="ws-topbar-actions">${`<a class="btn secondary small" data-copilot-export-active="1" href="/ai-copilot/export?workspace_id=${encodeURIComponent("ws-1")}">Export PDF</a>`}<a class="btn secondary small" href="/ai-copilot">Refresh</a></div>`;
+    assert(activeHtml.includes("Export PDF") && activeHtml.includes('href="/ai-copilot/export?workspace_id=') && activeHtml.includes('data-copilot-export-active="1"') && !activeHtml.includes("disabled") && activeHtml.includes("Refresh"), "active workspace render check failed");
     const inactiveHtml = `<div class="ws-topbar-actions"><button type="button" class="btn secondary small" disabled title="Export available after this analysis is saved." aria-disabled="true">Export PDF</button><a class="btn secondary small" href="/ai-copilot">Refresh</a></div>`;
     assert(inactiveHtml.includes("Export PDF") && inactiveHtml.includes("disabled") && inactiveHtml.includes("Export available after this analysis is saved.") && inactiveHtml.includes("Refresh"), "inactive workspace render check failed");
     assert(src.includes('pathname === "/ai-copilot/export"'), "ai-copilot export route missing");
