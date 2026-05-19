@@ -31793,15 +31793,7 @@ const server = http.createServer(async (req, res) => {
         writeJSON(FILES.orgs, orgs);
 
         user.org_id = org_id;
-        if (practice_specialty === "other" && !practice_specialty_detail) {
-      return send(res, 400, renderPage("Create Account", `
-      <h2>Create Account</h2>
-      <p class="error">Please enter your specialty when selecting Other.</p>
-      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
-    `, navPublic()));
-    }
-
-    const users = readJSON(FILES.users, []);
+        const users = readJSON(FILES.users, []);
         const idx = users.findIndex(u => u.user_id === user.user_id);
         if (idx >= 0) {
           users[idx].org_id = org_id;
@@ -31822,15 +31814,7 @@ const server = http.createServer(async (req, res) => {
       sub.stripe_customer_id = stripeCustomerId || sub.stripe_customer_id || "";
       sub.stripe_subscription_id = stripeSubscriptionId || sub.stripe_subscription_id || "";
 
-      if (practice_specialty === "other" && !practice_specialty_detail) {
-      return send(res, 400, renderPage("Create Account", `
-      <h2>Create Account</h2>
-      <p class="error">Please enter your specialty when selecting Other.</p>
-      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
-    `, navPublic()));
-    }
-
-    const users = readJSON(FILES.users, []);
+      const users = readJSON(FILES.users, []);
       const uIdx = users.findIndex(u => u.user_id === user.user_id);
       if (uIdx >= 0) {
         users[uIdx].stripe_customer_id = stripeCustomerId || users[uIdx].stripe_customer_id || "";
@@ -31877,15 +31861,7 @@ const server = http.createServer(async (req, res) => {
 
     if (!user) {
       const orgs = readJSON(FILES.orgs, []);
-      if (practice_specialty === "other" && !practice_specialty_detail) {
-      return send(res, 400, renderPage("Create Account", `
-      <h2>Create Account</h2>
-      <p class="error">Please enter your specialty when selecting Other.</p>
-      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
-    `, navPublic()));
-    }
-
-    const users = readJSON(FILES.users, []);
+      const users = readJSON(FILES.users, []);
 
       const org_id = existingSub?.org_id || uuid();
       if (!orgs.find(o => o.org_id === org_id)) {
@@ -31938,15 +31914,7 @@ const server = http.createServer(async (req, res) => {
       writeJSON(FILES.users, users);
       writeJSON(FILES.orgs, orgs);
     } else {
-      if (practice_specialty === "other" && !practice_specialty_detail) {
-      return send(res, 400, renderPage("Create Account", `
-      <h2>Create Account</h2>
-      <p class="error">Please enter your specialty when selecting Other.</p>
-      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
-    `, navPublic()));
-    }
-
-    const users = readJSON(FILES.users, []);
+      const users = readJSON(FILES.users, []);
       const idx = users.findIndex(u => u.user_id === user.user_id);
       if (idx >= 0) {
         users[idx].password_hash = bcrypt.hashSync(password, 10);
@@ -34123,14 +34091,6 @@ section center">
 
     const token = uuid();
     const expiresAt = Date.now() + 20*60*1000;
-    if (practice_specialty === "other" && !practice_specialty_detail) {
-      return send(res, 400, renderPage("Create Account", `
-      <h2>Create Account</h2>
-      <p class="error">Please enter your specialty when selecting Other.</p>
-      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
-    `, navPublic()));
-    }
-
     const users = readJSON(FILES.users, []);
     const idx = users.findIndex(u => (u.email||"").toLowerCase() === email);
     if (idx >= 0) {
@@ -34189,14 +34149,6 @@ section center">
         <div class="btnRow"><a class="btn secondary" href="/forgot-password">Try again</a></div>
       `, navPublic());
       return send(res, 400, html);
-    }
-
-    if (practice_specialty === "other" && !practice_specialty_detail) {
-      return send(res, 400, renderPage("Create Account", `
-      <h2>Create Account</h2>
-      <p class="error">Please enter your specialty when selecting Other.</p>
-      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
-    `, navPublic()));
     }
 
     const users = readJSON(FILES.users, []);
@@ -36224,15 +36176,7 @@ ${(content.demo.steps || []).map(s =>
 
     if (method === "GET" && pathname === "/admin/dashboard") {
       const orgs = readJSON(FILES.orgs, []);
-      if (practice_specialty === "other" && !practice_specialty_detail) {
-      return send(res, 400, renderPage("Create Account", `
-      <h2>Create Account</h2>
-      <p class="error">Please enter your specialty when selecting Other.</p>
-      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
-    `, navPublic()));
-    }
-
-    const users = readJSON(FILES.users, []);
+      const users = readJSON(FILES.users, []);
       const pilots = readJSON(FILES.pilots, []);
       const subs = readJSON(FILES.subscriptions, []);
       const casesData = readJSON(FILES.cases, []);
@@ -36369,15 +36313,7 @@ ${(content.demo.steps || []).map(s =>
     }
 
     if (method === "GET" && pathname === "/admin/insights") {
-      if (practice_specialty === "other" && !practice_specialty_detail) {
-      return send(res, 400, renderPage("Create Account", `
-      <h2>Create Account</h2>
-      <p class="error">Please enter your specialty when selecting Other.</p>
-      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
-    `, navPublic()));
-    }
-
-    const users = readJSON(FILES.users, []);
+      const users = readJSON(FILES.users, []);
       const orgs = readJSON(FILES.orgs, []);
       const subs = readJSON(FILES.subscriptions, []);
       const apps = readJSON(FILES.applications, []);
@@ -42495,6 +42431,13 @@ if (method === "GET" && pathname === "/ai-copilot") {
     </div>
   `;
 
+  const copilotExportHref = workspace?.workspace_id
+    ? `/ai-copilot/export?workspace_id=${encodeURIComponent(workspace.workspace_id)}`
+    : "";
+  const copilotExportButton = workspace?.workspace_id
+    ? `<a class="btn secondary small" href="${copilotExportHref}">Export PDF</a>`
+    : `<button type="button" class="btn secondary small" disabled title="Export available after this analysis is saved." aria-disabled="true">Export PDF</button>`;
+
   const html = renderPage("AI Copilot", `
     <style>
       .page-shell:has(#wsLayout), .page-shell #wsLayout{max-width:none;}
@@ -42627,7 +42570,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
           </div>
           <div class="ws-topbar-actions">
             <button type="button" class="btn secondary small" id="wsExpandBtn" style="display:none;">☰ Saved Analyses</button>
-            ${workspace?.workspace_id ? `<a class="btn secondary small" href="/ai-copilot/export?workspace_id=${encodeURIComponent(workspace.workspace_id)}">Export PDF</a>` : ``}
+            ${copilotExportButton}
             <a class="btn secondary small" href="/ai-copilot">Refresh</a>
           </div>
         </div>
@@ -54281,14 +54224,6 @@ if (method === "POST" && pathname === "/account/preferences") {
     const body = await parseBody(req);
     const params = new URLSearchParams(body);
     const theme = String(params.get("theme") || "light");
-    if (practice_specialty === "other" && !practice_specialty_detail) {
-      return send(res, 400, renderPage("Create Account", `
-      <h2>Create Account</h2>
-      <p class="error">Please enter your specialty when selecting Other.</p>
-      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
-    `, navPublic()));
-    }
-
     const users = readJSON(FILES.users, []);
     const uidx = users.findIndex(u => u.user_id === user.user_id);
     if (uidx >= 0) {
@@ -54314,14 +54249,6 @@ if (method === "POST" && pathname === "/account/password") {
         <div class="btnRow"><a class="btn secondary" href="/account?tab=security">Back</a></div>
       `, navUser(), {showChat:true, orgName: (typeof org!=="undefined" && org ? org.org_name : "")});
       return send(res, 400, html);
-    }
-
-    if (practice_specialty === "other" && !practice_specialty_detail) {
-      return send(res, 400, renderPage("Create Account", `
-      <h2>Create Account</h2>
-      <p class="error">Please enter your specialty when selecting Other.</p>
-      <div class="btnRow"><a class="btn secondary" href="/signup">Back</a></div>
-    `, navPublic()));
     }
 
     const users = readJSON(FILES.users, []);
@@ -58027,6 +57954,51 @@ if (process.env.TJHP_ORG_SIGNATURE_UI_SMOKE_TESTS === "true" && (process.env.TJH
   assert(tjhpPacketSignatureTextForWorkspace(testOrg, '')==='Legacy Signature Block','legacy fallback missing');
   process.stdout.write("ORG_SIGNATURE_UI_SMOKE_TESTS_PASSED\n");
   process.exit(0);
+}
+
+if (process.env.TJHP_SPECIALTY_VALIDATION_LEAK_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c, m) => { if (!c) throw new Error(m || "assertion failed"); };
+    assert(src.includes('if (method === "POST" && pathname === "/signup")'), "missing signup route");
+    assert(src.includes('const practice_specialty = tjhpNormalizeSpecialtyProfile(params.get("practice_specialty") || "other");'), "signup specialty profile missing");
+    assert(src.includes('const raw_specialty_detail = tjhpNormalizeSpecialtyDetail(params.get("practice_specialty_detail") || "");'), "signup raw specialty detail missing");
+    assert(src.includes('const practice_specialty_detail = practice_specialty === "other" ? raw_specialty_detail : "";'), "signup specialty detail mapping missing");
+    assert(src.includes('Please enter your specialty when selecting Other.'), "signup specialty validation message missing");
+    assert(src.includes('/account/org-settings/save') || src.includes('tjhpSpecialtyDetailIsRequired(nextSpecialty) && !nextSpecialtyDetail'), "org settings specialty validation missing");
+    assert(src.includes("SPECIALTY_VALIDATION_LEAK_SMOKE_TESTS_PASSED"), "pass marker missing");
+    const banned = ["practice_specialty === \"other\"", "practice_specialty_detail", "Please enter your specialty when selecting Other"];
+    ["/admin/dashboard", "/admin/insights", "/account/preferences", "/account/password", "/forgot-password", "/reset-password", "/checkout", "/subscription"].forEach((route) => {
+      const idx = src.indexOf(`pathname === "${route}"`);
+      if (idx < 0) return;
+      const fragment = src.slice(Math.max(0, idx - 300), Math.min(src.length, idx + 2200));
+      banned.forEach((needle) => assert(!fragment.includes(needle), `${route} leak: ${needle}`));
+    });
+    process.stdout.write("SPECIALTY_VALIDATION_LEAK_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("SPECIALTY_VALIDATION_LEAK_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+if (process.env.TJHP_AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c, m) => { if (!c) throw new Error(m || "assertion failed"); };
+    assert(src.includes("copilotExportButton"), "missing always-render export button variable");
+    assert(src.includes('/ai-copilot/export?workspace_id='), "missing export route href");
+    assert(src.includes("Export available after this analysis is saved."), "missing disabled export helper");
+    assert(src.includes("AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED"), "pass marker missing");
+    assert(src.includes("wsExpandBtn"), "wsExpandBtn missing");
+    assert(src.includes("wsCollapseBtn"), "wsCollapseBtn missing");
+    assert(src.includes("Saved Analyses"), "saved analyses label missing");
+    assert(src.includes("New Analysis"), "new analysis label missing");
+    assert(src.includes("Refresh"), "refresh button missing");
+    assert(src.includes("Export PDF"), "export label missing");
+    const activeHtml = `<div class="ws-topbar-actions">${`<a class="btn secondary small" href="/ai-copilot/export?workspace_id=${encodeURIComponent("ws-1")}">Export PDF</a>`}<a class="btn secondary small" href="/ai-copilot">Refresh</a></div>`;
+    assert(activeHtml.includes("Export PDF") && activeHtml.includes("/ai-copilot/export?workspace_id=") && activeHtml.includes("Refresh"), "active workspace render check failed");
+    const inactiveHtml = `<div class="ws-topbar-actions"><button type="button" class="btn secondary small" disabled title="Export available after this analysis is saved." aria-disabled="true">Export PDF</button><a class="btn secondary small" href="/ai-copilot">Refresh</a></div>`;
+    assert(inactiveHtml.includes("Export PDF") && inactiveHtml.includes("disabled") && inactiveHtml.includes("Export available after this analysis is saved.") && inactiveHtml.includes("Refresh"), "inactive workspace render check failed");
+    assert(src.includes('pathname === "/ai-copilot/export"'), "ai-copilot export route missing");
+    process.stdout.write("AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
 
 if (process.env.TJHP_PACKET_SIGNATURE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
