@@ -15282,79 +15282,85 @@ function chooseGranularity(preset){
   return "week";
 }
 
+
+function tjhpWorkspaceSubmittedForChannel(ws, channel){
+  return String(ws?.submission?.status || "") === "submitted" && String(ws?.submission?.channel || "") === String(channel || "");
+}
+function tjhpWorkspaceDraftForChannel(ws, channel){
+  if (!ws) return false;
+  if (tjhpWorkspaceSubmittedForChannel(ws, channel)) return false;
+  const ch = String(channel || "");
+  if (ch === "appeal") return !!(ws.appeal || ws.appeal_letter || ws.appealDraft || ws.packet_sections?.appeal);
+  if (ch === "negotiation") return !!(ws.negotiation || ws.negotiation_letter || ws.negotiationDraft || ws.packet_sections?.negotiation);
+  return false;
+}
+function tjhpLegacySubmitted(row){
+  const r = row || {};
+  const status = String(r.status || r.submission_status || "").toLowerCase();
+  return !!(r.submitted_at || r.last_submitted_at || String(r.mark_submitted || "").toLowerCase() === "true" || String(r.marked_submitted || "").toLowerCase() === "true" || status === "submitted" || status === "accepted" || (status === "closed" && r.submitted_at));
+}
+function tjhpLegacyDraft(row){ return !tjhpLegacySubmitted(row); }
 function computeLegacyRecoveryIntelligence(org_id, start, end){
   const inRange = (dtStr) => {
     const d = dtStr ? new Date(dtStr) : null;
     return !!(d && !isNaN(d.getTime()) && d >= start && d <= end);
   };
-
   const cases = readJSON(FILES.cases, []).filter(c => c.org_id === org_id && inRange(c.updated_at || c.created_at));
-  const negotiations = getNegotiations(org_id)
-    .map(n => normalizeNegotiation(n))
-    .filter(n => inRange(n.updated_at || n.created_at));
-
-  const appealSubmittedCount = cases.length;
-  const appealWinsCount = cases.filter(c => !!c.paid).length;
+  const negotiations = getNegotiations(org_id).map(n => normalizeNegotiation(n)).filter(n => inRange(n.updated_at || n.created_at));
+  const appealSubmittedRows = cases.filter(tjhpLegacySubmitted);
+  const appealDraftRows = cases.filter(tjhpLegacyDraft);
+  const appealSubmittedCount = appealSubmittedRows.length;
+  const appealDraftCount = appealDraftRows.length;
+  const appealWinsCount = appealSubmittedRows.filter(c => !!c.paid).length;
   const appealSuccessRate = appealSubmittedCount ? (appealWinsCount / appealSubmittedCount) * 100 : 0;
-
-  const negotiationSubmittedCount = negotiations.length;
-  const negotiatedRequestedTotal = negotiations.reduce((sum, n) => sum + Math.max(0, num(n.requested_amount || 0)), 0);
-  const negotiatedRecoveredTotal = negotiations.reduce((sum, n) => sum + Math.max(0, num(n.collected_amount || 0)), 0);
-  const negotiatedApprovedTotal = negotiations.reduce((sum, n) => sum + Math.max(0, num(n.approved_amount || 0)), 0);
+  const negotiationSubmittedRows = negotiations.filter(tjhpLegacySubmitted);
+  const negotiationDraftRows = negotiations.filter(tjhpLegacyDraft);
+  const negotiationSubmittedCount = negotiationSubmittedRows.length;
+  const negotiationDraftCount = negotiationDraftRows.length;
+  const negotiatedRequestedTotal = negotiationSubmittedRows.reduce((sum, n) => sum + Math.max(0, num(n.requested_amount || 0)), 0);
+  const negotiatedRecoveredTotal = negotiationSubmittedRows.reduce((sum, n) => sum + Math.max(0, num(n.collected_amount || 0)), 0);
+  const negotiatedApprovedTotal = negotiationSubmittedRows.reduce((sum, n) => sum + Math.max(0, num(n.approved_amount || 0)), 0);
   const negotiationROI = negotiatedRequestedTotal ? (negotiatedRecoveredTotal / negotiatedRequestedTotal) * 100 : 0;
   const approvedVsPaidPct = negotiatedApprovedTotal ? (negotiatedRecoveredTotal / negotiatedApprovedTotal) * 100 : 0;
-
-  return {
-    appealSubmittedCount,
-    appealWinsCount,
-    appealSuccessRate,
-    negotiationSubmittedCount,
-    negotiatedRequestedTotal,
-    negotiatedApprovedTotal,
-    negotiatedRecoveredTotal,
-    negotiationROI,
-    approvedVsPaidPct,
-    usingLegacyFallback: true
-  };
+  return { appealSubmittedCount, appealDraftCount, appealWinsCount, appealSuccessRate, negotiationSubmittedCount, negotiationDraftCount, negotiatedRequestedTotal, negotiatedApprovedTotal, negotiatedRecoveredTotal, negotiationROI, approvedVsPaidPct, usingLegacyFallback: true };
 }
 
 function computeRecoveryIntelligence(org_id, start, end){
-  const workspaces = readJSON(FILES.agent_workspaces, [])
-    .filter(w => w.org_id === org_id)
-    .map(w => ensurePacketSections(w));
-  const inRange = (ws) => {
-    const t = new Date(ws.updated_at || ws.created_at || 0);
-    return !!(t && !isNaN(t.getTime()) && t >= start && t <= end);
-  };
+  const workspaces = readJSON(FILES.agent_workspaces, []).filter(w => w.org_id === org_id).map(w => ensurePacketSections(w));
+  const inRange = (ws) => { const t = new Date(ws.updated_at || ws.created_at || 0); return !!(t && !isNaN(t.getTime()) && t >= start && t <= end); };
   const ws = workspaces.filter(inRange);
-
-  const appealSubmitted = ws.filter(w => String(w.submission?.status || "") === "submitted" && String(w.submission?.channel || "") === "appeal");
+  const appealSubmitted = ws.filter(w => tjhpWorkspaceSubmittedForChannel(w, "appeal"));
+  const appealDraft = ws.filter(w => tjhpWorkspaceDraftForChannel(w, "appeal"));
   const appealWins = appealSubmitted.filter(w => ["approved", "partially_approved"].includes(String(w.outcome?.outcome_status || "")) && num(w.outcome?.paid_posted_amount) > 0);
-  const appealSuccessRate = appealSubmitted.length ? (appealWins.length / appealSubmitted.length) * 100 : 0;
-
-  const negotiationSubmitted = ws.filter(w => String(w.submission?.status || "") === "submitted" && String(w.submission?.channel || "") === "negotiation");
+  const negotiationSubmitted = ws.filter(w => tjhpWorkspaceSubmittedForChannel(w, "negotiation"));
+  const negotiationDraft = ws.filter(w => tjhpWorkspaceDraftForChannel(w, "negotiation"));
   const negotiatedRequestedTotal = negotiationSubmitted.reduce((s, w) => s + Math.max(0, num(w.negotiation?.requested_amount || w.negotiation?.packet_sections?.requested_amount || 0)), 0);
   const negotiatedRecoveredTotal = negotiationSubmitted.reduce((s, w) => s + Math.max(0, num(w.outcome?.paid_posted_amount || 0)), 0);
-  const negotiationROI = negotiatedRequestedTotal ? (negotiatedRecoveredTotal / negotiatedRequestedTotal) * 100 : 0;
-
   const negotiatedApprovedTotal = negotiationSubmitted.reduce((s, w) => s + Math.max(0, num(w.outcome?.approved_amount || 0)), 0);
-  const approvedVsPaidPct = negotiatedApprovedTotal ? (negotiatedRecoveredTotal / negotiatedApprovedTotal) * 100 : 0;
-
-  const submittedWorkspaceCount = appealSubmitted.length + negotiationSubmitted.length;
-  if (submittedWorkspaceCount === 0) {
-    return computeLegacyRecoveryIntelligence(org_id, start, end);
-  }
-
+  const legacy = computeLegacyRecoveryIntelligence(org_id, start, end);
+  const totalAppealSubmittedCount = appealSubmitted.length + Number(legacy.appealSubmittedCount || 0);
+  const totalAppealDraftCount = appealDraft.length + Number(legacy.appealDraftCount || 0);
+  const totalAppealWinsCount = appealWins.length + Number(legacy.appealWinsCount || 0);
+  const totalNegotiationSubmittedCount = negotiationSubmitted.length + Number(legacy.negotiationSubmittedCount || 0);
+  const totalNegotiationDraftCount = negotiationDraft.length + Number(legacy.negotiationDraftCount || 0);
+  const totalNegotiatedRequested = negotiatedRequestedTotal + Number(legacy.negotiatedRequestedTotal || 0);
+  const totalNegotiatedApproved = negotiatedApprovedTotal + Number(legacy.negotiatedApprovedTotal || 0);
+  const totalNegotiatedRecovered = negotiatedRecoveredTotal + Number(legacy.negotiatedRecoveredTotal || 0);
+  const mergedAppealSuccessRate = totalAppealSubmittedCount ? (totalAppealWinsCount / totalAppealSubmittedCount) * 100 : 0;
+  const mergedNegotiationROI = totalNegotiatedRequested ? (totalNegotiatedRecovered / totalNegotiatedRequested) * 100 : 0;
+  const mergedApprovedVsPaidPct = totalNegotiatedApproved ? (totalNegotiatedRecovered / totalNegotiatedApproved) * 100 : 0;
   return {
-    appealSubmittedCount: appealSubmitted.length,
-    appealWinsCount: appealWins.length,
-    appealSuccessRate,
-    negotiationSubmittedCount: negotiationSubmitted.length,
-    negotiatedRequestedTotal,
-    negotiatedApprovedTotal,
-    negotiatedRecoveredTotal,
-    negotiationROI,
-    approvedVsPaidPct,
+    appealSubmittedCount: totalAppealSubmittedCount,
+    appealDraftCount: totalAppealDraftCount,
+    appealWinsCount: totalAppealWinsCount,
+    appealSuccessRate: mergedAppealSuccessRate,
+    negotiationSubmittedCount: totalNegotiationSubmittedCount,
+    negotiationDraftCount: totalNegotiationDraftCount,
+    negotiatedRequestedTotal: totalNegotiatedRequested,
+    negotiatedApprovedTotal: totalNegotiatedApproved,
+    negotiatedRecoveredTotal: totalNegotiatedRecovered,
+    negotiationROI: mergedNegotiationROI,
+    approvedVsPaidPct: mergedApprovedVsPaidPct,
     usingLegacyFallback: false
   };
 }
@@ -16498,19 +16504,12 @@ function tjhpForecastRowMonth(row, type = "") {
 
 function tjhpExecutiveDenialRowMonth(row, type = "") {
   const r = row || {};
+  // Denial trend should use row-level business dates first. Upload/import dates are fallback only.
   const candidates = [
-    r.reporting_period,
-    r.denial_date,
-    r.denied_date,
-    r.response_date,
-    r.paid_date,
-    r.payment_date,
-    r.posted_date,
-    r.date_of_service,
-    r.dos,
-    r.service_date,
-    r.created_at,
-    r.uploaded_at
+    r.denial_date, r.denied_date, r.payer_response_date, r.response_date, r.eob_date, r.era_date, r.remittance_date,
+    r.paid_date, r.payment_date, r.date_paid, r.posted_date, r.date_of_service, r.dos, r.service_date,
+    r.service_from, r.service_to, r.statement_date, r.claim_date, r.submission_date, r.reporting_period,
+    r.created_at, r.uploaded_at, r.imported_at
   ];
   for (const v of candidates) {
     const month = typeof tjhpForecastNormalizeMonth === "function" ? tjhpForecastNormalizeMonth(v) : "";
@@ -38580,9 +38579,9 @@ if (method === "GET" && pathname === "/executive-export") {
           <div style="font-weight:800;">Recovery Intelligence</div>
           <div class="muted small" style="margin-top:6px;">
             Appeal Success Rate: <strong>${formatPct(m.appealSuccessRate||0)}</strong><br/>
-            Appeals Submitted: <strong>${formatNumberUI(m.appealSubmittedCount||0)}</strong><br/>
+            Appeal Drafts / Submitted: <strong>${formatNumberUI(m.appealDraftCount || 0)} / ${formatNumberUI(m.appealSubmittedCount || 0)}</strong><br/>
             Negotiation ROI: <strong>${formatPct(m.negotiationROI||0)}</strong><br/>
-            Negotiations Submitted: <strong>${formatNumberUI(m.negotiationSubmittedCount||0)}</strong><br/>
+            Negotiation Drafts / Submitted: <strong>${formatNumberUI(m.negotiationDraftCount || 0)} / ${formatNumberUI(m.negotiationSubmittedCount || 0)}</strong><br/>
             Negotiated Requested: <strong>${formatMoneyUI(m.negotiatedTotal||0)}</strong><br/>
             Negotiated Recovered: <strong>${formatMoneyUI(m.recoveredTotal||0)}</strong><br/>
             Approved vs Paid: <strong>${formatPct(m.approvedVsPaidPct||0)}</strong>
@@ -41895,13 +41894,13 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       <div class="muted">Strategic decision support and revenue risk prioritization.</div>
     </div>
     <div class="eb-card">
-      <div class="eb-sectionHead"><h3>Executive Strategy Brief</h3><div class="muted">Decision layer for this week's revenue recovery work.</div></div>
+      <div class="eb-sectionHead"><h3>Executive Strategy Snapshot</h3><div class="muted">Decision layer for this week's revenue recovery work.</div></div>
       <div class="muted small" style="margin-top:8px;">This section turns uploaded claim/payment activity into an executive recovery plan. Supporting analytics below explain why these priorities were selected.</div>
       <div class="strategy-brief-grid">
         <div class="strategy-brief-chip"><div class="label">Current posture</div><div class="value">${safeStr(strategyDecision.posture)}</div><div class="eb-sub">${safeStr(strategyDecision.posture_detail)}</div></div>
         <div class="strategy-brief-chip"><div class="label">Primary revenue risk</div><div class="value">${safeStr(strategyDecision.primary_revenue_risk)}</div><div class="eb-sub">Main revenue problem to monitor.</div></div>
         <div class="strategy-brief-chip"><div class="label">Highest-risk payer</div><div class="value">${safeStr(strategyHighestPayerLabel)}</div><div class="eb-sub">${safeStr(strategyDecision.highest_risk_reason)}</div></div>
-        <div class="strategy-brief-chip"><div class="label">Recommended next action</div><div class="value">Open Action Center</div><div class="eb-sub">${safeStr(strategyDecision.action_center_reason)}</div></div>
+        <div class="strategy-brief-chip"><div class="label">What should I do next</div><div class="value">Open Action Center</div><div class="eb-sub">${safeStr(strategyDecision.action_center_reason)}</div></div>
       </div>
     </div>
     <div class="eb-card">
@@ -41972,33 +41971,37 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         <div class="muted small">Start with Action Center for current recovery work. Use Payer Hub to understand payer behavior behind the strategy.</div>
       </div>
     </div>
-    <div class="eb-card">
-      <div class="eb-sectionHead"><h3>Supporting Analytics</h3><div class="muted">Evidence for the executive strategy above.</div></div>
+    <div class="eb-card exec-chart-group">
+      <div class="eb-sectionHead"><h3>Supporting Analytics</h3><div class="muted">Why the strategy was selected.</div></div>
       <div class="muted small" style="margin-top:8px;">These metrics explain the strategy above. Use them to validate payer concentration, denial pressure, and recovery performance.</div>
-    </div>
-    <div class="executive-card">
-      <h4>Revenue Risk Concentration</h4>
-      <div id="riskConcentrationPanel">
-        Revenue risk is ${riskConcentrationPct}% concentrated in ${topRiskPayers.length} payers.<br/>
-        Top exposure payer: ${safeStr(highestExposurePayer?.payer || "N/A")} — ${formatMoneyUI(tjhpRiPayerAtRiskValue(highestExposurePayer))} at risk.<br/>
-        Top payer concentration dollars: ${formatMoneyUI(topRiskTotal)}.
+      <div class="executive-card" style="margin-top:12px;">
+        <h4>Revenue Risk Concentration</h4>
+        <div id="riskConcentrationPanel">
+          Revenue risk is ${riskConcentrationPct}% concentrated in ${topRiskPayers.length} payers.<br/>
+          Top exposure payer: ${safeStr(highestExposurePayer?.payer || "N/A")} — ${formatMoneyUI(tjhpRiPayerAtRiskValue(highestExposurePayer))} at risk.<br/>
+          Top payer concentration dollars: ${formatMoneyUI(topRiskTotal)}.
+        </div>
       </div>
-    </div>
-    <div class="eb-grid2">
+      <div class="eb-grid2" style="margin-top:12px;">
       <div class="eb-card eb-chart"><h4>Revenue Flow (Funnel)</h4><canvas id="ebFunnel"></canvas><div class="muted small" style="margin-top:8px;">Billed → Expected → Paid → At Risk</div></div>
       <div class="eb-card eb-chart"><h4>Denials Trend</h4><canvas id="ebDenials"></canvas><div class="muted small" style="margin-top:8px;">${useRowLevelDenials ? "Denials by row-level service/payment/denial dates." : "Recent periods based on available claim/payment history."}${useRowLevelDenials && executiveDenialsTrend ? ` Denial months detected: ${executiveDenialsTrend.detectedMonths}.` : ""}</div></div>
+      </div>
+      <div class="muted small exec-chart-note" style="margin-top:10px;">Chart notes: Revenue Flow shows billed → expected → paid → at risk. Denials Trend uses row-level business dates when available, not upload date.</div>
     </div>
     <div class="eb-card">
       <div class="eb-sectionHead"><h3>Recovery Performance</h3><div class="muted">Appeals + negotiations KPIs for executive tracking.</div></div>
       <div class="hr"></div>
       <div class="eb-recovery">
-        <div class="eb-kpi"><div class="l">Appeal Success Rate</div><div class="v">${formatNumberUI(Number(m.appealSuccessRate || 0))}%</div><div class="h">Approved/partial + payment posted.</div></div>
-        <div class="eb-kpi"><div class="l">Appeals Submitted</div><div class="v">${formatNumberUI(Number(m.appealSubmittedCount || 0))}</div><div class="h">Submitted appeal workspaces.</div></div>
-        <div class="eb-kpi"><div class="l">Negotiation ROI</div><div class="v">${formatNumberUI(Number(m.negotiationROI || 0))}%</div><div class="h">Recovered cash vs requested amount.</div></div>
-        <div class="eb-kpi"><div class="l">Negotiations Submitted</div><div class="v">${formatNumberUI(Number(m.negotiationSubmittedCount || 0))}</div><div class="h">Submitted negotiation workspaces.</div></div>
+        <div class="eb-kpi"><div class="l">Appeal Success Rate</div><div class="v">${formatNumberUI(Number(m.appealSuccessRate || 0))}%</div><div class="h">Based on submitted appeals with approved/partial outcome and payment posted.</div></div>
+        <div class="eb-kpi"><div class="l">Appeal Drafts / Submitted</div><div class="v">${formatNumberUI(Number(m.appealDraftCount || 0))} / ${formatNumberUI(Number(m.appealSubmittedCount || 0))}</div><div class="h">Drafts can be auto-created. Submitted counts only after Mark Submitted.</div></div>
+        <div class="eb-kpi"><div class="l">Negotiation ROI</div><div class="v">${formatNumberUI(Number(m.negotiationROI || 0))}%</div><div class="h">Based on submitted negotiations with requested and recovered amounts.</div></div>
+        <div class="eb-kpi"><div class="l">Negotiation Drafts / Submitted</div><div class="v">${formatNumberUI(Number(m.negotiationDraftCount || 0))} / ${formatNumberUI(Number(m.negotiationSubmittedCount || 0))}</div><div class="h">Drafts can be auto-created. Submitted counts only after Mark Submitted.</div></div>
       </div>
     </div>
-    <div class="eb-card">
+    <details class="eb-card exec-payer-detail" style="margin-top:16px;">
+      <summary class="exec-collapsible-summary" style="cursor:pointer;font-weight:900;">View payer-level detail</summary>
+      <div class="muted small" style="margin-top:8px;">Payer-level detail is available for deeper review after the executive strategy summary.</div>
+      <div class="eb-card" style="margin-top:10px;">
       <div class="eb-sectionHead">
         <div>
           <h3>Top Payers to Review</h3>
@@ -42011,7 +42014,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       <div class="hr"></div>
       ${topPayersToReviewHtml}
     </div>
-    <div class="eb-card">
+    <div class="eb-card" style="margin-top:12px;">
       <div class="eb-sectionHead"><h3>Exposure Breakdown</h3><div class="muted">Denied vs underpaid vs at-risk concentration by payer.</div></div>
       <div class="hr"></div>
       <div class="eb-table-wrap">
@@ -42023,8 +42026,9 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         </table>
       </div>
     </div>
+    </details>
     <div class="eb-card">
-      <div class="eb-sectionHead"><h3>Organization Targets</h3><a class="btn secondary small" href="/account?tab=targets">Edit Targets</a><div class="muted">Targets vs current performance.</div></div>
+      <div class="eb-sectionHead"><h3>Organization Targets</h3><div class="muted">Targets vs current performance.</div></div>
       <div class="hr"></div>
       <div class="eb-targets">
         ${renderTargetBar("Appeal Target", Number(m.appealSuccessRate || 0), Number(targets.target_appeal_success_rate || 60))}
@@ -42033,6 +42037,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         ${renderTargetBar("AR90 Target", Number(m.ar90Rate || 0), Number(targets.target_ar90_rate || 15))}
         ${renderTargetBar("AI Case Readiness", Number(m.operationalDisciplineScore || 0), Number(targets.target_operational_discipline || 80))}
       </div>
+      <div class="btnRow targets-actions" style="margin-top:12px;"><a class="btn secondary small" href="/account?tab=targets">Edit Targets</a></div>
     </div>
   </div>
   <!-- Load Chart.js if not already loaded -->
@@ -58367,7 +58372,7 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS === "tr
   try {
     const src = fs.readFileSync(__filename, "utf8");
     const assert = (c,m)=>{ if(!c) throw new Error(m||"assertion failed"); };
-    ["buildExecutiveStrategyDecisionLayer", "Executive Strategy Brief", "Top Strategic Priorities", "Supporting Analytics", "Current posture", "Primary revenue risk", "Highest-risk payer", "Recommended next action", "REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x), x));
+    ["buildExecutiveStrategyDecisionLayer", "Executive Strategy Snapshot", "Top Strategic Priorities", "Supporting Analytics", "Current posture", "Primary revenue risk", "Highest-risk payer", "What should I do next", "REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x), x));
     const fakeM = {
       kpis: { revenueAtRisk: 2153, totalUnderpaid: 996, ar90: 0 },
       denialRate: 20,
@@ -58390,7 +58395,7 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS === "tr
     const executiveStart = src.indexOf('const executiveBrief = `');
     const executiveEnd = src.indexOf('const payerHubHtml = `', executiveStart);
     const executiveSrc = src.slice(executiveStart, executiveEnd);
-    ["Executive Strategy Brief", "Top Strategic Priorities", "Supporting Analytics", "Open Action Center", "Open Payer Hub", "Open Revenue Overview", "Export Executive PDF", "Revenue Risk Concentration", "Revenue Flow (Funnel)", "Denials Trend", "Recovery Performance", "Top Payers to Review"].forEach(x=>assert(executiveSrc.includes(x), x));
+    ["Executive Strategy Snapshot", "Top Strategic Priorities", "Supporting Analytics", "Open Action Center", "Open Payer Hub", "Open Revenue Overview", "Export Executive PDF", "Revenue Risk Concentration", "Revenue Flow (Funnel)", "Denials Trend", "Recovery Performance", "Top Payers to Review"].forEach(x=>assert(executiveSrc.includes(x), x));
     assert(!executiveSrc.includes("Automation & Templates"), "automation templates removed");
     const actionStart = executiveSrc.indexOf("<h3>Executive Actions</h3>");
     const actionEnd = executiveSrc.indexOf("Start with Action Center for current recovery work", actionStart);
@@ -58400,6 +58405,87 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS === "tr
     ["REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED","FORECAST_CHART_LABEL_CLEANUP_SMOKE_TESTS_PASSED","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED"].forEach(x=>assert(src.includes(x), x));
     process.stdout.write("REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+
+if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m||"assertion failed"); };
+    const executiveStart = src.indexOf('const executiveBrief = `');
+    const executiveEnd = src.indexOf('const payerHubHtml = `', executiveStart);
+    assert(executiveStart >= 0, "executiveBrief block missing");
+    assert(executiveEnd > executiveStart, "executiveBrief block end missing");
+    const executiveSrc = src.slice(executiveStart, executiveEnd);
+    ["Executive Strategy Snapshot","What should I do next","Top Strategic Priorities","Supporting Analytics","Revenue Flow (Funnel)","Denials Trend","Recovery Performance","Top Payers to Review","Exposure Breakdown","/actions","/revenue-intelligence?tab=payers","/dashboard","/executive-export","Appeal Drafts / Submitted","Negotiation Drafts / Submitted","Drafts can be auto-created","Submitted counts only after Mark Submitted","Chart notes:","Denials Trend uses row-level business dates when available, not upload date","Organization Targets","Edit Targets","targets-actions"].forEach(x => assert(executiveSrc.includes(x), "missing executive UI text: " + x));
+
+    const renderPageStart = src.indexOf("function renderPage(");
+    const revenueRouteStart = src.indexOf('if (method === "GET" && pathname === "/revenue-intelligence")');
+    const renderPageSrc = src.slice(renderPageStart, revenueRouteStart);
+    assert(!renderPageSrc.includes("targets-actions"), "targets-actions leaked into renderPage/global shell");
+
+    const orgTargetsIdx = executiveSrc.indexOf("Organization Targets");
+    const targetGridIdx = executiveSrc.indexOf('class="eb-targets"', orgTargetsIdx);
+    const editTargetsIdx = executiveSrc.indexOf("Edit Targets", orgTargetsIdx);
+    assert(orgTargetsIdx >= 0, "Organization Targets missing");
+    assert(targetGridIdx > orgTargetsIdx, "target grid missing after Organization Targets");
+    assert(editTargetsIdx > targetGridIdx, "Edit Targets must appear below target grid/cards");
+    const targetsHeaderEnd = executiveSrc.indexOf('<div class="hr"></div>', orgTargetsIdx);
+    const targetsHeaderSrc = executiveSrc.slice(orgTargetsIdx, targetsHeaderEnd);
+    assert(!targetsHeaderSrc.includes("Edit Targets"), "Edit Targets must not be inside Organization Targets header");
+
+    const recoveryIdx = executiveSrc.indexOf("Recovery Performance");
+    const recoveryEnd = executiveSrc.indexOf("Top Payers to Review", recoveryIdx);
+    const recoverySrc = executiveSrc.slice(recoveryIdx, recoveryEnd > recoveryIdx ? recoveryEnd : executiveSrc.length);
+    assert(recoverySrc.includes("m.appealDraftCount"), "appeal draft count missing from Recovery Performance value");
+    assert(recoverySrc.includes("m.appealSubmittedCount"), "appeal submitted count missing from Recovery Performance value");
+    assert(recoverySrc.includes("m.negotiationDraftCount"), "negotiation draft count missing from Recovery Performance value");
+    assert(recoverySrc.includes("m.negotiationSubmittedCount"), "negotiation submitted count missing from Recovery Performance value");
+    assert(recoverySrc.includes(" / "), "draft/submitted slash missing");
+    assert(!/Appeal Drafts \/ Submitted[\s\S]{0,250}formatNumberUI\(Number\(m\.appealSubmittedCount\s*\|\|\s*0\)\)[\s\S]{0,120}<div class="h">Submitted appeal workspaces\./.test(recoverySrc), "appeal draft/submitted still shows submitted-only value/helper");
+    assert(!/Negotiation Drafts \/ Submitted[\s\S]{0,250}formatNumberUI\(Number\(m\.negotiationSubmittedCount\s*\|\|\s*0\)\)[\s\S]{0,120}<div class="h">Submitted negotiation workspaces\./.test(recoverySrc), "negotiation draft/submitted still shows submitted-only value/helper");
+
+    const chartNoteIdx = executiveSrc.indexOf("Chart notes:");
+    const recoveryPerformanceIdx = executiveSrc.indexOf("Recovery Performance");
+    assert(chartNoteIdx > 0, "chart note missing");
+    assert(chartNoteIdx < recoveryPerformanceIdx, "chart note must appear before Recovery Performance");
+
+    assert(executiveSrc.includes("Top Payers to Review"), "Top Payers to Review deleted");
+    assert(executiveSrc.includes("Exposure Breakdown"), "Exposure Breakdown deleted");
+    assert(executiveSrc.includes("<details") && executiveSrc.includes("View payer-level detail"), "payer detail should be collapsible or clearly lower-priority");
+
+    const m1 = tjhpExecutiveDenialRowMonth({ denial_date: "2026-02-10", date_of_service: "2026-02-03", created_at: "2026-05-19T00:00:00.000Z", uploaded_at: "2026-05-19T00:00:00.000Z", imported_at: "2026-05-19T00:00:00.000Z" }, "claim");
+    const m2 = tjhpExecutiveDenialRowMonth({ date_of_service: "2026-02-03", created_at: "2026-05-19T00:00:00.000Z", uploaded_at: "2026-05-19T00:00:00.000Z", imported_at: "2026-05-19T00:00:00.000Z" }, "claim");
+    assert(m1 === "2026-02", "month with denial");
+    assert(m2 === "2026-02", "month with dos");
+
+    const oldWs = readJSON(FILES.agent_workspaces, []);
+    const tempOrg = `__executive_polish_org__${Date.now()}`;
+    const nowIso = new Date().toISOString();
+    try {
+      const cleaned = oldWs.filter(w => w.org_id !== tempOrg);
+      const testWs = [
+        { org_id: tempOrg, updated_at: nowIso, appeal: { draft: true } },
+        { org_id: tempOrg, updated_at: nowIso, submission: { status: "submitted", channel: "appeal" }, outcome: { outcome_status: "approved", paid_posted_amount: 100 }, appeal: { draft: false } },
+        { org_id: tempOrg, updated_at: nowIso, negotiation: { requested_amount: 200 } },
+        { org_id: tempOrg, updated_at: nowIso, submission: { status: "submitted", channel: "negotiation" }, negotiation: { requested_amount: 300 }, outcome: { paid_posted_amount: 150, approved_amount: 180 } }
+      ];
+      writeJSON(FILES.agent_workspaces, cleaned.concat(testWs));
+      const end = new Date();
+      const start = new Date(end.getTime() - 7*24*60*60*1000);
+      const rec = computeRecoveryIntelligence(tempOrg, start, end);
+      assert(Number(rec.appealDraftCount||0) >= 1, "appealDraftCount");
+      assert(Number(rec.appealSubmittedCount||0) >= 1, "appealSubmittedCount");
+      assert(Number(rec.negotiationDraftCount||0) >= 1, "negotiationDraftCount");
+      assert(Number(rec.negotiationSubmittedCount||0) >= 1, "negotiationSubmittedCount");
+      assert(Number(rec.appealSubmittedCount||0) < 3, "draft-only workspace counted as submitted");
+      assert(Number.isFinite(Number(rec.appealSuccessRate||0)), "appealSuccessRate finite");
+      assert(Number.isFinite(Number(rec.negotiationROI||0)), "negotiationROI finite");
+    } finally { writeJSON(FILES.agent_workspaces, oldWs); }
+
+    ["window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__","window.__TJHP_VIEW_PANEL_OPENER_RESCUE_READY__","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","UPLOAD_COMPAT_SMOKE_TESTS_PASSED","AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED","DATA_MANAGEMENT_REIMBURSEMENT_TAB_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
+    process.stdout.write("REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
 
 if (process.env.TJHP_REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
