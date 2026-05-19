@@ -1782,6 +1782,7 @@ function renderPayerPolicySourceLibraryPanel(org_id, orgContext=null){
         renderAccessHelp();
       })();
       </script>
+    </div>
   `;
 }
 
@@ -42446,6 +42447,9 @@ if (method === "GET" && pathname === "/ai-copilot") {
   const exportNotice = ["missing_workspace", "workspace_not_found"].includes(String(parsed.query.export || ""))
     ? `<div class="alert" style="margin-bottom:10px;">Export PDF is available after selecting or saving an analysis.</div>`
     : "";
+  const copilotExportHelperHtml = activeCopilotWorkspace
+    ? ""
+    : `<div id="copilotExportHelper" class="muted small" style="margin-top:8px;">Export PDF becomes available after this analysis is saved.</div>`;
 
   const html = renderPage("AI Copilot", `
     <style>
@@ -42576,6 +42580,8 @@ if (method === "GET" && pathname === "/ai-copilot") {
                 <a href="/upgrade" style="margin-left:10px;">Upgrade</a>
               </div>
             ` : ``}
+            ${exportNotice}
+            ${copilotExportHelperHtml}
           </div>
           <div class="ws-topbar-actions">
             <button type="button" class="btn secondary small" id="wsExpandBtn" style="display:none;">☰ Saved Analyses</button>
@@ -42761,6 +42767,72 @@ if (method === "GET" && pathname === "/ai-copilot") {
                   }).join("") + '</div>';
                 }
 
+
+                function ensureCopilotExportHelperMessage(){
+                  const actions = document.querySelector(".ws-topbar-actions");
+                  const host = actions && actions.parentElement ? actions.parentElement : document.querySelector(".ws-topbar") || document.body;
+                  if (!host) return;
+                  let helper = document.getElementById("copilotExportHelper");
+                  if (!helper) {
+                    helper = document.createElement("div");
+                    helper.id = "copilotExportHelper";
+                    helper.className = "muted small";
+                    helper.style.marginTop = "8px";
+                    host.appendChild(helper);
+                  }
+                  helper.textContent = "Export PDF becomes available after this analysis is saved.";
+                }
+
+                function refreshCopilotExportButton(workspaceId, tempDoc) {
+                  const actions = document.querySelector(".ws-topbar-actions");
+                  if (!actions) return;
+                  const id = String(workspaceId || "").trim();
+                  const fetchedActions = tempDoc && tempDoc.querySelector ? tempDoc.querySelector(".ws-topbar-actions") : null;
+                  if (fetchedActions) {
+                    actions.innerHTML = fetchedActions.innerHTML;
+                    if (!id) ensureCopilotExportHelperMessage();
+                    return;
+                  }
+                  const existing = actions.querySelector("[data-copilot-export-active]") || Array.from(actions.querySelectorAll("button,a")).find(el => String(el.textContent || "").trim() === "Export PDF");
+                  if (!existing) return;
+                  if (!id) {
+                    existing.outerHTML = '<button type="button" class="btn secondary small" disabled title="Export available after this analysis is saved." aria-disabled="true">Export PDF</button>';
+                    ensureCopilotExportHelperMessage();
+                    return;
+                  }
+                  const helper = document.getElementById("copilotExportHelper");
+                  if (helper) helper.remove();
+                  existing.outerHTML = '<a class="btn secondary small" data-copilot-export-active="1" href="/ai-copilot/export?workspace_id=' + encodeURIComponent(id) + '">Export PDF</a>';
+                }
+
+                document.addEventListener("click", function(ev){
+                  const exportEl = ev.target && ev.target.closest ? ev.target.closest("[data-copilot-export-active]") : null;
+                  if (!exportEl) return;
+                  const href = String(exportEl.getAttribute("href") || "").trim();
+                  if (href) return;
+                  ev.preventDefault();
+                  const params = new URLSearchParams(window.location.search || "");
+                  let id = String(params.get("workspace") || params.get("workspace_id") || "").trim();
+                  if (!id) {
+                    const hidden = document.querySelector('input[name="workspace_id"]');
+                    id = String(hidden && hidden.value || "").trim();
+                  }
+                  if (!id) {
+                    const activeLink = document.querySelector('.ws-sidebar-link.active[href*="workspace="]');
+                    if (activeLink) {
+                      try {
+                        const u = new URL(activeLink.getAttribute("href"), window.location.origin);
+                        id = String(u.searchParams.get("workspace") || u.searchParams.get("workspace_id") || "").trim();
+                      } catch {}
+                    }
+                  }
+                  if (id) {
+                    window.location.href = "/ai-copilot/export?workspace_id=" + encodeURIComponent(id);
+                    return;
+                  }
+                  refreshCopilotExportButton("", null);
+                });
+
                 async function submitMainCopilot() {
                   const prompt = String(input.value || "").trim();
                   if (!prompt) return;
@@ -42869,6 +42941,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                         }
 
                         window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
+                        refreshCopilotExportButton(workspaceId);
                       }
 
                       let refreshed = false;
@@ -42880,6 +42953,7 @@ if (method === "GET" && pathname === "/ai-copilot") {
                           const html = await res2.text();
                           const temp = document.createElement("div");
                           temp.innerHTML = html;
+                          refreshCopilotExportButton(data.workspace_id, temp);
 
                           const newThread = temp.querySelector("#wsThread");
                           const currentThread = document.getElementById("wsThread");
@@ -42980,12 +43054,14 @@ if (method === "GET" && pathname === "/ai-copilot") {
                         workspaceInput.value = workspaceId;
                       }
                       window.history.pushState({}, "", "/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
+                        refreshCopilotExportButton(workspaceId);
 
                       try {
                         const res2 = await fetch("/ai-copilot?workspace=" + encodeURIComponent(workspaceId));
                         const html = await res2.text();
                         const temp = document.createElement("div");
                         temp.innerHTML = html;
+                        refreshCopilotExportButton(workspaceId, temp);
 
                         const newThread = temp.querySelector("#wsThread");
                         const currentThread = document.getElementById("wsThread");
@@ -49990,6 +50066,10 @@ if (method === "GET" && pathname === "/data-management") {
     const rules = getAllowedAmountRules(org.org_id);
     const feeSchedules = getFeeSchedules(org.org_id).sort((a,b)=>new Date(b.uploaded_at||0)-new Date(a.uploaded_at||0));
     const practice = getPracticeSettings(org.org_id);
+    const safeIngests = Array.isArray(ingests) ? ingests : [];
+    const safeUploads = Array.isArray(uploads) ? uploads : [];
+    const safeContracts = Array.isArray(contracts) ? contracts : [];
+    const safeFeeSchedules = Array.isArray(feeSchedules) ? feeSchedules : [];
 
     const claimCtx = buildClaimContext(org.org_id);
     const claimIntegrity = billed.reduce((acc, b) => {
@@ -50388,7 +50468,7 @@ const showMatchingReview =
             </tr>
           </thead>
           <tbody>
-            ${contracts.map(c => `
+            ${safeContracts.map(c => `
               <tr>
                 <td>${safeStr(c.payer_name || "")}</td>
                 <td>${safeStr(c.network_status || "")}</td>
@@ -50463,16 +50543,19 @@ const showMatchingReview =
         <button class="btn" type="submit">Upload Schedule</button>
       </form>
       <div style="overflow:auto;"><table><thead><tr><th>Type</th><th>Payer</th><th>Year</th><th>Locality</th><th>Uploaded</th><th>Preview</th><th></th></tr></thead><tbody>
-      ${feeSchedules.map(f=>`<tr><td>${safeStr(f.schedule_type||"")}</td><td>${safeStr(f.payer_name||"-")}</td><td>${safeStr(String(f.year||""))}</td><td>${safeStr(f.locality||"-")}</td><td>${f.uploaded_at?new Date(f.uploaded_at).toLocaleString():"-"}</td><td>${safeStr((f.rows||[]).slice(0,1).map(r=>`${r.procedure_code}:${r.amount}`).join(", ")||"-")}</td><td><form method="POST" action="/data-management/fee-schedules/delete"><input type="hidden" name="schedule_id" value="${safeStr(f.schedule_id)}"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="7" class="muted">No schedules</td></tr>'}
+      ${safeFeeSchedules.map(f=>`<tr><td>${safeStr(f.schedule_type||"")}</td><td>${safeStr(f.payer_name||"-")}</td><td>${safeStr(String(f.year||""))}</td><td>${safeStr(f.locality||"-")}</td><td>${f.uploaded_at?new Date(f.uploaded_at).toLocaleString():"-"}</td><td>${safeStr((f.rows||[]).slice(0,1).map(r=>`${r.procedure_code}:${r.amount}`).join(", ")||"-")}</td><td><form method="POST" action="/data-management/fee-schedules/delete"><input type="hidden" name="schedule_id" value="${safeStr(f.schedule_id)}"/><button class="btn danger small" type="submit">Delete</button></form></td></tr>`).join("") || '<tr><td colspan="7" class="muted">No schedules</td></tr>'}
       </tbody></table></div>
     `;
 
-    const reimbursementReviewDocs = ingests.filter(i =>
+    let reimbursementContent = "";
+    try {
+    const reimbursementReviewDocs = safeIngests.filter(i =>
       tjhpIsReviewUploadIngest(i) &&
       tjhpReviewUploadTypeLabel(i) === "Reimbursement Documents"
     ).slice(0, 50);
-    const reimbursementContent = `
+    reimbursementContent = `
 <h2>Reimbursement Contracts</h2>
+<!-- safe fee schedules loaded: ${safeFeeSchedules.length} -->
 <p class="muted">Define how your claims should be reimbursed and how expected amounts are calculated.</p>
 
 
@@ -50550,8 +50633,8 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
       </thead>
       <tbody>
         ${
-          uploads.length
-            ? uploads.map(u => `
+          safeUploads.length
+            ? safeUploads.map(u => `
               <tr>
                 <td>${u.created_at ? new Date(u.created_at).toLocaleString() : "-"}</td>
                 <td>${safeStr(u.created_by || "")}</td>
@@ -50655,7 +50738,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         </tr>
       </thead>
       <tbody>
-        ${contracts.map(c => `
+        ${safeContracts.map(c => `
           <tr>
             <td>${safeStr(c.payer_name || "")}</td>
             <td>${safeStr(c.network_status || "")}</td>
@@ -50785,7 +50868,21 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
   renderHints();
 })();
 </script>
-`
+`;
+    } catch (err) {
+      console.error("DATA_MANAGEMENT_REIMBURSEMENT_RENDER_ERROR", err && err.stack ? err.stack : err);
+      reimbursementContent = `
+<h2>Reimbursement Contracts</h2>
+<div class="alert warn">
+  Reimbursement Contracts could not be loaded. Core claims, payments, lifecycle, and revenue metrics are unaffected.
+</div>
+<p class="muted small">${safeStr(String(err && err.message ? err.message : err).slice(0, 180))}</p>
+<div class="btnRow">
+  <a class="btn secondary" href="/data-management?tab=upload">Back to Uploads</a>
+  <a class="btn secondary" href="/data-management?tab=revenue">Open Revenue Automation</a>
+</div>
+`;
+    }
     let revenueContent = "";
     try {
       revenueContent = renderTemplateEditor(org, user);
@@ -58021,6 +58118,15 @@ if (process.env.TJHP_AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS === "true" && (process
     assert(src.includes("export=missing_workspace"), "missing missing_workspace redirect");
     assert(src.includes("export=workspace_not_found"), "missing workspace_not_found redirect");
     assert(src.includes("Export available after this analysis is saved."), "missing disabled export helper");
+    assert(src.includes("copilotExportHelperHtml") || src.includes("copilotExportHelper"), "missing server-rendered export helper variable/id");
+    assert(src.includes("Export PDF becomes available after this analysis is saved."), "missing visible export helper text");
+    assert(src.includes("${copilotExportHelperHtml}") || src.includes("copilotExportHelperHtml"), "export helper must be rendered in AI Copilot HTML");
+    assert(src.includes("Export PDF becomes available after this analysis is saved."), "missing visible disabled helper text");
+    assert(src.includes("${exportNotice}"), "exportNotice not rendered");
+    assert(src.includes("function refreshCopilotExportButton(workspaceId, tempDoc)"), "missing refreshCopilotExportButton helper");
+    assert(src.includes("refreshCopilotExportButton(workspaceId"), "missing workspace pushState export refresh wiring");
+    assert(src.includes('temp.querySelector(".ws-topbar-actions")'), "missing fetched topbar actions refresh");
+    assert(src.includes('document.addEventListener("click"'), "missing delegated export click handler");
     assert(src.includes("AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED"), "pass marker missing");
     assert(src.includes("wsExpandBtn"), "wsExpandBtn missing");
     assert(src.includes("wsCollapseBtn"), "wsCollapseBtn missing");
@@ -58035,6 +58141,55 @@ if (process.env.TJHP_AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS === "true" && (process
     assert(src.includes('pathname === "/ai-copilot/export"'), "ai-copilot export route missing");
     process.stdout.write("AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+
+if (process.env.TJHP_DATA_MANAGEMENT_REIMBURSEMENT_TAB_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m || "assertion failed"); };
+    const dataRouteStart = src.indexOf('pathname === "/data-management"');
+    assert(dataRouteStart >= 0, "data management route missing");
+    const contractsContentIdx = src.indexOf("const contractsContent = `", dataRouteStart);
+    const feeContentIdx = src.indexOf("const feeContent = `", dataRouteStart);
+    const reimbLetIdx = src.indexOf('let reimbursementContent = ""', dataRouteStart);
+    const revenueContentIdx = src.indexOf('let revenueContent = ""', dataRouteStart);
+    assert(contractsContentIdx > dataRouteStart, "contractsContent missing");
+    assert(feeContentIdx > contractsContentIdx, "feeContent missing");
+    assert(reimbLetIdx > feeContentIdx, "reimbursementContent declaration missing");
+    assert(revenueContentIdx > reimbLetIdx, "revenueContent boundary missing");
+    const safeIngestsIdx = src.indexOf("const safeIngests = Array.isArray(ingests)", dataRouteStart);
+    const safeUploadsIdx = src.indexOf("const safeUploads = Array.isArray(uploads)", dataRouteStart);
+    const safeContractsIdx = src.indexOf("const safeContracts = Array.isArray(contracts)", dataRouteStart);
+    const safeFeeSchedulesIdx = src.indexOf("const safeFeeSchedules = Array.isArray(feeSchedules)", dataRouteStart);
+    assert(safeIngestsIdx > dataRouteStart && safeIngestsIdx < contractsContentIdx, "safeIngests must be declared before content templates");
+    assert(safeUploadsIdx > dataRouteStart && safeUploadsIdx < contractsContentIdx, "safeUploads must be declared before content templates");
+    assert(safeContractsIdx > dataRouteStart && safeContractsIdx < contractsContentIdx, "safeContracts must be declared before contractsContent");
+    assert(safeFeeSchedulesIdx > dataRouteStart && safeFeeSchedulesIdx < contractsContentIdx, "safeFeeSchedules must be declared before feeContent");
+    const reimbBlock = src.slice(reimbLetIdx, revenueContentIdx);
+    assert(!/const\s+reimbursementContent\s*=/.test(reimbBlock), "reimbursementContent is shadowed inside reimbursement block");
+    assert(/reimbursementContent\s*=\s*`/.test(reimbBlock), "reimbursementContent must be assigned inside try");
+    assert(reimbBlock.includes("DATA_MANAGEMENT_REIMBURSEMENT_RENDER_ERROR"), "missing reimbursement render error log");
+    assert(reimbBlock.includes("Reimbursement Contracts could not be loaded"), "missing reimbursement fallback");
+    assert(reimbBlock.includes("safeIngests.filter"), "reimbursement docs must use safeIngests");
+    assert(reimbBlock.includes("safeUploads.length"), "upload history must check safeUploads.length");
+    assert(!reimbBlock.includes("uploads.length\n            ? safeUploads.map"), "mixed uploads.length with safeUploads.map");
+    assert(!/uploads\.length\s*\?\s*safeUploads\.map/.test(reimbBlock), "mixed uploads.length with safeUploads.map");
+    assert(reimbBlock.includes("safeContracts.map"), "reimbursement contract rows must use safeContracts.map");
+    const contractsBlock = src.slice(contractsContentIdx, feeContentIdx);
+    assert(contractsBlock.includes("safeContracts.map"), "contractsContent must use safeContracts.map");
+    assert(!contractsBlock.includes("${contracts.map"), "contractsContent still uses contracts.map");
+    const feeBlock = src.slice(feeContentIdx, reimbLetIdx);
+    assert(feeBlock.includes("safeFeeSchedules.map"), "feeContent must use safeFeeSchedules.map");
+    assert(!feeBlock.includes("${feeSchedules.map"), "feeContent still uses feeSchedules.map");
+    ["Reimbursement Contracts","/data-management/reimbursement/upload","Supporting / Review Documents","Upload History","Manual Contract Rule Entry","Existing Contract Rules","Default Reimbursement Rule","Payer Policy Source Library"].forEach(t=>assert(src.includes(t), "missing reimbursement text: "+t));
+    assert(src.includes("function renderPayerPolicySourceLibraryPanel"), "missing payer policy source render function");
+    assert(src.includes("window.__TJHP_VIEW_CLAIM_PANEL_HARD_STOP__"), "view panel hard stop changed");
+    assert(src.includes("window.__TJHP_VIEW_PANEL_OPENER_RESCUE_READY__"), "view panel rescue ready changed");
+    assert(src.includes("PAYMENT_MATCH_SMOKE_TESTS_PASSED"), "payment smoke marker missing");
+    assert(src.includes("VIEW_PANEL_STATIC_TESTS_PASSED"), "view panel smoke marker missing");
+    process.stdout.write("DATA_MANAGEMENT_REIMBURSEMENT_TAB_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("DATA_MANAGEMENT_REIMBURSEMENT_TAB_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
 
 if (process.env.TJHP_PACKET_SIGNATURE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
