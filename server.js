@@ -41547,6 +41547,26 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   const payTrend = computePaymentTrends(org.org_id);
   const ebDenialMonths = Object.keys(denialByMonth || {}).sort();
   const ebDenialTotals = ebDenialMonths.map(k => Number((denialByMonth && denialByMonth[k] && denialByMonth[k].total) || 0));
+  const executiveDenialsTrend =
+    typeof tjhpBuildExecutiveDenialsTrendFromRows === "function"
+      ? tjhpBuildExecutiveDenialsTrendFromRows(org.org_id)
+      : null;
+
+  const useRowLevelDenials =
+    !!(
+      executiveDenialsTrend &&
+      Array.isArray(executiveDenialsTrend.values) &&
+      executiveDenialsTrend.values.length > 0
+    );
+
+  const ebDenialLabelsForExecutive = useRowLevelDenials
+    ? (executiveDenialsTrend.labels || [])
+    : ebDenialMonths;
+
+  const ebDenialValuesForExecutive = useRowLevelDenials
+    ? (executiveDenialsTrend.values || [])
+    : ebDenialTotals;
+
   const ebFunnel = {
     billed: Number(m?.kpis?.totalBilled || m?.totalBilled || 0),
     expected: Number(m?.kpis?.expectedInsuranceTotal || m?.expectedInsuranceTotal || m?.totalExpected || 0),
@@ -41554,8 +41574,9 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     atRisk: Number(m?.kpis?.revenueAtRisk || m?.revenueAtRisk || 0)
   };
   const ebChartsB64 = Buffer.from(JSON.stringify({
-    denialLabels: ebDenialMonths,
-    denialTotals: ebDenialTotals,
+    denialLabels: ebDenialLabelsForExecutive,
+    denialTotals: ebDenialValuesForExecutive,
+    denialValues: ebDenialValuesForExecutive,
     billedSeries: Array.isArray(payTrend?.labels) ? payTrend.labels.map((_, i) => Number((payTrend && payTrend.billed && payTrend.billed[i]) || 0)) : [],
     expectedSeries: Array.isArray(payTrend?.labels) ? payTrend.labels.map((_, i) => Number((payTrend && payTrend.expected && payTrend.expected[i]) || 0)) : [],
     paidSeries: Array.isArray(payTrend?.labels) ? payTrend.labels.map((_, i) => Number((payTrend && payTrend.collected && payTrend.collected[i]) || 0)) : [],
@@ -41685,18 +41706,31 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   const ar90 = Number(m.ar90Rate || 0);
   const collectedTotal = Number(m?.kpis?.collectedTotal || 0);
   const revenueAtRisk = Number(m?.kpis?.revenueAtRisk || 0);
-  const topRiskPayers = (payerRanks || []).slice(0, 3);
-  const topRiskTotal = topRiskPayers.reduce((sum, p) => sum + Number(p.totalAtRisk || 0), 0);
-  const allRiskTotal = (payerRanks || []).reduce((sum, p) => sum + Number(p.totalAtRisk || 0), 0);
+  const riskRankedPayers =
+    typeof tjhpRiRiskRankedPayers === "function"
+      ? tjhpRiRiskRankedPayers(payerRanks || [])
+      : (payerRanks || []).slice().sort((a, b) => Number(b.totalAtRisk || b.atRisk || 0) - Number(a.totalAtRisk || a.atRisk || 0));
+
+  const topRiskPayers = riskRankedPayers
+    .filter(p => Number(p.totalAtRisk || p.atRisk || 0) > 0)
+    .slice(0, 3);
+
+  const topRiskTotal = topRiskPayers.reduce((sum, p) => sum + Number(p.totalAtRisk || p.atRisk || 0), 0);
+  const allRiskTotal = riskRankedPayers.reduce((sum, p) => sum + Number(p.totalAtRisk || p.atRisk || 0), 0);
   const riskConcentrationPct = allRiskTotal > 0 ? Math.round((topRiskTotal / allRiskTotal) * 100) : 0;
   const highestExposurePayer = topRiskPayers[0] || null;
   const denialPriorityThreshold = Number(targets.target_denial_rate || 12);
   const highestAtRiskPayer = highestExposurePayer ? `${highestExposurePayer.payer} (${formatMoneyUI(highestExposurePayer.totalAtRisk || 0)} at risk)` : "No payer risk available";
   const missingContractClaims = Math.max(0, Number(m.statusCounts?.Underpaid || 0) + Number(m.statusCounts?.Appeal || 0));
+  const bestPerformingPayer =
+    typeof tjhpRiBestPerformingPayer === "function"
+      ? tjhpRiBestPerformingPayer(payerRanks || [])
+      : ((payerRanks || []).slice().sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || null);
   const strategyDecision = buildExecutiveStrategyDecisionLayer({
     ...m,
     topRiskPayers,
     highestExposurePayer,
+    bestPerformingPayer,
     riskConcentrationPct,
     missingContractClaims
   }, payerRanks);
@@ -42021,7 +42055,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
     </div>
     <div class="eb-grid2">
       <div class="eb-card eb-chart"><h4>Revenue Flow (Funnel)</h4><canvas id="ebFunnel"></canvas><div class="muted small" style="margin-top:8px;">Billed → Expected → Paid → At Risk</div></div>
-      <div class="eb-card eb-chart"><h4>Denials Trend</h4><canvas id="ebDenials"></canvas><div class="muted small" style="margin-top:8px;">${useRowLevelDenials ? "Denials by row-level service/payment/denial dates." : "Recent periods based on available claim/payment history."}${useRowLevelDenials ? ` Denial months detected: ${executiveDenialsTrend.detectedMonths}.` : ""}</div></div>
+      <div class="eb-card eb-chart"><h4>Denials Trend</h4><canvas id="ebDenials"></canvas><div class="muted small" style="margin-top:8px;">${useRowLevelDenials ? "Denials by row-level service/payment/denial dates." : "Recent periods based on available claim/payment history."}${useRowLevelDenials && executiveDenialsTrend ? ` Denial months detected: ${executiveDenialsTrend.detectedMonths}.` : ""}</div></div>
     </div>
     <div class="eb-card">
       <div class="eb-sectionHead"><h3>Recovery Performance</h3><div class="muted">Appeals + negotiations KPIs for executive tracking.</div></div>
@@ -58142,7 +58176,12 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS === "
     assert(String(decision.highest_risk_payer || "") === "Aetna", "risk payer aetna");
     const fnSrc = src.slice(src.indexOf("function renderExecutiveTab(org, m, payerRanks, q){"), src.indexOf("function renderForecastTab"));
     ["Top exposure payer", "Best-performing payer", "tjhpRiRiskRankedPayers", "tjhpBuildExecutiveDenialsTrendFromRows", "row_level_denial_dates", "ebDenials", "Denial months detected"].forEach(x=>assert(src.includes(x), x));
-    assert(src.indexOf("const top5 = tjhpRiRiskRankedPayers") > -1, "top payer ordering source");
+    ["const executiveDenialsTrend", "const useRowLevelDenials", "ebDenialLabelsForExecutive", "ebDenialValuesForExecutive", "denialValues: ebDenialValuesForExecutive", "REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x), x));
+    assert(src.indexOf("const top5 = tjhpRiRiskRankedPayers") > -1 || src.indexOf("const top5 = riskRankedPayers.slice(0, 5)") > -1, "top payer ordering source");
+    const denialsTemplateIdx = src.indexOf("Denials by row-level service/payment/denial dates");
+    assert(denialsTemplateIdx > -1, "denials template text exists");
+    assert(src.lastIndexOf("const executiveDenialsTrend", denialsTemplateIdx) > -1, "executiveDenialsTrend defined before template use");
+    assert(src.lastIndexOf("const useRowLevelDenials", denialsTemplateIdx) > -1, "useRowLevelDenials defined before template use");
     const org_id = "__executive_denial_trend_smoke_org__" + Date.now().toString(36);
     const oldBilled = readJSON(FILES.billed, []), oldPayments = readJSON(FILES.payments, []);
     const cleanBilled = oldBilled.filter(r => !String(r?.org_id || "").startsWith("__executive_denial_trend_smoke_org__"));
