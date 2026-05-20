@@ -14761,8 +14761,7 @@ function compileAppealPacketText(c, orgLike) {
 Organization: ${orgCtx.displayName || ""}
 Legal Name: ${orgCtx.legalName || "(enter legal name)"}
 Tax ID (EIN): ${orgCtx.taxId || "(enter EIN)"}
-NPI: ${orgCtx.npi || "(enter NPI)"} (${orgCtx.npiType || "Gr
-oup"})
+NPI: ${orgCtx.npi || "(enter NPI)"} (${orgCtx.npiType || "Group"})
 Taxonomy: ${orgCtx.taxonomyCode || "(enter taxonomy code)"}
 State License: ${orgCtx.stateLicenseNumber || "(enter state license)"}
 Physical Address: ${orgCtx.physicalAddress || "(enter physical address)"}
@@ -16105,6 +16104,56 @@ function renderOnboardingWizardPage(org, sess, parsed){
   return html;
 }
 
+function tjhpFirstValidDateValue(...values){
+  for (const value of values) {
+    const raw = String(value || "").trim();
+    if (!raw) continue;
+    const d = new Date(raw);
+    if (d && !isNaN(d.getTime())) return raw;
+  }
+  return "";
+}
+
+function tjhpClaimBusinessDateForAging(row){
+  const r = row || {};
+  // AR aging should use claim/business dates first.
+  // Upload/import/system dates are fallback only.
+  return tjhpFirstValidDateValue(
+    r.billed_date, r.bill_date, r.billing_date, r.submitted_date, r.submission_date,
+    r.claim_submission_date, r.last_submission_at, r.submitted_at, r.claim_date, r.statement_date,
+    r.date_of_service, r.dos, r.service_date, r.service_from, r.service_to, r.encounter_date,
+    r.discharge_date, r.reporting_period, r.created_at, r.uploaded_at, r.imported_at, r.ingested_at, r.batch_uploaded_at
+  );
+}
+
+function tjhpPaymentBusinessDateForDaysToPay(row){
+  const r = row || {};
+  return tjhpFirstValidDateValue(
+    r.paid_at, r.last_paid_at, r.paid_date, r.payment_date, r.date_paid, r.posted_date, r.eob_date,
+    r.era_date, r.remittance_date, r.payment_response_received_at, r.created_at, r.uploaded_at, r.imported_at, r.ingested_at, r.batch_uploaded_at
+  );
+}
+
+function tjhpComputeClaimARAgingBuckets(billedRows, ctx, asOfDate = new Date()){
+  const arBuckets = { "0-30":0, "31-60":0, "61-90":0, "90+":0 };
+  const asOf = asOfDate instanceof Date && !isNaN(asOfDate.getTime()) ? asOfDate : new Date();
+  (Array.isArray(billedRows) ? billedRows : []).forEach(b => {
+    const d = evaluateClaimDerived(b, ctx);
+    if (typeof isResolvedLifecycleStage === "function" && isResolvedLifecycleStage(d.lifecycleStage)) return;
+    const outstanding = Math.max(0, Number(d.underpaidAmount || 0) + Number(d.patientBalanceRemaining || 0));
+    if (outstanding <= 0) return;
+    const basisRaw = tjhpClaimBusinessDateForAging(b);
+    const basisDate = basisRaw ? new Date(basisRaw) : asOf;
+    if (!basisDate || isNaN(basisDate.getTime())) return;
+    const age = Math.max(0, Math.floor((asOf.getTime() - basisDate.getTime()) / (1000 * 60 * 60 * 24)));
+    if (age <= 30) arBuckets["0-30"] += outstanding;
+    else if (age <= 60) arBuckets["31-60"] += outstanding;
+    else if (age <= 90) arBuckets["61-90"] += outstanding;
+    else arBuckets["90+"] += outstanding;
+  });
+  return arBuckets;
+}
+
 function computeDashboardMetrics(org_id, start, end, preset){
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
@@ -16183,8 +16232,8 @@ function computeDashboardMetrics(org_id, start, end, preset){
     else if (st === "Waiting Payment") statusCounts["Waiting Payment"]++;
     else statusCounts.Pending++;
 
-    const createdAt = new Date(b.created_at || b.dos || Date.now()).getTime();
-    const paidAt = new Date(b.paid_at || b.last_paid_at || Date.now()).getTime();
+    const createdAt = new Date(tjhpClaimBusinessDateForAging(b) || Date.now()).getTime();
+    const paidAt = new Date(tjhpPaymentBusinessDateForDaysToPay(b) || Date.now()).getTime();
     if (safeNum(d.paidAmount) > 0 && isFinite(createdAt) && isFinite(paidAt)) {
       const dd = Math.max(0, Math.round((paidAt - createdAt) / (1000*60*60*24)));
       if (isFinite(dd)) daysToPayVals.push(dd);
@@ -16231,20 +16280,8 @@ function computeDashboardMetrics(org_id, start, end, preset){
     .map(([payer,v])=>({ payer, ...v }));
 
   // AR Aging Buckets
-  const arBuckets = { "0-30":0, "31-60":0, "61-90":0, "90+":0 };
-  billed.forEach(b=>{
-    const d = evaluateClaimDerived(b, ctx);
-    const atRisk = Math.max(0, d.underpaidAmount + d.patientBalanceRemaining);
-    if (atRisk <= 0) return;
-
-    const created = new Date(b.created_at || b.dos || Date.now());
-    const age = Math.floor((Date.now() - created.getTime()) / (1000*60*60*24));
-
-    if (age <= 30) arBuckets["0-30"] += atRisk;
-    else if (age <= 60) arBuckets["31-60"] += atRisk;
-    else if (age <= 90) arBuckets["61-90"] += atRisk;
-    else arBuckets["90+"] += atRisk;
-  });
+  // Centralized so all AR Aging displays use claim/business dates before upload/import dates.
+  const arBuckets = tjhpComputeClaimARAgingBuckets(billed, ctx);
 
   const totalClaims = billed.length;
   const denialRate = totalClaims ? (statusCounts.Denied / totalClaims) * 100 : 0;
@@ -16425,8 +16462,10 @@ function computeDashboardMetrics(org_id, start, end, preset){
     negotiatedTotal: recov.negotiatedRequestedTotal,
     recoveredTotal: recov.negotiatedRecoveredTotal,
     appealSubmittedCount: recov.appealSubmittedCount,
+    appealDraftCount: recov.appealDraftCount,
     appealWinsCount: recov.appealWinsCount,
     negotiationSubmittedCount: recov.negotiationSubmittedCount,
+    negotiationDraftCount: recov.negotiationDraftCount,
     negotiatedApprovedTotal: recov.negotiatedApprovedTotal,
     approvedVsPaidPct: recov.approvedVsPaidPct,
     usingLegacyRecoveryFallback: !!recov.usingLegacyFallback,
@@ -38517,7 +38556,52 @@ if (method === "GET" && pathname === "/executive-export") {
   }
 
   const m = computeDashboardMetrics(org.org_id, startDate, endDate, preset);
-  const ranks = computeAllPayerRankings(org.org_id).slice(0, 10);
+  const ar = m.arBuckets || {};
+  const targets = getOrgSettings(org.org_id).recovery_targets || {};
+  const ranks = computeAllPayerRankings(org.org_id);
+  const payerRanks = Array.isArray(ranks) ? ranks : computeAllPayerRankings(org.org_id, m);
+  const riskRankedPayers = typeof tjhpRiRiskRankedPayers === "function"
+    ? tjhpRiRiskRankedPayers(payerRanks || [])
+    : (payerRanks || []).slice().sort((a, b) => Number(b.totalAtRisk || b.atRisk || 0) - Number(a.totalAtRisk || a.atRisk || 0));
+  const topRiskPayers = riskRankedPayers
+    .filter(p => Number(p.totalAtRisk || p.atRisk || 0) > 0)
+    .slice(0, 3);
+  const topRiskTotal = topRiskPayers.reduce((sum, p) => sum + Number(p.totalAtRisk || p.atRisk || 0), 0);
+  const allRiskTotal = riskRankedPayers.reduce((sum, p) => sum + Number(p.totalAtRisk || p.atRisk || 0), 0);
+  const riskConcentrationPct = allRiskTotal > 0 ? Math.round((topRiskTotal / allRiskTotal) * 100) : 0;
+  const highestExposurePayer = topRiskPayers[0] || null;
+  const missingContractClaims = Math.max(0, Number(m.statusCounts?.Underpaid || 0) + Number(m.statusCounts?.Appeal || 0));
+  const bestPerformingPayer =
+    typeof tjhpRiBestPerformingPayer === "function"
+      ? tjhpRiBestPerformingPayer(payerRanks || [])
+      : ((payerRanks || []).slice().sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || null);
+  const strategyDecision = buildExecutiveStrategyDecisionLayer({
+    ...m,
+    topRiskPayers,
+    highestExposurePayer,
+    bestPerformingPayer,
+    riskConcentrationPct,
+    missingContractClaims
+  }, payerRanks);
+  const strategyHighestPayerLabel = strategyDecision.highest_risk_payer_at_risk > 0
+    ? `${strategyDecision.highest_risk_payer} — ${formatMoneyUI(strategyDecision.highest_risk_payer_at_risk)} at risk`
+    : strategyDecision.highest_risk_payer;
+  const otherPayerRiskSummary = topRiskPayers.slice(1, 3)
+    .map(p => `${p.payer} ${formatMoneyUI(tjhpRiPayerAtRiskValue(p))}`)
+    .join(" · ") || "No additional payer concentration";
+  const executiveDenialsTrend = typeof tjhpBuildExecutiveDenialsTrendFromRows === "function"
+    ? tjhpBuildExecutiveDenialsTrendFromRows(org.org_id)
+    : null;
+  const denialsTrendSummary = executiveDenialsTrend && Array.isArray(executiveDenialsTrend.keys) && executiveDenialsTrend.keys.length
+    ? executiveDenialsTrend.keys.map((k, idx) => `${k}: ${formatNumberUI(executiveDenialsTrend.valuesByKey?.[k] ?? executiveDenialsTrend.values?.[idx] ?? 0)}`).join(" · ")
+    : "No row-level denial trend data available.";
+  const financialScore = Number.isFinite(Number(m.healthScore)) ? Number(m.healthScore) : 0;
+  const financialGrade = safeStr(m.healthGrade || (financialScore >= 90 ? "A" : financialScore >= 80 ? "B" : financialScore >= 70 ? "C" : financialScore >= 60 ? "D" : "F"));
+  const denialRate = Number(m.denialRate || 0);
+  const ar90 = Number(m.ar90Rate || m.kpis?.ar90 || 0);
+  const collectedTotal = Number(m?.kpis?.collectedTotal || 0);
+  const revenueAtRisk = Number(m?.kpis?.revenueAtRisk || 0);
+  const underpaymentExposure = Number(m?.kpis?.totalUnderpaid || m?.kpis?.underpaidAmt || 0);
 
   const printCss = `
     <style>
@@ -38536,53 +38620,76 @@ if (method === "GET" && pathname === "/executive-export") {
     </style><script>(function(){function updateOtherSpecialty(){var specialty=document.querySelector('select[name="practice_specialty"]');var wrap=document.getElementById("signup_other_specialty_wrap");var input=document.getElementById("signup_practice_specialty_detail");if(!specialty||!wrap||!input)return;var isOther=specialty.value==="other";wrap.style.display=isOther?"":"none";input.required=isOther;if(!isOther)input.value="";}document.addEventListener("change",function(e){if(e&&e.target&&e.target.name==="practice_specialty")updateOtherSpecialty();});if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",updateOtherSpecialty,{once:true});}else{updateOtherSpecialty();}})();</script>
   `;
 
-  const ar = m.arBuckets || {};
   const html = renderPage("Executive Export", `
     ${printCss}
     <div class="printWrap">
       <div class="printHeader">
         <div>
-          <div class="printTitle">Executive Revenue Summary</div>
-          <div class="muted small">${safeStr(org.org_name || "")} • Range: ${safeStr(preset || "last30")}</div>
+          <div class="printTitle">Executive Strategy Export</div>
+          <div class="muted small">${safeStr(org.display_name || org.name || org.org_name || "Organization")} • Range: ${safeStr(preset || "last30")} • Print-ready executive strategy</div>
         </div>
         <div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn" onclick="window.print()">Save as PDF</button>
-          <a class="btn secondary" href="/revenue-overview">Back</a>
+          <a class="btn secondary" href="/revenue-intelligence?tab=executive">Back</a>
         </div>
       </div>
 
       <div class="printGrid">
         <div class="printCard">
-          <div style="font-weight:800;">Practice Financial Health</div>
-          <div style="font-size:28px;font-weight:900;margin-top:6px;">
-            ${formatNumberUI(m.healthScore || 0)} / 100
-            <span class="badge ${gradeBadgeClass(m.healthGrade)}" style="margin-left:10px;">${safeStr(m.healthGrade || "-")}</span>
-          </div>
-          <div class="muted small">Weighted score: collection rate, denial %, underpaid %, days-to-pay, AR aging (90+).</div>
-        </div>
-
-        <div class="printCard">
-          <div style="font-weight:800;">Topline KPIs</div>
+          <div style="font-weight:900;">Executive Strategy Snapshot</div>
           <div class="muted small" style="margin-top:6px;">
-            Total Billed: <strong>${formatMoneyUI(m.kpis.totalBilled||0)}</strong><br/>
-            Total Collected: <strong>${formatMoneyUI(m.kpis.collectedTotal||0)}</strong><br/>
-            Revenue At Risk: <strong>${formatMoneyUI(m.kpis.revenueAtRisk||0)}</strong><br/>
-            Underpaid Amount: <strong>${formatMoneyUI(m.kpis.underpaidAmt||0)}</strong>
+            Current posture: <strong>${safeStr(strategyDecision.posture)}</strong> — ${safeStr(strategyDecision.posture_detail)}<br/>
+            Primary revenue risk: <strong>${safeStr(strategyDecision.primary_revenue_risk)}</strong><br/>
+            Highest-risk payer: <strong>${safeStr(strategyHighestPayerLabel)}</strong> — ${safeStr(strategyDecision.highest_risk_reason)}<br/>
+            What should I do next: <strong>Open Action Center</strong> — ${safeStr(strategyDecision.action_center_reason)}
           </div>
         </div>
 
         <div class="printCard">
-          <div style="font-weight:800;">AR Aging</div>
+          <div style="font-weight:900;">Top Strategic Priorities</div>
           <div class="muted small" style="margin-top:6px;">
-            0–30: <strong>${formatMoneyUI(ar["0-30"]||0)}</strong><br/>
-            31–60: <strong>${formatMoneyUI(ar["31-60"]||0)}</strong><br/>
-            61–90: <strong>${formatMoneyUI(ar["61-90"]||0)}</strong><br/>
-            90+: <strong>${formatMoneyUI(ar["90+"]||0)}</strong>
+            ${(strategyDecision.strategic_priorities || []).slice(0, 3).map((p, idx) => `${idx + 1}. ${safeStr(p.title)} — ${safeStr(p.detail)}${p.action_label ? ` (${safeStr(p.action_label)})` : ""}`).join("<br/>") || "No strategic priorities available."}
           </div>
         </div>
 
         <div class="printCard">
-          <div style="font-weight:800;">Recovery Intelligence</div>
+          <div style="font-weight:900;">Financial Health Snapshot</div>
+          <div class="muted small" style="margin-top:6px;">
+            Health score and grade: <strong>${formatNumberUI(financialScore)} / 100 (${financialGrade})</strong><br/>
+            Total collected: <strong>${formatMoneyUI(collectedTotal)}</strong><br/>
+            Revenue at risk: <strong>${formatMoneyUI(revenueAtRisk)}</strong><br/>
+            Denial rate: <strong>${formatNumberUI(denialRate)}%</strong><br/>
+            AR 90+ exposure: <strong>${formatNumberUI(ar90)}%</strong><br/>
+            Underpayment exposure: <strong>${formatMoneyUI(underpaymentExposure)}</strong>
+          </div>
+        </div>
+
+        <div class="printCard">
+          <div style="font-weight:900;">Executive Actions</div>
+          <div class="muted small" style="margin-top:6px;">
+            Open Action Center — start with current recovery work.<br/>
+            Open Payer Hub — review full payer rankings, search, Analyze, and Action Center actions.<br/>
+            Open Revenue Overview — review overall financial performance.
+          </div>
+        </div>
+
+        <div class="printCard">
+          <div style="font-weight:900;">Supporting Analytics</div>
+          <div class="muted small" style="margin-top:6px;">
+            <strong>Revenue Risk Concentration</strong><br/>
+            Revenue risk is ${formatNumberUI(riskConcentrationPct)}% concentrated in ${formatNumberUI(topRiskPayers.length)} payer(s).<br/>
+            Top exposure payer: ${safeStr(highestExposurePayer?.payer || "N/A")} — ${formatMoneyUI(tjhpRiPayerAtRiskValue(highestExposurePayer))} at risk.<br/>
+            Top payer concentration dollars: ${formatMoneyUI(topRiskTotal)}.<br/><br/>
+            <strong>Revenue Flow</strong><br/>
+            Billed: ${formatMoneyUI(m.kpis.totalBilled||0)} · Expected: ${formatMoneyUI(m.kpis.expectedTotal||m.kpis.expectedAllowed||0)} · Paid: ${formatMoneyUI(collectedTotal)} · At Risk: ${formatMoneyUI(revenueAtRisk)}<br/><br/>
+            <strong>Denials Trend</strong><br/>
+            ${safeStr(denialsTrendSummary)}<br/>
+            Denials Trend uses row-level business dates when available, not upload date.
+          </div>
+        </div>
+
+        <div class="printCard">
+          <div style="font-weight:900;">Recovery Performance</div>
           <div class="muted small" style="margin-top:6px;">
             Appeal Success Rate: <strong>${formatPct(m.appealSuccessRate||0)}</strong><br/>
             Appeal Drafts / Submitted: <strong>${formatNumberUI(m.appealDraftCount || 0)} / ${formatNumberUI(m.appealSubmittedCount || 0)}</strong><br/>
@@ -38593,36 +38700,49 @@ if (method === "GET" && pathname === "/executive-export") {
             Approved vs Paid: <strong>${formatPct(m.approvedVsPaidPct||0)}</strong>
           </div>
         </div>
+
+        <div class="printCard">
+          <div style="font-weight:900;">Payer Focus Summary</div>
+          <div class="muted small" style="margin-top:6px;">
+            Top payer risk: <strong>${safeStr(strategyHighestPayerLabel)}</strong><br/>
+            Risk concentration: <strong>${formatNumberUI(riskConcentrationPct)}%</strong><br/>
+            Other payer risks: <strong>${safeStr(otherPayerRiskSummary)}</strong><br/>
+            Open Payer Hub for full payer rankings, search, Analyze, and Action Center actions.
+          </div>
+        </div>
+
+        <div class="printCard">
+          <div style="font-weight:900;">Organization Targets</div>
+          <div style="margin-top:10px;overflow:auto;">
+            <table>
+              <thead><tr><th>Target</th><th>Current</th><th>Goal</th></tr></thead>
+              <tbody>
+                <tr><td>Appeal Target</td><td>${formatNumberUI(Number(m.appealSuccessRate || 0))}%</td><td>${formatNumberUI(Number(targets.target_appeal_success_rate || 60))}%</td></tr>
+                <tr><td>Negotiation ROI Target</td><td>${formatNumberUI(Number(m.negotiationROI || 0))}%</td><td>${formatNumberUI(Number(targets.target_negotiation_roi || 60))}%</td></tr>
+                <tr><td>Days-to-Pay Target</td><td>${formatNumberUI(Number(m.avgDaysToPay || 0))}</td><td>${formatNumberUI(Number(targets.target_days_to_pay || 30))}</td></tr>
+                <tr><td>AR90 Target</td><td>${formatNumberUI(Number(m.ar90Rate || 0))}%</td><td>${formatNumberUI(Number(targets.target_ar90_rate || 15))}%</td></tr>
+                <tr><td>AI Case Readiness</td><td>${formatNumberUI(Number(m.operationalDisciplineScore || 0))}%</td><td>${formatNumberUI(Number(targets.target_operational_discipline || 80))}%</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="printCard">
+          <div style="font-weight:900;">AR Aging</div>
+          <div class="muted small" style="margin-top:6px;">
+            0–30: <strong>${formatMoneyUI(ar["0-30"]||0)}</strong><br/>
+            31–60: <strong>${formatMoneyUI(ar["31-60"]||0)}</strong><br/>
+            61–90: <strong>${formatMoneyUI(ar["61-90"]||0)}</strong><br/>
+            90+: <strong>${formatMoneyUI(ar["90+"]||0)}</strong><br/>
+            AR Aging uses claim business dates where available; upload/import dates are fallback only.
+          </div>
+        </div>
       </div>
 
       <div class="printCard" style="margin-top:12px;">
-        <div style="font-weight:900;">Top 10 Payer Rankings</div>
-        <div class="muted small" style="margin-top:6px;">Grade is based on payer score (0–100). Higher is better.</div>
-        <div style="margin-top:10px;overflow:auto;">
-          <table>
-            <thead>
-              <tr><th>Payer</th><th>Grade</th><th>Score</th><th>Claims</th><th>Denial %</th><th>Appeal Recovery %</th><th>Avg Days</th><th>Collected</th><th>At Risk</th></tr>
-            </thead>
-            <tbody>
-              ${
-                ranks.length
-                  ? ranks.map(r=>`
-                    <tr>
-                      <td>${safeStr(r.payer)}</td>
-                      <td>${safeStr(r.grade)}</td>
-                      <td>${formatNumberUI(r.score)}</td>
-                      <td>${formatNumberUI(r.totalClaims)}</td>
-                      <td>${formatPct(r.denialRate)}</td>
-                      <td>${formatPct(r.recoveryRate)}</td>
-                      <td>${formatNumberUI(Math.round(r.avgDaysToPay||0))}</td>
-                      <td>${formatMoneyUI(r.totalCollected||0)}</td>
-                      <td>${formatMoneyUI(r.totalAtRisk||0)}</td>
-                    </tr>
-                  `).join("")
-                  : `<tr><td colspan="9" class="muted">No payer data.</td></tr>`
-              }
-            </tbody>
-          </table>
+        <div style="font-weight:900;">Export Notes</div>
+        <div class="muted small" style="margin-top:6px;">
+          This export is a print-friendly version of Executive Strategy.
         </div>
       </div>
 
@@ -41673,6 +41793,9 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
   const strategyHighestPayerLabel = strategyDecision.highest_risk_payer_at_risk > 0
     ? `${strategyDecision.highest_risk_payer} — ${formatMoneyUI(strategyDecision.highest_risk_payer_at_risk)} at risk`
     : strategyDecision.highest_risk_payer;
+  const otherPayerRiskSummary = topRiskPayers.slice(1, 3)
+    .map(p => `${p.payer} ${formatMoneyUI(tjhpRiPayerAtRiskValue(p))}`)
+    .join(" · ") || "No additional payer concentration";
   const strategyPriorityCardsHtml = (strategyDecision.strategic_priorities || []).slice(0, 3).map((priority, idx) => `
     <div class="strategy-priority-card ${safeStr(priority.severity || "low")}">
       <div class="strategy-priority-num">${idx + 1}</div>
@@ -42004,35 +42127,33 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         <div class="eb-kpi"><div class="l">Negotiation Drafts / Submitted</div><div class="v">${formatNumberUI(Number(m.negotiationDraftCount || 0))} / ${formatNumberUI(Number(m.negotiationSubmittedCount || 0))}</div><div class="h">Drafts can be auto-created. Submitted counts only after Mark Submitted.</div></div>
       </div>
     </div>
-    <details class="eb-card exec-payer-detail" style="margin-top:16px;">
-      <summary class="exec-collapsible-summary" style="cursor:pointer;font-weight:900;">View payer-level detail</summary>
-      <div class="muted small" style="margin-top:8px;">Payer-level detail is available for deeper review after the executive strategy summary.</div>
-      <div class="eb-card" style="margin-top:10px;">
+    <div class="eb-card exec-payer-focus" style="margin-top:16px;">
       <div class="eb-sectionHead">
         <div>
-          <h3>Top Payers to Review</h3>
-          <div class="muted small">Start with payers carrying the highest at-risk exposure.</div>
+          <h3>Payer Focus Summary</h3>
+          <div class="muted small">Executive-level payer focus only. Open Payer Hub for the full payer table, search, Analyze, and Action Center actions.</div>
         </div>
-        <a class="btn secondary small" href="/revenue-intelligence?tab=payers">
-          Open Full Payer Hub
-        </a>
+        <a class="btn secondary small" href="/revenue-intelligence?tab=payers">Open Full Payer Hub</a>
       </div>
       <div class="hr"></div>
-      ${topPayersToReviewHtml}
-    </div>
-    <div class="eb-card" style="margin-top:12px;">
-      <div class="eb-sectionHead"><h3>Exposure Breakdown</h3><div class="muted">Denied vs underpaid vs at-risk concentration by payer.</div></div>
-      <div class="hr"></div>
-      <div class="eb-table-wrap">
-        <table class="eb-table">
-          <thead><tr><th>Payer</th><th>At Risk</th><th>Denied</th><th>Underpaid</th></tr></thead>
-          <tbody>
-            ${(payerRanks || []).slice(0,8).map(p=>`<tr><td>${safeStr(p.payer)}</td><td>${formatMoneyUI(p.totalAtRisk||0)}</td><td>${formatMoneyUI(p.deniedExposure||0)}</td><td>${formatMoneyUI(p.underpaidExposure||0)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No exposure data available.</td></tr>`}
-          </tbody>
-        </table>
+      <div class="strategy-brief-grid">
+        <div class="strategy-brief-chip">
+          <div class="label">Top payer risk</div>
+          <div class="value">${safeStr(strategyHighestPayerLabel)}</div>
+          <div class="eb-sub">${safeStr(strategyDecision.highest_risk_reason)}</div>
+        </div>
+        <div class="strategy-brief-chip">
+          <div class="label">Risk concentration</div>
+          <div class="value">${formatNumberUI(riskConcentrationPct)}%</div>
+          <div class="eb-sub">Concentrated in ${formatNumberUI(topRiskPayers.length)} payer(s).</div>
+        </div>
+        <div class="strategy-brief-chip">
+          <div class="label">Other payer risks</div>
+          <div class="value">${safeStr(otherPayerRiskSummary)}</div>
+          <div class="eb-sub">Detailed payer rankings stay in Payer Hub.</div>
+        </div>
       </div>
     </div>
-    </details>
     <div class="eb-card">
       <div class="eb-sectionHead"><h3>Organization Targets</h3><div class="muted">Targets vs current performance.</div></div>
       <div class="hr"></div>
@@ -57957,8 +58078,7 @@ if (process.env.TJHP_REVENUE_AUTOMATION_UI_SMOKE_TESTS === "true" && (process.en
   assert(rendered.includes("[Diagnosis]"), "render missing [Diagnosis]");
   assert(rendered.includes("[Procedure]"), "render missing [Procedure]");
   assert(rendered.includes("Text without placeholders is treated as reusable wording"), "render missing reusable wording guidance");
-  assert(rendered.includes("Letter of Medical Necessity Preview"), "r
-ender missing LMN preview label");
+  assert(rendered.includes("Letter of Medical Necessity Preview"), "render missing LMN preview label");
   assert(rendered.includes('id="previewLmn"'), "render missing previewLmn id");
   assert(rendered.includes("APPEAL LETTER PREVIEW"), "render missing APPEAL LETTER PREVIEW");
   assert(rendered.includes("NEGOTIATION LETTER PREVIEW"), "render missing NEGOTIATION LETTER PREVIEW");
@@ -58405,7 +58525,7 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS === "tr
     const executiveStart = src.indexOf('const executiveBrief = `');
     const executiveEnd = src.indexOf('const payerHubHtml = `', executiveStart);
     const executiveSrc = src.slice(executiveStart, executiveEnd);
-    ["Executive Strategy Snapshot", "Top Strategic Priorities", "Supporting Analytics", "Open Action Center", "Open Payer Hub", "Open Revenue Overview", "Export Executive PDF", "Revenue Risk Concentration", "Revenue Flow (Funnel)", "Denials Trend", "Recovery Performance", "Top Payers to Review"].forEach(x=>assert(executiveSrc.includes(x), x));
+    ["Executive Strategy Snapshot", "Top Strategic Priorities", "Supporting Analytics", "Open Action Center", "Open Payer Hub", "Open Revenue Overview", "Export Executive PDF", "Revenue Risk Concentration", "Revenue Flow (Funnel)", "Denials Trend", "Recovery Performance", "Payer Focus Summary", "Open Full Payer Hub"].forEach(x=>assert(executiveSrc.includes(x), x));
     assert(!executiveSrc.includes("Automation & Templates"), "automation templates removed");
     const actionStart = executiveSrc.indexOf("<h3>Executive Actions</h3>");
     const actionEnd = executiveSrc.indexOf("Start with Action Center for current recovery work", actionStart);
@@ -58427,7 +58547,7 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS === "true
     assert(executiveStart >= 0, "executiveBrief block missing");
     assert(executiveEnd > executiveStart, "executiveBrief block end missing");
     const executiveSrc = src.slice(executiveStart, executiveEnd);
-    ["Executive Strategy Snapshot","What should I do next","Top Strategic Priorities","Supporting Analytics","Revenue Flow (Funnel)","Denials Trend","Recovery Performance","Top Payers to Review","Exposure Breakdown","/actions","/revenue-intelligence?tab=payers","/dashboard","/executive-export","Appeal Drafts / Submitted","Negotiation Drafts / Submitted","Drafts can be auto-created","Submitted counts only after Mark Submitted","Chart notes:","Denials Trend uses row-level business dates when available, not upload date","Organization Targets","Edit Targets","targets-actions"].forEach(x => assert(executiveSrc.includes(x), "missing executive UI text: " + x));
+    ["Executive Strategy Snapshot","What should I do next","Top Strategic Priorities","Supporting Analytics","Revenue Flow (Funnel)","Denials Trend","Recovery Performance","Payer Focus Summary","Executive-level payer focus only","Open Full Payer Hub","Detailed payer rankings stay in Payer Hub","/actions","/revenue-intelligence?tab=payers","/dashboard","/executive-export","Appeal Drafts / Submitted","Negotiation Drafts / Submitted","Drafts can be auto-created","Submitted counts only after Mark Submitted","Chart notes:","Denials Trend uses row-level business dates when available, not upload date","Organization Targets","Edit Targets","targets-actions"].forEach(x => assert(executiveSrc.includes(x), "missing executive UI text: " + x));
 
     const renderPageStart = src.indexOf("function renderPage(");
     const revenueRouteStart = src.indexOf('if (method === "GET" && pathname === "/revenue-intelligence")');
@@ -58445,7 +58565,7 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS === "true
     assert(!targetsHeaderSrc.includes("Edit Targets"), "Edit Targets must not be inside Organization Targets header");
 
     const recoveryIdx = executiveSrc.indexOf("Recovery Performance");
-    const recoveryEnd = executiveSrc.indexOf("Top Payers to Review", recoveryIdx);
+    const recoveryEnd = executiveSrc.indexOf("Payer Focus Summary", recoveryIdx);
     const recoverySrc = executiveSrc.slice(recoveryIdx, recoveryEnd > recoveryIdx ? recoveryEnd : executiveSrc.length);
     assert(recoverySrc.includes("m.appealDraftCount"), "appeal draft count missing from Recovery Performance value");
     assert(recoverySrc.includes("m.appealSubmittedCount"), "appeal submitted count missing from Recovery Performance value");
@@ -58460,9 +58580,18 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS === "true
     assert(chartNoteIdx > 0, "chart note missing");
     assert(chartNoteIdx < recoveryPerformanceIdx, "chart note must appear before Recovery Performance");
 
-    assert(executiveSrc.includes("Top Payers to Review"), "Top Payers to Review deleted");
-    assert(executiveSrc.includes("Exposure Breakdown"), "Exposure Breakdown deleted");
-    assert(executiveSrc.includes("<details") && executiveSrc.includes("View payer-level detail"), "payer detail should be collapsible or clearly lower-priority");
+    ["Payer Focus Summary","Executive-level payer focus only","Open Full Payer Hub","Detailed payer rankings stay in Payer Hub"].forEach(x => assert(executiveSrc.includes(x), "missing executive payer focus text: " + x));
+    assert(!executiveSrc.includes("${topPayersToReviewHtml}"), "Executive Strategy must not render topPayersToReviewHtml");
+    assert(!executiveSrc.includes("/analyze-payer?payer="), "Executive Strategy must not include payer Analyze links");
+    assert(!executiveSrc.includes("<h3>Top Payers to Review</h3>"), "Executive Strategy must not show full Top Payers table section");
+    assert(!executiveSrc.includes("<h3>Exposure Breakdown</h3>"), "Executive Strategy must not show full exposure breakdown table");
+    assert(!executiveSrc.includes("<th>Payer</th><th>At Risk</th><th>Denied</th><th>Underpaid</th>"), "Executive Strategy must not show exposure table headers");
+
+    const payerFnStart = src.indexOf('function renderPayerHubTable(payerRanks, qStr=""){');
+    const payerFnEnd = src.indexOf("function computePayerIntelligence", payerFnStart);
+    assert(payerFnStart >= 0 && payerFnEnd > payerFnStart, "Payer Hub table function missing");
+    const payerHubSrc = src.slice(payerFnStart, payerFnEnd);
+    ["Payer Intelligence Hub","Search payer...","Print Payer Intelligence Hub","Analyze","Action Center","<table"].forEach(x => assert(payerHubSrc.includes(x), "Payer Hub lost: " + x));
 
     const m1 = tjhpExecutiveDenialRowMonth({ denial_date: "2026-02-10", date_of_service: "2026-02-03", created_at: "2026-05-19T00:00:00.000Z", uploaded_at: "2026-05-19T00:00:00.000Z", imported_at: "2026-05-19T00:00:00.000Z" }, "claim");
     const m2 = tjhpExecutiveDenialRowMonth({ date_of_service: "2026-02-03", created_at: "2026-05-19T00:00:00.000Z", uploaded_at: "2026-05-19T00:00:00.000Z", imported_at: "2026-05-19T00:00:00.000Z" }, "claim");
@@ -58510,7 +58639,10 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS === "tru
     const routeStart = src.indexOf('if (method === "GET" && pathname === "/revenue-intelligence")');
     const routeEnd = src.indexOf('// ===============================\n// AI COPILOT WORKSPACE', routeStart);
     const routeSrc = src.slice(routeStart, routeEnd);
-    assert(!routeSrc.includes('tab === "executive" ? `<a class="btn secondary" href="/executive-export">Export Executive PDF</a>` : ""'), 'route header export removed');
+    const legacyExecutiveHeaderExportExpr = 'tab === "executive" ? `'
+      + '<a class="btn secondary" href="/executive-export">Export Executive PDF</a>'
+      + '` : ""';
+    assert(!routeSrc.includes(legacyExecutiveHeaderExportExpr), 'route header export removed');
     const forecastFnSrc = src.slice(src.indexOf("function renderForecastTab(org, m, forecastB64){"), src.indexOf("function renderDeepDiveTab"));
     assert(forecastFnSrc.includes("Export Forecast PDF"), 'forecast label');
     assert(!forecastFnSrc.includes("Export Executive PDF"), 'forecast no executive label');
@@ -58535,6 +58667,101 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS === "tru
     ["REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_PASSED","FORECAST_CHART_LABEL_CLEANUP_SMOKE_TESTS_PASSED","FORECAST_HORIZON_SMOKE_TESTS_PASSED","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
     process.stdout.write("REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_EXPORT_FULL_STRATEGY_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m||"assertion failed"); };
+    const exportStart = src.indexOf('if (method === "GET" && pathname === "/executive-export")');
+    const exportEnd = src.indexOf("// ==============================", exportStart);
+    assert(exportStart >= 0, "executive export route missing");
+    assert(exportEnd > exportStart, "executive export route end missing");
+    const exportSrc = src.slice(exportStart, exportEnd);
+    [
+      "Executive Strategy Export",
+      "Executive Strategy Snapshot",
+      "Top Strategic Priorities",
+      "Financial Health Snapshot",
+      "Executive Actions",
+      "Supporting Analytics",
+      "Revenue Risk Concentration",
+      "Revenue Flow",
+      "Denials Trend",
+      "Recovery Performance",
+      "Payer Focus Summary",
+      "Organization Targets",
+      "AR Aging",
+      "Denials Trend uses row-level business dates when available, not upload date",
+      "/revenue-intelligence?tab=executive"
+    ].forEach(x => assert(exportSrc.includes(x), "missing export strategy section: " + x));
+    assert(!exportSrc.includes("Executive Revenue Summary"), "old export title still present");
+    assert(!exportSrc.includes("Top 10 Payer Rankings"), "Executive export must not include full payer rankings table");
+    assert(!exportSrc.includes("/analyze-payer?payer="), "Executive export must not include payer Analyze links");
+    assert(!exportSrc.includes("<th>Payer</th><th>Grade</th><th>Score</th><th>Claims</th>"), "Executive export must not include Payer Hub table");
+    ["buildExecutiveStrategyDecisionLayer","tjhpRiRiskRankedPayers","tjhpRiPayerAtRiskValue","tjhpBuildExecutiveDenialsTrendFromRows","computeDashboardMetrics"].forEach(x => assert(exportSrc.includes(x), "export missing helper: " + x));
+    assert(exportSrc.includes("m.appealDraftCount"), "export missing appealDraftCount");
+    assert(exportSrc.includes("m.appealSubmittedCount"), "export missing appealSubmittedCount");
+    assert(exportSrc.includes("m.negotiationDraftCount"), "export missing negotiationDraftCount");
+    assert(exportSrc.includes("m.negotiationSubmittedCount"), "export missing negotiationSubmittedCount");
+    assert(exportSrc.includes(" / "), "export missing draft/submitted slash");
+    assert(exportSrc.includes("AR Aging uses claim business dates where available; upload/import dates are fallback only"), "missing AR Aging business-date note");
+    ["PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","UPLOAD_COMPAT_SMOKE_TESTS_PASSED","AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED","DATA_MANAGEMENT_REIMBURSEMENT_TAB_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
+    process.stdout.write("REVENUE_INTELLIGENCE_EXECUTIVE_EXPORT_FULL_STRATEGY_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_EXECUTIVE_EXPORT_FULL_STRATEGY_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+if (process.env.TJHP_REVENUE_INTELLIGENCE_AR_AGING_BUSINESS_DATE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m||"assertion failed"); };
+    assert(src.includes("function tjhpClaimBusinessDateForAging"), "missing AR aging business date helper");
+    assert(src.includes("function tjhpComputeClaimARAgingBuckets"), "missing central AR aging bucket helper");
+    assert(src.includes("Upload/import/system dates are fallback only"), "missing upload-date fallback comment");
+    const metricsStart = src.indexOf("function computeDashboardMetrics(org_id, start, end, preset){");
+    const metricsEnd = src.indexOf("function tjhpFirstValidDateValue(", metricsStart);
+    const metricsSrc = src.slice(metricsStart, metricsEnd > metricsStart ? metricsEnd : src.length);
+    assert(!metricsSrc.includes("const created = new Date(b.created_at || b.dos || Date.now())"), "old upload-first AR aging logic still present");
+    assert(!metricsSrc.includes("new Date(b.created_at || b.dos || Date.now())"), "old upload-first date basis still present");
+
+    const febClaim = {
+      billed_id: "ar-aging-smoke-1", org_id: "__ar_aging_smoke__", amount_billed: 100, billed_amount: 100, expected_amount: 100,
+      paid_amount: 0, insurance_paid: 0, dos: "2026-02-10", date_of_service: "2026-02-10",
+      created_at: "2026-05-19T00:00:00.000Z", uploaded_at: "2026-05-19T00:00:00.000Z", imported_at: "2026-05-19T00:00:00.000Z"
+    };
+    const basis = tjhpClaimBusinessDateForAging(febClaim);
+    assert(String(basis).includes("2026-02-10"), "AR aging basis should prefer February DOS over May upload date");
+
+    const billedDateClaim = { ...febClaim, billed_date: "2026-02-01", dos: "2026-02-10", created_at: "2026-05-19T00:00:00.000Z" };
+    assert(String(tjhpClaimBusinessDateForAging(billedDateClaim)).includes("2026-02-01"), "billed_date should beat DOS for AR aging");
+
+    const org_id = "__ar_aging_smoke__" + Date.now().toString(36);
+    const ctx = buildClaimContext(org_id);
+    const openClaim = { ...febClaim, org_id, billed_id: "ar-open", claim_number: "AR-OPEN", claim_id: "AR-OPEN", status: "Waiting Payment" };
+    const buckets = tjhpComputeClaimARAgingBuckets([openClaim], ctx, new Date("2026-05-19T00:00:00.000Z"));
+    assert(Number(buckets["90+"] || 0) >= 100, "open claim should age into 90+ bucket");
+    assert(Number(buckets["0-30"] || 0) === 0, "open claim should not be in 0-30 bucket");
+
+    const uploadOnlyClaim = {
+      ...febClaim, billed_id: "ar-upload-only", claim_number: "AR-UPLOAD-ONLY", billed_date: "", bill_date: "", billing_date: "",
+      submitted_date: "", submission_date: "", claim_submission_date: "", claim_date: "", statement_date: "", date_of_service: "",
+      dos: "", service_date: "", service_from: "", service_to: "", created_at: "2026-05-01T00:00:00.000Z", uploaded_at: "2026-05-01T00:00:00.000Z"
+    };
+    assert(String(tjhpClaimBusinessDateForAging(uploadOnlyClaim)).includes("2026-05-01"), "upload/system date should be fallback only when no business date exists");
+
+    const paidClaim = { ...openClaim, billed_id: "ar-paid", claim_number: "AR-PAID", claim_id: "AR-PAID", paid_amount: 100, insurance_paid: 100, status: "Paid" };
+    const paidBuckets = tjhpComputeClaimARAgingBuckets([paidClaim], ctx, new Date("2026-05-19T00:00:00.000Z"));
+    assert(Object.values(paidBuckets).every(v => Number(v || 0) === 0), "paid claim should not contribute to AR aging");
+
+    assert(src.includes("arBuckets"), "computeDashboardMetrics missing arBuckets");
+    assert(src.includes("appealDraftCount: recov.appealDraftCount"), "missing appealDraftCount return");
+    assert(src.includes("negotiationDraftCount: recov.negotiationDraftCount"), "missing negotiationDraftCount return");
+    if (src.includes('if (method === "GET" && pathname === "/executive-export")')) {
+      assert(src.includes("AR Aging uses claim business dates where available; upload/import dates are fallback only."), "missing export AR Aging note");
+    }
+    ["PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","UPLOAD_COMPAT_SMOKE_TESTS_PASSED","AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED","DATA_MANAGEMENT_REIMBURSEMENT_TAB_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_PASSED","REVENUE_INTELLIGENCE_EXECUTIVE_EXPORT_FULL_STRATEGY_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
+    process.stdout.write("REVENUE_INTELLIGENCE_AR_AGING_BUSINESS_DATE_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_AR_AGING_BUSINESS_DATE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
 
 if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
@@ -58825,7 +59052,10 @@ if (process.env.TJHP_FORECAST_UI_SMOKE_TESTS === "true" && (process.env.TJHP_FOR
     const routeStartForForecastUi = src.indexOf('if (method === "GET" && pathname === "/revenue-intelligence")');
     const routeEndForForecastUi = src.indexOf('// ===============================\n// AI COPILOT WORKSPACE', routeStartForForecastUi);
     const routeSrcForForecastUi = src.slice(routeStartForForecastUi, routeEndForForecastUi);
-    assert(!routeSrcForForecastUi.includes('tab === "executive" ? `<a class="btn secondary" href="/executive-export">Export Executive PDF</a>` : ""'), "generic header executive export removed");
+    const legacyExecutiveHeaderExportExpr = 'tab === "executive" ? `'
+      + '<a class="btn secondary" href="/executive-export">Export Executive PDF</a>'
+      + '` : ""';
+    assert(!routeSrcForForecastUi.includes(legacyExecutiveHeaderExportExpr), "generic header executive export removed");
     ["At least 3 months of claim or payment activity","Detected: ${detectedMonths} month(s) of activity.","not just the upload date"].forEach(x=>assert(src.includes(x),x));
     const interp = buildForecastExecutiveInterpretation(fc, fakeM);
     assert(interp && interp.length > 20, "interpretation non-empty");
