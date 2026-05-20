@@ -50492,8 +50492,11 @@ function renderTemplateEditor(org, user){
 if (method === "GET" && pathname === "/data-management") {
     tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id, { write: true });
     const tab = String(parsed.query.tab || "upload").toLowerCase();
-    const validTabs = ["upload","reimbursement","revenue"];
-    const normalizedTab = tab === "automation" ? "revenue" : tab;
+    const validTabs = ["upload","reimbursement","revenue","prior-auth"];
+    const normalizedTab =
+      tab === "automation" ? "revenue" :
+      ["prior-auth","prior_auth","priorauth","authorization","authorizations"].includes(tab) ? "prior-auth" :
+      tab;
     const activeTab = validTabs.includes(normalizedTab) ? normalizedTab : "upload";
     const billed = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const claimBatches = getClaimBatchHistory(org.org_id);
@@ -51338,12 +51341,28 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
       `;
     }
 
+    const priorAuthContent = `
+      <div class="card">
+        <h2>Prior Authorizations</h2>
+        <p class="muted">
+          Intake and storage layer for prior authorization cases.
+        </p>
+        <div class="alert" style="background:#f8fafc;color:#334155;border-color:#e2e8f0;">
+          This phase is read-only. Manual entry and upload intake will be added in later phases.
+        </div>
+        <p class="muted small">
+          This page does not change claims, payments, reimbursement rules, or lifecycle metrics.
+        </p>
+      </div>
+    `;
+
     const practiceContent = revenueContent;
     const section = ({
       "upload": uploadContent,
       "reimbursement": reimbursementContent,
       "revenue": practiceContent,
-      "automation": practiceContent
+      "automation": practiceContent,
+      "prior-auth": priorAuthContent
     })[activeTab] || uploadContent;
 
     const html = renderPage("Data Management", `<h2>Data Management</h2><p class="muted">Upload and manage your claims, payments, denial documents, reimbursement rules, and automation templates in one place.</p>${uploadBanner}${tabs}${section}<script>
