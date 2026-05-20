@@ -50489,6 +50489,20 @@ function renderTemplateEditor(org, user){
   if (method === "POST" && pathname === "/data-management/matching-review/ignore") { const body = await parseBody(req); const payment_id = String(new URLSearchParams(body).get("payment_id")||""); const payments = readJSON(FILES.payments, []); const billedAll = readJSON(FILES.billed, []); const p = payments.find(x=>String(x.org_id||"")===String(org.org_id||"") && String(x.payment_id||"")===payment_id); if (p) { p.payment_review_status = "ignored"; p.ignored_at = nowISO(); p.updated_at = nowISO(); tjhpRemoveOperationalClaimForPayment(org.org_id, billedAll, p); writeJSON(FILES.payments,payments); writeJSON(FILES.billed,billedAll); tjhpRecomputeClaimPaymentsFromLedgerForOrg(org.org_id,{billedAll,payments,write:true}); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id,{write:true}); } return redirect(res, "/data-management/matching-review"); }
   if (method === "POST" && pathname === "/data-management/matching-review/create-provisional") { const body = await parseBody(req); const payment_id = String(new URLSearchParams(body).get("payment_id")||""); const payments = readJSON(FILES.payments, []); const billedAll = readJSON(FILES.billed, []); const p = payments.find(x=>String(x.org_id||"")===String(org.org_id||"") && String(x.payment_id||"")===payment_id); if (p) { const realClaim = tjhpFindRealBilledForPayment(org.org_id, billedAll, p); if (realClaim) { tjhpLinkPaymentToClaim(p, realClaim); tjhpRemoveOperationalClaimForPayment(org.org_id, billedAll, p); } else { p.payment_review_status = "provisional_claim"; if (p.ignored_at) delete p.ignored_at; p.updated_at = nowISO(); tjhpCreateOrUpdateOperationalClaimFromPayment(org.org_id, billedAll, p, { reviewStatus: "provisional_claim" }); } writeJSON(FILES.payments,payments); writeJSON(FILES.billed,billedAll); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id,{write:true}); } return redirect(res, "/data-management/matching-review"); }
   if (method === "POST" && pathname === "/data-management/matching-review/bulk-exact") { const payments = readJSON(FILES.payments, []); const billedAll = readJSON(FILES.billed, []); let changed = false; for (const p of payments.filter(x=>String(x.org_id||"")===String(org.org_id||""))) { const c = tjhpFindRealBilledForPayment(org.org_id,billedAll,p); if (!c) continue; if (tjhpLinkPaymentToClaim(p, c)) changed = true; if (tjhpRemoveOperationalClaimForPayment(org.org_id, billedAll, p)) changed = true; } if (changed) writeJSON(FILES.payments,payments); tjhpRecomputeClaimPaymentsFromLedgerForOrg(org.org_id,{billedAll,payments,write:true}); tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id,{write:true}); return redirect(res, "/data-management/matching-review"); }
+if (method === "POST" && pathname === "/data-management/prior-auth/create") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+  const payload = Object.fromEntries(ps.entries());
+
+  delete payload.auth_case_id;
+  payload.org_id = org.org_id;
+  payload.created_by = sess.user_id || "";
+
+  upsertPriorAuthCase(org.org_id, payload, sess.user_id || "");
+
+  return redirect(res, "/data-management?tab=prior-auth&pa_status=created");
+}
+
 if (method === "GET" && pathname === "/data-management") {
     tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id, { write: true });
     const tab = String(parsed.query.tab || "upload").toLowerCase();
