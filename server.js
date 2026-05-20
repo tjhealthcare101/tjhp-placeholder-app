@@ -51373,6 +51373,12 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
           Stored prior auth cases: <strong>${formatNumberUI(priorAuthRows.length)}</strong><br/>
           Upload ledger records: <strong>${formatNumberUI(priorAuthUploads.length)}</strong>
         </p>
+        <p class="muted small">
+          Submitted / Pending: <strong>${formatNumberUI(priorAuthSubmittedPendingCount)}</strong><br/>
+          Missing Documentation: <strong>${formatNumberUI(priorAuthMissingDocsCount)}</strong><br/>
+          Denied / Partially Approved: <strong>${formatNumberUI(priorAuthDeniedPartialCount)}</strong><br/>
+          Expiring / Expired: <strong>${formatNumberUI(priorAuthExpiringCount)}</strong>
+        </p>
       </div>
     `;
 
