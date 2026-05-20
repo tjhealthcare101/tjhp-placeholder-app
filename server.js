@@ -51356,6 +51356,31 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
     const priorAuthExpiringCount = priorAuthRows.filter(x =>
       ["Expiring Soon","Expired"].includes(String(x.status || ""))
     ).length;
+    const priorAuthCaseRowsHtml = priorAuthRows.slice(0, 25).map(x => `
+  <tr>
+    <td>${safeStr(x.patient_name || x.patient_id || "-")}</td>
+    <td>${safeStr(x.payer || "-")}</td>
+    <td>${safeStr(x.cpt_hcpcs || "-")}</td>
+    <td>${safeStr(x.icd10 || "-")}</td>
+    <td>${safeStr(x.requested_service || "-")}</td>
+    <td>${safeStr(x.status || "-")}</td>
+    <td>${safeStr(x.auth_number || "-")}</td>
+    <td>${safeStr(x.submitted_date || "-")}</td>
+    <td>${safeStr(x.expiration_date || "-")}</td>
+    <td>${formatMoneyUI(Number(x.estimated_revenue_at_risk || 0))}</td>
+  </tr>
+`).join("") || `<tr><td colspan="10" class="muted">No prior authorization cases have been added yet.</td></tr>`;
+
+    const priorAuthUploadRowsHtml = priorAuthUploads.slice(0, 25).map(x => `
+  <tr>
+    <td>${safeStr(x.file_name || "-")}</td>
+    <td>${safeStr(x.file_type || "-")}</td>
+    <td>${safeStr(x.status || "-")}</td>
+    <td>${formatNumberUI(Number(x.parsed_case_count || 0))}</td>
+    <td>${x.needs_review ? "Yes" : "No"}</td>
+    <td>${safeStr(x.created_at || "-")}</td>
+  </tr>
+`).join("") || `<tr><td colspan="6" class="muted">No prior authorization uploads have been recorded yet.</td></tr>`;
 
     const priorAuthContent = `
       <div class="card">
@@ -51379,6 +51404,50 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
           Denied / Partially Approved: <strong>${formatNumberUI(priorAuthDeniedPartialCount)}</strong><br/>
           Expiring / Expired: <strong>${formatNumberUI(priorAuthExpiringCount)}</strong>
         </p>
+        <div class="hr"></div>
+        <h3>Prior Authorization Cases</h3>
+        <p class="muted small">
+          Read-only preview of stored prior authorization cases. Manual entry and upload intake will be added later.
+        </p>
+        <div style="overflow:auto;margin-top:10px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Patient</th>
+                <th>Payer</th>
+                <th>CPT / HCPCS</th>
+                <th>ICD-10</th>
+                <th>Requested Service</th>
+                <th>Status</th>
+                <th>Auth #</th>
+                <th>Submitted</th>
+                <th>Expiration</th>
+                <th>Est. Revenue At Risk</th>
+              </tr>
+            </thead>
+            <tbody>${priorAuthCaseRowsHtml}</tbody>
+          </table>
+        </div>
+        <div class="hr"></div>
+        <h3>Prior Auth Upload Ledger</h3>
+        <p class="muted small">
+          Read-only preview of prior authorization upload records. Upload parsing is not connected yet.
+        </p>
+        <div style="overflow:auto;margin-top:10px;">
+          <table>
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Parsed Cases</th>
+                <th>Needs Review</th>
+                <th>Uploaded</th>
+              </tr>
+            </thead>
+            <tbody>${priorAuthUploadRowsHtml}</tbody>
+          </table>
+        </div>
       </div>
     `;
 
