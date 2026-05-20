@@ -51402,6 +51402,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         <p class="muted">
           Intake and storage layer for prior authorization cases.
         </p>
+        ${String(parsed.query.pa_status || "").trim() === "created" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization case saved.</div>` : ""}
         <div class="alert" style="background:#f8fafc;color:#334155;border-color:#e2e8f0;">
           This phase is read-only. Manual entry and upload intake will be added in later phases.
         </div>
