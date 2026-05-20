@@ -51357,6 +51357,10 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         <p class="muted small">
           This page does not change claims, payments, reimbursement rules, or lifecycle metrics.
         </p>
+        <p class="muted small">
+          Stored prior auth cases: <strong>${formatNumberUI(priorAuthRows.length)}</strong><br/>
+          Upload ledger records: <strong>${formatNumberUI(priorAuthUploads.length)}</strong>
+        </p>
       </div>
     `;
 
