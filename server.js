@@ -51344,6 +51344,18 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
 
     const priorAuthRows = getPriorAuthCases(org.org_id);
     const priorAuthUploads = getPriorAuthUploads(org.org_id);
+    const priorAuthSubmittedPendingCount = priorAuthRows.filter(x =>
+      ["Submitted","Pending"].includes(String(x.status || ""))
+    ).length;
+    const priorAuthMissingDocsCount = priorAuthRows.filter(x =>
+      String(x.status || "") === "Missing Documentation"
+    ).length;
+    const priorAuthDeniedPartialCount = priorAuthRows.filter(x =>
+      ["Denied","Partially Approved"].includes(String(x.status || ""))
+    ).length;
+    const priorAuthExpiringCount = priorAuthRows.filter(x =>
+      ["Expiring Soon","Expired"].includes(String(x.status || ""))
+    ).length;
 
     const priorAuthContent = `
       <div class="card">
