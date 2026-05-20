@@ -51437,7 +51437,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         ${String(parsed.query.pa_status || "").trim() === "uploaded" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization upload stored for review.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "upload_failed" ? `<div class="alert warn" style="margin:10px 0;">Prior authorization upload failed. Please try again.</div>` : ""}
         <div class="alert" style="background:#f8fafc;color:#334155;border-color:#e2e8f0;">
-          This phase is read-only. Manual entry and upload intake will be added in later phases.
+          Manual entry and upload storage are available. Structured upload parsing, Action Center queues, and lifecycle integration will be added in later phases.
         </div>
         <p class="muted small">
           This page does not change claims, payments, reimbursement rules, or lifecycle metrics.
@@ -51514,6 +51514,27 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
 
             <div style="grid-column:1/-1;">
               <button class="btn" type="submit">Save Prior Auth Case</button>
+            </div>
+          </form>
+        </details>
+        <details class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
+          <summary style="cursor:pointer;font-weight:900;">Upload prior authorization support files</summary>
+          <p class="muted small" style="margin-top:8px;">
+            Upload approval letters, denial letters, payer responses, clinical notes, physician orders, referral documents, or payer forms. This phase stores files for review only; structured parsing will be added later.
+          </p>
+
+          <form method="POST" action="/data-management/prior-auth/upload" enctype="multipart/form-data">
+            <input
+              type="file"
+              name="documents"
+              accept=".csv,.xls,.xlsx,.pdf,.txt,.doc,.docx,.jpg,.jpeg,.png"
+              multiple
+            />
+            <div class="muted small" style="margin-top:8px;">
+              Files are recorded in the Prior Auth Upload Ledger. They do not change claims, payments, reimbursement rules, or lifecycle metrics.
+            </div>
+            <div style="margin-top:10px;">
+              <button class="btn secondary" type="submit">Store Prior Auth Upload For Review</button>
             </div>
           </form>
         </details>
