@@ -50563,6 +50563,7 @@ if (method === "GET" && pathname === "/data-management") {
         ${tabBtn("upload","Upload")}
         ${tabBtn("reimbursement","Reimbursement Contracts")}
         ${tabBtn("revenue","Revenue Automation")}
+        ${tabBtn("prior-auth","Prior Authorizations")}
       </div>
     `;
 
