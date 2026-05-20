@@ -632,6 +632,36 @@ function deletePriorAuthCaseForSmokeOnly(org_id, auth_case_id){
 
   savePriorAuthCasesForOrg(oid, rows);
 }
+
+function getPriorAuthUploads(org_id){
+  const oid = String(org_id || "").trim();
+
+  return readJSON(FILES.prior_auth_uploads, [])
+    .filter(x => String(x.org_id || "") === oid);
+}
+
+function savePriorAuthUploadRecord(record = {}){
+  const all = readJSON(FILES.prior_auth_uploads, []);
+  const now = nowISO();
+
+  const row = {
+    upload_id: String(record.upload_id || "pau_" + uuid()).trim(),
+    org_id: String(record.org_id || "").trim(),
+    file_name: String(record.file_name || record.filename || "").trim(),
+    file_type: String(record.file_type || record.mime_type || "").trim(),
+    upload_purpose: String(record.upload_purpose || "prior_authorization").trim(),
+    status: String(record.status || "stored").trim(),
+    parsed_case_count: Number(record.parsed_case_count || 0) || 0,
+    needs_review: record.needs_review !== false,
+    created_at: String(record.created_at || now).trim(),
+    created_by: String(record.created_by || "").trim(),
+    notes: String(record.notes || "").trim()
+  };
+
+  all.push(row);
+  writeJSON(FILES.prior_auth_uploads, all);
+  return row;
+}
 function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
 function dateInputFromISO(iso){
   const d = new Date(iso || nowISO());
@@ -59131,6 +59161,123 @@ if (process.env.TJHP_PRIOR_AUTH_NORMALIZATION_SMOKE_TESTS === "true" && (process
   } catch (err) {
     process.stderr.write("PRIOR_AUTH_NORMALIZATION_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
   }
+}
+
+if (process.env.TJHP_PRIOR_AUTH_MODEL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "prior_auth_cases",
+        "prior_auth_uploads",
+        "PRIOR_AUTH_STATUSES",
+        "normalizePriorAuthStatus",
+        "normalizePriorAuthCase",
+        "getAllPriorAuthCases",
+        "getPriorAuthCases",
+        "savePriorAuthCasesForOrg",
+        "getPriorAuthCaseById",
+        "upsertPriorAuthCase",
+        "deletePriorAuthCaseForSmokeOnly",
+        "getPriorAuthUploads",
+        "savePriorAuthUploadRecord"
+      ].forEach(x => assert(src.includes(x), "missing prior auth symbol: " + x));
+
+      [
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED",
+        "AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED",
+        "DATA_MANAGEMENT_REIMBURSEMENT_TAB_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_EXECUTIVE_EXPORT_FULL_STRATEGY_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_AR_AGING_BUSINESS_DATE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_NORMALIZATION_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "protected marker missing: " + x));
+
+      const org_id = "__prior_auth_model_smoke__" + Date.now().toString(36);
+      const originalUploads = readJSON(FILES.prior_auth_uploads, []);
+
+      try {
+        savePriorAuthCasesForOrg(org_id, []);
+
+        const created = upsertPriorAuthCase(org_id, {
+          patient_id: "P-100",
+          patient_name: "Smoke Patient",
+          payer: "BlueCross",
+          cpt_hcpcs: "99214",
+          icd10: "Z00.00",
+          status: "Submitted",
+          requested_service: "Office visit",
+          estimated_revenue_at_risk: 350
+        }, "smoke");
+
+        assert(created && created.ok === true, "upsert create failed");
+        assert(created.case && created.case.auth_case_id, "missing created auth_case_id");
+        assert.strictEqual(getPriorAuthCases(org_id).length, 1, "expected one prior auth case after create");
+
+        const found = getPriorAuthCaseById(org_id, created.case.auth_case_id);
+        assert(found, "getPriorAuthCaseById failed");
+        assert.strictEqual(found.status, "Submitted", "created status mismatch");
+
+        const updated = upsertPriorAuthCase(org_id, {
+          auth_case_id: created.case.auth_case_id,
+          status: "Approved",
+          auth_number: "AUTH123",
+          approved_units: "1"
+        }, "smoke");
+
+        assert(updated && updated.ok === true, "upsert update failed");
+        assert.strictEqual(getPriorAuthCases(org_id).length, 1, "update should not duplicate case");
+
+        const foundUpdated = getPriorAuthCaseById(org_id, created.case.auth_case_id);
+        assert.strictEqual(foundUpdated.status, "Approved", "updated status mismatch");
+        assert.strictEqual(foundUpdated.auth_number, "AUTH123", "auth number mismatch");
+        assert.strictEqual(foundUpdated.approved_units, "1", "approved units mismatch");
+
+        deletePriorAuthCaseForSmokeOnly(org_id, created.case.auth_case_id);
+        assert.strictEqual(getPriorAuthCases(org_id).length, 0, "delete smoke helper did not remove case");
+
+        savePriorAuthCasesForOrg(org_id, [
+          { patient_id:"P-200", payer:"Aetna", status:"p2p", cpt:"72148" },
+          { patient_id:"P-201", payer:"Cigna", status:"partial", cpt:"97110" }
+        ]);
+
+        const savedRows = getPriorAuthCases(org_id);
+        assert.strictEqual(savedRows.length, 2, "savePriorAuthCasesForOrg should save two rows");
+        assert(savedRows.some(x => x.status === "Peer-to-Peer Needed"), "p2p status not normalized in storage");
+        assert(savedRows.some(x => x.status === "Partially Approved"), "partial status not normalized in storage");
+
+        const upload = savePriorAuthUploadRecord({
+          org_id,
+          file_name: "prior-auths.csv",
+          file_type: "text/csv",
+          parsed_case_count: 2,
+          needs_review: false,
+          created_by: "smoke"
+        });
+
+        assert(upload.upload_id, "missing upload_id");
+        assert.strictEqual(upload.upload_purpose, "prior_authorization", "upload purpose mismatch");
+        assert.strictEqual(upload.needs_review, false, "needs_review mismatch");
+        assert(getPriorAuthUploads(org_id).length >= 1, "prior auth upload not retrievable");
+      } finally {
+        savePriorAuthCasesForOrg(org_id, []);
+        writeJSON(FILES.prior_auth_uploads, originalUploads);
+      }
+
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior auth cases not cleaned up");
+      process.stdout.write("PRIOR_AUTH_MODEL_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_MODEL_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
 }
 
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
