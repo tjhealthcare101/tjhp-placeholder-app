@@ -50503,6 +50503,37 @@ if (method === "POST" && pathname === "/data-management/prior-auth/create") {
   return redirect(res, "/data-management?tab=prior-auth&pa_status=created");
 }
 
+if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
+  try {
+    const parsedUpload = await new Promise((resolve, reject) => {
+      parseMultipartForm(req, (err, result) => {
+        if (err) reject(err);
+        else resolve(result || {});
+      });
+    });
+
+    const files = Array.isArray(parsedUpload.files) ? parsedUpload.files : [];
+
+    files.forEach(file => {
+      savePriorAuthUploadRecord({
+        org_id: org.org_id,
+        file_name: file.originalName || file.filename || "",
+        file_type: file.mimeType || "",
+        upload_purpose: "prior_authorization",
+        status: "stored_for_review",
+        parsed_case_count: 0,
+        needs_review: true,
+        created_by: sess.user_id || "",
+        notes: file.url ? `Stored file: ${file.url}` : "Stored prior authorization upload for review."
+      });
+    });
+
+    return redirect(res, "/data-management?tab=prior-auth&pa_status=uploaded");
+  } catch (err) {
+    return redirect(res, "/data-management?tab=prior-auth&pa_status=upload_failed");
+  }
+}
+
 if (method === "GET" && pathname === "/data-management") {
     tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id, { write: true });
     const tab = String(parsed.query.tab || "upload").toLowerCase();
