@@ -51342,6 +51342,9 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
       `;
     }
 
+    const priorAuthRows = getPriorAuthCases(org.org_id);
+    const priorAuthUploads = getPriorAuthUploads(org.org_id);
+
     const priorAuthContent = `
       <div class="card">
         <h2>Prior Authorizations</h2>
