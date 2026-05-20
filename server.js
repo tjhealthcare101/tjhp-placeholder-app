@@ -299,6 +299,8 @@ const FILES = {
   fee_schedules: path.join(DATA_DIR, "fee_schedules.json"),
   claim_batches: path.join(DATA_DIR, "claim_batches.json"),
   upload_batches: path.join(DATA_DIR, "upload_batches.json"),
+  prior_auth_cases: path.join(DATA_DIR, "prior_auth_cases.json"),
+  prior_auth_uploads: path.join(DATA_DIR, "prior_auth_uploads.json"),
   audit_log: path.join(DATA_DIR, "audit_log.json"),
   practice_settings: path.join(DATA_DIR, "practice_settings.json"),
   ai_agent_drafts: path.join(DATA_DIR, "ai_agent_drafts.json"),
@@ -358,6 +360,181 @@ function uuid() {
 }
 
 function nowISO() { return new Date().toISOString(); }
+
+const PRIOR_AUTH_STATUSES = [
+  "Auth Needed",
+  "Draft",
+  "Submitted",
+  "Pending",
+  "Missing Documentation",
+  "Peer-to-Peer Needed",
+  "Approved",
+  "Partially Approved",
+  "Denied",
+  "Expiring Soon",
+  "Expired",
+  "Ready to Bill",
+  "Linked to Claim"
+];
+
+const PRIOR_AUTH_DEFAULT_STATUS = "Auth Needed";
+
+function normalizePriorAuthStatus(value){
+  const raw = String(value || "").trim();
+  if (!raw) return PRIOR_AUTH_DEFAULT_STATUS;
+
+  const found = PRIOR_AUTH_STATUSES.find(s => s.toLowerCase() === raw.toLowerCase());
+  if (found) return found;
+
+  const compact = raw
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const aliases = {
+    "needed": "Auth Needed",
+    "auth needed": "Auth Needed",
+    "authorization needed": "Auth Needed",
+    "prior auth needed": "Auth Needed",
+    "pa needed": "Auth Needed",
+
+    "draft": "Draft",
+
+    "submitted": "Submitted",
+    "sent": "Submitted",
+    "filed": "Submitted",
+
+    "pending": "Pending",
+    "in review": "Pending",
+    "under review": "Pending",
+
+    "missing docs": "Missing Documentation",
+    "missing documentation": "Missing Documentation",
+    "missing documents": "Missing Documentation",
+    "needs docs": "Missing Documentation",
+
+    "peer to peer": "Peer-to-Peer Needed",
+    "peer-to-peer": "Peer-to-Peer Needed",
+    "p2p": "Peer-to-Peer Needed",
+    "peer review": "Peer-to-Peer Needed",
+
+    "approved": "Approved",
+    "authorized": "Approved",
+
+    "partial": "Partially Approved",
+    "partially approved": "Partially Approved",
+    "partial approval": "Partially Approved",
+
+    "denied": "Denied",
+    "rejected": "Denied",
+
+    "expiring": "Expiring Soon",
+    "expiring soon": "Expiring Soon",
+
+    "expired": "Expired",
+
+    "ready": "Ready to Bill",
+    "ready to bill": "Ready to Bill",
+
+    "linked": "Linked to Claim",
+    "linked to claim": "Linked to Claim"
+  };
+
+  return aliases[compact] || PRIOR_AUTH_DEFAULT_STATUS;
+}
+
+function priorAuthCaseId(){
+  return "pa_" + uuid();
+}
+
+function normalizePriorAuthListValue(value){
+  if (Array.isArray(value)) {
+    return value
+      .map(v => String(v || "").trim())
+      .filter(Boolean);
+  }
+
+  const raw = String(value || "").trim();
+  if (!raw) return [];
+
+  return raw
+    .split(/[,\n|;]+/)
+    .map(v => v.trim())
+    .filter(Boolean);
+}
+
+function normalizePriorAuthBoolean(value){
+  if (value === true) return true;
+  const raw = String(value || "").trim().toLowerCase();
+  return ["true", "yes", "y", "1", "required", "needed"].includes(raw);
+}
+
+function normalizePriorAuthCase(input = {}, defaults = {}){
+  const now = nowISO();
+  const row = input || {};
+
+  const auth_case_id = String(
+    row.auth_case_id ||
+    row.prior_auth_id ||
+    row.authorization_id ||
+    defaults.auth_case_id ||
+    priorAuthCaseId()
+  ).trim();
+
+  const org_id = String(row.org_id || defaults.org_id || "").trim();
+
+  return {
+    auth_case_id,
+    org_id,
+
+    patient_id: String(row.patient_id || "").trim(),
+    patient_name: String(row.patient_name || "").trim(),
+
+    payer: String(row.payer || "").trim(),
+    provider: String(row.provider || "").trim(),
+    specialty: String(row.specialty || "").trim(),
+
+    cpt_hcpcs: String(row.cpt_hcpcs || row.cpt || row.hcpcs || row.procedure_code || "").trim(),
+    icd10: String(row.icd10 || row.icd_10 || row.diagnosis_code || row.dx_code || "").trim(),
+
+    requested_service: String(row.requested_service || row.service || row.procedure || "").trim(),
+    requested_units: String(row.requested_units || row.units_requested || "").trim(),
+    approved_units: String(row.approved_units || row.units_approved || "").trim(),
+
+    submitted_date: String(row.submitted_date || row.submission_date || "").trim(),
+    determination_date: String(row.determination_date || row.decision_date || "").trim(),
+    expiration_date: String(row.expiration_date || row.expires_at || "").trim(),
+    scheduled_service_date: String(row.scheduled_service_date || row.service_date || row.dos || "").trim(),
+
+    auth_number: String(row.auth_number || row.authorization_number || row.prior_auth_number || "").trim(),
+
+    status: normalizePriorAuthStatus(row.status || defaults.status),
+
+    denial_reason: String(row.denial_reason || "").trim(),
+    partial_approval_reason: String(row.partial_approval_reason || "").trim(),
+
+    peer_to_peer_required: normalizePriorAuthBoolean(row.peer_to_peer_required),
+
+    missing_documentation: normalizePriorAuthListValue(row.missing_documentation),
+    assigned_user_id: String(row.assigned_user_id || row.owner_user_id || "").trim(),
+
+    linked_claim_id: String(row.linked_claim_id || row.claim_id || "").trim(),
+    linked_billed_id: String(row.linked_billed_id || row.billed_id || "").trim(),
+    linked_documents: normalizePriorAuthListValue(row.linked_documents),
+
+    risk_level: String(row.risk_level || "").trim(),
+    estimated_revenue_at_risk: Number(row.estimated_revenue_at_risk || row.revenue_at_risk || 0) || 0,
+
+    notes: String(row.notes || "").trim(),
+
+    created_at: String(row.created_at || defaults.created_at || now).trim(),
+    updated_at: String(row.updated_at || now).trim(),
+    created_by: String(row.created_by || defaults.created_by || "").trim(),
+
+    source_upload_batch_id: String(row.source_upload_batch_id || "").trim()
+  };
+}
 function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
 function dateInputFromISO(iso){
   const d = new Date(iso || nowISO());
@@ -5051,6 +5228,8 @@ ensureFile(FILES.allowed_amount_rules, []);
 ensureFile(FILES.fee_schedules, []);
 ensureFile(FILES.claim_batches, []);
 ensureFile(FILES.upload_batches, []);
+ensureFile(FILES.prior_auth_cases, []);
+ensureFile(FILES.prior_auth_uploads, []);
 ensureFile(FILES.audit_log, []);
 ensureFile(FILES.practice_settings, []);
 ensureFile(FILES.ai_agent_drafts, []);
@@ -58788,6 +58967,73 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS === "t
     ["REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","FORECAST_CHART_LABEL_CLEANUP_SMOKE_TESTS_PASSED","LAUNCH_READINESS_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
     process.stdout.write("REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+if (process.env.TJHP_PRIOR_AUTH_NORMALIZATION_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const assert = (c, m) => { if (!c) throw new Error(m || "assertion failed"); };
+    const src = fs.readFileSync(__filename, "utf8");
+    [
+      "PRIOR_AUTH_STATUSES",
+      "PRIOR_AUTH_DEFAULT_STATUS",
+      "normalizePriorAuthStatus",
+      "priorAuthCaseId",
+      "normalizePriorAuthListValue",
+      "normalizePriorAuthBoolean",
+      "normalizePriorAuthCase",
+      "prior_auth_cases",
+      "prior_auth_uploads"
+    ].forEach(x => assert(src.includes(x), x));
+    [
+      "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+      "VIEW_PANEL_STATIC_TESTS_PASSED",
+      "UPLOAD_COMPAT_SMOKE_TESTS_PASSED",
+      "AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED",
+      "DATA_MANAGEMENT_REIMBURSEMENT_TAB_SMOKE_TESTS_PASSED",
+      "REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED",
+      "REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS_PASSED",
+      "REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_PASSED",
+      "REVENUE_INTELLIGENCE_EXECUTIVE_EXPORT_FULL_STRATEGY_SMOKE_TESTS_PASSED",
+      "REVENUE_INTELLIGENCE_AR_AGING_BUSINESS_DATE_SMOKE_TESTS_PASSED"
+    ].forEach(x => assert(src.includes(x), x));
+
+    assert(normalizePriorAuthStatus("") === "Auth Needed");
+    assert(normalizePriorAuthStatus("p2p") === "Peer-to-Peer Needed");
+    assert(normalizePriorAuthStatus("partial") === "Partially Approved");
+    assert(normalizePriorAuthStatus("ready") === "Ready to Bill");
+    assert(normalizePriorAuthStatus("authorized") === "Approved");
+    assert(normalizePriorAuthStatus("bad status") === "Auth Needed");
+
+    assert(normalizePriorAuthListValue("imaging report, physician order").length === 2);
+    assert(normalizePriorAuthListValue(["clinical notes", "", "referral"]).length === 2);
+
+    const normalized = normalizePriorAuthCase({
+      org_id: "__pa_smoke__",
+      patient_id: "P-1",
+      payer: "Aetna",
+      cpt: "72148",
+      icd_10: "M54.5",
+      status: "p2p",
+      peer_to_peer_required: "yes",
+      missing_documentation: "imaging report, physician order",
+      estimated_revenue_at_risk: "1200"
+    });
+
+    assert(normalized.org_id === "__pa_smoke__");
+    assert(normalized.status === "Peer-to-Peer Needed");
+    assert(normalized.cpt_hcpcs === "72148");
+    assert(normalized.icd10 === "M54.5");
+    assert(normalized.peer_to_peer_required === true);
+    assert(normalized.missing_documentation.length === 2);
+    assert(normalized.estimated_revenue_at_risk === 1200);
+    assert(String(normalized.auth_case_id || "").startsWith("pa_"));
+    assert(Boolean(normalized.created_at));
+    assert(Boolean(normalized.updated_at));
+
+    process.stdout.write("PRIOR_AUTH_NORMALIZATION_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) {
+    process.stderr.write("PRIOR_AUTH_NORMALIZATION_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
+  }
 }
 
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
