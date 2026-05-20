@@ -535,6 +535,103 @@ function normalizePriorAuthCase(input = {}, defaults = {}){
     source_upload_batch_id: String(row.source_upload_batch_id || "").trim()
   };
 }
+
+function getAllPriorAuthCases(){
+  return readJSON(FILES.prior_auth_cases, []);
+}
+
+function getPriorAuthCases(org_id){
+  const oid = String(org_id || "").trim();
+
+  return getAllPriorAuthCases()
+    .filter(x => String(x.org_id || "") === oid)
+    .map(x => normalizePriorAuthCase(x));
+}
+
+function savePriorAuthCasesForOrg(org_id, rows){
+  const oid = String(org_id || "").trim();
+  const all = getAllPriorAuthCases();
+  const keep = all.filter(x => String(x.org_id || "") !== oid);
+
+  const normalized = (Array.isArray(rows) ? rows : [])
+    .map(x => normalizePriorAuthCase(x, { org_id: oid }))
+    .filter(x => String(x.org_id || "").trim());
+
+  writeJSON(FILES.prior_auth_cases, [...keep, ...normalized]);
+  return normalized;
+}
+
+function getPriorAuthCaseById(org_id, auth_case_id){
+  const oid = String(org_id || "").trim();
+  const id = String(auth_case_id || "").trim();
+
+  if (!oid || !id) return null;
+
+  return getPriorAuthCases(oid)
+    .find(x => String(x.auth_case_id || "") === id) || null;
+}
+
+function upsertPriorAuthCase(org_id, input, user_id = ""){
+  const source = input || {};
+  const oid = String(org_id || source.org_id || "").trim();
+
+  if (!oid) {
+    return { ok:false, error:"missing_org_id", case:null };
+  }
+
+  const rows = getPriorAuthCases(oid);
+
+  const incoming = normalizePriorAuthCase(source, {
+    org_id: oid,
+    created_by: user_id
+  });
+
+  const idx = rows.findIndex(x =>
+    String(x.auth_case_id || "") === String(incoming.auth_case_id || "")
+  );
+
+  if (idx >= 0) {
+    const existing = rows[idx];
+
+    rows[idx] = normalizePriorAuthCase({
+      ...existing,
+      ...incoming,
+      auth_case_id: existing.auth_case_id,
+      org_id: oid,
+      created_at: existing.created_at || incoming.created_at,
+      created_by: existing.created_by || incoming.created_by,
+      updated_at: nowISO()
+    });
+  } else {
+    rows.push(normalizePriorAuthCase({
+      ...incoming,
+      org_id: oid,
+      created_at: incoming.created_at || nowISO(),
+      updated_at: nowISO(),
+      created_by: incoming.created_by || user_id || ""
+    }));
+  }
+
+  const saved = savePriorAuthCasesForOrg(oid, rows);
+
+  const found = saved.find(x =>
+    String(x.auth_case_id || "") === String(incoming.auth_case_id || "")
+  );
+
+  return { ok:true, case: found || incoming };
+}
+
+function deletePriorAuthCaseForSmokeOnly(org_id, auth_case_id){
+  const oid = String(org_id || "").trim();
+  const id = String(auth_case_id || "").trim();
+
+  if (!oid || !id) return;
+
+  const rows = getPriorAuthCases(oid)
+    .filter(x => String(x.auth_case_id || "") !== id);
+
+  savePriorAuthCasesForOrg(oid, rows);
+}
 function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
 function dateInputFromISO(iso){
   const d = new Date(iso || nowISO());
