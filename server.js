@@ -51420,6 +51420,71 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
           Expiring / Expired: <strong>${formatNumberUI(priorAuthExpiringCount)}</strong>
         </p>
         <div class="hr"></div>
+        <details class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
+          <summary style="cursor:pointer;font-weight:900;">Add prior authorization case manually</summary>
+          <p class="muted small" style="margin-top:8px;">
+            Manual entry creates a prior authorization case only. It does not change claims, payments, reimbursement rules, lifecycle metrics, Action Center tasks, or workspaces.
+          </p>
+
+          <form method="POST" action="/data-management/prior-auth/create" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px;">
+            <div>
+              <label>Patient Name</label>
+              <input name="patient_name" placeholder="Optional" />
+            </div>
+
+            <div>
+              <label>Payer</label>
+              <input name="payer" placeholder="e.g. Aetna" />
+            </div>
+
+            <div>
+              <label>CPT / HCPCS</label>
+              <input name="cpt_hcpcs" placeholder="e.g. 72148" />
+            </div>
+
+            <div>
+              <label>ICD-10</label>
+              <input name="icd10" placeholder="e.g. M54.5" />
+            </div>
+
+            <div>
+              <label>Requested Service</label>
+              <input name="requested_service" placeholder="Service/procedure requested" />
+            </div>
+
+            <div>
+              <label>Status</label>
+              <select name="status">
+                ${PRIOR_AUTH_STATUSES.map(s => `<option value="${safeStr(s)}">${safeStr(s)}</option>`).join("")}
+              </select>
+            </div>
+
+            <div>
+              <label>Submitted Date</label>
+              <input type="date" name="submitted_date" />
+            </div>
+
+            <div>
+              <label>Expiration Date</label>
+              <input type="date" name="expiration_date" />
+            </div>
+
+            <div>
+              <label>Est. Revenue At Risk</label>
+              <input name="estimated_revenue_at_risk" type="number" step="0.01" min="0" placeholder="0.00" />
+            </div>
+
+            <div style="grid-column:1/-1;">
+              <label>Notes</label>
+              <textarea name="notes" rows="3" placeholder="Internal notes only"></textarea>
+            </div>
+
+            <div style="grid-column:1/-1;">
+              <button class="btn" type="submit">Save Prior Auth Case</button>
+            </div>
+          </form>
+        </details>
+        <div class="hr"></div>
         <h3>Prior Authorization Cases</h3>
         <p class="muted small">
           Read-only preview of stored prior authorization cases. Manual entry and upload intake will be added later.
