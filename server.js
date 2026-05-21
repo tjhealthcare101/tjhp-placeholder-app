@@ -662,6 +662,92 @@ function savePriorAuthUploadRecord(record = {}){
   writeJSON(FILES.prior_auth_uploads, all);
   return row;
 }
+
+function priorAuthNormalizeHeaderKey(value){
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const PRIOR_AUTH_HEADER_ALIASES = {
+  patient_id: [
+    "patient id", "patient_id", "patient reference", "mrn",
+    "member id", "member_id", "subscriber id"
+  ],
+  patient_name: [
+    "patient name", "patient_name", "member name", "name"
+  ],
+  payer: [
+    "payer", "payer name", "insurance", "insurance company", "health plan", "plan"
+  ],
+  provider: [
+    "provider", "ordering provider", "rendering provider", "physician", "clinician"
+  ],
+  specialty: [
+    "specialty", "department", "service line"
+  ],
+  cpt_hcpcs: [
+    "cpt", "cpt code", "cpt_code", "hcpcs", "hcpcs code",
+    "procedure code", "procedure_code", "service code", "service_code"
+  ],
+  icd10: [
+    "icd10", "icd 10", "icd-10", "icd_10",
+    "diagnosis code", "diagnosis_code", "dx", "dx code", "dx_code"
+  ],
+  requested_service: [
+    "requested service", "service", "procedure", "requested procedure",
+    "requested item", "auth service"
+  ],
+  submitted_date: [
+    "submitted date", "submission date", "submitted", "date submitted",
+    "auth submitted date"
+  ],
+  expiration_date: [
+    "expiration date", "expires", "expires at", "auth expiration",
+    "authorization expiration", "valid through"
+  ],
+  auth_number: [
+    "auth number", "authorization number", "prior auth number", "pa number",
+    "auth #", "authorization #", "approval number"
+  ],
+  status: [
+    "status", "auth status", "authorization status", "prior auth status"
+  ],
+  denial_reason: [
+    "denial reason", "denial", "reason denied", "reason", "payer reason"
+  ],
+  peer_to_peer_required: [
+    "peer to peer", "peer-to-peer", "p2p", "peer review", "peer to peer required"
+  ],
+  missing_documentation: [
+    "missing documentation", "missing docs", "missing documents", "docs needed",
+    "documentation needed", "needed documents"
+  ],
+  estimated_revenue_at_risk: [
+    "estimated revenue at risk", "revenue at risk", "amount at risk",
+    "estimated value", "expected revenue"
+  ],
+  notes: [
+    "notes", "note", "comments", "comment"
+  ]
+};
+
+function priorAuthFieldForHeader(header){
+  const normalized = priorAuthNormalizeHeaderKey(header);
+  if (!normalized) return "";
+
+  for (const [field, aliases] of Object.entries(PRIOR_AUTH_HEADER_ALIASES)) {
+    if ((aliases || []).some(alias => priorAuthNormalizeHeaderKey(alias) === normalized)) {
+      return field;
+    }
+  }
+
+  return "";
+}
+
 function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
 function dateInputFromISO(iso){
   const d = new Date(iso || nowISO());
