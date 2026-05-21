@@ -748,6 +748,104 @@ function priorAuthFieldForHeader(header){
   return "";
 }
 
+
+function priorAuthStructuredRowSignal(row = {}){
+  const fields = new Set();
+
+  Object.keys(row || {}).forEach(key => {
+    const field = priorAuthFieldForHeader(key);
+    if (field) fields.add(field);
+  });
+
+  const recognizedFields = Array.from(fields);
+
+  const hasPayerOrPatient =
+    fields.has("payer") ||
+    fields.has("patient_name") ||
+    fields.has("patient_id");
+
+  const hasServiceSignal =
+    fields.has("cpt_hcpcs") ||
+    fields.has("requested_service") ||
+    fields.has("auth_number");
+
+  const hasStatusOrDateSignal =
+    fields.has("status") ||
+    fields.has("submitted_date") ||
+    fields.has("expiration_date");
+
+  let score = recognizedFields.length;
+  if (hasPayerOrPatient) score += 1;
+  if (hasServiceSignal) score += 2;
+  if (hasStatusOrDateSignal) score += 1;
+
+  const confidence =
+    score >= 6 && hasPayerOrPatient && hasServiceSignal ? "high" :
+    score >= 3 ? "medium" :
+    score > 0 ? "low" :
+    "none";
+
+  return {
+    recognizedFields,
+    recognizedCount: recognizedFields.length,
+    score,
+    confidence,
+    hasPayerOrPatient,
+    hasServiceSignal,
+    hasStatusOrDateSignal
+  };
+}
+
+function priorAuthStructuredRowToCaseInput(row = {}, defaults = {}){
+  const input = {};
+
+  Object.entries(row || {}).forEach(([key, value]) => {
+    const field = priorAuthFieldForHeader(key);
+    if (!field) return;
+
+    if (input[field] == null || String(input[field] || "").trim() === "") {
+      input[field] = value;
+    }
+  });
+
+  return normalizePriorAuthCase(input, defaults);
+}
+
+function parsePriorAuthStructuredRows(rows = [], defaults = {}, options = {}){
+  const minConfidence = String(options.minConfidence || "high");
+  const ranks = { none:0, low:1, medium:2, high:3 };
+  const minRank = ranks[minConfidence] || ranks.high;
+
+  const parsed = [];
+  const review = [];
+
+  (Array.isArray(rows) ? rows : []).forEach((row, index) => {
+    const signal = priorAuthStructuredRowSignal(row);
+    const rank = ranks[signal.confidence] || 0;
+
+    if (rank >= minRank) {
+      parsed.push(priorAuthStructuredRowToCaseInput(row, defaults));
+    } else {
+      review.push({
+        index,
+        signal,
+        reason: signal.recognizedCount
+          ? "recognized_headers_below_confidence_threshold"
+          : "no_prior_auth_headers_recognized"
+      });
+    }
+  });
+
+  return {
+    ok: parsed.length > 0,
+    parse_status: parsed.length > 0 ? "parsed_prior_auth_cases" : "needs_review",
+    parsed_case_count: parsed.length,
+    needs_review: review.length > 0,
+    cases: parsed,
+    review
+  };
+}
+
 function addDaysISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString(); }
 function dateInputFromISO(iso){
   const d = new Date(iso || nowISO());
