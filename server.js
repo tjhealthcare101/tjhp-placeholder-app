@@ -51783,7 +51783,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
     const priorAuthExpiringCount = priorAuthRows.filter(x =>
       ["Expiring Soon","Expired"].includes(String(x.status || ""))
     ).length;
-    const priorAuthCaseRowsHtml = priorAuthRows.slice(0, 25).map(x => `
+    const priorAuthCaseRowsHtml = priorAuthFilteredRows.slice(0, 25).map(x => `
   <tr>
     <td>${safeStr(x.patient_name || x.patient_id || "-")}</td>
     <td>${safeStr(x.payer || "-")}</td>
@@ -51798,7 +51798,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
   </tr>
 `).join("") || `<tr><td colspan="10" class="muted">No prior authorization cases have been added yet.</td></tr>`;
 
-    const priorAuthUploadRowsHtml = priorAuthUploads.slice(0, 25).map(x => {
+    const priorAuthUploadRowsHtml = priorAuthFilteredUploads.slice(0, 25).map(x => {
   const fileUrl = priorAuthUploadFileUrl(x);
   const fileNameHtml = fileUrl
     ? `<a href="${safeStr(fileUrl)}" target="_blank" rel="noopener">${safeStr(x.file_name || "Open file")}</a>`
