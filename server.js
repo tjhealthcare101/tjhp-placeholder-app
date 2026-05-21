@@ -60415,6 +60415,134 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_REVIEW_STORAGE_SMOKE_TESTS === "true" && (pr
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_EXCEL_PARSE_STORAGE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    let tempXlsxPath = "";
+
+    try {
+      [
+        "tjhpParseRowsFromUploadedFile",
+        "parsePriorAuthStructuredRows",
+        "upsertPriorAuthCase",
+        "savePriorAuthUploadRecord",
+        "PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_CSV_PARSE_STORAGE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_CSV_REVIEW_STORAGE_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior auth Excel dependency: " + x));
+
+      const org_id = "__prior_auth_excel_smoke__" + Date.now().toString(36);
+      const originalUploads = readJSON(FILES.prior_auth_uploads, []);
+      const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+      const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+      const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+      const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+
+      try {
+        savePriorAuthCasesForOrg(org_id, []);
+
+        const XLSX = require("xlsx");
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet([
+          {
+            "Patient Name": "Excel Patient",
+            "Payer": "United",
+            "CPT Code": "97110",
+            "ICD-10": "M25.5",
+            "Status": "pending",
+            "Revenue At Risk": "500",
+            "Submitted Date": "2026-03-01"
+          }
+        ]);
+
+        XLSX.utils.book_append_sheet(wb, ws, "PriorAuth");
+        const xlsxBuffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+        tempXlsxPath = path.join(DATA_DIR, "__prior_auth_excel_smoke_" + Date.now() + ".xlsx");
+        fs.writeFileSync(tempXlsxPath, xlsxBuffer);
+
+        const excelParsedFile = tjhpParseRowsFromUploadedFile({
+          filename: "prior-auths.xlsx",
+          originalName: "prior-auths.xlsx",
+          mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          buffer: xlsxBuffer,
+          absPath: tempXlsxPath
+        }, {
+          purpose: "prior_authorization",
+          allowExcelStructured: true
+        });
+
+        assert(excelParsedFile.ok === true, "Excel file parse failed");
+        assert(excelParsedFile.kind === "EXCEL", "Excel file should be EXCEL kind");
+        assert(Array.isArray(excelParsedFile.rows), "Excel rows missing");
+        assert.strictEqual(excelParsedFile.rows.length, 1, "Excel should have one parsed row");
+
+        const parsedExcelPriorAuth = parsePriorAuthStructuredRows(
+          excelParsedFile.rows,
+          { org_id, created_by: "smoke", source_upload_batch_id: "excel_smoke_upload" },
+          { minConfidence: "high" }
+        );
+
+        assert(parsedExcelPriorAuth.ok === true, "Excel prior-auth rows should parse");
+        assert.strictEqual(parsedExcelPriorAuth.parsed_case_count, 1, "expected one parsed Excel prior-auth case");
+
+        parsedExcelPriorAuth.cases.forEach(caseInput => {
+          upsertPriorAuthCase(org_id, { ...caseInput, org_id, created_by: "smoke" }, "smoke");
+        });
+
+        savePriorAuthUploadRecord({
+          org_id,
+          file_name: "prior-auths.xlsx",
+          file_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          upload_purpose: "prior_authorization",
+          status: "parsed_prior_auth_cases",
+          parsed_case_count: parsedExcelPriorAuth.cases.length,
+          needs_review: !!parsedExcelPriorAuth.needs_review,
+          created_by: "smoke",
+          notes: "Parsed 1 prior authorization case(s) from EXCEL."
+        });
+
+        const cases = getPriorAuthCases(org_id);
+        assert.strictEqual(cases.length, 1, "expected one prior auth case after Excel parse");
+        assert(cases.some(x => x.patient_name === "Excel Patient" && x.status === "Pending"), "expected normalized Excel pending case");
+
+        const uploads = getPriorAuthUploads(org_id);
+        assert(uploads.some(x =>
+          x.file_name === "prior-auths.xlsx" &&
+          x.status === "parsed_prior_auth_cases" &&
+          Number(x.parsed_case_count || 0) === 1
+        ), "expected Excel parsed ledger row");
+
+        assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+        assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+        assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+        assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+
+      } finally {
+        savePriorAuthCasesForOrg(org_id, []);
+        writeJSON(FILES.prior_auth_uploads, originalUploads);
+        try {
+          if (tempXlsxPath && fs.existsSync(tempXlsxPath)) fs.unlinkSync(tempXlsxPath);
+        } catch (_) {}
+      }
+
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims changed after cleanup");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments changed after cleanup");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts changed after cleanup");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests changed after cleanup");
+
+      process.stdout.write("PRIOR_AUTH_EXCEL_PARSE_STORAGE_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_EXCEL_PARSE_STORAGE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_MODEL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
