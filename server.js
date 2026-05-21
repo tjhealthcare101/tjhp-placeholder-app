@@ -649,6 +649,8 @@ function savePriorAuthUploadRecord(record = {}){
     org_id: String(record.org_id || "").trim(),
     file_name: String(record.file_name || record.filename || "").trim(),
     file_type: String(record.file_type || record.mime_type || "").trim(),
+    file_url: String(record.file_url || record.url || "").trim(),
+    stored_path: String(record.stored_path || record.absPath || "").trim(),
     upload_purpose: String(record.upload_purpose || "prior_authorization").trim(),
     status: String(record.status || "stored").trim(),
     parsed_case_count: Number(record.parsed_case_count || 0) || 0,
@@ -661,6 +663,73 @@ function savePriorAuthUploadRecord(record = {}){
   all.push(row);
   writeJSON(FILES.prior_auth_uploads, all);
   return row;
+}
+
+function priorAuthUploadFileUrl(row = {}){
+  const direct = String(row.file_url || row.url || "").trim();
+  if (direct) return direct;
+
+  const notes = String(row.notes || "");
+  const m = notes.match(/Stored file:\s*(\/uploads\/support\/[^\s<>"']+)/);
+  if (m && m[1]) return m[1];
+
+  return "";
+}
+
+function priorAuthUploadStoredPath(row = {}){
+  const direct = String(row.stored_path || row.absPath || "").trim();
+  if (direct) return direct;
+
+  const fileUrl = priorAuthUploadFileUrl(row);
+  if (!fileUrl || !fileUrl.startsWith("/uploads/support/")) return "";
+
+  const rel = fileUrl.replace(/^\/uploads\/support\//, "");
+  return path.join(__dirname, "uploads", "support", rel);
+}
+
+function priorAuthSafeDeleteStoredUploadFile(row = {}){
+  const abs = priorAuthUploadStoredPath(row);
+  if (!abs) return false;
+
+  const supportDir = path.join(__dirname, "uploads", "support");
+  const resolved = path.resolve(abs);
+  const resolvedSupport = path.resolve(supportDir);
+
+  if (!resolved.startsWith(resolvedSupport)) return false;
+
+  try {
+    if (fs.existsSync(resolved)) {
+      fs.unlinkSync(resolved);
+      return true;
+    }
+  } catch (_) {}
+
+  return false;
+}
+
+function deletePriorAuthUploadForOrg(org_id, upload_id){
+  const oid = String(org_id || "").trim();
+  const id = String(upload_id || "").trim();
+
+  if (!oid || !id) return { ok:false, deleted:false };
+
+  const all = readJSON(FILES.prior_auth_uploads, []);
+  const target = all.find(x =>
+    String(x.org_id || "") === oid &&
+    String(x.upload_id || "") === id
+  );
+
+  if (!target) return { ok:false, deleted:false };
+
+  priorAuthSafeDeleteStoredUploadFile(target);
+
+  const kept = all.filter(x =>
+    !(String(x.org_id || "") === oid && String(x.upload_id || "") === id)
+  );
+
+  writeJSON(FILES.prior_auth_uploads, kept);
+
+  return { ok:true, deleted:true };
 }
 
 function priorAuthNormalizeHeaderKey(value){
@@ -50776,6 +50845,8 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
         org_id: org.org_id,
         file_name: fileName,
         file_type: fileType,
+        file_url: file.url || "",
+        stored_path: file.absPath || "",
         upload_purpose: "prior_authorization",
         status,
         parsed_case_count: parsedCaseCount,
@@ -50792,6 +50863,16 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
   } catch (err) {
     return redirect(res, "/data-management?tab=prior-auth&pa_status=upload_failed");
   }
+}
+
+if (method === "POST" && pathname === "/data-management/prior-auth/upload/delete") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+  const upload_id = String(ps.get("upload_id") || "").trim();
+
+  deletePriorAuthUploadForOrg(org.org_id, upload_id);
+
+  return redirect(res, "/data-management?tab=prior-auth&pa_status=upload_deleted");
 }
 
 if (method === "GET" && pathname === "/data-management") {
@@ -51676,16 +51757,29 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
   </tr>
 `).join("") || `<tr><td colspan="10" class="muted">No prior authorization cases have been added yet.</td></tr>`;
 
-    const priorAuthUploadRowsHtml = priorAuthUploads.slice(0, 25).map(x => `
+    const priorAuthUploadRowsHtml = priorAuthUploads.slice(0, 25).map(x => {
+  const fileUrl = priorAuthUploadFileUrl(x);
+  const fileNameHtml = fileUrl
+    ? `<a href="${safeStr(fileUrl)}" target="_blank" rel="noopener">${safeStr(x.file_name || "Open file")}</a>`
+    : safeStr(x.file_name || "-");
+
+  return `
   <tr>
-    <td>${safeStr(x.file_name || "-")}</td>
+    <td>${fileNameHtml}</td>
     <td>${safeStr(x.file_type || "-")}</td>
     <td>${safeStr(x.status || "-")}</td>
     <td>${formatNumberUI(Number(x.parsed_case_count || 0))}</td>
     <td>${x.needs_review ? "Yes" : "No"}</td>
     <td>${safeStr(x.created_at || "-")}</td>
+    <td>
+      <form method="POST" action="/data-management/prior-auth/upload/delete" onsubmit="return confirm('Delete this prior authorization upload record? This will not delete any prior auth cases already created from it.');">
+        <input type="hidden" name="upload_id" value="${safeStr(x.upload_id || "")}" />
+        <button class="btn danger small" type="submit">Delete</button>
+      </form>
+    </td>
   </tr>
-`).join("") || `<tr><td colspan="6" class="muted">No prior authorization uploads have been recorded yet.</td></tr>`;
+`;
+}).join("") || `<tr><td colspan="7" class="muted">No prior authorization uploads have been recorded yet.</td></tr>`;
 
     const priorAuthContent = `
       <div class="card">
@@ -51697,6 +51791,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         ${String(parsed.query.pa_status || "").trim() === "uploaded" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization upload stored for review.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "parsed" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization upload parsed and prior auth cases created.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "upload_failed" ? `<div class="alert warn" style="margin:10px 0;">Prior authorization upload failed. Please try again.</div>` : ""}
+        ${String(parsed.query.pa_status || "").trim() === "upload_deleted" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization upload deleted.</div>` : ""}
         <div class="alert" style="background:#f8fafc;color:#334155;border-color:#e2e8f0;">
           Manual entry and structured CSV, Excel, and TXT upload parsing are available. PDF, Word, and image uploads are stored for review; Action Center queues and lifecycle integration will be added in later phases.
         </div>
@@ -51998,6 +52093,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
                 <th>Parsed Cases</th>
                 <th>Needs Review</th>
                 <th>Uploaded</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>${priorAuthUploadRowsHtml}</tbody>
