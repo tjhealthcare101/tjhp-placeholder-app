@@ -536,6 +536,68 @@ function normalizePriorAuthCase(input = {}, defaults = {}){
   };
 }
 
+function priorAuthDedupeText(value){
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function priorAuthDedupeDate(value){
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const day = raw.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : "";
+}
+
+function priorAuthCaseDedupeKey(row = {}){
+  const payer = priorAuthDedupeText(row.payer);
+
+  const authNumber = priorAuthDedupeText(
+    row.auth_number ||
+    row.authorization_number ||
+    row.prior_auth_number
+  );
+
+  const patient = priorAuthDedupeText(
+    row.patient_id ||
+    row.patient_name
+  );
+
+  const service = priorAuthDedupeText(
+    row.cpt_hcpcs ||
+    row.cpt ||
+    row.hcpcs ||
+    row.procedure_code ||
+    row.requested_service ||
+    row.service ||
+    row.procedure
+  );
+
+  const date = priorAuthDedupeDate(
+    row.submitted_date ||
+    row.determination_date ||
+    row.expiration_date ||
+    row.scheduled_service_date
+  );
+
+  if (payer && authNumber) return `auth:${payer}:${authNumber}`;
+  if (authNumber && patient) return `authpatient:${authNumber}:${patient}`;
+  if (payer && patient && service && date) return `svc:${payer}:${patient}:${service}:${date}`;
+
+  return "";
+}
+
+function priorAuthFindDuplicateCaseIndex(rows = [], incoming = {}){
+  const key = priorAuthCaseDedupeKey(incoming);
+  if (!key) return -1;
+
+  return (Array.isArray(rows) ? rows : []).findIndex(row =>
+    priorAuthCaseDedupeKey(row) === key
+  );
+}
+
 function getAllPriorAuthCases(){
   return readJSON(FILES.prior_auth_cases, []);
 }
