@@ -59905,6 +59905,86 @@ if (process.env.TJHP_PRIOR_AUTH_STRUCTURED_ROW_PARSER_SMOKE_TESTS === "true" && 
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "tjhpParseRowsFromUploadedFile",
+        "parsePriorAuthStructuredRows",
+        "upsertPriorAuthCase",
+        "savePriorAuthUploadRecord",
+        "PRIOR_AUTH_STRUCTURED_ROW_PARSER_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_MODEL_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior auth CSV dependency: " + x));
+
+      const uploadStart = src.indexOf('if (method === "POST" && pathname === "/data-management/prior-auth/upload")');
+      const uploadEnd = src.indexOf('if (method === "GET" && pathname === "/data-management")', uploadStart);
+
+      assert(uploadStart >= 0, "prior auth upload route missing");
+      assert(uploadEnd > uploadStart, "prior auth upload route boundary missing");
+
+      const uploadRouteSrc = src.slice(uploadStart, uploadEnd);
+
+      [
+        "parseMultipartForm",
+        "tjhpParseRowsFromUploadedFile",
+        "allowExcelStructured: false",
+        "parsePriorAuthStructuredRows",
+        "upsertPriorAuthCase",
+        "savePriorAuthUploadRecord",
+        "stored_for_review",
+        "parsed_prior_auth_cases",
+        "needs_review",
+        "pa_status=parsed",
+        "pa_status=uploaded",
+        "pa_status=upload_failed"
+      ].forEach(x => assert(uploadRouteSrc.includes(x), "prior auth CSV upload route missing marker: " + x));
+
+      assert(uploadRouteSrc.includes('parsedFile.kind === "CSV"'), "prior auth upload route must be CSV-gated");
+      assert(uploadRouteSrc.includes('{ minConfidence: "high" }'), "prior auth upload route must require high confidence");
+      assert(uploadRouteSrc.includes("totalParsedCases > 0"), "prior auth upload route must redirect parsed only when cases are created");
+
+      [
+        "/upload-router",
+        "FILES.billed",
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "document_ingests",
+        "writeJSON(FILES.billed",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests"
+      ].forEach(x => assert(!uploadRouteSrc.includes(x), "prior auth upload route must not include: " + x));
+
+      const priorAuthContentStart = src.indexOf("const priorAuthContent = `");
+      const priorAuthContentEnd = src.indexOf("const practiceContent = revenueContent;", priorAuthContentStart);
+      assert(priorAuthContentStart >= 0 && priorAuthContentEnd > priorAuthContentStart, "priorAuthContent boundary missing");
+
+      const priorAuthContentSrc = src.slice(priorAuthContentStart, priorAuthContentEnd);
+
+      [
+        "Prior authorization CSV parsed and cases created.",
+        "CSV upload parsing",
+        "CSV files with recognizable prior authorization headers can be parsed into cases",
+        "CSV parsing can create prior auth cases only",
+        "non-CSV and uncertain files remain stored for review"
+      ].forEach(x => assert(priorAuthContentSrc.includes(x), "prior auth CSV UI marker missing: " + x));
+
+      assert(!priorAuthContentSrc.includes('action="/upload-router"'), "prior auth content must not post to upload-router");
+
+      process.stdout.write("PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_MODEL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
