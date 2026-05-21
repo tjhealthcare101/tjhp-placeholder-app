@@ -50697,22 +50697,86 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
     });
 
     const files = Array.isArray(parsedUpload.files) ? parsedUpload.files : [];
+    let totalParsedCases = 0;
 
     files.forEach(file => {
+      const fileName = file.originalName || file.filename || "";
+      const fileType = file.mimeType || "";
+      let status = "stored_for_review";
+      let parsedCaseCount = 0;
+      let needsReview = true;
+      let notes = file.url ? `Stored file: ${file.url}` : "Stored prior authorization upload for review.";
+
+      const parsedFile = tjhpParseRowsFromUploadedFile(file, {
+        purpose: "prior_authorization",
+        allowExcelStructured: false
+      });
+
+      const isCsvStructured =
+        parsedFile &&
+        parsedFile.ok &&
+        parsedFile.kind === "CSV" &&
+        Array.isArray(parsedFile.rows) &&
+        parsedFile.rows.length > 0;
+
+      if (isCsvStructured) {
+        const parsedPriorAuth = parsePriorAuthStructuredRows(
+          parsedFile.rows,
+          {
+            org_id: org.org_id,
+            created_by: sess.user_id || "",
+            source_upload_batch_id: ""
+          },
+          { minConfidence: "high" }
+        );
+
+        if (parsedPriorAuth.ok && Array.isArray(parsedPriorAuth.cases) && parsedPriorAuth.cases.length) {
+          status = "parsed_prior_auth_cases";
+          parsedCaseCount = parsedPriorAuth.cases.length;
+          needsReview = !!parsedPriorAuth.needs_review;
+
+          parsedPriorAuth.cases.forEach(caseInput => {
+            upsertPriorAuthCase(org.org_id, {
+              ...caseInput,
+              org_id: org.org_id,
+              created_by: sess.user_id || ""
+            }, sess.user_id || "");
+          });
+
+          totalParsedCases += parsedCaseCount;
+          notes = `Parsed ${parsedCaseCount} prior authorization case(s) from CSV. ${parsedPriorAuth.needs_review ? "Some rows need review." : "All recognized rows parsed."}`;
+        } else {
+          status = "needs_review";
+          parsedCaseCount = 0;
+          needsReview = true;
+          notes = "CSV uploaded but prior authorization headers were not recognized with high confidence. Stored for review.";
+        }
+      }
+
+      if (!isCsvStructured && parsedFile && parsedFile.kind && parsedFile.kind !== "CSV") {
+        status = "stored_for_review";
+        parsedCaseCount = 0;
+        needsReview = true;
+        notes = `${parsedFile.kind} upload stored for review. Structured prior-auth parsing is currently CSV-only.`;
+      }
+
       savePriorAuthUploadRecord({
         org_id: org.org_id,
-        file_name: file.originalName || file.filename || "",
-        file_type: file.mimeType || "",
+        file_name: fileName,
+        file_type: fileType,
         upload_purpose: "prior_authorization",
-        status: "stored_for_review",
-        parsed_case_count: 0,
-        needs_review: true,
+        status,
+        parsed_case_count: parsedCaseCount,
+        needs_review: needsReview,
         created_by: sess.user_id || "",
-        notes: file.url ? `Stored file: ${file.url}` : "Stored prior authorization upload for review."
+        notes
       });
     });
 
-    return redirect(res, "/data-management?tab=prior-auth&pa_status=uploaded");
+    return redirect(res, totalParsedCases > 0
+      ? "/data-management?tab=prior-auth&pa_status=parsed"
+      : "/data-management?tab=prior-auth&pa_status=uploaded"
+    );
   } catch (err) {
     return redirect(res, "/data-management?tab=prior-auth&pa_status=upload_failed");
   }
