@@ -598,6 +598,49 @@ function priorAuthFindDuplicateCaseIndex(rows = [], incoming = {}){
   );
 }
 
+
+function priorAuthIncomingValueIsUseful(key, value, existing = {}){
+  if (Array.isArray(value)) return value.length > 0;
+
+  if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+  if (typeof value === "boolean") return value === true;
+
+  const text = String(value || "").trim();
+  if (!text) return false;
+
+  if (
+    key === "status" &&
+    text === PRIOR_AUTH_DEFAULT_STATUS &&
+    String(existing.status || "").trim() &&
+    String(existing.status || "").trim() !== PRIOR_AUTH_DEFAULT_STATUS
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function priorAuthMergeCaseForUpdate(existing = {}, incoming = {}, org_id = ""){
+  const merged = { ...(existing || {}) };
+
+  Object.entries(incoming || {}).forEach(([key, value]) => {
+    if (["auth_case_id","org_id","created_at","created_by"].includes(key)) return;
+
+    if (priorAuthIncomingValueIsUseful(key, value, existing)) {
+      merged[key] = value;
+    }
+  });
+
+  return {
+    ...merged,
+    auth_case_id: existing.auth_case_id || incoming.auth_case_id,
+    org_id: String(org_id || existing.org_id || incoming.org_id || "").trim(),
+    created_at: existing.created_at || incoming.created_at || nowISO(),
+    created_by: existing.created_by || incoming.created_by || "",
+    updated_at: nowISO()
+  };
+}
+
 function getAllPriorAuthCases(){
   return readJSON(FILES.prior_auth_cases, []);
 }
