@@ -51730,6 +51730,47 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
 
     const priorAuthRows = getPriorAuthCases(org.org_id);
     const priorAuthUploads = getPriorAuthUploads(org.org_id);
+
+    function priorAuthDateKey(value){
+      const raw = String(value || "").trim();
+      if (!raw) return "";
+      const day = raw.slice(0, 10);
+      return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : "";
+    }
+
+    const priorAuthDateStartRaw = priorAuthDateKey(parsed.query.pa_start || "");
+    const priorAuthDateEndRaw = priorAuthDateKey(parsed.query.pa_end || "");
+    const priorAuthDateFilterActive = !!(priorAuthDateStartRaw || priorAuthDateEndRaw);
+
+    function priorAuthWithinDateFilter(value){
+      const day = priorAuthDateKey(value);
+      if (priorAuthDateFilterActive && !day) return false;
+      if (priorAuthDateStartRaw && day < priorAuthDateStartRaw) return false;
+      if (priorAuthDateEndRaw && day > priorAuthDateEndRaw) return false;
+      return true;
+    }
+
+    function priorAuthCaseFilterDate(row = {}){
+      return String(
+        row.submitted_date ||
+        row.determination_date ||
+        row.expiration_date ||
+        row.created_at ||
+        ""
+      ).trim();
+    }
+
+    const priorAuthFilteredRows = priorAuthRows.filter(x =>
+      priorAuthWithinDateFilter(priorAuthCaseFilterDate(x))
+    );
+
+    const priorAuthFilteredUploads = priorAuthUploads.filter(x =>
+      priorAuthWithinDateFilter(x.created_at)
+    );
+
+    const priorAuthDateFilterSummary = priorAuthDateFilterActive
+      ? `Showing ${formatNumberUI(priorAuthFilteredRows.length)} of ${formatNumberUI(priorAuthRows.length)} cases and ${formatNumberUI(priorAuthFilteredUploads.length)} of ${formatNumberUI(priorAuthUploads.length)} uploads.`
+      : "Showing latest Prior Auth cases and upload records.";
     const priorAuthSubmittedPendingCount = priorAuthRows.filter(x =>
       ["Submitted","Pending"].includes(String(x.status || ""))
     ).length;
