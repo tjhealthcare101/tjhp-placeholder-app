@@ -59411,6 +59411,105 @@ if (process.env.TJHP_PRIOR_AUTH_NORMALIZATION_SMOKE_TESTS === "true" && (process
   }
 }
 
+if (process.env.TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "Prior Authorizations",
+        "/data-management?tab=prior-auth",
+        "priorAuthContent",
+        "getPriorAuthCases(org.org_id)",
+        "getPriorAuthUploads(org.org_id)",
+        "Stored prior auth cases",
+        "Upload ledger records",
+        "Submitted / Pending",
+        "Missing Documentation",
+        "Denied / Partially Approved",
+        "Expiring / Expired",
+        "Add prior authorization case manually",
+        "Prior Authorization Cases",
+        "Prior Auth Upload Ledger",
+        "Upload prior authorization support files",
+        "Store Prior Auth Upload For Review",
+        "Prior authorization case saved.",
+        "Prior authorization upload stored for review.",
+        "Prior authorization upload failed. Please try again."
+      ].forEach(x => assert(src.includes(x), "missing prior auth UI marker: " + x));
+
+      [
+        'action="/data-management/prior-auth/create"',
+        'action="/data-management/prior-auth/upload"',
+        'name="documents"',
+        'POST" && pathname === "/data-management/prior-auth/create"',
+        'POST" && pathname === "/data-management/prior-auth/upload"',
+        "savePriorAuthUploadRecord",
+        "stored_for_review"
+      ].forEach(x => assert(src.includes(x), "missing prior auth route/form marker: " + x));
+
+      [
+        "prior_auth",
+        "priorauth",
+        "authorization",
+        "authorizations"
+      ].forEach(x => assert(src.includes(x), "missing prior auth tab alias: " + x));
+
+      [
+        "Upload",
+        "Reimbursement Contracts",
+        "Revenue Automation"
+      ].forEach(x => assert(src.includes(x), "existing Data Management tab missing: " + x));
+
+      [
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED",
+        "AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED",
+        "DATA_MANAGEMENT_REIMBURSEMENT_TAB_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_EXECUTIVE_EXPORT_FULL_STRATEGY_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_AR_AGING_BUSINESS_DATE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_NORMALIZATION_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_MODEL_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "protected smoke marker missing: " + x));
+
+      const uploadStart = src.indexOf('if (method === "POST" && pathname === "/data-management/prior-auth/upload")');
+      const uploadEnd = src.indexOf('if (method === "GET" && pathname === "/data-management")', uploadStart);
+      assert(uploadStart >= 0, "prior auth upload route missing");
+      assert(uploadEnd > uploadStart, "prior auth upload route boundary missing");
+
+      const uploadRouteSrc = src.slice(uploadStart, uploadEnd);
+
+      assert(uploadRouteSrc.includes("parseMultipartForm"), "prior auth upload route must use parseMultipartForm");
+      assert(uploadRouteSrc.includes("savePriorAuthUploadRecord"), "prior auth upload route must write upload ledger");
+      assert(!uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth upload route must not create cases from files");
+      assert(!uploadRouteSrc.includes("/upload-router"), "prior auth upload route must not call upload-router");
+      assert(!uploadRouteSrc.includes("document_ingests"), "prior auth upload route must not mutate document_ingests");
+      assert(!uploadRouteSrc.includes("FILES.billed"), "prior auth upload route must not mutate billed claims");
+      assert(!uploadRouteSrc.includes("FILES.payments"), "prior auth upload route must not mutate payments");
+      assert(!uploadRouteSrc.includes("FILES.payer_contracts"), "prior auth upload route must not mutate contracts");
+
+      const priorAuthContentStart = src.indexOf("const priorAuthContent = `");
+      const priorAuthContentEnd = src.indexOf("const practiceContent = revenueContent;", priorAuthContentStart);
+      assert(priorAuthContentStart >= 0, "priorAuthContent missing");
+      assert(priorAuthContentEnd > priorAuthContentStart, "priorAuthContent boundary missing");
+
+      const priorAuthContentSrc = src.slice(priorAuthContentStart, priorAuthContentEnd);
+      assert(!priorAuthContentSrc.includes('action="/upload-router"'), "prior auth content must not post to upload-router");
+
+      process.stdout.write("PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_MODEL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
