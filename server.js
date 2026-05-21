@@ -60147,7 +60147,19 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
         "structured CSV, Excel, and TXT upload parsing",
         "CSV, Excel, or clearly delimited TXT files",
         "CSV, Excel, and structured TXT parsing can create prior auth cases only",
-        "PDF, Word, image, and uncertain files remain stored for review"
+        "PDF, Word, image, and uncertain files remain stored for review",
+        "pa-upload-form",
+        "pa-files",
+        "pa-drop",
+        "pa-filelist",
+        "pa-upload-btn",
+        "pa-clear",
+        "Drag & drop prior authorization files here or click to select",
+        "Accepted: CSV, XLS/XLSX, TXT, PDF, DOC/DOCX, JPG/PNG",
+        "Structured candidate",
+        "Stored for review",
+        "Upload Prior Auth File",
+        "Upload Prior Auth Files"
       ].forEach(x => assert(priorAuthContentSrc.includes(x), "prior auth CSV UI marker missing: " + x));
 
       assert(!priorAuthContentSrc.includes('action="/upload-router"'), "prior auth content must not post to upload-router");
