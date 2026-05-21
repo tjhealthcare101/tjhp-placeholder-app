@@ -59670,7 +59670,20 @@ if (process.env.TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS === "true" && (pr
 
       assert(uploadRouteSrc.includes("parseMultipartForm"), "prior auth upload route must use parseMultipartForm");
       assert(uploadRouteSrc.includes("savePriorAuthUploadRecord"), "prior auth upload route must write upload ledger");
-      assert(!uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth upload route must not create cases from files");
+
+      const uploadRouteHasPriorAuthParser = uploadRouteSrc.includes("parsePriorAuthStructuredRows");
+
+      if (uploadRouteHasPriorAuthParser) {
+        assert(
+          uploadRouteSrc.includes("parseCSV") || uploadRouteSrc.includes("tjhpParseRowsFromUploadedFile"),
+          "prior auth parser wiring must parse structured rows from uploaded CSV/data"
+        );
+        assert(uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth parser wiring should create cases only after structured parse");
+        assert(uploadRouteSrc.includes("stored_for_review"), "prior auth parser wiring must still store unparsed/uncertain files for review");
+      } else {
+        assert(!uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth upload route must not create cases before parser wiring");
+      }
+
       assert(!uploadRouteSrc.includes("/upload-router"), "prior auth upload route must not call upload-router");
       assert(!uploadRouteSrc.includes("document_ingests"), "prior auth upload route must not mutate document_ingests");
       assert(!uploadRouteSrc.includes("FILES.billed"), "prior auth upload route must not mutate billed claims");
@@ -59799,9 +59812,19 @@ if (process.env.TJHP_PRIOR_AUTH_STRUCTURED_ROW_PARSER_SMOKE_TESTS === "true" && 
 
       const uploadRouteSrc = src.slice(uploadStart, uploadEnd);
 
-      assert(!uploadRouteSrc.includes("parsePriorAuthStructuredRows"), "Phase 2C-2A smoke test must not wire parser into upload route");
-      assert(!uploadRouteSrc.includes("priorAuthStructuredRowToCaseInput"), "prior auth upload route must not use row-to-case helper yet");
-      assert(!uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth upload route must still not create cases");
+      const uploadRouteHasPriorAuthParser = uploadRouteSrc.includes("parsePriorAuthStructuredRows");
+
+      if (uploadRouteHasPriorAuthParser) {
+        assert(
+          uploadRouteSrc.includes("parseCSV") || uploadRouteSrc.includes("tjhpParseRowsFromUploadedFile"),
+          "prior auth parser wiring must parse structured rows from uploaded CSV/data"
+        );
+        assert(uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth parser wiring should create cases only after structured parse");
+        assert(uploadRouteSrc.includes("stored_for_review"), "prior auth parser wiring must still store unparsed/uncertain files for review");
+      } else {
+        assert(!uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth upload route must not create cases before parser wiring");
+      }
+
       assert(!uploadRouteSrc.includes("/upload-router"), "prior auth upload route must not call upload-router");
       assert(!uploadRouteSrc.includes("FILES.billed"), "prior auth upload route must not mutate billed claims");
       assert(!uploadRouteSrc.includes("FILES.payments"), "prior auth upload route must not mutate payments");
