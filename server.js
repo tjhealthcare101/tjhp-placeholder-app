@@ -60443,22 +60443,10 @@ if (process.env.TJHP_PRIOR_AUTH_EXCEL_PARSE_STORAGE_SMOKE_TESTS === "true" && (p
       try {
         savePriorAuthCasesForOrg(org_id, []);
 
-        const XLSX = require("xlsx");
-        const wb = XLSX.utils.book_new();
-        const ws = XLSX.utils.json_to_sheet([
-          {
-            "Patient Name": "Excel Patient",
-            "Payer": "United",
-            "CPT Code": "97110",
-            "ICD-10": "M25.5",
-            "Status": "pending",
-            "Revenue At Risk": "500",
-            "Submitted Date": "2026-03-01"
-          }
-        ]);
-
-        XLSX.utils.book_append_sheet(wb, ws, "PriorAuth");
-        const xlsxBuffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+        const xlsxBuffer = tjhpSmokeBuildMinimalXlsx(
+          ["Patient Name","Payer","CPT Code","ICD-10","Status","Revenue At Risk","Submitted Date"],
+          [["Excel Patient","United","97110","M25.5","pending","500","2026-03-01"]]
+        );
 
         tempXlsxPath = path.join(DATA_DIR, "__prior_auth_excel_smoke_" + Date.now() + ".xlsx");
         fs.writeFileSync(tempXlsxPath, xlsxBuffer);
