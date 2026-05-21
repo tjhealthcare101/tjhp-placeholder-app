@@ -50709,17 +50709,17 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
 
       const parsedFile = tjhpParseRowsFromUploadedFile(file, {
         purpose: "prior_authorization",
-        allowExcelStructured: false
+        allowExcelStructured: true
       });
 
-      const isCsvStructured =
+      const isStructuredPriorAuthUpload =
         parsedFile &&
         parsedFile.ok &&
-        parsedFile.kind === "CSV" &&
+        ["CSV","EXCEL","TXT"].includes(String(parsedFile.kind || "")) &&
         Array.isArray(parsedFile.rows) &&
         parsedFile.rows.length > 0;
 
-      if (isCsvStructured) {
+      if (isStructuredPriorAuthUpload) {
         const parsedPriorAuth = parsePriorAuthStructuredRows(
           parsedFile.rows,
           {
@@ -50744,20 +50744,32 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
           });
 
           totalParsedCases += parsedCaseCount;
-          notes = `Parsed ${parsedCaseCount} prior authorization case(s) from CSV. ${parsedPriorAuth.needs_review ? "Some rows need review." : "All recognized rows parsed."}`;
+          notes = `Parsed ${parsedCaseCount} prior authorization case(s) from ${parsedFile.kind}. ${parsedPriorAuth.needs_review ? "Some rows need review." : "All recognized rows parsed."}`;
         } else {
           status = "needs_review";
           parsedCaseCount = 0;
           needsReview = true;
-          notes = "CSV uploaded but prior authorization headers were not recognized with high confidence. Stored for review.";
+          notes = `${parsedFile.kind} uploaded but prior authorization headers were not recognized with high confidence. Stored for review.`;
         }
       }
 
-      if (!isCsvStructured && parsedFile && parsedFile.kind && parsedFile.kind !== "CSV") {
-        status = "stored_for_review";
-        parsedCaseCount = 0;
-        needsReview = true;
-        notes = `${parsedFile.kind} upload stored for review. Structured prior-auth parsing is currently CSV-only.`;
+      if (!isStructuredPriorAuthUpload && parsedFile && parsedFile.kind) {
+        if (["PDF","WORD","IMAGE"].includes(String(parsedFile.kind || ""))) {
+          status = "stored_for_review";
+          parsedCaseCount = 0;
+          needsReview = true;
+          notes = `${parsedFile.kind} upload stored for review. Structured prior-auth parsing currently creates cases only from CSV, Excel, or clearly delimited TXT.`;
+        } else if (["CSV","EXCEL","TXT"].includes(String(parsedFile.kind || ""))) {
+          status = "needs_review";
+          parsedCaseCount = 0;
+          needsReview = true;
+          notes = `${parsedFile.kind} uploaded but structured prior-auth rows were not recognized. Stored for review.`;
+        } else if (parsedFile.ok === false || String(parsedFile.kind || "") === "UNKNOWN") {
+          status = "unsupported_file_type";
+          parsedCaseCount = 0;
+          needsReview = true;
+          notes = "Unsupported prior authorization upload file type. Stored safely without parsing.";
+        }
       }
 
       savePriorAuthUploadRecord({
@@ -59932,19 +59944,23 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
       [
         "parseMultipartForm",
         "tjhpParseRowsFromUploadedFile",
-        "allowExcelStructured: false",
+        "allowExcelStructured: true",
         "parsePriorAuthStructuredRows",
         "upsertPriorAuthCase",
         "savePriorAuthUploadRecord",
         "stored_for_review",
         "parsed_prior_auth_cases",
         "needs_review",
+        "const isStructuredPriorAuthUpload",
+        "unsupported_file_type",
+        "Structured prior-auth parsing currently creates cases only from CSV, Excel, or clearly delimited TXT.",
+        "uploaded but structured prior-auth rows were not recognized. Stored for review.",
         "pa_status=parsed",
         "pa_status=uploaded",
         "pa_status=upload_failed"
       ].forEach(x => assert(uploadRouteSrc.includes(x), "prior auth CSV upload route missing marker: " + x));
 
-      assert(uploadRouteSrc.includes('parsedFile.kind === "CSV"'), "prior auth upload route must be CSV-gated");
+      assert(uploadRouteSrc.includes('["CSV","EXCEL","TXT"].includes(String(parsedFile.kind || ""))'), "prior auth upload route must be gated to CSV/EXCEL/TXT structured uploads");
       assert(uploadRouteSrc.includes('{ minConfidence: "high" }'), "prior auth upload route must require high confidence");
       assert(uploadRouteSrc.includes("totalParsedCases > 0"), "prior auth upload route must redirect parsed only when cases are created");
 
