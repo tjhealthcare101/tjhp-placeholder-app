@@ -691,36 +691,41 @@ function upsertPriorAuthCase(org_id, input, user_id = ""){
     created_by: user_id
   });
 
-  const idx = rows.findIndex(x =>
+  let idx = rows.findIndex(x =>
     String(x.auth_case_id || "") === String(incoming.auth_case_id || "")
   );
+
+  if (idx < 0) {
+    idx = priorAuthFindDuplicateCaseIndex(rows, incoming);
+  }
+
+  let targetAuthCaseId = String(incoming.auth_case_id || "");
 
   if (idx >= 0) {
     const existing = rows[idx];
 
-    rows[idx] = normalizePriorAuthCase({
-      ...existing,
-      ...incoming,
-      auth_case_id: existing.auth_case_id,
-      org_id: oid,
-      created_at: existing.created_at || incoming.created_at,
-      created_by: existing.created_by || incoming.created_by,
-      updated_at: nowISO()
-    });
+    rows[idx] = normalizePriorAuthCase(
+      priorAuthMergeCaseForUpdate(existing, incoming, oid)
+    );
+
+    targetAuthCaseId = String(rows[idx].auth_case_id || targetAuthCaseId || "");
   } else {
-    rows.push(normalizePriorAuthCase({
+    const created = normalizePriorAuthCase({
       ...incoming,
       org_id: oid,
       created_at: incoming.created_at || nowISO(),
       updated_at: nowISO(),
       created_by: incoming.created_by || user_id || ""
-    }));
+    });
+
+    targetAuthCaseId = String(created.auth_case_id || targetAuthCaseId || "");
+    rows.push(created);
   }
 
   const saved = savePriorAuthCasesForOrg(oid, rows);
 
   const found = saved.find(x =>
-    String(x.auth_case_id || "") === String(incoming.auth_case_id || "")
+    String(x.auth_case_id || "") === String(targetAuthCaseId || "")
   );
 
   return { ok:true, case: found || incoming };
