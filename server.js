@@ -59985,6 +59985,115 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_CSV_PARSE_STORAGE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "tjhpParseRowsFromUploadedFile",
+        "parsePriorAuthStructuredRows",
+        "upsertPriorAuthCase",
+        "savePriorAuthUploadRecord",
+        "PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_STRUCTURED_ROW_PARSER_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_MODEL_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior auth CSV functional dependency: " + x));
+
+      const org_id = "__prior_auth_csv_parse_storage_smoke__" + Date.now().toString(36);
+      const originalUploads = readJSON(FILES.prior_auth_uploads, []);
+      const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+      const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+      const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+      const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+
+      try {
+        savePriorAuthCasesForOrg(org_id, []);
+
+        const csv = [
+          "Patient Name,Payer,CPT Code,ICD-10,Status,Missing Docs,Revenue At Risk,Submitted Date",
+          "Smoke Patient,Aetna,72148,M54.5,p2p,\"imaging report, physician order\",1200,2026-02-10",
+          "Second Patient,BlueCross,99214,Z00.00,approved,,350,2026-02-11"
+        ].join("\n");
+
+        const parsedFile = tjhpParseRowsFromUploadedFile({
+          filename: "prior-auths.csv",
+          originalName: "prior-auths.csv",
+          mimeType: "text/csv",
+          buffer: Buffer.from(csv)
+        }, {
+          purpose: "prior_authorization",
+          allowExcelStructured: false
+        });
+
+        assert(parsedFile.ok === true, "structured CSV file parse failed");
+        assert(parsedFile.kind === "CSV", "structured file should be CSV");
+        assert(Array.isArray(parsedFile.rows), "structured CSV rows missing");
+        assert.strictEqual(parsedFile.rows.length, 2, "structured CSV should have two rows");
+
+        const parsedPriorAuth = parsePriorAuthStructuredRows(
+          parsedFile.rows,
+          { org_id, created_by: "smoke", source_upload_batch_id: "smoke_upload" },
+          { minConfidence: "high" }
+        );
+
+        assert(parsedPriorAuth.ok === true, "structured prior-auth rows should parse");
+        assert.strictEqual(parsedPriorAuth.parse_status, "parsed_prior_auth_cases", "parse status mismatch");
+        assert.strictEqual(parsedPriorAuth.parsed_case_count, 2, "expected two parsed prior-auth cases");
+
+        parsedPriorAuth.cases.forEach(caseInput => {
+          upsertPriorAuthCase(org_id, { ...caseInput, org_id, created_by: "smoke" }, "smoke");
+        });
+
+        savePriorAuthUploadRecord({
+          org_id,
+          file_name: "prior-auths.csv",
+          file_type: "text/csv",
+          upload_purpose: "prior_authorization",
+          status: "parsed_prior_auth_cases",
+          parsed_case_count: parsedPriorAuth.cases.length,
+          needs_review: !!parsedPriorAuth.needs_review,
+          created_by: "smoke",
+          notes: "Parsed 2 prior authorization case(s) from CSV."
+        });
+
+        const cases = getPriorAuthCases(org_id);
+        assert.strictEqual(cases.length, 2, "expected two prior auth cases after CSV parse");
+        assert(cases.some(x => x.patient_name === "Smoke Patient" && x.status === "Peer-to-Peer Needed"), "expected normalized p2p case");
+        assert(cases.some(x => x.patient_name === "Second Patient" && x.status === "Approved"), "expected approved case");
+
+        const uploadRows = getPriorAuthUploads(org_id);
+        assert(uploadRows.some(x =>
+          x.status === "parsed_prior_auth_cases" &&
+          Number(x.parsed_case_count || 0) === 2
+        ), "expected parsed prior auth upload ledger row");
+
+        assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+        assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+        assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+        assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+      } finally {
+        savePriorAuthCasesForOrg(org_id, []);
+        writeJSON(FILES.prior_auth_uploads, originalUploads);
+      }
+
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims changed after cleanup");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments changed after cleanup");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts changed after cleanup");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests changed after cleanup");
+
+      process.stdout.write("PRIOR_AUTH_CSV_PARSE_STORAGE_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_CSV_PARSE_STORAGE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_MODEL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
