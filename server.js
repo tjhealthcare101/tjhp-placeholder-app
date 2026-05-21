@@ -51541,7 +51541,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         <div class="hr"></div>
         <h3>Prior Authorization Cases</h3>
         <p class="muted small">
-          Read-only preview of stored prior authorization cases. Manual entry and upload intake will be added later.
+          Read-only preview of stored prior authorization cases. Manual entry is available above; upload storage is available for support files.
         </p>
         <div style="overflow:auto;margin-top:10px;">
           <table>
