@@ -52098,6 +52098,28 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         </details>
 
         <div class="hr"></div>
+        <div class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
+          <h3 style="margin-top:0;">Filter Prior Auth Records</h3>
+          <p class="muted small">
+            Filter cases and uploads by date. Cases use submitted/determination/expiration/created date; uploads use upload date.
+          </p>
+          <form method="GET" action="/data-management" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
+            <input type="hidden" name="tab" value="prior-auth" />
+            <div>
+              <label>From</label>
+              <input type="date" name="pa_start" value="${safeStr(priorAuthDateStartRaw)}" />
+            </div>
+            <div>
+              <label>To</label>
+              <input type="date" name="pa_end" value="${safeStr(priorAuthDateEndRaw)}" />
+            </div>
+            <div class="btnRow">
+              <button class="btn secondary" type="submit">Apply</button>
+              <a class="btn secondary" href="/data-management?tab=prior-auth">Reset</a>
+            </div>
+          </form>
+          <p class="muted small" style="margin-top:8px;">${safeStr(priorAuthDateFilterSummary)}</p>
+        </div>
         <h3>Prior Authorization Cases</h3>
         <p class="muted small">
           Read-only preview of stored prior authorization cases. Manual entry is available above; upload storage is available for support files.
