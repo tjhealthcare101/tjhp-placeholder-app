@@ -60415,6 +60415,59 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_REVIEW_STORAGE_SMOKE_TESTS === "true" && (pr
   })();
 }
 
+
+if (process.env.TJHP_PRIOR_AUTH_TXT_PARSE_HELPER_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+
+    try {
+      const txt = [
+        "Patient Name|Payer|Procedure Code|Diagnosis Code|Status|Revenue At Risk|Submitted Date",
+        "Txt Patient|Cigna|97530|M54.5|approved|800|2026-03-02"
+      ].join("\n");
+
+      const parsedFile = tjhpParseRowsFromUploadedFile({
+        filename: "prior-auths.txt",
+        originalName: "prior-auths.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from(txt)
+      }, {
+        purpose: "prior_authorization",
+        allowExcelStructured: true
+      });
+
+      assert(parsedFile.ok === true, "structured TXT file parse failed");
+      assert.strictEqual(parsedFile.kind, "TXT", "file should parse as TXT");
+      assert(Array.isArray(parsedFile.rows), "TXT rows missing");
+      assert.strictEqual(parsedFile.rows.length, 1, "TXT should have one parsed row");
+
+      const parsedPriorAuth = parsePriorAuthStructuredRows(
+        parsedFile.rows,
+        { org_id: "__prior_auth_txt_helper_smoke__", created_by: "smoke" },
+        { minConfidence: "high" }
+      );
+
+      assert(parsedPriorAuth.ok === true, "TXT prior-auth rows should parse");
+      assert.strictEqual(parsedPriorAuth.parsed_case_count, 1, "expected one parsed TXT prior-auth case");
+      assert.strictEqual(parsedPriorAuth.cases.length, 1, "expected one case input");
+
+      const row = parsedPriorAuth.cases[0];
+      assert.strictEqual(row.patient_name, "Txt Patient", "patient name mapping failed");
+      assert.strictEqual(row.payer, "Cigna", "payer mapping failed");
+      assert.strictEqual(row.cpt_hcpcs, "97530", "procedure mapping failed");
+      assert.strictEqual(row.icd10, "M54.5", "diagnosis mapping failed");
+      assert.strictEqual(row.status, "Approved", "status normalization failed");
+      assert.strictEqual(row.estimated_revenue_at_risk, 800, "revenue at risk mapping failed");
+
+      process.stdout.write("PRIOR_AUTH_TXT_PARSE_HELPER_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_TXT_PARSE_HELPER_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_EXCEL_PARSE_STORAGE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
