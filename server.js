@@ -51784,20 +51784,180 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
             Upload prior authorization CSV, Excel, or clearly delimited TXT files, plus approval letters, denial letters, payer responses, clinical notes, physician orders, referral documents, payer forms, PDFs, Word documents, and images. CSV, Excel, and clearly delimited TXT files with recognizable prior authorization headers can be parsed into cases. PDF, Word, and image files are stored for review in this phase.
           </p>
 
-          <form method="POST" action="/data-management/prior-auth/upload" enctype="multipart/form-data">
+          <form id="pa-upload-form" method="POST" action="/data-management/prior-auth/upload" enctype="multipart/form-data">
             <input
+              id="pa-files"
               type="file"
               name="documents"
               accept=".csv,.xls,.xlsx,.pdf,.txt,.doc,.docx,.jpg,.jpeg,.png"
               multiple
+              style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;"
             />
+
+            <div
+              id="pa-drop"
+              class="dropzone"
+              tabindex="0"
+              role="button"
+              aria-label="Drag and drop prior authorization files or click to choose files"
+              style="margin-top:10px;border:2px dashed #cbd5e1;border-radius:14px;padding:18px;text-align:center;background:#fff;"
+            >
+              <div id="pa-drop-title" style="font-weight:900;">Drag & drop prior authorization files here or click to select</div>
+              <div id="pa-drop-sub" class="muted small" style="margin-top:4px;">Accepted: CSV, XLS/XLSX, TXT, PDF, DOC/DOCX, JPG/PNG</div>
+              <div id="pa-filelist" class="muted small" style="display:none;margin-top:8px;"></div>
+            </div>
+
             <div class="muted small" style="margin-top:8px;">
               Files are recorded in the Prior Auth Upload Ledger. CSV, Excel, and structured TXT parsing can create prior auth cases only; uploads do not change claims, payments, reimbursement rules, or lifecycle metrics.
             </div>
-            <div style="margin-top:10px;">
-              <button class="btn secondary" type="submit">Store Prior Auth Upload For Review</button>
+
+            <div class="btnRow" style="margin-top:10px;">
+              <button id="pa-upload-btn" class="btn secondary" type="submit" disabled>Store Prior Auth Upload For Review</button>
+              <button id="pa-clear" class="btn secondary" type="button" style="display:none;">Clear</button>
             </div>
           </form>
+          <script>
+          (function(){
+            const form = document.getElementById("pa-upload-form");
+            const dz = document.getElementById("pa-drop");
+            const inp = document.getElementById("pa-files");
+            const list = document.getElementById("pa-filelist");
+            const title = document.getElementById("pa-drop-title");
+            const sub = document.getElementById("pa-drop-sub");
+            const btn = document.getElementById("pa-upload-btn");
+            const clearBtn = document.getElementById("pa-clear");
+
+            if (!form || !dz || !inp) return;
+
+            const esc = function(s){
+              return String(s || "").replace(/[<>&"]/g, function(c){
+                return c === "<" ? "&lt;" : (c === ">" ? "&gt;" : (c === "&" ? "&amp;" : "&quot;"));
+              });
+            };
+
+            const accepted = [".csv",".xls",".xlsx",".txt",".pdf",".doc",".docx",".jpg",".jpeg",".png"];
+            let selected = [];
+
+            const sameFile = function(a, b){
+              return !!(a && b && a.name === b.name && a.size === b.size && a.lastModified === b.lastModified);
+            };
+
+            const detectType = function(fileName){
+              const n = String(fileName || "").toLowerCase();
+              const ext = "." + (n.split(".").pop() || "");
+              if ([".csv",".xls",".xlsx",".txt"].includes(ext)) return "Structured candidate";
+              if ([".pdf",".doc",".docx",".jpg",".jpeg",".png"].includes(ext)) return "Stored for review";
+              return "Unsupported";
+            };
+
+            const syncInput = function(){
+              try {
+                const dt = new DataTransfer();
+                selected.forEach(function(f){ dt.items.add(f); });
+                inp.files = dt.files;
+              } catch (_) {}
+            };
+
+            const render = function(){
+              if (!title || !sub || !list) return;
+
+              if (!selected.length) {
+                title.textContent = "Drag & drop prior authorization files here or click to select";
+                sub.textContent = "Accepted: CSV, XLS/XLSX, TXT, PDF, DOC/DOCX, JPG/PNG";
+                list.style.display = "none";
+                list.innerHTML = "";
+                if (btn) {
+                  btn.disabled = true;
+                  btn.textContent = "Store Prior Auth Upload For Review";
+                }
+                if (clearBtn) clearBtn.style.display = "none";
+                return;
+              }
+
+              title.textContent = selected.length === 1
+                ? "1 prior authorization file ready"
+                : selected.length + " prior authorization files ready";
+
+              sub.textContent = "Drag & drop to add more, or click to replace selection";
+              list.style.display = "block";
+              list.innerHTML = selected.map(function(f){
+                const ext = (String(f.name || "").split(".").pop() || "").toUpperCase();
+                return esc(f.name) + " • " + esc(ext) + " • " + esc(detectType(f.name));
+              }).join("<br/>");
+
+              if (btn) {
+                btn.disabled = false;
+                btn.textContent = selected.length === 1 ? "Upload Prior Auth File" : "Upload Prior Auth Files";
+              }
+
+              if (clearBtn) clearBtn.style.display = "inline-flex";
+            };
+
+            const addFiles = function(files){
+              Array.from(files || []).forEach(function(f){
+                const ext = "." + String(f.name || "").toLowerCase().split(".").pop();
+                if (!accepted.includes(ext)) return;
+                if (!selected.some(function(x){ return sameFile(x, f); })) selected.push(f);
+              });
+
+              syncInput();
+              render();
+            };
+
+            dz.addEventListener("click", function(){ inp.click(); });
+
+            dz.addEventListener("keydown", function(e){
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                inp.click();
+              }
+            });
+
+            ["dragenter","dragover"].forEach(function(evt){
+              dz.addEventListener(evt, function(e){
+                e.preventDefault();
+                dz.style.borderColor = "#2563eb";
+                dz.style.background = "#eff6ff";
+              });
+            });
+
+            ["dragleave","drop"].forEach(function(evt){
+              dz.addEventListener(evt, function(e){
+                e.preventDefault();
+                dz.style.borderColor = "#cbd5e1";
+                dz.style.background = "#fff";
+              });
+            });
+
+            dz.addEventListener("drop", function(e){
+              addFiles((e.dataTransfer && e.dataTransfer.files) ? e.dataTransfer.files : []);
+            });
+
+            inp.addEventListener("change", function(){
+              selected = Array.from(inp.files || []);
+              render();
+            });
+
+            if (clearBtn) {
+              clearBtn.addEventListener("click", function(){
+                selected = [];
+                try { inp.value = ""; } catch (_) {}
+                syncInput();
+                render();
+              });
+            }
+
+            form.addEventListener("submit", function(){
+              if (btn) {
+                btn.disabled = true;
+                btn.textContent = "Uploading...";
+              }
+              if (sub) sub.textContent = "Uploading... please wait";
+            });
+
+            render();
+          })();
+          </script>
         </details>
         <div class="hr"></div>
         <h3>Prior Authorization Cases</h3>
