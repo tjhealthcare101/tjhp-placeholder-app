@@ -60094,6 +60094,139 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_PARSE_STORAGE_SMOKE_TESTS === "true" && (pro
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_CSV_REVIEW_STORAGE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "tjhpParseRowsFromUploadedFile",
+        "parsePriorAuthStructuredRows",
+        "savePriorAuthUploadRecord",
+        "getPriorAuthCases",
+        "getPriorAuthUploads",
+        "PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_CSV_PARSE_STORAGE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_STRUCTURED_ROW_PARSER_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior auth review-storage dependency: " + x));
+
+      const org_id = "__prior_auth_csv_review_storage_smoke__" + Date.now().toString(36);
+      const originalUploads = readJSON(FILES.prior_auth_uploads, []);
+      const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+      const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+      const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+      const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+
+      try {
+        savePriorAuthCasesForOrg(org_id, []);
+
+        const weakCsv = [
+          "Random Column,Other",
+          "foo,bar",
+          "hello,world"
+        ].join("\n");
+
+        const weakParsedFile = tjhpParseRowsFromUploadedFile({
+          filename: "prior-auth-weak.csv",
+          originalName: "prior-auth-weak.csv",
+          mimeType: "text/csv",
+          buffer: Buffer.from(weakCsv)
+        }, {
+          purpose: "prior_authorization",
+          allowExcelStructured: false
+        });
+
+        assert(weakParsedFile.kind === "CSV", "weak file should still be treated as CSV");
+
+        const weakPriorAuth = parsePriorAuthStructuredRows(
+          weakParsedFile.rows || [],
+          { org_id, created_by: "smoke" },
+          { minConfidence: "high" }
+        );
+
+        assert.strictEqual(weakPriorAuth.ok, false, "weak CSV should not parse into prior-auth cases");
+        assert.strictEqual(weakPriorAuth.parsed_case_count, 0, "weak CSV should create zero cases");
+
+        savePriorAuthUploadRecord({
+          org_id,
+          file_name: "prior-auth-weak.csv",
+          file_type: "text/csv",
+          upload_purpose: "prior_authorization",
+          status: "needs_review",
+          parsed_case_count: 0,
+          needs_review: true,
+          created_by: "smoke",
+          notes: "CSV uploaded but prior authorization headers were not recognized with high confidence. Stored for review."
+        });
+
+        const pdfParsedFile = tjhpParseRowsFromUploadedFile({
+          filename: "prior-auth-letter.pdf",
+          originalName: "prior-auth-letter.pdf",
+          mimeType: "application/pdf",
+          buffer: Buffer.from("%PDF-1.4 smoke")
+        }, {
+          purpose: "prior_authorization",
+          allowExcelStructured: false
+        });
+
+        assert(!(pdfParsedFile.ok === true && pdfParsedFile.kind === "CSV"), "PDF should not parse as CSV");
+
+        savePriorAuthUploadRecord({
+          org_id,
+          file_name: "prior-auth-letter.pdf",
+          file_type: "application/pdf",
+          upload_purpose: "prior_authorization",
+          status: "stored_for_review",
+          parsed_case_count: 0,
+          needs_review: true,
+          created_by: "smoke",
+          notes: "PDF upload stored for review. Structured prior-auth parsing is currently CSV-only."
+        });
+
+        const cases = getPriorAuthCases(org_id);
+        assert.strictEqual(cases.length, 0, "weak CSV and non-CSV files should not create prior-auth cases");
+
+        const uploads = getPriorAuthUploads(org_id);
+        assert(uploads.some(x =>
+          x.file_name === "prior-auth-weak.csv" &&
+          x.status === "needs_review" &&
+          Number(x.parsed_case_count || 0) === 0 &&
+          x.needs_review === true
+        ), "weak CSV review ledger row missing");
+
+        assert(uploads.some(x =>
+          x.file_name === "prior-auth-letter.pdf" &&
+          x.status === "stored_for_review" &&
+          Number(x.parsed_case_count || 0) === 0 &&
+          x.needs_review === true
+        ), "non-CSV stored-for-review ledger row missing");
+
+        assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+        assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+        assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+        assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+
+      } finally {
+        savePriorAuthCasesForOrg(org_id, []);
+        writeJSON(FILES.prior_auth_uploads, originalUploads);
+      }
+
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims changed after cleanup");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments changed after cleanup");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts changed after cleanup");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests changed after cleanup");
+
+      process.stdout.write("PRIOR_AUTH_CSV_REVIEW_STORAGE_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_CSV_REVIEW_STORAGE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_MODEL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
