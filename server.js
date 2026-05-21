@@ -59694,6 +59694,129 @@ if (process.env.TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS === "true" && (pr
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_STRUCTURED_ROW_PARSER_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "priorAuthNormalizeHeaderKey",
+        "PRIOR_AUTH_HEADER_ALIASES",
+        "priorAuthFieldForHeader",
+        "priorAuthStructuredRowSignal",
+        "priorAuthStructuredRowToCaseInput",
+        "parsePriorAuthStructuredRows"
+      ].forEach(x => assert(src.includes(x), "missing prior auth parser symbol: " + x));
+
+      [
+        "PRIOR_AUTH_NORMALIZATION_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_MODEL_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED",
+        "AI_COPILOT_EXPORT_BUTTON_SMOKE_TESTS_PASSED",
+        "DATA_MANAGEMENT_REIMBURSEMENT_TAB_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_EXECUTIVE_EXPORT_FULL_STRATEGY_SMOKE_TESTS_PASSED",
+        "REVENUE_INTELLIGENCE_AR_AGING_BUSINESS_DATE_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "protected marker missing: " + x));
+
+      assert.strictEqual(priorAuthNormalizeHeaderKey("CPT / HCPCS"), "cpt hcpcs", "header normalization failed");
+      assert.strictEqual(priorAuthFieldForHeader("CPT Code"), "cpt_hcpcs", "CPT Code alias failed");
+      assert.strictEqual(priorAuthFieldForHeader("ICD-10"), "icd10", "ICD-10 alias failed");
+      assert.strictEqual(priorAuthFieldForHeader("Auth #"), "auth_number", "Auth # alias failed");
+      assert.strictEqual(priorAuthFieldForHeader("Missing Docs"), "missing_documentation", "Missing Docs alias failed");
+
+      const strongRow = {
+        "Patient Name": "Smoke Patient",
+        "Payer": "Aetna",
+        "CPT Code": "72148",
+        "ICD-10": "M54.5",
+        "Status": "p2p",
+        "Missing Docs": "imaging report, physician order",
+        "Revenue At Risk": "1200",
+        "Submitted Date": "2026-02-10"
+      };
+
+      const signal = priorAuthStructuredRowSignal(strongRow);
+      assert.strictEqual(signal.confidence, "high", "structured prior auth row should be high confidence");
+      assert(signal.recognizedFields.includes("payer"), "payer should be recognized");
+      assert(signal.recognizedFields.includes("cpt_hcpcs"), "cpt_hcpcs should be recognized");
+      assert(signal.recognizedFields.includes("icd10"), "icd10 should be recognized");
+
+      const caseInput = priorAuthStructuredRowToCaseInput(strongRow, { org_id:"__prior_auth_parser_smoke__" });
+      assert.strictEqual(caseInput.org_id, "__prior_auth_parser_smoke__", "org_id default failed");
+      assert.strictEqual(caseInput.patient_name, "Smoke Patient", "patient name mapping failed");
+      assert.strictEqual(caseInput.payer, "Aetna", "payer mapping failed");
+      assert.strictEqual(caseInput.cpt_hcpcs, "72148", "cpt mapping failed");
+      assert.strictEqual(caseInput.icd10, "M54.5", "icd10 mapping failed");
+      assert.strictEqual(caseInput.status, "Peer-to-Peer Needed", "status normalization failed");
+      assert.strictEqual(caseInput.missing_documentation.length, 2, "missing docs list normalization failed");
+      assert.strictEqual(caseInput.estimated_revenue_at_risk, 1200, "revenue at risk mapping failed");
+
+      const structuredRows = [
+        strongRow,
+        {
+          "Patient ID": "P-200",
+          "Payer Name": "BlueCross",
+          "Procedure Code": "99214",
+          "Diagnosis Code": "Z00.00",
+          "Authorization Number": "AUTH123",
+          "Status": "approved",
+          "Expiration Date": "2026-06-30"
+        }
+      ];
+
+      const parsed = parsePriorAuthStructuredRows(structuredRows, { org_id:"__prior_auth_parser_smoke__" });
+
+      assert(parsed.ok === true, "structured rows should parse");
+      assert.strictEqual(parsed.parse_status, "parsed_prior_auth_cases", "parse status mismatch");
+      assert.strictEqual(parsed.parsed_case_count, 2, "expected two parsed prior auth cases");
+      assert.strictEqual(parsed.cases.length, 2, "expected two case inputs");
+      assert.strictEqual(parsed.cases[0].status, "Peer-to-Peer Needed", "first case status mismatch");
+      assert.strictEqual(parsed.cases[0].cpt_hcpcs, "72148", "first case cpt mismatch");
+      assert.strictEqual(parsed.cases[0].icd10, "M54.5", "first case icd mismatch");
+      assert.strictEqual(parsed.cases[1].status, "Approved", "second case status mismatch");
+      assert.strictEqual(parsed.cases[1].auth_number, "AUTH123", "second case auth number mismatch");
+
+      const weak = parsePriorAuthStructuredRows([
+        { "Random Column": "some note", "Other": "not structured" }
+      ], { org_id:"__prior_auth_parser_smoke__" });
+
+      assert.strictEqual(weak.ok, false, "unstructured row should not parse");
+      assert.strictEqual(weak.parse_status, "needs_review", "unstructured row should need review");
+      assert.strictEqual(weak.parsed_case_count, 0, "unstructured row should not create cases");
+      assert.strictEqual(weak.cases.length, 0, "unstructured row should return no cases");
+      assert.strictEqual(weak.review.length, 1, "unstructured row should be in review");
+
+      const uploadStart = src.indexOf('if (method === "POST" && pathname === "/data-management/prior-auth/upload")');
+      const uploadEnd = src.indexOf('if (method === "GET" && pathname === "/data-management")', uploadStart);
+      assert(uploadStart >= 0 && uploadEnd > uploadStart, "prior auth upload route boundary missing");
+
+      const uploadRouteSrc = src.slice(uploadStart, uploadEnd);
+
+      assert(!uploadRouteSrc.includes("parsePriorAuthStructuredRows"), "Phase 2C-2A smoke test must not wire parser into upload route");
+      assert(!uploadRouteSrc.includes("priorAuthStructuredRowToCaseInput"), "prior auth upload route must not use row-to-case helper yet");
+      assert(!uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth upload route must still not create cases");
+      assert(!uploadRouteSrc.includes("/upload-router"), "prior auth upload route must not call upload-router");
+      assert(!uploadRouteSrc.includes("FILES.billed"), "prior auth upload route must not mutate billed claims");
+      assert(!uploadRouteSrc.includes("FILES.payments"), "prior auth upload route must not mutate payments");
+      assert(!uploadRouteSrc.includes("FILES.payer_contracts"), "prior auth upload route must not mutate contracts");
+      assert(!uploadRouteSrc.includes("document_ingests"), "prior auth upload route must not mutate document_ingests");
+
+      process.stdout.write("PRIOR_AUTH_STRUCTURED_ROW_PARSER_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_STRUCTURED_ROW_PARSER_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_MODEL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
