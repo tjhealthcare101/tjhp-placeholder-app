@@ -50891,7 +50891,7 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
       getPriorAuthCases(org.org_id).map(x => String(x.auth_case_id || ""))
     );
 
-    files.forEach(file => {
+    for (const file of files) {
       const priorAuthUploadId = "pau_" + uuid();
       const createdPriorAuthCaseIds = [];
       const fileName = file.originalName || file.filename || "";
@@ -50901,7 +50901,7 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
       let needsReview = true;
       let notes = file.url ? `Stored file: ${file.url}` : "Stored prior authorization upload for review.";
 
-      const parsedFile = tjhpParseRowsFromUploadedFile(file, {
+      const parsedFile = await tjhpParseRowsFromUploadedFileForRoute(file, {
         purpose: "prior_authorization",
         allowExcelStructured: true
       });
@@ -50909,7 +50909,7 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
       const isStructuredPriorAuthUpload =
         parsedFile &&
         parsedFile.ok &&
-        ["CSV","EXCEL","TXT"].includes(String(parsedFile.kind || "")) &&
+        ["CSV","EXCEL","TXT","PDF","WORD","IMAGE"].includes(String(parsedFile.kind || "")) &&
         Array.isArray(parsedFile.rows) &&
         parsedFile.rows.length > 0;
 
@@ -50968,7 +50968,7 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
           status = "stored_for_review";
           parsedCaseCount = 0;
           needsReview = true;
-          notes = `${parsedFile.kind} upload stored for review. Structured prior-auth parsing currently creates cases only from CSV, Excel, or clearly delimited TXT.`;
+          notes = `${parsedFile.kind} upload stored for review. No reliable prior authorization fields were extracted.`;
         } else if (["CSV","EXCEL","TXT"].includes(String(parsedFile.kind || ""))) {
           status = "needs_review";
           parsedCaseCount = 0;
@@ -50996,7 +50996,7 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
         created_by: sess.user_id || "",
         notes
       });
-    });
+    }
 
     return redirect(res, totalParsedCases > 0
       ? "/data-management?tab=prior-auth&pa_status=parsed"
