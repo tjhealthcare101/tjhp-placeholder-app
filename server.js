@@ -50887,8 +50887,13 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
 
     const files = Array.isArray(parsedUpload.files) ? parsedUpload.files : [];
     let totalParsedCases = 0;
+    const knownPriorAuthCaseIds = new Set(
+      getPriorAuthCases(org.org_id).map(x => String(x.auth_case_id || ""))
+    );
 
     files.forEach(file => {
+      const priorAuthUploadId = "pau_" + uuid();
+      const createdPriorAuthCaseIds = [];
       const fileName = file.originalName || file.filename || "";
       const fileType = file.mimeType || "";
       let status = "stored_for_review";
@@ -50925,15 +50930,31 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
           needsReview = !!parsedPriorAuth.needs_review;
 
           parsedPriorAuth.cases.forEach(caseInput => {
-            upsertPriorAuthCase(org.org_id, {
+            const saved = upsertPriorAuthCase(org.org_id, {
               ...caseInput,
               org_id: org.org_id,
               created_by: sess.user_id || ""
             }, sess.user_id || "");
+
+            const savedCase = saved && saved.case ? saved.case : null;
+            const savedCaseId = String(savedCase && savedCase.auth_case_id || "");
+
+            if (savedCaseId && !knownPriorAuthCaseIds.has(savedCaseId)) {
+              upsertPriorAuthCase(org.org_id, {
+                ...savedCase,
+                source_upload_batch_id: priorAuthUploadId
+              }, sess.user_id || "");
+              createdPriorAuthCaseIds.push(savedCaseId);
+            }
+
+            if (savedCaseId) knownPriorAuthCaseIds.add(savedCaseId);
           });
 
           totalParsedCases += parsedCaseCount;
           notes = `Parsed ${parsedCaseCount} prior authorization case(s) from ${parsedFile.kind}. ${parsedPriorAuth.needs_review ? "Some rows need review." : "All recognized rows parsed."}`;
+          if (createdPriorAuthCaseIds.length) {
+            notes += ` Linked cases: ${createdPriorAuthCaseIds.join(", ")}.`;
+          }
         } else {
           status = "needs_review";
           parsedCaseCount = 0;
@@ -50962,6 +50983,7 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
       }
 
       savePriorAuthUploadRecord({
+        upload_id: priorAuthUploadId,
         org_id: org.org_id,
         file_name: fileName,
         file_type: fileType,
