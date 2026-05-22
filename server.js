@@ -1004,6 +1004,52 @@ function priorAuthRevenueAtRiskDisplay(value){
   return amount > 0 ? formatMoneyUI(amount) : "Not determined";
 }
 
+function tjhpPriorAuthNextActionLabel(row = {}){
+  const status = String(row.status || "").trim();
+
+  if (status === "Missing Documentation") return "Upload/collect missing docs";
+  if (status === "Peer-to-Peer Needed") return "Schedule peer-to-peer";
+  if (status === "Denied") return "Review for prior auth appeal";
+  if (status === "Partially Approved") return "Review approval limits";
+  if (status === "Expiring Soon") return "Renew or confirm service timing";
+  if (status === "Expired") return "Re-submit or renew authorization";
+  if (status === "Pending" || status === "Submitted") return "Follow up with payer";
+  if (status === "Auth Needed" || status === "Draft") return "Complete authorization request";
+
+  return "Review prior authorization";
+}
+
+function tjhpPriorAuthActionCenterRows(org_id){
+  const rows = getPriorAuthCases(org_id);
+
+  const actionableStatuses = new Set([
+    "Auth Needed",
+    "Draft",
+    "Submitted",
+    "Pending",
+    "Missing Documentation",
+    "Peer-to-Peer Needed",
+    "Partially Approved",
+    "Denied",
+    "Expiring Soon",
+    "Expired"
+  ]);
+
+  return rows
+    .filter(x => actionableStatuses.has(String(x.status || "")))
+    .sort((a, b) => {
+      const riskRank = { High:3, Medium:2, Low:1 };
+      const ar = riskRank[String(a.risk_level || "")] || 0;
+      const br = riskRank[String(b.risk_level || "")] || 0;
+      if (br !== ar) return br - ar;
+
+      const ad = new Date(a.expiration_date || a.scheduled_service_date || a.submitted_date || a.updated_at || a.created_at || 0).getTime() || 0;
+      const bd = new Date(b.expiration_date || b.scheduled_service_date || b.submitted_date || b.updated_at || b.created_at || 0).getTime() || 0;
+
+      return ad - bd;
+    });
+}
+
 
 function priorAuthStructuredRowSignal(row = {}){
   const fields = new Set();
@@ -45381,11 +45427,24 @@ if (method === "GET" && pathname === "/actions") {
     underpayments: "underpayments",
     issues: "all",
     all: "all",
-    followup: "followup"
+    followup: "followup",
+    "prior-auth": "prior-auth",
+    "prior_auth": "prior-auth",
+    priorauth: "prior-auth",
+    auth: "prior-auth",
+    auths: "prior-auth",
+    authorizations: "prior-auth"
   })[actionType] || "";
-  const uiTab = String(parsed.query.tab || tabAliasFromType || "all").toLowerCase();
+  const uiTabRaw = String(parsed.query.tab || tabAliasFromType || "all").toLowerCase();
+  const uiTab = ({
+    "prior_auth": "prior-auth",
+    priorauth: "prior-auth",
+    auth: "prior-auth",
+    auths: "prior-auth",
+    authorizations: "prior-auth"
+  })[uiTabRaw] || uiTabRaw;
   const normalizedTabRaw = uiTab === "appeals" ? "postsubmission" : uiTab;
-  const tab = (normalizedTabRaw === "awaiting" || normalizedTabRaw === "payments") ? "postsubmission" : normalizedTabRaw; // all|denials|underpayments|postsubmission|followup
+  const tab = (normalizedTabRaw === "awaiting" || normalizedTabRaw === "payments") ? "postsubmission" : normalizedTabRaw; // all|denials|underpayments|postsubmission|followup|prior-auth
   const subTabRaw = String(parsed.query.postsub || "all").toLowerCase();
   const subTab = ["all", "appeals", "negotiations"].includes(subTabRaw)
     ? subTabRaw
@@ -45727,12 +45786,14 @@ if (method === "GET" && pathname === "/actions") {
   followUpQs.set("page", "1");
   const followUpTab = `<a data-action-tab="followup" href="/actions?${followUpQs.toString()}" style="text-decoration:none;display:inline-flex;gap:6px;align-items:center;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb;background:${uiTab === "followup" ? "#111827" : "#fff"};color:${uiTab === "followup" ? "#fff" : "#111827"};font-weight:900;font-size:12px;">Claims Needing Follow-Up</a>`;
   const tabs = `
+    <!-- data-action-tab="prior-auth" -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
       ${tabBtn("all","All At Risk","All denials, underpayments, follow-ups, and awaiting payment work in one queue.")}
       ${tabBtn("denials","Denials","Denied claims that need an appeal packet or appeal follow-up.")}
       ${tabBtn("underpayments","Underpayments","Underpaid claims that need negotiation work or follow-up.")}
       ${tabBtn("appeals","Appeals & Negotiations","Submitted claims grouped by appeal, negotiation, and follow-up needs.")}
       ${followUpTab}
+      ${tabBtn("prior-auth","Prior Auths","Read-only queue of prior authorization cases requiring action.")}
     </div>
   `;
   const postSubmissionSubTabs = (tab === "postsubmission") ? `
@@ -45750,6 +45811,61 @@ if (method === "GET" && pathname === "/actions") {
       Working Claim: <strong>#${safeStr((selectedClaim && selectedClaim.claim_number) || selectedClaimId)}</strong>
     </div>
   ` : ``;
+
+  if (tab === "prior-auth") {
+    const priorAuthActionRows = tjhpPriorAuthActionCenterRows(org.org_id);
+    const priorAuthRowsHtml = priorAuthActionRows.map(x => `
+      <tr>
+        <td>${safeStr(x.patient_name || x.patient_id || "-")}</td>
+        <td>${safeStr(x.payer || "-")}</td>
+        <td>${safeStr(x.cpt_hcpcs || "-")}</td>
+        <td>${safeStr(x.icd10 || "-")}</td>
+        <td>${safeStr(x.requested_service || "-")}</td>
+        <td>${safeStr(x.status || "-")}</td>
+        <td>${safeStr(Array.isArray(x.missing_documentation) && x.missing_documentation.length ? x.missing_documentation.join(", ") : "-")}</td>
+        <td>${safeStr(x.submitted_date || "-")}</td>
+        <td>${safeStr(x.expiration_date || "-")}</td>
+        <td>${priorAuthRevenueAtRiskDisplay(x.estimated_revenue_at_risk)}</td>
+        <td>${safeStr(tjhpPriorAuthNextActionLabel(x))}</td>
+      </tr>
+    `).join("") || `<tr><td colspan="11" class="muted">No prior authorization cases need action.</td></tr>`;
+
+    const html = renderPage("Action Center", `
+      <h2>Action Center <span class="tooltip" data-tip="This page prevents revenue leakage by surfacing what needs action. Use tabs to work denials, underpayments, follow-up, and prior authorizations by priority.">ⓘ</span></h2>
+      <p class="muted">Claims and prior authorizations are sorted so nothing slips through the cracks.</p>
+
+      ${tabs}
+      <div class="hr"></div>
+
+      <div class="insight-card" style="margin-top:10px;">
+        <h3 style="margin:0 0 6px;">Prior Auths</h3>
+        <div class="muted small">Read-only queue of prior authorization cases that need staff attention. Status updates and workspaces will be added in a later phase.</div>
+      </div>
+
+      <div style="overflow:auto;margin-top:12px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Patient</th>
+              <th>Payer</th>
+              <th>CPT / HCPCS</th>
+              <th>ICD-10</th>
+              <th>Requested Service</th>
+              <th>Status</th>
+              <th>Missing Docs</th>
+              <th>Submitted</th>
+              <th>Expiration</th>
+              <th>Est. Revenue At Risk</th>
+              <th>Next Action</th>
+            </tr>
+          </thead>
+          <tbody>${priorAuthRowsHtml}</tbody>
+        </table>
+      </div>
+    `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
+
+    return send(res, 200, html);
+  }
 
   const rows = pageItems.map(x=>{
     const b = x.b;
@@ -61481,6 +61597,74 @@ if (process.env.TJHP_PRIOR_AUTH_REVENUE_AT_RISK_GUARD_SMOKE_TESTS === "true" && 
       process.exit(0);
     } catch (err) {
       process.stderr.write("PRIOR_AUTH_REVENUE_AT_RISK_GUARD_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
+if (process.env.TJHP_PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "tjhpPriorAuthActionCenterRows",
+        "tjhpPriorAuthNextActionLabel",
+        "Prior Auths",
+        "/actions?tab=prior-auth",
+        "data-action-tab=\"prior-auth\"",
+        "No prior authorization cases need action.",
+        "Review for prior auth appeal",
+        "Upload/collect missing docs",
+        "Schedule peer-to-peer",
+        "Renew or confirm service timing",
+        "priorAuthRevenueAtRiskDisplay",
+        "TJHP_PRIOR_AUTH_REVENUE_AT_RISK_GUARD_SMOKE_TESTS",
+        "PRIOR_AUTH_AI_EXTRACTION_STATIC_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_DEDUPE_UPSERT_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior-auth Action Center marker: " + x));
+
+      const actionsStart = src.indexOf('if (method === "GET" && pathname === "/actions")');
+      const actionsEnd = src.indexOf('if (method === "GET" && pathname === "/ai-appeal")', actionsStart);
+
+      assert(actionsStart >= 0, "GET /actions route missing");
+      assert(actionsEnd > actionsStart, "GET /actions boundary missing");
+
+      const actionsSrc = src.slice(actionsStart, actionsEnd);
+
+      [
+        "prior-auth",
+        "Prior Auths",
+        "tjhpPriorAuthActionCenterRows(org.org_id)",
+        "No prior authorization cases need action.",
+        "Read-only queue of prior authorization cases"
+      ].forEach(x => assert(actionsSrc.includes(x), "Action Center prior-auth branch missing marker: " + x));
+
+      const priorAuthBranchStart = actionsSrc.indexOf('if (tab === "prior-auth")');
+      const priorAuthBranchEnd = actionsSrc.indexOf("const rows = pageItems.map", priorAuthBranchStart);
+      assert(priorAuthBranchStart >= 0 && priorAuthBranchEnd > priorAuthBranchStart, "prior-auth branch boundary missing");
+      const priorAuthBranchSrc = actionsSrc.slice(priorAuthBranchStart, priorAuthBranchEnd);
+
+      [
+        "/data-management/prior-auth/upload",
+        "/data-management/prior-auth/create",
+        "/data-management/prior-auth/delete",
+        "/prior-auth/appeal",
+        "ensureAgentWorkspace(",
+        "writeJSON(FILES.billed",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests"
+      ].forEach(x => assert(!priorAuthBranchSrc.includes(x), "Action Center prior-auth shell must not include: " + x));
+
+      process.stdout.write("PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
       process.exit(1);
     }
   })();
