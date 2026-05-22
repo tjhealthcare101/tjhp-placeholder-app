@@ -45489,6 +45489,11 @@ if (method === "POST" && pathname === "/prior-auth/case/status") {
   }
 
   const nextStatus = normalizePriorAuthStatus(requestedStatus);
+
+  if (nextStatus === "Ready to Bill" && !tjhpPriorAuthCanMoveToReadyToBill(row)) {
+    return redirect(res, `/prior-auth/case?auth_case_id=${encodeURIComponent(auth_case_id)}&pa_status=ready_to_bill_not_allowed`);
+  }
+
   const existingNotes = String(row.notes || "").trim();
   const statusNote = note
     ? `[${new Date().toISOString()}] Status updated to ${nextStatus}: ${note}`
