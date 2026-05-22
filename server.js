@@ -45516,7 +45516,9 @@ if (method === "GET" && pathname === "/prior-auth/case") {
   const html = renderPage("Prior Auth Case", `
     <div class="card">
       <h2>Prior Authorization Case</h2>
-      <p class="muted">Read-only case detail. Status updates, claim linking, and workspaces will be added in later phases.</p>
+      <p class="muted">Case detail and staff status tracking. Claim linking and workspaces will be added in later phases.</p>
+      ${String(parsed.query.pa_status || "").trim() === "status_updated" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization status updated.</div>` : ""}
+      ${String(parsed.query.pa_status || "").trim() === "status_invalid" ? `<div class="alert warn" style="margin:10px 0;">That prior authorization status is not available for this phase.</div>` : ""}
       <div class="btnRow">
         <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
         <a class="btn secondary" href="/data-management?tab=prior-auth">Open Data Management</a>
@@ -45547,7 +45549,27 @@ if (method === "GET" && pathname === "/prior-auth/case") {
       <strong>Notes</strong>
       <div class="muted small" style="white-space:pre-wrap;margin-top:4px;">${safeStr(row.notes || "-")}</div>
       <div class="hr"></div>
-      <p class="muted small">Read-only phase: no payer submission, no claim mutation, no lifecycle mutation, no workspace creation.</p>
+      <h3>Update Status</h3>
+      <p class="muted small">This updates only the prior authorization case status. It does not link claims, change lifecycle metrics, create workspaces, or submit anything to a payer.</p>
+      <form method="POST" action="/prior-auth/case/status" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;align-items:end;">
+        <input type="hidden" name="auth_case_id" value="${safeStr(row.auth_case_id || "")}" />
+        <div>
+          <label>Status</label>
+          <select name="status">
+            ${tjhpPriorAuthStaffStatusOptions().map(s => `<option value="${safeStr(s)}" ${String(row.status || "") === s ? "selected" : ""}>${safeStr(s)}</option>`).join("")}
+          </select>
+        </div>
+        <div style="grid-column:1/-1;">
+          <label>Optional Note</label>
+          <textarea name="note" rows="2" placeholder="Optional internal note about this status update"></textarea>
+        </div>
+        <div>
+          <button class="btn" type="submit">Update Prior Auth Status</button>
+        </div>
+      </form>
+
+      <div class="hr"></div>
+      <p class="muted small">Status update phase: no payer submission, no claim mutation, no lifecycle mutation, no workspace creation.</p>
     </div>
   `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
   return send(res, 200, html);
