@@ -51981,7 +51981,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         <details open class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
           <summary style="cursor:pointer;font-weight:900;">Upload prior authorization support files</summary>
           <p class="muted small" style="margin-top:8px;">
-            Upload prior authorization CSV, Excel, or clearly delimited TXT files, plus approval letters, denial letters, payer responses, clinical notes, physician orders, referral documents, payer forms, PDFs, Word documents, and images. CSV, Excel, and clearly delimited TXT files with recognizable prior authorization headers can be parsed into cases. PDF, Word, and image files are stored for review in this phase.
+            Upload prior authorization CSV, Excel, TXT, PDF, Word, or image files, plus approval letters, denial letters, payer responses, clinical notes, physician orders, referral documents, payer forms, PDFs, Word documents, and images. CSV, Excel, and clearly delimited TXT files with recognizable prior authorization headers can be parsed into cases. PDF, Word, and image files are stored for review in this phase.
           </p>
 
           <form id="pa-upload-form" method="POST" action="/data-management/prior-auth/upload" enctype="multipart/form-data">
@@ -52008,7 +52008,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
             </div>
 
             <div class="muted small" style="margin-top:8px;">
-              Files are recorded in the Prior Auth Upload Ledger. CSV, Excel, and structured TXT parsing can create prior auth cases only; uploads do not change claims, payments, reimbursement rules, or lifecycle metrics.
+              Files are recorded in the Prior Auth Upload Ledger. Structured parsing can create prior auth cases only; uploads do not change claims, payments, reimbursement rules, or lifecycle metrics.
             </div>
 
             <div class="btnRow" style="margin-top:10px;">
@@ -52288,7 +52288,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         <div class="hr"></div>
         <h3>Prior Auth Upload Ledger</h3>
         <p class="muted small">
-          Read-only preview of prior authorization upload records. CSV, Excel, and structured TXT parsing can create prior auth cases; PDF, Word, image, and uncertain files remain stored for review.
+          Read-only preview of prior authorization upload records. CSV, Excel, and structured TXT parsing can create prior auth cases; uncertain files remain stored for review.
         </p>
         <div style="overflow:auto;margin-top:10px;">
           <table>
@@ -60215,7 +60215,7 @@ if (process.env.TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS === "true" && (pr
 
       if (uploadRouteHasPriorAuthParser) {
         assert(
-          uploadRouteSrc.includes("parseCSV") || uploadRouteSrc.includes("tjhpParseRowsFromUploadedFile"),
+          uploadRouteSrc.includes("parseCSV") || uploadRouteSrc.includes("tjhpParseRowsFromUploadedFileForRoute"),
           "prior auth parser wiring must parse structured rows from uploaded CSV/data"
         );
         assert(uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth parser wiring should create cases only after structured parse");
@@ -60356,7 +60356,7 @@ if (process.env.TJHP_PRIOR_AUTH_STRUCTURED_ROW_PARSER_SMOKE_TESTS === "true" && 
 
       if (uploadRouteHasPriorAuthParser) {
         assert(
-          uploadRouteSrc.includes("parseCSV") || uploadRouteSrc.includes("tjhpParseRowsFromUploadedFile"),
+          uploadRouteSrc.includes("parseCSV") || uploadRouteSrc.includes("tjhpParseRowsFromUploadedFileForRoute"),
           "prior auth parser wiring must parse structured rows from uploaded CSV/data"
         );
         assert(uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth parser wiring should create cases only after structured parse");
@@ -60387,7 +60387,7 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
 
     try {
       [
-        "tjhpParseRowsFromUploadedFile",
+        "tjhpParseRowsFromUploadedFileForRoute",
         "parsePriorAuthStructuredRows",
         "upsertPriorAuthCase",
         "savePriorAuthUploadRecord",
@@ -60406,7 +60406,7 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
 
       [
         "parseMultipartForm",
-        "tjhpParseRowsFromUploadedFile",
+        "tjhpParseRowsFromUploadedFileForRoute",
         "allowExcelStructured: true",
         "parsePriorAuthStructuredRows",
         "upsertPriorAuthCase",
@@ -60416,14 +60416,14 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
         "needs_review",
         "const isStructuredPriorAuthUpload",
         "unsupported_file_type",
-        "Structured prior-auth parsing currently creates cases only from CSV, Excel, or clearly delimited TXT.",
+        "No reliable prior authorization fields were extracted.",
         "uploaded but structured prior-auth rows were not recognized. Stored for review.",
         "pa_status=parsed",
         "pa_status=uploaded",
         "pa_status=upload_failed"
       ].forEach(x => assert(uploadRouteSrc.includes(x), "prior auth CSV upload route missing marker: " + x));
 
-      assert(uploadRouteSrc.includes('["CSV","EXCEL","TXT"].includes(String(parsedFile.kind || ""))'), "prior auth upload route must be gated to CSV/EXCEL/TXT structured uploads");
+      assert(uploadRouteSrc.includes('["CSV","EXCEL","TXT","PDF","WORD","IMAGE"].includes(String(parsedFile.kind || ""))'), "prior auth upload route must allow CSV/EXCEL/TXT/PDF/WORD/IMAGE structured uploads");
       assert(uploadRouteSrc.includes('{ minConfidence: "high" }'), "prior auth upload route must require high confidence");
       assert(uploadRouteSrc.includes("totalParsedCases > 0"), "prior auth upload route must redirect parsed only when cases are created");
 
@@ -60448,9 +60448,9 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
       [
         "Prior authorization upload parsed and prior auth cases created.",
         "structured CSV, Excel, and TXT upload parsing",
-        "CSV, Excel, or clearly delimited TXT files",
-        "CSV, Excel, and structured TXT parsing can create prior auth cases only",
-        "PDF, Word, image, and uncertain files remain stored for review",
+        "CSV, Excel, TXT, PDF, Word, or image files",
+        "Structured parsing can create prior auth cases only",
+        "uncertain files remain stored for review",
         "pa-upload-form",
         "pa-files",
         "pa-drop",
@@ -60483,7 +60483,7 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_PARSE_STORAGE_SMOKE_TESTS === "true" && (pro
 
     try {
       [
-        "tjhpParseRowsFromUploadedFile",
+        "tjhpParseRowsFromUploadedFileForRoute",
         "parsePriorAuthStructuredRows",
         "upsertPriorAuthCase",
         "savePriorAuthUploadRecord",
@@ -60592,7 +60592,7 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_REVIEW_STORAGE_SMOKE_TESTS === "true" && (pr
 
     try {
       [
-        "tjhpParseRowsFromUploadedFile",
+        "tjhpParseRowsFromUploadedFileForRoute",
         "parsePriorAuthStructuredRows",
         "savePriorAuthUploadRecord",
         "getPriorAuthCases",
@@ -60780,7 +60780,7 @@ if (process.env.TJHP_PRIOR_AUTH_EXCEL_PARSE_STORAGE_SMOKE_TESTS === "true" && (p
 
     try {
       [
-        "tjhpParseRowsFromUploadedFile",
+        "tjhpParseRowsFromUploadedFileForRoute",
         "parsePriorAuthStructuredRows",
         "upsertPriorAuthCase",
         "savePriorAuthUploadRecord",
