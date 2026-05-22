@@ -937,6 +937,73 @@ function priorAuthFieldForHeader(header){
   return "";
 }
 
+function priorAuthRevenueEvidenceText(row = {}){
+  return Object.entries(row || {})
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(" ")
+    .toLowerCase();
+}
+
+function priorAuthRevenueAtRiskIsDisclaimed(row = {}){
+  const text = priorAuthRevenueEvidenceText(row);
+
+  return [
+    "testing placeholder",
+    "test placeholder",
+    "placeholder",
+    "no dollar amount",
+    "no dollar value",
+    "no amount was shown",
+    "no amount shown",
+    "not shown in the letter",
+    "not shown on the letter",
+    "not available",
+    "not provided",
+    "unknown amount"
+  ].some(token => text.includes(token));
+}
+
+function priorAuthUploadedRowHasExplicitRevenueAtRisk(row = {}){
+  if (priorAuthRevenueAtRiskIsDisclaimed(row)) return false;
+
+  return Object.entries(row || {}).some(([key, value]) => {
+    const field = priorAuthFieldForHeader(key);
+    if (field !== "estimated_revenue_at_risk") return false;
+
+    const amount = Number(String(value || "").replace(/[^0-9.-]/g, ""));
+    return Number.isFinite(amount) && amount > 0;
+  });
+}
+
+function priorAuthApplyUploadedRevenueAtRiskGuard(input = {}, sourceRow = {}, defaults = {}){
+  const allowTrustedInternalEstimate = defaults && defaults.prior_auth_allow_internal_revenue_estimate === true;
+
+  if (allowTrustedInternalEstimate) return input;
+
+  if (priorAuthUploadedRowHasExplicitRevenueAtRisk(sourceRow)) return input;
+
+  if (
+    input &&
+    (input.estimated_revenue_at_risk != null || input.revenue_at_risk != null)
+  ) {
+    delete input.estimated_revenue_at_risk;
+    delete input.revenue_at_risk;
+
+    const existingNotes = String(input.notes || "").trim();
+    const guardNote = "Estimated revenue at risk not determined from uploaded document.";
+    input.notes = existingNotes
+      ? `${existingNotes} ${guardNote}`
+      : guardNote;
+  }
+
+  return input;
+}
+
+function priorAuthRevenueAtRiskDisplay(value){
+  const amount = Number(value || 0) || 0;
+  return amount > 0 ? formatMoneyUI(amount) : "Not determined";
+}
+
 
 function priorAuthStructuredRowSignal(row = {}){
   const fields = new Set();
@@ -997,6 +1064,7 @@ function priorAuthStructuredRowToCaseInput(row = {}, defaults = {}){
     }
   });
 
+  priorAuthApplyUploadedRevenueAtRiskGuard(input, row, defaults);
   return normalizePriorAuthCase(input, defaults);
 }
 
@@ -52084,7 +52152,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
     <td>${safeStr(x.auth_number || "-")}</td>
     <td>${safeStr(x.submitted_date || "-")}</td>
     <td>${safeStr(x.expiration_date || "-")}</td>
-    <td>${formatMoneyUI(Number(x.estimated_revenue_at_risk || 0))}</td>
+    <td>${priorAuthRevenueAtRiskDisplay(x.estimated_revenue_at_risk)}</td>
   </tr>
 `).join("") || `<tr><td colspan="10" class="muted">No prior authorization cases have been added yet.</td></tr>`;
 
@@ -61318,6 +61386,101 @@ if (process.env.TJHP_PRIOR_AUTH_AI_EXTRACTION_STATIC_SMOKE_TESTS === "true" && (
       process.exit(0);
     } catch (err) {
       process.stderr.write("PRIOR_AUTH_AI_EXTRACTION_STATIC_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
+if (process.env.TJHP_PRIOR_AUTH_REVENUE_AT_RISK_GUARD_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "priorAuthUploadedRowHasExplicitRevenueAtRisk",
+        "priorAuthRevenueAtRiskIsDisclaimed",
+        "priorAuthApplyUploadedRevenueAtRiskGuard",
+        "priorAuthRevenueAtRiskDisplay",
+        "Estimated revenue at risk not determined from uploaded document.",
+        "Not determined",
+        "PRIOR_AUTH_STRUCTURED_ROW_PARSER_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_AI_EXTRACTION_STATIC_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior-auth revenue guard marker: " + x));
+
+      const realAmountRow = {
+        "Patient Name": "Revenue Patient",
+        "Payer": "Aetna",
+        "CPT Code": "72148",
+        "Status": "Denied",
+        "Revenue At Risk": "1200.00"
+      };
+
+      const realAmountCase = priorAuthStructuredRowToCaseInput(realAmountRow, {
+        org_id: "__prior_auth_revenue_guard_smoke__"
+      });
+
+      assert.strictEqual(Number(realAmountCase.estimated_revenue_at_risk || 0), 1200, "real explicit uploaded revenue should be preserved");
+
+      const placeholderRow = {
+        "Patient Name": "Placeholder Patient",
+        "Payer": "BlueCross BlueShield of Texas",
+        "Requested Service": "Endlymphoma Mutation Assay By V1",
+        "Status": "Denied",
+        "Auth #": "254985877",
+        "Revenue At Risk": "1200.00",
+        "Notes": "Revenue at risk is a testing placeholder; no dollar amount was shown in the letter."
+      };
+
+      const placeholderCase = priorAuthStructuredRowToCaseInput(placeholderRow, {
+        org_id: "__prior_auth_revenue_guard_smoke__"
+      });
+
+      assert.strictEqual(Number(placeholderCase.estimated_revenue_at_risk || 0), 0, "placeholder revenue should be stripped");
+      assert(String(placeholderCase.notes || "").includes("Estimated revenue at risk not determined from uploaded document."), "placeholder revenue guard note missing");
+
+      const noAmountRow = {
+        "Patient Name": "PDF Patient",
+        "Payer": "BlueCross",
+        "Requested Service": "Prior auth denied service",
+        "Status": "Denied",
+        "Auth #": "AUTH-PDF-1"
+      };
+
+      const noAmountCase = priorAuthStructuredRowToCaseInput(noAmountRow, {
+        org_id: "__prior_auth_revenue_guard_smoke__"
+      });
+
+      assert.strictEqual(Number(noAmountCase.estimated_revenue_at_risk || 0), 0, "missing revenue should remain zero internally");
+      assert.strictEqual(priorAuthRevenueAtRiskDisplay(noAmountCase.estimated_revenue_at_risk), "Not determined", "missing revenue should display Not determined");
+
+      const manualNormalized = normalizePriorAuthCase({
+        org_id: "__prior_auth_revenue_guard_smoke__",
+        patient_name: "Manual Patient",
+        payer: "Aetna",
+        status: "Denied",
+        estimated_revenue_at_risk: "900"
+      });
+
+      assert.strictEqual(Number(manualNormalized.estimated_revenue_at_risk || 0), 900, "manual revenue entry should remain allowed");
+
+      const uploadStart = src.indexOf('if (method === "POST" && pathname === "/data-management/prior-auth/upload")');
+      const uploadEnd = src.indexOf('if (method === "POST" && pathname === "/data-management/prior-auth/upload/delete")', uploadStart);
+      assert(uploadStart >= 0 && uploadEnd > uploadStart, "prior-auth upload route boundary missing");
+
+      const uploadRouteSrc = src.slice(uploadStart, uploadEnd);
+      [
+        "/upload-router",
+        "FILES.billed",
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "document_ingests"
+      ].forEach(x => assert(!uploadRouteSrc.includes(x), "prior-auth upload route must not include: " + x));
+
+      process.stdout.write("PRIOR_AUTH_REVENUE_AT_RISK_GUARD_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_REVENUE_AT_RISK_GUARD_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
       process.exit(1);
     }
   })();
