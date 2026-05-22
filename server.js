@@ -45788,12 +45788,12 @@ if (method === "GET" && pathname === "/actions") {
   const tabs = `
     <!-- data-action-tab="prior-auth" -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-      ${tabBtn("all","All At Risk","All denials, underpayments, follow-ups, and awaiting payment work in one queue.")}
-      ${tabBtn("denials","Denials","Denied claims that need an appeal packet or appeal follow-up.")}
+      ${tabBtn("all","All At Risk","All billed-claim risk work in one queue. Prior auths have a dedicated pre-service queue.")}
+      ${tabBtn("prior-auth","Prior Auths","Pre-service authorization cases requiring action.")}
+      ${tabBtn("denials","Billed Denials","Denied billed claims that need an appeal packet or appeal follow-up.")}
       ${tabBtn("underpayments","Underpayments","Underpaid claims that need negotiation work or follow-up.")}
-      ${tabBtn("appeals","Appeals & Negotiations","Submitted claims grouped by appeal, negotiation, and follow-up needs.")}
+      ${tabBtn("appeals","Billed Appeals & Negotiations","Submitted billed claims grouped by appeal, negotiation, and follow-up needs.")}
       ${followUpTab}
-      ${tabBtn("prior-auth","Prior Auths","Read-only queue of prior authorization cases requiring action.")}
     </div>
   `;
   const postSubmissionSubTabs = (tab === "postsubmission") ? `
