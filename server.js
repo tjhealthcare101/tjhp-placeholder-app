@@ -1016,6 +1016,8 @@ function tjhpPriorAuthNextActionLabel(row = {}){
   if (status === "Pending" || status === "Submitted") return "Follow up with payer";
   if (status === "Auth Needed" || status === "Draft") return "Complete authorization request";
 
+  if (status === "Ready to Bill") return "Link to billed claim";
+
   return "Review prior authorization";
 }
 
@@ -1032,7 +1034,8 @@ function tjhpPriorAuthActionCenterRows(org_id){
     "Partially Approved",
     "Denied",
     "Expiring Soon",
-    "Expired"
+    "Expired",
+    "Ready to Bill"
   ]);
 
   return rows
