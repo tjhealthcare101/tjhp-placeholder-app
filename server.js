@@ -45464,6 +45464,39 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
   `;
 }
 
+if (method === "POST" && pathname === "/prior-auth/case/status") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+
+  const auth_case_id = String(ps.get("auth_case_id") || "").trim();
+  const requestedStatus = String(ps.get("status") || "").trim();
+  const note = String(ps.get("note") || "").trim();
+
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+
+  if (!row) {
+    return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+  }
+
+  if (!tjhpPriorAuthStaffStatusAllowed(requestedStatus)) {
+    return redirect(res, `/prior-auth/case?auth_case_id=${encodeURIComponent(auth_case_id)}&pa_status=status_invalid`);
+  }
+
+  const nextStatus = normalizePriorAuthStatus(requestedStatus);
+  const existingNotes = String(row.notes || "").trim();
+  const statusNote = note
+    ? `[${new Date().toISOString()}] Status updated to ${nextStatus}: ${note}`
+    : `[${new Date().toISOString()}] Status updated to ${nextStatus}.`;
+
+  upsertPriorAuthCase(org.org_id, {
+    ...row,
+    status: nextStatus,
+    notes: existingNotes ? `${existingNotes}\n${statusNote}` : statusNote
+  }, sess.user_id || "");
+
+  return redirect(res, `/prior-auth/case?auth_case_id=${encodeURIComponent(auth_case_id)}&pa_status=status_updated`);
+}
+
 if (method === "GET" && pathname === "/prior-auth/case") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
   const row = getPriorAuthCaseById(org.org_id, auth_case_id);
