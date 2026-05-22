@@ -1051,6 +1051,65 @@ function tjhpPriorAuthActionCenterRows(org_id){
 }
 
 
+
+function tjhpPriorAuthStaffStatusOptions(){
+  return PRIOR_AUTH_STATUSES.filter(s => s !== "Linked to Claim");
+}
+
+function tjhpPriorAuthStaffStatusAllowed(status){
+  const raw = String(status || "").trim();
+  if (!raw) return false;
+
+  const compact = raw
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const allowedAliases = new Set([
+    "auth needed",
+    "needed",
+    "authorization needed",
+    "prior auth needed",
+    "pa needed",
+    "draft",
+    "submitted",
+    "sent",
+    "filed",
+    "pending",
+    "in review",
+    "under review",
+    "missing documentation",
+    "missing docs",
+    "missing documents",
+    "needs docs",
+    "peer to peer",
+    "peer-to-peer",
+    "p2p",
+    "peer review",
+    "approved",
+    "authorized",
+    "partially approved",
+    "partial approval",
+    "partial",
+    "denied",
+    "rejected",
+    "expiring soon",
+    "expiring",
+    "expired",
+    "ready to bill",
+    "ready"
+  ]);
+
+  const exactAllowed = tjhpPriorAuthStaffStatusOptions()
+    .some(s => s.toLowerCase() === raw.toLowerCase());
+
+  if (!exactAllowed && !allowedAliases.has(compact)) return false;
+
+  const normalized = normalizePriorAuthStatus(raw);
+  return tjhpPriorAuthStaffStatusOptions().includes(normalized);
+}
+
 function priorAuthStructuredRowSignal(row = {}){
   const fields = new Set();
 
