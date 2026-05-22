@@ -1110,6 +1110,12 @@ function tjhpPriorAuthStaffStatusAllowed(status){
   return tjhpPriorAuthStaffStatusOptions().includes(normalized);
 }
 
+
+function tjhpPriorAuthCanMoveToReadyToBill(row = {}){
+  const status = normalizePriorAuthStatus(row.status || "");
+  return ["Approved", "Partially Approved"].includes(status);
+}
+
 function priorAuthStructuredRowSignal(row = {}){
   const fields = new Set();
 
