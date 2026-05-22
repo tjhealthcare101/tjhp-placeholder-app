@@ -61929,6 +61929,153 @@ if (process.env.TJHP_PRIOR_AUTH_CASE_DETAIL_SMOKE_TESTS === "true" && (process.e
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_STATUS_UPDATE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const org_id = "__prior_auth_status_smoke__" + Date.now().toString(36);
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+
+    try {
+      [
+        'if (method === "POST" && pathname === "/prior-auth/case/status")',
+        'action="/prior-auth/case/status"',
+        "Update Prior Auth Status",
+        "tjhpPriorAuthStaffStatusOptions",
+        "tjhpPriorAuthStaffStatusAllowed",
+        "status_updated",
+        "status_invalid",
+        "This updates only the prior authorization case status.",
+        "Status update phase: no payer submission, no claim mutation, no lifecycle mutation, no workspace creation.",
+        "PRIOR_AUTH_CASE_DETAIL_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior-auth status update marker: " + x));
+
+      const routeStart = src.indexOf('if (method === "POST" && pathname === "/prior-auth/case/status")');
+      const routeEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")', routeStart);
+
+      assert(routeStart >= 0, "status update route missing");
+      assert(routeEnd > routeStart, "status update route boundary missing");
+
+      const routeSrc = src.slice(routeStart, routeEnd);
+
+      [
+        "parseBody(req)",
+        "getPriorAuthCaseById(org.org_id, auth_case_id)",
+        "tjhpPriorAuthStaffStatusAllowed(requestedStatus)",
+        "normalizePriorAuthStatus(requestedStatus)",
+        "upsertPriorAuthCase(org.org_id",
+        "status_updated",
+        "status_invalid"
+      ].forEach(x => assert(routeSrc.includes(x), "status route missing required marker: " + x));
+
+      [
+        "writeJSON(FILES.billed",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests",
+        "ensureAgentWorkspace(",
+        "linked_claim_id =",
+        "linked_billed_id =",
+        "/upload-router",
+        "/data-management/prior-auth/upload",
+        "/data-management/prior-auth/create",
+        "deletePriorAuth"
+      ].forEach(x => assert(!routeSrc.includes(x), "status route must not include: " + x));
+
+      const detailStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")');
+      const detailEnd = src.indexOf('if (method === "GET" && pathname === "/actions")', detailStart);
+
+      assert(detailStart >= 0, "detail route missing");
+      assert(detailEnd > detailStart, "detail route boundary missing");
+
+      const detailSrc = src.slice(detailStart, detailEnd);
+
+      [
+        'action="/prior-auth/case/status"',
+        'name="auth_case_id"',
+        'name="status"',
+        'name="note"',
+        "tjhpPriorAuthStaffStatusOptions().map",
+        "Update Prior Auth Status",
+        "status_updated",
+        "status_invalid"
+      ].forEach(x => assert(detailSrc.includes(x), "detail route missing status form marker: " + x));
+
+      [
+        'action="/data-management/prior-auth/upload"',
+        'action="/data-management/prior-auth/create"',
+        'action="/upload-router"',
+        "ensureAgentWorkspace(",
+        "linked_claim_id =",
+        "linked_billed_id =",
+        "deletePriorAuth",
+        "writeJSON(FILES.billed",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests"
+      ].forEach(x => assert(!detailSrc.includes(x), "detail route status form must not include: " + x));
+
+      assert(tjhpPriorAuthStaffStatusOptions().includes("Denied"), "Denied should be staff-selectable");
+      assert(tjhpPriorAuthStaffStatusOptions().includes("Ready to Bill"), "Ready to Bill should be staff-selectable");
+      assert(!tjhpPriorAuthStaffStatusOptions().includes("Linked to Claim"), "Linked to Claim should not be staff-selectable");
+
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("Denied"), true, "Denied should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("Ready to Bill"), true, "Ready to Bill should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("Linked to Claim"), false, "Linked to Claim should not be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("not a real status"), false, "unknown status should not be allowed");
+
+      savePriorAuthCasesForOrg(org_id, []);
+
+      const created = upsertPriorAuthCase(org_id, {
+        patient_name: "Status Smoke Patient",
+        payer: "Aetna",
+        requested_service: "MRI",
+        status: "Pending"
+      }, "smoke");
+
+      assert(created && created.ok === true, "smoke case create failed");
+
+      const id = String(created.case && created.case.auth_case_id || "");
+      assert(id, "smoke auth_case_id missing");
+
+      const updated = upsertPriorAuthCase(org_id, {
+        ...created.case,
+        status: "Denied",
+        notes: "Smoke status update"
+      }, "smoke");
+
+      assert(updated && updated.ok === true, "smoke status update failed");
+
+      const found = getPriorAuthCaseById(org_id, id);
+      assert(found, "updated smoke case not found");
+      assert.strictEqual(found.status, "Denied", "status did not update");
+
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+
+      savePriorAuthCasesForOrg(org_id, []);
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+
+      process.stdout.write("PRIOR_AUTH_STATUS_UPDATE_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_STATUS_UPDATE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
 }
