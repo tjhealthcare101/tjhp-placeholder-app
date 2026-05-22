@@ -28034,6 +28034,23 @@ async function tjhpExtractRowsFromPdfWithAI(file, purpose) {
   } catch (err) { return tjhpPdfAiFailureResult("PDF AI exception", err && err.message ? err.message : String(err)); }
 }
 function tjhpImageVisionExtractionEnabled() { return !!process.env.OPENAI_API_KEY; }
+function tjhpIsPriorAuthUploadPurpose(purpose){
+  const p = String(purpose || "").trim().toLowerCase();
+  return [
+    "prior_authorization",
+    "prior-auth",
+    "prior_auth",
+    "priorauth",
+    "authorization",
+    "authorizations"
+  ].includes(p);
+}
+
+function tjhpPriorAuthAiJsonShapeText(){
+  return "{rows:[{patient_name,patient_id,payer,cpt_hcpcs,icd10,requested_service,status,auth_number,submitted_date,expiration_date,determination_date,estimated_revenue_at_risk,missing_documentation,denial_reason}]}";
+}
+
+
 async function tjhpExtractRowsFromTextWithAI(text, purpose) {
   try {
     if (!tjhpUploadAiParsingEnabled()) return null;
