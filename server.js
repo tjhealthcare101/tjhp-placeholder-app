@@ -62088,6 +62088,161 @@ if (process.env.TJHP_PRIOR_AUTH_STATUS_UPDATE_SMOKE_TESTS === "true" && (process
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_READY_TO_BILL_GUARD_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const org_id = "__prior_auth_ready_bill_guard_smoke__" + Date.now().toString(36);
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+
+    try {
+      [
+        "function tjhpPriorAuthCanMoveToReadyToBill",
+        "ready_to_bill_not_allowed",
+        "Ready to Bill is available only after the authorization is approved or partially approved.",
+        "PRIOR_AUTH_STATUS_UPDATE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_CASE_DETAIL_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing ready-to-bill guard marker: " + x));
+
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Denied" }), false, "Denied should not move to Ready to Bill");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Pending" }), false, "Pending should not move to Ready to Bill");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Submitted" }), false, "Submitted should not move to Ready to Bill");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Missing Documentation" }), false, "Missing Documentation should not move to Ready to Bill");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Peer-to-Peer Needed" }), false, "Peer-to-Peer Needed should not move to Ready to Bill");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Auth Needed" }), false, "Auth Needed should not move to Ready to Bill");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Draft" }), false, "Draft should not move to Ready to Bill");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Expired" }), false, "Expired should not move to Ready to Bill");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Approved" }), true, "Approved should move to Ready to Bill");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Partially Approved" }), true, "Partially Approved should move to Ready to Bill by staff decision");
+
+      const routeStart = src.indexOf('if (method === "POST" && pathname === "/prior-auth/case/status")');
+      const routeEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")', routeStart);
+
+      assert(routeStart >= 0, "status route missing");
+      assert(routeEnd > routeStart, "status route boundary missing");
+
+      const routeSrc = src.slice(routeStart, routeEnd);
+
+      [
+        'nextStatus === "Ready to Bill"',
+        "tjhpPriorAuthCanMoveToReadyToBill(row)",
+        "ready_to_bill_not_allowed",
+        "tjhpPriorAuthStaffStatusAllowed(requestedStatus)",
+        "normalizePriorAuthStatus(requestedStatus)",
+        "upsertPriorAuthCase(org.org_id"
+      ].forEach(x => assert(routeSrc.includes(x), "status route missing ready-to-bill guard marker: " + x));
+
+      [
+        "writeJSON(FILES.billed",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests",
+        "ensureAgentWorkspace(",
+        "linked_claim_id =",
+        "linked_billed_id =",
+        "/upload-router",
+        "/data-management/prior-auth/upload",
+        "/data-management/prior-auth/create",
+        "deletePriorAuth"
+      ].forEach(x => assert(!routeSrc.includes(x), "ready-to-bill guard route must not include: " + x));
+
+      const detailStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")');
+      const detailEnd = src.indexOf('if (method === "GET" && pathname === "/actions")', detailStart);
+
+      assert(detailStart >= 0, "detail route missing");
+      assert(detailEnd > detailStart, "detail route boundary missing");
+
+      const detailSrc = src.slice(detailStart, detailEnd);
+
+      [
+        "ready_to_bill_not_allowed",
+        "Ready to Bill is available only after the authorization is approved or partially approved.",
+        'action="/prior-auth/case/status"',
+        "Update Prior Auth Status"
+      ].forEach(x => assert(detailSrc.includes(x), "detail route missing ready-to-bill warning marker: " + x));
+
+      [
+        'action="/data-management/prior-auth/upload"',
+        'action="/data-management/prior-auth/create"',
+        'action="/upload-router"',
+        "ensureAgentWorkspace(",
+        "linked_claim_id =",
+        "linked_billed_id =",
+        "deletePriorAuth",
+        "writeJSON(FILES.billed",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests"
+      ].forEach(x => assert(!detailSrc.includes(x), "detail route must not include forbidden marker: " + x));
+
+      savePriorAuthCasesForOrg(org_id, []);
+
+      const denied = upsertPriorAuthCase(org_id, {
+        patient_name: "Denied Ready Guard Patient",
+        payer: "Aetna",
+        requested_service: "MRI",
+        status: "Denied"
+      }, "smoke");
+
+      assert(denied && denied.ok === true, "Denied smoke case create failed");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill(denied.case), false, "Denied smoke case should not be Ready to Bill eligible");
+
+      const pending = upsertPriorAuthCase(org_id, {
+        patient_name: "Pending Ready Guard Patient",
+        payer: "Aetna",
+        requested_service: "MRI",
+        status: "Pending"
+      }, "smoke");
+
+      assert(pending && pending.ok === true, "Pending smoke case create failed");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill(pending.case), false, "Pending smoke case should not be Ready to Bill eligible");
+
+      const approved = upsertPriorAuthCase(org_id, {
+        patient_name: "Approved Ready Guard Patient",
+        payer: "Aetna",
+        requested_service: "MRI",
+        status: "Approved"
+      }, "smoke");
+
+      assert(approved && approved.ok === true, "Approved smoke case create failed");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill(approved.case), true, "Approved smoke case should be Ready to Bill eligible");
+
+      const partial = upsertPriorAuthCase(org_id, {
+        patient_name: "Partial Ready Guard Patient",
+        payer: "Aetna",
+        requested_service: "MRI",
+        status: "Partially Approved"
+      }, "smoke");
+
+      assert(partial && partial.ok === true, "Partially Approved smoke case create failed");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill(partial.case), true, "Partially Approved smoke case should be Ready to Bill eligible by staff decision");
+
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+
+      savePriorAuthCasesForOrg(org_id, []);
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+
+      process.stdout.write("PRIOR_AUTH_READY_TO_BILL_GUARD_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_READY_TO_BILL_GUARD_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
 }
