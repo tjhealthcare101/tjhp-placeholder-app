@@ -28091,6 +28091,55 @@ async function tjhpExtractRowsFromPdfWithAI(file, purpose) {
         ? "Extract prior authorization data from this PDF. Return STRICT JSON only. Do not invent rows. Use this exact shape: " + schemaText + ". Include only visible authorization request, approval, denial, partial approval, missing documentation, peer-to-peer, auth number, payer, CPT/HCPCS, ICD-10, date, or revenue at risk details. If a field is missing, leave it blank."
         : "Extract the billed claims table from this PDF. Return STRICT JSON only. Do not invent rows. Use this exact shape: " + schemaText + ". If a column is missing, leave it blank. Only include visible rows.");
     let lastReason = "";
+    if (isPriorAuth && String(process.env.TJHP_PRIOR_AUTH_PDF_FAST_MODE || "true").toLowerCase() !== "false") {
+      const uploadedFast = await tjhpUploadPdfToOpenAiFiles(buffer, filename);
+
+      if (uploadedFast?.ok && uploadedFast.file_id) {
+        const fastFile = await tjhpCallOpenAiResponsesForPdfInput({
+          model,
+          filename,
+          fileInput:{ type:"input_file", file_id:uploadedFast.file_id },
+          prompt
+        });
+
+        if (fastFile.ok) {
+          const parsed = tjhpParsedRowsFromOpenAiTextForUpload(fastFile.text, purpose, "parsed_pdf_ai");
+          if (parsed) return { ...parsed, notes:"PDF parsed with AI file extraction." };
+        } else {
+          lastReason = fastFile.reason || lastReason;
+        }
+      } else if (uploadedFast && uploadedFast.reason) {
+        lastReason = uploadedFast.reason || lastReason;
+      }
+
+      const fastChat = await tjhpCallOpenAiChatForPdfFile({ model, filename, b64, prompt });
+
+      if (fastChat.ok) {
+        const parsed = tjhpParsedRowsFromOpenAiTextForUpload(fastChat.text, purpose, "parsed_pdf_ai");
+        if (parsed) return { ...parsed, notes:"PDF parsed with AI file extraction." };
+      } else {
+        lastReason = fastChat.reason || lastReason;
+      }
+
+      const fastDataUrl = await tjhpCallOpenAiResponsesForPdfInput({
+        model,
+        filename,
+        fileInput:{ type:"input_file", filename, file_data:`data:application/pdf;base64,${b64}` },
+        prompt
+      });
+
+      if (fastDataUrl.ok) {
+        const parsed = tjhpParsedRowsFromOpenAiTextForUpload(fastDataUrl.text, purpose, "parsed_pdf_ai");
+        if (parsed) return { ...parsed, notes:"PDF parsed with AI file extraction." };
+      } else {
+        lastReason = fastDataUrl.reason || lastReason;
+      }
+
+      return tjhpPdfAiFailureResult(
+        "PDF AI returned no structured rows",
+        lastReason || "Prior-auth PDF fast extraction completed without valid rows."
+      );
+    }
     const a1 = await tjhpCallOpenAiResponsesForPdfInput({ model, filename, fileInput:{ type:"input_file", filename, file_data:b64 }, prompt });
     if (a1.ok) { const parsed = tjhpParsedRowsFromOpenAiTextForUpload(a1.text, purpose, "parsed_pdf_ai"); if (parsed) return { ...parsed, notes:"PDF parsed with AI file extraction." }; }
     else lastReason = a1.reason || lastReason;
@@ -52074,9 +52123,6 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         ${String(parsed.query.pa_status || "").trim() === "parsed" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization upload parsed and prior auth cases created.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "upload_failed" ? `<div class="alert warn" style="margin:10px 0;">Prior authorization upload failed. Please try again.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "upload_deleted" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization upload deleted.</div>` : ""}
-        <div class="alert" style="background:#f8fafc;color:#334155;border-color:#e2e8f0;">
-          Manual entry and structured upload parsing are available. CSV, Excel, TXT, PDF, Word, and image uploads can create prior auth cases only when reliable prior authorization fields are extracted; uncertain files stay stored for review. Action Center queues and lifecycle integration will be added in later phases.
-        </div>
         <details open class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
           <summary style="cursor:pointer;font-weight:900;">Upload prior authorization support files</summary>
           <p class="muted small" style="margin-top:8px;">
@@ -60546,7 +60592,6 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
 
       [
         "Prior authorization upload parsed and prior auth cases created.",
-        "structured upload parsing",
         "CSV, Excel, TXT, PDF, Word, or image files",
         "Structured parsing can create prior auth cases only",
         "uncertain files remain stored for review",
