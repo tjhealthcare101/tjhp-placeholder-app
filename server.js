@@ -61197,6 +61197,87 @@ if (process.env.TJHP_PRIOR_AUTH_MODEL_SMOKE_TESTS === "true" && (process.env.TJH
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_AI_EXTRACTION_STATIC_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "function tjhpIsPriorAuthUploadPurpose",
+        "function tjhpPriorAuthAiJsonShapeText",
+        "function tjhpParseVisionRowsJsonForUpload",
+        "async function tjhpExtractRowsFromTextWithAI",
+        "async function tjhpExtractRowsFromPdfWithAI",
+        "async function tjhpExtractRowsFromImageWithVision",
+        "tjhpPriorAuthAiJsonShapeText()",
+        "prior_authorizations",
+        "authorizations",
+        "auths",
+        "patient_name",
+        "patient_id",
+        "payer",
+        "cpt_hcpcs",
+        "icd10",
+        "requested_service",
+        "status",
+        "auth_number",
+        "submitted_date",
+        "expiration_date",
+        "determination_date",
+        "estimated_revenue_at_risk",
+        "missing_documentation",
+        "denial_reason",
+        "You are extracting prior authorization data from messy PDF or document text",
+        "Extract prior authorization data from this PDF",
+        "Extract prior authorization details from this image"
+      ].forEach(x => assert(src.includes(x), "missing prior-auth AI extraction marker: " + x));
+
+      const uploadStart = src.indexOf('if (method === "POST" && pathname === "/data-management/prior-auth/upload")');
+      const uploadEnd = src.indexOf('if (method === "POST" && pathname === "/data-management/prior-auth/upload/delete")', uploadStart);
+
+      assert(uploadStart >= 0 && uploadEnd > uploadStart, "prior-auth upload route boundary missing");
+
+      const uploadRouteSrc = src.slice(uploadStart, uploadEnd);
+
+      [
+        "await tjhpParseRowsFromUploadedFileForRoute",
+        'purpose: "prior_authorization"',
+        '["CSV","EXCEL","TXT","PDF","WORD","IMAGE"].includes(String(parsedFile.kind || ""))',
+        "parsePriorAuthStructuredRows",
+        "savePriorAuthUploadRecord",
+        "upload_id: priorAuthUploadId",
+        "source_upload_batch_id: priorAuthUploadId"
+      ].forEach(x => assert(uploadRouteSrc.includes(x), "missing prior-auth upload route marker: " + x));
+
+      [
+        "/upload-router",
+        "FILES.billed",
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "document_ingests"
+      ].forEach(x => assert(!uploadRouteSrc.includes(x), "prior-auth upload route must not include: " + x));
+
+      [
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_STRUCTURED_ROW_PARSER_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_CSV_PARSE_STORAGE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_EXCEL_PARSE_STORAGE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_DEDUPE_UPSERT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "protected smoke marker missing: " + x));
+
+      process.stdout.write("PRIOR_AUTH_AI_EXTRACTION_STATIC_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_AI_EXTRACTION_STATIC_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
 }
