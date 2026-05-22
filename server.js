@@ -28152,9 +28152,12 @@ async function tjhpExtractRowsFromImageWithVision(file, purpose) {
     if (!tjhpImageVisionExtractionEnabled()) return null;
     const ext=tjhpUploadExtFromFile(file); const mime=(ext===".png"?"image/png":"image/jpeg"); const b64=tjhpUploadedFileBuffer(file).toString("base64");
     const model=process.env.OPENAI_VISION_MODEL || "gpt-4o-mini";
+    const isPriorAuth = tjhpIsPriorAuthUploadPurpose(purpose);
     const prompt = purpose==="payments"
       ? "Extract the payment/remittance table from this image. Return STRICT JSON only. Do not invent rows. Use {rows:[{claim_id,payer,paid_amount,denial_reason,paid_date}]}. If a column is missing, leave it blank. Only include visible rows."
-      : "Extract the billed claims table from this image. Return STRICT JSON only. Do not invent rows. Use {rows:[{claim_id,patient_name,payer,cpt_code,billed_amount,expected_amount,date_of_service}]}. If a column is missing, leave it blank. Only include visible rows.";
+      : (isPriorAuth
+        ? "Extract prior authorization details from this image. Return STRICT JSON only. Do not invent rows. Use " + tjhpPriorAuthAiJsonShapeText() + ". Include only visible authorization request, approval, denial, partial approval, missing documentation, peer-to-peer, auth number, payer, CPT/HCPCS, ICD-10, date, or revenue at risk details. If a field is missing, leave it blank."
+        : "Extract the billed claims table from this image. Return STRICT JSON only. Do not invent rows. Use {rows:[{claim_id,patient_name,payer,cpt_code,billed_amount,expected_amount,date_of_service}]}. If a column is missing, leave it blank. Only include visible rows.");
     const r = await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${process.env.OPENAI_API_KEY}`},body:JSON.stringify({model,temperature:0,max_tokens:900,response_format:{type:"json_object"},messages:[{role:"user",content:[{type:"text",text:prompt},{type:"image_url",image_url:{url:`data:${mime};base64,${b64}`}}]}]})});
     if (!r.ok) return null;
     const j=await r.json(); const txt=String(j?.choices?.[0]?.message?.content||"").trim(); const parsed=tjhpParseVisionRowsJsonForUpload(txt,purpose); if(!parsed) return null;
