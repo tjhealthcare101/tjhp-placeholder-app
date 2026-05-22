@@ -821,7 +821,7 @@ function deletePriorAuthUploadForOrg(org_id, upload_id){
   const oid = String(org_id || "").trim();
   const id = String(upload_id || "").trim();
 
-  if (!oid || !id) return { ok:false, deleted:false };
+  if (!oid || !id) return { ok:false, deleted:false, deleted_case_count:0 };
 
   const all = readJSON(FILES.prior_auth_uploads, []);
   const target = all.find(x =>
@@ -829,17 +829,27 @@ function deletePriorAuthUploadForOrg(org_id, upload_id){
     String(x.upload_id || "") === id
   );
 
-  if (!target) return { ok:false, deleted:false };
+  if (!target) return { ok:false, deleted:false, deleted_case_count:0 };
 
   priorAuthSafeDeleteStoredUploadFile(target);
 
-  const kept = all.filter(x =>
+  const keptUploads = all.filter(x =>
     !(String(x.org_id || "") === oid && String(x.upload_id || "") === id)
   );
 
-  writeJSON(FILES.prior_auth_uploads, kept);
+  writeJSON(FILES.prior_auth_uploads, keptUploads);
 
-  return { ok:true, deleted:true };
+  const beforeCases = getPriorAuthCases(oid);
+  const keptCases = beforeCases.filter(x =>
+    String(x.source_upload_batch_id || "") !== id
+  );
+  const deletedCaseCount = beforeCases.length - keptCases.length;
+
+  if (deletedCaseCount > 0) {
+    savePriorAuthCasesForOrg(oid, keptCases);
+  }
+
+  return { ok:true, deleted:true, deleted_case_count: deletedCaseCount };
 }
 
 function priorAuthNormalizeHeaderKey(value){
