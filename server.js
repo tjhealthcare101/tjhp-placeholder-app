@@ -27814,13 +27814,24 @@ function tjhpParseVisionRowsJsonForUpload(jsonText, purpose){
   try {
     const isPayments = purpose === "payments";
     const isReimbursement = purpose === "reimbursement" || purpose === "contracts";
+    const isPriorAuth = tjhpIsPriorAuthUploadPurpose(purpose);
+
     const canonical = isPayments
       ? ["claim_id","payer","paid_amount","denial_reason","paid_date"]
       : (isReimbursement
         ? ["payer_name","network_status","procedure_code","diagnosis_code","reimbursement_model","allowed_amount","effective_date"]
-        : ["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"]);
+        : (isPriorAuth
+          ? ["patient_name","patient_id","payer","cpt_hcpcs","icd10","requested_service","status","auth_number","submitted_date","expiration_date","determination_date","estimated_revenue_at_risk","missing_documentation","denial_reason"]
+          : ["claim_id","patient_name","payer","cpt_code","billed_amount","expected_amount","date_of_service"]));
+
     const aliases = isPayments
-      ? { claim_id:["claim_id","claim_number","claim"], payer:["payer","payer_name"], paid_amount:["paid_amount","paid","amount_paid","insurance_paid"], denial_reason:["denial_reason","reason","remark"], paid_date:["paid_date","date_paid","payment_date"] }
+      ? {
+        claim_id:["claim_id","claim_number","claim"],
+        payer:["payer","payer_name"],
+        paid_amount:["paid_amount","paid","amount_paid","insurance_paid"],
+        denial_reason:["denial_reason","reason","remark"],
+        paid_date:["paid_date","date_paid","payment_date"]
+      }
       : (isReimbursement
         ? {
           payer_name:["payer_name","payer","payer_name_or_plan","insurance","insurance_payer"],
@@ -27831,24 +27842,80 @@ function tjhpParseVisionRowsJsonForUpload(jsonText, purpose){
           allowed_amount:["allowed_amount","allowed","expected_amount","expected","rate","amount"],
           effective_date:["effective_date","effective","effective_at","start_date","date"]
         }
-        : { claim_id:["claim_id","claim_number","claim"], patient_name:["patient_name","patient","member"], payer:["payer","payer_name","insurance"], cpt_code:["cpt_code","cpt","procedure_code","hcpcs"], billed_amount:["billed_amount","billed","amount_billed","charge_amount"], expected_amount:["expected_amount","expected","allowed_amount"], date_of_service:["date_of_service","dos","service_date"] });
+        : (isPriorAuth
+          ? {
+            patient_name:["patient_name","patient","patient name","member","member_name","member name"],
+            patient_id:["patient_id","patient id","member_id","member id","mrn","subscriber_id","subscriber id"],
+            payer:["payer","payer_name","payer name","insurance","insurance company","health plan","plan"],
+            cpt_hcpcs:["cpt_hcpcs","cpt","cpt_code","cpt code","hcpcs","hcpcs_code","procedure_code","procedure code","service_code","service code"],
+            icd10:["icd10","icd_10","icd-10","icd 10","diagnosis_code","diagnosis code","dx","dx_code","dx code"],
+            requested_service:["requested_service","requested service","service","procedure","requested procedure","auth service","authorization service"],
+            status:["status","auth_status","auth status","authorization_status","authorization status","decision","determination","outcome"],
+            auth_number:["auth_number","auth number","authorization_number","authorization number","prior_auth_number","prior auth number","pa_number","pa number","auth #","authorization #","approval number"],
+            submitted_date:["submitted_date","submitted date","submission_date","submission date","date submitted","auth submitted date"],
+            expiration_date:["expiration_date","expiration date","expires","expires_at","expires at","valid through","authorization expiration"],
+            determination_date:["determination_date","determination date","decision_date","decision date","response date"],
+            estimated_revenue_at_risk:["estimated_revenue_at_risk","revenue_at_risk","revenue at risk","amount_at_risk","amount at risk","estimated value","expected revenue"],
+            missing_documentation:["missing_documentation","missing documentation","missing_docs","missing docs","missing documents","docs needed","documentation needed"],
+            denial_reason:["denial_reason","denial reason","reason","reason denied","payer reason","medical necessity reason"]
+          }
+          : {
+            claim_id:["claim_id","claim_number","claim"],
+            patient_name:["patient_name","patient","member"],
+            payer:["payer","payer_name","insurance"],
+            cpt_code:["cpt_code","cpt","procedure_code","hcpcs"],
+            billed_amount:["billed_amount","billed","amount_billed","charge_amount"],
+            expected_amount:["expected_amount","expected","allowed_amount"],
+            date_of_service:["date_of_service","dos","service_date"]
+          }));
+
     const parsed = JSON.parse(tjhpExtractJsonObjectFromText(jsonText || "{}"));
-    const rows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.rows) ? parsed.rows : (Array.isArray(parsed?.claims) ? parsed.claims : (Array.isArray(parsed?.payments) ? parsed.payments : [])));
+
+    const rows = Array.isArray(parsed)
+      ? parsed
+      : (
+        Array.isArray(parsed?.rows) ? parsed.rows :
+        Array.isArray(parsed?.prior_authorizations) ? parsed.prior_authorizations :
+        Array.isArray(parsed?.authorizations) ? parsed.authorizations :
+        Array.isArray(parsed?.auths) ? parsed.auths :
+        Array.isArray(parsed?.cases) ? parsed.cases :
+        Array.isArray(parsed?.claims) ? parsed.claims :
+        Array.isArray(parsed?.payments) ? parsed.payments :
+        []
+      );
+
     if (!rows.length) return null;
+
     const out = rows.map((r)=>{
       const row = {};
+
       canonical.forEach((h)=>{
         const keys = [h, ...(aliases[h] || [])];
         let val = "";
-        for (const k of keys) { if (r && r[k] != null && String(r[k]).trim()) { val = String(r[k]).trim(); break; } }
+
+        for (const k of keys) {
+          if (r && r[k] != null && String(r[k]).trim()) {
+            val = String(r[k]).trim();
+            break;
+          }
+        }
+
         row[h] = val;
       });
+
       return row;
     }).filter((r)=>{
       if (isPayments) return (r.claim_id || r.payer) && r.paid_amount;
       if (isReimbursement) return r.payer_name && r.procedure_code && tjhpMoneyNumberFromText(r.allowed_amount) > 0;
+      if (isPriorAuth) {
+        return (
+          (r.payer || r.patient_name || r.patient_id) &&
+          (r.cpt_hcpcs || r.requested_service || r.auth_number || r.status || r.submitted_date || r.expiration_date || r.denial_reason || r.missing_documentation)
+        );
+      }
       return r.claim_id && r.payer && (r.billed_amount || r.expected_amount);
     });
+
     return out.length ? { rows:out, headers:canonical } : null;
   } catch(_) { return null; }
 }
