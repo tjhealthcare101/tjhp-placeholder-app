@@ -51057,9 +51057,9 @@ if (method === "GET" && pathname === "/data-management") {
     const tabs = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px 0;">
         ${tabBtn("upload","Upload")}
+        ${tabBtn("prior-auth","Prior Authorizations")}
         ${tabBtn("reimbursement","Reimbursement Contracts")}
         ${tabBtn("revenue","Revenue Automation")}
-        ${tabBtn("prior-auth","Prior Authorizations")}
       </div>
     `;
 
