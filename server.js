@@ -45530,6 +45530,7 @@ if (method === "GET" && pathname === "/prior-auth/case") {
       <p class="muted">Case detail and staff status tracking. Claim linking and workspaces will be added in later phases.</p>
       ${String(parsed.query.pa_status || "").trim() === "status_updated" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization status updated.</div>` : ""}
       ${String(parsed.query.pa_status || "").trim() === "status_invalid" ? `<div class="alert warn" style="margin:10px 0;">That prior authorization status is not available for this phase.</div>` : ""}
+      ${String(parsed.query.pa_status || "").trim() === "ready_to_bill_not_allowed" ? `<div class="alert warn" style="margin:10px 0;">Ready to Bill is available only after the authorization is approved or partially approved.</div>` : ""}
       <div class="btnRow">
         <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
         <a class="btn secondary" href="/data-management?tab=prior-auth">Open Data Management</a>
