@@ -52465,12 +52465,16 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
                 ? "1 prior authorization file ready"
                 : selected.length + " prior authorization files ready";
 
-              sub.textContent = "Drag & drop to add more, or click to replace selection";
-              list.style.display = "block";
-              list.innerHTML = selected.map(function(f){
+              sub.style.display = "block";
+              sub.style.marginTop = "8px";
+              sub.innerHTML = selected.map(function(f){
                 const ext = (String(f.name || "").split(".").pop() || "").toUpperCase();
-                return esc(f.name) + " • " + esc(ext) + " • " + esc(detectType(f.name));
-              }).join("<br/>");
+                return '<div style="margin-top:4px;"><strong>' + esc(f.name) + '</strong></div><div class="muted small" style="margin-top:2px;">' + esc(ext) + ' · ' + esc(detectType(f.name)) + '</div>';
+              }).join("");
+
+              list.style.display = "block";
+              list.style.marginTop = "8px";
+              list.innerHTML = '<div class="muted small">Click or drag to add more files, or use Clear to reset.</div>';
 
               if (btn) {
                 btn.disabled = false;
@@ -52539,7 +52543,11 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
                 btn.disabled = true;
                 btn.textContent = "Uploading...";
               }
-              if (sub) sub.textContent = "Uploading... please wait";
+              if (list) {
+                list.style.display = "block";
+                list.style.marginTop = "8px";
+                list.innerHTML = '<div style="font-weight:800;">Uploading... please wait</div>';
+              }
             });
 
             render();
