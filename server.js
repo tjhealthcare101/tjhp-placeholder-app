@@ -60855,6 +60855,100 @@ if (process.env.TJHP_PRIOR_AUTH_EXCEL_PARSE_STORAGE_SMOKE_TESTS === "true" && (p
   })();
 }
 
+
+if (process.env.TJHP_PRIOR_AUTH_DEDUPE_UPSERT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+
+    const org_id = "__prior_auth_dedupe_smoke__" + Date.now().toString(36);
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+
+    try {
+      savePriorAuthCasesForOrg(org_id, []);
+
+      const first = upsertPriorAuthCase(org_id, {
+        auth_case_id: "pa_smoke_first_" + uuid(),
+        patient_name: "Test Patient - Prior Auth Denial Letter",
+        payer: "BlueCross BlueShield of Texas",
+        requested_service: "Endlymphoma Mutation Assay By V1",
+        auth_number: "254985877",
+        submitted_date: "2024-12-20",
+        expiration_date: "2025-03-19",
+        status: "Submitted",
+        estimated_revenue_at_risk: 1200,
+        notes: "Initial structured upload"
+      }, "smoke");
+
+      assert(first && first.ok === true, "first upsert failed");
+      const firstId = String(first.case && first.case.auth_case_id || "");
+      assert(firstId, "first auth_case_id missing");
+      assert.strictEqual(getPriorAuthCases(org_id).length, 1, "first insert should create one case");
+
+      const second = upsertPriorAuthCase(org_id, {
+        auth_case_id: "pa_smoke_second_" + uuid(),
+        patient_name: "Test Patient - Prior Auth Denial Letter",
+        payer: "BlueCross BlueShield of Texas",
+        requested_service: "Endlymphoma Mutation Assay By V1",
+        auth_number: "254985877",
+        submitted_date: "2024-12-20",
+        expiration_date: "2025-03-19",
+        status: "Denied",
+        denial_reason: "Not medically necessary",
+        estimated_revenue_at_risk: 1200,
+        notes: "Duplicate structured upload should merge"
+      }, "smoke");
+
+      assert(second && second.ok === true, "second upsert failed");
+      assert.strictEqual(getPriorAuthCases(org_id).length, 1, "duplicate upsert should not create second case");
+
+      const afterSecond = getPriorAuthCases(org_id)[0];
+      assert.strictEqual(afterSecond.auth_case_id, firstId, "duplicate merge should preserve original auth_case_id");
+      assert.strictEqual(afterSecond.status, "Denied", "useful incoming status should merge");
+      assert.strictEqual(afterSecond.denial_reason, "Not medically necessary", "denial reason should merge");
+
+      const third = upsertPriorAuthCase(org_id, {
+        auth_case_id: "pa_smoke_third_" + uuid(),
+        patient_name: "Test Patient - Prior Auth Denial Letter",
+        payer: "BlueCross BlueShield of Texas",
+        requested_service: "Endlymphoma Mutation Assay By V1",
+        auth_number: "254985877",
+        submitted_date: "2024-12-20",
+        status: "",
+        denial_reason: "",
+        estimated_revenue_at_risk: 0
+      }, "smoke");
+
+      assert(third && third.ok === true, "third upsert failed");
+      assert.strictEqual(getPriorAuthCases(org_id).length, 1, "third duplicate upsert should not create another case");
+
+      const afterThird = getPriorAuthCases(org_id)[0];
+      assert.strictEqual(afterThird.auth_case_id, firstId, "third duplicate should preserve original auth_case_id");
+      assert.strictEqual(afterThird.status, "Denied", "blank/default status should not wipe useful existing status");
+      assert.strictEqual(afterThird.denial_reason, "Not medically necessary", "blank denial reason should not wipe useful existing value");
+      assert.strictEqual(Number(afterThird.estimated_revenue_at_risk || 0), 1200, "zero revenue should not wipe useful existing revenue");
+
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+
+      savePriorAuthCasesForOrg(org_id, []);
+
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+
+      process.stdout.write("PRIOR_AUTH_DEDUPE_UPSERT_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_DEDUPE_UPSERT_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_MODEL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
