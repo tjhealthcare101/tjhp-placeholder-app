@@ -51976,12 +51976,12 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         ${String(parsed.query.pa_status || "").trim() === "upload_failed" ? `<div class="alert warn" style="margin:10px 0;">Prior authorization upload failed. Please try again.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "upload_deleted" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization upload deleted.</div>` : ""}
         <div class="alert" style="background:#f8fafc;color:#334155;border-color:#e2e8f0;">
-          Manual entry and structured CSV, Excel, and TXT upload parsing are available. PDF, Word, and image uploads are stored for review; Action Center queues and lifecycle integration will be added in later phases.
+          Manual entry and structured upload parsing are available. CSV, Excel, TXT, PDF, Word, and image uploads can create prior auth cases only when reliable prior authorization fields are extracted; uncertain files stay stored for review. Action Center queues and lifecycle integration will be added in later phases.
         </div>
         <details open class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
           <summary style="cursor:pointer;font-weight:900;">Upload prior authorization support files</summary>
           <p class="muted small" style="margin-top:8px;">
-            Upload prior authorization CSV, Excel, TXT, PDF, Word, or image files, plus approval letters, denial letters, payer responses, clinical notes, physician orders, referral documents, payer forms, PDFs, Word documents, and images. CSV, Excel, and clearly delimited TXT files with recognizable prior authorization headers can be parsed into cases. PDF, Word, and image files are stored for review in this phase.
+            Upload prior authorization CSV, Excel, TXT, PDF, Word, or image files, plus approval letters, denial letters, payer responses, clinical notes, physician orders, referral documents, payer forms, PDFs, Word documents, and images. Files can be parsed into prior auth cases only when reliable prior authorization fields are extracted; uncertain files stay stored for review.
           </p>
 
           <form id="pa-upload-form" method="POST" action="/data-management/prior-auth/upload" enctype="multipart/form-data">
@@ -60447,7 +60447,7 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
 
       [
         "Prior authorization upload parsed and prior auth cases created.",
-        "structured CSV, Excel, and TXT upload parsing",
+        "structured upload parsing",
         "CSV, Excel, TXT, PDF, Word, or image files",
         "Structured parsing can create prior auth cases only",
         "uncertain files remain stored for review",
