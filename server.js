@@ -28079,8 +28079,17 @@ async function tjhpExtractRowsFromPdfWithAI(file, purpose) {
     const filename = tjhpUploadedFileName(file) || "uploaded.pdf";
     const b64 = buffer.toString("base64");
     const model = process.env.OPENAI_PDF_MODEL || process.env.OPENAI_VISION_MODEL || "gpt-4o-mini";
-    const schemaText = purpose === "payments" ? '{rows:[{claim_id,payer,paid_amount,denial_reason,paid_date}]}' : '{rows:[{claim_id,patient_name,payer,cpt_code,billed_amount,expected_amount,date_of_service}]}';
-    const prompt = purpose === "payments" ? "Extract the payment/remittance table from this PDF. Return STRICT JSON only. Do not invent rows. Use this exact shape: " + schemaText + ". If a column is missing, leave it blank. Only include visible rows." : "Extract the billed claims table from this PDF. Return STRICT JSON only. Do not invent rows. Use this exact shape: " + schemaText + ". If a column is missing, leave it blank. Only include visible rows.";
+    const isPriorAuth = tjhpIsPriorAuthUploadPurpose(purpose);
+    const schemaText = purpose === "payments"
+      ? '{rows:[{claim_id,payer,paid_amount,denial_reason,paid_date}]}'
+      : (isPriorAuth
+        ? tjhpPriorAuthAiJsonShapeText()
+        : '{rows:[{claim_id,patient_name,payer,cpt_code,billed_amount,expected_amount,date_of_service}]}');
+    const prompt = purpose === "payments"
+      ? "Extract the payment/remittance table from this PDF. Return STRICT JSON only. Do not invent rows. Use this exact shape: " + schemaText + ". If a column is missing, leave it blank. Only include visible rows."
+      : (isPriorAuth
+        ? "Extract prior authorization data from this PDF. Return STRICT JSON only. Do not invent rows. Use this exact shape: " + schemaText + ". Include only visible authorization request, approval, denial, partial approval, missing documentation, peer-to-peer, auth number, payer, CPT/HCPCS, ICD-10, date, or revenue at risk details. If a field is missing, leave it blank."
+        : "Extract the billed claims table from this PDF. Return STRICT JSON only. Do not invent rows. Use this exact shape: " + schemaText + ". If a column is missing, leave it blank. Only include visible rows.");
     let lastReason = "";
     const a1 = await tjhpCallOpenAiResponsesForPdfInput({ model, filename, fileInput:{ type:"input_file", filename, file_data:b64 }, prompt });
     if (a1.ok) { const parsed = tjhpParsedRowsFromOpenAiTextForUpload(a1.text, purpose, "parsed_pdf_ai"); if (parsed) return { ...parsed, notes:"PDF parsed with AI file extraction." }; }
@@ -28124,9 +28133,12 @@ async function tjhpExtractRowsFromTextWithAI(text, purpose) {
     const normalizedText = tjhpNormalizeExtractedUploadText(text);
     if (normalizedText.length < 40) return null;
     const model = process.env.OPENAI_UPLOAD_TEXT_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini";
+    const isPriorAuth = tjhpIsPriorAuthUploadPurpose(purpose);
     const prompt = purpose === "payments"
       ? "You are extracting a payment/remittance upload table from messy PDF text. Return STRICT JSON only. Do not invent rows. Use this shape: {rows:[{claim_id,payer,paid_amount,denial_reason,paid_date}]}."
-      : "You are extracting a billed-claims upload table from messy PDF text. Return STRICT JSON only. Do not invent rows. Use this shape: {rows:[{claim_id,patient_name,payer,cpt_code,billed_amount,expected_amount,date_of_service}]}. Extract only rows that clearly contain a claim id, payer, and billed or expected amount.";
+      : (isPriorAuth
+        ? "You are extracting prior authorization data from messy PDF or document text. Return STRICT JSON only. Do not invent rows. Use this shape: " + tjhpPriorAuthAiJsonShapeText() + ". Include only rows that clearly describe an authorization request, approval, denial, partial approval, missing documentation, peer-to-peer requirement, auth number, payer, CPT/HCPCS, ICD-10, dates, or revenue at risk. If a field is missing, leave it blank."
+        : "You are extracting a billed-claims upload table from messy PDF text. Return STRICT JSON only. Do not invent rows. Use this shape: {rows:[{claim_id,patient_name,payer,cpt_code,billed_amount,expected_amount,date_of_service}]}. Extract only rows that clearly contain a claim id, payer, and billed or expected amount.");
     const r = await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${process.env.OPENAI_API_KEY}`},body:JSON.stringify({model,temperature:0,max_tokens:1200,response_format:{type:"json_object"},messages:[{role:"user",content:`${prompt}\n\nTEXT:\n${normalizedText.slice(0, 24000)}`} ]})});
     if (!r.ok) return null;
     const j = await r.json();
