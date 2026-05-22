@@ -45405,6 +45405,62 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
   `;
 }
 
+if (method === "GET" && pathname === "/prior-auth/case") {
+  const auth_case_id = String(parsed.query.auth_case_id || "").trim();
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  if (!row) {
+    return send(res, 404, renderPage("Prior Auth Case", `
+      <div class="card">
+        <h2>Prior Authorization Case</h2>
+        <div class="alert warn">Prior authorization case not found.</div>
+        <div class="btnRow">
+          <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
+        </div>
+      </div>
+    `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name }));
+  }
+  const missingDocs = Array.isArray(row.missing_documentation) && row.missing_documentation.length ? row.missing_documentation.join(", ") : "-";
+  const linkedDocs = Array.isArray(row.linked_documents) && row.linked_documents.length ? row.linked_documents.join(", ") : "-";
+  const html = renderPage("Prior Auth Case", `
+    <div class="card">
+      <h2>Prior Authorization Case</h2>
+      <p class="muted">Read-only case detail. Status updates, claim linking, and workspaces will be added in later phases.</p>
+      <div class="btnRow">
+        <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
+        <a class="btn secondary" href="/data-management?tab=prior-auth">Open Data Management</a>
+      </div>
+      <div class="hr"></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+        <div><strong>Patient</strong><br/>${safeStr(row.patient_name || row.patient_id || "-")}</div>
+        <div><strong>Payer</strong><br/>${safeStr(row.payer || "-")}</div>
+        <div><strong>Status</strong><br/>${safeStr(row.status || "-")}</div>
+        <div><strong>Next Action</strong><br/>${safeStr(tjhpPriorAuthNextActionLabel(row))}</div>
+        <div><strong>CPT / HCPCS</strong><br/>${safeStr(row.cpt_hcpcs || "-")}</div>
+        <div><strong>ICD-10</strong><br/>${safeStr(row.icd10 || "-")}</div>
+        <div><strong>Requested Service</strong><br/>${safeStr(row.requested_service || "-")}</div>
+        <div><strong>Auth #</strong><br/>${safeStr(row.auth_number || "-")}</div>
+        <div><strong>Submitted</strong><br/>${safeStr(row.submitted_date || "-")}</div>
+        <div><strong>Determination</strong><br/>${safeStr(row.determination_date || "-")}</div>
+        <div><strong>Expiration</strong><br/>${safeStr(row.expiration_date || "-")}</div>
+        <div><strong>Est. Revenue At Risk</strong><br/>${priorAuthRevenueAtRiskDisplay(row.estimated_revenue_at_risk)}</div>
+      </div>
+      <div class="hr"></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
+        <div><strong>Missing Documentation</strong><div class="muted small" style="margin-top:4px;">${safeStr(missingDocs)}</div></div>
+        <div><strong>Denial Reason</strong><div class="muted small" style="margin-top:4px;">${safeStr(row.denial_reason || "-")}</div></div>
+        <div><strong>Partial Approval Reason</strong><div class="muted small" style="margin-top:4px;">${safeStr(row.partial_approval_reason || "-")}</div></div>
+        <div><strong>Linked Documents</strong><div class="muted small" style="margin-top:4px;">${safeStr(linkedDocs)}</div></div>
+      </div>
+      <div class="hr"></div>
+      <strong>Notes</strong>
+      <div class="muted small" style="white-space:pre-wrap;margin-top:4px;">${safeStr(row.notes || "-")}</div>
+      <div class="hr"></div>
+      <p class="muted small">Read-only phase: no payer submission, no claim mutation, no lifecycle mutation, no workspace creation.</p>
+    </div>
+  `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
+  return send(res, 200, html);
+}
+
 if (method === "GET" && pathname === "/actions") {
   tjhpSyncPaymentOnlyOperationalClaimsForOrg(org.org_id, { write: true });
   function actionCenterEditClaimButton(b){
@@ -45827,8 +45883,9 @@ if (method === "GET" && pathname === "/actions") {
         <td>${safeStr(x.expiration_date || "-")}</td>
         <td>${priorAuthRevenueAtRiskDisplay(x.estimated_revenue_at_risk)}</td>
         <td>${safeStr(tjhpPriorAuthNextActionLabel(x))}</td>
+        <td><a class="btn secondary small" href="/prior-auth/case?auth_case_id=${encodeURIComponent(x.auth_case_id || "")}">View</a></td>
       </tr>
-    `).join("") || `<tr><td colspan="11" class="muted">No prior authorization cases need action.</td></tr>`;
+    `).join("") || `<tr><td colspan="12" class="muted">No prior authorization cases need action.</td></tr>`;
 
     const html = renderPage("Action Center", `
       <h2>Action Center <span class="tooltip" data-tip="This page prevents revenue leakage by surfacing what needs action. Use tabs to work denials, underpayments, follow-up, and prior authorizations by priority.">ⓘ</span></h2>
@@ -45857,6 +45914,7 @@ if (method === "GET" && pathname === "/actions") {
               <th>Expiration</th>
               <th>Est. Revenue At Risk</th>
               <th>Next Action</th>
+              <th>Details</th>
             </tr>
           </thead>
           <tbody>${priorAuthRowsHtml}</tbody>
@@ -61665,6 +61723,85 @@ if (process.env.TJHP_PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS === "true" && (p
       process.exit(0);
     } catch (err) {
       process.stderr.write("PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
+if (process.env.TJHP_PRIOR_AUTH_CASE_DETAIL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        'if (method === "GET" && pathname === "/prior-auth/case")',
+        "getPriorAuthCaseById(org.org_id, auth_case_id)",
+        "Read-only case detail",
+        "Back to Prior Auth Queue",
+        "Open Data Management",
+        "tjhpPriorAuthNextActionLabel(row)",
+        "priorAuthRevenueAtRiskDisplay(row.estimated_revenue_at_risk)",
+        "/prior-auth/case?auth_case_id=",
+        ">View</a>",
+        "Details",
+        "PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_REVENUE_AT_RISK_GUARD_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior-auth case detail marker: " + x));
+
+      const routeStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")');
+      const routeEnd = src.indexOf('if (method === "GET" && pathname === "/actions")', routeStart);
+      assert(routeStart >= 0, "prior auth detail route missing");
+      assert(routeEnd > routeStart, "prior auth detail route boundary missing");
+
+      const routeSrc = src.slice(routeStart, routeEnd);
+      [
+        "writeJSON(",
+        "upsertPriorAuthCase(",
+        "savePriorAuthCasesForOrg(",
+        "deletePriorAuth",
+        "ensureAgentWorkspace(",
+        "linked_claim_id =",
+        "linked_billed_id =",
+        'method === "POST"'
+      ].forEach(x => assert(!routeSrc.includes(x), "prior auth detail route must be read-only and must not include: " + x));
+
+      const actionsStart = src.indexOf('if (method === "GET" && pathname === "/actions")');
+      const actionsEnd = src.indexOf('if (method === "GET" && pathname === "/ai-appeal")', actionsStart);
+      assert(actionsStart >= 0 && actionsEnd > actionsStart, "GET /actions boundary missing");
+
+      const actionsSrc = src.slice(actionsStart, actionsEnd);
+      [
+        "tab === \"prior-auth\"",
+        "/prior-auth/case?auth_case_id=",
+        "Details",
+        "View"
+      ].forEach(x => assert(actionsSrc.includes(x), "Action Center prior-auth detail link missing marker: " + x));
+
+      const priorAuthBranchStart = actionsSrc.indexOf('if (tab === "prior-auth")');
+      const priorAuthBranchEnd = actionsSrc.indexOf("const rows = pageItems.map", priorAuthBranchStart);
+      assert(priorAuthBranchStart >= 0 && priorAuthBranchEnd > priorAuthBranchStart, "prior-auth branch boundary missing");
+      const priorAuthBranchSrc = actionsSrc.slice(priorAuthBranchStart, priorAuthBranchEnd);
+
+      [
+        "/data-management/prior-auth/upload",
+        "/data-management/prior-auth/create",
+        "/data-management/prior-auth/delete",
+        "/prior-auth/appeal",
+        "ensureAgentWorkspace(",
+        "writeJSON(FILES.billed",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests"
+      ].forEach(x => assert(!priorAuthBranchSrc.includes(x), "Action Center prior-auth detail shell must not include: " + x));
+
+      process.stdout.write("PRIOR_AUTH_CASE_DETAIL_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_CASE_DETAIL_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
       process.exit(1);
     }
   })();
