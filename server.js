@@ -1119,6 +1119,142 @@ function tjhpPriorAuthCanMoveToReadyToBill(row = {}){
   return ["Approved", "Partially Approved"].includes(status);
 }
 
+function tjhpPriorAuthCandidateText(value){
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tjhpPriorAuthClaimField(row = {}, keys = []){
+  for (const key of keys) {
+    const value = row ? row[key] : "";
+    if (value != null && String(value).trim()) return String(value).trim();
+  }
+  return "";
+}
+
+function tjhpPriorAuthMoneyField(row = {}, keys = []){
+  for (const key of keys) {
+    const raw = row ? row[key] : "";
+    const n = Number(String(raw || "").replace(/[^0-9.-]/g, ""));
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
+function tjhpPriorAuthClaimCandidateScore(priorAuth = {}, claim = {}){
+  const reasons = [];
+  let score = 0;
+
+  const paPayer = tjhpPriorAuthCandidateText(priorAuth.payer);
+  const claimPayer = tjhpPriorAuthCandidateText(
+    tjhpPriorAuthClaimField(claim, ["payer","payer_name","insurance","health_plan"])
+  );
+
+  if (paPayer && claimPayer && (paPayer === claimPayer || paPayer.includes(claimPayer) || claimPayer.includes(paPayer))) {
+    score += 4;
+    reasons.push("payer match");
+  }
+
+  const paPatient = tjhpPriorAuthCandidateText(priorAuth.patient_id || priorAuth.patient_name);
+  const claimPatient = tjhpPriorAuthCandidateText(
+    tjhpPriorAuthClaimField(claim, ["patient_id","patient_name","patient","member_id","member_name"])
+  );
+
+  if (paPatient && claimPatient && (paPatient === claimPatient || paPatient.includes(claimPatient) || claimPatient.includes(paPatient))) {
+    score += 5;
+    reasons.push("patient match");
+  }
+
+  const paCpt = tjhpPriorAuthCandidateText(priorAuth.cpt_hcpcs);
+  const claimCpt = tjhpPriorAuthCandidateText(
+    tjhpPriorAuthClaimField(claim, ["cpt_hcpcs","cpt","cpt_code","hcpcs","procedure_code"])
+  );
+
+  if (paCpt && claimCpt && (paCpt === claimCpt || paCpt.includes(claimCpt) || claimCpt.includes(paCpt))) {
+    score += 5;
+    reasons.push("CPT/HCPCS match");
+  }
+
+  const paIcd = tjhpPriorAuthCandidateText(priorAuth.icd10);
+  const claimIcd = tjhpPriorAuthCandidateText(
+    tjhpPriorAuthClaimField(claim, ["icd10","icd_10","diagnosis_code","dx_code"])
+  );
+
+  if (paIcd && claimIcd && (paIcd === claimIcd || paIcd.includes(claimIcd) || claimIcd.includes(paIcd))) {
+    score += 3;
+    reasons.push("ICD-10 match");
+  }
+
+  const paAuth = tjhpPriorAuthCandidateText(priorAuth.auth_number);
+  const claimAuth = tjhpPriorAuthCandidateText(
+    tjhpPriorAuthClaimField(claim, ["auth_number","authorization_number","prior_auth_number","pa_number"])
+  );
+
+  if (paAuth && claimAuth && paAuth === claimAuth) {
+    score += 8;
+    reasons.push("auth number match");
+  }
+
+  const paService = tjhpPriorAuthCandidateText(priorAuth.requested_service);
+  const claimService = tjhpPriorAuthCandidateText(
+    tjhpPriorAuthClaimField(claim, ["requested_service","service","procedure","description","service_description"])
+  );
+
+  if (paService && claimService && (paService.includes(claimService) || claimService.includes(paService))) {
+    score += 2;
+    reasons.push("service text match");
+  }
+
+  const confidence =
+    score >= 12 ? "high" :
+    score >= 7 ? "medium" :
+    score >= 3 ? "low" :
+    "none";
+
+  return { score, confidence, reasons };
+}
+
+function tjhpPriorAuthClaimCandidatesForCase(org_id, priorAuth = {}, options = {}){
+  const oid = String(org_id || priorAuth.org_id || "").trim();
+  const limit = Math.max(1, Math.min(Number(options.limit || 10) || 10, 25));
+
+  if (!oid || !priorAuth) return [];
+
+  const allBilled = readJSON(FILES.billed, []);
+  const orgClaims = (Array.isArray(allBilled) ? allBilled : [])
+    .filter(x => String(x.org_id || "") === oid);
+
+  return orgClaims
+    .map(claim => {
+      const match = tjhpPriorAuthClaimCandidateScore(priorAuth, claim);
+      const billed_id = tjhpPriorAuthClaimField(claim, ["billed_id","claim_id","claim_number"]);
+      const claim_number = tjhpPriorAuthClaimField(claim, ["claim_number","claim_id","billed_id"]);
+
+      return {
+        billed_id,
+        claim_number,
+        payer: tjhpPriorAuthClaimField(claim, ["payer","payer_name","insurance","health_plan"]),
+        patient: tjhpPriorAuthClaimField(claim, ["patient_name","patient_id","patient","member_name","member_id"]),
+        cpt_hcpcs: tjhpPriorAuthClaimField(claim, ["cpt_hcpcs","cpt","cpt_code","hcpcs","procedure_code"]),
+        icd10: tjhpPriorAuthClaimField(claim, ["icd10","icd_10","diagnosis_code","dx_code"]),
+        date_of_service: tjhpPriorAuthClaimField(claim, ["date_of_service","dos","service_date"]),
+        billed_amount: tjhpPriorAuthMoneyField(claim, ["amount_billed","billed_amount","charge_amount","charges"]),
+        score: match.score,
+        confidence: match.confidence,
+        reasons: match.reasons
+      };
+    })
+    .filter(x => x.score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return String(a.claim_number || "").localeCompare(String(b.claim_number || ""));
+    })
+    .slice(0, limit);
+}
+
 function priorAuthStructuredRowSignal(row = {}){
   const fields = new Set();
 
