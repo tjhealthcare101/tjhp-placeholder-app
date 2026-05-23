@@ -62526,6 +62526,159 @@ if (process.env.TJHP_PRIOR_AUTH_READY_TO_BILL_QUEUE_SMOKE_TESTS === "true" && (p
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_CLAIM_CANDIDATE_PANEL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const org_id = "__prior_auth_candidate_panel_smoke__" + Date.now().toString(36);
+    const originalBilled = readJSON(FILES.billed, []);
+    const billedBefore = JSON.stringify(originalBilled);
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+
+    try {
+      [
+        "function tjhpPriorAuthClaimCandidateScore",
+        "function tjhpPriorAuthClaimCandidatesForCase",
+        "tjhpPriorAuthClaimCandidatesForCase(org.org_id, row, { limit: 8 })",
+        "Possible Billed Claim Matches",
+        "Read-only candidate preview based on payer, patient, CPT/HCPCS, ICD-10, auth number, and service text.",
+        "No billed claim candidates found yet.",
+        "PRIOR_AUTH_READY_TO_BILL_QUEUE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_STATUS_UPDATE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_CASE_DETAIL_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior-auth claim candidate panel marker: " + x));
+
+      const score = tjhpPriorAuthClaimCandidateScore(
+        {
+          payer: "Aetna",
+          patient_name: "Candidate Patient",
+          cpt_hcpcs: "72148",
+          icd10: "M54.5",
+          auth_number: "AUTH123",
+          requested_service: "Lumbar MRI"
+        },
+        {
+          payer: "Aetna",
+          patient_name: "Candidate Patient",
+          cpt_code: "72148",
+          diagnosis_code: "M54.5",
+          auth_number: "AUTH123",
+          service_description: "Lumbar MRI without contrast"
+        }
+      );
+
+      assert(score.score >= 12, "expected high score for matching candidate");
+      assert.strictEqual(score.confidence, "high", "expected high confidence candidate");
+      assert(score.reasons.includes("payer match"), "missing payer match reason");
+      assert(score.reasons.includes("patient match"), "missing patient match reason");
+      assert(score.reasons.includes("CPT/HCPCS match"), "missing CPT match reason");
+      assert(score.reasons.includes("auth number match"), "missing auth match reason");
+
+      const smokeBilled = originalBilled.concat([{
+        org_id,
+        billed_id: "billed_candidate_smoke_1",
+        claim_number: "CLM-PA-SMOKE-1",
+        patient_name: "Candidate Patient",
+        payer: "Aetna",
+        cpt_code: "72148",
+        diagnosis_code: "M54.5",
+        auth_number: "AUTH123",
+        service_description: "Lumbar MRI without contrast",
+        date_of_service: "2026-05-01",
+        billed_amount: 1200
+      }, {
+        org_id,
+        billed_id: "billed_candidate_smoke_2",
+        claim_number: "CLM-PA-SMOKE-2",
+        patient_name: "Other Patient",
+        payer: "Other Payer",
+        cpt_code: "99213",
+        diagnosis_code: "Z00.0",
+        date_of_service: "2026-05-02",
+        billed_amount: 100
+      }]);
+
+      writeJSON(FILES.billed, smokeBilled);
+
+      savePriorAuthCasesForOrg(org_id, []);
+
+      const created = upsertPriorAuthCase(org_id, {
+        patient_name: "Candidate Patient",
+        payer: "Aetna",
+        cpt_hcpcs: "72148",
+        icd10: "M54.5",
+        auth_number: "AUTH123",
+        requested_service: "Lumbar MRI",
+        status: "Ready to Bill"
+      }, "smoke");
+
+      assert(created && created.ok === true, "prior auth smoke case create failed");
+
+      const candidates = tjhpPriorAuthClaimCandidatesForCase(org_id, created.case, { limit: 8 });
+
+      assert(Array.isArray(candidates), "candidates should be array");
+      assert(candidates.length >= 1, "expected at least one candidate");
+      assert.strictEqual(candidates[0].claim_number, "CLM-PA-SMOKE-1", "expected strongest candidate first");
+      assert(candidates[0].score > 0, "candidate score should be positive");
+      assert(candidates[0].reasons.includes("payer match"), "candidate missing payer reason");
+      assert(candidates[0].reasons.includes("patient match"), "candidate missing patient reason");
+
+      const detailStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")');
+      const detailEnd = src.indexOf('if (method === "GET" && pathname === "/actions")', detailStart);
+
+      assert(detailStart >= 0, "GET /prior-auth/case missing");
+      assert(detailEnd > detailStart, "GET /prior-auth/case boundary missing");
+
+      const detailSrc = src.slice(detailStart, detailEnd);
+
+      [
+        "Possible Billed Claim Matches",
+        "priorAuthClaimCandidateRowsHtml",
+        "tjhpPriorAuthClaimCandidatesForCase(org.org_id, row, { limit: 8 })",
+        "No billed claim candidates found yet.",
+        "Claim linking will be added in a later phase."
+      ].forEach(x => assert(detailSrc.includes(x), "detail page missing candidate panel marker: " + x));
+
+      [
+        'action="/prior-auth/case/link"',
+        'action="/prior-auth/link"',
+        "Link Prior Auth",
+        "Link to Claim",
+        "ensureAgentWorkspace(",
+        "linked_claim_id =",
+        "linked_billed_id =",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests"
+      ].forEach(x => assert(!detailSrc.includes(x), "candidate panel must remain read-only and must not include: " + x));
+
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+
+      savePriorAuthCasesForOrg(org_id, []);
+      writeJSON(FILES.billed, originalBilled);
+
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims not restored");
+
+      process.stdout.write("PRIOR_AUTH_CLAIM_CANDIDATE_PANEL_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      try { writeJSON(FILES.billed, originalBilled); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_CLAIM_CANDIDATE_PANEL_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
 }
