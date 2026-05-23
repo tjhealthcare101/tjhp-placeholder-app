@@ -374,7 +374,8 @@ const PRIOR_AUTH_STATUSES = [
   "Expiring Soon",
   "Expired",
   "Ready to Bill",
-  "Linked to Claim"
+  "Linked to Claim",
+  "Not Pursued"
 ];
 
 const PRIOR_AUTH_DEFAULT_STATUS = "Auth Needed";
@@ -438,7 +439,20 @@ function normalizePriorAuthStatus(value){
     "ready to bill": "Ready to Bill",
 
     "linked": "Linked to Claim",
-    "linked to claim": "Linked to Claim"
+    "linked to claim": "Linked to Claim",
+
+    "not pursued": "Not Pursued",
+    "do not pursue": "Not Pursued",
+    "not pursuing": "Not Pursued",
+    "service not performed": "Not Pursued",
+    "service not done": "Not Pursued",
+    "do not perform service": "Not Pursued",
+    "do not do service": "Not Pursued",
+    "cancel service": "Not Pursued",
+    "cancelled service": "Not Pursued",
+    "canceled service": "Not Pursued",
+    "patient not proceeding": "Not Pursued",
+    "not proceeding": "Not Pursued"
   };
 
   return aliases[compact] || PRIOR_AUTH_DEFAULT_STATUS;
@@ -1017,6 +1031,7 @@ function tjhpPriorAuthNextActionLabel(row = {}){
   if (status === "Auth Needed" || status === "Draft") return "Complete authorization request";
 
   if (status === "Ready to Bill") return "Link to billed claim";
+  if (status === "Not Pursued") return "No further action";
 
   return "Review prior authorization";
 }
@@ -1101,7 +1116,19 @@ function tjhpPriorAuthStaffStatusAllowed(status){
     "expiring",
     "expired",
     "ready to bill",
-    "ready"
+    "ready",
+    "not pursued",
+    "do not pursue",
+    "not pursuing",
+    "service not performed",
+    "service not done",
+    "do not perform service",
+    "do not do service",
+    "cancel service",
+    "cancelled service",
+    "canceled service",
+    "patient not proceeding",
+    "not proceeding"
   ]);
 
   const exactAllowed = tjhpPriorAuthStaffStatusOptions()
