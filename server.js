@@ -45663,6 +45663,20 @@ if (method === "GET" && pathname === "/prior-auth/case") {
   }
   const missingDocs = Array.isArray(row.missing_documentation) && row.missing_documentation.length ? row.missing_documentation.join(", ") : "-";
   const linkedDocs = Array.isArray(row.linked_documents) && row.linked_documents.length ? row.linked_documents.join(", ") : "-";
+  const priorAuthClaimCandidates = tjhpPriorAuthClaimCandidatesForCase(org.org_id, row, { limit: 8 });
+  const priorAuthClaimCandidateRowsHtml = priorAuthClaimCandidates.map(x => `
+    <tr>
+      <td>${safeStr(x.claim_number || x.billed_id || "-")}</td>
+      <td>${safeStr(x.patient || "-")}</td>
+      <td>${safeStr(x.payer || "-")}</td>
+      <td>${safeStr(x.cpt_hcpcs || "-")}</td>
+      <td>${safeStr(x.icd10 || "-")}</td>
+      <td>${safeStr(x.date_of_service || "-")}</td>
+      <td>${Number(x.billed_amount || 0) > 0 ? formatMoneyUI(Number(x.billed_amount || 0)) : "-"}</td>
+      <td>${safeStr(x.confidence || "-")}</td>
+      <td>${safeStr(Array.isArray(x.reasons) && x.reasons.length ? x.reasons.join(", ") : "-")}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="9" class="muted">No billed claim candidates found yet.</td></tr>`;
   const html = renderPage("Prior Auth Case", `
     <div class="card">
       <h2>Prior Authorization Case</h2>
@@ -45699,6 +45713,30 @@ if (method === "GET" && pathname === "/prior-auth/case") {
       <div class="hr"></div>
       <strong>Notes</strong>
       <div class="muted small" style="white-space:pre-wrap;margin-top:4px;">${safeStr(row.notes || "-")}</div>
+      <div class="hr"></div>
+      <h3>Possible Billed Claim Matches</h3>
+      <p class="muted small">
+        Read-only candidate preview based on payer, patient, CPT/HCPCS, ICD-10, auth number, and service text. Claim linking will be added in a later phase.
+      </p>
+      <div style="overflow:auto;margin-top:10px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Claim #</th>
+              <th>Patient</th>
+              <th>Payer</th>
+              <th>CPT / HCPCS</th>
+              <th>ICD-10</th>
+              <th>DOS</th>
+              <th>Billed Amount</th>
+              <th>Confidence</th>
+              <th>Why</th>
+            </tr>
+          </thead>
+          <tbody>${priorAuthClaimCandidateRowsHtml}</tbody>
+        </table>
+      </div>
+
       <div class="hr"></div>
       <h3>Update Status</h3>
       <p class="muted small">This updates only the prior authorization case status. It does not link claims, change lifecycle metrics, create workspaces, or submit anything to a payer.</p>
