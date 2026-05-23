@@ -45716,6 +45716,59 @@ if (method === "POST" && pathname === "/prior-auth/case/status") {
   return redirect(res, `/prior-auth/case?auth_case_id=${encodeURIComponent(auth_case_id)}&pa_status=status_updated`);
 }
 
+if (method === "POST" && pathname === "/prior-auth/case/link") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+
+  const auth_case_id = String(ps.get("auth_case_id") || "").trim();
+  const billed_id = String(ps.get("billed_id") || "").trim();
+
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+
+  if (!row) {
+    return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+  }
+
+  const eligibility = tjhpPriorAuthClaimLinkEligibility(org.org_id, row, billed_id);
+
+  if (!eligibility.ok) {
+    const reason = String(eligibility.reason || "link_failed");
+    const status =
+      reason === "prior_auth_not_ready_to_bill" ? "link_not_ready" :
+      reason === "billed_claim_not_found" ? "link_invalid" :
+      reason === "selected_claim_has_no_prior_auth_match_signal" ? "link_invalid" :
+      "link_failed";
+
+    return redirect(res, `/prior-auth/case?auth_case_id=${encodeURIComponent(auth_case_id)}&pa_status=${encodeURIComponent(status)}&pa_link_reason=${encodeURIComponent(reason)}`);
+  }
+
+  const claim = eligibility.claim || {};
+  const linkedBilledId = String(
+    eligibility.billed_id ||
+    tjhpPriorAuthClaimField(claim, ["billed_id","claim_id","claim_number"]) ||
+    billed_id
+  ).trim();
+
+  const linkedClaimId = String(
+    tjhpPriorAuthClaimField(claim, ["claim_id","billed_id","claim_number"]) ||
+    linkedBilledId
+  ).trim();
+
+  const existingNotes = String(row.notes || "").trim();
+  const claimLabel = String(eligibility.claim_number || linkedClaimId || linkedBilledId || "selected billed claim").trim();
+  const linkNote = `[${new Date().toISOString()}] Linked prior authorization to billed claim ${claimLabel}. Match confidence: ${eligibility.confidence || "unknown"}; reasons: ${Array.isArray(eligibility.reasons) && eligibility.reasons.length ? eligibility.reasons.join(", ") : "not recorded"}.`;
+
+  upsertPriorAuthCase(org.org_id, {
+    ...row,
+    status: "Linked to Claim",
+    linked_billed_id: linkedBilledId,
+    linked_claim_id: linkedClaimId,
+    notes: existingNotes ? `${existingNotes}\n${linkNote}` : linkNote
+  }, sess.user_id || "");
+
+  return redirect(res, `/prior-auth/case?auth_case_id=${encodeURIComponent(auth_case_id)}&pa_status=linked`);
+}
+
 if (method === "GET" && pathname === "/prior-auth/case") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
   const row = getPriorAuthCaseById(org.org_id, auth_case_id);
