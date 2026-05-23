@@ -62246,6 +62246,112 @@ if (process.env.TJHP_PRIOR_AUTH_READY_TO_BILL_GUARD_SMOKE_TESTS === "true" && (p
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_READY_TO_BILL_QUEUE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const org_id = "__prior_auth_ready_bill_queue_smoke__" + Date.now().toString(36);
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+
+    try {
+      [
+        "function tjhpPriorAuthNextActionLabel",
+        "function tjhpPriorAuthActionCenterRows",
+        'if (status === "Ready to Bill") return "Link to billed claim";',
+        "Link to billed claim",
+        "function tjhpPriorAuthStaffStatusOptions",
+        "function tjhpPriorAuthStaffStatusAllowed",
+        "function tjhpPriorAuthCanMoveToReadyToBill",
+        "PRIOR_AUTH_READY_TO_BILL_GUARD_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_STATUS_UPDATE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_CASE_DETAIL_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing Ready to Bill queue marker: " + x));
+
+      assert.strictEqual(
+        tjhpPriorAuthNextActionLabel({ status:"Ready to Bill" }),
+        "Link to billed claim",
+        "Ready to Bill next action mismatch"
+      );
+
+      assert(!tjhpPriorAuthStaffStatusOptions().includes("Linked to Claim"), "Linked to Claim should not be staff-selectable");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("Linked to Claim"), false, "Linked to Claim should remain blocked");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Approved" }), true, "Approved should be Ready to Bill eligible");
+      assert.strictEqual(tjhpPriorAuthCanMoveToReadyToBill({ status:"Denied" }), false, "Denied should not be Ready to Bill eligible");
+
+      savePriorAuthCasesForOrg(org_id, []);
+
+      const ready = upsertPriorAuthCase(org_id, {
+        patient_name: "Ready Bill Patient",
+        payer: "Aetna",
+        requested_service: "MRI",
+        status: "Ready to Bill"
+      }, "smoke");
+
+      assert(ready && ready.ok === true, "Ready to Bill smoke case create failed");
+
+      const linked = upsertPriorAuthCase(org_id, {
+        patient_name: "Linked Patient",
+        payer: "Aetna",
+        requested_service: "CT",
+        status: "Linked to Claim"
+      }, "smoke");
+
+      assert(linked && linked.ok === true, "Linked smoke case create failed");
+
+      const denied = upsertPriorAuthCase(org_id, {
+        patient_name: "Denied Patient",
+        payer: "Aetna",
+        requested_service: "Ultrasound",
+        status: "Denied"
+      }, "smoke");
+
+      assert(denied && denied.ok === true, "Denied smoke case create failed");
+
+      const rows = tjhpPriorAuthActionCenterRows(org_id);
+      const statuses = rows.map(x => String(x.status || ""));
+
+      assert(statuses.includes("Ready to Bill"), "Ready to Bill should appear in prior-auth action queue");
+      assert(statuses.includes("Denied"), "Denied should still appear in prior-auth action queue");
+      assert(!statuses.includes("Linked to Claim"), "Linked to Claim should not appear in prior-auth action queue");
+
+      const readyRow = rows.find(x => String(x.status || "") === "Ready to Bill");
+      assert(readyRow, "Ready to Bill row missing");
+      assert.strictEqual(tjhpPriorAuthNextActionLabel(readyRow), "Link to billed claim", "Ready to Bill queue action label mismatch");
+
+      const queueStart = src.indexOf("function tjhpPriorAuthActionCenterRows");
+      const queueEnd = src.indexOf("function tjhpPriorAuthStaffStatusOptions", queueStart);
+      assert(queueStart >= 0 && queueEnd > queueStart, "prior-auth action queue helper boundary missing");
+
+      const queueSrc = src.slice(queueStart, queueEnd);
+      assert(queueSrc.includes('"Ready to Bill"'), "Ready to Bill missing from action queue helper");
+      assert(!queueSrc.includes('"Linked to Claim"'), "Linked to Claim must not be in action queue helper");
+
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+
+      savePriorAuthCasesForOrg(org_id, []);
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+
+      process.stdout.write("PRIOR_AUTH_READY_TO_BILL_QUEUE_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_READY_TO_BILL_QUEUE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
 }
