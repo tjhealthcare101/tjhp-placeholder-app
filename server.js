@@ -1255,6 +1255,75 @@ function tjhpPriorAuthClaimCandidatesForCase(org_id, priorAuth = {}, options = {
     .slice(0, limit);
 }
 
+
+function tjhpPriorAuthFindBilledClaimForLink(org_id, billed_id){
+  const oid = String(org_id || "").trim();
+  const id = String(billed_id || "").trim();
+
+  if (!oid || !id) return null;
+
+  const allBilled = readJSON(FILES.billed, []);
+
+  return (Array.isArray(allBilled) ? allBilled : []).find(x => {
+    if (String(x.org_id || "") !== oid) return false;
+
+    return [
+      x.billed_id,
+      x.claim_id,
+      x.claim_number
+    ].some(v => String(v || "").trim() === id);
+  }) || null;
+}
+
+function tjhpPriorAuthClaimLinkEligibility(org_id, priorAuth = {}, billed_id = ""){
+  const oid = String(org_id || priorAuth.org_id || "").trim();
+  const id = String(billed_id || "").trim();
+
+  if (!oid) {
+    return { ok:false, reason:"missing_org_id", claim:null, score:0, confidence:"none", reasons:[] };
+  }
+
+  if (!priorAuth || !String(priorAuth.auth_case_id || "").trim()) {
+    return { ok:false, reason:"missing_prior_auth_case", claim:null, score:0, confidence:"none", reasons:[] };
+  }
+
+  const status = normalizePriorAuthStatus(priorAuth.status || "");
+
+  if (status !== "Ready to Bill") {
+    return { ok:false, reason:"prior_auth_not_ready_to_bill", claim:null, score:0, confidence:"none", reasons:[] };
+  }
+
+  const claim = tjhpPriorAuthFindBilledClaimForLink(oid, id);
+
+  if (!claim) {
+    return { ok:false, reason:"billed_claim_not_found", claim:null, score:0, confidence:"none", reasons:[] };
+  }
+
+  const match = tjhpPriorAuthClaimCandidateScore(priorAuth, claim);
+
+  if (!match || Number(match.score || 0) <= 0) {
+    return {
+      ok:false,
+      reason:"selected_claim_has_no_prior_auth_match_signal",
+      claim,
+      score:Number(match && match.score || 0),
+      confidence:String(match && match.confidence || "none"),
+      reasons:Array.isArray(match && match.reasons) ? match.reasons : []
+    };
+  }
+
+  return {
+    ok:true,
+    reason:"candidate_match",
+    claim,
+    billed_id:tjhpPriorAuthClaimField(claim, ["billed_id","claim_id","claim_number"]),
+    claim_number:tjhpPriorAuthClaimField(claim, ["claim_number","claim_id","billed_id"]),
+    score:Number(match.score || 0),
+    confidence:String(match.confidence || "none"),
+    reasons:Array.isArray(match.reasons) ? match.reasons : []
+  };
+}
+
 function priorAuthStructuredRowSignal(row = {}){
   const fields = new Set();
 
