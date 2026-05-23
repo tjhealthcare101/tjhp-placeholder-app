@@ -62748,6 +62748,212 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIM_CANDIDATE_PANEL_SMOKE_TESTS === "true" && 
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_CLAIM_LINK_HELPERS_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const org_id = "__prior_auth_claim_link_helpers_smoke__" + Date.now().toString(36);
+    const originalBilled = readJSON(FILES.billed, []);
+    const billedBefore = JSON.stringify(originalBilled);
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+
+    try {
+      [
+        "function tjhpPriorAuthFindBilledClaimForLink",
+        "function tjhpPriorAuthClaimLinkEligibility",
+        "prior_auth_not_ready_to_bill",
+        "billed_claim_not_found",
+        "selected_claim_has_no_prior_auth_match_signal",
+        "candidate_match",
+        "tjhpPriorAuthClaimCandidateScore(priorAuth, claim)",
+        "tjhpPriorAuthFindBilledClaimForLink(oid, id)",
+        "PRIOR_AUTH_CLAIM_CANDIDATE_PANEL_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_READY_TO_BILL_QUEUE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_STATUS_UPDATE_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior-auth claim link helper marker: " + x));
+
+      const linkRouteDecl = 'if (method === "POST" && pathname === "/prior-auth/case/link")';
+      const linkRouteCount = src.split(linkRouteDecl).length - 1;
+      assert(linkRouteCount <= 1, "POST /prior-auth/case/link route must not exist yet");
+
+      const helperStart = src.indexOf("function tjhpPriorAuthFindBilledClaimForLink");
+      const helperEnd = src.indexOf("function priorAuthStructuredRowSignal", helperStart);
+
+      assert(helperStart >= 0, "claim link helper block missing");
+      assert(helperEnd > helperStart, "claim link helper block boundary missing");
+
+      const helperBlock = src.slice(helperStart, helperEnd);
+
+      [
+        "writeJSON(",
+        "upsertPriorAuthCase(",
+        "savePriorAuthCasesForOrg(",
+        "ensureAgentWorkspace(",
+        "linked_claim_id =",
+        "linked_billed_id =",
+        'status: "Linked to Claim"',
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "FILES.document_ingests"
+      ].forEach(x => assert(!helperBlock.includes(x), "claim link helpers must remain read-only and must not include: " + x));
+
+      const detailStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")');
+      const detailEnd = src.indexOf('if (method === "GET" && pathname === "/actions")', detailStart);
+
+      assert(detailStart >= 0, "GET /prior-auth/case route missing");
+      assert(detailEnd > detailStart, "GET /prior-auth/case route boundary missing");
+
+      const detailSrc = src.slice(detailStart, detailEnd);
+
+      [
+        "Possible Billed Claim Matches",
+        "Claim linking will be added in a later phase.",
+        "priorAuthClaimCandidateRowsHtml",
+        "tjhpPriorAuthClaimCandidatesForCase(org.org_id, row, { limit: 8 })"
+      ].forEach(x => assert(detailSrc.includes(x), "detail page missing read-only candidate marker: " + x));
+
+      [
+        'action="/prior-auth/case/link"',
+        'action="/prior-auth/link"',
+        'name="billed_id"',
+        "Link Prior Auth",
+        "Link to Claim</button>",
+        "Link to Claim</a>",
+        "ensureAgentWorkspace(",
+        "linked_claim_id =",
+        "linked_billed_id =",
+        "writeJSON(FILES.billed",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests"
+      ].forEach(x => assert(!detailSrc.includes(x), "candidate panel must remain read-only and must not include: " + x));
+
+      assert.strictEqual(
+        tjhpPriorAuthClaimLinkEligibility("", { auth_case_id:"pa_missing_org", status:"Ready to Bill" }, "x").reason,
+        "missing_org_id",
+        "missing org should be rejected"
+      );
+
+      assert.strictEqual(
+        tjhpPriorAuthClaimLinkEligibility(org_id, {}, "x").reason,
+        "missing_prior_auth_case",
+        "missing prior auth case should be rejected"
+      );
+
+      savePriorAuthCasesForOrg(org_id, []);
+
+      const pending = upsertPriorAuthCase(org_id, {
+        patient_name: "Pending Link Patient",
+        payer: "Aetna",
+        requested_service: "MRI",
+        cpt_hcpcs: "72148",
+        icd10: "M54.5",
+        auth_number: "AUTH-LINK-1",
+        status: "Pending"
+      }, "smoke");
+
+      assert(pending && pending.ok === true, "pending prior auth smoke create failed");
+
+      const ready = upsertPriorAuthCase(org_id, {
+        patient_name: "Ready Link Patient",
+        payer: "Aetna",
+        requested_service: "MRI",
+        cpt_hcpcs: "72148",
+        icd10: "M54.5",
+        auth_number: "AUTH-LINK-2",
+        status: "Ready to Bill"
+      }, "smoke");
+
+      assert(ready && ready.ok === true, "ready prior auth smoke create failed");
+
+      const smokeBilled = originalBilled.concat([
+        {
+          org_id,
+          billed_id: "billed_link_smoke_match",
+          claim_number: "CLM-LINK-SMOKE-1",
+          patient_name: "Ready Link Patient",
+          payer: "Aetna",
+          cpt_code: "72148",
+          diagnosis_code: "M54.5",
+          auth_number: "AUTH-LINK-2",
+          service_description: "MRI",
+          billed_amount: 1200,
+          date_of_service: "2026-05-01"
+        },
+        {
+          org_id,
+          billed_id: "billed_link_smoke_nomatch",
+          claim_number: "CLM-LINK-SMOKE-2",
+          patient_name: "Different Patient",
+          payer: "Different Payer",
+          cpt_code: "99213",
+          diagnosis_code: "Z00.0",
+          service_description: "Office Visit",
+          billed_amount: 100,
+          date_of_service: "2026-05-02"
+        }
+      ]);
+
+      writeJSON(FILES.billed, smokeBilled);
+
+      const foundByBilledId = tjhpPriorAuthFindBilledClaimForLink(org_id, "billed_link_smoke_match");
+      assert(foundByBilledId, "expected billed claim lookup by billed_id");
+
+      const foundByClaimNumber = tjhpPriorAuthFindBilledClaimForLink(org_id, "CLM-LINK-SMOKE-1");
+      assert(foundByClaimNumber, "expected billed claim lookup by claim_number");
+
+      const notReady = tjhpPriorAuthClaimLinkEligibility(org_id, pending.case, "billed_link_smoke_match");
+      assert.strictEqual(notReady.ok, false, "not-ready prior auth should not be link eligible");
+      assert.strictEqual(notReady.reason, "prior_auth_not_ready_to_bill", "not-ready rejection reason mismatch");
+
+      const missingClaim = tjhpPriorAuthClaimLinkEligibility(org_id, ready.case, "missing_billed_id");
+      assert.strictEqual(missingClaim.ok, false, "missing billed claim should not be eligible");
+      assert.strictEqual(missingClaim.reason, "billed_claim_not_found", "missing claim rejection reason mismatch");
+
+      const noSignal = tjhpPriorAuthClaimLinkEligibility(org_id, ready.case, "billed_link_smoke_nomatch");
+      assert.strictEqual(noSignal.ok, false, "no-signal billed claim should not be eligible");
+      assert.strictEqual(noSignal.reason, "selected_claim_has_no_prior_auth_match_signal", "no-signal rejection reason mismatch");
+
+      const eligible = tjhpPriorAuthClaimLinkEligibility(org_id, ready.case, "billed_link_smoke_match");
+      assert.strictEqual(eligible.ok, true, "matching claim should be eligible");
+      assert.strictEqual(eligible.reason, "candidate_match", "eligible reason mismatch");
+      assert.strictEqual(eligible.claim_number, "CLM-LINK-SMOKE-1", "eligible claim number mismatch");
+      assert(Number(eligible.score || 0) > 0, "eligible score should be positive");
+      assert(Array.isArray(eligible.reasons) && eligible.reasons.length > 0, "eligible reasons should be present");
+
+      const readyAfter = getPriorAuthCaseById(org_id, ready.case.auth_case_id);
+      assert(readyAfter, "ready smoke prior auth missing after eligibility check");
+      assert.strictEqual(readyAfter.status, "Ready to Bill", "eligibility helper must not update prior-auth status");
+      assert.strictEqual(String(readyAfter.linked_billed_id || ""), "", "eligibility helper must not set linked_billed_id");
+      assert.strictEqual(String(readyAfter.linked_claim_id || ""), "", "eligibility helper must not set linked_claim_id");
+
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+
+      savePriorAuthCasesForOrg(org_id, []);
+      writeJSON(FILES.billed, originalBilled);
+
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims not restored");
+
+      process.stdout.write("PRIOR_AUTH_CLAIM_LINK_HELPERS_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      try { writeJSON(FILES.billed, originalBilled); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_CLAIM_LINK_HELPERS_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
 }
