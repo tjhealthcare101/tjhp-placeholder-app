@@ -62771,18 +62771,36 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIM_CANDIDATE_PANEL_SMOKE_TESTS === "true" && 
         "Claim linking will be added in a later phase."
       ].forEach(x => assert(detailSrc.includes(x), "detail page missing candidate panel marker: " + x));
 
+      const futureCandidatePanelHasLinkForm = detailSrc.includes('action="/prior-auth/case/link"');
+
+      if (futureCandidatePanelHasLinkForm) {
+        [
+          'action="/prior-auth/case/link"',
+          'name="auth_case_id"',
+          'name="billed_id"',
+          "Link to Claim",
+          "Possible Billed Claim Matches"
+        ].forEach(x => assert(detailSrc.includes(x), "future candidate panel link form missing marker: " + x));
+      } else {
+        [
+          'action="/prior-auth/case/link"',
+          'action="/prior-auth/link"',
+          'name="billed_id"',
+          "Link Prior Auth",
+          "Link to Claim</button>",
+          "Link to Claim</a>"
+        ].forEach(x => assert(!detailSrc.includes(x), "candidate panel should remain read-only before link form and must not include: " + x));
+      }
+
       [
-        'action="/prior-auth/case/link"',
-        'action="/prior-auth/link"',
-        "Link Prior Auth",
-        "Link to Claim",
         "ensureAgentWorkspace(",
         "linked_claim_id =",
         "linked_billed_id =",
+        "writeJSON(FILES.billed",
         "writeJSON(FILES.payments",
         "writeJSON(FILES.payer_contracts",
         "writeJSON(FILES.document_ingests"
-      ].forEach(x => assert(!detailSrc.includes(x), "candidate panel must remain read-only and must not include: " + x));
+      ].forEach(x => assert(!detailSrc.includes(x), "candidate panel/detail route must not include mutation marker: " + x));
 
       assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
       assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
@@ -62794,6 +62812,7 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIM_CANDIDATE_PANEL_SMOKE_TESTS === "true" && 
       assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
       assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims not restored");
 
+      /* PRIOR_AUTH_CLAIM_CANDIDATE_PANEL_FUTURE_LINK_FORM_GUARD_OK */
       process.stdout.write("PRIOR_AUTH_CLAIM_CANDIDATE_PANEL_SMOKE_TESTS_PASSED\n");
       process.exit(0);
     } catch (err) {
