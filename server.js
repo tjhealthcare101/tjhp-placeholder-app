@@ -45806,6 +45806,10 @@ if (method === "GET" && pathname === "/prior-auth/case") {
       ${String(parsed.query.pa_status || "").trim() === "status_updated" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization status updated.</div>` : ""}
       ${String(parsed.query.pa_status || "").trim() === "status_invalid" ? `<div class="alert warn" style="margin:10px 0;">That prior authorization status is not available for this phase.</div>` : ""}
       ${String(parsed.query.pa_status || "").trim() === "ready_to_bill_not_allowed" ? `<div class="alert warn" style="margin:10px 0;">Ready to Bill is available only after the authorization is approved or partially approved.</div>` : ""}
+      ${String(parsed.query.pa_status || "").trim() === "linked" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization linked to billed claim.</div>` : ""}
+      ${String(parsed.query.pa_status || "").trim() === "link_not_ready" ? `<div class="alert warn" style="margin:10px 0;">Prior authorization must be Ready to Bill before linking to a billed claim.</div>` : ""}
+      ${String(parsed.query.pa_status || "").trim() === "link_invalid" ? `<div class="alert warn" style="margin:10px 0;">Selected billed claim could not be linked. Review the candidate match and try again.</div>` : ""}
+      ${String(parsed.query.pa_status || "").trim() === "link_failed" ? `<div class="alert warn" style="margin:10px 0;">Prior authorization claim link failed. Please try again.</div>` : ""}
       <div class="btnRow">
         <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
         <a class="btn secondary" href="/data-management?tab=prior-auth">Open Data Management</a>
