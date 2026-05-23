@@ -62780,7 +62780,34 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIM_LINK_HELPERS_SMOKE_TESTS === "true" && (pr
 
       const linkRouteDecl = 'if (method === "POST" && pathname === "/prior-auth/case/link")';
       const linkRouteCount = src.split(linkRouteDecl).length - 1;
-      assert(linkRouteCount <= 1, "POST /prior-auth/case/link route must not exist yet");
+
+      if (linkRouteCount > 1) {
+        const futureLinkRouteStart = src.indexOf(linkRouteDecl);
+        const futureLinkRouteEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")', futureLinkRouteStart);
+        assert(futureLinkRouteEnd > futureLinkRouteStart, "future POST /prior-auth/case/link route boundary missing");
+
+        const futureLinkRouteSrc = src.slice(futureLinkRouteStart, futureLinkRouteEnd);
+
+        [
+          "parseBody(req)",
+          "getPriorAuthCaseById(org.org_id, auth_case_id)",
+          "tjhpPriorAuthClaimLinkEligibility",
+          "upsertPriorAuthCase(org.org_id",
+          "Linked to Claim",
+          "pa_status=linked"
+        ].forEach(x => assert(futureLinkRouteSrc.includes(x), "future link route missing required marker: " + x));
+
+        [
+          "writeJSON(FILES.billed",
+          "writeJSON(FILES.payments",
+          "writeJSON(FILES.payer_contracts",
+          "writeJSON(FILES.document_ingests",
+          "ensureAgentWorkspace(",
+          "/upload-router",
+          "/data-management/prior-auth/upload",
+          "/data-management/prior-auth/create"
+        ].forEach(x => assert(!futureLinkRouteSrc.includes(x), "future link route must not include: " + x));
+      }
 
       const helperStart = src.indexOf("function tjhpPriorAuthFindBilledClaimForLink");
       const helperEnd = src.indexOf("function priorAuthStructuredRowSignal", helperStart);
@@ -62818,13 +62845,26 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIM_LINK_HELPERS_SMOKE_TESTS === "true" && (pr
         "tjhpPriorAuthClaimCandidatesForCase(org.org_id, row, { limit: 8 })"
       ].forEach(x => assert(detailSrc.includes(x), "detail page missing read-only candidate marker: " + x));
 
+      const futureDetailHasLinkForm = detailSrc.includes('action="/prior-auth/case/link"');
+
+      if (futureDetailHasLinkForm) {
+        [
+          'action="/prior-auth/case/link"',
+          'name="auth_case_id"',
+          'name="billed_id"',
+          "Possible Billed Claim Matches"
+        ].forEach(x => assert(detailSrc.includes(x), "future detail link form missing marker: " + x));
+      } else {
+        [
+          'action="/prior-auth/link"',
+          'name="billed_id"',
+          "Link Prior Auth",
+          "Link to Claim</button>",
+          "Link to Claim</a>"
+        ].forEach(x => assert(!detailSrc.includes(x), "candidate panel should remain read-only before link form and must not include: " + x));
+      }
+
       [
-        'action="/prior-auth/case/link"',
-        'action="/prior-auth/link"',
-        'name="billed_id"',
-        "Link Prior Auth",
-        "Link to Claim</button>",
-        "Link to Claim</a>",
         "ensureAgentWorkspace(",
         "linked_claim_id =",
         "linked_billed_id =",
@@ -62832,7 +62872,7 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIM_LINK_HELPERS_SMOKE_TESTS === "true" && (pr
         "writeJSON(FILES.payments",
         "writeJSON(FILES.payer_contracts",
         "writeJSON(FILES.document_ingests"
-      ].forEach(x => assert(!detailSrc.includes(x), "candidate panel must remain read-only and must not include: " + x));
+      ].forEach(x => assert(!detailSrc.includes(x), "candidate panel/detail route must not include mutation marker: " + x));
 
       assert.strictEqual(
         tjhpPriorAuthClaimLinkEligibility("", { auth_case_id:"pa_missing_org", status:"Ready to Bill" }, "x").reason,
@@ -62943,6 +62983,7 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIM_LINK_HELPERS_SMOKE_TESTS === "true" && (pr
       assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
       assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims not restored");
 
+      /* PRIOR_AUTH_CLAIM_LINK_HELPERS_FUTURE_ROUTE_GUARD_OK */
       process.stdout.write("PRIOR_AUTH_CLAIM_LINK_HELPERS_SMOKE_TESTS_PASSED\n");
       process.exit(0);
     } catch (err) {
