@@ -45797,8 +45797,15 @@ if (method === "GET" && pathname === "/prior-auth/case") {
       <td>${Number(x.billed_amount || 0) > 0 ? formatMoneyUI(Number(x.billed_amount || 0)) : "-"}</td>
       <td>${safeStr(x.confidence || "-")}</td>
       <td>${safeStr(Array.isArray(x.reasons) && x.reasons.length ? x.reasons.join(", ") : "-")}</td>
+      <td>
+        <form method="POST" action="/prior-auth/case/link" style="display:inline-block;">
+          <input type="hidden" name="auth_case_id" value="${safeStr(row.auth_case_id || "")}" />
+          <input type="hidden" name="billed_id" value="${safeStr(x.billed_id || x.claim_number || "")}" />
+          <button class="btn small" type="submit">Link to Claim</button>
+        </form>
+      </td>
     </tr>
-  `).join("") || `<tr><td colspan="9" class="muted">No billed claim candidates found yet.</td></tr>`;
+  `).join("") || `<tr><td colspan="10" class="muted">No billed claim candidates found yet.</td></tr>`;
   const html = renderPage("Prior Auth Case", `
     <div class="card">
       <h2>Prior Authorization Case</h2>
@@ -45857,6 +45864,7 @@ if (method === "GET" && pathname === "/prior-auth/case") {
               <th>Billed Amount</th>
               <th>Confidence</th>
               <th>Why</th>
+              <th>Action</th>
             </tr>
           </thead>
           <tbody>${priorAuthClaimCandidateRowsHtml}</tbody>
