@@ -64939,6 +64939,94 @@ if (process.env.TJHP_PRIOR_AUTH_OPEN_APPEAL_WORKSPACE_LINK_SMOKE_TESTS === "true
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+    const org_id = "__prior_auth_appeal_layout_helpers_smoke__" + Date.now().toString(36);
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+    const workspacesBefore = JSON.stringify(readJSON(FILES.agent_workspaces, []));
+    try {
+      ["function tjhpPriorAuthAppealEvidenceItems","function tjhpPriorAuthAppealPacketSections","function tjhpPriorAuthAppealCommandCenterMetrics","function tjhpPriorAuthAppealNarrativeDraft","function tjhpPriorAuthAppealWorkspaceLayoutModel",'workspace_type: "prior_auth_appeal_command_center"',"Prior Auth Appeal Packet Command Center","Original Prior Authorization Request","Denial or Partial Approval Letter","Letter of Medical Necessity","Clinical Documentation","Payer Policy / Guidelines","CPT / HCPCS and ICD-10 Rationale","Evidence of Authorization / Request History","Provider Authorization Form","Prior Authorization Appeal Narrative","Service / Revenue Impact Summary","This request is not a billed-claim payment appeal.","no_agent_workspace_creation","PRIOR_AUTH_OPEN_APPEAL_WORKSPACE_LINK_SMOKE_TESTS_PASSED","PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS_PASSED","PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS_PASSED","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","UPLOAD_COMPAT_SMOKE_TESTS_PASSED"].forEach(x => assert(src.includes(x), "missing prior-auth appeal layout helper marker: " + x));
+      const helperStart = src.indexOf("function tjhpPriorAuthAppealEvidenceItems");
+      const helperEnd = src.indexOf("function priorAuthStructuredRowSignal", helperStart);
+      assert(helperStart >= 0, "prior-auth appeal layout helper block missing");
+      assert(helperEnd > helperStart, "prior-auth appeal layout helper block boundary missing");
+      const helperBlock = src.slice(helperStart, helperEnd);
+      ["writeJSON(","upsertPriorAuthCase(","savePriorAuthCasesForOrg(","saveAgentWorkspace(","ensureAgentWorkspace(","ensureWorkspacePacket(","ensurePacketSections(","createAgentWorkspace","parseBody(req)","pathname ===","method ===","FILES.billed","FILES.payments","FILES.payer_contracts","FILES.document_ingests","FILES.agent_workspaces"].forEach(x => assert(!helperBlock.includes(x), "prior-auth appeal layout helpers must remain read-only and must not include: " + x));
+      ['if (method === "GET" && pathname === "/appeal-workspace")','if (method === "GET" && pathname === "/negotiation-workspace")','if (method === "GET" && pathname === "/agent-workspace")','if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))','pathname === "/ai-negotiation" ? "negotiation" : "appeal"',"function workspacePagePath","ensureAgentWorkspace","ensureWorkspacePacket","ensurePacketSections","saveAgentWorkspace"].forEach(x => assert(src.includes(x), "existing sensitive workspace marker missing: " + x));
+      const ctx = tjhpPriorAuthAppealWorkspaceContext({ org_id, org_name:"Smoke Ortho Practice" }, { auth_case_id:"pa_layout_helpers_smoke", org_id, patient_name:"Layout Helpers Smoke Patient", payer:"Aetna", provider:"Dr. Smith", specialty:"Orthopedics", requested_service:"Lumbar MRI", cpt_hcpcs:"72148", icd10:"M54.5", auth_number:"AUTH-LAYOUT-SMOKE", status:"Denied", denial_reason:"Medical necessity criteria not met", missing_documentation:["clinical notes", "imaging report"], estimated_revenue_at_risk:1200 });
+      const evidence = tjhpPriorAuthAppealEvidenceItems(ctx);
+      assert(Array.isArray(evidence), "evidence items should be array");
+      assert(evidence.length >= 10, "expected prior-auth evidence item set");
+      ["Original Prior Authorization Request","Denial or Partial Approval Letter","Letter of Medical Necessity","Clinical Documentation","Payer Policy / Guidelines","CPT / HCPCS and ICD-10 Rationale","Relevant Imaging, Lab, or Diagnostic Results","Missing Documentation Response","Evidence of Authorization / Request History","Provider Authorization Form","Prior Payer Correspondence"].forEach(label => { assert(evidence.some(x => x.label === label), "missing evidence item: " + label); });
+      evidence.forEach(item => { assert(String(item.key || "").trim(), "evidence item missing key"); assert(String(item.label || "").trim(), "evidence item missing label"); assert(String(item.description || "").trim(), "evidence item missing description"); assert(Object.prototype.hasOwnProperty.call(item, "required"), "evidence item missing required flag"); assert(String(item.source || "").trim(), "evidence item missing source"); assert(String(item.status || "").trim(), "evidence item missing status"); assert(String(item.status_label || "").trim(), "evidence item missing status_label"); assert(String(item.packet_impact || "").trim(), "evidence item missing packet_impact"); });
+      const p2pEvidence = tjhpPriorAuthAppealEvidenceItems({ ...ctx, status:"Peer-to-Peer Needed" });
+      const p2pNotes = p2pEvidence.find(x => x.key === "peer_to_peer_notes");
+      assert(p2pNotes && p2pNotes.required === true, "peer-to-peer notes should be required for P2P status");
+      const sections = tjhpPriorAuthAppealPacketSections(ctx, { org_id, org_name:"Smoke Ortho Practice" });
+      assert(Array.isArray(sections), "packet sections should be array");
+      assert(sections.length >= 12, "expected packet preview sections");
+      ["Header","Prior Authorization Case Summary","Clinical Summary","Service / Revenue Impact Summary","Prior Authorization Appeal Narrative","Requested Action","Attachments Index","Evidence Summary","Letter of Medical Necessity","Clinical Documentation","Payer Policy / Guidelines","Evidence of Authorization","Provider Authorization Form","Peer-to-Peer Notes","Missing Documentation Response"].forEach(title => { assert(sections.some(x => x.title === title), "missing packet section: " + title); });
+      sections.forEach(section => { assert(String(section.key || "").trim(), "packet section missing key"); assert(String(section.title || "").trim(), "packet section missing title"); assert(String(section.subtitle || "").trim(), "packet section missing subtitle"); assert(Object.prototype.hasOwnProperty.call(section, "body"), "packet section missing body"); assert(Object.prototype.hasOwnProperty.call(section, "complete"), "packet section missing complete flag"); assert(Object.prototype.hasOwnProperty.call(section, "editable_later"), "packet section missing editable_later flag"); });
+      const metrics = tjhpPriorAuthAppealCommandCenterMetrics(ctx);
+      ["packet_readiness_pct","source_proof_readiness_pct","draft_readiness_pct","clinical_necessity_strength_pct","required_source_proof_count","source_proof_attached_count","source_proof_needed_count","preview_section_count","completed_preview_section_count","estimated_revenue_at_risk","estimated_revenue_at_risk_display","status_label","workspace_badge"].forEach(key => { assert(Object.prototype.hasOwnProperty.call(metrics, key), "metrics missing key: " + key); });
+      assert(metrics.packet_readiness_pct >= 0 && metrics.packet_readiness_pct <= 100, "packet readiness out of range");
+      assert(metrics.source_proof_readiness_pct >= 0 && metrics.source_proof_readiness_pct <= 100, "source proof readiness out of range");
+      assert(metrics.draft_readiness_pct >= 0 && metrics.draft_readiness_pct <= 100, "draft readiness out of range");
+      assert(metrics.clinical_necessity_strength_pct >= 0 && metrics.clinical_necessity_strength_pct <= 100, "clinical necessity strength out of range");
+      assert.strictEqual(metrics.workspace_badge, "Prior Auth", "workspace badge mismatch");
+      const narrative = tjhpPriorAuthAppealNarrativeDraft(ctx, { org_id, org_name:"Smoke Ortho Practice" });
+      assert(narrative.includes("Prior Authorization Appeals Department"), "narrative missing prior-auth addressee");
+      assert(narrative.includes("requests reconsideration of the prior authorization decision"), "narrative missing reconsideration language");
+      assert(narrative.includes("medical necessity"), "narrative missing medical necessity language");
+      assert(narrative.includes("pre-service authorization appeal"), "narrative missing pre-service framing");
+      assert(narrative.includes("This request is not a billed-claim payment appeal."), "narrative missing non-billed claim framing");
+      ["paid amount","underpayment","remittance","reverse denial and issue payment"].forEach(term => { assert(!narrative.toLowerCase().includes(term), "narrative should not use billed-payment appeal language: " + term); });
+      const layout = tjhpPriorAuthAppealWorkspaceLayoutModel({ org_id, org_name:"Smoke Ortho Practice" }, { auth_case_id:"pa_layout_helpers_smoke", org_id, patient_name:"Layout Helpers Smoke Patient", payer:"Aetna", provider:"Dr. Smith", specialty:"Orthopedics", requested_service:"Lumbar MRI", cpt_hcpcs:"72148", icd10:"M54.5", auth_number:"AUTH-LAYOUT-SMOKE", status:"Denied", denial_reason:"Medical necessity criteria not met", missing_documentation:["clinical notes", "imaging report"], estimated_revenue_at_risk:1200 });
+      assert.strictEqual(layout.workspace_type, "prior_auth_appeal_command_center", "layout workspace_type mismatch");
+      assert.strictEqual(layout.title, "Prior Auth Appeal Packet Command Center", "layout title mismatch");
+      assert(layout.subtitle && layout.subtitle.includes("prior authorization appeal"), "layout subtitle mismatch");
+      assert(layout.context && layout.context.auth_case_id === "pa_layout_helpers_smoke", "layout context mismatch");
+      assert(layout.command_center_metrics && typeof layout.command_center_metrics === "object", "layout metrics missing");
+      assert(Array.isArray(layout.evidence_items), "layout evidence items missing");
+      assert(Array.isArray(layout.packet_sections), "layout packet sections missing");
+      assert(String(layout.narrative_draft || "").includes("prior authorization decision"), "layout narrative missing");
+      assert(layout.workflow && Array.isArray(layout.workflow.submission_methods), "layout workflow missing");
+      assert(layout.guardrails && layout.guardrails.read_only === true, "layout read-only guardrail missing");
+      assert(layout.guardrails.no_payer_submission === true, "layout no payer submission guardrail missing");
+      assert(layout.guardrails.no_claim_mutation === true, "layout no claim mutation guardrail missing");
+      assert(layout.guardrails.no_payment_mutation === true, "layout no payment mutation guardrail missing");
+      assert(layout.guardrails.no_contract_mutation === true, "layout no contract mutation guardrail missing");
+      assert(layout.guardrails.no_document_ingest_mutation === true, "layout no document ingest mutation guardrail missing");
+      assert(layout.guardrails.no_agent_workspace_creation === true, "layout no agent workspace guardrail missing");
+      const priorAuthWorkspaceStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {');
+      const priorAuthWorkspaceEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case") {', priorAuthWorkspaceStart);
+      assert(priorAuthWorkspaceStart >= 0, "prior-auth appeal workspace route missing");
+      assert(priorAuthWorkspaceEnd > priorAuthWorkspaceStart, "prior-auth appeal workspace route boundary missing");
+      const priorAuthRoute = src.slice(priorAuthWorkspaceStart, priorAuthWorkspaceEnd);
+      ["tjhpPriorAuthAppealWorkspaceContext(org, row)","Prior Auth Appeal Workspace","Appeal Workspace Shell","Evidence Checklist","Workspace Notes"].forEach(x => assert(priorAuthRoute.includes(x), "prior-auth workspace route marker missing: " + x));
+      ["tjhpPriorAuthAppealWorkspaceLayoutModel","Prior Auth Appeal Packet Command Center","ensureAgentWorkspace(","saveAgentWorkspace(","writeJSON(",'method="POST"','action="/prior-auth/appeal-workspace"'].forEach(x => assert(!priorAuthRoute.includes(x), "prior-auth workspace route should remain unchanged and must not include: " + x));
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.agent_workspaces, [])), workspacesBefore, "agent workspaces mutated");
+      savePriorAuthCasesForOrg(org_id, []);
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+      process.stdout.write("PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
 }
