@@ -65009,7 +65009,52 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS === 
       assert(priorAuthWorkspaceEnd > priorAuthWorkspaceStart, "prior-auth appeal workspace route boundary missing");
       const priorAuthRoute = src.slice(priorAuthWorkspaceStart, priorAuthWorkspaceEnd);
       ["tjhpPriorAuthAppealWorkspaceContext(org, row)","Prior Auth Appeal Workspace","Appeal Workspace Shell","Evidence Checklist","Workspace Notes"].forEach(x => assert(priorAuthRoute.includes(x), "prior-auth workspace route marker missing: " + x));
-      ["tjhpPriorAuthAppealWorkspaceLayoutModel","Prior Auth Appeal Packet Command Center","ensureAgentWorkspace(","saveAgentWorkspace(","writeJSON(",'method="POST"','action="/prior-auth/appeal-workspace"'].forEach(x => assert(!priorAuthRoute.includes(x), "prior-auth workspace route should remain unchanged and must not include: " + x));
+      const futurePriorAuthWorkspaceUsesLayoutModel = priorAuthRoute.includes("tjhpPriorAuthAppealWorkspaceLayoutModel");
+
+      if (futurePriorAuthWorkspaceUsesLayoutModel) {
+        [
+          "tjhpPriorAuthAppealWorkspaceLayoutModel",
+          "Prior Auth Appeal Packet Command Center",
+          "Packet readiness",
+          "Source proof",
+          "Clinical necessity",
+          "Appeal Packet Preview",
+          "Evidence Checklist",
+          "Prior Authorization Appeal Narrative",
+          "This request is not a billed-claim payment appeal.",
+          "Back to Prior Auth Case",
+          "Back to Prior Auth Queue"
+        ].forEach(x => assert(priorAuthRoute.includes(x), "future command-center route missing marker: " + x));
+      } else {
+        [
+          "tjhpPriorAuthAppealWorkspaceContext(org, row)",
+          "Prior Auth Appeal Workspace",
+          "Appeal Workspace Shell",
+          "Evidence Checklist",
+          "Workspace Notes"
+        ].forEach(x => assert(priorAuthRoute.includes(x), "current simple route missing marker: " + x));
+      }
+
+      [
+        "ensureAgentWorkspace(",
+        "saveAgentWorkspace(",
+        "ensureWorkspacePacket(",
+        "ensurePacketSections(",
+        "writeJSON(",
+        "parseBody(req)",
+        "FILES.billed",
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "FILES.document_ingests",
+        "FILES.agent_workspaces",
+        'method="POST"',
+        'action="/prior-auth/appeal-workspace"',
+        'action="/prior-auth/case/status"',
+        'action="/prior-auth/case/link"',
+        "/upload-router",
+        "/data-management/prior-auth/upload",
+        "/data-management/prior-auth/create"
+      ].forEach(x => assert(!priorAuthRoute.includes(x), "prior-auth workspace route must remain read-only and must not include: " + x));
       assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
       assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
       assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
@@ -65017,6 +65062,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS === 
       assert.strictEqual(JSON.stringify(readJSON(FILES.agent_workspaces, [])), workspacesBefore, "agent workspaces mutated");
       savePriorAuthCasesForOrg(org_id, []);
       assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+      /* PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_FUTURE_ROUTE_GUARD_OK */
       process.stdout.write("PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS_PASSED\n");
       process.exit(0);
     } catch (err) {
