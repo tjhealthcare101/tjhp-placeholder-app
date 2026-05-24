@@ -63903,9 +63903,47 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS === "
         "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
       ].forEach(x => assert(src.includes(x), "missing prior-auth appeal workspace shell helper marker: " + x));
 
-      const forbiddenGetAppealWorkspaceRoute = 'if (method === "GET" && pathname === "/prior-auth/' + 'appeal-workspace") {';
+      const futureGetAppealWorkspaceRoute = 'if (method === "GET" && pathname === "/prior-auth/' + 'appeal-workspace") {';
       const forbiddenPostAppealWorkspaceRoute = 'if (method === "POST" && pathname === "/prior-auth/' + 'appeal-workspace") {';
-      assert(!src.includes(forbiddenGetAppealWorkspaceRoute), "prior-auth appeal workspace GET route must not exist yet");
+
+      if (src.includes(futureGetAppealWorkspaceRoute)) {
+        const futureRouteStart = src.indexOf(futureGetAppealWorkspaceRoute);
+        const futureRouteEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")', futureRouteStart);
+        assert(futureRouteEnd > futureRouteStart, "future prior-auth appeal workspace GET route boundary missing");
+
+        const futureRouteSrc = src.slice(futureRouteStart, futureRouteEnd);
+
+        [
+          "tjhpPriorAuthAppealWorkspaceContext(org, row)",
+          "Prior Auth Appeal Workspace",
+          "Appeal Workspace Shell",
+          "Evidence Checklist",
+          "Next Step",
+          "Back to Prior Auth Case",
+          "Back to Prior Auth Queue"
+        ].forEach(x => assert(futureRouteSrc.includes(x), "future appeal workspace route missing required marker: " + x));
+
+        [
+          "parseBody(req)",
+          "upsertPriorAuthCase(",
+          "savePriorAuthCasesForOrg(",
+          "writeJSON(",
+          "ensureAgentWorkspace(",
+          "createAgentWorkspace",
+          "FILES.billed",
+          "FILES.payments",
+          "FILES.payer_contracts",
+          "FILES.document_ingests",
+          'method="POST"',
+          'action="/prior-auth/appeal-workspace"',
+          'action="/prior-auth/case/status"',
+          'action="/prior-auth/case/link"',
+          "/upload-router",
+          "/data-management/prior-auth/upload",
+          "/data-management/prior-auth/create"
+        ].forEach(x => assert(!futureRouteSrc.includes(x), "future appeal workspace GET route must remain read-only and must not include: " + x));
+      }
+
       assert(!src.includes(forbiddenPostAppealWorkspaceRoute), "prior-auth appeal workspace POST route must not exist yet");
 
       const helperStart = src.indexOf("function tjhpPriorAuthAppealWorkspaceEligible");
@@ -64084,6 +64122,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS === "
       savePriorAuthCasesForOrg(org_id, []);
       assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
 
+      /* PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_FUTURE_GET_ROUTE_GUARD_OK */
       process.stdout.write("PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS_PASSED\n");
       process.exit(0);
     } catch (err) {
