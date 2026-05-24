@@ -46355,18 +46355,21 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   })();
 
   const html = renderPage("Prior Auth Appeal Workspace", `
-    <div class="card" style="padding:0;overflow:hidden;">
-      <div style="padding:18px 20px;border-bottom:1px solid #e5e7eb;background:#f8fafc;">
+    ${workspacePolishStyles()}
+    <div class="ws-main packet-workspace-shell prior-auth-workspace-shell">
+      <div class="ws-banner">
         <div class="muted small" style="font-weight:900;text-transform:uppercase;letter-spacing:.08em;">Appeal Workspace Shell</div>
-        <h2 style="margin:6px 0 4px 0;">Prior Auth Appeal Workspace</h2>
-        <div class="muted">${safeStr(layout.subtitle || "Prepare a prior authorization appeal or next-round packet using medical necessity evidence, payer criteria, and source proof.")}</div>
-        <div class="btnRow" style="margin-top:12px;">
+        <div class="ws-banner-title">Round 1 (Prior Auth Appeal)</div>
+        <div class="ws-banner-sub">Prepare a prior authorization appeal or next-round packet using medical necessity evidence, payer criteria, and source proof.</div>
+        <div class="ws-quick-actions">
           <a class="btn secondary" href="${caseHref}">Back to Prior Auth Case</a>
           <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
+          <button class="btn" type="button" disabled title="Prior-auth appeal packet export will be added in a later phase.">Preview PDF</button>
         </div>
       </div>
 
-      <div style="padding:18px 20px;">
+      <div class="card" style="margin-top:12px;">
+        <h2 style="margin-top:0;">Prior Auth Appeal Workspace</h2>
         <h3>Prior Auth Appeal Packet Command Center</h3>
         <p class="muted small">
           Use this read-only command center to review packet readiness, source proof gaps, medical-necessity support, and appeal packet preview. No payer submission occurs from this shell.
@@ -46401,6 +46404,21 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           <div class="insight-card">
             <div class="muted small" style="font-weight:900;">Round</div>
             <div style="font-weight:950;margin-top:4px;">${safeStr(workflow.round_label || "Round 1")}</div>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="ws-callout" style="border-left:4px solid #6366f1;">
+          <h3>AI Prior Authorization Assistant</h3>
+          <p class="muted small">
+            Prior-auth medical-necessity support, payer criteria review, and appeal language suggestions will be added in a later phase.
+          </p>
+          <button class="btn secondary" type="button" disabled title="AI Prior Authorization Assistant is not active in this phase.">
+            Open AI Prior Authorization Assistant
+          </button>
+          <div class="muted small" style="margin-top:8px;">
+            Not active in this phase. This shell does not call AI, create an agent workspace, submit to a payer, or change case data.
           </div>
         </div>
 
@@ -46486,22 +46504,26 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
         <div class="hr"></div>
 
-        <h3>Appeal Packet Preview</h3>
-        <p class="muted small">Read-only packet preview sections. Editing, source proof upload, AI drafting, and payer submission are not enabled in this phase.</p>
-        ${packetSectionsHtml}
+        <div class="ws-full-preview">
+          <h3>Appeal Packet Preview</h3>
+          <p class="muted small">Read-only packet preview sections. Editing, source proof upload, AI drafting, and payer submission are not enabled in this phase.</p>
+          ${packetSectionsHtml}
+        </div>
 
         <div class="hr"></div>
 
-        <h3>Workspace Notes</h3>
-        <p class="muted small">
-          This read-only shell does not create an agent workspace, does not submit anything to a payer, does not update claim lifecycle, and does not mutate claims, payments, contracts, document ingestion records, or agent workspace records.
-        </p>
-        <p class="muted small">
-          This request is not a billed-claim payment appeal. It is a pre-service authorization appeal focused on medical necessity, payer criteria, and source proof.
-        </p>
-        <p class="muted small">
-          Guardrails: read_only=${safeStr(String(guardrails.read_only === true))}, no_payer_submission=${safeStr(String(guardrails.no_payer_submission === true))}, no_agent_workspace_creation=${safeStr(String(guardrails.no_agent_workspace_creation === true))}.
-        </p>
+        <div class="ws-full-workflow">
+          <h3>Workspace Notes</h3>
+          <p class="muted small">
+            This read-only shell does not create an agent workspace, does not submit anything to a payer, does not update claim lifecycle, and does not mutate claims, payments, contracts, document ingestion records, or agent workspace records.
+          </p>
+          <p class="muted small">
+            This request is not a billed-claim payment appeal. It is a pre-service authorization appeal focused on medical necessity, payer criteria, and source proof.
+          </p>
+          <p class="muted small">
+            Guardrails: read_only=${safeStr(String(guardrails.read_only === true))}, no_payer_submission=${safeStr(String(guardrails.no_payer_submission === true))}, no_agent_workspace_creation=${safeStr(String(guardrails.no_agent_workspace_creation === true))}.
+          </p>
+        </div>
       </div>
     </div>
   `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
