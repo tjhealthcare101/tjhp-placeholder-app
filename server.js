@@ -63182,6 +63182,130 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIM_LINK_ROUTE_FORM_SMOKE_TESTS === "true" && 
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_NOT_PURSUED_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const org_id = "__prior_auth_not_pursued_smoke__" + Date.now().toString(36);
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+
+    try {
+      [
+        '"Not Pursued"',
+        '"service not performed": "Not Pursued"',
+        '"do not pursue": "Not Pursued"',
+        '"patient not proceeding": "Not Pursued"',
+        'if (status === "Not Pursued") return "No further action";',
+        "function tjhpPriorAuthStaffStatusOptions",
+        "function tjhpPriorAuthStaffStatusAllowed",
+        "function tjhpPriorAuthActionCenterRows",
+        "PRIOR_AUTH_STATUS_UPDATE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_READY_TO_BILL_QUEUE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_CLAIM_LINK_ROUTE_FORM_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing Not Pursued marker: " + x));
+
+      assert.strictEqual(normalizePriorAuthStatus("Not Pursued"), "Not Pursued", "Not Pursued exact status should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("not pursued"), "Not Pursued", "not pursued alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("do not pursue"), "Not Pursued", "do not pursue alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("not pursuing"), "Not Pursued", "not pursuing alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("service not performed"), "Not Pursued", "service not performed alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("service not done"), "Not Pursued", "service not done alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("do not perform service"), "Not Pursued", "do not perform service alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("cancel service"), "Not Pursued", "cancel service alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("patient not proceeding"), "Not Pursued", "patient not proceeding alias should normalize");
+
+      assert(tjhpPriorAuthStaffStatusOptions().includes("Not Pursued"), "Not Pursued should be staff-selectable");
+      assert(!tjhpPriorAuthStaffStatusOptions().includes("Linked to Claim"), "Linked to Claim should remain excluded from staff-selectable statuses");
+
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("Not Pursued"), true, "Not Pursued should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("service not performed"), true, "service not performed alias should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("do not pursue"), true, "do not pursue alias should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("patient not proceeding"), true, "patient not proceeding alias should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("Linked to Claim"), false, "Linked to Claim should remain blocked");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("not a real prior auth status"), false, "unknown status should remain blocked");
+
+      assert.strictEqual(
+        tjhpPriorAuthNextActionLabel({ status:"Not Pursued" }),
+        "No further action",
+        "Not Pursued next action mismatch"
+      );
+
+      const queueStart = src.indexOf("function tjhpPriorAuthActionCenterRows");
+      const queueEnd = src.indexOf("function tjhpPriorAuthStaffStatusOptions", queueStart);
+
+      assert(queueStart >= 0, "prior-auth action queue helper missing");
+      assert(queueEnd > queueStart, "prior-auth action queue helper boundary missing");
+
+      const queueSrc = src.slice(queueStart, queueEnd);
+
+      assert(!queueSrc.includes('"Not Pursued"'), "Not Pursued must not be included in action queue helper");
+      assert(!queueSrc.includes('"Linked to Claim"'), "Linked to Claim must not be included in action queue helper");
+
+      savePriorAuthCasesForOrg(org_id, []);
+
+      const denied = upsertPriorAuthCase(org_id, {
+        patient_name: "Not Pursued Smoke Patient",
+        payer: "Aetna",
+        requested_service: "MRI",
+        cpt_hcpcs: "72148",
+        status: "Denied"
+      }, "smoke");
+
+      assert(denied && denied.ok === true, "denied prior auth smoke create failed");
+
+      const closed = upsertPriorAuthCase(org_id, {
+        ...denied.case,
+        status: "service not performed",
+        notes: "Smoke test: service not performed / not pursued."
+      }, "smoke");
+
+      assert(closed && closed.ok === true, "Not Pursued upsert failed");
+
+      const found = getPriorAuthCaseById(org_id, denied.case.auth_case_id);
+      assert(found, "Not Pursued smoke case not found");
+      assert.strictEqual(found.status, "Not Pursued", "Not Pursued status did not persist");
+      assert(String(found.notes || "").includes("service not performed"), "Not Pursued note missing");
+
+      const rows = tjhpPriorAuthActionCenterRows(org_id);
+      assert(!rows.some(x => String(x.auth_case_id || "") === String(found.auth_case_id || "")), "Not Pursued case should not appear in prior-auth action queue");
+
+      const linked = upsertPriorAuthCase(org_id, {
+        patient_name: "Linked Smoke Patient",
+        payer: "Aetna",
+        requested_service: "CT",
+        status: "Linked to Claim"
+      }, "smoke");
+
+      assert(linked && linked.ok === true, "Linked to Claim smoke case create failed");
+
+      const rowsAfterLinked = tjhpPriorAuthActionCenterRows(org_id);
+      assert(!rowsAfterLinked.some(x => String(x.status || "") === "Linked to Claim"), "Linked to Claim should not appear in prior-auth action queue");
+
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+
+      savePriorAuthCasesForOrg(org_id, []);
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+
+      process.stdout.write("PRIOR_AUTH_NOT_PURSUED_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_NOT_PURSUED_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
 }
