@@ -46301,94 +46301,214 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }
 
   const ctx = tjhpPriorAuthAppealWorkspaceContext(org, row);
+  const layout = tjhpPriorAuthAppealWorkspaceLayoutModel(org, row);
+  const metrics = layout.command_center_metrics || {};
+  const evidenceItems = Array.isArray(layout.evidence_items) ? layout.evidence_items : [];
+  const packetSections = Array.isArray(layout.packet_sections) ? layout.packet_sections : [];
+  const workflow = layout.workflow || {};
+  const guardrails = layout.guardrails || {};
   const caseHref = "/prior-auth/case?auth_case_id=" + encodeURIComponent(ctx.auth_case_id || auth_case_id);
-  const evidenceHtml = (Array.isArray(ctx.evidence_checklist) ? ctx.evidence_checklist : [])
-    .map(item => `<li>${safeStr(item)}</li>`)
-    .join("") || `<li class="muted">No evidence checklist items available.</li>`;
-  const missingDocsHtml = (Array.isArray(ctx.missing_documentation) && ctx.missing_documentation.length)
-    ? ctx.missing_documentation.map(item => `<li>${safeStr(item)}</li>`).join("")
-    : `<li class="muted">No missing documentation listed.</li>`;
+
+  const pct = value => Math.max(0, Math.min(100, Math.round(Number(value || 0) || 0)));
+  const metricBar = (label, value, caption) => {
+    const n = pct(value);
+    return `
+      <div style="border:1px solid #e5e7eb;border-radius:14px;padding:14px;background:#fff;">
+        <div class="muted small" style="font-weight:900;text-transform:uppercase;letter-spacing:.04em;">${safeStr(label)}</div>
+        <div style="font-size:28px;font-weight:950;margin-top:6px;">${formatNumberUI(n)}%</div>
+        <div style="height:8px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-top:8px;">
+          <div style="width:${n}%;height:8px;background:#111827;border-radius:999px;"></div>
+        </div>
+        <div class="muted small" style="margin-top:8px;">${safeStr(caption || "")}</div>
+      </div>
+    `;
+  };
+
+  const evidenceRowsHtml = evidenceItems.map(item => `
+    <tr>
+      <td>
+        <div style="font-weight:900;">${safeStr(item.label || "-")}</div>
+        <div class="muted small">${safeStr(item.description || "")}</div>
+      </td>
+      <td>${item.required ? "Required" : "Optional"}</td>
+      <td>${safeStr(item.status_label || item.status || "-")}</td>
+      <td>${safeStr(item.packet_impact || "-")}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="4" class="muted">No evidence checklist items available.</td></tr>`;
+
+  const packetSectionsHtml = packetSections.map(section => `
+    <details class="card" style="box-shadow:none;background:#fff;margin:10px 0;border:1px solid #e5e7eb;" ${section.key === "appeal_narrative" ? "open" : ""}>
+      <summary style="cursor:pointer;font-weight:950;">
+        ${safeStr(section.title || "-")}
+        <span class="badge ${section.complete ? "ok" : "warn"}" style="margin-left:8px;">${section.complete ? "Ready" : "Needs source proof"}</span>
+      </summary>
+      <div class="muted small" style="margin-top:8px;">${safeStr(section.subtitle || "")}</div>
+      <pre style="white-space:pre-wrap;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-top:10px;font-family:inherit;">${safeStr(section.body || "-")}</pre>
+    </details>
+  `).join("") || `<div class="muted">No packet preview sections available.</div>`;
+
+  const whyText = (() => {
+    const payer = ctx.payer || "The payer";
+    const service = ctx.requested_service || "the requested service";
+    const reason = ctx.denial_reason || ctx.partial_approval_reason || "the authorization requires additional appeal review";
+    return `${payer} requires appeal or next-round work for ${service}. Current reason/context: ${reason}.`;
+  })();
 
   const html = renderPage("Prior Auth Appeal Workspace", `
-    <div class="card">
-      <h2>Prior Auth Appeal Workspace</h2>
-      <p class="muted">Appeal Workspace Shell for prior authorization denial, partial approval, peer-to-peer, and missing-documentation work. This page is read-only in this phase.</p>
-
-      <div class="btnRow">
-        <a class="btn secondary" href="${caseHref}">Back to Prior Auth Case</a>
-        <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
-      </div>
-
-      <div class="hr"></div>
-
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
-        <div>
-          <strong>Next Step</strong><br/>
-          ${safeStr(ctx.next_step || "-")}
-        </div>
-        <div>
-          <strong>Eligible for Appeal Workspace</strong><br/>
-          ${ctx.eligible ? "Yes" : "No"}
-        </div>
-        <div>
-          <strong>Status</strong><br/>
-          ${safeStr(ctx.status || "-")}
-        </div>
-        <div>
-          <strong>Estimated Revenue At Risk</strong><br/>
-          ${priorAuthRevenueAtRiskDisplay(ctx.estimated_revenue_at_risk)}
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="padding:18px 20px;border-bottom:1px solid #e5e7eb;background:#f8fafc;">
+        <div class="muted small" style="font-weight:900;text-transform:uppercase;letter-spacing:.08em;">Appeal Workspace Shell</div>
+        <h2 style="margin:6px 0 4px 0;">Prior Auth Appeal Workspace</h2>
+        <div class="muted">${safeStr(layout.subtitle || "Prepare a prior authorization appeal or next-round packet using medical necessity evidence, payer criteria, and source proof.")}</div>
+        <div class="btnRow" style="margin-top:12px;">
+          <a class="btn secondary" href="${caseHref}">Back to Prior Auth Case</a>
+          <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
         </div>
       </div>
 
-      <div class="hr"></div>
+      <div style="padding:18px 20px;">
+        <h3>Prior Auth Appeal Packet Command Center</h3>
+        <p class="muted small">
+          Use this read-only command center to review packet readiness, source proof gaps, medical-necessity support, and appeal packet preview. No payer submission occurs from this shell.
+        </p>
 
-      <h3>Case Summary</h3>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
-        <div><strong>Patient</strong><br/>${safeStr(ctx.patient || "-")}</div>
-        <div><strong>Payer</strong><br/>${safeStr(ctx.payer || "-")}</div>
-        <div><strong>Provider</strong><br/>${safeStr(ctx.provider || "-")}</div>
-        <div><strong>Specialty</strong><br/>${safeStr(ctx.specialty || "-")}</div>
-        <div><strong>Requested Service</strong><br/>${safeStr(ctx.requested_service || "-")}</div>
-        <div><strong>CPT / HCPCS</strong><br/>${safeStr(ctx.cpt_hcpcs || "-")}</div>
-        <div><strong>ICD-10</strong><br/>${safeStr(ctx.icd10 || "-")}</div>
-        <div><strong>Auth #</strong><br/>${safeStr(ctx.auth_number || "-")}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:12px;">
+          ${metricBar("Packet readiness", metrics.packet_readiness_pct, "Overall appeal packet completeness.")}
+          ${metricBar("Source proof", metrics.source_proof_readiness_pct, `${formatNumberUI(metrics.source_proof_needed_count || 0)} source proof item(s) still needed.`)}
+          ${metricBar("Clinical necessity", metrics.clinical_necessity_strength_pct, "Strength of currently available prior-auth appeal context.")}
+          <div style="border:1px solid #e5e7eb;border-radius:14px;padding:14px;background:#fff;">
+            <div class="muted small" style="font-weight:900;text-transform:uppercase;letter-spacing:.04em;">Estimated revenue at risk</div>
+            <div style="font-size:28px;font-weight:950;margin-top:6px;">${priorAuthRevenueAtRiskDisplay(ctx.estimated_revenue_at_risk)}</div>
+            <div class="muted small" style="margin-top:8px;">Shown only when reliably known from source data.</div>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+          <div class="insight-card">
+            <div class="muted small" style="font-weight:900;">Next Step</div>
+            <div style="font-weight:950;margin-top:4px;">${safeStr(ctx.next_step || workflow.next_step || "-")}</div>
+          </div>
+          <div class="insight-card">
+            <div class="muted small" style="font-weight:900;">Eligible for Appeal Workspace</div>
+            <div style="font-weight:950;margin-top:4px;">${ctx.eligible ? "Yes" : "No"}</div>
+          </div>
+          <div class="insight-card">
+            <div class="muted small" style="font-weight:900;">Status</div>
+            <div style="font-weight:950;margin-top:4px;">${safeStr(ctx.status || "-")}</div>
+          </div>
+          <div class="insight-card">
+            <div class="muted small" style="font-weight:900;">Round</div>
+            <div style="font-weight:950;margin-top:4px;">${safeStr(workflow.round_label || "Round 1")}</div>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <h3>Case Summary</h3>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+          <div><strong>Patient</strong><br/>${safeStr(ctx.patient || "-")}</div>
+          <div><strong>Payer</strong><br/>${safeStr(ctx.payer || "-")}</div>
+          <div><strong>Provider</strong><br/>${safeStr(ctx.provider || "-")}</div>
+          <div><strong>Specialty</strong><br/>${safeStr(ctx.specialty || "-")}</div>
+          <div><strong>Requested Service</strong><br/>${safeStr(ctx.requested_service || "-")}</div>
+          <div><strong>CPT / HCPCS</strong><br/>${safeStr(ctx.cpt_hcpcs || "-")}</div>
+          <div><strong>ICD-10</strong><br/>${safeStr(ctx.icd10 || "-")}</div>
+          <div><strong>Auth #</strong><br/>${safeStr(ctx.auth_number || "-")}</div>
+        </div>
+
+        <div class="hr"></div>
+
+        <h3>Appeal Context</h3>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
+          <div class="insight-card">
+            <strong>Denial Reason</strong>
+            <div class="muted small" style="margin-top:4px;">${safeStr(ctx.denial_reason || "-")}</div>
+          </div>
+          <div class="insight-card">
+            <strong>Partial Approval Reason</strong>
+            <div class="muted small" style="margin-top:4px;">${safeStr(ctx.partial_approval_reason || "-")}</div>
+          </div>
+          <div class="insight-card">
+            <strong>Missing Documentation</strong>
+            <div class="muted small" style="margin-top:4px;">${safeStr(Array.isArray(ctx.missing_documentation) && ctx.missing_documentation.length ? ctx.missing_documentation.join(", ") : "-")}</div>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <h3>Why this prior authorization appeal exists</h3>
+        <div class="insight-card" style="border-left:4px solid #111827;">
+          ${safeStr(whyText)}
+        </div>
+
+        <div class="hr"></div>
+
+        <h3>Outcome Intelligence</h3>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+          <div class="insight-card">
+            <strong>Medical necessity focus</strong>
+            <div class="muted small" style="margin-top:4px;">Prior-auth appeals should map clinical evidence to payer coverage criteria.</div>
+          </div>
+          <div class="insight-card">
+            <strong>Source proof gaps</strong>
+            <div class="muted small" style="margin-top:4px;">${formatNumberUI(metrics.source_proof_needed_count || 0)} required item(s) still need source proof.</div>
+          </div>
+          <div class="insight-card">
+            <strong>Submission planning</strong>
+            <div class="muted small" style="margin-top:4px;">Default follow-up window: ${formatNumberUI(workflow.follow_up_days || 14)} days after appeal submission.</div>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <h3>Evidence Checklist</h3>
+        <p class="muted small">Prior-auth-specific source proof needed for the packet. This is read-only in this phase.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Evidence</th>
+                <th>Required</th>
+                <th>Status</th>
+                <th>Impact</th>
+              </tr>
+            </thead>
+            <tbody>${evidenceRowsHtml}</tbody>
+          </table>
+        </div>
+
+        <div class="hr"></div>
+
+        <h3>Prior Authorization Appeal Narrative</h3>
+        <pre style="white-space:pre-wrap;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px;font-family:inherit;">${safeStr(layout.narrative_draft || "-")}</pre>
+
+        <div class="hr"></div>
+
+        <h3>Appeal Packet Preview</h3>
+        <p class="muted small">Read-only packet preview sections. Editing, source proof upload, AI drafting, and payer submission are not enabled in this phase.</p>
+        ${packetSectionsHtml}
+
+        <div class="hr"></div>
+
+        <h3>Workspace Notes</h3>
+        <p class="muted small">
+          This read-only shell does not create an agent workspace, does not submit anything to a payer, does not update claim lifecycle, and does not mutate claims, payments, contracts, document ingestion records, or agent workspace records.
+        </p>
+        <p class="muted small">
+          This request is not a billed-claim payment appeal. It is a pre-service authorization appeal focused on medical necessity, payer criteria, and source proof.
+        </p>
+        <p class="muted small">
+          Guardrails: read_only=${safeStr(String(guardrails.read_only === true))}, no_payer_submission=${safeStr(String(guardrails.no_payer_submission === true))}, no_agent_workspace_creation=${safeStr(String(guardrails.no_agent_workspace_creation === true))}.
+        </p>
       </div>
-
-      <div class="hr"></div>
-
-      <h3>Appeal Context</h3>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
-        <div>
-          <strong>Denial Reason</strong>
-          <div class="muted small" style="margin-top:4px;">${safeStr(ctx.denial_reason || "-")}</div>
-        </div>
-        <div>
-          <strong>Partial Approval Reason</strong>
-          <div class="muted small" style="margin-top:4px;">${safeStr(ctx.partial_approval_reason || "-")}</div>
-        </div>
-        <div>
-          <strong>Missing Documentation</strong>
-          <ul style="margin-top:6px;">${missingDocsHtml}</ul>
-        </div>
-      </div>
-
-      <div class="hr"></div>
-
-      <h3>Evidence Checklist</h3>
-      <p class="muted small">Use this checklist to prepare a prior authorization appeal, next-round request, peer-to-peer packet, or missing-documentation response. No payer submission occurs from this shell.</p>
-      <ul>${evidenceHtml}</ul>
-
-      <div class="hr"></div>
-
-      <h3>Workspace Notes</h3>
-      <p class="muted small">
-        This read-only shell does not create an agent workspace, does not submit anything to a payer, does not update claim lifecycle, and does not mutate claims, payments, contracts, or document ingestion records.
-      </p>
     </div>
   `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
 
   return send(res, 200, html);
 }
+
 
 if (method === "GET" && pathname === "/prior-auth/case") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
