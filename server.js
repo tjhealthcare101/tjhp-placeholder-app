@@ -1845,6 +1845,86 @@ function tjhpPriorAuthAppealWorkspaceLayoutModel(org = {}, row = {}){
   };
 }
 
+
+function tjhpPriorAuthWorkspaceEditableSectionKeys(org = {}, row = {}){
+  const ctx = tjhpPriorAuthAppealWorkspaceContext(org, row);
+  const sections = tjhpPriorAuthAppealPacketSections(ctx, org);
+
+  return (Array.isArray(sections) ? sections : [])
+    .map(section => String(section && section.key || "").trim())
+    .filter(Boolean);
+}
+
+function tjhpPriorAuthWorkspacePacketSectionsForRender(org = {}, row = {}){
+  const layout = tjhpPriorAuthAppealWorkspaceLayoutModel(org, row);
+  const rawSavedSections =
+    row &&
+    row.workspace_packet_sections &&
+    typeof row.workspace_packet_sections === "object" &&
+    !Array.isArray(row.workspace_packet_sections)
+      ? row.workspace_packet_sections
+      : {};
+
+  const sections = Array.isArray(layout.packet_sections) ? layout.packet_sections : [];
+
+  return sections.map(section => {
+    const key = String(section && section.key || "").trim();
+    const hasSaved = !!key && Object.prototype.hasOwnProperty.call(rawSavedSections, key);
+    const generatedBody = String(section && section.body != null ? section.body : "").trimEnd();
+    const savedBody = hasSaved ? String(rawSavedSections[key] || "") : "";
+
+    return {
+      ...section,
+      key,
+      generated_body: generatedBody,
+      body: hasSaved ? savedBody : generatedBody,
+      saved: hasSaved
+    };
+  });
+}
+
+function tjhpPriorAuthWorkspaceEvidenceBySection(layout = {}){
+  const evidenceItems = Array.isArray(layout && layout.evidence_items)
+    ? layout.evidence_items
+    : [];
+
+  const evidenceByKey = evidenceItems.reduce((acc, item) => {
+    const key = String(item && item.key || "").trim();
+    if (key) acc[key] = item;
+    return acc;
+  }, {});
+
+  const sectionToEvidenceKey = {
+    original_prior_auth_request: "original_prior_auth_request",
+    denial_or_partial_approval_letter: "denial_or_partial_approval_letter",
+    letter_of_medical_necessity: "letter_of_medical_necessity",
+    clinical_documentation: "clinical_documentation",
+    payer_policy_guidelines: "payer_policy_guidelines",
+    coding_rationale: "coding_rationale",
+    diagnostic_results: "diagnostic_results",
+    missing_documentation_response: "missing_documentation_response",
+    peer_to_peer_notes: "peer_to_peer_notes",
+    evidence_of_authorization: "authorization_history",
+    provider_authorization_form: "provider_authorization_form",
+    prior_payer_correspondence: "prior_payer_correspondence",
+
+    case_summary: "original_prior_auth_request",
+    clinical_summary: "clinical_documentation",
+    service_revenue_impact: "original_prior_auth_request",
+    appeal_narrative: "denial_or_partial_approval_letter",
+    requested_action: "denial_or_partial_approval_letter",
+    attachments_index: "prior_payer_correspondence",
+    evidence_summary: "prior_payer_correspondence"
+  };
+
+  return Object.entries(sectionToEvidenceKey).reduce((acc, pair) => {
+    const sectionKey = pair[0];
+    const evidenceKey = pair[1];
+    if (evidenceByKey[evidenceKey]) acc[sectionKey] = evidenceByKey[evidenceKey];
+    return acc;
+  }, {});
+}
+
 function priorAuthStructuredRowSignal(row = {}){
   const fields = new Set();
 
