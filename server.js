@@ -46069,6 +46069,11 @@ if (method === "GET" && pathname === "/prior-auth/case") {
       </td>
     </tr>
   `).join("") || `<tr><td colspan="10" class="muted">No billed claim candidates found yet.</td></tr>`;
+  const priorAuthAppealWorkspaceHref = "/prior-auth/appeal-workspace?auth_case_id=" + encodeURIComponent(row.auth_case_id || auth_case_id);
+  const priorAuthAppealWorkspaceLinkHtml = tjhpPriorAuthAppealWorkspaceEligible(row)
+    ? `<a class="btn" href="${priorAuthAppealWorkspaceHref}">Open Appeal Workspace</a>`
+    : "";
+
   const html = renderPage("Prior Auth Case", `
     <div class="card">
       <h2>Prior Authorization Case</h2>
@@ -46083,6 +46088,7 @@ if (method === "GET" && pathname === "/prior-auth/case") {
       <div class="btnRow">
         <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
         <a class="btn secondary" href="/data-management?tab=prior-auth">Open Data Management</a>
+        ${priorAuthAppealWorkspaceLinkHtml}
       </div>
       <div class="hr"></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
