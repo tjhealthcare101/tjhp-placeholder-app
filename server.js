@@ -64676,7 +64676,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS === "
           "FILES.payments",
           "FILES.payer_contracts",
           "FILES.document_ingests",
-          'method="POST"',
+          "FILES.agent_workspaces",
           'action="/prior-auth/appeal-workspace"',
           'action="/prior-auth/case/status"',
           'action="/prior-auth/case/link"',
@@ -64957,7 +64957,6 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS === "true" &&
         "FILES.payer_contracts",
         "FILES.document_ingests",
         "FILES.agent_workspaces",
-        'method="POST"',
         'action="/prior-auth/appeal-workspace"',
         'action="/prior-auth/case/status"',
         'action="/prior-auth/case/link"',
@@ -65098,6 +65097,20 @@ if (process.env.TJHP_PRIOR_AUTH_OPEN_APPEAL_WORKSPACE_LINK_SMOKE_TESTS === "true
       assert(workspaceEnd > workspaceStart, "GET /prior-auth/appeal-workspace route boundary missing");
 
       const workspaceRouteSrc = src.slice(workspaceStart, workspaceEnd);
+      const workspaceHasPriorAuthSaveSectionForm =
+        workspaceRouteSrc.includes('action="/prior-auth/appeal-workspace/save-section"');
+      if (workspaceRouteSrc.includes('method="POST"')) {
+        assert(workspaceHasPriorAuthSaveSectionForm, "GET prior-auth appeal workspace may only include POST forms for save-section");
+      }
+      if (workspaceHasPriorAuthSaveSectionForm) {
+        [
+          'action="/prior-auth/appeal-workspace/save-section"',
+          'name="auth_case_id"',
+          'name="section_key"',
+          'name="section_text"',
+          "Save Section"
+        ].forEach(x => assert(workspaceRouteSrc.includes(x), "editable prior-auth save-section form missing marker: " + x));
+      }
 
       [
         "tjhpPriorAuthAppealWorkspaceContext(org, row)",
@@ -65117,7 +65130,6 @@ if (process.env.TJHP_PRIOR_AUTH_OPEN_APPEAL_WORKSPACE_LINK_SMOKE_TESTS === "true
         "writeJSON(",
         "ensureAgentWorkspace(",
         "createAgentWorkspace",
-        'method="POST"',
         'action="/prior-auth/appeal-workspace"',
         "/upload-router",
         "/data-management/prior-auth/upload",
@@ -65269,6 +65281,20 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_COMMAND_CENTER_ROUTE_SMOKE_TEST
       assert(routeEnd > routeStart, "GET /prior-auth/appeal-workspace route boundary missing");
 
       const route = src.slice(routeStart, routeEnd);
+      const routeHasPriorAuthSaveSectionForm =
+        route.includes('action="/prior-auth/appeal-workspace/save-section"');
+      if (route.includes('method="POST"')) {
+        assert(routeHasPriorAuthSaveSectionForm, "GET prior-auth appeal workspace may only include POST forms for save-section");
+      }
+      if (routeHasPriorAuthSaveSectionForm) {
+        [
+          'action="/prior-auth/appeal-workspace/save-section"',
+          'name="auth_case_id"',
+          'name="section_key"',
+          'name="section_text"',
+          "Save Section"
+        ].forEach(x => assert(route.includes(x), "editable prior-auth save-section form missing marker: " + x));
+      }
 
       [
         "const ctx = tjhpPriorAuthAppealWorkspaceContext(org, row);",
@@ -65443,6 +65469,20 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS === 
       assert(priorAuthWorkspaceStart >= 0, "prior-auth appeal workspace route missing");
       assert(priorAuthWorkspaceEnd > priorAuthWorkspaceStart, "prior-auth appeal workspace route boundary missing");
       const priorAuthRoute = src.slice(priorAuthWorkspaceStart, priorAuthWorkspaceEnd);
+      const priorAuthRouteHasSaveSectionForm =
+        priorAuthRoute.includes('action="/prior-auth/appeal-workspace/save-section"');
+      if (priorAuthRoute.includes('method="POST"')) {
+        assert(priorAuthRouteHasSaveSectionForm, "GET prior-auth appeal workspace may only include POST forms for save-section");
+      }
+      if (priorAuthRouteHasSaveSectionForm) {
+        [
+          'action="/prior-auth/appeal-workspace/save-section"',
+          'name="auth_case_id"',
+          'name="section_key"',
+          'name="section_text"',
+          "Save Section"
+        ].forEach(x => assert(priorAuthRoute.includes(x), "editable prior-auth save-section form missing marker: " + x));
+      }
       ["tjhpPriorAuthAppealWorkspaceContext(org, row)","Prior Auth Appeal Workspace","Appeal Workspace Shell","Evidence Checklist","Workspace Notes"].forEach(x => assert(priorAuthRoute.includes(x), "prior-auth workspace route marker missing: " + x));
       const futurePriorAuthWorkspaceUsesLayoutModel = priorAuthRoute.includes("tjhpPriorAuthAppealWorkspaceLayoutModel");
 
@@ -65482,7 +65522,6 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS === 
         "FILES.payer_contracts",
         "FILES.document_ingests",
         "FILES.agent_workspaces",
-        'method="POST"',
         'action="/prior-auth/appeal-workspace"',
         'action="/prior-auth/case/status"',
         'action="/prior-auth/case/link"',
@@ -65498,6 +65537,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS === 
       savePriorAuthCasesForOrg(org_id, []);
       assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
       /* PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_FUTURE_ROUTE_GUARD_OK */
+      /* PRIOR_AUTH_EDITABLE_SAVE_SECTION_SMOKE_GUARDS_OK */
       process.stdout.write("PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS_PASSED\n");
       process.exit(0);
     } catch (err) {
