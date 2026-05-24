@@ -562,6 +562,13 @@ function normalizePriorAuthCase(input = {}, defaults = {}){
 
     notes: String(row.notes || "").trim(),
 
+    workspace_packet_sections:
+      row.workspace_packet_sections &&
+      typeof row.workspace_packet_sections === "object" &&
+      !Array.isArray(row.workspace_packet_sections)
+        ? row.workspace_packet_sections
+        : {},
+
     created_at: String(row.created_at || defaults.created_at || now).trim(),
     updated_at: String(row.updated_at || now).trim(),
     created_by: String(row.created_by || defaults.created_by || "").trim(),
