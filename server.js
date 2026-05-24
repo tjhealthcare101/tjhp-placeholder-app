@@ -46434,6 +46434,8 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   const metrics = layout.command_center_metrics || {};
   const evidenceItems = Array.isArray(layout.evidence_items) ? layout.evidence_items : [];
   const packetSections = Array.isArray(layout.packet_sections) ? layout.packet_sections : [];
+  const editablePacketSections = tjhpPriorAuthWorkspacePacketSectionsForRender(org, row);
+  const evidenceBySection = tjhpPriorAuthWorkspaceEvidenceBySection(layout);
   const workflow = layout.workflow || {};
   const guardrails = layout.guardrails || {};
   const caseHref = "/prior-auth/case?auth_case_id=" + encodeURIComponent(ctx.auth_case_id || auth_case_id);
@@ -46453,28 +46455,34 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     `;
   };
 
-  const evidenceRowsHtml = evidenceItems.map(item => `
-    <tr>
-      <td>
-        <div style="font-weight:900;">${safeStr(item.label || "-")}</div>
-        <div class="muted small">${safeStr(item.description || "")}</div>
-      </td>
-      <td>${item.required ? "Required" : "Optional"}</td>
-      <td>${safeStr(item.status_label || item.status || "-")}</td>
-      <td>${safeStr(item.packet_impact || "-")}</td>
-    </tr>
-  `).join("") || `<tr><td colspan="4" class="muted">No evidence checklist items available.</td></tr>`;
+  const packetSectionsHtml = editablePacketSections.map(section => {
+    const sectionKey = String(section.key || "").trim();
+    const evidence = evidenceBySection[sectionKey] || null;
+    const evidenceLine = evidence
+      ? `<div class="muted small" style="margin-top:8px;"><strong>Source proof:</strong> ${safeStr(evidence.status_label || evidence.status || "-")} · ${safeStr(evidence.packet_impact || "-")}</div>`
+      : `<div class="muted small" style="margin-top:8px;"><strong>Source proof:</strong> No linked evidence item for this section yet.</div>`;
 
-  const packetSectionsHtml = packetSections.map(section => `
-    <details class="card" style="box-shadow:none;background:#fff;margin:10px 0;border:1px solid #e5e7eb;" ${section.key === "appeal_narrative" ? "open" : ""}>
-      <summary style="cursor:pointer;font-weight:950;">
-        ${safeStr(section.title || "-")}
-        <span class="badge ${section.complete ? "ok" : "warn"}" style="margin-left:8px;">${section.complete ? "Ready" : "Needs source proof"}</span>
-      </summary>
-      <div class="muted small" style="margin-top:8px;">${safeStr(section.subtitle || "")}</div>
-      <pre style="white-space:pre-wrap;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-top:10px;font-family:inherit;">${safeStr(section.body || "-")}</pre>
-    </details>
-  `).join("") || `<div class="muted">No packet preview sections available.</div>`;
+    return `
+      <details class="card" style="box-shadow:none;background:#fff;margin:10px 0;border:1px solid #e5e7eb;" ${sectionKey === "appeal_narrative" ? "open" : ""}>
+        <summary style="cursor:pointer;font-weight:950;">
+          ${safeStr(section.title || "-")}
+          <span class="badge ${section.complete ? "ok" : "warn"}" style="margin-left:8px;">${section.complete ? "Ready" : "Needs source proof"}</span>
+          ${section.saved ? `<span class="badge ok" style="margin-left:6px;">Saved edit</span>` : ``}
+        </summary>
+        <div class="muted small" style="margin-top:8px;">${safeStr(section.subtitle || "")}</div>
+        ${evidenceLine}
+        <form method="${"POST"}" action="/prior-auth/appeal-workspace/save-section" style="margin-top:10px;">
+          <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
+          <input type="hidden" name="section_key" value="${safeStr(sectionKey)}" />
+          <textarea name="section_text" rows="8" style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:12px;padding:12px;font-family:inherit;line-height:1.45;background:#f8fafc;">${safeStr(section.body || "")}</textarea>
+          <div class="btnRow" style="margin-top:8px;">
+            <button class="btn small" type="submit">Save Section</button>
+            <span class="muted small">Saves this prior-auth packet section only. No payer submission occurs.</span>
+          </div>
+        </form>
+      </details>
+    `;
+  }).join("") || `<div class="muted">No packet preview sections available.</div>`;
 
   const whyText = (() => {
     const payer = ctx.payer || "The payer";
@@ -46490,18 +46498,20 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         <div class="muted small" style="font-weight:900;text-transform:uppercase;letter-spacing:.08em;">Appeal Workspace Shell</div>
         <div class="ws-banner-title">Round 1 (Prior Auth Appeal)</div>
         <div class="ws-banner-sub">Prepare a prior authorization appeal or next-round packet using medical necessity evidence, payer criteria, and source proof.</div>
-        <div class="ws-quick-actions">
+        ${String(parsed.query.pa_status || "").trim() === "section_saved" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization packet section saved.</div>` : ""}
+        ${String(parsed.query.pa_status || "").trim() === "section_invalid" ? `<div class="alert warn" style="margin:10px 0;">That packet section is not available.</div>` : ""}
+        <div class="ws-quick-actions" style="margin-top:12px;">
           <a class="btn secondary" href="${caseHref}">Back to Prior Auth Case</a>
           <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
           <button class="btn" type="button" disabled title="Prior-auth appeal packet export will be added in a later phase.">Preview PDF</button>
         </div>
       </div>
 
-      <div class="card" style="margin-top:12px;">
+      <div style="padding:18px 20px;">
         <h2 style="margin-top:0;">Prior Auth Appeal Workspace</h2>
         <h3>Prior Auth Appeal Packet Command Center</h3>
         <p class="muted small">
-          Use this read-only command center to review packet readiness, source proof gaps, medical-necessity support, and appeal packet preview. No payer submission occurs from this shell.
+          Use this workspace to review packet readiness, source proof gaps, medical-necessity support, and editable prior-auth appeal packet sections. No payer submission occurs from this shell.
         </p>
 
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:12px;">
@@ -46533,21 +46543,6 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           <div class="insight-card">
             <div class="muted small" style="font-weight:900;">Round</div>
             <div style="font-weight:950;margin-top:4px;">${safeStr(workflow.round_label || "Round 1")}</div>
-          </div>
-        </div>
-
-        <div class="hr"></div>
-
-        <div class="ws-callout" style="border-left:4px solid #6366f1;">
-          <h3>AI Prior Authorization Assistant</h3>
-          <p class="muted small">
-            Prior-auth medical-necessity support, payer criteria review, and appeal language suggestions will be added in a later phase.
-          </p>
-          <button class="btn secondary" type="button" disabled title="AI Prior Authorization Assistant is not active in this phase.">
-            Open AI Prior Authorization Assistant
-          </button>
-          <div class="muted small" style="margin-top:8px;">
-            Not active in this phase. This shell does not call AI, create an agent workspace, submit to a payer, or change case data.
           </div>
         </div>
 
@@ -46610,32 +46605,26 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
         <div class="hr"></div>
 
-        <h3>Evidence Checklist</h3>
-        <p class="muted small">Prior-auth-specific source proof needed for the packet. This is read-only in this phase.</p>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Evidence</th>
-                <th>Required</th>
-                <th>Status</th>
-                <th>Impact</th>
-              </tr>
-            </thead>
-            <tbody>${evidenceRowsHtml}</tbody>
-          </table>
+        <div class="ws-callout" style="border-left:4px solid #6366f1;">
+          <h3>AI Prior Authorization Assistant</h3>
+          <p class="muted small">
+            Prior-auth medical-necessity support, payer criteria review, and appeal language suggestions will be added in a later phase.
+          </p>
+          <button class="btn secondary" type="button" disabled title="AI Prior Authorization Assistant is not active in this phase.">
+            Open AI Prior Authorization Assistant
+          </button>
+          <div class="muted small" style="margin-top:8px;">
+            Not active in this phase. This shell does not call AI, create an agent workspace, submit to a payer, or change case data.
+          </div>
         </div>
-
-        <div class="hr"></div>
-
-        <h3>Prior Authorization Appeal Narrative</h3>
-        <pre style="white-space:pre-wrap;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px;font-family:inherit;">${safeStr(layout.narrative_draft || "-")}</pre>
 
         <div class="hr"></div>
 
         <div class="ws-full-preview">
           <h3>Appeal Packet Preview</h3>
-          <p class="muted small">Read-only packet preview sections. Editing, source proof upload, AI drafting, and payer submission are not enabled in this phase.</p>
+          <p class="muted small">
+            Evidence Checklist is integrated into each packet section below, including the Prior Authorization Appeal Narrative. Edit the prior-auth packet sections directly here; source proof upload, AI drafting, packet export, and payer submission are not enabled in this phase.
+          </p>
           ${packetSectionsHtml}
         </div>
 
