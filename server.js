@@ -45914,6 +45914,51 @@ if (method === "GET" && pathname === "/prior-auth/case") {
       <strong>Notes</strong>
       <div class="muted small" style="white-space:pre-wrap;margin-top:4px;">${safeStr(row.notes || "-")}</div>
       <div class="hr"></div>
+      <h3>Appeal / Next Round Actions</h3>
+      <p class="muted small">
+        Use these shortcuts for denied, insufficient partial approval, peer-to-peer, missing-documentation, or final no-service outcomes. These actions only update the prior authorization case status.
+      </p>
+      <div class="btnRow" style="align-items:flex-start;gap:8px;flex-wrap:wrap;">
+        <form method="POST" action="/prior-auth/case/status" style="display:inline-block;">
+          <input type="hidden" name="auth_case_id" value="${safeStr(row.auth_case_id || "")}" />
+          <input type="hidden" name="status" value="Appeal Needed" />
+          <input type="hidden" name="note" value="Appeal or next round needed." />
+          <button class="btn small" type="submit">Start Appeal / Next Round</button>
+        </form>
+
+        <form method="POST" action="/prior-auth/case/status" style="display:inline-block;">
+          <input type="hidden" name="auth_case_id" value="${safeStr(row.auth_case_id || "")}" />
+          <input type="hidden" name="status" value="Appeal Submitted" />
+          <input type="hidden" name="note" value="Appeal or next-round request submitted to payer." />
+          <button class="btn secondary small" type="submit">Mark Appeal Submitted</button>
+        </form>
+
+        <form method="POST" action="/prior-auth/case/status" style="display:inline-block;">
+          <input type="hidden" name="auth_case_id" value="${safeStr(row.auth_case_id || "")}" />
+          <input type="hidden" name="status" value="Peer-to-Peer Needed" />
+          <input type="hidden" name="note" value="Peer-to-peer review needed for this prior authorization." />
+          <button class="btn secondary small" type="submit">Mark Peer-to-Peer Needed</button>
+        </form>
+
+        <form method="POST" action="/prior-auth/case/status" style="display:inline-block;">
+          <input type="hidden" name="auth_case_id" value="${safeStr(row.auth_case_id || "")}" />
+          <input type="hidden" name="status" value="Missing Documentation" />
+          <input type="hidden" name="note" value="Additional documentation needed for this prior authorization." />
+          <button class="btn secondary small" type="submit">Mark Missing Documentation</button>
+        </form>
+
+        <form method="POST" action="/prior-auth/case/status" style="display:inline-block;">
+          <input type="hidden" name="auth_case_id" value="${safeStr(row.auth_case_id || "")}" />
+          <input type="hidden" name="status" value="Not Pursued" />
+          <input type="hidden" name="note" value="Service not performed or no further prior-auth action pursued." />
+          <button class="btn danger small" type="submit">Not Pursued / Service Not Performed</button>
+        </form>
+      </div>
+      <p class="muted small" style="margin-top:8px;">
+        No payer submission, claim mutation, lifecycle mutation, or workspace creation occurs from these shortcuts.
+      </p>
+
+      <div class="hr"></div>
       <h3>Possible Billed Claim Matches</h3>
       <p class="muted small">
         Read-only candidate preview based on payer, patient, CPT/HCPCS, ICD-10, auth number, and service text. Claim linking will be added in a later phase.
