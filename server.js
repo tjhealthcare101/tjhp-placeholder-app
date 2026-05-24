@@ -1391,6 +1391,95 @@ function tjhpPriorAuthClaimLinkEligibility(org_id, priorAuth = {}, billed_id = "
   };
 }
 
+
+function tjhpPriorAuthAppealWorkspaceEligible(row = {}){
+  const status = normalizePriorAuthStatus(row.status || "");
+  return [
+    "Denied",
+    "Partially Approved",
+    "Appeal Needed",
+    "Appeal Submitted",
+    "Peer-to-Peer Needed",
+    "Missing Documentation"
+  ].includes(status);
+}
+
+function tjhpPriorAuthAppealWorkspaceNextStepLabel(row = {}){
+  const status = normalizePriorAuthStatus(row.status || "");
+
+  if (status === "Denied") return "Start appeal / next round";
+  if (status === "Partially Approved") return "Review approval limits and appeal gap";
+  if (status === "Appeal Needed") return "Build prior auth appeal packet";
+  if (status === "Appeal Submitted") return "Follow up on prior auth appeal";
+  if (status === "Peer-to-Peer Needed") return "Prepare peer-to-peer review";
+  if (status === "Missing Documentation") return "Collect and attach missing documentation";
+
+  return "No appeal workspace action";
+}
+
+function tjhpPriorAuthAppealWorkspaceEvidenceChecklist(row = {}){
+  const status = normalizePriorAuthStatus(row.status || "");
+  const items = [
+    "Denial or partial approval letter",
+    "Original prior authorization request",
+    "Payer medical policy or guideline",
+    "Physician order / referral",
+    "Clinical notes supporting medical necessity",
+    "Relevant imaging, lab, or diagnostic results",
+    "CPT / HCPCS and ICD-10 rationale",
+    "Prior payer correspondence"
+  ];
+
+  if (status === "Peer-to-Peer Needed") {
+    items.push("Peer-to-peer notes, if applicable");
+  }
+
+  if (
+    status === "Missing Documentation" ||
+    normalizePriorAuthListValue(row.missing_documentation).length > 0
+  ) {
+    items.push("Missing documentation requested by payer");
+  }
+
+  return Array.from(new Set(items));
+}
+
+function tjhpPriorAuthAppealWorkspaceContext(org = {}, row = {}){
+  const normalized = normalizePriorAuthCase(row, {
+    org_id: String(org.org_id || row.org_id || "").trim()
+  });
+
+  return {
+    workspace_type: "prior_auth_appeal",
+    eligible: tjhpPriorAuthAppealWorkspaceEligible(normalized),
+    next_step: tjhpPriorAuthAppealWorkspaceNextStepLabel(normalized),
+
+    auth_case_id: String(normalized.auth_case_id || "").trim(),
+    org_id: String(normalized.org_id || org.org_id || "").trim(),
+
+    patient: String(normalized.patient_name || normalized.patient_id || "").trim(),
+    payer: String(normalized.payer || "").trim(),
+    provider: String(normalized.provider || "").trim(),
+    specialty: String(normalized.specialty || "").trim(),
+
+    requested_service: String(normalized.requested_service || "").trim(),
+    cpt_hcpcs: String(normalized.cpt_hcpcs || "").trim(),
+    icd10: String(normalized.icd10 || "").trim(),
+    auth_number: String(normalized.auth_number || "").trim(),
+
+    status: String(normalized.status || "").trim(),
+    denial_reason: String(normalized.denial_reason || "").trim(),
+    partial_approval_reason: String(normalized.partial_approval_reason || "").trim(),
+    missing_documentation: normalizePriorAuthListValue(normalized.missing_documentation),
+    estimated_revenue_at_risk: Number(normalized.estimated_revenue_at_risk || 0) || 0,
+
+    evidence_checklist: tjhpPriorAuthAppealWorkspaceEvidenceChecklist(normalized),
+
+    created_at: String(normalized.created_at || "").trim(),
+    updated_at: String(normalized.updated_at || "").trim()
+  };
+}
+
 function priorAuthStructuredRowSignal(row = {}){
   const fields = new Set();
 
@@ -63776,6 +63865,230 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_ACTIONS_PANEL_SMOKE_TESTS === "true" && (
     } catch (err) {
       try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
       process.stderr.write("PRIOR_AUTH_APPEAL_ACTIONS_PANEL_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
+if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const org_id = "__prior_auth_appeal_workspace_shell_helpers_smoke__" + Date.now().toString(36);
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+    const workspacesBefore = JSON.stringify(readJSON(FILES.agent_workspaces, []));
+
+    try {
+      [
+        "function tjhpPriorAuthAppealWorkspaceEligible",
+        "function tjhpPriorAuthAppealWorkspaceNextStepLabel",
+        "function tjhpPriorAuthAppealWorkspaceEvidenceChecklist",
+        "function tjhpPriorAuthAppealWorkspaceContext",
+        'workspace_type: "prior_auth_appeal"',
+        "Build prior auth appeal packet",
+        "Follow up on prior auth appeal",
+        "Denial or partial approval letter",
+        "Payer medical policy or guideline",
+        "Clinical notes supporting medical necessity",
+        "PRIOR_AUTH_APPEAL_ACTIONS_PANEL_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_APPEAL_STATUS_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_NOT_PURSUED_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_CLAIM_LINK_ROUTE_FORM_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior-auth appeal workspace shell helper marker: " + x));
+
+      const forbiddenGetAppealWorkspaceRoute = 'if (method === "GET" && pathname === "/prior-auth/' + 'appeal-workspace") {';
+      const forbiddenPostAppealWorkspaceRoute = 'if (method === "POST" && pathname === "/prior-auth/' + 'appeal-workspace") {';
+      assert(!src.includes(forbiddenGetAppealWorkspaceRoute), "prior-auth appeal workspace GET route must not exist yet");
+      assert(!src.includes(forbiddenPostAppealWorkspaceRoute), "prior-auth appeal workspace POST route must not exist yet");
+
+      const helperStart = src.indexOf("function tjhpPriorAuthAppealWorkspaceEligible");
+      const helperEnd = src.indexOf("function priorAuthStructuredRowSignal", helperStart);
+
+      assert(helperStart >= 0, "prior-auth appeal workspace helper block missing");
+      assert(helperEnd > helperStart, "prior-auth appeal workspace helper block boundary missing");
+
+      const helperBlock = src.slice(helperStart, helperEnd);
+
+      [
+        "writeJSON(",
+        "upsertPriorAuthCase(",
+        "savePriorAuthCasesForOrg(",
+        "ensureAgentWorkspace(",
+        "createAgentWorkspace",
+        "FILES.billed",
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "FILES.document_ingests",
+        "POST",
+        "pathname ==="
+      ].forEach(x => assert(!helperBlock.includes(x), "appeal workspace helpers must remain read-only and must not include: " + x));
+
+      [
+        "Denied",
+        "Partially Approved",
+        "Appeal Needed",
+        "Appeal Submitted",
+        "Peer-to-Peer Needed",
+        "Missing Documentation"
+      ].forEach(status => {
+        assert.strictEqual(
+          tjhpPriorAuthAppealWorkspaceEligible({ status }),
+          true,
+          status + " should be prior-auth appeal workspace eligible"
+        );
+      });
+
+      [
+        "Approved",
+        "Ready to Bill",
+        "Linked to Claim",
+        "Not Pursued",
+        "Expired",
+        "Expiring Soon",
+        "Auth Needed",
+        "Draft",
+        "Submitted",
+        "Pending"
+      ].forEach(status => {
+        assert.strictEqual(
+          tjhpPriorAuthAppealWorkspaceEligible({ status }),
+          false,
+          status + " should not be prior-auth appeal workspace eligible"
+        );
+      });
+
+      assert.strictEqual(
+        tjhpPriorAuthAppealWorkspaceNextStepLabel({ status:"Denied" }),
+        "Start appeal / next round",
+        "Denied next step mismatch"
+      );
+
+      assert.strictEqual(
+        tjhpPriorAuthAppealWorkspaceNextStepLabel({ status:"Partially Approved" }),
+        "Review approval limits and appeal gap",
+        "Partially Approved next step mismatch"
+      );
+
+      assert.strictEqual(
+        tjhpPriorAuthAppealWorkspaceNextStepLabel({ status:"Appeal Needed" }),
+        "Build prior auth appeal packet",
+        "Appeal Needed next step mismatch"
+      );
+
+      assert.strictEqual(
+        tjhpPriorAuthAppealWorkspaceNextStepLabel({ status:"Appeal Submitted" }),
+        "Follow up on prior auth appeal",
+        "Appeal Submitted next step mismatch"
+      );
+
+      assert.strictEqual(
+        tjhpPriorAuthAppealWorkspaceNextStepLabel({ status:"Peer-to-Peer Needed" }),
+        "Prepare peer-to-peer review",
+        "Peer-to-Peer Needed next step mismatch"
+      );
+
+      assert.strictEqual(
+        tjhpPriorAuthAppealWorkspaceNextStepLabel({ status:"Missing Documentation" }),
+        "Collect and attach missing documentation",
+        "Missing Documentation next step mismatch"
+      );
+
+      assert.strictEqual(
+        tjhpPriorAuthAppealWorkspaceNextStepLabel({ status:"Ready to Bill" }),
+        "No appeal workspace action",
+        "non-eligible next step mismatch"
+      );
+
+      const baseChecklist = tjhpPriorAuthAppealWorkspaceEvidenceChecklist({ status:"Denied" });
+
+      [
+        "Denial or partial approval letter",
+        "Original prior authorization request",
+        "Payer medical policy or guideline",
+        "Physician order / referral",
+        "Clinical notes supporting medical necessity",
+        "Relevant imaging, lab, or diagnostic results",
+        "CPT / HCPCS and ICD-10 rationale",
+        "Prior payer correspondence"
+      ].forEach(item => {
+        assert(baseChecklist.includes(item), "base checklist missing: " + item);
+      });
+
+      const p2pChecklist = tjhpPriorAuthAppealWorkspaceEvidenceChecklist({ status:"Peer-to-Peer Needed" });
+      assert(p2pChecklist.includes("Peer-to-peer notes, if applicable"), "P2P checklist item missing");
+
+      const missingDocsChecklist = tjhpPriorAuthAppealWorkspaceEvidenceChecklist({
+        status:"Denied",
+        missing_documentation:["clinical notes", "imaging report"]
+      });
+      assert(missingDocsChecklist.includes("Missing documentation requested by payer"), "missing documentation checklist item missing");
+
+      const ctx = tjhpPriorAuthAppealWorkspaceContext(
+        { org_id },
+        {
+          auth_case_id:"pa_workspace_shell_smoke",
+          org_id,
+          patient_name:"Workspace Smoke Patient",
+          payer:"Aetna",
+          provider:"Dr. Smith",
+          specialty:"Orthopedics",
+          requested_service:"Lumbar MRI",
+          cpt_hcpcs:"72148",
+          icd10:"M54.5",
+          auth_number:"AUTH-WORKSPACE-SMOKE",
+          status:"Denied",
+          denial_reason:"Medical necessity",
+          partial_approval_reason:"",
+          missing_documentation:"clinical notes, imaging report",
+          estimated_revenue_at_risk: 1200,
+          created_at:"2026-05-01T00:00:00.000Z",
+          updated_at:"2026-05-02T00:00:00.000Z"
+        }
+      );
+
+      assert.strictEqual(ctx.workspace_type, "prior_auth_appeal", "workspace type mismatch");
+      assert.strictEqual(ctx.eligible, true, "context eligibility mismatch");
+      assert.strictEqual(ctx.next_step, "Start appeal / next round", "context next step mismatch");
+      assert.strictEqual(ctx.auth_case_id, "pa_workspace_shell_smoke", "context auth_case_id mismatch");
+      assert.strictEqual(ctx.org_id, org_id, "context org_id mismatch");
+      assert.strictEqual(ctx.patient, "Workspace Smoke Patient", "context patient mismatch");
+      assert.strictEqual(ctx.payer, "Aetna", "context payer mismatch");
+      assert.strictEqual(ctx.provider, "Dr. Smith", "context provider mismatch");
+      assert.strictEqual(ctx.specialty, "Orthopedics", "context specialty mismatch");
+      assert.strictEqual(ctx.requested_service, "Lumbar MRI", "context requested_service mismatch");
+      assert.strictEqual(ctx.cpt_hcpcs, "72148", "context cpt_hcpcs mismatch");
+      assert.strictEqual(ctx.icd10, "M54.5", "context icd10 mismatch");
+      assert.strictEqual(ctx.auth_number, "AUTH-WORKSPACE-SMOKE", "context auth_number mismatch");
+      assert.strictEqual(ctx.status, "Denied", "context status mismatch");
+      assert.strictEqual(ctx.denial_reason, "Medical necessity", "context denial_reason mismatch");
+      assert(Array.isArray(ctx.missing_documentation), "context missing_documentation should be array");
+      assert(ctx.missing_documentation.includes("clinical notes"), "context missing docs missing clinical notes");
+      assert.strictEqual(ctx.estimated_revenue_at_risk, 1200, "context revenue mismatch");
+      assert(Array.isArray(ctx.evidence_checklist), "context evidence checklist should be array");
+      assert(ctx.evidence_checklist.includes("Denial or partial approval letter"), "context evidence missing denial letter");
+      assert(ctx.evidence_checklist.includes("Missing documentation requested by payer"), "context evidence missing missing-doc item");
+
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.agent_workspaces, [])), workspacesBefore, "agent workspaces mutated");
+
+      savePriorAuthCasesForOrg(org_id, []);
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+
+      process.stdout.write("PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
       process.exit(1);
     }
   })();
