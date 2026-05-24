@@ -46371,6 +46371,48 @@ if (method === "POST" && pathname === "/prior-auth/case/link") {
 }
 
 
+
+if (method === "POST" && pathname === "/prior-auth/appeal-workspace/save-section") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+
+  const auth_case_id = String(ps.get("auth_case_id") || "").trim();
+  const section_key = String(ps.get("section_key") || "").trim();
+  const section_text = String(ps.get("section_text") || "");
+
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+
+  if (!row) {
+    return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+  }
+
+  const backHref = "/prior-auth/appeal-workspace?auth_case_id=" + encodeURIComponent(auth_case_id);
+  const editableKeys = new Set(tjhpPriorAuthWorkspaceEditableSectionKeys(org, row));
+
+  if (!section_key || !editableKeys.has(section_key)) {
+    return redirect(res, backHref + "&pa_status=section_invalid");
+  }
+
+  const currentSections =
+    row.workspace_packet_sections &&
+    typeof row.workspace_packet_sections === "object" &&
+    !Array.isArray(row.workspace_packet_sections)
+      ? row.workspace_packet_sections
+      : {};
+
+  const updatedSections = {
+    ...currentSections,
+    [section_key]: section_text
+  };
+
+  upsertPriorAuthCase(org.org_id, {
+    ...row,
+    workspace_packet_sections: updatedSections
+  }, sess.user_id || "");
+
+  return redirect(res, backHref + "&pa_status=section_saved");
+}
+
 if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
   const row = getPriorAuthCaseById(org.org_id, auth_case_id);
