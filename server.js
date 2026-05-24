@@ -45925,6 +45925,113 @@ if (method === "POST" && pathname === "/prior-auth/case/link") {
   return redirect(res, `/prior-auth/case?auth_case_id=${encodeURIComponent(auth_case_id)}&pa_status=linked`);
 }
 
+
+if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
+  const auth_case_id = String(parsed.query.auth_case_id || "").trim();
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+
+  if (!row) {
+    return send(res, 404, renderPage("Prior Auth Appeal Workspace", `
+      <div class="card">
+        <h2>Prior Auth Appeal Workspace</h2>
+        <div class="alert warn">Prior authorization case not found.</div>
+        <div class="btnRow">
+          <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
+        </div>
+      </div>
+    `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name }));
+  }
+
+  const ctx = tjhpPriorAuthAppealWorkspaceContext(org, row);
+  const caseHref = "/prior-auth/case?auth_case_id=" + encodeURIComponent(ctx.auth_case_id || auth_case_id);
+  const evidenceHtml = (Array.isArray(ctx.evidence_checklist) ? ctx.evidence_checklist : [])
+    .map(item => `<li>${safeStr(item)}</li>`)
+    .join("") || `<li class="muted">No evidence checklist items available.</li>`;
+  const missingDocsHtml = (Array.isArray(ctx.missing_documentation) && ctx.missing_documentation.length)
+    ? ctx.missing_documentation.map(item => `<li>${safeStr(item)}</li>`).join("")
+    : `<li class="muted">No missing documentation listed.</li>`;
+
+  const html = renderPage("Prior Auth Appeal Workspace", `
+    <div class="card">
+      <h2>Prior Auth Appeal Workspace</h2>
+      <p class="muted">Appeal Workspace Shell for prior authorization denial, partial approval, peer-to-peer, and missing-documentation work. This page is read-only in this phase.</p>
+
+      <div class="btnRow">
+        <a class="btn secondary" href="${caseHref}">Back to Prior Auth Case</a>
+        <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
+      </div>
+
+      <div class="hr"></div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+        <div>
+          <strong>Next Step</strong><br/>
+          ${safeStr(ctx.next_step || "-")}
+        </div>
+        <div>
+          <strong>Eligible for Appeal Workspace</strong><br/>
+          ${ctx.eligible ? "Yes" : "No"}
+        </div>
+        <div>
+          <strong>Status</strong><br/>
+          ${safeStr(ctx.status || "-")}
+        </div>
+        <div>
+          <strong>Estimated Revenue At Risk</strong><br/>
+          ${priorAuthRevenueAtRiskDisplay(ctx.estimated_revenue_at_risk)}
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <h3>Case Summary</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+        <div><strong>Patient</strong><br/>${safeStr(ctx.patient || "-")}</div>
+        <div><strong>Payer</strong><br/>${safeStr(ctx.payer || "-")}</div>
+        <div><strong>Provider</strong><br/>${safeStr(ctx.provider || "-")}</div>
+        <div><strong>Specialty</strong><br/>${safeStr(ctx.specialty || "-")}</div>
+        <div><strong>Requested Service</strong><br/>${safeStr(ctx.requested_service || "-")}</div>
+        <div><strong>CPT / HCPCS</strong><br/>${safeStr(ctx.cpt_hcpcs || "-")}</div>
+        <div><strong>ICD-10</strong><br/>${safeStr(ctx.icd10 || "-")}</div>
+        <div><strong>Auth #</strong><br/>${safeStr(ctx.auth_number || "-")}</div>
+      </div>
+
+      <div class="hr"></div>
+
+      <h3>Appeal Context</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
+        <div>
+          <strong>Denial Reason</strong>
+          <div class="muted small" style="margin-top:4px;">${safeStr(ctx.denial_reason || "-")}</div>
+        </div>
+        <div>
+          <strong>Partial Approval Reason</strong>
+          <div class="muted small" style="margin-top:4px;">${safeStr(ctx.partial_approval_reason || "-")}</div>
+        </div>
+        <div>
+          <strong>Missing Documentation</strong>
+          <ul style="margin-top:6px;">${missingDocsHtml}</ul>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <h3>Evidence Checklist</h3>
+      <p class="muted small">Use this checklist to prepare a prior authorization appeal, next-round request, peer-to-peer packet, or missing-documentation response. No payer submission occurs from this shell.</p>
+      <ul>${evidenceHtml}</ul>
+
+      <div class="hr"></div>
+
+      <h3>Workspace Notes</h3>
+      <p class="muted small">
+        This read-only shell does not create an agent workspace, does not submit anything to a payer, does not update claim lifecycle, and does not mutate claims, payments, contracts, or document ingestion records.
+      </p>
+    </div>
+  `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
+
+  return send(res, 200, html);
+}
+
 if (method === "GET" && pathname === "/prior-auth/case") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
   const row = getPriorAuthCaseById(org.org_id, auth_case_id);
