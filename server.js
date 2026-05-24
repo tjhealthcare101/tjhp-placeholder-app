@@ -63346,6 +63346,186 @@ if (process.env.TJHP_PRIOR_AUTH_NOT_PURSUED_SMOKE_TESTS === "true" && (process.e
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_APPEAL_STATUS_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const org_id = "__prior_auth_appeal_status_smoke__" + Date.now().toString(36);
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+
+    try {
+      [
+        '"Appeal Needed"',
+        '"Appeal Submitted"',
+        '"appeal needed": "Appeal Needed"',
+        '"appeal submitted": "Appeal Submitted"',
+        '"next round": "Appeal Needed"',
+        '"next round submitted": "Appeal Submitted"',
+        'if (status === "Appeal Needed") return "Prepare prior auth appeal";',
+        'if (status === "Appeal Submitted") return "Follow up on prior auth appeal";',
+        "function tjhpPriorAuthStaffStatusOptions",
+        "function tjhpPriorAuthStaffStatusAllowed",
+        "function tjhpPriorAuthActionCenterRows",
+        "PRIOR_AUTH_STATUS_UPDATE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_NOT_PURSUED_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_CLAIM_LINK_ROUTE_FORM_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing Appeal status marker: " + x));
+
+      assert.strictEqual(normalizePriorAuthStatus("Appeal Needed"), "Appeal Needed", "Appeal Needed exact status should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("Appeal Submitted"), "Appeal Submitted", "Appeal Submitted exact status should normalize");
+
+      assert.strictEqual(normalizePriorAuthStatus("appeal"), "Appeal Needed", "appeal alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("appeal needed"), "Appeal Needed", "appeal needed alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("appeal required"), "Appeal Needed", "appeal required alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("appeal draft"), "Appeal Needed", "appeal draft alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("appeal in progress"), "Appeal Needed", "appeal in progress alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("next appeal"), "Appeal Needed", "next appeal alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("next round"), "Appeal Needed", "next round alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("another round"), "Appeal Needed", "another round alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("prior auth appeal needed"), "Appeal Needed", "prior auth appeal needed alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("pa appeal needed"), "Appeal Needed", "pa appeal needed alias should normalize");
+
+      assert.strictEqual(normalizePriorAuthStatus("appeal submitted"), "Appeal Submitted", "appeal submitted alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("appeal sent"), "Appeal Submitted", "appeal sent alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("appeal filed"), "Appeal Submitted", "appeal filed alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("next round submitted"), "Appeal Submitted", "next round submitted alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("prior auth appeal submitted"), "Appeal Submitted", "prior auth appeal submitted alias should normalize");
+      assert.strictEqual(normalizePriorAuthStatus("pa appeal submitted"), "Appeal Submitted", "pa appeal submitted alias should normalize");
+
+      assert(tjhpPriorAuthStaffStatusOptions().includes("Appeal Needed"), "Appeal Needed should be staff-selectable");
+      assert(tjhpPriorAuthStaffStatusOptions().includes("Appeal Submitted"), "Appeal Submitted should be staff-selectable");
+      assert(tjhpPriorAuthStaffStatusOptions().includes("Not Pursued"), "Not Pursued should remain staff-selectable");
+      assert(!tjhpPriorAuthStaffStatusOptions().includes("Linked to Claim"), "Linked to Claim should remain excluded from staff-selectable statuses");
+
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("Appeal Needed"), true, "Appeal Needed should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("Appeal Submitted"), true, "Appeal Submitted should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("appeal"), true, "appeal alias should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("next round"), true, "next round alias should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("appeal sent"), true, "appeal sent alias should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("next round submitted"), true, "next round submitted alias should be allowed");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("Linked to Claim"), false, "Linked to Claim should remain blocked");
+      assert.strictEqual(tjhpPriorAuthStaffStatusAllowed("not a real prior auth status"), false, "unknown status should remain blocked");
+
+      assert.strictEqual(
+        tjhpPriorAuthNextActionLabel({ status:"Appeal Needed" }),
+        "Prepare prior auth appeal",
+        "Appeal Needed next action mismatch"
+      );
+
+      assert.strictEqual(
+        tjhpPriorAuthNextActionLabel({ status:"Appeal Submitted" }),
+        "Follow up on prior auth appeal",
+        "Appeal Submitted next action mismatch"
+      );
+
+      const queueStart = src.indexOf("function tjhpPriorAuthActionCenterRows");
+      const queueEnd = src.indexOf("function tjhpPriorAuthStaffStatusOptions", queueStart);
+
+      assert(queueStart >= 0, "prior-auth action queue helper missing");
+      assert(queueEnd > queueStart, "prior-auth action queue helper boundary missing");
+
+      const queueSrc = src.slice(queueStart, queueEnd);
+
+      assert(queueSrc.includes('"Appeal Needed"'), "Appeal Needed must be included in action queue helper");
+      assert(queueSrc.includes('"Appeal Submitted"'), "Appeal Submitted must be included in action queue helper");
+      assert(!queueSrc.includes('"Not Pursued"'), "Not Pursued must not be included in action queue helper");
+      assert(!queueSrc.includes('"Linked to Claim"'), "Linked to Claim must not be included in action queue helper");
+
+      savePriorAuthCasesForOrg(org_id, []);
+
+      const denied = upsertPriorAuthCase(org_id, {
+        patient_name: "Appeal Needed Smoke Patient",
+        payer: "Aetna",
+        requested_service: "MRI",
+        cpt_hcpcs: "72148",
+        status: "Denied"
+      }, "smoke");
+
+      assert(denied && denied.ok === true, "denied prior auth smoke create failed");
+
+      const appealNeeded = upsertPriorAuthCase(org_id, {
+        ...denied.case,
+        status: "next round",
+        notes: "Smoke test: appeal/next round needed."
+      }, "smoke");
+
+      assert(appealNeeded && appealNeeded.ok === true, "Appeal Needed upsert failed");
+
+      const appealCase = getPriorAuthCaseById(org_id, denied.case.auth_case_id);
+      assert(appealCase, "Appeal Needed smoke case not found");
+      assert.strictEqual(appealCase.status, "Appeal Needed", "Appeal Needed status did not persist");
+      assert(String(appealCase.notes || "").includes("appeal/next round needed"), "Appeal Needed note missing");
+
+      const submitted = upsertPriorAuthCase(org_id, {
+        patient_name: "Appeal Submitted Smoke Patient",
+        payer: "Aetna",
+        requested_service: "CT",
+        cpt_hcpcs: "70450",
+        status: "appeal sent",
+        notes: "Smoke test: appeal sent to payer."
+      }, "smoke");
+
+      assert(submitted && submitted.ok === true, "Appeal Submitted smoke create failed");
+
+      const submittedCase = getPriorAuthCaseById(org_id, submitted.case.auth_case_id);
+      assert(submittedCase, "Appeal Submitted smoke case not found");
+      assert.strictEqual(submittedCase.status, "Appeal Submitted", "Appeal Submitted status did not persist");
+      assert(String(submittedCase.notes || "").includes("appeal sent to payer"), "Appeal Submitted note missing");
+
+      const notPursued = upsertPriorAuthCase(org_id, {
+        patient_name: "Not Pursued Appeal Smoke Patient",
+        payer: "Aetna",
+        requested_service: "PT",
+        status: "Not Pursued"
+      }, "smoke");
+
+      assert(notPursued && notPursued.ok === true, "Not Pursued smoke create failed");
+
+      const linked = upsertPriorAuthCase(org_id, {
+        patient_name: "Linked Appeal Smoke Patient",
+        payer: "Aetna",
+        requested_service: "X-Ray",
+        status: "Linked to Claim"
+      }, "smoke");
+
+      assert(linked && linked.ok === true, "Linked to Claim smoke create failed");
+
+      const rows = tjhpPriorAuthActionCenterRows(org_id);
+      const statuses = rows.map(x => String(x.status || ""));
+
+      assert(statuses.includes("Appeal Needed"), "Appeal Needed should appear in prior-auth action queue");
+      assert(statuses.includes("Appeal Submitted"), "Appeal Submitted should appear in prior-auth action queue");
+      assert(!statuses.includes("Not Pursued"), "Not Pursued should not appear in prior-auth action queue");
+      assert(!statuses.includes("Linked to Claim"), "Linked to Claim should not appear in prior-auth action queue");
+
+      assert(rows.some(x => String(x.auth_case_id || "") === String(appealCase.auth_case_id || "")), "Appeal Needed case missing from action queue");
+      assert(rows.some(x => String(x.auth_case_id || "") === String(submittedCase.auth_case_id || "")), "Appeal Submitted case missing from action queue");
+
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+
+      savePriorAuthCasesForOrg(org_id, []);
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+
+      process.stdout.write("PRIOR_AUTH_APPEAL_STATUS_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_APPEAL_STATUS_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
 }
