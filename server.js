@@ -371,6 +371,8 @@ const PRIOR_AUTH_STATUSES = [
   "Approved",
   "Partially Approved",
   "Denied",
+  "Appeal Needed",
+  "Appeal Submitted",
   "Expiring Soon",
   "Expired",
   "Ready to Bill",
@@ -429,6 +431,24 @@ function normalizePriorAuthStatus(value){
 
     "denied": "Denied",
     "rejected": "Denied",
+
+    "appeal needed": "Appeal Needed",
+    "appeal required": "Appeal Needed",
+    "appeal": "Appeal Needed",
+    "appeal draft": "Appeal Needed",
+    "appeal in progress": "Appeal Needed",
+    "next appeal": "Appeal Needed",
+    "next round": "Appeal Needed",
+    "another round": "Appeal Needed",
+    "prior auth appeal needed": "Appeal Needed",
+    "pa appeal needed": "Appeal Needed",
+
+    "appeal submitted": "Appeal Submitted",
+    "appeal sent": "Appeal Submitted",
+    "appeal filed": "Appeal Submitted",
+    "next round submitted": "Appeal Submitted",
+    "prior auth appeal submitted": "Appeal Submitted",
+    "pa appeal submitted": "Appeal Submitted",
 
     "expiring": "Expiring Soon",
     "expiring soon": "Expiring Soon",
@@ -1024,6 +1044,8 @@ function tjhpPriorAuthNextActionLabel(row = {}){
   if (status === "Missing Documentation") return "Upload/collect missing docs";
   if (status === "Peer-to-Peer Needed") return "Schedule peer-to-peer";
   if (status === "Denied") return "Review for prior auth appeal";
+  if (status === "Appeal Needed") return "Prepare prior auth appeal";
+  if (status === "Appeal Submitted") return "Follow up on prior auth appeal";
   if (status === "Partially Approved") return "Review approval limits";
   if (status === "Expiring Soon") return "Renew or confirm service timing";
   if (status === "Expired") return "Re-submit or renew authorization";
@@ -1048,6 +1070,8 @@ function tjhpPriorAuthActionCenterRows(org_id){
     "Peer-to-Peer Needed",
     "Partially Approved",
     "Denied",
+    "Appeal Needed",
+    "Appeal Submitted",
     "Expiring Soon",
     "Expired",
     "Ready to Bill"
@@ -1112,6 +1136,22 @@ function tjhpPriorAuthStaffStatusAllowed(status){
     "partial",
     "denied",
     "rejected",
+    "appeal needed",
+    "appeal required",
+    "appeal",
+    "appeal draft",
+    "appeal in progress",
+    "next appeal",
+    "next round",
+    "another round",
+    "prior auth appeal needed",
+    "pa appeal needed",
+    "appeal submitted",
+    "appeal sent",
+    "appeal filed",
+    "next round submitted",
+    "prior auth appeal submitted",
+    "pa appeal submitted",
     "expiring soon",
     "expiring",
     "expired",
