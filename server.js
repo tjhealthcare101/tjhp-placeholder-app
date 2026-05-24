@@ -64240,6 +64240,150 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS === "
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const org_id = "__prior_auth_appeal_workspace_route_smoke__" + Date.now().toString(36);
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+    const workspacesBefore = JSON.stringify(readJSON(FILES.agent_workspaces, []));
+
+    try {
+      [
+        'if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {',
+        "tjhpPriorAuthAppealWorkspaceContext(org, row)",
+        "Prior Auth Appeal Workspace",
+        "Appeal Workspace Shell",
+        "Evidence Checklist",
+        "Next Step",
+        "Eligible for Appeal Workspace",
+        "Case Summary",
+        "Appeal Context",
+        "Workspace Notes",
+        "Back to Prior Auth Case",
+        "Back to Prior Auth Queue",
+        "Prior authorization case not found.",
+        "PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_FUTURE_GET_ROUTE_GUARD_OK",
+        "PRIOR_AUTH_APPEAL_ACTIONS_PANEL_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_APPEAL_STATUS_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_NOT_PURSUED_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing prior-auth appeal workspace route marker: " + x));
+
+      const forbiddenPostAppealWorkspaceRoute = 'if (method === "POST" && pathname === "/prior-auth/' + 'appeal-workspace") {';
+      assert(
+        !src.includes(forbiddenPostAppealWorkspaceRoute),
+        "POST /prior-auth/appeal-workspace must not exist"
+      );
+
+      const routeStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {');
+      const routeEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case") {', routeStart);
+
+      assert(routeStart >= 0, "GET /prior-auth/appeal-workspace route missing");
+      assert(routeEnd > routeStart, "GET /prior-auth/appeal-workspace route boundary missing");
+
+      const routeSrc = src.slice(routeStart, routeEnd);
+
+      [
+        "const auth_case_id = String(parsed.query.auth_case_id || \"\").trim();",
+        "const row = getPriorAuthCaseById(org.org_id, auth_case_id);",
+        "tjhpPriorAuthAppealWorkspaceContext(org, row)",
+        "Prior Auth Appeal Workspace",
+        "Appeal Workspace Shell",
+        "Evidence Checklist",
+        "Next Step",
+        "Eligible for Appeal Workspace",
+        "Case Summary",
+        "Appeal Context",
+        "Workspace Notes",
+        "Back to Prior Auth Case",
+        "Back to Prior Auth Queue",
+        "priorAuthRevenueAtRiskDisplay(ctx.estimated_revenue_at_risk)",
+        "No payer submission occurs from this shell.",
+        "This read-only shell does not create an agent workspace"
+      ].forEach(x => assert(routeSrc.includes(x), "GET appeal workspace route missing required marker: " + x));
+
+      [
+        "parseBody(req)",
+        "upsertPriorAuthCase(",
+        "savePriorAuthCasesForOrg(",
+        "writeJSON(",
+        "ensureAgentWorkspace(",
+        "createAgentWorkspace",
+        "FILES.billed",
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "FILES.document_ingests",
+        "FILES.agent_workspaces",
+        'method="POST"',
+        'action="/prior-auth/appeal-workspace"',
+        'action="/prior-auth/case/status"',
+        'action="/prior-auth/case/link"',
+        "/upload-router",
+        "/data-management/prior-auth/upload",
+        "/data-management/prior-auth/create"
+      ].forEach(x => assert(!routeSrc.includes(x), "GET appeal workspace route must remain read-only and must not include: " + x));
+
+      savePriorAuthCasesForOrg(org_id, []);
+
+      const created = upsertPriorAuthCase(org_id, {
+        patient_name: "Appeal Workspace Route Smoke Patient",
+        payer: "Aetna",
+        provider: "Dr. Smith",
+        specialty: "Orthopedics",
+        requested_service: "Lumbar MRI",
+        cpt_hcpcs: "72148",
+        icd10: "M54.5",
+        auth_number: "AUTH-WORKSPACE-ROUTE-SMOKE",
+        status: "Denied",
+        denial_reason: "Medical necessity",
+        missing_documentation: "clinical notes, imaging report",
+        estimated_revenue_at_risk: 1200
+      }, "smoke");
+
+      assert(created && created.ok === true, "appeal workspace route smoke case create failed");
+
+      const row = getPriorAuthCaseById(org_id, created.case.auth_case_id);
+      assert(row, "appeal workspace route smoke case missing");
+
+      const ctx = tjhpPriorAuthAppealWorkspaceContext({ org_id }, row);
+
+      assert.strictEqual(ctx.workspace_type, "prior_auth_appeal", "context workspace_type mismatch");
+      assert.strictEqual(ctx.eligible, true, "context should be eligible for denied case");
+      assert.strictEqual(ctx.next_step, "Start appeal / next round", "context next step mismatch");
+      assert.strictEqual(ctx.auth_case_id, created.case.auth_case_id, "context auth_case_id mismatch");
+      assert.strictEqual(ctx.payer, "Aetna", "context payer mismatch");
+      assert.strictEqual(ctx.status, "Denied", "context status mismatch");
+      assert(Array.isArray(ctx.evidence_checklist), "context evidence_checklist should be array");
+      assert(ctx.evidence_checklist.includes("Denial or partial approval letter"), "context evidence missing denial letter");
+      assert(ctx.evidence_checklist.includes("Missing documentation requested by payer"), "context evidence missing missing-doc item");
+
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.agent_workspaces, [])), workspacesBefore, "agent workspaces mutated");
+
+      savePriorAuthCasesForOrg(org_id, []);
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+
+      process.stdout.write("PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PAYMENT_MATCH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try { runPaymentMatchingSmokeTests(); process.stdout.write("PAYMENT_MATCH_SMOKE_TESTS_PASSED\n"); process.exit(0);} catch (err) { process.stderr.write("PAYMENT_MATCH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);}
 }
