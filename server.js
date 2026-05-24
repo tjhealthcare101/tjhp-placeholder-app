@@ -65059,6 +65059,170 @@ if (process.env.TJHP_PRIOR_AUTH_OPEN_APPEAL_WORKSPACE_LINK_SMOKE_TESTS === "true
   })();
 }
 
+if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_COMMAND_CENTER_ROUTE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const org_id = "__prior_auth_command_center_route_smoke__" + Date.now().toString(36);
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+    const workspacesBefore = JSON.stringify(readJSON(FILES.agent_workspaces, []));
+
+    try {
+      [
+        'if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {',
+        "tjhpPriorAuthAppealWorkspaceContext(org, row)",
+        "tjhpPriorAuthAppealWorkspaceLayoutModel(org, row)",
+        "Prior Auth Appeal Workspace",
+        "Appeal Workspace Shell",
+        "Prior Auth Appeal Packet Command Center",
+        "Packet readiness",
+        "Source proof",
+        "Clinical necessity",
+        "Estimated revenue at risk",
+        "Next Step",
+        "Eligible for Appeal Workspace",
+        "Case Summary",
+        "Appeal Context",
+        "Why this prior authorization appeal exists",
+        "Outcome Intelligence",
+        "Evidence Checklist",
+        "Prior Authorization Appeal Narrative",
+        "Appeal Packet Preview",
+        "Workspace Notes",
+        "Back to Prior Auth Case",
+        "Back to Prior Auth Queue",
+        "No payer submission occurs from this shell.",
+        "This read-only shell does not create an agent workspace",
+        "This request is not a billed-claim payment appeal.",
+        "PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS_PASSED",
+        "PRIOR_AUTH_OPEN_APPEAL_WORKSPACE_LINK_SMOKE_TESTS_PASSED",
+        "PAYMENT_MATCH_SMOKE_TESTS_PASSED",
+        "VIEW_PANEL_STATIC_TESTS_PASSED",
+        "UPLOAD_COMPAT_SMOKE_TESTS_PASSED"
+      ].forEach(x => assert(src.includes(x), "missing command-center route marker: " + x));
+
+      assert(
+        !src.includes('if (method === "POST" && pathname === "/prior-auth/' + 'appeal-workspace") {'),
+        "POST /prior-auth/appeal-workspace must not exist"
+      );
+
+      const routeStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {');
+      const routeEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case") {', routeStart);
+
+      assert(routeStart >= 0, "GET /prior-auth/appeal-workspace route missing");
+      assert(routeEnd > routeStart, "GET /prior-auth/appeal-workspace route boundary missing");
+
+      const route = src.slice(routeStart, routeEnd);
+
+      [
+        "const ctx = tjhpPriorAuthAppealWorkspaceContext(org, row);",
+        "const layout = tjhpPriorAuthAppealWorkspaceLayoutModel(org, row);",
+        "const metrics = layout.command_center_metrics || {};",
+        "const evidenceItems = Array.isArray(layout.evidence_items)",
+        "const packetSections = Array.isArray(layout.packet_sections)",
+        "const workflow = layout.workflow || {};",
+        "const guardrails = layout.guardrails || {};",
+        "metricBar(\"Packet readiness\"",
+        "metricBar(\"Source proof\"",
+        "metricBar(\"Clinical necessity\"",
+        "Prior Auth Appeal Packet Command Center",
+        "Appeal Packet Preview",
+        "Prior Authorization Appeal Narrative",
+        "Evidence Checklist",
+        "Outcome Intelligence",
+        "Workspace Notes"
+      ].forEach(x => assert(route.includes(x), "GET command-center route missing marker: " + x));
+
+      [
+        "parseBody(req)",
+        "upsertPriorAuthCase(",
+        "savePriorAuthCasesForOrg(",
+        "writeJSON(",
+        "ensureAgentWorkspace(",
+        "saveAgentWorkspace(",
+        "ensureWorkspacePacket(",
+        "ensurePacketSections(",
+        "createAgentWorkspace",
+        "FILES.billed",
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "FILES.document_ingests",
+        "FILES.agent_workspaces",
+        'method="POST"',
+        'action="/prior-auth/appeal-workspace"',
+        'action="/prior-auth/case/status"',
+        'action="/prior-auth/case/link"',
+        "/upload-router",
+        "/data-management/prior-auth/upload",
+        "/data-management/prior-auth/create"
+      ].forEach(x => assert(!route.includes(x), "GET command-center route must remain read-only and must not include: " + x));
+
+      [
+        'if (method === "GET" && pathname === "/appeal-workspace")',
+        'if (method === "GET" && pathname === "/negotiation-workspace")',
+        'if (method === "GET" && pathname === "/agent-workspace")',
+        'if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))',
+        'pathname === "/ai-negotiation" ? "negotiation" : "appeal"',
+        "function workspacePagePath",
+        "ensureAgentWorkspace",
+        "ensureWorkspacePacket",
+        "ensurePacketSections",
+        "saveAgentWorkspace"
+      ].forEach(x => assert(src.includes(x), "existing billed/negotiation workspace marker missing: " + x));
+
+      const layout = tjhpPriorAuthAppealWorkspaceLayoutModel(
+        { org_id, org_name:"Command Center Smoke Practice" },
+        {
+          auth_case_id:"pa_command_center_route_smoke",
+          org_id,
+          patient_name:"Command Center Smoke Patient",
+          payer:"Aetna",
+          provider:"Dr. Smith",
+          specialty:"Orthopedics",
+          requested_service:"Lumbar MRI",
+          cpt_hcpcs:"72148",
+          icd10:"M54.5",
+          auth_number:"AUTH-COMMAND-CENTER-SMOKE",
+          status:"Denied",
+          denial_reason:"Medical necessity criteria not met",
+          missing_documentation:["clinical notes", "imaging report"],
+          estimated_revenue_at_risk:1200
+        }
+      );
+
+      assert.strictEqual(layout.workspace_type, "prior_auth_appeal_command_center", "layout workspace type mismatch");
+      assert.strictEqual(layout.title, "Prior Auth Appeal Packet Command Center", "layout title mismatch");
+      assert(layout.command_center_metrics && typeof layout.command_center_metrics === "object", "layout metrics missing");
+      assert(Array.isArray(layout.evidence_items), "layout evidence items missing");
+      assert(Array.isArray(layout.packet_sections), "layout packet sections missing");
+      assert(String(layout.narrative_draft || "").includes("pre-service authorization appeal"), "layout narrative missing pre-service framing");
+      assert(layout.guardrails && layout.guardrails.read_only === true, "layout read-only guardrail missing");
+      assert(layout.guardrails.no_agent_workspace_creation === true, "layout no-agent-workspace guardrail missing");
+
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.agent_workspaces, [])), workspacesBefore, "agent workspaces mutated");
+
+      savePriorAuthCasesForOrg(org_id, []);
+      assert.strictEqual(getPriorAuthCases(org_id).length, 0, "smoke prior-auth cases not cleaned up");
+
+      process.stdout.write("PRIOR_AUTH_APPEAL_WORKSPACE_COMMAND_CENTER_ROUTE_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
+      process.stderr.write("PRIOR_AUTH_APPEAL_WORKSPACE_COMMAND_CENTER_ROUTE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
