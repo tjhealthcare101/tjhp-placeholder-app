@@ -1480,6 +1480,364 @@ function tjhpPriorAuthAppealWorkspaceContext(org = {}, row = {}){
   };
 }
 
+
+function tjhpPriorAuthAppealEvidenceItems(ctx = {}){
+  const status = normalizePriorAuthStatus(ctx.status || "");
+  const hasDenial = !!String(ctx.denial_reason || "").trim();
+  const hasPartial = !!String(ctx.partial_approval_reason || "").trim();
+  const missingDocs = normalizePriorAuthListValue(ctx.missing_documentation);
+  const hasMissingDocs = missingDocs.length > 0 || status === "Missing Documentation";
+  const hasP2P = status === "Peer-to-Peer Needed";
+
+  const item = (key, label, description, options = {}) => {
+    const required = options.required !== false;
+    const found = options.found === true;
+    const optional = options.optional === true;
+
+    return {
+      key,
+      label,
+      description,
+      required,
+      source: String(options.source || "Prior Auth Appeal Packet Standard").trim(),
+      status: found ? "found_in_system" : (required ? "source_proof_needed" : "optional"),
+      status_label: found ? "Found in System" : (required ? "Required — Source Proof Needed" : "Optional"),
+      packet_impact: String(options.packet_impact || (required ? "High Impact" : "Recommended")).trim(),
+      optional
+    };
+  };
+
+  return [
+    item(
+      "original_prior_auth_request",
+      "Original Prior Authorization Request",
+      "Initial authorization request, submitted service, requested units, coding, diagnosis, and supporting rationale.",
+      { required:true, found: !!(ctx.auth_number || ctx.requested_service || ctx.cpt_hcpcs || ctx.icd10) }
+    ),
+    item(
+      "denial_or_partial_approval_letter",
+      "Denial or Partial Approval Letter",
+      "Payer decision letter showing the denial, partial approval limit, appeal rights, policy basis, or missing criteria.",
+      { required:true, found: hasDenial || hasPartial }
+    ),
+    item(
+      "letter_of_medical_necessity",
+      "Letter of Medical Necessity",
+      "Provider narrative explaining diagnosis, severity, failed alternatives, clinical rationale, and why the requested service should be approved.",
+      { required:true, found:false }
+    ),
+    item(
+      "clinical_documentation",
+      "Clinical Documentation",
+      "Progress notes, specialist notes, therapy notes, imaging/lab/pathology/genetic results, medication history, and records supporting medical necessity.",
+      { required:true, found:false }
+    ),
+    item(
+      "payer_policy_guidelines",
+      "Payer Policy / Guidelines",
+      "Relevant payer medical policy, clinical guideline, coverage criterion, or plan rule mapped to the patient evidence.",
+      { required:true, found:false }
+    ),
+    item(
+      "coding_rationale",
+      "CPT / HCPCS and ICD-10 Rationale",
+      "Rationale connecting requested service, CPT/HCPCS, ICD-10, requested units, and site of service to the clinical need.",
+      { required:true, found: !!(ctx.cpt_hcpcs || ctx.icd10) }
+    ),
+    item(
+      "diagnostic_results",
+      "Relevant Imaging, Lab, or Diagnostic Results",
+      "Imaging, lab, pathology, test, or diagnostic reports supporting the requested service.",
+      { required:true, found:false }
+    ),
+    item(
+      "missing_documentation_response",
+      "Missing Documentation Response",
+      "A response packet that addresses each document or criterion the payer said was missing.",
+      { required:hasMissingDocs, found:hasMissingDocs, optional:!hasMissingDocs }
+    ),
+    item(
+      "peer_to_peer_notes",
+      "Peer-to-Peer Notes",
+      "Peer-to-peer schedule, reviewer information, call notes, clinical rationale, and outcome if peer-to-peer is required or completed.",
+      { required:hasP2P, found:false, optional:!hasP2P }
+    ),
+    item(
+      "authorization_history",
+      "Evidence of Authorization / Request History",
+      "Prior authorization approval, request history, portal confirmation, reference number, or evidence that authorization was previously requested.",
+      { required:false, found: !!ctx.auth_number }
+    ),
+    item(
+      "provider_authorization_form",
+      "Provider Authorization Form",
+      "Signed patient/provider authorization, appeal representative form, plan appeal form, or provider attestation when required by payer.",
+      { required:true, found:false, packet_impact:"Recommended" }
+    ),
+    item(
+      "prior_payer_correspondence",
+      "Prior Payer Correspondence",
+      "Payer messages, portal notes, fax confirmations, prior case notes, or staff correspondence related to the prior authorization.",
+      { required:false, found:false }
+    )
+  ];
+}
+
+function tjhpPriorAuthAppealPacketSections(ctx = {}, org = {}){
+  const orgName = String(org.org_name || org.name || ctx.org_name || "Practice").trim();
+  const today = new Date().toISOString().slice(0, 10);
+  const missingDocs = normalizePriorAuthListValue(ctx.missing_documentation);
+  const revenueDisplay = priorAuthRevenueAtRiskDisplay(ctx.estimated_revenue_at_risk);
+
+  const section = (key, title, subtitle, body, options = {}) => ({
+    key,
+    title,
+    subtitle,
+    body: String(body || "").trim(),
+    complete: options.complete === true,
+    editable_later: options.editable_later !== false
+  });
+
+  const requestedAction =
+    normalizePriorAuthStatus(ctx.status || "") === "Partially Approved"
+      ? "Approve the full requested service, requested units, or requested authorization scope that was not included in the partial approval."
+      : "Approve the requested prior authorization based on medical necessity and the supporting clinical documentation.";
+
+  return [
+    section(
+      "header",
+      "Header",
+      "Prior authorization appeal identifiers.",
+      [
+        orgName,
+        "Date: " + today,
+        "Prior Auth Case ID: " + (ctx.auth_case_id || "-"),
+        "Payer: " + (ctx.payer || "-"),
+        "Auth #: " + (ctx.auth_number || "-")
+      ].join("\n"),
+      { complete:true }
+    ),
+    section(
+      "case_summary",
+      "Prior Authorization Case Summary",
+      "Patient, payer, requested service, and coding context.",
+      [
+        "Patient: " + (ctx.patient || "-"),
+        "Payer: " + (ctx.payer || "-"),
+        "Requested Service: " + (ctx.requested_service || "-"),
+        "CPT / HCPCS: " + (ctx.cpt_hcpcs || "-"),
+        "ICD-10: " + (ctx.icd10 || "-"),
+        "Status: " + (ctx.status || "-")
+      ].join("\n"),
+      { complete:!!(ctx.patient || ctx.requested_service || ctx.payer) }
+    ),
+    section(
+      "clinical_summary",
+      "Clinical Summary",
+      "Medical necessity context for the requested service.",
+      "Summarize diagnosis, symptoms, severity, failed alternatives, conservative treatment, functional impact, and why the requested service is clinically appropriate.",
+      { complete:false }
+    ),
+    section(
+      "service_revenue_impact",
+      "Service / Revenue Impact Summary",
+      "Service at risk and known financial exposure, when available.",
+      [
+        "Requested Service: " + (ctx.requested_service || "-"),
+        "Estimated Revenue At Risk: " + revenueDisplay,
+        "Note: Prior authorization appeals are pre-service and should focus on medical necessity and coverage criteria. Revenue is shown only when reliably known."
+      ].join("\n"),
+      { complete:true }
+    ),
+    section(
+      "appeal_narrative",
+      "Prior Authorization Appeal Narrative",
+      "Core prior-auth appeal argument and medical necessity explanation.",
+      tjhpPriorAuthAppealNarrativeDraft(ctx, org),
+      { complete:!!(ctx.denial_reason || ctx.partial_approval_reason || ctx.requested_service) }
+    ),
+    section(
+      "requested_action",
+      "Requested Action",
+      "Specific authorization action requested from payer.",
+      requestedAction,
+      { complete:true }
+    ),
+    section(
+      "attachments_index",
+      "Attachments Index",
+      "Index of packet evidence and source proof.",
+      "Attach or reference source proof for the denial/partial approval letter, original request, medical necessity letter, clinical documentation, payer policy, coding rationale, missing-documentation response, peer-to-peer notes, and payer correspondence.",
+      { complete:false }
+    ),
+    section(
+      "evidence_summary",
+      "Evidence Summary",
+      "Summary of source proof and criteria support.",
+      "Summarize which evidence items are found in system, uploaded, still needed, or optional for this prior-auth appeal packet.",
+      { complete:false }
+    ),
+    section(
+      "letter_of_medical_necessity",
+      "Letter of Medical Necessity",
+      "Provider-facing medical necessity letter.",
+      "Draft a provider letter explaining why the requested service is medically necessary, clinically appropriate, and should be authorized under the payer policy.",
+      { complete:false }
+    ),
+    section(
+      "clinical_documentation",
+      "Clinical Documentation",
+      "Clinical records that support medical necessity.",
+      "Attach progress notes, specialist notes, therapy notes, diagnostic reports, labs, imaging, pathology, genetic testing support, prior treatment history, and failed alternatives.",
+      { complete:false }
+    ),
+    section(
+      "payer_policy_guidelines",
+      "Payer Policy / Guidelines",
+      "Coverage criteria and medical policy match.",
+      "Map each payer policy criterion to the supporting chart evidence. Avoid generic chart dumps; show why the patient meets criteria.",
+      { complete:false }
+    ),
+    section(
+      "evidence_of_authorization",
+      "Evidence of Authorization",
+      "Original authorization request and history.",
+      "Include original request, portal confirmation, fax confirmation, auth/reference number, request history, and any prior approval or denial correspondence.",
+      { complete:!!ctx.auth_number }
+    ),
+    section(
+      "provider_authorization_form",
+      "Provider Authorization Form",
+      "Plan-specific or representative authorization form.",
+      "Include patient/provider representative form, provider attestation, payer appeal form, or signed authorization if required by payer.",
+      { complete:false }
+    ),
+    section(
+      "peer_to_peer_notes",
+      "Peer-to-Peer Notes",
+      "Peer-to-peer scheduling, rationale, and outcome.",
+      "Document reviewer name, scheduled time, physician notes, outcome, and appeal handoff when peer-to-peer is required.",
+      { complete:normalizePriorAuthStatus(ctx.status || "") !== "Peer-to-Peer Needed" }
+    ),
+    section(
+      "missing_documentation_response",
+      "Missing Documentation Response",
+      "Response to payer-requested missing items.",
+      missingDocs.length
+        ? "Address requested missing items: " + missingDocs.join(", ")
+        : "No missing documentation listed. If payer requests missing documentation, list each item and attach source proof.",
+      { complete:missingDocs.length === 0 }
+    )
+  ];
+}
+
+function tjhpPriorAuthAppealCommandCenterMetrics(ctx = {}){
+  const evidenceItems = tjhpPriorAuthAppealEvidenceItems(ctx);
+  const sections = tjhpPriorAuthAppealPacketSections(ctx, {});
+  const required = evidenceItems.filter(x => x.required);
+  const found = required.filter(x => String(x.status || "") === "found_in_system");
+  const completedSections = sections.filter(x => x.complete);
+
+  const pct = (num, den) => den > 0 ? Math.max(0, Math.min(100, Math.round((num / den) * 100))) : 0;
+
+  const sourceProofReadiness = pct(found.length, required.length);
+  const draftReadiness = pct(completedSections.length, sections.length);
+  const clinicalSignals = [
+    ctx.denial_reason,
+    ctx.partial_approval_reason,
+    ctx.requested_service,
+    ctx.cpt_hcpcs,
+    ctx.icd10,
+    normalizePriorAuthListValue(ctx.missing_documentation).join(" ")
+  ].filter(x => String(x || "").trim()).length;
+  const clinicalStrength = Math.max(0, Math.min(100, 30 + clinicalSignals * 10));
+
+  return {
+    packet_readiness_pct: Math.round((sourceProofReadiness * 0.45) + (draftReadiness * 0.35) + (clinicalStrength * 0.20)),
+    source_proof_readiness_pct: sourceProofReadiness,
+    draft_readiness_pct: draftReadiness,
+    clinical_necessity_strength_pct: clinicalStrength,
+    required_source_proof_count: required.length,
+    source_proof_attached_count: found.length,
+    source_proof_needed_count: Math.max(0, required.length - found.length),
+    preview_section_count: sections.length,
+    completed_preview_section_count: completedSections.length,
+    estimated_revenue_at_risk: Number(ctx.estimated_revenue_at_risk || 0) || 0,
+    estimated_revenue_at_risk_display: priorAuthRevenueAtRiskDisplay(ctx.estimated_revenue_at_risk),
+    status_label: String(ctx.status || "-").trim() || "-",
+    workspace_badge: "Prior Auth"
+  };
+}
+
+function tjhpPriorAuthAppealNarrativeDraft(ctx = {}, org = {}){
+  const orgName = String(org.org_name || org.name || "our practice").trim();
+  const service = String(ctx.requested_service || "the requested service").trim();
+  const cpt = String(ctx.cpt_hcpcs || "").trim();
+  const icd = String(ctx.icd10 || "").trim();
+  const auth = String(ctx.auth_number || "").trim();
+  const denial = String(ctx.denial_reason || "").trim();
+  const partial = String(ctx.partial_approval_reason || "").trim();
+
+  const reasonLine = denial
+    ? "The denial reason provided was: " + denial + "."
+    : (partial ? "The authorization was partially approved, but the approval does not fully cover the requested service: " + partial + "." : "The request requires additional review based on the available clinical and authorization documentation.");
+
+  const codingLine = [
+    cpt ? "CPT/HCPCS " + cpt : "",
+    icd ? "ICD-10 " + icd : ""
+  ].filter(Boolean).join(" and ");
+
+  return [
+    "To the Prior Authorization Appeals Department,",
+    "",
+    orgName + " requests reconsideration of the prior authorization decision for " + service + ".",
+    auth ? "Authorization / reference number: " + auth + "." : "",
+    codingLine ? "The requested service is supported by " + codingLine + "." : "",
+    reasonLine,
+    "",
+    "The attached packet is intended to demonstrate medical necessity, coverage-criteria support, the clinical rationale for the requested service, and any documentation requested by the payer.",
+    "",
+    "Requested action: approve the requested prior authorization, or approve the remaining requested scope if the prior decision was a partial approval.",
+    "",
+    "This request is not a billed-claim payment appeal. It is a pre-service authorization appeal focused on medical necessity and coverage criteria."
+  ].filter(x => x !== "").join("\n");
+}
+
+function tjhpPriorAuthAppealWorkspaceLayoutModel(org = {}, row = {}){
+  const context = tjhpPriorAuthAppealWorkspaceContext(org, row);
+  const evidenceItems = tjhpPriorAuthAppealEvidenceItems(context);
+  const packetSections = tjhpPriorAuthAppealPacketSections(context, org);
+  const commandCenterMetrics = tjhpPriorAuthAppealCommandCenterMetrics(context);
+
+  return {
+    workspace_type: "prior_auth_appeal_command_center",
+    title: "Prior Auth Appeal Packet Command Center",
+    subtitle: "Prepare a prior authorization appeal or next-round packet using medical necessity evidence, payer criteria, and source proof.",
+    context,
+    command_center_metrics: commandCenterMetrics,
+    evidence_items: evidenceItems,
+    packet_sections: packetSections,
+    narrative_draft: tjhpPriorAuthAppealNarrativeDraft(context, org),
+    workflow: {
+      round_label: "Round 1",
+      status_label: String(context.status || "-").trim() || "-",
+      next_step: String(context.next_step || "").trim(),
+      submission_methods: ["Portal", "Fax", "Phone", "Mail", "Other"],
+      default_submission_method: "Portal",
+      follow_up_days: 14
+    },
+    guardrails: {
+      read_only: true,
+      no_payer_submission: true,
+      no_claim_mutation: true,
+      no_payment_mutation: true,
+      no_contract_mutation: true,
+      no_document_ingest_mutation: true,
+      no_agent_workspace_creation: true
+    }
+  };
+}
+
 function priorAuthStructuredRowSignal(row = {}){
   const fields = new Set();
 
