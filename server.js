@@ -1961,7 +1961,21 @@ function tjhpPriorAuthWorkspaceEvidenceState(row = {}, evidenceKey = ""){
 function tjhpPriorAuthWorkspaceEvidenceItemsForRender(org = {}, row = {}){
   const layout = tjhpPriorAuthAppealWorkspaceLayoutModel(org, row);
   const evidenceItems = Array.isArray(layout.evidence_items) ? layout.evidence_items : [];
-  return evidenceItems.map(item => {
+  const priorAuthEditableTextOnlyEvidenceKeys = new Set([
+    "header",
+    "case_summary",
+    "prior_authorization_case_summary",
+    "clinical_summary",
+    "service_revenue_impact",
+    "letter_of_medical_necessity",
+    "appeal_narrative",
+    "requested_action",
+    "attachments_index",
+    "evidence_summary"
+  ]);
+  return evidenceItems
+  .filter(item => !priorAuthEditableTextOnlyEvidenceKeys.has(String(item && item.key || "").trim()))
+  .map(item => {
     const key = String(item && item.key || "").trim();
     const state = tjhpPriorAuthWorkspaceEvidenceState(row, key);
     const itemStatus = String(item && (item.status_label || item.status) || "").trim();
@@ -46620,8 +46634,66 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     `;
   };
 
+  const priorAuthSystemEvidencePreviewHtml = (item = {}) => {
+    const key = String(item.key || "").trim();
+    const isSystemFound =
+      item.found === true ||
+      /found in system|system evidence/i.test(String(item.status_label || item.status || item.proof_label || ""));
+
+    if (!isSystemFound) return "";
+
+    if (key === "denial_or_partial_approval_letter") {
+      return `
+        <details class="ws-proof-preview" style="margin-top:10px;">
+          <summary class="btn secondary small" style="display:inline-block;cursor:pointer;">Preview evidence</summary>
+          <div class="muted small" style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
+            <strong>System-found prior authorization decision context</strong><br/>
+            Payer: ${safeStr(ctx.payer || "-")}<br/>
+            Status: ${safeStr(ctx.status || "-")}<br/>
+            Requested Service: ${safeStr(ctx.requested_service || "-")}<br/>
+            Auth #: ${safeStr(ctx.auth_number || "-")}<br/>
+            Denial Reason: ${safeStr(ctx.denial_reason || "-")}<br/>
+            Partial Approval Reason: ${safeStr(ctx.partial_approval_reason || "-")}
+          </div>
+        </details>
+      `;
+    }
+
+    if (key === "original_prior_auth_request" || key === "evidence_of_authorization" || key === "authorization_history") {
+      return `
+        <details class="ws-proof-preview" style="margin-top:10px;">
+          <summary class="btn secondary small" style="display:inline-block;cursor:pointer;">Preview evidence</summary>
+          <div class="muted small" style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
+            <strong>System-found authorization context</strong><br/>
+            Auth #: ${safeStr(ctx.auth_number || "-")}<br/>
+            Requested Service: ${safeStr(ctx.requested_service || "-")}<br/>
+            CPT / HCPCS: ${safeStr(ctx.cpt_hcpcs || "-")}<br/>
+            ICD-10: ${safeStr(ctx.icd10 || "-")}<br/>
+            Submitted: ${safeStr(ctx.submitted_date || row.submitted_date || "-")}<br/>
+            Determination: ${safeStr(ctx.determination_date || row.determination_date || "-")}<br/>
+            Expiration: ${safeStr(ctx.expiration_date || row.expiration_date || "-")}<br/>
+            Status: ${safeStr(ctx.status || "-")}
+          </div>
+        </details>
+      `;
+    }
+
+    return `
+      <details class="ws-proof-preview" style="margin-top:10px;">
+        <summary class="btn secondary small" style="display:inline-block;cursor:pointer;">Preview evidence</summary>
+        <div class="muted small" style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
+          <strong>System-found evidence context</strong><br/>
+          ${safeStr(item.description || item.why || item.status_label || item.status || "Evidence context is available from the prior authorization case.")}
+        </div>
+      </details>
+    `;
+  };
+
   const evidenceProofCardsHtml = priorAuthEvidenceItems.map(item => {
     const attachments = Array.isArray(item.attachments) ? item.attachments : [];
+    const isSystemFound =
+      item.found === true ||
+      /found in system|system evidence/i.test(String(item.status_label || item.status || item.proof_label || ""));
     const attachmentsHtml = attachments.length ? `
       <div class="ws-proof-detail" style="margin-top:8px;">
         ${attachments.map(att => `<div style="margin-top:6px;">
@@ -46630,7 +46702,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           ${att.url ? `<a class="btn secondary small" style="margin-left:8px;" href="${safeStr(att.url)}" target="_blank" rel="noopener">Preview evidence</a>` : ""}
         </div>`).join("")}
       </div>
-    ` : `<div class="muted small" style="margin-top:8px;">No uploaded evidence yet.</div>`;
+    ` : (isSystemFound ? "" : `<div class="muted small" style="margin-top:8px;">No uploaded evidence yet.</div>`);
     return `
       <div class="ws-proof-card ${item.required ? "required" : "optional"} ${safeStr(item.status_class || "")}">
         <div class="ws-proof-head">
@@ -46648,6 +46720,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           <span class="ws-source-pill">${safeStr(item.packet_impact || "Recommended")}</span>
         </div>
         ${attachmentsHtml}
+        ${priorAuthSystemEvidencePreviewHtml(item)}
         <div class="ws-proof-actions">
           <form method="${"POST"}" action="/prior-auth/appeal-workspace/evidence/upload" enctype="multipart/form-data">
             <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
@@ -46679,7 +46752,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
       : `<div class="muted small" style="margin-top:8px;"><strong>Source proof:</strong> No linked evidence item for this section yet.</div>`;
 
     return `
-      <details class="card" style="box-shadow:none;background:#fff;margin:10px 0;border:1px solid #e5e7eb;" ${sectionKey === "appeal_narrative" ? "open" : ""}>
+      <details class="card" style="box-shadow:none;background:#fff;margin:10px 0;border:1px solid #e5e7eb;">
         <summary style="cursor:pointer;font-weight:950;">
           ${safeStr(section.title || "-")}
           <span class="badge ${section.complete ? "ok" : "warn"}" style="margin-left:8px;">${section.complete ? "Ready" : "Needs source proof"}</span>
@@ -46854,6 +46927,9 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           <h3>Appeal Packet Preview</h3>
           <p class="muted small">
             Editable letter and narrative sections are below, including Prior Authorization Appeal Narrative. Source-proof documents are managed in Evidence Checklist / Packet Attachments above.
+          </p>
+          <p class="muted small">
+            Letter of Medical Necessity remains an editable packet section.
           </p>
           ${packetSectionsHtml}
         </div>
