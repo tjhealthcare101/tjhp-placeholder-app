@@ -46689,11 +46689,10 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     `;
   };
 
+  const evidenceCardHtmlByKey = new Map();
   const evidenceProofCardsHtml = priorAuthEvidenceItems.map(item => {
+    const itemKey = String(item && item.key || "").trim();
     const attachments = Array.isArray(item.attachments) ? item.attachments : [];
-    const isSystemFound =
-      item.found === true ||
-      /found in system|system evidence/i.test(String(item.status_label || item.status || item.proof_label || ""));
     const attachmentsHtml = attachments.length ? `
       <div class="ws-proof-detail" style="margin-top:8px;">
         ${attachments.map(att => `<div style="margin-top:6px;">
@@ -46702,9 +46701,10 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           ${att.url ? `<a class="btn secondary small" style="margin-left:8px;" href="${safeStr(att.url)}" target="_blank" rel="noopener">Preview evidence</a>` : ""}
         </div>`).join("")}
       </div>
-    ` : (isSystemFound ? "" : `<div class="muted small" style="margin-top:8px;">No uploaded evidence yet.</div>`);
-    return `
-      <div class="ws-proof-card ${item.required ? "required" : "optional"} ${safeStr(item.status_class || "")}">
+    ` : (/found in system|system evidence/i.test(String(item.status_label || item.status || item.proof_label || "")) ? "" : `<div class="muted small" style="margin-top:8px;">No uploaded evidence yet.</div>`);
+
+    const cardHtml = `
+      <div class="ws-proof-card ${item.required ? "required" : "optional"} ${safeStr(item.status_class || "")}" data-prior-auth-packet-item-type="evidence" data-prior-auth-packet-key="${safeStr(itemKey)}">
         <div class="ws-proof-head">
           <div>
             <div class="ws-proof-title">
@@ -46713,18 +46713,23 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             </div>
             <div class="ws-proof-detail">${safeStr(item.description || item.why || "")}</div>
           </div>
-          <div class="ws-proof-status"><span class="badge ${safeStr(item.status_class || "")}">${safeStr(item.status_label || "-")}</span></div>
+          <div class="ws-proof-status">
+            <span class="badge ${safeStr(item.status_class || "")}">${safeStr(item.status_label || "-")}</span>
+          </div>
         </div>
+
         <div class="ws-proof-pills">
           <span class="ws-source-pill ${safeStr(item.status_class || "")}">${safeStr(item.proof_label || "-")}</span>
           <span class="ws-source-pill">${safeStr(item.packet_impact || "Recommended")}</span>
         </div>
+
         ${attachmentsHtml}
         ${priorAuthSystemEvidencePreviewHtml(item)}
+
         <div class="ws-proof-actions">
           <form method="${"POST"}" action="/prior-auth/appeal-workspace/evidence/upload" enctype="multipart/form-data">
             <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
-            <input type="hidden" name="evidence_key" value="${safeStr(item.key || "")}" />
+            <input type="hidden" name="evidence_key" value="${safeStr(itemKey)}" />
             <label class="ws-drop-zone">
               <input class="ws-doc-file-input" type="file" name="files" multiple />
               <span class="ws-file-name"></span>
@@ -46735,31 +46740,32 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           </form>
           <form method="${"POST"}" action="/prior-auth/appeal-workspace/evidence/exclude">
             <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
-            <input type="hidden" name="evidence_key" value="${safeStr(item.key || "")}" />
+            <input type="hidden" name="evidence_key" value="${safeStr(itemKey)}" />
             <input type="hidden" name="excluded" value="${item.excluded ? "0" : "1"}" />
             <button class="btn secondary small" type="submit">${item.excluded ? "Include in packet" : "Exclude from packet"}</button>
           </form>
         </div>
       </div>
     `;
+
+    if (itemKey) evidenceCardHtmlByKey.set(itemKey, cardHtml);
+    return cardHtml;
   }).join("") || `<div class="muted">No evidence checklist items available.</div>`;
 
+  const editableSectionHtmlByKey = new Map();
   const packetSectionsHtml = editablePacketSections.map(section => {
     const sectionKey = String(section.key || "").trim();
-    const evidence = evidenceBySection[sectionKey] || null;
-    const evidenceLine = evidence
-      ? `<div class="muted small" style="margin-top:8px;"><strong>Source proof:</strong> ${safeStr(evidence.status_label || evidence.status || "-")} · ${safeStr(evidence.packet_impact || "-")}</div>`
-      : `<div class="muted small" style="margin-top:8px;"><strong>Source proof:</strong> No linked evidence item for this section yet.</div>`;
+    const sectionTypeLine = `<div class="muted small" style="margin-top:8px;"><strong>Editable packet text:</strong> Source-proof documents appear as packet rows in this same ordered packet.</div>`;
 
-    return `
-      <details class="card" style="box-shadow:none;background:#fff;margin:10px 0;border:1px solid #e5e7eb;">
+    const sectionHtml = `
+      <details class="ws-proof-card prior-auth-editable-packet-section" style="box-shadow:none;background:#fff;margin:10px 0;border:1px solid #e5e7eb;" data-prior-auth-packet-item-type="section" data-prior-auth-packet-key="${safeStr(sectionKey)}">
         <summary style="cursor:pointer;font-weight:950;">
           ${safeStr(section.title || "-")}
           <span class="badge ${section.complete ? "ok" : "warn"}" style="margin-left:8px;">${section.complete ? "Ready" : "Needs source proof"}</span>
           ${section.saved ? `<span class="badge ok" style="margin-left:6px;">Saved edit</span>` : ``}
         </summary>
         <div class="muted small" style="margin-top:8px;">${safeStr(section.subtitle || "")}</div>
-        ${evidenceLine}
+        ${sectionTypeLine}
         <form method="${"POST"}" action="/prior-auth/appeal-workspace/save-section" style="margin-top:10px;">
           <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
           <input type="hidden" name="section_key" value="${safeStr(sectionKey)}" />
@@ -46771,7 +46777,65 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         </form>
       </details>
     `;
+
+    if (sectionKey) editableSectionHtmlByKey.set(sectionKey, sectionHtml);
+    return sectionHtml;
   }).join("") || `<div class="muted">No packet preview sections available.</div>`;
+
+  const priorAuthPacketOrder = [
+    ["section", "header"],
+    ["section", "case_summary"],
+    ["section", "prior_authorization_case_summary"],
+    ["evidence", "original_prior_auth_request"],
+    ["evidence", "denial_or_partial_approval_letter"],
+    ["section", "clinical_summary"],
+    ["evidence", "clinical_documentation"],
+    ["evidence", "diagnostic_results"],
+    ["evidence", "payer_policy_guidelines"],
+    ["evidence", "coding_rationale"],
+    ["section", "service_revenue_impact"],
+    ["section", "letter_of_medical_necessity"],
+    ["evidence", "authorization_history"],
+    ["evidence", "evidence_of_authorization"],
+    ["evidence", "provider_authorization_form"],
+    ["evidence", "prior_payer_correspondence"],
+    ["evidence", "peer_to_peer_notes"],
+    ["evidence", "missing_documentation_response"],
+    ["section", "appeal_narrative"],
+    ["section", "requested_action"],
+    ["section", "attachments_index"],
+    ["section", "evidence_summary"]
+  ];
+
+  const priorAuthOrderedPacketUsed = new Set();
+  const priorAuthOrderedPacketRows = [];
+  const pushPriorAuthOrderedPacketItem = (kind, key) => {
+    const cleanKind = String(kind || "").trim();
+    const cleanKey = String(key || "").trim();
+    if (!cleanKind || !cleanKey) return;
+
+    const map = cleanKind === "evidence" ? evidenceCardHtmlByKey : editableSectionHtmlByKey;
+    if (!map.has(cleanKey)) return;
+
+    const id = cleanKind + ":" + cleanKey;
+    if (priorAuthOrderedPacketUsed.has(id)) return;
+
+    priorAuthOrderedPacketUsed.add(id);
+    priorAuthOrderedPacketRows.push({ kind: cleanKind, key: cleanKey, html: map.get(cleanKey) });
+  };
+
+  priorAuthPacketOrder.forEach(pair => pushPriorAuthOrderedPacketItem(pair[0], pair[1]));
+  editablePacketSections.forEach(section => pushPriorAuthOrderedPacketItem("section", section && section.key));
+  priorAuthEvidenceItems.forEach(item => pushPriorAuthOrderedPacketItem("evidence", item && item.key));
+
+  const priorAuthOrderedPacketHtml = priorAuthOrderedPacketRows.map((entry, index) => `
+    <div class="prior-auth-ordered-packet-row" data-prior-auth-ordered-kind="${safeStr(entry.kind)}" data-prior-auth-ordered-key="${safeStr(entry.key)}" style="margin-top:12px;">
+      <div class="muted small" style="font-weight:900;text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px 2px;">
+        Packet item ${formatNumberUI(index + 1)} · ${entry.kind === "evidence" ? "Source proof" : "Editable text"}
+      </div>
+      ${entry.html}
+    </div>
+  `).join("") || `<div class="muted">No prior authorization packet items available.</div>`;
 
   const whyText = (() => {
     const payer = ctx.payer || "The payer";
@@ -46913,25 +46977,15 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
         <div class="hr"></div>
 
-        <div class="ws-full-preview">
-          <h3>Evidence Checklist / Packet Attachments</h3>
+        <div class="ws-full-preview prior-auth-ordered-packet">
+          <h3>Prior Auth Appeal Packet</h3>
           <p class="muted small">
-            Use this checklist to upload, preview, or exclude prior-auth source proof. These items support the packet but are not editable letter text.
-          </p>
-          ${evidenceProofCardsHtml}
-        </div>
-
-        <div class="hr"></div>
-
-        <div class="ws-full-preview">
-          <h3>Appeal Packet Preview</h3>
-          <p class="muted small">
-            Editable letter and narrative sections are below, including Prior Authorization Appeal Narrative. Source-proof documents are managed in Evidence Checklist / Packet Attachments above.
+            <strong>Appeal Packet Preview:</strong> The rows below are shown in packet order. Evidence Checklist / Packet Attachments controls are embedded where source proof belongs, and editable letter/narrative rows are in the same packet flow.
           </p>
           <p class="muted small">
-            Letter of Medical Necessity remains an editable packet section.
+            Letter of Medical Necessity remains an editable packet section. Prior Authorization Appeal Narrative remains editable in this same ordered flow.
           </p>
-          ${packetSectionsHtml}
+          ${priorAuthOrderedPacketHtml}
         </div>
 
         <div class="hr"></div>
@@ -65569,6 +65623,58 @@ if (process.env.TJHP_PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS === "t
       assert.strictEqual(JSON.stringify(readJSON(FILES.agent_workspaces, [])), workspacesBefore, "agent workspaces mutated");
       process.stdout.write("PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS_PASSED\n"); process.exit(0);
     } catch (err) { process.stderr.write("PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+  })();
+}
+
+if (process.env.TJHP_PRIOR_AUTH_ORDERED_PACKET_LAYOUT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+    const workspacesBefore = JSON.stringify(readJSON(FILES.agent_workspaces, []));
+    try {
+      const getStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace")');
+      const getEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")', getStart);
+      assert(getStart >= 0 && getEnd > getStart, "GET prior-auth appeal workspace route boundary missing");
+      const getRoute = src.slice(getStart, getEnd);
+      ["priorAuthPacketOrder","priorAuthOrderedPacketHtml","priorAuthOrderedPacketRows","pushPriorAuthOrderedPacketItem","evidenceCardHtmlByKey","editableSectionHtmlByKey","prior-auth-ordered-packet","prior-auth-ordered-packet-row","data-prior-auth-ordered-kind","data-prior-auth-ordered-key","Packet item","Prior Auth Appeal Packet","Appeal Packet Preview:","Evidence Checklist / Packet Attachments controls are embedded","editable letter/narrative rows are in the same packet flow","Letter of Medical Necessity remains an editable packet section","Upload Source Proof","Preview evidence","Exclude from packet","Include in packet","Save Section","section_text","AI Prior Authorization Assistant","workspaceDropzoneScript"].forEach(x => assert(getRoute.includes(x), "GET prior-auth ordered packet route missing marker: " + x));
+      ['["section", "header"]','["section", "case_summary"]','["section", "prior_authorization_case_summary"]','["evidence", "original_prior_auth_request"]','["evidence", "denial_or_partial_approval_letter"]','["section", "clinical_summary"]','["evidence", "clinical_documentation"]','["evidence", "diagnostic_results"]','["evidence", "payer_policy_guidelines"]','["evidence", "coding_rationale"]','["section", "service_revenue_impact"]','["section", "letter_of_medical_necessity"]','["evidence", "authorization_history"]','["evidence", "evidence_of_authorization"]','["evidence", "provider_authorization_form"]','["evidence", "prior_payer_correspondence"]','["evidence", "peer_to_peer_notes"]','["evidence", "missing_documentation_response"]','["section", "appeal_narrative"]','["section", "requested_action"]','["section", "attachments_index"]','["section", "evidence_summary"]'].forEach(x => assert(getRoute.includes(x), "ordered packet route missing order marker: " + x));
+      ["<h3>Evidence Checklist / Packet Attachments</h3>","<h3>Appeal Packet Preview</h3>","${evidenceProofCardsHtml}","${packetSectionsHtml}","Source-proof documents are managed in Evidence Checklist / Packet Attachments above.","Editable letter and narrative sections are below, including Prior Authorization Appeal Narrative."].forEach(x => assert(!getRoute.includes(x), "old split packet layout marker should be absent from GET route: " + x));
+      ["FILES.billed","FILES.payments","FILES.payer_contracts","FILES.document_ingests","FILES.agent_workspaces","/upload-router"].forEach(x => assert(!getRoute.includes(x), "GET prior-auth ordered packet route must not include forbidden marker: " + x));
+      const smokeOrg = { org_id: "__prior_auth_ordered_packet_layout_smoke__", org_name: "Prior Auth Ordered Packet Smoke Practice" };
+      const smokeRow = { auth_case_id: "pa_ordered_packet_layout_smoke", org_id: smokeOrg.org_id, patient_name: "Ordered Packet Smoke Patient", payer: "Aetna", provider: "Dr. Smith", specialty: "Orthopedics", requested_service: "Lumbar MRI", cpt_hcpcs: "72148", icd10: "M54.5", auth_number: "AUTH-ORDERED-PACKET-SMOKE", status: "Denied", denial_reason: "Medical necessity criteria not met", partial_approval_reason: "", submitted_date: "2026-05-01", determination_date: "2026-05-04", expiration_date: "2026-06-15", missing_documentation: ["clinical notes", "imaging report"], estimated_revenue_at_risk: 1200, workspace_packet_sections: {}, workspace_evidence: {} };
+      const editableSections = tjhpPriorAuthWorkspaceEditablePacketSectionsOnly(smokeOrg, smokeRow);
+      const editableKeys = new Set((Array.isArray(editableSections) ? editableSections : []).map(x => String(x.key || "").trim()));
+      ["header","letter_of_medical_necessity","appeal_narrative","requested_action","clinical_summary","service_revenue_impact","attachments_index","evidence_summary"].forEach(key => assert(editableKeys.has(key), "ordered packet editable key missing: " + key));
+      ["denial_or_partial_approval_letter","clinical_documentation","payer_policy_guidelines","provider_authorization_form","prior_payer_correspondence"].forEach(key => assert(!editableKeys.has(key), "editable packet helper must exclude evidence-only key: " + key));
+      const evidenceItems = tjhpPriorAuthWorkspaceEvidenceItemsForRender(smokeOrg, smokeRow);
+      const evidenceKeys = new Set((Array.isArray(evidenceItems) ? evidenceItems : []).map(x => String(x.key || "").trim()));
+      ["original_prior_auth_request","denial_or_partial_approval_letter","clinical_documentation","payer_policy_guidelines","coding_rationale","diagnostic_results","provider_authorization_form","prior_payer_correspondence"].forEach(key => assert(evidenceKeys.has(key), "ordered packet evidence key missing: " + key));
+      assert(evidenceKeys.has("evidence_of_authorization") || evidenceKeys.has("authorization_history"), "ordered packet authorization evidence/history key missing");
+      ["header","letter_of_medical_necessity","appeal_narrative","requested_action","attachments_index","evidence_summary"].forEach(key => assert(!evidenceKeys.has(key), "evidence helper must exclude editable packet key: " + key));
+      assert(src.includes("TJHP_PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS"), "evidence/packet split smoke missing");
+      assert(src.includes("PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS_PASSED"), "evidence/packet split smoke pass marker missing");
+      ['if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))','if (method === "POST" && pathname === "/ai-workspace/save-preview")',"renderWorkspacePreview","renderWorkflowPanel","renderInlineAIAssist","ensureAgentWorkspace","ensureWorkspacePacket","ensurePacketSections","saveAgentWorkspace","function renderClaimPanelBootstrap"].forEach(x => assert(src.includes(x), "existing billed workspace/panel marker missing: " + x));
+      const noPostPriorAuthWorkspace = "if (method === \"POST\" && pathname === \"/prior-auth/appeal-workspace\") {";
+      const noGetAiPriorAuth = "if (method === \"GET\" && pathname === \"/ai-prior-auth\")";
+      const noPostAiPriorAuth = "if (method === \"POST\" && pathname === \"/ai-prior-auth\")";
+      assert(!src.includes(noPostPriorAuthWorkspace), "POST /prior-auth/appeal-workspace must not exist");
+      assert(!src.includes(noGetAiPriorAuth), "GET /ai-prior-auth must not exist");
+      assert(!src.includes(noPostAiPriorAuth), "POST /ai-prior-auth must not exist");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.agent_workspaces, [])), workspacesBefore, "agent workspaces mutated");
+      process.stdout.write("PRIOR_AUTH_ORDERED_PACKET_LAYOUT_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_ORDERED_PACKET_LAYOUT_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
   })();
 }
 
