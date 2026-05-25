@@ -568,6 +568,12 @@ function normalizePriorAuthCase(input = {}, defaults = {}){
       !Array.isArray(row.workspace_packet_sections)
         ? row.workspace_packet_sections
         : {},
+    workspace_evidence:
+      row.workspace_evidence &&
+      typeof row.workspace_evidence === "object" &&
+      !Array.isArray(row.workspace_evidence)
+        ? row.workspace_evidence
+        : {},
 
     created_at: String(row.created_at || defaults.created_at || now).trim(),
     updated_at: String(row.updated_at || now).trim(),
@@ -1923,6 +1929,89 @@ function tjhpPriorAuthWorkspaceEvidenceBySection(layout = {}){
     if (evidenceByKey[evidenceKey]) acc[sectionKey] = evidenceByKey[evidenceKey];
     return acc;
   }, {});
+}
+
+function tjhpPriorAuthWorkspaceEvidenceState(row = {}, evidenceKey = ""){
+  const key = String(evidenceKey || "").trim();
+  const rawEvidence =
+    row &&
+    row.workspace_evidence &&
+    typeof row.workspace_evidence === "object" &&
+    !Array.isArray(row.workspace_evidence)
+      ? row.workspace_evidence
+      : {};
+  const itemState =
+    key &&
+    rawEvidence[key] &&
+    typeof rawEvidence[key] === "object" &&
+    !Array.isArray(rawEvidence[key])
+      ? rawEvidence[key]
+      : {};
+  const attachments = Array.isArray(itemState.attachments)
+    ? itemState.attachments
+      .filter(x => x && typeof x === "object")
+      .map(x => ({ ...x }))
+    : [];
+  return {
+    excluded: itemState.excluded === true,
+    attachments
+  };
+}
+
+function tjhpPriorAuthWorkspaceEvidenceItemsForRender(org = {}, row = {}){
+  const layout = tjhpPriorAuthAppealWorkspaceLayoutModel(org, row);
+  const evidenceItems = Array.isArray(layout.evidence_items) ? layout.evidence_items : [];
+  return evidenceItems.map(item => {
+    const key = String(item && item.key || "").trim();
+    const state = tjhpPriorAuthWorkspaceEvidenceState(row, key);
+    const itemStatus = String(item && (item.status_label || item.status) || "").trim();
+    let status_label = "Optional";
+    let status_class = "muted";
+    let proof_label = "Optional";
+    if (state.excluded) {
+      status_label = "Excluded from packet";
+      status_class = "warn";
+      proof_label = "Excluded";
+    } else if (state.attachments.length > 0) {
+      status_label = "Source Proof Attached";
+      status_class = "ok";
+      proof_label = "Uploaded";
+    } else if (itemStatus === "Found in System") {
+      status_label = "Found in System";
+      status_class = "ok";
+      proof_label = "System evidence";
+    } else if (item && item.required === true) {
+      status_label = "Required — Source Proof Needed";
+      status_class = "warn";
+      proof_label = "Source Proof Needed";
+    }
+    return {
+      ...item,
+      key,
+      excluded: state.excluded,
+      attachments: state.attachments,
+      status_label,
+      status_class,
+      proof_label
+    };
+  });
+}
+
+function tjhpPriorAuthWorkspaceEditablePacketSectionsOnly(org = {}, row = {}){
+  const allowed = new Set([
+    "header",
+    "case_summary",
+    "prior_authorization_case_summary",
+    "clinical_summary",
+    "service_revenue_impact",
+    "letter_of_medical_necessity",
+    "appeal_narrative",
+    "requested_action",
+    "attachments_index",
+    "evidence_summary"
+  ]);
+  return tjhpPriorAuthWorkspacePacketSectionsForRender(org, row)
+    .filter(section => allowed.has(String(section && section.key || "").trim()));
 }
 
 function priorAuthStructuredRowSignal(row = {}){
@@ -46413,6 +46502,81 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/save-section
   return redirect(res, backHref + "&pa_status=section_saved");
 }
 
+if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upload") {
+  const parsedEvidenceUpload = await new Promise((resolve, reject) => {
+    parseMultipartForm(req, (err, result) => {
+      if (err) reject(err);
+      else resolve(result || {});
+    });
+  });
+
+  const fields = parsedEvidenceUpload.fields || {};
+  const files = Array.isArray(parsedEvidenceUpload.files) ? parsedEvidenceUpload.files : [];
+  const auth_case_id = String(fields.auth_case_id || "").trim();
+  const evidence_key = String(fields.evidence_key || "").trim();
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  if (!row) return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+  const backHref = "/prior-auth/appeal-workspace?auth_case_id=" + encodeURIComponent(auth_case_id);
+  const validEvidenceKeys = new Set(tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row).map(x => String(x.key || "").trim()).filter(Boolean));
+  if (!evidence_key || !validEvidenceKeys.has(evidence_key)) return redirect(res, backHref + "&pa_status=evidence_invalid");
+  const incomingFiles = Array.isArray(files) ? files : [];
+  if (!incomingFiles.length) return redirect(res, backHref + "&pa_status=evidence_invalid");
+  const currentEvidence =
+    row.workspace_evidence &&
+    typeof row.workspace_evidence === "object" &&
+    !Array.isArray(row.workspace_evidence)
+      ? row.workspace_evidence
+      : {};
+  const currentState = tjhpPriorAuthWorkspaceEvidenceState(row, evidence_key);
+  const newAttachments = incomingFiles.map(file => ({
+    attachment_id: "paev_" + uuid(),
+    file_name: String(file.originalName || file.filename || "").trim(),
+    file_type: String(file.mimeType || "").trim(),
+    url: String(file.url || file.path || "").trim(),
+    uploaded_at: nowISO(),
+    uploaded_by: sess.user_id || ""
+  }));
+  const updatedEvidence = {
+    ...currentEvidence,
+    [evidence_key]: {
+      excluded: false,
+      attachments: [...currentState.attachments, ...newAttachments]
+    }
+  };
+  upsertPriorAuthCase(org.org_id, { ...row, workspace_evidence: updatedEvidence }, sess.user_id || "");
+  return redirect(res, backHref + "&pa_status=evidence_uploaded");
+}
+
+if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/exclude") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+  const auth_case_id = String(ps.get("auth_case_id") || "").trim();
+  const evidence_key = String(ps.get("evidence_key") || "").trim();
+  const excluded = String(ps.get("excluded") || "").trim();
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  if (!row) return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+  const backHref = "/prior-auth/appeal-workspace?auth_case_id=" + encodeURIComponent(auth_case_id);
+  const validEvidenceKeys = new Set(tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row).map(x => String(x.key || "").trim()).filter(Boolean));
+  if (!evidence_key || !validEvidenceKeys.has(evidence_key)) return redirect(res, backHref + "&pa_status=evidence_invalid");
+  const currentEvidence =
+    row.workspace_evidence &&
+    typeof row.workspace_evidence === "object" &&
+    !Array.isArray(row.workspace_evidence)
+      ? row.workspace_evidence
+      : {};
+  const currentState = tjhpPriorAuthWorkspaceEvidenceState(row, evidence_key);
+  const nextExcluded = excluded === "1";
+  const updatedEvidence = {
+    ...currentEvidence,
+    [evidence_key]: {
+      excluded: nextExcluded,
+      attachments: currentState.attachments
+    }
+  };
+  upsertPriorAuthCase(org.org_id, { ...row, workspace_evidence: updatedEvidence }, sess.user_id || "");
+  return redirect(res, backHref + `&pa_status=${nextExcluded ? "evidence_excluded" : "evidence_included"}`);
+}
+
 if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
   const row = getPriorAuthCaseById(org.org_id, auth_case_id);
@@ -46434,7 +46598,8 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   const metrics = layout.command_center_metrics || {};
   const evidenceItems = Array.isArray(layout.evidence_items) ? layout.evidence_items : [];
   const packetSections = Array.isArray(layout.packet_sections) ? layout.packet_sections : [];
-  const editablePacketSections = tjhpPriorAuthWorkspacePacketSectionsForRender(org, row);
+  const editablePacketSections = tjhpPriorAuthWorkspaceEditablePacketSectionsOnly(org, row);
+  const priorAuthEvidenceItems = tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row);
   const evidenceBySection = tjhpPriorAuthWorkspaceEvidenceBySection(layout);
   const workflow = layout.workflow || {};
   const guardrails = layout.guardrails || {};
@@ -46454,6 +46619,57 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
       </div>
     `;
   };
+
+  const evidenceProofCardsHtml = priorAuthEvidenceItems.map(item => {
+    const attachments = Array.isArray(item.attachments) ? item.attachments : [];
+    const attachmentsHtml = attachments.length ? `
+      <div class="ws-proof-detail" style="margin-top:8px;">
+        ${attachments.map(att => `<div style="margin-top:6px;">
+          <strong>${safeStr(att.file_name || "Uploaded file")}</strong>
+          <span class="muted small"> · ${safeStr(String(att.uploaded_at || "").slice(0, 10) || "-")}</span>
+          ${att.url ? `<a class="btn secondary small" style="margin-left:8px;" href="${safeStr(att.url)}" target="_blank" rel="noopener">Preview evidence</a>` : ""}
+        </div>`).join("")}
+      </div>
+    ` : `<div class="muted small" style="margin-top:8px;">No uploaded evidence yet.</div>`;
+    return `
+      <div class="ws-proof-card ${item.required ? "required" : "optional"} ${safeStr(item.status_class || "")}">
+        <div class="ws-proof-head">
+          <div>
+            <div class="ws-proof-title">
+              ${safeStr(item.label || "-")}
+              ${item.required ? `<span class="badge warn">Required</span>` : `<span class="badge">Optional</span>`}
+            </div>
+            <div class="ws-proof-detail">${safeStr(item.description || item.why || "")}</div>
+          </div>
+          <div class="ws-proof-status"><span class="badge ${safeStr(item.status_class || "")}">${safeStr(item.status_label || "-")}</span></div>
+        </div>
+        <div class="ws-proof-pills">
+          <span class="ws-source-pill ${safeStr(item.status_class || "")}">${safeStr(item.proof_label || "-")}</span>
+          <span class="ws-source-pill">${safeStr(item.packet_impact || "Recommended")}</span>
+        </div>
+        ${attachmentsHtml}
+        <div class="ws-proof-actions">
+          <form method="${"POST"}" action="/prior-auth/appeal-workspace/evidence/upload" enctype="multipart/form-data">
+            <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
+            <input type="hidden" name="evidence_key" value="${safeStr(item.key || "")}" />
+            <label class="ws-drop-zone">
+              <input class="ws-doc-file-input" type="file" name="files" multiple />
+              <span class="ws-file-name"></span>
+              <strong>Drop documents here or choose files</strong>
+              <span class="muted small">PDF, image, CSV, Excel, Word, TXT, or supporting documents. Multiple files supported.</span>
+            </label>
+            <button class="btn secondary small" type="submit">Upload Source Proof</button>
+          </form>
+          <form method="${"POST"}" action="/prior-auth/appeal-workspace/evidence/exclude">
+            <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
+            <input type="hidden" name="evidence_key" value="${safeStr(item.key || "")}" />
+            <input type="hidden" name="excluded" value="${item.excluded ? "0" : "1"}" />
+            <button class="btn secondary small" type="submit">${item.excluded ? "Include in packet" : "Exclude from packet"}</button>
+          </form>
+        </div>
+      </div>
+    `;
+  }).join("") || `<div class="muted">No evidence checklist items available.</div>`;
 
   const packetSectionsHtml = editablePacketSections.map(section => {
     const sectionKey = String(section.key || "").trim();
@@ -46500,6 +46716,10 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         <div class="ws-banner-sub">Prepare a prior authorization appeal or next-round packet using medical necessity evidence, payer criteria, and source proof.</div>
         ${String(parsed.query.pa_status || "").trim() === "section_saved" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization packet section saved.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "section_invalid" ? `<div class="alert warn" style="margin:10px 0;">That packet section is not available.</div>` : ""}
+        ${String(parsed.query.pa_status || "").trim() === "evidence_uploaded" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization source proof uploaded.</div>` : ""}
+        ${String(parsed.query.pa_status || "").trim() === "evidence_excluded" ? `<div class="alert warn" style="margin:10px 0;">Evidence item excluded from packet.</div>` : ""}
+        ${String(parsed.query.pa_status || "").trim() === "evidence_included" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Evidence item included in packet.</div>` : ""}
+        ${String(parsed.query.pa_status || "").trim() === "evidence_invalid" ? `<div class="alert warn" style="margin:10px 0;">That evidence item is not available.</div>` : ""}
         <div class="ws-quick-actions" style="margin-top:12px;">
           <a class="btn secondary" href="${caseHref}">Back to Prior Auth Case</a>
           <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
@@ -46621,9 +46841,19 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         <div class="hr"></div>
 
         <div class="ws-full-preview">
+          <h3>Evidence Checklist / Packet Attachments</h3>
+          <p class="muted small">
+            Use this checklist to upload, preview, or exclude prior-auth source proof. These items support the packet but are not editable letter text.
+          </p>
+          ${evidenceProofCardsHtml}
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="ws-full-preview">
           <h3>Appeal Packet Preview</h3>
           <p class="muted small">
-            Evidence Checklist is integrated into each packet section below, including the Prior Authorization Appeal Narrative. Edit the prior-auth packet sections directly here; source proof upload, AI drafting, packet export, and payer submission are not enabled in this phase.
+            Editable letter and narrative sections are below, including Prior Authorization Appeal Narrative. Source-proof documents are managed in Evidence Checklist / Packet Attachments above.
           </p>
           ${packetSectionsHtml}
         </div>
@@ -46644,6 +46874,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         </div>
       </div>
     </div>
+    ${typeof workspaceDropzoneScript === "function" ? workspaceDropzoneScript() : ""}
   `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
 
   return send(res, 200, html);
