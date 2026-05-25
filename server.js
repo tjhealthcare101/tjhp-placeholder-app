@@ -65518,6 +65518,60 @@ if (process.env.TJHP_PRIOR_AUTH_OPEN_APPEAL_WORKSPACE_LINK_SMOKE_TESTS === "true
   })();
 }
 
+
+if (process.env.TJHP_PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const billedBefore = JSON.stringify(readJSON(FILES.billed, []));
+    const paymentsBefore = JSON.stringify(readJSON(FILES.payments, []));
+    const contractsBefore = JSON.stringify(readJSON(FILES.payer_contracts, []));
+    const ingestsBefore = JSON.stringify(readJSON(FILES.document_ingests, []));
+    const workspacesBefore = JSON.stringify(readJSON(FILES.agent_workspaces, []));
+
+    try {
+      ["function tjhpPriorAuthWorkspaceEvidenceItemsForRender","function tjhpPriorAuthWorkspaceEditablePacketSectionsOnly","priorAuthEditableTextOnlyEvidenceKeys","letter_of_medical_necessity","priorAuthSystemEvidencePreviewHtml","System-found prior authorization decision context","System-found authorization context","Evidence Checklist / Packet Attachments","Upload Source Proof","Exclude from packet","Include in packet","Preview evidence","Save Section","section_text"].forEach(x => assert(src.includes(x), "missing prior-auth evidence split marker: " + x));
+      const smokeOrg = { org_id: "__prior_auth_evidence_packet_split_smoke__", org_name: "Prior Auth Evidence Split Smoke Practice" };
+      const smokeRow = { auth_case_id: "pa_evidence_packet_split_smoke", org_id: smokeOrg.org_id, patient_name: "Evidence Split Smoke Patient", payer: "Aetna", provider: "Dr. Smith", specialty: "Orthopedics", requested_service: "Lumbar MRI", cpt_hcpcs: "72148", icd10: "M54.5", auth_number: "AUTH-EVIDENCE-SPLIT-SMOKE", status: "Denied", denial_reason: "Medical necessity criteria not met", partial_approval_reason: "", submitted_date: "2026-05-01", determination_date: "2026-05-04", expiration_date: "2026-06-15", missing_documentation: ["clinical notes", "imaging report"], estimated_revenue_at_risk: 1200, workspace_packet_sections: {}, workspace_evidence: {} };
+      const evidenceItems = tjhpPriorAuthWorkspaceEvidenceItemsForRender(smokeOrg, smokeRow);
+      const evidenceKeys = new Set((Array.isArray(evidenceItems) ? evidenceItems : []).map(x => String(x.key || "").trim()));
+      ["original_prior_auth_request","denial_or_partial_approval_letter","clinical_documentation","payer_policy_guidelines","coding_rationale","diagnostic_results","provider_authorization_form","prior_payer_correspondence"].forEach(key => assert(evidenceKeys.has(key), "evidence proof-card helper should include source-proof key: " + key));
+      assert(evidenceKeys.has("evidence_of_authorization") || evidenceKeys.has("authorization_history"),"evidence proof-card helper should include authorization evidence/history key");
+      ["header","case_summary","prior_authorization_case_summary","clinical_summary","service_revenue_impact","letter_of_medical_necessity","appeal_narrative","requested_action","attachments_index","evidence_summary"].forEach(key => assert(!evidenceKeys.has(key), "evidence proof-card helper must exclude editable packet key: " + key));
+      const editableSections = tjhpPriorAuthWorkspaceEditablePacketSectionsOnly(smokeOrg, smokeRow);
+      const editableKeys = new Set((Array.isArray(editableSections) ? editableSections : []).map(x => String(x.key || "").trim()));
+      ["letter_of_medical_necessity","appeal_narrative","requested_action","clinical_summary","service_revenue_impact","attachments_index","evidence_summary"].forEach(key => assert(editableKeys.has(key), "editable packet helper should include packet text key: " + key));
+      ["denial_or_partial_approval_letter","clinical_documentation","payer_policy_guidelines","provider_authorization_form","prior_payer_correspondence"].forEach(key => assert(!editableKeys.has(key), "editable packet helper must exclude source-proof-only key: " + key));
+      const denialEvidence = evidenceItems.find(x => String(x.key || "") === "denial_or_partial_approval_letter");
+      assert(denialEvidence, "denial_or_partial_approval_letter evidence item missing");
+      assert.strictEqual(String(denialEvidence.status_label || ""), "Found in System", "denial decision should be found in system for smoke row");
+      assert.strictEqual(String(denialEvidence.proof_label || ""), "System evidence", "denial decision proof label mismatch");
+      const getStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace")');
+      const getEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")', getStart);
+      assert(getStart >= 0 && getEnd > getStart, "GET prior-auth appeal workspace route boundary missing");
+      const getRoute = src.slice(getStart, getEnd);
+      ["priorAuthSystemEvidencePreviewHtml","priorAuthSystemEvidencePreviewHtml(item)","System-found prior authorization decision context","System-found authorization context","System-found evidence context","Preview evidence","Evidence Checklist / Packet Attachments","Upload Source Proof","Exclude from packet","Include in packet","Letter of Medical Necessity","Save Section","section_text","AI Prior Authorization Assistant"].forEach(x => assert(getRoute.includes(x), "GET prior-auth workspace route missing split/preview marker: " + x));
+      ['sectionKey === "appeal_narrative" ? "open" : ""',"document_ingests","FILES.billed","FILES.payments","FILES.payer_contracts","FILES.agent_workspaces","ensureAgentWorkspace(","saveAgentWorkspace(","ensureWorkspacePacket(","ensurePacketSections(","/upload-router","OpenAI"].forEach(x => assert(!getRoute.includes(x), "GET prior-auth workspace route must not include: " + x));
+      const methodPostLiteral = 'method="' + 'POST"';
+      if (getRoute.includes(methodPostLiteral)) { assert(getRoute.includes('action="/prior-auth/appeal-workspace/save-section"') || getRoute.includes('action="/prior-auth/appeal-workspace/evidence/upload"') || getRoute.includes('action="/prior-auth/appeal-workspace/evidence/exclude"'),"GET prior-auth workspace POST forms must be limited to prior-auth workspace save/evidence actions"); }
+      ['if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))','if (method === "POST" && pathname === "/ai-workspace/save-preview")',"renderWorkspacePreview","renderWorkflowPanel","renderInlineAIAssist","ensureAgentWorkspace","ensureWorkspacePacket","ensurePacketSections","saveAgentWorkspace","function renderClaimPanelBootstrap"].forEach(x => assert(src.includes(x), "existing billed workspace/panel marker missing: " + x));
+      const disallowedPriorAuthPostRoute = 'if (method === "POST" && pathname === "' + '/prior-auth/appeal-workspace") {';
+      const disallowedAiPriorAuthGetRoute = 'if (method === "GET" && pathname === "' + '/ai-prior-auth")';
+      const disallowedAiPriorAuthPostRoute = 'if (method === "POST" && pathname === "' + '/ai-prior-auth")';
+      assert(!src.includes(disallowedPriorAuthPostRoute), "POST /prior-auth/appeal-workspace must not exist");
+      assert(!src.includes(disallowedAiPriorAuthGetRoute), "GET /ai-prior-auth must not exist");
+      assert(!src.includes(disallowedAiPriorAuthPostRoute), "POST /ai-prior-auth must not exist");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), paymentsBefore, "payments mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), contractsBefore, "payer contracts mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), ingestsBefore, "document_ingests mutated");
+      assert.strictEqual(JSON.stringify(readJSON(FILES.agent_workspaces, [])), workspacesBefore, "agent workspaces mutated");
+      process.stdout.write("PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS_PASSED\n"); process.exit(0);
+    } catch (err) { process.stderr.write("PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_COMMAND_CENTER_ROUTE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
