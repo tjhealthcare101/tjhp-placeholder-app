@@ -46852,21 +46852,15 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     return String(section && section.body != null ? section.body : "").trimEnd();
   };
 
+  const priorAuthPacketSectionObject = key => {
+    const cleanKey = String(key || "").trim();
+    return priorAuthPacketSectionByKey.get(cleanKey) || { key: cleanKey, title: cleanKey, subtitle: "" };
+  };
+
   const priorAuthCoverLetterDefaultBody = [
     priorAuthPacketSectionBody("header"),
     "To the Prior Authorization Appeals Department,",
-    priorAuthPacketSectionBody("case_summary"),
-    "Clinical Summary / Medical Necessity",
-    priorAuthPacketSectionBody("clinical_summary"),
-    "Letter of Medical Necessity",
-    priorAuthPacketSectionBody("letter_of_medical_necessity"),
-    "Prior Authorization Appeal Narrative",
     priorAuthPacketSectionBody("appeal_narrative"),
-    "Requested Action",
-    priorAuthPacketSectionBody("requested_action"),
-    "Evidence and Attachments Referenced",
-    priorAuthPacketSectionBody("attachments_index"),
-    priorAuthPacketSectionBody("evidence_summary"),
     "Sincerely,",
     String(org.org_name || org.name || ctx.org_name || "Practice").trim()
   ]
@@ -46874,63 +46868,156 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     .filter(Boolean)
     .join("\n\n");
 
-  const priorAuthCoverLetterBody =
-    Object.prototype.hasOwnProperty.call(priorAuthSavedPacketSections, "appeal_narrative")
-      ? String(priorAuthSavedPacketSections.appeal_narrative || "").trimEnd()
-      : priorAuthCoverLetterDefaultBody;
+  const priorAuthEditablePacketPageHtml = (sectionKey, options = {}) => {
+    const cleanKey = String(sectionKey || "").trim();
+    const section = priorAuthPacketSectionObject(cleanKey);
+    const title = String(options.title || section.title || cleanKey || "Packet Section").trim();
+    const subtitle = String(options.subtitle || section.subtitle || "").trim();
+    const body =
+      Object.prototype.hasOwnProperty.call(options, "body")
+        ? String(options.body || "").trimEnd()
+        : priorAuthPacketSectionBody(cleanKey);
+    const rows = Math.max(6, Math.min(30, Number(options.rows || 10) || 10));
+    const saved = Object.prototype.hasOwnProperty.call(priorAuthSavedPacketSections, cleanKey);
+    const badgeText = saved ? "Saved edit" : (body ? "Ready" : "Draft");
+    const badgeClass = body ? "ok" : "warn";
 
-  const priorAuthSupportingEvidenceHtml = priorAuthOrderedPacketRows
-    .filter(entry => String(entry.kind || "") === "evidence")
-    .map((entry, index) => `
-      <div class="prior-auth-ordered-packet-row" data-prior-auth-ordered-kind="evidence" data-prior-auth-ordered-key="${safeStr(entry.key)}" style="margin-top:12px;">
-        <div class="muted small" style="font-weight:900;text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px 2px;">
-          Source proof ${formatNumberUI(index + 1)}
-        </div>
-        ${entry.html}
-      </div>
-    `)
-    .join("") || `<div class="muted">No supporting evidence items available.</div>`;
-
-  const priorAuthOrderedPacketHtml = `
-    <!-- Prior-auth ordered packet compatibility markers: Packet item · prior-auth-ordered-packet-row · data-prior-auth-ordered-kind · data-prior-auth-ordered-key -->
-    <div class="prior-auth-ordered-packet-row prior-auth-continuous-cover-letter" data-prior-auth-ordered-kind="section" data-prior-auth-ordered-key="appeal_narrative" style="margin-top:12px;">
-      <div class="card" style="box-shadow:none;background:#fff;margin:10px 0;border:1px solid #e5e7eb;">
+    return `
+      <div class="prior-auth-packet-page" data-prior-auth-packet-page-key="${safeStr(cleanKey)}" style="border:1px solid #e5e7eb;border-radius:18px;background:#fff;padding:16px;margin-top:12px;">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;">
           <div>
-            <h3 style="margin:0;">Prior Authorization Appeal Letter</h3>
-            <p class="muted small" style="margin:6px 0 0 0;">
-              One continuous editable packet letter. This combines the header, case summary, clinical summary, letter of medical necessity, appeal narrative, requested action, and evidence references.
-            </p>
+            <h3 style="margin:0;">${safeStr(title)}</h3>
+            ${subtitle ? `<p class="muted small" style="margin:6px 0 0 0;">${safeStr(subtitle)}</p>` : ""}
           </div>
-          <span class="badge ${priorAuthCoverLetterBody ? "ok" : "warn"}">${priorAuthCoverLetterBody ? "Ready" : "Draft"}</span>
+          <span class="badge ${badgeClass}">${safeStr(badgeText)}</span>
         </div>
 
         <form method="${"POST"}" action="/prior-auth/appeal-workspace/save-section" style="margin-top:12px;">
           <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
-          <input type="hidden" name="section_key" value="appeal_narrative" />
+          <input type="hidden" name="section_key" value="${safeStr(cleanKey)}" />
           <textarea
             name="section_text"
-            rows="26"
+            rows="${safeStr(rows)}"
             style="width:100%;box-sizing:border-box;border:1px dashed #94a3b8;border-radius:14px;padding:14px;font-family:inherit;line-height:1.55;background:#f8fafc;white-space:pre-wrap;"
-          >${safeStr(priorAuthCoverLetterBody || "")}</textarea>
+          >${safeStr(body || "")}</textarea>
           <div class="btnRow" style="margin-top:10px;">
             <button class="btn small" type="submit">Save Section</button>
-            <span class="muted small">Saves the continuous prior-auth appeal letter only. No payer submission occurs.</span>
+            <span class="muted small">Saves this prior-auth packet section only. No payer submission occurs.</span>
           </div>
         </form>
-
-        <p class="muted small" style="margin-top:10px;">
-          Letter of Medical Necessity remains an editable packet section inside this continuous letter. Prior Authorization Appeal Narrative remains editable in this same ordered flow.
-        </p>
       </div>
-    </div>
+    `;
+  };
 
-    <div class="prior-auth-supporting-evidence" style="margin-top:18px;">
-      <h3>Supporting Evidence / Packet Attachments</h3>
-      <p class="muted small">
-        Evidence Checklist / Packet Attachments controls are embedded here as supporting source proof for the continuous appeal letter. Uploaded or system-found evidence supports the packet but is not editable letter text.
-      </p>
-      ${priorAuthSupportingEvidenceHtml}
+  const priorAuthDisplaySectionHtmlByKey = new Map();
+
+  priorAuthDisplaySectionHtmlByKey.set("appeal_narrative", priorAuthEditablePacketPageHtml("appeal_narrative", {
+    title: "Prior Authorization Appeal Cover Letter",
+    subtitle: "Editable cover letter page. Keep the high-level appeal request, auth identifiers, and closing here. Letter of Medical Necessity remains a separate editable packet section.",
+    body: Object.prototype.hasOwnProperty.call(priorAuthSavedPacketSections, "appeal_narrative")
+      ? String(priorAuthSavedPacketSections.appeal_narrative || "").trimEnd()
+      : priorAuthCoverLetterDefaultBody,
+    rows: 14
+  }));
+
+  priorAuthDisplaySectionHtmlByKey.set("case_summary", priorAuthEditablePacketPageHtml("case_summary", {
+    title: "Prior Authorization Case Summary",
+    subtitle: "Separate editable case summary page for patient, payer, requested service, and coding context.",
+    rows: 8
+  }));
+
+  priorAuthDisplaySectionHtmlByKey.set("letter_of_medical_necessity", priorAuthEditablePacketPageHtml("letter_of_medical_necessity", {
+    title: "Letter of Medical Necessity",
+    subtitle: "Separate editable medical-necessity page. Do not merge this into the cover letter.",
+    rows: 18
+  }));
+
+  priorAuthDisplaySectionHtmlByKey.set("clinical_summary", priorAuthEditablePacketPageHtml("clinical_summary", {
+    title: "Clinical Summary",
+    subtitle: "Separate editable clinical summary page used to support medical necessity.",
+    rows: 10
+  }));
+
+  priorAuthDisplaySectionHtmlByKey.set("service_revenue_impact", priorAuthEditablePacketPageHtml("service_revenue_impact", {
+    title: "Service / Revenue Impact Summary",
+    subtitle: "Separate editable service and impact summary when reliable source data is available.",
+    rows: 8
+  }));
+
+  priorAuthDisplaySectionHtmlByKey.set("requested_action", priorAuthEditablePacketPageHtml("requested_action", {
+    title: "Requested Action",
+    subtitle: "Separate editable page describing the authorization action requested from the payer.",
+    rows: 6
+  }));
+
+  priorAuthDisplaySectionHtmlByKey.set("attachments_index", priorAuthEditablePacketPageHtml("attachments_index", {
+    title: "Attachments Index",
+    subtitle: "Separate editable index of attached prior-auth evidence and supporting documents.",
+    rows: 8
+  }));
+
+  priorAuthDisplaySectionHtmlByKey.set("evidence_summary", priorAuthEditablePacketPageHtml("evidence_summary", {
+    title: "Evidence Summary",
+    subtitle: "Separate editable summary of what evidence is found in system, uploaded, still needed, or intentionally excluded.",
+    rows: 8
+  }));
+
+  const priorAuthPacketDisplayOrder = [
+    ["section", "appeal_narrative"],
+    ["section", "case_summary"],
+    ["evidence", "original_prior_auth_request"],
+    ["evidence", "denial_or_partial_approval_letter"],
+    ["section", "letter_of_medical_necessity"],
+    ["section", "clinical_summary"],
+    ["evidence", "clinical_documentation"],
+    ["evidence", "diagnostic_results"],
+    ["evidence", "payer_policy_guidelines"],
+    ["evidence", "coding_rationale"],
+    ["section", "service_revenue_impact"],
+    ["evidence", "authorization_history"],
+    ["evidence", "evidence_of_authorization"],
+    ["evidence", "provider_authorization_form"],
+    ["evidence", "prior_payer_correspondence"],
+    ["evidence", "peer_to_peer_notes"],
+    ["evidence", "missing_documentation_response"],
+    ["section", "requested_action"],
+    ["section", "attachments_index"],
+    ["section", "evidence_summary"]
+  ];
+
+  const priorAuthPacketDisplayUsed = new Set();
+  const priorAuthPacketDisplayRows = [];
+  const pushPriorAuthPacketDisplayRow = (kind, key) => {
+    const cleanKind = String(kind || "").trim();
+    const cleanKey = String(key || "").trim();
+    if (!cleanKind || !cleanKey) return;
+
+    const html =
+      cleanKind === "evidence"
+        ? evidenceCardHtmlByKey.get(cleanKey)
+        : priorAuthDisplaySectionHtmlByKey.get(cleanKey);
+
+    if (!html) return;
+
+    const id = cleanKind + ":" + cleanKey;
+    if (priorAuthPacketDisplayUsed.has(id)) return;
+
+    priorAuthPacketDisplayUsed.add(id);
+    priorAuthPacketDisplayRows.push({ kind: cleanKind, key: cleanKey, html });
+  };
+
+  priorAuthPacketDisplayOrder.forEach(pair => pushPriorAuthPacketDisplayRow(pair[0], pair[1]));
+  priorAuthEvidenceItems.forEach(item => pushPriorAuthPacketDisplayRow("evidence", item && item.key));
+  Array.from(priorAuthDisplaySectionHtmlByKey.keys()).forEach(key => pushPriorAuthPacketDisplayRow("section", key));
+
+  const priorAuthOrderedPacketHtml = `
+    <!-- Prior-auth ordered packet compatibility markers: Packet item · prior-auth-ordered-packet-row · data-prior-auth-ordered-kind · data-prior-auth-ordered-key · priorAuthOrderedPacketRows -->
+    <div class="prior-auth-packet-flow">
+      ${priorAuthPacketDisplayRows.map(entry => `
+        <div class="prior-auth-ordered-packet-row" data-prior-auth-ordered-kind="${safeStr(entry.kind)}" data-prior-auth-ordered-key="${safeStr(entry.key)}" style="margin-top:14px;">
+          ${entry.html}
+        </div>
+      `).join("") || `<div class="muted">No prior authorization packet items available.</div>`}
     </div>
   `;
 
@@ -47078,10 +47165,10 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         <div class="ws-full-preview prior-auth-ordered-packet">
           <h3>Prior Auth Appeal Packet</h3>
           <p class="muted small">
-            <strong>Appeal Packet Preview:</strong> This is one continuous prior authorization appeal packet. The cover letter is editable as one document. Evidence Checklist / Packet Attachments controls are embedded below as supporting source proof, and editable letter/narrative rows are in the same packet flow.
+            <strong>Appeal Packet Preview:</strong> This is one ordered prior authorization appeal packet. Cover letter, Prior Authorization Case Summary, Letter of Medical Necessity, Clinical Summary, Requested Action, Attachments Index, and Evidence Summary remain separate editable pages. Evidence Checklist / Packet Attachments controls are embedded where each source proof item belongs, and editable letter/narrative rows are in the same packet flow.
           </p>
           <p class="muted small">
-            Letter of Medical Necessity remains an editable packet section. Prior Authorization Appeal Narrative remains editable in this same ordered flow.
+            Letter of Medical Necessity remains an editable packet section. Prior Authorization Appeal Cover Letter and Letter of Medical Necessity are separate packet pages in this same ordered flow. Prior Authorization Appeal Narrative remains editable as the cover letter section.
           </p>
           ${priorAuthOrderedPacketHtml}
         </div>
