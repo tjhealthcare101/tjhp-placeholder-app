@@ -1648,7 +1648,19 @@ function tjhpPriorAuthAppealPacketSections(ctx = {}, org = {}){
       "clinical_summary",
       "Clinical Summary",
       "Medical necessity context for the requested service.",
-      "Summarize diagnosis, symptoms, severity, failed alternatives, conservative treatment, functional impact, and why the requested service is clinically appropriate.",
+      [
+        "Diagnosis / Condition:",
+        "- Summarize the diagnosis, clinical condition, symptoms, severity, and functional impact.",
+        "",
+        "Clinical History:",
+        "- Summarize relevant treatment history, prior conservative care, failed alternatives, medications, therapy, procedures, or other interventions.",
+        "",
+        "Reason Requested Service Is Clinically Appropriate:",
+        "- Explain why " + (ctx.requested_service || "the requested service") + " is medically necessary and appropriate for this patient.",
+        "",
+        "Supporting Evidence:",
+        "- Reference the attached clinical documentation, diagnostic results, payer criteria, and any prior authorization history that supports approval."
+      ].join("\n"),
       { complete:false }
     ),
     section(
@@ -1694,7 +1706,45 @@ function tjhpPriorAuthAppealPacketSections(ctx = {}, org = {}){
       "letter_of_medical_necessity",
       "Letter of Medical Necessity",
       "Provider-facing medical necessity letter.",
-      "Draft a provider letter explaining why the requested service is medically necessary, clinically appropriate, and should be authorized under the payer policy.",
+      [
+        orgName,
+        "[Practice Address]",
+        "Phone Number: [Phone Number]",
+        "Email: [Email]",
+        "",
+        today,
+        "",
+        (ctx.payer || "Payer"),
+        "[Address]",
+        "",
+        "Re: Letter of Medical Necessity for " + (ctx.patient || "[Patient Name]"),
+        "Prior Authorization / Reference Number: " + (ctx.auth_number || ctx.auth_case_id || "[Authorization Number]"),
+        "Requested Service: " + (ctx.requested_service || "[Requested Service]"),
+        "CPT / HCPCS: " + (ctx.cpt_hcpcs || "-"),
+        "ICD-10: " + (ctx.icd10 || "-"),
+        "",
+        "To Whom It May Concern,",
+        "",
+        "I am writing on behalf of my patient, " + (ctx.patient || "[Patient Name]") + ", to document the medical necessity of the requested service: " + (ctx.requested_service || "[Requested Service]") + ".",
+        "",
+        "Medical Necessity Rationale:",
+        "- Describe the patient's diagnosis, symptoms, severity, functional limitations, and why the requested service is clinically appropriate.",
+        "",
+        "Prior Treatment / Failed Alternatives:",
+        "- Summarize conservative measures, prior treatments, medications, therapy, testing, or alternative services that were tried, insufficient, contraindicated, or not appropriate.",
+        "",
+        "Payer Criteria / Coverage Support:",
+        "- Map the patient's clinical facts to the payer's medical policy or coverage criteria when available.",
+        "",
+        "Requested Authorization Action:",
+        "- Please approve the requested prior authorization or approve the remaining requested scope if the prior decision was a partial approval.",
+        "",
+        "Supporting Documentation:",
+        "- Clinical records, diagnostic results, payer policy references, authorization history, and other source proof are attached or referenced in this packet.",
+        "",
+        "Sincerely,",
+        orgName
+      ].join("\n"),
       { complete:false }
     ),
     section(
@@ -46645,9 +46695,10 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     if (key === "denial_or_partial_approval_letter") {
       return `
         <details class="ws-proof-preview" style="margin-top:10px;">
-          <summary class="btn secondary small" style="display:inline-block;cursor:pointer;">Preview evidence</summary>
+          <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview evidence</summary>
           <div class="muted small" style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
             <strong>System-found prior authorization decision context</strong><br/>
+            <span>This is system-found case context, not an attached source document. Upload the payer decision letter if the packet needs the actual document.</span><br/><br/>
             Payer: ${safeStr(ctx.payer || "-")}<br/>
             Status: ${safeStr(ctx.status || "-")}<br/>
             Requested Service: ${safeStr(ctx.requested_service || "-")}<br/>
@@ -46662,9 +46713,10 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     if (key === "original_prior_auth_request" || key === "evidence_of_authorization" || key === "authorization_history") {
       return `
         <details class="ws-proof-preview" style="margin-top:10px;">
-          <summary class="btn secondary small" style="display:inline-block;cursor:pointer;">Preview evidence</summary>
+          <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview evidence</summary>
           <div class="muted small" style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
             <strong>System-found authorization context</strong><br/>
+            <span>This is system-found authorization context, not an attached source document. Upload the original request or authorization history if the packet needs the actual document.</span><br/><br/>
             Auth #: ${safeStr(ctx.auth_number || "-")}<br/>
             Requested Service: ${safeStr(ctx.requested_service || "-")}<br/>
             CPT / HCPCS: ${safeStr(ctx.cpt_hcpcs || "-")}<br/>
@@ -46680,10 +46732,85 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
     return `
       <details class="ws-proof-preview" style="margin-top:10px;">
-        <summary class="btn secondary small" style="display:inline-block;cursor:pointer;">Preview evidence</summary>
+        <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview evidence</summary>
         <div class="muted small" style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
           <strong>System-found evidence context</strong><br/>
+          <span>This is system-found context, not an attached source document. Upload source proof if the packet needs the actual document.</span><br/><br/>
           ${safeStr(item.description || item.why || item.status_label || item.status || "Evidence context is available from the prior authorization case.")}
+        </div>
+      </details>
+    `;
+  };
+
+  const priorAuthEvidenceAttachmentPreviewHtml = (att = {}) => {
+    const url = String(att.url || att.path || "").trim();
+    const fileName = String(att.file_name || att.originalName || att.filename || "Uploaded file").trim();
+    const fileType = String(att.file_type || att.mimeType || "").toLowerCase().trim();
+    const ext = String(fileName.split(".").pop() || "").toLowerCase();
+    const isPdf = fileType.includes("pdf") || ext === "pdf";
+    const isImage =
+      fileType.startsWith("image/") ||
+      ["png","jpg","jpeg","gif","webp","bmp","svg"].includes(ext);
+
+    const meta = `
+      <div class="muted small" style="margin-top:6px;">
+        <strong>${safeStr(fileName || "Uploaded file")}</strong>
+        ${fileType ? ` · ${safeStr(fileType)}` : ""}
+        ${att.uploaded_at ? ` · Uploaded ${safeStr(String(att.uploaded_at || "").slice(0, 10))}` : ""}
+      </div>
+    `;
+
+    if (!url) {
+      return `
+        <details class="ws-proof-preview prior-auth-uploaded-evidence-preview" style="margin-top:10px;">
+          <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview evidence</summary>
+          <div class="muted small" style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
+            <strong>Uploaded source document</strong>
+            ${meta}
+            <div style="margin-top:8px;">This file is attached, but no browser preview URL is available yet.</div>
+          </div>
+        </details>
+      `;
+    }
+
+    const openLink = `<a class="btn secondary small" style="margin-top:8px;display:inline-flex;align-items:center;justify-content:center;min-height:34px;" href="${safeStr(url)}" target="_blank" rel="noopener">Open evidence document</a>`;
+
+    if (isPdf) {
+      return `
+        <details class="ws-proof-preview prior-auth-uploaded-evidence-preview" style="margin-top:10px;">
+          <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview evidence</summary>
+          <div style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
+            <strong>Uploaded source document preview</strong>
+            ${meta}
+            <iframe src="${safeStr(url)}" title="${safeStr(fileName)}" style="width:100%;height:520px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;margin-top:10px;"></iframe>
+            ${openLink}
+          </div>
+        </details>
+      `;
+    }
+
+    if (isImage) {
+      return `
+        <details class="ws-proof-preview prior-auth-uploaded-evidence-preview" style="margin-top:10px;">
+          <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview evidence</summary>
+          <div style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
+            <strong>Uploaded source document preview</strong>
+            ${meta}
+            <img src="${safeStr(url)}" alt="${safeStr(fileName)}" style="display:block;max-width:100%;max-height:520px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;margin-top:10px;" />
+            ${openLink}
+          </div>
+        </details>
+      `;
+    }
+
+    return `
+      <details class="ws-proof-preview prior-auth-uploaded-evidence-preview" style="margin-top:10px;">
+        <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview evidence</summary>
+        <div class="muted small" style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
+          <strong>Uploaded source document</strong>
+          ${meta}
+          <div style="margin-top:8px;">Inline preview is not available for this file type. Open it in a new tab to review the full attachment.</div>
+          ${openLink}
         </div>
       </details>
     `;
@@ -46693,15 +46820,14 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   const evidenceProofCardsHtml = priorAuthEvidenceItems.map(item => {
     const itemKey = String(item && item.key || "").trim();
     const attachments = Array.isArray(item.attachments) ? item.attachments : [];
-    const attachmentsHtml = attachments.length ? `
-      <div class="ws-proof-detail" style="margin-top:8px;">
-        ${attachments.map(att => `<div style="margin-top:6px;">
-          <strong>${safeStr(att.file_name || "Uploaded file")}</strong>
-          <span class="muted small"> · ${safeStr(String(att.uploaded_at || "").slice(0, 10) || "-")}</span>
-          ${att.url ? `<a class="btn secondary small" style="margin-left:8px;" href="${safeStr(att.url)}" target="_blank" rel="noopener">Preview evidence</a>` : ""}
-        </div>`).join("")}
-      </div>
-    ` : (/found in system|system evidence/i.test(String(item.status_label || item.status || item.proof_label || "")) ? "" : `<div class="muted small" style="margin-top:8px;">No uploaded evidence yet.</div>`);
+    const attachmentsHtml = attachments.length
+      ? `<div class="ws-proof-detail" style="margin-top:8px;">
+          ${attachments.map(att => priorAuthEvidenceAttachmentPreviewHtml(att)).join("")}
+        </div>`
+      : (/found in system|system evidence/i.test(String(item.status_label || item.status || item.proof_label || ""))
+          ? `<div class="muted small" style="margin-top:8px;">System-found context is available below. Upload source proof if the payer packet needs the actual document.</div>`
+          : `<div class="muted small" style="margin-top:8px;">No source proof uploaded yet.</div>`);
+
 
     const cardHtml = `
       <div class="ws-proof-card ${item.required ? "required" : "optional"} ${safeStr(item.status_class || "")}" data-prior-auth-packet-item-type="evidence" data-prior-auth-packet-key="${safeStr(itemKey)}">
@@ -46793,7 +46919,6 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     ["evidence", "diagnostic_results"],
     ["evidence", "payer_policy_guidelines"],
     ["evidence", "coding_rationale"],
-    ["section", "service_revenue_impact"],
     ["section", "letter_of_medical_necessity"],
     ["evidence", "authorization_history"],
     ["evidence", "evidence_of_authorization"],
@@ -46860,7 +46985,21 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   const priorAuthCoverLetterDefaultBody = [
     priorAuthPacketSectionBody("header"),
     "To the Prior Authorization Appeals Department,",
-    priorAuthPacketSectionBody("appeal_narrative"),
+    "",
+    "We are requesting reconsideration of the prior authorization decision for " + (ctx.requested_service || "the requested service") + ".",
+    "Patient: " + (ctx.patient || "-"),
+    "Payer: " + (ctx.payer || "-"),
+    "Authorization / Reference Number: " + (ctx.auth_number || ctx.auth_case_id || "-"),
+    "Current Status: " + (ctx.status || "-"),
+    "",
+    (ctx.denial_reason ? "Decision Reason / Context: " + ctx.denial_reason : ""),
+    (ctx.partial_approval_reason ? "Partial Approval Context: " + ctx.partial_approval_reason : ""),
+    "",
+    "Requested Action:",
+    priorAuthPacketSectionBody("requested_action"),
+    "",
+    "Please review the attached Letter of Medical Necessity, clinical documentation, payer criteria support, authorization history, and other source proof included in this packet.",
+    "",
     "Sincerely,",
     String(org.org_name || org.name || ctx.org_name || "Practice").trim()
   ]
@@ -46896,9 +47035,10 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
           <input type="hidden" name="section_key" value="${safeStr(cleanKey)}" />
           <textarea
+            class="prior-auth-packet-textarea"
             name="section_text"
             rows="${safeStr(rows)}"
-            style="width:100%;box-sizing:border-box;border:1px dashed #94a3b8;border-radius:14px;padding:14px;font-family:inherit;line-height:1.55;background:#f8fafc;white-space:pre-wrap;"
+            style="width:100%;box-sizing:border-box;border:1px dashed #94a3b8;border-radius:14px;padding:14px;font-family:inherit;line-height:1.55;background:#f8fafc;white-space:pre-wrap;overflow:hidden;resize:vertical;"
           >${safeStr(body || "")}</textarea>
           <div class="btnRow" style="margin-top:10px;">
             <button class="btn small" type="submit">Save Section</button>
@@ -46913,7 +47053,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
   priorAuthDisplaySectionHtmlByKey.set("appeal_narrative", priorAuthEditablePacketPageHtml("appeal_narrative", {
     title: "Prior Authorization Appeal Cover Letter",
-    subtitle: "Editable cover letter page. Keep the high-level appeal request, auth identifiers, and closing here. Letter of Medical Necessity remains a separate editable packet section.",
+    subtitle: "Editable cover letter page. Keep the high-level appeal request, auth identifiers, requested action, and closing here. Letter of Medical Necessity is a separate packet page.",
     body: Object.prototype.hasOwnProperty.call(priorAuthSavedPacketSections, "appeal_narrative")
       ? String(priorAuthSavedPacketSections.appeal_narrative || "").trimEnd()
       : priorAuthCoverLetterDefaultBody,
@@ -46936,12 +47076,6 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     title: "Clinical Summary",
     subtitle: "Separate editable clinical summary page used to support medical necessity.",
     rows: 10
-  }));
-
-  priorAuthDisplaySectionHtmlByKey.set("service_revenue_impact", priorAuthEditablePacketPageHtml("service_revenue_impact", {
-    title: "Service / Revenue Impact Summary",
-    subtitle: "Separate editable service and impact summary when reliable source data is available.",
-    rows: 8
   }));
 
   priorAuthDisplaySectionHtmlByKey.set("requested_action", priorAuthEditablePacketPageHtml("requested_action", {
@@ -46973,7 +47107,6 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     ["evidence", "diagnostic_results"],
     ["evidence", "payer_policy_guidelines"],
     ["evidence", "coding_rationale"],
-    ["section", "service_revenue_impact"],
     ["evidence", "authorization_history"],
     ["evidence", "evidence_of_authorization"],
     ["evidence", "provider_authorization_form"],
@@ -47165,7 +47298,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         <div class="ws-full-preview prior-auth-ordered-packet">
           <h3>Prior Auth Appeal Packet</h3>
           <p class="muted small">
-            <strong>Appeal Packet Preview:</strong> This is one ordered prior authorization appeal packet. Cover letter, Prior Authorization Case Summary, Letter of Medical Necessity, Clinical Summary, Requested Action, Attachments Index, and Evidence Summary remain separate editable pages. Evidence Checklist / Packet Attachments controls are embedded where each source proof item belongs, and editable letter/narrative rows are in the same packet flow.
+            <strong>Appeal Packet Preview:</strong> This is one ordered prior authorization appeal packet. Cover letter, Prior Authorization Case Summary, Letter of Medical Necessity, Clinical Summary, Requested Action, Attachments Index, and Evidence Summary remain separate editable pages. Internal revenue impact is not included in the payer packet. Evidence Checklist / Packet Attachments controls are embedded where each source proof item belongs, and editable letter/narrative rows are in the same packet flow.
           </p>
           <p class="muted small">
             Letter of Medical Necessity remains an editable packet section. Prior Authorization Appeal Cover Letter and Letter of Medical Necessity are separate packet pages in this same ordered flow. Prior Authorization Appeal Narrative remains editable as the cover letter section.
@@ -47190,6 +47323,19 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
       </div>
     </div>
     ${typeof workspaceDropzoneScript === "function" ? workspaceDropzoneScript() : ""}
+      <script>
+        (function(){
+          const resize = function(el){
+            if (!el || !el.classList || !el.classList.contains("prior-auth-packet-textarea")) return;
+            el.style.height = "auto";
+            el.style.height = Math.max(el.scrollHeight + 4, 180) + "px";
+          };
+          document.querySelectorAll(".prior-auth-packet-textarea").forEach(function(el){
+            resize(el);
+            el.addEventListener("input", function(){ resize(el); });
+          });
+        })();
+      </script>
   `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
 
   return send(res, 200, html);
@@ -65825,8 +65971,10 @@ if (process.env.TJHP_PRIOR_AUTH_ORDERED_PACKET_LAYOUT_SMOKE_TESTS === "true" && 
       const getEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")', getStart);
       assert(getStart >= 0 && getEnd > getStart, "GET prior-auth appeal workspace route boundary missing");
       const getRoute = src.slice(getStart, getEnd);
-      ["priorAuthPacketOrder","priorAuthOrderedPacketHtml","priorAuthOrderedPacketRows","pushPriorAuthOrderedPacketItem","evidenceCardHtmlByKey","editableSectionHtmlByKey","prior-auth-ordered-packet","prior-auth-ordered-packet-row","data-prior-auth-ordered-kind","data-prior-auth-ordered-key","Packet item","Prior Auth Appeal Packet","Appeal Packet Preview:","Evidence Checklist / Packet Attachments controls are embedded","editable letter/narrative rows are in the same packet flow","Letter of Medical Necessity remains an editable packet section","Upload Source Proof","Preview evidence","Exclude from packet","Include in packet","Save Section","section_text","AI Prior Authorization Assistant","workspaceDropzoneScript"].forEach(x => assert(getRoute.includes(x), "GET prior-auth ordered packet route missing marker: " + x));
-      ['["section", "header"]','["section", "case_summary"]','["section", "prior_authorization_case_summary"]','["evidence", "original_prior_auth_request"]','["evidence", "denial_or_partial_approval_letter"]','["section", "clinical_summary"]','["evidence", "clinical_documentation"]','["evidence", "diagnostic_results"]','["evidence", "payer_policy_guidelines"]','["evidence", "coding_rationale"]','["section", "service_revenue_impact"]','["section", "letter_of_medical_necessity"]','["evidence", "authorization_history"]','["evidence", "evidence_of_authorization"]','["evidence", "provider_authorization_form"]','["evidence", "prior_payer_correspondence"]','["evidence", "peer_to_peer_notes"]','["evidence", "missing_documentation_response"]','["section", "appeal_narrative"]','["section", "requested_action"]','["section", "attachments_index"]','["section", "evidence_summary"]'].forEach(x => assert(getRoute.includes(x), "ordered packet route missing order marker: " + x));
+      ["priorAuthPacketOrder","priorAuthOrderedPacketHtml","priorAuthOrderedPacketRows","pushPriorAuthOrderedPacketItem","evidenceCardHtmlByKey","editableSectionHtmlByKey","prior-auth-ordered-packet","prior-auth-ordered-packet-row","data-prior-auth-ordered-kind","data-prior-auth-ordered-key","Packet item","Prior Auth Appeal Packet",
+        "Internal revenue impact is not included in the payer packet.",
+        "prior-auth-packet-textarea","Appeal Packet Preview:","Evidence Checklist / Packet Attachments controls are embedded","editable letter/narrative rows are in the same packet flow","Letter of Medical Necessity remains an editable packet section","Upload Source Proof","Preview evidence","Exclude from packet","Include in packet","Save Section","section_text","AI Prior Authorization Assistant","workspaceDropzoneScript"].forEach(x => assert(getRoute.includes(x), "GET prior-auth ordered packet route missing marker: " + x));
+      ['["section", "header"]','["section", "case_summary"]','["section", "prior_authorization_case_summary"]','["evidence", "original_prior_auth_request"]','["evidence", "denial_or_partial_approval_letter"]','["section", "clinical_summary"]','["evidence", "clinical_documentation"]','["evidence", "diagnostic_results"]','["evidence", "payer_policy_guidelines"]','["evidence", "coding_rationale"]','["section", "letter_of_medical_necessity"]','["evidence", "authorization_history"]','["evidence", "evidence_of_authorization"]','["evidence", "provider_authorization_form"]','["evidence", "prior_payer_correspondence"]','["evidence", "peer_to_peer_notes"]','["evidence", "missing_documentation_response"]','["section", "appeal_narrative"]','["section", "requested_action"]','["section", "attachments_index"]','["section", "evidence_summary"]'].forEach(x => assert(getRoute.includes(x), "ordered packet route missing order marker: " + x));
       ["<h3>Evidence Checklist / Packet Attachments</h3>","<h3>Appeal Packet Preview</h3>","${evidenceProofCardsHtml}","${packetSectionsHtml}","Source-proof documents are managed in Evidence Checklist / Packet Attachments above.","Editable letter and narrative sections are below, including Prior Authorization Appeal Narrative."].forEach(x => assert(!getRoute.includes(x), "old split packet layout marker should be absent from GET route: " + x));
       ["FILES.billed","FILES.payments","FILES.payer_contracts","FILES.document_ingests","FILES.agent_workspaces","/upload-router"].forEach(x => assert(!getRoute.includes(x), "GET prior-auth ordered packet route must not include forbidden marker: " + x));
       const smokeOrg = { org_id: "__prior_auth_ordered_packet_layout_smoke__", org_name: "Prior Auth Ordered Packet Smoke Practice" };
