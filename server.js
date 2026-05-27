@@ -47162,6 +47162,254 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     return `${payer} requires appeal or next-round work for ${service}. Current reason/context: ${reason}.`;
   })();
 
+
+  const priorAuthPdfPreviewRowsHtml = priorAuthPacketDisplayRows.map((entry, index) => {
+    const kind = String(entry.kind || "").trim();
+    const key = String(entry.key || "").trim();
+
+    if (kind === "evidence") {
+      const item = (priorAuthEvidenceItems || []).find(x => String(x && x.key || "").trim() === key) || {};
+      const attachments = Array.isArray(item.attachments) ? item.attachments : [];
+      const attachmentList = attachments.length
+        ? attachments.map(att => `<li>${safeStr(att.file_name || att.originalName || att.filename || "Uploaded file")}${att.url ? ` — <a href="${safeStr(att.url)}" target="_blank" rel="noopener">Open evidence document</a>` : ""}</li>`).join("")
+        : `<li>${safeStr(item.status_label || item.proof_label || "No uploaded source proof yet.")}</li>`;
+
+      return `
+        <section class="prior-auth-print-section" data-prior-auth-print-kind="evidence" data-prior-auth-print-key="${safeStr(key)}">
+          <h3>${formatNumberUI(index + 1)}. ${safeStr(item.label || key || "Evidence")}</h3>
+          <p class="muted small">${safeStr(item.description || item.why || "")}</p>
+          <p><strong>Status:</strong> ${safeStr(item.status_label || item.status || "-")}</p>
+          <ul>${attachmentList}</ul>
+        </section>
+      `;
+    }
+
+    const section = priorAuthPacketSectionObject(key);
+    const title = String(section && section.title || key || "Packet Section").trim();
+    const body = priorAuthPacketSectionBody(key);
+
+    return `
+      <section class="prior-auth-print-section" data-prior-auth-print-kind="section" data-prior-auth-print-key="${safeStr(key)}">
+        <h3>${formatNumberUI(index + 1)}. ${safeStr(title)}</h3>
+        <pre style="white-space:pre-wrap;font-family:inherit;line-height:1.45;">${safeStr(body || "-")}</pre>
+      </section>
+    `;
+  }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
+
+  const priorAuthAssistantAndPreviewShellHtml = `
+    <style>
+      .prior-auth-ai-floater{
+        position:fixed;
+        right:18px;
+        bottom:82px;
+        z-index:9998;
+        border:0;
+        border-radius:999px;
+        padding:12px 16px;
+        background:#111827;
+        color:#fff;
+        font-weight:900;
+        box-shadow:0 18px 40px rgba(15,23,42,.25);
+        cursor:pointer;
+      }
+      .prior-auth-shell-backdrop{
+        display:none;
+        position:fixed;
+        inset:0;
+        z-index:9997;
+        background:rgba(15,23,42,.35);
+      }
+      .prior-auth-shell-panel{
+        display:none;
+        position:fixed;
+        right:20px;
+        bottom:20px;
+        z-index:9999;
+        width:min(720px,calc(100vw - 40px));
+        max-height:calc(100vh - 80px);
+        overflow:auto;
+        background:#fff;
+        border:1px solid #e5e7eb;
+        border-radius:18px;
+        box-shadow:0 24px 70px rgba(15,23,42,.28);
+        padding:18px;
+      }
+      .prior-auth-shell-panel.wide{
+        left:50%;
+        right:auto;
+        top:48px;
+        bottom:auto;
+        transform:translateX(-50%);
+        width:min(980px,calc(100vw - 48px));
+      }
+      .prior-auth-shell-head{
+        display:flex;
+        align-items:flex-start;
+        justify-content:space-between;
+        gap:12px;
+        margin-bottom:12px;
+      }
+      .prior-auth-shell-close{
+        border:1px solid #e5e7eb;
+        background:#fff;
+        border-radius:10px;
+        padding:8px 10px;
+        cursor:pointer;
+        font-weight:900;
+      }
+      .prior-auth-assistant-chip{
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        min-height:34px;
+        border:1px solid #e5e7eb;
+        border-radius:999px;
+        padding:6px 10px;
+        margin:4px;
+        background:#f8fafc;
+        font-size:12px;
+        font-weight:800;
+      }
+      .prior-auth-print-section{
+        border:1px solid #e5e7eb;
+        border-radius:14px;
+        padding:14px;
+        margin:12px 0;
+        background:#fff;
+      }
+      @media print{
+        body *{ visibility:hidden !important; }
+        #prior-auth-pdf-preview-panel,
+        #prior-auth-pdf-preview-panel *{ visibility:visible !important; }
+        #prior-auth-pdf-preview-panel{
+          display:block !important;
+          position:absolute !important;
+          inset:0 !important;
+          width:auto !important;
+          max-height:none !important;
+          overflow:visible !important;
+          box-shadow:none !important;
+          border:0 !important;
+          transform:none !important;
+        }
+        .prior-auth-shell-close,
+        .prior-auth-print-actions{ display:none !important; }
+      }
+    </style>
+
+    <button class="prior-auth-ai-floater" type="button" data-prior-auth-ai-open="true" aria-label="Open AI Prior Authorization Assistant">
+      AI Prior Auth Assistant
+    </button>
+
+    <div class="prior-auth-shell-backdrop" data-prior-auth-shell-backdrop="true"></div>
+
+    <div id="prior-auth-ai-assistant-panel" class="prior-auth-shell-panel" role="dialog" aria-modal="true" aria-label="AI Prior Authorization Assistant">
+      <div class="prior-auth-shell-head">
+        <div>
+          <h2 style="margin:0;">AI Prior Authorization Assistant</h2>
+          <p class="muted small" style="margin:6px 0 0 0;">
+            Shell only in this phase. It does not call AI, create an agent workspace, submit to a payer, or change case data.
+          </p>
+        </div>
+        <button class="prior-auth-shell-close" type="button" data-prior-auth-shell-close="true">Close</button>
+      </div>
+
+      <div class="card" style="box-shadow:none;background:#f8fafc;margin:10px 0;">
+        <h3>Case context</h3>
+        <p class="muted small">
+          Patient: ${safeStr(ctx.patient || "-")} · Payer: ${safeStr(ctx.payer || "-")} · Status: ${safeStr(ctx.status || "-")} · Requested service: ${safeStr(ctx.requested_service || "-")}
+        </p>
+      </div>
+
+      <h3>Future assistant actions</h3>
+      <div>
+        <span class="prior-auth-assistant-chip">Improve cover letter language</span>
+        <span class="prior-auth-assistant-chip">Draft LMN rationale</span>
+        <span class="prior-auth-assistant-chip">Map clinical facts to payer criteria</span>
+        <span class="prior-auth-assistant-chip">Find missing source proof</span>
+        <span class="prior-auth-assistant-chip">Prepare peer-to-peer talking points</span>
+      </div>
+
+      <div class="alert warn" style="margin-top:12px;">
+        Not active in this phase. These actions are placeholders until the Prior Auth AI workflow is added.
+      </div>
+    </div>
+
+    <div id="prior-auth-pdf-preview-panel" class="prior-auth-shell-panel wide" role="dialog" aria-modal="true" aria-label="Prior Auth Packet Preview">
+      <div class="prior-auth-shell-head">
+        <div>
+          <h2 style="margin:0;">Prior Auth Packet Preview</h2>
+          <p class="muted small" style="margin:6px 0 0 0;">
+            Read-only packet preview. Use browser print to save as PDF in this phase; no payer submission occurs.
+          </p>
+        </div>
+        <button class="prior-auth-shell-close" type="button" data-prior-auth-shell-close="true">Close</button>
+      </div>
+
+      <div class="prior-auth-print-actions btnRow">
+        <button class="btn" type="button" onclick="window.print()">Print / Save as PDF</button>
+      </div>
+
+      <div class="prior-auth-print-section">
+        <h1 style="margin-top:0;">Prior Authorization Appeal Packet</h1>
+        <p><strong>Practice:</strong> ${safeStr(org.org_name || org.name || "-")}</p>
+        <p><strong>Patient:</strong> ${safeStr(ctx.patient || "-")}</p>
+        <p><strong>Payer:</strong> ${safeStr(ctx.payer || "-")}</p>
+        <p><strong>Requested service:</strong> ${safeStr(ctx.requested_service || "-")}</p>
+        <p><strong>Auth #:</strong> ${safeStr(ctx.auth_number || "-")}</p>
+      </div>
+
+      ${priorAuthPdfPreviewRowsHtml}
+    </div>
+
+    <script>
+      (function(){
+        const backdrop = document.querySelector('[data-prior-auth-shell-backdrop="true"]');
+        const aiPanel = document.getElementById('prior-auth-ai-assistant-panel');
+        const previewPanel = document.getElementById('prior-auth-pdf-preview-panel');
+
+        const closeAll = function(){
+          if (backdrop) backdrop.style.display = 'none';
+          if (aiPanel) aiPanel.style.display = 'none';
+          if (previewPanel) previewPanel.style.display = 'none';
+          document.body.style.overflow = '';
+        };
+
+        const openPanel = function(panel){
+          closeAll();
+          if (backdrop) backdrop.style.display = 'block';
+          if (panel) panel.style.display = 'block';
+          document.body.style.overflow = 'hidden';
+        };
+
+        document.addEventListener('click', function(e){
+          const aiBtn = e.target.closest('[data-prior-auth-ai-open="true"]');
+          if (aiBtn) {
+            e.preventDefault();
+            openPanel(aiPanel);
+            return;
+          }
+
+          const previewBtn = e.target.closest('[data-prior-auth-preview-open="true"]');
+          if (previewBtn) {
+            e.preventDefault();
+            openPanel(previewPanel);
+            return;
+          }
+
+          if (e.target.closest('[data-prior-auth-shell-close="true"]') || e.target.closest('[data-prior-auth-shell-backdrop="true"]')) {
+            e.preventDefault();
+            closeAll();
+          }
+        });
+
+        document.addEventListener('keydown', function(e){
+          if (e.key === 'Escape') closeAll();
+        });
+      })();
+    </script>
+  `;
+
   const html = renderPage("Prior Auth Appeal Workspace", `
     ${workspacePolishStyles()}
     <div class="ws-main packet-workspace-shell prior-auth-workspace-shell">
@@ -47178,7 +47426,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         <div class="ws-quick-actions" style="margin-top:12px;">
           <a class="btn secondary" href="${caseHref}">Back to Prior Auth Case</a>
           <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
-          <button class="btn" type="button" disabled title="Prior-auth appeal packet export will be added in a later phase.">Preview PDF</button>
+          <button class="btn" type="button" data-prior-auth-preview-open="true" title="Open a read-only prior-auth packet preview.">Preview PDF</button>
         </div>
       </div>
 
@@ -47285,7 +47533,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           <p class="muted small">
             Prior-auth medical-necessity support, payer criteria review, and appeal language suggestions will be added in a later phase.
           </p>
-          <button class="btn secondary" type="button" disabled title="AI Prior Authorization Assistant is not active in this phase.">
+          <button class="btn secondary" type="button" data-prior-auth-ai-open="true" title="Open the Prior Auth Assistant shell. No AI call is made in this phase.">
             Open AI Prior Authorization Assistant
           </button>
           <div class="muted small" style="margin-top:8px;">
@@ -47322,7 +47570,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         </div>
       </div>
     </div>
-    ${typeof workspaceDropzoneScript === "function" ? workspaceDropzoneScript() : ""}
+    ${priorAuthAssistantAndPreviewShellHtml}\n    ${typeof workspaceDropzoneScript === "function" ? workspaceDropzoneScript() : ""}
       <script>
         (function(){
           const resize = function(el){
