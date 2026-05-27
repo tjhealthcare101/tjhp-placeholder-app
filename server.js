@@ -46732,11 +46732,55 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
   editablePacketSections.forEach(section => pushRow("section", section && section.key));
   evidenceItems.forEach(item => pushRow("evidence", item && item.key));
 
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", "inline; filename=prior-auth-appeal-packet.pdf");
+  const priorAuthExportAttachmentFilename = att => String(att && (att.file_name || att.originalName || att.filename) || "Uploaded file").trim();
 
+  const priorAuthExportAttachmentPath = att => {
+    if (!att || typeof att !== "object") return "";
+
+    const directPath = String(att.absPath || att.storedPath || "").trim();
+    if (directPath && fs.existsSync(directPath)) return directPath;
+
+    const rawPath = String(att.path || "").trim();
+    if (rawPath && fs.existsSync(rawPath)) return rawPath;
+
+    const url = String(att.url || "").trim();
+    if (url && url.startsWith("/uploads/")) {
+      const localPath = path.join(__dirname, url.replace(/^\/+/, ""));
+      if (fs.existsSync(localPath)) return localPath;
+    }
+
+    return "";
+  };
+
+  const priorAuthExportEligibleAttachments = item => {
+    if (!item || item.excluded === true) return [];
+    return (Array.isArray(item.attachments) ? item.attachments : [])
+      .filter(att => priorAuthExportAttachmentPath(att));
+  };
+
+  const priorAuthExportEvidenceHasRealSource = item => priorAuthExportEligibleAttachments(item).length > 0;
+
+  const priorAuthExportRows = rows.filter(entry => {
+    if (!entry || entry.kind === "section") return true;
+    if (entry.kind !== "evidence") return false;
+
+    const item = entry.evidence || {};
+    return priorAuthExportEvidenceHasRealSource(item);
+  });
+
+  const priorAuthSkippedEvidenceRows = rows.filter(entry => {
+    if (!entry || entry.kind !== "evidence") return false;
+    const item = entry.evidence || {};
+    return !priorAuthExportEvidenceHasRealSource(item);
+  });
+
+  const priorAuthBasePdfChunks = [];
   const doc = new PDFKitDocument({ margin: 54, size: "LETTER", bufferPages: true });
-  doc.pipe(res);
+  const priorAuthBasePdfDone = new Promise((resolve, reject) => {
+    doc.on("data", chunk => priorAuthBasePdfChunks.push(chunk));
+    doc.on("end", resolve);
+    doc.on("error", reject);
+  });
 
   const addPageHeader = (title) => {
     doc.font("Helvetica-Bold").fontSize(15).text(title, { align: "left" });
@@ -46767,8 +46811,17 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
   doc.text("Status: " + String(ctx.status || "-"));
   doc.moveDown(1);
 
-  rows.forEach((entry, index) => {
+  if (priorAuthSkippedEvidenceRows.length) {
+    doc.font("Helvetica-Bold").fontSize(11).text("Workspace source-proof gaps not included in this PDF");
+    doc.font("Helvetica").fontSize(9).fillColor("#374151");
+    doc.text("Evidence items without an uploaded source document are tracked in the workspace but are not exported as blank packet pages.");
+    doc.fillColor("black");
+    doc.moveDown(0.8);
+  }
+
+  priorAuthExportRows.forEach((entry, index) => {
     doc.addPage();
+
     if (entry.kind === "section") {
       const title = String(entry.section && entry.section.title || entry.key || "Packet Section");
       addPageHeader((index + 1) + ". " + title);
@@ -46778,11 +46831,11 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
 
     const item = entry.evidence || {};
     const title = String(item.label || entry.key || "Evidence");
-    const attachments = Array.isArray(item.attachments) ? item.attachments : [];
+    const attachments = priorAuthExportEligibleAttachments(item);
 
     addPageHeader((index + 1) + ". " + title);
     doc.font("Helvetica").fontSize(10);
-    doc.text("Status: " + String(item.status_label || item.status || "-"));
+    doc.text("Status: Source Proof Attached");
     doc.text("Impact: " + String(item.packet_impact || "-"));
     doc.moveDown(0.5);
     doc.text(String(item.description || item.why || ""), { width: 480, lineGap: 2 });
@@ -46791,21 +46844,127 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
     doc.font("Helvetica-Bold").fontSize(11).text("Source Proof");
     doc.font("Helvetica").fontSize(10);
 
-    if (attachments.length) {
-      attachments.forEach((att, attIndex) => {
-        doc.text((attIndex + 1) + ". " + String(att.file_name || att.originalName || att.filename || "Uploaded file"));
-        if (att.uploaded_at) doc.text("   Uploaded: " + String(att.uploaded_at).slice(0, 10));
-        if (att.url) doc.text("   Open evidence document: " + String(att.url));
-      });
-    } else if (/found in system|system evidence/i.test(String(item.status_label || item.status || item.proof_label || ""))) {
-      doc.text("System-found context is available in the workspace. Upload source proof if the payer packet needs the actual document.");
-    } else {
-      doc.text("No source proof uploaded yet.");
-    }
+    attachments.forEach((att, attIndex) => {
+      doc.text((attIndex + 1) + ". " + priorAuthExportAttachmentFilename(att));
+      if (att.uploaded_at) doc.text("   Uploaded: " + String(att.uploaded_at).slice(0, 10));
+      if (att.url) doc.text("   Evidence link: " + String(att.url));
+    });
   });
 
   doc.end();
-  return;
+  await priorAuthBasePdfDone;
+
+  const basePdfBytes = Buffer.concat(priorAuthBasePdfChunks);
+  const mergedPdf = await PDFDocument.create();
+  const basePdf = await PDFDocument.load(basePdfBytes);
+  const basePages = await mergedPdf.copyPages(basePdf, basePdf.getPageIndices());
+  basePages.forEach(page => mergedPdf.addPage(page));
+
+  const priorAuthAppendEvidenceAttachment = async (entry, att) => {
+    const item = entry.evidence || {};
+    const storedPath = priorAuthExportAttachmentPath(att);
+    if (!storedPath) return;
+
+    const filename = priorAuthExportAttachmentFilename(att);
+    const ext = path.extname(filename || storedPath).toLowerCase();
+    const label = String(item.label || entry.key || "Supporting Evidence");
+
+    try {
+      if ([".pdf", ".png", ".jpg", ".jpeg", ".txt", ".csv"].includes(ext)) {
+        await workspaceAppendPdfKitPage(mergedPdf, (coverDoc) => {
+          const CONTENT_WIDTH = coverDoc.page.width - 100;
+          coverDoc.font("Helvetica-Bold").fontSize(16).text(label + " Source Proof", { width: CONTENT_WIDTH });
+          coverDoc.moveDown(0.5);
+          coverDoc.font("Helvetica").fontSize(10).text([
+            "Attached source file follows this cover page.",
+            "",
+            "File: " + filename,
+            "Evidence item: " + label
+          ].join("\n"), { width: CONTENT_WIDTH, lineGap: 3 });
+        });
+      }
+
+      if (ext === ".pdf") {
+        const pdfBytes = fs.readFileSync(storedPath);
+        const extDoc = await PDFDocument.load(pdfBytes);
+        const pages = await mergedPdf.copyPages(extDoc, extDoc.getPageIndices());
+        pages.forEach(page => mergedPdf.addPage(page));
+        return;
+      }
+
+      if ([".png", ".jpg", ".jpeg"].includes(ext)) {
+        const imgBytes = fs.readFileSync(storedPath);
+        const img = ext === ".png"
+          ? await mergedPdf.embedPng(imgBytes)
+          : await mergedPdf.embedJpg(imgBytes);
+        const page = mergedPdf.addPage();
+        const { width, height } = page.getSize();
+        const maxWidth = width - 100;
+        const maxHeight = height - 100;
+        const scale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
+        const drawWidth = img.width * scale;
+        const drawHeight = img.height * scale;
+        page.drawImage(img, {
+          x: (width - drawWidth) / 2,
+          y: (height - drawHeight) / 2,
+          width: drawWidth,
+          height: drawHeight
+        });
+        return;
+      }
+
+      if ([".txt", ".csv"].includes(ext)) {
+        await workspaceAppendTextAttachmentPage(mergedPdf, { label, attachment: att }, storedPath);
+        return;
+      }
+
+      await workspaceAppendPdfKitPage(mergedPdf, (fallbackDoc) => {
+        const CONTENT_WIDTH = fallbackDoc.page.width - 100;
+        fallbackDoc.font("Helvetica-Bold").fontSize(14).text(label + " Uploaded File", { width: CONTENT_WIDTH });
+        fallbackDoc.moveDown(0.5);
+        fallbackDoc.font("Helvetica").fontSize(10).text([
+          "File: " + filename,
+          "Type: " + (ext || "Unknown"),
+          "",
+          "This file is tracked as part of the packet, but this file type cannot be embedded directly into the PDF without a document conversion service.",
+          "Open or attach the original uploaded file separately if payer submission requires the exact document."
+        ].join("\n"), { width: CONTENT_WIDTH, lineGap: 3 });
+      });
+    } catch (err) {
+      await workspaceAppendPdfKitPage(mergedPdf, (fallbackDoc) => {
+        const CONTENT_WIDTH = fallbackDoc.page.width - 100;
+        fallbackDoc.font("Helvetica-Bold").fontSize(14).text(label + " Attachment Preview Error", { width: CONTENT_WIDTH });
+        fallbackDoc.moveDown(0.5);
+        fallbackDoc.font("Helvetica").fontSize(10).text([
+          "File: " + filename,
+          "",
+          "The evidence item was included in the packet index, but the uploaded file could not be embedded automatically.",
+          "Review or attach the source file separately before payer submission."
+        ].join("\n"), { width: CONTENT_WIDTH, lineGap: 3 });
+      });
+    }
+  };
+
+  for (const entry of priorAuthExportRows) {
+    if (!entry || entry.kind !== "evidence") continue;
+    const item = entry.evidence || {};
+    const attachments = priorAuthExportEligibleAttachments(item);
+    for (const att of attachments) {
+      await priorAuthAppendEvidenceAttachment(entry, att);
+    }
+  }
+
+  const finalBytes = await mergedPdf.save();
+
+  res.writeHead(200, {
+    "Content-Type": "application/pdf",
+    "Content-Disposition": "inline; filename=prior-auth-appeal-packet.pdf",
+    "Cache-Control": "no-store, no-cache, must-revalidate, private",
+    "Pragma": "no-cache",
+    "Expires": "0"
+  });
+
+  return res.end(Buffer.from(finalBytes));
 }
 
 if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
@@ -46862,7 +47021,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     if (key === "denial_or_partial_approval_letter") {
       return `
         <details class="ws-proof-preview" style="margin-top:10px;">
-          <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview evidence</summary>
+          <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview system context</summary>
           <div class="muted small" style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
             <strong>System-found prior authorization decision context</strong><br/>
             <span>This is system-found case context, not an attached source document. Upload the payer decision letter if the packet needs the actual document.</span><br/><br/>
@@ -46880,7 +47039,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     if (key === "original_prior_auth_request" || key === "evidence_of_authorization" || key === "authorization_history") {
       return `
         <details class="ws-proof-preview" style="margin-top:10px;">
-          <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview evidence</summary>
+          <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview system context</summary>
           <div class="muted small" style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
             <strong>System-found authorization context</strong><br/>
             <span>This is system-found authorization context, not an attached source document. Upload the original request or authorization history if the packet needs the actual document.</span><br/><br/>
@@ -46899,7 +47058,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
     return `
       <details class="ws-proof-preview" style="margin-top:10px;">
-        <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview evidence</summary>
+        <summary class="btn secondary small" style="display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:1.1;cursor:pointer;">Preview system context</summary>
         <div class="muted small" style="margin-top:10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
           <strong>System-found evidence context</strong><br/>
           <span>This is system-found context, not an attached source document. Upload source proof if the packet needs the actual document.</span><br/><br/>
