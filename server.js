@@ -46641,6 +46641,173 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/exc
   return redirect(res, backHref + `&pa_status=${nextExcluded ? "evidence_excluded" : "evidence_included"}`);
 }
 
+
+if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
+  const auth_case_id = String(parsed.query.auth_case_id || "").trim();
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+
+  if (!row) {
+    return send(res, 404, "Prior authorization case not found");
+  }
+
+  const ctx = tjhpPriorAuthAppealWorkspaceContext(org, row);
+  const evidenceItems = tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row);
+  const editablePacketSections = tjhpPriorAuthWorkspaceEditablePacketSectionsOnly(org, row);
+
+  const priorAuthSavedPacketSections =
+    row &&
+    row.workspace_packet_sections &&
+    typeof row.workspace_packet_sections === "object" &&
+    !Array.isArray(row.workspace_packet_sections)
+      ? row.workspace_packet_sections
+      : {};
+
+  const editableByKey = new Map();
+  editablePacketSections.forEach(section => {
+    const key = String(section && section.key || "").trim();
+    if (key) editableByKey.set(key, section);
+  });
+
+  const evidenceByKey = new Map();
+  evidenceItems.forEach(item => {
+    const key = String(item && item.key || "").trim();
+    if (key) evidenceByKey.set(key, item);
+  });
+
+  const packetSectionBody = key => {
+    const cleanKey = String(key || "").trim();
+    if (!cleanKey) return "";
+    if (Object.prototype.hasOwnProperty.call(priorAuthSavedPacketSections, cleanKey)) {
+      return String(priorAuthSavedPacketSections[cleanKey] || "").trimEnd();
+    }
+    const section = editableByKey.get(cleanKey);
+    return String(section && section.body != null ? section.body : "").trimEnd();
+  };
+
+  const packetOrder = [
+    ["section", "appeal_narrative"],
+    ["section", "case_summary"],
+    ["evidence", "original_prior_auth_request"],
+    ["evidence", "denial_or_partial_approval_letter"],
+    ["section", "letter_of_medical_necessity"],
+    ["section", "clinical_summary"],
+    ["evidence", "clinical_documentation"],
+    ["evidence", "diagnostic_results"],
+    ["evidence", "payer_policy_guidelines"],
+    ["evidence", "coding_rationale"],
+    ["evidence", "authorization_history"],
+    ["evidence", "evidence_of_authorization"],
+    ["evidence", "provider_authorization_form"],
+    ["evidence", "prior_payer_correspondence"],
+    ["evidence", "peer_to_peer_notes"],
+    ["evidence", "missing_documentation_response"],
+    ["section", "requested_action"],
+    ["section", "attachments_index"],
+    ["section", "evidence_summary"]
+  ];
+
+  const used = new Set();
+  const rows = [];
+
+  const pushRow = (kind, key) => {
+    const cleanKind = String(kind || "").trim();
+    const cleanKey = String(key || "").trim();
+    if (!cleanKind || !cleanKey) return;
+
+    const id = cleanKind + ":" + cleanKey;
+    if (used.has(id)) return;
+
+    if (cleanKind === "section" && editableByKey.has(cleanKey)) {
+      used.add(id);
+      rows.push({ kind: cleanKind, key: cleanKey, section: editableByKey.get(cleanKey), body: packetSectionBody(cleanKey) });
+    }
+
+    if (cleanKind === "evidence" && evidenceByKey.has(cleanKey)) {
+      used.add(id);
+      rows.push({ kind: cleanKind, key: cleanKey, evidence: evidenceByKey.get(cleanKey) });
+    }
+  };
+
+  packetOrder.forEach(pair => pushRow(pair[0], pair[1]));
+  editablePacketSections.forEach(section => pushRow("section", section && section.key));
+  evidenceItems.forEach(item => pushRow("evidence", item && item.key));
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", "inline; filename=prior-auth-appeal-packet.pdf");
+
+  const doc = new PDFKitDocument({ margin: 54, size: "LETTER", bufferPages: true });
+  doc.pipe(res);
+
+  const addPageHeader = (title) => {
+    doc.font("Helvetica-Bold").fontSize(15).text(title, { align: "left" });
+    doc.moveDown(0.35);
+    doc.font("Helvetica").fontSize(9).fillColor("#374151")
+      .text("TJ Healthcare Pro · Prior Authorization Appeal Packet Preview", { align: "left" });
+    doc.moveDown(0.8);
+    doc.fillColor("black");
+  };
+
+  const addSectionBody = (text) => {
+    doc.font("Helvetica").fontSize(10).fillColor("black");
+    String(text || "-").split("\n").forEach(line => {
+      doc.text(line || " ", { width: 480, lineGap: 2 });
+    });
+  };
+
+  addPageHeader("Prior Authorization Appeal Packet");
+
+  doc.font("Helvetica-Bold").fontSize(18).text("Prior Authorization Appeal Packet");
+  doc.moveDown(0.8);
+  doc.font("Helvetica").fontSize(11);
+  doc.text("Practice: " + String(org.org_name || org.name || "-"));
+  doc.text("Patient: " + String(ctx.patient || "-"));
+  doc.text("Payer: " + String(ctx.payer || "-"));
+  doc.text("Requested service: " + String(ctx.requested_service || "-"));
+  doc.text("Auth #: " + String(ctx.auth_number || "-"));
+  doc.text("Status: " + String(ctx.status || "-"));
+  doc.moveDown(1);
+
+  rows.forEach((entry, index) => {
+    doc.addPage();
+    if (entry.kind === "section") {
+      const title = String(entry.section && entry.section.title || entry.key || "Packet Section");
+      addPageHeader((index + 1) + ". " + title);
+      addSectionBody(entry.body || "-");
+      return;
+    }
+
+    const item = entry.evidence || {};
+    const title = String(item.label || entry.key || "Evidence");
+    const attachments = Array.isArray(item.attachments) ? item.attachments : [];
+
+    addPageHeader((index + 1) + ". " + title);
+    doc.font("Helvetica").fontSize(10);
+    doc.text("Status: " + String(item.status_label || item.status || "-"));
+    doc.text("Impact: " + String(item.packet_impact || "-"));
+    doc.moveDown(0.5);
+    doc.text(String(item.description || item.why || ""), { width: 480, lineGap: 2 });
+    doc.moveDown(0.8);
+
+    doc.font("Helvetica-Bold").fontSize(11).text("Source Proof");
+    doc.font("Helvetica").fontSize(10);
+
+    if (attachments.length) {
+      attachments.forEach((att, attIndex) => {
+        doc.text((attIndex + 1) + ". " + String(att.file_name || att.originalName || att.filename || "Uploaded file"));
+        if (att.uploaded_at) doc.text("   Uploaded: " + String(att.uploaded_at).slice(0, 10));
+        if (att.url) doc.text("   Open evidence document: " + String(att.url));
+      });
+    } else if (/found in system|system evidence/i.test(String(item.status_label || item.status || item.proof_label || ""))) {
+      doc.text("System-found context is available in the workspace. Upload source proof if the payer packet needs the actual document.");
+    } else {
+      doc.text("No source proof uploaded yet.");
+    }
+  });
+
+  doc.end();
+  return;
+}
+
 if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
   const row = getPriorAuthCaseById(org.org_id, auth_case_id);
@@ -47200,15 +47367,23 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     <style>
       .prior-auth-ai-floater{
         position:fixed;
-        right:18px;
-        bottom:82px;
+        right:22px;
+        bottom:22px;
         z-index:9998;
         border:0;
         border-radius:999px;
-        padding:12px 16px;
+        min-height:44px;
+        padding:10px 15px;
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        gap:8px;
         background:#111827;
         color:#fff;
+        font-size:13px;
+        line-height:1;
         font-weight:900;
+        white-space:nowrap;
         box-shadow:0 18px 40px rgba(15,23,42,.25);
         cursor:pointer;
       }
@@ -47426,7 +47601,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         <div class="ws-quick-actions" style="margin-top:12px;">
           <a class="btn secondary" href="${caseHref}">Back to Prior Auth Case</a>
           <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
-          <button class="btn" type="button" data-prior-auth-preview-open="true" title="Open a read-only prior-auth packet preview.">Preview PDF</button>
+          <a class="btn" href="/prior-auth/appeal-workspace/export?auth_case_id=${encodeURIComponent(ctx.auth_case_id || auth_case_id)}&preview=1" target="_blank" rel="noopener" title="Open the prior-auth appeal packet PDF preview.">Preview PDF</a>
         </div>
       </div>
 
