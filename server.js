@@ -1981,6 +1981,65 @@ function tjhpPriorAuthWorkspaceEvidenceBySection(layout = {}){
   }, {});
 }
 
+
+function tjhpPriorAuthEvidenceUploadText(value = ""){
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tjhpPriorAuthEvidenceKeyForUploadedSource(priorAuth = {}, upload = {}, parsedFile = {}){
+  const status = normalizePriorAuthStatus(priorAuth.status || "");
+  const text = tjhpPriorAuthEvidenceUploadText([
+    upload.file_name,upload.filename,upload.originalName,upload.notes,upload.status,upload.file_type,upload.mimeType,parsedFile.kind,priorAuth.status,priorAuth.denial_reason,priorAuth.partial_approval_reason,priorAuth.requested_service,priorAuth.notes
+  ].filter(Boolean).join(" "));
+  if (status === "Missing Documentation" || /missing documentation|additional information|additional documentation|documentation request/.test(text)) return "missing_documentation_response";
+  if (status === "Peer-to-Peer Needed" || /peer to peer|p2p|peer review/.test(text)) return "peer_to_peer_notes";
+  if (status === "Denied" || status === "Partially Approved" || status === "Appeal Needed" || status === "Appeal Submitted" || String(priorAuth.denial_reason || "").trim() || String(priorAuth.partial_approval_reason || "").trim() || /denied|denial|partial approval|partially approved|adverse determination|determination letter|decision letter|denied service|not meet|medical necessity/.test(text)) return "denial_or_partial_approval_letter";
+  if (/authorization request|prior authorization request|prior auth request|request confirmation|portal confirmation|authorization history|auth history|auth request/.test(text)) return "original_prior_auth_request";
+  return "";
+}
+
+function tjhpPriorAuthUploadedSourceAttachmentForEvidence(upload = {}, uploadId = "", userId = ""){
+  const fileName = String(upload.file_name || upload.originalName || upload.filename || "").trim();
+  const fileType = String(upload.file_type || upload.mimeType || upload.mime_type || "").trim();
+  const fileUrl = String(upload.file_url || upload.url || "").trim() || priorAuthUploadFileUrl(upload);
+  const storedPath = String(upload.stored_path || upload.absPath || "").trim() || priorAuthUploadStoredPath(upload);
+  const id = String(uploadId || upload.upload_id || "").trim();
+  return { attachment_id: "paev_" + uuid(), source: "prior_auth_source_upload", source_upload_id: id, file_name: fileName, file_type: fileType, url: fileUrl, path: storedPath, absPath: storedPath, storedPath, uploaded_at: String(upload.created_at || nowISO()).trim(), uploaded_by: String(userId || upload.created_by || "").trim() };
+}
+
+function tjhpPriorAuthEvidenceAttachmentEquivalent(a = {}, b = {}){
+  const aSource = String(a.source_upload_id || "").trim();
+  const bSource = String(b.source_upload_id || "").trim();
+  if (aSource && bSource && aSource === bSource) return true;
+  const aUrl = String(a.url || "").trim();
+  const bUrl = String(b.url || "").trim();
+  if (aUrl && bUrl && aUrl === bUrl) return true;
+  const aPath = String(a.absPath || a.storedPath || a.path || "").trim();
+  const bPath = String(b.absPath || b.storedPath || b.path || "").trim();
+  if (aPath && bPath && aPath === bPath) return true;
+  const aName = String(a.file_name || "").trim();
+  const bName = String(b.file_name || "").trim();
+  return !!(aName && bName && aName === bName && aSource === bSource);
+}
+
+function tjhpPriorAuthSourceUploadAttachmentForEvidence(row = {}, evidenceKey = ""){
+  const key = String(evidenceKey || "").trim();
+  const sourceUploadId = String(row.source_upload_batch_id || "").trim();
+  if (!key || !sourceUploadId) return null;
+  const uploads = getPriorAuthUploads(row.org_id || "");
+  const upload = uploads.find(x => String(x.upload_id || "") === sourceUploadId) || null;
+  if (!upload) return null;
+  const inferredKey = tjhpPriorAuthEvidenceKeyForUploadedSource(row, upload, {});
+  if (String(inferredKey || "") !== key) return null;
+  const attachment = tjhpPriorAuthUploadedSourceAttachmentForEvidence(upload, sourceUploadId, upload.created_by || row.created_by || "");
+  if (!String(attachment.url || attachment.path || attachment.absPath || attachment.storedPath || "").trim()) return null;
+  return attachment;
+}
+
 function tjhpPriorAuthWorkspaceEvidenceState(row = {}, evidenceKey = ""){
   const key = String(evidenceKey || "").trim();
   const rawEvidence =
@@ -2002,6 +2061,15 @@ function tjhpPriorAuthWorkspaceEvidenceState(row = {}, evidenceKey = ""){
       .filter(x => x && typeof x === "object")
       .map(x => ({ ...x }))
     : [];
+
+  const sourceUploadAttachment = tjhpPriorAuthSourceUploadAttachmentForEvidence(row, key);
+  if (
+    sourceUploadAttachment &&
+    !attachments.some(existing => tjhpPriorAuthEvidenceAttachmentEquivalent(existing, sourceUploadAttachment))
+  ) {
+    attachments.unshift(sourceUploadAttachment);
+  }
+
   return {
     excluded: itemState.excluded === true,
     attachments
