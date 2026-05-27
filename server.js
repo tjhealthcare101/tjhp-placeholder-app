@@ -2026,6 +2026,70 @@ function tjhpPriorAuthEvidenceAttachmentEquivalent(a = {}, b = {}){
   return !!(aName && bName && aName === bName && aSource === bSource);
 }
 
+
+function tjhpPriorAuthAttachUploadedSourceEvidence(row = {}, evidenceKey = "", attachment = {}){
+  const key = String(evidenceKey || "").trim();
+  if (!key || !attachment || typeof attachment !== "object") return row;
+
+  const currentEvidence =
+    row &&
+    row.workspace_evidence &&
+    typeof row.workspace_evidence === "object" &&
+    !Array.isArray(row.workspace_evidence)
+      ? row.workspace_evidence
+      : {};
+
+  const currentState = tjhpPriorAuthWorkspaceEvidenceState(row, key);
+  const attachments = Array.isArray(currentState.attachments) ? [...currentState.attachments] : [];
+
+  if (!attachments.some(existing => tjhpPriorAuthEvidenceAttachmentEquivalent(existing, attachment))) {
+    attachments.push(attachment);
+  }
+
+  return {
+    ...row,
+    workspace_evidence: {
+      ...currentEvidence,
+      [key]: {
+        excluded: false,
+        attachments
+      }
+    }
+  };
+}
+
+function tjhpPriorAuthAttachSourceUploadEvidenceForCaseId(org_id, auth_case_id, upload = {}, uploadId = "", userId = "", parsedFile = {}){
+  const oid = String(org_id || "").trim();
+  const caseId = String(auth_case_id || "").trim();
+  if (!oid || !caseId) return null;
+
+  const currentCase = getPriorAuthCaseById(oid, caseId);
+  if (!currentCase) return null;
+
+  const caseForSourceEvidence = {
+    ...currentCase,
+    org_id: oid,
+    source_upload_batch_id: String(currentCase.source_upload_batch_id || uploadId || "").trim()
+  };
+
+  const evidenceKey = tjhpPriorAuthEvidenceKeyForUploadedSource(caseForSourceEvidence, upload, parsedFile);
+  if (!evidenceKey) return null;
+
+  const attachment = tjhpPriorAuthUploadedSourceAttachmentForEvidence(upload, uploadId, userId);
+  const hasSource = String(
+    attachment.url ||
+    attachment.path ||
+    attachment.absPath ||
+    attachment.storedPath ||
+    ""
+  ).trim();
+
+  if (!hasSource) return null;
+
+  const updatedCase = tjhpPriorAuthAttachUploadedSourceEvidence(caseForSourceEvidence, evidenceKey, attachment);
+  return upsertPriorAuthCase(oid, updatedCase, userId || "");
+}
+
 function tjhpPriorAuthSourceUploadAttachmentForEvidence(row = {}, evidenceKey = ""){
   const key = String(evidenceKey || "").trim();
   const sourceUploadId = String(row.source_upload_batch_id || "").trim();
@@ -54048,7 +54112,18 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
               createdPriorAuthCaseIds.push(savedCaseId);
             }
 
-            if (savedCaseId) knownPriorAuthCaseIds.add(savedCaseId);
+            if (savedCaseId) {
+              tjhpPriorAuthAttachSourceUploadEvidenceForCaseId(
+                org.org_id,
+                savedCaseId,
+                file,
+                priorAuthUploadId,
+                sess.user_id || "",
+                parsedFile
+              );
+
+              knownPriorAuthCaseIds.add(savedCaseId);
+            }
           });
 
           totalParsedCases += parsedCaseCount;
