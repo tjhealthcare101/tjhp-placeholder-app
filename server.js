@@ -2008,7 +2008,7 @@ function tjhpPriorAuthUploadedSourceAttachmentForEvidence(upload = {}, uploadId 
   const fileUrl = String(upload.file_url || upload.url || "").trim() || priorAuthUploadFileUrl(upload);
   const storedPath = String(upload.stored_path || upload.absPath || "").trim() || priorAuthUploadStoredPath(upload);
   const id = String(uploadId || upload.upload_id || "").trim();
-  return { attachment_id: "paev_" + uuid(), source: "prior_auth_source_upload", source_upload_id: id, file_name: fileName, file_type: fileType, url: fileUrl, path: storedPath, absPath: storedPath, storedPath, uploaded_at: String(upload.created_at || nowISO()).trim(), uploaded_by: String(userId || upload.created_by || "").trim() };
+  return { attachment_id: id ? "paev_src_" + id : "paev_" + uuid(), source: "prior_auth_source_upload", source_upload_id: id, file_name: fileName, file_type: fileType, url: fileUrl, path: storedPath, absPath: storedPath, storedPath, uploaded_at: String(upload.created_at || nowISO()).trim(), uploaded_by: String(userId || upload.created_by || "").trim() };
 }
 
 function tjhpPriorAuthEvidenceAttachmentEquivalent(a = {}, b = {}){
@@ -2026,6 +2026,51 @@ function tjhpPriorAuthEvidenceAttachmentEquivalent(a = {}, b = {}){
   return !!(aName && bName && aName === bName && aSource === bSource);
 }
 
+
+
+function tjhpPriorAuthParseEvidencePageList(value = ""){
+  const out = new Set();
+
+  const rawParts = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[,;\s]+/);
+
+  rawParts.forEach(part => {
+    const raw = String(part || "").trim();
+    if (!raw) return;
+
+    const range = raw.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (range) {
+      const start = Math.max(1, Number(range[1] || 0) || 0);
+      const end = Math.max(1, Number(range[2] || 0) || 0);
+      const lo = Math.min(start, end);
+      const hi = Math.max(start, end);
+      for (let n = lo; n <= hi && n <= 10000; n += 1) out.add(n);
+      return;
+    }
+
+    const n = Math.max(1, Number(raw.replace(/[^0-9]/g, "") || 0) || 0);
+    if (n > 0) out.add(n);
+  });
+
+  return out;
+}
+
+function tjhpPriorAuthNormalizeEvidencePageList(value = ""){
+  return Array.from(tjhpPriorAuthParseEvidencePageList(value))
+    .sort((a, b) => a - b)
+    .join(", ");
+}
+
+function tjhpPriorAuthEvidenceAttachmentMatchesToken(att = {}, attachmentId = "", sourceUploadId = ""){
+  const targetAttachmentId = String(attachmentId || "").trim();
+  const targetSourceUploadId = String(sourceUploadId || "").trim();
+
+  if (targetAttachmentId && String(att.attachment_id || "").trim() === targetAttachmentId) return true;
+  if (targetSourceUploadId && String(att.source_upload_id || "").trim() === targetSourceUploadId) return true;
+
+  return false;
+}
 
 function tjhpPriorAuthAttachUploadedSourceEvidence(row = {}, evidenceKey = "", attachment = {}){
   const key = String(evidenceKey || "").trim();
@@ -46774,6 +46819,75 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/exc
 }
 
 
+
+if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/pages") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+
+  const auth_case_id = String(ps.get("auth_case_id") || "").trim();
+  const evidence_key = String(ps.get("evidence_key") || "").trim();
+  const attachment_id = String(ps.get("attachment_id") || "").trim();
+  const source_upload_id = String(ps.get("source_upload_id") || "").trim();
+  const pages_excluded = tjhpPriorAuthNormalizeEvidencePageList(ps.get("pages_excluded") || "");
+
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  if (!row) return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+
+  const backHref = "/prior-auth/appeal-workspace?auth_case_id=" + encodeURIComponent(auth_case_id);
+  const validEvidenceKeys = new Set(tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row).map(x => String(x.key || "").trim()).filter(Boolean));
+
+  if (!evidence_key || !validEvidenceKeys.has(evidence_key) || (!attachment_id && !source_upload_id)) {
+    return redirect(res, backHref + "&pa_status=evidence_invalid");
+  }
+
+  const currentEvidence =
+    row.workspace_evidence &&
+    typeof row.workspace_evidence === "object" &&
+    !Array.isArray(row.workspace_evidence)
+      ? row.workspace_evidence
+      : {};
+
+  const currentItemState =
+    currentEvidence[evidence_key] &&
+    typeof currentEvidence[evidence_key] === "object" &&
+    !Array.isArray(currentEvidence[evidence_key])
+      ? currentEvidence[evidence_key]
+      : {};
+
+  const currentState = tjhpPriorAuthWorkspaceEvidenceState(row, evidence_key);
+  let matched = false;
+
+  const updatedAttachments = (Array.isArray(currentState.attachments) ? currentState.attachments : []).map(att => {
+    if (!tjhpPriorAuthEvidenceAttachmentMatchesToken(att, attachment_id, source_upload_id)) return att;
+
+    matched = true;
+
+    return {
+      ...att,
+      excluded_pages: pages_excluded,
+      excluded_page_numbers: Array.from(tjhpPriorAuthParseEvidencePageList(pages_excluded))
+    };
+  });
+
+  if (!matched) {
+    return redirect(res, backHref + "&pa_status=evidence_invalid");
+  }
+
+  upsertPriorAuthCase(org.org_id, {
+    ...row,
+    workspace_evidence: {
+      ...currentEvidence,
+      [evidence_key]: {
+        ...currentItemState,
+        excluded: currentState.excluded === true,
+        attachments: updatedAttachments
+      }
+    }
+  }, sess.user_id || "");
+
+  return redirect(res, backHref + "&pa_status=evidence_pages_saved");
+}
+
 if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
   const row = getPriorAuthCaseById(org.org_id, auth_case_id);
@@ -46980,6 +47094,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
       doc.text((attIndex + 1) + ". " + priorAuthExportAttachmentFilename(att));
       if (att.uploaded_at) doc.text("   Uploaded: " + String(att.uploaded_at).slice(0, 10));
       if (att.url) doc.text("   Evidence link: " + String(att.url));
+      if (att.excluded_pages) doc.text("   Excluded PDF pages from packet: " + String(att.excluded_pages));
     });
   });
 
@@ -47019,7 +47134,25 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
       if (ext === ".pdf") {
         const pdfBytes = fs.readFileSync(storedPath);
         const extDoc = await PDFDocument.load(pdfBytes);
-        const pages = await mergedPdf.copyPages(extDoc, extDoc.getPageIndices());
+        const excludedPages = tjhpPriorAuthParseEvidencePageList(att.excluded_pages || att.excludedPages || att.pages_excluded || att.excluded_page_numbers || "");
+        const includedPageIndexes = extDoc.getPageIndices().filter(pageIndex => !excludedPages.has(pageIndex + 1));
+
+        if (!includedPageIndexes.length) {
+          await workspaceAppendPdfKitPage(mergedPdf, (fallbackDoc) => {
+            const CONTENT_WIDTH = fallbackDoc.page.width - 100;
+            fallbackDoc.font("Helvetica-Bold").fontSize(14).text(label + " Uploaded File", { width: CONTENT_WIDTH });
+            fallbackDoc.moveDown(0.5);
+            fallbackDoc.font("Helvetica").fontSize(10).text([
+              "File: " + filename,
+              "",
+              "All pages in this uploaded PDF are excluded from the packet export.",
+              "The original source file remains available in the workspace."
+            ].join("\n"), { width: CONTENT_WIDTH, lineGap: 3 });
+          });
+          return;
+        }
+
+        const pages = await mergedPdf.copyPages(extDoc, includedPageIndexes);
         pages.forEach(page => mergedPdf.addPage(page));
         return;
       }
@@ -47200,7 +47333,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     `;
   };
 
-  const priorAuthEvidenceAttachmentPreviewHtml = (att = {}) => {
+  const priorAuthEvidenceAttachmentPreviewHtml = (att = {}, evidenceKey = "") => {
     const url = String(att.url || att.path || "").trim();
     const fileName = String(att.file_name || att.originalName || att.filename || "Uploaded file").trim();
     const fileType = String(att.file_type || att.mimeType || "").toLowerCase().trim();
@@ -47233,6 +47366,25 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
     const openLink = `<a class="btn secondary small" style="margin-top:8px;display:inline-flex;align-items:center;justify-content:center;min-height:34px;" href="${safeStr(url)}" target="_blank" rel="noopener">Open evidence document</a>`;
 
+    const attachmentId = String(att.attachment_id || "").trim();
+    const sourceUploadId = String(att.source_upload_id || "").trim();
+    const excludedPagesText = tjhpPriorAuthNormalizeEvidencePageList(att.excluded_pages || att.excludedPages || att.pages_excluded || att.excluded_page_numbers || "");
+
+    const pdfPageControls = isPdf ? `
+      <form method="${"POST"}" action="/prior-auth/appeal-workspace/evidence/pages" style="margin-top:10px;border:1px solid #e5e7eb;border-radius:12px;padding:10px;background:#fff;">
+        <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
+        <input type="hidden" name="evidence_key" value="${safeStr(evidenceKey)}" />
+        <input type="hidden" name="attachment_id" value="${safeStr(attachmentId)}" />
+        <input type="hidden" name="source_upload_id" value="${safeStr(sourceUploadId)}" />
+        <label class="muted small" style="display:block;font-weight:900;margin-bottom:6px;">Exclude PDF pages from packet export</label>
+        <input name="pages_excluded" value="${safeStr(excludedPagesText)}" placeholder="Example: 5, 7-9" style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:10px;padding:8px;" />
+        <div class="btnRow" style="margin-top:8px;">
+          <button class="btn secondary small" type="submit">Save page exclusions</button>
+          <span class="muted small">Only affects packet export. The uploaded source file is unchanged.</span>
+        </div>
+      </form>
+    ` : "";
+
     if (isPdf) {
       return `
         <details class="ws-proof-preview prior-auth-uploaded-evidence-preview" style="margin-top:10px;">
@@ -47242,6 +47394,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             ${meta}
             <iframe src="${safeStr(url)}" title="${safeStr(fileName)}" style="width:100%;height:520px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;margin-top:10px;"></iframe>
             ${openLink}
+            ${pdfPageControls}
           </div>
         </details>
       `;
@@ -47256,6 +47409,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             ${meta}
             <img src="${safeStr(url)}" alt="${safeStr(fileName)}" style="display:block;max-width:100%;max-height:520px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;margin-top:10px;" />
             ${openLink}
+            ${pdfPageControls}
           </div>
         </details>
       `;
@@ -47280,7 +47434,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     const attachments = Array.isArray(item.attachments) ? item.attachments : [];
     const attachmentsHtml = attachments.length
       ? `<div class="ws-proof-detail" style="margin-top:8px;">
-          ${attachments.map(att => priorAuthEvidenceAttachmentPreviewHtml(att)).join("")}
+          ${attachments.map(att => priorAuthEvidenceAttachmentPreviewHtml(att, itemKey)).join("")}
         </div>`
       : (/found in system|system evidence/i.test(String(item.status_label || item.status || item.proof_label || ""))
           ? `<div class="muted small" style="margin-top:8px;">System-found context is available below. Upload source proof if the payer packet needs the actual document.</div>`
@@ -47888,6 +48042,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         ${String(parsed.query.pa_status || "").trim() === "evidence_uploaded" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization source proof uploaded.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "evidence_excluded" ? `<div class="alert warn" style="margin:10px 0;">Evidence item excluded from packet.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "evidence_included" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Evidence item included in packet.</div>` : ""}
+        ${String(parsed.query.pa_status || "").trim() === "evidence_pages_saved" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Evidence PDF page exclusions saved.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "evidence_invalid" ? `<div class="alert warn" style="margin:10px 0;">That evidence item is not available.</div>` : ""}
         <div class="ws-quick-actions" style="margin-top:12px;">
           <a class="btn secondary" href="${caseHref}">Back to Prior Auth Case</a>
