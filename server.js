@@ -48009,7 +48009,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         <div>
           <h2 style="margin:0;">AI Prior Authorization Assistant</h2>
           <p class="muted small" style="margin:6px 0 0 0;">
-            Shell only in this phase. It does not call AI, create an agent workspace, submit to a payer, or change case data.
+            Assistant suggestions can help improve prior-auth packet drafts, organize source-proof gaps, and prepare payer-facing language. Review suggestions before saving.
           </p>
         </div>
         <button class="prior-auth-shell-close" type="button" data-prior-auth-shell-close="true">Close</button>
@@ -48022,11 +48022,11 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         </p>
       </div>
 
-      <h3>Future assistant actions</h3>
+      <h3 data-prior-auth-assistant-copy-active="true">AI Assistant Actions</h3>
       <div>
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Help improve the cover letter language for this prior authorization appeal.">Improve cover letter language</button>
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Improve the Letter of Medical Necessity rationale using the prior-auth case data and uploaded source proof.">Improve LMN rationale</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Map the clinical facts to payer medical necessity criteria and update the Clinical Summary with a payer-criteria rationale.">Map clinical facts to payer criteria</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Map the clinical facts to payer medical necessity criteria and update the Clinical Summary with a payer-criteria rationale. If Letter of Medical Necessity is selected as the target, improve the LMN instead.">Map clinical facts to payer criteria</button>
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Find missing source proof using TJ Healthcare Pro packet data. If EHR retrieval is needed, explain that Enterprise EHR integration is required.">Find missing source proof</button>
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Improve the Clinical Summary using prior-auth case context and uploaded clinical evidence.">Improve clinical summary</button>
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Suggest PDF pages to exclude from the denial letter, for example exclude pages 5, 7-9.">Suggest PDF pages to exclude</button>
@@ -48049,7 +48049,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         </select>
         <div data-prior-auth-assistant-messages="true" style="max-height:260px;overflow:auto;border:1px solid #e5e7eb;border-radius:12px;background:#f8fafc;padding:10px;margin-bottom:10px;">
           <div class="muted small">
-            Type a question or choose a shortcut. This shell gives local guidance only in this phase.
+            Type a question or choose a shortcut. Suggestions appear as draft updates for staff review.
           </div>
         </div>
         <div data-prior-auth-assistant-proposal="true" style="display:none;margin-bottom:10px;border:1px solid #86efac;background:#ecfdf5;border-radius:12px;padding:10px;">
@@ -48072,13 +48072,13 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           ></textarea>
           <div class="btnRow" style="margin-top:8px;">
             <button class="btn small" type="button" data-prior-auth-assistant-submit="true">Ask Assistant</button>
-            <span class="muted small">Shell only — no AI call, no payer submission, and no case mutation.</span>
+            <span class="muted small">Assistant suggestions update draft text only. Review, apply, then save the section.</span>
           </div>
         </form>
       </div>
 
-      <div class="alert warn" style="margin-top:12px;">
-        Not active in this phase. Responses are local shell guidance until the Prior Auth AI workflow is added.
+      <div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin-top:12px;">
+        Assistant actions generate draft suggestions only. They do not submit to a payer; use Save Section or Save page exclusions to persist changes.
       </div>
     </div>
 
@@ -48361,7 +48361,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             return 'The cover letter should stay high level: identify the patient/auth request, summarize the appeal reason, reference the attached LMN and evidence, and state the requested authorization action. Do not merge the full LMN into the cover letter.';
           }
 
-          return 'I can help organize the prior-auth packet, identify missing source proof, outline LMN language, map facts to payer criteria, or prepare peer-to-peer points. This is shell guidance only; no AI call or case update occurred.';
+          return 'I can help organize the prior-auth packet, identify missing source proof, outline LMN language, map facts to payer criteria, or prepare peer-to-peer points. Suggestions update drafts only after staff review and normal Save actions.';
         };
 
         if (assistantForm) {
@@ -48779,13 +48779,13 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         <div class="ws-callout" style="border-left:4px solid #6366f1;">
           <h3>AI Prior Authorization Assistant</h3>
           <p class="muted small">
-            Prior-auth medical-necessity support, payer criteria review, and appeal language suggestions will be added in a later phase.
+            Use the assistant to improve prior-auth appeal language, LMN rationale, clinical summaries, payer-criteria mapping, and source-proof readiness.
           </p>
-          <button class="btn secondary" type="button" data-prior-auth-ai-open="true" data-prior-auth-assistant-open="true" onclick="return (window.__tjhpPriorAuthAssistantOpenFromClick ? window.__tjhpPriorAuthAssistantOpenFromClick(event) : false)" title="Open the Prior Auth Assistant shell. No AI call is made in this phase.">
+          <button class="btn secondary" type="button" data-prior-auth-ai-open="true" data-prior-auth-assistant-open="true" onclick="return (window.__tjhpPriorAuthAssistantOpenFromClick ? window.__tjhpPriorAuthAssistantOpenFromClick(event) : false)" title="Open the Prior Auth Assistant.">
             Open AI Prior Authorization Assistant
           </button>
           <div class="muted small" style="margin-top:8px;">
-            Not active in this phase. This shell does not call AI, create an agent workspace, submit to a payer, or change case data.
+            Assistant suggestions update workspace drafts only. Review changes, then use the normal Save buttons to persist them.
           </div>
         </div>
 
@@ -48835,7 +48835,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
 
     <script>
-      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK */
+      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK PRIOR_AUTH_ASSISTANT_RUNNER_ACTIVE_COPY_OK */
       (function(){
         if (window.__tjhpPriorAuthAssistantResilientRunnerBound) return;
         window.__tjhpPriorAuthAssistantResilientRunnerBound = true;
@@ -48846,7 +48846,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         const safeCss = function(value){
           const raw = String(value || "");
           if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(raw);
-          return raw.replace(/["\\]/g, "\\$&");
+          return raw.replace(/["\\\\]/g, "\\\\$&");
         };
 
         const panel = q("#prior-auth-ai-assistant-panel");
@@ -48984,7 +48984,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             "- Check Authorization History, Provider Authorization Form, Peer-to-Peer Notes, and Missing Documentation Response when relevant.",
             "",
             "TJ Healthcare Pro can use uploaded packet data already attached in this workspace.",
-            "EHR retrieval is an Enterprise integration action. If this organization has Enterprise EHR enabled, a future phase can request clinical notes, labs, imaging, medication history, and treatment records. Otherwise, upload clinical documentation manually."
+            "EHR retrieval is available only for Enterprise plans with EHR integration enabled. If EHR is not connected, upload clinical notes, labs, imaging, medication history, treatment records, and provider documentation manually."
           ].join("\n");
         };
 
@@ -49234,6 +49234,68 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             }
           });
         }
+      })();
+    </script>
+
+    <script>
+      (function(){
+        if (window.__tjhpPriorAuthAssistantFailsafeBound) return;
+        window.__tjhpPriorAuthAssistantFailsafeBound = true;
+
+        const fireAssistantPrompt = function(){
+          const input = document.querySelector('[data-prior-auth-assistant-input="true"]');
+          const prompt = input ? input.value.trim() : "";
+          if (!prompt) return false;
+
+          if (typeof window.__tjhpPriorAuthAssistantRunShellPrompt === "function") {
+            const messages = document.querySelector('[data-prior-auth-assistant-messages="true"]');
+            if (messages) {
+              const wrap = document.createElement("div");
+              wrap.style.marginTop = "8px";
+              wrap.style.padding = "10px";
+              wrap.style.borderRadius = "12px";
+              wrap.style.border = "1px solid #e5e7eb";
+              wrap.style.background = "#fff";
+              wrap.innerHTML = "<strong>You</strong><br/><span></span>";
+              wrap.querySelector("span").textContent = prompt;
+              messages.appendChild(wrap);
+              messages.scrollTop = messages.scrollHeight;
+            }
+
+            window.__tjhpPriorAuthAssistantRunShellPrompt(prompt);
+            if (input) input.value = "";
+          }
+
+          return false;
+        };
+
+        document.addEventListener("click", function(event){
+          const submit = event.target && event.target.closest
+            ? event.target.closest('[data-prior-auth-assistant-submit="true"]')
+            : null;
+
+          if (!submit) return;
+
+          event.preventDefault();
+          event.stopPropagation();
+          if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+          return fireAssistantPrompt();
+        }, true);
+
+        document.addEventListener("keydown", function(event){
+          const input = event.target && event.target.closest
+            ? event.target.closest('[data-prior-auth-assistant-input="true"]')
+            : null;
+
+          if (!input) return;
+
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+            fireAssistantPrompt();
+          }
+        }, true);
       })();
     </script>`, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
 
