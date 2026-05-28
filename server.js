@@ -48025,9 +48025,11 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
       <h3>Future assistant actions</h3>
       <div>
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Help improve the cover letter language for this prior authorization appeal.">Improve cover letter language</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Help draft the Letter of Medical Necessity rationale for this prior authorization appeal.">Draft LMN rationale</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Help map the clinical facts to payer medical necessity criteria.">Map clinical facts to payer criteria</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="What source proof is missing from this prior authorization appeal packet?">Find missing source proof</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Improve the Letter of Medical Necessity rationale using the prior-auth case data and uploaded source proof.">Improve LMN rationale</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Map the clinical facts to payer medical necessity criteria and update the Clinical Summary with a payer-criteria rationale.">Map clinical facts to payer criteria</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Find missing source proof using TJ Healthcare Pro packet data. If EHR retrieval is needed, explain that Enterprise EHR integration is required.">Find missing source proof</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Improve the Clinical Summary using prior-auth case context and uploaded clinical evidence.">Improve clinical summary</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Suggest PDF pages to exclude from the denial letter, for example exclude pages 5, 7-9.">Suggest PDF pages to exclude</button>
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Help prepare peer-to-peer talking points for this prior authorization case.">Prepare peer-to-peer talking points</button>
       </div>
 
@@ -48069,7 +48071,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:12px;padding:10px;font-family:inherit;line-height:1.45;resize:vertical;"
           ></textarea>
           <div class="btnRow" style="margin-top:8px;">
-            <button class="btn small" type="submit">Ask Assistant</button>
+            <button class="btn small" type="button" data-prior-auth-assistant-submit="true">Ask Assistant</button>
             <span class="muted small">Shell only — no AI call, no payer submission, and no case mutation.</span>
           </div>
         </form>
@@ -48830,7 +48832,410 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           });
         })();
       </script>
-  `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
+
+
+    <script>
+      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK */
+      (function(){
+        if (window.__tjhpPriorAuthAssistantResilientRunnerBound) return;
+        window.__tjhpPriorAuthAssistantResilientRunnerBound = true;
+
+        const q = function(sel, root){ return (root || document).querySelector(sel); };
+        const qa = function(sel, root){ return Array.from((root || document).querySelectorAll(sel)); };
+
+        const safeCss = function(value){
+          const raw = String(value || "");
+          if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(raw);
+          return raw.replace(/["\\]/g, "\\$&");
+        };
+
+        const panel = q("#prior-auth-ai-assistant-panel");
+        const messages = q("[data-prior-auth-assistant-messages='true']");
+        const input = q("[data-prior-auth-assistant-input='true']");
+        const form = q("[data-prior-auth-assistant-form='true']");
+        const targetSelect = q("[data-prior-auth-assistant-target='true']");
+        const proposal = q("[data-prior-auth-assistant-proposal='true']");
+        const proposalText = q("[data-prior-auth-assistant-proposal-text='true']");
+        const proposalMeta = q("[data-prior-auth-assistant-proposal-meta='true']");
+
+        let lastPrompt = "";
+        let lastTarget = "";
+        let lastProposal = "";
+
+        const labels = {
+          appeal_narrative: "Prior Authorization Appeal Cover Letter",
+          case_summary: "Prior Authorization Case Summary",
+          letter_of_medical_necessity: "Letter of Medical Necessity",
+          clinical_summary: "Clinical Summary",
+          requested_action: "Requested Action",
+          attachments_index: "Attachments Index",
+          evidence_summary: "Evidence Summary"
+        };
+
+        const addMessage = function(role, text){
+          if (!messages) return;
+          const wrap = document.createElement("div");
+          wrap.style.marginTop = "8px";
+          wrap.style.padding = "10px";
+          wrap.style.borderRadius = "12px";
+          wrap.style.border = "1px solid #e5e7eb";
+          wrap.style.background = role === "user" ? "#fff" : "#ecfeff";
+          const strong = document.createElement("strong");
+          strong.textContent = role === "user" ? "You" : "Prior Auth Assistant";
+          const span = document.createElement("span");
+          span.textContent = text;
+          wrap.appendChild(strong);
+          wrap.appendChild(document.createElement("br"));
+          wrap.appendChild(span);
+          messages.appendChild(wrap);
+          messages.scrollTop = messages.scrollHeight;
+        };
+
+        const sectionFor = function(key){
+          if (!key) return null;
+          return q("[data-prior-auth-packet-page-key='" + safeCss(key) + "']");
+        };
+
+        const textareaFor = function(key){
+          const section = sectionFor(key);
+          return section ? q("textarea[name='section_text']", section) : null;
+        };
+
+        const detectTarget = function(prompt){
+          const selected = targetSelect ? String(targetSelect.value || "auto") : "auto";
+          if (selected && selected !== "auto") return selected;
+
+          const text = String(prompt || "").toLowerCase();
+
+          if (/exclude|remove|omit|skip/.test(text) && /page/.test(text)) return "page_exclusion";
+          if (/lmn|medical necessity|letter of medical necessity|necessity rationale/.test(text)) return "letter_of_medical_necessity";
+          if (/clinical summary|clinical facts|payer criteria|criteria mapping|policy criteria|symptom|severity|failed alternative|treatment history/.test(text)) return "clinical_summary";
+          if (/cover|appeal letter|intro|opening|closing/.test(text)) return "appeal_narrative";
+          if (/case summary|patient summary|auth summary|authorization summary/.test(text)) return "case_summary";
+          if (/requested action|ask|request approval|approve|overturn/.test(text)) return "requested_action";
+          if (/attachment|index|exhibit list/.test(text)) return "attachments_index";
+          if (/missing|proof|source|evidence gap|ehr|clinical document/.test(text)) return "missing_source_proof";
+          if (/evidence summary|proof summary|source proof summary/.test(text)) return "evidence_summary";
+
+          return "appeal_narrative";
+        };
+
+        const extractPages = function(prompt){
+          const text = String(prompt || "");
+          const found = text.match(/\b\d+\s*(?:-\s*\d+)?\b/g) || [];
+          return found.map(x => x.replace(/\s+/g, "")).join(", ");
+        };
+
+        const findEvidenceCard = function(prompt){
+          const text = String(prompt || "").toLowerCase();
+          const key =
+            /clinical/.test(text) ? "clinical_documentation" :
+            /diagnostic|lab|imaging|result/.test(text) ? "diagnostic_results" :
+            /policy|criteria|guideline/.test(text) ? "payer_policy_guidelines" :
+            "denial_or_partial_approval_letter";
+
+          return {
+            key,
+            card: q("[data-prior-auth-ordered-key='" + safeCss(key) + "'], [data-prior-auth-packet-key='" + safeCss(key) + "']")
+          };
+        };
+
+        const runPageExclusion = function(prompt){
+          const pages = extractPages(prompt);
+          const found = findEvidenceCard(prompt);
+          const card = found.card;
+
+          if (!card) {
+            addMessage("assistant", "I could not find the matching evidence card.");
+            return;
+          }
+
+          const field = q("input[name='pages_excluded']", card);
+          card.scrollIntoView({ behavior:"auto", block:"center" });
+
+          if (!field) {
+            addMessage("assistant", "I found the evidence card, but no PDF page-exclusion field is available yet. Upload or preview a PDF source proof first.");
+            return;
+          }
+
+          card.classList.add("prior-auth-ai-working-target");
+
+          setTimeout(function(){
+            if (pages) field.value = pages;
+            card.classList.remove("prior-auth-ai-working-target");
+            card.classList.add("prior-auth-ai-proposed-target");
+            setTimeout(function(){ card.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
+
+            addMessage(
+              "assistant",
+              pages
+                ? "I filled the page-exclusion field with: " + pages + ". Review it, then click Save page exclusions to persist it."
+                : "I found the evidence card. Tell me which pages to exclude, for example: exclude pages 5, 7-9."
+            );
+          }, 500);
+        };
+
+        const missingProofReply = function(prompt){
+          return [
+            "Missing source proof review:",
+            "- Check Denial or Partial Approval Letter for actual payer decision proof.",
+            "- Check Original Prior Authorization Request or portal/fax confirmation.",
+            "- Check Clinical Documentation, Diagnostic Results, Payer Policy / Guidelines, and Coding Rationale.",
+            "- Check Authorization History, Provider Authorization Form, Peer-to-Peer Notes, and Missing Documentation Response when relevant.",
+            "",
+            "TJ Healthcare Pro can use uploaded packet data already attached in this workspace.",
+            "EHR retrieval is an Enterprise integration action. If this organization has Enterprise EHR enabled, a future phase can request clinical notes, labs, imaging, medication history, and treatment records. Otherwise, upload clinical documentation manually."
+          ].join("\n");
+        };
+
+        const proposalFor = function(key, prompt, current){
+          const text = String(prompt || "");
+          const body = String(current || "").trim();
+          const label = labels[key] || key;
+
+          if (key === "letter_of_medical_necessity") {
+            return [
+              body || "Letter of Medical Necessity",
+              "",
+              "Assistant improvement focus:",
+              "- Strengthen why the requested service is medically necessary.",
+              "- Tie symptoms, severity, failed alternatives, and functional impact to payer criteria.",
+              "- Reference uploaded clinical documentation and diagnostic results where available.",
+              "- Keep unsupported facts as placeholders until source proof is uploaded.",
+              "",
+              "Requested adjustment:",
+              text
+            ].join("\n");
+          }
+
+          if (key === "clinical_summary") {
+            return [
+              body || "Clinical Summary",
+              "",
+              "Assistant improvement focus:",
+              "- Organize diagnosis, symptoms, severity, functional impact, treatment history, failed alternatives, and relevant test results.",
+              "- Add a payer-criteria mapping paragraph showing how the patient facts support medical necessity.",
+              "- Reference uploaded documentation where available and flag missing EHR/source proof when needed.",
+              "",
+              "Requested adjustment:",
+              text
+            ].join("\n");
+          }
+
+          if (key === "appeal_narrative") {
+            return [
+              body || "Prior Authorization Appeal Cover Letter",
+              "",
+              "Assistant improvement focus:",
+              "- Keep this as a high-level cover letter.",
+              "- Identify the patient, authorization request, denial/partial approval context, requested action, and attached evidence.",
+              "- Do not merge the full Letter of Medical Necessity into the cover letter.",
+              "",
+              "Requested adjustment:",
+              text
+            ].join("\n");
+          }
+
+          if (key === "requested_action") {
+            return [
+              body || "Requested Action",
+              "",
+              "Please approve the requested prior authorization or approve the remaining requested scope based on the attached Letter of Medical Necessity and supporting evidence.",
+              "",
+              "Requested adjustment:",
+              text
+            ].join("\n");
+          }
+
+          if (key === "attachments_index" || key === "evidence_summary") {
+            return [
+              body || label,
+              "",
+              "Assistant improvement focus:",
+              "- List source proof that is uploaded, found in system, missing, or intentionally excluded.",
+              "- Keep this payer-facing and do not include internal revenue impact.",
+              "",
+              "Requested adjustment:",
+              text
+            ].join("\n");
+          }
+
+          return [
+            body || label,
+            "",
+            "Assistant improvement focus:",
+            "- Improve clarity and payer-facing language.",
+            "- Reference supporting evidence without inventing facts.",
+            "",
+            "Requested adjustment:",
+            text
+          ].join("\n");
+        };
+
+        const showProposal = function(key, prompt){
+          const section = sectionFor(key);
+          const textarea = textareaFor(key);
+
+          if (!section || !textarea) {
+            addMessage("assistant", "I could not find the editable section for " + (labels[key] || key) + ".");
+            return;
+          }
+
+          lastPrompt = prompt;
+          lastTarget = key;
+
+          section.scrollIntoView({ behavior:"auto", block:"center" });
+          section.classList.add("prior-auth-ai-working-target");
+
+          setTimeout(function(){
+            lastProposal = proposalFor(key, prompt, textarea.value);
+
+            section.classList.remove("prior-auth-ai-working-target");
+            section.classList.add("prior-auth-ai-proposed-target");
+            setTimeout(function(){ section.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
+
+            if (proposal && proposalText && proposalMeta) {
+              proposal.style.display = "block";
+              proposalMeta.textContent = "Target: " + (labels[key] || key);
+              proposalText.textContent = lastProposal;
+            }
+
+            addMessage("assistant", "I drafted a proposed update for " + (labels[key] || key) + ". Review the green proposal, then Apply or Regenerate.");
+          }, 650);
+        };
+
+        const runPrompt = function(prompt){
+          const text = String(prompt || "").trim();
+          if (!text) return;
+
+          const target = detectTarget(text);
+
+          if (target === "page_exclusion") {
+            runPageExclusion(text);
+            return;
+          }
+
+          if (target === "missing_source_proof") {
+            addMessage("assistant", missingProofReply(text));
+            return;
+          }
+
+          showProposal(target, text);
+        };
+
+        const applyProposal = function(){
+          if (!lastTarget || !lastProposal) return;
+          const section = sectionFor(lastTarget);
+          const textarea = textareaFor(lastTarget);
+          if (!section || !textarea) return;
+
+          textarea.value = lastProposal;
+          textarea.dispatchEvent(new Event("input", { bubbles:true }));
+          section.scrollIntoView({ behavior:"auto", block:"center" });
+          section.classList.add("prior-auth-ai-proposed-target");
+          setTimeout(function(){ section.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
+
+          addMessage("assistant", "Applied the proposal to the textarea. Click Save Section to persist it.");
+        };
+
+        window.__tjhpPriorAuthAssistantRunShellPrompt = runPrompt;
+
+        const ask = function(event){
+          if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+          }
+
+          const prompt = input ? input.value.trim() : "";
+          if (!prompt) return false;
+
+          addMessage("user", prompt);
+          runPrompt(prompt);
+          if (input) input.value = "";
+          return false;
+        };
+
+        document.addEventListener("click", function(event){
+          const submit = event.target && event.target.closest
+            ? event.target.closest("[data-prior-auth-assistant-submit='true']")
+            : null;
+
+          if (submit) {
+            ask(event);
+            return false;
+          }
+
+          const shortcut = event.target && event.target.closest
+            ? event.target.closest("[data-prior-auth-assistant-prompt]")
+            : null;
+
+          if (shortcut) {
+            event.preventDefault();
+            event.stopPropagation();
+            const prompt = shortcut.getAttribute("data-prior-auth-assistant-prompt") || "";
+            if (input) input.value = prompt;
+            addMessage("user", prompt);
+            runPrompt(prompt);
+            return false;
+          }
+
+          const apply = event.target && event.target.closest
+            ? event.target.closest("[data-prior-auth-assistant-apply='true']")
+            : null;
+
+          if (apply) {
+            event.preventDefault();
+            applyProposal();
+            return false;
+          }
+
+          const regen = event.target && event.target.closest
+            ? event.target.closest("[data-prior-auth-assistant-regenerate='true']")
+            : null;
+
+          if (regen) {
+            event.preventDefault();
+            const extra = input ? input.value.trim() : "";
+            const prompt = extra || lastPrompt || "Regenerate this section.";
+            if (extra) addMessage("user", extra);
+            if (input) input.value = "";
+            if (lastTarget) showProposal(lastTarget, prompt);
+            return false;
+          }
+
+          const clear = event.target && event.target.closest
+            ? event.target.closest("[data-prior-auth-assistant-clear='true']")
+            : null;
+
+          if (clear) {
+            event.preventDefault();
+            lastProposal = "";
+            if (proposal) proposal.style.display = "none";
+            return false;
+          }
+        }, true);
+
+        document.addEventListener("submit", function(event){
+          const assistantForm = event.target && event.target.closest
+            ? event.target.closest("[data-prior-auth-assistant-form='true']")
+            : null;
+
+          if (assistantForm) {
+            ask(event);
+            return false;
+          }
+        }, true);
+
+        if (input) {
+          input.addEventListener("keydown", function(event){
+            if (event.key === "Enter" && !event.shiftKey) {
+              ask(event);
+            }
+          });
+        }
+      })();
+    </script>`, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
 
   return send(res, 200, html);
 }
