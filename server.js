@@ -47958,6 +47958,70 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         box-shadow:0 0 0 6px rgba(34,197,94,.14);
         transition:outline .2s ease, box-shadow .2s ease;
       }
+      .prior-auth-ai-inline-review{
+        border:2px solid #a5b4fc;
+        border-left:5px solid #4f46e5;
+        border-radius:18px;
+        padding:16px;
+        margin-top:14px;
+        background:#fff;
+        box-shadow:0 12px 30px rgba(79,70,229,.12);
+      }
+      .prior-auth-ai-inline-review-title{
+        font-weight:900;
+        margin-bottom:8px;
+      }
+      .prior-auth-ai-inline-diff{
+        white-space:pre-wrap;
+        font-family:inherit;
+        line-height:1.55;
+        border:1px solid #e5e7eb;
+        border-radius:14px;
+        padding:14px;
+        background:#fff;
+        min-height:120px;
+      }
+      .prior-auth-ai-diff-added{
+        background:#bbf7d0;
+        color:#065f46;
+        border-radius:5px;
+        padding:1px 3px;
+      }
+      .prior-auth-ai-inline-regenerate-row{
+        display:flex;
+        gap:10px;
+        align-items:center;
+        margin-top:12px;
+        flex-wrap:wrap;
+      }
+      .prior-auth-ai-inline-regenerate-row input{
+        flex:1 1 360px;
+        min-width:240px;
+        border:1px solid #e5e7eb;
+        border-radius:12px;
+        padding:10px;
+        font-family:inherit;
+      }
+      .prior-auth-ai-inline-review .prior-auth-ai-inline-status{
+        background:#ecfdf5;
+        color:#065f46;
+        border:1px solid #86efac;
+        border-radius:12px;
+        padding:10px;
+        font-weight:900;
+        margin-top:12px;
+      }
+      .prior-auth-ai-inline-review-actions{
+        display:flex;
+        gap:10px;
+        justify-content:flex-end;
+        flex-wrap:wrap;
+        margin-top:12px;
+      }
+      .prior-auth-ai-inline-active{
+        border-left:4px solid #4f46e5 !important;
+        padding-left:18px !important;
+      }
       .prior-auth-assistant-chip{
         display:inline-flex;
         align-items:center;
@@ -48835,7 +48899,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
 
     <script>
-      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK PRIOR_AUTH_ASSISTANT_RUNNER_ACTIVE_COPY_OK */
+      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK PRIOR_AUTH_ASSISTANT_INLINE_SECTION_REVIEW_OK PRIOR_AUTH_ASSISTANT_RUNNER_ACTIVE_COPY_OK */
       (function(){
         if (window.__tjhpPriorAuthAssistantResilientRunnerBound) return;
         window.__tjhpPriorAuthAssistantResilientRunnerBound = true;
@@ -49072,6 +49136,101 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           ].join("\n");
         };
 
+        const priorAuthAssistantEscapeHtml = function(value){
+          return String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        };
+
+        const priorAuthAssistantTokenize = function(value){
+          return String(value || "").match(/\s+|[^\s]+/g) || [];
+        };
+
+        const priorAuthAssistantInlineDiffHtml = function(before, after){
+          const a = priorAuthAssistantTokenize(before);
+          const b = priorAuthAssistantTokenize(after);
+          const maxTokens = 900;
+
+          if (a.length > maxTokens || b.length > maxTokens) {
+            return priorAuthAssistantEscapeHtml(after || "");
+          }
+
+          const dp = Array(a.length + 1).fill(null).map(function(){ return Array(b.length + 1).fill(0); });
+
+          for (let i = a.length - 1; i >= 0; i -= 1) {
+            for (let j = b.length - 1; j >= 0; j -= 1) {
+              dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+            }
+          }
+
+          const out = [];
+          let i = 0;
+          let j = 0;
+
+          while (i < a.length && j < b.length) {
+            if (a[i] === b[j]) {
+              out.push(priorAuthAssistantEscapeHtml(a[i]));
+              i += 1;
+              j += 1;
+            } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+              i += 1;
+            } else {
+              const token = b[j];
+              if (/^\s+$/.test(String(token || ""))) out.push(priorAuthAssistantEscapeHtml(token));
+              else out.push('<span class="prior-auth-ai-diff-added">' + priorAuthAssistantEscapeHtml(token) + '</span>');
+              j += 1;
+            }
+          }
+
+          while (j < b.length) {
+            const token = b[j];
+            if (/^\s+$/.test(String(token || ""))) out.push(priorAuthAssistantEscapeHtml(token));
+            else out.push('<span class="prior-auth-ai-diff-added">' + priorAuthAssistantEscapeHtml(token) + '</span>');
+            j += 1;
+          }
+
+          return out.join("");
+        };
+
+        const priorAuthAssistantRenderInlineReview = function(sectionKey, prompt, beforeText, afterText){
+          const section = sectionFor(sectionKey);
+          const textarea = textareaFor(sectionKey);
+          if (!section || !textarea) return null;
+
+          section.querySelectorAll('[data-prior-auth-inline-ai-review="true"]').forEach(function(el){ el.remove(); });
+
+          const label = labels[sectionKey] || sectionKey.replace(/_/g, " ");
+          const review = document.createElement("div");
+          review.className = "prior-auth-ai-inline-review";
+          review.setAttribute("data-prior-auth-inline-ai-review", "true");
+          review.setAttribute("data-prior-auth-inline-ai-section", sectionKey);
+
+          review.innerHTML = [
+            '<div class="prior-auth-ai-inline-review-title">AI proposed update for ' + priorAuthAssistantEscapeHtml(label) + '</div>',
+            '<div class="muted small" style="margin-bottom:8px;">Review the proposed draft below. Green highlights show additions. You can edit this proposal before applying.</div>',
+            '<div class="prior-auth-ai-inline-diff" contenteditable="true" data-prior-auth-inline-ai-proposed-text="true">' + priorAuthAssistantInlineDiffHtml(beforeText, afterText) + '</div>',
+            '<div class="prior-auth-ai-inline-regenerate-row">',
+              '<input data-prior-auth-inline-ai-regenerate-prompt="true" placeholder="Optional instruction for regenerated version" />',
+              '<button class="btn secondary small" type="button" data-prior-auth-inline-ai-regenerate="true">Regenerate</button>',
+            '</div>',
+            '<div class="prior-auth-ai-inline-status">AI additions are highlighted in green. Edit the proposal directly, then apply when ready.</div>',
+            '<div class="prior-auth-ai-inline-review-actions">',
+              '<button class="btn" type="button" data-prior-auth-inline-ai-apply="true">Apply AI Update to ' + priorAuthAssistantEscapeHtml(label) + '</button>',
+              '<button class="btn secondary" type="button" data-prior-auth-inline-ai-cancel="true">Cancel AI Update</button>',
+            '</div>'
+          ].join("");
+
+          const form = section.querySelector('form[action="/prior-auth/appeal-workspace/save-section"]') || section.querySelector("form") || null;
+          if (form && form.parentNode) form.parentNode.insertBefore(review, form.nextSibling);
+          else section.appendChild(review);
+
+          section.classList.add("prior-auth-ai-inline-active");
+          return review;
+        };
+
         const showProposal = function(key, prompt){
           const section = sectionFor(key);
           const textarea = textareaFor(key);
@@ -49087,12 +49246,27 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           section.scrollIntoView({ behavior:"auto", block:"center" });
           section.classList.add("prior-auth-ai-working-target");
 
+          let banner = section.querySelector('[data-prior-auth-inline-ai-working-banner="true"]');
+          if (!banner) {
+            banner = document.createElement("div");
+            banner.setAttribute("data-prior-auth-inline-ai-working-banner", "true");
+            banner.className = "prior-auth-ai-inline-status";
+            banner.style.marginBottom = "10px";
+            section.insertBefore(banner, section.firstChild);
+          }
+          banner.textContent = "Improving " + (labels[key] || key.replace(/_/g, " ")) + "... Keep this page open.";
+
           setTimeout(function(){
-            lastProposal = proposalFor(key, prompt, textarea.value);
+            const beforeText = textarea.value || "";
+            lastProposal = proposalFor(key, prompt, beforeText);
 
             section.classList.remove("prior-auth-ai-working-target");
             section.classList.add("prior-auth-ai-proposed-target");
             setTimeout(function(){ section.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
+
+            if (banner) banner.remove();
+
+            priorAuthAssistantRenderInlineReview(key, prompt, beforeText, lastProposal);
 
             if (proposal && proposalText && proposalMeta) {
               proposal.style.display = "block";
@@ -49100,7 +49274,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
               proposalText.textContent = lastProposal;
             }
 
-            addMessage("assistant", "I drafted a proposed update for " + (labels[key] || key) + ". Review the green proposal, then Apply or Regenerate.");
+            addMessage("assistant", "I drafted a proposed update for " + (labels[key] || key) + ". Review it in the section below, then Apply, Regenerate, or Cancel.");
           }, 650);
         };
 
@@ -49124,18 +49298,30 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         };
 
         const applyProposal = function(){
-          if (!lastTarget || !lastProposal) return;
+          if (!lastTarget) return;
           const section = sectionFor(lastTarget);
           const textarea = textareaFor(lastTarget);
           if (!section || !textarea) return;
 
-          textarea.value = lastProposal;
+          const inlineReview = section.querySelector('[data-prior-auth-inline-ai-review="true"]');
+          const inlineTextEl = inlineReview ? inlineReview.querySelector('[data-prior-auth-inline-ai-proposed-text="true"]') : null;
+          const proposalTextFromReview = inlineTextEl ? String(inlineTextEl.textContent || "").trim() : "";
+
+          const finalText = proposalTextFromReview || lastProposal;
+          if (!finalText) return;
+
+          textarea.value = finalText;
           textarea.dispatchEvent(new Event("input", { bubbles:true }));
+
+          if (inlineReview) inlineReview.remove();
+          section.classList.remove("prior-auth-ai-inline-active");
+          if (proposal) proposal.style.display = "none";
+
           section.scrollIntoView({ behavior:"auto", block:"center" });
           section.classList.add("prior-auth-ai-proposed-target");
           setTimeout(function(){ section.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
 
-          addMessage("assistant", "Applied the proposal to the textarea. Click Save Section to persist it.");
+          addMessage("assistant", "Applied the AI proposal to the textarea. Click Save Section to persist it.");
         };
 
         window.__tjhpPriorAuthAssistantRunShellPrompt = runPrompt;
@@ -49157,6 +49343,54 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         };
 
         document.addEventListener("click", function(event){
+          const inlineApply = event.target && event.target.closest
+            ? event.target.closest('[data-prior-auth-inline-ai-apply="true"]')
+            : null;
+
+          if (inlineApply) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+            applyProposal();
+            return false;
+          }
+
+          const inlineRegen = event.target && event.target.closest
+            ? event.target.closest('[data-prior-auth-inline-ai-regenerate="true"]')
+            : null;
+
+          if (inlineRegen) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+            const review = inlineRegen.closest('[data-prior-auth-inline-ai-review="true"]');
+            const regenInput = review ? review.querySelector('[data-prior-auth-inline-ai-regenerate-prompt="true"]') : null;
+            const extra = regenInput ? regenInput.value.trim() : "";
+            const prompt = extra || lastPrompt || "Regenerate this section.";
+            if (extra) addMessage("user", extra);
+            if (regenInput) regenInput.value = "";
+            if (lastTarget) showProposal(lastTarget, prompt);
+            return false;
+          }
+
+          const inlineCancel = event.target && event.target.closest
+            ? event.target.closest('[data-prior-auth-inline-ai-cancel="true"]')
+            : null;
+
+          if (inlineCancel) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+            const review = inlineCancel.closest('[data-prior-auth-inline-ai-review="true"]');
+            const section = review ? review.closest('[data-prior-auth-packet-page-key]') : null;
+            if (review) review.remove();
+            if (section) section.classList.remove("prior-auth-ai-inline-active");
+            lastProposal = "";
+            if (proposal) proposal.style.display = "none";
+            addMessage("assistant", "Canceled the AI proposal. No draft text was changed.");
+            return false;
+          }
+
           const submit = event.target && event.target.closest
             ? event.target.closest("[data-prior-auth-assistant-submit='true']")
             : null;
