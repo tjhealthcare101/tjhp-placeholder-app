@@ -47998,7 +47998,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
       }
     </style>
 
-    <button class="prior-auth-ai-floater" type="button" data-prior-auth-ai-open="true" aria-label="Open AI Prior Authorization Assistant">
+    <button class="prior-auth-ai-floater" type="button" data-prior-auth-ai-open="true" data-prior-auth-assistant-open="true" onclick="return (window.__tjhpPriorAuthAssistantOpenFromClick ? window.__tjhpPriorAuthAssistantOpenFromClick(event) : false)" aria-label="Open AI Prior Authorization Assistant">
       AI Prior Auth Assistant
     </button>
 
@@ -48107,6 +48107,80 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
       ${priorAuthPdfPreviewRowsHtml}
     </div>
 
+    <script>
+      /* PRIOR_AUTH_ASSISTANT_OPEN_BOOTSTRAP_OK */
+      (function(){
+        if (window.__tjhpPriorAuthAssistantOpenBootstrapBound) return;
+        window.__tjhpPriorAuthAssistantOpenBootstrapBound = true;
+
+        const priorAuthAssistantOpenPanel = function(event){
+          if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+          }
+
+          const backdrop = document.querySelector('[data-prior-auth-shell-backdrop="true"]');
+          const panel = document.getElementById('prior-auth-ai-assistant-panel');
+          const previewPanel = document.getElementById('prior-auth-pdf-preview-panel');
+
+          if (previewPanel) previewPanel.style.display = 'none';
+          if (backdrop) backdrop.style.display = 'block';
+          if (panel) {
+            panel.style.display = 'block';
+            panel.removeAttribute('aria-hidden');
+          }
+
+          document.body.style.overflow = 'hidden';
+          return false;
+        };
+
+        const priorAuthAssistantClosePanel = function(event){
+          if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+
+          const backdrop = document.querySelector('[data-prior-auth-shell-backdrop="true"]');
+          const panel = document.getElementById('prior-auth-ai-assistant-panel');
+          const previewPanel = document.getElementById('prior-auth-pdf-preview-panel');
+
+          if (backdrop) backdrop.style.display = 'none';
+          if (panel) panel.style.display = 'none';
+          if (previewPanel) previewPanel.style.display = 'none';
+
+          document.body.style.overflow = '';
+          return false;
+        };
+
+        window.__tjhpPriorAuthAssistantOpenFromClick = priorAuthAssistantOpenPanel;
+        window.__tjhpPriorAuthAssistantCloseFromClick = priorAuthAssistantClosePanel;
+
+        document.addEventListener('click', function(event){
+          const openTrigger = event.target && event.target.closest
+            ? event.target.closest('[data-prior-auth-ai-open="true"], [data-prior-auth-assistant-open="true"], .prior-auth-ai-floater')
+            : null;
+
+          if (openTrigger) {
+            priorAuthAssistantOpenPanel(event);
+            return false;
+          }
+
+          const closeTrigger = event.target && event.target.closest
+            ? event.target.closest('[data-prior-auth-shell-close="true"], [data-prior-auth-shell-backdrop="true"]')
+            : null;
+
+          if (closeTrigger) {
+            priorAuthAssistantClosePanel(event);
+            return false;
+          }
+        }, true);
+
+        document.addEventListener('keydown', function(event){
+          if (event && event.key === 'Escape') priorAuthAssistantClosePanel(event);
+        }, true);
+      })();
+    </script>
     <script>
       (function(){
         const backdrop = document.querySelector('[data-prior-auth-shell-backdrop="true"]');
@@ -48705,7 +48779,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           <p class="muted small">
             Prior-auth medical-necessity support, payer criteria review, and appeal language suggestions will be added in a later phase.
           </p>
-          <button class="btn secondary" type="button" data-prior-auth-ai-open="true" title="Open the Prior Auth Assistant shell. No AI call is made in this phase.">
+          <button class="btn secondary" type="button" data-prior-auth-ai-open="true" data-prior-auth-assistant-open="true" onclick="return (window.__tjhpPriorAuthAssistantOpenFromClick ? window.__tjhpPriorAuthAssistantOpenFromClick(event) : false)" title="Open the Prior Auth Assistant shell. No AI call is made in this phase.">
             Open AI Prior Authorization Assistant
           </button>
           <div class="muted small" style="margin-top:8px;">
