@@ -47878,7 +47878,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_LOCAL_PROPOSAL_UI_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK -->
+    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_LOCAL_PROPOSAL_UI_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK -->
     <style>
       .prior-auth-ai-floater{
         position:fixed;
@@ -48061,7 +48061,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           </div>
           <div class="muted small" style="margin-top:6px;">Applying updates the textarea only. Click Save Section to persist it.</div>
         </div>
-        <form data-prior-auth-assistant-form="true">
+        <form data-prior-auth-assistant-form="true" action="javascript:void(0)">
           <textarea
             data-prior-auth-assistant-input="true"
             rows="3"
@@ -48227,7 +48227,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         const priorAuthWorkspaceSafeCss = function(value){
           const raw = String(value || '');
           if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(raw);
-          return raw.replace(/["\\]/g, '\\$&');
+          return raw.replace(/["\\\\]/g, '\\\\$&');
         };
 
         const priorAuthWorkspaceRestoreTarget = function(info){
