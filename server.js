@@ -47104,8 +47104,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
   const basePdfBytes = Buffer.concat(priorAuthBasePdfChunks);
   const mergedPdf = await PDFDocument.create();
   const basePdf = await PDFDocument.load(basePdfBytes);
-  const basePages = await mergedPdf.copyPages(basePdf, basePdf.getPageIndices());
-  basePages.forEach(page => mergedPdf.addPage(page));
+  const priorAuthBasePageIndices = basePdf.getPageIndices();
 
   const priorAuthAppendEvidenceAttachment = async (entry, att) => {
     const item = entry.evidence || {};
@@ -47210,13 +47209,44 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
     }
   };
 
-  for (const entry of priorAuthExportRows) {
+  // PRIOR_AUTH_EXPORT_INTERLEAVES_EVIDENCE_ATTACHMENTS_WITH_ROWS
+  const priorAuthAppendGeneratedBasePage = async (pageIndex) => {
+    if (!Number.isInteger(pageIndex) || pageIndex < 0) return;
+    if (pageIndex >= priorAuthBasePageIndices.length) return;
+
+    const copied = await mergedPdf.copyPages(basePdf, [priorAuthBasePageIndices[pageIndex]]);
+    copied.forEach(page => mergedPdf.addPage(page));
+  };
+
+  /*
+    Base PDF page mapping:
+    - page 0 is the generated packet cover
+    - each priorAuthExportRows entry starts on the next generated page
+    Evidence attachments are appended immediately after their generated evidence row.
+  */
+  await priorAuthAppendGeneratedBasePage(0);
+
+  for (let rowIndex = 0; rowIndex < priorAuthExportRows.length; rowIndex += 1) {
+    const entry = priorAuthExportRows[rowIndex];
+
+    await priorAuthAppendGeneratedBasePage(rowIndex + 1);
+
     if (!entry || entry.kind !== "evidence") continue;
+
     const item = entry.evidence || {};
     const attachments = priorAuthExportEligibleAttachments(item);
+
     for (const att of attachments) {
       await priorAuthAppendEvidenceAttachment(entry, att);
     }
+  }
+
+  /*
+    Preserve any extra generated pages if a long generated section flowed onto
+    additional pages. These extra pages stay after the ordered packet rows.
+  */
+  for (let pageIndex = priorAuthExportRows.length + 1; pageIndex < priorAuthBasePageIndices.length; pageIndex += 1) {
+    await priorAuthAppendGeneratedBasePage(pageIndex);
   }
 
   const finalBytes = await mergedPdf.save();
