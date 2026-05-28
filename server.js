@@ -47116,19 +47116,8 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
     const label = String(item.label || entry.key || "Supporting Evidence");
 
     try {
-      if ([".pdf", ".png", ".jpg", ".jpeg", ".txt", ".csv"].includes(ext)) {
-        await workspaceAppendPdfKitPage(mergedPdf, (coverDoc) => {
-          const CONTENT_WIDTH = coverDoc.page.width - 100;
-          coverDoc.font("Helvetica-Bold").fontSize(16).text(label + " Source Proof", { width: CONTENT_WIDTH });
-          coverDoc.moveDown(0.5);
-          coverDoc.font("Helvetica").fontSize(10).text([
-            "Attached source file follows this cover page.",
-            "",
-            "File: " + filename,
-            "Evidence item: " + label
-          ].join("\n"), { width: CONTENT_WIDTH, lineGap: 3 });
-        });
-      }
+      // Uploaded PDF/image/text source proof is inserted directly into the packet here.
+      // PRIOR_AUTH_EXPORT_DIRECT_SOURCE_DOCUMENT_PAGES
 
       if (ext === ".pdf") {
         const pdfBytes = fs.readFileSync(storedPath);
@@ -47220,25 +47209,29 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
 
   /*
     Base PDF page mapping:
-    - page 0 is the generated packet cover
-    - each priorAuthExportRows entry starts on the next generated page
-    Evidence attachments are appended immediately after their generated evidence row.
+    - page 0 is the generated packet cover.
+    - section rows copy their generated page.
+    - evidence rows skip the generated summary page and insert uploaded source documents directly.
+    This keeps payer-facing source proof from being preceded by extra label pages.
   */
   await priorAuthAppendGeneratedBasePage(0);
 
   for (let rowIndex = 0; rowIndex < priorAuthExportRows.length; rowIndex += 1) {
     const entry = priorAuthExportRows[rowIndex];
+    if (!entry) continue;
+
+    if (entry.kind === "evidence") {
+      const item = entry.evidence || {};
+      const attachments = priorAuthExportEligibleAttachments(item);
+
+      for (const att of attachments) {
+        await priorAuthAppendEvidenceAttachment(entry, att);
+      }
+
+      continue;
+    }
 
     await priorAuthAppendGeneratedBasePage(rowIndex + 1);
-
-    if (!entry || entry.kind !== "evidence") continue;
-
-    const item = entry.evidence || {};
-    const attachments = priorAuthExportEligibleAttachments(item);
-
-    for (const att of attachments) {
-      await priorAuthAppendEvidenceAttachment(entry, att);
-    }
   }
 
   /*
