@@ -1982,6 +1982,48 @@ function tjhpPriorAuthWorkspaceEvidenceBySection(layout = {}){
 }
 
 
+
+function tjhpPriorAuthGeneratedPacketAttachmentText(value = ""){
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tjhpPriorAuthIsGeneratedPacketAttachment(value = {}){
+  if (!value || typeof value !== "object") return false;
+
+  const fileName = tjhpPriorAuthGeneratedPacketAttachmentText(
+    value.file_name ||
+    value.originalName ||
+    value.filename ||
+    value.name ||
+    ""
+  );
+
+  const urlPath = tjhpPriorAuthGeneratedPacketAttachmentText([
+    value.url,
+    value.path,
+    value.absPath,
+    value.storedPath,
+    value.stored_path,
+    value.file_url
+  ].filter(Boolean).join(" "));
+
+  const combined = [fileName, urlPath].filter(Boolean).join(" ");
+
+  if (!combined) return false;
+
+  return (
+    /\bprior auth appeal packet\b/.test(combined) ||
+    /\bprior authorization appeal packet\b/.test(combined) ||
+    /\bprior auth packet preview\b/.test(combined) ||
+    /\bprior auth appeal packet pdf\b/.test(combined) ||
+    /\bprior authorization appeal packet pdf\b/.test(combined)
+  );
+}
+
 function tjhpPriorAuthEvidenceUploadText(value = ""){
   return String(value || "")
     .toLowerCase()
@@ -1991,6 +2033,8 @@ function tjhpPriorAuthEvidenceUploadText(value = ""){
 }
 
 function tjhpPriorAuthEvidenceKeyForUploadedSource(priorAuth = {}, upload = {}, parsedFile = {}){
+  if (tjhpPriorAuthIsGeneratedPacketAttachment(upload) || tjhpPriorAuthIsGeneratedPacketAttachment(parsedFile)) return "";
+
   const status = normalizePriorAuthStatus(priorAuth.status || "");
   const text = tjhpPriorAuthEvidenceUploadText([
     upload.file_name,upload.filename,upload.originalName,upload.notes,upload.status,upload.file_type,upload.mimeType,parsedFile.kind,priorAuth.status,priorAuth.denial_reason,priorAuth.partial_approval_reason,priorAuth.requested_service,priorAuth.notes
@@ -2168,6 +2212,7 @@ function tjhpPriorAuthWorkspaceEvidenceState(row = {}, evidenceKey = ""){
   const attachments = Array.isArray(itemState.attachments)
     ? itemState.attachments
       .filter(x => x && typeof x === "object")
+      .filter(x => !tjhpPriorAuthIsGeneratedPacketAttachment(x))
       .map(x => ({ ...x }))
     : [];
 
@@ -47001,6 +47046,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
   const priorAuthExportEligibleAttachments = item => {
     if (!item || item.excluded === true) return [];
     return (Array.isArray(item.attachments) ? item.attachments : [])
+      .filter(att => !tjhpPriorAuthIsGeneratedPacketAttachment(att))
       .filter(att => priorAuthExportAttachmentPath(att));
   };
 
@@ -47832,7 +47878,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK -->
+    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK -->
     <style>
       .prior-auth-ai-floater{
         position:fixed;
@@ -48068,16 +48114,72 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           }
         });
 
-        const priorAuthScrollKey = 'tjhp_prior_auth_workspace_scroll_' + "PLACEHOLDER_AUTH_CASE_ID";
         const actualPriorAuthScrollKey = 'tjhp_prior_auth_workspace_scroll_' + "${safeStr(ctx.auth_case_id || auth_case_id)}";
+
+        const priorAuthWorkspaceSafeCss = function(value){
+          const raw = String(value || '');
+          if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(raw);
+          return raw.replace(/["\\]/g, '\\$&');
+        };
+
+        const priorAuthWorkspaceRestoreTarget = function(info){
+          if (!info || typeof info !== 'object') return null;
+
+          const candidates = [];
+
+          if (info.kind && info.key) {
+            candidates.push('[data-prior-auth-ordered-kind="' + priorAuthWorkspaceSafeCss(info.kind) + '"][data-prior-auth-ordered-key="' + priorAuthWorkspaceSafeCss(info.key) + '"]');
+          }
+
+          if (info.key) {
+            candidates.push('[data-prior-auth-ordered-key="' + priorAuthWorkspaceSafeCss(info.key) + '"]');
+            candidates.push('[data-prior-auth-packet-key="' + priorAuthWorkspaceSafeCss(info.key) + '"]');
+            candidates.push('[data-prior-auth-packet-page-key="' + priorAuthWorkspaceSafeCss(info.key) + '"]');
+          }
+
+          if (info.evidenceKey) {
+            candidates.push('[data-prior-auth-ordered-key="' + priorAuthWorkspaceSafeCss(info.evidenceKey) + '"]');
+            candidates.push('[data-prior-auth-packet-key="' + priorAuthWorkspaceSafeCss(info.evidenceKey) + '"]');
+          }
+
+          for (const selector of candidates) {
+            try {
+              const found = document.querySelector(selector);
+              if (found) return found;
+            } catch (err) {}
+          }
+
+          return null;
+        };
+
+        const priorAuthWorkspaceScrollToTarget = function(target, fallbackY){
+          if (target && target.getBoundingClientRect) {
+            const top = Math.max(0, target.getBoundingClientRect().top + (window.scrollY || window.pageYOffset || 0) - 115);
+            window.scrollTo({ top, behavior: 'auto' });
+            return;
+          }
+
+          window.scrollTo({ top: Math.max(0, Number(fallbackY || 0) || 0), behavior: 'auto' });
+        };
 
         document.addEventListener('submit', function(e){
           const form = e.target;
           if (!form || !form.getAttribute) return;
           const action = String(form.getAttribute('action') || '');
           if (action.indexOf('/prior-auth/appeal-workspace/') !== 0) return;
+
+          const anchor = form.closest('[data-prior-auth-ordered-key], [data-prior-auth-packet-key], [data-prior-auth-packet-page-key]');
+
+          const info = {
+            y: Number(window.scrollY || window.pageYOffset || 0) || 0,
+            kind: anchor ? String(anchor.getAttribute('data-prior-auth-ordered-kind') || '') : '',
+            key: anchor ? String(anchor.getAttribute('data-prior-auth-ordered-key') || anchor.getAttribute('data-prior-auth-packet-key') || anchor.getAttribute('data-prior-auth-packet-page-key') || '') : '',
+            evidenceKey: form.querySelector('[name="evidence_key"]') ? String(form.querySelector('[name="evidence_key"]').value || '') : '',
+            attachmentId: form.querySelector('[name="attachment_id"]') ? String(form.querySelector('[name="attachment_id"]').value || '') : ''
+          };
+
           try {
-            sessionStorage.setItem(actualPriorAuthScrollKey, String(window.scrollY || window.pageYOffset || 0));
+            sessionStorage.setItem(actualPriorAuthScrollKey, JSON.stringify(info));
           } catch (err) {}
         }, true);
 
@@ -48085,9 +48187,21 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           const savedScroll = sessionStorage.getItem(actualPriorAuthScrollKey);
           if (savedScroll !== null && savedScroll !== '') {
             sessionStorage.removeItem(actualPriorAuthScrollKey);
-            setTimeout(function(){
-              window.scrollTo({ top: Math.max(0, Number(savedScroll || 0) || 0), behavior: 'auto' });
-            }, 80);
+
+            let info = {};
+            try {
+              info = JSON.parse(savedScroll);
+            } catch (err) {
+              info = { y: Number(savedScroll || 0) || 0 };
+            }
+
+            const restore = function(){
+              priorAuthWorkspaceScrollToTarget(priorAuthWorkspaceRestoreTarget(info), info.y);
+            };
+
+            setTimeout(restore, 80);
+            setTimeout(restore, 350);
+            setTimeout(restore, 900);
           }
         } catch (err) {}
 
