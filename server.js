@@ -47832,6 +47832,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
+    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK -->
     <style>
       .prior-auth-ai-floater{
         position:fixed;
@@ -47966,15 +47967,36 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
       <h3>Future assistant actions</h3>
       <div>
-        <span class="prior-auth-assistant-chip">Improve cover letter language</span>
-        <span class="prior-auth-assistant-chip">Draft LMN rationale</span>
-        <span class="prior-auth-assistant-chip">Map clinical facts to payer criteria</span>
-        <span class="prior-auth-assistant-chip">Find missing source proof</span>
-        <span class="prior-auth-assistant-chip">Prepare peer-to-peer talking points</span>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Help improve the cover letter language for this prior authorization appeal.">Improve cover letter language</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Help draft the Letter of Medical Necessity rationale for this prior authorization appeal.">Draft LMN rationale</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Help map the clinical facts to payer medical necessity criteria.">Map clinical facts to payer criteria</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="What source proof is missing from this prior authorization appeal packet?">Find missing source proof</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Help prepare peer-to-peer talking points for this prior authorization case.">Prepare peer-to-peer talking points</button>
+      </div>
+
+      <div class="prior-auth-assistant-chat" style="margin-top:14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff;padding:12px;">
+        <div class="muted small" style="font-weight:900;margin-bottom:8px;">Ask the Prior Auth Assistant</div>
+        <div data-prior-auth-assistant-messages="true" style="max-height:260px;overflow:auto;border:1px solid #e5e7eb;border-radius:12px;background:#f8fafc;padding:10px;margin-bottom:10px;">
+          <div class="muted small">
+            Type a question or choose a shortcut. This shell gives local guidance only in this phase.
+          </div>
+        </div>
+        <form data-prior-auth-assistant-form="true">
+          <textarea
+            data-prior-auth-assistant-input="true"
+            rows="3"
+            placeholder="Ask about LMN language, missing proof, payer criteria, peer-to-peer notes, or cover letter wording..."
+            style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:12px;padding:10px;font-family:inherit;line-height:1.45;resize:vertical;"
+          ></textarea>
+          <div class="btnRow" style="margin-top:8px;">
+            <button class="btn small" type="submit">Ask Assistant</button>
+            <span class="muted small">Shell only — no AI call, no payer submission, and no case mutation.</span>
+          </div>
+        </form>
       </div>
 
       <div class="alert warn" style="margin-top:12px;">
-        Not active in this phase. These actions are placeholders until the Prior Auth AI workflow is added.
+        Not active in this phase. Responses are local shell guidance until the Prior Auth AI workflow is added.
       </div>
     </div>
 
@@ -48045,6 +48067,100 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             closeAll();
           }
         });
+
+        const priorAuthScrollKey = 'tjhp_prior_auth_workspace_scroll_' + "PLACEHOLDER_AUTH_CASE_ID";
+        const actualPriorAuthScrollKey = 'tjhp_prior_auth_workspace_scroll_' + "${safeStr(ctx.auth_case_id || auth_case_id)}";
+
+        document.addEventListener('submit', function(e){
+          const form = e.target;
+          if (!form || !form.getAttribute) return;
+          const action = String(form.getAttribute('action') || '');
+          if (action.indexOf('/prior-auth/appeal-workspace/') !== 0) return;
+          try {
+            sessionStorage.setItem(actualPriorAuthScrollKey, String(window.scrollY || window.pageYOffset || 0));
+          } catch (err) {}
+        }, true);
+
+        try {
+          const savedScroll = sessionStorage.getItem(actualPriorAuthScrollKey);
+          if (savedScroll !== null && savedScroll !== '') {
+            sessionStorage.removeItem(actualPriorAuthScrollKey);
+            setTimeout(function(){
+              window.scrollTo({ top: Math.max(0, Number(savedScroll || 0) || 0), behavior: 'auto' });
+            }, 80);
+          }
+        } catch (err) {}
+
+        const assistantMessages = document.querySelector('[data-prior-auth-assistant-messages="true"]');
+        const assistantInput = document.querySelector('[data-prior-auth-assistant-input="true"]');
+        const assistantForm = document.querySelector('[data-prior-auth-assistant-form="true"]');
+
+        const appendAssistantMessage = function(role, text){
+          if (!assistantMessages) return;
+          const wrap = document.createElement('div');
+          wrap.style.marginTop = '8px';
+          wrap.style.padding = '10px';
+          wrap.style.borderRadius = '12px';
+          wrap.style.border = '1px solid #e5e7eb';
+          wrap.style.background = role === 'user' ? '#fff' : '#ecfeff';
+          wrap.innerHTML = '<strong>' + (role === 'user' ? 'You' : 'Prior Auth Assistant') + '</strong><br/><span></span>';
+          wrap.querySelector('span').textContent = text;
+          assistantMessages.appendChild(wrap);
+          assistantMessages.scrollTop = assistantMessages.scrollHeight;
+        };
+
+        const priorAuthAssistantLocalReply = function(prompt){
+          const text = String(prompt || '').toLowerCase();
+          const patient = "${safeStr(ctx.patient || '-')}";
+          const payer = "${safeStr(ctx.payer || '-')}";
+          const service = "${safeStr(ctx.requested_service || '-')}";
+          const status = "${safeStr(ctx.status || '-')}";
+          const reason = "${safeStr(ctx.denial_reason || ctx.partial_approval_reason || '-')}";
+
+          if (/lmn|medical necessity|necessity/.test(text)) {
+            return 'For the LMN, focus on why ' + service + ' is medically necessary for ' + patient + ', the severity/functional impact, failed alternatives, and how the clinical facts meet ' + payer + ' criteria. Keep this separate from the cover letter.';
+          }
+
+          if (/missing|proof|source|document|evidence/.test(text)) {
+            return 'Review source-proof gaps first: denial/partial approval letter, original prior-auth request, clinical documentation, diagnostic results, payer policy, coding rationale, authorization history, and any missing-documentation or peer-to-peer records. Upload actual source proof where the packet needs the real document.';
+          }
+
+          if (/criteria|policy|payer/.test(text)) {
+            return 'For payer criteria, map the patient facts to the policy: diagnosis, requested service, CPT/HCPCS, ICD-10, prior treatment, diagnostic support, and why the request satisfies coverage criteria. Current payer: ' + payer + '.';
+          }
+
+          if (/peer|p2p|talking/.test(text)) {
+            return 'Peer-to-peer talking points should include the requested service, current status (' + status + '), denial/context (' + reason + '), medical-necessity rationale, and the specific approval action requested.';
+          }
+
+          if (/cover|letter|appeal/.test(text)) {
+            return 'The cover letter should stay high level: identify the patient/auth request, summarize the appeal reason, reference the attached LMN and evidence, and state the requested authorization action. Do not merge the full LMN into the cover letter.';
+          }
+
+          return 'I can help organize the prior-auth packet, identify missing source proof, outline LMN language, map facts to payer criteria, or prepare peer-to-peer points. This is shell guidance only; no AI call or case update occurred.';
+        };
+
+        if (assistantForm) {
+          assistantForm.addEventListener('submit', function(e){
+            e.preventDefault();
+            const prompt = assistantInput ? assistantInput.value.trim() : '';
+            if (!prompt) return;
+            appendAssistantMessage('user', prompt);
+            appendAssistantMessage('assistant', priorAuthAssistantLocalReply(prompt));
+            if (assistantInput) assistantInput.value = '';
+          });
+        }
+
+        document.addEventListener('click', function(e){
+          const shortcut = e.target.closest('[data-prior-auth-assistant-prompt]');
+          if (!shortcut) return;
+          e.preventDefault();
+          const prompt = shortcut.getAttribute('data-prior-auth-assistant-prompt') || '';
+          if (assistantInput) assistantInput.value = prompt;
+          appendAssistantMessage('user', prompt);
+          appendAssistantMessage('assistant', priorAuthAssistantLocalReply(prompt));
+        });
+
 
         document.addEventListener('keydown', function(e){
           if (e.key === 'Escape') closeAll();
