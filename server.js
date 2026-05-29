@@ -47878,7 +47878,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_LOCAL_PROPOSAL_UI_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK -->
+    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_LOCAL_PROPOSAL_UI_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK -->
     <style>
       .prior-auth-ai-floater{
         position:fixed;
@@ -48602,7 +48602,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
               "",
               "Requested adjustment:",
               text
-            ].join("\n");
+            ].join("\\n");
           }
 
           if (sectionKey === "clinical_summary") {
@@ -48615,7 +48615,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
               "",
               "Requested adjustment:",
               text
-            ].join("\n");
+            ].join("\\n");
           }
 
           if (sectionKey === "requested_action") {
@@ -48626,7 +48626,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
               "",
               "Requested adjustment:",
               text
-            ].join("\n");
+            ].join("\\n");
           }
 
           if (sectionKey === "attachments_index" || sectionKey === "evidence_summary") {
@@ -48639,7 +48639,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
               "",
               "Requested adjustment:",
               text
-            ].join("\n");
+            ].join("\\n");
           }
 
           return [
@@ -48652,7 +48652,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             "",
             "Requested adjustment:",
             text
-          ].join("\n");
+          ].join("\\n");
         };
 
         const priorAuthAssistantShowProposal = function(sectionKey, prompt){
@@ -48899,7 +48899,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
 
     <script>
-      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK PRIOR_AUTH_ASSISTANT_INLINE_SECTION_REVIEW_OK PRIOR_AUTH_ASSISTANT_RUNNER_ACTIVE_COPY_OK */
+      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_INLINE_SECTION_REVIEW_OK PRIOR_AUTH_ASSISTANT_RUNNER_ACTIVE_COPY_OK */
       (function(){
         if (window.__tjhpPriorAuthAssistantResilientRunnerBound) return;
         window.__tjhpPriorAuthAssistantResilientRunnerBound = true;
@@ -49049,7 +49049,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             "",
             "TJ Healthcare Pro can use uploaded packet data already attached in this workspace.",
             "EHR retrieval is available only for Enterprise plans with EHR integration enabled. If EHR is not connected, upload clinical notes, labs, imaging, medication history, treatment records, and provider documentation manually."
-          ].join("\n");
+          ].join("\\n");
         };
 
         const proposalFor = function(key, prompt, current){
@@ -49069,7 +49069,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
               "",
               "Requested adjustment:",
               text
-            ].join("\n");
+            ].join("\\n");
           }
 
           if (key === "clinical_summary") {
@@ -49083,7 +49083,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
               "",
               "Requested adjustment:",
               text
-            ].join("\n");
+            ].join("\\n");
           }
 
           if (key === "appeal_narrative") {
@@ -49097,7 +49097,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
               "",
               "Requested adjustment:",
               text
-            ].join("\n");
+            ].join("\\n");
           }
 
           if (key === "requested_action") {
@@ -49108,7 +49108,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
               "",
               "Requested adjustment:",
               text
-            ].join("\n");
+            ].join("\\n");
           }
 
           if (key === "attachments_index" || key === "evidence_summary") {
@@ -49121,7 +49121,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
               "",
               "Requested adjustment:",
               text
-            ].join("\n");
+            ].join("\\n");
           }
 
           return [
@@ -49133,7 +49133,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             "",
             "Requested adjustment:",
             text
-          ].join("\n");
+          ].join("\\n");
         };
 
         const priorAuthAssistantEscapeHtml = function(value){
@@ -49146,7 +49146,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         };
 
         const priorAuthAssistantTokenize = function(value){
-          return String(value || "").match(/\s+|[^\s]+/g) || [];
+          return String(value || "").match(/\\s+|[^\\s]+/g) || [];
         };
 
         const priorAuthAssistantInlineDiffHtml = function(before, after){
@@ -49179,7 +49179,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
               i += 1;
             } else {
               const token = b[j];
-              if (/^\s+$/.test(String(token || ""))) out.push(priorAuthAssistantEscapeHtml(token));
+              if (/^\\s+$/.test(String(token || ""))) out.push(priorAuthAssistantEscapeHtml(token));
               else out.push('<span class="prior-auth-ai-diff-added">' + priorAuthAssistantEscapeHtml(token) + '</span>');
               j += 1;
             }
@@ -49187,7 +49187,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
           while (j < b.length) {
             const token = b[j];
-            if (/^\s+$/.test(String(token || ""))) out.push(priorAuthAssistantEscapeHtml(token));
+            if (/^\\s+$/.test(String(token || ""))) out.push(priorAuthAssistantEscapeHtml(token));
             else out.push('<span class="prior-auth-ai-diff-added">' + priorAuthAssistantEscapeHtml(token) + '</span>');
             j += 1;
           }
