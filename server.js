@@ -47878,7 +47878,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_LOCAL_PROPOSAL_UI_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK -->
+    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_LOCAL_PROPOSAL_UI_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK -->
     <style>
       .prior-auth-ai-floater{
         position:fixed;
@@ -48587,72 +48587,30 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         };
 
         const priorAuthAssistantGenerateLocalProposal = function(sectionKey, prompt, currentText){
-          const label = priorAuthAssistantSectionLabels[sectionKey] || sectionKey.replace(/_/g, " ");
-          const text = String(prompt || "");
           const current = String(currentText || "").trim();
+          const NL = String.fromCharCode(10);
 
           if (sectionKey === "letter_of_medical_necessity") {
-            return [
-              current || "Letter of Medical Necessity",
+            return current || [
+              "Letter of Medical Necessity",
               "",
-              "Assistant focus:",
-              "- Strengthen the medical necessity rationale for the requested service.",
-              "- Connect symptoms, severity, failed alternatives, and clinical documentation to payer criteria.",
-              "- Avoid unsupported facts and use placeholders where proof is missing.",
-              "",
-              "Requested adjustment:",
-              text
-            ].join("\\n");
+              "The requested service is medically necessary based on the patient’s clinical presentation, treatment history, and supporting documentation. The clinical facts should be tied directly to payer criteria and the requested authorization action."
+            ].join(NL);
           }
 
           if (sectionKey === "clinical_summary") {
-            return [
-              current || "Clinical Summary",
+            return current || [
+              "Clinical Summary",
               "",
-              "Assistant focus:",
-              "- Organize diagnosis, symptoms, severity, functional impact, treatment history, failed alternatives, and relevant test results.",
-              "- Reference uploaded clinical documentation and diagnostic results where available.",
-              "",
-              "Requested adjustment:",
-              text
-            ].join("\\n");
+              "Summarize diagnosis, symptoms, severity, failed alternatives, functional impact, relevant test results, and payer-criteria support for the requested service."
+            ].join(NL);
           }
 
           if (sectionKey === "requested_action") {
-            return [
-              current || "Requested Action",
-              "",
-              "Please approve the requested prior authorization or approve the remaining requested scope based on the attached Letter of Medical Necessity and supporting evidence.",
-              "",
-              "Requested adjustment:",
-              text
-            ].join("\\n");
+            return current || "Approve the requested prior authorization based on medical necessity and the supporting clinical documentation.";
           }
 
-          if (sectionKey === "attachments_index" || sectionKey === "evidence_summary") {
-            return [
-              current || label,
-              "",
-              "Assistant focus:",
-              "- List included source proof clearly.",
-              "- Identify evidence that is uploaded, system-found, still needed, or intentionally excluded.",
-              "",
-              "Requested adjustment:",
-              text
-            ].join("\\n");
-          }
-
-          return [
-            current || label,
-            "",
-            "Assistant focus:",
-            "- Improve clarity and payer-facing language.",
-            "- Keep this section separate from the LMN and other packet pages.",
-            "- Reference supporting evidence without inventing facts.",
-            "",
-            "Requested adjustment:",
-            text
-          ].join("\\n");
+          return current || String(priorAuthAssistantSectionLabels[sectionKey] || sectionKey || "Prior Auth Packet Section");
         };
 
         const priorAuthAssistantShowProposal = function(sectionKey, prompt){
@@ -48899,7 +48857,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
 
     <script>
-      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_INLINE_SECTION_REVIEW_OK PRIOR_AUTH_ASSISTANT_MAIN_SECTION_INLINE_FOCUS_OK PRIOR_AUTH_ASSISTANT_RUNNER_ACTIVE_COPY_OK */
+      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_INLINE_SECTION_REVIEW_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_MAIN_SECTION_INLINE_FOCUS_OK PRIOR_AUTH_ASSISTANT_RUNNER_ACTIVE_COPY_OK */
       (function(){
         if (window.__tjhpPriorAuthAssistantResilientRunnerBound) return;
         window.__tjhpPriorAuthAssistantResilientRunnerBound = true;
@@ -49073,87 +49031,97 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         };
 
         const proposalFor = function(key, prompt, current){
-          const text = String(prompt || "");
           const body = String(current || "").trim();
           const label = labels[key] || key;
+          const NL = String.fromCharCode(10);
+
+          const cleanJoin = function(parts){
+            return parts.filter(x => x !== null && x !== undefined).join(NL);
+          };
+
+          const appendIfMissing = function(base, phrase, paragraph){
+            const existing = String(base || "");
+            if (phrase && existing.toLowerCase().indexOf(String(phrase || "").toLowerCase()) >= 0) return existing;
+            return [existing.trim(), String(paragraph || "").trim()].filter(Boolean).join(NL + NL);
+          };
+
+          const safeBody = function(fallback){
+            return body || fallback;
+          };
+
+          if (key === "appeal_narrative") {
+            let next = safeBody(cleanJoin([
+              "To the Prior Authorization Appeals Department,",
+              "",
+              "We respectfully request reconsideration of the prior authorization decision for this requested service.",
+              "",
+              "The attached packet includes the Letter of Medical Necessity and supporting source proof demonstrating medical necessity, coverage-criteria support, and the requested authorization action.",
+              "",
+              "Please review the attached materials and approve the requested prior authorization.",
+              "",
+              "Sincerely,"
+            ]));
+
+            next = next.replace(/We are requesting reconsideration/i, "We respectfully request reconsideration");
+            next = appendIfMissing(
+              next,
+              "medical necessity, coverage criteria, and source proof",
+              "This request is supported by the attached medical-necessity documentation, payer-criteria support, and source proof included in this packet."
+            );
+
+            return next;
+          }
 
           if (key === "letter_of_medical_necessity") {
-            return [
-              body || "Letter of Medical Necessity",
+            let next = safeBody(cleanJoin([
+              "Letter of Medical Necessity",
               "",
-              "Assistant improvement focus:",
-              "- Strengthen why the requested service is medically necessary.",
-              "- Tie symptoms, severity, failed alternatives, and functional impact to payer criteria.",
-              "- Reference uploaded clinical documentation and diagnostic results where available.",
-              "- Keep unsupported facts as placeholders until source proof is uploaded.",
+              "The requested service is medically necessary because the patient’s clinical presentation, documented symptoms, prior treatment history, and available diagnostic support meet the medical-necessity standard for the requested authorization.",
               "",
-              "Requested adjustment:",
-              text
-            ].join("\\n");
+              "The attached clinical documentation should be reviewed with the payer criteria to confirm that the requested service is clinically appropriate and should be authorized."
+            ]));
+
+            next = appendIfMissing(
+              next,
+              "payer criteria",
+              "The clinical facts should be mapped directly to the applicable payer criteria, including diagnosis, severity, failed alternatives, diagnostic findings, and why the requested service is appropriate at this time."
+            );
+
+            return next;
           }
 
           if (key === "clinical_summary") {
-            return [
-              body || "Clinical Summary",
+            let next = safeBody(cleanJoin([
+              "Clinical Summary",
               "",
-              "Assistant improvement focus:",
-              "- Organize diagnosis, symptoms, severity, functional impact, treatment history, failed alternatives, and relevant test results.",
-              "- Add a payer-criteria mapping paragraph showing how the patient facts support medical necessity.",
-              "- Reference uploaded documentation where available and flag missing EHR/source proof when needed.",
+              "Summarize the diagnosis, symptoms, severity, functional impact, prior treatment history, failed alternatives, and relevant diagnostic results supporting the requested service.",
               "",
-              "Requested adjustment:",
-              text
-            ].join("\\n");
-          }
+              "Payer Criteria Match Rationale:",
+              "The clinical facts should be tied to the payer’s medical-necessity criteria so the reviewer can see why the patient meets coverage requirements for the requested authorization."
+            ]));
 
-          if (key === "appeal_narrative") {
-            return [
-              body || "Prior Authorization Appeal Cover Letter",
-              "",
-              "Assistant improvement focus:",
-              "- Keep this as a high-level cover letter.",
-              "- Identify the patient, authorization request, denial/partial approval context, requested action, and attached evidence.",
-              "- Do not merge the full Letter of Medical Necessity into the cover letter.",
-              "",
-              "Requested adjustment:",
-              text
-            ].join("\\n");
+            next = appendIfMissing(
+              next,
+              "Payer Criteria Match Rationale",
+              "Payer Criteria Match Rationale:" + NL + "The patient’s diagnosis, clinical severity, failed alternatives, and supporting documentation should be mapped to the payer policy requirements. Include uploaded clinical notes, labs, imaging, and other source proof where available."
+            );
+
+            return next;
           }
 
           if (key === "requested_action") {
-            return [
-              body || "Requested Action",
-              "",
-              "Please approve the requested prior authorization or approve the remaining requested scope based on the attached Letter of Medical Necessity and supporting evidence.",
-              "",
-              "Requested adjustment:",
-              text
-            ].join("\\n");
+            return safeBody("Approve the requested prior authorization based on the attached Letter of Medical Necessity and supporting clinical documentation.");
           }
 
-          if (key === "attachments_index" || key === "evidence_summary") {
-            return [
-              body || label,
-              "",
-              "Assistant improvement focus:",
-              "- List source proof that is uploaded, found in system, missing, or intentionally excluded.",
-              "- Keep this payer-facing and do not include internal revenue impact.",
-              "",
-              "Requested adjustment:",
-              text
-            ].join("\\n");
+          if (key === "attachments_index") {
+            return safeBody("Attachments Index" + NL + NL + "List each uploaded source-proof document included in this prior authorization appeal packet, including payer decision letter, original prior authorization request, clinical documentation, diagnostic results, payer policy support, authorization history, and any peer-to-peer or missing-documentation records.");
           }
 
-          return [
-            body || label,
-            "",
-            "Assistant improvement focus:",
-            "- Improve clarity and payer-facing language.",
-            "- Reference supporting evidence without inventing facts.",
-            "",
-            "Requested adjustment:",
-            text
-          ].join("\\n");
+          if (key === "evidence_summary") {
+            return safeBody("Evidence Summary" + NL + NL + "Summarize which source-proof items are attached, which are system-found context only, which are still needed, and which pages or documents have been intentionally excluded from the packet export.");
+          }
+
+          return safeBody(label);
         };
 
         const priorAuthAssistantEscapeHtml = function(value){
@@ -49215,6 +49183,15 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           return out.join("");
         };
 
+        const priorAuthAssistantRestoreSectionForm = function(section){
+          if (!section) return;
+
+          section.querySelectorAll('[data-prior-auth-ai-review-hidden-form="true"]').forEach(function(form){
+            form.style.display = "";
+            form.removeAttribute("data-prior-auth-ai-review-hidden-form");
+          });
+        };
+
         const priorAuthAssistantRenderInlineReview = function(sectionKey, prompt, beforeText, afterText){
           const section = sectionFor(sectionKey);
           const textarea = textareaFor(sectionKey);
@@ -49244,8 +49221,13 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           ].join("");
 
           const form = section.querySelector('form[action="/prior-auth/appeal-workspace/save-section"]') || section.querySelector("form") || null;
-          if (form && form.parentNode) form.parentNode.insertBefore(review, form);
-          else section.appendChild(review);
+          if (form && form.parentNode) {
+            form.parentNode.insertBefore(review, form);
+            form.setAttribute("data-prior-auth-ai-review-hidden-form", "true");
+            form.style.display = "none";
+          } else {
+            section.appendChild(review);
+          }
 
           section.classList.add("prior-auth-ai-inline-active");
           return review;
@@ -49294,7 +49276,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             if (proposal) proposal.style.display = "none";
 
             addMessage("assistant", "I drafted a proposed update for " + (labels[key] || key) + ". The review card is now in the packet section. Apply, Regenerate, or Cancel there.");
-          }, 650);
+          }, 1600);
         };
 
         const runPrompt = function(prompt){
@@ -49333,6 +49315,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           textarea.dispatchEvent(new Event("input", { bubbles:true }));
 
           if (inlineReview) inlineReview.remove();
+          priorAuthAssistantRestoreSectionForm(section);
           section.classList.remove("prior-auth-ai-inline-active");
           if (proposal) proposal.style.display = "none";
 
@@ -49403,7 +49386,10 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             const review = inlineCancel.closest('[data-prior-auth-inline-ai-review="true"]');
             const section = review ? review.closest('[data-prior-auth-packet-page-key]') : null;
             if (review) review.remove();
-            if (section) section.classList.remove("prior-auth-ai-inline-active");
+            if (section) {
+              priorAuthAssistantRestoreSectionForm(section);
+              section.classList.remove("prior-auth-ai-inline-active");
+            }
             lastProposal = "";
             if (proposal) proposal.style.display = "none";
             addMessage("assistant", "Canceled the AI proposal. No draft text was changed.");
