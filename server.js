@@ -48899,7 +48899,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
 
     <script>
-      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_INLINE_SECTION_REVIEW_OK PRIOR_AUTH_ASSISTANT_RUNNER_ACTIVE_COPY_OK */
+      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_INLINE_SECTION_REVIEW_OK PRIOR_AUTH_ASSISTANT_MAIN_SECTION_INLINE_FOCUS_OK PRIOR_AUTH_ASSISTANT_RUNNER_ACTIVE_COPY_OK */
       (function(){
         if (window.__tjhpPriorAuthAssistantResilientRunnerBound) return;
         window.__tjhpPriorAuthAssistantResilientRunnerBound = true;
@@ -48953,6 +48953,25 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           wrap.appendChild(span);
           messages.appendChild(wrap);
           messages.scrollTop = messages.scrollHeight;
+        };
+
+        const priorAuthAssistantCloseDrawerForWorkspaceEdit = function(){
+          try {
+            if (typeof window.__tjhpPriorAuthAssistantCloseFromClick === "function") {
+              window.__tjhpPriorAuthAssistantCloseFromClick();
+              return;
+            }
+          } catch (err) {}
+
+          const backdrop = document.querySelector('[data-prior-auth-shell-backdrop="true"]');
+          const panel = document.getElementById('prior-auth-ai-assistant-panel');
+          const previewPanel = document.getElementById('prior-auth-pdf-preview-panel');
+
+          if (backdrop) backdrop.style.display = 'none';
+          if (panel) panel.style.display = 'none';
+          if (previewPanel) previewPanel.style.display = 'none';
+
+          document.body.style.overflow = '';
         };
 
         const sectionFor = function(key){
@@ -49015,6 +49034,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           }
 
           const field = q("input[name='pages_excluded']", card);
+          priorAuthAssistantCloseDrawerForWorkspaceEdit();
           card.scrollIntoView({ behavior:"auto", block:"center" });
 
           if (!field) {
@@ -49224,7 +49244,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           ].join("");
 
           const form = section.querySelector('form[action="/prior-auth/appeal-workspace/save-section"]') || section.querySelector("form") || null;
-          if (form && form.parentNode) form.parentNode.insertBefore(review, form.nextSibling);
+          if (form && form.parentNode) form.parentNode.insertBefore(review, form);
           else section.appendChild(review);
 
           section.classList.add("prior-auth-ai-inline-active");
@@ -49242,6 +49262,9 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
           lastPrompt = prompt;
           lastTarget = key;
+
+          priorAuthAssistantCloseDrawerForWorkspaceEdit();
+          if (proposal) proposal.style.display = "none";
 
           section.scrollIntoView({ behavior:"auto", block:"center" });
           section.classList.add("prior-auth-ai-working-target");
@@ -49268,13 +49291,9 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
             priorAuthAssistantRenderInlineReview(key, prompt, beforeText, lastProposal);
 
-            if (proposal && proposalText && proposalMeta) {
-              proposal.style.display = "block";
-              proposalMeta.textContent = "Target: " + (labels[key] || key);
-              proposalText.textContent = lastProposal;
-            }
+            if (proposal) proposal.style.display = "none";
 
-            addMessage("assistant", "I drafted a proposed update for " + (labels[key] || key) + ". Review it in the section below, then Apply, Regenerate, or Cancel.");
+            addMessage("assistant", "I drafted a proposed update for " + (labels[key] || key) + ". The review card is now in the packet section. Apply, Regenerate, or Cancel there.");
           }, 650);
         };
 
