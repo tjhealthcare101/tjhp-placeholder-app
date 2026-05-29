@@ -47878,7 +47878,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_LOCAL_PROPOSAL_UI_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK -->
+    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_LOCAL_PROPOSAL_UI_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK -->
     <style>
       .prior-auth-ai-floater{
         position:fixed;
@@ -47969,6 +47969,15 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         outline:3px solid #86efac;
         box-shadow:0 0 0 6px rgba(34,197,94,.14);
         transition:outline .2s ease, box-shadow .2s ease;
+      }
+      [data-prior-auth-assistant-proposal="true"],
+      [data-prior-auth-assistant-proposal-disabled="true"]{
+        display:none !important;
+        height:0 !important;
+        overflow:hidden !important;
+        padding:0 !important;
+        margin:0 !important;
+        border:0 !important;
       }
       .prior-auth-ai-inline-review{
         border:2px solid #a5b4fc;
@@ -48128,7 +48137,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             Type a question or choose a shortcut. Suggestions appear as draft updates for staff review.
           </div>
         </div>
-        <div data-prior-auth-assistant-proposal="true" style="display:none;margin-bottom:10px;border:1px solid #86efac;background:#ecfdf5;border-radius:12px;padding:10px;">
+        <div data-prior-auth-assistant-proposal="true" data-prior-auth-assistant-proposal-disabled="true" style="display:none!important;height:0;overflow:hidden;padding:0;margin:0;border:0;">
           <div style="font-weight:900;color:#065f46;">Proposed update</div>
           <div class="muted small" data-prior-auth-assistant-proposal-meta="true" style="margin:4px 0 8px 0;"></div>
           <pre data-prior-auth-assistant-proposal-text="true" style="white-space:pre-wrap;font-family:inherit;line-height:1.45;margin:0;background:#fff;border:1px solid #bbf7d0;border-radius:10px;padding:10px;"></pre>
@@ -48443,10 +48452,18 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         if (assistantForm) {
           assistantForm.addEventListener('submit', function(e){
             e.preventDefault();
+            e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+
             const prompt = assistantInput ? assistantInput.value.trim() : '';
             if (!prompt) return;
+
             appendAssistantMessage('user', prompt);
-            priorAuthAssistantRunPrompt(prompt);
+
+            if (!priorAuthAssistantDelegateToInlineRunner(prompt)) {
+              priorAuthAssistantRunPrompt(prompt);
+            }
+
             if (assistantInput) assistantInput.value = '';
           });
         }
@@ -48454,12 +48471,19 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         document.addEventListener('click', function(e){
           const shortcut = e.target.closest('[data-prior-auth-assistant-prompt]');
           if (!shortcut) return;
+
           e.preventDefault();
-          openPanel(aiPanel);
+          e.stopPropagation();
+          if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+
           const prompt = shortcut.getAttribute('data-prior-auth-assistant-prompt') || '';
           if (assistantInput) assistantInput.value = prompt;
           appendAssistantMessage('user', prompt);
-          priorAuthAssistantRunPrompt(prompt);
+
+          if (!priorAuthAssistantDelegateToInlineRunner(prompt)) {
+            openPanel(aiPanel);
+            priorAuthAssistantRunPrompt(prompt);
+          }
         });
 
         document.addEventListener('click', function(e){
@@ -48625,7 +48649,23 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           return current || String(priorAuthAssistantSectionLabels[sectionKey] || sectionKey || "Prior Auth Packet Section");
         };
 
+        const priorAuthAssistantDelegateToInlineRunner = function(prompt){
+          if (typeof window.__tjhpPriorAuthAssistantRunShellPrompt !== "function") return false;
+
+          try {
+            window.__tjhpPriorAuthAssistantRunShellPrompt(String(prompt || ""));
+            return true;
+          } catch (err) {
+            return false;
+          }
+        };
+
         const priorAuthAssistantShowProposal = function(sectionKey, prompt){
+          if (priorAuthAssistantDelegateToInlineRunner(prompt)) {
+            if (assistantProposal) assistantProposal.style.display = "none";
+            return;
+          }
+
           const section = priorAuthAssistantFindEditableSection(sectionKey);
           const textarea = priorAuthAssistantFindEditableTextarea(sectionKey);
 
@@ -48648,13 +48688,9 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             section.classList.add("prior-auth-ai-proposed-target");
             setTimeout(function(){ section.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
 
-            if (assistantProposal && assistantProposalText && assistantProposalMeta) {
-              assistantProposal.style.display = "block";
-              assistantProposalText.textContent = proposed;
-              assistantProposalMeta.textContent = "Target: " + (priorAuthAssistantSectionLabels[sectionKey] || sectionKey);
-            }
+            if (assistantProposal) assistantProposal.style.display = "none";
 
-            appendAssistantMessage("assistant", "I drafted a proposed update for " + (priorAuthAssistantSectionLabels[sectionKey] || sectionKey) + ". Review the green proposal, then Apply or Regenerate.");
+            appendAssistantMessage("assistant", "I drafted a proposed update for " + (priorAuthAssistantSectionLabels[sectionKey] || sectionKey) + ". The review appears in the packet section, not in the assistant drawer.");
           }, 850);
         };
 
@@ -68341,6 +68377,151 @@ if (process.env.TJHP_PRIOR_AUTH_ORDERED_PACKET_LAYOUT_SMOKE_TESTS === "true" && 
       process.exit(0);
     } catch (err) {
       process.stderr.write("PRIOR_AUTH_ORDERED_PACKET_LAYOUT_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
+if (process.env.TJHP_PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK",
+        "PRIOR_AUTH_ASSISTANT_INLINE_SECTION_REVIEW_OK",
+        "PRIOR_AUTH_ASSISTANT_MAIN_SECTION_INLINE_FOCUS_OK",
+        "PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK",
+        "PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK",
+        "priorAuthAssistantDelegateToInlineRunner",
+        "__tjhpPriorAuthAssistantRunShellPrompt",
+        "data-prior-auth-assistant-proposal-disabled",
+        "data-prior-auth-inline-ai-review",
+        "Apply AI Update to",
+        "Cancel AI Update",
+        "The review appears in the packet section, not in the assistant drawer.",
+        "form.parentNode.insertBefore(review, form);",
+        "priorAuthAssistantCloseDrawerForWorkspaceEdit",
+        "priorAuthAssistantRestoreSectionForm",
+        "data-prior-auth-ai-review-hidden-form"
+      ].forEach(marker => assert(src.includes(marker), "missing prior-auth assistant packet-section review marker: " + marker));
+
+      const routeStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {');
+      const routeEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case") {', routeStart);
+      assert(routeStart >= 0, "GET /prior-auth/appeal-workspace route missing");
+      assert(routeEnd > routeStart, "GET /prior-auth/appeal-workspace route boundary missing");
+
+      const routeSrc = src.slice(routeStart, routeEnd);
+      [
+        'assistantProposal.style.display = "block"',
+        "Review the green proposal, then Apply or Regenerate.",
+        'data-prior-auth-assistant-proposal="true" style="display:none;margin-bottom:10px'
+      ].forEach(marker => assert(!routeSrc.includes(marker), "old drawer-review behavior still present inside GET /prior-auth/appeal-workspace: " + marker));
+
+      [
+        'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/pages")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upload")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/exclude")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/save-section")',
+        '/ai-appeal',
+        '/ai-negotiation',
+        '/ai-workspace/save-preview',
+        '/ai-workspace/export',
+        'renderWorkspacePreview',
+        'renderWorkflowPanel',
+        'renderInlineAIAssist',
+        'buildMergedPacketPDF'
+      ].forEach(marker => assert(src.includes(marker), "protected route/workspace marker missing: " + marker));
+
+      [
+        'if (method === "GET" && pathname === "/ai-' + 'prior-auth")',
+        'if (method === "POST" && pathname === "/ai-' + 'prior-auth")',
+        'if (method === "GET" && pathname === "/prior-auth/' + 'ai")',
+        'if (method === "POST" && pathname === "/prior-auth/' + 'ai")',
+        'if (method === "POST" && pathname === "/prior-auth/' + 'appeal-workspace") {'
+      ].forEach(marker => assert(!src.includes(marker), "forbidden prior-auth assistant route exists: " + marker));
+
+      const templateMarker = "const priorAuthAssistantAndPreviewShellHtml = " + "`";
+      const templateStart = src.indexOf(templateMarker);
+      assert(templateStart >= 0, "assistant shell template missing");
+
+      const backtickStart = src.indexOf("`", templateStart);
+      assert(backtickStart >= templateStart, "assistant shell template backtick missing");
+      let end = -1;
+      let escaped = false;
+
+      for (let i = backtickStart + 1; i < src.length; i += 1) {
+        const ch = src[i];
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (ch === "`") {
+          end = i;
+          break;
+        }
+      }
+
+      assert(end > backtickStart, "assistant shell template end not found");
+      const template = src.slice(backtickStart, end + 1);
+
+      const safeStr = value => String(value == null ? "" : value);
+      const ctx = {
+        patient: "Smoke Test Patient",
+        payer: "Smoke Test Payer",
+        status: "Denied",
+        requested_service: "Smoke Test Service",
+        denial_reason: "Smoke test denial reason",
+        partial_approval_reason: "",
+        auth_number: "AUTH-SMOKE",
+        auth_case_id: "pa_smoke"
+      };
+      const auth_case_id = "pa_smoke";
+      const org = { org_name: "TJHP Smoke", name: "TJHP Smoke" };
+      const priorAuthPdfPreviewRowsHtml = "";
+
+      const render = new Function(
+        "safeStr",
+        "ctx",
+        "auth_case_id",
+        "org",
+        "priorAuthPdfPreviewRowsHtml",
+        "return " + template + ";"
+      );
+      const html = render(safeStr, ctx, auth_case_id, org, priorAuthPdfPreviewRowsHtml);
+      const scripts = Array.from(html.matchAll(/<script>([\s\S]*?)<\/script>/g)).map(match => match[1]);
+      assert(scripts.length > 0, "No scripts found in rendered assistant shell");
+
+      scripts.forEach((script, index) => {
+        try {
+          new Function(script);
+        } catch (err) {
+          err.message = "Rendered prior-auth assistant shell script failed at index " + index + ": " + err.message;
+          throw err;
+        }
+      });
+
+      [
+        "PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK",
+        "data-prior-auth-assistant-proposal-disabled"
+      ].forEach(marker => assert(html.includes(marker), "rendered assistant shell missing marker: " + marker));
+
+      const renderedAssistantShellWithInlineSectionReview = html + "\n" + routeSrc;
+      assert(
+        renderedAssistantShellWithInlineSectionReview.includes("data-prior-auth-inline-ai-review"),
+        "rendered assistant shell missing marker: data-prior-auth-inline-ai-review"
+      );
+
+      process.stdout.write("PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
       process.exit(1);
     }
   })();
