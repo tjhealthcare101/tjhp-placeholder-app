@@ -575,6 +575,13 @@ function normalizePriorAuthCase(input = {}, defaults = {}){
         ? row.workspace_evidence
         : {},
 
+    workspace_ai_preview:
+      row.workspace_ai_preview &&
+      typeof row.workspace_ai_preview === "object" &&
+      !Array.isArray(row.workspace_ai_preview)
+        ? row.workspace_ai_preview
+        : {},
+
     created_at: String(row.created_at || defaults.created_at || now).trim(),
     updated_at: String(row.updated_at || now).trim(),
     created_by: String(row.created_by || defaults.created_by || "").trim(),
@@ -2298,6 +2305,185 @@ function tjhpPriorAuthWorkspaceEditablePacketSectionsOnly(org = {}, row = {}){
   ]);
   return tjhpPriorAuthWorkspacePacketSectionsForRender(org, row)
     .filter(section => allowed.has(String(section && section.key || "").trim()));
+}
+
+function tjhpPriorAuthAiSectionLabel(sectionKey){
+  const labels = {
+    appeal_narrative: "Prior Authorization Appeal Cover Letter",
+    case_summary: "Prior Authorization Case Summary",
+    letter_of_medical_necessity: "Letter of Medical Necessity",
+    clinical_summary: "Clinical Summary",
+    requested_action: "Requested Action",
+    attachments_index: "Attachments Index",
+    evidence_summary: "Evidence Summary"
+  };
+  return labels[String(sectionKey || "").trim()] || "Prior Authorization Packet Section";
+}
+
+function tjhpPriorAuthAiEditableSectionKeys(){
+  return [
+    "appeal_narrative",
+    "case_summary",
+    "letter_of_medical_necessity",
+    "clinical_summary",
+    "requested_action",
+    "attachments_index",
+    "evidence_summary"
+  ];
+}
+
+function tjhpPriorAuthAiTargetFromPrompt(prompt, selectedTarget){
+  const editableKeys = new Set(tjhpPriorAuthAiEditableSectionKeys());
+  const selected = String(selectedTarget || "").trim();
+  if (selected && selected !== "auto" && editableKeys.has(selected)) return selected;
+
+  const text = String(prompt || "").toLowerCase();
+  if (/\b(lmn|medical necessity)\b|letter of medical necessity|necessity rationale/.test(text)) return "letter_of_medical_necessity";
+  if (/clinical|criteria|payer criteria|facts|policy/.test(text)) return "clinical_summary";
+  if (/cover|appeal letter|intro|closing/.test(text)) return "appeal_narrative";
+  if (/case summary|auth summary|authorization summary/.test(text)) return "case_summary";
+  if (/requested action|approve|overturn/.test(text)) return "requested_action";
+  if (/attachment|index/.test(text)) return "attachments_index";
+  if (/missing proof|source proof|evidence/.test(text)) return "evidence_summary";
+  return "appeal_narrative";
+}
+
+function tjhpPriorAuthAiDraftForSection(org = {}, row = {}, sectionKey = "", prompt = "", currentText = "", regeneratePrompt = ""){
+  const cleanKey = String(sectionKey || "").trim();
+  const patient = String(row.patient_name || "the patient").trim() || "the patient";
+  const payer = String(row.payer || "the payer").trim() || "the payer";
+  const service = String(row.requested_service || "the requested service").trim() || "the requested service";
+  const authNumber = String(row.auth_number || "").trim();
+  const status = String(row.status || "").trim();
+  const denialReason = String(row.denial_reason || "").trim();
+  const partialReason = String(row.partial_approval_reason || "").trim();
+  const cpt = String(row.cpt_hcpcs || "").trim();
+  const icd10 = String(row.icd10 || "").trim();
+  const orgName = String(org.org_name || org.name || "the requesting provider").trim() || "the requesting provider";
+  const NL = "\n";
+  const caseFacts = [
+    `Patient: ${patient}`,
+    `Payer: ${payer}`,
+    `Requested service: ${service}`,
+    authNumber ? `Authorization/reference number: ${authNumber}` : "",
+    status ? `Current status: ${status}` : "",
+    cpt ? `CPT/HCPCS: ${cpt}` : "",
+    icd10 ? `ICD-10: ${icd10}` : "",
+    denialReason ? `Decision rationale to address: ${denialReason}` : "",
+    partialReason ? `Partial approval context: ${partialReason}` : ""
+  ].filter(Boolean);
+
+  const base = String(currentText || "").trim();
+  const templates = {
+    appeal_narrative: [
+      "To the Prior Authorization Appeals Department,",
+      "",
+      `${orgName} requests review and approval of ${service} for ${patient}. The enclosed Letter of Medical Necessity and source documentation support that the requested service is medically necessary and aligned with the clinical record.`,
+      "",
+      caseFacts.join(NL),
+      "",
+      "Please review the attached medical-necessity rationale, clinical summary, and supporting evidence and authorize the requested service."
+    ].join(NL),
+    letter_of_medical_necessity: [
+      "Letter of Medical Necessity",
+      "",
+      `${service} is medically necessary for ${patient} based on the documented diagnosis, clinical severity, treatment history, and the need to prevent avoidable deterioration or delayed care.`,
+      "",
+      caseFacts.join(NL),
+      "",
+      "The supporting documentation should be reviewed against the payer's medical policy criteria. The clinical record supports approval because the requested service is tied to the patient's condition, prior treatment course, and expected clinical benefit.",
+      "",
+      "We request approval of the prior authorization. If approval cannot be issued, please provide the specific criteria not met and the clinical rationale for that determination."
+    ].join(NL),
+    clinical_summary: [
+      "Clinical Summary",
+      "",
+      `${patient} is being evaluated for ${service}. The packet should be reviewed for diagnosis, symptoms, severity, prior treatment history, diagnostic support, coding context, and the payer-policy criteria that support medical necessity.`,
+      "",
+      caseFacts.join(NL),
+      "",
+      "The attached clinical evidence is intended to demonstrate the relationship between the patient's documented condition and the requested authorization."
+    ].join(NL),
+    requested_action: [
+      "Requested Action",
+      "",
+      `Please approve ${service} for ${patient} based on the enclosed medical-necessity documentation and source proof.`,
+      denialReason ? `If the prior determination is maintained, please identify the specific medical policy criteria that remain unmet and the rationale for that decision.` : `If additional information is needed, please identify the specific criteria or documentation required to complete review.`
+    ].join(NL),
+    attachments_index: [
+      "Attachments Index",
+      "",
+      "1. Prior authorization request and case summary",
+      "2. Payer denial or partial-approval correspondence, if applicable",
+      "3. Letter of Medical Necessity",
+      "4. Clinical documentation and diagnostic support",
+      "5. Payer policy or criteria support",
+      "6. Authorization history and related correspondence"
+    ].join(NL),
+    evidence_summary: [
+      "Evidence Summary",
+      "",
+      `The packet should include source proof supporting ${service} for ${patient}, including clinical documentation, diagnostic support, authorization history, payer correspondence, and any missing-documentation response relevant to the current determination.`,
+      "",
+      caseFacts.join(NL),
+      "",
+      /ehr|enterprise/i.test(String(prompt || "") + " " + String(regeneratePrompt || ""))
+        ? "If additional EHR source proof is required, Enterprise EHR integration or manual upload is needed before payer submission."
+        : "Before payer submission, confirm that each referenced source document is attached or intentionally excluded from the packet."
+    ].join(NL)
+  };
+
+  const seed = base || templates[cleanKey] || templates.appeal_narrative;
+  const regen = String(regeneratePrompt || "").trim();
+  const promptText = String(prompt || "").toLowerCase();
+  const additions = [];
+  if (/concise|short|brief/.test(regen.toLowerCase())) additions.push("This revision is intentionally concise and focused on the payer action requested.");
+  if (/strong|specific|criteria|policy/.test(regen.toLowerCase()) || /criteria|policy/.test(promptText)) additions.push("The payer should compare the attached documentation to the applicable medical-necessity criteria and identify any criterion that remains unmet.");
+  if (/warm|professional|polished/.test(regen.toLowerCase())) additions.push("We appreciate timely review of the enclosed documentation and a written determination based on the complete record.");
+  if (/peer|p2p|talking point/.test(promptText + " " + regen.toLowerCase())) additions.push("For peer-to-peer discussion, focus on diagnosis, severity, failed alternatives, clinical risk of delay, and the requested authorization outcome.");
+
+  const suffix = additions.length ? `${NL}${NL}${additions.join(NL + NL)}` : "";
+  return `${seed}${suffix}`.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function tjhpPriorAuthAiReviewHtml({ org = {}, row = {}, sectionKey = "", title = "", before = "", after = "" } = {}){
+  const cleanKey = String(sectionKey || "").trim();
+  const label = String(title || tjhpPriorAuthAiSectionLabel(cleanKey)).trim();
+  const authCaseId = String(row.auth_case_id || "").trim();
+  const finalText = String(after || "");
+  return `
+    <div class="ws-section-body ws-ai-review-mode" data-prior-auth-ai-review-root="true" data-auth-case-id="${safeStr(authCaseId)}" data-section-key="${safeStr(cleanKey)}" data-regenerate-action="/prior-auth/appeal-workspace/ai-regenerate" style="position:relative;">
+      <div class="ws-ai-regenerating-overlay" style="display:none;">Regenerating draft…</div>
+      <div class="ws-ai-review-head">
+        <div>
+          <strong>AI draft ready for review</strong>
+          <div class="muted small">Review the proposed update inside this prior-auth packet section before applying it.</div>
+        </div>
+        <span class="badge ok">AI Review</span>
+      </div>
+      <div class="ws-track-changes">
+        ${workspaceAiInteractiveTrackChangesHtml(before, after)}
+      </div>
+      <div class="ws-ai-regenerate-controls">
+        <label class="muted small" style="display:block;font-weight:900;margin-bottom:6px;">Regeneration instructions</label>
+        <input type="text" name="regenerate_prompt" placeholder="Example: make it more concise, stronger on criteria, or more payer-facing" style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:12px;padding:10px;" />
+        <button class="btn secondary small" type="button" data-prior-auth-ai-regenerate-button="true" style="margin-top:8px;">Regenerate</button>
+      </div>
+      <div class="ws-ai-review-actions">
+        <form method="POST" action="/prior-auth/appeal-workspace/ai-apply" data-prior-auth-ai-action-form="true" style="display:inline-block;margin:0;">
+          <input type="hidden" name="auth_case_id" value="${safeStr(authCaseId)}" />
+          <input type="hidden" name="section_key" value="${safeStr(cleanKey)}" />
+          <textarea name="after" data-ai-final-text="true" data-prior-auth-ai-final-text="true" class="ws-ai-final-hidden">${safeStr(finalText)}</textarea>
+          <button class="btn small" type="submit">Apply AI Update to ${safeStr(label)}</button>
+        </form>
+        <form method="POST" action="/prior-auth/appeal-workspace/ai-cancel" data-prior-auth-ai-action-form="true" style="display:inline-block;margin:0 0 0 8px;">
+          <input type="hidden" name="auth_case_id" value="${safeStr(authCaseId)}" />
+          <input type="hidden" name="section_key" value="${safeStr(cleanKey)}" />
+          <button class="btn secondary small" type="submit">Cancel AI Update</button>
+        </form>
+      </div>
+    </div>
+  `;
 }
 
 function priorAuthStructuredRowSignal(row = {}){
@@ -46933,6 +47119,126 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/pag
   return redirect(res, backHref + "&pa_status=evidence_pages_saved");
 }
 
+if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-preview") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+  const auth_case_id = String(ps.get("auth_case_id") || "").trim();
+  const target_section = String(ps.get("target_section") || "").trim();
+  const prompt = String(ps.get("prompt") || "").trim();
+  const current_text = String(ps.get("current_text") || "");
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  if (!row) return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+
+  const sectionKey = tjhpPriorAuthAiTargetFromPrompt(prompt, target_section);
+  const editableKeys = new Set(tjhpPriorAuthAiEditableSectionKeys());
+  const backHref = "/prior-auth/appeal-workspace?auth_case_id=" + encodeURIComponent(auth_case_id);
+  if (!sectionKey || !editableKeys.has(sectionKey)) return redirect(res, backHref + "&pa_status=section_invalid");
+
+  const currentSections = row.workspace_packet_sections && typeof row.workspace_packet_sections === "object" && !Array.isArray(row.workspace_packet_sections) ? row.workspace_packet_sections : {};
+  const generatedSections = tjhpPriorAuthWorkspacePacketSectionsForRender(org, row);
+  const generatedSection = generatedSections.find(section => String(section && section.key || "") === sectionKey) || {};
+  const before = String(current_text || "").trim()
+    ? String(current_text || "").trimEnd()
+    : (Object.prototype.hasOwnProperty.call(currentSections, sectionKey)
+        ? String(currentSections[sectionKey] || "").trimEnd()
+        : String(generatedSection.body || "").trimEnd());
+  const after = tjhpPriorAuthAiDraftForSection(org, row, sectionKey, prompt, before, "");
+
+  upsertPriorAuthCase(org.org_id, {
+    ...row,
+    workspace_ai_preview: {
+      active: true,
+      section_key: sectionKey,
+      prompt,
+      before,
+      after,
+      updated_at: nowISO()
+    }
+  }, sess.user_id || "");
+
+  return redirect(res, backHref + "&pa_status=ai_preview#pa-ai-" + encodeURIComponent(sectionKey));
+}
+
+if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-regenerate") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+  const auth_case_id = String(ps.get("auth_case_id") || "").trim();
+  const sectionKey = String(ps.get("section_key") || "").trim();
+  const afterText = String(ps.get("after") || "");
+  const regeneratePrompt = String(ps.get("regenerate_prompt") || "").trim();
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  if (!row) return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+
+  const editableKeys = new Set(tjhpPriorAuthAiEditableSectionKeys());
+  const backHref = "/prior-auth/appeal-workspace?auth_case_id=" + encodeURIComponent(auth_case_id);
+  if (!sectionKey || !editableKeys.has(sectionKey)) return redirect(res, backHref + "&pa_status=section_invalid");
+
+  const currentPreview = row.workspace_ai_preview && typeof row.workspace_ai_preview === "object" && !Array.isArray(row.workspace_ai_preview) ? row.workspace_ai_preview : {};
+  const currentSections = row.workspace_packet_sections && typeof row.workspace_packet_sections === "object" && !Array.isArray(row.workspace_packet_sections) ? row.workspace_packet_sections : {};
+  const before = String(currentPreview.before || currentSections[sectionKey] || afterText || "").trimEnd();
+  const prompt = String(currentPreview.prompt || "Regenerate this prior authorization packet section.").trim();
+  const after = tjhpPriorAuthAiDraftForSection(org, row, sectionKey, prompt, afterText || before, regeneratePrompt);
+
+  upsertPriorAuthCase(org.org_id, {
+    ...row,
+    workspace_ai_preview: {
+      ...currentPreview,
+      active: true,
+      section_key: sectionKey,
+      prompt,
+      before,
+      after,
+      regenerate_prompt: regeneratePrompt,
+      updated_at: nowISO()
+    }
+  }, sess.user_id || "");
+
+  return redirect(res, backHref + "&pa_status=ai_preview#pa-ai-" + encodeURIComponent(sectionKey));
+}
+
+if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-apply") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+  const auth_case_id = String(ps.get("auth_case_id") || "").trim();
+  const sectionKey = String(ps.get("section_key") || "").trim();
+  const after = String(ps.get("after") || "");
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  if (!row) return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+
+  const editableKeys = new Set(tjhpPriorAuthAiEditableSectionKeys());
+  const backHref = "/prior-auth/appeal-workspace?auth_case_id=" + encodeURIComponent(auth_case_id);
+  if (!sectionKey || !editableKeys.has(sectionKey)) return redirect(res, backHref + "&pa_status=section_invalid");
+
+  const currentSections = row.workspace_packet_sections && typeof row.workspace_packet_sections === "object" && !Array.isArray(row.workspace_packet_sections) ? row.workspace_packet_sections : {};
+  upsertPriorAuthCase(org.org_id, {
+    ...row,
+    workspace_packet_sections: {
+      ...currentSections,
+      [sectionKey]: after
+    },
+    workspace_ai_preview: {}
+  }, sess.user_id || "");
+
+  return redirect(res, backHref + "&pa_status=ai_applied&ai_section=" + encodeURIComponent(sectionKey) + "#pa-ai-" + encodeURIComponent(sectionKey));
+}
+
+if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-cancel") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+  const auth_case_id = String(ps.get("auth_case_id") || "").trim();
+  const sectionKey = String(ps.get("section_key") || "").trim();
+  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  if (!row) return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+
+  const backHref = "/prior-auth/appeal-workspace?auth_case_id=" + encodeURIComponent(auth_case_id);
+  upsertPriorAuthCase(org.org_id, {
+    ...row,
+    workspace_ai_preview: {}
+  }, sess.user_id || "");
+
+  return redirect(res, backHref + "&pa_status=ai_cancelled&ai_section=" + encodeURIComponent(sectionKey) + "#pa-ai-" + encodeURIComponent(sectionKey));
+}
+
 if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
   const row = getPriorAuthCaseById(org.org_id, auth_case_id);
@@ -47327,6 +47633,13 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   const evidenceBySection = tjhpPriorAuthWorkspaceEvidenceBySection(layout);
   const workflow = layout.workflow || {};
   const guardrails = layout.guardrails || {};
+  const priorAuthAiPreview =
+    row.workspace_ai_preview &&
+    typeof row.workspace_ai_preview === "object" &&
+    !Array.isArray(row.workspace_ai_preview) &&
+    row.workspace_ai_preview.active
+      ? row.workspace_ai_preview
+      : {};
   const caseHref = "/prior-auth/case?auth_case_id=" + encodeURIComponent(ctx.auth_case_id || auth_case_id);
 
   const pct = value => Math.max(0, Math.min(100, Math.round(Number(value || 0) || 0)));
@@ -47699,11 +48012,13 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         : priorAuthPacketSectionBody(cleanKey);
     const rows = Math.max(6, Math.min(30, Number(options.rows || 10) || 10));
     const saved = Object.prototype.hasOwnProperty.call(priorAuthSavedPacketSections, cleanKey);
-    const badgeText = saved ? "Saved edit" : (body ? "Ready" : "Draft");
-    const badgeClass = body ? "ok" : "warn";
+    const hasAiPreview = String(priorAuthAiPreview.section_key || "") === cleanKey;
+    const aiReviewHtml = hasAiPreview ? tjhpPriorAuthAiReviewHtml({ org, row, sectionKey: cleanKey, title, before: priorAuthAiPreview.before || "", after: priorAuthAiPreview.after || "" }) : "";
+    const badgeText = hasAiPreview ? "AI review" : (saved ? "Saved edit" : (body ? "Ready" : "Draft"));
+    const badgeClass = hasAiPreview || body ? "ok" : "warn";
 
     return `
-      <div class="prior-auth-packet-page" data-prior-auth-packet-page-key="${safeStr(cleanKey)}" style="border:1px solid #e5e7eb;border-radius:18px;background:#fff;padding:16px;margin-top:12px;">
+      <div id="pa-ai-${safeStr(cleanKey)}" class="prior-auth-packet-page" data-prior-auth-packet-page-key="${safeStr(cleanKey)}" style="border:1px solid #e5e7eb;border-radius:18px;background:#fff;padding:16px;margin-top:12px;">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;">
           <div>
             <h3 style="margin:0;">${safeStr(title)}</h3>
@@ -47712,20 +48027,22 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           <span class="badge ${badgeClass}">${safeStr(badgeText)}</span>
         </div>
 
-        <form method="${"POST"}" action="/prior-auth/appeal-workspace/save-section" style="margin-top:12px;">
-          <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
-          <input type="hidden" name="section_key" value="${safeStr(cleanKey)}" />
-          <textarea
-            class="prior-auth-packet-textarea"
-            name="section_text"
-            rows="${safeStr(rows)}"
-            style="width:100%;box-sizing:border-box;border:1px dashed #94a3b8;border-radius:14px;padding:14px;font-family:inherit;line-height:1.55;background:#f8fafc;white-space:pre-wrap;overflow:hidden;resize:vertical;"
-          >${safeStr(body || "")}</textarea>
-          <div class="btnRow" style="margin-top:10px;">
-            <button class="btn small" type="submit">Save Section</button>
-            <span class="muted small">Saves this prior-auth packet section only. No payer submission occurs.</span>
-          </div>
-        </form>
+        ${hasAiPreview ? aiReviewHtml : `
+          <form method="${"POST"}" action="/prior-auth/appeal-workspace/save-section" style="margin-top:12px;">
+            <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
+            <input type="hidden" name="section_key" value="${safeStr(cleanKey)}" />
+            <textarea
+              class="prior-auth-packet-textarea"
+              name="section_text"
+              rows="${safeStr(rows)}"
+              style="width:100%;box-sizing:border-box;border:1px dashed #94a3b8;border-radius:14px;padding:14px;font-family:inherit;line-height:1.55;background:#f8fafc;white-space:pre-wrap;overflow:hidden;resize:vertical;"
+            >${safeStr(body || "")}</textarea>
+            <div class="btnRow" style="margin-top:10px;">
+              <button class="btn small" type="submit">Save Section</button>
+              <span class="muted small">Saves this prior-auth packet section only. No payer submission occurs.</span>
+            </div>
+          </form>
+        `}
       </div>
     `;
   };
@@ -47878,251 +48195,55 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_LOCAL_PROPOSAL_UI_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
+    <!-- PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
     <style>
-      .prior-auth-ai-floater{
-        position:fixed;
-        right:22px;
-        bottom:22px;
-        z-index:9998;
-        border:0;
-        border-radius:999px;
-        min-height:44px;
-        padding:10px 15px;
-        display:inline-flex;
-        align-items:center;
-        justify-content:center;
-        gap:8px;
-        background:#111827;
-        color:#fff;
-        font-size:13px;
-        line-height:1;
-        font-weight:900;
-        white-space:nowrap;
-        box-shadow:0 18px 40px rgba(15,23,42,.25);
-        cursor:pointer;
-      }
-      .prior-auth-shell-backdrop{
-        display:none;
-        position:fixed;
-        inset:0;
-        z-index:9997;
-        background:rgba(15,23,42,.35);
-      }
-      .prior-auth-shell-panel{
-        display:none;
-        position:fixed;
-        right:20px;
-        bottom:20px;
-        z-index:9999;
-        width:min(720px,calc(100vw - 40px));
-        max-height:calc(100vh - 80px);
-        overflow:auto;
-        background:#fff;
-        border:1px solid #e5e7eb;
-        border-radius:18px;
-        box-shadow:0 24px 70px rgba(15,23,42,.28);
-        padding:18px;
-      }
-      .prior-auth-shell-panel.wide{
-        left:50%;
-        right:auto;
-        top:48px;
-        bottom:auto;
-        transform:translateX(-50%);
-        width:min(980px,calc(100vw - 48px));
-      }
-      .prior-auth-shell-head{
-        display:flex;
-        align-items:flex-start;
-        justify-content:space-between;
-        gap:12px;
-        margin-bottom:12px;
-      }
-      .prior-auth-shell-close{
-        border:1px solid #e5e7eb;
-        background:#fff;
-        border-radius:10px;
-        padding:8px 10px;
-        cursor:pointer;
-        font-weight:900;
-      }
-      .prior-auth-ai-working-target{
-        position:relative;
-      }
-      .prior-auth-ai-working-target > :not([data-prior-auth-inline-ai-working-banner="true"]){
-        opacity:.32;
-        filter:blur(1.8px);
-        pointer-events:none;
-        transition:opacity .15s ease, filter .15s ease;
-      }
-      .prior-auth-ai-working-target [data-prior-auth-inline-ai-working-banner="true"]{
-        opacity:1 !important;
-        filter:none !important;
-        pointer-events:auto !important;
-        position:sticky;
-        top:112px;
-        z-index:20;
-        box-shadow:0 10px 28px rgba(37,99,235,.12);
-      }
-      .prior-auth-ai-proposed-target{
-        outline:3px solid #86efac;
-        box-shadow:0 0 0 6px rgba(34,197,94,.14);
-        transition:outline .2s ease, box-shadow .2s ease;
-      }
-      [data-prior-auth-assistant-proposal="true"],
-      [data-prior-auth-assistant-proposal-disabled="true"]{
-        display:none !important;
-        height:0 !important;
-        overflow:hidden !important;
-        padding:0 !important;
-        margin:0 !important;
-        border:0 !important;
-      }
-      .prior-auth-ai-inline-review{
-        border:2px solid #a5b4fc;
-        border-left:5px solid #4f46e5;
-        border-radius:18px;
-        padding:16px;
-        margin-top:14px;
-        background:#fff;
-        box-shadow:0 12px 30px rgba(79,70,229,.12);
-      }
-      .prior-auth-ai-inline-review-title{
-        font-weight:900;
-        margin-bottom:8px;
-      }
-      .prior-auth-ai-inline-diff{
-        white-space:pre-wrap;
-        font-family:inherit;
-        line-height:1.55;
-        border:1px solid #e5e7eb;
-        border-radius:14px;
-        padding:14px;
-        background:#fff;
-        min-height:120px;
-      }
-      .prior-auth-ai-diff-added{
-        background:#bbf7d0;
-        color:#065f46;
-        border-radius:5px;
-        padding:1px 3px;
-      }
-      .prior-auth-ai-inline-regenerate-row{
-        display:flex;
-        gap:10px;
-        align-items:center;
-        margin-top:12px;
-        flex-wrap:wrap;
-      }
-      .prior-auth-ai-inline-regenerate-row input{
-        flex:1 1 360px;
-        min-width:240px;
-        border:1px solid #e5e7eb;
-        border-radius:12px;
-        padding:10px;
-        font-family:inherit;
-      }
-      .prior-auth-ai-inline-review .prior-auth-ai-inline-status{
-        background:#ecfdf5;
-        color:#065f46;
-        border:1px solid #86efac;
-        border-radius:12px;
-        padding:10px;
-        font-weight:900;
-        margin-top:12px;
-      }
-      .prior-auth-ai-inline-review-actions{
-        display:flex;
-        gap:10px;
-        justify-content:flex-end;
-        flex-wrap:wrap;
-        margin-top:12px;
-      }
-      .prior-auth-ai-inline-active{
-        border-left:4px solid #4f46e5 !important;
-        padding-left:18px !important;
-      }
-      .prior-auth-assistant-chip{
-        display:inline-flex;
-        align-items:center;
-        justify-content:center;
-        min-height:34px;
-        border:1px solid #e5e7eb;
-        border-radius:999px;
-        padding:6px 10px;
-        margin:4px;
-        background:#f8fafc;
-        font-size:12px;
-        font-weight:800;
-      }
-      .prior-auth-print-section{
-        border:1px solid #e5e7eb;
-        border-radius:14px;
-        padding:14px;
-        margin:12px 0;
-        background:#fff;
-      }
-      @media print{
-        body *{ visibility:hidden !important; }
-        #prior-auth-pdf-preview-panel,
-        #prior-auth-pdf-preview-panel *{ visibility:visible !important; }
-        #prior-auth-pdf-preview-panel{
-          display:block !important;
-          position:absolute !important;
-          inset:0 !important;
-          width:auto !important;
-          max-height:none !important;
-          overflow:visible !important;
-          box-shadow:none !important;
-          border:0 !important;
-          transform:none !important;
-        }
-        .prior-auth-shell-close,
-        .prior-auth-print-actions{ display:none !important; }
-      }
+      .prior-auth-shell-backdrop{display:none;position:fixed;inset:0;background:rgba(15,23,42,.46);z-index:2998;}
+      .prior-auth-shell-panel{display:none;position:fixed;top:0;right:0;width:min(520px,96vw);height:100vh;overflow:auto;background:#fff;border-left:1px solid #e5e7eb;box-shadow:-20px 0 45px rgba(15,23,42,.18);z-index:2999;padding:18px;box-sizing:border-box;}
+      .prior-auth-shell-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px;}
+      .prior-auth-shell-close{border:1px solid #e5e7eb;background:#fff;border-radius:999px;padding:8px 12px;font-weight:900;cursor:pointer;}
+      .prior-auth-ai-floater{position:fixed;right:22px;bottom:22px;z-index:2800;border:0;border-radius:999px;background:#111827;color:#fff;padding:13px 16px;font-weight:950;box-shadow:0 14px 30px rgba(15,23,42,.28);cursor:pointer;}
+      .prior-auth-assistant-chip{border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:999px;padding:8px 11px;margin:0 6px 8px 0;font-weight:900;cursor:pointer;}
+      .prior-auth-packet-page .ws-ai-final-hidden{display:none;}
+      .prior-auth-packet-page .ws-ai-regenerating-overlay{position:absolute;inset:0;background:rgba(255,255,255,.72);z-index:4;align-items:center;justify-content:center;font-weight:950;color:#111827;border-radius:14px;}
+      .prior-auth-packet-page .ws-ai-review-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:12px 0;}
+      .prior-auth-packet-page .ws-track-changes{border:1px solid #bbf7d0;border-radius:14px;background:#f0fdf4;padding:12px;margin-top:10px;}
+      .prior-auth-packet-page .ws-ai-regenerate-controls{margin-top:12px;border-top:1px solid #e5e7eb;padding-top:12px;}
+      .prior-auth-packet-page .ws-ai-review-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
     </style>
 
-    <button class="prior-auth-ai-floater" type="button" data-prior-auth-ai-open="true" data-prior-auth-assistant-open="true" onclick="return (window.__tjhpPriorAuthAssistantOpenFromClick ? window.__tjhpPriorAuthAssistantOpenFromClick(event) : false)" aria-label="Open AI Prior Authorization Assistant">
-      AI Prior Auth Assistant
-    </button>
-
+    <button class="prior-auth-ai-floater" type="button" data-prior-auth-ai-open="true" data-prior-auth-assistant-open="true" onclick="return (window.__tjhpPriorAuthAssistantOpenFromClick ? window.__tjhpPriorAuthAssistantOpenFromClick(event) : false)" aria-label="Open AI Prior Authorization Assistant">AI Prior Auth Assistant</button>
     <div class="prior-auth-shell-backdrop" data-prior-auth-shell-backdrop="true"></div>
 
     <div id="prior-auth-ai-assistant-panel" class="prior-auth-shell-panel" role="dialog" aria-modal="true" aria-label="AI Prior Authorization Assistant">
       <div class="prior-auth-shell-head">
         <div>
           <h2 style="margin:0;">AI Prior Authorization Assistant</h2>
-          <p class="muted small" style="margin:6px 0 0 0;">
-            Assistant suggestions can help improve prior-auth packet drafts, organize source-proof gaps, and prepare payer-facing language. Review suggestions before saving.
-          </p>
+          <p class="muted small" style="margin:6px 0 0 0;">Suggestions are saved as server-backed section reviews. Apply only after staff review.</p>
         </div>
         <button class="prior-auth-shell-close" type="button" data-prior-auth-shell-close="true">Close</button>
       </div>
 
       <div class="card" style="box-shadow:none;background:#f8fafc;margin:10px 0;">
         <h3>Case context</h3>
-        <p class="muted small">
-          Patient: ${safeStr(ctx.patient || "-")} · Payer: ${safeStr(ctx.payer || "-")} · Status: ${safeStr(ctx.status || "-")} · Requested service: ${safeStr(ctx.requested_service || "-")}
-        </p>
+        <p class="muted small">Patient: ${safeStr(ctx.patient || "-")} · Payer: ${safeStr(ctx.payer || "-")} · Status: ${safeStr(ctx.status || "-")} · Requested service: ${safeStr(ctx.requested_service || "-")}</p>
       </div>
 
       <h3 data-prior-auth-assistant-copy-active="true">AI Assistant Actions</h3>
       <div>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Help improve the cover letter language for this prior authorization appeal.">Improve cover letter language</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Improve the Letter of Medical Necessity rationale using the prior-auth case data and uploaded source proof.">Improve LMN rationale</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Map the clinical facts to payer medical necessity criteria and update the Clinical Summary with a payer-criteria rationale. If Letter of Medical Necessity is selected as the target, improve the LMN instead.">Map clinical facts to payer criteria</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Find missing source proof using TJ Healthcare Pro packet data. If EHR retrieval is needed, explain that Enterprise EHR integration is required.">Find missing source proof</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Improve the Clinical Summary using prior-auth case context and uploaded clinical evidence.">Improve clinical summary</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Suggest PDF pages to exclude from the denial letter, for example exclude pages 5, 7-9.">Suggest PDF pages to exclude</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-prompt="Help prepare peer-to-peer talking points for this prior authorization case.">Prepare peer-to-peer talking points</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="appeal_narrative" data-prior-auth-assistant-prompt="Help improve the cover letter language for this prior authorization appeal.">Improve cover letter language</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="letter_of_medical_necessity" data-prior-auth-assistant-prompt="Improve the Letter of Medical Necessity rationale using the prior-auth case data and uploaded source proof.">Improve LMN rationale</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="clinical_summary" data-prior-auth-assistant-prompt="Map the clinical facts to payer medical necessity criteria and update the Clinical Summary with a payer-criteria rationale. If Letter of Medical Necessity is selected as the target, improve the LMN instead.">Map clinical facts to payer criteria</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="evidence_summary" data-prior-auth-assistant-prompt="Find missing source proof using TJ Healthcare Pro packet data. If EHR retrieval is needed, explain that Enterprise EHR integration is required.">Find missing source proof</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="clinical_summary" data-prior-auth-assistant-prompt="Improve the Clinical Summary using prior-auth case context and uploaded clinical evidence.">Improve clinical summary</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-page-exclusion-shortcut="true" data-prior-auth-assistant-prompt="Suggest PDF pages to exclude from the denial letter, for example exclude pages 5, 7-9.">Suggest PDF pages to exclude</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="evidence_summary" data-prior-auth-assistant-prompt="Help prepare peer-to-peer talking points for this prior authorization case.">Prepare peer-to-peer talking points</button>
       </div>
 
-      <div class="prior-auth-assistant-chat" style="margin-top:14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff;padding:12px;">
-        <div class="muted small" style="font-weight:900;margin-bottom:8px;">Ask the Prior Auth Assistant</div>
+      <form method="POST" action="/prior-auth/appeal-workspace/ai-preview" data-prior-auth-ai-preview-form="true" data-prior-auth-assistant-form="true" style="margin-top:14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff;padding:12px;">
+        <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || auth_case_id)}" />
         <label class="muted small" style="display:block;font-weight:900;margin-bottom:6px;">Target section or action</label>
-        <select data-prior-auth-assistant-target="true" style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:12px;padding:9px;margin-bottom:10px;">
-          <option value="auto">Auto-detect from prompt</option>
+        <select name="target_section" data-prior-auth-assistant-target="true" style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:12px;padding:9px;margin-bottom:10px;">
+          <option value="auto">Auto-detect best packet section</option>
           <option value="appeal_narrative">Prior Authorization Appeal Cover Letter</option>
           <option value="case_summary">Prior Authorization Case Summary</option>
           <option value="letter_of_medical_necessity">Letter of Medical Necessity</option>
@@ -48130,602 +48251,93 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           <option value="requested_action">Requested Action</option>
           <option value="attachments_index">Attachments Index</option>
           <option value="evidence_summary">Evidence Summary</option>
-          <option value="page_exclusion">Evidence PDF Page Exclusions</option>
         </select>
-        <div data-prior-auth-assistant-messages="true" style="max-height:260px;overflow:auto;border:1px solid #e5e7eb;border-radius:12px;background:#f8fafc;padding:10px;margin-bottom:10px;">
-          <div class="muted small">
-            Type a question or choose a shortcut. Suggestions appear as draft updates for staff review.
-          </div>
-        </div>
-        <div data-prior-auth-assistant-proposal="true" data-prior-auth-assistant-proposal-disabled="true" style="display:none!important;height:0;overflow:hidden;padding:0;margin:0;border:0;">
-          <div style="font-weight:900;color:#065f46;">Proposed update</div>
-          <div class="muted small" data-prior-auth-assistant-proposal-meta="true" style="margin:4px 0 8px 0;"></div>
-          <pre data-prior-auth-assistant-proposal-text="true" style="white-space:pre-wrap;font-family:inherit;line-height:1.45;margin:0;background:#fff;border:1px solid #bbf7d0;border-radius:10px;padding:10px;"></pre>
-          <div class="btnRow" style="margin-top:8px;">
-            <button class="btn small" type="button" data-prior-auth-assistant-apply="true">Apply to section</button>
-            <button class="btn secondary small" type="button" data-prior-auth-assistant-regenerate="true">Regenerate</button>
-            <button class="btn secondary small" type="button" data-prior-auth-assistant-clear="true">Clear</button>
-          </div>
-          <div class="muted small" style="margin-top:6px;">Applying updates the textarea only. Click Save Section to persist it.</div>
-        </div>
-        <form data-prior-auth-assistant-form="true" action="javascript:void(0)">
-          <textarea
-            data-prior-auth-assistant-input="true"
-            rows="3"
-            placeholder="Ask about LMN language, missing proof, payer criteria, peer-to-peer notes, or cover letter wording..."
-            style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:12px;padding:10px;font-family:inherit;line-height:1.45;resize:vertical;"
-          ></textarea>
-          <div class="btnRow" style="margin-top:8px;">
-            <button class="btn small" type="button" data-prior-auth-assistant-submit="true">Ask Assistant</button>
-            <span class="muted small">Assistant suggestions update draft text only. Review, apply, then save the section.</span>
-          </div>
-        </form>
-      </div>
-
-      <div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin-top:12px;">
-        Assistant actions generate draft suggestions only. They do not submit to a payer; use Save Section or Save page exclusions to persist changes.
-      </div>
+        <textarea name="prompt" data-prior-auth-assistant-input="true" data-prior-auth-assistant-prompt-input="true" rows="4" placeholder="Ask for payer-facing prior-auth packet edits..." style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:12px;padding:10px;font-family:inherit;line-height:1.45;"></textarea>
+        <input type="hidden" name="current_text" data-prior-auth-ai-current-text="true" />
+        <div class="muted small" data-prior-auth-assistant-messages="true" style="margin-top:8px;">The assistant will redirect to the target packet section for review.</div>
+        <button class="btn small" type="submit" data-prior-auth-assistant-submit="true" style="margin-top:10px;">Ask Assistant</button>
+      </form>
     </div>
 
-    <div id="prior-auth-pdf-preview-panel" class="prior-auth-shell-panel wide" role="dialog" aria-modal="true" aria-label="Prior Auth Packet Preview">
-      <div class="prior-auth-shell-head">
-        <div>
-          <h2 style="margin:0;">Prior Auth Packet Preview</h2>
-          <p class="muted small" style="margin:6px 0 0 0;">
-            Read-only packet preview. Use browser print to save as PDF in this phase; no payer submission occurs.
-          </p>
-        </div>
-        <button class="prior-auth-shell-close" type="button" data-prior-auth-shell-close="true">Close</button>
-      </div>
-
-      <div class="prior-auth-print-actions btnRow">
-        <button class="btn" type="button" onclick="window.print()">Print / Save as PDF</button>
-      </div>
-
-      <div class="prior-auth-print-section">
-        <h1 style="margin-top:0;">Prior Authorization Appeal Packet</h1>
-        <p><strong>Practice:</strong> ${safeStr(org.org_name || org.name || "-")}</p>
-        <p><strong>Patient:</strong> ${safeStr(ctx.patient || "-")}</p>
-        <p><strong>Payer:</strong> ${safeStr(ctx.payer || "-")}</p>
-        <p><strong>Requested service:</strong> ${safeStr(ctx.requested_service || "-")}</p>
-        <p><strong>Auth #:</strong> ${safeStr(ctx.auth_number || "-")}</p>
-      </div>
-
-      ${priorAuthPdfPreviewRowsHtml}
-    </div>
-
-    <script>
-      /* PRIOR_AUTH_ASSISTANT_OPEN_BOOTSTRAP_OK */
-      (function(){
-        if (window.__tjhpPriorAuthAssistantOpenBootstrapBound) return;
-        window.__tjhpPriorAuthAssistantOpenBootstrapBound = true;
-
-        const priorAuthAssistantOpenPanel = function(event){
-          if (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-          }
-
-          const backdrop = document.querySelector('[data-prior-auth-shell-backdrop="true"]');
-          const panel = document.getElementById('prior-auth-ai-assistant-panel');
-          const previewPanel = document.getElementById('prior-auth-pdf-preview-panel');
-
-          if (previewPanel) previewPanel.style.display = 'none';
-          if (backdrop) backdrop.style.display = 'block';
-          if (panel) {
-            panel.style.display = 'block';
-            panel.removeAttribute('aria-hidden');
-          }
-
-          document.body.style.overflow = 'hidden';
-          return false;
-        };
-
-        const priorAuthAssistantClosePanel = function(event){
-          if (event) {
-            event.preventDefault();
-            event.stopPropagation();
-          }
-
-          const backdrop = document.querySelector('[data-prior-auth-shell-backdrop="true"]');
-          const panel = document.getElementById('prior-auth-ai-assistant-panel');
-          const previewPanel = document.getElementById('prior-auth-pdf-preview-panel');
-
-          if (backdrop) backdrop.style.display = 'none';
-          if (panel) panel.style.display = 'none';
-          if (previewPanel) previewPanel.style.display = 'none';
-
-          document.body.style.overflow = '';
-          return false;
-        };
-
-        window.__tjhpPriorAuthAssistantOpenFromClick = priorAuthAssistantOpenPanel;
-        window.__tjhpPriorAuthAssistantCloseFromClick = priorAuthAssistantClosePanel;
-
-        document.addEventListener('click', function(event){
-          const openTrigger = event.target && event.target.closest
-            ? event.target.closest('[data-prior-auth-ai-open="true"], [data-prior-auth-assistant-open="true"], .prior-auth-ai-floater')
-            : null;
-
-          if (openTrigger) {
-            priorAuthAssistantOpenPanel(event);
-            return false;
-          }
-
-          const closeTrigger = event.target && event.target.closest
-            ? event.target.closest('[data-prior-auth-shell-close="true"], [data-prior-auth-shell-backdrop="true"]')
-            : null;
-
-          if (closeTrigger) {
-            priorAuthAssistantClosePanel(event);
-            return false;
-          }
-        }, true);
-
-        document.addEventListener('keydown', function(event){
-          if (event && event.key === 'Escape') priorAuthAssistantClosePanel(event);
-        }, true);
-      })();
-    </script>
     <script>
       (function(){
         const backdrop = document.querySelector('[data-prior-auth-shell-backdrop="true"]');
-        const aiPanel = document.getElementById('prior-auth-ai-assistant-panel');
-        const previewPanel = document.getElementById('prior-auth-pdf-preview-panel');
+        const panel = document.getElementById('prior-auth-ai-assistant-panel');
+        const form = document.querySelector('[data-prior-auth-ai-preview-form="true"]');
+        const target = document.querySelector('[data-prior-auth-assistant-target="true"]');
+        const prompt = document.querySelector('[data-prior-auth-assistant-input="true"]');
+        const currentText = document.querySelector('[data-prior-auth-ai-current-text="true"]');
 
-        const closeAll = function(){
-          if (backdrop) backdrop.style.display = 'none';
-          if (aiPanel) aiPanel.style.display = 'none';
-          if (previewPanel) previewPanel.style.display = 'none';
-          document.body.style.overflow = '';
+        const openPanel = function(){ if (backdrop) backdrop.style.display = 'block'; if (panel) panel.style.display = 'block'; document.body.style.overflow = 'hidden'; return false; };
+        const closePanel = function(){ if (backdrop) backdrop.style.display = 'none'; if (panel) panel.style.display = 'none'; document.body.style.overflow = ''; return false; };
+        window.__tjhpPriorAuthAssistantOpenFromClick = function(event){ if (event) { event.preventDefault(); event.stopPropagation(); } return openPanel(); };
+        window.__tjhpPriorAuthAssistantCloseFromClick = function(event){ if (event) { event.preventDefault(); event.stopPropagation(); } return closePanel(); };
+
+        const cssEscape = function(value){ return String(value || '').replace(/[^a-zA-Z0-9_-]/g, ''); };
+        const selectedTarget = function(){ return target ? String(target.value || 'auto') : 'auto'; };
+        const detectTarget = function(text){
+          const selected = selectedTarget();
+          if (selected && selected !== 'auto') return selected;
+          const lower = String(text || '').toLowerCase();
+          if (/lmn|medical necessity/.test(lower)) return 'letter_of_medical_necessity';
+          if (/clinical|criteria|facts|policy/.test(lower)) return 'clinical_summary';
+          if (/cover|appeal letter|intro|closing/.test(lower)) return 'appeal_narrative';
+          if (/case summary|auth summary/.test(lower)) return 'case_summary';
+          if (/requested action|approve|overturn/.test(lower)) return 'requested_action';
+          if (/attachment|index/.test(lower)) return 'attachments_index';
+          if (/missing proof|source proof|evidence|peer-to-peer|peer to peer/.test(lower)) return 'evidence_summary';
+          return 'appeal_narrative';
+        };
+        const copyCurrentSectionText = function(){
+          const key = detectTarget(prompt ? prompt.value : '');
+          const section = document.querySelector('[data-prior-auth-packet-page-key="' + cssEscape(key) + '"]');
+          const textarea = section ? section.querySelector('textarea[name="section_text"]') : null;
+          if (currentText) currentText.value = textarea ? textarea.value : '';
+        };
+        const assistantMessage = function(text){
+          const messages = document.querySelector('[data-prior-auth-assistant-messages="true"]');
+          if (messages) messages.textContent = text;
+        };
+        const runPageExclusionHelper = function(text){
+          const matches = String(text || '').match(/\b\d+\s*(?:-\s*\d+)?\b/g) || [];
+          const pages = matches.map(function(x){ return x.replace(/\s+/g, ''); }).join(', ');
+          const card = document.querySelector('[data-prior-auth-ordered-key="denial_or_partial_approval_letter"], [data-prior-auth-packet-key="denial_or_partial_approval_letter"]');
+          const field = card ? card.querySelector('input[name="pages_excluded"]') : null;
+          if (field && pages) {
+            field.value = pages;
+            field.dispatchEvent(new Event('input', { bubbles:true }));
+            card.scrollIntoView({ behavior:'auto', block:'center' });
+            closePanel();
+            assistantMessage('I filled the page-exclusion field with: ' + pages + '. Review it, then click Save page exclusions to persist it.');
+            return true;
+          }
+          openPanel();
+          assistantMessage(field ? 'Tell me which pages to exclude, for example: exclude pages 5, 7-9.' : 'Upload or preview a PDF source proof before using page exclusions.');
+          return true;
         };
 
-        const openPanel = function(panel){
-          closeAll();
-          if (backdrop) backdrop.style.display = 'block';
-          if (panel) panel.style.display = 'block';
-          document.body.style.overflow = 'hidden';
-        };
-
-        document.addEventListener('click', function(e){
-          const aiBtn = e.target.closest('[data-prior-auth-ai-open="true"]');
-          if (aiBtn) {
-            e.preventDefault();
-            openPanel(aiPanel);
-            return;
-          }
-
-          const previewBtn = e.target.closest('[data-prior-auth-preview-open="true"]');
-          if (previewBtn) {
-            e.preventDefault();
-            openPanel(previewPanel);
-            return;
-          }
-
-          if (e.target.closest('[data-prior-auth-shell-close="true"]') || e.target.closest('[data-prior-auth-shell-backdrop="true"]')) {
-            e.preventDefault();
-            closeAll();
-          }
-        });
-
-        const actualPriorAuthScrollKey = 'tjhp_prior_auth_workspace_scroll_' + "${safeStr(ctx.auth_case_id || auth_case_id)}";
-
-        const priorAuthWorkspaceSafeCss = function(value){
-          const raw = String(value || '');
-          if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(raw);
-          return raw.replace(/["\\\\]/g, '\\\\$&');
-        };
-
-        const priorAuthWorkspaceRestoreTarget = function(info){
-          if (!info || typeof info !== 'object') return null;
-
-          const candidates = [];
-
-          if (info.kind && info.key) {
-            candidates.push('[data-prior-auth-ordered-kind="' + priorAuthWorkspaceSafeCss(info.kind) + '"][data-prior-auth-ordered-key="' + priorAuthWorkspaceSafeCss(info.key) + '"]');
-          }
-
-          if (info.key) {
-            candidates.push('[data-prior-auth-ordered-key="' + priorAuthWorkspaceSafeCss(info.key) + '"]');
-            candidates.push('[data-prior-auth-packet-key="' + priorAuthWorkspaceSafeCss(info.key) + '"]');
-            candidates.push('[data-prior-auth-packet-page-key="' + priorAuthWorkspaceSafeCss(info.key) + '"]');
-          }
-
-          if (info.evidenceKey) {
-            candidates.push('[data-prior-auth-ordered-key="' + priorAuthWorkspaceSafeCss(info.evidenceKey) + '"]');
-            candidates.push('[data-prior-auth-packet-key="' + priorAuthWorkspaceSafeCss(info.evidenceKey) + '"]');
-          }
-
-          for (const selector of candidates) {
-            try {
-              const found = document.querySelector(selector);
-              if (found) return found;
-            } catch (err) {}
-          }
-
-          return null;
-        };
-
-        const priorAuthWorkspaceScrollToTarget = function(target, fallbackY){
-          if (target && target.getBoundingClientRect) {
-            const top = Math.max(0, target.getBoundingClientRect().top + (window.scrollY || window.pageYOffset || 0) - 115);
-            window.scrollTo({ top, behavior: 'auto' });
-            return;
-          }
-
-          window.scrollTo({ top: Math.max(0, Number(fallbackY || 0) || 0), behavior: 'auto' });
-        };
-
-        document.addEventListener('submit', function(e){
-          const form = e.target;
-          if (!form || !form.getAttribute) return;
-          const action = String(form.getAttribute('action') || '');
-          if (action.indexOf('/prior-auth/appeal-workspace/') !== 0) return;
-
-          const anchor = form.closest('[data-prior-auth-ordered-key], [data-prior-auth-packet-key], [data-prior-auth-packet-page-key]');
-
-          const info = {
-            y: Number(window.scrollY || window.pageYOffset || 0) || 0,
-            kind: anchor ? String(anchor.getAttribute('data-prior-auth-ordered-kind') || '') : '',
-            key: anchor ? String(anchor.getAttribute('data-prior-auth-ordered-key') || anchor.getAttribute('data-prior-auth-packet-key') || anchor.getAttribute('data-prior-auth-packet-page-key') || '') : '',
-            evidenceKey: form.querySelector('[name="evidence_key"]') ? String(form.querySelector('[name="evidence_key"]').value || '') : '',
-            attachmentId: form.querySelector('[name="attachment_id"]') ? String(form.querySelector('[name="attachment_id"]').value || '') : ''
-          };
-
-          try {
-            sessionStorage.setItem(actualPriorAuthScrollKey, JSON.stringify(info));
-          } catch (err) {}
+        document.addEventListener('click', function(event){
+          const close = event.target && event.target.closest ? event.target.closest('[data-prior-auth-shell-close="true"], [data-prior-auth-shell-backdrop="true"]') : null;
+          if (close) { event.preventDefault(); closePanel(); return; }
+          const open = event.target && event.target.closest ? event.target.closest('[data-prior-auth-ai-open="true"], [data-prior-auth-assistant-open="true"]') : null;
+          if (open) { event.preventDefault(); openPanel(); return; }
+          const shortcut = event.target && event.target.closest ? event.target.closest('[data-prior-auth-assistant-prompt]') : null;
+          if (!shortcut) return;
+          event.preventDefault();
+          const text = shortcut.getAttribute('data-prior-auth-assistant-prompt') || '';
+          if (prompt) prompt.value = text;
+          const shortcutTarget = shortcut.getAttribute('data-prior-auth-assistant-target-shortcut') || '';
+          if (target && shortcutTarget && selectedTarget() === 'auto') target.value = shortcutTarget;
+          if (shortcut.hasAttribute('data-prior-auth-page-exclusion-shortcut')) { runPageExclusionHelper(text); return; }
+          copyCurrentSectionText();
+          if (form) form.submit();
         }, true);
 
-        try {
-          const savedScroll = sessionStorage.getItem(actualPriorAuthScrollKey);
-          if (savedScroll !== null && savedScroll !== '') {
-            sessionStorage.removeItem(actualPriorAuthScrollKey);
-
-            let info = {};
-            try {
-              info = JSON.parse(savedScroll);
-            } catch (err) {
-              info = { y: Number(savedScroll || 0) || 0 };
-            }
-
-            const restore = function(){
-              priorAuthWorkspaceScrollToTarget(priorAuthWorkspaceRestoreTarget(info), info.y);
-            };
-
-            setTimeout(restore, 80);
-            setTimeout(restore, 350);
-            setTimeout(restore, 900);
-          }
-        } catch (err) {}
-
-        const assistantMessages = document.querySelector('[data-prior-auth-assistant-messages="true"]');
-        const assistantInput = document.querySelector('[data-prior-auth-assistant-input="true"]');
-        const assistantForm = document.querySelector('[data-prior-auth-assistant-form="true"]');
-
-        const appendAssistantMessage = function(role, text){
-          if (!assistantMessages) return;
-          const wrap = document.createElement('div');
-          wrap.style.marginTop = '8px';
-          wrap.style.padding = '10px';
-          wrap.style.borderRadius = '12px';
-          wrap.style.border = '1px solid #e5e7eb';
-          wrap.style.background = role === 'user' ? '#fff' : '#ecfeff';
-          wrap.innerHTML = '<strong>' + (role === 'user' ? 'You' : 'Prior Auth Assistant') + '</strong><br/><span></span>';
-          wrap.querySelector('span').textContent = text;
-          assistantMessages.appendChild(wrap);
-          assistantMessages.scrollTop = assistantMessages.scrollHeight;
-        };
-
-        const priorAuthAssistantLocalReply = function(prompt){
-          const text = String(prompt || '').toLowerCase();
-          const patient = "${safeStr(ctx.patient || '-')}";
-          const payer = "${safeStr(ctx.payer || '-')}";
-          const service = "${safeStr(ctx.requested_service || '-')}";
-          const status = "${safeStr(ctx.status || '-')}";
-          const reason = "${safeStr(ctx.denial_reason || ctx.partial_approval_reason || '-')}";
-
-          if (/lmn|medical necessity|necessity/.test(text)) {
-            return 'For the LMN, focus on why ' + service + ' is medically necessary for ' + patient + ', the severity/functional impact, failed alternatives, and how the clinical facts meet ' + payer + ' criteria. Keep this separate from the cover letter.';
-          }
-
-          if (/missing|proof|source|document|evidence/.test(text)) {
-            return 'Review source-proof gaps first: denial/partial approval letter, original prior-auth request, clinical documentation, diagnostic results, payer policy, coding rationale, authorization history, and any missing-documentation or peer-to-peer records. Upload actual source proof where the packet needs the real document.';
-          }
-
-          if (/criteria|policy|payer/.test(text)) {
-            return 'For payer criteria, map the patient facts to the policy: diagnosis, requested service, CPT/HCPCS, ICD-10, prior treatment, diagnostic support, and why the request satisfies coverage criteria. Current payer: ' + payer + '.';
-          }
-
-          if (/peer|p2p|talking/.test(text)) {
-            return 'Peer-to-peer talking points should include the requested service, current status (' + status + '), denial/context (' + reason + '), medical-necessity rationale, and the specific approval action requested.';
-          }
-
-          if (/cover|letter|appeal/.test(text)) {
-            return 'The cover letter should stay high level: identify the patient/auth request, summarize the appeal reason, reference the attached LMN and evidence, and state the requested authorization action. Do not merge the full LMN into the cover letter.';
-          }
-
-          return 'I can help organize the prior-auth packet, identify missing source proof, outline LMN language, map facts to payer criteria, or prepare peer-to-peer points. Suggestions update drafts only after staff review and normal Save actions.';
-        };
-
-        if (assistantForm) {
-          assistantForm.addEventListener('submit', function(e){
-            e.preventDefault();
-            e.stopPropagation();
-            if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
-
-            const prompt = assistantInput ? assistantInput.value.trim() : '';
-            if (!prompt) return;
-
-            appendAssistantMessage('user', prompt);
-
-            if (!priorAuthAssistantDelegateToInlineRunner(prompt)) {
-              priorAuthAssistantRunPrompt(prompt);
-            }
-
-            if (assistantInput) assistantInput.value = '';
-          });
+        if (form) {
+          form.addEventListener('submit', function(){ copyCurrentSectionText(); });
         }
-
-        document.addEventListener('click', function(e){
-          const shortcut = e.target.closest('[data-prior-auth-assistant-prompt]');
-          if (!shortcut) return;
-
-          e.preventDefault();
-          e.stopPropagation();
-          if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
-
-          const prompt = shortcut.getAttribute('data-prior-auth-assistant-prompt') || '';
-          if (assistantInput) assistantInput.value = prompt;
-          appendAssistantMessage('user', prompt);
-
-          if (!priorAuthAssistantDelegateToInlineRunner(prompt)) {
-            openPanel(aiPanel);
-            priorAuthAssistantRunPrompt(prompt);
-          }
-        });
-
-        document.addEventListener('click', function(e){
-          const apply = e.target.closest('[data-prior-auth-assistant-apply="true"]');
-          if (apply) {
-            e.preventDefault();
-            priorAuthAssistantApplyProposal();
-            return;
-          }
-
-          const regen = e.target.closest('[data-prior-auth-assistant-regenerate="true"]');
-          if (regen) {
-            e.preventDefault();
-            const extra = assistantInput ? assistantInput.value.trim() : "";
-            const prompt = extra || priorAuthAssistantLastPrompt || "Regenerate this section.";
-            if (extra) appendAssistantMessage('user', extra);
-            if (assistantInput) assistantInput.value = "";
-            if (priorAuthAssistantLastTarget) {
-              priorAuthAssistantShowProposal(priorAuthAssistantLastTarget, prompt);
-            }
-            return;
-          }
-
-          const clear = e.target.closest('[data-prior-auth-assistant-clear="true"]');
-          if (clear) {
-            e.preventDefault();
-            priorAuthAssistantLastProposal = "";
-            if (assistantProposal) assistantProposal.style.display = "none";
-          }
-        });
-
-
-        window.tjhpOpenPriorAuthAssistant = function(){
-          openPanel(aiPanel);
-        };
-
-        window.tjhpClosePriorAuthAssistant = function(){
-          closeAll();
-        };
-
-        document.querySelectorAll('[data-prior-auth-ai-open="true"]').forEach(function(btn){
-          btn.addEventListener('click', function(e){
-            e.preventDefault();
-            e.stopPropagation();
-            openPanel(aiPanel);
-          });
-        });
-
-        const assistantTarget = document.querySelector('[data-prior-auth-assistant-target="true"]');
-        const assistantProposal = document.querySelector('[data-prior-auth-assistant-proposal="true"]');
-        const assistantProposalText = document.querySelector('[data-prior-auth-assistant-proposal-text="true"]');
-        const assistantProposalMeta = document.querySelector('[data-prior-auth-assistant-proposal-meta="true"]');
-        let priorAuthAssistantLastPrompt = "";
-        let priorAuthAssistantLastTarget = "";
-        let priorAuthAssistantLastProposal = "";
-
-        const priorAuthAssistantSectionLabels = {
-          appeal_narrative: "Prior Authorization Appeal Cover Letter",
-          case_summary: "Prior Authorization Case Summary",
-          letter_of_medical_necessity: "Letter of Medical Necessity",
-          clinical_summary: "Clinical Summary",
-          requested_action: "Requested Action",
-          attachments_index: "Attachments Index",
-          evidence_summary: "Evidence Summary"
-        };
-
-        const priorAuthAssistantFindEditableSection = function(key){
-          const cleanKey = String(key || "").trim();
-          if (!cleanKey) return null;
-          return document.querySelector('[data-prior-auth-packet-page-key="' + priorAuthWorkspaceSafeCss(cleanKey) + '"]');
-        };
-
-        const priorAuthAssistantFindEditableTextarea = function(key){
-          const section = priorAuthAssistantFindEditableSection(key);
-          return section ? section.querySelector('textarea[name="section_text"]') : null;
-        };
-
-        const priorAuthAssistantDetectTarget = function(prompt){
-          const selected = assistantTarget ? String(assistantTarget.value || "auto") : "auto";
-          if (selected && selected !== "auto") return selected;
-
-          const text = String(prompt || "").toLowerCase();
-
-          if (/exclude|remove|omit|skip/.test(text) && /page/.test(text)) return "page_exclusion";
-          if (/lmn|medical necessity|letter of medical necessity|necessity rationale/.test(text)) return "letter_of_medical_necessity";
-          if (/clinical summary|clinical facts|symptom|severity|failed alternative|treatment history/.test(text)) return "clinical_summary";
-          if (/cover|appeal letter|intro|opening|closing/.test(text)) return "appeal_narrative";
-          if (/case summary|patient summary|auth summary|authorization summary/.test(text)) return "case_summary";
-          if (/requested action|ask|request approval|approve|overturn/.test(text)) return "requested_action";
-          if (/attachment|index|exhibit list/.test(text)) return "attachments_index";
-          if (/evidence summary|proof summary|source proof summary/.test(text)) return "evidence_summary";
-
-          return "appeal_narrative";
-        };
-
-        const priorAuthAssistantExtractPages = function(prompt){
-          const text = String(prompt || "");
-          const rangeText = [];
-          const regex = /\b\d+\s*(?:-\s*\d+)?\b/g;
-          let match;
-          while ((match = regex.exec(text))) rangeText.push(match[0].replace(/\s+/g, ""));
-          return rangeText.join(", ");
-        };
-
-        const priorAuthAssistantHandlePageExclusionPrompt = function(prompt){
-          const pages = priorAuthAssistantExtractPages(prompt);
-          const evidenceKey =
-            /clinical/.test(String(prompt || "").toLowerCase()) ? "clinical_documentation" :
-            /diagnostic|lab|imaging|result/.test(String(prompt || "").toLowerCase()) ? "diagnostic_results" :
-            /policy|criteria|guideline/.test(String(prompt || "").toLowerCase()) ? "payer_policy_guidelines" :
-            "denial_or_partial_approval_letter";
-
-          const card = document.querySelector('[data-prior-auth-ordered-key="' + priorAuthWorkspaceSafeCss(evidenceKey) + '"], [data-prior-auth-packet-key="' + priorAuthWorkspaceSafeCss(evidenceKey) + '"]');
-          if (!card) {
-            return "I could not find the evidence card for " + evidenceKey.replace(/_/g, " ") + ".";
-          }
-
-          const input = card.querySelector('input[name="pages_excluded"]');
-          if (!input) {
-            card.scrollIntoView({ behavior: "auto", block: "center" });
-            return "I found the evidence card, but it does not have a PDF page-exclusion field yet. Upload or preview a PDF source proof first.";
-          }
-
-          card.classList.add("prior-auth-ai-working-target");
-          card.scrollIntoView({ behavior: "auto", block: "center" });
-
-          setTimeout(function(){
-            input.value = pages || input.value;
-            card.classList.remove("prior-auth-ai-working-target");
-            card.classList.add("prior-auth-ai-proposed-target");
-            setTimeout(function(){ card.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
-          }, 650);
-
-          return pages
-            ? "I filled the page-exclusion field with: " + pages + ". Review it, then click Save page exclusions to persist it."
-            : "I found the evidence card. Tell me which pages to exclude, for example: exclude pages 5, 7-9.";
-        };
-
-        const priorAuthAssistantGenerateLocalProposal = function(sectionKey, prompt, currentText){
-          const current = String(currentText || "").trim();
-          const NL = String.fromCharCode(10);
-
-          if (sectionKey === "letter_of_medical_necessity") {
-            return current || [
-              "Letter of Medical Necessity",
-              "",
-              "The requested service is medically necessary based on the patient’s clinical presentation, treatment history, and supporting documentation. The clinical facts should be tied directly to payer criteria and the requested authorization action."
-            ].join(NL);
-          }
-
-          if (sectionKey === "clinical_summary") {
-            return current || [
-              "Clinical Summary",
-              "",
-              "Summarize diagnosis, symptoms, severity, failed alternatives, functional impact, relevant test results, and payer-criteria support for the requested service."
-            ].join(NL);
-          }
-
-          if (sectionKey === "requested_action") {
-            return current || "Approve the requested prior authorization based on medical necessity and the supporting clinical documentation.";
-          }
-
-          return current || String(priorAuthAssistantSectionLabels[sectionKey] || sectionKey || "Prior Auth Packet Section");
-        };
-
-        const priorAuthAssistantDelegateToInlineRunner = function(prompt){
-          if (typeof window.__tjhpPriorAuthAssistantRunShellPrompt !== "function") return false;
-
-          try {
-            window.__tjhpPriorAuthAssistantRunShellPrompt(String(prompt || ""));
-            return true;
-          } catch (err) {
-            return false;
-          }
-        };
-
-        const priorAuthAssistantShowProposal = function(sectionKey, prompt){
-          if (priorAuthAssistantDelegateToInlineRunner(prompt)) {
-            if (assistantProposal) assistantProposal.style.display = "none";
-            return;
-          }
-
-          const section = priorAuthAssistantFindEditableSection(sectionKey);
-          const textarea = priorAuthAssistantFindEditableTextarea(sectionKey);
-
-          if (!section || !textarea) {
-            appendAssistantMessage("assistant", "I could not find that editable section.");
-            return;
-          }
-
-          priorAuthAssistantLastPrompt = prompt;
-          priorAuthAssistantLastTarget = sectionKey;
-
-          section.classList.add("prior-auth-ai-working-target");
-          section.scrollIntoView({ behavior: "auto", block: "center" });
-
-          setTimeout(function(){
-            const proposed = priorAuthAssistantGenerateLocalProposal(sectionKey, prompt, textarea.value);
-            priorAuthAssistantLastProposal = proposed;
-
-            section.classList.remove("prior-auth-ai-working-target");
-            section.classList.add("prior-auth-ai-proposed-target");
-            setTimeout(function(){ section.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
-
-            if (assistantProposal) assistantProposal.style.display = "none";
-
-            appendAssistantMessage("assistant", "I drafted a proposed update for " + (priorAuthAssistantSectionLabels[sectionKey] || sectionKey) + ". The review appears in the packet section, not in the assistant drawer.");
-          }, 850);
-        };
-
-        const priorAuthAssistantApplyProposal = function(){
-          if (!priorAuthAssistantLastTarget || !priorAuthAssistantLastProposal) return;
-          const section = priorAuthAssistantFindEditableSection(priorAuthAssistantLastTarget);
-          const textarea = priorAuthAssistantFindEditableTextarea(priorAuthAssistantLastTarget);
-          if (!section || !textarea) return;
-
-          textarea.value = priorAuthAssistantLastProposal;
-          textarea.dispatchEvent(new Event("input", { bubbles:true }));
-          section.classList.add("prior-auth-ai-proposed-target");
-          setTimeout(function(){ section.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
-          section.scrollIntoView({ behavior: "auto", block: "center" });
-          appendAssistantMessage("assistant", "Applied the proposal to the textarea. Click Save Section to persist it.");
-        };
-
-        const priorAuthAssistantRunPrompt = function(prompt){
-          const target = priorAuthAssistantDetectTarget(prompt);
-
-          if (target === "page_exclusion") {
-            appendAssistantMessage("assistant", priorAuthAssistantHandlePageExclusionPrompt(prompt));
-            return;
-          }
-
-          priorAuthAssistantShowProposal(target, prompt);
-        };
-
-
-        document.addEventListener('keydown', function(e){
-          if (e.key === 'Escape') closeAll();
-        });
       })();
-    </script>
-  `;
+    </script>`;
 
   const html = renderPage("Prior Auth Appeal Workspace", `
     ${workspacePolishStyles()}
@@ -48888,829 +48500,49 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         </div>
       </div>
     </div>
-    ${priorAuthAssistantAndPreviewShellHtml}\n    ${typeof workspaceDropzoneScript === "function" ? workspaceDropzoneScript() : ""}
-      <script>
-        (function(){
-          const resize = function(el){
-            if (!el || !el.classList || !el.classList.contains("prior-auth-packet-textarea")) return;
-            el.style.height = "auto";
-            el.style.height = Math.max(el.scrollHeight + 4, 180) + "px";
-          };
-          document.querySelectorAll(".prior-auth-packet-textarea").forEach(function(el){
-            resize(el);
-            el.addEventListener("input", function(){ resize(el); });
-          });
-        })();
-      </script>
-
-
+    ${priorAuthAssistantAndPreviewShellHtml}
+    ${typeof workspaceDropzoneScript === "function" ? workspaceDropzoneScript() : ""}
     <script>
-      /* PRIOR_AUTH_ASSISTANT_RESILIENT_RUNNER_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_INLINE_SECTION_REVIEW_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_MAIN_SECTION_INLINE_FOCUS_OK PRIOR_AUTH_ASSISTANT_RUNNER_ACTIVE_COPY_OK */
       (function(){
-        if (window.__tjhpPriorAuthAssistantResilientRunnerBound) return;
-        window.__tjhpPriorAuthAssistantResilientRunnerBound = true;
-
-        const q = function(sel, root){ return (root || document).querySelector(sel); };
-        const qa = function(sel, root){ return Array.from((root || document).querySelectorAll(sel)); };
-
-        const safeCss = function(value){
-          const raw = String(value || "");
-          if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(raw);
-          return raw.replace(/["\\\\]/g, "\\\\$&");
-        };
-
-        const panel = q("#prior-auth-ai-assistant-panel");
-        const messages = q("[data-prior-auth-assistant-messages='true']");
-        const input = q("[data-prior-auth-assistant-input='true']");
-        const form = q("[data-prior-auth-assistant-form='true']");
-        const targetSelect = q("[data-prior-auth-assistant-target='true']");
-        const proposal = q("[data-prior-auth-assistant-proposal='true']");
-        const proposalText = q("[data-prior-auth-assistant-proposal-text='true']");
-        const proposalMeta = q("[data-prior-auth-assistant-proposal-meta='true']");
-
-        let lastPrompt = "";
-        let lastTarget = "";
-        let lastProposal = "";
-        let priorAuthAssistantProposalVersion = 0;
-
-        const labels = {
-          appeal_narrative: "Prior Authorization Appeal Cover Letter",
-          case_summary: "Prior Authorization Case Summary",
-          letter_of_medical_necessity: "Letter of Medical Necessity",
-          clinical_summary: "Clinical Summary",
-          requested_action: "Requested Action",
-          attachments_index: "Attachments Index",
-          evidence_summary: "Evidence Summary"
-        };
-
-        const addMessage = function(role, text){
-          if (!messages) return;
-          const wrap = document.createElement("div");
-          wrap.style.marginTop = "8px";
-          wrap.style.padding = "10px";
-          wrap.style.borderRadius = "12px";
-          wrap.style.border = "1px solid #e5e7eb";
-          wrap.style.background = role === "user" ? "#fff" : "#ecfeff";
-          const strong = document.createElement("strong");
-          strong.textContent = role === "user" ? "You" : "Prior Auth Assistant";
-          const span = document.createElement("span");
-          span.textContent = text;
-          wrap.appendChild(strong);
-          wrap.appendChild(document.createElement("br"));
-          wrap.appendChild(span);
-          messages.appendChild(wrap);
-          messages.scrollTop = messages.scrollHeight;
-        };
-
-        const priorAuthAssistantCloseDrawerForWorkspaceEdit = function(){
-          try {
-            if (typeof window.__tjhpPriorAuthAssistantCloseFromClick === "function") {
-              window.__tjhpPriorAuthAssistantCloseFromClick();
-              return;
-            }
-          } catch (err) {}
-
-          const backdrop = document.querySelector('[data-prior-auth-shell-backdrop="true"]');
-          const panel = document.getElementById('prior-auth-ai-assistant-panel');
-          const previewPanel = document.getElementById('prior-auth-pdf-preview-panel');
-
-          if (backdrop) backdrop.style.display = 'none';
-          if (panel) panel.style.display = 'none';
-          if (previewPanel) previewPanel.style.display = 'none';
-
-          document.body.style.overflow = '';
-        };
-
-        const sectionFor = function(key){
-          if (!key) return null;
-          return q("[data-prior-auth-packet-page-key='" + safeCss(key) + "']");
-        };
-
-        const textareaFor = function(key){
-          const section = sectionFor(key);
-          return section ? q("textarea[name='section_text']", section) : null;
-        };
-
-        const detectTarget = function(prompt){
-          const selected = targetSelect ? String(targetSelect.value || "auto") : "auto";
-          if (selected && selected !== "auto") return selected;
-
-          const text = String(prompt || "").toLowerCase();
-
-          if (/exclude|remove|omit|skip/.test(text) && /page/.test(text)) return "page_exclusion";
-          if (/lmn|medical necessity|letter of medical necessity|necessity rationale/.test(text)) return "letter_of_medical_necessity";
-          if (/clinical summary|clinical facts|payer criteria|criteria mapping|policy criteria|symptom|severity|failed alternative|treatment history/.test(text)) return "clinical_summary";
-          if (/cover|appeal letter|intro|opening|closing/.test(text)) return "appeal_narrative";
-          if (/case summary|patient summary|auth summary|authorization summary/.test(text)) return "case_summary";
-          if (/requested action|ask|request approval|approve|overturn/.test(text)) return "requested_action";
-          if (/attachment|index|exhibit list/.test(text)) return "attachments_index";
-          if (/missing|proof|source|evidence gap|ehr|clinical document/.test(text)) return "missing_source_proof";
-          if (/evidence summary|proof summary|source proof summary/.test(text)) return "evidence_summary";
-
-          return "appeal_narrative";
-        };
-
-        const extractPages = function(prompt){
-          const text = String(prompt || "");
-          const found = text.match(/\b\d+\s*(?:-\s*\d+)?\b/g) || [];
-          return found.map(x => x.replace(/\s+/g, "")).join(", ");
-        };
-
-        const findEvidenceCard = function(prompt){
-          const text = String(prompt || "").toLowerCase();
-          const key =
-            /clinical/.test(text) ? "clinical_documentation" :
-            /diagnostic|lab|imaging|result/.test(text) ? "diagnostic_results" :
-            /policy|criteria|guideline/.test(text) ? "payer_policy_guidelines" :
-            "denial_or_partial_approval_letter";
-
-          return {
-            key,
-            card: q("[data-prior-auth-ordered-key='" + safeCss(key) + "'], [data-prior-auth-packet-key='" + safeCss(key) + "']")
-          };
-        };
-
-        const runPageExclusion = function(prompt){
-          const pages = extractPages(prompt);
-          const found = findEvidenceCard(prompt);
-          const card = found.card;
-
-          if (!card) {
-            addMessage("assistant", "I could not find the matching evidence card.");
-            return;
-          }
-
-          const field = q("input[name='pages_excluded']", card);
-          priorAuthAssistantCloseDrawerForWorkspaceEdit();
-          card.scrollIntoView({ behavior:"auto", block:"center" });
-
-          if (!field) {
-            addMessage("assistant", "I found the evidence card, but no PDF page-exclusion field is available yet. Upload or preview a PDF source proof first.");
-            return;
-          }
-
-          card.classList.add("prior-auth-ai-working-target");
-
-          setTimeout(function(){
-            if (pages) field.value = pages;
-            card.classList.remove("prior-auth-ai-working-target");
-            card.classList.add("prior-auth-ai-proposed-target");
-            setTimeout(function(){ card.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
-
-            addMessage(
-              "assistant",
-              pages
-                ? "I filled the page-exclusion field with: " + pages + ". Review it, then click Save page exclusions to persist it."
-                : "I found the evidence card. Tell me which pages to exclude, for example: exclude pages 5, 7-9."
-            );
-          }, 500);
-        };
-
-        const missingProofReply = function(prompt){
-          return [
-            "Missing source proof review:",
-            "- Check Denial or Partial Approval Letter for actual payer decision proof.",
-            "- Check Original Prior Authorization Request or portal/fax confirmation.",
-            "- Check Clinical Documentation, Diagnostic Results, Payer Policy / Guidelines, and Coding Rationale.",
-            "- Check Authorization History, Provider Authorization Form, Peer-to-Peer Notes, and Missing Documentation Response when relevant.",
-            "",
-            "TJ Healthcare Pro can use uploaded packet data already attached in this workspace.",
-            "EHR retrieval is available only for Enterprise plans with EHR integration enabled. If EHR is not connected, upload clinical notes, labs, imaging, medication history, treatment records, and provider documentation manually."
-          ].join("\\n");
-        };
-
-        const proposalFor = function(key, prompt, current){
-          const body = String(current || "").trim();
-          const lowerPrompt = String(prompt || "").toLowerCase();
-          const version = Number(priorAuthAssistantProposalVersion || 0) || 0;
-          const label = labels[key] || key;
-          const NL = String.fromCharCode(10);
-
-          const cleanJoin = function(parts){
-            return parts.filter(x => x !== null && x !== undefined && String(x).trim() !== "").join(NL);
-          };
-
-          const includesText = function(text, phrase){
-            return String(text || "").toLowerCase().indexOf(String(phrase || "").toLowerCase()) >= 0;
-          };
-
-          const appendIfMissing = function(base, phrase, paragraph){
-            const existing = String(base || "").trim();
-            if (!paragraph) return existing;
-            if (phrase && includesText(existing, phrase)) return existing;
-            return [existing, String(paragraph || "").trim()].filter(Boolean).join(NL + NL);
-          };
-
-          const replacePhrase = function(text, find, replacement){
-            const source = String(text || "");
-            const idx = source.toLowerCase().indexOf(String(find || "").toLowerCase());
-            if (idx < 0) return source;
-            return source.slice(0, idx) + replacement + source.slice(idx + String(find || "").length);
-          };
-
-          const extractLineValue = function(text, labelText){
-            const needle = String(labelText || "").toLowerCase();
-            const lines = String(text || "").split(NL);
-            for (const line of lines) {
-              const clean = String(line || "").trim();
-              if (clean.toLowerCase().indexOf(needle) === 0) {
-                return clean.slice(String(labelText || "").length).replace(/^[:\- ]+/, "").trim();
-              }
-            }
-            return "";
-          };
-
-          const fallbackCaseContext = {
-            patient: ${JSON.stringify(String(ctx.patient || "-"))},
-            payer: ${JSON.stringify(String(ctx.payer || "-"))},
-            service: ${JSON.stringify(String(ctx.requested_service || "-"))},
-            status: ${JSON.stringify(String(ctx.status || "-"))},
-            reason: ${JSON.stringify(String(ctx.denial_reason || ctx.partial_approval_reason || "-"))},
-            auth: ${JSON.stringify(String(ctx.auth_number || "-"))}
-          };
-
-          const facts = {
-            patient: extractLineValue(body, "Patient") || fallbackCaseContext.patient,
-            payer: extractLineValue(body, "Payer") || fallbackCaseContext.payer,
-            service: extractLineValue(body, "Requested Service") || fallbackCaseContext.service,
-            auth: extractLineValue(body, "Authorization / Reference Number") || extractLineValue(body, "Auth #") || fallbackCaseContext.auth,
-            status: extractLineValue(body, "Current Status") || fallbackCaseContext.status,
-            reason: extractLineValue(body, "Decision Reason / Context") || fallbackCaseContext.reason
-          };
-
-          const wantsFirm = lowerPrompt.indexOf("firm") >= 0 || lowerPrompt.indexOf("strong") >= 0 || lowerPrompt.indexOf("stronger") >= 0;
-          const wantsConcise = lowerPrompt.indexOf("concise") >= 0 || lowerPrompt.indexOf("short") >= 0;
-          const wantsCriteria = lowerPrompt.indexOf("criteria") >= 0 || lowerPrompt.indexOf("policy") >= 0 || lowerPrompt.indexOf("medical necessity") >= 0;
-          const wantsDetailed = lowerPrompt.indexOf("detail") >= 0 || lowerPrompt.indexOf("detailed") >= 0 || lowerPrompt.indexOf("specific") >= 0;
-          const variant = version % 3;
-
-          if (key === "appeal_narrative") {
-            let next = body || cleanJoin([
-              "To the Prior Authorization Appeals Department,",
-              "",
-              "We respectfully request reconsideration of the prior authorization decision for " + facts.service + ".",
-              "",
-              "Patient: " + facts.patient,
-              "Payer: " + facts.payer,
-              "Authorization / Reference Number: " + facts.auth,
-              "Current Status: " + facts.status,
-              "",
-              "Decision Reason / Context: " + facts.reason,
-              "",
-              "Requested Action:",
-              "Please approve the requested prior authorization based on the attached Letter of Medical Necessity, clinical documentation, payer-criteria support, and source proof.",
-              "",
-              "Sincerely,"
-            ]);
-
-            next = replacePhrase(next, "We are requesting reconsideration", "We respectfully request reconsideration");
-            next = replacePhrase(next, "Approve the requested prior authorization based on medical necessity and the supporting clinical documentation.", "Please approve the requested prior authorization based on the attached Letter of Medical Necessity, clinical documentation, payer-criteria support, and source proof.");
-
-            if (wantsFirm || variant === 1) {
-              next = appendIfMissing(
-                next,
-                "written rationale and policy citation",
-                "If any portion of this request remains denied, please provide the specific medical policy, coverage criterion, and written rationale relied upon so the provider may respond with any additional documentation required."
-              );
-            } else if (wantsConcise || variant === 2) {
-              next = appendIfMissing(
-                next,
-                "focused review of the attached packet",
-                "We ask for a focused review of the attached packet and approval of the requested authorization based on the medical-necessity rationale and source proof provided."
-              );
-            } else {
-              next = appendIfMissing(
-                next,
-                "source proof included in this packet",
-                "This request is supported by the attached medical-necessity documentation, payer-criteria support, authorization history, and source proof included in this packet."
-              );
-            }
-
-            return next;
-          }
-
-          if (key === "letter_of_medical_necessity") {
-            let next = body || cleanJoin([
-              "Letter of Medical Necessity",
-              "",
-              "The requested service, " + facts.service + ", is medically necessary for " + facts.patient + " based on the documented clinical presentation, treatment history, and supporting source proof.",
-              "",
-              "Medical Necessity Rationale:",
-              "Describe the diagnosis, severity, symptoms, functional impact, prior treatment or failed alternatives, and why the requested service is clinically appropriate at this time.",
-              "",
-              "Requested Action:",
-              "Please authorize the requested service based on the attached clinical documentation and payer-criteria support."
-            ]);
-
-            if (wantsCriteria || variant === 1) {
-              next = appendIfMissing(
-                next,
-                "Payer Criteria Support",
-                "Payer Criteria Support:" + NL + "The clinical facts should be mapped directly to the applicable payer criteria, including diagnosis, severity, failed alternatives, diagnostic findings, and why " + facts.service + " is medically necessary now."
-              );
-            } else {
-              next = appendIfMissing(
-                next,
-                "Medical Necessity Rationale",
-                "Medical Necessity Rationale:" + NL + "The requested service should be evaluated in the context of the patient’s documented clinical need, the denial reason, and the source proof attached to this appeal packet."
-              );
-            }
-
-            return next;
-          }
-
-          if (key === "clinical_summary") {
-            let next = body || cleanJoin([
-              "Clinical Summary",
-              "",
-              "Patient: " + facts.patient,
-              "Requested Service: " + facts.service,
-              "",
-              "Clinical Need:",
-              "Summarize the diagnosis, symptoms, severity, functional impact, prior treatment history, failed alternatives, and relevant diagnostic results supporting the requested service.",
-              "",
-              "Payer Criteria Match Rationale:",
-              "Map the patient’s clinical facts to the payer’s medical-necessity criteria so the reviewer can see why the request meets coverage requirements."
-            ]);
-
-            if (wantsDetailed || variant === 1) {
-              next = appendIfMissing(
-                next,
-                "Evidence to cite",
-                "Evidence to cite:" + NL + "- Clinical notes and provider documentation" + NL + "- Diagnostic results, labs, imaging, or genetic testing records" + NL + "- Prior treatment history and failed alternatives" + NL + "- Payer policy or coverage criteria"
-              );
-            } else {
-              next = appendIfMissing(
-                next,
-                "Payer Criteria Match Rationale",
-                "Payer Criteria Match Rationale:" + NL + "Tie the patient’s diagnosis, severity, failed alternatives, diagnostic support, and requested service to the payer’s stated medical-necessity requirements."
-              );
-            }
-
-            return next;
-          }
-
-          if (key === "requested_action") {
-            if (wantsFirm || variant === 1) {
-              return "Approve the requested prior authorization for " + facts.service + ". If any portion remains denied, provide the specific policy criterion, clinical rationale, and documentation requirement needed for reconsideration.";
-            }
-
-            return body || "Approve the requested prior authorization based on the attached Letter of Medical Necessity and supporting clinical documentation.";
-          }
-
-          if (key === "attachments_index") {
-            return body || cleanJoin([
-              "Attachments Index",
-              "",
-              "Include the payer decision letter or partial approval notice, original prior authorization request, Letter of Medical Necessity, clinical documentation, diagnostic results, payer policy support, authorization history, peer-to-peer notes if applicable, and missing-documentation responses if applicable."
-            ]);
-          }
-
-          if (key === "evidence_summary") {
-            return body || cleanJoin([
-              "Evidence Summary",
-              "",
-              "Summarize which source-proof items are attached, which are system-found context only, which remain needed, and which pages or documents have been intentionally excluded from packet export."
-            ]);
-          }
-
-          return body || String(label || "Prior Auth Packet Section");
-        };
-
-        const priorAuthAssistantEscapeHtml = function(value){
-          return String(value || "")
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#39;");
-        };
-
-        const priorAuthAssistantTokenize = function(value){
-          return String(value || "").match(/\\s+|[^\\s]+/g) || [];
-        };
-
-        const priorAuthAssistantInlineDiffHtml = function(before, after){
-          const a = priorAuthAssistantTokenize(before);
-          const b = priorAuthAssistantTokenize(after);
-          const maxTokens = 900;
-
-          if (a.length > maxTokens || b.length > maxTokens) {
-            return priorAuthAssistantEscapeHtml(after || "");
-          }
-
-          const dp = Array(a.length + 1).fill(null).map(function(){ return Array(b.length + 1).fill(0); });
-
-          for (let i = a.length - 1; i >= 0; i -= 1) {
-            for (let j = b.length - 1; j >= 0; j -= 1) {
-              dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-            }
-          }
-
-          const out = [];
-          let i = 0;
-          let j = 0;
-
-          while (i < a.length && j < b.length) {
-            if (a[i] === b[j]) {
-              out.push(priorAuthAssistantEscapeHtml(a[i]));
-              i += 1;
-              j += 1;
-            } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-              i += 1;
-            } else {
-              const token = b[j];
-              if (/^\\s+$/.test(String(token || ""))) out.push(priorAuthAssistantEscapeHtml(token));
-              else out.push('<span class="ws-diff-added ws-ai-added-text prior-auth-ai-diff-added">' + priorAuthAssistantEscapeHtml(token) + '</span>');
-              j += 1;
-            }
-          }
-
-          while (j < b.length) {
-            const token = b[j];
-            if (/^\\s+$/.test(String(token || ""))) out.push(priorAuthAssistantEscapeHtml(token));
-            else out.push('<span class="ws-diff-added ws-ai-added-text prior-auth-ai-diff-added">' + priorAuthAssistantEscapeHtml(token) + '</span>');
-            j += 1;
-          }
-
-          return out.join("");
-        };
-
-        const priorAuthAssistantRestoreSectionForm = function(section){
-          if (!section) return;
-
-          section.querySelectorAll('[data-prior-auth-ai-review-hidden-form="true"]').forEach(function(form){
-            form.style.display = "";
-            form.removeAttribute("data-prior-auth-ai-review-hidden-form");
-          });
-        };
-
-        const priorAuthAssistantRenderInlineReview = function(sectionKey, prompt, beforeText, afterText){
-          const section = sectionFor(sectionKey);
-          const textarea = textareaFor(sectionKey);
-          if (!section || !textarea) return null;
-
-          section.querySelectorAll('[data-prior-auth-inline-ai-review="true"]').forEach(function(el){ el.remove(); });
-
-          const label = labels[sectionKey] || sectionKey.replace(/_/g, " ");
-          const review = document.createElement("div");
-          review.className = "ws-section-body ws-ai-review-mode prior-auth-ai-inline-review prior-auth-ai-review-uses-appeal-style";
-          review.setAttribute("data-prior-auth-inline-ai-review", "true");
-          review.setAttribute("data-prior-auth-ai-review-root", "true");
-          review.setAttribute("data-prior-auth-inline-ai-section", sectionKey);
-          review.setAttribute("data-prior-auth-ai-before", String(beforeText || ""));
-
-          review.innerHTML = [
-            '<div class="ws-ai-regenerating-overlay" role="status" aria-live="assertive" style="display:none;">Regenerating a new version… Keep this page open.</div>',
-            '<div class="ws-ai-review-head">',
-              '<div>',
-                '<div class="ws-ai-review-title">AI proposed update for ' + priorAuthAssistantEscapeHtml(label) + '</div>',
-                '<div class="ws-ai-review-copy">Review the AI-updated section below. New AI text is highlighted in green. You can type directly in the section before applying.</div>',
-              '</div>',
-              '<span class="badge ok">Review draft</span>',
-            '</div>',
-            '<div class="ws-track-changes">',
-              '<div class="ws-ai-interactive-diff ws-ai-simple-editor" contenteditable="true" spellcheck="true" role="textbox" aria-label="Editable AI proposed prior authorization packet section" data-prior-auth-inline-ai-proposed-text="true">' + priorAuthAssistantInlineDiffHtml(beforeText, afterText) + '</div>',
-            '</div>',
-            '<div class="ws-ai-regenerate-controls" data-prior-auth-inline-ai-regenerate-controls="true">',
-              '<input class="ws-ai-regenerate-prompt" data-prior-auth-inline-ai-regenerate-prompt="true" placeholder="Optional instruction for regenerated version" title="Click Regenerate to create a new version. Add an instruction only if you want specific changes." aria-label="Optional instruction for regenerated version" autocomplete="off" />',
-              '<button class="btn secondary small" type="button" data-prior-auth-inline-ai-regenerate="true">Regenerate</button>',
-            '</div>',
-            '<div class="ws-ai-review-footer-note prior-auth-ai-inline-status">AI additions are highlighted in green. Edit the section directly, then apply when ready.</div>',
-            '<div class="ws-ai-review-actions prior-auth-ai-inline-review-actions">',
-              '<button class="btn" type="button" data-prior-auth-inline-ai-apply="true">Apply AI Update to ' + priorAuthAssistantEscapeHtml(label) + '</button>',
-              '<button class="btn secondary" type="button" data-prior-auth-inline-ai-cancel="true">Cancel AI Update</button>',
-            '</div>'
-          ].join("");
-
-          const form = section.querySelector('form[action="/prior-auth/appeal-workspace/save-section"]') || section.querySelector("form") || null;
-          if (form && form.parentNode) {
-            form.parentNode.insertBefore(review, form);
-            form.setAttribute("data-prior-auth-ai-review-hidden-form", "true");
-            form.style.display = "none";
-          } else {
-            section.appendChild(review);
-          }
-
-          section.classList.add("prior-auth-ai-inline-active");
-          section.classList.add("ai-target-section");
-          return review;
-        };
-
-        const priorAuthAssistantCurrentReviewText = function(section){
-          const review = section ? section.querySelector('[data-prior-auth-inline-ai-review="true"]') : null;
-          const proposed = review ? review.querySelector('[data-prior-auth-inline-ai-proposed-text="true"], .ws-ai-interactive-diff') : null;
-          return proposed ? String(proposed.innerText || proposed.textContent || "").trim() : "";
-        };
-
-        const showProposal = function(key, prompt){
-          const section = sectionFor(key);
-          const textarea = textareaFor(key);
-
-          if (!section || !textarea) {
-            addMessage("assistant", "I could not find the editable section for " + (labels[key] || key) + ".");
-            return;
-          }
-
-          lastPrompt = prompt;
-          lastTarget = key;
-
-          priorAuthAssistantCloseDrawerForWorkspaceEdit();
-          if (proposal) proposal.style.display = "none";
-
-          section.scrollIntoView({ behavior:"auto", block:"center" });
-          section.classList.add("prior-auth-ai-working-target");
-
-          let banner = section.querySelector('[data-prior-auth-inline-ai-working-banner="true"]');
-          if (!banner) {
-            banner = document.createElement("div");
-            banner.setAttribute("data-prior-auth-inline-ai-working-banner", "true");
-            banner.className = "ws-ai-section-working-banner show";
-            banner.style.marginBottom = "12px";
-            banner.style.display = "block";
-            section.insertBefore(banner, section.firstChild);
-          }
-          banner.textContent = "Improving " + (labels[key] || key.replace(/_/g, " ")) + "... Keep this page open.";
-
-          setTimeout(function(){
-            const beforeText = priorAuthAssistantCurrentReviewText(section) || textarea.value || "";
-            priorAuthAssistantProposalVersion += 1;
-            lastProposal = proposalFor(key, prompt, beforeText);
-
-            section.classList.remove("prior-auth-ai-working-target");
-            section.classList.add("prior-auth-ai-proposed-target");
-            setTimeout(function(){ section.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
-
-            if (banner) banner.remove();
-
-            priorAuthAssistantRenderInlineReview(key, prompt, beforeText, lastProposal);
-
-            if (proposal) proposal.style.display = "none";
-
-            addMessage("assistant", "I drafted a proposed update for " + (labels[key] || key) + ". The review card is now in the packet section. Apply, Regenerate, or Cancel there.");
-          }, 2400);
-        };
-
-        const runPrompt = function(prompt){
-          const text = String(prompt || "").trim();
-          if (!text) return;
-
-          const target = detectTarget(text);
-
-          if (target === "page_exclusion") {
-            runPageExclusion(text);
-            return;
-          }
-
-          if (target === "missing_source_proof") {
-            addMessage("assistant", missingProofReply(text));
-            return;
-          }
-
-          showProposal(target, text);
-        };
-
-        const applyProposal = function(){
-          if (!lastTarget) return;
-          const section = sectionFor(lastTarget);
-          const textarea = textareaFor(lastTarget);
-          if (!section || !textarea) return;
-
-          const inlineReview = section.querySelector('[data-prior-auth-inline-ai-review="true"]');
-          const inlineTextEl = inlineReview ? inlineReview.querySelector('[data-prior-auth-inline-ai-proposed-text="true"], .ws-ai-interactive-diff') : null;
-          const proposalTextFromReview = inlineTextEl ? String(inlineTextEl.innerText || inlineTextEl.textContent || "").trim() : "";
-
-          const finalText = proposalTextFromReview || lastProposal;
-          if (!finalText) return;
-
-          textarea.value = finalText;
-          textarea.dispatchEvent(new Event("input", { bubbles:true }));
-
-          if (inlineReview) inlineReview.remove();
-          priorAuthAssistantRestoreSectionForm(section);
-          section.classList.remove("prior-auth-ai-inline-active");
-          section.classList.remove("ai-target-section");
-          if (proposal) proposal.style.display = "none";
-
-          section.scrollIntoView({ behavior:"auto", block:"center" });
-          section.classList.add("prior-auth-ai-proposed-target");
-          setTimeout(function(){ section.classList.remove("prior-auth-ai-proposed-target"); }, 2200);
-
-          addMessage("assistant", "Applied the AI proposal to the textarea. Click Save Section to persist it.");
-        };
-
-        window.__tjhpPriorAuthAssistantRunShellPrompt = runPrompt;
-
-        const ask = function(event){
-          if (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-          }
-
-          const prompt = input ? input.value.trim() : "";
-          if (!prompt) return false;
-
-          addMessage("user", prompt);
-          runPrompt(prompt);
-          if (input) input.value = "";
-          return false;
-        };
+        document.addEventListener("submit", function(event){
+          const form = event.target && event.target.closest ? event.target.closest("[data-prior-auth-ai-action-form='true']") : null;
+          if (!form) return;
+          const root = form.closest("[data-prior-auth-ai-review-root]");
+          const diff = root ? root.querySelector(".ws-ai-interactive-diff") : null;
+          const finalText = form.querySelector("textarea[data-prior-auth-ai-final-text]");
+          if (finalText && diff) finalText.value = (diff.innerText || diff.textContent || "").trim();
+        }, true);
 
         document.addEventListener("click", function(event){
-          const inlineApply = event.target && event.target.closest
-            ? event.target.closest('[data-prior-auth-inline-ai-apply="true"]')
-            : null;
-
-          if (inlineApply) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-            applyProposal();
-            return false;
-          }
-
-          const inlineRegen = event.target && event.target.closest
-            ? event.target.closest('[data-prior-auth-inline-ai-regenerate="true"]')
-            : null;
-
-          if (inlineRegen) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-            const review = inlineRegen.closest('[data-prior-auth-inline-ai-review="true"]');
-            const regenInput = review ? review.querySelector('[data-prior-auth-inline-ai-regenerate-prompt="true"]') : null;
-            const extra = regenInput ? regenInput.value.trim() : "";
-            const prompt = extra || ((lastPrompt || "Regenerate this section.") + " Use a different payer-facing wording option.");
-            if (extra) addMessage("user", extra);
-            if (regenInput) regenInput.value = "";
-            if (lastTarget) showProposal(lastTarget, prompt);
-            return false;
-          }
-
-          const inlineCancel = event.target && event.target.closest
-            ? event.target.closest('[data-prior-auth-inline-ai-cancel="true"]')
-            : null;
-
-          if (inlineCancel) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-            const review = inlineCancel.closest('[data-prior-auth-inline-ai-review="true"]');
-            const section = review ? review.closest('[data-prior-auth-packet-page-key]') : null;
-            if (review) review.remove();
-            if (section) {
-              priorAuthAssistantRestoreSectionForm(section);
-              section.classList.remove("prior-auth-ai-inline-active");
-              section.classList.remove("ai-target-section");
-            }
-            lastProposal = "";
-            if (proposal) proposal.style.display = "none";
-            addMessage("assistant", "Canceled the AI proposal. No draft text was changed.");
-            return false;
-          }
-
-          const submit = event.target && event.target.closest
-            ? event.target.closest("[data-prior-auth-assistant-submit='true']")
-            : null;
-
-          if (submit) {
-            ask(event);
-            return false;
-          }
-
-          const shortcut = event.target && event.target.closest
-            ? event.target.closest("[data-prior-auth-assistant-prompt]")
-            : null;
-
-          if (shortcut) {
-            event.preventDefault();
-            event.stopPropagation();
-            const prompt = shortcut.getAttribute("data-prior-auth-assistant-prompt") || "";
-            if (input) input.value = prompt;
-            addMessage("user", prompt);
-            runPrompt(prompt);
-            return false;
-          }
-
-          const apply = event.target && event.target.closest
-            ? event.target.closest("[data-prior-auth-assistant-apply='true']")
-            : null;
-
-          if (apply) {
-            event.preventDefault();
-            applyProposal();
-            return false;
-          }
-
-          const regen = event.target && event.target.closest
-            ? event.target.closest("[data-prior-auth-assistant-regenerate='true']")
-            : null;
-
-          if (regen) {
-            event.preventDefault();
-            const extra = input ? input.value.trim() : "";
-            const prompt = extra || lastPrompt || "Regenerate this section.";
-            if (extra) addMessage("user", extra);
-            if (input) input.value = "";
-            if (lastTarget) showProposal(lastTarget, prompt);
-            return false;
-          }
-
-          const clear = event.target && event.target.closest
-            ? event.target.closest("[data-prior-auth-assistant-clear='true']")
-            : null;
-
-          if (clear) {
-            event.preventDefault();
-            lastProposal = "";
-            if (proposal) proposal.style.display = "none";
-            return false;
-          }
+          const button = event.target && event.target.closest ? event.target.closest("[data-prior-auth-ai-regenerate-button='true']") : null;
+          if (!button) return;
+          event.preventDefault();
+          const root = button.closest("[data-prior-auth-ai-review-root]");
+          if (!root) return;
+          const overlay = root.querySelector(".ws-ai-regenerating-overlay");
+          if (overlay) overlay.style.display = "flex";
+          const diff = root.querySelector(".ws-ai-interactive-diff");
+          const input = root.querySelector("input[name='regenerate_prompt']");
+          const form = document.createElement("form");
+          form.method = "POST";
+          form.action = root.getAttribute("data-regenerate-action") || "/prior-auth/appeal-workspace/ai-regenerate";
+          const append = function(name, value){
+            const field = document.createElement("input");
+            field.type = "hidden";
+            field.name = name;
+            field.value = value == null ? "" : String(value);
+            form.appendChild(field);
+          };
+          append("auth_case_id", root.getAttribute("data-auth-case-id") || "");
+          append("section_key", root.getAttribute("data-section-key") || "");
+          append("after", diff ? (diff.innerText || diff.textContent || "").trim() : "");
+          append("regenerate_prompt", input ? input.value : "");
+          document.body.appendChild(form);
+          form.submit();
         }, true);
-
-        document.addEventListener("submit", function(event){
-          const assistantForm = event.target && event.target.closest
-            ? event.target.closest("[data-prior-auth-assistant-form='true']")
-            : null;
-
-          if (assistantForm) {
-            ask(event);
-            return false;
-          }
-        }, true);
-
-        if (input) {
-          input.addEventListener("keydown", function(event){
-            if (event.key === "Enter" && !event.shiftKey) {
-              ask(event);
-            }
-          });
-        }
       })();
     </script>
-
-    <script>
-      (function(){
-        if (window.__tjhpPriorAuthAssistantFailsafeBound) return;
-        window.__tjhpPriorAuthAssistantFailsafeBound = true;
-
-        const fireAssistantPrompt = function(){
-          const input = document.querySelector('[data-prior-auth-assistant-input="true"]');
-          const prompt = input ? input.value.trim() : "";
-          if (!prompt) return false;
-
-          if (typeof window.__tjhpPriorAuthAssistantRunShellPrompt === "function") {
-            const messages = document.querySelector('[data-prior-auth-assistant-messages="true"]');
-            if (messages) {
-              const wrap = document.createElement("div");
-              wrap.style.marginTop = "8px";
-              wrap.style.padding = "10px";
-              wrap.style.borderRadius = "12px";
-              wrap.style.border = "1px solid #e5e7eb";
-              wrap.style.background = "#fff";
-              wrap.innerHTML = "<strong>You</strong><br/><span></span>";
-              wrap.querySelector("span").textContent = prompt;
-              messages.appendChild(wrap);
-              messages.scrollTop = messages.scrollHeight;
-            }
-
-            window.__tjhpPriorAuthAssistantRunShellPrompt(prompt);
-            if (input) input.value = "";
-          }
-
-          return false;
-        };
-
-        document.addEventListener("click", function(event){
-          const submit = event.target && event.target.closest
-            ? event.target.closest('[data-prior-auth-assistant-submit="true"]')
-            : null;
-
-          if (!submit) return;
-
-          event.preventDefault();
-          event.stopPropagation();
-          if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-          return fireAssistantPrompt();
-        }, true);
-
-        document.addEventListener("keydown", function(event){
-          const input = event.target && event.target.closest
-            ? event.target.closest('[data-prior-auth-assistant-input="true"]')
-            : null;
-
-          if (!input) return;
-
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            event.stopPropagation();
-            if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-            fireAssistantPrompt();
-          }
-        }, true);
-      })();
-    </script>`, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
+`, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
 
   return send(res, 200, html);
 }
@@ -68403,22 +67235,24 @@ if (process.env.TJHP_PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_SMOKE_TESTS
 
     try {
       [
+        "PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK",
         "PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK",
         "PRIOR_AUTH_ASSISTANT_INLINE_SECTION_REVIEW_OK",
-        "PRIOR_AUTH_ASSISTANT_MAIN_SECTION_INLINE_FOCUS_OK",
         "PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK",
         "PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK",
-        "priorAuthAssistantDelegateToInlineRunner",
-        "__tjhpPriorAuthAssistantRunShellPrompt",
-        "data-prior-auth-assistant-proposal-disabled",
-        "data-prior-auth-inline-ai-review",
+        "workspace_ai_preview",
+        "tjhpPriorAuthAiReviewHtml",
+        "data-prior-auth-ai-preview-form",
+        "data-prior-auth-ai-review-root",
+        "data-prior-auth-ai-regenerate-button",
+        "data-prior-auth-ai-final-text",
+        "data-prior-auth-ai-action-form",
         "Apply AI Update to",
         "Cancel AI Update",
-        "The review appears in the packet section, not in the assistant drawer.",
-        "form.parentNode.insertBefore(review, form);",
-        "priorAuthAssistantCloseDrawerForWorkspaceEdit",
-        "priorAuthAssistantRestoreSectionForm",
-        "data-prior-auth-ai-review-hidden-form"
+        "/prior-auth/appeal-workspace/ai-preview",
+        "/prior-auth/appeal-workspace/ai-regenerate",
+        "/prior-auth/appeal-workspace/ai-apply",
+        "/prior-auth/appeal-workspace/ai-cancel"
       ].forEach(marker => assert(src.includes(marker), "missing prior-auth assistant packet-section review marker: " + marker));
 
       const routeStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {');
@@ -68428,9 +67262,9 @@ if (process.env.TJHP_PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_SMOKE_TESTS
 
       const routeSrc = src.slice(routeStart, routeEnd);
       [
-        'assistantProposal.style.display = "block"',
+        'assistantProposal.style.display = ' + '"block"',
         "Review the green proposal, then Apply or Regenerate.",
-        'data-prior-auth-assistant-proposal="true" style="display:none;margin-bottom:10px'
+        'data-prior-auth-assistant-' + 'proposal="true" style="display:none;margin-bottom:10px'
       ].forEach(marker => assert(!routeSrc.includes(marker), "old drawer-review behavior still present inside GET /prior-auth/appeal-workspace: " + marker));
 
       [
@@ -68522,14 +67356,16 @@ if (process.env.TJHP_PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_SMOKE_TESTS
       });
 
       [
+        "PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK",
         "PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK",
-        "data-prior-auth-assistant-proposal-disabled"
+        "data-prior-auth-ai-preview-form",
+        "/prior-auth/appeal-workspace/ai-preview"
       ].forEach(marker => assert(html.includes(marker), "rendered assistant shell missing marker: " + marker));
 
-      const renderedAssistantShellWithInlineSectionReview = html + "\n" + routeSrc;
+      const renderedAssistantShellWithServerReview = html + "\n" + routeSrc;
       assert(
-        renderedAssistantShellWithInlineSectionReview.includes("data-prior-auth-inline-ai-review"),
-        "rendered assistant shell missing marker: data-prior-auth-inline-ai-review"
+        renderedAssistantShellWithServerReview.includes("data-prior-auth-ai-review-root"),
+        "rendered workspace missing marker: data-prior-auth-ai-review-root"
       );
 
       process.stdout.write("PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_SMOKE_TESTS_PASSED\n");
