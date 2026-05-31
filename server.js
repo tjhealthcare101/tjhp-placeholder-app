@@ -2597,6 +2597,264 @@ function tjhpPriorAuthAiDraftForSection(org = {}, row = {}, sectionKey = "", pro
   return (base || caseFacts.join(NL)).replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function tjhpPriorAuthAiEvidencePromptContext(org = {}, row = {}){
+  let items = [];
+  try {
+    items = tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row);
+  } catch (err) {
+    items = [];
+  }
+
+  const lines = (Array.isArray(items) ? items : []).slice(0, 20).map(item => {
+    const label = String(item.label || item.title || item.key || "").trim();
+    const status = String(item.status_label || item.status || "").trim();
+    const proof = String(item.proof_label || "").trim();
+    const excluded = item.excluded === true ? "excluded from packet" : "";
+    const attachments = Array.isArray(item.attachments)
+      ? item.attachments
+          .filter(att => att && typeof att === "object")
+          .slice(0, 6)
+          .map(att => {
+            const name = String(att.file_name || att.filename || att.name || att.originalName || "attached document").trim();
+            const pages = String(att.excluded_pages || "").trim();
+            return pages ? `${name} (excluded pages: ${pages})` : name;
+          })
+      : [];
+
+    return [
+      label ? `Evidence item: ${label}` : "",
+      status ? `Status: ${status}` : "",
+      proof ? `Proof: ${proof}` : "",
+      excluded ? `Packet handling: ${excluded}` : "",
+      attachments.length ? `Attachments: ${attachments.join("; ")}` : ""
+    ].filter(Boolean).join(" | ");
+  }).filter(Boolean);
+
+  if (!lines.length) {
+    return "No uploaded prior-auth source-proof attachments are currently summarized in the workspace. Use bracketed placeholders where source proof is missing.";
+  }
+
+  return lines.join("\n");
+}
+
+function tjhpPriorAuthAiEhrPromptContext(org = {}, row = {}, prompt = ""){
+  const wantsEhr = /ehr|emr|clinical note|clinical notes|progress note|labs?|imaging|medication|treatment history|pull records?|retrieve records?/i.test(String(prompt || ""));
+  let integrationsEnabled = false;
+  let connectedEhrCount = 0;
+
+  try {
+    integrationsEnabled = typeof isIntegrationsEnabledForOrg === "function" && isIntegrationsEnabledForOrg(org);
+  } catch (err) {
+    integrationsEnabled = false;
+  }
+
+  try {
+    connectedEhrCount = typeof getOrgEhrIntegrations === "function"
+      ? (getOrgEhrIntegrations(org.org_id) || []).filter(i => String(i.status || "") === "connected").length
+      : 0;
+  } catch (err) {
+    connectedEhrCount = 0;
+  }
+
+  if (!wantsEhr) {
+    return [
+      `Enterprise integrations enabled: ${integrationsEnabled ? "yes" : "no"}`,
+      `Connected EHR integrations: ${connectedEhrCount}`,
+      "Do not claim EHR records were retrieved unless they are already uploaded or present in workspace evidence."
+    ].join("\n");
+  }
+
+  if (!integrationsEnabled) {
+    return [
+      "User asked about EHR/clinical records.",
+      "EHR retrieval requires an Enterprise plan with integrations enabled.",
+      "No live EHR pull occurred in this drafting request.",
+      "If records are missing, tell staff to upload clinical notes, labs, imaging, medication history, treatment history, and provider documentation manually."
+    ].join("\n");
+  }
+
+  if (!connectedEhrCount) {
+    return [
+      "User asked about EHR/clinical records.",
+      "Enterprise integrations are enabled, but no connected EHR integration is available.",
+      "No live EHR pull occurred in this drafting request.",
+      "If records are missing, tell staff to connect EHR integration or upload clinical documentation manually."
+    ].join("\n");
+  }
+
+  return [
+    "User asked about EHR/clinical records.",
+    "Enterprise EHR integration appears configured.",
+    "No live EHR pull occurred in this drafting request.",
+    "Use only uploaded/source-proof evidence already present in the workspace. If additional EHR documents are needed, describe what should be retrieved in a future EHR retrieval action."
+  ].join("\n");
+}
+
+function tjhpPriorAuthAiCleanModelOutput(text = ""){
+  const cleaner = typeof workspaceCleanAiSectionOutput === "function"
+    ? workspaceCleanAiSectionOutput
+    : value => String(value || "")
+        .replace(/```[a-zA-Z]*\n?/g, "")
+        .replace(/```/g, "")
+        .replace(/\*\*(.*?)\*\*/g, "$1")
+        .replace(/^\s*Here is (the )?(revised|updated).*?:\s*/i, "")
+        .replace(/^\s*Updated section:\s*/i, "")
+        .replace(/\r\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+
+  return cleaner(text);
+}
+
+function tjhpPriorAuthAiNormalizeModelDraft(sectionKey = "", text = ""){
+  const cleanKey = String(sectionKey || "").trim();
+  let out = tjhpPriorAuthAiCleanModelOutput(text);
+
+  out = tjhpPriorAuthAiCleanPriorGeneratedAdditions(out);
+
+  if (cleanKey === "appeal_narrative") {
+    const lower = out.toLowerCase();
+    const closingMarkers = ["\nsincerely,", "\nrespectfully,", "\nthank you,"];
+    let closingAt = -1;
+
+    for (const marker of closingMarkers) {
+      const idx = lower.lastIndexOf(marker);
+      if (idx >= 0) {
+        closingAt = idx + 1;
+        break;
+      }
+    }
+
+    if (closingAt >= 0) {
+      const before = out.slice(0, closingAt).trimEnd();
+      const closingAndAfter = out.slice(closingAt).trimStart();
+      const closingLines = closingAndAfter.split("\n");
+      const closingBlock = closingLines.slice(0, 3).join("\n").trim();
+      const trailing = closingLines.slice(3).join("\n").trim();
+
+      if (trailing) {
+        out = `${before}\n\n${trailing}\n\n${closingBlock}`.replace(/\n{3,}/g, "\n\n").trim();
+      }
+    }
+  }
+
+  return out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+async function tjhpPriorAuthAiDraftForSectionSmart({ org = {}, row = {}, sectionKey = "", prompt = "", currentText = "", regeneratePrompt = "" } = {}){
+  const fallbackText = tjhpPriorAuthAiDraftForSection(org, row, sectionKey, prompt, currentText, regeneratePrompt);
+  const cleanKey = String(sectionKey || "").trim();
+  const sectionLabel = tjhpPriorAuthAiSectionLabel(cleanKey);
+  const userPrompt = String(prompt || "").trim() || `Improve ${sectionLabel}.`;
+  const regen = String(regeneratePrompt || "").trim();
+
+  if (!process.env.OPENAI_API_KEY) {
+    return {
+      after: fallbackText,
+      source: "deterministic_fallback",
+      model: "",
+      fallback_reason: "OPENAI_API_KEY not configured"
+    };
+  }
+
+  const caseContext = [
+    `Organization: ${String(org.org_name || org.name || "").trim() || "-"}`,
+    `Patient: ${String(row.patient_name || row.patient_id || "").trim() || "-"}`,
+    `Payer: ${String(row.payer || "").trim() || "-"}`,
+    `Requested service: ${String(row.requested_service || "").trim() || "-"}`,
+    `CPT / HCPCS: ${String(row.cpt_hcpcs || "").trim() || "-"}`,
+    `ICD-10: ${String(row.icd10 || "").trim() || "-"}`,
+    `Auth number: ${String(row.auth_number || "").trim() || "-"}`,
+    `Status: ${String(row.status || "").trim() || "-"}`,
+    `Denial reason: ${String(row.denial_reason || "").trim() || "-"}`,
+    `Partial approval reason: ${String(row.partial_approval_reason || "").trim() || "-"}`,
+    `Missing documentation: ${normalizePriorAuthListValue(row.missing_documentation).join("; ") || "-"}`
+  ].join("\n");
+
+  const evidenceContext = tjhpPriorAuthAiEvidencePromptContext(org, row);
+  const ehrContext = tjhpPriorAuthAiEhrPromptContext(org, row, `${userPrompt} ${regen}`);
+  const currentSection = String(currentText || "").trim();
+
+  const systemPrompt = [
+    "You are TJ Healthcare Pro's Prior Authorization packet section editor.",
+    "Rewrite only the targeted editable prior-authorization packet section.",
+    "Return clean plain text only. No markdown. No bullets unless the section already uses bullets or the user asks for bullets.",
+    "Use the current section text as the source of truth. Preserve staff edits and section structure unless the user asks to rewrite.",
+    "Do not invent symptoms, diagnoses, treatment history, payer criteria, authorization history, EHR facts, or uploaded evidence.",
+    "If proof is missing, use cautious wording or bracketed placeholders.",
+    "For cover letters, never place new content after Sincerely/signature. Keep the closing/signature last.",
+    "For medical necessity and clinical summary sections, map clinical facts to payer criteria only when the facts are present in case/evidence context.",
+    "Do not submit anything to a payer."
+  ].join(" ");
+
+  const userContent = [
+    `Target section: ${sectionLabel}`,
+    `Section key: ${cleanKey}`,
+    `User request: ${userPrompt}`,
+    regen ? `Regeneration instruction: ${regen}` : "",
+    "",
+    "Prior Auth case context:",
+    caseContext,
+    "",
+    "Evidence/source-proof context:",
+    evidenceContext,
+    "",
+    "Enterprise/EHR context:",
+    ehrContext,
+    "",
+    "Current section text. This may include unsaved staff edits and must be treated as the latest draft:",
+    currentSection || "[This section is blank. Draft using only safe known facts and bracketed placeholders where needed.]"
+  ].filter(Boolean).join("\n");
+
+  try {
+    const completion = await requestOpenAIChatCompletion({
+      temperature: 0.25,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userContent }
+      ]
+    });
+
+    if (completion && completion.aiError) {
+      return {
+        after: fallbackText,
+        source: "deterministic_fallback",
+        model: "",
+        fallback_reason: completion.message || "OpenAI request failed"
+      };
+    }
+
+    const aiText = completion && completion.choices && completion.choices[0] && completion.choices[0].message
+      ? completion.choices[0].message.content
+      : "";
+
+    const cleaned = tjhpPriorAuthAiNormalizeModelDraft(cleanKey, aiText);
+
+    if (!cleaned || cleaned.length < 20) {
+      return {
+        after: fallbackText,
+        source: "deterministic_fallback",
+        model: "",
+        fallback_reason: "OpenAI response was empty or too short"
+      };
+    }
+
+    return {
+      after: cleaned,
+      source: "openai",
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      fallback_reason: ""
+    };
+  } catch (err) {
+    return {
+      after: fallbackText,
+      source: "deterministic_fallback",
+      model: "",
+      fallback_reason: err && err.message ? err.message : String(err || "OpenAI request failed")
+    };
+  }
+}
+
 function tjhpPriorAuthAiReviewHtml({ org = {}, row = {}, sectionKey = "", title = "", before = "", after = "" } = {}){
   const cleanKey = String(sectionKey || "").trim();
   const label = String(title || tjhpPriorAuthAiSectionLabel(cleanKey)).trim();
@@ -47308,7 +47566,15 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-preview")
     : (Object.prototype.hasOwnProperty.call(currentSections, sectionKey)
         ? String(currentSections[sectionKey] || "").trimEnd()
         : String(generatedSection.body || "").trimEnd());
-  const after = tjhpPriorAuthAiDraftForSection(org, row, sectionKey, prompt, before, "");
+  const draft = await tjhpPriorAuthAiDraftForSectionSmart({
+    org,
+    row,
+    sectionKey,
+    prompt,
+    currentText: before,
+    regeneratePrompt: ""
+  });
+  const after = draft.after;
 
   upsertPriorAuthCase(org.org_id, {
     ...row,
@@ -47318,6 +47584,9 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-preview")
       prompt,
       before,
       after,
+      ai_source: draft.source,
+      ai_model: draft.model,
+      ai_fallback_reason: draft.fallback_reason,
       updated_at: nowISO()
     }
   }, sess.user_id || "");
@@ -47347,7 +47616,15 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-regenerat
   const effectiveRegeneratePrompt = tjhpPriorAuthAiRegenerateInstruction(regeneratePrompt, {
     regenerate_count: regenerateCount
   });
-  const after = tjhpPriorAuthAiDraftForSection(org, row, sectionKey, prompt, afterText || before, effectiveRegeneratePrompt);
+  const draft = await tjhpPriorAuthAiDraftForSectionSmart({
+    org,
+    row,
+    sectionKey,
+    prompt,
+    currentText: afterText || before,
+    regeneratePrompt: effectiveRegeneratePrompt
+  });
+  const after = draft.after;
 
   upsertPriorAuthCase(org.org_id, {
     ...row,
@@ -47358,6 +47635,9 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-regenerat
       prompt,
       before,
       after,
+      ai_source: draft.source,
+      ai_model: draft.model,
+      ai_fallback_reason: draft.fallback_reason,
       regenerate_count: regenerateCount,
       regenerate_prompt: effectiveRegeneratePrompt,
       updated_at: nowISO()
@@ -48366,7 +48646,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
+    <!-- PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
     <style>
       .prior-auth-shell-backdrop{display:none;position:fixed;inset:0;background:rgba(15,23,42,.46);z-index:2998;}
       .prior-auth-shell-panel{display:none;position:fixed;top:0;right:0;width:min(520px,96vw);height:100vh;overflow:auto;background:#fff;border-left:1px solid #e5e7eb;box-shadow:-20px 0 45px rgba(15,23,42,.18);z-index:2999;padding:18px;box-sizing:border-box;}
@@ -48625,6 +48905,42 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
             if (form.dataset.priorAuthAiSubmittingReady === "1") return true;
             return submitPriorAuthAiPreviewWithWorking(event);
           });
+        }
+
+        const autoSizePriorAuthPacketTextarea = function(textarea){
+          if (!textarea) return;
+          textarea.style.height = "auto";
+          const minHeight = textarea.classList.contains("prior-auth-packet-textarea") ? 220 : 160;
+          const nextHeight = Math.max(minHeight, textarea.scrollHeight + 12);
+          textarea.style.height = nextHeight + "px";
+          textarea.style.overflow = "hidden";
+        };
+
+        window.__tjhpPriorAuthAutosizePacketTextareas = function(root){
+          const scope = root && root.querySelectorAll ? root : document;
+          scope.querySelectorAll("textarea.prior-auth-packet-textarea").forEach(autoSizePriorAuthPacketTextarea);
+        };
+
+        document.addEventListener("input", function(event){
+          if (event.target && event.target.matches && event.target.matches("textarea.prior-auth-packet-textarea")) {
+            autoSizePriorAuthPacketTextarea(event.target);
+          }
+        });
+
+        document.addEventListener("focusin", function(event){
+          if (event.target && event.target.matches && event.target.matches("textarea.prior-auth-packet-textarea")) {
+            setTimeout(function(){ autoSizePriorAuthPacketTextarea(event.target); }, 0);
+          }
+        });
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", function(){
+            window.__tjhpPriorAuthAutosizePacketTextareas();
+          });
+        } else {
+          setTimeout(function(){
+            window.__tjhpPriorAuthAutosizePacketTextareas();
+          }, 0);
         }
       })();
     </script>`;
