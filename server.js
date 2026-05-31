@@ -1712,27 +1712,20 @@ function tjhpPriorAuthAppealPacketSections(ctx = {}, org = {}){
     section(
       "letter_of_medical_necessity",
       "Letter of Medical Necessity",
-      "Provider-facing medical necessity letter.",
+      "Editable provider letter explaining medical necessity and payer-criteria support.",
       [
-        orgName,
-        "[Practice Address]",
-        "Phone Number: [Phone Number]",
-        "Email: [Email]",
+        "Letter of Medical Necessity",
         "",
-        today,
-        "",
-        (ctx.payer || "Payer"),
-        "[Address]",
-        "",
-        "Re: Letter of Medical Necessity for " + (ctx.patient || "[Patient Name]"),
-        "Prior Authorization / Reference Number: " + (ctx.auth_number || ctx.auth_case_id || "[Authorization Number]"),
+        "Patient: " + (ctx.patient || "[Patient Name]"),
         "Requested Service: " + (ctx.requested_service || "[Requested Service]"),
+        "Prior Authorization / Reference Number: " + (ctx.auth_number || ctx.auth_case_id || "[Authorization Number]"),
+        "Payer: " + (ctx.payer || "Payer"),
         "CPT / HCPCS: " + (ctx.cpt_hcpcs || "-"),
         "ICD-10: " + (ctx.icd10 || "-"),
         "",
         "To Whom It May Concern,",
         "",
-        "I am writing on behalf of my patient, " + (ctx.patient || "[Patient Name]") + ", to document the medical necessity of the requested service: " + (ctx.requested_service || "[Requested Service]") + ".",
+        "I am writing to document the medical necessity of the requested service: " + (ctx.requested_service || "[Requested Service]") + ".",
         "",
         "Medical Necessity Rationale:",
         "- Describe the patient's diagnosis, symptoms, severity, functional limitations, and why the requested service is clinically appropriate.",
@@ -1749,8 +1742,7 @@ function tjhpPriorAuthAppealPacketSections(ctx = {}, org = {}){
         "Supporting Documentation:",
         "- Clinical records, diagnostic results, payer policy references, authorization history, and other source proof are attached or referenced in this packet.",
         "",
-        "Sincerely,",
-        orgName
+        "Sincerely,"
       ].join("\n"),
       { complete:false }
     ),
@@ -2310,26 +2302,14 @@ function tjhpPriorAuthWorkspaceEditablePacketSectionsOnly(org = {}, row = {}){
 function tjhpPriorAuthAiSectionLabel(sectionKey){
   const labels = {
     appeal_narrative: "Prior Authorization Appeal Cover Letter",
-    case_summary: "Prior Authorization Case Summary",
     letter_of_medical_necessity: "Letter of Medical Necessity",
-    clinical_summary: "Clinical Summary",
-    requested_action: "Requested Action",
-    attachments_index: "Attachments Index",
-    evidence_summary: "Evidence Summary"
+    clinical_summary: "Clinical Summary"
   };
   return labels[String(sectionKey || "").trim()] || "Prior Authorization Packet Section";
 }
 
 function tjhpPriorAuthAiEditableSectionKeys(){
-  return [
-    "appeal_narrative",
-    "case_summary",
-    "letter_of_medical_necessity",
-    "clinical_summary",
-    "requested_action",
-    "attachments_index",
-    "evidence_summary"
-  ];
+  return tjhpPriorAuthPayerFacingEditableSectionKeys();
 }
 
 function tjhpPriorAuthAiTargetFromPrompt(prompt, selectedTarget){
@@ -2339,12 +2319,8 @@ function tjhpPriorAuthAiTargetFromPrompt(prompt, selectedTarget){
 
   const text = String(prompt || "").toLowerCase();
   if (/\b(lmn|medical necessity)\b|letter of medical necessity|necessity rationale/.test(text)) return "letter_of_medical_necessity";
-  if (/clinical|criteria|payer criteria|facts|policy/.test(text)) return "clinical_summary";
+  if (/clinical|criteria|payer criteria|facts|policy|missing proof|source proof|evidence|peer-to-peer|peer to peer/.test(text)) return "clinical_summary";
   if (/cover|appeal letter|intro|closing/.test(text)) return "appeal_narrative";
-  if (/case summary|auth summary|authorization summary/.test(text)) return "case_summary";
-  if (/requested action|approve|overturn/.test(text)) return "requested_action";
-  if (/attachment|index/.test(text)) return "attachments_index";
-  if (/missing proof|source proof|evidence/.test(text)) return "evidence_summary";
   return "appeal_narrative";
 }
 
@@ -2498,7 +2474,199 @@ function tjhpPriorAuthPracticeLetterheadBlock(org = {}, row = {}){
   ].filter(x => String(x || "").trim()).join("\n");
 }
 
-function tjhpPriorAuthPayerAddressBlock(row = {}, ctx = {}){
+function tjhpPriorAuthPayerFacingEditableSectionKeys(){
+  return [
+    "appeal_narrative",
+    "letter_of_medical_necessity",
+    "clinical_summary"
+  ];
+}
+
+function tjhpPriorAuthPayerFacingPacketContentOrder(){
+  return [
+    ["evidence", "original_prior_auth_request"],
+    ["evidence", "denial_or_partial_approval_letter"],
+    ["section", "letter_of_medical_necessity"],
+    ["section", "clinical_summary"],
+    ["evidence", "clinical_documentation"],
+    ["evidence", "diagnostic_results"],
+    ["evidence", "payer_policy_guidelines"],
+    ["evidence", "coding_rationale"],
+    ["evidence", "authorization_history"],
+    ["evidence", "evidence_of_authorization"],
+    ["evidence", "provider_authorization_form"],
+    ["evidence", "prior_payer_correspondence"],
+    ["evidence", "peer_to_peer_notes"],
+    ["evidence", "missing_documentation_response"]
+  ];
+}
+
+function tjhpPriorAuthPayerFacingPacketDisplayOrder(){
+  return [
+    ["section", "appeal_narrative"],
+    ...tjhpPriorAuthPayerFacingPacketContentOrder()
+  ];
+}
+
+function tjhpPriorAuthPayerFacingEditableSectionSet(){
+  return new Set(tjhpPriorAuthPayerFacingEditableSectionKeys());
+}
+
+function tjhpPriorAuthPayerFacingSectionLabel(sectionKey = ""){
+  const key = String(sectionKey || "").trim();
+
+  const labels = {
+    appeal_narrative: "Prior Authorization Appeal Cover Letter",
+    letter_of_medical_necessity: "Letter of Medical Necessity",
+    clinical_summary: "Clinical Summary"
+  };
+
+  return labels[key] || tjhpPriorAuthAiSectionLabel(key);
+}
+
+function tjhpPriorAuthEvidenceLabelForPacketContents(org = {}, row = {}, evidenceKey = ""){
+  const key = String(evidenceKey || "").trim();
+  if (!key) return "";
+
+  try {
+    const items = tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row);
+    const item = (Array.isArray(items) ? items : [])
+      .find(x => String(x && x.key || "").trim() === key);
+
+    if (item && item.excluded === true) return "";
+
+    const label = String(item && (item.label || item.title) || "").trim();
+    if (label) return label;
+  } catch (err) {}
+
+  const fallback = {
+    original_prior_auth_request: "Original Prior Authorization Request",
+    denial_or_partial_approval_letter: "Denial or Partial Approval Letter",
+    clinical_documentation: "Clinical Documentation",
+    diagnostic_results: "Diagnostic / Lab / Imaging / Genetic Results",
+    payer_policy_guidelines: "Payer Policy / Medical Criteria Support",
+    coding_rationale: "Coding Rationale",
+    authorization_history: "Authorization History",
+    evidence_of_authorization: "Evidence of Authorization",
+    provider_authorization_form: "Provider Authorization Form",
+    prior_payer_correspondence: "Prior Payer Correspondence",
+    peer_to_peer_notes: "Peer-to-Peer Notes",
+    missing_documentation_response: "Missing Documentation Response"
+  };
+
+  return fallback[key] || key.replace(/_/g, " ");
+}
+
+function tjhpPriorAuthPacketContentLabel(org = {}, row = {}, kind = "", key = ""){
+  const cleanKind = String(kind || "").trim();
+  const cleanKey = String(key || "").trim();
+
+  if (cleanKind === "section") return tjhpPriorAuthPayerFacingSectionLabel(cleanKey);
+  if (cleanKind === "evidence") return tjhpPriorAuthEvidenceLabelForPacketContents(org, row, cleanKey);
+
+  return "";
+}
+
+function tjhpPriorAuthExtractAppealSubmissionAddress(text = ""){
+  const raw = String(text || "").replace(/\r\n/g, "\n").trim();
+  if (!raw) return "";
+
+  const lines = raw
+    .split("\n")
+    .map(line => String(line || "").trim())
+    .filter(Boolean);
+
+  if (!lines.length) return "";
+
+  const joined = lines.join("\n");
+
+  const explicitMatch = joined.match(/(?:appeals?|appeal submission|send(?:\s+your)?\s+appeal|mail(?:\s+your)?\s+appeal|submit(?:\s+your)?\s+appeal)[\s\S]{0,450}/i);
+  const windowText = explicitMatch ? explicitMatch[0] : "";
+
+  const candidateLines = (windowText || joined)
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line =>
+      /appeal|department|po box|p\.o\. box|street|st\.|road|rd\.|drive|dr\.|avenue|ave\.|suite|fax|phone|portal|claims|blue cross|aetna|cigna|united|humana|anthem|health/i.test(line) ||
+      /\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/.test(line) || /,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/.test(line)
+    );
+
+  const cleaned = [];
+  candidateLines.forEach(line => {
+    const normalized = line.replace(/\s+/g, " ").trim();
+    if (!normalized) return;
+    if (cleaned.some(existing => existing.toLowerCase() === normalized.toLowerCase())) return;
+    cleaned.push(normalized);
+  });
+
+  return cleaned.slice(0, 8).join("\n");
+}
+
+function tjhpPriorAuthDenialSubmissionContextText(org = {}, row = {}){
+  const chunks = [];
+
+  [
+    row.appeal_address,
+    row.appeal_submission_address,
+    row.payer_appeal_address,
+    row.payer_submission_address,
+    row.payer_mailing_address,
+    row.denial_letter_appeal_address,
+    row.denial_appeal_instructions,
+    row.appeal_instructions,
+    row.submission_instructions
+  ].forEach(value => {
+    const clean = String(value || "").trim();
+    if (clean) chunks.push(clean);
+  });
+
+  try {
+    const item = tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row)
+      .find(x => String(x && x.key || "") === "denial_or_partial_approval_letter");
+
+    const attachments = Array.isArray(item && item.attachments) ? item.attachments : [];
+    attachments.forEach(att => {
+      [
+        att.appeal_address,
+        att.appeal_submission_address,
+        att.submission_address,
+        att.appeal_instructions,
+        att.text,
+        att.extracted_text,
+        att.summary,
+        att.notes,
+        att.file_name
+      ].forEach(value => {
+        const clean = String(value || "").trim();
+        if (clean) chunks.push(clean);
+      });
+    });
+  } catch (err) {}
+
+  return chunks.join("\n");
+}
+
+function tjhpPriorAuthAppealSubmissionAddressBlock(org = {}, row = {}, ctx = {}){
+  const explicit = tjhpPriorAuthFirstValue(
+    row.appeal_address,
+    row.appeal_submission_address,
+    row.payer_appeal_address,
+    row.payer_submission_address,
+    ctx.appeal_address,
+    ctx.appeal_submission_address
+  );
+
+  if (explicit) return explicit;
+
+  const denialText = tjhpPriorAuthDenialSubmissionContextText(org, row);
+  const extracted = tjhpPriorAuthExtractAppealSubmissionAddress(denialText);
+  if (extracted) return extracted;
+
+  return "";
+}
+
+function tjhpPriorAuthPayerAddressBlock(row = {}, ctx = {}, org = {}){
   const payer = tjhpPriorAuthFirstValue(
     ctx.payer,
     row.payer,
@@ -2507,12 +2675,17 @@ function tjhpPriorAuthPayerAddressBlock(row = {}, ctx = {}){
     "Payer"
   );
 
+  const appealSubmissionBlock = tjhpPriorAuthAppealSubmissionAddressBlock(org, row, ctx);
+
   const payerAddress = tjhpPriorAuthFirstValue(
+    appealSubmissionBlock,
     row.payer_address,
     row.payer_mailing_address,
     row.insurance_address,
     "[Payer Address]"
   );
+
+  if (appealSubmissionBlock) return payerAddress;
 
   return [
     payer,
@@ -2522,39 +2695,20 @@ function tjhpPriorAuthPayerAddressBlock(row = {}, ctx = {}){
 }
 
 function tjhpPriorAuthCoverLetterPacketContentsLines(org = {}, row = {}){
-  const base = [
-    "Letter of Medical Necessity",
-    "Prior Authorization Case Summary",
-    "Clinical Summary / medical-necessity support",
-    "Clinical documentation and supporting provider records",
-    "Diagnostic, lab, imaging, pathology, or genetic testing results when applicable",
-    "Payer policy / medical criteria support and coding rationale",
-    "Original prior authorization request / authorization history",
-    "Payer decision, denial, or partial approval notice",
-    "Other uploaded source proof included in this packet"
-  ];
+  const lines = [];
 
-  let evidenceLabels = [];
+  tjhpPriorAuthPayerFacingPacketContentOrder().forEach(pair => {
+    const kind = pair[0];
+    const key = pair[1];
 
-  try {
-    const items = tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row);
-    evidenceLabels = (Array.isArray(items) ? items : [])
-      .filter(item => item && item.excluded !== true)
-      .map(item => String(item.label || item.title || "").trim())
-      .filter(Boolean);
-  } catch (err) {
-    evidenceLabels = [];
-  }
+    const label = tjhpPriorAuthPacketContentLabel(org, row, kind, key);
+    if (!label) return;
 
-  const merged = [];
-  base.concat(evidenceLabels).forEach(label => {
-    const clean = String(label || "").trim();
-    if (!clean) return;
-    if (merged.some(existing => existing.toLowerCase() === clean.toLowerCase())) return;
-    merged.push(clean);
+    if (lines.some(existing => existing.toLowerCase() === label.toLowerCase())) return;
+    lines.push(label);
   });
 
-  return merged.slice(0, 12);
+  return lines;
 }
 
 function tjhpPriorAuthCoverLetterPacketContentsBlock(org = {}, row = {}){
@@ -2648,7 +2802,7 @@ function tjhpPriorAuthCoverLetterDefaultText(org = {}, row = {}, ctx = {}){
     "",
     new Date().toISOString().slice(0, 10),
     "",
-    tjhpPriorAuthPayerAddressBlock(row, context),
+    tjhpPriorAuthPayerAddressBlock(row, context, org),
     "",
     "Re: Prior Authorization Appeal / Reconsideration",
     `Patient: ${patient}`,
@@ -48085,27 +48239,8 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
     return tjhpPriorAuthExportPacketSectionText(org, row, cleanKey, section && section.body != null ? section.body : "");
   };
 
-  const packetOrder = [
-    ["section", "appeal_narrative"],
-    ["section", "case_summary"],
-    ["evidence", "original_prior_auth_request"],
-    ["evidence", "denial_or_partial_approval_letter"],
-    ["section", "letter_of_medical_necessity"],
-    ["section", "clinical_summary"],
-    ["evidence", "clinical_documentation"],
-    ["evidence", "diagnostic_results"],
-    ["evidence", "payer_policy_guidelines"],
-    ["evidence", "coding_rationale"],
-    ["evidence", "authorization_history"],
-    ["evidence", "evidence_of_authorization"],
-    ["evidence", "provider_authorization_form"],
-    ["evidence", "prior_payer_correspondence"],
-    ["evidence", "peer_to_peer_notes"],
-    ["evidence", "missing_documentation_response"],
-    ["section", "requested_action"],
-    ["section", "attachments_index"],
-    ["section", "evidence_summary"]
-  ];
+  // Payer-facing export order begins with appeal_narrative cover letter via tjhpPriorAuthPayerFacingPacketDisplayOrder().
+  const packetOrder = tjhpPriorAuthPayerFacingPacketDisplayOrder();
 
   const used = new Set();
   const rows = [];
@@ -48117,6 +48252,8 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
 
     const id = cleanKind + ":" + cleanKey;
     if (used.has(id)) return;
+
+    if (cleanKind === "section" && !tjhpPriorAuthPayerFacingEditableSectionSet().has(cleanKey)) return;
 
     if (cleanKind === "section" && editableByKey.has(cleanKey)) {
       used.add(id);
@@ -48130,7 +48267,9 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
   };
 
   packetOrder.forEach(pair => pushRow(pair[0], pair[1]));
-  editablePacketSections.forEach(section => pushRow("section", section && section.key));
+  editablePacketSections
+    .filter(section => tjhpPriorAuthPayerFacingEditableSectionSet().has(String(section && section.key || "").trim()))
+    .forEach(section => pushRow("section", section && section.key));
   evidenceItems.forEach(item => pushRow("evidence", item && item.key));
 
   const priorAuthExportAttachmentFilename = att => String(att && (att.file_name || att.originalName || att.filename) || "Uploaded file").trim();
@@ -48842,11 +48981,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     rows: 14
   }));
 
-  priorAuthDisplaySectionHtmlByKey.set("case_summary", priorAuthEditablePacketPageHtml("case_summary", {
-    title: "Prior Authorization Case Summary",
-    subtitle: "Separate editable case summary page for patient, payer, requested service, and coding context.",
-    rows: 8
-  }));
+;
 
   priorAuthDisplaySectionHtmlByKey.set("letter_of_medical_necessity", priorAuthEditablePacketPageHtml("letter_of_medical_necessity", {
     title: "Letter of Medical Necessity",
@@ -48860,45 +48995,13 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     rows: 10
   }));
 
-  priorAuthDisplaySectionHtmlByKey.set("requested_action", priorAuthEditablePacketPageHtml("requested_action", {
-    title: "Requested Action",
-    subtitle: "Separate editable page describing the authorization action requested from the payer.",
-    rows: 6
-  }));
+;
 
-  priorAuthDisplaySectionHtmlByKey.set("attachments_index", priorAuthEditablePacketPageHtml("attachments_index", {
-    title: "Attachments Index",
-    subtitle: "Separate editable index of attached prior-auth evidence and supporting documents.",
-    rows: 8
-  }));
+;
 
-  priorAuthDisplaySectionHtmlByKey.set("evidence_summary", priorAuthEditablePacketPageHtml("evidence_summary", {
-    title: "Evidence Summary",
-    subtitle: "Separate editable summary of what evidence is found in system, uploaded, still needed, or intentionally excluded.",
-    rows: 8
-  }));
+;
 
-  const priorAuthPacketDisplayOrder = [
-    ["section", "appeal_narrative"],
-    ["section", "case_summary"],
-    ["evidence", "original_prior_auth_request"],
-    ["evidence", "denial_or_partial_approval_letter"],
-    ["section", "letter_of_medical_necessity"],
-    ["section", "clinical_summary"],
-    ["evidence", "clinical_documentation"],
-    ["evidence", "diagnostic_results"],
-    ["evidence", "payer_policy_guidelines"],
-    ["evidence", "coding_rationale"],
-    ["evidence", "authorization_history"],
-    ["evidence", "evidence_of_authorization"],
-    ["evidence", "provider_authorization_form"],
-    ["evidence", "prior_payer_correspondence"],
-    ["evidence", "peer_to_peer_notes"],
-    ["evidence", "missing_documentation_response"],
-    ["section", "requested_action"],
-    ["section", "attachments_index"],
-    ["section", "evidence_summary"]
-  ];
+  const priorAuthPacketDisplayOrder = tjhpPriorAuthPayerFacingPacketDisplayOrder();
 
   const priorAuthPacketDisplayUsed = new Set();
   const priorAuthPacketDisplayRows = [];
@@ -48923,7 +49026,9 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
   priorAuthPacketDisplayOrder.forEach(pair => pushPriorAuthPacketDisplayRow(pair[0], pair[1]));
   priorAuthEvidenceItems.forEach(item => pushPriorAuthPacketDisplayRow("evidence", item && item.key));
-  Array.from(priorAuthDisplaySectionHtmlByKey.keys()).forEach(key => pushPriorAuthPacketDisplayRow("section", key));
+  Array.from(priorAuthDisplaySectionHtmlByKey.keys())
+    .filter(key => tjhpPriorAuthPayerFacingEditableSectionSet().has(String(key || "").trim()))
+    .forEach(key => pushPriorAuthPacketDisplayRow("section", key));
 
   const priorAuthOrderedPacketHtml = `
     <!-- Prior-auth ordered packet compatibility markers: Packet item · prior-auth-ordered-packet-row · data-prior-auth-ordered-kind · data-prior-auth-ordered-key · priorAuthOrderedPacketRows -->
@@ -48979,7 +49084,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
+    <!-- PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
     <style>
       .prior-auth-shell-backdrop{display:none;position:fixed;inset:0;background:rgba(15,23,42,.46);z-index:2998;}
       .prior-auth-shell-panel{display:none;position:fixed;top:0;right:0;width:min(520px,96vw);height:100vh;overflow:auto;background:#fff;border-left:1px solid #e5e7eb;box-shadow:-20px 0 45px rgba(15,23,42,.18);z-index:2999;padding:18px;box-sizing:border-box;}
@@ -49069,10 +49174,10 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="appeal_narrative" data-prior-auth-assistant-prompt="Help improve the cover letter language for this prior authorization appeal.">Improve cover letter language</button>
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="letter_of_medical_necessity" data-prior-auth-assistant-prompt="Improve the Letter of Medical Necessity rationale using the prior-auth case data and uploaded source proof.">Improve LMN rationale</button>
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="clinical_summary" data-prior-auth-assistant-prompt="Map the clinical facts to payer medical necessity criteria and update the Clinical Summary with a payer-criteria rationale. If Letter of Medical Necessity is selected as the target, improve the LMN instead.">Map clinical facts to payer criteria</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="evidence_summary" data-prior-auth-assistant-prompt="Find missing source proof using TJ Healthcare Pro packet data. If EHR retrieval is needed, explain that Enterprise EHR integration is required.">Find missing source proof</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="clinical_summary" data-prior-auth-assistant-prompt="Identify missing source proof and suggest what clinical/evidence support should be referenced in the Clinical Summary. If EHR retrieval is needed, explain that Enterprise EHR integration is required.">Find missing source proof</button>
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="clinical_summary" data-prior-auth-assistant-prompt="Improve the Clinical Summary using prior-auth case context and uploaded clinical evidence.">Improve clinical summary</button>
         <button class="prior-auth-assistant-chip" type="button" data-prior-auth-page-exclusion-shortcut="true" data-prior-auth-assistant-prompt="Suggest PDF pages to exclude from the denial letter, for example exclude pages 5, 7-9.">Suggest PDF pages to exclude</button>
-        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="evidence_summary" data-prior-auth-assistant-prompt="Help prepare peer-to-peer talking points for this prior authorization case.">Prepare peer-to-peer talking points</button>
+        <button class="prior-auth-assistant-chip" type="button" data-prior-auth-assistant-target-shortcut="clinical_summary" data-prior-auth-assistant-prompt="Prepare peer-to-peer talking points based on diagnosis, severity, failed alternatives, clinical risk of delay, and requested authorization outcome.">Prepare peer-to-peer talking points</button>
       </div>
 
       <form method="POST" action="/prior-auth/appeal-workspace/ai-preview" data-prior-auth-ai-preview-form="true" data-prior-auth-assistant-form="true" style="margin-top:14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff;padding:12px;">
@@ -49081,12 +49186,8 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
         <select name="target_section" data-prior-auth-assistant-target="true" style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:12px;padding:9px;margin-bottom:10px;">
           <option value="auto">Auto-detect best packet section</option>
           <option value="appeal_narrative">Prior Authorization Appeal Cover Letter</option>
-          <option value="case_summary">Prior Authorization Case Summary</option>
           <option value="letter_of_medical_necessity">Letter of Medical Necessity</option>
           <option value="clinical_summary">Clinical Summary</option>
-          <option value="requested_action">Requested Action</option>
-          <option value="attachments_index">Attachments Index</option>
-          <option value="evidence_summary">Evidence Summary</option>
         </select>
         <textarea name="prompt" data-prior-auth-assistant-input="true" data-prior-auth-assistant-prompt-input="true" rows="4" placeholder="Ask for payer-facing prior-auth packet edits..." style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:12px;padding:10px;font-family:inherit;line-height:1.45;"></textarea>
         <input type="hidden" name="current_text" data-prior-auth-ai-current-text="true" />
@@ -68114,6 +68215,111 @@ if (process.env.TJHP_PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS === "t
   })();
 }
 
+
+if (process.env.TJHP_PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK",
+        "tjhpPriorAuthPayerFacingEditableSectionKeys",
+        "tjhpPriorAuthPayerFacingPacketContentOrder",
+        "tjhpPriorAuthPayerFacingPacketDisplayOrder",
+        "tjhpPriorAuthAppealSubmissionAddressBlock",
+        "tjhpPriorAuthExtractAppealSubmissionAddress",
+        "tjhpPriorAuthPayerAddressBlock(row, context, org)",
+        "const priorAuthPacketDisplayOrder = tjhpPriorAuthPayerFacingPacketDisplayOrder();",
+        "const packetOrder = tjhpPriorAuthPayerFacingPacketDisplayOrder();",
+        "data-prior-auth-assistant-target-shortcut=\"clinical_summary\"",
+        "Enclosures / packet contents include:",
+        "Letter of Medical Necessity",
+        "Clinical Summary"
+      ].forEach(marker => assert(src.includes(marker), "missing packet structure cleanup marker: " + marker));
+
+      const routeStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {');
+      const routeEnd = src.indexOf('if (method === "POST" && pathname === "/prior-auth/appeal-workspace/save-section") {', routeStart);
+      assert(routeStart >= 0, "GET /prior-auth/appeal-workspace route missing");
+      assert(routeEnd > routeStart, "GET /prior-auth/appeal-workspace route boundary missing");
+      const routeSrc = src.slice(routeStart, routeEnd);
+
+      [
+        'priorAuthDisplaySectionHtmlByKey.set("case_summary"',
+        'priorAuthDisplaySectionHtmlByKey.set("requested_action"',
+        'priorAuthDisplaySectionHtmlByKey.set("attachments_index"',
+        'priorAuthDisplaySectionHtmlByKey.set("evidence_summary"'
+      ].forEach(marker => assert(!routeSrc.includes(marker), "redundant rendered section map remains: " + marker));
+
+      [
+        '<option value="case_summary">',
+        '<option value="requested_action">',
+        '<option value="attachments_index">',
+        '<option value="evidence_summary">'
+      ].forEach(marker => assert(!routeSrc.includes(marker), "redundant prior-auth assistant dropdown option remains: " + marker));
+
+      const editableKeys = new Set(tjhpPriorAuthAiEditableSectionKeys());
+      ["appeal_narrative", "letter_of_medical_necessity", "clinical_summary"].forEach(key => assert(editableKeys.has(key), "missing payer-facing AI editable key: " + key));
+      ["case_summary", "requested_action", "attachments_index", "evidence_summary"].forEach(key => assert(!editableKeys.has(key), "redundant AI editable key remains: " + key));
+      assert.strictEqual(tjhpPriorAuthAiTargetFromPrompt("map clinical facts to payer criteria", "auto"), "clinical_summary");
+      assert.strictEqual(tjhpPriorAuthAiTargetFromPrompt("find missing source proof", "auto"), "clinical_summary");
+      assert.strictEqual(tjhpPriorAuthAiTargetFromPrompt("improve LMN rationale", "auto"), "letter_of_medical_necessity");
+
+      const sampleOrg = { org_id:"smoke_org", org_name:"Smoke Practice" };
+      const sampleRow = normalizePriorAuthCase({
+        auth_case_id:"pa_structure_smoke",
+        patient_name:"Test Patient",
+        payer:"Test Payer",
+        requested_service:"Test Service",
+        auth_number:"AUTH123",
+        status:"Denied"
+      });
+
+      const contents = tjhpPriorAuthCoverLetterPacketContentsLines(sampleOrg, sampleRow);
+      ["Prior Authorization Case Summary", "Requested Action", "Attachments Index", "Evidence Summary"].forEach(label => assert(!contents.includes(label), "cover packet contents still include redundant label: " + label));
+      ["Letter of Medical Necessity", "Clinical Summary"].forEach(label => assert(contents.includes(label), "cover packet contents missing: " + label));
+      assert(contents.indexOf("Original Prior Authorization Request") >= 0, "original prior auth request content missing");
+      assert(contents.indexOf("Denial or Partial Approval Letter") >= 0, "denial/partial approval letter content missing");
+      assert(contents.indexOf("Original Prior Authorization Request") < contents.indexOf("Denial or Partial Approval Letter"), "original request should precede denial letter");
+      assert(contents.indexOf("Denial or Partial Approval Letter") < contents.indexOf("Letter of Medical Necessity"), "denial letter should precede LMN");
+
+      const extracted = tjhpPriorAuthExtractAppealSubmissionAddress(`
+You may appeal this decision in writing.
+Send your appeal to:
+Blue Cross Blue Shield of Texas
+Prior Authorization Appeals Department
+PO Box 660044
+Dallas, TX 75266-0044
+Fax: 800-555-1212
+`);
+      ["Blue Cross Blue Shield of Texas", "PO Box 660044", "Dallas, TX 75266-0044"].forEach(part => assert(extracted.includes(part), "appeal submission extraction missing: " + part));
+
+      [
+        'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/pages")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upload")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/exclude")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/save-section")',
+        'if (method === "POST" && pathname === "/data-management/prior-auth/upload")',
+        'if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))',
+        'if (method === "POST" && pathname === "/ai-workspace/save-preview")',
+        'if (method === "GET" && pathname === "/ai-workspace/export")',
+        "/ai-workspace/regenerate-diff",
+        "/ai-workspace/apply-diff",
+        "/ai-workspace/cancel-diff",
+        "function renderInlineAIAssist",
+        "function workspaceAiInteractiveTrackChangesHtml"
+      ].forEach(marker => assert(src.includes(marker), "protected route/helper missing: " + marker));
+
+      process.stdout.write("PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
@@ -68264,7 +68470,19 @@ if (process.env.TJHP_PRIOR_AUTH_ORDERED_PACKET_LAYOUT_SMOKE_TESTS === "true" && 
       ["priorAuthPacketOrder","priorAuthOrderedPacketHtml","priorAuthOrderedPacketRows","pushPriorAuthOrderedPacketItem","evidenceCardHtmlByKey","editableSectionHtmlByKey","prior-auth-ordered-packet","prior-auth-ordered-packet-row","data-prior-auth-ordered-kind","data-prior-auth-ordered-key","Packet item","Prior Auth Appeal Packet",
         "Internal revenue impact is not included in the payer packet.",
         "prior-auth-packet-textarea","Appeal Packet Preview:","Evidence Checklist / Packet Attachments controls are embedded","editable letter/narrative rows are in the same packet flow","Letter of Medical Necessity remains an editable packet section","Upload Source Proof","Preview evidence","Exclude from packet","Include in packet","Save Section","section_text","AI Prior Authorization Assistant","workspaceDropzoneScript"].forEach(x => assert(getRoute.includes(x), "GET prior-auth ordered packet route missing marker: " + x));
-      ['["section", "header"]','["section", "case_summary"]','["section", "prior_authorization_case_summary"]','["evidence", "original_prior_auth_request"]','["evidence", "denial_or_partial_approval_letter"]','["section", "clinical_summary"]','["evidence", "clinical_documentation"]','["evidence", "diagnostic_results"]','["evidence", "payer_policy_guidelines"]','["evidence", "coding_rationale"]','["section", "letter_of_medical_necessity"]','["evidence", "authorization_history"]','["evidence", "evidence_of_authorization"]','["evidence", "provider_authorization_form"]','["evidence", "prior_payer_correspondence"]','["evidence", "peer_to_peer_notes"]','["evidence", "missing_documentation_response"]','["section", "appeal_narrative"]','["section", "requested_action"]','["section", "attachments_index"]','["section", "evidence_summary"]'].forEach(x => assert(getRoute.includes(x), "ordered packet route missing order marker: " + x));
+      [
+        "const priorAuthPacketDisplayOrder = tjhpPriorAuthPayerFacingPacketDisplayOrder();",
+        "tjhpPriorAuthPayerFacingEditableSectionSet()",
+        "priorAuthDisplaySectionHtmlByKey.set(\"appeal_narrative\"",
+        "priorAuthDisplaySectionHtmlByKey.set(\"letter_of_medical_necessity\"",
+        "priorAuthDisplaySectionHtmlByKey.set(\"clinical_summary\""
+      ].forEach(x => assert(getRoute.includes(x), "ordered packet route missing cleaned order marker: " + x));
+      [
+        "priorAuthDisplaySectionHtmlByKey.set(\"case_summary\"",
+        "priorAuthDisplaySectionHtmlByKey.set(\"requested_action\"",
+        "priorAuthDisplaySectionHtmlByKey.set(\"attachments_index\"",
+        "priorAuthDisplaySectionHtmlByKey.set(\"evidence_summary\""
+      ].forEach(x => assert(!getRoute.includes(x), "ordered packet route still renders redundant section: " + x));
       ["<h3>Evidence Checklist / Packet Attachments</h3>","<h3>Appeal Packet Preview</h3>","${evidenceProofCardsHtml}","${packetSectionsHtml}","Source-proof documents are managed in Evidence Checklist / Packet Attachments above.","Editable letter and narrative sections are below, including Prior Authorization Appeal Narrative."].forEach(x => assert(!getRoute.includes(x), "old split packet layout marker should be absent from GET route: " + x));
       ["FILES.billed","FILES.payments","FILES.payer_contracts","FILES.document_ingests","FILES.agent_workspaces","/upload-router"].forEach(x => assert(!getRoute.includes(x), "GET prior-auth ordered packet route must not include forbidden marker: " + x));
       const smokeOrg = { org_id: "__prior_auth_ordered_packet_layout_smoke__", org_name: "Prior Auth Ordered Packet Smoke Practice" };
