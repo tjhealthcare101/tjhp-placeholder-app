@@ -2349,6 +2349,361 @@ function tjhpPriorAuthAiTargetFromPrompt(prompt, selectedTarget){
 }
 
 // PRIOR_AUTH_AI_DRAFT_PLACEMENT_REGEN_OK
+function tjhpPriorAuthFirstValue(...values){
+  if (typeof workspaceFirstValue === "function") {
+    return workspaceFirstValue(...values);
+  }
+
+  for (const value of values) {
+    const clean = String(value || "").trim();
+    if (clean) return clean;
+  }
+
+  return "";
+}
+
+function tjhpPriorAuthPracticeIdentityContext(org = {}, row = {}){
+  const orgId = String(org.org_id || row.org_id || row.organization_id || "").trim();
+  let orgCtx = {};
+
+  try {
+    orgCtx = orgId && typeof workspaceOrgIdentityContext === "function"
+      ? workspaceOrgIdentityContext(orgId)
+      : {};
+  } catch (err) {
+    orgCtx = {};
+  }
+
+  const settings = orgCtx.settings || {};
+  const identity = orgCtx.identity || {};
+  const orgRecord = orgCtx.orgRecord || org || {};
+
+  const manualAddress = [
+    org.practice_address,
+    org.address,
+    org.address_line1,
+    org.address_line2,
+    org.city && org.state ? `${org.city}, ${org.state} ${org.zip || ""}` : ""
+  ].filter(x => String(x || "").trim()).join("\n");
+
+  const orgName = tjhpPriorAuthFirstValue(
+    orgCtx.orgName,
+    identity.legal_name,
+    identity.dba_name,
+    settings.practice_name,
+    settings.legal_name,
+    org.legal_name,
+    org.dba_name,
+    org.org_name,
+    org.name,
+    "Practice"
+  );
+
+  const addressBlock = tjhpPriorAuthFirstValue(
+    orgCtx.addressBlock,
+    orgCtx.primaryAddress,
+    orgCtx.mailingAddress,
+    manualAddress,
+    "[Practice Address]"
+  );
+
+  const phone = tjhpPriorAuthFirstValue(
+    orgCtx.phone,
+    identity.phone,
+    identity.practice_phone,
+    settings.phone,
+    settings.practice_phone,
+    settings.billing_phone,
+    org.phone,
+    org.main_phone,
+    org.practice_phone,
+    "[Phone Number]"
+  );
+
+  const fax = tjhpPriorAuthFirstValue(
+    orgCtx.fax,
+    identity.fax,
+    settings.fax,
+    org.fax,
+    org.practice_fax
+  );
+
+  const email = tjhpPriorAuthFirstValue(
+    orgCtx.email,
+    identity.email,
+    identity.practice_email,
+    settings.email,
+    settings.practice_email,
+    settings.billing_email,
+    org.email,
+    org.org_email,
+    org.practice_email,
+    "[Email]"
+  );
+
+  const npi = tjhpPriorAuthFirstValue(
+    orgCtx.npi,
+    identity.npi,
+    settings.npi,
+    settings.provider_npi,
+    org.npi,
+    org.org_npi,
+    org.provider_npi,
+    "[NPI Number]"
+  );
+
+  const taxId = tjhpPriorAuthFirstValue(
+    orgCtx.taxId,
+    identity.tax_id,
+    settings.tax_id,
+    org.tax_id,
+    org.tin,
+    org.tax_identifier,
+    "[Tax ID]"
+  );
+
+  const signatureName = tjhpPriorAuthFirstValue(
+    settings.practice_signature && settings.practice_signature.typed_name,
+    identity.provider_name,
+    settings.provider_name,
+    settings.physician_name,
+    org.provider_name,
+    orgName
+  );
+
+  return {
+    orgId,
+    orgName,
+    addressBlock,
+    phone,
+    fax,
+    email,
+    npi,
+    taxId,
+    signatureName
+  };
+}
+
+function tjhpPriorAuthPracticeLetterheadBlock(org = {}, row = {}){
+  const identity = tjhpPriorAuthPracticeIdentityContext(org, row);
+
+  return [
+    identity.orgName,
+    identity.addressBlock,
+    `Phone: ${identity.phone}`,
+    identity.fax ? `Fax: ${identity.fax}` : "",
+    `Email: ${identity.email}`,
+    `NPI: ${identity.npi}`,
+    `Tax ID: ${identity.taxId}`
+  ].filter(x => String(x || "").trim()).join("\n");
+}
+
+function tjhpPriorAuthPayerAddressBlock(row = {}, ctx = {}){
+  const payer = tjhpPriorAuthFirstValue(
+    ctx.payer,
+    row.payer,
+    row.payer_name,
+    row.insurance,
+    "Payer"
+  );
+
+  const payerAddress = tjhpPriorAuthFirstValue(
+    row.payer_address,
+    row.payer_mailing_address,
+    row.insurance_address,
+    "[Payer Address]"
+  );
+
+  return [
+    payer,
+    "Prior Authorization Appeals Department",
+    payerAddress
+  ].filter(x => String(x || "").trim()).join("\n");
+}
+
+function tjhpPriorAuthCoverLetterPacketContentsLines(org = {}, row = {}){
+  const base = [
+    "Letter of Medical Necessity",
+    "Prior Authorization Case Summary",
+    "Clinical Summary / medical-necessity support",
+    "Clinical documentation and supporting provider records",
+    "Diagnostic, lab, imaging, pathology, or genetic testing results when applicable",
+    "Payer policy / medical criteria support and coding rationale",
+    "Original prior authorization request / authorization history",
+    "Payer decision, denial, or partial approval notice",
+    "Other uploaded source proof included in this packet"
+  ];
+
+  let evidenceLabels = [];
+
+  try {
+    const items = tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row);
+    evidenceLabels = (Array.isArray(items) ? items : [])
+      .filter(item => item && item.excluded !== true)
+      .map(item => String(item.label || item.title || "").trim())
+      .filter(Boolean);
+  } catch (err) {
+    evidenceLabels = [];
+  }
+
+  const merged = [];
+  base.concat(evidenceLabels).forEach(label => {
+    const clean = String(label || "").trim();
+    if (!clean) return;
+    if (merged.some(existing => existing.toLowerCase() === clean.toLowerCase())) return;
+    merged.push(clean);
+  });
+
+  return merged.slice(0, 12);
+}
+
+function tjhpPriorAuthCoverLetterPacketContentsBlock(org = {}, row = {}){
+  const lines = tjhpPriorAuthCoverLetterPacketContentsLines(org, row);
+  return [
+    "Enclosures / packet contents include:",
+    ...lines.map(line => `- ${line}`)
+  ].join("\n");
+}
+
+function tjhpPriorAuthRemoveLeadingDuplicatePracticeName(text = "", org = {}, row = {}){
+  const identity = tjhpPriorAuthPracticeIdentityContext(org, row);
+  const orgName = String(identity.orgName || "").trim();
+  let out = String(text || "").trimStart();
+
+  if (!orgName) return out;
+
+  const firstLine = out.split(/\n/)[0] || "";
+  if (firstLine.trim().toLowerCase() === orgName.toLowerCase()) {
+    out = out.split(/\n/).slice(1).join("\n").trimStart();
+  }
+
+  return out;
+}
+
+function tjhpPriorAuthEnsureCoverLetterProfessionalBlocks(org = {}, row = {}, text = ""){
+  let out = tjhpPriorAuthAiCleanPriorGeneratedAdditions(String(text || "").trim());
+  const identity = tjhpPriorAuthPracticeIdentityContext(org, row);
+  const letterhead = tjhpPriorAuthPracticeLetterheadBlock(org, row);
+  const lower = out.toLowerCase();
+
+  const hasLetterhead =
+    lower.includes("phone:") ||
+    lower.includes("email:") ||
+    lower.includes("npi:") ||
+    lower.includes("tax id:") ||
+    lower.includes("[practice address]");
+
+  if (!hasLetterhead) {
+    out = tjhpPriorAuthRemoveLeadingDuplicatePracticeName(out, org, row);
+    out = `${letterhead}\n\n${out}`.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  if (!/enclosures\s*\/?\s*packet contents include|packet contents include|attachments included/i.test(out)) {
+    out = tjhpPriorAuthAiInsertBeforeClosing(
+      out,
+      tjhpPriorAuthCoverLetterPacketContentsBlock(org, row)
+    );
+  }
+
+  if (!/(sincerely,|respectfully,|thank you,)/i.test(out)) {
+    out = `${out}\n\nSincerely,\n${identity.signatureName || identity.orgName}`.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function tjhpPriorAuthCoverLetterDefaultText(org = {}, row = {}, ctx = {}){
+  const identity = tjhpPriorAuthPracticeIdentityContext(org, row);
+  let context = {};
+
+  try {
+    context = tjhpPriorAuthAppealWorkspaceContext(org, row) || {};
+  } catch (err) {
+    context = {};
+  }
+
+  context = { ...context, ...(ctx || {}) };
+
+  const patient = tjhpPriorAuthFirstValue(context.patient, row.patient_name, "[Patient Name]");
+  const payer = tjhpPriorAuthFirstValue(context.payer, row.payer, "[Payer]");
+  const service = tjhpPriorAuthFirstValue(context.requested_service, row.requested_service, "[Requested Service]");
+  const auth = tjhpPriorAuthFirstValue(context.auth_number, row.auth_number, context.auth_case_id, row.auth_case_id, "[Authorization Number]");
+  const cpt = tjhpPriorAuthFirstValue(context.cpt_hcpcs, row.cpt_hcpcs, "-");
+  const icd10 = tjhpPriorAuthFirstValue(context.icd10, row.icd10, "-");
+  const status = tjhpPriorAuthFirstValue(context.status, row.status, "-");
+  const denialReason = tjhpPriorAuthFirstValue(context.denial_reason, row.denial_reason);
+  const partialReason = tjhpPriorAuthFirstValue(context.partial_approval_reason, row.partial_approval_reason);
+  const requestedAction = tjhpPriorAuthFirstValue(
+    context.requested_action_text,
+    context.requested_action,
+    "Please approve the requested prior authorization based on the attached Letter of Medical Necessity, clinical documentation, payer-criteria support, and source proof."
+  );
+
+  const decisionContext = denialReason
+    ? `Decision Reason / Context: ${denialReason}`
+    : (partialReason ? `Partial Approval Context: ${partialReason}` : "");
+
+  const body = [
+    tjhpPriorAuthPracticeLetterheadBlock(org, row),
+    "",
+    new Date().toISOString().slice(0, 10),
+    "",
+    tjhpPriorAuthPayerAddressBlock(row, context),
+    "",
+    "Re: Prior Authorization Appeal / Reconsideration",
+    `Patient: ${patient}`,
+    `Requested Service: ${service}`,
+    `Authorization / Reference Number: ${auth}`,
+    `Payer: ${payer}`,
+    `CPT / HCPCS: ${cpt}`,
+    `ICD-10: ${icd10}`,
+    `Current Status: ${status}`,
+    decisionContext,
+    "",
+    "To the Prior Authorization Appeals Department,",
+    "",
+    `${identity.orgName} respectfully requests reconsideration of the prior authorization decision for ${service}. The attached packet supports medical necessity, payer-criteria review, and approval of the requested authorization.`,
+    "",
+    "Requested Action:",
+    requestedAction,
+    "",
+    tjhpPriorAuthCoverLetterPacketContentsBlock(org, row),
+    "",
+    "Sincerely,",
+    identity.signatureName || identity.orgName
+  ].filter(line => line !== null && line !== undefined).join("\n");
+
+  return body.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function tjhpPriorAuthExportPacketSectionText(org = {}, row = {}, sectionKey = "", fallbackText = ""){
+  const cleanKey = String(sectionKey || "").trim();
+  const packetSections =
+    row &&
+    row.workspace_packet_sections &&
+    typeof row.workspace_packet_sections === "object" &&
+    !Array.isArray(row.workspace_packet_sections)
+      ? row.workspace_packet_sections
+      : {};
+
+  const savedText = String(packetSections[cleanKey] || "").trim();
+
+  if (savedText) return savedText;
+
+  if (cleanKey === "appeal_narrative") {
+    let ctx = {};
+    try {
+      ctx = tjhpPriorAuthAppealWorkspaceContext(org, row) || {};
+    } catch (err) {
+      ctx = {};
+    }
+
+    return tjhpPriorAuthCoverLetterDefaultText(org, row, ctx);
+  }
+
+  return String(fallbackText || "").trim();
+}
+
 function tjhpPriorAuthAiInsertBeforeClosing(text = "", addition = ""){
   const body = String(text || "").trimEnd();
   const add = String(addition || "").trim();
@@ -2455,27 +2810,18 @@ function tjhpPriorAuthAiDraftForSection(org = {}, row = {}, sectionKey = "", pro
   const baseRaw = String(currentText || "").trim();
   const base = tjhpPriorAuthAiCleanPriorGeneratedAdditions(baseRaw);
 
-  const fallbackCover = [
-    `${orgName}`,
-    `Date: ${new Date().toISOString().slice(0, 10)}`,
-    authNumber ? `Auth #: ${authNumber}` : "",
-    "",
-    "To the Prior Authorization Appeals Department,",
-    "",
-    `${orgName} requests reconsideration of the prior authorization decision for ${service}.`,
-    "",
-    `Patient: ${patient}`,
-    `Payer: ${payer}`,
-    authNumber ? `Authorization / Reference Number: ${authNumber}` : "",
-    status ? `Current Status: ${status}` : "",
-    denialReason ? `Decision Reason / Context: ${denialReason}` : "",
-    "",
-    "Requested Action:",
-    "Please approve the requested prior authorization based on the attached Letter of Medical Necessity and supporting clinical documentation.",
-    "",
-    "Sincerely,",
-    orgName
-  ].filter(x => x !== "").join(NL);
+  const fallbackCover = tjhpPriorAuthCoverLetterDefaultText(org, row, {
+    patient,
+    payer,
+    requested_service: service,
+    auth_number: authNumber,
+    status,
+    denial_reason: denialReason,
+    partial_approval_reason: partialReason,
+    cpt_hcpcs: cpt,
+    icd10,
+    requested_action_text: "Please approve the requested prior authorization based on the attached Letter of Medical Necessity, clinical documentation, payer-criteria support, and source proof."
+  });
 
   if (cleanKey === "appeal_narrative") {
     let next = base || fallbackCover;
@@ -2502,6 +2848,7 @@ function tjhpPriorAuthAiDraftForSection(org = {}, row = {}, sectionKey = "", pro
       next = tjhpPriorAuthAiInsertBeforeClosing(next, addition);
     }
 
+    next = tjhpPriorAuthEnsureCoverLetterProfessionalBlocks(org, row, next);
     return next.replace(/\n{3,}/g, "\n\n").trim();
   }
 
@@ -2774,12 +3121,18 @@ async function tjhpPriorAuthAiDraftForSectionSmart({ org = {}, row = {}, section
   const evidenceContext = tjhpPriorAuthAiEvidencePromptContext(org, row);
   const ehrContext = tjhpPriorAuthAiEhrPromptContext(org, row, `${userPrompt} ${regen}`);
   const currentSection = String(currentText || "").trim();
+  const practiceContext = tjhpPriorAuthPracticeLetterheadBlock(org, row);
+  const packetContentsContext = tjhpPriorAuthCoverLetterPacketContentsBlock(org, row);
 
   const systemPrompt = [
     "You are TJ Healthcare Pro's Prior Authorization packet section editor.",
     "Rewrite only the targeted editable prior-authorization packet section.",
     "Return clean plain text only. No markdown. No bullets unless the section already uses bullets or the user asks for bullets.",
     "Use the current section text as the source of truth. Preserve staff edits and section structure unless the user asks to rewrite.",
+    "Use the practice letterhead/account identity when drafting or improving the cover letter.",
+    "Cover letters should include practice name, address, phone, email, NPI, Tax ID when available or placeholders when missing.",
+    "Cover letters should include a concise Enclosures / packet contents summary before the closing/signature.",
+    "Do not place packet contents or new requested-action language after the closing/signature.",
     "Do not invent symptoms, diagnoses, treatment history, payer criteria, authorization history, EHR facts, or uploaded evidence.",
     "If proof is missing, use cautious wording or bracketed placeholders.",
     "For cover letters, never place new content after Sincerely/signature. Keep the closing/signature last.",
@@ -2795,6 +3148,12 @@ async function tjhpPriorAuthAiDraftForSectionSmart({ org = {}, row = {}, section
     "",
     "Prior Auth case context:",
     caseContext,
+    "",
+    "Practice / letterhead context:",
+    practiceContext,
+    "",
+    "Packet contents / enclosures context:",
+    packetContentsContext,
     "",
     "Evidence/source-proof context:",
     evidenceContext,
@@ -2828,7 +3187,10 @@ async function tjhpPriorAuthAiDraftForSectionSmart({ org = {}, row = {}, section
       ? completion.choices[0].message.content
       : "";
 
-    const cleaned = tjhpPriorAuthAiNormalizeModelDraft(cleanKey, aiText);
+    let cleaned = tjhpPriorAuthAiNormalizeModelDraft(cleanKey, aiText);
+    if (cleanKey === "appeal_narrative") {
+      cleaned = tjhpPriorAuthEnsureCoverLetterProfessionalBlocks(org, row, cleaned);
+    }
 
     if (!cleaned || cleaned.length < 20) {
       return {
@@ -47702,14 +48064,6 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
   const evidenceItems = tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row);
   const editablePacketSections = tjhpPriorAuthWorkspaceEditablePacketSectionsOnly(org, row);
 
-  const priorAuthSavedPacketSections =
-    row &&
-    row.workspace_packet_sections &&
-    typeof row.workspace_packet_sections === "object" &&
-    !Array.isArray(row.workspace_packet_sections)
-      ? row.workspace_packet_sections
-      : {};
-
   const editableByKey = new Map();
   editablePacketSections.forEach(section => {
     const key = String(section && section.key || "").trim();
@@ -47722,14 +48076,13 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
     if (key) evidenceByKey.set(key, item);
   });
 
+  // PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK
+  // Export section text resolves from applied row.workspace_packet_sections only; un-applied workspace_ai_preview drafts are intentionally excluded.
   const packetSectionBody = key => {
     const cleanKey = String(key || "").trim();
     if (!cleanKey) return "";
-    if (Object.prototype.hasOwnProperty.call(priorAuthSavedPacketSections, cleanKey)) {
-      return String(priorAuthSavedPacketSections[cleanKey] || "").trimEnd();
-    }
     const section = editableByKey.get(cleanKey);
-    return String(section && section.body != null ? section.body : "").trimEnd();
+    return tjhpPriorAuthExportPacketSectionText(org, row, cleanKey, section && section.body != null ? section.body : "");
   };
 
   const packetOrder = [
@@ -48427,30 +48780,10 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     return priorAuthPacketSectionByKey.get(cleanKey) || { key: cleanKey, title: cleanKey, subtitle: "" };
   };
 
-  const priorAuthCoverLetterDefaultBody = [
-    priorAuthPacketSectionBody("header"),
-    "To the Prior Authorization Appeals Department,",
-    "",
-    "We are requesting reconsideration of the prior authorization decision for " + (ctx.requested_service || "the requested service") + ".",
-    "Patient: " + (ctx.patient || "-"),
-    "Payer: " + (ctx.payer || "-"),
-    "Authorization / Reference Number: " + (ctx.auth_number || ctx.auth_case_id || "-"),
-    "Current Status: " + (ctx.status || "-"),
-    "",
-    (ctx.denial_reason ? "Decision Reason / Context: " + ctx.denial_reason : ""),
-    (ctx.partial_approval_reason ? "Partial Approval Context: " + ctx.partial_approval_reason : ""),
-    "",
-    "Requested Action:",
-    priorAuthPacketSectionBody("requested_action"),
-    "",
-    "Please review the attached Letter of Medical Necessity, clinical documentation, payer criteria support, authorization history, and other source proof included in this packet.",
-    "",
-    "Sincerely,",
-    String(org.org_name || org.name || ctx.org_name || "Practice").trim()
-  ]
-    .map(x => String(x || "").trim())
-    .filter(Boolean)
-    .join("\n\n");
+  const priorAuthCoverLetterDefaultBody = tjhpPriorAuthCoverLetterDefaultText(org, row, {
+    ...ctx,
+    requested_action_text: priorAuthPacketSectionBody("requested_action")
+  });
 
   const priorAuthEditablePacketPageHtml = (sectionKey, options = {}) => {
     const cleanKey = String(sectionKey || "").trim();
@@ -48646,7 +48979,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
+    <!-- PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
     <style>
       .prior-auth-shell-backdrop{display:none;position:fixed;inset:0;background:rgba(15,23,42,.46);z-index:2998;}
       .prior-auth-shell-panel{display:none;position:fixed;top:0;right:0;width:min(520px,96vw);height:100vh;overflow:auto;background:#fff;border-left:1px solid #e5e7eb;box-shadow:-20px 0 45px rgba(15,23,42,.18);z-index:2999;padding:18px;box-sizing:border-box;}
@@ -48964,6 +49297,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
           <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
           <a class="btn" href="/prior-auth/appeal-workspace/export?auth_case_id=${encodeURIComponent(ctx.auth_case_id || auth_case_id)}&preview=1" target="_blank" rel="noopener" title="Open the prior-auth appeal packet PDF preview.">Preview PDF</a>
         </div>
+        <div class="muted small" style="margin-top:8px;">Preview PDF uses applied/saved packet sections. Apply AI updates before exporting.</div>
       </div>
 
       <div style="padding:18px 20px;">
@@ -67777,6 +68111,139 @@ if (process.env.TJHP_PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS === "t
       assert.strictEqual(JSON.stringify(readJSON(FILES.agent_workspaces, [])), workspacesBefore, "agent workspaces mutated");
       process.stdout.write("PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS_PASSED\n"); process.exit(0);
     } catch (err) { process.stderr.write("PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+  })();
+}
+
+if (process.env.TJHP_PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    [
+      "PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK",
+      "tjhpPriorAuthExportPacketSectionText",
+      "tjhpPriorAuthCoverLetterDefaultText",
+      "tjhpPriorAuthEnsureCoverLetterProfessionalBlocks",
+      "tjhpPriorAuthCoverLetterPacketContentsBlock",
+      "workspace_packet_sections",
+      "appeal_narrative",
+      "Enclosures / packet contents include:",
+      "NPI:",
+      "Tax ID:",
+      "Phone:",
+      "Email:",
+      "Preview PDF uses applied/saved packet sections"
+    ].forEach(marker => assert(src.includes(marker), "missing export alignment marker: " + marker));
+
+    const exportStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")');
+    const exportEnd = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace")', exportStart);
+    assert(exportStart >= 0, "prior-auth export route missing");
+    assert(exportEnd > exportStart, "prior-auth export route boundary missing");
+    const exportSrc = src.slice(exportStart, exportEnd);
+
+    [
+      "tjhpPriorAuthExportPacketSectionText",
+      "workspace_packet_sections",
+      "appeal_narrative",
+      "PRIOR_AUTH_EXPORT_DIRECT_SOURCE_DOCUMENT_PAGES"
+    ].forEach(marker => assert(exportSrc.includes(marker), "export route missing marker: " + marker));
+
+    [
+      "workspace_ai_preview.after",
+      "row.workspace_ai_preview.after",
+      "priorAuthAiPreview.after"
+    ].forEach(marker => assert(!exportSrc.includes(marker), "export route must not use un-applied AI preview: " + marker));
+
+    [
+      "OpenAI",
+      "fetch(",
+      "ensureAgentWorkspace(",
+      "saveAgentWorkspace(",
+      "FILES.billed",
+      "FILES.payments",
+      "FILES.payer_contracts",
+      "FILES.document_ingests",
+      "FILES.agent_workspaces"
+    ].forEach(marker => assert(!exportSrc.includes(marker), "export route must not include side effect marker: " + marker));
+
+    const sampleOrg = {
+      org_id: "pa_export_org",
+      org_name: "Test Practice",
+      address: "123 Practice Way",
+      phone: "555-100-2000",
+      email: "priorauth@testpractice.example",
+      npi: "1234567890",
+      tax_id: "12-3456789"
+    };
+
+    const sampleRow = normalizePriorAuthCase({
+      auth_case_id: "pa_export_test",
+      patient_name: "Test Patient",
+      payer: "Test Payer",
+      requested_service: "Test Service",
+      auth_number: "AUTH123",
+      status: "Denied",
+      workspace_packet_sections: {
+        appeal_narrative: "CUSTOM SAVED COVER LETTER"
+      },
+      workspace_ai_preview: {
+        active: true,
+        section_key: "appeal_narrative",
+        after: "UNAPPLIED AI PREVIEW SHOULD NOT EXPORT"
+      }
+    });
+
+    assert.strictEqual(
+      tjhpPriorAuthExportPacketSectionText(sampleOrg, sampleRow, "appeal_narrative", ""),
+      "CUSTOM SAVED COVER LETTER",
+      "export should prefer saved/applied cover letter"
+    );
+
+    const fallbackRow = normalizePriorAuthCase({
+      auth_case_id: "pa_export_fallback",
+      patient_name: "Test Patient",
+      payer: "Test Payer",
+      requested_service: "Test Service",
+      auth_number: "AUTH123",
+      status: "Denied",
+      workspace_packet_sections: {}
+    });
+
+    const fallbackCover = tjhpPriorAuthExportPacketSectionText(sampleOrg, fallbackRow, "appeal_narrative", "");
+
+    [
+      "Phone:",
+      "Email:",
+      "NPI:",
+      "Tax ID:",
+      "Enclosures / packet contents include:",
+      "Sincerely,"
+    ].forEach(marker => assert(fallbackCover.includes(marker), "fallback cover missing: " + marker));
+
+    assert(
+      fallbackCover.indexOf("Enclosures / packet contents include:") < fallbackCover.indexOf("Sincerely,"),
+      "packet contents must appear before signature"
+    );
+
+    [
+      'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/pages")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upload")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/exclude")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/save-section")',
+      'if (method === "POST" && pathname === "/data-management/prior-auth/upload")',
+      "function renderInlineAIAssist",
+      "function workspaceAiInteractiveTrackChangesHtml",
+      "/ai-workspace/regenerate-diff",
+      "/ai-workspace/apply-diff",
+      "/ai-workspace/cancel-diff",
+      'if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))',
+      'if (method === "POST" && pathname === "/ai-workspace/save-preview")',
+      'if (method === "GET" && pathname === "/ai-workspace/export")'
+    ].forEach(marker => assert(src.includes(marker), "protected route/helper missing: " + marker));
+
+    process.stdout.write("PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
   })();
 }
 
