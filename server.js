@@ -2348,6 +2348,78 @@ function tjhpPriorAuthAiTargetFromPrompt(prompt, selectedTarget){
   return "appeal_narrative";
 }
 
+// PRIOR_AUTH_AI_DRAFT_PLACEMENT_REGEN_OK
+function tjhpPriorAuthAiInsertBeforeClosing(text = "", addition = ""){
+  const body = String(text || "").trimEnd();
+  const add = String(addition || "").trim();
+  if (!body || !add) return body || add;
+
+  const lower = body.toLowerCase();
+  const closingMatches = [
+    "\nsincerely,",
+    "\nrespectfully,",
+    "\nthank you,"
+  ];
+
+  let insertAt = -1;
+  for (const marker of closingMatches) {
+    const idx = lower.lastIndexOf(marker);
+    if (idx >= 0) {
+      insertAt = idx + 1;
+      break;
+    }
+  }
+
+  if (insertAt < 0) {
+    return `${body}\n\n${add}`.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  const before = body.slice(0, insertAt).trimEnd();
+  const after = body.slice(insertAt).trimStart();
+
+  return `${before}\n\n${add}\n\n${after}`.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function tjhpPriorAuthAiCleanPriorGeneratedAdditions(text = ""){
+  let out = String(text || "").replace(/\r\n/g, "\n").trim();
+
+  const generatedPatterns = [
+    /(?:\n\n|^)\s*This request is supported by the attached Letter of Medical Necessity, clinical documentation, payer-criteria support, authorization history, and source proof included in this packet\.\s*/gi,
+    /(?:\n\n|^)\s*This request is supported by the attached medical-necessity documentation, payer-criteria support, authorization history, and source proof included in this packet\.\s*/gi,
+    /(?:\n\n|^)\s*The payer should compare the attached documentation to the applicable medical-necessity criteria and identify any criterion that remains unmet\.\s*/gi,
+    /(?:\n\n|^)\s*We appreciate timely review of the enclosed documentation and a written determination based on the complete record\.\s*/gi,
+    /(?:\n\n|^)\s*This revision is intentionally concise and focused on the payer action requested\.\s*/gi,
+    /(?:\n\n|^)\s*If any portion remains denied, please provide the specific medical policy criterion, clinical rationale, and documentation requirement needed for reconsideration\.\s*/gi,
+    /(?:\n\n|^)\s*For peer-to-peer discussion, focus on diagnosis, severity, failed alternatives, clinical risk of delay, and the requested authorization outcome\.\s*/gi,
+    /(?:\n\n|^)\s*Payer Criteria Match Rationale:\s*The clinical facts should be mapped to the payer[’']s medical-necessity criteria, including diagnosis, severity, failed alternatives, diagnostic support, and why the requested service is appropriate now\.\s*/gi
+  ];
+
+  generatedPatterns.forEach(pattern => {
+    out = out.replace(pattern, "\n\n");
+  });
+
+  return out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function tjhpPriorAuthAiHasMeaning(text = "", phrase = ""){
+  return String(text || "").toLowerCase().includes(String(phrase || "").toLowerCase());
+}
+
+function tjhpPriorAuthAiRegenerateInstruction(regeneratePrompt = "", preview = {}){
+  const raw = String(regeneratePrompt || "").trim();
+  if (raw) return raw;
+
+  const count = Number(preview && preview.regenerate_count || 0) || 0;
+  const variants = [
+    "Make the wording more firm and payer-facing.",
+    "Make the wording more concise and direct.",
+    "Add clearer payer-criteria and source-proof language.",
+    "Make the wording more professional and medically focused."
+  ];
+
+  return variants[count % variants.length];
+}
+
 function tjhpPriorAuthAiDraftForSection(org = {}, row = {}, sectionKey = "", prompt = "", currentText = "", regeneratePrompt = ""){
   const cleanKey = String(sectionKey || "").trim();
   const patient = String(row.patient_name || "the patient").trim() || "the patient";
@@ -2361,101 +2433,168 @@ function tjhpPriorAuthAiDraftForSection(org = {}, row = {}, sectionKey = "", pro
   const icd10 = String(row.icd10 || "").trim();
   const orgName = String(org.org_name || org.name || "the requesting provider").trim() || "the requesting provider";
   const NL = "\n";
+
+  const contextText = [prompt, regeneratePrompt].join(" ").toLowerCase();
+  const wantsFirm = /firm|strong|stronger|assertive|payer-facing|appeal/i.test(contextText);
+  const wantsConcise = /concise|short|brief|direct/i.test(contextText);
+  const wantsCriteria = /criteria|policy|medical necessity|payer criteria|coverage/i.test(contextText);
+  const wantsProfessional = /professional|polished|clear|clean/i.test(contextText);
+
   const caseFacts = [
     `Patient: ${patient}`,
     `Payer: ${payer}`,
     `Requested service: ${service}`,
-    authNumber ? `Authorization/reference number: ${authNumber}` : "",
-    status ? `Current status: ${status}` : "",
-    cpt ? `CPT/HCPCS: ${cpt}` : "",
+    authNumber ? `Authorization / Reference Number: ${authNumber}` : "",
+    status ? `Current Status: ${status}` : "",
+    cpt ? `CPT / HCPCS: ${cpt}` : "",
     icd10 ? `ICD-10: ${icd10}` : "",
-    denialReason ? `Decision rationale to address: ${denialReason}` : "",
-    partialReason ? `Partial approval context: ${partialReason}` : ""
+    denialReason ? `Decision Reason / Context: ${denialReason}` : "",
+    partialReason ? `Partial Approval Context: ${partialReason}` : ""
   ].filter(Boolean);
 
-  const base = String(currentText || "").trim();
-  const templates = {
-    appeal_narrative: [
-      "To the Prior Authorization Appeals Department,",
-      "",
-      `${orgName} requests review and approval of ${service} for ${patient}. The enclosed Letter of Medical Necessity and source documentation support that the requested service is medically necessary and aligned with the clinical record.`,
-      "",
-      caseFacts.join(NL),
-      "",
-      "Please review the attached medical-necessity rationale, clinical summary, and supporting evidence and authorize the requested service."
-    ].join(NL),
-    letter_of_medical_necessity: [
+  const baseRaw = String(currentText || "").trim();
+  const base = tjhpPriorAuthAiCleanPriorGeneratedAdditions(baseRaw);
+
+  const fallbackCover = [
+    `${orgName}`,
+    `Date: ${new Date().toISOString().slice(0, 10)}`,
+    authNumber ? `Auth #: ${authNumber}` : "",
+    "",
+    "To the Prior Authorization Appeals Department,",
+    "",
+    `${orgName} requests reconsideration of the prior authorization decision for ${service}.`,
+    "",
+    `Patient: ${patient}`,
+    `Payer: ${payer}`,
+    authNumber ? `Authorization / Reference Number: ${authNumber}` : "",
+    status ? `Current Status: ${status}` : "",
+    denialReason ? `Decision Reason / Context: ${denialReason}` : "",
+    "",
+    "Requested Action:",
+    "Please approve the requested prior authorization based on the attached Letter of Medical Necessity and supporting clinical documentation.",
+    "",
+    "Sincerely,",
+    orgName
+  ].filter(x => x !== "").join(NL);
+
+  if (cleanKey === "appeal_narrative") {
+    let next = base || fallbackCover;
+
+    next = next
+      .replace(/We are requesting reconsideration/gi, "We respectfully request reconsideration")
+      .replace(/Approve the requested prior authorization based on medical necessity and the supporting clinical documentation\./gi, "Please approve the requested prior authorization based on the attached Letter of Medical Necessity, clinical documentation, payer-criteria support, and source proof.");
+
+    let addition = "";
+
+    if (wantsConcise) {
+      addition = "The attached packet provides the medical-necessity rationale, payer-criteria support, and source proof needed to complete review of this authorization request.";
+    } else if (wantsCriteria) {
+      addition = "The attached documentation should be reviewed against the applicable payer medical-necessity criteria, including the clinical rationale, diagnostic support, authorization history, and source proof included with this packet.";
+    } else if (wantsFirm) {
+      addition = "If any portion of this request remains denied, please provide the specific medical policy criterion, clinical rationale, and documentation requirement needed for reconsideration.";
+    } else if (wantsProfessional) {
+      addition = "We appreciate a timely review of the complete prior authorization packet and a written determination based on the attached medical-necessity documentation and source proof.";
+    } else {
+      addition = "This request is supported by the attached Letter of Medical Necessity, clinical documentation, payer-criteria support, authorization history, and source proof included in this packet.";
+    }
+
+    if (!tjhpPriorAuthAiHasMeaning(next, addition)) {
+      next = tjhpPriorAuthAiInsertBeforeClosing(next, addition);
+    }
+
+    return next.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  if (cleanKey === "letter_of_medical_necessity") {
+    let next = base || [
       "Letter of Medical Necessity",
       "",
-      `${service} is medically necessary for ${patient} based on the documented diagnosis, clinical severity, treatment history, and the need to prevent avoidable deterioration or delayed care.`,
+      `${service} is medically necessary for ${patient} based on the documented diagnosis, clinical severity, treatment history, diagnostic support, and expected clinical benefit.`,
       "",
       caseFacts.join(NL),
       "",
-      "The supporting documentation should be reviewed against the payer's medical policy criteria. The clinical record supports approval because the requested service is tied to the patient's condition, prior treatment course, and expected clinical benefit.",
+      "Medical Necessity Rationale:",
+      "The requested service should be evaluated in the context of the patient’s documented clinical need, prior treatment course, and risk of delayed or unavailable care.",
       "",
-      "We request approval of the prior authorization. If approval cannot be issued, please provide the specific criteria not met and the clinical rationale for that determination."
-    ].join(NL),
-    clinical_summary: [
+      "Requested Action:",
+      "Please authorize the requested service based on the attached clinical documentation and payer-criteria support."
+    ].join(NL);
+
+    const addition = wantsCriteria || wantsFirm
+      ? `Payer Criteria Support:${NL}The clinical facts should be mapped directly to the applicable payer criteria, including diagnosis, severity, failed alternatives, diagnostic findings, and why ${service} is medically necessary now.`
+      : `Clinical Rationale:${NL}The available documentation should demonstrate why ${service} is clinically appropriate, medically necessary, and supported by the patient’s current condition and treatment history.`;
+
+    if (!tjhpPriorAuthAiHasMeaning(next, "Payer Criteria Support") && !tjhpPriorAuthAiHasMeaning(next, "Clinical Rationale")) {
+      next = `${next.trim()}\n\n${addition}`;
+    }
+
+    return next.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  if (cleanKey === "clinical_summary") {
+    let next = base || [
       "Clinical Summary",
       "",
-      `${patient} is being evaluated for ${service}. The packet should be reviewed for diagnosis, symptoms, severity, prior treatment history, diagnostic support, coding context, and the payer-policy criteria that support medical necessity.`,
+      `Patient: ${patient}`,
+      `Requested Service: ${service}`,
       "",
-      caseFacts.join(NL),
-      "",
-      "The attached clinical evidence is intended to demonstrate the relationship between the patient's documented condition and the requested authorization."
-    ].join(NL),
-    requested_action: [
-      "Requested Action",
-      "",
-      `Please approve ${service} for ${patient} based on the enclosed medical-necessity documentation and source proof.`,
-      denialReason ? `If the prior determination is maintained, please identify the specific medical policy criteria that remain unmet and the rationale for that decision.` : `If additional information is needed, please identify the specific criteria or documentation required to complete review.`
-    ].join(NL),
-    attachments_index: [
+      "Clinical Need:",
+      "Summarize the diagnosis, symptoms, severity, functional impact, prior treatment history, failed alternatives, and relevant diagnostic results supporting the requested service."
+    ].join(NL);
+
+    const criteriaBlock = [
+      "Payer Criteria Match Rationale:",
+      `The clinical facts should be tied to ${payer}'s medical-necessity criteria for ${service}. Include diagnosis, severity, failed alternatives, diagnostic support, and why the requested service is appropriate now.`
+    ].join(NL);
+
+    if (!tjhpPriorAuthAiHasMeaning(next, "Payer Criteria Match Rationale")) {
+      next = `${next.trim()}\n\n${criteriaBlock}`;
+    }
+
+    return next.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  if (cleanKey === "requested_action") {
+    const current = base || `Please approve ${service} for ${patient} based on the attached Letter of Medical Necessity and supporting clinical documentation.`;
+    const addition = "If any portion remains denied, please provide the specific medical policy criterion, clinical rationale, and documentation requirement needed for reconsideration.";
+    return tjhpPriorAuthAiHasMeaning(current, "specific medical policy criterion")
+      ? current
+      : `${current.trim()}\n\n${addition}`;
+  }
+
+  if (cleanKey === "attachments_index") {
+    return base || [
       "Attachments Index",
       "",
-      "1. Prior authorization request and case summary",
-      "2. Payer denial or partial-approval correspondence, if applicable",
+      "1. Payer decision letter or partial approval notice",
+      "2. Original prior authorization request",
       "3. Letter of Medical Necessity",
       "4. Clinical documentation and diagnostic support",
       "5. Payer policy or criteria support",
-      "6. Authorization history and related correspondence"
-    ].join(NL),
-    evidence_summary: [
-      "Evidence Summary",
-      "",
-      `The packet should include source proof supporting ${service} for ${patient}, including clinical documentation, diagnostic support, authorization history, payer correspondence, and any missing-documentation response relevant to the current determination.`,
-      "",
-      caseFacts.join(NL),
-      "",
-      /ehr|enterprise/i.test(String(prompt || "") + " " + String(regeneratePrompt || ""))
-        ? "If additional EHR source proof is required, Enterprise EHR integration or manual upload is needed before payer submission."
-        : "Before payer submission, confirm that each referenced source document is attached or intentionally excluded from the packet."
-    ].join(NL)
-  };
-
-  const seed = base || templates[cleanKey] || templates.appeal_narrative;
-  const regen = String(regeneratePrompt || "").trim();
-  const promptText = String(prompt || "").toLowerCase();
-  const additions = [];
-  if (/concise|short|brief/.test(regen.toLowerCase())) additions.push("This revision is intentionally concise and focused on the payer action requested.");
-  if (/strong|specific|criteria|policy/.test(regen.toLowerCase()) || /criteria|policy/.test(promptText)) additions.push("The payer should compare the attached documentation to the applicable medical-necessity criteria and identify any criterion that remains unmet.");
-  if (/warm|professional|polished/.test(regen.toLowerCase())) additions.push("We appreciate timely review of the enclosed documentation and a written determination based on the complete record.");
-  if (/peer|p2p|talking point/.test(promptText + " " + regen.toLowerCase())) additions.push("For peer-to-peer discussion, focus on diagnosis, severity, failed alternatives, clinical risk of delay, and the requested authorization outcome.");
-
-  if (!additions.length) {
-    if (cleanKey === "appeal_narrative" && /improve|cover|appeal|strong|stronger|polish|payer/i.test(String(prompt || "") + " " + String(regeneratePrompt || ""))) {
-      additions.push("This request is supported by the attached Letter of Medical Necessity, clinical documentation, payer-criteria support, authorization history, and source proof included in this packet.");
-    } else if (cleanKey === "letter_of_medical_necessity" && /improve|lmn|medical necessity|necessity|criteria|strong/i.test(String(prompt || "") + " " + String(regeneratePrompt || ""))) {
-      additions.push("The medical necessity rationale should connect the requested service to the patient’s documented clinical condition, prior treatment history, diagnostic support, and applicable payer criteria.");
-    } else if (cleanKey === "clinical_summary" && /improve|clinical|criteria|facts|policy|payer/i.test(String(prompt || "") + " " + String(regeneratePrompt || ""))) {
-      additions.push("Payer Criteria Match Rationale: The clinical facts should be mapped to the payer’s medical-necessity criteria, including diagnosis, severity, failed alternatives, diagnostic support, and why the requested service is appropriate now.");
-    } else if (cleanKey === "requested_action") {
-      additions.push("If any portion remains denied, please provide the specific medical policy criterion, clinical rationale, and documentation requirement needed for reconsideration.");
-    }
+      "6. Authorization history and related correspondence",
+      "7. Peer-to-peer notes or missing-documentation response, if applicable"
+    ].join(NL);
   }
 
-  const suffix = additions.length ? `${NL}${NL}${additions.join(NL + NL)}` : "";
-  return `${seed}${suffix}`.replace(/\n{3,}/g, "\n\n").trim();
+  if (cleanKey === "evidence_summary") {
+    let next = base || [
+      "Evidence Summary",
+      "",
+      `The packet should include source proof supporting ${service} for ${patient}, including clinical documentation, diagnostic support, authorization history, payer correspondence, and any missing-documentation response relevant to the current determination.`
+    ].join(NL);
+
+    const ehrNote = /ehr|enterprise/i.test(contextText)
+      ? "EHR retrieval is available only for Enterprise plans with EHR integration enabled. If EHR is not connected, upload clinical notes, labs, imaging, medication history, treatment records, and provider documentation manually."
+      : "Before payer submission, confirm that each referenced source document is attached, previewed, included, or intentionally excluded from the packet.";
+
+    if (!tjhpPriorAuthAiHasMeaning(next, ehrNote)) {
+      next = `${next.trim()}\n\n${ehrNote}`;
+    }
+
+    return next.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  return (base || caseFacts.join(NL)).replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function tjhpPriorAuthAiReviewHtml({ org = {}, row = {}, sectionKey = "", title = "", before = "", after = "" } = {}){
@@ -47204,7 +47343,11 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-regenerat
   const currentSections = row.workspace_packet_sections && typeof row.workspace_packet_sections === "object" && !Array.isArray(row.workspace_packet_sections) ? row.workspace_packet_sections : {};
   const before = String(currentPreview.before || currentSections[sectionKey] || afterText || "").trimEnd();
   const prompt = String(currentPreview.prompt || "Regenerate this prior authorization packet section.").trim();
-  const after = tjhpPriorAuthAiDraftForSection(org, row, sectionKey, prompt, afterText || before, regeneratePrompt);
+  const regenerateCount = Number(currentPreview.regenerate_count || 0) + 1;
+  const effectiveRegeneratePrompt = tjhpPriorAuthAiRegenerateInstruction(regeneratePrompt, {
+    regenerate_count: regenerateCount
+  });
+  const after = tjhpPriorAuthAiDraftForSection(org, row, sectionKey, prompt, afterText || before, effectiveRegeneratePrompt);
 
   upsertPriorAuthCase(org.org_id, {
     ...row,
@@ -47215,7 +47358,8 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-regenerat
       prompt,
       before,
       after,
-      regenerate_prompt: regeneratePrompt,
+      regenerate_count: regenerateCount,
+      regenerate_prompt: effectiveRegeneratePrompt,
       updated_at: nowISO()
     }
   }, sess.user_id || "");
