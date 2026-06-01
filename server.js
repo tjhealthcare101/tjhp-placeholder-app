@@ -48589,6 +48589,300 @@ function renderClaimPanelBootstrap(scriptId, claims, claimCtx, panelTitle){
   `;
 }
 
+function renderPriorAuthActionCenterPanelBootstrap(scriptId, priorAuthRows, org = {}, panelTitle = "Prior Auth Case View"){
+  const safeScriptId = safeStr(scriptId || "priorAuthPanelData");
+  const safePanelTitle = safeStr(panelTitle || "Prior Auth Case View");
+
+  const payload = JSON.stringify(
+    (priorAuthRows || []).map(row => {
+      let readiness = {};
+      try {
+        readiness = tjhpPriorAuthSubmissionReadiness(org, row);
+      } catch (err) {
+        readiness = {};
+      }
+
+      const latestSubmission = tjhpPriorAuthLatestSubmission(row);
+
+      return {
+        ...row,
+        __latestSubmission: latestSubmission || null,
+        __readiness: readiness || {},
+        __nextAction: tjhpPriorAuthNextActionLabel(row),
+        __revenueAtRisk: priorAuthRevenueAtRiskDisplay(row.estimated_revenue_at_risk)
+      };
+    })
+  ).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
+
+  return `
+    <script id="${safeScriptId}" type="application/json">${payload}</script>
+    <script>
+(function(){
+  if (window.__tjhpPriorAuthActionCenterPanelBound) return;
+  window.__tjhpPriorAuthActionCenterPanelBound = true;
+
+  function paEsc(v){
+    return String(v == null ? "" : v).replace(/[&<>"']/g, function(ch){
+      return ({
+        "&":"&amp;",
+        "<":"&lt;",
+        ">":"&gt;",
+        '"':"&quot;",
+        "'":"&#39;"
+      })[ch];
+    });
+  }
+
+  function paMoney(v){
+    if (v == null || v === "" || String(v) === "Not determined") return "Not determined";
+    var n = Number(v || 0);
+    if (!Number.isFinite(n)) return paEsc(v);
+    try {
+      return n.toLocaleString("en-US", { style:"currency", currency:"USD" });
+    } catch(e) {
+      return "$" + n.toFixed(2);
+    }
+  }
+
+  function paDateOnly(value){
+    var raw = String(value || "").trim();
+    if (!raw || raw === "-") return "-";
+    if (/^\\d{4}-\\d{2}-\\d{2}$/.test(raw)) return raw;
+    var d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return raw;
+    return d.toISOString().slice(0, 10);
+  }
+
+  function paBuildHref(row, kind){
+    var id = encodeURIComponent(String(row.auth_case_id || ""));
+    if (kind === "case") return "/prior-auth/case?auth_case_id=" + id;
+    if (kind === "workspace") return "/prior-auth/appeal-workspace?auth_case_id=" + id;
+    if (kind === "preview") return "/prior-auth/appeal-workspace/export?auth_case_id=" + id + "&preview=1";
+    if (kind === "upload-response") return "/data-management?tab=prior-auth&auth_case_id=" + id + "&document_type=payer_response&focus=prior-auth";
+    if (kind === "next-round") return "/prior-auth/appeal-workspace?auth_case_id=" + id + "&start_next_round=1#prior-auth-submission-workflow";
+    return "#";
+  }
+
+  function paButton(label, href, primary){
+    return '<a class="btn ' + (primary ? '' : 'secondary ') + 'small" href="' + paEsc(href) + '"' + (href.indexOf("/prior-auth/appeal-workspace/export") === 0 ? ' target="_blank" rel="noopener"' : '') + '>' + paEsc(label) + '</a>';
+  }
+
+  function paQuickActions(row){
+    var latest = row.__latestSubmission || null;
+    var parts = [];
+
+    parts.push(paButton("Open Prior Auth Case", paBuildHref(row, "case"), false));
+
+    if (latest) {
+      parts.unshift(paButton("View Submitted Packet", paBuildHref(row, "preview"), false));
+      parts.push(paButton("Upload Payer Response", paBuildHref(row, "upload-response"), false));
+      parts.push(paButton("Start Next Round of Appeal", paBuildHref(row, "next-round"), false));
+      parts.push(paButton("Open Appeal Workspace", paBuildHref(row, "workspace"), false));
+    } else {
+      parts.unshift(paButton("Continue Prior Auth Appeal", paBuildHref(row, "workspace"), true));
+      parts.push(paButton("Preview Packet", paBuildHref(row, "preview"), false));
+    }
+
+    return parts.join(" ");
+  }
+
+  function ensurePriorAuthPanel(){
+    var backdrop = document.getElementById("priorAuthSidePanelBackdrop");
+    var panel = document.getElementById("priorAuthSidePanel");
+
+    if (!backdrop) {
+      backdrop = document.createElement("div");
+      backdrop.id = "priorAuthSidePanelBackdrop";
+      backdrop.style.position = "fixed";
+      backdrop.style.inset = "0";
+      backdrop.style.background = "rgba(15,23,42,0.35)";
+      backdrop.style.opacity = "0";
+      backdrop.style.transition = "opacity 0.2s ease";
+      backdrop.style.zIndex = "9998";
+      backdrop.style.display = "none";
+      document.body.appendChild(backdrop);
+    }
+
+    if (!panel) {
+      panel = document.createElement("aside");
+      panel.id = "priorAuthSidePanel";
+      panel.setAttribute("aria-hidden", "true");
+      panel.style.position = "fixed";
+      panel.style.top = "0";
+      panel.style.right = "-460px";
+      panel.style.width = "440px";
+      panel.style.maxWidth = "96vw";
+      panel.style.height = "100%";
+      panel.style.background = "#fff";
+      panel.style.borderLeft = "1px solid #e5e7eb";
+      panel.style.boxShadow = "-8px 0 30px rgba(15,23,42,0.18)";
+      panel.style.zIndex = "9999";
+      panel.style.padding = "18px";
+      panel.style.overflowY = "auto";
+      panel.style.transition = "right 0.22s ease";
+      panel.innerHTML = ''
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+        +   '<div>'
+        +     '<div class="muted small" style="text-transform:uppercase;letter-spacing:.06em;">Prior Auth Detail</div>'
+        +     '<strong style="font-size:16px;">${safePanelTitle}</strong>'
+        +   '</div>'
+        +   '<button type="button" data-prior-auth-panel-close style="border:1px solid #111;background:#fff;color:#111;border-radius:10px;height:36px;padding:0 12px;cursor:pointer;font-weight:700;">Close</button>'
+        + '</div>'
+        + '<div data-prior-auth-panel-content></div>';
+      document.body.appendChild(panel);
+    }
+
+    if (!backdrop.dataset.bound) {
+      backdrop.dataset.bound = "1";
+      backdrop.addEventListener("click", function(){
+        window.closePriorAuthPanel();
+      });
+    }
+
+    var closeBtn = panel.querySelector("[data-prior-auth-panel-close]");
+    if (closeBtn && !closeBtn.dataset.bound) {
+      closeBtn.dataset.bound = "1";
+      closeBtn.addEventListener("click", function(){
+        window.closePriorAuthPanel();
+      });
+    }
+
+    return {
+      backdrop: backdrop,
+      panel: panel,
+      content: panel.querySelector("[data-prior-auth-panel-content]")
+    };
+  }
+
+  var dataNode = document.getElementById("${safeScriptId}");
+  var rows = [];
+  try {
+    rows = JSON.parse(dataNode ? dataNode.textContent : "[]");
+  } catch(e) {
+    rows = [];
+  }
+
+  var rowMap = new Map();
+  (rows || []).forEach(function(row){
+    var id = String(row && row.auth_case_id || "").trim();
+    if (!id) return;
+    rowMap.set(id, row);
+    rowMap.set(encodeURIComponent(id), row);
+  });
+
+  window.closePriorAuthPanel = function(){
+    var backdrop = document.getElementById("priorAuthSidePanelBackdrop");
+    var panel = document.getElementById("priorAuthSidePanel");
+    if (panel) {
+      panel.style.right = "-460px";
+      panel.setAttribute("aria-hidden", "true");
+    }
+    if (backdrop) {
+      backdrop.style.opacity = "0";
+      setTimeout(function(){ backdrop.style.display = "none"; }, 180);
+    }
+  };
+
+  window.openPriorAuthPanel = function(id){
+    var rawId = String(id || "").trim();
+    if (!rawId) return false;
+
+    var row = rowMap.get(rawId);
+    if (!row) {
+      try { row = rowMap.get(decodeURIComponent(rawId)); } catch(e) {}
+    }
+    if (!row) return false;
+
+    var ui = ensurePriorAuthPanel();
+    if (!ui || !ui.panel || !ui.content) return false;
+
+    var latest = row.__latestSubmission || null;
+    var readiness = row.__readiness || {};
+    var status = String(row.status || "-");
+    var missingDocs = Array.isArray(row.missing_documentation) && row.missing_documentation.length
+      ? row.missing_documentation.join(", ")
+      : "-";
+    var reason = row.denial_reason || row.partial_approval_reason || row.reason || "-";
+
+    var submittedHtml = latest
+      ? ''
+        + '<div class="ws-callout ok" style="margin:12px 0;">'
+        +   '<strong>Manual prior-auth appeal submission logged.</strong><br/>'
+        +   'Method: ' + paEsc(latest.method || row.appeal_submission_method || "-") + '<br/>'
+        +   'Submitted: ' + paEsc(paDateOnly(latest.submitted_at || row.appeal_submitted_at || "-")) + '<br/>'
+        +   'Follow-up: ' + paEsc(paDateOnly(latest.follow_up_date || row.appeal_follow_up_date || "-")) + '<br/>'
+        +   'Round: ' + paEsc(latest.round || row.appeal_submission_round || "1")
+        + '</div>'
+      : '<div class="ws-callout warn" style="margin:12px 0;">No manual payer submission logged yet.</div>';
+
+    ui.content.innerHTML = ''
+      + '<h2 style="margin:4px 0 6px;">Prior Auth Case</h2>'
+      + '<div class="muted small">' + paEsc(row.payer || "-") + ' · ' + paEsc(row.requested_service || "-") + '</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0;">'
+      +   '<div class="kpi"><div class="muted small">Patient</div><strong>' + paEsc(row.patient_name || row.patient_id || "-") + '</strong></div>'
+      +   '<div class="kpi"><div class="muted small">Status</div><strong>' + paEsc(status) + '</strong></div>'
+      +   '<div class="kpi"><div class="muted small">Auth / Ref #</div><strong>' + paEsc(row.auth_number || row.reference_number || "-") + '</strong></div>'
+      +   '<div class="kpi"><div class="muted small">Revenue at Risk</div><strong>' + paMoney(row.estimated_revenue_at_risk) + '</strong></div>'
+      +   '<div class="kpi"><div class="muted small">CPT / HCPCS</div><strong>' + paEsc(row.cpt_hcpcs || "-") + '</strong></div>'
+      +   '<div class="kpi"><div class="muted small">ICD-10</div><strong>' + paEsc(row.icd10 || "-") + '</strong></div>'
+      + '</div>'
+      + '<div class="card" style="box-shadow:none;margin:12px 0;">'
+      +   '<h3 style="margin-top:0;">Why this prior auth needs action</h3>'
+      +   '<div class="muted small"><strong>Requested service:</strong> ' + paEsc(row.requested_service || "-") + '</div>'
+      +   '<div class="muted small" style="margin-top:6px;"><strong>Denial / partial approval reason:</strong> ' + paEsc(reason) + '</div>'
+      +   '<div class="muted small" style="margin-top:6px;"><strong>Missing documentation:</strong> ' + paEsc(missingDocs) + '</div>'
+      + '</div>'
+      + '<div class="card" style="box-shadow:none;margin:12px 0;">'
+      +   '<h3 style="margin-top:0;">Packet readiness</h3>'
+      +   '<div class="muted small">Source proof readiness: <strong>' + paEsc(readiness.source_proof_readiness_pct || 0) + '%</strong></div>'
+      +   '<div class="muted small">Draft readiness: <strong>' + paEsc(readiness.draft_readiness_pct || 0) + '%</strong></div>'
+      +   '<div class="muted small">Packet readiness: <strong>' + paEsc(readiness.packet_readiness_pct || 0) + '%</strong></div>'
+      + '</div>'
+      + submittedHtml
+      + '<div class="card" style="box-shadow:none;margin:12px 0;">'
+      +   '<h3 style="margin-top:0;">Next action</h3>'
+      +   '<p class="muted small">' + paEsc(row.__nextAction || "-") + '</p>'
+      + '</div>'
+      + '<div class="btnRow" style="gap:8px;flex-wrap:wrap;">'
+      +   paQuickActions(row)
+      + '</div>';
+
+    ui.backdrop.style.display = "block";
+    requestAnimationFrame(function(){
+      ui.backdrop.style.opacity = "1";
+      ui.panel.style.right = "0";
+      ui.panel.setAttribute("aria-hidden", "false");
+    });
+
+    return true;
+  };
+
+  window.__tjhpOpenPriorAuthPanelOrNavigate = function(event, el){
+    var id = el && (el.getAttribute("data-open-prior-auth-panel") || el.getAttribute("data-auth-case-id"));
+    var opened = window.openPriorAuthPanel(id);
+    if (opened && event && typeof event.preventDefault === "function") {
+      event.preventDefault();
+      event.stopPropagation();
+      return false;
+    }
+    return true;
+  };
+
+  document.addEventListener("click", function(e){
+    if (e.defaultPrevented) return;
+    var btn = e.target && e.target.closest ? e.target.closest("[data-open-prior-auth-panel]") : null;
+    if (!btn) return;
+    return window.__tjhpOpenPriorAuthPanelOrNavigate(e, btn);
+  });
+
+  document.addEventListener("keydown", function(e){
+    if (e.key === "Escape") window.closePriorAuthPanel();
+  });
+})();
+</script>
+  `;
+}
+
 if (method === "POST" && pathname === "/prior-auth/case/status") {
   const body = await parseBody(req);
   const ps = new URLSearchParams(body);
@@ -50208,7 +50502,7 @@ Fax: (325) 794-2926" style="width:100%;box-sizing:border-box;border:1px solid #b
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_MANUAL_APPEAL_ADDRESS_AND_ENCLOSURES_OK PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_DENIAL_LETTER_APPEAL_ADDRESS_EXTRACTION_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_FINAL_PACKET_CLEANUP_OK PRIOR_AUTH_MANUAL_SUBMISSION_WORKFLOW_OK PRIOR_AUTH_DENIAL_ADDRESS_COMPACT_EXTRACTION_AND_DIAGNOSTIC_CLEANUP_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
+    <!-- PRIOR_AUTH_ACTION_CENTER_PANEL_AND_QUICK_ACTIONS_OK PRIOR_AUTH_MANUAL_APPEAL_ADDRESS_AND_ENCLOSURES_OK PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_DENIAL_LETTER_APPEAL_ADDRESS_EXTRACTION_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_FINAL_PACKET_CLEANUP_OK PRIOR_AUTH_MANUAL_SUBMISSION_WORKFLOW_OK PRIOR_AUTH_DENIAL_ADDRESS_COMPACT_EXTRACTION_AND_DIAGNOSTIC_CLEANUP_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
     <style>
       .prior-auth-shell-backdrop{display:none;position:fixed;inset:0;background:rgba(15,23,42,.46);z-index:2998;}
       .prior-auth-shell-panel{display:none;position:fixed;top:0;right:0;width:min(520px,96vw);height:100vh;overflow:auto;background:#fff;border-left:1px solid #e5e7eb;box-shadow:-20px 0 45px rgba(15,23,42,.18);z-index:2999;padding:18px;box-sizing:border-box;}
@@ -51303,6 +51597,48 @@ if (method === "GET" && pathname === "/actions") {
 
   if (tab === "prior-auth") {
     const priorAuthActionRows = tjhpPriorAuthActionCenterRows(org.org_id);
+    const priorAuthActionHref = (x, kind) => {
+      const id = encodeURIComponent(x.auth_case_id || "");
+      if (kind === "case") return `/prior-auth/case?auth_case_id=${id}`;
+      if (kind === "workspace") return `/prior-auth/appeal-workspace?auth_case_id=${id}`;
+      if (kind === "preview") return `/prior-auth/appeal-workspace/export?auth_case_id=${id}&preview=1`;
+      if (kind === "upload-response") return `/data-management?tab=prior-auth&auth_case_id=${id}&document_type=payer_response&focus=prior-auth`;
+      if (kind === "next-round") return `/prior-auth/appeal-workspace?auth_case_id=${id}&start_next_round=1#prior-auth-submission-workflow`;
+      return "#";
+    };
+
+    const priorAuthPanelViewButton = x => `
+      <a class="btn secondary small view-prior-auth-btn"
+         href="${safeStr(priorAuthActionHref(x, "case"))}"
+         data-open-prior-auth-panel="${safeStr(x.auth_case_id || "")}"
+         data-auth-case-id="${safeStr(x.auth_case_id || "")}"
+         data-fallback-href="${safeStr(priorAuthActionHref(x, "case"))}"
+         onclick="return window.__tjhpOpenPriorAuthPanelOrNavigate ? window.__tjhpOpenPriorAuthPanelOrNavigate(event, this) : true;">
+        View
+      </a>
+    `;
+
+    const priorAuthActionButtons = (x, latestSubmission) => {
+      const submitted = !!latestSubmission;
+
+      if (submitted) {
+        return `
+          ${priorAuthPanelViewButton(x)}
+          <a class="btn secondary small" href="${safeStr(priorAuthActionHref(x, "preview"))}" target="_blank" rel="noopener">View Submitted Packet</a>
+          <a class="btn secondary small" href="${safeStr(priorAuthActionHref(x, "upload-response"))}">Upload Payer Response</a>
+          <a class="btn secondary small" href="${safeStr(priorAuthActionHref(x, "next-round"))}">Start Next Round of Appeal</a>
+          <a class="btn secondary small" href="${safeStr(priorAuthActionHref(x, "case"))}">Open Prior Auth Case</a>
+        `;
+      }
+
+      return `
+        ${priorAuthPanelViewButton(x)}
+        <a class="btn secondary small" href="${safeStr(priorAuthActionHref(x, "workspace"))}">Continue Prior Auth Appeal</a>
+        <a class="btn secondary small" href="${safeStr(priorAuthActionHref(x, "preview"))}" target="_blank" rel="noopener">Preview Packet</a>
+        <a class="btn secondary small" href="${safeStr(priorAuthActionHref(x, "case"))}">Open Prior Auth Case</a>
+      `;
+    };
+
     const priorAuthRowsHtml = priorAuthActionRows.map(x => {
       const latestSubmission = tjhpPriorAuthLatestSubmission(x);
       const submittedDisplay = latestSubmission
@@ -51330,10 +51666,21 @@ if (method === "GET" && pathname === "/actions") {
         <td>${safeStr(followUpDisplay)}${expirationSubtext}</td>
         <td>${priorAuthRevenueAtRiskDisplay(x.estimated_revenue_at_risk)}</td>
         <td>${safeStr(tjhpPriorAuthNextActionLabel(x))}</td>
-        <td><a class="btn secondary small" href="/prior-auth/case?auth_case_id=${encodeURIComponent(x.auth_case_id || "")}">View</a></td>
+        <td style="white-space:nowrap;">
+          <div class="btnRow" style="gap:6px;flex-wrap:wrap;">
+            ${priorAuthActionButtons(x, latestSubmission)}
+          </div>
+        </td>
       </tr>
     `;
     }).join("") || `<tr><td colspan="12" class="muted">No prior authorization cases need action.</td></tr>`;
+
+    const priorAuthPanelBootstrap = renderPriorAuthActionCenterPanelBootstrap(
+      "actionCenterPriorAuthData",
+      priorAuthActionRows,
+      org,
+      "Action Center Prior Auth View"
+    );
 
     const html = renderPage("Action Center", `
       <h2>Action Center <span class="tooltip" data-tip="This page prevents revenue leakage by surfacing what needs action. Use tabs to work denials, underpayments, follow-up, and prior authorizations by priority.">ⓘ</span></h2>
@@ -51344,7 +51691,7 @@ if (method === "GET" && pathname === "/actions") {
 
       <div class="insight-card" style="margin-top:10px;">
         <h3 style="margin:0 0 6px;">Prior Auths</h3>
-        <div class="muted small">Read-only queue of prior authorization cases that need staff attention. Manual appeal submission status and follow-up dates are tracked here.</div>
+        <div class="muted small">Read-only queue of prior authorization cases that need staff attention. View opens a prior-auth case panel; quick actions open the workspace, packet preview, response upload context, or next-round workflow.</div>
       </div>
 
       <div style="overflow:auto;margin-top:12px;">
@@ -51362,12 +51709,13 @@ if (method === "GET" && pathname === "/actions") {
               <th>Follow-up / Expiration</th>
               <th>Est. Revenue At Risk</th>
               <th>Next Action</th>
-              <th>Details</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>${priorAuthRowsHtml}</tbody>
         </table>
       </div>
+      ${priorAuthPanelBootstrap}
     `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name });
 
     return send(res, 200, html);
@@ -70008,6 +70356,112 @@ if (process.env.TJHP_PRIOR_AUTH_DENIAL_ADDRESS_COMPACT_EXTRACTION_SMOKE_TESTS ==
   })();
 }
 
+
+if (process.env.TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const fs = require("fs");
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
+    const requiredMarkers = [
+      "PRIOR_AUTH_ACTION_CENTER_PANEL_AND_QUICK_ACTIONS_OK",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "priorAuthSidePanel",
+      "priorAuthSidePanelBackdrop",
+      "window.openPriorAuthPanel",
+      "window.__tjhpOpenPriorAuthPanelOrNavigate",
+      "data-open-prior-auth-panel",
+      "view-prior-auth-btn",
+      "Action Center Prior Auth View",
+      "Prior Auth Detail",
+      "Packet readiness",
+      "View Submitted Packet",
+      "Upload Payer Response",
+      "Start Next Round of Appeal",
+      "Continue Prior Auth Appeal",
+      "Open Prior Auth Case",
+      "/prior-auth/appeal-workspace/export?auth_case_id=",
+      "/data-management?tab=prior-auth&auth_case_id=",
+      "&start_next_round=1#prior-auth-submission-workflow",
+      "Read-only queue of prior authorization cases that need staff attention. View opens a prior-auth case panel"
+    ];
+    requiredMarkers.forEach(marker => assert(src.includes(marker), "missing prior-auth panel marker: " + marker));
+
+    const claimPanelMarkers = [
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "claimSidePanelBackdrop",
+      "window.openClaimPanel",
+      "window.__tjhpOpenClaimPanelOrNavigate",
+      "data-open-claim-panel",
+      "view-claim-btn"
+    ];
+    claimPanelMarkers.forEach(marker => assert(src.includes(marker), "missing existing claim panel marker: " + marker));
+
+    ["priorAuthSidePanel", "priorAuthSidePanelBackdrop", "actionCenterPriorAuthData"].forEach(marker => {
+      assert(src.includes(marker), "missing separate prior-auth panel id/data marker: " + marker);
+    });
+
+    const forbiddenRoutes = [
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace") ' + '{',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/payer-response"' + ')',
+      'if (method === "GET" && pathname === "/ai-prior-auth"' + ')',
+      'if (method === "POST" && pathname === "/ai-prior-auth"' + ')',
+      'if (method === "GET" && pathname === "/prior-auth/ai"' + ')',
+      'if (method === "POST" && pathname === "/prior-auth/ai"' + ')'
+    ];
+    forbiddenRoutes.forEach(marker => assert(!src.includes(marker), "forbidden prior-auth route added: " + marker));
+
+    const protectedMarkers = [
+      'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/submit")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/save-section")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upload")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/exclude")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/pages")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/appeal-address")',
+      'if (method === "POST" && pathname === "/data-management/prior-auth/upload")',
+      'if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))',
+      'if (method === "POST" && pathname === "/ai-workspace/save-preview")',
+      'if (method === "GET" && pathname === "/ai-workspace/export")',
+      "/ai-workspace/regenerate-diff",
+      "/ai-workspace/apply-diff",
+      "/ai-workspace/cancel-diff",
+      "function renderInlineAIAssist",
+      "function workspaceAiInteractiveTrackChangesHtml"
+    ];
+    protectedMarkers.forEach(marker => assert(src.includes(marker), "protected route/helper missing: " + marker));
+
+    function extractFunctionBody(name) {
+      const start = src.indexOf("function " + name);
+      assert(start >= 0, "function missing: " + name);
+      if (name === "renderClaimPanelBootstrap") {
+        const end = src.indexOf("function renderPriorAuthActionCenterPanelBootstrap", start);
+        assert(end > start, "claim panel function boundary missing");
+        return src.slice(start, end);
+      }
+      if (name === "renderPriorAuthActionCenterPanelBootstrap") {
+        const end = src.indexOf('if (method === "POST" && pathname === "/prior-auth/case/status")', start);
+        assert(end > start, "prior-auth panel function boundary missing");
+        return src.slice(start, end);
+      }
+      throw new Error("unsupported function extraction: " + name);
+    }
+
+    const claimBody = extractFunctionBody("renderClaimPanelBootstrap");
+    ["priorAuthSidePanel", "openPriorAuthPanel", "data-open-prior-auth-panel"].forEach(marker => {
+      assert(!claimBody.includes(marker), "claim panel function was modified with prior-auth marker: " + marker);
+    });
+
+    const priorAuthBody = extractFunctionBody("renderPriorAuthActionCenterPanelBootstrap");
+    ["priorAuthSidePanel", "openPriorAuthPanel", "data-open-prior-auth-panel"].forEach(marker => {
+      assert(priorAuthBody.includes(marker), "prior-auth panel function missing marker: " + marker);
+    });
+
+    process.stdout.write("PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) {
+    process.stderr.write("PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
+  }
+}
 
 if (process.env.TJHP_PRIOR_AUTH_MANUAL_SUBMISSION_WORKFLOW_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
