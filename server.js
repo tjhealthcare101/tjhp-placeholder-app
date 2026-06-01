@@ -545,6 +545,11 @@ function normalizePriorAuthCase(input = {}, defaults = {}){
 
     status: normalizePriorAuthStatus(row.status || defaults.status),
 
+    appeal_submission_address: String(row.appeal_submission_address || row.appeal_address || "").trim(),
+    payer_appeal_address: String(row.payer_appeal_address || row.payer_submission_address || "").trim(),
+    denial_letter_appeal_address: String(row.denial_letter_appeal_address || "").trim(),
+    appeal_submission_address_source: String(row.appeal_submission_address_source || "").trim(),
+
     denial_reason: String(row.denial_reason || "").trim(),
     partial_approval_reason: String(row.partial_approval_reason || "").trim(),
 
@@ -2510,14 +2515,20 @@ function tjhpPriorAuthPayerFacingPacketContentOrder(){
     ["evidence", "clinical_documentation"],
     ["evidence", "diagnostic_results"],
     ["evidence", "payer_policy_guidelines"],
-    ["evidence", "coding_rationale"],
-    ["evidence", "authorization_history"],
-    ["evidence", "evidence_of_authorization"],
     ["evidence", "provider_authorization_form"],
     ["evidence", "prior_payer_correspondence"],
     ["evidence", "peer_to_peer_notes"],
     ["evidence", "missing_documentation_response"]
   ];
+}
+
+function tjhpPriorAuthPayerFacingEvidenceKeySet(){
+  return new Set(
+    tjhpPriorAuthPayerFacingPacketContentOrder()
+      .filter(pair => String(pair && pair[0] || "") === "evidence")
+      .map(pair => String(pair && pair[1] || "").trim())
+      .filter(Boolean)
+  );
 }
 
 function tjhpPriorAuthPayerFacingPacketDisplayOrder(){
@@ -2893,6 +2904,51 @@ function tjhpPriorAuthAppealSubmissionAddressBlock(org = {}, row = {}, ctx = {})
   return "";
 }
 
+function tjhpPriorAuthCoverLetterApplyAppealAddress(org = {}, row = {}, text = "", ctx = {}){
+  let out = String(text || "").trim();
+  if (!out) return out;
+
+  const address = tjhpPriorAuthAppealSubmissionAddressBlock(org, row, ctx);
+  if (!address) return out;
+
+  const payer = tjhpPriorAuthFirstValue(
+    ctx.payer,
+    row.payer,
+    row.payer_name,
+    row.insurance,
+    "Payer"
+  );
+
+  const payerBlock = [
+    payer,
+    "Prior Authorization Appeals Department",
+    address
+  ].filter(x => String(x || "").trim()).join("\n");
+
+  if (out.includes("[Payer Address]")) {
+    out = out.replace(/\[Payer Address\]/g, address);
+  }
+
+  const genericBlockPattern = new RegExp(
+    String(payer || "Payer").replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
+      "\\s*\\n\\s*Prior Authorization Appeals Department\\s*\\n\\s*\\[Payer Address\\]",
+    "i"
+  );
+
+  if (genericBlockPattern.test(out)) {
+    out = out.replace(genericBlockPattern, payerBlock);
+  }
+
+  if (!out.includes(address) && /Prior Authorization Appeals Department/i.test(out)) {
+    out = out.replace(
+      /(Prior Authorization Appeals Department)(?![\s\S]{0,160}(?:PO Box|P\.?\s*O\.?\s*Box|\d{5}(?:-\d{4})?|\[Payer Address\]))/i,
+      `$1\n${address}`
+    );
+  }
+
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function tjhpPriorAuthPayerAddressBlock(row = {}, ctx = {}, org = {}){
   const payer = tjhpPriorAuthFirstValue(
     ctx.payer,
@@ -2990,6 +3046,7 @@ function tjhpPriorAuthEnsureCoverLetterProfessionalBlocks(org = {}, row = {}, te
     out = `${out}\n\nSincerely,\n${identity.signatureName || identity.orgName}`.replace(/\n{3,}/g, "\n\n").trim();
   }
 
+  out = tjhpPriorAuthCoverLetterApplyAppealAddress(org, row, out);
   return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -3069,7 +3126,11 @@ function tjhpPriorAuthExportPacketSectionText(org = {}, row = {}, sectionKey = "
 
   const savedText = String(packetSections[cleanKey] || "").trim();
 
-  if (savedText) return savedText;
+  if (savedText) {
+    return cleanKey === "appeal_narrative"
+      ? tjhpPriorAuthCoverLetterApplyAppealAddress(org, row, savedText)
+      : savedText;
+  }
 
   if (cleanKey === "appeal_narrative") {
     let ctx = {};
@@ -3079,7 +3140,12 @@ function tjhpPriorAuthExportPacketSectionText(org = {}, row = {}, sectionKey = "
       ctx = {};
     }
 
-    return tjhpPriorAuthCoverLetterDefaultText(org, row, ctx);
+    return tjhpPriorAuthCoverLetterApplyAppealAddress(
+      org,
+      row,
+      tjhpPriorAuthCoverLetterDefaultText(org, row, ctx),
+      ctx
+    );
   }
 
   return String(fallbackText || "").trim();
@@ -48167,14 +48233,44 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upl
       ? row.workspace_evidence
       : {};
   const currentState = tjhpPriorAuthWorkspaceEvidenceState(row, evidence_key);
-  const newAttachments = incomingFiles.map(file => ({
-    attachment_id: "paev_" + uuid(),
-    file_name: String(file.originalName || file.filename || "").trim(),
-    file_type: String(file.mimeType || "").trim(),
-    url: String(file.url || file.path || "").trim(),
-    uploaded_at: nowISO(),
-    uploaded_by: sess.user_id || ""
-  }));
+  const newAttachments = [];
+  for (const file of incomingFiles) {
+    const fileName = String(file.originalName || file.filename || "").trim();
+    const fileType = String(file.mimeType || "").trim();
+    const fileUrl = String(file.url || file.path || "").trim();
+    const filePath = String(file.absPath || file.path || "").trim();
+
+    let extractedText = "";
+    let appealSubmissionAddress = "";
+
+    if (evidence_key === "denial_or_partial_approval_letter") {
+      try {
+        extractedText = tjhpNormalizeExtractedUploadText(
+          await tjhpExtractTextFromUploadedFileForParsing(file)
+        ).slice(0, 40000);
+        appealSubmissionAddress = tjhpPriorAuthExtractAppealSubmissionAddress(extractedText);
+      } catch (err) {
+        extractedText = "";
+        appealSubmissionAddress = "";
+      }
+    }
+
+    newAttachments.push({
+      attachment_id: "paev_" + uuid(),
+      file_name: fileName,
+      file_type: fileType,
+      url: fileUrl,
+      path: filePath,
+      absPath: filePath,
+      storedPath: filePath,
+      uploaded_at: nowISO(),
+      uploaded_by: sess.user_id || "",
+      text_excerpt: extractedText.slice(0, 2000),
+      extracted_text: extractedText,
+      appeal_submission_address: appealSubmissionAddress,
+      appeal_submission_address_source: appealSubmissionAddress ? "workspace_evidence_upload" : ""
+    });
+  }
   const updatedEvidence = {
     ...currentEvidence,
     [evidence_key]: {
@@ -48182,7 +48278,22 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upl
       attachments: [...currentState.attachments, ...newAttachments]
     }
   };
-  upsertPriorAuthCase(org.org_id, { ...row, workspace_evidence: updatedEvidence }, sess.user_id || "");
+  const nextRow = { ...row, workspace_evidence: updatedEvidence };
+
+  if (evidence_key === "denial_or_partial_approval_letter") {
+    const uploadedAppealAddress = newAttachments
+      .map(att => String(att.appeal_submission_address || "").trim())
+      .find(Boolean);
+
+    if (uploadedAppealAddress) {
+      nextRow.appeal_submission_address = uploadedAppealAddress;
+      nextRow.payer_appeal_address = uploadedAppealAddress;
+      nextRow.denial_letter_appeal_address = uploadedAppealAddress;
+      nextRow.appeal_submission_address_source = "workspace_evidence_upload";
+    }
+  }
+
+  upsertPriorAuthCase(org.org_id, nextRow, sess.user_id || "");
   return redirect(res, backHref + "&pa_status=evidence_uploaded");
 }
 
@@ -48508,7 +48619,9 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
   editablePacketSections
     .filter(section => tjhpPriorAuthPayerFacingEditableSectionSet().has(String(section && section.key || "").trim()))
     .forEach(section => pushRow("section", section && section.key));
-  evidenceItems.forEach(item => pushRow("evidence", item && item.key));
+  evidenceItems
+    .filter(item => tjhpPriorAuthPayerFacingEvidenceKeySet().has(String(item && item.key || "").trim()))
+    .forEach(item => pushRow("evidence", item && item.key));
 
   const priorAuthExportAttachmentFilename = att => String(att && (att.file_name || att.originalName || att.filename) || "Uploaded file").trim();
 
@@ -49097,10 +49210,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     ["evidence", "clinical_documentation"],
     ["evidence", "diagnostic_results"],
     ["evidence", "payer_policy_guidelines"],
-    ["evidence", "coding_rationale"],
     ["section", "letter_of_medical_necessity"],
-    ["evidence", "authorization_history"],
-    ["evidence", "evidence_of_authorization"],
     ["evidence", "provider_authorization_form"],
     ["evidence", "prior_payer_correspondence"],
     ["evidence", "peer_to_peer_notes"],
@@ -49130,7 +49240,9 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
 
   priorAuthPacketOrder.forEach(pair => pushPriorAuthOrderedPacketItem(pair[0], pair[1]));
   editablePacketSections.forEach(section => pushPriorAuthOrderedPacketItem("section", section && section.key));
-  priorAuthEvidenceItems.forEach(item => pushPriorAuthOrderedPacketItem("evidence", item && item.key));
+  priorAuthEvidenceItems
+    .filter(item => tjhpPriorAuthPayerFacingEvidenceKeySet().has(String(item && item.key || "").trim()))
+    .forEach(item => pushPriorAuthOrderedPacketItem("evidence", item && item.key));
 
   const priorAuthPacketSectionByKey = new Map();
   editablePacketSections.forEach(section => {
@@ -49149,11 +49261,21 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   const priorAuthPacketSectionBody = key => {
     const cleanKey = String(key || "").trim();
     if (!cleanKey) return "";
+
+    let body = "";
+
     if (Object.prototype.hasOwnProperty.call(priorAuthSavedPacketSections, cleanKey)) {
-      return String(priorAuthSavedPacketSections[cleanKey] || "").trimEnd();
+      body = String(priorAuthSavedPacketSections[cleanKey] || "").trimEnd();
+    } else {
+      const section = priorAuthPacketSectionByKey.get(cleanKey);
+      body = String(section && section.body != null ? section.body : "").trimEnd();
     }
-    const section = priorAuthPacketSectionByKey.get(cleanKey);
-    return String(section && section.body != null ? section.body : "").trimEnd();
+
+    if (cleanKey === "appeal_narrative") {
+      body = tjhpPriorAuthCoverLetterApplyAppealAddress(org, row, body, ctx);
+    }
+
+    return body;
   };
 
   const priorAuthPacketSectionObject = key => {
@@ -49218,7 +49340,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
     title: "Prior Authorization Appeal Cover Letter",
     subtitle: "Editable cover letter page. Keep the high-level appeal request, auth identifiers, requested action, and closing here. Letter of Medical Necessity is a separate packet page.",
     body: Object.prototype.hasOwnProperty.call(priorAuthSavedPacketSections, "appeal_narrative")
-      ? String(priorAuthSavedPacketSections.appeal_narrative || "").trimEnd()
+      ? priorAuthPacketSectionBody("appeal_narrative")
       : priorAuthCoverLetterDefaultBody,
     rows: 14
   }));
@@ -49267,7 +49389,9 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   };
 
   priorAuthPacketDisplayOrder.forEach(pair => pushPriorAuthPacketDisplayRow(pair[0], pair[1]));
-  priorAuthEvidenceItems.forEach(item => pushPriorAuthPacketDisplayRow("evidence", item && item.key));
+  priorAuthEvidenceItems
+    .filter(item => tjhpPriorAuthPayerFacingEvidenceKeySet().has(String(item && item.key || "").trim()))
+    .forEach(item => pushPriorAuthPacketDisplayRow("evidence", item && item.key));
   Array.from(priorAuthDisplaySectionHtmlByKey.keys())
     .filter(key => tjhpPriorAuthPayerFacingEditableSectionSet().has(String(key || "").trim()))
     .forEach(key => pushPriorAuthPacketDisplayRow("section", key));
@@ -49326,7 +49450,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_DENIAL_LETTER_APPEAL_ADDRESS_EXTRACTION_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
+    <!-- PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_DENIAL_LETTER_APPEAL_ADDRESS_EXTRACTION_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_FINAL_PACKET_CLEANUP_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
     <style>
       .prior-auth-shell-backdrop{display:none;position:fixed;inset:0;background:rgba(15,23,42,.46);z-index:2998;}
       .prior-auth-shell-panel{display:none;position:fixed;top:0;right:0;width:min(520px,96vw);height:100vh;overflow:auto;background:#fff;border-left:1px solid #e5e7eb;box-shadow:-20px 0 45px rgba(15,23,42,.18);z-index:2999;padding:18px;box-sizing:border-box;}
@@ -68783,6 +68907,126 @@ if (process.env.TJHP_PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_SMOKE_TESTS === "t
 
     process.stdout.write("PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_SMOKE_TESTS_PASSED\n");
     process.exit(0);
+  })();
+}
+
+if (process.env.TJHP_PRIOR_AUTH_FINAL_PACKET_CLEANUP_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "PRIOR_AUTH_FINAL_PACKET_CLEANUP_OK",
+        "tjhpPriorAuthCoverLetterApplyAppealAddress",
+        "tjhpPriorAuthPayerFacingEvidenceKeySet",
+        'evidence_key === "denial_or_partial_approval_letter"',
+        "text_excerpt: extractedText.slice(0, 2000)",
+        'appeal_submission_address_source: appealSubmissionAddress ? "workspace_evidence_upload" : ""',
+        "nextRow.appeal_submission_address = uploadedAppealAddress",
+        "priorAuthEvidenceItems\n    .filter(item => tjhpPriorAuthPayerFacingEvidenceKeySet().has",
+        "evidenceItems\n    .filter(item => tjhpPriorAuthPayerFacingEvidenceKeySet().has"
+      ].forEach(marker => assert(src.includes(marker), "missing final packet cleanup marker: " + marker));
+
+      const payerFacingEvidence = tjhpPriorAuthPayerFacingEvidenceKeySet();
+      ["coding_rationale", "authorization_history", "evidence_of_authorization"].forEach(key => {
+        assert(!payerFacingEvidence.has(key), "payer-facing evidence set should exclude: " + key);
+      });
+
+      const sampleOrg = { org_id:"final_cleanup_org", org_name:"Final Cleanup Practice" };
+      const sampleRow = normalizePriorAuthCase({
+        auth_case_id:"pa_final_cleanup",
+        patient_name:"Ronald Vinson",
+        payer:"BlueCross BlueShield of Texas",
+        requested_service:"Endlymphoma Mutation Assay By V1",
+        auth_number:"254968577",
+        status:"Denied",
+        appeal_submission_address:[
+          "Blue Cross and Blue Shield of Texas",
+          "PO Box 660044",
+          "Dallas, Texas 75266-0044",
+          "Fax: 800-555-1212"
+        ].join("\n"),
+        workspace_packet_sections:{
+          appeal_narrative:[
+            "Final Cleanup Practice",
+            "",
+            "BlueCross BlueShield of Texas",
+            "Prior Authorization Appeals Department",
+            "[Payer Address]",
+            "",
+            "To the Prior Authorization Appeals Department,",
+            "",
+            "Body.",
+            "",
+            "Sincerely,",
+            "Final Cleanup Practice"
+          ].join("\n")
+        }
+      });
+
+      const repaired = tjhpPriorAuthCoverLetterApplyAppealAddress(
+        sampleOrg,
+        sampleRow,
+        sampleRow.workspace_packet_sections.appeal_narrative,
+        {}
+      );
+
+      ["PO Box 660044", "Dallas, Texas 75266-0044", "Fax: 800-555-1212"].forEach(marker => {
+        assert(repaired.includes(marker), "repaired cover letter missing: " + marker);
+      });
+      assert(!repaired.includes("[Payer Address]"), "repaired cover letter must not include [Payer Address]");
+
+      const contents = tjhpPriorAuthCoverLetterPacketContentsLines(sampleOrg, sampleRow).join("\n");
+      [
+        "CPT / HCPCS and ICD-10 Rationale",
+        "Evidence of Authorization",
+        "Authorization History"
+      ].forEach(label => assert(!contents.includes(label), "cover-letter contents should not include removed evidence label: " + label));
+
+      [
+        'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/pages")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upload")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/exclude")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/save-section")',
+        'if (method === "POST" && pathname === "/data-management/prior-auth/upload")',
+        'if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))',
+        'if (method === "POST" && pathname === "/ai-workspace/save-preview")',
+        'if (method === "GET" && pathname === "/ai-workspace/export")',
+        "/ai-workspace/regenerate-diff",
+        "/ai-workspace/apply-diff",
+        "/ai-workspace/cancel-diff",
+        "function renderInlineAIAssist",
+        "function workspaceAiInteractiveTrackChangesHtml"
+      ].forEach(marker => assert(src.includes(marker), "protected route/helper missing: " + marker));
+
+      const cleanupSlices = [];
+      const helperStart = src.indexOf("function tjhpPriorAuthCoverLetterApplyAppealAddress");
+      const helperEnd = src.indexOf("function tjhpPriorAuthPayerAddressBlock", helperStart);
+      assert(helperStart >= 0 && helperEnd > helperStart, "cover-letter repair helper boundary missing");
+      cleanupSlices.push(src.slice(helperStart, helperEnd));
+      [
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upload")',
+        'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")',
+        'if (method === "GET" && pathname === "/prior-auth/appeal-workspace")'
+      ].forEach(startMarker => {
+        const start = src.indexOf(startMarker);
+        assert(start >= 0, "cleanup route boundary missing: " + startMarker);
+        const end = src.indexOf("\nif (method ===", start + 1);
+        cleanupSlices.push(src.slice(start, end > start ? end : start + 8000));
+      });
+      const cleanupSrc = cleanupSlices.join("\n");
+      ["new OpenAI(", "ensureAgentWorkspace(", "saveAgentWorkspace(", "FILES.billed", "FILES.payments", "FILES.payer_contracts", "FILES.document_ingests", "FILES.agent_workspaces"].forEach(marker => {
+        assert(!cleanupSrc.includes(marker), "final cleanup code must not include forbidden marker: " + marker);
+      });
+
+      process.stdout.write("PRIOR_AUTH_FINAL_PACKET_CLEANUP_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_FINAL_PACKET_CLEANUP_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
   })();
 }
 
