@@ -821,6 +821,9 @@ function savePriorAuthUploadRecord(record = {}){
     needs_review: record.needs_review !== false,
     created_at: String(record.created_at || now).trim(),
     created_by: String(record.created_by || "").trim(),
+    text_excerpt: String(record.text_excerpt || "").trim(),
+    extracted_text: String(record.extracted_text || "").trim(),
+    appeal_submission_address: String(record.appeal_submission_address || "").trim(),
     notes: String(record.notes || "").trim()
   };
 
@@ -2051,7 +2054,23 @@ function tjhpPriorAuthUploadedSourceAttachmentForEvidence(upload = {}, uploadId 
   const fileUrl = String(upload.file_url || upload.url || "").trim() || priorAuthUploadFileUrl(upload);
   const storedPath = String(upload.stored_path || upload.absPath || "").trim() || priorAuthUploadStoredPath(upload);
   const id = String(uploadId || upload.upload_id || "").trim();
-  return { attachment_id: id ? "paev_src_" + id : "paev_" + uuid(), source: "prior_auth_source_upload", source_upload_id: id, file_name: fileName, file_type: fileType, url: fileUrl, path: storedPath, absPath: storedPath, storedPath, uploaded_at: String(upload.created_at || nowISO()).trim(), uploaded_by: String(userId || upload.created_by || "").trim() };
+  return {
+    attachment_id: id ? "paev_src_" + id : "paev_" + uuid(),
+    source: "prior_auth_source_upload",
+    source_upload_id: id,
+    file_name: fileName,
+    file_type: fileType,
+    url: fileUrl,
+    path: storedPath,
+    absPath: storedPath,
+    storedPath,
+    uploaded_at: String(upload.created_at || nowISO()).trim(),
+    uploaded_by: String(userId || upload.created_by || "").trim(),
+    text_excerpt: String(upload.text_excerpt || "").trim(),
+    extracted_text: String(upload.extracted_text || "").trim(),
+    appeal_submission_address: String(upload.appeal_submission_address || "").trim(),
+    appeal_instructions: String(upload.appeal_instructions || "").trim()
+  };
 }
 
 function tjhpPriorAuthEvidenceAttachmentEquivalent(a = {}, b = {}){
@@ -2567,42 +2586,147 @@ function tjhpPriorAuthPacketContentLabel(org = {}, row = {}, kind = "", key = ""
   return "";
 }
 
-function tjhpPriorAuthExtractAppealSubmissionAddress(text = ""){
-  const raw = String(text || "").replace(/\r\n/g, "\n").trim();
-  if (!raw) return "";
-
-  const lines = raw
-    .split("\n")
-    .map(line => String(line || "").trim())
-    .filter(Boolean);
-
-  if (!lines.length) return "";
-
-  const joined = lines.join("\n");
-
-  const explicitMatch = joined.match(/(?:appeals?|appeal submission|send(?:\s+your)?\s+appeal|mail(?:\s+your)?\s+appeal|submit(?:\s+your)?\s+appeal)[\s\S]{0,450}/i);
-  const windowText = explicitMatch ? explicitMatch[0] : "";
-
-  const candidateLines = (windowText || joined)
-    .split("\n")
-    .map(line => line.trim())
-    .filter(Boolean)
-    .filter(line =>
-      /appeal|department|po box|p\.o\. box|street|st\.|road|rd\.|drive|dr\.|avenue|ave\.|suite|fax|phone|portal|claims|blue cross|aetna|cigna|united|humana|anthem|health/i.test(line) ||
-      /\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/.test(line) || /,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/.test(line)
-    );
-
-  const cleaned = [];
-  candidateLines.forEach(line => {
-    const normalized = line.replace(/\s+/g, " ").trim();
-    if (!normalized) return;
-    if (cleaned.some(existing => existing.toLowerCase() === normalized.toLowerCase())) return;
-    cleaned.push(normalized);
-  });
-
-  return cleaned.slice(0, 8).join("\n");
+function tjhpPriorAuthNormalizeAppealAddressLine(line = ""){
+  return String(line || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[•\-\*\u2022]+\s*/, "")
+    .trim();
 }
 
+function tjhpPriorAuthAppealAddressLineLooksUseful(line = ""){
+  const clean = tjhpPriorAuthNormalizeAppealAddressLine(line);
+  if (!clean) return false;
+
+  return (
+    /appeals?|appeal department|prior authorization|blue\s*cross|bluecross|blue shield|aetna|cigna|united|uhc|humana|anthem|healthselect|health select|claims department|benefits department/i.test(clean) ||
+    /\bP\.?\s*O\.?\s*Box\b/i.test(clean) ||
+    /\bPO Box\b/i.test(clean) ||
+    /\b\d{2,6}\s+[A-Za-z0-9 .'-]+(?:street|st\.|road|rd\.|drive|dr\.|avenue|ave\.|boulevard|blvd\.|lane|ln\.|way|parkway|pkwy|suite|ste\.?)\b/i.test(clean) ||
+    /\b[A-Z][a-zA-Z .'-]+,\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|IA|ID|IL|IN|KS|KY|LA|MA|MD|ME|MI|MN|MO|MS|MT|NC|ND|NE|NH|NJ|NM|NV|NY|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VA|VT|WA|WI|WV|WY|Texas)\s+\d{5}(?:-\d{4})?\b/i.test(clean) ||
+    /\bFax\b|\bfax\s*[:#]?\s*\(?\d{3}\)?/i.test(clean)
+  );
+}
+
+function tjhpPriorAuthAppealAddressStopLine(line = ""){
+  const clean = tjhpPriorAuthNormalizeAppealAddressLine(line);
+  if (!clean) return true;
+
+  return /^(include the following information|include all|for faster|you may also|if you need|what if|what should|please note|this notice|protected health information|if you are not|para confirmar|si usted|call us|contact us|web site|website|visit|member services|customer service|be certain)/i.test(clean);
+}
+
+function tjhpPriorAuthExtractAppealSubmissionAddress(text = ""){
+  const raw = String(text || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .trim();
+
+  if (!raw) return "";
+
+  const normalized = raw
+    .split("\n")
+    .map(tjhpPriorAuthNormalizeAppealAddressLine)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
+
+  const appealWindows = [];
+
+  const patterns = [
+    /(?:how do i file an appeal\??)[\s\S]{0,1100}/ig,
+    /(?:submit(?:ting)?\s+(?:your\s+)?appeal(?:\s+to\s+us)?(?:\s+in\s+writing)?(?:\s+at\s+the\s+following\s+address)?)[\s\S]{0,900}/ig,
+    /(?:send(?:\s+your)?\s+appeal(?:\s+to)?)[\s\S]{0,900}/ig,
+    /(?:mail(?:\s+your)?\s+appeal(?:\s+to)?)[\s\S]{0,900}/ig,
+    /(?:appeal(?:s)?\s+(?:department|address|submission|request))[\s\S]{0,900}/ig,
+    /(?:if\s+i\s+don['’]?t\s+agree\s+with\s+this\s+decision)[\s\S]{0,1200}/ig
+  ];
+
+  patterns.forEach(pattern => {
+    const matches = normalized.match(pattern) || [];
+    matches.forEach(match => {
+      const clean = String(match || "").trim();
+      if (clean) appealWindows.push(clean);
+    });
+  });
+
+  if (!appealWindows.length) {
+    const fallbackAppealIndex = normalized.toLowerCase().indexOf("appeal");
+    if (fallbackAppealIndex >= 0) {
+      appealWindows.push(normalized.slice(fallbackAppealIndex, fallbackAppealIndex + 1000));
+    }
+  }
+
+  const scoreCandidate = candidate => {
+    const c = String(candidate || "");
+    let score = 0;
+    if (/\bP\.?\s*O\.?\s*Box\b|\bPO Box\b/i.test(c)) score += 5;
+    if (/\b[A-Z][a-zA-Z .'-]+,\s*(?:TX|Texas)\s+\d{5}(?:-\d{4})?\b/i.test(c)) score += 4;
+    if (/\b[A-Z][a-zA-Z .'-]+,\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|IA|ID|IL|IN|KS|KY|LA|MA|MD|ME|MI|MN|MO|MS|MT|NC|ND|NE|NH|NJ|NM|NV|NY|OH|OK|OR|PA|RI|SC|SD|TN|UT|VA|VT|WA|WI|WV|WY)\s+\d{5}(?:-\d{4})?\b/i.test(c)) score += 4;
+    if (/appeals?|prior authorization|department/i.test(c)) score += 3;
+    if (/blue\s*cross|bluecross|blue shield|aetna|cigna|united|uhc|humana|anthem|healthselect|health select/i.test(c)) score += 3;
+    if (/\bfax\b/i.test(c)) score += 1;
+    if (/university|patient|member address|provider address|recipient|carlos|galveston/i.test(c)) score -= 3;
+    return score;
+  };
+
+  const candidates = [];
+
+  appealWindows.forEach(windowText => {
+    let body = String(windowText || "");
+
+    const introMatch = body.match(/(?:following\s+address|send(?:\s+your)?\s+appeal\s+to|submit(?:ting)?(?:\s+your)?\s+appeal(?:\s+to\s+us)?(?:\s+in\s+writing)?(?:\s+at)?|mail(?:\s+your)?\s+appeal\s+to)\s*:?\s*([\s\S]{0,700})/i);
+    if (introMatch && introMatch[1]) body = introMatch[1];
+
+    const lines = body
+      .split("\n")
+      .map(tjhpPriorAuthNormalizeAppealAddressLine)
+      .filter(Boolean);
+
+    const useful = [];
+    let started = false;
+
+    for (const line of lines) {
+      if (tjhpPriorAuthAppealAddressStopLine(line)) {
+        if (started && useful.length) break;
+        continue;
+      }
+
+      const looksUseful = tjhpPriorAuthAppealAddressLineLooksUseful(line);
+
+      if (!started && looksUseful) started = true;
+      if (!started) continue;
+
+      if (!looksUseful && useful.length >= 3) break;
+      if (!looksUseful && useful.length < 3) continue;
+
+      if (/^(what if|how do|you may|include|contact|call|visit|web)/i.test(line)) continue;
+
+      if (!useful.some(existing => existing.toLowerCase() === line.toLowerCase())) useful.push(line);
+      if (useful.length >= 8) break;
+    }
+
+    if (useful.length >= 2) {
+      const candidate = useful.join("\n").trim();
+      if (candidate) candidates.push(candidate);
+    }
+  });
+
+  candidates.sort((a, b) => scoreCandidate(b) - scoreCandidate(a));
+
+  const best = candidates.find(candidate =>
+    scoreCandidate(candidate) >= 4 &&
+    (/\bP\.?\s*O\.?\s*Box\b|\bPO Box\b|\b\d{2,6}\s+[A-Za-z0-9 .'-]+(?:street|st\.|road|rd\.|drive|dr\.|avenue|ave\.|boulevard|blvd\.|lane|ln\.|way|parkway|pkwy|suite|ste\.?)\b/i.test(candidate)) &&
+    /\b\d{5}(?:-\d{4})?\b/.test(candidate)
+  ) || candidates[0] || "";
+
+  return String(best || "")
+    .split("\n")
+    .map(tjhpPriorAuthNormalizeAppealAddressLine)
+    .filter(Boolean)
+    .filter((line, idx, arr) => arr.findIndex(x => x.toLowerCase() === line.toLowerCase()) === idx)
+    .slice(0, 8)
+    .join("\n");
+}
 function tjhpPriorAuthDenialSubmissionContextText(org = {}, row = {}){
   const chunks = [];
 
@@ -2645,6 +2769,109 @@ function tjhpPriorAuthDenialSubmissionContextText(org = {}, row = {}){
   } catch (err) {}
 
   return chunks.join("\n");
+}
+
+function tjhpPriorAuthAttachmentStoredPath(att = {}){
+  const direct = String(att.absPath || att.storedPath || att.stored_path || att.path || "").trim();
+  if (direct && fs.existsSync(direct)) return direct;
+
+  const url = String(att.url || att.file_url || "").trim();
+  if (url && url.startsWith("/uploads/support/")) {
+    const rel = url.replace(/^\/uploads\/support\//, "");
+    const abs = path.join(__dirname, "uploads", "support", rel);
+    if (fs.existsSync(abs)) return abs;
+  }
+
+  return "";
+}
+
+async function tjhpPriorAuthAttachmentTextForAppealAddress(att = {}){
+  const direct = [
+    att.appeal_submission_address,
+    att.appeal_address,
+    att.submission_address,
+    att.appeal_instructions,
+    att.extracted_text,
+    att.text_excerpt,
+    att.text,
+    att.summary,
+    att.notes
+  ].map(x => String(x || "").trim()).filter(Boolean).join("\n");
+
+  if (direct && direct.length > 60) return direct;
+
+  const storedPath = tjhpPriorAuthAttachmentStoredPath(att);
+  if (!storedPath) return direct;
+
+  const fileName = String(att.file_name || att.filename || att.originalName || path.basename(storedPath)).trim();
+  const fileType = String(att.file_type || att.mimeType || "").trim();
+
+  try {
+    const text = await tjhpExtractTextFromUploadedFileForParsing({
+      filename: fileName,
+      originalName: fileName,
+      file_name: fileName,
+      mimeType: fileType,
+      file_type: fileType,
+      absPath: storedPath,
+      path: storedPath
+    });
+
+    const normalized = tjhpNormalizeExtractedUploadText(text).slice(0, 40000);
+    return [direct, normalized].filter(Boolean).join("\n");
+  } catch (err) {
+    return direct;
+  }
+}
+
+async function tjhpPriorAuthHydrateAppealSubmissionAddressFromEvidence(org = {}, row = {}){
+  const already = tjhpPriorAuthFirstValue(
+    row.appeal_address,
+    row.appeal_submission_address,
+    row.payer_appeal_address,
+    row.payer_submission_address,
+    row.denial_letter_appeal_address
+  );
+
+  if (already) return row;
+
+  let evidenceState = {};
+  try {
+    evidenceState = tjhpPriorAuthWorkspaceEvidenceState(row, "denial_or_partial_approval_letter") || {};
+  } catch (err) {
+    evidenceState = {};
+  }
+
+  const attachments = Array.isArray(evidenceState.attachments) ? evidenceState.attachments : [];
+  const chunks = [tjhpPriorAuthDenialSubmissionContextText(org, row)];
+
+  for (const att of attachments.slice(0, 4)) {
+    const text = await tjhpPriorAuthAttachmentTextForAppealAddress(att);
+    if (text) chunks.push(text);
+
+    const extracted = tjhpPriorAuthExtractAppealSubmissionAddress(chunks.join("\n"));
+    if (extracted) {
+      return {
+        ...row,
+        appeal_submission_address: extracted,
+        payer_appeal_address: extracted,
+        denial_letter_appeal_address: extracted,
+        appeal_submission_address_source: "denial_or_partial_approval_letter"
+      };
+    }
+  }
+
+  const extracted = tjhpPriorAuthExtractAppealSubmissionAddress(chunks.join("\n"));
+
+  if (!extracted) return row;
+
+  return {
+    ...row,
+    appeal_submission_address: extracted,
+    payer_appeal_address: extracted,
+    denial_letter_appeal_address: extracted,
+    appeal_submission_address_source: "denial_or_partial_approval_letter"
+  };
 }
 
 function tjhpPriorAuthAppealSubmissionAddressBlock(org = {}, row = {}, ctx = {}){
@@ -48066,8 +48293,12 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-preview")
   const target_section = String(ps.get("target_section") || "").trim();
   const prompt = String(ps.get("prompt") || "").trim();
   const current_text = String(ps.get("current_text") || "");
-  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  let row = getPriorAuthCaseById(org.org_id, auth_case_id);
   if (!row) return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+  const persistedRow = row;
+
+
+  row = await tjhpPriorAuthHydrateAppealSubmissionAddressFromEvidence(org, row);
 
   const sectionKey = tjhpPriorAuthAiTargetFromPrompt(prompt, target_section);
   const editableKeys = new Set(tjhpPriorAuthAiEditableSectionKeys());
@@ -48093,7 +48324,7 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-preview")
   const after = draft.after;
 
   upsertPriorAuthCase(org.org_id, {
-    ...row,
+    ...persistedRow,
     workspace_ai_preview: {
       active: true,
       section_key: sectionKey,
@@ -48117,8 +48348,12 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-regenerat
   const sectionKey = String(ps.get("section_key") || "").trim();
   const afterText = String(ps.get("after") || "");
   const regeneratePrompt = String(ps.get("regenerate_prompt") || "").trim();
-  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  let row = getPriorAuthCaseById(org.org_id, auth_case_id);
   if (!row) return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+  const persistedRow = row;
+
+
+  row = await tjhpPriorAuthHydrateAppealSubmissionAddressFromEvidence(org, row);
 
   const editableKeys = new Set(tjhpPriorAuthAiEditableSectionKeys());
   const backHref = "/prior-auth/appeal-workspace?auth_case_id=" + encodeURIComponent(auth_case_id);
@@ -48143,7 +48378,7 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-regenerat
   const after = draft.after;
 
   upsertPriorAuthCase(org.org_id, {
-    ...row,
+    ...persistedRow,
     workspace_ai_preview: {
       ...currentPreview,
       active: true,
@@ -48208,11 +48443,14 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-cancel") 
 
 if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
-  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  let row = getPriorAuthCaseById(org.org_id, auth_case_id);
 
   if (!row) {
     return send(res, 404, "Prior authorization case not found");
   }
+
+
+  row = await tjhpPriorAuthHydrateAppealSubmissionAddressFromEvidence(org, row);
 
   const ctx = tjhpPriorAuthAppealWorkspaceContext(org, row);
   const evidenceItems = tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row);
@@ -48552,7 +48790,8 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
 
 if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
-  const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  // const row = getPriorAuthCaseById(org.org_id, auth_case_id);
+  let row = getPriorAuthCaseById(org.org_id, auth_case_id);
 
   if (!row) {
     return send(res, 404, renderPage("Prior Auth Appeal Workspace", `
@@ -48565,6 +48804,9 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
       </div>
     `, navUser("actions", sess.user_id), { showChat:true, orgName: org.org_name }));
   }
+
+
+  row = await tjhpPriorAuthHydrateAppealSubmissionAddressFromEvidence(org, row);
 
   const ctx = tjhpPriorAuthAppealWorkspaceContext(org, row);
   const layout = tjhpPriorAuthAppealWorkspaceLayoutModel(org, row);
@@ -49084,7 +49326,7 @@ if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
+    <!-- PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_DENIAL_LETTER_APPEAL_ADDRESS_EXTRACTION_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
     <style>
       .prior-auth-shell-backdrop{display:none;position:fixed;inset:0;background:rgba(15,23,42,.46);z-index:2998;}
       .prior-auth-shell-panel{display:none;position:fixed;top:0;right:0;width:min(520px,96vw);height:100vh;overflow:auto;background:#fff;border-left:1px solid #e5e7eb;box-shadow:-20px 0 45px rgba(15,23,42,.18);z-index:2999;padding:18px;box-sizing:border-box;}
@@ -55604,6 +55846,30 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
         allowExcelStructured: true
       });
 
+      let priorAuthUploadExtractedText = String(
+        parsedFile.extracted_text ||
+        parsedFile.text ||
+        parsedFile.text_excerpt ||
+        ""
+      ).trim();
+
+      if (!priorAuthUploadExtractedText && parsedFile && ["PDF","WORD","TXT","CSV"].includes(String(parsedFile.kind || ""))) {
+        try {
+          priorAuthUploadExtractedText = tjhpNormalizeExtractedUploadText(
+            await tjhpExtractTextFromUploadedFileForParsing(file)
+          );
+        } catch (err) {
+          priorAuthUploadExtractedText = "";
+        }
+      }
+
+      priorAuthUploadExtractedText = String(priorAuthUploadExtractedText || "").slice(0, 40000);
+      const priorAuthUploadAppealSubmissionAddress = tjhpPriorAuthExtractAppealSubmissionAddress(priorAuthUploadExtractedText);
+
+      file.extracted_text = priorAuthUploadExtractedText;
+      file.text_excerpt = priorAuthUploadExtractedText.slice(0, 2000);
+      file.appeal_submission_address = priorAuthUploadAppealSubmissionAddress;
+
       const isStructuredPriorAuthUpload =
         parsedFile &&
         parsedFile.ok &&
@@ -55703,6 +55969,9 @@ if (method === "POST" && pathname === "/data-management/prior-auth/upload") {
         parsed_case_count: parsedCaseCount,
         needs_review: needsReview,
         created_by: sess.user_id || "",
+        text_excerpt: priorAuthUploadExtractedText.slice(0, 2000),
+        extracted_text: priorAuthUploadExtractedText,
+        appeal_submission_address: priorAuthUploadAppealSubmissionAddress,
         notes
       });
     }
@@ -67952,6 +68221,70 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS === "true" &&
     } catch (err) {
       try { savePriorAuthCasesForOrg(org_id, []); } catch (_) {}
       process.stderr.write("PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
+if (process.env.TJHP_PRIOR_AUTH_DENIAL_APPEAL_ADDRESS_EXTRACTION_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (async function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      ["PRIOR_AUTH_DENIAL_LETTER_APPEAL_ADDRESS_EXTRACTION_OK","tjhpPriorAuthExtractAppealSubmissionAddress","tjhpPriorAuthAttachmentTextForAppealAddress","tjhpPriorAuthHydrateAppealSubmissionAddressFromEvidence","tjhpPriorAuthAttachmentStoredPath","appeal_submission_address_source","file.extracted_text = priorAuthUploadExtractedText","appeal_submission_address: priorAuthUploadAppealSubmissionAddress","row = await tjhpPriorAuthHydrateAppealSubmissionAddressFromEvidence(org, row);"].forEach(x => assert(src.includes(x), "missing denial appeal address marker: " + x));
+
+      const denialText = `
+BlueCross BlueShield of Texas
+HealthSelect
+December 20, 2024
+
+Carlos Postal
+301 University Blvd
+Galveston, TX 77555-5302
+
+Important information about Your Appeal Rights if Your Claim was Denied
+
+What if I don't agree with this decision?
+You have the right to appeal any decision not to provide or pay for an item or service.
+
+How do I file an appeal?
+A review of this benefit determination may be requested by submitting your appeal to us in writing at the following address:
+
+Blue Cross and Blue Shield of Texas
+PO Box 660044
+Dallas, Texas 75266-0044
+Fax: 800-555-1212
+
+Include the following information:
+Name of person filing the appeal.
+`;
+
+      const extracted = tjhpPriorAuthExtractAppealSubmissionAddress(denialText);
+      ["Blue Cross and Blue Shield of Texas","PO Box 660044","Dallas, Texas 75266-0044","Fax: 800-555-1212"].forEach(x => assert(extracted.includes(x), "extracted appeal address missing: " + x));
+      ["Carlos Postal","301 University Blvd","Galveston, TX 77555-5302"].forEach(x => assert(!extracted.includes(x), "extracted appeal address included patient/provider address: " + x));
+
+      const sampleOrg = { org_id:"pa_address_org", org_name:"Test Practice" };
+      const sampleRow = normalizePriorAuthCase({ auth_case_id:"pa_address_smoke", patient_name:"Test Patient", payer:"BlueCross BlueShield of Texas", requested_service:"Test Service", auth_number:"AUTH123", status:"Denied", workspace_evidence:{ denial_or_partial_approval_letter:{ attachments:[{ file_name:"denial.pdf", extracted_text: denialText }] } } });
+      const hydrated = await tjhpPriorAuthHydrateAppealSubmissionAddressFromEvidence(sampleOrg, sampleRow);
+      const cover = tjhpPriorAuthCoverLetterDefaultText(sampleOrg, hydrated, {});
+      ["Blue Cross and Blue Shield of Texas","PO Box 660044","Dallas, Texas 75266-0044"].forEach(x => assert(cover.includes(x), "cover letter missing hydrated appeal address: " + x));
+      ["[Payer Address]","Carlos Postal","301 University Blvd"].forEach(x => assert(!cover.includes(x), "cover letter included forbidden patient/fallback address: " + x));
+
+      ['if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")','if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/pages")','if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upload")','if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/exclude")','if (method === "POST" && pathname === "/prior-auth/appeal-workspace/save-section")','if (method === "POST" && pathname === "/data-management/prior-auth/upload")','if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))','if (method === "POST" && pathname === "/ai-workspace/save-preview")','if (method === "GET" && pathname === "/ai-workspace/export")',"/ai-workspace/regenerate-diff","/ai-workspace/apply-diff","/ai-workspace/cancel-diff","function renderInlineAIAssist","function workspaceAiInteractiveTrackChangesHtml"].forEach(x => assert(src.includes(x), "protected route/helper missing: " + x));
+
+      const helperStart = src.indexOf("function tjhpPriorAuthNormalizeAppealAddressLine");
+      const helperEnd = src.indexOf("function tjhpPriorAuthCoverLetterPacketContentsLines", helperStart);
+      assert(helperStart >= 0 && helperEnd > helperStart, "prior-auth cover-letter/address helper bounds missing");
+      const helperSrc = src.slice(helperStart, helperEnd);
+      const routeStarts = ['if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")','if (method === "GET" && pathname === "/prior-auth/appeal-workspace")','if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-preview")','if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-regenerate")'];
+      const routeSrc = routeStarts.map(startMarker => { const start = src.indexOf(startMarker); if (start < 0) return ""; const end = src.indexOf("\nif (method ===", start + 1); return src.slice(start, end > start ? end : start + 6000); }).join("\n");
+      ["new OpenAI(","ensureAgentWorkspace(","saveAgentWorkspace(","FILES.billed","FILES.payments","FILES.payer_contracts","FILES.document_ingests","FILES.agent_workspaces"].forEach(x => { assert(!helperSrc.includes(x), "prior-auth address helpers include forbidden marker: " + x); assert(!routeSrc.includes(x), "prior-auth hydrated routes include forbidden marker: " + x); });
+
+      process.stdout.write("PRIOR_AUTH_DENIAL_APPEAL_ADDRESS_EXTRACTION_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_DENIAL_APPEAL_ADDRESS_EXTRACTION_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
       process.exit(1);
     }
   })();
