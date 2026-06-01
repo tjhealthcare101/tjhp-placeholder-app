@@ -589,6 +589,29 @@ function normalizePriorAuthCase(input = {}, defaults = {}){
         ? row.workspace_ai_preview
         : {},
 
+    prior_auth_submission:
+      row.prior_auth_submission &&
+      typeof row.prior_auth_submission === "object" &&
+      !Array.isArray(row.prior_auth_submission)
+        ? row.prior_auth_submission
+        : {},
+
+    prior_auth_submissions:
+      Array.isArray(row.prior_auth_submissions)
+        ? row.prior_auth_submissions.filter(x => x && typeof x === "object")
+        : [],
+
+    appeal_submission_status: String(row.appeal_submission_status || "").trim(),
+    appeal_submission_method: String(row.appeal_submission_method || "").trim(),
+    appeal_submitted_at: String(row.appeal_submitted_at || "").trim(),
+    appeal_submitted_by: String(row.appeal_submitted_by || "").trim(),
+    appeal_follow_up_date: String(row.appeal_follow_up_date || "").trim(),
+    appeal_submission_note: String(row.appeal_submission_note || "").trim(),
+    appeal_submission_round: Number(row.appeal_submission_round || 0) || 0,
+    appeal_submission_override_reason: String(row.appeal_submission_override_reason || "").trim(),
+    appeal_submission_confirmed_missing_source_docs: row.appeal_submission_confirmed_missing_source_docs === true,
+    manual_payer_submission_logged: row.manual_payer_submission_logged === true,
+
     created_at: String(row.created_at || defaults.created_at || now).trim(),
     updated_at: String(row.updated_at || now).trim(),
     created_by: String(row.created_by || defaults.created_by || "").trim(),
@@ -1075,7 +1098,10 @@ function tjhpPriorAuthNextActionLabel(row = {}){
   if (status === "Peer-to-Peer Needed") return "Schedule peer-to-peer";
   if (status === "Denied") return "Review for prior auth appeal";
   if (status === "Appeal Needed") return "Prepare prior auth appeal";
-  if (status === "Appeal Submitted") return "Follow up on prior auth appeal";
+  if (status === "Appeal Submitted") {
+    const followUp = String(row.appeal_follow_up_date || "").trim();
+    return followUp ? `Follow up with payer by ${followUp}` : "Await payer response / set follow-up date";
+  }
   if (status === "Partially Approved") return "Review approval limits";
   if (status === "Expiring Soon") return "Renew or confirm service timing";
   if (status === "Expired") return "Re-submit or renew authorization";
@@ -1086,6 +1112,250 @@ function tjhpPriorAuthNextActionLabel(row = {}){
   if (status === "Not Pursued") return "No further action";
 
   return "Review prior authorization";
+}
+
+function tjhpPriorAuthLatestSubmission(row = {}){
+  const submissions = Array.isArray(row.prior_auth_submissions)
+    ? row.prior_auth_submissions
+    : [];
+
+  const latestFromHistory = submissions
+    .filter(s => s && typeof s === "object" && String(s.status || "") === "submitted")
+    .sort((a, b) => new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0))[0];
+
+  if (latestFromHistory) return latestFromHistory;
+
+  if (
+    row.prior_auth_submission &&
+    typeof row.prior_auth_submission === "object" &&
+    String(row.prior_auth_submission.status || "") === "submitted"
+  ) {
+    return row.prior_auth_submission;
+  }
+
+  if (String(row.appeal_submission_status || "") === "submitted" || String(row.status || "") === "Appeal Submitted") {
+    return {
+      status: "submitted",
+      method: row.appeal_submission_method || "",
+      submitted_at: row.appeal_submitted_at || "",
+      submitted_by: row.appeal_submitted_by || "",
+      follow_up_date: row.appeal_follow_up_date || "",
+      note: row.appeal_submission_note || "",
+      round: row.appeal_submission_round || 1,
+      manual_submission: true
+    };
+  }
+
+  return null;
+}
+
+function tjhpPriorAuthNextSubmissionRound(row = {}){
+  const submissions = Array.isArray(row.prior_auth_submissions) ? row.prior_auth_submissions : [];
+  const maxRound = submissions.reduce((max, s) => Math.max(max, Number(s && s.round || 0) || 0), 0);
+  const existingRound = Number(row.appeal_submission_round || 0) || 0;
+  return Math.max(1, maxRound || existingRound || 1);
+}
+
+function tjhpPriorAuthDefaultFollowUpDate(days = 14){
+  return addDaysISO(nowISO(), Number(days || 14)).slice(0, 10);
+}
+
+function tjhpPriorAuthSubmissionMethod(value = ""){
+  const raw = String(value || "").trim();
+  const allowed = ["Portal", "Fax", "Mail", "Phone", "Payer website", "Other"];
+  return allowed.find(x => x.toLowerCase() === raw.toLowerCase()) || "Portal";
+}
+
+function tjhpPriorAuthSubmissionReadiness(org = {}, row = {}){
+  const layout = tjhpPriorAuthAppealWorkspaceLayoutModel(org, row);
+  const metrics = layout.command_center_metrics || {};
+  const editableKeys = tjhpPriorAuthPayerFacingEditableSectionKeys();
+  const renderedSections = tjhpPriorAuthWorkspacePacketSectionsForRender(org, row);
+  const sectionsByKey = new Map(
+    (Array.isArray(renderedSections) ? renderedSections : [])
+      .map(section => [String(section && section.key || "").trim(), section])
+  );
+
+  const completedDraftSections = editableKeys.filter(key => {
+    const section = sectionsByKey.get(key);
+    return String(section && section.body || "").trim().length >= 20;
+  });
+
+  const evidenceItems = tjhpPriorAuthWorkspaceEvidenceItemsForRender(org, row);
+  const payerFacingEvidence = tjhpPriorAuthPayerFacingEvidenceKeySet();
+
+  const requiredEvidence = (Array.isArray(evidenceItems) ? evidenceItems : [])
+    .filter(item =>
+      item &&
+      item.required === true &&
+      payerFacingEvidence.has(String(item.key || "").trim()) &&
+      item.excluded !== true
+    );
+
+  const attachedRequiredEvidence = requiredEvidence.filter(item =>
+    tjhpPriorAuthEvidenceIncludedInPacketContents(org, row, item.key)
+  );
+
+  const missingRequiredEvidence = requiredEvidence
+    .filter(item => !tjhpPriorAuthEvidenceIncludedInPacketContents(org, row, item.key))
+    .map(item => String(item.label || item.title || item.key || "").trim())
+    .filter(Boolean);
+
+  const pct = (num, den) => den > 0 ? Math.max(0, Math.min(100, Math.round((num / den) * 100))) : 100;
+
+  const draftPct = pct(completedDraftSections.length, editableKeys.length);
+  const sourcePct = pct(attachedRequiredEvidence.length, requiredEvidence.length);
+
+  return {
+    source_proof_readiness_pct: sourcePct,
+    draft_readiness_pct: draftPct,
+    packet_readiness_pct: Math.round((sourcePct * 0.55) + (draftPct * 0.45)),
+    required_source_proof_count: requiredEvidence.length,
+    source_proof_attached_count: attachedRequiredEvidence.length,
+    source_proof_needed_count: missingRequiredEvidence.length,
+    missing_source_proof_labels: missingRequiredEvidence,
+    preview_section_count: editableKeys.length + requiredEvidence.length,
+    completed_preview_section_count: completedDraftSections.length + attachedRequiredEvidence.length,
+    metrics
+  };
+}
+
+function tjhpPriorAuthSubmissionWorkflowHtml(org = {}, row = {}, ctx = {}, opts = {}){
+  const readiness = tjhpPriorAuthSubmissionReadiness(org, row);
+  const latest = tjhpPriorAuthLatestSubmission(row);
+  const isSubmitted = latest && String(latest.status || "") === "submitted";
+  const round = tjhpPriorAuthNextSubmissionRound(row);
+  const sourceProofIncomplete = Number(readiness.source_proof_needed_count || 0) > 0;
+  const missingLabels = readiness.missing_source_proof_labels || [];
+  const followUpDefaultDays = 14;
+  const blocked = String(opts.blocked || "").trim();
+
+  const statusChip = isSubmitted
+    ? `<span class="ws-chip ok">Submitted</span>`
+    : sourceProofIncomplete
+      ? `<span class="ws-chip warn">Source proof needed</span>`
+      : `<span class="ws-chip ok">Ready to submit</span>`;
+
+  const submittedSummary = isSubmitted ? `
+    <div class="ws-callout ok" style="margin-top:10px;">
+      <strong>Prior auth appeal manually submitted.</strong><br/>
+      Submitted via: ${safeStr(latest.method || row.appeal_submission_method || "N/A")}<br/>
+      Submitted: ${safeStr(latest.submitted_at || row.appeal_submitted_at || "-")}<br/>
+      Follow-up date: ${safeStr(latest.follow_up_date || row.appeal_follow_up_date || "-")}<br/>
+      Round: ${safeStr(latest.round || row.appeal_submission_round || round)}
+      ${latest.note ? `<br/>Note: ${safeStr(latest.note)}` : ""}
+    </div>
+  ` : "";
+
+  return `
+    <div id="prior-auth-submission-workflow" class="ws-panel" data-prior-auth-submission-card>
+      <h3>Prior Auth Submission Workflow</h3>
+      <p class="muted small">
+        Use this panel to log manual submission of the prior authorization appeal packet. This does not automatically send anything to a payer.
+      </p>
+
+      ${blocked === "confirm_missing_source_docs_required" ? `<div class="ws-callout warn" style="margin-bottom:10px;" data-prior-auth-submit-error>Confirm that you want to proceed with missing or system-found source proof before marking this packet submitted.</div>` : `<div class="ws-callout warn" style="display:none;margin-bottom:10px;" data-prior-auth-submit-error></div>`}
+
+      <div class="ws-score">
+        <div class="ws-score-num">${formatNumberUI(readiness.source_proof_readiness_pct || 0)}%</div>
+        <div class="ws-score-sub">
+          Source proof readiness ${formatNumberUI(readiness.source_proof_readiness_pct || 0)}% · Draft readiness ${formatNumberUI(readiness.draft_readiness_pct || 0)}% · ${formatNumberUI(readiness.completed_preview_section_count || 0)} of ${formatNumberUI(readiness.preview_section_count || 0)} packet elements completed
+        </div>
+      </div>
+
+      <div class="ws-chip-row">
+        ${statusChip}
+        <span class="ws-chip">Round ${formatNumberUI(round)}</span>
+        ${isSubmitted ? `<span class="ws-chip ok">Pending payer response</span>` : `<span class="ws-chip warn">Manual submission log</span>`}
+      </div>
+
+      ${sourceProofIncomplete ? `
+        <div class="ws-callout warn" style="margin-top:10px;">
+          <strong>Source proof needed:</strong> ${safeStr(missingLabels.join(", ") || "Required source proof is still missing.")}
+        </div>
+      ` : `
+        <div class="ws-callout ok" style="margin-top:10px;">
+          Required source proof items included or attached for the payer-facing packet.
+        </div>
+      `}
+
+      ${submittedSummary}
+
+      <form method="POST" action="/prior-auth/appeal-workspace/submit" class="ws-submit-form" data-prior-auth-submit-form data-source-proof-incomplete="${sourceProofIncomplete ? "1" : "0"}" style="margin-top:12px;">
+        <input type="hidden" name="auth_case_id" value="${safeStr(ctx.auth_case_id || row.auth_case_id || "")}" />
+
+        <div class="ws-submit-grid">
+          <div class="ws-submit-field">
+            <label class="small">Method</label>
+            <select name="method">
+              <option>Portal</option>
+              <option>Fax</option>
+              <option>Mail</option>
+              <option>Phone</option>
+              <option>Payer website</option>
+              <option>Other</option>
+            </select>
+          </div>
+
+          <div class="ws-submit-field">
+            <label class="small">Follow-up Date</label>
+            <input type="date" name="follow_up_date" value="${safeStr(row.appeal_follow_up_date || "")}" />
+            <div class="small muted" style="margin-top:4px;">If left blank, the system will set a default follow-up date ${formatNumberUI(followUpDefaultDays)} days after submission.</div>
+          </div>
+
+          <div class="ws-submit-field" style="grid-column:1 / -1;">
+            <label class="small">Submission note</label>
+            <textarea name="submission_note" placeholder="Optional. Example: Submitted through payer site with cover letter, denial letter, LMN, clinical documentation, and source proof attached." style="min-height:84px;">${safeStr(row.appeal_submission_note || "")}</textarea>
+          </div>
+
+          <div class="ws-submit-field" style="grid-column:1 / -1;">
+            <label class="small">Optional reason for submitting with missing source proof</label>
+            <textarea name="override_reason" placeholder="Optional. Add context if staff is proceeding with system-found evidence or missing source proof." style="min-height:74px;">${safeStr(row.appeal_submission_override_reason || "")}</textarea>
+          </div>
+        </div>
+
+        <label class="small ws-submit-confirm">
+          <input type="checkbox" name="confirm_missing_source_docs" value="1" ${row.appeal_submission_confirmed_missing_source_docs ? "checked" : ""}/>
+          Proceed with system-found evidence or missing source proof
+        </label>
+
+        <button class="btn" type="submit" style="margin-top:8px;">
+          Mark Submitted · Round ${formatNumberUI(round)}
+        </button>
+        <span class="muted small" style="margin-left:8px;">Manual tracking only. No automated payer submission occurs.</span>
+      </form>
+
+      <script>
+(function(){
+  if (window.__tjhpPriorAuthSubmitGuardBound) return;
+  window.__tjhpPriorAuthSubmitGuardBound = true;
+
+  function showPriorAuthSubmitError(form, message, focusEl){
+    var card = form && form.closest ? form.closest("[data-prior-auth-submission-card]") : null;
+    var box = form ? form.querySelector("[data-prior-auth-submit-error]") : null;
+    if (box) { box.textContent = message; box.style.display = "block"; }
+    try { (card || form).scrollIntoView({ behavior: "smooth", block: "center" }); } catch(e) {}
+    if (focusEl && typeof focusEl.focus === "function") setTimeout(function(){ focusEl.focus(); }, 180);
+  }
+
+  document.addEventListener("submit", function(e){
+    var form = e.target;
+    if (!form || !form.matches || !form.matches("[data-prior-auth-submit-form]")) return;
+
+    var incomplete = String(form.getAttribute("data-source-proof-incomplete") || "") === "1";
+    if (!incomplete) return;
+
+    var checkbox = form.querySelector("[name='confirm_missing_source_docs']");
+    if (!checkbox || !checkbox.checked) {
+      e.preventDefault();
+      showPriorAuthSubmitError(form, "Confirm that you want to proceed with system-found evidence or missing source proof before marking this packet submitted.", checkbox);
+      return false;
+    }
+  }, true);
+})();
+</script>
+    </div>
+  `;
 }
 
 function tjhpPriorAuthActionCenterRows(org_id){
@@ -48881,6 +49151,86 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-cancel") 
   return redirect(res, backHref + "&pa_status=ai_cancelled&ai_section=" + encodeURIComponent(sectionKey) + "#pa-ai-" + encodeURIComponent(sectionKey));
 }
 
+
+if (method === "POST" && pathname === "/prior-auth/appeal-workspace/submit") {
+  const body = await parseBody(req);
+  const ps = new URLSearchParams(body);
+
+  const auth_case_id = String(ps.get("auth_case_id") || "").trim();
+  const methodValue = tjhpPriorAuthSubmissionMethod(ps.get("method") || "");
+  const followUpInput = String(ps.get("follow_up_date") || "").trim();
+  const submissionNote = String(ps.get("submission_note") || "").trim();
+  const overrideReason = String(ps.get("override_reason") || "").trim();
+  const confirmedMissing = String(ps.get("confirm_missing_source_docs") || "").trim() === "1";
+
+  let row = getPriorAuthCaseById(org.org_id, auth_case_id);
+
+  if (!row) {
+    return redirect(res, "/actions?tab=prior-auth&pa_status=case_not_found");
+  }
+
+  row = await tjhpPriorAuthHydrateAppealSubmissionAddressFromEvidence(org, row);
+
+  const backHref = "/prior-auth/appeal-workspace?auth_case_id=" + encodeURIComponent(auth_case_id);
+  const submissionAnchor = "#prior-auth-submission-workflow";
+  const readiness = tjhpPriorAuthSubmissionReadiness(org, row);
+  const sourceProofIncomplete = Number(readiness.source_proof_needed_count || 0) > 0;
+
+  if (sourceProofIncomplete && !confirmedMissing) {
+    return redirect(res, backHref + "&pa_status=submit_confirm_required" + submissionAnchor);
+  }
+
+  const submittedAt = nowISO();
+  const followUpDate = followUpInput || tjhpPriorAuthDefaultFollowUpDate(14);
+  const round = tjhpPriorAuthNextSubmissionRound(row);
+  const existingHistory = Array.isArray(row.prior_auth_submissions) ? row.prior_auth_submissions : [];
+
+  const submissionRecord = {
+    status: "submitted",
+    channel: "prior_auth",
+    label: `Prior Auth Appeal Round ${round}`,
+    round,
+    method: methodValue,
+    submitted_at: submittedAt,
+    submitted_by: sess.user_id || "",
+    follow_up_date: followUpDate,
+    note: submissionNote,
+    override_reason: overrideReason,
+    confirmed_missing_source_docs: confirmedMissing,
+    source_proof_incomplete: sourceProofIncomplete,
+    source_proof_readiness_pct: readiness.source_proof_readiness_pct,
+    draft_readiness_pct: readiness.draft_readiness_pct,
+    packet_readiness_pct: readiness.packet_readiness_pct,
+    missing_source_proof_labels: readiness.missing_source_proof_labels,
+    manual_submission: true,
+    no_automated_payer_submission: true
+  };
+
+  const existingNotes = String(row.notes || "").trim();
+  const submissionNoteLine = `Prior auth appeal manually submitted via ${methodValue} on ${submittedAt}. Follow-up date: ${followUpDate}.`;
+  const nextNotes = [existingNotes, submissionNoteLine, submissionNote].filter(Boolean).join("\n");
+
+  upsertPriorAuthCase(org.org_id, {
+    ...row,
+    status: "Appeal Submitted",
+    appeal_submission_status: "submitted",
+    appeal_submission_method: methodValue,
+    appeal_submitted_at: submittedAt,
+    appeal_submitted_by: sess.user_id || "",
+    appeal_follow_up_date: followUpDate,
+    appeal_submission_note: submissionNote,
+    appeal_submission_round: round,
+    appeal_submission_override_reason: overrideReason,
+    appeal_submission_confirmed_missing_source_docs: confirmedMissing,
+    manual_payer_submission_logged: true,
+    prior_auth_submission: submissionRecord,
+    prior_auth_submissions: [...existingHistory, submissionRecord],
+    notes: nextNotes
+  }, sess.user_id || "");
+
+  return redirect(res, backHref + "&pa_status=prior_auth_appeal_submitted" + submissionAnchor);
+}
+
 if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export") {
   const auth_case_id = String(parsed.query.auth_case_id || "").trim();
   let row = getPriorAuthCaseById(org.org_id, auth_case_id);
@@ -49858,7 +50208,7 @@ Fax: (325) 794-2926" style="width:100%;box-sizing:border-box;border:1px solid #b
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_MANUAL_APPEAL_ADDRESS_AND_ENCLOSURES_OK PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_DENIAL_LETTER_APPEAL_ADDRESS_EXTRACTION_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_FINAL_PACKET_CLEANUP_OK PRIOR_AUTH_DENIAL_ADDRESS_COMPACT_EXTRACTION_AND_DIAGNOSTIC_CLEANUP_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
+    <!-- PRIOR_AUTH_MANUAL_APPEAL_ADDRESS_AND_ENCLOSURES_OK PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_DENIAL_LETTER_APPEAL_ADDRESS_EXTRACTION_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_FINAL_PACKET_CLEANUP_OK PRIOR_AUTH_MANUAL_SUBMISSION_WORKFLOW_OK PRIOR_AUTH_DENIAL_ADDRESS_COMPACT_EXTRACTION_AND_DIAGNOSTIC_CLEANUP_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
     <style>
       .prior-auth-shell-backdrop{display:none;position:fixed;inset:0;background:rgba(15,23,42,.46);z-index:2998;}
       .prior-auth-shell-panel{display:none;position:fixed;top:0;right:0;width:min(520px,96vw);height:100vh;overflow:auto;background:#fff;border-left:1px solid #e5e7eb;box-shadow:-20px 0 45px rgba(15,23,42,.18);z-index:2999;padding:18px;box-sizing:border-box;}
@@ -50167,6 +50517,8 @@ Fax: (325) 794-2926" style="width:100%;box-sizing:border-box;border:1px solid #b
         ${String(parsed.query.pa_status || "").trim() === "evidence_included" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Evidence item included in packet.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "evidence_pages_saved" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Evidence PDF page exclusions saved.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "evidence_invalid" ? `<div class="alert warn" style="margin:10px 0;">That evidence item is not available.</div>` : ""}
+        ${String(parsed.query.pa_status || "").trim() === "prior_auth_appeal_submitted" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization appeal marked submitted. Follow-up tracking is now active.</div>` : ""}
+        ${String(parsed.query.pa_status || "").trim() === "submit_confirm_required" ? `<div class="alert warn" style="margin:10px 0;">Confirm missing/source-proof override before marking the packet submitted.</div>` : ""}
         <div class="ws-quick-actions" style="margin-top:12px;">
           <a class="btn secondary" href="${caseHref}">Back to Prior Auth Case</a>
           <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
@@ -50179,7 +50531,7 @@ Fax: (325) 794-2926" style="width:100%;box-sizing:border-box;border:1px solid #b
         <h2 style="margin-top:0;">Prior Auth Appeal Workspace</h2>
         <h3>Prior Auth Appeal Packet Command Center</h3>
         <p class="muted small">
-          Use this workspace to review packet readiness, source proof gaps, medical-necessity support, and editable prior-auth appeal packet sections. No payer submission occurs from this shell.
+          Use this workspace to review packet readiness, source proof gaps, medical-necessity support, and editable prior-auth appeal packet sections. No automated payer submission occurs from this workspace. Use the submission workflow to log manual payer submission after staff submits the packet.
         </p>
 
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:12px;">
@@ -50301,18 +50653,12 @@ Fax: (325) 794-2926" style="width:100%;box-sizing:border-box;border:1px solid #b
 
         <div class="hr"></div>
 
-        <div class="ws-full-workflow">
-          <h3>Workspace Notes</h3>
-          <p class="muted small">
-            This read-only shell does not create an agent workspace, does not submit anything to a payer, does not update claim lifecycle, and does not mutate claims, payments, contracts, document ingestion records, or agent workspace records.
-          </p>
-          <p class="muted small">
-            This request is not a billed-claim payment appeal. It is a pre-service authorization appeal focused on medical necessity, payer criteria, and source proof.
-          </p>
-          <p class="muted small">
-            Guardrails: read_only=${safeStr(String(guardrails.read_only === true))}, no_payer_submission=${safeStr(String(guardrails.no_payer_submission === true))}, no_agent_workspace_creation=${safeStr(String(guardrails.no_agent_workspace_creation === true))}.
-          </p>
-        </div>
+        <!-- action="/prior-auth/appeal-workspace/submit" rendered by Prior Auth Submission Workflow. -->
+        ${tjhpPriorAuthSubmissionWorkflowHtml(org, row, ctx, {
+          blocked: String(parsed.query.pa_status || "").trim() === "submit_confirm_required"
+            ? "confirm_missing_source_docs_required"
+            : ""
+        })}
       </div>
     </div>
     ${priorAuthAssistantAndPreviewShellHtml}
@@ -50416,6 +50762,7 @@ if (method === "GET" && pathname === "/prior-auth/case") {
       ${String(parsed.query.pa_status || "").trim() === "link_not_ready" ? `<div class="alert warn" style="margin:10px 0;">Prior authorization must be Ready to Bill before linking to a billed claim.</div>` : ""}
       ${String(parsed.query.pa_status || "").trim() === "link_invalid" ? `<div class="alert warn" style="margin:10px 0;">Selected billed claim could not be linked. Review the candidate match and try again.</div>` : ""}
       ${String(parsed.query.pa_status || "").trim() === "link_failed" ? `<div class="alert warn" style="margin:10px 0;">Prior authorization claim link failed. Please try again.</div>` : ""}
+      ${String(parsed.query.pa_status || "").trim() === "prior_auth_appeal_submitted" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization appeal marked submitted. Follow-up tracking is now active.</div>` : ""}
       <div class="btnRow">
         <a class="btn secondary" href="/actions?tab=prior-auth">Back to Prior Auth Queue</a>
         <a class="btn secondary" href="/data-management?tab=prior-auth">Open Data Management</a>
@@ -50434,6 +50781,10 @@ if (method === "GET" && pathname === "/prior-auth/case") {
         <div><strong>Submitted</strong><br/>${safeStr(row.submitted_date || "-")}</div>
         <div><strong>Determination</strong><br/>${safeStr(row.determination_date || "-")}</div>
         <div><strong>Expiration</strong><br/>${safeStr(row.expiration_date || "-")}</div>
+        <div><strong>Appeal Submitted</strong><br/>${safeStr(row.appeal_submitted_at || "-")}</div>
+        <div><strong>Appeal Method</strong><br/>${safeStr(row.appeal_submission_method || "-")}</div>
+        <div><strong>Appeal Follow-up</strong><br/>${safeStr(row.appeal_follow_up_date || "-")}</div>
+        <div><strong>Appeal Submission Status</strong><br/>${safeStr(row.appeal_submission_status || "-")}</div>
         <div><strong>Est. Revenue At Risk</strong><br/>${priorAuthRevenueAtRiskDisplay(row.estimated_revenue_at_risk)}</div>
       </div>
       <div class="hr"></div>
@@ -50952,22 +51303,37 @@ if (method === "GET" && pathname === "/actions") {
 
   if (tab === "prior-auth") {
     const priorAuthActionRows = tjhpPriorAuthActionCenterRows(org.org_id);
-    const priorAuthRowsHtml = priorAuthActionRows.map(x => `
+    const priorAuthRowsHtml = priorAuthActionRows.map(x => {
+      const latestSubmission = tjhpPriorAuthLatestSubmission(x);
+      const submittedDisplay = latestSubmission
+        ? (latestSubmission.submitted_at || x.appeal_submitted_at || "-")
+        : (x.submitted_date || "-");
+      const followUpDisplay = latestSubmission
+        ? (latestSubmission.follow_up_date || x.appeal_follow_up_date || "-")
+        : (x.appeal_follow_up_date || x.expiration_date || "-");
+      const expirationSubtext = latestSubmission && x.expiration_date && followUpDisplay !== x.expiration_date
+        ? `<div class="muted small">Expiration: ${safeStr(x.expiration_date)}</div>`
+        : "";
+      const statusCell = latestSubmission
+        ? `${safeStr(x.status || "-")}<div class="muted small">Manual submission logged · ${safeStr(latestSubmission.method || x.appeal_submission_method || "-")}</div>`
+        : safeStr(x.status || "-");
+      return `
       <tr>
         <td>${safeStr(x.patient_name || x.patient_id || "-")}</td>
         <td>${safeStr(x.payer || "-")}</td>
         <td>${safeStr(x.cpt_hcpcs || "-")}</td>
         <td>${safeStr(x.icd10 || "-")}</td>
         <td>${safeStr(x.requested_service || "-")}</td>
-        <td>${safeStr(x.status || "-")}</td>
+        <td>${statusCell}</td>
         <td>${safeStr(Array.isArray(x.missing_documentation) && x.missing_documentation.length ? x.missing_documentation.join(", ") : "-")}</td>
-        <td>${safeStr(x.submitted_date || "-")}</td>
-        <td>${safeStr(x.expiration_date || "-")}</td>
+        <td>${safeStr(submittedDisplay)}</td>
+        <td>${safeStr(followUpDisplay)}${expirationSubtext}</td>
         <td>${priorAuthRevenueAtRiskDisplay(x.estimated_revenue_at_risk)}</td>
         <td>${safeStr(tjhpPriorAuthNextActionLabel(x))}</td>
         <td><a class="btn secondary small" href="/prior-auth/case?auth_case_id=${encodeURIComponent(x.auth_case_id || "")}">View</a></td>
       </tr>
-    `).join("") || `<tr><td colspan="12" class="muted">No prior authorization cases need action.</td></tr>`;
+    `;
+    }).join("") || `<tr><td colspan="12" class="muted">No prior authorization cases need action.</td></tr>`;
 
     const html = renderPage("Action Center", `
       <h2>Action Center <span class="tooltip" data-tip="This page prevents revenue leakage by surfacing what needs action. Use tabs to work denials, underpayments, follow-up, and prior authorizations by priority.">ⓘ</span></h2>
@@ -50978,7 +51344,7 @@ if (method === "GET" && pathname === "/actions") {
 
       <div class="insight-card" style="margin-top:10px;">
         <h3 style="margin:0 0 6px;">Prior Auths</h3>
-        <div class="muted small">Read-only queue of prior authorization cases that need staff attention. Status updates and workspaces will be added in a later phase.</div>
+        <div class="muted small">Read-only queue of prior authorization cases that need staff attention. Manual appeal submission status and follow-up dates are tracked here.</div>
       </div>
 
       <div style="overflow:auto;margin-top:12px;">
@@ -50993,7 +51359,7 @@ if (method === "GET" && pathname === "/actions") {
               <th>Status</th>
               <th>Missing Docs</th>
               <th>Submitted</th>
-              <th>Expiration</th>
+              <th>Follow-up / Expiration</th>
               <th>Est. Revenue At Risk</th>
               <th>Next Action</th>
               <th>Details</th>
@@ -68638,7 +69004,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS === "true" &&
         "Eligible for Appeal Workspace",
         "Case Summary",
         "Appeal Context",
-        "Workspace Notes",
+        "tjhpPriorAuthSubmissionWorkflowHtml",
         "Back to Prior Auth Case",
         "Back to Prior Auth Queue",
         "Prior authorization case not found.",
@@ -68655,7 +69021,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS === "true" &&
       const forbiddenPostAppealWorkspaceRoute = 'if (method === "POST" && pathname === "/prior-auth/' + 'appeal-workspace") {';
       assert(
         !src.includes(forbiddenPostAppealWorkspaceRoute),
-        "POST /prior-auth/appeal-workspace must not exist"
+        "exact POST /prior-auth/appeal-workspace must not exist"
       );
 
       const routeStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {');
@@ -68677,12 +69043,11 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS === "true" &&
         "Eligible for Appeal Workspace",
         "Case Summary",
         "Appeal Context",
-        "Workspace Notes",
+        "tjhpPriorAuthSubmissionWorkflowHtml",
         "Back to Prior Auth Case",
         "Back to Prior Auth Queue",
         "priorAuthRevenueAtRiskDisplay(ctx.estimated_revenue_at_risk)",
-        "No payer submission occurs from this shell.",
-        "This read-only shell does not create an agent workspace"
+        "No automated payer submission occurs"
       ].forEach(x => assert(routeSrc.includes(x), "GET appeal workspace route missing required marker: " + x));
 
       [
@@ -69040,7 +69405,7 @@ if (process.env.TJHP_PRIOR_AUTH_OPEN_APPEAL_WORKSPACE_LINK_SMOKE_TESTS === "true
       const forbiddenPostAppealWorkspaceRoute = 'if (method === "POST" && pathname === "/prior-auth/' + 'appeal-workspace") {';
       assert(
         !src.includes(forbiddenPostAppealWorkspaceRoute),
-        "POST /prior-auth/appeal-workspace must not exist"
+        "exact POST /prior-auth/appeal-workspace must not exist"
       );
 
       const caseStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/case")');
@@ -69113,7 +69478,7 @@ if (process.env.TJHP_PRIOR_AUTH_OPEN_APPEAL_WORKSPACE_LINK_SMOKE_TESTS === "true
         "Next Step",
         "Back to Prior Auth Case",
         "Back to Prior Auth Queue",
-        "Workspace Notes"
+        "Prior Auth Submission Workflow"
       ].forEach(x => assert(workspaceRouteSrc.includes(x), "GET appeal workspace route missing marker: " + x));
 
       [
@@ -69251,12 +69616,12 @@ if (process.env.TJHP_PRIOR_AUTH_EVIDENCE_PACKET_SPLIT_PREVIEW_SMOKE_TESTS === "t
       ["priorAuthSystemEvidencePreviewHtml","priorAuthSystemEvidencePreviewHtml(item)","System-found prior authorization decision context","System-found authorization context","System-found evidence context","Preview evidence","Prior Auth Appeal Packet","Upload Source Proof","Exclude from packet","Include in packet","Letter of Medical Necessity","Save Section","section_text","AI Prior Authorization Assistant"].forEach(x => assert(getRoute.includes(x), "GET prior-auth workspace route missing split/preview marker: " + x));
       ['sectionKey === "appeal_narrative" ? "open" : ""',"document_ingests","FILES.billed","FILES.payments","FILES.payer_contracts","FILES.agent_workspaces","ensureAgentWorkspace(","saveAgentWorkspace(","ensureWorkspacePacket(","ensurePacketSections(","/upload-router","OpenAI"].forEach(x => assert(!getRoute.includes(x), "GET prior-auth workspace route must not include: " + x));
       const methodPostLiteral = 'method="' + 'POST"';
-      if (getRoute.includes(methodPostLiteral)) { ['action="/prior-auth/appeal-workspace/save-section"','action="/prior-auth/appeal-workspace/evidence/upload"','action="/prior-auth/appeal-workspace/evidence/exclude"','action="/prior-auth/appeal-workspace/evidence/appeal-address"'].forEach(action => assert(getRoute.includes(action), "GET prior-auth workspace missing allowed POST form: " + action)); }
+      if (getRoute.includes(methodPostLiteral)) { ['action="/prior-auth/appeal-workspace/save-section"','action="/prior-auth/appeal-workspace/evidence/upload"','action="/prior-auth/appeal-workspace/evidence/exclude"','action="/prior-auth/appeal-workspace/evidence/appeal-address"','action="/prior-auth/appeal-workspace/submit"'].forEach(action => assert(getRoute.includes(action), "GET prior-auth workspace missing allowed POST form: " + action)); }
       ['if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))','if (method === "POST" && pathname === "/ai-workspace/save-preview")',"renderWorkspacePreview","renderWorkflowPanel","renderInlineAIAssist","ensureAgentWorkspace","ensureWorkspacePacket","ensurePacketSections","saveAgentWorkspace","function renderClaimPanelBootstrap"].forEach(x => assert(src.includes(x), "existing billed workspace/panel marker missing: " + x));
       const disallowedPriorAuthPostRoute = 'if (method === "POST" && pathname === "' + '/prior-auth/appeal-workspace") {';
       const disallowedAiPriorAuthGetRoute = 'if (method === "GET" && pathname === "' + '/ai-prior-auth")';
       const disallowedAiPriorAuthPostRoute = 'if (method === "POST" && pathname === "' + '/ai-prior-auth")';
-      assert(!src.includes(disallowedPriorAuthPostRoute), "POST /prior-auth/appeal-workspace must not exist");
+      assert(!src.includes(disallowedPriorAuthPostRoute), "exact POST /prior-auth/appeal-workspace must not exist");
       assert(!src.includes(disallowedAiPriorAuthGetRoute), "GET /ai-prior-auth must not exist");
       assert(!src.includes(disallowedAiPriorAuthPostRoute), "POST /ai-prior-auth must not exist");
       assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
@@ -69643,6 +70008,113 @@ if (process.env.TJHP_PRIOR_AUTH_DENIAL_ADDRESS_COMPACT_EXTRACTION_SMOKE_TESTS ==
   })();
 }
 
+
+if (process.env.TJHP_PRIOR_AUTH_MANUAL_SUBMISSION_WORKFLOW_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  (function(){
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    try {
+      [
+        "PRIOR_AUTH_MANUAL_SUBMISSION_WORKFLOW_OK",
+        "prior_auth_submission",
+        "prior_auth_submissions",
+        "appeal_submission_status",
+        "appeal_submission_method",
+        "appeal_submitted_at",
+        "appeal_follow_up_date",
+        "manual_payer_submission_logged",
+        "tjhpPriorAuthLatestSubmission",
+        "tjhpPriorAuthNextSubmissionRound",
+        "tjhpPriorAuthSubmissionReadiness",
+        "tjhpPriorAuthSubmissionWorkflowHtml",
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/submit")',
+        "Prior Auth Submission Workflow",
+        "Manual tracking only. No automated payer submission occurs.",
+        'action="/prior-auth/appeal-workspace/submit"',
+        "pa_status=prior_auth_appeal_submitted",
+        "Appeal Submitted",
+        "Follow-up / Expiration",
+        "Manual submission logged"
+      ].forEach(marker => assert(src.includes(marker), "missing manual submission workflow marker: " + marker));
+
+      [
+        "<h3>Workspace " + "Notes</h3>",
+        "No payer submission occurs " + "from this shell",
+        'if (method === "POST" && pathname === "/prior-auth/' + 'appeal-workspace") {'
+      ].forEach(marker => assert(!src.includes(marker), "forbidden manual submission workflow marker present: " + marker));
+
+      const sampleRow = normalizePriorAuthCase({
+        auth_case_id:"pa_submit_smoke",
+        org_id:"submit_org",
+        status:"Denied",
+        prior_auth_submissions:[{
+          status:"submitted",
+          round:1,
+          method:"Portal",
+          submitted_at:"2026-06-01T10:00:00.000Z",
+          follow_up_date:"2026-06-15",
+          manual_submission:true
+        }],
+        appeal_submission_status:"submitted",
+        appeal_submission_method:"Portal",
+        appeal_submitted_at:"2026-06-01T10:00:00.000Z",
+        appeal_follow_up_date:"2026-06-15"
+      });
+
+      const latest = tjhpPriorAuthLatestSubmission(sampleRow);
+      assert(latest && latest.method === "Portal", "latest submission method mismatch");
+      assert(latest.follow_up_date === "2026-06-15", "latest submission follow-up mismatch");
+      assert(tjhpPriorAuthNextActionLabel({ ...sampleRow, status:"Appeal Submitted" }).includes("2026-06-15"), "next action should include follow-up date");
+
+      const defaultFollow = tjhpPriorAuthDefaultFollowUpDate(14);
+      assert(/^\d{4}-\d{2}-\d{2}$/.test(defaultFollow), "default follow-up date format mismatch");
+
+      [
+        'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/save-section")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upload")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/exclude")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/pages")',
+        'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/appeal-address")',
+        'if (method === "POST" && pathname === "/data-management/prior-auth/upload")',
+        'if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))',
+        'if (method === "POST" && pathname === "/ai-workspace/save-preview")',
+        'if (method === "GET" && pathname === "/ai-workspace/export")',
+        "/ai-workspace/regenerate-diff",
+        "/ai-workspace/apply-diff",
+        "/ai-workspace/cancel-diff",
+        "function renderInlineAIAssist",
+        "function workspaceAiInteractiveTrackChangesHtml"
+      ].forEach(marker => assert(src.includes(marker), "protected route/helper missing: " + marker));
+
+      const routeStart = src.indexOf('if (method === "POST" && pathname === "/prior-auth/appeal-workspace/submit")');
+      const routeEnd = src.indexOf('\nif (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")', routeStart);
+      assert(routeStart >= 0 && routeEnd > routeStart, "manual submission route boundary missing");
+      const routeSrc = src.slice(routeStart, routeEnd);
+      [
+        "new OpenAI(",
+        "fetch(",
+        "ensureAgentWorkspace(",
+        "saveAgentWorkspace(",
+        "FILES.billed",
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "FILES.document_ingests",
+        "FILES.agent_workspaces",
+        "payer portal submission",
+        "automated payer submission"
+      ].forEach(marker => assert(!routeSrc.includes(marker), "manual submission route includes forbidden marker: " + marker));
+
+      process.stdout.write("PRIOR_AUTH_MANUAL_SUBMISSION_WORKFLOW_SMOKE_TESTS_PASSED\n");
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write("PRIOR_AUTH_MANUAL_SUBMISSION_WORKFLOW_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+      process.exit(1);
+    }
+  })();
+}
+
 if (process.env.TJHP_PRIOR_AUTH_FINAL_PACKET_CLEANUP_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
@@ -69811,7 +70283,7 @@ if (process.env.TJHP_PRIOR_AUTH_ORDERED_PACKET_LAYOUT_SMOKE_TESTS === "true" && 
       const noPostPriorAuthWorkspace = "if (method === \"POST\" && pathname === \"/prior-auth/appeal-workspace\") {";
       const noGetAiPriorAuth = "if (method === \"GET\" && pathname === \"/ai-prior-auth\")";
       const noPostAiPriorAuth = "if (method === \"POST\" && pathname === \"/ai-prior-auth\")";
-      assert(!src.includes(noPostPriorAuthWorkspace), "POST /prior-auth/appeal-workspace must not exist");
+      assert(!src.includes(noPostPriorAuthWorkspace), "exact POST /prior-auth/appeal-workspace must not exist");
       assert(!src.includes(noGetAiPriorAuth), "GET /ai-prior-auth must not exist");
       assert(!src.includes(noPostAiPriorAuth), "POST /ai-prior-auth must not exist");
       assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), billedBefore, "billed claims mutated");
@@ -70010,11 +70482,10 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_COMMAND_CENTER_ROUTE_SMOKE_TEST
         "Evidence Checklist",
         "Prior Authorization Appeal Narrative",
         "Appeal Packet Preview",
-        "Workspace Notes",
+        "tjhpPriorAuthSubmissionWorkflowHtml",
         "Back to Prior Auth Case",
         "Back to Prior Auth Queue",
-        "No payer submission occurs from this shell.",
-        "This read-only shell does not create an agent workspace",
+        "No automated payer submission occurs",
         "This request is not a billed-claim payment appeal.",
         "PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS_PASSED",
         "PRIOR_AUTH_APPEAL_WORKSPACE_ROUTE_SMOKE_TESTS_PASSED",
@@ -70026,7 +70497,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_COMMAND_CENTER_ROUTE_SMOKE_TEST
 
       assert(
         !src.includes('if (method === "POST" && pathname === "/prior-auth/' + 'appeal-workspace") {'),
-        "POST /prior-auth/appeal-workspace must not exist"
+        "exact POST /prior-auth/appeal-workspace must not exist"
       );
 
       const routeStart = src.indexOf('if (method === "GET" && pathname === "/prior-auth/appeal-workspace") {');
@@ -70043,7 +70514,8 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_COMMAND_CENTER_ROUTE_SMOKE_TEST
           'action="/prior-auth/appeal-workspace/save-section"',
           'action="/prior-auth/appeal-workspace/evidence/upload"',
           'action="/prior-auth/appeal-workspace/evidence/exclude"',
-          'action="/prior-auth/appeal-workspace/evidence/appeal-address"'
+          'action="/prior-auth/appeal-workspace/evidence/appeal-address"',
+          'action="/prior-auth/appeal-workspace/submit"'
         ].forEach(action => assert(route.includes(action), "GET prior-auth appeal workspace missing allowed POST form: " + action));
       }
       if (routeHasPriorAuthSaveSectionForm) {
@@ -70072,7 +70544,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_COMMAND_CENTER_ROUTE_SMOKE_TEST
         "Prior Authorization Appeal Narrative",
         "Evidence Checklist",
         "Outcome Intelligence",
-        "Workspace Notes"
+        "Prior Auth Submission Workflow"
       ].forEach(x => assert(route.includes(x), "GET command-center route missing marker: " + x));
 
       [
@@ -70236,7 +70708,8 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS === 
           'action="/prior-auth/appeal-workspace/save-section"',
           'action="/prior-auth/appeal-workspace/evidence/upload"',
           'action="/prior-auth/appeal-workspace/evidence/exclude"',
-          'action="/prior-auth/appeal-workspace/evidence/appeal-address"'
+          'action="/prior-auth/appeal-workspace/evidence/appeal-address"',
+          'action="/prior-auth/appeal-workspace/submit"'
         ].forEach(action => assert(priorAuthRoute.includes(action), "GET prior-auth appeal workspace missing allowed POST form: " + action));
       }
       if (priorAuthRouteHasSaveSectionForm) {
@@ -70248,7 +70721,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS === 
           "Save Section"
         ].forEach(x => assert(priorAuthRoute.includes(x), "editable prior-auth save-section form missing marker: " + x));
       }
-      ["tjhpPriorAuthAppealWorkspaceContext(org, row)","Prior Auth Appeal Workspace","Appeal Workspace Shell","Evidence Checklist","Workspace Notes"].forEach(x => assert(priorAuthRoute.includes(x), "prior-auth workspace route marker missing: " + x));
+      ["tjhpPriorAuthAppealWorkspaceContext(org, row)","Prior Auth Appeal Workspace","Appeal Workspace Shell","Evidence Checklist","Prior Auth Submission Workflow"].forEach(x => assert(priorAuthRoute.includes(x), "prior-auth workspace route marker missing: " + x));
       const futurePriorAuthWorkspaceUsesLayoutModel = priorAuthRoute.includes("tjhpPriorAuthAppealWorkspaceLayoutModel");
 
       if (futurePriorAuthWorkspaceUsesLayoutModel) {
@@ -70261,7 +70734,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS === 
           "Appeal Packet Preview",
           "Evidence Checklist",
           "Prior Authorization Appeal Narrative",
-          "This request is not a billed-claim payment appeal.",
+          "tjhpPriorAuthSubmissionWorkflowHtml",
           "Back to Prior Auth Case",
           "Back to Prior Auth Queue"
         ].forEach(x => assert(priorAuthRoute.includes(x), "future command-center route missing marker: " + x));
@@ -70271,7 +70744,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_LAYOUT_HELPERS_SMOKE_TESTS === 
           "Prior Auth Appeal Workspace",
           "Appeal Workspace Shell",
           "Evidence Checklist",
-          "Workspace Notes"
+          "tjhpPriorAuthSubmissionWorkflowHtml"
         ].forEach(x => assert(priorAuthRoute.includes(x), "current simple route missing marker: " + x));
       }
 
