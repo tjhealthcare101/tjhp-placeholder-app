@@ -1096,11 +1096,11 @@ function tjhpPriorAuthNextActionLabel(row = {}){
 
   if (status === "Missing Documentation") return "Upload/collect missing docs";
   if (status === "Peer-to-Peer Needed") return "Schedule peer-to-peer";
-  if (status === "Denied") return "Review for prior auth appeal";
-  if (status === "Appeal Needed") return "Prepare prior auth appeal";
+  if (status === "Denied") return "Continue Prior Auth Appeal";
+  if (status === "Appeal Needed") return "Continue Prior Auth Appeal";
   if (status === "Appeal Submitted") {
     const followUp = String(row.appeal_follow_up_date || "").trim();
-    return followUp ? `Follow up with payer by ${followUp}` : "Await payer response / set follow-up date";
+    return followUp ? `Follow up with payer by ${followUp}` : "Upload Payer Response";
   }
   if (status === "Partially Approved") return "Review approval limits";
   if (status === "Expiring Soon") return "Renew or confirm service timing";
@@ -48680,7 +48680,6 @@ function renderPriorAuthActionCenterPanelBootstrap(scriptId, priorAuthRows, org 
       parts.push(paButton("Open Appeal Workspace", paBuildHref(row, "workspace"), false));
     } else {
       parts.unshift(paButton("Continue Prior Auth Appeal", paBuildHref(row, "workspace"), true));
-      parts.push(paButton("Preview Packet", paBuildHref(row, "preview"), false));
     }
 
     return parts.join(" ");
@@ -48822,7 +48821,7 @@ function renderPriorAuthActionCenterPanelBootstrap(scriptId, priorAuthRows, org 
       +   '<div class="kpi"><div class="muted small">Patient</div><strong>' + paEsc(row.patient_name || row.patient_id || "-") + '</strong></div>'
       +   '<div class="kpi"><div class="muted small">Status</div><strong>' + paEsc(status) + '</strong></div>'
       +   '<div class="kpi"><div class="muted small">Auth / Ref #</div><strong>' + paEsc(row.auth_number || row.reference_number || "-") + '</strong></div>'
-      +   '<div class="kpi"><div class="muted small">Revenue at Risk</div><strong>' + paMoney(row.estimated_revenue_at_risk) + '</strong></div>'
+      +   '<div class="kpi"><div class="muted small">Revenue at Risk</div><strong>' + paEsc(row.__revenueAtRisk || "Not determined") + '</strong></div>'
       +   '<div class="kpi"><div class="muted small">CPT / HCPCS</div><strong>' + paEsc(row.cpt_hcpcs || "-") + '</strong></div>'
       +   '<div class="kpi"><div class="muted small">ICD-10</div><strong>' + paEsc(row.icd10 || "-") + '</strong></div>'
       + '</div>'
@@ -48843,7 +48842,7 @@ function renderPriorAuthActionCenterPanelBootstrap(scriptId, priorAuthRows, org 
       +   '<h3 style="margin-top:0;">Next action</h3>'
       +   '<p class="muted small">' + paEsc(row.__nextAction || "-") + '</p>'
       + '</div>'
-      + '<div class="btnRow" style="gap:8px;flex-wrap:wrap;">'
+      + '<div class="btnRow prior-auth-panel-action-row" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
       +   paQuickActions(row)
       + '</div>';
 
@@ -50502,7 +50501,7 @@ Fax: (325) 794-2926" style="width:100%;box-sizing:border-box;border:1px solid #b
   }).join("") || `<p class="muted">No prior authorization packet preview rows available.</p>`;
 
   const priorAuthAssistantAndPreviewShellHtml = `
-    <!-- PRIOR_AUTH_ACTION_CENTER_PANEL_AND_QUICK_ACTIONS_OK PRIOR_AUTH_MANUAL_APPEAL_ADDRESS_AND_ENCLOSURES_OK PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_DENIAL_LETTER_APPEAL_ADDRESS_EXTRACTION_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_FINAL_PACKET_CLEANUP_OK PRIOR_AUTH_MANUAL_SUBMISSION_WORKFLOW_OK PRIOR_AUTH_DENIAL_ADDRESS_COMPACT_EXTRACTION_AND_DIAGNOSTIC_CLEANUP_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
+    <!-- PRIOR_AUTH_ACTION_CENTER_PANEL_AND_QUICK_ACTIONS_OK PRIOR_AUTH_ACTION_CENTER_POLISH_OK PRIOR_AUTH_MANUAL_APPEAL_ADDRESS_AND_ENCLOSURES_OK PRIOR_AUTH_AI_SERVER_REVIEW_LIFECYCLE_OK PRIOR_AUTH_AI_OPENAI_DRAFTING_WITH_FALLBACK_OK PRIOR_AUTH_PACKET_STRUCTURE_CLEANUP_OK PRIOR_AUTH_COVER_LETTER_IDENTITY_PACKET_CONTENTS_OK PRIOR_AUTH_DENIAL_LETTER_APPEAL_ADDRESS_EXTRACTION_OK PRIOR_AUTH_COVER_LETTER_EXPORT_ALIGNMENT_OK PRIOR_AUTH_FINAL_PACKET_CLEANUP_OK PRIOR_AUTH_MANUAL_SUBMISSION_WORKFLOW_OK PRIOR_AUTH_DENIAL_ADDRESS_COMPACT_EXTRACTION_AND_DIAGNOSTIC_CLEANUP_OK PRIOR_AUTH_SCROLL_RESTORE_AND_ASSISTANT_INPUT_OK PRIOR_AUTH_ASSISTANT_PROMPT_SUBMIT_FIX_OK PRIOR_AUTH_SOURCE_PROOF_FILTER_AND_ANCHOR_SCROLL_OK PRIOR_AUTH_ASSISTANT_BROWSER_SCRIPT_ESCAPE_OK PRIOR_AUTH_ASSISTANT_SECTION_REVIEW_NO_DUPLICATE_OK PRIOR_AUTH_ASSISTANT_SMART_REGEN_LIVE_DRAFT_OK PRIOR_AUTH_ASSISTANT_PACKET_SECTION_REVIEW_ONLY_OK PRIOR_AUTH_ASSISTANT_APPEAL_STYLE_INLINE_REVIEW_OK -->
     <style>
       .prior-auth-shell-backdrop{display:none;position:fixed;inset:0;background:rgba(15,23,42,.46);z-index:2998;}
       .prior-auth-shell-panel{display:none;position:fixed;top:0;right:0;width:min(520px,96vw);height:100vh;overflow:auto;background:#fff;border-left:1px solid #e5e7eb;box-shadow:-20px 0 45px rgba(15,23,42,.18);z-index:2999;padding:18px;box-sizing:border-box;}
@@ -51634,7 +51633,6 @@ if (method === "GET" && pathname === "/actions") {
       return `
         ${priorAuthPanelViewButton(x)}
         <a class="btn secondary small" href="${safeStr(priorAuthActionHref(x, "workspace"))}">Continue Prior Auth Appeal</a>
-        <a class="btn secondary small" href="${safeStr(priorAuthActionHref(x, "preview"))}" target="_blank" rel="noopener">Preview Packet</a>
         <a class="btn secondary small" href="${safeStr(priorAuthActionHref(x, "case"))}">Open Prior Auth Case</a>
       `;
     };
@@ -51666,8 +51664,8 @@ if (method === "GET" && pathname === "/actions") {
         <td>${safeStr(followUpDisplay)}${expirationSubtext}</td>
         <td>${priorAuthRevenueAtRiskDisplay(x.estimated_revenue_at_risk)}</td>
         <td>${safeStr(tjhpPriorAuthNextActionLabel(x))}</td>
-        <td style="white-space:nowrap;">
-          <div class="btnRow" style="gap:6px;flex-wrap:wrap;">
+        <td class="prior-auth-actions-cell" style="white-space:nowrap;min-width:${latestSubmission ? "760px" : "430px"};">
+          <div class="btnRow prior-auth-action-row" style="display:inline-flex;gap:8px;align-items:center;flex-wrap:nowrap;white-space:nowrap;">
             ${priorAuthActionButtons(x, latestSubmission)}
           </div>
         </td>
@@ -67515,7 +67513,7 @@ if (process.env.TJHP_PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS === "true" && (p
         "/actions?tab=prior-auth",
         "data-action-tab=\"prior-auth\"",
         "No prior authorization cases need action.",
-        "Review for prior auth appeal",
+        "Continue Prior Auth Appeal",
         "Upload/collect missing docs",
         "Schedule peer-to-peer",
         "Renew or confirm service timing",
@@ -68695,8 +68693,8 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_STATUS_SMOKE_TESTS === "true" && (process
         '"appeal submitted": "Appeal Submitted"',
         '"next round": "Appeal Needed"',
         '"next round submitted": "Appeal Submitted"',
-        'if (status === "Appeal Needed") return "Prepare prior auth appeal";',
-        'if (status === "Appeal Submitted") return "Follow up on prior auth appeal";',
+        'if (status === "Appeal Needed") return "Continue Prior Auth Appeal";',
+        'return followUp ? `Follow up with payer by ${followUp}` : "Upload Payer Response";',
         "function tjhpPriorAuthStaffStatusOptions",
         "function tjhpPriorAuthStaffStatusAllowed",
         "function tjhpPriorAuthActionCenterRows",
@@ -68745,13 +68743,13 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_STATUS_SMOKE_TESTS === "true" && (process
 
       assert.strictEqual(
         tjhpPriorAuthNextActionLabel({ status:"Appeal Needed" }),
-        "Prepare prior auth appeal",
+        "Continue Prior Auth Appeal",
         "Appeal Needed next action mismatch"
       );
 
       assert.strictEqual(
         tjhpPriorAuthNextActionLabel({ status:"Appeal Submitted" }),
-        "Follow up on prior auth appeal",
+        "Upload Payer Response",
         "Appeal Submitted next action mismatch"
       );
 
@@ -70354,6 +70352,130 @@ if (process.env.TJHP_PRIOR_AUTH_DENIAL_ADDRESS_COMPACT_EXTRACTION_SMOKE_TESTS ==
       process.exit(1);
     }
   })();
+}
+
+
+if (process.env.TJHP_PRIOR_AUTH_ACTION_CENTER_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const fs = require("fs");
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    const requiredMarkers = [
+      "PRIOR_AUTH_ACTION_CENTER_POLISH_OK",
+      'class="prior-auth-actions-cell"',
+      "prior-auth-action-row",
+      "flex-wrap:nowrap",
+      'min-width:${latestSubmission ? "760px" : "430px"}',
+      "prior-auth-panel-action-row",
+      'paEsc(row.__revenueAtRisk || "Not determined")',
+      'if (status === "Denied") return "Continue Prior Auth Appeal";',
+      'if (status === "Appeal Needed") return "Continue Prior Auth Appeal";',
+      'return followUp ? `Follow up with payer by ${followUp}` : "Upload Payer Response";'
+    ];
+    requiredMarkers.forEach(marker => assert(src.includes(marker), "missing prior-auth polish marker: " + marker));
+
+    const forbiddenMarkers = [
+      "paMoney(row.estimated_revenue" + "_at_risk)",
+      "paButton(\"Preview " + "Packet\"",
+      ">Preview " + "Packet</a>",
+      "Review for prior auth " + "appeal",
+      "Prepare prior auth " + "appeal"
+    ];
+    forbiddenMarkers.forEach(marker => assert(!src.includes(marker), "forbidden prior-auth polish marker remained: " + marker));
+
+    [
+      "View Submitted Packet",
+      "Upload Payer Response",
+      "Start Next Round of Appeal",
+      "Open Prior Auth Case",
+      "Continue Prior Auth Appeal",
+      "View"
+    ].forEach(marker => assert(src.includes(marker), "missing prior-auth action label: " + marker));
+
+    assert.strictEqual(
+      priorAuthRevenueAtRiskDisplay(0),
+      "Not determined",
+      "Prior Auth zero revenue should display Not determined"
+    );
+
+    assert.strictEqual(
+      tjhpPriorAuthNextActionLabel({ status:"Denied" }),
+      "Continue Prior Auth Appeal",
+      "Denied next action should align with draft action button"
+    );
+
+    assert.strictEqual(
+      tjhpPriorAuthNextActionLabel({ status:"Appeal Needed" }),
+      "Continue Prior Auth Appeal",
+      "Appeal Needed next action should align with draft action button"
+    );
+
+    assert.strictEqual(
+      tjhpPriorAuthNextActionLabel({ status:"Appeal Submitted" }),
+      "Upload Payer Response",
+      "Submitted next action without follow-up should ask for payer response"
+    );
+
+    assert(
+      tjhpPriorAuthNextActionLabel({ status:"Appeal Submitted", appeal_follow_up_date:"2026-06-16" }).includes("2026-06-16"),
+      "Submitted next action with follow-up should include date"
+    );
+
+    const claimPanelMarkers = [
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "claimSidePanelBackdrop",
+      "window.openClaimPanel",
+      "window.__tjhpOpenClaimPanelOrNavigate",
+      "data-open-claim-panel",
+      "view-claim-btn"
+    ];
+    claimPanelMarkers.forEach(marker => assert(src.includes(marker), "missing existing claim panel marker: " + marker));
+
+    function extractFunctionBody(name) {
+      const start = src.indexOf("function " + name);
+      assert(start >= 0, "function missing: " + name);
+      if (name === "renderClaimPanelBootstrap") {
+        const end = src.indexOf("function renderPriorAuthActionCenterPanelBootstrap", start);
+        assert(end > start, "claim panel function boundary missing");
+        return src.slice(start, end);
+      }
+      throw new Error("unsupported function extraction: " + name);
+    }
+
+    const claimBody = extractFunctionBody("renderClaimPanelBootstrap");
+    [
+      "priorAuthSidePanel",
+      "openPriorAuthPanel",
+      "data-open-prior-auth-panel",
+      "prior-auth-action-row"
+    ].forEach(marker => assert(!claimBody.includes(marker), "claim panel function should not include prior-auth polish marker: " + marker));
+
+    const protectedMarkers = [
+      'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/submit")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/save-section")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/upload")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/exclude")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/pages")',
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace/evidence/appeal-address")',
+      'if (method === "POST" && pathname === "/data-management/prior-auth/upload")',
+      'if (method === "GET" && (pathname === "/ai-appeal" || pathname === "/ai-negotiation"))',
+      'if (method === "POST" && pathname === "/ai-workspace/save-preview")',
+      'if (method === "GET" && pathname === "/ai-workspace/export")',
+      "/ai-workspace/regenerate-diff",
+      "/ai-workspace/apply-diff",
+      "/ai-workspace/cancel-diff",
+      "function renderInlineAIAssist",
+      "function workspaceAiInteractiveTrackChangesHtml"
+    ];
+    protectedMarkers.forEach(marker => assert(src.includes(marker), "protected route/helper missing: " + marker));
+
+    process.stdout.write("PRIOR_AUTH_ACTION_CENTER_POLISH_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) {
+    process.stderr.write("PRIOR_AUTH_ACTION_CENTER_POLISH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
+  }
 }
 
 
