@@ -1136,8 +1136,8 @@ function tjhpPriorAuthLifecycleLaneDefinitions(){
     },
     {
       key: "pending",
-      label: "Submitted / Pending",
-      helper: "Prior-auth requests submitted or awaiting payer response.",
+      label: "Initial Request Pending",
+      helper: "Initial prior-auth requests staff uploaded or marked submitted; awaiting payer decision.",
       href: "/actions?tab=prior-auth"
     },
     {
@@ -1149,7 +1149,7 @@ function tjhpPriorAuthLifecycleLaneDefinitions(){
     {
       key: "appeal_submitted",
       label: "Appeal Submitted",
-      helper: "Manual appeal submission logged and awaiting payer response.",
+      helper: "Appeal packets staff marked submitted; awaiting payer response.",
       href: "/actions?tab=prior-auth"
     },
     {
@@ -1249,8 +1249,8 @@ function tjhpPriorAuthLifecycleLaneHtml(org_id = ""){
       : "";
 
     return `
-      <a href="${safeStr(group.href)}" style="text-decoration:none;color:inherit;flex:1;min-width:170px;">
-        <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);height:100%;">
+      <a href="${safeStr(group.href)}" style="text-decoration:none;color:inherit;min-width:0;">
+        <div style="border:1px solid var(--border);border-radius:12px;padding:10px 11px;background:var(--card);height:100%;min-height:128px;">
           <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
             <div style="font-weight:950;">${safeStr(group.label)}</div>
             <span class="badge ${hasRows ? "warn" : "ok"}">${formatNumberUI(group.count || 0)}</span>
@@ -1272,9 +1272,9 @@ function tjhpPriorAuthLifecycleLaneHtml(org_id = ""){
     <div class="insight-card" id="pre-service-prior-auth-lane" style="margin-top:14px;">
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;">
         <div>
-          <h3 style="margin:0;">Pre-Service Prior Authorization <span class="tooltip" data-tip="Read-only pre-service visibility based on prior authorization cases created from uploads or manual entry. This does not use EHR or payer portal automation.">ⓘ</span></h3>
+          <h3 style="margin:0;">Pre-Service Prior Authorization <span class="tooltip" data-tip="Read-only pre-service visibility based on prior authorization cases created from uploads, manual entry, or staff-marked workflow updates. No EHR, payer portal, or automated submission occurs here.">ⓘ</span></h3>
           <p class="muted small" style="margin:4px 0 0;">
-            Manual/upload-driven prior-auth visibility before claims enter the post-submission lifecycle.
+            Pre-service prior-auth visibility based on uploaded documents and manual workflow updates.
           </p>
         </div>
         <div class="muted small">
@@ -1282,18 +1282,31 @@ function tjhpPriorAuthLifecycleLaneHtml(org_id = ""){
         </div>
       </div>
 
-      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;">
+      <div class="prior-auth-lifecycle-lane-grid" style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:10px;">
         ${cardHtml}
       </div>
+      <style>
+      @media (max-width: 980px) {
+        .prior-auth-lifecycle-lane-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+      }
+      @media (max-width: 620px) {
+        .prior-auth-lifecycle-lane-grid {
+          grid-template-columns: 1fr !important;
+        }
+      }
+      </style>
 
       <div class="muted small" style="margin-top:10px;">
-        This lane does not create auth-needed tasks automatically, does not check payer portals, and does not change claim lifecycle totals.
+        Manual/upload-driven only. TJ Healthcare Pro does not submit prior authorization requests or appeals to payers automatically, does not check payer portals, and does not change claim lifecycle totals.
       </div>
     </div>
   `;
 }
 
 // PRIOR_AUTH_CLAIMS_LIFECYCLE_PRE_SERVICE_LANE_OK
+// PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_OK
 
 function tjhpPriorAuthLatestSubmission(row = {}){
   const submissions = Array.isArray(row.prior_auth_submissions)
@@ -44268,7 +44281,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       ${nextActionBanner}
 
       <div class="muted small" style="margin-bottom:10px;">
-        Click a stage to drill into those claims, then move them into the Action Center or workspace. Prior authorization appears as a compact pre-service lane based on uploaded/manual prior-auth cases.
+        Click a stage to drill into those claims, then move them into the Action Center or workspace. Prior authorization appears as a compact pre-service lane based on uploaded documents and manual workflow updates.
       </div>
 
       ${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}
@@ -66618,7 +66631,7 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_SMOKE_TESTS === "true" && 
     const assert = require("assert");
     const src = fs.readFileSync(__filename, "utf8");
 
-    ["PRIOR_AUTH_CLAIMS_LIFECYCLE_PRE_SERVICE_LANE_OK","tjhpPriorAuthLifecycleGroupForRow","tjhpPriorAuthLifecycleLaneDefinitions","tjhpPriorAuthLifecycleLaneModel","tjhpPriorAuthLifecycleLaneHtml","Pre-Service Prior Authorization","pre-service-prior-auth-lane","Manual/upload-driven prior-auth visibility before claims enter the post-submission lifecycle.","This lane does not create auth-needed tasks automatically","does not check payer portals","does not change claim lifecycle totals","Intake / Draft","Submitted / Pending","Denied / Partial","Appeal Submitted","Approved / Ready","${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}","${pipelineHtml}"].forEach(x => assert(src.includes(x), "missing prior-auth lifecycle lane marker: " + x));
+    ["PRIOR_AUTH_CLAIMS_LIFECYCLE_PRE_SERVICE_LANE_OK","tjhpPriorAuthLifecycleGroupForRow","tjhpPriorAuthLifecycleLaneDefinitions","tjhpPriorAuthLifecycleLaneModel","tjhpPriorAuthLifecycleLaneHtml","Pre-Service Prior Authorization","pre-service-prior-auth-lane","Pre-service prior-auth visibility based on uploaded documents and manual workflow updates.","Manual/upload-driven only. TJ Healthcare Pro does not submit prior authorization requests or appeals to payers automatically","does not check payer portals","does not change claim lifecycle totals","Intake / Draft","Initial Request Pending","Denied / Partial","Appeal Submitted","Approved / Ready","${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}","${pipelineHtml}"].forEach(x => assert(src.includes(x), "missing prior-auth lifecycle lane marker: " + x));
     ["Claims Lifecycle Stages","Awaiting Payment","Denied","Underpaid","Resolved","const pipelineHtml = `","const pipelineAgg = {","lifecycleTable","lifecycleClaimsData","totalAtRiskAll","Total Revenue at Risk"].forEach(x => assert(src.includes(x), "missing claims lifecycle core marker: " + x));
 
     const paIdx = src.indexOf("${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}");
@@ -66646,6 +66659,90 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_SMOKE_TESTS === "true" && 
     process.stdout.write("PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) {
     process.stderr.write("PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
+  }
+}
+
+
+if (process.env.TJHP_PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    [
+      "PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_OK",
+      "PRIOR_AUTH_CLAIMS_LIFECYCLE_PRE_SERVICE_LANE_OK",
+      "prior-auth-lifecycle-lane-grid",
+      "grid-template-columns:repeat(5,minmax(0,1fr))",
+      "@media (max-width: 980px)",
+      "@media (max-width: 620px)",
+      "Initial Request Pending",
+      "Initial prior-auth requests staff uploaded or marked submitted; awaiting payer decision.",
+      "Appeal packets staff marked submitted; awaiting payer response.",
+      "Pre-service prior-auth visibility based on uploaded documents and manual workflow updates.",
+      "Manual/upload-driven only. TJ Healthcare Pro does not submit prior authorization requests or appeals to payers automatically",
+      "No EHR, payer portal, or automated submission occurs here."
+    ].forEach(x => assert(src.includes(x), "missing polish marker: " + x));
+
+    const definitionsStart = src.indexOf("function tjhpPriorAuthLifecycleLaneDefinitions(){");
+    const definitionsEnd = src.indexOf("function tjhpPriorAuthLifecycleLaneModel", definitionsStart);
+    assert(definitionsStart >= 0 && definitionsEnd > definitionsStart, "prior-auth lifecycle definitions function body not found");
+    const definitionsSrc = src.slice(definitionsStart, definitionsEnd);
+    [
+      "Submitted / Pending",
+      "Prior-auth requests submitted or awaiting payer response."
+    ].forEach(x => assert(!definitionsSrc.includes(x), "legacy pending copy should not remain in definitions: " + x));
+
+    [
+      "Claims Lifecycle Stages",
+      "Awaiting Payment",
+      "Denied",
+      "Underpaid",
+      "Resolved",
+      "const pipelineHtml = `",
+      "const pipelineAgg = {",
+      "lifecycleTable",
+      "lifecycleClaimsData",
+      "totalAtRiskAll",
+      "Total Revenue at Risk"
+    ].forEach(x => assert(src.includes(x), "missing claims lifecycle core marker: " + x));
+
+    const paIdx = src.indexOf("${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}");
+    const pipeIdx = src.indexOf("${pipelineHtml}");
+    assert(paIdx >= 0 && pipeIdx >= 0 && paIdx < pipeIdx, "prior-auth lane should render before claim lifecycle pipeline");
+
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Submitted" }), "pending");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Pending" }), "pending");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Appeal Submitted" }), "appeal_submitted");
+
+    [
+      "automatically " + "submit",
+      "payer portal" + "/API",
+      "EHR" + " pull",
+      "claim/prior-auth automatic" + " linking",
+      "POST /prior-auth/appeal-workspace" + "/payer-response"
+    ].forEach(x => assert(!src.includes(x), "forbidden automation or mutation marker present: " + x));
+
+    [
+      "getPriorAuthCases",
+      "tjhpPriorAuthActionCenterRows",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "PRIOR_AUTH_ACTION_CENTER_PANEL_AND_QUICK_ACTIONS_OK",
+      "PRIOR_AUTH_UNIFIED_UPLOAD_INTAKE_OK",
+      "PRIOR_AUTH_UPLOAD_INTAKE_FILTER_POLISH_OK",
+      'if (method === "GET" && pathname === "/prior-auth/appeal-workspace")',
+      'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")',
+      'if (method === "POST" && pathname === "/upload-router")',
+      'if (method === "POST" && pathname === "/data-management/prior-auth/upload")',
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "window.openClaimPanel",
+      "renderInlineAIAssist",
+      "workspaceAiInteractiveTrackChangesHtml"
+    ].forEach(x => assert(src.includes(x), "protected helper or route marker missing: " + x));
+
+    process.stdout.write("PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) {
+    process.stderr.write("PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
   }
 }
 
