@@ -1091,6 +1091,45 @@ function priorAuthRevenueAtRiskDisplay(value){
   return amount > 0 ? formatMoneyUI(amount) : "Not determined";
 }
 
+function tjhpPriorAuthStatusBadgeClass(status = ""){
+  const s = String(status || "").trim().toLowerCase();
+
+  if (!s) return "";
+
+  if (["approved", "ready to bill"].includes(s)) return "ok";
+
+  if (
+    s === "denied" ||
+    s === "expired"
+  ) return "err";
+
+  if (
+    s === "partially approved" ||
+    s === "appeal needed" ||
+    s === "missing documentation" ||
+    s === "peer-to-peer needed" ||
+    s === "expiring soon"
+  ) return "warn";
+
+  if (
+    s === "appeal submitted" ||
+    s === "submitted" ||
+    s === "pending" ||
+    s === "auth needed" ||
+    s === "draft"
+  ) return "pending";
+
+  if (s === "not pursued") return "writeoff";
+
+  return "";
+}
+
+function tjhpPriorAuthStatusBadgeHtml(status = ""){
+  const label = String(status || "-").trim() || "-";
+  const cls = tjhpPriorAuthStatusBadgeClass(label);
+  return `<span class="badge ${safeStr(cls)}">${safeStr(label)}</span>`;
+}
+
 function tjhpPriorAuthNextActionLabel(row = {}){
   const status = String(row.status || "").trim();
 
@@ -1317,7 +1356,6 @@ function tjhpPriorAuthLifecycleLaneModel(org_id = ""){
         count: 0,
         known_revenue_at_risk: 0,
         not_determined_count: 0,
-        latest_follow_up_date: "",
         latest_case: null,
         statuses: {}
       }
@@ -1341,16 +1379,6 @@ function tjhpPriorAuthLifecycleLaneModel(org_id = ""){
       bucket.not_determined_count += 1;
     }
 
-    const submission = tjhpPriorAuthLatestSubmission(row);
-    const followUp = String(
-      row.appeal_follow_up_date ||
-      (submission && submission.follow_up_date) ||
-      ""
-    ).trim();
-
-    if (followUp && (!bucket.latest_follow_up_date || followUp < bucket.latest_follow_up_date)) {
-      bucket.latest_follow_up_date = followUp;
-    }
 
     const currentUpdated = new Date(row.updated_at || row.created_at || 0).getTime() || 0;
     const latestUpdated = bucket.latest_case
@@ -1388,9 +1416,6 @@ function tjhpPriorAuthLifecycleLaneHtml(org_id = ""){
       .map(([status, count]) => `${status}: ${formatNumberUI(count)}`)
       .join(" · ");
 
-    const followUpText = group.latest_follow_up_date
-      ? `Next follow-up: ${group.latest_follow_up_date}`
-      : "";
 
     return `
       <a href="${safeStr(group.href)}" style="text-decoration:none;color:inherit;min-width:0;">
@@ -1403,7 +1428,6 @@ function tjhpPriorAuthLifecycleLaneHtml(org_id = ""){
           ${hasRows ? `
             <div class="muted small" style="margin-top:8px;">${safeStr(revenueText)}</div>
             ${statusText ? `<div class="muted small" style="margin-top:4px;">${safeStr(statusText)}</div>` : ""}
-            ${followUpText ? `<div class="muted small" style="margin-top:4px;">${safeStr(followUpText)}</div>` : ""}
           ` : `
             <div class="muted small" style="margin-top:8px;">No prior-auth cases in this lane.</div>
           `}
@@ -1452,6 +1476,7 @@ function tjhpPriorAuthLifecycleLaneHtml(org_id = ""){
 // PRIOR_AUTH_CLAIMS_LIFECYCLE_PRE_SERVICE_LANE_OK
 // PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_OK
 // PRIOR_AUTH_LIFECYCLE_TO_ACTION_CENTER_FILTERS_OK
+// PRIOR_AUTH_STATUS_PILLS_AND_LIFECYCLE_AGGREGATE_OK
 
 function tjhpPriorAuthLatestSubmission(row = {}){
   const submissions = Array.isArray(row.prior_auth_submissions)
@@ -49051,6 +49076,32 @@ function renderPriorAuthActionCenterPanelBootstrap(scriptId, priorAuthRows, org 
     return '<a class="btn ' + (primary ? '' : 'secondary ') + 'small" href="' + paEsc(href) + '"' + (href.indexOf("/prior-auth/appeal-workspace/export") === 0 ? ' target="_blank" rel="noopener"' : '') + '>' + paEsc(label) + '</a>';
   }
 
+  function paStatusBadge(status){
+    var s = String(status || "").trim();
+    var lower = s.toLowerCase();
+    var cls = "";
+
+    if (lower === "approved" || lower === "ready to bill") cls = "ok";
+    else if (lower === "denied" || lower === "expired") cls = "err";
+    else if (
+      lower === "partially approved" ||
+      lower === "appeal needed" ||
+      lower === "missing documentation" ||
+      lower === "peer-to-peer needed" ||
+      lower === "expiring soon"
+    ) cls = "warn";
+    else if (
+      lower === "appeal submitted" ||
+      lower === "submitted" ||
+      lower === "pending" ||
+      lower === "auth needed" ||
+      lower === "draft"
+    ) cls = "pending";
+    else if (lower === "not pursued") cls = "writeoff";
+
+    return '<span class="badge ' + paEsc(cls) + '">' + paEsc(s || "-") + '</span>';
+  }
+
   function paQuickActions(row){
     var latest = row.__latestSubmission || null;
     var parts = [];
@@ -49203,7 +49254,7 @@ function renderPriorAuthActionCenterPanelBootstrap(scriptId, priorAuthRows, org 
       + '<div class="muted small">' + paEsc(row.payer || "-") + ' · ' + paEsc(row.requested_service || "-") + '</div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0;">'
       +   '<div class="kpi"><div class="muted small">Patient</div><strong>' + paEsc(row.patient_name || row.patient_id || "-") + '</strong></div>'
-      +   '<div class="kpi"><div class="muted small">Status</div><strong>' + paEsc(status) + '</strong></div>'
+      +   '<div class="kpi"><div class="muted small">Status</div><div style="margin-top:4px;">' + paStatusBadge(status) + '</div></div>'
       +   '<div class="kpi"><div class="muted small">Auth / Ref #</div><strong>' + paEsc(row.auth_number || row.reference_number || "-") + '</strong></div>'
       +   '<div class="kpi"><div class="muted small">Revenue at Risk</div><strong>' + paEsc(row.__revenueAtRisk || "Not determined") + '</strong></div>'
       +   '<div class="kpi"><div class="muted small">CPT / HCPCS</div><strong>' + paEsc(row.cpt_hcpcs || "-") + '</strong></div>'
@@ -52055,9 +52106,10 @@ if (method === "GET" && pathname === "/actions") {
       const expirationSubtext = latestSubmission && x.expiration_date && followUpDisplay !== x.expiration_date
         ? `<div class="muted small">Expiration: ${safeStr(x.expiration_date)}</div>`
         : "";
+      const statusBadge = tjhpPriorAuthStatusBadgeHtml(x.status || "-");
       const statusCell = latestSubmission
-        ? `${safeStr(x.status || "-")}<div class="muted small">Manual submission logged · ${safeStr(latestSubmission.method || x.appeal_submission_method || "-")}</div>`
-        : safeStr(x.status || "-");
+        ? `${statusBadge}<div class="muted small">Manual submission logged · ${safeStr(latestSubmission.method || x.appeal_submission_method || "-")}</div>`
+        : statusBadge;
       return `
       <tr>
         <td>${safeStr(x.patient_name || x.patient_id || "-")}</td>
@@ -66855,6 +66907,121 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS === "t
     ["REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","FORECAST_CHART_LABEL_CLEANUP_SMOKE_TESTS_PASSED","LAUNCH_READINESS_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
     process.stdout.write("REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+if (process.env.TJHP_PRIOR_AUTH_STATUS_PILLS_AND_LIFECYCLE_AGGREGATE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = require("assert");
+    const extractFunctionBodyForSmoke = (name) => {
+      const signature = "function " + name;
+      const start = src.indexOf(signature);
+      assert(start >= 0, "missing function for body extraction: " + name);
+      const open = src.indexOf("{", start);
+      assert(open >= 0, "missing function open brace: " + name);
+      let depth = 0;
+      for (let i = open; i < src.length; i += 1) {
+        const ch = src[i];
+        if (ch === "{") depth += 1;
+        else if (ch === "}") {
+          depth -= 1;
+          if (depth === 0) return src.slice(open + 1, i);
+        }
+      }
+      throw new Error("missing function closing brace: " + name);
+    };
+
+    [
+      "PRIOR_AUTH_STATUS_PILLS_AND_LIFECYCLE_AGGREGATE_OK",
+      "tjhpPriorAuthStatusBadgeClass",
+      "tjhpPriorAuthStatusBadgeHtml",
+      "const statusBadge = tjhpPriorAuthStatusBadgeHtml",
+      "Manual submission logged",
+      "paStatusBadge",
+      "'<span class=\"badge ' + paEsc(cls) + '\">'",
+      "Prior Auth Case",
+      "priorAuthSidePanel",
+      "prior-auth-action-center-filter-card",
+      "PRIOR_AUTH_LIFECYCLE_TO_ACTION_CENTER_FILTERS_OK"
+    ].forEach(marker => assert(src.includes(marker), "missing prior-auth status/lifecycle marker: " + marker));
+
+    const lifecycleModelBody = extractFunctionBodyForSmoke("tjhpPriorAuthLifecycleLaneModel");
+    const lifecycleHtmlBody = extractFunctionBodyForSmoke("tjhpPriorAuthLifecycleLaneHtml");
+    [lifecycleModelBody, lifecycleHtmlBody].forEach((body, idx) => {
+      assert(!body.includes("latest_follow_up_date"), "lifecycle function body still contains latest_follow_up_date at index " + idx);
+      assert(!body.includes("Next follow-up:"), "lifecycle function body still contains Next follow-up at index " + idx);
+    });
+
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Approved"), "ok");
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Ready to Bill"), "ok");
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Denied"), "err");
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Expired"), "err");
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Partially Approved"), "warn");
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Missing Documentation"), "warn");
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Peer-to-Peer Needed"), "warn");
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Expiring Soon"), "warn");
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Appeal Submitted"), "pending");
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Submitted"), "pending");
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Pending"), "pending");
+    assert.strictEqual(tjhpPriorAuthStatusBadgeClass("Draft"), "pending");
+
+    const approvedBadge = tjhpPriorAuthStatusBadgeHtml("Approved");
+    assert(approvedBadge.includes('class="badge ok"'), "approved badge should use ok class");
+    assert(approvedBadge.includes(">Approved<"), "approved badge should include label");
+
+    const deniedBadge = tjhpPriorAuthStatusBadgeHtml("Denied");
+    assert(deniedBadge.includes('class="badge err"'), "denied badge should use err class");
+
+    [
+      "badgeClassForStatusText",
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "window.openClaimPanel",
+      "data-open-claim-panel",
+      "view-claim-btn"
+    ].forEach(marker => assert(src.includes(marker), "missing existing claim badge/panel marker: " + marker));
+
+    const claimPanelBody = extractFunctionBodyForSmoke("renderClaimPanelBootstrap");
+    ["tjhpPriorAuthStatusBadgeHtml", "paStatusBadge", "priorAuthSidePanel"].forEach(marker => {
+      assert(!claimPanelBody.includes(marker), "claim panel body should not include prior-auth marker: " + marker);
+    });
+
+    [
+      "tjhpPriorAuthLifecycleLaneHtml",
+      "Pre-Service Prior Authorization",
+      "prior-auth-lifecycle-lane-grid",
+      "tjhpPriorAuthActionCenterFilterModel",
+      "pa_stage",
+      "pa_search",
+      "pa_payer",
+      "pa_status",
+      "pa_range",
+      "pa_sort"
+    ].forEach(marker => assert(src.includes(marker), "missing existing prior-auth lane/filter marker: " + marker));
+
+    [
+      'if (method === "GET" && pathname === "/prior-auth/appeal-workspace")',
+      'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")',
+      'if (method === "POST" && pathname === "/upload-router")',
+      'if (method === "POST" && pathname === "/data-management/prior-auth/upload")',
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "renderInlineAIAssist",
+      "workspaceAiInteractiveTrackChangesHtml"
+    ].forEach(marker => assert(src.includes(marker), "missing protected route/helper marker: " + marker));
+
+    [
+      "automatically " + "submit",
+      "payer portal" + "/API",
+      "EHR " + "pull",
+      "claim/prior-auth " + "automatic linking",
+      "POST /prior-auth/appeal-workspace" + "/payer-response",
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace")' + " {"
+    ].forEach(marker => assert(!src.includes(marker), "forbidden automation/mutation marker present: " + marker));
+
+    process.stdout.write("PRIOR_AUTH_STATUS_PILLS_AND_LIFECYCLE_AGGREGATE_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) {
+    process.stderr.write("PRIOR_AUTH_STATUS_PILLS_AND_LIFECYCLE_AGGREGATE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
+  }
 }
 
 if (process.env.TJHP_PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
