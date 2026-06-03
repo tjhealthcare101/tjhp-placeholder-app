@@ -1756,6 +1756,202 @@ function tjhpPriorAuthActionCenterRows(org_id){
     });
 }
 
+// PHASE_9A_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_OK
+// PRIOR_AUTH_REVENUE_OVERVIEW_NAVIGATION_ONLY_OK
+// PRIOR_AUTH_REVENUE_OVERVIEW_NO_MUTATION_OK
+function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
+  const rows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
+  const intakeStatuses = new Set(["Auth Needed", "Draft"]);
+  const pendingStatuses = new Set(["Submitted", "Pending"]);
+  const deniedPartialStatuses = new Set(["Denied", "Partially Approved", "Appeal Needed", "Missing Documentation", "Peer-to-Peer Needed"]);
+  const expiringStatuses = new Set(["Expiring Soon", "Expired"]);
+  const needsActionIds = new Set();
+  const needsActionRows = [];
+
+  const parseDateOnly = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return null;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  };
+  const today = new Date();
+  const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const ageDays = (value) => {
+    const d = parseDateOnly(value);
+    if (!d) return null;
+    return Math.floor((todayUtc.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+  };
+  const isStalePending = (row) => {
+    if (!pendingStatuses.has(String(row.status || ""))) return false;
+    const days = ageDays(row.submitted_date || row.updated_at || row.created_at);
+    return days != null && days >= 14;
+  };
+  const isAppealFollowUpDue = (row) => {
+    if (String(row.status || "") !== "Appeal Submitted") return false;
+    const d = parseDateOnly(row.appeal_follow_up_date);
+    return !!d && d.getTime() <= todayUtc.getTime();
+  };
+  const positiveRevenue = (row) => {
+    const n = Number(row.estimated_revenue_at_risk);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+
+  const model = {
+    total_cases: rows.length,
+    needs_action_count: 0,
+    denied_partial_count: 0,
+    pending_count: 0,
+    stale_pending_count: 0,
+    intake_count: 0,
+    expiring_count: 0,
+    appeal_follow_up_due_count: 0,
+    known_revenue_at_risk: 0,
+    not_determined_count: 0,
+    top_case: null,
+    top_next_action: "",
+    has_cases: rows.length > 0,
+    has_actionable: false
+  };
+
+  rows.forEach((row, idx) => {
+    const status = String(row.status || "");
+    if (intakeStatuses.has(status)) model.intake_count += 1;
+    if (pendingStatuses.has(status)) model.pending_count += 1;
+    if (deniedPartialStatuses.has(status)) model.denied_partial_count += 1;
+    if (expiringStatuses.has(status)) model.expiring_count += 1;
+
+    const stalePending = isStalePending(row);
+    const appealDue = isAppealFollowUpDue(row);
+    if (stalePending) model.stale_pending_count += 1;
+    if (appealDue) model.appeal_follow_up_due_count += 1;
+
+    const needsAction = intakeStatuses.has(status) || deniedPartialStatuses.has(status) || expiringStatuses.has(status) || stalePending || appealDue;
+    if (!needsAction) return;
+
+    const rowId = String(row.auth_case_id || `prior_auth_row_${idx}`);
+    if (needsActionIds.has(rowId)) return;
+    needsActionIds.add(rowId);
+    needsActionRows.push(row);
+
+    const revenue = positiveRevenue(row);
+    if (revenue > 0) model.known_revenue_at_risk += revenue;
+    else model.not_determined_count += 1;
+  });
+
+  needsActionRows.sort((a, b) => {
+    const riskRank = { High: 3, Medium: 2, Low: 1 };
+    const ar = riskRank[String(a.risk_level || "")] || 0;
+    const br = riskRank[String(b.risk_level || "")] || 0;
+    if (br !== ar) return br - ar;
+
+    const revDiff = positiveRevenue(b) - positiveRevenue(a);
+    if (revDiff !== 0) return revDiff;
+
+    const dateValue = (row) => {
+      const d = parseDateOnly(row.appeal_follow_up_date || row.expiration_date || row.submitted_date || row.scheduled_service_date || row.updated_at || row.created_at);
+      return d ? d.getTime() : Number.MAX_SAFE_INTEGER;
+    };
+    const dateDiff = dateValue(a) - dateValue(b);
+    if (dateDiff !== 0) return dateDiff;
+
+    return String(a.auth_case_id || "").localeCompare(String(b.auth_case_id || ""));
+  });
+
+  model.needs_action_count = needsActionRows.length;
+  model.has_actionable = model.needs_action_count > 0;
+  model.top_case = needsActionRows[0] || null;
+  model.top_next_action = model.top_case ? tjhpPriorAuthNextActionLabel(model.top_case) : "";
+  return model;
+}
+
+function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
+  const model = tjhpRevenueOverviewPriorAuthWorkModel(org_id);
+  const primaryHref = "/actions?tab=prior-auth&pa_sort=priority";
+  const uploadHref = "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity";
+  const disclaimer = `<div class="muted small" style="font-size:11px;margin-top:8px;">Manual/upload-driven only. No payer portal check or automatic submission occurs here.</div>`;
+
+  if (!model.has_cases) {
+    return `
+      <div class="prior-auth-work-strip prior-auth-work-empty">
+        <div class="prior-auth-work-head">
+          <div>
+            <h4>Prior Auths Needing Action</h4>
+            <p class="prior-auth-work-copy">Protect pre-service revenue before claims are billed.</p>
+          </div>
+          <div class="prior-auth-work-actions"><a class="btn small secondary" href="${uploadHref}">Upload Auth Materials</a></div>
+        </div>
+        <div class="muted small">No prior-auth work is active yet.</div>
+        <div class="muted small">Upload authorization requests or payer decisions when they affect pre-service revenue.</div>
+        ${disclaimer}
+      </div>
+    `;
+  }
+
+  if (!model.has_actionable) {
+    return `
+      <div class="prior-auth-work-strip prior-auth-work-empty">
+        <div class="prior-auth-work-head">
+          <div>
+            <h4>Prior Auths Needing Action</h4>
+            <p class="prior-auth-work-copy">Protect pre-service revenue before claims are billed.</p>
+          </div>
+          <div class="prior-auth-work-actions"><a class="btn small secondary" href="${primaryHref}">Open Prior Auth Work</a></div>
+        </div>
+        <div class="muted small">Prior auths are being monitored.</div>
+        <div class="muted small">No prior-auth cases need revenue action right now.</div>
+        ${disclaimer}
+      </div>
+    `;
+  }
+
+  const revenueText = model.known_revenue_at_risk > 0
+    ? formatMoneyUI(model.known_revenue_at_risk)
+    : "Not determined";
+  const notDetermined = model.not_determined_count > 0
+    ? `<span class="muted small">${formatNumberUI(model.not_determined_count)} case(s) have no reliable dollar amount yet.</span>`
+    : "";
+  const top = model.top_case || null;
+  const topDetails = top
+    ? [top.payer, top.requested_service, top.auth_number ? `Auth #${top.auth_number}` : ""].filter(Boolean).map(safeStr).join(" · ")
+    : "";
+  const topLine = top
+    ? `<div class="prior-auth-work-next"><strong>Next: ${safeStr(model.top_next_action || tjhpPriorAuthNextActionLabel(top))}</strong>${topDetails ? ` <span class="muted small">${topDetails}</span>` : ""}</div>`
+    : "";
+
+  return `
+    <div class="prior-auth-work-strip">
+      <div class="prior-auth-work-head">
+        <div>
+          <h4>Prior Auths Needing Action</h4>
+          <p class="prior-auth-work-copy">Protect pre-service revenue before claims are billed.</p>
+        </div>
+        <div class="prior-auth-work-actions"><a class="btn small secondary" href="${primaryHref}">Open Prior Auth Work</a></div>
+      </div>
+      <div class="prior-auth-work-grid">
+        <a class="prior-auth-work-metric" href="${primaryHref}">
+          <strong>${formatNumberUI(model.needs_action_count)}</strong>
+          <span>Needs Action</span>
+          <small>Review, appeal, missing docs, expiring, or stale auths.</small>
+        </a>
+        <a class="prior-auth-work-metric" href="/actions?tab=prior-auth&pa_stage=denied_partial&pa_sort=priority">
+          <strong>${formatNumberUI(model.denied_partial_count)}</strong>
+          <span>Denied / Partial</span>
+          <small>Payer decisions that may need appeal or follow-up.</small>
+        </a>
+        <a class="prior-auth-work-metric" href="/actions?tab=prior-auth&pa_stage=pending&pa_sort=follow_up">
+          <strong>${formatNumberUI(model.pending_count)}</strong>
+          <span>Pending / Stale</span>
+          <small>Submitted auths awaiting payer response. ${formatNumberUI(model.stale_pending_count)} stale.</small>
+        </a>
+      </div>
+      <div class="prior-auth-work-revenue"><strong>Known pre-service revenue at risk:</strong> ${safeStr(revenueText)} ${notDetermined}</div>
+      ${topLine}
+      ${disclaimer}
+    </div>
+  `;
+}
+
 
 
 function tjhpPriorAuthStaffStatusOptions(){
@@ -42586,6 +42782,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       followup: { count: 0, amount: 0 }
     });
     const todaysAtRiskTotal = todaysPriorities.denied.amount + todaysPriorities.underpaid.amount + todaysPriorities.followup.amount;
+    const priorAuthWorkStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(org.org_id);
     const revenueSummaryBlock = `
 <div class="insight-card priority-summary" style="margin-bottom:16px;">
 
@@ -42652,6 +42849,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </details>
     `
   }
+
+  ${priorAuthWorkStrip}
 
 </div>
 `;
@@ -42753,6 +42952,20 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .priority-claims[open] .priority-chevron{transform:rotate(180deg);}
         .priority-claim-list{margin-top:8px;}
         .priority-claim-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #eee;}
+        .prior-auth-work-strip{margin-top:12px;border:1px solid var(--border);border-top:3px solid var(--border);border-radius:12px;background:#f8fafc;padding:12px;}
+        .prior-auth-work-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;}
+        .prior-auth-work-head h4{margin:0;font-size:15px;}
+        .prior-auth-work-copy{margin:3px 0 0;color:var(--muted);font-size:12px;line-height:1.35;}
+        .prior-auth-work-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+        .prior-auth-work-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px;}
+        .prior-auth-work-metric{display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:10px;background:var(--card);padding:9px 10px;min-width:0;}
+        .prior-auth-work-metric strong{display:block;font-size:18px;line-height:1.05;}
+        .prior-auth-work-metric span{display:block;margin-top:4px;font-size:12px;font-weight:850;}
+        .prior-auth-work-metric small{display:block;margin-top:3px;color:var(--muted);font-size:11px;line-height:1.3;}
+        .prior-auth-work-revenue{margin-top:9px;font-size:12px;color:#111827;}
+        .prior-auth-work-revenue .muted{margin-left:6px;}
+        .prior-auth-work-next{margin-top:7px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        .prior-auth-work-empty{background:#f8fafc;}
         .recovery-snapshot{padding:16px;}
         .recovery-progress-wrap{border:1px solid var(--border);border-radius:12px;background:#f8fafc;padding:12px;margin-top:12px;}
         .recovery-progress-bar{height:10px;border-radius:999px;background:#e5e7eb;overflow:hidden;margin-top:8px;}
@@ -42776,8 +42989,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .health-fill{height:100%;border-radius:999px;background:#111827;}
         .health-driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px;}
         .health-driver{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px 12px;}
-        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-claim-row{align-items:flex-start;flex-direc
-tion:column;}.priority-claim-row .btn{width:100%;}}
+        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row .btn{width:100%;}.prior-auth-work-grid{grid-template-columns:1fr}.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}}
       </style>
 
       <div style="border-left:6px solid ${verdictColor};padding:14px 18px;margin-bottom:18px;background:var(--card);border-radius:10px;">
@@ -65262,6 +65474,192 @@ const SHOULD_RUN_UPLOAD_SMOKE_TESTS =
     (!IS_PROD && !IS_RAILWAY_RUNTIME)
   );
 
+if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  let smokeOrgId = "";
+  let emptyOrg = "";
+  try {
+    [
+      "PHASE_9A_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_OK",
+      "PRIOR_AUTH_REVENUE_OVERVIEW_NAVIGATION_ONLY_OK",
+      "PRIOR_AUTH_REVENUE_OVERVIEW_NO_MUTATION_OK",
+      "function tjhpRevenueOverviewPriorAuthWorkModel",
+      "function tjhpRevenueOverviewPriorAuthWorkStripHtml",
+      "Prior Auths Needing Action",
+      "Protect pre-service revenue before claims are billed.",
+      "Open Prior Auth Work",
+      "/actions?tab=prior-auth&pa_sort=priority",
+      "/actions?tab=prior-auth&pa_stage=denied_partial",
+      "/actions?tab=prior-auth&pa_stage=pending",
+      "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity",
+      "Manual/upload-driven only. No payer portal check or automatic submission occurs here.",
+      "${priorAuthWorkStrip}"
+    ].forEach(marker => assert(src.includes(marker), "missing Phase 9A marker: " + marker));
+
+    const topClaimsIdx = src.indexOf("Top claims to work today");
+    const stripIdx = src.indexOf("${priorAuthWorkStrip}");
+    const recoveryIdx = src.indexOf("Revenue Recovery Insights");
+    assert(topClaimsIdx >= 0, "missing top claims marker");
+    assert(stripIdx > topClaimsIdx && recoveryIdx > stripIdx, "prior-auth strip must render after top claims and before Revenue Recovery Insights");
+
+    ["renderClaimPanelBootstrap", "claimSidePanel", "claimSidePanelBackdrop", "window.openClaimPanel", "data-open-claim-panel", "view-claim-btn"].forEach(marker => {
+      assert(src.includes(marker), "missing protected claim panel marker: " + marker);
+    });
+    ["renderPriorAuthActionCenterPanelBootstrap", "priorAuthSidePanel", "priorAuthSidePanelBackdrop", "window.openPriorAuthPanel", "view-prior-auth-btn"].forEach(marker => {
+      assert(src.includes(marker), "missing protected prior-auth panel marker: " + marker);
+    });
+
+    function extractFunctionBody(functionName){
+      const start = src.indexOf("function " + functionName);
+      assert(start >= 0, "missing function for body extraction: " + functionName);
+      const open = src.indexOf("{", start);
+      assert(open >= 0, "missing opening brace for: " + functionName);
+      let depth = 0;
+      for (let i = open; i < src.length; i++) {
+        const ch = src[i];
+        if (ch === "{") depth += 1;
+        if (ch === "}") depth -= 1;
+        if (depth === 0) return src.slice(open + 1, i);
+      }
+      throw new Error("missing closing brace for: " + functionName);
+    }
+
+    const helperBodies = [
+      extractFunctionBody("tjhpRevenueOverviewPriorAuthWorkModel"),
+      extractFunctionBody("tjhpRevenueOverviewPriorAuthWorkStripHtml")
+    ].join("\n");
+    [
+      "requestOpenAIChatCompletion",
+      "fetchFHIRDocuments",
+      "fetchEHRDocuments",
+      "routePacket",
+      "submitPacket",
+      "scrapePortal",
+      "writeJSON",
+      "savePriorAuthCasesForOrg",
+      "upsertPriorAuthCase",
+      "appendAuditLog",
+      "createActionTask",
+      "createPacket",
+      "savePacket",
+      "OCR",
+      "payer portal submission",
+      "automatic prior-auth submission"
+    ].forEach(forbidden => assert(!helperBodies.includes(forbidden), "new helper body contains forbidden mutation/automation marker: " + forbidden));
+
+    const before = {
+      billed: JSON.stringify(readJSON(FILES.billed, [])),
+      payments: JSON.stringify(readJSON(FILES.payments, [])),
+      payer_contracts: JSON.stringify(readJSON(FILES.payer_contracts, [])),
+      document_ingests: JSON.stringify(readJSON(FILES.document_ingests, [])),
+      agent_workspaces: JSON.stringify(readJSON(FILES.agent_workspaces, [])),
+      upload_batches: JSON.stringify(readJSON(FILES.upload_batches, []))
+    };
+
+    smokeOrgId = "__phase9a_pa_revenue_overview_smoke__" + Date.now().toString(36);
+    emptyOrg = smokeOrgId + "_empty";
+    const staleDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    savePriorAuthCasesForOrg(smokeOrgId, []);
+    savePriorAuthCasesForOrg(smokeOrgId, [
+      {
+        auth_case_id: "pa_smoke_submitted_stale",
+        status: "Submitted",
+        submitted_date: staleDate,
+        risk_level: "Medium",
+        payer: "Smoke Payer A",
+        requested_service: "MRI",
+        estimated_revenue_at_risk: 500
+      },
+      {
+        auth_case_id: "pa_smoke_denied",
+        status: "Denied",
+        risk_level: "High",
+        payer: "Smoke Payer B",
+        requested_service: "Surgery",
+        auth_number: "AUTH-DENIED-1",
+        estimated_revenue_at_risk: 1200
+      },
+      {
+        auth_case_id: "pa_smoke_approved",
+        status: "Approved",
+        risk_level: "Low",
+        payer: "Smoke Payer C",
+        requested_service: "Physical Therapy",
+        estimated_revenue_at_risk: 300
+      },
+      {
+        auth_case_id: "pa_smoke_not_pursued",
+        status: "Not Pursued",
+        risk_level: "High",
+        payer: "Smoke Payer D",
+        requested_service: "Cancelled Service",
+        estimated_revenue_at_risk: 900
+      },
+      {
+        auth_case_id: "pa_smoke_auth_needed",
+        status: "Auth Needed",
+        risk_level: "Low",
+        payer: "Smoke Payer E",
+        requested_service: "CT",
+        estimated_revenue_at_risk: 0
+      }
+    ]);
+
+    const model = tjhpRevenueOverviewPriorAuthWorkModel(smokeOrgId);
+    assert.strictEqual(model.total_cases, 5, "total cases mismatch");
+    assert.strictEqual(model.denied_partial_count, 1, "denied / partial count mismatch");
+    assert.strictEqual(model.pending_count, 1, "pending count mismatch");
+    assert.strictEqual(model.stale_pending_count, 1, "stale pending count mismatch");
+    assert.strictEqual(model.intake_count, 1, "intake count mismatch");
+    assert.strictEqual(model.needs_action_count, 3, "needs action count mismatch");
+    assert.strictEqual(model.known_revenue_at_risk, 1700, "known revenue at risk mismatch");
+    assert.strictEqual(model.not_determined_count, 1, "not determined count mismatch");
+    assert(model.top_case, "top case missing");
+    assert.strictEqual(model.top_case.auth_case_id, "pa_smoke_denied", "top case sorting mismatch");
+    assert(model.top_next_action.includes("Prior Auth Appeal") || model.top_next_action.length > 0, "top next action missing");
+
+    const strip = tjhpRevenueOverviewPriorAuthWorkStripHtml(smokeOrgId);
+    [
+      "Prior Auths Needing Action",
+      "Open Prior Auth Work",
+      "Known pre-service revenue at risk",
+      formatMoneyUI(1700),
+      "Denied / Partial",
+      "Pending / Stale",
+      "Manual/upload-driven only. No payer portal check or automatic submission occurs here."
+    ].forEach(marker => assert(strip.includes(marker), "strip html missing marker: " + marker));
+
+    savePriorAuthCasesForOrg(emptyOrg, []);
+    const emptyStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(emptyOrg);
+    [
+      "No prior-auth work is active yet.",
+      "Upload Auth Materials",
+      "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity"
+    ].forEach(marker => assert(emptyStrip.includes(marker), "empty strip missing marker: " + marker));
+
+    savePriorAuthCasesForOrg(smokeOrgId, []);
+    savePriorAuthCasesForOrg(emptyOrg, []);
+    assert.strictEqual(getPriorAuthCases(smokeOrgId).length, 0, "smoke prior-auth cases not cleaned");
+    assert.strictEqual(getPriorAuthCases(emptyOrg).length, 0, "empty smoke prior-auth cases not cleaned");
+
+    assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), before.billed, "billed data changed");
+    assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), before.payments, "payments data changed");
+    assert.strictEqual(JSON.stringify(readJSON(FILES.payer_contracts, [])), before.payer_contracts, "payer contracts data changed");
+    assert.strictEqual(JSON.stringify(readJSON(FILES.document_ingests, [])), before.document_ingests, "document ingests data changed");
+    assert.strictEqual(JSON.stringify(readJSON(FILES.agent_workspaces, [])), before.agent_workspaces, "agent workspaces data changed");
+    assert.strictEqual(JSON.stringify(readJSON(FILES.upload_batches, [])), before.upload_batches, "upload batches data changed");
+
+    process.stdout.write("REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    try { if (smokeOrgId) savePriorAuthCasesForOrg(smokeOrgId, []); } catch (_) {}
+    try { if (emptyOrg) savePriorAuthCasesForOrg(emptyOrg, []); } catch (_) {}
+    process.stderr.write("REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+    process.exit(1);
+  }
+}
+
 
 function runPaymentMatchingSmokeTests(){
   function assert(c,m){ if(!c) throw new Error(m); }
@@ -67211,6 +67609,7 @@ if (process.env.TJHP_PRIOR_AUTH_NORMALIZATION_SMOKE_TESTS === "true" && (process
   }
 }
 
+// PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_DELEGATION_FIX_OK
 if (process.env.TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
@@ -67283,28 +67682,70 @@ if (process.env.TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS === "true" && (pr
       assert(uploadEnd > uploadStart, "prior auth upload route boundary missing");
 
       const uploadRouteSrc = src.slice(uploadStart, uploadEnd);
+      const uploadHelperStart = src.indexOf("async function tjhpProcessPriorAuthDataManagementUploadFiles");
+      const uploadHelperEnd = src.indexOf('if (method === "POST" && pathname === "/data-management/prior-auth/upload")', uploadHelperStart);
+      assert(uploadHelperStart >= 0 && uploadHelperEnd > uploadHelperStart, "prior auth delegated upload helper boundary missing");
 
+      const uploadHelperSrc = src.slice(uploadHelperStart, uploadHelperEnd);
+      const uploadRouteAndHelperSrc = uploadRouteSrc + "\n" + uploadHelperSrc;
+
+      assert(src.includes("PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_DELEGATION_FIX_OK"), "missing prior-auth Data Management UI smoke delegation fix marker");
       assert(uploadRouteSrc.includes("parseMultipartForm"), "prior auth upload route must use parseMultipartForm");
-      assert(uploadRouteSrc.includes("savePriorAuthUploadRecord"), "prior auth upload route must write upload ledger");
+      assert(uploadRouteSrc.includes("tjhpProcessPriorAuthDataManagementUploadFiles"), "prior auth upload route must delegate to prior-auth upload helper");
+      assert(uploadRouteSrc.includes('source_route: "/data-management/prior-auth/upload"'), "prior auth upload route must identify its source route");
+      assert(uploadHelperSrc.includes("savePriorAuthUploadRecord"), "delegated prior auth upload helper must write upload ledger");
+      assert(uploadHelperSrc.includes("upload_id: priorAuthUploadId"), "delegated prior auth upload helper must assign upload ledger id");
 
-      const uploadRouteHasPriorAuthParser = uploadRouteSrc.includes("parsePriorAuthStructuredRows");
+      const uploadRouteHasPriorAuthParser = uploadRouteAndHelperSrc.includes("parsePriorAuthStructuredRows");
 
       if (uploadRouteHasPriorAuthParser) {
         assert(
-          uploadRouteSrc.includes("parseCSV") || uploadRouteSrc.includes("tjhpParseRowsFromUploadedFileForRoute"),
+          uploadRouteAndHelperSrc.includes("parseCSV") || uploadRouteAndHelperSrc.includes("tjhpParseRowsFromUploadedFileForRoute"),
           "prior auth parser wiring must parse structured rows from uploaded CSV/data"
         );
-        assert(uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth parser wiring should create cases only after structured parse");
-        assert(uploadRouteSrc.includes("stored_for_review"), "prior auth parser wiring must still store unparsed/uncertain files for review");
+        [
+          "parsePriorAuthStructuredRows",
+          "upsertPriorAuthCase",
+          "stored_for_review",
+          "needs_review",
+          "parsed_prior_auth_cases",
+          "unsupported_file_type",
+          "source_upload_batch_id: priorAuthUploadId"
+        ].forEach(marker => assert(uploadRouteAndHelperSrc.includes(marker), "prior auth parser/helper marker missing: " + marker));
       } else {
-        assert(!uploadRouteSrc.includes("upsertPriorAuthCase"), "prior auth upload route must not create cases before parser wiring");
+        assert(!uploadRouteAndHelperSrc.includes("upsertPriorAuthCase"), "prior auth upload route/helper must not create cases before parser wiring");
       }
 
-      assert(!uploadRouteSrc.includes("/upload-router"), "prior auth upload route must not call upload-router");
-      assert(!uploadRouteSrc.includes("document_ingests"), "prior auth upload route must not mutate document_ingests");
-      assert(!uploadRouteSrc.includes("FILES.billed"), "prior auth upload route must not mutate billed claims");
-      assert(!uploadRouteSrc.includes("FILES.payments"), "prior auth upload route must not mutate payments");
-      assert(!uploadRouteSrc.includes("FILES.payer_contracts"), "prior auth upload route must not mutate contracts");
+      [
+        "/upload-router",
+        "document_ingests",
+        "FILES.billed",
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "writeJSON(FILES.billed",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests"
+      ].forEach(marker => assert(!uploadRouteSrc.includes(marker), "prior auth upload route must not contain forbidden marker: " + marker));
+
+      [
+        "document_ingests",
+        "FILES.billed",
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "writeJSON(FILES.billed",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests",
+        "requestOpenAIChatCompletion",
+        "fetchFHIRDocuments",
+        "fetchEHRDocuments",
+        "scrapePortal",
+        "routePacket",
+        "submitPacket",
+        "automatic prior-auth submission",
+        "payer portal submission"
+      ].forEach(marker => assert(!uploadHelperSrc.includes(marker), "prior auth upload helper must not contain forbidden marker: " + marker));
 
       const priorAuthContentStart = src.indexOf("const priorAuthContent = `");
       const priorAuthContentEnd = src.indexOf("const practiceContent = revenueContent;", priorAuthContentStart);
@@ -67479,9 +67920,22 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
       assert(uploadEnd > uploadStart, "prior auth upload route boundary missing");
 
       const uploadRouteSrc = src.slice(uploadStart, uploadEnd);
+      const uploadHelperStart = src.indexOf("async function tjhpProcessPriorAuthDataManagementUploadFiles");
+      const uploadHelperEnd = src.indexOf('if (method === "POST" && pathname === "/data-management/prior-auth/upload")', uploadHelperStart);
+      assert(uploadHelperStart >= 0 && uploadHelperEnd > uploadHelperStart, "prior auth delegated upload helper boundary missing");
+      const uploadHelperSrc = src.slice(uploadHelperStart, uploadHelperEnd);
+      const uploadRouteAndHelperSrc = uploadRouteSrc + "\n" + uploadHelperSrc;
 
       [
         "parseMultipartForm",
+        "pa_status=parsed",
+        "pa_status=uploaded",
+        "pa_status=upload_failed",
+        "tjhpProcessPriorAuthDataManagementUploadFiles",
+        'source_route: "/data-management/prior-auth/upload"'
+      ].forEach(x => assert(uploadRouteSrc.includes(x), "prior auth CSV upload route missing marker: " + x));
+
+      [
         "tjhpParseRowsFromUploadedFileForRoute",
         "allowExcelStructured: true",
         "parsePriorAuthStructuredRows",
@@ -67493,14 +67947,11 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
         "const isStructuredPriorAuthUpload",
         "unsupported_file_type",
         "No reliable prior authorization fields were extracted.",
-        "uploaded but structured prior-auth rows were not recognized. Stored for review.",
-        "pa_status=parsed",
-        "pa_status=uploaded",
-        "pa_status=upload_failed"
-      ].forEach(x => assert(uploadRouteSrc.includes(x), "prior auth CSV upload route missing marker: " + x));
+        "uploaded but structured prior-auth rows were not recognized. Stored for review."
+      ].forEach(x => assert(uploadRouteAndHelperSrc.includes(x), "prior auth CSV upload route/helper missing marker: " + x));
 
-      assert(uploadRouteSrc.includes('["CSV","EXCEL","TXT","PDF","WORD","IMAGE"].includes(String(parsedFile.kind || ""))'), "prior auth upload route must allow CSV/EXCEL/TXT/PDF/WORD/IMAGE structured uploads");
-      assert(uploadRouteSrc.includes('{ minConfidence: "high" }'), "prior auth upload route must require high confidence");
+      assert(uploadRouteAndHelperSrc.includes('["CSV","EXCEL","TXT","PDF","WORD","IMAGE"].includes(String(parsedFile.kind || ""))'), "prior auth upload helper must allow CSV/EXCEL/TXT/PDF/WORD/IMAGE structured uploads");
+      assert(uploadRouteAndHelperSrc.includes('{ minConfidence: "high" }'), "prior auth upload helper must require high confidence");
       assert(uploadRouteSrc.includes("totalParsedCases > 0"), "prior auth upload route must redirect parsed only when cases are created");
 
       [
@@ -67514,6 +67965,23 @@ if (process.env.TJHP_PRIOR_AUTH_CSV_UPLOAD_STATIC_SMOKE_TESTS === "true" && (pro
         "writeJSON(FILES.payer_contracts",
         "writeJSON(FILES.document_ingests"
       ].forEach(x => assert(!uploadRouteSrc.includes(x), "prior auth upload route must not include: " + x));
+
+      [
+        "FILES.billed",
+        "FILES.payments",
+        "FILES.payer_contracts",
+        "document_ingests",
+        "writeJSON(FILES.billed",
+        "writeJSON(FILES.payments",
+        "writeJSON(FILES.payer_contracts",
+        "writeJSON(FILES.document_ingests",
+        "requestOpenAIChatCompletion",
+        "fetchFHIRDocuments",
+        "fetchEHRDocuments",
+        "scrapePortal",
+        "routePacket",
+        "submitPacket"
+      ].forEach(x => assert(!uploadHelperSrc.includes(x), "prior auth upload helper must not include: " + x));
 
       const priorAuthContentStart = src.indexOf("const priorAuthContent = `");
       const priorAuthContentEnd = src.indexOf("const practiceContent = revenueContent;", priorAuthContentStart);
