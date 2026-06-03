@@ -1170,7 +1170,7 @@ function tjhpPriorAuthLifecycleLaneDefinitions(){
     {
       key: "intake",
       label: "Intake / Draft",
-      helper: "Manual or uploaded prior-auth cases not yet submitted.",
+      helper: "Manual entries or uploaded request materials where no payer submission or payer decision has been confirmed.",
       href: "/actions?tab=prior-auth&pa_stage=intake"
     },
     {
