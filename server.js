@@ -1114,6 +1114,187 @@ function tjhpPriorAuthNextActionLabel(row = {}){
   return "Review prior authorization";
 }
 
+function tjhpPriorAuthLifecycleGroupForRow(row = {}){
+  const status = String(row.status || "").trim();
+
+  if (["Auth Needed", "Draft"].includes(status)) return "intake";
+  if (["Submitted", "Pending"].includes(status)) return "pending";
+  if (["Denied", "Partially Approved", "Appeal Needed", "Missing Documentation", "Peer-to-Peer Needed"].includes(status)) return "denied_partial";
+  if (status === "Appeal Submitted") return "appeal_submitted";
+  if (["Approved", "Ready to Bill", "Expiring Soon", "Expired"].includes(status)) return "approved_ready";
+
+  return "";
+}
+
+function tjhpPriorAuthLifecycleLaneDefinitions(){
+  return [
+    {
+      key: "intake",
+      label: "Intake / Draft",
+      helper: "Manual or uploaded prior-auth cases not yet submitted.",
+      href: "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity"
+    },
+    {
+      key: "pending",
+      label: "Submitted / Pending",
+      helper: "Prior-auth requests submitted or awaiting payer response.",
+      href: "/actions?tab=prior-auth"
+    },
+    {
+      key: "denied_partial",
+      label: "Denied / Partial",
+      helper: "Denied, partially approved, missing documentation, or peer-to-peer cases.",
+      href: "/actions?tab=prior-auth"
+    },
+    {
+      key: "appeal_submitted",
+      label: "Appeal Submitted",
+      helper: "Manual appeal submission logged and awaiting payer response.",
+      href: "/actions?tab=prior-auth"
+    },
+    {
+      key: "approved_ready",
+      label: "Approved / Ready",
+      helper: "Approved, ready-to-bill, expiring, or expired authorizations.",
+      href: "/actions?tab=prior-auth"
+    }
+  ];
+}
+
+function tjhpPriorAuthLifecycleLaneModel(org_id = ""){
+  const rows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
+  const definitions = tjhpPriorAuthLifecycleLaneDefinitions();
+
+  const groups = new Map(
+    definitions.map(def => [
+      def.key,
+      {
+        ...def,
+        count: 0,
+        known_revenue_at_risk: 0,
+        not_determined_count: 0,
+        latest_follow_up_date: "",
+        latest_case: null,
+        statuses: {}
+      }
+    ])
+  );
+
+  rows.forEach(row => {
+    const groupKey = tjhpPriorAuthLifecycleGroupForRow(row);
+    if (!groupKey || !groups.has(groupKey)) return;
+
+    const bucket = groups.get(groupKey);
+    bucket.count += 1;
+
+    const status = String(row.status || "Unknown").trim() || "Unknown";
+    bucket.statuses[status] = (bucket.statuses[status] || 0) + 1;
+
+    const revenue = Number(row.estimated_revenue_at_risk || 0) || 0;
+    if (revenue > 0) {
+      bucket.known_revenue_at_risk += revenue;
+    } else {
+      bucket.not_determined_count += 1;
+    }
+
+    const submission = tjhpPriorAuthLatestSubmission(row);
+    const followUp = String(
+      row.appeal_follow_up_date ||
+      (submission && submission.follow_up_date) ||
+      ""
+    ).trim();
+
+    if (followUp && (!bucket.latest_follow_up_date || followUp < bucket.latest_follow_up_date)) {
+      bucket.latest_follow_up_date = followUp;
+    }
+
+    const currentUpdated = new Date(row.updated_at || row.created_at || 0).getTime() || 0;
+    const latestUpdated = bucket.latest_case
+      ? (new Date(bucket.latest_case.updated_at || bucket.latest_case.created_at || 0).getTime() || 0)
+      : 0;
+
+    if (!bucket.latest_case || currentUpdated > latestUpdated) {
+      bucket.latest_case = row;
+    }
+  });
+
+  const activeCount = Array.from(groups.values()).reduce((sum, item) => sum + item.count, 0);
+  const knownRevenueAtRisk = Array.from(groups.values()).reduce((sum, item) => sum + item.known_revenue_at_risk, 0);
+
+  return {
+    rows,
+    groups: Array.from(groups.values()),
+    active_count: activeCount,
+    known_revenue_at_risk: knownRevenueAtRisk,
+    not_determined_count: rows.filter(row => (Number(row.estimated_revenue_at_risk || 0) || 0) <= 0).length
+  };
+}
+
+function tjhpPriorAuthLifecycleLaneHtml(org_id = ""){
+  const model = tjhpPriorAuthLifecycleLaneModel(org_id);
+  const groups = model.groups || [];
+
+  const cardHtml = groups.map(group => {
+    const hasRows = Number(group.count || 0) > 0;
+    const revenueText = group.known_revenue_at_risk > 0
+      ? `Known at risk: ${formatMoneyUI(group.known_revenue_at_risk)}`
+      : "Revenue at risk: Not determined";
+
+    const statusText = Object.entries(group.statuses || {})
+      .map(([status, count]) => `${status}: ${formatNumberUI(count)}`)
+      .join(" · ");
+
+    const followUpText = group.latest_follow_up_date
+      ? `Next follow-up: ${group.latest_follow_up_date}`
+      : "";
+
+    return `
+      <a href="${safeStr(group.href)}" style="text-decoration:none;color:inherit;flex:1;min-width:170px;">
+        <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--card);height:100%;">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+            <div style="font-weight:950;">${safeStr(group.label)}</div>
+            <span class="badge ${hasRows ? "warn" : "ok"}">${formatNumberUI(group.count || 0)}</span>
+          </div>
+          <div class="muted small" style="margin-top:4px;">${safeStr(group.helper)}</div>
+          ${hasRows ? `
+            <div class="muted small" style="margin-top:8px;">${safeStr(revenueText)}</div>
+            ${statusText ? `<div class="muted small" style="margin-top:4px;">${safeStr(statusText)}</div>` : ""}
+            ${followUpText ? `<div class="muted small" style="margin-top:4px;">${safeStr(followUpText)}</div>` : ""}
+          ` : `
+            <div class="muted small" style="margin-top:8px;">No prior-auth cases in this lane.</div>
+          `}
+        </div>
+      </a>
+    `;
+  }).join("");
+
+  return `
+    <div class="insight-card" id="pre-service-prior-auth-lane" style="margin-top:14px;">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+        <div>
+          <h3 style="margin:0;">Pre-Service Prior Authorization <span class="tooltip" data-tip="Read-only pre-service visibility based on prior authorization cases created from uploads or manual entry. This does not use EHR or payer portal automation.">ⓘ</span></h3>
+          <p class="muted small" style="margin:4px 0 0;">
+            Manual/upload-driven prior-auth visibility before claims enter the post-submission lifecycle.
+          </p>
+        </div>
+        <div class="muted small">
+          Active prior-auth cases: ${formatNumberUI(model.active_count || 0)}
+        </div>
+      </div>
+
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;">
+        ${cardHtml}
+      </div>
+
+      <div class="muted small" style="margin-top:10px;">
+        This lane does not create auth-needed tasks automatically, does not check payer portals, and does not change claim lifecycle totals.
+      </div>
+    </div>
+  `;
+}
+
+// PRIOR_AUTH_CLAIMS_LIFECYCLE_PRE_SERVICE_LANE_OK
+
 function tjhpPriorAuthLatestSubmission(row = {}){
   const submissions = Array.isArray(row.prior_auth_submissions)
     ? row.prior_auth_submissions
@@ -3978,7 +4159,7 @@ function tjhpPriorAuthAiEhrPromptContext(org = {}, row = {}, prompt = ""){
     return [
       "User asked about EHR/clinical records.",
       "EHR retrieval requires an Enterprise plan with integrations enabled.",
-      "No live EHR pull occurred in this drafting request.",
+      "No live EHR data pull occurred in this drafting request.",
       "If records are missing, tell staff to upload clinical notes, labs, imaging, medication history, treatment history, and provider documentation manually."
     ].join("\n");
   }
@@ -3987,7 +4168,7 @@ function tjhpPriorAuthAiEhrPromptContext(org = {}, row = {}, prompt = ""){
     return [
       "User asked about EHR/clinical records.",
       "Enterprise integrations are enabled, but no connected EHR integration is available.",
-      "No live EHR pull occurred in this drafting request.",
+      "No live EHR data pull occurred in this drafting request.",
       "If records are missing, tell staff to connect EHR integration or upload clinical documentation manually."
     ].join("\n");
   }
@@ -3995,7 +4176,7 @@ function tjhpPriorAuthAiEhrPromptContext(org = {}, row = {}, prompt = ""){
   return [
     "User asked about EHR/clinical records.",
     "Enterprise EHR integration appears configured.",
-    "No live EHR pull occurred in this drafting request.",
+    "No live EHR data pull occurred in this drafting request.",
     "Use only uploaded/source-proof evidence already present in the workspace. If additional EHR documents are needed, describe what should be retrieved in a future EHR retrieval action."
   ].join("\n");
 }
@@ -5162,7 +5343,7 @@ async function refreshPayerPolicySourceSnapshot(org_id, source_id){
     rows[idx] = {
       ...source,
       fetch_status: "not_fetchable",
-      fetch_error: "This source requires payer portal/API/manual access and is not eligible for public URL caching.",
+      fetch_error: "This source requires payer portal, API, or manual access and is not eligible for public URL caching.",
       updated_at: nowISO()
     };
 
@@ -5170,7 +5351,7 @@ async function refreshPayerPolicySourceSnapshot(org_id, source_id){
 
     return {
       ok:false,
-      message:"This source is not public. Use payer portal/API integration or manual upload for this source."
+      message:"This source is not public. Use payer portal or API integration or manual upload for this source."
     };
   }
 
@@ -5622,7 +5803,7 @@ function renderPayerPolicySourceLibraryPanel(org_id, orgContext=null){
       </div>
 
       <div class="alert" style="background:#eff6ff;color:#1e3a8a;border-color:#bfdbfe;">
-        Public-source cache only. Do not include PHI in URLs. Payer-login content should be pulled later through authorized payer portal/API integrations.
+        Public-source cache only. Do not include PHI in URLs. Payer-login content should be pulled later through authorized payer portal or API integrations.
       </div>
 
       <details id="payerPolicyStarterPacks" class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
@@ -44087,8 +44268,10 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       ${nextActionBanner}
 
       <div class="muted small" style="margin-bottom:10px;">
-        Click a stage to drill into those claims, then move them into the Action Center or workspace.
+        Click a stage to drill into those claims, then move them into the Action Center or workspace. Prior authorization appears as a compact pre-service lane based on uploaded/manual prior-auth cases.
       </div>
+
+      ${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}
 
       ${pipelineHtml}
       ${lifecycleTable}
@@ -60346,7 +60529,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
       content_hash: "",
       last_fetched_at: "",
       fetch_status: access_type === "public" ? "not_fetched" : "not_fetchable",
-      fetch_error: access_type === "public" ? "" : "Saved as non-public source. Use payer portal/API integration or manual upload.",
+      fetch_error: access_type === "public" ? "" : "Saved as non-public source. Use payer portal or API integration or manual upload.",
       created_at: nowISO(),
       updated_at: nowISO()
     });
@@ -66428,6 +66611,42 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS === "t
     ["REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","FORECAST_CHART_LABEL_CLEANUP_SMOKE_TESTS_PASSED","LAUNCH_READINESS_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
     process.stdout.write("REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+if (process.env.TJHP_PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+
+    ["PRIOR_AUTH_CLAIMS_LIFECYCLE_PRE_SERVICE_LANE_OK","tjhpPriorAuthLifecycleGroupForRow","tjhpPriorAuthLifecycleLaneDefinitions","tjhpPriorAuthLifecycleLaneModel","tjhpPriorAuthLifecycleLaneHtml","Pre-Service Prior Authorization","pre-service-prior-auth-lane","Manual/upload-driven prior-auth visibility before claims enter the post-submission lifecycle.","This lane does not create auth-needed tasks automatically","does not check payer portals","does not change claim lifecycle totals","Intake / Draft","Submitted / Pending","Denied / Partial","Appeal Submitted","Approved / Ready","${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}","${pipelineHtml}"].forEach(x => assert(src.includes(x), "missing prior-auth lifecycle lane marker: " + x));
+    ["Claims Lifecycle Stages","Awaiting Payment","Denied","Underpaid","Resolved","const pipelineHtml = `","const pipelineAgg = {","lifecycleTable","lifecycleClaimsData","totalAtRiskAll","Total Revenue at Risk"].forEach(x => assert(src.includes(x), "missing claims lifecycle core marker: " + x));
+
+    const paIdx = src.indexOf("${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}");
+    const pipeIdx = src.indexOf("${pipelineHtml}");
+    assert(paIdx >= 0 && pipeIdx >= 0 && paIdx < pipeIdx, "prior-auth lane should render before claim lifecycle pipeline");
+
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Auth Needed" }), "intake");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Draft" }), "intake");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Submitted" }), "pending");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Pending" }), "pending");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Denied" }), "denied_partial");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Partially Approved" }), "denied_partial");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Appeal Needed" }), "denied_partial");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Missing Documentation" }), "denied_partial");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Peer-to-Peer Needed" }), "denied_partial");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Appeal Submitted" }), "appeal_submitted");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Approved" }), "approved_ready");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Ready to Bill" }), "approved_ready");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Expiring Soon" }), "approved_ready");
+    assert.strictEqual(tjhpPriorAuthLifecycleGroupForRow({ status:"Expired" }), "approved_ready");
+
+    ["automatically create auth-" + "needed","payer portal" + "/API","EHR" + " pull","claim/prior-auth automatic" + " linking","POST /prior-auth/appeal-workspace" + "/payer-response"].forEach(x => assert(!src.includes(x), "forbidden automation or mutation marker present: " + x));
+    ["getPriorAuthCases","tjhpPriorAuthActionCenterRows","renderPriorAuthActionCenterPanelBootstrap","PRIOR_AUTH_ACTION_CENTER_PANEL_AND_QUICK_ACTIONS_OK","PRIOR_AUTH_UNIFIED_UPLOAD_INTAKE_OK","PRIOR_AUTH_UPLOAD_INTAKE_FILTER_POLISH_OK",'if (method === "GET" && pathname === "/prior-auth/appeal-workspace")','if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")','if (method === "POST" && pathname === "/upload-router")','if (method === "POST" && pathname === "/data-management/prior-auth/upload")',"renderClaimPanelBootstrap","claimSidePanel","window.openClaimPanel","renderInlineAIAssist","workspaceAiInteractiveTrackChangesHtml"].forEach(x => assert(src.includes(x), "protected helper or route marker missing: " + x));
+
+    process.stdout.write("PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) {
+    process.stderr.write("PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
+  }
 }
 
 if (process.env.TJHP_PRIOR_AUTH_NORMALIZATION_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
