@@ -1132,33 +1132,177 @@ function tjhpPriorAuthLifecycleLaneDefinitions(){
       key: "intake",
       label: "Intake / Draft",
       helper: "Manual or uploaded prior-auth cases not yet submitted.",
-      href: "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity"
+      href: "/actions?tab=prior-auth&pa_stage=intake"
     },
     {
       key: "pending",
       label: "Initial Request Pending",
       helper: "Initial prior-auth requests staff uploaded or marked submitted; awaiting payer decision.",
-      href: "/actions?tab=prior-auth"
+      href: "/actions?tab=prior-auth&pa_stage=pending"
     },
     {
       key: "denied_partial",
       label: "Denied / Partial",
       helper: "Denied, partially approved, missing documentation, or peer-to-peer cases.",
-      href: "/actions?tab=prior-auth"
+      href: "/actions?tab=prior-auth&pa_stage=denied_partial"
     },
     {
       key: "appeal_submitted",
       label: "Appeal Submitted",
       helper: "Appeal packets staff marked submitted; awaiting payer response.",
-      href: "/actions?tab=prior-auth"
+      href: "/actions?tab=prior-auth&pa_stage=appeal_submitted"
     },
     {
       key: "approved_ready",
       label: "Approved / Ready",
       helper: "Approved, ready-to-bill, expiring, or expired authorizations.",
-      href: "/actions?tab=prior-auth"
+      href: "/actions?tab=prior-auth&pa_stage=approved_ready"
     }
   ];
+}
+
+function tjhpPriorAuthActionCenterStageOptions(){
+  return [
+    { key: "all", label: "All Prior Auths" },
+    { key: "intake", label: "Intake / Draft" },
+    { key: "pending", label: "Initial Request Pending" },
+    { key: "denied_partial", label: "Denied / Partial" },
+    { key: "appeal_submitted", label: "Appeal Submitted" },
+    { key: "approved_ready", label: "Approved / Ready" }
+  ];
+}
+
+function tjhpPriorAuthActionCenterStageLabel(value = ""){
+  const raw = String(value || "").trim();
+  const match = tjhpPriorAuthActionCenterStageOptions().find(x => x.key === raw);
+  return match ? match.label : "All Prior Auths";
+}
+
+function tjhpPriorAuthNormalizeActionCenterStage(value = ""){
+  const raw = String(value || "").trim().toLowerCase();
+  const allowed = new Set(tjhpPriorAuthActionCenterStageOptions().map(x => x.key));
+  return allowed.has(raw) ? raw : "all";
+}
+
+function tjhpPriorAuthActionCenterDateForFilter(row = {}){
+  return String(
+    row.appeal_follow_up_date ||
+    row.expiration_date ||
+    row.appeal_submitted_at ||
+    row.appeal_submitted_date ||
+    row.submitted_date ||
+    row.determination_date ||
+    row.updated_at ||
+    row.created_at ||
+    ""
+  ).trim();
+}
+
+function tjhpPriorAuthActionCenterWithinRange(row = {}, range = "all"){
+  const rawRange = String(range || "all").trim().toLowerCase();
+  if (!rawRange || rawRange === "all") return true;
+
+  const days = rawRange === "last90" || rawRange === "90" ? 90 : 30;
+  const rawDate = tjhpPriorAuthActionCenterDateForFilter(row);
+  if (!rawDate) return true;
+
+  const ms = new Date(rawDate).getTime();
+  if (!Number.isFinite(ms)) return true;
+
+  const cutoff = Date.now() - (days * 24 * 60 * 60 * 1000);
+  return ms >= cutoff;
+}
+
+function tjhpPriorAuthActionCenterFilterModel(org_id = "", query = {}){
+  const allRows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
+  const defaultRows = tjhpPriorAuthActionCenterRows(org_id).map(normalizePriorAuthCase);
+
+  const search = String(query.pa_search || "").trim();
+  const searchLower = search.toLowerCase();
+  const payer = String(query.pa_payer || "all").trim() || "all";
+  const stage = tjhpPriorAuthNormalizeActionCenterStage(query.pa_stage || "all");
+  const status = String(query.pa_status || "all").trim() || "all";
+  const range = String(query.pa_range || "all").trim() || "all";
+  const sort = String(query.pa_sort || "priority").trim() || "priority";
+
+  const filterActive = Boolean(
+    search ||
+    payer !== "all" ||
+    stage !== "all" ||
+    status !== "all" ||
+    range !== "all" ||
+    sort !== "priority"
+  );
+
+  const sourceRows = filterActive ? allRows : defaultRows;
+
+  const rows = sourceRows.filter(row => {
+    if (payer !== "all" && String(row.payer || "") !== payer) return false;
+    if (status !== "all" && String(row.status || "") !== status) return false;
+    if (stage !== "all" && tjhpPriorAuthLifecycleGroupForRow(row) !== stage) return false;
+    if (!tjhpPriorAuthActionCenterWithinRange(row, range)) return false;
+
+    if (searchLower) {
+      const haystack = [
+        row.patient_name,
+        row.patient_id,
+        row.payer,
+        row.requested_service,
+        row.auth_number,
+        row.cpt_hcpcs,
+        row.icd10,
+        row.status,
+        row.denial_reason,
+        row.partial_approval_reason,
+        row.notes
+      ].map(x => String(x || "").toLowerCase()).join(" ");
+
+      if (!haystack.includes(searchLower)) return false;
+    }
+
+    return true;
+  });
+
+  rows.sort((a, b) => {
+    if (sort === "follow_up") {
+      const ad = new Date(a.appeal_follow_up_date || a.expiration_date || a.updated_at || 0).getTime() || 0;
+      const bd = new Date(b.appeal_follow_up_date || b.expiration_date || b.updated_at || 0).getTime() || 0;
+      return ad - bd;
+    }
+
+    if (sort === "status") {
+      const s = String(a.status || "").localeCompare(String(b.status || ""));
+      if (s !== 0) return s;
+    }
+
+    if (sort === "updated") {
+      const ad = new Date(a.updated_at || a.created_at || 0).getTime() || 0;
+      const bd = new Date(b.updated_at || b.created_at || 0).getTime() || 0;
+      return bd - ad;
+    }
+
+    const riskRank = { High:3, Medium:2, Low:1 };
+    const ar = riskRank[String(a.risk_level || "")] || 0;
+    const br = riskRank[String(b.risk_level || "")] || 0;
+    if (br !== ar) return br - ar;
+
+    const ad = new Date(a.expiration_date || a.scheduled_service_date || a.submitted_date || a.updated_at || a.created_at || 0).getTime() || 0;
+    const bd = new Date(b.expiration_date || b.scheduled_service_date || b.submitted_date || b.updated_at || b.created_at || 0).getTime() || 0;
+    return ad - bd;
+  });
+
+  return {
+    allRows,
+    defaultRows,
+    rows,
+    filterActive,
+    search,
+    payer,
+    stage,
+    status,
+    range,
+    sort
+  };
 }
 
 function tjhpPriorAuthLifecycleLaneModel(org_id = ""){
@@ -1272,9 +1416,9 @@ function tjhpPriorAuthLifecycleLaneHtml(org_id = ""){
     <div class="insight-card" id="pre-service-prior-auth-lane" style="margin-top:14px;">
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;">
         <div>
-          <h3 style="margin:0;">Pre-Service Prior Authorization <span class="tooltip" data-tip="Read-only pre-service visibility based on prior authorization cases created from uploads, manual entry, or staff-marked workflow updates. No EHR, payer portal, or automated submission occurs here.">ⓘ</span></h3>
+          <h3 style="margin:0;">Pre-Service Prior Authorization <span class="tooltip" data-tip="Pre-service prior-auth navigation based on prior authorization cases created from uploads, manual entry, or staff-marked workflow updates. No EHR, payer portal, or automated submission occurs here.">ⓘ</span></h3>
           <p class="muted small" style="margin:4px 0 0;">
-            Pre-service prior-auth visibility based on uploaded documents and manual workflow updates.
+            Pre-service prior-auth visibility based on uploaded documents and manual workflow updates. Click a stage to view matching prior-auth cases.
           </p>
         </div>
         <div class="muted small">
@@ -1299,7 +1443,7 @@ function tjhpPriorAuthLifecycleLaneHtml(org_id = ""){
       </style>
 
       <div class="muted small" style="margin-top:10px;">
-        Manual/upload-driven only. TJ Healthcare Pro does not submit prior authorization requests or appeals to payers automatically, does not check payer portals, and does not change claim lifecycle totals.
+        Manual/upload-driven only. Clicking a stage opens matching prior-auth cases. TJ Healthcare Pro does not submit prior authorization requests or appeals to payers automatically, does not check payer portals, and does not change claim lifecycle totals.
       </div>
     </div>
   `;
@@ -1307,6 +1451,7 @@ function tjhpPriorAuthLifecycleLaneHtml(org_id = ""){
 
 // PRIOR_AUTH_CLAIMS_LIFECYCLE_PRE_SERVICE_LANE_OK
 // PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_OK
+// PRIOR_AUTH_LIFECYCLE_TO_ACTION_CENTER_FILTERS_OK
 
 function tjhpPriorAuthLatestSubmission(row = {}){
   const submissions = Array.isArray(row.prior_auth_submissions)
@@ -44281,7 +44426,7 @@ if (method === "GET" && (pathname === "/claims" || pathname === "/claims-lifecyc
       ${nextActionBanner}
 
       <div class="muted small" style="margin-bottom:10px;">
-        Click a stage to drill into those claims, then move them into the Action Center or workspace. Prior authorization appears as a compact pre-service lane based on uploaded documents and manual workflow updates.
+        Click a stage to drill into those claims, then move them into the Action Center or workspace. Prior authorization appears as a compact pre-service lane based on uploaded documents and manual workflow updates; click a prior-auth stage to open matching cases.
       </div>
 
       ${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}
@@ -51834,7 +51979,26 @@ if (method === "GET" && pathname === "/actions") {
   ` : ``;
 
   if (tab === "prior-auth") {
-    const priorAuthActionRows = tjhpPriorAuthActionCenterRows(org.org_id);
+    const priorAuthFilterModel = tjhpPriorAuthActionCenterFilterModel(org.org_id, parsed.query || {});
+    const priorAuthActionRows = priorAuthFilterModel.rows;
+    const priorAuthPayers = Array.from(new Set(
+      priorAuthFilterModel.allRows
+        .map(x => String(x.payer || "").trim())
+        .filter(Boolean)
+    )).sort();
+
+    const priorAuthStatuses = Array.from(new Set(
+      priorAuthFilterModel.allRows
+        .map(x => String(x.status || "").trim())
+        .filter(Boolean)
+    )).sort();
+
+    const priorAuthStageOptions = tjhpPriorAuthActionCenterStageOptions();
+
+    const priorAuthFilterSummary = priorAuthFilterModel.filterActive
+      ? `Showing ${formatNumberUI(priorAuthActionRows.length)} of ${formatNumberUI(priorAuthFilterModel.allRows.length)} prior-auth cases for selected filters.`
+      : `Showing ${formatNumberUI(priorAuthActionRows.length)} prior-auth cases needing staff attention.`;
+
     const priorAuthActionHref = (x, kind) => {
       const id = encodeURIComponent(x.auth_case_id || "");
       if (kind === "case") return `/prior-auth/case?auth_case_id=${id}`;
@@ -51876,6 +52040,10 @@ if (method === "GET" && pathname === "/actions") {
       `;
     };
 
+    const priorAuthEmptyState = priorAuthFilterModel.filterActive
+      ? "No prior authorization cases match the selected filters."
+      : "No prior authorization cases need staff attention.";
+
     const priorAuthRowsHtml = priorAuthActionRows.map(x => {
       const latestSubmission = tjhpPriorAuthLatestSubmission(x);
       const submittedDisplay = latestSubmission
@@ -51910,7 +52078,7 @@ if (method === "GET" && pathname === "/actions") {
         </td>
       </tr>
     `;
-    }).join("") || `<tr><td colspan="12" class="muted">No prior authorization cases need action.</td></tr>`;
+    }).join("") || `<tr><td colspan="12" class="muted">${safeStr(priorAuthEmptyState)}</td></tr>`;
 
     const priorAuthPanelBootstrap = renderPriorAuthActionCenterPanelBootstrap(
       "actionCenterPriorAuthData",
@@ -51928,7 +52096,70 @@ if (method === "GET" && pathname === "/actions") {
 
       <div class="insight-card" style="margin-top:10px;">
         <h3 style="margin:0 0 6px;">Prior Auths</h3>
-        <div class="muted small">Read-only queue of prior authorization cases that need staff attention. View opens a prior-auth case panel; quick actions open the workspace, packet preview, response upload context, or next-round workflow.</div>
+        <div class="muted small">Prior authorization queue and lifecycle view. Use filters to view intake, pending, denied/partial, submitted appeal, approved/ready, or staff-attention cases. View opens a prior-auth case panel; quick actions open the workspace, packet preview, response upload context, or next-round workflow.</div>
+      </div>
+
+      <div class="insight-card prior-auth-action-center-filter-card" style="margin-top:10px;">
+        <form method="GET" action="/actions" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;align-items:end;">
+          <input type="hidden" name="tab" value="prior-auth" />
+
+          <div>
+            <label class="small">Search</label>
+            <input name="pa_search" value="${safeStr(priorAuthFilterModel.search)}" placeholder="Patient, payer, auth #, service..." />
+          </div>
+
+          <div>
+            <label class="small">Payer</label>
+            <select name="pa_payer">
+              <option value="all">All</option>
+              ${priorAuthPayers.map(payer => `<option value="${safeStr(payer)}" ${priorAuthFilterModel.payer === payer ? "selected" : ""}>${safeStr(payer)}</option>`).join("")}
+            </select>
+          </div>
+
+          <div>
+            <label class="small">Stage</label>
+            <select name="pa_stage">
+              ${priorAuthStageOptions.map(stageOpt => `<option value="${safeStr(stageOpt.key)}" ${priorAuthFilterModel.stage === stageOpt.key ? "selected" : ""}>${safeStr(stageOpt.label)}</option>`).join("")}
+            </select>
+          </div>
+
+          <div>
+            <label class="small">Status</label>
+            <select name="pa_status">
+              <option value="all">All</option>
+              ${priorAuthStatuses.map(status => `<option value="${safeStr(status)}" ${priorAuthFilterModel.status === status ? "selected" : ""}>${safeStr(status)}</option>`).join("")}
+            </select>
+          </div>
+
+          <div>
+            <label class="small">Range</label>
+            <select name="pa_range">
+              <option value="all" ${priorAuthFilterModel.range === "all" ? "selected" : ""}>All Dates</option>
+              <option value="last30" ${priorAuthFilterModel.range === "last30" ? "selected" : ""}>Last 30 Days</option>
+              <option value="last90" ${priorAuthFilterModel.range === "last90" ? "selected" : ""}>Last 90 Days</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="small">Sort</label>
+            <select name="pa_sort">
+              <option value="priority" ${priorAuthFilterModel.sort === "priority" ? "selected" : ""}>Priority</option>
+              <option value="follow_up" ${priorAuthFilterModel.sort === "follow_up" ? "selected" : ""}>Follow-up / Expiration</option>
+              <option value="updated" ${priorAuthFilterModel.sort === "updated" ? "selected" : ""}>Recently Updated</option>
+              <option value="status" ${priorAuthFilterModel.sort === "status" ? "selected" : ""}>Status</option>
+            </select>
+          </div>
+
+          <div class="btnRow">
+            <button class="btn secondary small" type="submit">Apply</button>
+            <a class="btn secondary small" href="/actions?tab=prior-auth">Reset</a>
+          </div>
+        </form>
+
+        <p class="muted small" style="margin:8px 0 0;">
+          ${safeStr(priorAuthFilterSummary)}
+          ${priorAuthFilterModel.stage !== "all" ? ` · Stage: ${safeStr(tjhpPriorAuthActionCenterStageLabel(priorAuthFilterModel.stage))}` : ""}
+        </p>
       </div>
 
       <div style="overflow:auto;margin-top:12px;">
@@ -66631,7 +66862,7 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_SMOKE_TESTS === "true" && 
     const assert = require("assert");
     const src = fs.readFileSync(__filename, "utf8");
 
-    ["PRIOR_AUTH_CLAIMS_LIFECYCLE_PRE_SERVICE_LANE_OK","tjhpPriorAuthLifecycleGroupForRow","tjhpPriorAuthLifecycleLaneDefinitions","tjhpPriorAuthLifecycleLaneModel","tjhpPriorAuthLifecycleLaneHtml","Pre-Service Prior Authorization","pre-service-prior-auth-lane","Pre-service prior-auth visibility based on uploaded documents and manual workflow updates.","Manual/upload-driven only. TJ Healthcare Pro does not submit prior authorization requests or appeals to payers automatically","does not check payer portals","does not change claim lifecycle totals","Intake / Draft","Initial Request Pending","Denied / Partial","Appeal Submitted","Approved / Ready","${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}","${pipelineHtml}"].forEach(x => assert(src.includes(x), "missing prior-auth lifecycle lane marker: " + x));
+    ["PRIOR_AUTH_CLAIMS_LIFECYCLE_PRE_SERVICE_LANE_OK","tjhpPriorAuthLifecycleGroupForRow","tjhpPriorAuthLifecycleLaneDefinitions","tjhpPriorAuthLifecycleLaneModel","tjhpPriorAuthLifecycleLaneHtml","Pre-Service Prior Authorization","pre-service-prior-auth-lane","Pre-service prior-auth visibility based on uploaded documents and manual workflow updates. Click a stage to view matching prior-auth cases.","Manual/upload-driven only. Clicking a stage opens matching prior-auth cases. TJ Healthcare Pro does not submit prior authorization requests or appeals to payers automatically","does not check payer portals","does not change claim lifecycle totals","Intake / Draft","Initial Request Pending","Denied / Partial","Appeal Submitted","Approved / Ready","${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}","${pipelineHtml}"].forEach(x => assert(src.includes(x), "missing prior-auth lifecycle lane marker: " + x));
     ["Claims Lifecycle Stages","Awaiting Payment","Denied","Underpaid","Resolved","const pipelineHtml = `","const pipelineAgg = {","lifecycleTable","lifecycleClaimsData","totalAtRiskAll","Total Revenue at Risk"].forEach(x => assert(src.includes(x), "missing claims lifecycle core marker: " + x));
 
     const paIdx = src.indexOf("${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}");
@@ -66678,8 +66909,8 @@ if (process.env.TJHP_PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_SMOKE_TESTS === "tr
       "Initial Request Pending",
       "Initial prior-auth requests staff uploaded or marked submitted; awaiting payer decision.",
       "Appeal packets staff marked submitted; awaiting payer response.",
-      "Pre-service prior-auth visibility based on uploaded documents and manual workflow updates.",
-      "Manual/upload-driven only. TJ Healthcare Pro does not submit prior authorization requests or appeals to payers automatically",
+      "Pre-service prior-auth visibility based on uploaded documents and manual workflow updates. Click a stage to view matching prior-auth cases.",
+      "Manual/upload-driven only. Clicking a stage opens matching prior-auth cases. TJ Healthcare Pro does not submit prior authorization requests or appeals to payers automatically",
       "No EHR, payer portal, or automated submission occurs here."
     ].forEach(x => assert(src.includes(x), "missing polish marker: " + x));
 
@@ -67963,7 +68194,7 @@ if (process.env.TJHP_PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS === "true" && (p
         "Prior Auths",
         "/actions?tab=prior-auth",
         "data-action-tab=\"prior-auth\"",
-        "No prior authorization cases need action.",
+        "No prior authorization cases need staff attention.",
         "Continue Prior Auth Appeal",
         "Upload/collect missing docs",
         "Schedule peer-to-peer",
@@ -67989,8 +68220,8 @@ if (process.env.TJHP_PRIOR_AUTH_ACTION_CENTER_QUEUE_SMOKE_TESTS === "true" && (p
         "prior-auth",
         "Prior Auths",
         "tjhpPriorAuthActionCenterRows(org.org_id)",
-        "No prior authorization cases need action.",
-        "Read-only queue of prior authorization cases"
+        "No prior authorization cases need staff attention.",
+        "Prior authorization queue and lifecycle view."
       ].forEach(x => assert(actionsSrc.includes(x), "Action Center prior-auth branch missing marker: " + x));
 
       const priorAuthBranchStart = actionsSrc.indexOf('if (tab === "prior-auth")');
@@ -70955,7 +71186,7 @@ if (process.env.TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS === "true" && (p
       "/prior-auth/appeal-workspace/export?auth_case_id=",
       "/data-management?tab=prior-auth&auth_case_id=",
       "&start_next_round=1#prior-auth-submission-workflow",
-      "Read-only queue of prior authorization cases that need staff attention. View opens a prior-auth case panel"
+      "Prior authorization queue and lifecycle view. Use filters to view intake, pending, denied/partial, submitted appeal, approved/ready, or staff-attention cases. View opens a prior-auth case panel"
     ];
     requiredMarkers.forEach(marker => assert(src.includes(marker), "missing prior-auth panel marker: " + marker));
 
@@ -72004,6 +72235,91 @@ if (process.env.TJHP_REIMBURSEMENT_UPLOAD_SMOKE_TESTS === "true" && (process.env
       process.stderr.write("REIMBURSEMENT_UPLOAD_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
       process.exit(1);
     });
+}
+
+if (process.env.TJHP_PRIOR_AUTH_LIFECYCLE_ACTION_CENTER_FILTER_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+    [
+      "PRIOR_AUTH_LIFECYCLE_TO_ACTION_CENTER_FILTERS_OK",
+      "tjhpPriorAuthActionCenterStageOptions",
+      "tjhpPriorAuthActionCenterStageLabel",
+      "tjhpPriorAuthNormalizeActionCenterStage",
+      "tjhpPriorAuthActionCenterFilterModel",
+      "pa_stage",
+      "pa_search",
+      "pa_payer",
+      "pa_status",
+      "pa_range",
+      "pa_sort",
+      "prior-auth-action-center-filter-card",
+      "Prior authorization queue and lifecycle view.",
+      "Use filters to view intake, pending, denied/partial, submitted appeal, approved/ready, or staff-attention cases.",
+      "Click a stage to view matching prior-auth cases.",
+      "click a prior-auth stage to open matching cases",
+      "/actions?tab=prior-auth&pa_stage=intake",
+      "/actions?tab=prior-auth&pa_stage=pending",
+      "/actions?tab=prior-auth&pa_stage=denied_partial",
+      "/actions?tab=prior-auth&pa_stage=appeal_submitted",
+      "/actions?tab=prior-auth&pa_stage=approved_ready",
+      "No prior authorization cases match the selected filters.",
+      "No prior authorization cases need staff attention."
+    ].forEach(marker => assert(src.includes(marker), "missing prior-auth lifecycle Action Center filter marker: " + marker));
+
+    [
+      "Read-only queue of prior authorization" + " cases that need staff attention.",
+      "Read-only pre-service" + " visibility"
+    ].forEach(marker => assert(!src.includes(marker), "legacy read-only marker should be removed: " + marker));
+
+    assert.strictEqual(tjhpPriorAuthNormalizeActionCenterStage("approved_ready"), "approved_ready");
+    assert.strictEqual(tjhpPriorAuthNormalizeActionCenterStage("bad"), "all");
+    assert.strictEqual(tjhpPriorAuthActionCenterStageLabel("pending"), "Initial Request Pending");
+    assert.strictEqual(tjhpPriorAuthActionCenterStageLabel("approved_ready"), "Approved / Ready");
+
+    [
+      "const sourceRows = filterActive ? allRows : defaultRows;",
+      "stage !== \"all\" && tjhpPriorAuthLifecycleGroupForRow(row) !== stage",
+      "approved_ready",
+      "const defaultRows = tjhpPriorAuthActionCenterRows(org_id).map(normalizePriorAuthCase);"
+    ].forEach(marker => assert(src.includes(marker), "missing source/default filter behavior marker: " + marker));
+
+    const paIdx = src.indexOf("${tjhpPriorAuthLifecycleLaneHtml(org.org_id)}");
+    const pipeIdx = src.indexOf("${pipelineHtml}");
+    assert(paIdx >= 0 && pipeIdx >= 0 && paIdx < pipeIdx, "prior-auth lane should still render before pipeline");
+
+    [
+      "actionCenterClaimPanel",
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "window.openClaimPanel",
+      "data-open-claim-panel",
+      "view-claim-btn"
+    ].forEach(marker => assert(src.includes(marker), "missing existing claim Action Center/panel marker: " + marker));
+
+    [
+      'if (method === "GET" && pathname === "/prior-auth/appeal-workspace")',
+      'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")',
+      'if (method === "POST" && pathname === "/upload-router")',
+      'if (method === "POST" && pathname === "/data-management/prior-auth/upload")',
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "renderInlineAIAssist",
+      "workspaceAiInteractiveTrackChangesHtml"
+    ].forEach(marker => assert(src.includes(marker), "protected route/helper missing: " + marker));
+
+    [
+      "automatically " + "submit",
+      "payer portal" + "/API",
+      "EHR" + " pull",
+      "claim/prior-auth automatic" + " linking",
+      "POST /prior-auth/appeal-workspace" + "/payer-response",
+      'if (method === "POST" && pathname === "/prior-auth/appeal-workspace") ' + '{'
+    ].forEach(marker => assert(!src.includes(marker), "forbidden automation or mutation marker present: " + marker));
+
+    process.stdout.write("PRIOR_AUTH_LIFECYCLE_ACTION_CENTER_FILTER_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) {
+    process.stderr.write("PRIOR_AUTH_LIFECYCLE_ACTION_CENTER_FILTER_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1);
+  }
 }
 
 function startHttpServer() {
