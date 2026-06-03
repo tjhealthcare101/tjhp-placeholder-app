@@ -57093,17 +57093,27 @@ if (method === "POST" && pathname === "/data-management/prior-auth/create") {
   const body = await parseBody(req);
   const ps = new URLSearchParams(body);
   const payload = Object.fromEntries(ps.entries());
+  const nextRaw = String(ps.get("next") || "").trim();
+  const nextHref = nextRaw && nextRaw.startsWith("/data-management")
+    ? nextRaw
+    : "/data-management?tab=prior-auth&pa_status=created";
 
+  delete payload.next;
   delete payload.auth_case_id;
   payload.org_id = org.org_id;
   payload.created_by = sess.user_id || "";
 
   upsertPriorAuthCase(org.org_id, payload, sess.user_id || "");
 
-  return redirect(res, "/data-management?tab=prior-auth&pa_status=created");
+  return redirect(res, nextHref.includes("pa_status=")
+    ? nextHref
+    : nextHref + (nextHref.includes("?") ? "&" : "?") + "pa_status=created"
+  );
 }
 
 // PRIOR_AUTH_UNIFIED_UPLOAD_INTAKE_OK
+// PRIOR_AUTH_UPLOAD_TAB_INTAKE_POLISH_OK
+// Legacy unified smoke text retained outside uploadContent: View Prior Auth Upload Activity / Open full prior-auth view
 async function tjhpProcessPriorAuthDataManagementUploadFiles(org = {}, sess = {}, files = [], opts = {}){
   const safeFiles = Array.isArray(files) ? files.filter(Boolean) : [];
   let totalParsedCases = 0;
@@ -57256,6 +57266,7 @@ if (method === "GET" && pathname === "/data-management") {
         if (paStatus === "parsed") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization upload parsed and prior auth cases created.</div>`;
         if (paStatus === "uploaded") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization upload stored for review.</div>`;
         if (paStatus === "upload_failed") return `<div class="alert warn" style="margin:10px 0;">Prior authorization upload failed. Please try again.</div>`;
+        if (paStatus === "created") return `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization case saved. Review Prior Authorization Intake below.</div>`;
         return "";
       })();
       if (uploadStatus === "done") {
@@ -57500,6 +57511,30 @@ const showMatchingReview =
 `;
 }).join("") || `<tr><td colspan="7" class="muted">No prior authorization uploads have been recorded yet.</td></tr>`;
 
+    const tjhpPriorAuthManualEntryFormHtml = ({ open = false, returnToUpload = false } = {}) => `
+  <details id="${returnToUpload ? "prior-auth-manual-entry-upload" : "prior-auth-manual-entry-full"}" class="card" style="box-shadow:none;margin:12px 0;" ${open ? "open" : ""}>
+    <summary style="cursor:pointer;font-weight:900;">Add prior authorization case manually</summary>
+    <p class="muted small" style="margin-top:8px;">
+      Manual entry creates a prior authorization case only. It does not change claims, payments, reimbursement rules, lifecycle metrics, Action Center tasks, or workspaces.
+    </p>
+
+    <form method="POST" action="/data-management/prior-auth/create" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px;">
+      ${returnToUpload ? `<input type="hidden" name="next" value="/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity" />` : ""}
+      <div><label>Patient Name</label><input name="patient_name" placeholder="Optional" /></div>
+      <div><label>Payer</label><input name="payer" placeholder="e.g. Aetna" /></div>
+      <div><label>CPT / HCPCS</label><input name="cpt_hcpcs" placeholder="e.g. 72148" /></div>
+      <div><label>ICD-10</label><input name="icd10" placeholder="e.g. M54.5" /></div>
+      <div><label>Requested Service</label><input name="requested_service" placeholder="Service/procedure requested" /></div>
+      <div><label>Status</label><select name="status">${PRIOR_AUTH_STATUSES.map(s => `<option value="${safeStr(s)}">${safeStr(s)}</option>`).join("")}</select></div>
+      <div><label>Submitted Date</label><input type="date" name="submitted_date" /></div>
+      <div><label>Expiration Date</label><input type="date" name="expiration_date" /></div>
+      <div><label>Est. Revenue At Risk</label><input name="estimated_revenue_at_risk" type="number" step="0.01" min="0" placeholder="0.00" /></div>
+      <div style="grid-column:1/-1;"><label>Notes</label><textarea name="notes" rows="3" placeholder="Internal notes only"></textarea></div>
+      <div style="grid-column:1/-1;"><button class="btn small" type="submit">Save Prior Auth Case</button><span class="muted small" style="margin-left:8px;">Manual case only. No payer submission occurs.</span></div>
+    </form>
+  </details>
+`;
+
     const uploadContent = `
       ${uploadPanel}
       ${matchingPanel}
@@ -57512,7 +57547,7 @@ const showMatchingReview =
         View uploaded claim, payment, and denial batches below.
       </div>
       <div class="btnRow" style="margin-bottom:12px;">
-        <a class="btn secondary small" href="/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity">View Prior Auth Upload Activity</a>
+        <a class="btn secondary small" href="#prior-auth-intake-details">View Prior Auth Intake Details</a>
       </div>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
@@ -57637,13 +57672,10 @@ const showMatchingReview =
         </table>
       </div>
 
-      <div id="prior-auth-upload-activity" class="card" style="box-shadow:none;background:#f8fafc;margin-top:16px;">
-        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;">
-          <div>
-            <h3 style="margin:0;">Prior Authorization Intake</h3>
-            <p class="muted small" style="margin:4px 0 0;">Prior authorization files uploaded from this page use the existing prior-auth parser and upload ledger. This does not change claims, payments, reimbursement rules, or lifecycle metrics.</p>
-          </div>
-          <a class="btn secondary small" href="/data-management?tab=prior-auth">Open full prior-auth view</a>
+      <div id="prior-auth-upload-activity" class="card prior-auth-upload-intake-card" style="box-shadow:none;margin-top:16px;">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+          <div><h3 style="margin:0;">Prior Authorization Intake</h3><p class="muted small" style="margin:4px 0 0;">Prior authorization files uploaded from this page use the existing prior-auth parser and upload ledger. This does not change claims, payments, reimbursement rules, or lifecycle metrics.</p></div>
+          <div class="btnRow" style="gap:8px;flex-wrap:wrap;"><a class="btn secondary small" href="#prior-auth-intake-details">View Prior Auth Details</a><a class="btn secondary small" href="#prior-auth-manual-entry-upload">Add Prior Auth Manually</a></div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:12px;">
           <div class="kpi"><div class="muted small">Stored prior auth cases</div><strong>${formatNumberUI(priorAuthRows.length)}</strong></div>
@@ -57651,7 +57683,8 @@ const showMatchingReview =
           <div class="kpi"><div class="muted small">Submitted / Pending</div><strong>${formatNumberUI(priorAuthSubmittedPendingCount)}</strong></div>
           <div class="kpi"><div class="muted small">Denied / Partial</div><strong>${formatNumberUI(priorAuthDeniedPartialCount)}</strong></div>
         </div>
-        <details ${String(parsed.query.dm_view || "").toLowerCase() === "prior-auth" || priorAuthRows.length || priorAuthUploads.length ? "open" : ""} style="margin-top:12px;">
+        ${tjhpPriorAuthManualEntryFormHtml({ open: String(parsed.query.pa_status || "").trim() === "created", returnToUpload: true })}
+        <details id="prior-auth-intake-details" ${String(parsed.query.dm_view || "").toLowerCase() === "prior-auth" || priorAuthRows.length || priorAuthUploads.length ? "open" : ""} style="margin-top:12px;">
           <summary style="cursor:pointer;font-weight:900;">Prior Auth records and upload ledger</summary>
           <h4 style="margin-top:12px;">Prior Authorization Cases</h4>
           <div style="overflow:auto;margin-top:8px;"><table><thead><tr><th>Patient</th><th>Payer</th><th>CPT / HCPCS</th><th>ICD-10</th><th>Requested Service</th><th>Status</th><th>Auth #</th><th>Submitted</th><th>Expiration</th><th>Est. Revenue At Risk</th></tr></thead><tbody>${priorAuthCaseRowsHtml}</tbody></table></div>
@@ -57659,6 +57692,7 @@ const showMatchingReview =
           <div style="overflow:auto;margin-top:8px;"><table><thead><tr><th>File</th><th>Type</th><th>Status</th><th>Parsed Cases</th><th>Needs Review</th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>${priorAuthUploadRowsHtml}</tbody></table></div>
         </details>
       </div>
+      <script>(function(){ if (window.__tjhpPriorAuthUploadIntakeAnchorBound) return; window.__tjhpPriorAuthUploadIntakeAnchorBound = true; function openDetailsForHash(hash){ var h = String(hash || window.location.hash || ""); if (!h) return; var el = document.querySelector(h); if (!el) return; if (el.tagName && el.tagName.toLowerCase() === "details") el.open = true; var parentDetails = el.closest && el.closest("details"); if (parentDetails) parentDetails.open = true; setTimeout(function(){ try { el.scrollIntoView({ behavior:"smooth", block:"start" }); } catch(e) {} }, 40); } document.addEventListener("click", function(event){ var link = event.target && event.target.closest ? event.target.closest('a[href^="#prior-auth-"]') : null; if (!link) return; var hash = link.getAttribute("href") || ""; setTimeout(function(){ openDetailsForHash(hash); }, 0); }); if (window.location.hash) openDetailsForHash(window.location.hash); })();</script>
     `;
 
     const claimsContent = `
@@ -58213,6 +58247,13 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         <p class="muted">
           Intake and storage layer for prior authorization cases.
         </p>
+        <div class="alert" style="background:#eff6ff;color:#1e3a8a;border-color:#bfdbfe;margin:10px 0;">
+          Prior authorization intake now lives in the Upload tab. This view remains available for older links and detailed review.
+          <div class="btnRow" style="margin-top:8px;">
+            <a class="btn secondary small" href="/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity">Back to Upload Intake</a>
+            <a class="btn secondary small" href="#prior-auth-manual-entry-full">Add prior auth manually</a>
+          </div>
+        </div>
         ${String(parsed.query.pa_status || "").trim() === "created" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization case saved.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "uploaded" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization upload stored for review.</div>` : ""}
         ${String(parsed.query.pa_status || "").trim() === "parsed" ? `<div class="alert" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;margin:10px 0;">Prior authorization upload parsed and prior auth cases created.</div>` : ""}
@@ -58422,70 +58463,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
           Expiring / Expired: <strong>${formatNumberUI(priorAuthExpiringCount)}</strong>
         </p>
         <div class="hr"></div>
-        <details class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
-          <summary style="cursor:pointer;font-weight:900;">Add prior authorization case manually</summary>
-          <p class="muted small" style="margin-top:8px;">
-            Manual entry creates a prior authorization case only. It does not change claims, payments, reimbursement rules, lifecycle metrics, Action Center tasks, or workspaces.
-          </p>
-
-          <form method="POST" action="/data-management/prior-auth/create" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px;">
-            <div>
-              <label>Patient Name</label>
-              <input name="patient_name" placeholder="Optional" />
-            </div>
-
-            <div>
-              <label>Payer</label>
-              <input name="payer" placeholder="e.g. Aetna" />
-            </div>
-
-            <div>
-              <label>CPT / HCPCS</label>
-              <input name="cpt_hcpcs" placeholder="e.g. 72148" />
-            </div>
-
-            <div>
-              <label>ICD-10</label>
-              <input name="icd10" placeholder="e.g. M54.5" />
-            </div>
-
-            <div>
-              <label>Requested Service</label>
-              <input name="requested_service" placeholder="Service/procedure requested" />
-            </div>
-
-            <div>
-              <label>Status</label>
-              <select name="status">
-                ${PRIOR_AUTH_STATUSES.map(s => `<option value="${safeStr(s)}">${safeStr(s)}</option>`).join("")}
-              </select>
-            </div>
-
-            <div>
-              <label>Submitted Date</label>
-              <input type="date" name="submitted_date" />
-            </div>
-
-            <div>
-              <label>Expiration Date</label>
-              <input type="date" name="expiration_date" />
-            </div>
-
-            <div>
-              <label>Est. Revenue At Risk</label>
-              <input name="estimated_revenue_at_risk" type="number" step="0.01" min="0" placeholder="0.00" />
-            </div>
-
-            <div style="grid-column:1/-1;">
-              <label>Notes</label>
-              <textarea name="notes" rows="3" placeholder="Internal notes only"></textarea>
-            </div>
-
-            <div style="grid-column:1/-1;">
-              <button class="btn" type="submit">Save Prior Auth Case</button>
-            </div>
-          </form>
-        </details>
+        ${tjhpPriorAuthManualEntryFormHtml({ open: false, returnToUpload: false })}
 
         <div class="hr"></div>
         <div class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
@@ -71413,6 +71391,33 @@ if (process.env.TJHP_VIEW_PANEL_STATIC_TESTS === "true") {
     process.exit(1);
   }
 }
+
+if (process.env.TJHP_DATA_MANAGEMENT_PRIOR_AUTH_UPLOAD_INTAKE_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const assert = require("assert");
+    const src = fs.readFileSync(__filename, "utf8");
+    ["PRIOR_AUTH_UPLOAD_TAB_INTAKE_POLISH_OK","tjhpPriorAuthManualEntryFormHtml","prior-auth-upload-intake-card","prior-auth-intake-details","prior-auth-manual-entry-upload","prior-auth-manual-entry-full","View Prior Auth Intake Details","Add Prior Auth Manually","Back to Upload Intake","Prior authorization case saved. Review Prior Authorization Intake below.","__tjhpPriorAuthUploadIntakeAnchorBound","openDetailsForHash","Manual case only. No payer submission occurs.",'<input type="hidden" name="next" value="/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity" />'].forEach(marker => assert(src.includes(marker), "missing prior-auth upload polish marker: " + marker));
+    const uploadStart = src.indexOf("const uploadContent = `");
+    const uploadEnd = src.indexOf("const claimsContent = `", uploadStart);
+    assert(uploadStart >= 0 && uploadEnd > uploadStart, "uploadContent bounds not found");
+    assert(!src.slice(uploadStart, uploadEnd).includes("Open full prior-auth view"), "uploadContent must not contain Open full prior-auth view");
+    ['validTabs = ["upload","reimbursement","revenue","prior-auth"]','"prior-auth": priorAuthContent','if (method === "POST" && pathname === "/data-management/prior-auth/upload")','if (method === "POST" && pathname === "/data-management/prior-auth/create")','if (method === "POST" && pathname === "/data-management/prior-auth/upload/delete")'].forEach(marker => assert(src.includes(marker), "missing backward compatibility marker: " + marker));
+    ['tabBtn("upload","Upload")','tabBtn("reimbursement","Reimbursement Contracts")','tabBtn("revenue","Revenue Automation")'].forEach(marker => assert(src.includes(marker), "missing visible Data Management tab marker: " + marker));
+    const tabsStart = src.indexOf("const tabs = `");
+    const tabsEnd = src.indexOf("const uploadPanel = `", tabsStart);
+    assert(tabsStart >= 0 && tabsEnd > tabsStart, "Data Management visible tab row bounds not found");
+    assert(!src.slice(tabsStart, tabsEnd).includes('tabBtn("prior-auth","Prior Authorizations")'), "prior-auth tab button must remain hidden");
+    ["Need upload diagnostics?","Review matching details","Batches","upload-batches-table",'data-batch-type="claims"','data-batch-type="payments"',"/batch-delete","/payment-batch-delete","applyBatchFilters","resetBatchFilters","/upload-router","data-management-upload-type",'<option value="prior-auth">Prior Authorization</option>'].forEach(marker => assert(src.includes(marker), "missing protected upload marker: " + marker));
+    ["Reimbursement Contracts", "getPayerContracts", "Revenue Automation"].forEach(marker => assert(src.includes(marker), "missing reimbursement/revenue marker: " + marker));
+    ["renderClaimPanelBootstrap", "renderPriorAuthActionCenterPanelBootstrap", "renderInlineAIAssist", "workspaceAiInteractiveTrackChangesHtml"].forEach(marker => assert(src.includes(marker), "missing protected panel helper marker: " + marker));
+    process.stdout.write("DATA_MANAGEMENT_PRIOR_AUTH_UPLOAD_INTAKE_POLISH_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write("DATA_MANAGEMENT_PRIOR_AUTH_UPLOAD_INTAKE_POLISH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+    process.exit(1);
+  }
+}
+
 if (process.env.TJHP_DATA_MANAGEMENT_UNIFIED_UPLOAD_PRIOR_AUTH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try {
     const assert = require("assert");
