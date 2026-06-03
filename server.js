@@ -57113,6 +57113,7 @@ if (method === "POST" && pathname === "/data-management/prior-auth/create") {
 
 // PRIOR_AUTH_UNIFIED_UPLOAD_INTAKE_OK
 // PRIOR_AUTH_UPLOAD_TAB_INTAKE_POLISH_OK
+// PRIOR_AUTH_UPLOAD_INTAKE_FILTER_POLISH_OK
 // Legacy unified smoke text retained outside uploadContent: View Prior Auth Upload Activity / Open full prior-auth view
 async function tjhpProcessPriorAuthDataManagementUploadFiles(org = {}, sess = {}, files = [], opts = {}){
   const safeFiles = Array.isArray(files) ? files.filter(Boolean) : [];
@@ -57431,6 +57432,31 @@ const showMatchingReview =
     const priorAuthDateEndRaw = priorAuthDateKey(parsed.query.pa_end || "");
     const priorAuthDateFilterActive = !!(priorAuthDateStartRaw || priorAuthDateEndRaw);
 
+    const priorAuthSearchRaw = String(parsed.query.pa_search || "").trim();
+    const priorAuthSearchLower = priorAuthSearchRaw.toLowerCase();
+
+    const priorAuthCaseStatusRaw = String(parsed.query.pa_case_status || "all").trim();
+    const priorAuthCaseStatusFilter = priorAuthCaseStatusRaw && priorAuthCaseStatusRaw !== "all"
+      ? priorAuthCaseStatusRaw
+      : "all";
+
+    const priorAuthUploadStatusRaw = String(parsed.query.pa_upload_status || "all").trim();
+    const priorAuthUploadStatusFilter = priorAuthUploadStatusRaw && priorAuthUploadStatusRaw !== "all"
+      ? priorAuthUploadStatusRaw
+      : "all";
+
+    const priorAuthNeedsReviewRaw = String(parsed.query.pa_needs_review || "all").trim().toLowerCase();
+    const priorAuthNeedsReviewFilter = ["yes", "no"].includes(priorAuthNeedsReviewRaw)
+      ? priorAuthNeedsReviewRaw
+      : "all";
+
+    const priorAuthAdvancedFilterActive = !!(
+      priorAuthSearchRaw ||
+      priorAuthCaseStatusFilter !== "all" ||
+      priorAuthUploadStatusFilter !== "all" ||
+      priorAuthNeedsReviewFilter !== "all"
+    );
+
     function priorAuthWithinDateFilter(value){
       const day = priorAuthDateKey(value);
       if (priorAuthDateFilterActive && !day) return false;
@@ -57449,15 +57475,61 @@ const showMatchingReview =
       ).trim();
     }
 
-    const priorAuthFilteredRows = priorAuthRows.filter(x =>
-      priorAuthWithinDateFilter(priorAuthCaseFilterDate(x))
-    );
+    function priorAuthCaseMatchesFilters(row = {}){
+      if (!priorAuthWithinDateFilter(priorAuthCaseFilterDate(row))) return false;
 
-    const priorAuthFilteredUploads = priorAuthUploads.filter(x =>
-      priorAuthWithinDateFilter(x.created_at)
-    );
+      if (priorAuthCaseStatusFilter !== "all" && String(row.status || "") !== priorAuthCaseStatusFilter) {
+        return false;
+      }
 
-    const priorAuthDateFilterSummary = priorAuthDateFilterActive
+      if (priorAuthSearchLower) {
+        const haystack = [
+          row.patient_name,
+          row.patient_id,
+          row.payer,
+          row.requested_service,
+          row.auth_number,
+          row.cpt_hcpcs,
+          row.icd10,
+          row.status,
+          row.notes
+        ].map(x => String(x || "").toLowerCase()).join(" ");
+
+        if (!haystack.includes(priorAuthSearchLower)) return false;
+      }
+
+      return true;
+    }
+
+    function priorAuthUploadMatchesFilters(upload = {}){
+      if (!priorAuthWithinDateFilter(upload.created_at)) return false;
+
+      if (priorAuthUploadStatusFilter !== "all" && String(upload.status || "") !== priorAuthUploadStatusFilter) {
+        return false;
+      }
+
+      if (priorAuthNeedsReviewFilter === "yes" && upload.needs_review !== true) return false;
+      if (priorAuthNeedsReviewFilter === "no" && upload.needs_review === true) return false;
+
+      if (priorAuthSearchLower) {
+        const haystack = [
+          upload.file_name,
+          upload.file_type,
+          upload.status,
+          upload.notes,
+          upload.upload_id
+        ].map(x => String(x || "").toLowerCase()).join(" ");
+
+        if (!haystack.includes(priorAuthSearchLower)) return false;
+      }
+
+      return true;
+    }
+
+    const priorAuthFilteredRows = priorAuthRows.filter(priorAuthCaseMatchesFilters);
+    const priorAuthFilteredUploads = priorAuthUploads.filter(priorAuthUploadMatchesFilters);
+
+    const priorAuthDateFilterSummary = (priorAuthDateFilterActive || priorAuthAdvancedFilterActive)
       ? `Showing ${formatNumberUI(priorAuthFilteredRows.length)} of ${formatNumberUI(priorAuthRows.length)} cases and ${formatNumberUI(priorAuthFilteredUploads.length)} of ${formatNumberUI(priorAuthUploads.length)} uploads.`
       : "Showing latest Prior Auth cases and upload records.";
     const priorAuthSubmittedPendingCount = priorAuthRows.filter(x =>
@@ -57511,6 +57583,79 @@ const showMatchingReview =
 `;
 }).join("") || `<tr><td colspan="7" class="muted">No prior authorization uploads have been recorded yet.</td></tr>`;
 
+    const priorAuthUploadStatusOptions = Array.from(new Set(
+      priorAuthUploads
+        .map(x => String(x.status || "").trim())
+        .filter(Boolean)
+    )).sort();
+
+    const tjhpPriorAuthRecordsFilterFormHtml = ({ returnToUpload = false } = {}) => {
+      const resetHref = returnToUpload
+        ? "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity"
+        : "/data-management?tab=prior-auth";
+
+      return `
+        <div class="card" style="box-shadow:none;margin:12px 0;">
+          <h4 style="margin-top:0;">Filter Prior Auth Records</h4>
+          <p class="muted small">
+            Filter prior-auth cases and upload ledger records by search, date, status, upload status, or needs-review flag.
+          </p>
+
+          <form method="GET" action="/data-management" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;align-items:end;">
+            <input type="hidden" name="tab" value="${returnToUpload ? "upload" : "prior-auth"}" />
+            ${returnToUpload ? `<input type="hidden" name="dm_view" value="prior-auth" />` : ""}
+
+            <div>
+              <label>Search</label>
+              <input name="pa_search" value="${safeStr(priorAuthSearchRaw)}" placeholder="Patient, payer, file, auth #, service" />
+            </div>
+
+            <div>
+              <label>From</label>
+              <input type="date" name="pa_start" value="${safeStr(priorAuthDateStartRaw)}" />
+            </div>
+
+            <div>
+              <label>To</label>
+              <input type="date" name="pa_end" value="${safeStr(priorAuthDateEndRaw)}" />
+            </div>
+
+            <div>
+              <label>Case Status</label>
+              <select name="pa_case_status">
+                <option value="all">All</option>
+                ${PRIOR_AUTH_STATUSES.map(status => `<option value="${safeStr(status)}" ${priorAuthCaseStatusFilter === status ? "selected" : ""}>${safeStr(status)}</option>`).join("")}
+              </select>
+            </div>
+
+            <div>
+              <label>Upload Status</label>
+              <select name="pa_upload_status">
+                <option value="all">All</option>
+                ${priorAuthUploadStatusOptions.map(status => `<option value="${safeStr(status)}" ${priorAuthUploadStatusFilter === status ? "selected" : ""}>${safeStr(status)}</option>`).join("")}
+              </select>
+            </div>
+
+            <div>
+              <label>Needs Review</label>
+              <select name="pa_needs_review">
+                <option value="all" ${priorAuthNeedsReviewFilter === "all" ? "selected" : ""}>All</option>
+                <option value="yes" ${priorAuthNeedsReviewFilter === "yes" ? "selected" : ""}>Yes</option>
+                <option value="no" ${priorAuthNeedsReviewFilter === "no" ? "selected" : ""}>No</option>
+              </select>
+            </div>
+
+            <div class="btnRow">
+              <button class="btn secondary small" type="submit">Apply</button>
+              <a class="btn secondary small" href="${safeStr(resetHref)}">Reset</a>
+            </div>
+          </form>
+
+          <p class="muted small" style="margin-top:8px;">${safeStr(priorAuthDateFilterSummary)}</p>
+        </div>
+      `;
+    };
+
     const tjhpPriorAuthManualEntryFormHtml = ({ open = false, returnToUpload = false } = {}) => `
   <details id="${returnToUpload ? "prior-auth-manual-entry-upload" : "prior-auth-manual-entry-full"}" class="card" style="box-shadow:none;margin:12px 0;" ${open ? "open" : ""}>
     <summary style="cursor:pointer;font-weight:900;">Add prior authorization case manually</summary>
@@ -57546,10 +57691,6 @@ const showMatchingReview =
       <div class="muted small" style="margin-bottom:10px;">
         View uploaded claim, payment, and denial batches below.
       </div>
-      <div class="btnRow" style="margin-bottom:12px;">
-        <a class="btn secondary small" href="#prior-auth-intake-details">View Prior Auth Intake Details</a>
-      </div>
-
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
         <input type="date" id="startDate" />
         <input type="date" id="endDate" />
@@ -57675,7 +57816,6 @@ const showMatchingReview =
       <div id="prior-auth-upload-activity" class="card prior-auth-upload-intake-card" style="box-shadow:none;margin-top:16px;">
         <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">
           <div><h3 style="margin:0;">Prior Authorization Intake</h3><p class="muted small" style="margin:4px 0 0;">Prior authorization files uploaded from this page use the existing prior-auth parser and upload ledger. This does not change claims, payments, reimbursement rules, or lifecycle metrics.</p></div>
-          <div class="btnRow" style="gap:8px;flex-wrap:wrap;"><a class="btn secondary small" href="#prior-auth-intake-details">View Prior Auth Details</a><a class="btn secondary small" href="#prior-auth-manual-entry-upload">Add Prior Auth Manually</a></div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:12px;">
           <div class="kpi"><div class="muted small">Stored prior auth cases</div><strong>${formatNumberUI(priorAuthRows.length)}</strong></div>
@@ -57684,8 +57824,9 @@ const showMatchingReview =
           <div class="kpi"><div class="muted small">Denied / Partial</div><strong>${formatNumberUI(priorAuthDeniedPartialCount)}</strong></div>
         </div>
         ${tjhpPriorAuthManualEntryFormHtml({ open: String(parsed.query.pa_status || "").trim() === "created", returnToUpload: true })}
-        <details id="prior-auth-intake-details" ${String(parsed.query.dm_view || "").toLowerCase() === "prior-auth" || priorAuthRows.length || priorAuthUploads.length ? "open" : ""} style="margin-top:12px;">
+        <details id="prior-auth-intake-details" ${String(parsed.query.dm_view || "").toLowerCase() === "prior-auth" || priorAuthRows.length || priorAuthUploads.length || priorAuthDateFilterActive || priorAuthAdvancedFilterActive ? "open" : ""} style="margin-top:12px;">
           <summary style="cursor:pointer;font-weight:900;">Prior Auth records and upload ledger</summary>
+          ${tjhpPriorAuthRecordsFilterFormHtml({ returnToUpload: true })}
           <h4 style="margin-top:12px;">Prior Authorization Cases</h4>
           <div style="overflow:auto;margin-top:8px;"><table><thead><tr><th>Patient</th><th>Payer</th><th>CPT / HCPCS</th><th>ICD-10</th><th>Requested Service</th><th>Status</th><th>Auth #</th><th>Submitted</th><th>Expiration</th><th>Est. Revenue At Risk</th></tr></thead><tbody>${priorAuthCaseRowsHtml}</tbody></table></div>
           <h4 style="margin-top:14px;">Prior Auth Upload Ledger</h4>
@@ -58466,28 +58607,7 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
         ${tjhpPriorAuthManualEntryFormHtml({ open: false, returnToUpload: false })}
 
         <div class="hr"></div>
-        <div class="card" style="box-shadow:none;background:#f8fafc;margin:12px 0;">
-          <h3 style="margin-top:0;">Filter Prior Auth Records</h3>
-          <p class="muted small">
-            Filter cases and uploads by date. Cases use submitted/determination/expiration/created date; uploads use upload date.
-          </p>
-          <form method="GET" action="/data-management" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
-            <input type="hidden" name="tab" value="prior-auth" />
-            <div>
-              <label>From</label>
-              <input type="date" name="pa_start" value="${safeStr(priorAuthDateStartRaw)}" />
-            </div>
-            <div>
-              <label>To</label>
-              <input type="date" name="pa_end" value="${safeStr(priorAuthDateEndRaw)}" />
-            </div>
-            <div class="btnRow">
-              <button class="btn secondary" type="submit">Apply</button>
-              <a class="btn secondary" href="/data-management?tab=prior-auth">Reset</a>
-            </div>
-          </form>
-          <p class="muted small" style="margin-top:8px;">${safeStr(priorAuthDateFilterSummary)}</p>
-        </div>
+        ${tjhpPriorAuthRecordsFilterFormHtml({ returnToUpload: false })}
         <h3>Prior Authorization Cases</h3>
         <p class="muted small">
           Read-only preview of stored prior authorization cases. Manual entry is available above; upload storage is available for support files.
@@ -71388,6 +71508,96 @@ if (process.env.TJHP_VIEW_PANEL_STATIC_TESTS === "true") {
     process.exit(0);
   } catch (err) {
     process.stderr.write("VIEW_PANEL_STATIC_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+    process.exit(1);
+  }
+}
+
+if (process.env.TJHP_DATA_MANAGEMENT_PRIOR_AUTH_INTAKE_FILTER_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (condition, message) => { if (!condition) throw new Error(message || "assertion failed"); };
+    [
+      "PRIOR_AUTH_UPLOAD_INTAKE_FILTER_POLISH_OK",
+      "tjhpPriorAuthRecordsFilterFormHtml",
+      "priorAuthSearchRaw",
+      "priorAuthSearchLower",
+      "pa_search",
+      "pa_case_status",
+      "pa_upload_status",
+      "pa_needs_review",
+      "priorAuthCaseMatchesFilters",
+      "priorAuthUploadMatchesFilters",
+      "priorAuthUploadStatusOptions",
+      "Filter Prior Auth Records",
+      "Filter prior-auth cases and upload ledger records by search, date, status, upload status, or needs-review flag.",
+      "${tjhpPriorAuthRecordsFilterFormHtml({ returnToUpload: true })}",
+      "${tjhpPriorAuthRecordsFilterFormHtml({ returnToUpload: false })}"
+    ].forEach(marker => assert(src.includes(marker), "missing prior-auth intake filter marker: " + marker));
+
+    const uploadStart = src.indexOf("const uploadContent = `");
+    const uploadEnd = src.indexOf("const claimsContent = `", uploadStart);
+    assert(uploadStart >= 0 && uploadEnd > uploadStart, "uploadContent bounds not found");
+    const uploadContentSrc = src.slice(uploadStart, uploadEnd);
+    [
+      'href="#prior-auth-intake-details">View Prior Auth Intake Details</a>',
+      'href="#prior-auth-intake-details">View Prior Auth Details</a>',
+      'href="#prior-auth-manual-entry-upload">Add Prior Auth Manually</a>'
+    ].forEach(marker => assert(!uploadContentSrc.includes(marker), "removed prior-auth shortcut still in uploadContent: " + marker));
+
+    [
+      "prior-auth-manual-entry-upload",
+      "prior-auth-manual-entry-full",
+      "prior-auth-intake-details",
+      "Add prior authorization case manually",
+      "Prior Auth records and upload ledger",
+      "Prior Authorization Cases",
+      "Prior Auth Upload Ledger"
+    ].forEach(marker => assert(src.includes(marker), "missing inline prior-auth section marker: " + marker));
+
+    [
+      "Need upload diagnostics?",
+      "Review matching details",
+      "Batches",
+      "upload-batches-table",
+      'data-batch-type="claims"',
+      'data-batch-type="payments"',
+      "/batch-delete",
+      "/payment-batch-delete",
+      "applyBatchFilters",
+      "resetBatchFilters",
+      "/upload-router",
+      "data-management-upload-type",
+      '<option value="prior-auth">Prior Authorization</option>'
+    ].forEach(marker => assert(src.includes(marker), "missing protected Upload tab marker: " + marker));
+
+    [
+      'validTabs = ["upload","reimbursement","revenue","prior-auth"]',
+      '"prior-auth": priorAuthContent',
+      "Back to Upload Intake",
+      'if (method === "POST" && pathname === "/data-management/prior-auth/upload")',
+      'if (method === "POST" && pathname === "/data-management/prior-auth/create")',
+      'if (method === "POST" && pathname === "/data-management/prior-auth/upload/delete")'
+    ].forEach(marker => assert(src.includes(marker), "missing prior-auth compatibility marker: " + marker));
+
+    [
+      "Reimbursement Contracts",
+      "getPayerContracts",
+      "Revenue Automation"
+    ].forEach(marker => assert(src.includes(marker), "missing reimbursement/revenue marker: " + marker));
+
+    [
+      "renderClaimPanelBootstrap",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "renderInlineAIAssist",
+      "workspaceAiInteractiveTrackChangesHtml",
+      'if (method === "GET" && pathname === "/prior-auth/appeal-workspace")',
+      'if (method === "GET" && pathname === "/prior-auth/appeal-workspace/export")'
+    ].forEach(marker => assert(src.includes(marker), "missing protected panel/workspace helper marker: " + marker));
+
+    process.stdout.write("DATA_MANAGEMENT_PRIOR_AUTH_INTAKE_FILTER_POLISH_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write("DATA_MANAGEMENT_PRIOR_AUTH_INTAKE_FILTER_POLISH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
     process.exit(1);
   }
 }
