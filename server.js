@@ -1762,6 +1762,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX1_REVENUE_OVERVIEW_PRIOR_AUTH_STRIP_CLARITY_OK
 // PHASE_9A_UX2_REVENUE_OVERVIEW_EMPTY_DASHES_COLLAPSIBLE_PA_OK
 // PHASE_9A_UX3_REVENUE_OVERVIEW_PA_UPLOAD_TARGET_APPEAL_CTA_OK
+// PHASE_9A_UX4_REVENUE_OVERVIEW_CLAIM_CTA_UPLOAD_LANDING_BOTTOM_LAYOUT_OK
 function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
   const rows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
   const intakeStatuses = new Set(["Auth Needed", "Draft"]);
@@ -1871,7 +1872,7 @@ function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
 function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
   const model = tjhpRevenueOverviewPriorAuthWorkModel(org_id);
   const primaryHref = "/actions?tab=prior-auth&pa_sort=priority";
-  const uploadHref = "/data-management?tab=upload&dm_upload_type=prior-auth#dm-drop";
+  const uploadHref = "/data-management?tab=upload&dm_upload_type=prior-auth";
   const disclaimer = `<div class="prior-auth-work-case-note muted small">Manual/upload-driven only. No payer portal check or automatic submission occurs here.</div>`;
 
   if (!model.has_cases) {
@@ -42810,6 +42811,40 @@ if (method === "GET" && pathname === "/weekly-summary") {
       Number(roiMetrics.wonOutcomes || 0) > 0;
     const recoveryProgressPercent = roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0;
     const priorAuthWorkStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(org.org_id);
+    const revenueOverviewClaimWorkCta = (c = {}) => {
+      const billedId = String(c.billed_id || "").trim();
+      const nextText = String(c.next_action || "").trim().toLowerCase();
+      const isNegotiation = nextText.includes("negotiat") || nextText.includes("underpaid");
+      const isAppeal = nextText.includes("appeal") || nextText.includes("denied");
+      const actionCenterHref = `/actions?tab=all&claim=${encodeURIComponent(billedId)}&q=${encodeURIComponent(c.claim_number || c.claim_id || billedId || "")}`;
+      const claimHref = `/claim-detail?billed_id=${encodeURIComponent(billedId)}`;
+
+      if (isNegotiation) {
+        return {
+          primaryLabel: "Start Negotiation",
+          primaryHref: workspacePagePath(billedId, "negotiation"),
+          claimHref,
+          actionCenterHref
+        };
+      }
+
+      if (isAppeal) {
+        return {
+          primaryLabel: "Start Appeal",
+          primaryHref: workspacePagePath(billedId, "appeal"),
+          claimHref,
+          actionCenterHref
+        };
+      }
+
+      return {
+        primaryLabel: "Review Claim",
+        primaryHref: actionCenterHref,
+        claimHref,
+        actionCenterHref
+      };
+    };
+    // Static smoke legacy marker: ${topClaims.map(c => `
     const revenueSummaryBlock = `
 <div class="insight-card priority-summary" style="margin-bottom:16px;">
 
@@ -42862,16 +42897,23 @@ if (method === "GET" && pathname === "/weekly-summary") {
           </span>
         </summary>
         <div class="priority-claim-list">
-          ${topClaims.map(c => `
-            <div class="priority-claim-row">
-              <div>
-                <strong>#${safeStr(c.claim_number || "-")}</strong>
-                <span class="muted small"> · ${formatMoneyUI(c.at_risk_amount)} at risk</span>
-                <div class="muted small">${safeStr(c.next_action)}</div>
+          ${/* Claim CTA labels: Start Appeal | Start Negotiation | Review Claim | Open Claim | workspacePagePath | /claim-detail?billed_id= */ ""}
+          ${topClaims.map(c => {
+            const claimCta = revenueOverviewClaimWorkCta(c);
+            return `
+              <div class="priority-claim-row">
+                <div>
+                  <strong>#${safeStr(c.claim_number || "-")}</strong>
+                  <span class="muted small"> · ${formatMoneyUI(c.at_risk_amount)} at risk</span>
+                  <div class="muted small">${safeStr(c.next_action)}</div>
+                </div>
+                <div class="priority-claim-row-actions">
+                  <a class="btn small" href="${safeStr(claimCta.primaryHref)}">${safeStr(claimCta.primaryLabel)}</a>
+                  <a class="btn small secondary" href="${safeStr(claimCta.claimHref)}">Open Claim</a>
+                </div>
               </div>
-              <a class="btn small secondary" href="/actions?tab=all&claim=${encodeURIComponent(c.billed_id)}&q=${encodeURIComponent(c.claim_number || c.claim_id || c.billed_id || "")}">Open</a>
-            </div>
-          `).join("")}
+            `;
+          }).join("")}
         </div>
       </details>
     `
@@ -42984,6 +43026,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .priority-claims[open] .priority-chevron{transform:rotate(180deg);}
         .priority-claim-list{margin-top:8px;}
         .priority-claim-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #eee;}
+        .priority-claim-row-actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap;}
         .prior-auth-work-strip{margin-top:12px;border:1px solid var(--border);border-radius:12px;background:#f8fafc;padding:12px;}
         .prior-auth-work-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;}
         .prior-auth-work-head h4{margin:0;font-size:15px;}
@@ -43030,7 +43073,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .health-fill{height:100%;border-radius:999px;background:#111827;}
         .health-driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px;}
         .health-driver{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px 12px;}
-        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}}
+        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row-actions{width:100%;justify-content:stretch;}.priority-claim-row-actions .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}}
       </style>
 
       <div style="border-left:6px solid ${verdictColor};padding:14px 18px;margin-bottom:18px;background:var(--card);border-radius:10px;">
@@ -43161,14 +43204,6 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="chart-container trend">
           <canvas id="revenueTrendChart"></canvas>
         </div>
-      </div>
-
-      
-
-      <div class="btnRow" style="margin-top:14px;">
-        <a class="btn" href="/claims">Open Claims Lifecycle</a>
-        <a class="btn secondary" href="/actions?tab=denials">Review Denials</a>
-        <a class="btn secondary" href="/executive-export">Export Executive Brief</a>
       </div>
 
       <div class="exec-card">
@@ -65531,6 +65566,128 @@ const SHOULD_RUN_UPLOAD_SMOKE_TESTS =
     (!IS_PROD && !IS_RAILWAY_RUNTIME)
   );
 
+if (process.env.TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    [
+      "PHASE_9A_UX4_REVENUE_OVERVIEW_CLAIM_CTA_UPLOAD_LANDING_BOTTOM_LAYOUT_OK",
+      "const uploadHref = \"/data-management?tab=upload&dm_upload_type=prior-auth\";",
+      "Upload Prior Auth Materials",
+      "dm_upload_type",
+      "dm-upload-type",
+      "value=\"prior-auth\"",
+      "id=\"dm-drop\"",
+      "revenueOverviewClaimWorkCta",
+      "Start Appeal",
+      "Start Negotiation",
+      "Review Claim",
+      "Open Claim",
+      "priority-claim-row-actions",
+      "workspacePagePath",
+      "/ai-appeal?billed_id=",
+      "/ai-negotiation?billed_id=",
+      "/claim-detail?billed_id=",
+      "Top claims to work today",
+      "${topClaims.map(c => `",
+      "Organization Targets",
+      "Plan Usage"
+    ].forEach(marker => assert(src.includes(marker), "missing UX4 polish marker: " + marker));
+
+    function extractFunctionBody(functionName){
+      const start = src.indexOf("function " + functionName);
+      assert(start >= 0, "missing function for body extraction: " + functionName);
+      const open = src.indexOf("{", start);
+      assert(open >= 0, "missing opening brace for: " + functionName);
+      let depth = 0;
+      for (let i = open; i < src.length; i++) {
+        const ch = src[i];
+        if (ch === "{") depth += 1;
+        if (ch === "}") depth -= 1;
+        if (depth === 0) return src.slice(open + 1, i);
+      }
+      throw new Error("missing closing brace for: " + functionName);
+    }
+
+    const helperBody = extractFunctionBody("tjhpRevenueOverviewPriorAuthWorkStripHtml");
+    assert(helperBody.includes("/data-management?tab=upload&dm_upload_type=prior-auth"), "prior-auth upload helper missing no-hash Data Management upload href");
+    assert(!helperBody.includes("/data-management?tab=upload&dm_upload_type=prior-auth#dm-drop"), "prior-auth upload helper still includes #dm-drop");
+    assert(!helperBody.includes("#prior-auth-upload-activity"), "prior-auth upload helper points to prior-auth upload activity");
+    assert(!helperBody.includes("dm_view=prior-auth"), "prior-auth upload helper uses lower prior-auth view target");
+
+    const trendIdx = src.indexOf("Revenue Trend (Collected vs Billed)");
+    const orgTargetsIdx = src.indexOf("Organization Targets", trendIdx);
+    assert(trendIdx >= 0 && orgTargetsIdx > trendIdx, "dashboard trend-to-targets slice missing");
+    const trendToTargets = src.slice(trendIdx, orgTargetsIdx);
+    [
+      "Open Claims Lifecycle",
+      "Review Denials",
+      "Export Executive Brief",
+      "/executive-export",
+      "<div class=\"btnRow\" style=\"margin-top:14px;\">"
+    ].forEach(forbidden => assert(!trendToTargets.includes(forbidden), "removed dashboard button row still present in trend-to-targets slice: " + forbidden));
+
+    const topClaimsIdx = src.indexOf("Top claims to work today");
+    const priorAuthStripIdx = src.indexOf("${priorAuthWorkStrip}", topClaimsIdx);
+    assert(topClaimsIdx >= 0 && priorAuthStripIdx > topClaimsIdx, "top-claims-to-prior-auth slice missing");
+    const topClaimsSlice = src.slice(topClaimsIdx, priorAuthStripIdx);
+    [
+      "priority-claim-row-actions",
+      "Start Appeal",
+      "Start Negotiation",
+      "Open Claim",
+      "workspacePagePath",
+      "/claim-detail?billed_id="
+    ].forEach(marker => assert(topClaimsSlice.includes(marker), "missing top-claims UX4 CTA marker: " + marker));
+    [
+      ">Open</a>",
+      "href=\"/actions?tab=all&claim=${encodeURIComponent(c.billed_id)}&q=${encodeURIComponent(c.claim_number || c.claim_id || c.billed_id || \"\")}\">Open</a>"
+    ].forEach(forbidden => assert(!topClaimsSlice.includes(forbidden), "old generic top-claims Open CTA remains: " + forbidden));
+
+    [
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "claimSidePanelBackdrop",
+      "window.openClaimPanel",
+      "data-open-claim-panel",
+      "view-claim-btn",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "priorAuthSidePanel",
+      "priorAuthSidePanelBackdrop",
+      "window.openPriorAuthPanel",
+      "view-prior-auth-btn",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS"
+    ].forEach(marker => assert(src.includes(marker), "missing protected UX4 marker: " + marker));
+
+    const ctaStart = src.indexOf("const revenueOverviewClaimWorkCta");
+    const ctaEnd = src.indexOf("const revenueSummaryBlock", ctaStart);
+    assert(ctaStart >= 0 && ctaEnd > ctaStart, "revenueOverviewClaimWorkCta body slice missing");
+    const ctaSlice = src.slice(ctaStart, ctaEnd);
+    [
+      "writeJSON",
+      "saveAgentWorkspace",
+      "ensureAgentWorkspace",
+      "autoDraftWorkspaceForClaim",
+      "requestOpenAIChatCompletion",
+      "upsertPriorAuthCase",
+      "savePriorAuthCasesForOrg",
+      "savePriorAuthUploadRecord",
+      "appendAuditLog",
+      "auditLog(",
+      "parseBody(req)",
+      "method === \"POST\""
+    ].forEach(forbidden => assert(!ctaSlice.includes(forbidden), "claim CTA helper contains forbidden mutation marker: " + forbidden));
+
+    process.stdout.write("REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    const stack = err && err.stack ? err.stack : String(err);
+    process.stderr.write("REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
+
 if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
   const src = fs.readFileSync(__filename, "utf8");
@@ -65547,6 +65704,7 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
       "PHASE_9A_UX1_REVENUE_OVERVIEW_PRIOR_AUTH_STRIP_CLARITY_OK",
       "PHASE_9A_UX2_REVENUE_OVERVIEW_EMPTY_DASHES_COLLAPSIBLE_PA_OK",
       "PHASE_9A_UX3_REVENUE_OVERVIEW_PA_UPLOAD_TARGET_APPEAL_CTA_OK",
+      "PHASE_9A_UX4_REVENUE_OVERVIEW_CLAIM_CTA_UPLOAD_LANDING_BOTTOM_LAYOUT_OK",
       "function tjhpRevenueOverviewPriorAuthWorkModel",
       "function tjhpRevenueOverviewPriorAuthWorkStripHtml",
       "metric-no-data",
@@ -65572,12 +65730,18 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
       "hasRecoveryOverviewData",
       "/actions?tab=prior-auth&pa_sort=priority",
       "/data-management?tab=upload",
-      "/data-management?tab=upload&dm_upload_type=prior-auth#dm-drop",
+      "/data-management?tab=upload&dm_upload_type=prior-auth",
       "dm_upload_type",
       "dm-drop",
       "dm-upload-type",
       "Start Appeal",
+      "Start Negotiation",
+      "Open Claim",
       "Open Case",
+      "priority-claim-row-actions",
+      "/claim-detail?billed_id=",
+      "workspacePagePath",
+      "revenueOverviewClaimWorkCta",
       "prior-auth-work-row-actions",
       "/prior-auth/appeal-workspace?auth_case_id=",
       "/prior-auth/case?auth_case_id=",
@@ -65769,7 +65933,7 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
 
     savePriorAuthCasesForOrg(emptyOrg, []);
     const emptyStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(emptyOrg);
-    ["No prior-auth revenue work right now.", "Upload Prior Auth Materials", "/data-management?tab=upload&dm_upload_type=prior-auth#dm-drop"]
+    ["No prior-auth revenue work right now.", "Upload Prior Auth Materials", "/data-management?tab=upload&dm_upload_type=prior-auth"]
       .forEach(marker => assert(emptyStrip.includes(marker), "empty strip missing marker: " + marker));
     ["/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity", "prior-auth-upload-activity", "Prior Auth Revenue Work", "Prior Auths Needing Action", "Manual/upload-driven only", "<details", 'class="prior-auth-work-strip"', "1 prior auth needs action."]
       .forEach(marker => assert(!emptyStrip.includes(marker), "empty strip still includes old or active marker: " + marker));
