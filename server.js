@@ -1763,6 +1763,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX2_REVENUE_OVERVIEW_EMPTY_DASHES_COLLAPSIBLE_PA_OK
 // PHASE_9A_UX3_REVENUE_OVERVIEW_PA_UPLOAD_TARGET_APPEAL_CTA_OK
 // PHASE_9A_UX4_REVENUE_OVERVIEW_CLAIM_CTA_UPLOAD_LANDING_BOTTOM_LAYOUT_OK
+// PHASE_9A_UX5_REVENUE_OVERVIEW_PA_AWARE_INSIGHTS_OPERATIONAL_TREND_ALL_TIME_LAYOUT_OK
 function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
   const rows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
   const intakeStatuses = new Set(["Auth Needed", "Draft"]);
@@ -19829,6 +19830,177 @@ function chooseGranularity(preset){
   return "week";
 }
 
+function tjhpNormalizeRevenueOverviewTrendRange(range = "last30"){
+  const r = String(range || "last30").toLowerCase();
+  return ["last30", "last60", "last90", "all"].includes(r) ? r : "last30";
+}
+function tjhpRevenueOverviewParseOperationalDate(...values){
+  for (const value of values) {
+    if (value === null || value === undefined || String(value).trim() === "") continue;
+    const raw = String(value).trim();
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(raw + "T00:00:00.000Z") : new Date(raw);
+    if (d && !isNaN(d.getTime())) return d;
+  }
+  return null;
+}
+function tjhpRevenueOverviewClaimTrendDate(row = {}){
+  return tjhpRevenueOverviewParseOperationalDate(
+    row.date_of_service,
+    row.dos,
+    row.service_date,
+    row.claim_service_date,
+    row.billed_date,
+    row.claim_date,
+    row.submitted_at,
+    row.created_at,
+    row.imported_at,
+    row.uploaded_at
+  );
+}
+function tjhpRevenueOverviewPaymentTrendDate(row = {}){
+  return tjhpRevenueOverviewParseOperationalDate(
+    row.paid_date,
+    row.date_paid,
+    row.remittance_date,
+    row.payment_date,
+    row.posted_at,
+    row.paid_at,
+    row.last_paid_at,
+    row.created_at,
+    row.imported_at,
+    row.uploaded_at
+  );
+}
+function tjhpRevenueOverviewTrendRangeWindow(range = "last30"){
+  const effective = tjhpNormalizeRevenueOverviewTrendRange(range);
+  if (effective === "all") return { start:null, end:null, range: effective };
+  const now = new Date();
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
+  const days = effective === "last90" ? 90 : effective === "last60" ? 60 : 30;
+  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+  return { start, end, range: effective };
+}
+function tjhpRevenueOverviewTrendGranularity(start, end, effectiveRange = "last30"){
+  const range = tjhpNormalizeRevenueOverviewTrendRange(effectiveRange);
+  if (range === "last30") return "day";
+  if (range === "last60" || range === "last90") return "week";
+  if (start && end) {
+    const days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)));
+    if (days <= 60) return "day";
+    if (days <= 180) return "week";
+  }
+  return "month";
+}
+function tjhpRevenueOverviewFirstPositiveAmount(row = {}, fields = []){
+  for (const field of fields) {
+    const value = num(row[field]);
+    if (value > 0) return value;
+  }
+  return 0;
+}
+function tjhpRevenueOverviewBuildTrendSeries(org_id = "", range = "last30"){
+  const oid = String(org_id || "").trim();
+  const selected = tjhpNormalizeRevenueOverviewTrendRange(range);
+  const window = tjhpRevenueOverviewTrendRangeWindow(selected);
+  const claims = readJSON(FILES.billed, []).filter(b => b && String(b.org_id || "") === oid);
+  const payments = readJSON(FILES.payments, []).filter(p => p && String(p.org_id || "") === oid);
+  const ctx = buildClaimContext(oid);
+  // Operational trend anchors: date_of_service for billed rows and paid_date for collected rows before upload/current dates.
+  const rawBilled = [];
+  const rawCollected = [];
+  const inWindow = (d) => {
+    if (!d || isNaN(d.getTime())) return false;
+    if (!window.start || !window.end) return true;
+    return d >= window.start && d <= window.end;
+  };
+
+  claims.forEach(claim => {
+    const d = tjhpRevenueOverviewClaimTrendDate(claim);
+    const amount = tjhpRevenueOverviewFirstPositiveAmount(claim, ["amount_billed", "billed_amount", "charge_amount", "charges", "total_charge"]);
+    if (d && amount > 0 && inWindow(d)) rawBilled.push({ date: d, amount });
+  });
+
+  if (payments.length > 0) {
+    payments.forEach(payment => {
+      const d = tjhpRevenueOverviewPaymentTrendDate(payment);
+      const amount = tjhpRevenueOverviewFirstPositiveAmount(payment, ["amount_paid", "paid_amount", "payment_amount", "insurance_paid", "payer_paid", "total_paid"]);
+      if (d && amount > 0 && inWindow(d)) rawCollected.push({ date: d, amount });
+    });
+  } else {
+    claims.forEach(claim => {
+      const d = tjhpRevenueOverviewPaymentTrendDate(claim) || tjhpRevenueOverviewClaimTrendDate(claim);
+      const derived = evaluateClaimDerived(claim, ctx);
+      const amount = Math.max(
+        0,
+        num(derived.paidAmount || 0),
+        num(claim.paid_amount || 0),
+        num(claim.insurance_paid || 0),
+        num(claim.payer_paid || 0),
+        num(claim.patient_collected || 0)
+      );
+      if (d && amount > 0 && inWindow(d)) rawCollected.push({ date: d, amount });
+    });
+  }
+
+  const allDates = [...rawBilled, ...rawCollected].map(x => x.date).filter(Boolean).sort((a, b) => a - b);
+  const start = allDates[0] || window.start || null;
+  const end = allDates[allDates.length - 1] || window.end || null;
+  const gran = tjhpRevenueOverviewTrendGranularity(start, end, selected);
+  const billedSeries = {};
+  const collectedSeries = {};
+  rawBilled.forEach(x => {
+    const key = groupKeyForDate(x.date, gran);
+    billedSeries[key] = (billedSeries[key] || 0) + x.amount;
+  });
+  rawCollected.forEach(x => {
+    const key = groupKeyForDate(x.date, gran);
+    collectedSeries[key] = (collectedSeries[key] || 0) + x.amount;
+  });
+  const keys = Array.from(new Set([...Object.keys(billedSeries), ...Object.keys(collectedSeries)])).sort();
+  return {
+    selected_range: selected,
+    effective_range: selected,
+    fallback_to_all_time: false,
+    fallback_message: "",
+    series: {
+      gran,
+      keys,
+      billed: keys.map(k => round2(billedSeries[k] || 0)),
+      collected: keys.map(k => round2(collectedSeries[k] || 0)),
+      selected_range: selected,
+      effective_range: selected,
+      fallback_to_all_time: false,
+      fallback_message: ""
+    }
+  };
+}
+function tjhpRevenueOverviewTrendSeriesModel(org_id = "", selectedRange = "last30"){
+  const selected = tjhpNormalizeRevenueOverviewTrendRange(selectedRange);
+  const selectedModel = tjhpRevenueOverviewBuildTrendSeries(org_id, selected);
+  const selectedTotal = (selectedModel.series.billed || []).reduce((s, n) => s + num(n), 0)
+    + (selectedModel.series.collected || []).reduce((s, n) => s + num(n), 0);
+  if (selected === "all" || selectedTotal > 0) return selectedModel;
+
+  const allModel = tjhpRevenueOverviewBuildTrendSeries(org_id, "all");
+  const allTotal = (allModel.series.billed || []).reduce((s, n) => s + num(n), 0)
+    + (allModel.series.collected || []).reduce((s, n) => s + num(n), 0);
+  if (allTotal <= 0) return selectedModel;
+
+  const fallbackMessage = "No billed or payment activity was found in the selected trend window. Showing all-time uploaded history.";
+  allModel.selected_range = selected;
+  allModel.effective_range = "all";
+  allModel.fallback_to_all_time = true;
+  allModel.fallback_message = fallbackMessage;
+  allModel.series = {
+    ...(allModel.series || {}),
+    selected_range: selected,
+    effective_range: "all",
+    fallback_to_all_time: true,
+    fallback_message: fallbackMessage
+  };
+  return allModel;
+}
+
 
 function tjhpWorkspaceSubmittedForChannel(ws, channel){
   return String(ws?.submission?.status || "") === "submitted" && String(ws?.submission?.channel || "") === String(channel || "");
@@ -19912,6 +20084,61 @@ function computeRecoveryIntelligence(org_id, start, end){
   };
 }
 
+function tjhpRevenueOverviewPriorAuthWorkflowMetrics(org_id, start, end){
+  const asDate = (...vals) => {
+    for (const v of vals) {
+      if (!v) continue;
+      const d = new Date(v);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+    return null;
+  };
+  const isInRange = (...vals) => {
+    const d = asDate(...vals);
+    return !!(d && d >= start && d <= end);
+  };
+  const normalizeStatusKey = (value) => String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, " ");
+  const completed = new Set(["approved", "ready to bill", "linked to claim", "denied", "partially approved", "not pursued"]);
+  const wins = new Set(["approved", "ready to bill", "linked to claim", "partially approved"]);
+  const ignored = new Set(["auth needed", "draft", "submitted", "pending", "missing documentation", "peer to peer needed", "appeal needed", "appeal submitted", "expiring soon", "expired"]);
+  const cases = getPriorAuthCases(org_id).map(c => normalizePriorAuthCase(c));
+  const uploads = getPriorAuthUploads(org_id);
+  const priorAuthResolutionDays = [];
+  let priorAuthCompletedOutcomes = 0;
+  let priorAuthWonOutcomes = 0;
+  let actionableCases = 0;
+  let manualSubmissionUnits = 0;
+
+  cases.forEach(row => {
+    const statusKey = normalizeStatusKey(row.status || row.auth_status || row.decision || row.outcome_status);
+    const touchedInRange = isInRange(row.updated_at, row.created_at, row.submitted_date, row.determination_date, row.expiration_date);
+    if (touchedInRange && (completed.has(statusKey) || !ignored.has(statusKey))) actionableCases += 1;
+    if (!completed.has(statusKey)) return;
+    if (!isInRange(row.determination_date, row.updated_at, row.submitted_date, row.created_at)) return;
+    priorAuthCompletedOutcomes += 1;
+    if (wins.has(statusKey)) priorAuthWonOutcomes += 1;
+    const startD = asDate(row.submitted_date, row.created_at);
+    const endD = asDate(row.determination_date, row.updated_at);
+    if (startD && endD && endD >= startD) {
+      const days = Math.round((endD.getTime() - startD.getTime()) / (24 * 60 * 60 * 1000));
+      if (Number.isFinite(days)) priorAuthResolutionDays.push(days);
+    }
+    const submissions = Array.isArray(row.prior_auth_submissions) ? row.prior_auth_submissions : [];
+    manualSubmissionUnits += submissions.filter(x => isInRange(x?.submitted_at, x?.created_at, x?.updated_at)).length;
+    if (row.manual_payer_submission_logged === true && isInRange(row.appeal_submission_date, row.updated_at, row.created_at)) manualSubmissionUnits += 1;
+  });
+
+  const uploadUnits = uploads.filter(u => isInRange(u.created_at, u.updated_at, u.uploaded_at, u.imported_at)).length;
+  const priorAuthWorkUnits = actionableCases + uploadUnits + manualSubmissionUnits;
+  return {
+    priorAuthWonOutcomes,
+    priorAuthCompletedOutcomes,
+    priorAuthResolutionDays,
+    priorAuthAvgResolutionTimeDays: priorAuthResolutionDays.length ? round2(priorAuthResolutionDays.reduce((s, d) => s + num(d), 0) / priorAuthResolutionDays.length) : 0,
+    priorAuthWorkUnits,
+    priorAuthTimeSavedHours: round2((priorAuthWorkUnits * 15) / 60)
+  };
+}
 
 function computeRoiMetrics(org_id, start, end){
   const claimsAll = readJSON(FILES.billed, []).filter(b => b && b.org_id === org_id);
@@ -20186,6 +20413,16 @@ function computeRoiMetrics(org_id, start, end){
     .sort((a, b) => b[1] - a[1])
     .map(([payer, amount]) => ({ payer, amount }))[0] || { payer: "No leakage detected", amount: 0 };
 
+  const priorAuthWorkflow = tjhpRevenueOverviewPriorAuthWorkflowMetrics(org_id, start, end);
+  const claimWorkUnits = openTasksInRange.length + packetWorkUnits;
+  const staffTimeSavedWorkUnits = claimWorkUnits + num(priorAuthWorkflow.priorAuthWorkUnits || 0);
+  const combinedResolutionDays = [
+    ...recoveryDays,
+    ...(Array.isArray(priorAuthWorkflow.priorAuthResolutionDays) ? priorAuthWorkflow.priorAuthResolutionDays : [])
+  ];
+  const workflowWonOutcomes = wonCount + num(priorAuthWorkflow.priorAuthWonOutcomes || 0);
+  const workflowCompletedOutcomes = completedCount + num(priorAuthWorkflow.priorAuthCompletedOutcomes || 0);
+
   return {
     revenueFound: round2(Array.from(foundByClaim.values()).reduce((s, n) => s + num(n || 0), 0)),
     revenueRecovered: round2(Array.from(recoveredByClaim.values()).reduce((s, n) => s + num(n || 0), 0)),
@@ -20193,10 +20430,15 @@ function computeRoiMetrics(org_id, start, end){
     winRate: completedCount ? round2((wonCount / completedCount) * 100) : 0,
     wonOutcomes: wonCount,
     completedOutcomes: completedCount,
+    workflowWinRate: workflowCompletedOutcomes ? round2((workflowWonOutcomes / workflowCompletedOutcomes) * 100) : 0,
+    workflowWonOutcomes,
+    workflowCompletedOutcomes,
     avgRecoveryTimeDays: recoveryDays.length ? round2(recoveryDays.reduce((s, d) => s + num(d || 0), 0) / recoveryDays.length) : 0,
+    avgResolutionTimeDays: combinedResolutionDays.length ? round2(combinedResolutionDays.reduce((s, d) => s + num(d || 0), 0) / combinedResolutionDays.length) : 0,
     topPayerLeakage,
-    staffTimeSavedHours: round2(((openTasksInRange.length + packetWorkUnits) * 15) / 60),
-    staffTimeSavedWorkUnits: openTasksInRange.length + packetWorkUnits
+    staffTimeSavedHours: round2((staffTimeSavedWorkUnits * 15) / 60),
+    staffTimeSavedWorkUnits,
+    ...priorAuthWorkflow
   };
 }
 
@@ -42616,6 +42858,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
     }
 
     const m = computeDashboardMetrics(org.org_id, startDate, endDate, preset);
+    const selectedTrendRange = tjhpNormalizeRevenueOverviewTrendRange(parsed.query.trend_range || "last30");
+    const revenueTrendModel = tjhpRevenueOverviewTrendSeriesModel(org.org_id, selectedTrendRange);
     const roiMetrics = computeRoiMetrics(org.org_id, startDate, endDate);
     const payerRanks = computeAllPayerRankings(org.org_id);
     const casesInRange = readJSON(FILES.cases, [])
@@ -42626,7 +42870,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       });
 
     // --- SAFE DASHBOARD DATA ENCODING FOR CHARTS ---
-    const seriesB64 = Buffer.from(JSON.stringify(m.series || {})).toString("base64");
+    const seriesB64 = Buffer.from(JSON.stringify(revenueTrendModel.series || {})).toString("base64");
     const statusB64 = Buffer.from(JSON.stringify(m.statusCounts || {})).toString("base64");
     const payerB64 = Buffer.from(JSON.stringify(m.payerTop || [])).toString("base64");
     const deniedTotal = (m.payerTop || []).reduce((s, x) => s + num(x.denied), 0);
@@ -42924,6 +43168,22 @@ if (method === "GET" && pathname === "/weekly-summary") {
 </div>
 `;
 
+    const trendHref = (trendRange) => {
+      const params = new URLSearchParams();
+      params.set("range", preset || "last30");
+      if (preset === "custom") {
+        if (parsed.query.start) params.set("start", String(parsed.query.start));
+        if (parsed.query.end) params.set("end", String(parsed.query.end));
+      }
+      params.set("trend_range", tjhpNormalizeRevenueOverviewTrendRange(trendRange));
+      return `/dashboard?${params.toString()}`;
+    };
+    const trendButtonClass = (trendRange) => `btn secondary small${revenueTrendModel.effective_range === trendRange ? " active" : ""}`;
+    const trendHasAnyData = ((revenueTrendModel.series?.billed || []).reduce((sum, n) => sum + num(n), 0) + (revenueTrendModel.series?.collected || []).reduce((sum, n) => sum + num(n), 0)) > 0;
+    const revenueTrendNote = revenueTrendModel.fallback_to_all_time
+      ? `<div class="trend-fallback-note">${safeStr(revenueTrendModel.fallback_message || "No billed or payment activity was found in the selected trend window. Showing all-time uploaded history.")}</div>`
+      : (!trendHasAnyData ? `<div class="trend-empty-note">No billed or payment trend data is available yet.</div>` : "");
+
     const html = renderPage("Revenue Overview", `
       ${alertBanner}
       ${showWelcome ? `
@@ -43001,7 +43261,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .chart-container.payer{height:320px;max-height:320px;}
         .chart-container.trend{height:320px;max-height:320px;}
         .exec-table{margin-top:12px;overflow:auto;}
-        .trend-toggle{display:flex;gap:8px;align-items:center;}
+        .trend-toggle{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+        .trend-toggle .active{background:#111827;color:#fff;border-color:#111827;box-shadow:0 6px 14px rgba(15,23,42,.12);}
+        .trend-fallback-note,.trend-empty-note{font-size:12px;color:var(--muted);margin:4px 0 0;line-height:1.4;}
+        .plan-usage-card{margin-top:14px;}
+        .plan-usage-card .kpi-strip,.plan-usage-grid{margin-top:12px;}
         .priority-summary{padding:16px;}
         .priority-header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;}
         .priority-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
@@ -43134,27 +43398,27 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
         <div class="recovery-mini-grid">
           <div class="recovery-mini">
-            <div class="recovery-mini-label">Win Rate</div>
-            <div class="recovery-mini-value">${Number(roiMetrics.winRate || 0).toFixed(1)}%</div>
-            <div class="recovery-mini-sub">${formatNumberUI(roiMetrics.wonOutcomes || 0)} won / ${formatNumberUI(roiMetrics.completedOutcomes || 0)} completed</div>
+            <div class="recovery-mini-label">Workflow Win Rate</div>
+            <div class="recovery-mini-value">${Number((roiMetrics.workflowWinRate != null ? roiMetrics.workflowWinRate : roiMetrics.winRate) || 0).toFixed(1)}%</div>
+            <div class="recovery-mini-sub">${formatNumberUI(roiMetrics.workflowWonOutcomes != null ? roiMetrics.workflowWonOutcomes : roiMetrics.wonOutcomes || 0)} won / ${formatNumberUI(roiMetrics.workflowCompletedOutcomes != null ? roiMetrics.workflowCompletedOutcomes : roiMetrics.completedOutcomes || 0)} completed · includes prior auth decisions</div>
           </div>
 
           <div class="recovery-mini">
-            <div class="recovery-mini-label">Avg Recovery Time</div>
-            <div class="recovery-mini-value">${roiMetrics.avgRecoveryTimeDays ? `${Number(roiMetrics.avgRecoveryTimeDays || 0).toFixed(0)}d` : "-"}</div>
-            <div class="recovery-mini-sub">From recovery work start to outcome</div>
+            <div class="recovery-mini-label">Avg Resolution Time</div>
+            <div class="recovery-mini-value">${(roiMetrics.avgResolutionTimeDays || roiMetrics.avgRecoveryTimeDays) ? `${Number((roiMetrics.avgResolutionTimeDays || roiMetrics.avgRecoveryTimeDays) || 0).toFixed(0)}d` : "-"}</div>
+            <div class="recovery-mini-sub">Claims recovery + prior-auth decision workflows</div>
           </div>
 
           <div class="recovery-mini">
             <div class="recovery-mini-label">Top Payer Leakage</div>
             <div class="recovery-mini-value" style="font-size:15px;">${safeStr(roiMetrics.topPayerLeakage?.payer || "No leakage detected")}</div>
-            <div class="recovery-mini-sub">${formatMoneyUI(roiMetrics.topPayerLeakage?.amount || 0)} open at risk</div>
+            <div class="recovery-mini-sub">${formatMoneyUI(roiMetrics.topPayerLeakage?.amount || 0)} claim recovery at risk</div>
           </div>
 
           <div class="recovery-mini">
             <div class="recovery-mini-label">Time Saved</div>
             <div class="recovery-mini-value">${Number(roiMetrics.staffTimeSavedHours || 0).toFixed(1)}h</div>
-            <div class="recovery-mini-sub">${formatNumberUI(roiMetrics.staffTimeSavedWorkUnits || 0)} tasks / packets × 15 min</div>
+            <div class="recovery-mini-sub">${formatNumberUI(roiMetrics.staffTimeSavedWorkUnits || 0)} claim/prior-auth work units × 15 min</div>
           </div>
         </div>
       </div>
@@ -43194,11 +43458,15 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
       <section id="forecast-engine" class="executive-panel">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:end;">
-          <h3 style="margin-bottom:12px;">Revenue Trend (Collected vs Billed)</h3>
+          <div>
+            <h3 style="margin-bottom:12px;">Revenue Trend (Collected vs Billed)</h3>
+            ${revenueTrendNote}
+          </div>
           <div class="trend-toggle">
-            <a class="btn secondary small" href="/dashboard?range=last30">30 days</a>
-            <a class="btn secondary small" href="/dashboard?range=last60">60 days</a>
-            <a class="btn secondary small" href="/dashboard?range=last90">90 days</a>
+            <a class="${trendButtonClass("last30")}" href="${trendHref("last30")}">30 days</a>
+            <a class="${trendButtonClass("last60")}" href="${trendHref("last60")}">60 days</a>
+            <a class="${trendButtonClass("last90")}" href="${trendHref("last90")}">90 days</a>
+            <a class="${trendButtonClass("all")}" href="${trendHref("all")}">All Time</a>
           </div>
         </div>
         <div class="chart-container trend">
@@ -43217,13 +43485,12 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
       </div>
 
-      <div class="hr"></div>
-
       ${dashboardUpgradePrompts}
 
-      <h3>Plan Usage <span class="tooltip">ⓘ<span class="tooltiptext">Your current monthly usage relative to your plan limits.</span></span></h3>
+      <div class="exec-card plan-usage-card">
+        <h3>Plan Usage <span class="tooltip">ⓘ<span class="tooltiptext">Your current monthly usage relative to your plan limits.</span></span></h3>
 
-      <div class="kpi-strip" style="margin-top:12px;">
+        <div class="kpi-strip plan-usage-grid" style="margin-top:12px;">
         <div class="kpi-card">
           <p class="kpi-value">${formatNumberUI(caseCreditsUsed)} / ${caseCreditsLimit || 0}</p>
           <p class="kpi-label">Case Credits Used</p>
@@ -43240,9 +43507,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <p class="kpi-value">${formatNumberUI(paymentRowsUsed)}</p>
           <p class="kpi-label">Payment Rows Processed</p>
         </div>
+        </div>
       </div>
 
-     
+
 <script>
 window.__DASHBOARD__ = {
   series: JSON.parse(atob("${seriesB64}")),
@@ -65684,6 +65952,204 @@ if (process.env.TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS === "true" && (proc
   } catch (err) {
     const stack = err && err.stack ? err.stack : String(err);
     process.stderr.write("REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
+
+if (process.env.TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const snapshots = {};
+  const snapshotFiles = [
+    "billed",
+    "payments",
+    "prior_auth_cases",
+    "prior_auth_uploads",
+    "agent_tasks",
+    "agent_workspaces",
+    "workspace_outcomes",
+    "upload_batches",
+    "document_ingests"
+  ];
+  const extractFunctionBodyForUx5Smoke = (functionName) => {
+    const start = src.indexOf("function " + functionName);
+    assert(start >= 0, "missing function for body extraction: " + functionName);
+    const open = src.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === "{") depth += 1;
+      if (src[i] === "}") depth -= 1;
+      if (depth === 0) return src.slice(open + 1, i);
+    }
+    throw new Error("missing closing brace for " + functionName);
+  };
+  const fileText = (file) => fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  const restoreSnapshots = () => {
+    Object.entries(snapshots).forEach(([key, value]) => fs.writeFileSync(FILES[key], value));
+  };
+  try {
+    [
+      "PHASE_9A_UX5_REVENUE_OVERVIEW_PA_AWARE_INSIGHTS_OPERATIONAL_TREND_ALL_TIME_LAYOUT_OK",
+      "tjhpRevenueOverviewTrendSeriesModel",
+      "tjhpRevenueOverviewClaimTrendDate",
+      "tjhpRevenueOverviewPaymentTrendDate",
+      "tjhpRevenueOverviewTrendRangeWindow",
+      "tjhpRevenueOverviewTrendGranularity",
+      "trend_range",
+      "All Time",
+      "fallback_to_all_time",
+      "Showing all-time uploaded history",
+      "date_of_service",
+      "paid_date",
+      "remittance_date",
+      "payment_date",
+      "avgResolutionTimeDays",
+      "workflowWinRate",
+      "priorAuthWonOutcomes",
+      "priorAuthCompletedOutcomes",
+      "priorAuthWorkUnits",
+      "Workflow Win Rate",
+      "Avg Resolution Time",
+      "claim/prior-auth work units",
+      "plan-usage-card",
+      "plan-usage-grid"
+    ].forEach(marker => assert(src.includes(marker), "missing UX5 marker: " + marker));
+
+    [
+      "PHASE_9A_UX4_REVENUE_OVERVIEW_CLAIM_CTA_UPLOAD_LANDING_BOTTOM_LAYOUT_OK",
+      "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "claimSidePanelBackdrop",
+      "window.openClaimPanel",
+      "data-open-claim-panel",
+      "view-claim-btn",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "priorAuthSidePanel",
+      "priorAuthSidePanelBackdrop",
+      "window.openPriorAuthPanel",
+      "view-prior-auth-btn"
+    ].forEach(marker => assert(src.includes(marker), "missing protected marker: " + marker));
+
+    ["tjhpRevenueOverviewTrendSeriesModel", "tjhpRevenueOverviewPriorAuthWorkflowMetrics"].forEach(fn => {
+      const body = extractFunctionBodyForUx5Smoke(fn);
+      [
+        "writeJSON",
+        "savePriorAuthCasesForOrg",
+        "upsertPriorAuthCase",
+        "savePriorAuthUploadRecord",
+        "appendAuditLog",
+        "ensureAgentWorkspace",
+        "saveAgentWorkspace",
+        "autoDraftWorkspaceForClaim",
+        "requestOpenAIChatCompletion",
+        "fetchFHIRDocuments",
+        "fetchEHRDocuments",
+        "scrapePortal",
+        "routePacket",
+        "submitPacket",
+        "OCR",
+        "payer portal submission",
+        "automatic prior-auth submission",
+        "method === \"POST\"",
+        "parseBody(req)"
+      ].forEach(forbidden => assert(!body.includes(forbidden), fn + " contains forbidden mutation/integration marker: " + forbidden));
+    });
+
+    const trendBody = extractFunctionBodyForUx5Smoke("tjhpRevenueOverviewTrendSeriesModel") + extractFunctionBodyForUx5Smoke("tjhpRevenueOverviewBuildTrendSeries");
+    assert(!trendBody.includes("new Date(b.created_at || b.paid_at || b.denied_at || Date.now())"), "old created_at trend anchor remains in UX5 trend helper");
+    assert(trendBody.includes("date_of_service"), "trend helper missing date_of_service");
+    assert(trendBody.includes("paid_date"), "trend helper missing paid_date");
+
+    snapshotFiles.forEach(key => { snapshots[key] = fileText(FILES[key]); });
+    const smokeOrgId = "__phase9a_ux5_revenue_overview_smoke__" + Date.now().toString(36);
+    const daysAgo = (days) => {
+      const d = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      return d.toISOString().slice(0, 10);
+    };
+    const oldServiceDate = daysAgo(150);
+    const oldPaidDate = daysAgo(140);
+    writeJSON(FILES.billed, [
+      ...readJSON(FILES.billed, []),
+      {
+        billed_id: "ux5_billed_old_1",
+        claim_id: "UX5-CLAIM-1",
+        claim_number: "UX5-CLAIM-1",
+        org_id: smokeOrgId,
+        amount_billed: 940,
+        billed_amount: 940,
+        payer: "UX5 Payer",
+        date_of_service: oldServiceDate,
+        created_at: nowISO()
+      }
+    ]);
+    writeJSON(FILES.payments, [
+      ...readJSON(FILES.payments, []),
+      {
+        claim_id: "UX5-CLAIM-1",
+        org_id: smokeOrgId,
+        paid_amount: 350,
+        amount_paid: 350,
+        payer: "UX5 Payer",
+        paid_date: oldPaidDate,
+        created_at: nowISO()
+      }
+    ]);
+
+    const trend30 = tjhpRevenueOverviewTrendSeriesModel(smokeOrgId, "last30");
+    assert(trend30.selected_range === "last30", "trend30 selected range");
+    assert(trend30.effective_range === "all", "trend30 effective fallback range");
+    assert(trend30.fallback_to_all_time === true, "trend30 fallback flag");
+    assert(trend30.series.keys.length > 0, "trend30 keys");
+    assert(trend30.series.billed.reduce((s, n) => s + num(n), 0) === 940, "trend30 billed sum");
+    assert(trend30.series.collected.reduce((s, n) => s + num(n), 0) === 350, "trend30 collected sum");
+    const todayKey = new Date().toISOString().slice(0, 10);
+    assert(!trend30.series.keys.includes(todayKey), "old operational dates should not plot on today");
+    assert(trend30.series.keys.some(k => oldServiceDate.startsWith(k.slice(0, 7)) || oldPaidDate.startsWith(k.slice(0, 7))), "old service/payment period missing");
+
+    const trendAll = tjhpRevenueOverviewTrendSeriesModel(smokeOrgId, "all");
+    assert(trendAll.effective_range === "all", "trendAll effective range");
+    assert(trendAll.fallback_to_all_time === false, "trendAll fallback false");
+    assert(trendAll.series.billed.reduce((s, n) => s + num(n), 0) === 940, "trendAll billed sum");
+    assert(trendAll.series.collected.reduce((s, n) => s + num(n), 0) === 350, "trendAll collected sum");
+
+    savePriorAuthCasesForOrg(smokeOrgId, [
+      { auth_case_id:"ux5_pa_approved", org_id:smokeOrgId, status:"Approved", submitted_date:daysAgo(20), determination_date:daysAgo(5), created_at:daysAgo(21), updated_at:daysAgo(5) },
+      { auth_case_id:"ux5_pa_denied", org_id:smokeOrgId, status:"Denied", submitted_date:daysAgo(30), determination_date:daysAgo(10), created_at:daysAgo(31), updated_at:daysAgo(10) },
+      { auth_case_id:"ux5_pa_draft", org_id:smokeOrgId, status:"Draft", created_at:daysAgo(2), updated_at:daysAgo(2) }
+    ]);
+    const rr = rangeFromPreset("last90");
+    const roi = computeRoiMetrics(smokeOrgId, rr.start, rr.end);
+    assert(roi.priorAuthCompletedOutcomes >= 2, "priorAuthCompletedOutcomes");
+    assert(roi.priorAuthWonOutcomes >= 1, "priorAuthWonOutcomes");
+    assert(roi.priorAuthWorkUnits >= 1, "priorAuthWorkUnits");
+    assert(roi.workflowCompletedOutcomes >= roi.completedOutcomes, "workflowCompletedOutcomes merge");
+    assert(roi.workflowWonOutcomes >= roi.wonOutcomes, "workflowWonOutcomes merge");
+    assert(Number.isFinite(roi.workflowWinRate), "workflowWinRate finite");
+    assert(roi.avgResolutionTimeDays === 0 || Number.isFinite(roi.avgResolutionTimeDays), "avgResolutionTimeDays finite");
+    assert(roi.staffTimeSavedWorkUnits >= roi.priorAuthWorkUnits, "staff work units include prior auth");
+    assert(Number.isFinite(roi.staffTimeSavedHours), "staff time saved finite");
+    assert(num(roi.revenueRecovered || 0) === 0, "prior-auth estimated revenue must not be recovered revenue");
+
+    restoreSnapshots();
+    snapshotFiles.forEach(key => assert(fileText(FILES[key]) === snapshots[key], "snapshot restore mismatch: " + key));
+
+    const layoutStart = src.indexOf("Organization Targets");
+    const layoutEnd = src.indexOf("window.__DASHBOARD__", layoutStart);
+    const layoutSrc = src.slice(layoutStart, layoutEnd);
+    assert(layoutSrc.includes("plan-usage-card"), "bottom layout missing plan-usage-card");
+    assert(layoutSrc.includes("Plan Usage"), "bottom layout missing Plan Usage");
+    assert(layoutSrc.includes("Organization Targets"), "bottom layout missing Organization Targets");
+    assert(!layoutSrc.includes('<div class="hr"></div>\n\n      ${dashboardUpgradePrompts}\n\n      <h3>Plan Usage'), "old divider plan usage layout remains");
+    ["Open Claims Lifecycle", "Review Denials", "Export Executive Brief"].forEach(x => assert(!layoutSrc.includes(x), "old bottom button row text remains: " + x));
+
+    process.stdout.write("REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    try { restoreSnapshots(); } catch (_) {}
+    process.stderr.write("REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
     process.exit(1);
   }
 }
