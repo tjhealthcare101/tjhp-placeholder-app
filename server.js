@@ -1761,6 +1761,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PRIOR_AUTH_REVENUE_OVERVIEW_NO_MUTATION_OK
 // PHASE_9A_UX1_REVENUE_OVERVIEW_PRIOR_AUTH_STRIP_CLARITY_OK
 // PHASE_9A_UX2_REVENUE_OVERVIEW_EMPTY_DASHES_COLLAPSIBLE_PA_OK
+// PHASE_9A_UX3_REVENUE_OVERVIEW_PA_UPLOAD_TARGET_APPEAL_CTA_OK
 function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
   const rows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
   const intakeStatuses = new Set(["Auth Needed", "Draft"]);
@@ -1870,7 +1871,7 @@ function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
 function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
   const model = tjhpRevenueOverviewPriorAuthWorkModel(org_id);
   const primaryHref = "/actions?tab=prior-auth&pa_sort=priority";
-  const uploadHref = "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity";
+  const uploadHref = "/data-management?tab=upload&dm_upload_type=prior-auth#dm-drop";
   const disclaimer = `<div class="prior-auth-work-case-note muted small">Manual/upload-driven only. No payer portal check or automatic submission occurs here.</div>`;
 
   if (!model.has_cases) {
@@ -1892,7 +1893,15 @@ function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
   }
 
   const top = model.top_case || {};
-  const actionLabel = model.top_next_action || tjhpPriorAuthNextActionLabel(top) || "Continue Prior Auth Appeal";
+  const caseHref = `/prior-auth/case?auth_case_id=${encodeURIComponent(top.auth_case_id || "")}`;
+  const appealHref = `/prior-auth/appeal-workspace?auth_case_id=${encodeURIComponent(top.auth_case_id || "")}`;
+  const normalizedTopStatus = normalizePriorAuthStatus(top.status || "");
+  const startAppealStatuses = new Set(["Denied", "Appeal Needed", "Partially Approved"]);
+  const appealWorkspaceEligible = typeof tjhpPriorAuthAppealWorkspaceEligible === "function" && tjhpPriorAuthAppealWorkspaceEligible(top);
+  const shouldShowStartAppeal = appealWorkspaceEligible && startAppealStatuses.has(normalizedTopStatus);
+  const displayActionLabel = shouldShowStartAppeal
+    ? "Start Appeal"
+    : (model.top_next_action || tjhpPriorAuthNextActionLabel(top) || "Review prior authorization");
   const reasonItems = [
     model.denied_partial_count > 0 ? "Denied / Partial" : null,
     model.stale_pending_count > 0 ? "Stale Pending" : null,
@@ -1917,8 +1926,6 @@ function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
       : (top.scheduled_service_date
         ? `Service date: ${safeStr(top.scheduled_service_date)}`
         : (top.submitted_date ? `Submitted: ${safeStr(top.submitted_date)}` : "")));
-  const openHref = `/prior-auth/case?auth_case_id=${encodeURIComponent(top.auth_case_id || "")}`;
-
   return `
     <details class="priority-claims prior-auth-work-details">
       <summary>
@@ -1935,14 +1942,17 @@ function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
         <div class="prior-auth-work-case-note muted small">Known pre-service revenue at risk across actionable prior auths: ${model.known_revenue_at_risk > 0 ? formatMoneyUI(model.known_revenue_at_risk) : "Not determined"}</div>
         <div class="priority-claim-row prior-auth-work-row">
           <div>
-            <strong class="prior-auth-work-case-main">${safeStr(actionLabel)}</strong>
+            <strong class="prior-auth-work-case-main">${safeStr(displayActionLabel)}</strong>
             <div class="prior-auth-work-case-meta muted small">Reason: ${safeStr(reasonLabel)}</div>
             <div class="prior-auth-work-case-meta muted small">Known pre-service revenue at risk: ${safeStr(topRevenueText)}</div>
             ${noReliableAmountNote}
             ${caseDetails ? `<div class="prior-auth-work-case-meta muted small">${caseDetails}</div>` : ""}
             ${dateHint ? `<div class="prior-auth-work-case-meta muted small">${dateHint}</div>` : ""}
           </div>
-          <a class="btn small secondary" href="${openHref}">Open</a>
+          <div class="prior-auth-work-row-actions">
+            ${appealWorkspaceEligible ? `<a class="btn small" href="${appealHref}">${safeStr(shouldShowStartAppeal ? "Start Appeal" : "Open Appeal Workspace")}</a>` : ""}
+            <a class="btn small secondary" href="${caseHref}">Open Case</a>
+          </div>
         </div>
         ${disclaimer}
       </div>
@@ -42993,6 +43003,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .prior-auth-work-empty{background:#f8fafc;}
         .prior-auth-work-details{border-top:1px solid var(--border);padding-top:10px;}
         .prior-auth-work-row{align-items:center;}
+        .prior-auth-work-row-actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap;}
         .prior-auth-work-case-main{display:inline-block;margin-bottom:2px;}
         .prior-auth-work-case-meta{margin-top:2px;line-height:1.35;}
         .prior-auth-work-case-note{margin-top:5px;font-size:11px;line-height:1.35;}
@@ -43019,7 +43030,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .health-fill{height:100%;border-radius:999px;background:#111827;}
         .health-driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px;}
         .health-driver{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px 12px;}
-        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}}
+        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}}
       </style>
 
       <div style="border-left:6px solid ${verdictColor};padding:14px 18px;margin-bottom:18px;background:var(--card);border-radius:10px;">
@@ -58079,6 +58090,7 @@ if (method === "GET" && pathname === "/data-management") {
 
           <div
             id="dm-drop"
+            tabindex="0"
             class="dropzone"
             style="margin-top:8px;flex-direction:column;align-items:stretch;justify-content:center;padding:14px;text-align:center;"
           >
@@ -59397,6 +59409,21 @@ k reimbursement uploads with timestamps. You can rollback an upload if needed.</
   const clearBtn = document.getElementById("dm-clear");
 
   if (dz && inp) {
+    const uploadTypeSelect = document.getElementById("dm-upload-type");
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      const requestedUploadType = String(params.get("dm_upload_type") || "").trim().toLowerCase();
+      const allowedUploadTypes = new Set(["auto", "claims", "payments", "denials", "prior-auth", "other"]);
+      if (uploadTypeSelect && allowedUploadTypes.has(requestedUploadType)) {
+        uploadTypeSelect.value = requestedUploadType;
+      }
+      if (String(window.location.hash || "") === "#dm-drop" && dz && typeof dz.scrollIntoView === "function") {
+        setTimeout(function(){
+          try { dz.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (_) {}
+          try { if (typeof dz.focus === "function") dz.focus(); } catch (_) {}
+        }, 60);
+      }
+    } catch (_) {}
     const esc = (s) => String(s || "").replace(/[<>&"]/g, c => c === "<" ? "&lt;" : (c === ">" ? "&gt;" : (c === "&" ? "&amp;" : "&quot;")));
     const selectedUploadTypeLabel = () => {
       const type = document.getElementById("dm-upload-type");
@@ -65511,6 +65538,7 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
   let emptyOrg = "";
   let singleOrg = "";
   let noActionOrg = "";
+  let pendingOrg = "";
   try {
     [
       "PHASE_9A_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_OK",
@@ -65518,6 +65546,7 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
       "PRIOR_AUTH_REVENUE_OVERVIEW_NO_MUTATION_OK",
       "PHASE_9A_UX1_REVENUE_OVERVIEW_PRIOR_AUTH_STRIP_CLARITY_OK",
       "PHASE_9A_UX2_REVENUE_OVERVIEW_EMPTY_DASHES_COLLAPSIBLE_PA_OK",
+      "PHASE_9A_UX3_REVENUE_OVERVIEW_PA_UPLOAD_TARGET_APPEAL_CTA_OK",
       "function tjhpRevenueOverviewPriorAuthWorkModel",
       "function tjhpRevenueOverviewPriorAuthWorkStripHtml",
       "metric-no-data",
@@ -65543,7 +65572,15 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
       "hasRecoveryOverviewData",
       "/actions?tab=prior-auth&pa_sort=priority",
       "/data-management?tab=upload",
-      "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity",
+      "/data-management?tab=upload&dm_upload_type=prior-auth#dm-drop",
+      "dm_upload_type",
+      "dm-drop",
+      "dm-upload-type",
+      "Start Appeal",
+      "Open Case",
+      "prior-auth-work-row-actions",
+      "/prior-auth/appeal-workspace?auth_case_id=",
+      "/prior-auth/case?auth_case_id=",
       "Manual/upload-driven only. No payer portal check or automatic submission occurs here.",
       "${priorAuthWorkStrip}"
     ].forEach(marker => assert(src.includes(marker), "missing Phase 9A marker: " + marker));
@@ -65622,6 +65659,7 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
     emptyOrg = smokeOrgId + "_empty";
     singleOrg = smokeOrgId + "_single_denied";
     noActionOrg = smokeOrgId + "_no_action";
+    pendingOrg = smokeOrgId + "_pending_stale";
     const staleDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     savePriorAuthCasesForOrg(smokeOrgId, []);
     savePriorAuthCasesForOrg(smokeOrgId, [
@@ -65689,13 +65727,14 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
       "Prior auths to work today",
       "Click to expand and open prior-auth work in Action Center",
       "3",
-      "Continue Prior Auth Appeal",
+      "Start Appeal",
       "Reason:",
       "Denied / Partial",
       "Known pre-service revenue at risk",
       formatMoneyUI(1700),
-      "Open",
-      "/prior-auth/case?auth_case_id=",
+      "Open Case",
+      "/prior-auth/appeal-workspace?auth_case_id=pa_smoke_denied",
+      "/prior-auth/case?auth_case_id=pa_smoke_denied",
       "Manual/upload-driven only. No payer portal check or automatic submission occurs here."
     ].forEach(marker => assert(strip.includes(marker), "strip html missing marker: " + marker));
     ["<details open", "Prior Auth Revenue Work", 'class="prior-auth-work-strip"', 'class="prior-auth-work-status"', 'class="prior-auth-work-count"', 'class="prior-auth-work-grid"', 'class="prior-auth-work-metric"', "<span>Needs Action</span>", "<span>Pending / Stale</span>"]
@@ -65721,18 +65760,18 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
     assert.strictEqual(singleModel.total_cases, 1, "single total cases mismatch");
     assert.strictEqual(singleModel.needs_action_count, 1, "single needs action count mismatch");
     assert.strictEqual(singleModel.denied_partial_count, 1, "single denied / partial count mismatch");
-    ["<details", "prior-auth-work-details", "Prior auths to work today", "1", "Continue Prior Auth Appeal", "Reason:", "Denied / Partial", "Known pre-service revenue at risk:", "Not determined", "No reliable dollar amount yet.", "Single Smoke Payer", "Genetic Assay", "Auth #AUTH-SINGLE-1", "Follow-up:", "Open", "/prior-auth/case?auth_case_id=pa_smoke_single_denied"]
+    ["<details", "prior-auth-work-details", "Prior auths to work today", "1", "Start Appeal", "/prior-auth/appeal-workspace?auth_case_id=pa_smoke_single_denied", "Open Case", "/prior-auth/case?auth_case_id=pa_smoke_single_denied", "Reason:", "Denied / Partial", "Known pre-service revenue at risk:", "Not determined", "No reliable dollar amount yet.", "Single Smoke Payer", "Genetic Assay", "Auth #AUTH-SINGLE-1"]
       .forEach(marker => assert(singleStrip.includes(marker), "single strip missing marker: " + marker));
-    ["<details open", "1 prior auth needs action.", "Prior Auth Revenue Work", 'class="prior-auth-work-strip"', 'class="prior-auth-work-status"', 'class="prior-auth-work-count"', 'class="prior-auth-work-grid"', 'class="prior-auth-work-metric"']
+    ["Continue Prior Auth Appeal", ">Open</a>", "<details open", "1 prior auth needs action.", "Prior Auth Revenue Work", 'class="prior-auth-work-strip"', 'class="prior-auth-work-status"', 'class="prior-auth-work-count"', 'class="prior-auth-work-grid"', 'class="prior-auth-work-metric"']
       .forEach(marker => assert(!singleStrip.includes(marker), "single strip still includes old active marker: " + marker));
     savePriorAuthCasesForOrg(singleOrg, []);
     assert.strictEqual(getPriorAuthCases(singleOrg).length, 0, "single smoke prior-auth cases not cleaned");
 
     savePriorAuthCasesForOrg(emptyOrg, []);
     const emptyStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(emptyOrg);
-    ["No prior-auth revenue work right now.", "Upload Prior Auth Materials", "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity"]
+    ["No prior-auth revenue work right now.", "Upload Prior Auth Materials", "/data-management?tab=upload&dm_upload_type=prior-auth#dm-drop"]
       .forEach(marker => assert(emptyStrip.includes(marker), "empty strip missing marker: " + marker));
-    ["Prior Auth Revenue Work", "Prior Auths Needing Action", "Manual/upload-driven only", "<details", 'class="prior-auth-work-strip"', "1 prior auth needs action."]
+    ["/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity", "prior-auth-upload-activity", "Prior Auth Revenue Work", "Prior Auths Needing Action", "Manual/upload-driven only", "<details", 'class="prior-auth-work-strip"', "1 prior auth needs action."]
       .forEach(marker => assert(!emptyStrip.includes(marker), "empty strip still includes old or active marker: " + marker));
 
     savePriorAuthCasesForOrg(noActionOrg, [
@@ -65756,14 +65795,36 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
     savePriorAuthCasesForOrg(noActionOrg, []);
     assert.strictEqual(getPriorAuthCases(noActionOrg).length, 0, "no-action smoke prior-auth cases not cleaned");
 
+    savePriorAuthCasesForOrg(pendingOrg, [
+      {
+        auth_case_id: "pa_smoke_pending_stale",
+        status: "Submitted",
+        submitted_date: staleDate,
+        risk_level: "Medium",
+        payer: "Pending Smoke Payer",
+        requested_service: "MRI",
+        auth_number: "AUTH-PENDING-1",
+        estimated_revenue_at_risk: 400
+      }
+    ]);
+    const pendingStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(pendingOrg);
+    ["Prior auths to work today", "Follow up with payer", "Open Case", "/prior-auth/case?auth_case_id=pa_smoke_pending_stale"]
+      .forEach(marker => assert(pendingStrip.includes(marker), "pending strip missing marker: " + marker));
+    ["Start Appeal", "/prior-auth/appeal-workspace?auth_case_id=pa_smoke_pending_stale"]
+      .forEach(marker => assert(!pendingStrip.includes(marker), "pending strip includes appeal marker: " + marker));
+    savePriorAuthCasesForOrg(pendingOrg, []);
+    assert.strictEqual(getPriorAuthCases(pendingOrg).length, 0, "pending smoke prior-auth cases not cleaned");
+
     savePriorAuthCasesForOrg(smokeOrgId, []);
     savePriorAuthCasesForOrg(emptyOrg, []);
     savePriorAuthCasesForOrg(singleOrg, []);
     savePriorAuthCasesForOrg(noActionOrg, []);
+    savePriorAuthCasesForOrg(pendingOrg, []);
     assert.strictEqual(getPriorAuthCases(smokeOrgId).length, 0, "smoke prior-auth cases not cleaned");
     assert.strictEqual(getPriorAuthCases(emptyOrg).length, 0, "empty smoke prior-auth cases not cleaned");
     assert.strictEqual(getPriorAuthCases(singleOrg).length, 0, "single smoke prior-auth cases not cleaned after final cleanup");
     assert.strictEqual(getPriorAuthCases(noActionOrg).length, 0, "no-action smoke prior-auth cases not cleaned after final cleanup");
+    assert.strictEqual(getPriorAuthCases(pendingOrg).length, 0, "pending smoke prior-auth cases not cleaned after final cleanup");
 
     assert.strictEqual(JSON.stringify(readJSON(FILES.billed, [])), before.billed, "billed data changed");
     assert.strictEqual(JSON.stringify(readJSON(FILES.payments, [])), before.payments, "payments data changed");
@@ -65779,6 +65840,7 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
     try { if (emptyOrg) savePriorAuthCasesForOrg(emptyOrg, []); } catch (_) {}
     try { if (singleOrg) savePriorAuthCasesForOrg(singleOrg, []); } catch (_) {}
     try { if (noActionOrg) savePriorAuthCasesForOrg(noActionOrg, []); } catch (_) {}
+    try { if (pendingOrg) savePriorAuthCasesForOrg(pendingOrg, []); } catch (_) {}
     process.stderr.write("REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
     process.exit(1);
   }
@@ -67759,7 +67821,14 @@ if (process.env.TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS === "true" && (pr
         "Store Prior Auth Upload For Review",
         "Prior authorization case saved.",
         "Prior authorization upload stored for review.",
-        "Prior authorization upload failed. Please try again."
+        "Prior authorization upload failed. Please try again.",
+        "dm_upload_type",
+        'id="dm-upload-type"',
+        'id="dm-drop"',
+        'value="prior-auth"',
+        "window.location.search",
+        "URLSearchParams",
+        "scrollIntoView"
       ].forEach(x => assert(src.includes(x), "missing prior auth UI marker: " + x));
 
       [
@@ -70505,6 +70574,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_ACTIONS_PANEL_SMOKE_TESTS === "true" && (
   })();
 }
 
+// PHASE_9A_UX3_QA1_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_SMOKE_ALIGNMENT_OK
 if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   (function(){
     const assert = require("assert");
@@ -70519,6 +70589,7 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS === "
 
     try {
       [
+        "PHASE_9A_UX3_QA1_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_SMOKE_ALIGNMENT_OK",
         "function tjhpPriorAuthAppealWorkspaceEligible",
         "function tjhpPriorAuthAppealWorkspaceNextStepLabel",
         "function tjhpPriorAuthAppealWorkspaceEvidenceChecklist",
@@ -70548,15 +70619,54 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS === "
 
         const futureRouteSrc = src.slice(futureRouteStart, futureRouteEnd);
 
+        const futureRouteUsesCommandCenter =
+          futureRouteSrc.includes("tjhpPriorAuthAppealWorkspaceLayoutModel") ||
+          futureRouteSrc.includes("Prior Auth Appeal Packet Command Center");
+        const futureLayoutHelperStart = src.indexOf("function tjhpPriorAuthAppealEvidenceItems");
+        const futureCommandCenterMarkerSrc = futureRouteUsesCommandCenter && futureLayoutHelperStart >= 0
+          ? futureRouteSrc + "\n" + src.slice(futureLayoutHelperStart, futureRouteStart)
+          : futureRouteSrc;
+
         [
           "tjhpPriorAuthAppealWorkspaceContext(org, row)",
           "Prior Auth Appeal Workspace",
-          "Appeal Workspace Shell",
-          "Evidence Checklist",
-          "Next Step",
           "Back to Prior Auth Case",
-          "Back to Prior Auth Queue"
+          "Back to Prior Auth Queue",
+          "tjhpPriorAuthSubmissionWorkflowHtml"
         ].forEach(x => assert(futureRouteSrc.includes(x), "future appeal workspace route missing required marker: " + x));
+
+        if (futureRouteUsesCommandCenter) {
+          [
+            "tjhpPriorAuthAppealWorkspaceLayoutModel",
+            "Prior Auth Appeal Packet Command Center",
+            "Packet readiness",
+            "Source proof",
+            "Clinical necessity",
+            "Appeal Packet Preview",
+            "Prior Authorization Appeal Narrative",
+            "Prior Auth Submission Workflow"
+          ].forEach(x => assert(futureCommandCenterMarkerSrc.includes(x), "future command-center appeal workspace route missing required marker: " + x));
+
+          const hasEvidenceRouteSignal = [
+            "Evidence Checklist",
+            "evidenceItems",
+            "layout.evidence_items",
+            "Source proof",
+            "Evidence of Authorization / Request History"
+          ].some(marker => futureCommandCenterMarkerSrc.includes(marker));
+
+          assert(hasEvidenceRouteSignal, "appeal workspace GET route missing evidence/source-proof route signal");
+        } else {
+          [
+            "tjhpPriorAuthAppealWorkspaceContext(org, row)",
+            "Prior Auth Appeal Workspace",
+            "Appeal Workspace Shell",
+            "Evidence Checklist",
+            "Next Step",
+            "Back to Prior Auth Case",
+            "Back to Prior Auth Queue"
+          ].forEach(x => assert(futureRouteSrc.includes(x), "future appeal workspace route missing required marker: " + x));
+        }
 
         [
           "parseBody(req)",
@@ -70564,22 +70674,51 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS === "
           "savePriorAuthCasesForOrg(",
           "writeJSON(",
           "ensureAgentWorkspace(",
+          "saveAgentWorkspace(",
+          "ensureWorkspacePacket(",
+          "ensurePacketSections(",
           "createAgentWorkspace",
           "FILES.billed",
           "FILES.payments",
           "FILES.payer_contracts",
           "FILES.document_ingests",
           "FILES.agent_workspaces",
-          'action="/prior-auth/appeal-workspace"',
-          'action="/prior-auth/case/status"',
-          'action="/prior-auth/case/link"',
           "/upload-router",
           "/data-management/prior-auth/upload",
           "/data-management/prior-auth/create"
         ].forEach(x => assert(!futureRouteSrc.includes(x), "future appeal workspace GET route must remain read-only and must not include: " + x));
+
+        if (futureRouteSrc.includes('method="POST"')) {
+          const allowedWorkspaceFormActions = [
+            'action="/prior-auth/appeal-workspace/save-section"',
+            'action="/prior-auth/appeal-workspace/evidence/upload"',
+            'action="/prior-auth/appeal-workspace/evidence/exclude"',
+            'action="/prior-auth/appeal-workspace/evidence/appeal-address"',
+            'action="/prior-auth/appeal-workspace/submit"'
+          ];
+          assert(
+            allowedWorkspaceFormActions.some(action => futureRouteSrc.includes(action)),
+            "appeal workspace GET route POST forms must be expected workspace forms"
+          );
+        }
       }
 
       assert(!src.includes(forbiddenPostAppealWorkspaceRoute), "prior-auth appeal workspace POST route must not exist yet");
+
+      function extractSmokeFunctionSource(functionName){
+        const start = src.indexOf("function " + functionName);
+        assert(start >= 0, "prior-auth appeal workspace helper missing: " + functionName);
+        const open = src.indexOf("{", start);
+        assert(open > start, "prior-auth appeal workspace helper opening brace missing: " + functionName);
+        let depth = 0;
+        for (let i = open; i < src.length; i += 1) {
+          const ch = src[i];
+          if (ch === "{") depth += 1;
+          if (ch === "}") depth -= 1;
+          if (depth === 0) return src.slice(start, i + 1);
+        }
+        throw new Error("prior-auth appeal workspace helper closing brace missing: " + functionName);
+      }
 
       const helperStart = src.indexOf("function tjhpPriorAuthAppealWorkspaceEligible");
       const helperEnd = src.indexOf("function priorAuthStructuredRowSignal", helperStart);
@@ -70587,7 +70726,12 @@ if (process.env.TJHP_PRIOR_AUTH_APPEAL_WORKSPACE_SHELL_HELPERS_SMOKE_TESTS === "
       assert(helperStart >= 0, "prior-auth appeal workspace helper block missing");
       assert(helperEnd > helperStart, "prior-auth appeal workspace helper block boundary missing");
 
-      const helperBlock = src.slice(helperStart, helperEnd);
+      const helperBlock = [
+        "tjhpPriorAuthAppealWorkspaceEligible",
+        "tjhpPriorAuthAppealWorkspaceNextStepLabel",
+        "tjhpPriorAuthAppealWorkspaceEvidenceChecklist",
+        "tjhpPriorAuthAppealWorkspaceContext"
+      ].map(extractSmokeFunctionSource).join("\n");
 
       [
         "writeJSON(",
