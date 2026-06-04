@@ -1760,6 +1760,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PRIOR_AUTH_REVENUE_OVERVIEW_NAVIGATION_ONLY_OK
 // PRIOR_AUTH_REVENUE_OVERVIEW_NO_MUTATION_OK
 // PHASE_9A_UX1_REVENUE_OVERVIEW_PRIOR_AUTH_STRIP_CLARITY_OK
+// PHASE_9A_UX2_REVENUE_OVERVIEW_EMPTY_DASHES_COLLAPSIBLE_PA_OK
 function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
   const rows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
   const intakeStatuses = new Set(["Auth Needed", "Draft"]);
@@ -1870,82 +1871,82 @@ function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
   const model = tjhpRevenueOverviewPriorAuthWorkModel(org_id);
   const primaryHref = "/actions?tab=prior-auth&pa_sort=priority";
   const uploadHref = "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity";
-  const disclaimer = `<div class="muted small" style="font-size:11px;margin-top:8px;">Manual/upload-driven only. No payer portal check or automatic submission occurs here.</div>`;
-  const actionCount = Number(model.needs_action_count || 0) || 0;
-  const actionHeadline = actionCount === 1 ? "1 prior auth needs action." : `${formatNumberUI(actionCount)} prior auths need action.`;
-  const reasonItems = [
-    model.denied_partial_count > 0 ? { label: "Denied / Partial", href: "/actions?tab=prior-auth&pa_stage=denied_partial&pa_sort=priority" } : null,
-    model.stale_pending_count > 0 ? { label: "Stale Pending", href: "/actions?tab=prior-auth&pa_stage=pending&pa_sort=follow_up" } : null,
-    model.appeal_follow_up_due_count > 0 ? { label: "Appeal Follow-Up Due", href: "/actions?tab=prior-auth&pa_stage=appeal_submitted&pa_sort=follow_up" } : null,
-    model.intake_count > 0 ? { label: "Intake / Draft", href: "/actions?tab=prior-auth&pa_stage=intake&pa_sort=priority" } : null,
-    model.expiring_count > 0 ? { label: "Expiring / Expired", href: "/actions?tab=prior-auth&pa_stage=approved_ready&pa_sort=follow_up" } : null
-  ].filter(Boolean);
-  const reasonLinks = reasonItems.map(item => `<a class="prior-auth-work-reason" href="${item.href}">${safeStr(item.label)}</a>`).join('<span aria-hidden="true"> · </span>');
+  const disclaimer = `<div class="prior-auth-work-case-note muted small">Manual/upload-driven only. No payer portal check or automatic submission occurs here.</div>`;
 
   if (!model.has_cases) {
     return `
-      <div class="prior-auth-work-strip prior-auth-work-empty">
-        <div class="prior-auth-work-head">
-          <div>
-            <h4>No prior-auth revenue work right now</h4>
-            <p class="prior-auth-work-copy">Revenue Overview will show uploaded authorization requests or payer decisions when they need follow-up.</p>
-          </div>
-        </div>
-        <div class="muted small">No prior-auth cases are active for this organization.</div>
-        <div class="prior-auth-work-subtle-actions"><a class="prior-auth-work-subtle-link" href="${uploadHref}">Upload Auth Materials</a></div>
-        ${disclaimer}
+      <div class="priority-empty priority-empty-action-line prior-auth-empty-line muted small">
+        <span>No prior-auth revenue work right now.</span>
+        <a class="priority-inline-link" href="${uploadHref}">Upload Prior Auth Materials</a>
       </div>
     `;
   }
 
   if (!model.has_actionable) {
     return `
-      <div class="prior-auth-work-strip prior-auth-work-empty">
-        <div class="prior-auth-work-head">
-          <div>
-            <h4>No prior-auth revenue action right now</h4>
-            <p class="prior-auth-work-copy">Prior auth cases are being monitored, but none need revenue action today.</p>
-          </div>
-        </div>
-        <div class="muted small">Existing prior-auth cases can still be reviewed in Action Center.</div>
-        <div class="prior-auth-work-subtle-actions"><a class="prior-auth-work-subtle-link" href="${primaryHref}">View Prior Auths</a></div>
-        ${disclaimer}
+      <div class="priority-empty priority-empty-action-line prior-auth-empty-line muted small">
+        <span>No prior-auth revenue action right now.</span>
+        <a class="priority-inline-link" href="${primaryHref}">View Prior Auths</a>
       </div>
     `;
   }
 
-  const revenueText = model.known_revenue_at_risk > 0
-    ? formatMoneyUI(model.known_revenue_at_risk)
-    : "Not determined";
-  const notDetermined = model.not_determined_count > 0
-    ? `<span class="muted small">${formatNumberUI(model.not_determined_count)} case(s) have no reliable dollar amount yet.</span>`
-    : "";
-  const top = model.top_case || null;
-  const topDetails = top
-    ? [top.payer, top.requested_service, top.auth_number ? `Auth #${top.auth_number}` : ""].filter(Boolean).map(safeStr).join(" · ")
-    : "";
-  const topLine = top
-    ? `<div class="prior-auth-work-next"><strong>Next: ${safeStr(model.top_next_action || tjhpPriorAuthNextActionLabel(top))}</strong>${topDetails ? ` <span class="muted small">${topDetails}</span>` : ""}</div>`
-    : "";
-  const reasonLabel = reasonItems.length === 1 ? "Reason:" : "Reasons:";
+  const top = model.top_case || {};
+  const actionLabel = model.top_next_action || tjhpPriorAuthNextActionLabel(top) || "Continue Prior Auth Appeal";
+  const reasonItems = [
+    model.denied_partial_count > 0 ? "Denied / Partial" : null,
+    model.stale_pending_count > 0 ? "Stale Pending" : null,
+    model.appeal_follow_up_due_count > 0 ? "Appeal Follow-Up Due" : null,
+    model.intake_count > 0 ? "Intake / Draft" : null,
+    model.expiring_count > 0 ? "Expiring / Expired" : null
+  ].filter(Boolean);
+  const reasonLabel = reasonItems.length ? reasonItems.join(" · ") : safeStr(top.status || "Needs Action");
+  const topRevenue = Number(top.estimated_revenue_at_risk || 0);
+  const hasReliableTopRevenue = Number.isFinite(topRevenue) && topRevenue > 0;
+  const topRevenueText = hasReliableTopRevenue ? formatMoneyUI(topRevenue) : "Not determined";
+  const noReliableAmountNote = hasReliableTopRevenue ? "" : `<div class="prior-auth-work-case-note muted small">No reliable dollar amount yet.</div>`;
+  const caseDetails = [
+    top.payer,
+    top.requested_service,
+    top.auth_number ? `Auth #${top.auth_number}` : ""
+  ].filter(Boolean).map(safeStr).join(" · ");
+  const dateHint = top.appeal_follow_up_date
+    ? `Follow-up: ${safeStr(top.appeal_follow_up_date)}`
+    : (top.expiration_date
+      ? `Expires: ${safeStr(top.expiration_date)}`
+      : (top.scheduled_service_date
+        ? `Service date: ${safeStr(top.scheduled_service_date)}`
+        : (top.submitted_date ? `Submitted: ${safeStr(top.submitted_date)}` : "")));
+  const openHref = `/prior-auth/case?auth_case_id=${encodeURIComponent(top.auth_case_id || "")}`;
 
   return `
-    <div class="prior-auth-work-strip">
-      <div class="prior-auth-work-head">
-        <div>
-          <h4>Prior Auth Revenue Work</h4>
-          <p class="prior-auth-work-copy">Protect pre-service revenue before claims are billed.</p>
+    <details class="priority-claims prior-auth-work-details">
+      <summary>
+        <span>
+          <span>Prior auths to work today</span>
+          <small>Click to expand and open prior-auth work in Action Center</small>
+        </span>
+        <span class="priority-summary-right">
+          <strong>${formatNumberUI(model.needs_action_count)}</strong>
+          <span class="priority-chevron">⌄</span>
+        </span>
+      </summary>
+      <div class="priority-claim-list">
+        <div class="prior-auth-work-case-note muted small">Known pre-service revenue at risk across actionable prior auths: ${model.known_revenue_at_risk > 0 ? formatMoneyUI(model.known_revenue_at_risk) : "Not determined"}</div>
+        <div class="priority-claim-row prior-auth-work-row">
+          <div>
+            <strong class="prior-auth-work-case-main">${safeStr(actionLabel)}</strong>
+            <div class="prior-auth-work-case-meta muted small">Reason: ${safeStr(reasonLabel)}</div>
+            <div class="prior-auth-work-case-meta muted small">Known pre-service revenue at risk: ${safeStr(topRevenueText)}</div>
+            ${noReliableAmountNote}
+            ${caseDetails ? `<div class="prior-auth-work-case-meta muted small">${caseDetails}</div>` : ""}
+            ${dateHint ? `<div class="prior-auth-work-case-meta muted small">${dateHint}</div>` : ""}
+          </div>
+          <a class="btn small secondary" href="${openHref}">Open</a>
         </div>
-        <div class="prior-auth-work-actions"><a class="btn small secondary" href="${primaryHref}">Open Prior Auth Work</a></div>
+        ${disclaimer}
       </div>
-      <div class="prior-auth-work-status">
-        <div class="prior-auth-work-count">${safeStr(actionHeadline)}</div>
-        ${reasonItems.length ? `<div class="prior-auth-work-reasons muted small"><strong>${reasonLabel}</strong> ${reasonLinks}</div>` : ""}
-      </div>
-      <div class="prior-auth-work-revenue"><strong>Known pre-service revenue at risk:</strong> ${safeStr(revenueText)} ${notDetermined}</div>
-      ${topLine}
-      ${disclaimer}
-    </div>
+    </details>
   `;
 }
 
@@ -42779,6 +42780,25 @@ if (method === "GET" && pathname === "/weekly-summary") {
       followup: { count: 0, amount: 0 }
     });
     const todaysAtRiskTotal = todaysPriorities.denied.amount + todaysPriorities.underpaid.amount + todaysPriorities.followup.amount;
+    const dashboardPayments = readJSON(FILES.payments, []).filter(p => p && String(p.org_id || "") === String(org.org_id || ""));
+    const hasRevenueOverviewFinancialData = dashboardClaims.length > 0 || dashboardPayments.length > 0 || Number(m.kpis?.totalBilled || 0) > 0 || Number(m.kpis?.collectedTotal || 0) > 0;
+    const hasAtRiskClaimWork =
+      topClaims.length > 0 ||
+      todaysAtRiskTotal > 0 ||
+      Number(todaysPriorities.denied.count || 0) > 0 ||
+      Number(todaysPriorities.underpaid.count || 0) > 0 ||
+      Number(todaysPriorities.followup.count || 0) > 0;
+    const dashboardDash = `<span class="metric-no-data" aria-label="No data">-</span>`;
+    const moneyOrDash = (hasData, value) => hasData ? formatMoneyUI(value || 0) : dashboardDash;
+    const numberOrDash = (hasData, value) => hasData ? formatNumberUI(value || 0) : dashboardDash;
+    const hasRecoveryOverviewData =
+      hasRevenueOverviewFinancialData ||
+      Number(roiMetrics.revenueFound || 0) > 0 ||
+      Number(roiMetrics.revenueRecovered || 0) > 0 ||
+      Number(roiMetrics.pendingRecovery || 0) > 0 ||
+      Number(roiMetrics.completedOutcomes || 0) > 0 ||
+      Number(roiMetrics.wonOutcomes || 0) > 0;
+    const recoveryProgressPercent = roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0;
     const priorAuthWorkStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(org.org_id);
     const revenueSummaryBlock = `
 <div class="insight-card priority-summary" style="margin-bottom:16px;">
@@ -42790,35 +42810,35 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div class="muted small">Start with denied, underpaid, and follow-up claims that need action today.</div>
     </div>
     <div class="priority-actions">
-      <a class="btn" href="/actions?tab=all">Open All At-Risk Work</a>
+      ${hasAtRiskClaimWork ? `<a class="btn" href="/actions?tab=all">Open All At-Risk Work</a>` : ""}
     </div>
   </div>
 
   <div class="priority-grid">
     <div class="priority-main">
-      <div class="priority-main-value">${formatMoneyUI(todaysAtRiskTotal)}</div>
+      <div class="priority-main-value">${moneyOrDash(hasRevenueOverviewFinancialData, todaysAtRiskTotal)}</div>
       <div class="priority-main-label">Revenue At Risk</div>
     </div>
     <div class="priority-metric">
-      <strong>${formatNumberUI(todaysPriorities.denied.count)}</strong>
+      <strong>${numberOrDash(hasRevenueOverviewFinancialData, todaysPriorities.denied.count)}</strong>
       <span>Denied</span>
-      <small>${formatMoneyUI(todaysPriorities.denied.amount)}</small>
+      <small>${moneyOrDash(hasRevenueOverviewFinancialData, todaysPriorities.denied.amount)}</small>
     </div>
     <div class="priority-metric">
-      <strong>${formatNumberUI(todaysPriorities.underpaid.count)}</strong>
+      <strong>${numberOrDash(hasRevenueOverviewFinancialData, todaysPriorities.underpaid.count)}</strong>
       <span>Underpaid</span>
-      <small>${formatMoneyUI(todaysPriorities.underpaid.amount)}</small>
+      <small>${moneyOrDash(hasRevenueOverviewFinancialData, todaysPriorities.underpaid.amount)}</small>
     </div>
     <div class="priority-metric">
-      <strong>${formatNumberUI(todaysPriorities.followup.count)}</strong>
+      <strong>${numberOrDash(hasRevenueOverviewFinancialData, todaysPriorities.followup.count)}</strong>
       <span>Follow-Up</span>
-      <small>${formatMoneyUI(todaysPriorities.followup.amount)}</small>
+      <small>${moneyOrDash(hasRevenueOverviewFinancialData, todaysPriorities.followup.amount)}</small>
     </div>
   </div>
 
   ${
     topClaims.length === 0
-    ? `<div class="priority-empty muted small">No high-priority claims right now.</div>`
+    ? `<div class="priority-empty priority-empty-action-line muted small"><span>No high-priority claims right now.</span><a class="priority-inline-link" href="/data-management?tab=upload">Upload Claim Data</a></div>`
     : `
       <details class="priority-claims">
         <summary>
@@ -42941,6 +42961,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .priority-metric span{display:block;font-size:12px;color:var(--muted);font-weight:800;margin-top:5px;}
         .priority-metric small{display:block;font-size:12px;color:var(--muted);margin-top:4px;}
         .priority-empty{margin-top:12px;}
+        .metric-no-data{display:inline-block;font:inherit;font-weight:inherit;line-height:inherit;color:inherit;}
+        .priority-empty-action-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;line-height:1.4;}
+        .priority-inline-link{display:inline-flex;align-items:center;color:#111827;text-decoration:underline;text-underline-offset:3px;font-weight:800;}
+        .priority-inline-link:hover{text-decoration-thickness:2px;}
+        .prior-auth-empty-line{padding-top:2px;}
         .priority-claims{margin-top:12px;border-top:1px solid var(--border);padding-top:10px;}
         .priority-claims summary{cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;font-weight:900;border:1px solid var(--border);border-radius:12px;padding:12px;background:#f8fafc;}
         .priority-claims summary small{display:block;font-size:11px;color:var(--muted);font-weight:700;margin-top:3px;}
@@ -42966,6 +42991,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .prior-auth-work-revenue .muted{margin-left:6px;}
         .prior-auth-work-next{margin-top:7px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
         .prior-auth-work-empty{background:#f8fafc;}
+        .prior-auth-work-details{border-top:1px solid var(--border);padding-top:10px;}
+        .prior-auth-work-row{align-items:center;}
+        .prior-auth-work-case-main{display:inline-block;margin-bottom:2px;}
+        .prior-auth-work-case-meta{margin-top:2px;line-height:1.35;}
+        .prior-auth-work-case-note{margin-top:5px;font-size:11px;line-height:1.35;}
         .recovery-snapshot{padding:16px;}
         .recovery-progress-wrap{border:1px solid var(--border);border-radius:12px;background:#f8fafc;padding:12px;margin-top:12px;}
         .recovery-progress-bar{height:10px;border-radius:999px;background:#e5e7eb;overflow:hidden;margin-top:8px;}
@@ -42989,7 +43019,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .health-fill{height:100%;border-radius:999px;background:#111827;}
         .health-driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px;}
         .health-driver{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px 12px;}
-        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}}
+        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}}
       </style>
 
       <div style="border-left:6px solid ${verdictColor};padding:14px 18px;margin-bottom:18px;background:var(--card);border-radius:10px;">
@@ -43017,19 +43047,19 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
         <div class="recovery-core-grid">
           <div class="recovery-core-card">
-            <p class="recovery-value">${formatMoneyUI(roiMetrics.revenueFound || 0)}</p>
+            <p class="recovery-value">${moneyOrDash(hasRecoveryOverviewData, roiMetrics.revenueFound || 0)}</p>
             <p class="recovery-label">Revenue Found</p>
             <div class="recovery-sub">Identified recovery opportunity.</div>
           </div>
 
           <div class="recovery-core-card">
-            <p class="recovery-value">${formatMoneyUI(roiMetrics.revenueRecovered || 0)}</p>
+            <p class="recovery-value">${moneyOrDash(hasRecoveryOverviewData, roiMetrics.revenueRecovered || 0)}</p>
             <p class="recovery-label">Revenue Recovered</p>
             <div class="recovery-sub">Recovered from outcomes or linked recovery work.</div>
           </div>
 
           <div class="recovery-core-card">
-            <p class="recovery-value">${formatMoneyUI(roiMetrics.pendingRecovery || 0)}</p>
+            <p class="recovery-value">${moneyOrDash(hasRecoveryOverviewData, roiMetrics.pendingRecovery || 0)}</p>
             <p class="recovery-label">Pending Recovery</p>
             <div class="recovery-sub">Still open and awaiting resolution.</div>
           </div>
@@ -43041,10 +43071,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
               <strong>Recovery Progress</strong>
               <div class="muted small">Recovered versus revenue found in this date range.</div>
             </div>
-            <strong>${(roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0).toFixed(1)}%</strong>
+            <strong>${hasRecoveryOverviewData ? `${recoveryProgressPercent.toFixed(1)}%` : dashboardDash}</strong>
           </div>
           <div class="recovery-progress-bar">
-            <span class="recovery-progress-fill" style="width:${(roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0).toFixed(1)}%;"></span>
+            <span class="recovery-progress-fill" style="width:${hasRecoveryOverviewData ? recoveryProgressPercent.toFixed(1) : "0.0"}%;"></span>
           </div>
         </div>
 
@@ -65487,27 +65517,32 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
       "PRIOR_AUTH_REVENUE_OVERVIEW_NAVIGATION_ONLY_OK",
       "PRIOR_AUTH_REVENUE_OVERVIEW_NO_MUTATION_OK",
       "PHASE_9A_UX1_REVENUE_OVERVIEW_PRIOR_AUTH_STRIP_CLARITY_OK",
+      "PHASE_9A_UX2_REVENUE_OVERVIEW_EMPTY_DASHES_COLLAPSIBLE_PA_OK",
       "function tjhpRevenueOverviewPriorAuthWorkModel",
       "function tjhpRevenueOverviewPriorAuthWorkStripHtml",
-      "Prior Auth Revenue Work",
+      "metric-no-data",
+      "priority-empty-action-line",
+      "priority-inline-link",
+      "Upload Claim Data",
+      "Upload Prior Auth Materials",
       "No prior-auth revenue work right now",
       "No prior-auth revenue action right now",
-      "Revenue Overview will show uploaded authorization requests or payer decisions when they need follow-up.",
-      "Prior auth cases are being monitored, but none need revenue action today.",
-      "1 prior auth needs action.",
-      "prior auths need action.",
+      "Prior auths to work today",
+      "Click to expand and open prior-auth work in Action Center",
+      "prior-auth-work-details",
+      "No reliable dollar amount yet.",
+      "Follow-up:",
+      "Expires:",
       "Reason:",
-      "Reasons:",
+      "Denied / Partial",
       "View Prior Auths",
-      "Stale Pending",
-      "Intake / Draft",
-      "Expiring / Expired",
-      "Appeal Follow-Up Due",
-      "Protect pre-service revenue before claims are billed.",
-      "Open Prior Auth Work",
+      "moneyOrDash",
+      "numberOrDash",
+      "hasRevenueOverviewFinancialData",
+      "hasAtRiskClaimWork",
+      "hasRecoveryOverviewData",
       "/actions?tab=prior-auth&pa_sort=priority",
-      "/actions?tab=prior-auth&pa_stage=denied_partial",
-      "/actions?tab=prior-auth&pa_stage=pending",
+      "/data-management?tab=upload",
       "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity",
       "Manual/upload-driven only. No payer portal check or automatic submission occurs here.",
       "${priorAuthWorkStrip}"
@@ -65518,6 +65553,16 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
     const recoveryIdx = src.indexOf("Revenue Recovery Insights");
     assert(topClaimsIdx >= 0, "missing top claims marker");
     assert(stripIdx > topClaimsIdx && recoveryIdx > stripIdx, "prior-auth strip must render after top claims and before Revenue Recovery Insights");
+    const directAtRiskMoneyDisplay = '<div class="priority-main-value">${formatMoneyUI' + '(todaysAtRiskTotal)}</div>';
+    const directRevenueFoundDisplay = '<p class="recovery-value">${formatMoneyUI' + '(roiMetrics.revenueFound || 0)}</p>';
+    const directRevenueRecoveredDisplay = '<p class="recovery-value">${formatMoneyUI' + '(roiMetrics.revenueRecovered || 0)}</p>';
+    const directPendingRecoveryDisplay = '<p class="recovery-value">${formatMoneyUI' + '(roiMetrics.pendingRecovery || 0)}</p>';
+    assert(!src.includes(directAtRiskMoneyDisplay), "Revenue at Risk total still directly displays raw money value");
+    assert(!src.includes(directRevenueFoundDisplay), "Revenue Found still directly displays raw ROI money value");
+    assert(!src.includes(directRevenueRecoveredDisplay), "Revenue Recovered still directly displays raw ROI money value");
+    assert(!src.includes(directPendingRecoveryDisplay), "Pending Recovery still directly displays raw ROI money value");
+    assert(src.includes("moneyOrDash(hasRevenueOverviewFinancialData, todaysAtRiskTotal)"), "missing dash-aware Revenue at Risk total display");
+    assert(src.includes("moneyOrDash(hasRecoveryOverviewData, roiMetrics.revenueFound || 0)"), "missing dash-aware Recovery core display");
 
     ["renderClaimPanelBootstrap", "claimSidePanel", "claimSidePanelBackdrop", "window.openClaimPanel", "data-open-claim-panel", "view-claim-btn"].forEach(marker => {
       assert(src.includes(marker), "missing protected claim panel marker: " + marker);
@@ -65639,20 +65684,25 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
 
     const strip = tjhpRevenueOverviewPriorAuthWorkStripHtml(smokeOrgId);
     [
-      "Prior Auth Revenue Work",
-      "Open Prior Auth Work",
-      "3 prior auths need action.",
-      "Reasons:",
+      "<details",
+      "prior-auth-work-details",
+      "Prior auths to work today",
+      "Click to expand and open prior-auth work in Action Center",
+      "3",
+      "Continue Prior Auth Appeal",
+      "Reason:",
+      "Denied / Partial",
       "Known pre-service revenue at risk",
       formatMoneyUI(1700),
-      "Denied / Partial",
-      "Stale Pending",
-      "Intake / Draft",
+      "Open",
+      "/prior-auth/case?auth_case_id=",
       "Manual/upload-driven only. No payer portal check or automatic submission occurs here."
     ].forEach(marker => assert(strip.includes(marker), "strip html missing marker: " + marker));
-    ["<span>Needs Action</span>", "<span>Pending / Stale</span>", 'class="prior-auth-work-grid"', 'class="prior-auth-work-metric"']
-      .forEach(marker => assert(!strip.includes(marker), "strip html still includes old metric marker: " + marker));
+    ["<details open", "Prior Auth Revenue Work", 'class="prior-auth-work-strip"', 'class="prior-auth-work-status"', 'class="prior-auth-work-count"', 'class="prior-auth-work-grid"', 'class="prior-auth-work-metric"', "<span>Needs Action</span>", "<span>Pending / Stale</span>"]
+      .forEach(marker => assert(!strip.includes(marker), "strip html still includes old active marker: " + marker));
 
+    const futureFollowUpDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const futureExpirationDate = new Date(Date.now() + 21 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     savePriorAuthCasesForOrg(singleOrg, [
       {
         auth_case_id: "pa_smoke_single_denied",
@@ -65661,7 +65711,9 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
         payer: "Single Smoke Payer",
         requested_service: "Genetic Assay",
         auth_number: "AUTH-SINGLE-1",
-        estimated_revenue_at_risk: 0
+        estimated_revenue_at_risk: 0,
+        appeal_follow_up_date: futureFollowUpDate,
+        expiration_date: futureExpirationDate
       }
     ]);
     const singleModel = tjhpRevenueOverviewPriorAuthWorkModel(singleOrg);
@@ -65669,18 +65721,18 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
     assert.strictEqual(singleModel.total_cases, 1, "single total cases mismatch");
     assert.strictEqual(singleModel.needs_action_count, 1, "single needs action count mismatch");
     assert.strictEqual(singleModel.denied_partial_count, 1, "single denied / partial count mismatch");
-    ["Prior Auth Revenue Work", "1 prior auth needs action.", "Reason:", "Denied / Partial", "Known pre-service revenue at risk:", "Not determined", "Next:", "Open Prior Auth Work"]
+    ["<details", "prior-auth-work-details", "Prior auths to work today", "1", "Continue Prior Auth Appeal", "Reason:", "Denied / Partial", "Known pre-service revenue at risk:", "Not determined", "No reliable dollar amount yet.", "Single Smoke Payer", "Genetic Assay", "Auth #AUTH-SINGLE-1", "Follow-up:", "Open", "/prior-auth/case?auth_case_id=pa_smoke_single_denied"]
       .forEach(marker => assert(singleStrip.includes(marker), "single strip missing marker: " + marker));
-    ["<span>Needs Action</span>", "<span>Pending / Stale</span>", 'class="prior-auth-work-grid"', 'class="prior-auth-work-metric"']
-      .forEach(marker => assert(!singleStrip.includes(marker), "single strip still includes old metric marker: " + marker));
+    ["<details open", "1 prior auth needs action.", "Prior Auth Revenue Work", 'class="prior-auth-work-strip"', 'class="prior-auth-work-status"', 'class="prior-auth-work-count"', 'class="prior-auth-work-grid"', 'class="prior-auth-work-metric"']
+      .forEach(marker => assert(!singleStrip.includes(marker), "single strip still includes old active marker: " + marker));
     savePriorAuthCasesForOrg(singleOrg, []);
     assert.strictEqual(getPriorAuthCases(singleOrg).length, 0, "single smoke prior-auth cases not cleaned");
 
     savePriorAuthCasesForOrg(emptyOrg, []);
     const emptyStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(emptyOrg);
-    ["No prior-auth revenue work right now", "Revenue Overview will show uploaded authorization requests or payer decisions when they need follow-up.", "No prior-auth cases are active for this organization.", "Upload Auth Materials", "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity"]
+    ["No prior-auth revenue work right now.", "Upload Prior Auth Materials", "/data-management?tab=upload&dm_view=prior-auth#prior-auth-upload-activity"]
       .forEach(marker => assert(emptyStrip.includes(marker), "empty strip missing marker: " + marker));
-    ["Prior Auths Needing Action", "1 prior auth needs action.", 'class="prior-auth-work-grid"', 'class="prior-auth-work-metric"']
+    ["Prior Auth Revenue Work", "Prior Auths Needing Action", "Manual/upload-driven only", "<details", 'class="prior-auth-work-strip"', "1 prior auth needs action."]
       .forEach(marker => assert(!emptyStrip.includes(marker), "empty strip still includes old or active marker: " + marker));
 
     savePriorAuthCasesForOrg(noActionOrg, [
@@ -65697,9 +65749,9 @@ if (process.env.TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS === "tru
     const noActionStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(noActionOrg);
     assert.strictEqual(noActionModel.total_cases, 1, "no-action total cases mismatch");
     assert.strictEqual(noActionModel.needs_action_count, 0, "no-action needs action count mismatch");
-    ["No prior-auth revenue action right now", "Prior auth cases are being monitored, but none need revenue action today.", "View Prior Auths", "/actions?tab=prior-auth&pa_sort=priority"]
+    ["No prior-auth revenue action right now.", "View Prior Auths", "/actions?tab=prior-auth&pa_sort=priority"]
       .forEach(marker => assert(noActionStrip.includes(marker), "no-action strip missing marker: " + marker));
-    ["Prior Auths Needing Action", "1 prior auth needs action.", 'class="prior-auth-work-grid"', 'class="prior-auth-work-metric"']
+    ["Prior Auth Revenue Work", "Prior Auths Needing Action", "<details", 'class="prior-auth-work-strip"', "1 prior auth needs action."]
       .forEach(marker => assert(!noActionStrip.includes(marker), "no-action strip still includes old or active marker: " + marker));
     savePriorAuthCasesForOrg(noActionOrg, []);
     assert.strictEqual(getPriorAuthCases(noActionOrg).length, 0, "no-action smoke prior-auth cases not cleaned");
