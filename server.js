@@ -1764,6 +1764,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX3_REVENUE_OVERVIEW_PA_UPLOAD_TARGET_APPEAL_CTA_OK
 // PHASE_9A_UX4_REVENUE_OVERVIEW_CLAIM_CTA_UPLOAD_LANDING_BOTTOM_LAYOUT_OK
 // PHASE_9A_UX5_REVENUE_OVERVIEW_PA_AWARE_INSIGHTS_OPERATIONAL_TREND_ALL_TIME_LAYOUT_OK
+// PHASE_9A_UX6_REVENUE_OVERVIEW_TREND_BAR_ANCHOR_USAGE_CLEANUP_OK
 function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
   const rows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
   const intakeStatuses = new Set(["Auth Needed", "Draft"]);
@@ -19843,7 +19844,7 @@ function tjhpRevenueOverviewParseOperationalDate(...values){
   }
   return null;
 }
-function tjhpRevenueOverviewClaimTrendDate(row = {}){
+function tjhpRevenueOverviewClaimOperationalTrendDate(row = {}){
   return tjhpRevenueOverviewParseOperationalDate(
     row.date_of_service,
     row.dos,
@@ -19851,13 +19852,10 @@ function tjhpRevenueOverviewClaimTrendDate(row = {}){
     row.claim_service_date,
     row.billed_date,
     row.claim_date,
-    row.submitted_at,
-    row.created_at,
-    row.imported_at,
-    row.uploaded_at
+    row.submitted_at
   );
 }
-function tjhpRevenueOverviewPaymentTrendDate(row = {}){
+function tjhpRevenueOverviewPaymentOperationalTrendDate(row = {}){
   return tjhpRevenueOverviewParseOperationalDate(
     row.paid_date,
     row.date_paid,
@@ -19865,11 +19863,28 @@ function tjhpRevenueOverviewPaymentTrendDate(row = {}){
     row.payment_date,
     row.posted_at,
     row.paid_at,
-    row.last_paid_at,
+    row.last_paid_at
+  );
+}
+function tjhpRevenueOverviewClaimFallbackTrendDate(row = {}){
+  return tjhpRevenueOverviewParseOperationalDate(
     row.created_at,
     row.imported_at,
     row.uploaded_at
   );
+}
+function tjhpRevenueOverviewPaymentFallbackTrendDate(row = {}){
+  return tjhpRevenueOverviewParseOperationalDate(
+    row.created_at,
+    row.imported_at,
+    row.uploaded_at
+  );
+}
+function tjhpRevenueOverviewClaimTrendDate(row = {}){
+  return tjhpRevenueOverviewClaimOperationalTrendDate(row) || tjhpRevenueOverviewClaimFallbackTrendDate(row);
+}
+function tjhpRevenueOverviewPaymentTrendDate(row = {}){
+  return tjhpRevenueOverviewPaymentOperationalTrendDate(row) || tjhpRevenueOverviewPaymentFallbackTrendDate(row);
 }
 function tjhpRevenueOverviewTrendRangeWindow(range = "last30"){
   const effective = tjhpNormalizeRevenueOverviewTrendRange(range);
@@ -19898,6 +19913,11 @@ function tjhpRevenueOverviewFirstPositiveAmount(row = {}, fields = []){
   }
   return 0;
 }
+function tjhpDashboardBillableLimitReached(used, limit){
+  const u = Number(used || 0);
+  const l = Number(limit || 0);
+  return Number.isFinite(u) && Number.isFinite(l) && l > 0 && u > 0 && u >= l;
+}
 function tjhpRevenueOverviewBuildTrendSeries(org_id = "", range = "last30"){
   const oid = String(org_id || "").trim();
   const selected = tjhpNormalizeRevenueOverviewTrendRange(range);
@@ -19908,37 +19928,52 @@ function tjhpRevenueOverviewBuildTrendSeries(org_id = "", range = "last30"){
   // Operational trend anchors: date_of_service for billed rows and paid_date for collected rows before upload/current dates.
   const rawBilled = [];
   const rawCollected = [];
+  let realOperationalBilledCount = 0;
+  let realOperationalCollectedCount = 0;
+  let fallbackBilledCount = 0;
+  let fallbackCollectedCount = 0;
   const inWindow = (d) => {
     if (!d || isNaN(d.getTime())) return false;
     if (!window.start || !window.end) return true;
     return d >= window.start && d <= window.end;
   };
+  const pushPoint = (bucket, date, amount, isOperationalDate, sourceType) => {
+    if (!date || amount <= 0 || !inWindow(date)) return;
+    const point = { date, amount, is_operational_date: isOperationalDate === true, source_type: sourceType };
+    bucket.push(point);
+    if (sourceType === "billed") {
+      if (point.is_operational_date) realOperationalBilledCount += 1;
+      else fallbackBilledCount += 1;
+    } else if (sourceType === "collected") {
+      if (point.is_operational_date) realOperationalCollectedCount += 1;
+      else fallbackCollectedCount += 1;
+    }
+  };
 
   claims.forEach(claim => {
-    const d = tjhpRevenueOverviewClaimTrendDate(claim);
+    const operationalDate = tjhpRevenueOverviewClaimOperationalTrendDate(claim);
+    const fallbackDate = operationalDate ? null : tjhpRevenueOverviewClaimFallbackTrendDate(claim);
+    const d = operationalDate || fallbackDate;
     const amount = tjhpRevenueOverviewFirstPositiveAmount(claim, ["amount_billed", "billed_amount", "charge_amount", "charges", "total_charge"]);
-    if (d && amount > 0 && inWindow(d)) rawBilled.push({ date: d, amount });
+    pushPoint(rawBilled, d, amount, !!operationalDate, "billed");
   });
 
   if (payments.length > 0) {
     payments.forEach(payment => {
-      const d = tjhpRevenueOverviewPaymentTrendDate(payment);
+      const operationalDate = tjhpRevenueOverviewPaymentOperationalTrendDate(payment);
+      const fallbackDate = operationalDate ? null : tjhpRevenueOverviewPaymentFallbackTrendDate(payment);
+      const d = operationalDate || fallbackDate;
       const amount = tjhpRevenueOverviewFirstPositiveAmount(payment, ["amount_paid", "paid_amount", "payment_amount", "insurance_paid", "payer_paid", "total_paid"]);
-      if (d && amount > 0 && inWindow(d)) rawCollected.push({ date: d, amount });
+      pushPoint(rawCollected, d, amount, !!operationalDate, "collected");
     });
   } else {
     claims.forEach(claim => {
-      const d = tjhpRevenueOverviewPaymentTrendDate(claim) || tjhpRevenueOverviewClaimTrendDate(claim);
+      const operationalDate = tjhpRevenueOverviewPaymentOperationalTrendDate(claim) || tjhpRevenueOverviewClaimOperationalTrendDate(claim);
+      const fallbackDate = operationalDate ? null : (tjhpRevenueOverviewPaymentFallbackTrendDate(claim) || tjhpRevenueOverviewClaimFallbackTrendDate(claim));
+      const d = operationalDate || fallbackDate;
       const derived = evaluateClaimDerived(claim, ctx);
-      const amount = Math.max(
-        0,
-        num(derived.paidAmount || 0),
-        num(claim.paid_amount || 0),
-        num(claim.insurance_paid || 0),
-        num(claim.payer_paid || 0),
-        num(claim.patient_collected || 0)
-      );
-      if (d && amount > 0 && inWindow(d)) rawCollected.push({ date: d, amount });
+      const amount = Math.max(0, num(derived.paidAmount || 0), num(claim.paid_amount || 0), num(claim.insurance_paid || 0), num(claim.payer_paid || 0), num(claim.patient_collected || 0));
+      pushPoint(rawCollected, d, amount, !!operationalDate, "collected");
     });
   }
 
@@ -19948,59 +19983,58 @@ function tjhpRevenueOverviewBuildTrendSeries(org_id = "", range = "last30"){
   const gran = tjhpRevenueOverviewTrendGranularity(start, end, selected);
   const billedSeries = {};
   const collectedSeries = {};
-  rawBilled.forEach(x => {
-    const key = groupKeyForDate(x.date, gran);
-    billedSeries[key] = (billedSeries[key] || 0) + x.amount;
-  });
-  rawCollected.forEach(x => {
-    const key = groupKeyForDate(x.date, gran);
-    collectedSeries[key] = (collectedSeries[key] || 0) + x.amount;
-  });
+  rawBilled.forEach(x => { const key = groupKeyForDate(x.date, gran); billedSeries[key] = (billedSeries[key] || 0) + x.amount; });
+  rawCollected.forEach(x => { const key = groupKeyForDate(x.date, gran); collectedSeries[key] = (collectedSeries[key] || 0) + x.amount; });
   const keys = Array.from(new Set([...Object.keys(billedSeries), ...Object.keys(collectedSeries)])).sort();
+  const billed = keys.map(k => round2(billedSeries[k] || 0));
+  const collected = keys.map(k => round2(collectedSeries[k] || 0));
+  const billedTotal = round2(billed.reduce((sum, n) => sum + num(n), 0));
+  const collectedTotal = round2(collected.reduce((sum, n) => sum + num(n), 0));
+  const selected_has_billed = billedTotal > 0;
+  const selected_has_collected = collectedTotal > 0;
+  const selected_has_both = selected_has_billed && selected_has_collected;
+  const selected_has_real_operational_billed = realOperationalBilledCount > 0;
+  const selected_has_real_operational_collected = realOperationalCollectedCount > 0;
+  const selected_has_real_operational_both = selected_has_real_operational_billed && selected_has_real_operational_collected;
+  const selected_only_fallback_dates = (rawBilled.length + rawCollected.length) > 0 && (realOperationalBilledCount + realOperationalCollectedCount) === 0;
+  const metadata = { rawBilled, rawCollected, realOperationalBilledCount, realOperationalCollectedCount, fallbackBilledCount, fallbackCollectedCount, billedTotal, collectedTotal, billed_total: billedTotal, collected_total: collectedTotal, selected_has_billed, selected_has_collected, selected_has_both, selected_has_real_operational_billed, selected_has_real_operational_collected, selected_has_real_operational_both, selected_only_fallback_dates };
   return {
     selected_range: selected,
     effective_range: selected,
     fallback_to_all_time: false,
     fallback_message: "",
-    series: {
-      gran,
-      keys,
-      billed: keys.map(k => round2(billedSeries[k] || 0)),
-      collected: keys.map(k => round2(collectedSeries[k] || 0)),
-      selected_range: selected,
-      effective_range: selected,
-      fallback_to_all_time: false,
-      fallback_message: ""
-    }
+    ...metadata,
+    series: { gran, keys, billed, collected, selected_range: selected, effective_range: selected, fallback_to_all_time: false, fallback_message: "", billed_total: billedTotal, collected_total: collectedTotal, selected_has_billed, selected_has_collected, selected_has_both, selected_has_real_operational_billed, selected_has_real_operational_collected, selected_has_real_operational_both, selected_only_fallback_dates }
   };
 }
 function tjhpRevenueOverviewTrendSeriesModel(org_id = "", selectedRange = "last30"){
   const selected = tjhpNormalizeRevenueOverviewTrendRange(selectedRange);
   const selectedModel = tjhpRevenueOverviewBuildTrendSeries(org_id, selected);
-  const selectedTotal = (selectedModel.series.billed || []).reduce((s, n) => s + num(n), 0)
-    + (selectedModel.series.collected || []).reduce((s, n) => s + num(n), 0);
-  if (selected === "all" || selectedTotal > 0) return selectedModel;
+  if (selected === "all") return selectedModel;
 
   const allModel = tjhpRevenueOverviewBuildTrendSeries(org_id, "all");
-  const allTotal = (allModel.series.billed || []).reduce((s, n) => s + num(n), 0)
-    + (allModel.series.collected || []).reduce((s, n) => s + num(n), 0);
-  if (allTotal <= 0) return selectedModel;
+  const selectedBilledTotal = selectedModel.billed_total || 0;
+  const selectedCollectedTotal = selectedModel.collected_total || 0;
+  const selectedTotal = selectedBilledTotal + selectedCollectedTotal;
+  const allBilledTotal = allModel.billed_total || 0;
+  const allCollectedTotal = allModel.collected_total || 0;
+  const allTotal = allBilledTotal + allCollectedTotal;
+  const selectedHasBoth = selectedBilledTotal > 0 && selectedCollectedTotal > 0;
+  const allHasBoth = allBilledTotal > 0 && allCollectedTotal > 0;
+  const selectedOnlyFallback = selectedModel.selected_only_fallback_dates === true;
+  const allHasOperationalHistory = allModel.selected_has_real_operational_billed || allModel.selected_has_real_operational_collected;
+  const selectedFallbackHasFullerAllTimeContext = selectedOnlyFallback && allModel.selected_has_real_operational_both === true;
+  const shouldFallback = selected !== "all" && allTotal > 0 && (selectedTotal <= 0 || selectedFallbackHasFullerAllTimeContext || (allHasBoth && !selectedHasBoth));
+  if (!shouldFallback) return selectedModel;
 
-  const fallbackMessage = "No billed or payment activity was found in the selected trend window. Showing all-time uploaded history.";
+  const fallbackMessage = "The selected trend window does not include the full billed and collected history. Showing all-time uploaded history.";
   allModel.selected_range = selected;
   allModel.effective_range = "all";
   allModel.fallback_to_all_time = true;
   allModel.fallback_message = fallbackMessage;
-  allModel.series = {
-    ...(allModel.series || {}),
-    selected_range: selected,
-    effective_range: "all",
-    fallback_to_all_time: true,
-    fallback_message: fallbackMessage
-  };
+  allModel.series = { ...(allModel.series || {}), selected_range: selected, effective_range: "all", fallback_to_all_time: true, fallback_message: fallbackMessage };
   return allModel;
 }
-
 
 function tjhpWorkspaceSubmittedForChannel(ws, channel){
   return String(ws?.submission?.status || "") === "submitted" && String(ws?.submission?.channel || "") === String(channel || "");
@@ -42925,15 +42959,17 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const copilotUsage = getCopilotUsageSnapshot(org.org_id);
     const copilotQueriesLimit = Number(copilotUsage.limit || 0);
     const paymentRowsUsed = Number(usage.monthly_payment_rows_used || 0);
-    const usageLimits = checkUsageLimits(org.org_id);
+    const caseCreditsLimitReached = tjhpDashboardBillableLimitReached(caseCreditsUsed, caseCreditsLimit);
+    const copilotLimitReached = tjhpDashboardBillableLimitReached(copilotUsage.used, copilotQueriesLimit);
     const dashboardUpgradePrompts = `
-      ${usageLimits.aiExceeded ? renderUpgradePrompt("AI usage") : ""}
-      ${usageLimits.claimsExceeded ? renderUpgradePrompt("claim processing") : ""}
+      ${/* tjhpDashboardBillableLimitReached */ copilotLimitReached ? renderUpgradePrompt("AI Copilot queries") : ""}
+      ${/* tjhpDashboardBillableLimitReached */ caseCreditsLimitReached ? renderUpgradePrompt("case credits") : ""}
     `;
 
     function buildLimitBadge(used, limit){
       const u = Number(used || 0);
       const l = Number(limit || 0);
+      if (!Number.isFinite(u) || u <= 0) return "";
       if (!Number.isFinite(l) || l <= 0) return "";
       if (u >= l) return `<span class="badge bad">Limit Reached</span>`;
       if (u >= Math.ceil(l * 0.8)) return `<span class="badge warn">Approaching Limit</span>`;
@@ -43176,12 +43212,12 @@ if (method === "GET" && pathname === "/weekly-summary") {
         if (parsed.query.end) params.set("end", String(parsed.query.end));
       }
       params.set("trend_range", tjhpNormalizeRevenueOverviewTrendRange(trendRange));
-      return `/dashboard?${params.toString()}`;
+      return `/dashboard?${params.toString()}#revenue-trend`;
     };
     const trendButtonClass = (trendRange) => `btn secondary small${revenueTrendModel.effective_range === trendRange ? " active" : ""}`;
     const trendHasAnyData = ((revenueTrendModel.series?.billed || []).reduce((sum, n) => sum + num(n), 0) + (revenueTrendModel.series?.collected || []).reduce((sum, n) => sum + num(n), 0)) > 0;
     const revenueTrendNote = revenueTrendModel.fallback_to_all_time
-      ? `<div class="trend-fallback-note">${safeStr(revenueTrendModel.fallback_message || "No billed or payment activity was found in the selected trend window. Showing all-time uploaded history.")}</div>`
+      ? `<div class="trend-fallback-note">${safeStr(revenueTrendModel.fallback_message || "The selected trend window does not include the full billed and collected history. Showing all-time uploaded history.")}</div>`
       : (!trendHasAnyData ? `<div class="trend-empty-note">No billed or payment trend data is available yet.</div>` : "");
 
     const html = renderPage("Revenue Overview", `
@@ -43265,7 +43301,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .trend-toggle .active{background:#111827;color:#fff;border-color:#111827;box-shadow:0 6px 14px rgba(15,23,42,.12);}
         .trend-fallback-note,.trend-empty-note{font-size:12px;color:var(--muted);margin:4px 0 0;line-height:1.4;}
         .plan-usage-card{margin-top:14px;}
-        .plan-usage-card .kpi-strip,.plan-usage-grid{margin-top:12px;}
+        .plan-usage-card .kpi-strip,.plan-usage-grid{margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));}
+        #revenue-trend{scroll-margin-top:110px;}
         .priority-summary{padding:16px;}
         .priority-header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;}
         .priority-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
@@ -43456,10 +43493,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
         </div>
       </div>
 
-      <section id="forecast-engine" class="executive-panel">
+      <div class="exec-card" id="revenue-trend">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:end;">
           <div>
-            <h3 style="margin-bottom:12px;">Revenue Trend (Collected vs Billed)</h3>
+            <h3 style="margin-bottom:12px;">Billed vs Collected by Period</h3>
             ${revenueTrendNote}
           </div>
           <div class="trend-toggle">
@@ -43503,10 +43540,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           ${buildLimitBadge(copilotUsage.used, copilotQueriesLimit)}
         </div>
 
-        <div class="kpi-card">
-          <p class="kpi-value">${formatNumberUI(paymentRowsUsed)}</p>
-          <p class="kpi-label">Payment Rows Processed</p>
-        </div>
+
         </div>
       </div>
 
@@ -43557,12 +43591,46 @@ document.addEventListener("DOMContentLoaded", function(){
   }
 
   const trendCfg = {
-    type: "line",
-    data: { labels: trendLabels, datasets: [
-      { label: "Billed", data: billed, borderColor:"#111827", backgroundColor:"#111827", tension:.2 },
-      { label: "Collected", data: collected, borderColor:"#0ea5e9", backgroundColor:"#0ea5e9", tension:.2 }
-    ]},
-    options: { ...baseChartOptions, interaction:{mode:"index", intersect:false}, scales:{ x:{ ticks:{ maxTicksLimit:6 } }, y:{ ticks:{ maxTicksLimit:6, callback:(v)=>moneyFmt(v) } } } }
+    type: "bar",
+    data: {
+      labels: trendLabels,
+      datasets: [
+        {
+          label: "Billed",
+          data: billed,
+          backgroundColor: "#111827",
+          borderColor: "#111827",
+          borderWidth: 1,
+          barPercentage: 0.72,
+          categoryPercentage: 0.72
+        },
+        {
+          label: "Collected",
+          data: collected,
+          backgroundColor: "#0ea5e9",
+          borderColor: "#0ea5e9",
+          borderWidth: 1,
+          barPercentage: 0.72,
+          categoryPercentage: 0.72
+        }
+      ]
+    },
+    options: {
+      ...baseChartOptions,
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { ticks: { maxTicksLimit: 8 } },
+        y: { beginAtZero: true, ticks: { maxTicksLimit: 6, callback: (v) => moneyFmt(v) } }
+      },
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ctx.dataset.label + ": " + moneyFmt(ctx.parsed.y || 0)
+          }
+        }
+      }
+    }
   };
   new Chart(document.getElementById("revenueTrendChart"), trendCfg);
 
@@ -65883,7 +65951,7 @@ if (process.env.TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS === "true" && (proc
     assert(!helperBody.includes("#prior-auth-upload-activity"), "prior-auth upload helper points to prior-auth upload activity");
     assert(!helperBody.includes("dm_view=prior-auth"), "prior-auth upload helper uses lower prior-auth view target");
 
-    const trendIdx = src.indexOf("Revenue Trend (Collected vs Billed)");
+    const trendIdx = src.indexOf("Billed vs Collected by Period");
     const orgTargetsIdx = src.indexOf("Organization Targets", trendIdx);
     assert(trendIdx >= 0 && orgTargetsIdx > trendIdx, "dashboard trend-to-targets slice missing");
     const trendToTargets = src.slice(trendIdx, orgTargetsIdx);
@@ -65952,6 +66020,105 @@ if (process.env.TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS === "true" && (proc
   } catch (err) {
     const stack = err && err.stack ? err.stack : String(err);
     process.stderr.write("REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
+
+if (process.env.TJHP_REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const snapshots = {};
+  const snapshotFiles = ["billed", "payments", "prior_auth_cases", "prior_auth_uploads", "agent_tasks", "agent_workspaces", "workspace_outcomes", "upload_batches", "document_ingests", "usage"];
+  const fileText = (file) => fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  const restoreSnapshots = () => { Object.entries(snapshots).forEach(([key, value]) => fs.writeFileSync(FILES[key], value)); };
+  const extractFunctionBodyForUx6Smoke = (functionName) => {
+    const start = src.indexOf("function " + functionName);
+    assert(start >= 0, "missing function for body extraction: " + functionName);
+    const open = src.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === "{") depth += 1;
+      if (src[i] === "}") depth -= 1;
+      if (depth === 0) return src.slice(open + 1, i);
+    }
+    throw new Error("missing closing brace for " + functionName);
+  };
+  const sliceBetween = (startMarker, endMarker, label) => {
+    const start = src.indexOf(startMarker);
+    assert(start >= 0, "missing slice start for " + label + ": " + startMarker);
+    const end = src.indexOf(endMarker, start);
+    assert(end > start, "missing slice end for " + label + ": " + endMarker);
+    return src.slice(start, end + endMarker.length);
+  };
+  try {
+    ["PHASE_9A_UX6_REVENUE_OVERVIEW_TREND_BAR_ANCHOR_USAGE_CLEANUP_OK", "PHASE_9A_UX5_REVENUE_OVERVIEW_PA_AWARE_INSIGHTS_OPERATIONAL_TREND_ALL_TIME_LAYOUT_OK", "tjhpDashboardBillableLimitReached", "selected_only_fallback_dates", "selected_has_billed", "selected_has_collected", "selected_has_both", "selected_has_real_operational_billed", "selected_has_real_operational_collected", "The selected trend window does not include the full billed and collected history. Showing all-time uploaded history.", "id=\"revenue-trend\"", "#revenue-trend", "scroll-margin-top", "type: \"bar\"", "barPercentage", "categoryPercentage", "Billed vs Collected by Period", "Case Credits Used", "AI Copilot Queries", "plan-usage-grid", "buildLimitBadge"].forEach(marker => assert(src.includes(marker), "missing UX6 marker: " + marker));
+    ["All Time", "trend_range", "tjhpRevenueOverviewTrendSeriesModel", "tjhpRevenueOverviewClaimTrendDate", "tjhpRevenueOverviewPaymentTrendDate", "date_of_service", "paid_date", "TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS", "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS", "renderClaimPanelBootstrap", "claimSidePanel", "claimSidePanelBackdrop", "window.openClaimPanel", "data-open-claim-panel", "view-claim-btn", "renderPriorAuthActionCenterPanelBootstrap", "priorAuthSidePanel", "priorAuthSidePanelBackdrop", "window.openPriorAuthPanel", "view-prior-auth-btn"].forEach(marker => assert(src.includes(marker), "missing protected UX6 marker: " + marker));
+    const trendCfgSlice = sliceBetween('const trendCfg = {', 'new Chart(document.getElementById("revenueTrendChart"), trendCfg);', "trend chart config");
+    ["type: \"bar\"", "label: \"Billed\"", "label: \"Collected\"", "backgroundColor", "barPercentage"].forEach(marker => assert(trendCfgSlice.includes(marker), "trend chart missing: " + marker));
+    ["type: \"line\"", "tension:.2", "tension: .2"].forEach(marker => assert(!trendCfgSlice.includes(marker), "trend chart still includes: " + marker));
+    const planUsageSlice = sliceBetween('plan-usage-card', '<script>', "plan usage card");
+    assert(planUsageSlice.includes("Case Credits Used"), "plan usage missing case credits");
+    assert(planUsageSlice.includes("AI Copilot Queries"), "plan usage missing copilot queries");
+    assert(!planUsageSlice.includes("Payment Rows Processed"), "plan usage still shows payment rows");
+    assert(!planUsageSlice.includes("formatNumberUI(paymentRowsUsed)"), "plan usage still formats payment rows");
+    const dashboardPromptSlice = sliceBetween('const dashboardUpgradePrompts =', 'function buildLimitBadge', "dashboard upgrade prompts");
+    assert(dashboardPromptSlice.includes("tjhpDashboardBillableLimitReached"), "dashboard prompts missing visible billable limit helper");
+    assert(dashboardPromptSlice.includes("AI Copilot queries"), "dashboard prompts missing AI Copilot queries copy");
+    assert(dashboardPromptSlice.includes("case credits"), "dashboard prompts missing case credits copy");
+    assert(!dashboardPromptSlice.includes('usageLimits.aiExceeded ? renderUpgradePrompt("AI usage")'), "dashboard prompts still use AI usage limit flag");
+    assert(!dashboardPromptSlice.includes('usageLimits.claimsExceeded ? renderUpgradePrompt("claim processing")'), "dashboard prompts still use claims limit flag");
+    assert(!dashboardPromptSlice.includes("claim processing"), "dashboard prompts still include claim processing");
+    assert(tjhpDashboardBillableLimitReached(0, 0) === false, "0/0 should not be reached");
+    assert(tjhpDashboardBillableLimitReached(0, 10) === false, "0/10 should not be reached");
+    assert(tjhpDashboardBillableLimitReached(1, 0) === false, "1/0 should not be reached");
+    assert(tjhpDashboardBillableLimitReached(8, 10) === false, "8/10 should not be reached");
+    assert(tjhpDashboardBillableLimitReached(10, 10) === true, "10/10 should be reached");
+    assert(tjhpDashboardBillableLimitReached(11, 10) === true, "11/10 should be reached");
+    snapshotFiles.forEach(key => { snapshots[key] = fileText(FILES[key]); });
+    const smokeOrgId = "__phase9a_ux6_revenue_trend_smoke__" + Date.now().toString(36);
+    const daysAgo = (days) => { const d = new Date(Date.now() - days * 24 * 60 * 60 * 1000); return d.toISOString().slice(0, 10); };
+    const oldServiceDate = daysAgo(150);
+    const recentPaidDate = daysAgo(3);
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []), { billed_id: "ux6_billed_old_1", claim_id: "UX6-CLAIM-1", claim_number: "UX6-CLAIM-1", org_id: smokeOrgId, amount_billed: 940, billed_amount: 940, payer: "UX6 Payer", date_of_service: oldServiceDate, created_at: nowISO() }]);
+    writeJSON(FILES.payments, [...readJSON(FILES.payments, []), { claim_id: "UX6-CLAIM-1", org_id: smokeOrgId, paid_amount: 350, amount_paid: 350, payer: "UX6 Payer", paid_date: recentPaidDate, created_at: nowISO() }]);
+    const trend30 = tjhpRevenueOverviewTrendSeriesModel(smokeOrgId, "last30");
+    assert(trend30.selected_range === "last30", "trend30 selected range");
+    assert(trend30.effective_range === "all", "trend30 effective range should fallback to all");
+    assert(trend30.fallback_to_all_time === true, "trend30 fallback flag");
+    assert(String(trend30.fallback_message || "").includes("full billed and collected history"), "trend30 fallback message");
+    assert(trend30.series.keys.length > 0, "trend30 keys");
+    assert(trend30.series.billed.reduce((s, n) => s + num(n), 0) === 940, "trend30 billed sum");
+    assert(trend30.series.collected.reduce((s, n) => s + num(n), 0) === 350, "trend30 collected sum");
+    assert(trend30.series.effective_range === "all", "trend30 series effective range");
+    assert(trend30.series.fallback_to_all_time === true, "trend30 series fallback flag");
+    const todayKey = new Date().toISOString().slice(0, 10);
+    assert(!(trend30.series.keys.length === 1 && trend30.series.keys[0] === todayKey), "trend30 should not only plot upload/today date");
+    assert(trend30.series.keys.includes(groupKeyForDate(new Date(oldServiceDate + "T00:00:00.000Z"), trend30.series.gran)), "trend30 missing old service period");
+    assert(trend30.series.keys.includes(groupKeyForDate(new Date(recentPaidDate + "T00:00:00.000Z"), trend30.series.gran)), "trend30 missing recent paid period");
+    const trendAll = tjhpRevenueOverviewTrendSeriesModel(smokeOrgId, "all");
+    assert(trendAll.effective_range === "all", "trendAll effective range");
+    assert(trendAll.fallback_to_all_time === false, "trendAll fallback false");
+    assert(trendAll.series.billed.reduce((s, n) => s + num(n), 0) === 940, "trendAll billed sum");
+    assert(trendAll.series.collected.reduce((s, n) => s + num(n), 0) === 350, "trendAll collected sum");
+    const recentOrgId = smokeOrgId + "_recent";
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []), { billed_id:"ux6_billed_recent_1", claim_id:"UX6-RECENT-1", claim_number:"UX6-RECENT-1", org_id:recentOrgId, amount_billed:100, billed_amount:100, payer:"UX6 Payer", date_of_service:daysAgo(5), created_at:nowISO() }]);
+    writeJSON(FILES.payments, [...readJSON(FILES.payments, []), { claim_id:"UX6-RECENT-1", org_id:recentOrgId, paid_amount:80, amount_paid:80, payer:"UX6 Payer", paid_date:daysAgo(4), created_at:nowISO() }]);
+    const recentTrend30 = tjhpRevenueOverviewTrendSeriesModel(recentOrgId, "last30");
+    assert(recentTrend30.effective_range === "last30", "recentTrend30 should remain selected range");
+    assert(recentTrend30.fallback_to_all_time === false, "recentTrend30 should not fallback");
+    assert(recentTrend30.series.billed.reduce((s, n) => s + num(n), 0) === 100, "recentTrend30 billed sum");
+    assert(recentTrend30.series.collected.reduce((s, n) => s + num(n), 0) === 80, "recentTrend30 collected sum");
+    restoreSnapshots();
+    snapshotFiles.forEach(key => assert(fileText(FILES[key]) === snapshots[key], "snapshot restore mismatch: " + key));
+    ["tjhpRevenueOverviewTrendSeriesModel", "tjhpRevenueOverviewBuildTrendSeries", "tjhpDashboardBillableLimitReached"].forEach(fn => {
+      const body = extractFunctionBodyForUx6Smoke(fn);
+      ["writeJSON", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "savePriorAuthUploadRecord", "appendAuditLog", "ensureAgentWorkspace", "saveAgentWorkspace", "autoDraftWorkspaceForClaim", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "fetchEHRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", "automatic prior-auth submission", "method === \"POST\"", "parseBody(req)"].forEach(forbidden => assert(!body.includes(forbidden), fn + " contains forbidden marker: " + forbidden));
+    });
+    process.stdout.write("REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    try { restoreSnapshots(); } catch (_) {}
+    process.stderr.write("REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
     process.exit(1);
   }
 }
