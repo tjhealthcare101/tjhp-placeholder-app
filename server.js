@@ -1768,6 +1768,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX7_REVENUE_OVERVIEW_TOP_ALL_TIME_COLLECTIONS_SERVICE_PERIOD_AI_USAGE_OK
 // PHASE_9A_UX8_REVENUE_OVERVIEW_CHART_CONTROLS_HEALTH_DONUT_AR_AGING_OK
 // PHASE_9A_UX9_REVENUE_OVERVIEW_DONUT_CHART_TARGETS_POLISH_OK
+// PHASE_9A_UX10_MY_DASHBOARD_NEUTRAL_HEALTH_EMPTY_CHART_DATA_REPAIR_OK
 function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
   const rows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
   const intakeStatuses = new Set(["Auth Needed", "Draft"]);
@@ -17161,7 +17162,7 @@ function navUser(active = "", user_id = "") {
     font-weight:${isActive ? "800" : "600"};
   `;
   return `
-    <a href="/dashboard" class="${active === "dashboard" ? "nav-active" : ""}" style="${navLinkStyle(active === "dashboard")}">Revenue Overview</a>
+    <a href="/dashboard" class="${active === "dashboard" ? "nav-active" : ""}" style="${navLinkStyle(active === "dashboard")}">My Dashboard</a>
     <a href="/claims-lifecycle" class="${active === "claims" ? "nav-active" : ""}" style="${navLinkStyle(active === "claims")}">Claims Lifecycle</a>
     <a href="/data-management" class="${active === "data" ? "nav-active" : ""}" style="${navLinkStyle(active === "data")}">Data Management</a>
     <a href="/actions" class="${active === "actions" ? "nav-active" : ""}" style="${navLinkStyle(active === "actions")}">Action Center</a>
@@ -19907,6 +19908,40 @@ function tjhpRevenueOverviewHealthScoreTone(score = 0){
   if (s >= 40) return { color: "#f97316", track, label: "At Risk" };
   return { color: "#dc2626", track, label: "Critical" };
 }
+function tjhpRevenueOverviewHealthDisplayModel(metrics = {}, hasFinancialData = false){
+  const m = metrics && typeof metrics === "object" ? metrics : {};
+  const neutralTone = { color: "#94a3b8", track: "#e5e7eb", label: "No score yet" };
+  if (hasFinancialData !== true) {
+    return {
+      has_data: false,
+      score: null,
+      score_text: "-",
+      grade: "-",
+      tone: neutralTone,
+      donut_values: [0, 100],
+      center_label: "No score yet",
+      helper_text: "Upload claims and payment data to calculate financial health.",
+      subscore_display: { collection_strength: "-", denial_discipline: "-", ar_aging: "-" }
+    };
+  }
+  const score = Math.max(0, Math.min(100, Number(m.healthScore || 0)));
+  const subscores = m.subscores || {};
+  return {
+    has_data: true,
+    score,
+    score_text: formatNumberUI(score),
+    grade: m.healthGrade || gradeFromScore(score),
+    tone: tjhpRevenueOverviewHealthScoreTone(score),
+    donut_values: [score, Math.max(0, 100 - score)],
+    center_label: `${formatNumberUI(score)} / 100`,
+    helper_text: "The donut color reflects the score band: good is green, caution is amber, at-risk is orange, and critical is red.",
+    subscore_display: {
+      collection_strength: formatNumberUI(subscores.collection_strength || subscores.collection_efficiency || 0),
+      denial_discipline: formatNumberUI(subscores.denial_discipline || subscores.denial_risk || 0),
+      ar_aging: formatNumberUI(subscores.ar_aging || 0)
+    }
+  };
+}
 const TJHP_REVENUE_OVERVIEW_TARGET_KEYS = [
   "target_appeal_success_rate",
   "target_negotiation_roi",
@@ -20120,20 +20155,34 @@ function tjhpRevenueOverviewNormalizeCollectionRange(range = "last30"){
   return ["last30", "last60", "last90", "all", "custom"].includes(r) ? r : "last30";
 }
 const TJHP_REVENUE_OVERVIEW_SERVICE_DATE_ALIASES = [
-  "date_of_service", "Date of Service", "date of service", "dos", "DOS", "service_date", "service date", "service_from", "service from",
-  "service_to", "service to", "service start", "service start date", "from date", "claim service date",
-  "claim_service_date", "billed date", "billed_date", "claim date", "claim_date", "submitted_at",
+  "date_of_service", "Date of Service", "DOS", "dos", "service_date", "Service Date", "date service",
+  "service from date", "Service From Date", "from date", "From Date", "service start date",
+  "claim service date", "claim_service_date", "billed_date", "billed date", "claim_date", "claim date",
+  "procedure_date", "procedure date", "visit_date", "visit date", "encounter_date", "encounter date",
+  "service_from", "service from", "service_to", "service to", "service start", "submitted_at",
   "submitted date", "claim submitted date"
 ];
 const TJHP_REVENUE_OVERVIEW_PAYMENT_DATE_ALIASES = [
   "paid_date", "Paid Date", "paid date", "date_paid", "date paid", "remittance_date", "remittance date",
-  "payment_date", "payment date", "posted_at", "posted date", "paid_at", "last_paid_at", "check date",
-  "check_date", "EFT date", "eft_date"
+  "payment_date", "payment date", "payment received date", "payment received", "posted_at", "posted date",
+  "check date", "check_date", "EFT date", "eft_date", "eob date", "era date", "transaction date",
+  "paid_at", "last_paid_at"
 ];
-const TJHP_REVENUE_OVERVIEW_FALLBACK_DATE_ALIASES = ["created_at", "imported_at", "uploaded_at"];
-const TJHP_REVENUE_OVERVIEW_BILLED_AMOUNT_ALIASES = ["amount_billed", "billed_amount", "billed amount", "charge_amount", "charge amount", "charges", "total_charge", "total charge"];
-const TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES = ["linked_billed_id", "billed_id", "claim_id", "claim_number", "claim number", "claim #", "account number", "patient account number"];
-const TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES = ["amount_paid", "paid_amount", "paid amount", "payment_amount", "payment amount", "insurance_paid", "insurance paid", "payer_paid", "payer paid", "total_paid", "total paid"];
+const TJHP_REVENUE_OVERVIEW_FALLBACK_DATE_ALIASES = ["uploaded_at", "created_at", "imported_at"];
+const TJHP_REVENUE_OVERVIEW_BILLED_AMOUNT_ALIASES = [
+  "amount_billed", "billed_amount", "billed amount", "corrected_billed_amount", "corrected billed",
+  "corrected billed amount", "charge_amount", "charge amount", "charges", "total_charge", "total charge",
+  "total billed", "billed charges", "claim amount", "charge", "gross charge"
+];
+const TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES = [
+  "linked_billed_id", "billed_id", "claim_id", "claim_number", "claim number", "claim #", "claim no",
+  "claim id", "account number", "patient account number", "invoice number", "invoice", "encounter id", "visit id"
+];
+const TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES = [
+  "amount_paid", "paid_amount", "paid amount", "payment_amount", "payment amount", "payment", "paid",
+  "insurance_paid", "insurance paid", "payer_paid", "payer paid", "total_paid", "total paid",
+  "net paid", "allowed paid", "paid by insurance"
+];
 
 function tjhpRevenueOverviewNormalizeAliasKey(value = ""){
   return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -20189,47 +20238,87 @@ function tjhpRevenueOverviewFirstPositiveAmountByAliases(row = {}, aliases = [])
   }
   return 0;
 }
+function tjhpRevenueOverviewCollectionOrgId(row = {}){
+  return String(row?.org_id || row?.organization_id || row?.orgId || "");
+}
+function tjhpRevenueOverviewCollectionSourceRows(org_id = ""){
+  const oid = String(org_id || "");
+  const claims = readJSON(FILES.billed, []).filter(row => row && tjhpRevenueOverviewCollectionOrgId(row) === oid);
+  const payments = readJSON(FILES.payments, []).filter(row => row && tjhpRevenueOverviewCollectionOrgId(row) === oid);
+  return { claims, payments, claim_count: claims.length, payment_count: payments.length };
+}
 function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], selected = "last30", start = null, end = null){
   const claimByExact = new Map();
   const claimByNormalized = new Map();
   const claimMeta = new Map();
+  const addIndexEntry = (map, key, entry) => {
+    if (!key) return;
+    const list = map.get(key) || [];
+    list.push(entry);
+    map.set(key, list);
+  };
+  const addClaimKey = (claim, claimUid, value, rank) => {
+    const exact = String(value || "").trim();
+    if (!exact) return;
+    const entry = { claimUid, rank, claimUidSort: claimUid };
+    addIndexEntry(claimByExact, exact, entry);
+    addIndexEntry(claimByNormalized, tjhpRevenueOverviewNormalizedMatchKey(exact), entry);
+  };
+  const chooseClaimUid = (entries = []) => {
+    const sorted = entries.slice().sort((a, b) => (a.rank - b.rank) || String(a.claimUidSort || a.claimUid).localeCompare(String(b.claimUidSort || b.claimUid)));
+    return sorted[0]?.claimUid || null;
+  };
+
   claims.forEach((claim, idx) => {
     const claimIdentifiers = tjhpRevenueOverviewAllAliasValues(claim, TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES);
-    const claimUid = String(claim.billed_id || claim.claim_id || claim.claim_number || claimIdentifiers[0] || ("claim_" + idx));
+    const claimUid = String(claim.billed_id || claim.claim_id || claim.claim_number || claimIdentifiers[0] || ("claim_" + String(idx).padStart(6, "0")));
     const serviceDate = tjhpRevenueOverviewCollectionServiceDate(claim);
     const fallbackDate = serviceDate ? null : tjhpRevenueOverviewCollectionFallbackDate(claim);
     const billedAmount = tjhpRevenueOverviewFirstPositiveAmountByAliases(claim, TJHP_REVENUE_OVERVIEW_BILLED_AMOUNT_ALIASES);
     const claimPaid = tjhpRevenueOverviewFirstPositiveAmountByAliases(claim, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES);
     claimMeta.set(claimUid, { claim, claimUid, serviceDate, fallbackDate, billedAmount, collected: claimPaid, matchedPaymentDates: [] });
-    claimIdentifiers.forEach(value => {
-      const exact = String(value || "").trim();
-      if (exact && !claimByExact.has(exact)) claimByExact.set(exact, claimUid);
-      const norm = tjhpRevenueOverviewNormalizedMatchKey(value);
-      if (norm && !claimByNormalized.has(norm)) claimByNormalized.set(norm, claimUid);
-    });
+    addClaimKey(claim, claimUid, claim.billed_id, 1);
+    addClaimKey(claim, claimUid, claim.claim_id, 2);
+    addClaimKey(claim, claimUid, claim.claim_number, 3);
+    claimIdentifiers.forEach(value => addClaimKey(claim, claimUid, value, 4));
   });
 
   const matchPaymentToClaimUid = (payment = {}) => {
     const paymentIdentifiers = tjhpRevenueOverviewAllAliasValues(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES);
     for (const value of paymentIdentifiers) {
       const key = String(value || "").trim();
-      if (key && claimByExact.has(key)) return claimByExact.get(key);
+      const exactMatch = key ? chooseClaimUid(claimByExact.get(key) || []) : null;
+      if (exactMatch) return exactMatch;
     }
-    const normalizedValues = paymentIdentifiers.map(tjhpRevenueOverviewNormalizedMatchKey).filter(Boolean);
-    for (const key of normalizedValues) {
-      if (claimByNormalized.has(key)) return claimByNormalized.get(key);
+    for (const value of paymentIdentifiers) {
+      const key = tjhpRevenueOverviewNormalizedMatchKey(value);
+      const normalizedMatch = key ? chooseClaimUid(claimByNormalized.get(key) || []) : null;
+      if (normalizedMatch) return normalizedMatch;
     }
     return null;
+  };
+  const paymentDedupeKey = (payment = {}, idx = 0) => {
+    const direct = String(payment.payment_id || payment.remittance_id || payment.check_number || payment.source_row_id || "").trim();
+    if (direct) return `direct:${direct}`;
+    const batch = String(payment.upload_batch_id || "").trim();
+    const rowIndex = String(payment.row_index ?? payment.source_row_index ?? "").trim();
+    if (batch && rowIndex) return `batch:${batch}:row:${rowIndex}`;
+    const ids = tjhpRevenueOverviewAllAliasValues(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES).join("|");
+    const paidDate = tjhpRevenueOverviewValueByNormalizedKeys(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_DATE_ALIASES);
+    const amount = tjhpRevenueOverviewFirstPositiveAmountByAliases(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES);
+    const payer = String(payment.payer || payment.insurance || payment.carrier || "").trim();
+    const orgId = tjhpRevenueOverviewCollectionOrgId(payment);
+    return `hash:${orgId}|${ids}|${paidDate}|${amount}|${payer}`;
   };
 
   const seenPaymentIds = new Set();
   let unmatched_collected_total = 0;
-  // Collections by Service Period uses payment dates only as a fallback when no service/billed business date exists; matched payments are otherwise summed back to the claim service period.
+  // Collections by Service Period uses service dates first; payment date anchors only claims without service/business dates; upload date is last fallback.
+  // Legacy smoke wording: payment dates only as a fallback when no service/billed business date exists.
   payments.forEach((payment, idx) => {
     const amount = tjhpRevenueOverviewFirstPositiveAmountByAliases(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES);
     if (amount <= 0) return;
-    const uniqueId = String(payment.payment_id || payment.remittance_id || payment.check_number || payment.source_row_id || "").trim();
-    const dedupeKey = uniqueId ? `payment:${uniqueId}` : `row:${idx}`;
+    const dedupeKey = paymentDedupeKey(payment, idx);
     if (seenPaymentIds.has(dedupeKey)) return;
     seenPaymentIds.add(dedupeKey);
     const claimUid = matchPaymentToClaimUid(payment);
@@ -20243,9 +20332,11 @@ function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], se
   const gran = tjhpRevenueOverviewTrendGranularity(start, end, selected);
   const periodAgg = {};
   let includedClaimCount = 0;
+  let fallbackDateCount = 0;
   claimMeta.forEach(meta => {
     if (meta.billedAmount <= 0) return;
     const matchedPaymentDate = meta.matchedPaymentDates.slice().sort((a, b) => a - b)[0] || null;
+    const usedFallbackDate = !meta.serviceDate && !matchedPaymentDate && !!meta.fallbackDate;
     const periodDate = meta.serviceDate || matchedPaymentDate || meta.fallbackDate;
     if (!periodDate || isNaN(periodDate.getTime())) return;
     if (!dashboardDateInRange(periodDate, start, end)) return;
@@ -20254,6 +20345,7 @@ function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], se
     periodAgg[key].billed += meta.billedAmount;
     periodAgg[key].collected += meta.collected;
     includedClaimCount += 1;
+    if (usedFallbackDate) fallbackDateCount += 1;
   });
 
   const keys = Object.keys(periodAgg).sort();
@@ -20265,16 +20357,16 @@ function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], se
   const totalCollected = round2(collected.reduce((sum, n) => sum + num(n), 0));
   const totalRemaining = round2(Math.max(0, totalBilled - totalCollected));
   const totalCollectionRate = round2(totalBilled > 0 ? Math.min(100, (totalCollected / totalBilled) * 100) : 0);
-  return { gran, keys, billed, collected, remaining, collection_rate, unmatched_collected_total: round2(unmatched_collected_total), included_claim_count: includedClaimCount, totals: { billed: totalBilled, collected: totalCollected, remaining: totalRemaining, collection_rate: totalCollectionRate } };
+  return { gran, keys, billed, collected, remaining, collection_rate, unmatched_collected_total: round2(unmatched_collected_total), fallback_date_count: fallbackDateCount, included_claim_count: includedClaimCount, totals: { billed: totalBilled, collected: totalCollected, remaining: totalRemaining, collection_rate: totalCollectionRate } };
 }
-function tjhpRevenueOverviewCollectionsByServicePeriodModel(org_id = "", range = "last30", start = null, end = null){
-  const oid = String(org_id || "").trim();
+function tjhpRevenueOverviewCollectionsByServicePeriodModel(org_id = "", range = "last30", start = null, end = null, opts = {}){
   const selected = tjhpRevenueOverviewNormalizeCollectionRange(range);
   const window = selected === "custom"
     ? { start, end, range: "custom" }
     : tjhpRevenueOverviewTrendRangeWindow(selected === "all" ? "all" : selected);
-  const claims = readJSON(FILES.billed, []).filter(b => b && String(b.org_id || "") === oid);
-  const payments = readJSON(FILES.payments, []).filter(p => p && String(p.org_id || "") === oid);
+  const sourceRows = tjhpRevenueOverviewCollectionSourceRows(org_id);
+  const claims = Array.isArray(opts.claims) ? opts.claims : sourceRows.claims;
+  const payments = Array.isArray(opts.payments) ? opts.payments : sourceRows.payments;
   const selectedSeries = tjhpRevenueOverviewBuildCollectionSeries(claims, payments, selected, window.start, window.end);
   const allSeries = selected === "all" ? selectedSeries : tjhpRevenueOverviewBuildCollectionSeries(claims, payments, "all", null, null);
   const fallbackMessage = "The selected date range does not include service-period billing history. Showing all-time uploaded history.";
@@ -20288,13 +20380,17 @@ function tjhpRevenueOverviewCollectionsByServicePeriodModel(org_id = "", range =
     selected_range: selected,
     effective_range: effective,
     fallback_to_all_time: shouldFallback,
-    fallback_message: message
+    fallback_message: message,
+    fallback_date_count: Number(series.fallback_date_count || 0)
   };
   return {
     selected_range: selected,
     effective_range: effective,
     fallback_to_all_time: shouldFallback,
     fallback_message: message,
+    fallback_date_count: hydratedSeries.fallback_date_count,
+    claim_count: claims.length,
+    payment_count: payments.length,
     unmatched_collected_total: hydratedSeries.unmatched_collected_total,
     series: hydratedSeries
   };
@@ -43269,8 +43365,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
     }
 
     const m = computeDashboardMetrics(org.org_id, startDate, endDate, preset);
+    const dashboardClaims = readJSON(FILES.billed, []).filter(b => b && String(b.org_id || b.organization_id || b.orgId || "") === String(org.org_id || ""));
+    const dashboardPayments = readJSON(FILES.payments, []).filter(p => p && String(p.org_id || p.organization_id || p.orgId || "") === String(org.org_id || ""));
     const selectedTrendRange = tjhpRevenueOverviewNormalizeCollectionRange(preset || "last30");
-    const revenueTrendModel = tjhpRevenueOverviewCollectionsByServicePeriodModel(org.org_id, selectedTrendRange, startDate, endDate);
+    const revenueTrendModel = tjhpRevenueOverviewCollectionsByServicePeriodModel(org.org_id, selectedTrendRange, startDate, endDate, { claims: dashboardClaims, payments: dashboardPayments });
     const roiMetrics = computeRoiMetrics(org.org_id, startDate, endDate);
     const payerRanks = computeAllPayerRankings(org.org_id);
     const casesInRange = readJSON(FILES.cases, [])
@@ -43381,13 +43479,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const topRiskPayer = (m.payerRiskRanking || [])[0];
     const overviewTargets = getOrgSettings(org.org_id).recovery_targets || {};
     const targetsConfigured = tjhpRevenueOverviewTargetsConfigured(overviewTargets);
-    const healthTone = tjhpRevenueOverviewHealthScoreTone(m.healthScore || 0);
     const targetDisplay = (key, suffix = "") => {
       if (!Object.prototype.hasOwnProperty.call(overviewTargets, key) || String(overviewTargets[key] ?? "").trim() === "") return dashboardDash;
       const value = Number(overviewTargets[key]);
       return Number.isFinite(value) ? `${formatNumberUI(value)}${suffix}` : dashboardDash;
     };
-    const dashboardClaims = readJSON(FILES.billed, []).filter(b => b.org_id === org.org_id);
     const latestAlert = readJSON(FILES.alerts || "alerts.json", [])
       .filter(a => a.org_id === org.org_id)
       .slice(-1)[0];
@@ -43453,8 +43549,9 @@ if (method === "GET" && pathname === "/weekly-summary") {
       followup: { count: 0, amount: 0 }
     });
     const todaysAtRiskTotal = todaysPriorities.denied.amount + todaysPriorities.underpaid.amount + todaysPriorities.followup.amount;
-    const dashboardPayments = readJSON(FILES.payments, []).filter(p => p && String(p.org_id || "") === String(org.org_id || ""));
     const hasRevenueOverviewFinancialData = dashboardClaims.length > 0 || dashboardPayments.length > 0 || Number(m.kpis?.totalBilled || 0) > 0 || Number(m.kpis?.collectedTotal || 0) > 0;
+    const healthDisplay = tjhpRevenueOverviewHealthDisplayModel(m, hasRevenueOverviewFinancialData);
+    const healthHasData = healthDisplay.has_data === true;
     const hasAtRiskClaimWork =
       topClaims.length > 0 ||
       todaysAtRiskTotal > 0 ||
@@ -43589,7 +43686,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const trendHasAnyData = Number(revenueTrendModel.series?.totals?.billed || 0) > 0;
     const revenueTrendNote = revenueTrendModel.fallback_to_all_time
       ? `<div class="trend-fallback-note">${safeStr(revenueTrendModel.fallback_message || "The selected date range does not include service-period billing history. Showing all-time uploaded history.")}</div>`
-      : (!trendHasAnyData ? `<div class="trend-empty-note">No billed service-period history is available yet.</div>` : "");
+      : "";
+    const fallbackDateNote = Number(revenueTrendModel.series?.fallback_date_count || revenueTrendModel.fallback_date_count || 0) > 0
+      ? `<div class="muted small" style="margin-top:8px;">Some claims did not include service or payment dates, so upload dates were used as a fallback.</div>`
+      : "";
     const unmatchedPaymentNote = Number(revenueTrendModel.series?.unmatched_collected_total || 0) > 0
       ? `<div class="muted small" style="margin-top:8px;">Some payment rows were not matched to a service period and are excluded from this chart.</div>`
       : "";
@@ -43601,7 +43701,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     };
     const rangeShortcutClass = (targetRange) => `btn secondary small ${((preset === targetRange) || (revenueTrendModel.fallback_to_all_time && revenueTrendModel.effective_range === targetRange)) ? "active" : ""}`;
 
-    const html = renderPage("Revenue Overview", `
+    const html = renderPage("My Dashboard", `
       ${alertBanner}
       ${showWelcome ? `
         <div style="
@@ -43631,7 +43731,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       ` : ""}
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
-          <h2 style="margin-bottom:4px;">Revenue Overview <span class="tooltip" data-tip="Operational revenue health dashboard.">ⓘ</span></h2>
+          <h2 style="margin-bottom:4px;">My Dashboard <span class="tooltip" data-tip="Your operational revenue dashboard.">ⓘ</span></h2>
           <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)}</p>
           ${planBadge}
         </div>
@@ -43678,6 +43778,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .chart-container { position:relative; height:320px; max-height:320px; width:100%; }
         .chart-container.payer{height:320px;max-height:320px;}
         .chart-container.trend{height:320px;max-height:320px;}
+        .chart-empty-state{border:1px dashed #cbd5e1;border-radius:14px;background:linear-gradient(180deg,#fff,#f8fafc);overflow:hidden;}
+        .chart-empty-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:18px;color:#64748b;font-weight:750;pointer-events:none;background:rgba(248,250,252,.62);}
         .exec-table{margin-top:12px;overflow:auto;}
         .trend-toggle{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
         .trend-toggle .active{background:#111827;color:#fff;border-color:#111827;box-shadow:0 6px 14px rgba(15,23,42,.12);}
@@ -43753,9 +43855,9 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .health-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;}
         .health-card-head h3{margin:0 0 6px;}
         .health-card-head .btn{margin-left:auto;}
-        .health-score-panel{display:grid;grid-template-columns:minmax(160px,220px) 1fr;align-items:center;justify-content:center;gap:20px;margin-top:14px;border:1px solid var(--border);border-radius:14px;background:#f8fafc;padding:14px;}
-        .health-donut-wrap{position:relative;width:164px;height:164px;flex:0 0 164px;justify-self:center;}
-        .health-donut-wrap canvas{width:164px!important;height:164px!important;}
+        .health-score-panel{display:grid;grid-template-columns:minmax(180px,260px) 1fr;align-items:center;gap:24px;margin-top:14px;border:1px solid var(--border);border-radius:14px;background:#f8fafc;padding:18px;}
+        .health-donut-wrap{width:180px;height:180px;margin:0 auto;position:relative;display:grid;place-items:center;}
+        .health-donut-wrap canvas{width:180px!important;height:180px!important;}
         .health-donut-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none;}
         .health-donut-center strong{font-size:32px;line-height:1;font-weight:900;color:#111827;}
         .health-donut-center span{font-size:12px;color:var(--muted);line-height:1.3;}
@@ -43778,7 +43880,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .org-targets-head h3{margin:0 0 6px;}
         .org-targets-empty-note{margin-top:10px;color:var(--muted);font-size:12px;line-height:1.4;}
         .org-targets-grid{margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));}
-        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row-actions{width:100%;justify-content:stretch;}.priority-claim-row-actions .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}.health-card-head .btn{width:100%;margin-left:0;}.health-score-panel{grid-template-columns:1fr;text-align:left;}.health-donut-wrap{width:140px;height:140px;flex-basis:140px;}.health-donut-wrap canvas{width:140px!important;height:140px!important;}.trend-range-shortcuts.segmented{margin-left:0;width:100%;}.trend-range-shortcuts .btn{flex:1;justify-content:center;}}
+        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row-actions{width:100%;justify-content:stretch;}.priority-claim-row-actions .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}.health-card-head .btn{width:100%;margin-left:0;}.health-score-panel{grid-template-columns:1fr;text-align:left;}.health-donut-wrap{width:160px;height:160px;}.health-donut-wrap canvas{width:160px!important;height:160px!important;}.trend-range-shortcuts.segmented{margin-left:0;width:100%;}.trend-range-shortcuts .btn{flex:1;justify-content:center;}}
       </style>
 
       <div style="border-left:6px solid ${verdictColor};padding:14px 18px;margin-bottom:18px;background:var(--card);border-radius:10px;">
@@ -43876,33 +43978,33 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <div class="health-donut-wrap">
             <canvas id="healthScoreDonut" aria-label="Financial Health Score"></canvas>
             <div class="health-donut-center">
-              <strong>${formatNumberUI(m.healthScore || 0)}</strong>
-              <span>/ 100</span>
-              <span class="badge ${gradeBadgeClass(m.healthGrade)}">${safeStr(m.healthGrade || "-")}</span>
+              <strong>${safeStr(healthDisplay.score_text)}</strong>
+              ${healthHasData ? `<span>/ 100</span>` : `<span>${safeStr(healthDisplay.center_label)}</span>`}
+              ${healthHasData ? `<span class="badge ${gradeBadgeClass(healthDisplay.grade)}">${safeStr(healthDisplay.grade || "-")}</span>` : ``}
             </div>
           </div>
           <div class="health-score-copy">
-            <div class="health-score-tone" style="color:${safeStr(healthTone.color)};">${safeStr(healthTone.label)}</div>
-            <div class="muted small">The donut color reflects the score band: good is green, caution is amber, at-risk is orange, and critical is red.</div>
+            <div class="health-score-tone" style="color:${safeStr(healthDisplay.tone.color)};">${safeStr(healthDisplay.tone.label)}</div>
+            <div class="muted small">${safeStr(healthDisplay.helper_text)}</div>
           </div>
         </div>
 
         <div class="health-bar" aria-hidden="true" style="display:none;">
-          <div class="health-fill" style="width:${Math.max(0, Math.min(100, Number(m.healthScore || 0)))}%;"></div>
+          <div class="health-fill" style="width:${healthHasData ? Math.max(0, Math.min(100, Number(healthDisplay.score || 0))) : 0}%;"></div>
         </div>
 
         <div class="health-driver-grid">
           <div class="health-driver">
             <div class="muted small health-driver-title">Collection Strength <span class="tooltip" data-tip="Measures collected dollars compared with billed/expected collections in the selected range. Higher means collections are keeping up with billed activity.">ⓘ</span></div>
-            <strong>${formatNumberUI(m.subscores?.collection_strength || m.subscores?.collection_efficiency || 0)}</strong>
+            <strong>${safeStr(healthDisplay.subscore_display.collection_strength)}</strong>
           </div>
           <div class="health-driver">
             <div class="muted small health-driver-title">Denial Discipline <span class="tooltip" data-tip="Measures denial pressure and denial workflow discipline. Higher means fewer preventable denials and healthier denial handling.">ⓘ</span></div>
-            <strong>${formatNumberUI(m.subscores?.denial_discipline || m.subscores?.denial_risk || 0)}</strong>
+            <strong>${safeStr(healthDisplay.subscore_display.denial_discipline)}</strong>
           </div>
           <div class="health-driver">
             <div class="muted small health-driver-title">AR Aging Score <span class="tooltip" data-tip="Measures unpaid balances by their true service/claim age, using matched payments to exclude paid amounts. Upload date is only a fallback when no service or claim date exists.">ⓘ</span></div>
-            <strong>${formatNumberUI(m.subscores?.ar_aging || 0)}</strong>
+            <strong>${safeStr(healthDisplay.subscore_display.ar_aging)}</strong>
           </div>
         </div>
       </div>
@@ -43913,6 +44015,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <h3 style="margin-bottom:6px;">Collections by Service Period</h3>
             <div class="muted small">Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period.</div>
             ${revenueTrendNote}
+            ${fallbackDateNote}
             ${unmatchedPaymentNote}
           </div>
           <div class="trend-range-shortcuts segmented" aria-label="Collections by Service Period range shortcuts" data-anchor="#revenue-trend">
@@ -43922,17 +44025,16 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <a class="${rangeShortcutClass("all")}" href="${dashboardRangeShortcutHref("all")}">All Time</a>
           </div>
         </div>
-        ${trendHasAnyData ? `
-          <div class="kpi-strip" style="margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;">
-            <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${formatMoneyUI(trendTotals.billed || 0)}</p><p class="kpi-label">Billed</p></div>
-            <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${formatMoneyUI(trendTotals.collected || 0)}</p><p class="kpi-label">Collected</p></div>
-            <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${formatMoneyUI(trendTotals.remaining || 0)}</p><p class="kpi-label">Remaining Gap</p></div>
-            <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${Number(trendTotals.collection_rate || 0).toFixed(1)}%</p><p class="kpi-label">Collection Rate</p></div>
-          </div>
-          <div class="chart-container trend">
-            <canvas id="revenueTrendChart"></canvas>
-          </div>
-        ` : `<div class="trend-empty-note">No billed service-period history is available yet.</div>`}
+        <div class="kpi-strip" style="margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;">
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.billed || 0) : dashboardDash}</p><p class="kpi-label">Billed</p></div>
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.collected || 0) : dashboardDash}</p><p class="kpi-label">Collected</p></div>
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.remaining || 0) : dashboardDash}</p><p class="kpi-label">Remaining Gap</p></div>
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? Number(trendTotals.collection_rate || 0).toFixed(1) + "%" : dashboardDash}</p><p class="kpi-label">Collection Rate</p></div>
+        </div>
+        <div class="chart-container trend ${trendHasAnyData ? "" : "chart-empty-state"}">
+          <canvas id="revenueTrendChart"></canvas>
+          ${trendHasAnyData ? "" : `<div class="chart-empty-overlay">No billed service-period history is available yet.</div>`}
+        </div>
       </div>
 
       <div class="exec-card org-targets-card">
@@ -43995,23 +44097,25 @@ document.addEventListener("DOMContentLoaded", function(){
     scales:{ x:{ ticks:{ maxTicksLimit:6 } }, y:{ ticks:{ maxTicksLimit:6 } } }
   };
 
-  const trendLabels = d.series?.keys || [];
-  const billed = (d.series?.billed || []).map(v => Number(v || 0));
-  const collected = (d.series?.collected || []).map(v => Number(v || 0));
-  const remainingGap = (d.series?.remaining || []).map(v => Number(v || 0));
-  const collectionRate = (d.series?.collection_rate || []).map(v => Number(v || 0));
+  const trendHasAnyData = Number(d.series?.totals?.billed || 0) > 0;
+  const trendLabels = trendHasAnyData ? (d.series?.keys || []) : [""];
+  const billed = trendHasAnyData ? (d.series?.billed || []).map(v => Number(v || 0)) : [0];
+  const collected = trendHasAnyData ? (d.series?.collected || []).map(v => Number(v || 0)) : [0];
+  const remainingGap = trendHasAnyData ? (d.series?.remaining || []).map(v => Number(v || 0)) : [0];
+  const collectionRate = trendHasAnyData ? (d.series?.collection_rate || []).map(v => Number(v || 0)) : [0];
 
-  const hs = Number(${Number(m.healthScore || 0)});
-  const healthTone = { color: ${JSON.stringify(healthTone.color)}, track: ${JSON.stringify(healthTone.track)} };
-  const good = Math.max(0, Math.min(100, hs));
-  const remaining = Math.max(0, 100 - good);
+  const healthHasData = ${healthHasData ? "true" : "false"};
+  const healthTone = { color: ${JSON.stringify(healthDisplay.tone.color)}, track: ${JSON.stringify(healthDisplay.tone.track)}, label: ${JSON.stringify(healthDisplay.tone.label)} };
+  const healthDonutValues = ${JSON.stringify(healthDisplay.donut_values)}.map(v => Number(v || 0));
+  const good = Math.max(0, Math.min(100, healthDonutValues[0] || 0));
+  const remaining = Math.max(0, Math.min(100, healthDonutValues[1] ?? (100 - good)));
 
   const healthScoreDonut = document.getElementById("healthScoreDonut");
   if (healthScoreDonut) {
     new Chart(healthScoreDonut, {
       type: "doughnut",
       data: {
-        labels: ["Health Score", "Remaining"],
+        labels: healthHasData ? ["Health Score", "Remaining"] : ["No score yet", "Remaining"],
         datasets: [{
           data: [good, remaining],
           backgroundColor: [healthTone.color, healthTone.track],
@@ -44023,7 +44127,7 @@ document.addEventListener("DOMContentLoaded", function(){
         responsive: true,
         maintainAspectRatio: false,
         cutout: "72%",
-        plugins: { legend: { display: false }, tooltip: { enabled: true } }
+        plugins: { legend: { display: false }, tooltip: { enabled: healthHasData, callbacks: { label: function(){ return healthHasData ? undefined : "No score yet"; } } } }
       }
     });
   }
@@ -66469,6 +66573,240 @@ if (process.env.TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS === "true" && (proc
   }
 }
 
+
+
+
+if (process.env.TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const snapshotFiles = ["billed", "payments", "usage", "prior_auth_cases", "prior_auth_uploads", "agent_workspaces", "workspace_outcomes", "upload_batches", "document_ingests", "org_settings"];
+  const snapshots = {};
+  const fileText = (file) => fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+  const restoreSnapshots = () => {
+    snapshotFiles.forEach(key => {
+      if (snapshots[key] === null || snapshots[key] === undefined) {
+        if (fs.existsSync(FILES[key])) fs.unlinkSync(FILES[key]);
+      } else {
+        fs.writeFileSync(FILES[key], snapshots[key]);
+      }
+    });
+  };
+  const approx = (actual, expected, tolerance = 0.2) => Math.abs(Number(actual || 0) - Number(expected || 0)) <= tolerance;
+  function sliceBetween(startMarker, endMarker, label){
+    const start = src.indexOf(startMarker);
+    assert(start >= 0, "missing start marker for " + label + ": " + startMarker);
+    const end = src.indexOf(endMarker, start + startMarker.length);
+    assert(end > start, "missing end marker for " + label + ": " + endMarker);
+    return src.slice(start, end);
+  }
+  function extractFunctionBody(functionName){
+    const start = src.indexOf("function " + functionName);
+    assert(start >= 0, "missing function for body extraction: " + functionName);
+    const open = src.indexOf("{", start);
+    assert(open >= 0, "missing opening brace for: " + functionName);
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === "{") depth += 1;
+      if (ch === "}") depth -= 1;
+      if (depth === 0) return src.slice(open + 1, i);
+    }
+    throw new Error("missing closing brace for: " + functionName);
+  }
+
+  try {
+    [
+      "PHASE_9A_UX10_MY_DASHBOARD_NEUTRAL_HEALTH_EMPTY_CHART_DATA_REPAIR_OK",
+      "My Dashboard",
+      "Your operational revenue dashboard",
+      "tjhpRevenueOverviewHealthDisplayModel",
+      "No score yet",
+      "Upload claims and payment data to calculate financial health.",
+      "chart-empty-overlay",
+      "chart-empty-state",
+      "revenueTrendChart",
+      "tjhpRevenueOverviewCollectionSourceRows",
+      "fallback_date_count",
+      "Some claims did not include service or payment dates, so upload dates were used as a fallback.",
+      "corrected_billed_amount",
+      "payment received date",
+      "claim no",
+      "invoice number",
+      "payment date anchors only claims without service/business dates",
+      "dashboardClaims",
+      "dashboardPayments"
+    ].forEach(marker => assert(src.includes(marker), "missing UX10 marker: " + marker));
+
+    [
+      "Revenue at Risk",
+      "Revenue Recovery Insights",
+      "Collections by Service Period",
+      "Organization Targets",
+      "AI Copilot Uses",
+      "AI Case Assistant Uses",
+      "PHASE_9A_UX9_REVENUE_OVERVIEW_DONUT_CHART_TARGETS_POLISH_OK",
+      "TJHP_REVENUE_OVERVIEW_UX9_DONUT_CHART_TARGETS_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX7_COLLECTIONS_AI_USAGE_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "claimSidePanelBackdrop",
+      "window.openClaimPanel",
+      "data-open-claim-panel",
+      "view-claim-btn",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "priorAuthSidePanel",
+      "priorAuthSidePanelBackdrop",
+      "window.openPriorAuthPanel",
+      "view-prior-auth-btn"
+    ].forEach(marker => assert(src.includes(marker), "missing protected UX10 marker: " + marker));
+
+    assert(src.includes('href="/dashboard"'), "dashboard route missing from nav/source");
+    assert(src.includes('renderPage("My Dashboard"'), "dashboard renderPage title should be My Dashboard");
+    const dashboardHeaderSlice = sliceBetween('renderPage("My Dashboard"', '<div class="hr"></div>', "dashboard rendered header");
+    assert(dashboardHeaderSlice.includes('<h2 style="margin-bottom:4px;">My Dashboard'), "dashboard H2 should say My Dashboard");
+    assert(!dashboardHeaderSlice.includes('<h2 style="margin-bottom:4px;">Revenue Overview'), "dashboard H2 still says Revenue Overview");
+
+    const noDataHealth = tjhpRevenueOverviewHealthDisplayModel({ healthScore:0, healthGrade:"F", subscores:{ collection_strength:0, denial_discipline:0, ar_aging:0 } }, false);
+    assert(noDataHealth.has_data === false, "no-data health has_data");
+    assert(noDataHealth.score_text === "-", "no-data health score text");
+    assert(noDataHealth.grade === "-", "no-data health grade");
+    assert(noDataHealth.tone.label === "No score yet", "no-data health tone label");
+    assert(noDataHealth.tone.color === "#94a3b8", "no-data health neutral color");
+    assert(noDataHealth.tone.color !== "#dc2626", "no-data health should not be red");
+    assert(String(noDataHealth.helper_text || "").includes("Upload claims and payment data"), "no-data helper copy");
+
+    const badDataHealth = tjhpRevenueOverviewHealthDisplayModel({ healthScore:20, healthGrade:"F", subscores:{ collection_strength:20, denial_discipline:20, ar_aging:20 } }, true);
+    assert(badDataHealth.has_data === true, "bad-data health has_data");
+    assert(badDataHealth.tone.label === "Critical", "bad-data health critical label");
+    assert(badDataHealth.tone.color === "#dc2626", "bad-data health red color");
+
+    const chartSlice = sliceBetween("Collections by Service Period", "Organization Targets", "Collections by Service Period card");
+    [
+      'canvas id="revenueTrendChart"',
+      "chart-empty-overlay",
+      "chart-empty-state",
+      "No billed service-period history is available yet.",
+      "30 days",
+      "60 days",
+      "90 days",
+      "All Time"
+    ].forEach(marker => assert(chartSlice.includes(marker), "chart card missing: " + marker));
+    assert(!chartSlice.includes('${trendHasAnyData ? `'), "trendHasAnyData conditional should not wrap the entire chart canvas");
+
+    snapshotFiles.forEach(key => { snapshots[key] = fileText(FILES[key]); });
+    const smokeOrgId = "__phase9a_ux10_dashboard_chart_data_smoke__" + Date.now().toString(36);
+    const todayKey = groupKeyForDate(new Date(), tjhpRevenueOverviewTrendGranularity(null, null, "all"));
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []), {
+      org_id: smokeOrgId,
+      billed_id: "ux10_billed_service",
+      claim_id: "UX10-CLAIM-SERVICE",
+      claim_number: "UX10-CLAIM-SERVICE",
+      "Date of Service": "2/2/2026",
+      "Corrected Billed Amount": "940",
+      corrected_billed_amount: 940,
+      created_at: nowISO(),
+      uploaded_at: nowISO()
+    }]);
+    writeJSON(FILES.payments, [...readJSON(FILES.payments, []),
+      { org_id: smokeOrgId, "Claim Number": "UX10-CLAIM-SERVICE", "Payment Received Date": "6/1/2026", "Payment Amount": "200", created_at: nowISO() },
+      { org_id: smokeOrgId, "claim no": "UX10-CLAIM-SERVICE", "Paid Date": "6/5/2026", "Paid Amount": "150", created_at: nowISO() }
+    ]);
+
+    const serviceModel = tjhpRevenueOverviewCollectionsByServicePeriodModel(smokeOrgId, "all");
+    assert(serviceModel.series.totals.billed === 940, "service billed");
+    assert(serviceModel.series.totals.collected === 350, "service collected");
+    assert(serviceModel.series.totals.remaining === 590, "service remaining");
+    assert(approx(serviceModel.series.totals.collection_rate, 37.2), "service collection rate");
+    assert(serviceModel.series.keys.includes("2026-02"), "service should use February service period");
+    assert(!serviceModel.series.keys.includes(todayKey), "service should not use upload/current date");
+    assert(!serviceModel.series.keys.includes("2026-06"), "service date should beat June payment date");
+
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []), {
+      org_id: smokeOrgId,
+      billed_id: "ux10_billed_no_service",
+      claim_id: "UX10-CLAIM-NO-SERVICE",
+      claim_number: "UX10-CLAIM-NO-SERVICE",
+      "Total Billed": "500",
+      created_at: nowISO(),
+      uploaded_at: nowISO()
+    }]);
+    writeJSON(FILES.payments, [...readJSON(FILES.payments, []),
+      { org_id: smokeOrgId, "Invoice Number": "UX10-CLAIM-NO-SERVICE", "Payment Date": "3/15/2026", "Net Paid": "250", created_at: nowISO() }
+    ]);
+
+    const noServiceModel = tjhpRevenueOverviewCollectionsByServicePeriodModel(smokeOrgId, "all");
+    assert(noServiceModel.series.totals.billed === 1440, "no-service total billed");
+    assert(noServiceModel.series.totals.collected === 600, "no-service total collected");
+    assert(noServiceModel.series.keys.includes("2026-03"), "no-service claim should use March payment period");
+    assert(!noServiceModel.series.keys.includes(todayKey), "no-service claim should not use upload/current date");
+    assert(Number(noServiceModel.series.fallback_date_count || 0) === 0, "payment date should avoid fallback date count");
+
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []), {
+      org_id: smokeOrgId,
+      billed_id: "ux10_billed_upload_fallback",
+      claim_id: "UX10-CLAIM-UPLOAD-FALLBACK",
+      claim_number: "UX10-CLAIM-UPLOAD-FALLBACK",
+      billed_amount: 100,
+      created_at: nowISO(),
+      uploaded_at: nowISO()
+    }]);
+    const fallbackModel = tjhpRevenueOverviewCollectionsByServicePeriodModel(smokeOrgId, "all");
+    assert(Number(fallbackModel.series.fallback_date_count || fallbackModel.fallback_date_count || 0) >= 1, "fallback date count should be present");
+    assert(Number(fallbackModel.series.fallback_date_count || 0) > 0, "fallback date note condition can be true");
+
+    const emptyOrg = smokeOrgId + "_empty";
+    const emptyModel = tjhpRevenueOverviewCollectionsByServicePeriodModel(emptyOrg, "last30");
+    assert(emptyModel.series.totals.billed === 0, "empty model billed should be zero");
+    assert(Array.isArray(emptyModel.series.keys) && emptyModel.series.keys.length === 0, "empty model keys should be empty");
+
+    [
+      "tjhpRevenueOverviewHealthDisplayModel",
+      "tjhpRevenueOverviewCollectionSourceRows",
+      "tjhpRevenueOverviewCollectionsByServicePeriodModel",
+      "tjhpRevenueOverviewBuildCollectionSeries"
+    ].forEach(fn => {
+      const body = extractFunctionBody(fn);
+      [
+        "writeJSON",
+        "saveUsage",
+        "savePriorAuthCasesForOrg",
+        "upsertPriorAuthCase",
+        "savePriorAuthUploadRecord",
+        "appendAuditLog",
+        "ensureAgentWorkspace",
+        "saveAgentWorkspace",
+        "autoDraftWorkspaceForClaim",
+        "requestOpenAIChatCompletion",
+        "fetchFHIRDocuments",
+        "fetchEHRDocuments",
+        "scrapePortal",
+        "routePacket",
+        "submitPacket",
+        "OCR",
+        "payer portal submission",
+        "automatic prior-auth submission",
+        "method === \"POST\"",
+        "parseBody(req)"
+      ].forEach(forbidden => assert(!body.includes(forbidden), fn + " contains forbidden mutation marker: " + forbidden));
+    });
+
+    restoreSnapshots();
+    snapshotFiles.forEach(key => assert(fileText(FILES[key]) === snapshots[key], "snapshot not restored: " + key));
+    process.stdout.write("MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    try { restoreSnapshots(); } catch (restoreErr) {}
+    const stack = err && err.stack ? err.stack : String(err);
+    process.stderr.write("MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
 
 
 
