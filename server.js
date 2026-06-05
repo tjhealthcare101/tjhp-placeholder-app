@@ -1769,6 +1769,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX8_REVENUE_OVERVIEW_CHART_CONTROLS_HEALTH_DONUT_AR_AGING_OK
 // PHASE_9A_UX9_REVENUE_OVERVIEW_DONUT_CHART_TARGETS_POLISH_OK
 // PHASE_9A_UX10_MY_DASHBOARD_NEUTRAL_HEALTH_EMPTY_CHART_DATA_REPAIR_OK
+// PHASE_9A_UX11_DASHBOARD_LABEL_DONUT_CENTER_COLLECTIONS_DATA_FIX_OK
 function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
   const rows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
   const intakeStatuses = new Set(["Auth Needed", "Draft"]);
@@ -17162,7 +17163,7 @@ function navUser(active = "", user_id = "") {
     font-weight:${isActive ? "800" : "600"};
   `;
   return `
-    <a href="/dashboard" class="${active === "dashboard" ? "nav-active" : ""}" style="${navLinkStyle(active === "dashboard")}">My Dashboard</a>
+    <a href="/dashboard" class="${active === "dashboard" ? "nav-active" : ""}" style="${navLinkStyle(active === "dashboard")}">Dashboard</a>
     <a href="/claims-lifecycle" class="${active === "claims" ? "nav-active" : ""}" style="${navLinkStyle(active === "claims")}">Claims Lifecycle</a>
     <a href="/data-management" class="${active === "data" ? "nav-active" : ""}" style="${navLinkStyle(active === "data")}">Data Management</a>
     <a href="/actions" class="${active === "actions" ? "nav-active" : ""}" style="${navLinkStyle(active === "actions")}">Action Center</a>
@@ -20170,18 +20171,19 @@ const TJHP_REVENUE_OVERVIEW_PAYMENT_DATE_ALIASES = [
 ];
 const TJHP_REVENUE_OVERVIEW_FALLBACK_DATE_ALIASES = ["uploaded_at", "created_at", "imported_at"];
 const TJHP_REVENUE_OVERVIEW_BILLED_AMOUNT_ALIASES = [
-  "amount_billed", "billed_amount", "billed amount", "corrected_billed_amount", "corrected billed",
-  "corrected billed amount", "charge_amount", "charge amount", "charges", "total_charge", "total charge",
-  "total billed", "billed charges", "claim amount", "charge", "gross charge"
+  "amount_billed", "billed_amount", "billed amount", "corrected_billed_amount", "corrected billed amount",
+  "corrected billed", "total billed", "total_billed", "charge_amount", "charge amount", "charges",
+  "total_charge", "total charge", "billed charges", "claim amount", "charge", "gross charge"
 ];
 const TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES = [
   "linked_billed_id", "billed_id", "claim_id", "claim_number", "claim number", "claim #", "claim no",
-  "claim id", "account number", "patient account number", "invoice number", "invoice", "encounter id", "visit id"
+  "claim id", "claim", "account number", "patient account number", "invoice number", "invoice",
+  "encounter id", "visit id", "control number", "patient control number"
 ];
 const TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES = [
   "amount_paid", "paid_amount", "paid amount", "payment_amount", "payment amount", "payment", "paid",
   "insurance_paid", "insurance paid", "payer_paid", "payer paid", "total_paid", "total paid",
-  "net paid", "allowed paid", "paid by insurance"
+  "net paid", "allowed paid", "paid by insurance", "payment received amount", "amount received"
 ];
 
 function tjhpRevenueOverviewNormalizeAliasKey(value = ""){
@@ -20231,9 +20233,24 @@ function tjhpRevenueOverviewAllAliasValues(row = {}, aliases = []){
   }
   return Array.from(new Set(values.map(v => String(v).trim()).filter(Boolean)));
 }
+function tjhpRevenueOverviewLooksLikeDateAmount(value){
+  const raw = String(value ?? "").trim();
+  if (!raw) return false;
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(raw)) return true;
+  if (/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(raw)) return true;
+  return false;
+}
+function tjhpRevenueOverviewParsePositiveMoney(value){
+  const raw = String(value ?? "").trim();
+  if (!raw || tjhpRevenueOverviewLooksLikeDateAmount(raw)) return 0;
+  const cleaned = raw.replace(/[$,\s]/g, "");
+  if (!/^-?\d+(?:\.\d+)?$/.test(cleaned)) return 0;
+  const amount = Number(cleaned);
+  return Number.isFinite(amount) && amount > 0 ? amount : 0;
+}
 function tjhpRevenueOverviewFirstPositiveAmountByAliases(row = {}, aliases = []){
   for (const value of tjhpRevenueOverviewAllAliasValues(row, aliases)) {
-    const amount = num(value);
+    const amount = tjhpRevenueOverviewParsePositiveMoney(value);
     if (amount > 0) return amount;
   }
   return 0;
@@ -20247,27 +20264,18 @@ function tjhpRevenueOverviewCollectionSourceRows(org_id = ""){
   const payments = readJSON(FILES.payments, []).filter(row => row && tjhpRevenueOverviewCollectionOrgId(row) === oid);
   return { claims, payments, claim_count: claims.length, payment_count: payments.length };
 }
-function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], selected = "last30", start = null, end = null){
+function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], selected = "last30", start = null, end = null, opts = {}){
   const claimByExact = new Map();
   const claimByNormalized = new Map();
   const claimMeta = new Map();
-  const addIndexEntry = (map, key, entry) => {
-    if (!key) return;
-    const list = map.get(key) || [];
-    list.push(entry);
-    map.set(key, list);
-  };
+  const addIndexEntry = (map, key, entry) => { if (!key) return; const list = map.get(key) || []; list.push(entry); map.set(key, list); };
   const addClaimKey = (claim, claimUid, value, rank) => {
-    const exact = String(value || "").trim();
-    if (!exact) return;
+    const exact = String(value || "").trim(); if (!exact) return;
     const entry = { claimUid, rank, claimUidSort: claimUid };
     addIndexEntry(claimByExact, exact, entry);
     addIndexEntry(claimByNormalized, tjhpRevenueOverviewNormalizedMatchKey(exact), entry);
   };
-  const chooseClaimUid = (entries = []) => {
-    const sorted = entries.slice().sort((a, b) => (a.rank - b.rank) || String(a.claimUidSort || a.claimUid).localeCompare(String(b.claimUidSort || b.claimUid)));
-    return sorted[0]?.claimUid || null;
-  };
+  const chooseClaimUid = (entries = []) => entries.slice().sort((a, b) => (a.rank - b.rank) || String(a.claimUidSort || a.claimUid).localeCompare(String(b.claimUidSort || b.claimUid)))[0]?.claimUid || null;
 
   claims.forEach((claim, idx) => {
     const claimIdentifiers = tjhpRevenueOverviewAllAliasValues(claim, TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES);
@@ -20276,33 +20284,20 @@ function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], se
     const fallbackDate = serviceDate ? null : tjhpRevenueOverviewCollectionFallbackDate(claim);
     const billedAmount = tjhpRevenueOverviewFirstPositiveAmountByAliases(claim, TJHP_REVENUE_OVERVIEW_BILLED_AMOUNT_ALIASES);
     const claimPaid = tjhpRevenueOverviewFirstPositiveAmountByAliases(claim, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES);
-    claimMeta.set(claimUid, { claim, claimUid, serviceDate, fallbackDate, billedAmount, collected: claimPaid, matchedPaymentDates: [] });
-    addClaimKey(claim, claimUid, claim.billed_id, 1);
-    addClaimKey(claim, claimUid, claim.claim_id, 2);
-    addClaimKey(claim, claimUid, claim.claim_number, 3);
+    claimMeta.set(claimUid, { claim, claimUid, serviceDate, fallbackDate, billedAmount, collected: claimPaid, matchedPaymentDates: [], matchedPaymentRowCount: 0 });
+    addClaimKey(claim, claimUid, claim.billed_id, 1); addClaimKey(claim, claimUid, claim.claim_id, 2); addClaimKey(claim, claimUid, claim.claim_number, 3);
     claimIdentifiers.forEach(value => addClaimKey(claim, claimUid, value, 4));
   });
 
   const matchPaymentToClaimUid = (payment = {}) => {
     const paymentIdentifiers = tjhpRevenueOverviewAllAliasValues(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES);
-    for (const value of paymentIdentifiers) {
-      const key = String(value || "").trim();
-      const exactMatch = key ? chooseClaimUid(claimByExact.get(key) || []) : null;
-      if (exactMatch) return exactMatch;
-    }
-    for (const value of paymentIdentifiers) {
-      const key = tjhpRevenueOverviewNormalizedMatchKey(value);
-      const normalizedMatch = key ? chooseClaimUid(claimByNormalized.get(key) || []) : null;
-      if (normalizedMatch) return normalizedMatch;
-    }
+    for (const value of paymentIdentifiers) { const key = String(value || "").trim(); const exactMatch = key ? chooseClaimUid(claimByExact.get(key) || []) : null; if (exactMatch) return exactMatch; }
+    for (const value of paymentIdentifiers) { const key = tjhpRevenueOverviewNormalizedMatchKey(value); const normalizedMatch = key ? chooseClaimUid(claimByNormalized.get(key) || []) : null; if (normalizedMatch) return normalizedMatch; }
     return null;
   };
   const paymentDedupeKey = (payment = {}, idx = 0) => {
-    const direct = String(payment.payment_id || payment.remittance_id || payment.check_number || payment.source_row_id || "").trim();
-    if (direct) return `direct:${direct}`;
-    const batch = String(payment.upload_batch_id || "").trim();
-    const rowIndex = String(payment.row_index ?? payment.source_row_index ?? "").trim();
-    if (batch && rowIndex) return `batch:${batch}:row:${rowIndex}`;
+    const direct = String(payment.payment_id || payment.remittance_id || payment.check_number || payment.source_row_id || "").trim(); if (direct) return `direct:${direct}`;
+    const batch = String(payment.upload_batch_id || "").trim(); const rowIndex = String(payment.row_index ?? payment.source_row_index ?? "").trim(); if (batch && rowIndex) return `batch:${batch}:row:${rowIndex}`;
     const ids = tjhpRevenueOverviewAllAliasValues(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES).join("|");
     const paidDate = tjhpRevenueOverviewValueByNormalizedKeys(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_DATE_ALIASES);
     const amount = tjhpRevenueOverviewFirstPositiveAmountByAliases(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES);
@@ -20310,42 +20305,53 @@ function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], se
     const orgId = tjhpRevenueOverviewCollectionOrgId(payment);
     return `hash:${orgId}|${ids}|${paidDate}|${amount}|${payer}`;
   };
+  const applyPaymentToMeta = (meta, payment, amount) => { meta.collected += amount; meta.matchedPaymentRowCount += 1; const paymentDate = tjhpRevenueOverviewPaymentDate(payment); if (paymentDate) meta.matchedPaymentDates.push(paymentDate); };
 
   const seenPaymentIds = new Set();
   let unmatched_collected_total = 0;
   // Collections by Service Period uses service dates first; payment date anchors only claims without service/business dates; upload date is last fallback.
   // Legacy smoke wording: payment dates only as a fallback when no service/billed business date exists.
   payments.forEach((payment, idx) => {
-    const amount = tjhpRevenueOverviewFirstPositiveAmountByAliases(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES);
-    if (amount <= 0) return;
-    const dedupeKey = paymentDedupeKey(payment, idx);
-    if (seenPaymentIds.has(dedupeKey)) return;
-    seenPaymentIds.add(dedupeKey);
+    const amount = tjhpRevenueOverviewFirstPositiveAmountByAliases(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES); if (amount <= 0) return;
+    const dedupeKey = paymentDedupeKey(payment, idx); if (seenPaymentIds.has(dedupeKey)) return;
     const claimUid = matchPaymentToClaimUid(payment);
-    if (!claimUid || !claimMeta.has(claimUid)) { unmatched_collected_total += amount; return; }
-    const meta = claimMeta.get(claimUid);
-    meta.collected += amount;
-    const paymentDate = tjhpRevenueOverviewPaymentDate(payment);
-    if (paymentDate) meta.matchedPaymentDates.push(paymentDate);
+    if (!claimUid || !claimMeta.has(claimUid)) { seenPaymentIds.add(dedupeKey); unmatched_collected_total += amount; return; }
+    seenPaymentIds.add(dedupeKey); applyPaymentToMeta(claimMeta.get(claimUid), payment, amount);
   });
+
+  const orgId = String(opts.org_id || opts.orgId || "");
+  const claimCtx = opts.ctx || (orgId && typeof buildClaimContext === "function" ? buildClaimContext(orgId) : null);
+  if (claimCtx && typeof tjhpPaymentRowsForClaimFromContext === "function") {
+    claimMeta.forEach(meta => (tjhpPaymentRowsForClaimFromContext(meta.claim, claimCtx) || []).forEach((payment, idx) => {
+      const amount = tjhpRevenueOverviewFirstPositiveAmountByAliases(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES); if (amount <= 0) return;
+      const dedupeKey = paymentDedupeKey(payment, `ctx_${meta.claimUid}_${idx}`); if (seenPaymentIds.has(dedupeKey)) return;
+      seenPaymentIds.add(dedupeKey); applyPaymentToMeta(meta, payment, amount);
+    }));
+  }
+  if (claimCtx && typeof evaluateClaimDerived === "function") {
+    claimMeta.forEach(meta => {
+      if (meta.matchedPaymentRowCount > 0 || meta.collected > 0) return;
+      const derived = evaluateClaimDerived(meta.claim, claimCtx) || {};
+      const derivedPaid = Math.max(tjhpRevenueOverviewParsePositiveMoney(derived.paidAmount), tjhpRevenueOverviewFirstPositiveAmountByAliases(meta.claim, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES));
+      if (derivedPaid > 0) meta.collected = derivedPaid;
+    });
+  }
 
   const gran = tjhpRevenueOverviewTrendGranularity(start, end, selected);
   const periodAgg = {};
-  let includedClaimCount = 0;
-  let fallbackDateCount = 0;
+  let includedClaimCount = 0, fallbackDateCount = 0, businessDateCount = 0, paymentDateAnchorCount = 0;
   claimMeta.forEach(meta => {
     if (meta.billedAmount <= 0) return;
     const matchedPaymentDate = meta.matchedPaymentDates.slice().sort((a, b) => a - b)[0] || null;
+    const usedBusinessDate = !!meta.serviceDate;
+    const usedPaymentDateAnchor = !meta.serviceDate && !!matchedPaymentDate;
     const usedFallbackDate = !meta.serviceDate && !matchedPaymentDate && !!meta.fallbackDate;
     const periodDate = meta.serviceDate || matchedPaymentDate || meta.fallbackDate;
     if (!periodDate || isNaN(periodDate.getTime())) return;
     if (!dashboardDateInRange(periodDate, start, end)) return;
-    const key = groupKeyForDate(periodDate, gran);
-    if (!periodAgg[key]) periodAgg[key] = { billed: 0, collected: 0 };
-    periodAgg[key].billed += meta.billedAmount;
-    periodAgg[key].collected += meta.collected;
-    includedClaimCount += 1;
-    if (usedFallbackDate) fallbackDateCount += 1;
+    const key = groupKeyForDate(periodDate, gran); if (!periodAgg[key]) periodAgg[key] = { billed: 0, collected: 0 };
+    periodAgg[key].billed += meta.billedAmount; periodAgg[key].collected += meta.collected; includedClaimCount += 1;
+    if (usedBusinessDate) businessDateCount += 1; if (usedPaymentDateAnchor) paymentDateAnchorCount += 1; if (usedFallbackDate) fallbackDateCount += 1;
   });
 
   const keys = Object.keys(periodAgg).sort();
@@ -20357,43 +20363,33 @@ function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], se
   const totalCollected = round2(collected.reduce((sum, n) => sum + num(n), 0));
   const totalRemaining = round2(Math.max(0, totalBilled - totalCollected));
   const totalCollectionRate = round2(totalBilled > 0 ? Math.min(100, (totalCollected / totalBilled) * 100) : 0);
-  return { gran, keys, billed, collected, remaining, collection_rate, unmatched_collected_total: round2(unmatched_collected_total), fallback_date_count: fallbackDateCount, included_claim_count: includedClaimCount, totals: { billed: totalBilled, collected: totalCollected, remaining: totalRemaining, collection_rate: totalCollectionRate } };
+  const selected_real_period_count = businessDateCount + paymentDateAnchorCount;
+  return { gran, keys, billed, collected, remaining, collection_rate, unmatched_collected_total: round2(unmatched_collected_total), fallback_date_count: fallbackDateCount, business_date_count: businessDateCount, payment_date_anchor_count: paymentDateAnchorCount, selected_real_period_count, billed_total: totalBilled, collected_total: totalCollected, included_claim_count: includedClaimCount, totals: { billed: totalBilled, collected: totalCollected, remaining: totalRemaining, collection_rate: totalCollectionRate } };
 }
 function tjhpRevenueOverviewCollectionsByServicePeriodModel(org_id = "", range = "last30", start = null, end = null, opts = {}){
   const selected = tjhpRevenueOverviewNormalizeCollectionRange(range);
-  const window = selected === "custom"
-    ? { start, end, range: "custom" }
-    : tjhpRevenueOverviewTrendRangeWindow(selected === "all" ? "all" : selected);
+  const window = selected === "custom" ? { start, end, range: "custom" } : tjhpRevenueOverviewTrendRangeWindow(selected === "all" ? "all" : selected);
   const sourceRows = tjhpRevenueOverviewCollectionSourceRows(org_id);
   const claims = Array.isArray(opts.claims) ? opts.claims : sourceRows.claims;
   const payments = Array.isArray(opts.payments) ? opts.payments : sourceRows.payments;
-  const selectedSeries = tjhpRevenueOverviewBuildCollectionSeries(claims, payments, selected, window.start, window.end);
-  const allSeries = selected === "all" ? selectedSeries : tjhpRevenueOverviewBuildCollectionSeries(claims, payments, "all", null, null);
+  const buildOpts = { org_id, ctx: opts.ctx };
+  const selectedSeries = tjhpRevenueOverviewBuildCollectionSeries(claims, payments, selected, window.start, window.end, buildOpts);
+  const allSeries = selected === "all" ? selectedSeries : tjhpRevenueOverviewBuildCollectionSeries(claims, payments, "all", null, null, buildOpts);
   const fallbackMessage = "The selected date range does not include service-period billing history. Showing all-time uploaded history.";
   const emptyMessage = "No billed service-period history is available yet.";
-  const shouldFallback = selected !== "all" && Number(selectedSeries.totals?.billed || 0) <= 0 && Number(allSeries.totals?.billed || 0) > 0;
+  const selectedBilled = Number(selectedSeries.totals?.billed || 0);
+  const selectedCollected = Number(selectedSeries.totals?.collected || 0);
+  const allBilled = Number(allSeries.totals?.billed || 0);
+  const allCollected = Number(allSeries.totals?.collected || 0);
+  const selectedRealPeriods = Number(selectedSeries.business_date_count || 0) + Number(selectedSeries.payment_date_anchor_count || 0);
+  const selectedOnlyUploadFallback = selectedBilled > 0 && selectedRealPeriods <= 0 && Number(selectedSeries.fallback_date_count || 0) > 0;
+  const allHasMoreContext = allBilled > selectedBilled || allCollected > selectedCollected;
+  const shouldFallback = selected !== "all" && ((selectedBilled <= 0 && allBilled > 0) || (selectedOnlyUploadFallback && (allHasMoreContext || allBilled > 0)));
   const effective = shouldFallback ? "all" : selected;
   const series = shouldFallback ? allSeries : selectedSeries;
   const message = shouldFallback ? fallbackMessage : (Number(series.totals?.billed || 0) <= 0 ? emptyMessage : "");
-  const hydratedSeries = {
-    ...series,
-    selected_range: selected,
-    effective_range: effective,
-    fallback_to_all_time: shouldFallback,
-    fallback_message: message,
-    fallback_date_count: Number(series.fallback_date_count || 0)
-  };
-  return {
-    selected_range: selected,
-    effective_range: effective,
-    fallback_to_all_time: shouldFallback,
-    fallback_message: message,
-    fallback_date_count: hydratedSeries.fallback_date_count,
-    claim_count: claims.length,
-    payment_count: payments.length,
-    unmatched_collected_total: hydratedSeries.unmatched_collected_total,
-    series: hydratedSeries
-  };
+  const hydratedSeries = { ...series, selected_range: selected, effective_range: effective, fallback_to_all_time: shouldFallback, fallback_message: message, fallback_date_count: Number(series.fallback_date_count || 0), business_date_count: Number(series.business_date_count || 0), payment_date_anchor_count: Number(series.payment_date_anchor_count || 0), selected_real_period_count: Number(series.selected_real_period_count || 0), source_claim_count: sourceRows.claim_count, source_payment_count: sourceRows.payment_count, upload_batch_claim_total: 0, upload_batch_payment_total: 0 };
+  return { selected_range: selected, effective_range: effective, fallback_to_all_time: shouldFallback, fallback_message: message, fallback_date_count: hydratedSeries.fallback_date_count, business_date_count: hydratedSeries.business_date_count, payment_date_anchor_count: hydratedSeries.payment_date_anchor_count, selected_real_period_count: hydratedSeries.selected_real_period_count, claim_count: claims.length, payment_count: payments.length, source_claim_count: sourceRows.claim_count, source_payment_count: sourceRows.payment_count, unmatched_collected_total: hydratedSeries.unmatched_collected_total, series: hydratedSeries };
 }
 function tjhpRevenueOverviewAiUsageDisplayModel(org_id = ""){
   const usageRows = readJSON(FILES.usage, []);
@@ -43701,7 +43697,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     };
     const rangeShortcutClass = (targetRange) => `btn secondary small ${((preset === targetRange) || (revenueTrendModel.fallback_to_all_time && revenueTrendModel.effective_range === targetRange)) ? "active" : ""}`;
 
-    const html = renderPage("My Dashboard", `
+    const html = renderPage("Dashboard", `
       ${alertBanner}
       ${showWelcome ? `
         <div style="
@@ -43731,7 +43727,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       ` : ""}
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <div>
-          <h2 style="margin-bottom:4px;">My Dashboard <span class="tooltip" data-tip="Your operational revenue dashboard.">ⓘ</span></h2>
+          <h2 style="margin-bottom:4px;">Dashboard <span class="tooltip" data-tip="Your operational revenue dashboard.">ⓘ</span></h2>
           <p class="muted" style="margin-top:0;">Organization: ${safeStr(org.org_name)}</p>
           ${planBadge}
         </div>
@@ -43855,14 +43851,14 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .health-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;}
         .health-card-head h3{margin:0 0 6px;}
         .health-card-head .btn{margin-left:auto;}
-        .health-score-panel{display:grid;grid-template-columns:minmax(180px,260px) 1fr;align-items:center;gap:24px;margin-top:14px;border:1px solid var(--border);border-radius:14px;background:#f8fafc;padding:18px;}
-        .health-donut-wrap{width:180px;height:180px;margin:0 auto;position:relative;display:grid;place-items:center;}
-        .health-donut-wrap canvas{width:180px!important;height:180px!important;}
+        .health-score-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:12px;margin-top:14px;border:1px solid var(--border);border-radius:14px;background:#f8fafc;padding:18px;}
+        .health-donut-wrap{width:184px;height:184px;margin:0 auto;position:relative;display:grid;place-items:center;}
+        .health-donut-wrap canvas{width:184px!important;height:184px!important;}
+        .health-score-copy{display:flex;flex-direction:column;gap:8px;align-items:center;text-align:center;max-width:560px;margin:0 auto;}
         .health-donut-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none;}
         .health-donut-center strong{font-size:32px;line-height:1;font-weight:900;color:#111827;}
         .health-donut-center span{font-size:12px;color:var(--muted);line-height:1.3;}
         .health-donut-center .badge{margin-top:6px;color:#111827;}
-        .health-score-copy{display:flex;flex-direction:column;gap:8px;align-items:flex-start;max-width:460px;}
         .health-score-tone{font-size:12px;font-weight:850;color:#111827;text-transform:uppercase;letter-spacing:.05em;}
         .health-bar{display:none;height:0;overflow:hidden;}
         .health-fill{height:100%;border-radius:999px;background:#111827;}
@@ -43880,7 +43876,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .org-targets-head h3{margin:0 0 6px;}
         .org-targets-empty-note{margin-top:10px;color:var(--muted);font-size:12px;line-height:1.4;}
         .org-targets-grid{margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));}
-        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row-actions{width:100%;justify-content:stretch;}.priority-claim-row-actions .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}.health-card-head .btn{width:100%;margin-left:0;}.health-score-panel{grid-template-columns:1fr;text-align:left;}.health-donut-wrap{width:160px;height:160px;}.health-donut-wrap canvas{width:160px!important;height:160px!important;}.trend-range-shortcuts.segmented{margin-left:0;width:100%;}.trend-range-shortcuts .btn{flex:1;justify-content:center;}}
+        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row-actions{width:100%;justify-content:stretch;}.priority-claim-row-actions .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}.health-card-head .btn{width:100%;margin-left:0;}.health-score-panel{text-align:center;}.health-donut-wrap{width:160px;height:160px;}.health-donut-wrap canvas{width:160px!important;height:160px!important;}.trend-range-shortcuts.segmented{margin-left:0;width:100%;}.trend-range-shortcuts .btn{flex:1;justify-content:center;}}
       </style>
 
       <div style="border-left:6px solid ${verdictColor};padding:14px 18px;margin-bottom:18px;background:var(--card);border-radius:10px;">
@@ -66576,6 +66572,87 @@ if (process.env.TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS === "true" && (proc
 
 
 
+if (process.env.TJHP_DASHBOARD_UX11_LABEL_DONUT_COLLECTIONS_DATA_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const snapshotFiles = ["billed", "payments", "usage", "prior_auth_cases", "prior_auth_uploads", "agent_workspaces", "workspace_outcomes", "upload_batches", "document_ingests", "org_settings"];
+  const snapshots = {};
+  const fileText = (file) => fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+  const restoreSnapshots = () => snapshotFiles.forEach(key => { if (snapshots[key] === null || snapshots[key] === undefined) { if (fs.existsSync(FILES[key])) fs.unlinkSync(FILES[key]); } else fs.writeFileSync(FILES[key], snapshots[key]); });
+  const approx = (actual, expected, tolerance = 0.2) => Math.abs(Number(actual || 0) - Number(expected || 0)) <= tolerance;
+  function sliceBetween(startMarker, endMarker, label){ const start = src.indexOf(startMarker); assert(start >= 0, "missing start marker for " + label + ": " + startMarker); const end = src.indexOf(endMarker, start + startMarker.length); assert(end > start, "missing end marker for " + label + ": " + endMarker); return src.slice(start, end); }
+  function extractFunctionBody(functionName){ const start = src.indexOf("function " + functionName); assert(start >= 0, "missing function for body extraction: " + functionName); const open = src.indexOf("{", start); let depth = 0; for (let i = open; i < src.length; i++) { if (src[i] === "{") depth += 1; if (src[i] === "}") depth -= 1; if (depth === 0) return src.slice(open + 1, i); } throw new Error("missing closing brace for: " + functionName); }
+  try {
+    ["PHASE_9A_UX11_DASHBOARD_LABEL_DONUT_CENTER_COLLECTIONS_DATA_FIX_OK", "PHASE_9A_UX10_MY_DASHBOARD_NEUTRAL_HEALTH_EMPTY_CHART_DATA_REPAIR_OK", "Dashboard", "Your operational revenue dashboard", 'renderPage("Dashboard"', '<h2 style="margin-bottom:4px;">Dashboard', "tjhpRevenueOverviewHealthDisplayModel", "health-score-panel", "health-donut-wrap", "health-donut-center", "chart-empty-overlay", "Collections by Service Period", "selectedOnlyUploadFallback", "selectedRealPeriods", "business_date_count", "payment_date_anchor_count", "fallback_date_count", "corrected_billed_amount", "payment received amount", "patient control number", "buildClaimContext", "tjhpPaymentRowsForClaimFromContext", "evaluateClaimDerived"].forEach(marker => assert(src.includes(marker), "missing UX11 marker: " + marker));
+    const dashboardHeaderSlice = sliceBetween('renderPage("Dashboard"', '<div class="hr"></div>', "visible dashboard header");
+    assert(dashboardHeaderSlice.includes("Dashboard"), "visible dashboard header should include Dashboard");
+    assert(!dashboardHeaderSlice.includes("My Dashboard"), "visible dashboard header should not include My Dashboard");
+    assert(!dashboardHeaderSlice.includes('<h2 style="margin-bottom:4px;">Revenue Overview'), "visible dashboard H2 should not include Revenue Overview");
+    ["Revenue at Risk", "Revenue Recovery Insights", "Organization Targets", "AI Copilot Uses", "AI Case Assistant Uses", "TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX9_DONUT_CHART_TARGETS_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX7_COLLECTIONS_AI_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS", "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS", "renderClaimPanelBootstrap", "claimSidePanel", "claimSidePanelBackdrop", "window.openClaimPanel", "data-open-claim-panel", "view-claim-btn", "renderPriorAuthActionCenterPanelBootstrap", "priorAuthSidePanel", "priorAuthSidePanelBackdrop", "window.openPriorAuthPanel", "view-prior-auth-btn"].forEach(marker => assert(src.includes(marker), "missing protected UX11 marker: " + marker));
+    const healthSlice = sliceBetween('class="exec-card health-compact"', '<div class="health-driver-grid">', "Financial Health card");
+    ["health-score-panel", "health-donut-wrap", "health-donut-center", "health-score-copy", "View Deeper Analysis"].forEach(marker => assert(healthSlice.includes(marker), "health slice missing: " + marker));
+    assert(src.includes("align-items:center") && (src.includes("justify-content:center") || src.includes("place-items:center")), "health donut centering CSS missing");
+    const chartBody = sliceBetween("function tjhpRevenueOverviewBuildCollectionSeries", "function tjhpRevenueOverviewAiUsageDisplayModel", "Collections by Service Period helper/body");
+    ["claimMeta", "business_date_count", "payment_date_anchor_count", "fallback_date_count", "selectedOnlyUploadFallback", "selectedRealPeriods", "buildClaimContext", "tjhpPaymentRowsForClaimFromContext"].forEach(marker => assert(chartBody.includes(marker), "chart body missing: " + marker));
+    ["writeJSON", "tjhpLinkPaymentToClaim", "tjhpSyncPaymentOnlyOperationalClaimsForOrg", "method === \\\"POST\\\"", "parseBody(req)"].forEach(forbidden => assert(!chartBody.includes(forbidden), "chart helper contains forbidden marker: " + forbidden));
+    snapshotFiles.forEach(key => { snapshots[key] = fileText(FILES[key]); });
+    const smokeOrgId = "__phase9a_ux11_dashboard_chart_repair__" + Date.now().toString(36);
+    const todayKey = groupKeyForDate(new Date(), tjhpRevenueOverviewTrendGranularity(null, null, "all"));
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []),
+      { org_id: smokeOrgId, billed_id:"ux11_1001", "Claim Number":"1001", claim_number:"1001", "Date of Service":"2026-02-02", "Corrected Billed Amount":"150", corrected_billed_amount:150, created_at:nowISO(), uploaded_at:nowISO() },
+      { org_id: smokeOrgId, billed_id:"ux11_1002", "claim no":"1002", claim_number:"1002", date_of_service:"2026-02-03", corrected_billed_amount:"120", created_at:nowISO(), uploaded_at:nowISO() },
+      { org_id: smokeOrgId, billed_id:"ux11_1003", claim_id:"1003", claim_number:"1003", "Date of Service":"2026-02-04", "Corrected Billed Amount":"300", created_at:nowISO(), uploaded_at:nowISO() },
+      { org_id: smokeOrgId, billed_id:"ux11_1004", claim_id:"1004", "claim no":"1004", date_of_service:"2026-02-05", corrected_billed_amount:"220", created_at:nowISO(), uploaded_at:nowISO() },
+      { org_id: smokeOrgId, billed_id:"ux11_1005", claim_id:"1005", claim_number:"1005", "Date of Service":"2026-02-06", "Corrected Billed Amount":"150", created_at:nowISO(), uploaded_at:nowISO() }
+    ]);
+    writeJSON(FILES.payments, [...readJSON(FILES.payments, []),
+      { org_id: smokeOrgId, "Claim Number":"1001", "Payment Received Date":"2026-03-01", "Payment Received Amount":"100", created_at:nowISO() },
+      { org_id: smokeOrgId, "claim no":"1002", "Paid Date":"2026-03-05", "Paid Amount":"50", created_at:nowISO() },
+      { org_id: smokeOrgId, "patient control number":"1003", "Payment Amount":"100", payment_date:"2026-03-08", created_at:nowISO() },
+      { org_id: smokeOrgId, "invoice number":"1004", "Net Paid":"50", "check date":"2026-03-10", created_at:nowISO() },
+      { org_id: smokeOrgId, claim_id:"1005", amount_paid:"50", date_paid:"2026-03-12", created_at:nowISO() }
+    ]);
+    const model30 = tjhpRevenueOverviewCollectionsByServicePeriodModel(smokeOrgId, "last30");
+    assert(model30.effective_range === "all" && model30.fallback_to_all_time === true, "last30 should fall back to all");
+    assert(model30.series.totals.billed === 940 && model30.series.totals.collected === 350 && model30.series.totals.remaining === 590, "model30 totals");
+    assert(approx(model30.series.totals.collection_rate, 37.2), "model30 collection rate");
+    assert(model30.series.keys.includes("2026-02") && !model30.series.keys.includes(todayKey), "model30 should use service period, not upload date");
+    assert(Number(model30.series.fallback_date_count || 0) === 0 && Number(model30.series.business_date_count || 0) >= 5, "model30 period metadata");
+    const modelAll = tjhpRevenueOverviewCollectionsByServicePeriodModel(smokeOrgId, "all");
+    assert(modelAll.effective_range === "all" && modelAll.fallback_to_all_time === false, "all model range");
+    assert(modelAll.series.totals.billed === 940 && modelAll.series.totals.collected === 350 && modelAll.series.totals.remaining === 590 && approx(modelAll.series.totals.collection_rate, 37.2), "all totals");
+    assert(modelAll.series.keys.includes("2026-02") && !modelAll.series.keys.includes(todayKey), "all keys");
+    const noServiceOrg = smokeOrgId + "_no_service";
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []), { org_id:noServiceOrg, claim_number:"UX11-NO-SERVICE", billed_amount:500, created_at:nowISO(), uploaded_at:nowISO() }]);
+    writeJSON(FILES.payments, [...readJSON(FILES.payments, []), { org_id:noServiceOrg, claim_number:"UX11-NO-SERVICE", payment_date:"2026-03-15", amount_paid:250, created_at:nowISO() }]);
+    const noServiceModel = tjhpRevenueOverviewCollectionsByServicePeriodModel(noServiceOrg, "all");
+    assert(noServiceModel.series.totals.billed === 500 && noServiceModel.series.totals.collected === 250, "no-service totals");
+    assert(noServiceModel.series.keys.includes("2026-03") && !noServiceModel.series.keys.includes(todayKey), "no-service payment period");
+    assert(Number(noServiceModel.series.payment_date_anchor_count || 0) >= 1, "payment date anchor count");
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []), { org_id:smokeOrgId, claim_number:"UX11-UPLOAD-FALLBACK", billed_amount:100, created_at:nowISO(), uploaded_at:nowISO() }]);
+    const fallbackAll = tjhpRevenueOverviewCollectionsByServicePeriodModel(smokeOrgId, "all");
+    assert(Number(fallbackAll.series.fallback_date_count || 0) >= 1, "fallback date count should increment");
+    const fallback30 = tjhpRevenueOverviewCollectionsByServicePeriodModel(smokeOrgId, "last30");
+    assert(fallback30.effective_range === "all" && fallback30.fallback_to_all_time === true, "upload fallback should not block all-time fallback");
+    const ctxOrg = smokeOrgId + "_ctx";
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []), { org_id:ctxOrg, billed_id:"UX11-BILLED-ID", amount_billed:200, date_of_service:"2026-02-10", created_at:nowISO() }]);
+    writeJSON(FILES.payments, [...readJSON(FILES.payments, []), { org_id:ctxOrg, billed_id:"UX11-BILLED-ID", amount_paid:75, payment_date:"2026-03-20", created_at:nowISO() }]);
+    assert(tjhpRevenueOverviewCollectionsByServicePeriodModel(ctxOrg, "all").series.totals.collected === 75, "context/billed_id payment should count");
+    const derivedOrg = smokeOrgId + "_derived";
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []), { org_id:derivedOrg, claim_number:"UX11-DERIVED", amount_billed:80, paid_amount:30, date_of_service:"2026-02-11", created_at:nowISO() }]);
+    assert(tjhpRevenueOverviewCollectionsByServicePeriodModel(derivedOrg, "all").series.totals.collected === 30, "derived paid amount should count without matched payment rows");
+    ["tjhpRevenueOverviewCollectionsByServicePeriodModel", "tjhpRevenueOverviewBuildCollectionSeries", "tjhpRevenueOverviewCollectionSourceRows", "tjhpRevenueOverviewHealthDisplayModel"].forEach(fn => {
+      const body = fn === "tjhpRevenueOverviewBuildCollectionSeries" ? chartBody : extractFunctionBody(fn);
+      ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "savePriorAuthUploadRecord", "appendAuditLog", "ensureAgentWorkspace", "saveAgentWorkspace", "autoDraftWorkspaceForClaim", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "fetchEHRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", "automatic prior-auth submission", "method === \\\"POST\\\"", "parseBody(req)", "tjhpLinkPaymentToClaim", "tjhpSyncPaymentOnlyOperationalClaimsForOrg"].forEach(forbidden => assert(!body.includes(forbidden), fn + " contains forbidden mutation marker: " + forbidden));
+    });
+    restoreSnapshots();
+    snapshotFiles.forEach(key => assert(fileText(FILES[key]) === snapshots[key], "snapshot not restored: " + key));
+    process.stdout.write("DASHBOARD_UX11_LABEL_DONUT_COLLECTIONS_DATA_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) { try { restoreSnapshots(); } catch (restoreErr) {} const stack = err && err.stack ? err.stack : String(err); process.stderr.write("DASHBOARD_UX11_LABEL_DONUT_COLLECTIONS_DATA_SMOKE_TESTS_FAILED " + stack + "\n"); process.exit(1); }
+}
+
+
 if (process.env.TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
   const src = fs.readFileSync(__filename, "utf8");
@@ -66617,7 +66694,7 @@ if (process.env.TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TES
   try {
     [
       "PHASE_9A_UX10_MY_DASHBOARD_NEUTRAL_HEALTH_EMPTY_CHART_DATA_REPAIR_OK",
-      "My Dashboard",
+      "Dashboard",
       "Your operational revenue dashboard",
       "tjhpRevenueOverviewHealthDisplayModel",
       "No score yet",
@@ -66667,9 +66744,10 @@ if (process.env.TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TES
     ].forEach(marker => assert(src.includes(marker), "missing protected UX10 marker: " + marker));
 
     assert(src.includes('href="/dashboard"'), "dashboard route missing from nav/source");
-    assert(src.includes('renderPage("My Dashboard"'), "dashboard renderPage title should be My Dashboard");
-    const dashboardHeaderSlice = sliceBetween('renderPage("My Dashboard"', '<div class="hr"></div>', "dashboard rendered header");
-    assert(dashboardHeaderSlice.includes('<h2 style="margin-bottom:4px;">My Dashboard'), "dashboard H2 should say My Dashboard");
+    assert(src.includes('renderPage("Dashboard"'), "dashboard renderPage title should be Dashboard");
+    const dashboardHeaderSlice = sliceBetween('renderPage("Dashboard"', '<div class="hr"></div>', "dashboard rendered header");
+    assert(dashboardHeaderSlice.includes('<h2 style="margin-bottom:4px;">Dashboard'), "dashboard H2 should say Dashboard");
+    assert(!dashboardHeaderSlice.includes('My Dashboard'), "visible dashboard header should not say My Dashboard");
     assert(!dashboardHeaderSlice.includes('<h2 style="margin-bottom:4px;">Revenue Overview'), "dashboard H2 still says Revenue Overview");
 
     const noDataHealth = tjhpRevenueOverviewHealthDisplayModel({ healthScore:0, healthGrade:"F", subscores:{ collection_strength:0, denial_discipline:0, ar_aging:0 } }, false);
