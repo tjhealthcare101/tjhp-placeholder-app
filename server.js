@@ -1766,6 +1766,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX5_REVENUE_OVERVIEW_PA_AWARE_INSIGHTS_OPERATIONAL_TREND_ALL_TIME_LAYOUT_OK
 // PHASE_9A_UX6_REVENUE_OVERVIEW_TREND_BAR_ANCHOR_USAGE_CLEANUP_OK
 // PHASE_9A_UX7_REVENUE_OVERVIEW_TOP_ALL_TIME_COLLECTIONS_SERVICE_PERIOD_AI_USAGE_OK
+// PHASE_9A_UX8_REVENUE_OVERVIEW_CHART_CONTROLS_HEALTH_DONUT_AR_AGING_OK
 function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
   const rows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
   const intakeStatuses = new Set(["Auth Needed", "Draft"]);
@@ -20051,33 +20052,77 @@ function tjhpRevenueOverviewNormalizeCollectionRange(range = "last30"){
   const r = String(range || "last30").toLowerCase();
   return ["last30", "last60", "last90", "all", "custom"].includes(r) ? r : "last30";
 }
+const TJHP_REVENUE_OVERVIEW_SERVICE_DATE_ALIASES = [
+  "date_of_service", "date of service", "dos", "service_date", "service date", "service_from", "service from",
+  "service_to", "service to", "service start", "service start date", "from date", "claim service date",
+  "claim_service_date", "billed date", "billed_date", "claim date", "claim_date", "submitted_at",
+  "submitted date", "claim submitted date"
+];
+const TJHP_REVENUE_OVERVIEW_FALLBACK_DATE_ALIASES = ["created_at", "imported_at", "uploaded_at"];
+const TJHP_REVENUE_OVERVIEW_BILLED_AMOUNT_ALIASES = ["amount_billed", "billed_amount", "billed amount", "charge_amount", "charge amount", "charges", "total_charge", "total charge"];
+const TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES = ["linked_billed_id", "billed_id", "claim_id", "claim_number", "claim number", "claim #", "account number", "patient account number"];
+const TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES = ["amount_paid", "paid_amount", "paid amount", "payment_amount", "payment amount", "insurance_paid", "insurance paid", "payer_paid", "payer paid", "total_paid", "total paid"];
+
+function tjhpRevenueOverviewNormalizeAliasKey(value = ""){
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+function tjhpRevenueOverviewValueByNormalizedKeys(row = {}, aliases = []){
+  const r = row && typeof row === "object" ? row : {};
+  for (const alias of aliases) {
+    if (Object.prototype.hasOwnProperty.call(r, alias)) {
+      const value = r[alias];
+      if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+    }
+  }
+  const aliasSet = new Set((aliases || []).map(tjhpRevenueOverviewNormalizeAliasKey).filter(Boolean));
+  for (const [key, value] of Object.entries(r)) {
+    if (!aliasSet.has(tjhpRevenueOverviewNormalizeAliasKey(key))) continue;
+    if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+  }
+  return "";
+}
 function tjhpRevenueOverviewCollectionServiceDate(row = {}){
-  return tjhpRevenueOverviewParseOperationalDate(
-    row.date_of_service,
-    row.dos,
-    row.service_date,
-    row.claim_service_date,
-    row.billed_date,
-    row.claim_date,
-    row.submitted_at,
-    row.created_at,
-    row.imported_at,
-    row.uploaded_at
-  );
+  const serviceValue = tjhpRevenueOverviewValueByNormalizedKeys(row, TJHP_REVENUE_OVERVIEW_SERVICE_DATE_ALIASES);
+  const serviceDate = tjhpRevenueOverviewParseOperationalDate(serviceValue);
+  if (serviceDate) return serviceDate;
+  const fallbackValue = tjhpRevenueOverviewValueByNormalizedKeys(row, TJHP_REVENUE_OVERVIEW_FALLBACK_DATE_ALIASES);
+  return tjhpRevenueOverviewParseOperationalDate(fallbackValue);
 }
 function tjhpRevenueOverviewNormalizedMatchKey(value){
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+function tjhpRevenueOverviewAllAliasValues(row = {}, aliases = []){
+  const values = [];
+  const r = row && typeof row === "object" ? row : {};
+  for (const alias of aliases) {
+    const direct = r[alias];
+    if (direct !== null && direct !== undefined && String(direct).trim() !== "") values.push(direct);
+  }
+  const aliasSet = new Set((aliases || []).map(tjhpRevenueOverviewNormalizeAliasKey).filter(Boolean));
+  for (const [key, value] of Object.entries(r)) {
+    if (!aliasSet.has(tjhpRevenueOverviewNormalizeAliasKey(key))) continue;
+    if (value !== null && value !== undefined && String(value).trim() !== "") values.push(value);
+  }
+  return Array.from(new Set(values.map(v => String(v).trim()).filter(Boolean)));
+}
+function tjhpRevenueOverviewFirstPositiveAmountByAliases(row = {}, aliases = []){
+  for (const value of tjhpRevenueOverviewAllAliasValues(row, aliases)) {
+    const amount = num(value);
+    if (amount > 0) return amount;
+  }
+  return 0;
 }
 function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], selected = "last30", start = null, end = null){
   const claimByExact = new Map();
   const claimByNormalized = new Map();
   const claimMeta = new Map();
   claims.forEach((claim, idx) => {
-    const claimUid = String(claim.billed_id || claim.claim_id || claim.claim_number || ("claim_" + idx));
+    const claimIdentifiers = tjhpRevenueOverviewAllAliasValues(claim, TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES);
+    const claimUid = String(claim.billed_id || claim.claim_id || claim.claim_number || claimIdentifiers[0] || ("claim_" + idx));
     const serviceDate = tjhpRevenueOverviewCollectionServiceDate(claim);
-    const billedAmount = tjhpRevenueOverviewFirstPositiveAmount(claim, ["amount_billed", "billed_amount", "charge_amount", "charges", "total_charge"]);
+    const billedAmount = tjhpRevenueOverviewFirstPositiveAmountByAliases(claim, TJHP_REVENUE_OVERVIEW_BILLED_AMOUNT_ALIASES);
     claimMeta.set(claimUid, { claim, claimUid, serviceDate, billedAmount, collected: 0 });
-    [claim.billed_id, claim.claim_id, claim.claim_number].forEach(value => {
+    claimIdentifiers.forEach(value => {
       const exact = String(value || "").trim();
       if (exact && !claimByExact.has(exact)) claimByExact.set(exact, claimUid);
       const norm = tjhpRevenueOverviewNormalizedMatchKey(value);
@@ -20086,19 +20131,12 @@ function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], se
   });
 
   const matchPaymentToClaimUid = (payment = {}) => {
-    const exactPairs = [
-      [payment.linked_billed_id, "billed_id"],
-      [payment.billed_id, "billed_id"],
-      [payment.claim_id, "claim_id"],
-      [payment.claim_number, "claim_number"]
-    ];
-    for (const [value] of exactPairs) {
+    const paymentIdentifiers = tjhpRevenueOverviewAllAliasValues(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES);
+    for (const value of paymentIdentifiers) {
       const key = String(value || "").trim();
       if (key && claimByExact.has(key)) return claimByExact.get(key);
     }
-    const normalizedValues = [payment.linked_billed_id, payment.billed_id, payment.claim_id, payment.claim_number]
-      .map(tjhpRevenueOverviewNormalizedMatchKey)
-      .filter(Boolean);
+    const normalizedValues = paymentIdentifiers.map(tjhpRevenueOverviewNormalizedMatchKey).filter(Boolean);
     for (const key of normalizedValues) {
       if (claimByNormalized.has(key)) return claimByNormalized.get(key);
     }
@@ -20107,8 +20145,9 @@ function tjhpRevenueOverviewBuildCollectionSeries(claims = [], payments = [], se
 
   const seenPaymentIds = new Set();
   let unmatched_collected_total = 0;
+  // Collections by Service Period uses payment dates only for matching/audit context; chart period is claim service date.
   payments.forEach((payment, idx) => {
-    const amount = tjhpRevenueOverviewFirstPositiveAmount(payment, ["amount_paid", "paid_amount", "payment_amount", "insurance_paid", "payer_paid", "total_paid"]);
+    const amount = tjhpRevenueOverviewFirstPositiveAmountByAliases(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES);
     if (amount <= 0) return;
     const uniqueId = String(payment.payment_id || payment.remittance_id || payment.check_number || payment.source_row_id || "").trim();
     const dedupeKey = uniqueId ? `payment:${uniqueId}` : `row:${idx}`;
@@ -21162,6 +21201,90 @@ function tjhpComputeClaimARAgingBuckets(billedRows, ctx, asOfDate = new Date()){
   return arBuckets;
 }
 
+
+function tjhpRevenueOverviewArAgingSnapshot(org_id = "", asOf = new Date()){
+  const oid = String(org_id || "").trim();
+  const asOfDate = asOf instanceof Date && !isNaN(asOf.getTime()) ? asOf : new Date();
+  const buckets = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
+  const claims = readJSON(FILES.billed, []).filter(b => b && String(b.org_id || "") === oid);
+  const payments = readJSON(FILES.payments, []).filter(p => p && String(p.org_id || "") === oid);
+  const claimByExact = new Map();
+  const claimByNormalized = new Map();
+  const claimMeta = new Map();
+
+  claims.forEach((claim, idx) => {
+    const identifiers = tjhpRevenueOverviewAllAliasValues(claim, TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES);
+    const claimUid = String(claim.billed_id || claim.claim_id || claim.claim_number || identifiers[0] || ("claim_" + idx));
+    const billedAmount = tjhpRevenueOverviewFirstPositiveAmountByAliases(claim, TJHP_REVENUE_OVERVIEW_BILLED_AMOUNT_ALIASES);
+    const claimPaid = tjhpRevenueOverviewFirstPositiveAmountByAliases(claim, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES);
+    const serviceDate = tjhpRevenueOverviewCollectionServiceDate(claim);
+    claimMeta.set(claimUid, { claim, claimUid, billedAmount, claimPaid, matchedPaid: 0, serviceDate });
+    identifiers.forEach(value => {
+      const exact = String(value || "").trim();
+      if (exact && !claimByExact.has(exact)) claimByExact.set(exact, claimUid);
+      const norm = tjhpRevenueOverviewNormalizedMatchKey(value);
+      if (norm && !claimByNormalized.has(norm)) claimByNormalized.set(norm, claimUid);
+    });
+  });
+
+  const matchPaymentToClaimUid = (payment = {}) => {
+    const identifiers = tjhpRevenueOverviewAllAliasValues(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_MATCH_ALIASES);
+    for (const value of identifiers) {
+      const exact = String(value || "").trim();
+      if (exact && claimByExact.has(exact)) return claimByExact.get(exact);
+    }
+    for (const value of identifiers) {
+      const norm = tjhpRevenueOverviewNormalizedMatchKey(value);
+      if (norm && claimByNormalized.has(norm)) return claimByNormalized.get(norm);
+    }
+    return null;
+  };
+
+  const seenPaymentIds = new Set();
+  payments.forEach((payment, idx) => {
+    const amount = tjhpRevenueOverviewFirstPositiveAmountByAliases(payment, TJHP_REVENUE_OVERVIEW_PAYMENT_AMOUNT_ALIASES);
+    if (amount <= 0) return;
+    const uniqueId = String(payment.payment_id || payment.remittance_id || payment.check_number || payment.source_row_id || "").trim();
+    const dedupeKey = uniqueId ? `payment:${uniqueId}` : `row:${idx}`;
+    if (seenPaymentIds.has(dedupeKey)) return;
+    seenPaymentIds.add(dedupeKey);
+    const claimUid = matchPaymentToClaimUid(payment);
+    if (!claimUid || !claimMeta.has(claimUid)) return;
+    claimMeta.get(claimUid).matchedPaid += amount;
+  });
+
+  let total_ar = 0;
+  let ar90_amount = 0;
+  let claim_count = 0;
+  let paid_excluded_count = 0;
+  claimMeta.forEach(meta => {
+    const billedAmount = Math.max(0, Number(meta.billedAmount || 0));
+    if (billedAmount <= 0) return;
+    const paidAmount = Math.max(Number(meta.claimPaid || 0), Number(meta.matchedPaid || 0));
+    const outstanding = round2(Math.max(0, billedAmount - paidAmount));
+    if (outstanding <= 0) {
+      paid_excluded_count += 1;
+      return;
+    }
+    const basisDate = meta.serviceDate || tjhpRevenueOverviewCollectionServiceDate(meta.claim) || asOfDate;
+    if (!basisDate || isNaN(basisDate.getTime())) return;
+    const age = Math.max(0, Math.floor((asOfDate.getTime() - basisDate.getTime()) / (1000 * 60 * 60 * 24)));
+    if (age <= 30) buckets["0-30"] += outstanding;
+    else if (age <= 60) buckets["31-60"] += outstanding;
+    else if (age <= 90) buckets["61-90"] += outstanding;
+    else buckets["90+"] += outstanding;
+    total_ar += outstanding;
+    claim_count += 1;
+  });
+
+  Object.keys(buckets).forEach(k => { buckets[k] = round2(buckets[k]); });
+  total_ar = round2(total_ar);
+  ar90_amount = round2(buckets["90+"] || 0);
+  const ar90_rate = round2(total_ar > 0 ? (ar90_amount / total_ar) * 100 : 0);
+  const aging_score = scoreARAging(ar90_rate);
+  return { buckets, total_ar, ar90_amount, ar90_rate, aging_score, claim_count, paid_excluded_count };
+}
+
 function computeDashboardMetrics(org_id, start, end, preset){
   const billedAll = readJSON(FILES.billed, []).filter(b => b.org_id === org_id);
   const casesAll = readJSON(FILES.cases, []).filter(c => c.org_id === org_id);
@@ -21289,13 +21412,15 @@ function computeDashboardMetrics(org_id, start, end, preset){
 
   // AR Aging Buckets
   // Centralized so all AR Aging displays use claim/business dates before upload/import dates.
-  const arBuckets = tjhpComputeClaimARAgingBuckets(billed, ctx);
+  const legacyArBuckets = tjhpComputeClaimARAgingBuckets(billed, ctx);
+  const arAgingSnapshot = tjhpRevenueOverviewArAgingSnapshot(org_id, new Date());
+  const arBuckets = arAgingSnapshot.buckets || legacyArBuckets;
 
   const totalClaims = billed.length;
   const denialRate = totalClaims ? (statusCounts.Denied / totalClaims) * 100 : 0;
   const underpaidRate = totalClaims ? (statusCounts.Underpaid / totalClaims) * 100 : 0;
   const collectionRate = totals.totalBilled > 0 ? (collectedTotal / totals.totalBilled) * 100 : 0;
-  const ar90Rate = totals.totalBilled > 0 ? (arBuckets["90+"] / totals.totalBilled) * 100 : 0;
+  const ar90Rate = Number(arAgingSnapshot.ar90_rate || 0);
   const avgDaysToPay = daysToPayVals.length ? (daysToPayVals.reduce((a,b)=>a+b,0)/daysToPayVals.length) : 0;
 
   // ===========================
@@ -21373,7 +21498,7 @@ function computeDashboardMetrics(org_id, start, end, preset){
   // Adds AI Case Readiness (packet readiness) without adding staff analytics.
   // Weights sum to 1.00
   // ===========================
-  const hasFinancialData = billed.length > 0;
+  const hasFinancialData = billed.length > 0 || Number(arAgingSnapshot.total_ar || 0) > 0;
   const subscores = hasFinancialData
     ? {
       collection_strength: collectionScore,         // 0–100
@@ -43396,6 +43521,12 @@ if (method === "GET" && pathname === "/weekly-summary") {
       ? `<div class="muted small" style="margin-top:8px;">Some payment rows were not matched to a service period and are excluded from this chart.</div>`
       : "";
     const trendTotals = revenueTrendModel.series?.totals || { billed:0, collected:0, remaining:0, collection_rate:0 };
+    const dashboardRangeShortcutHref = (targetRange) => {
+      const params = new URLSearchParams();
+      params.set("range", targetRange);
+      return `/dashboard?${params.toString()}#revenue-trend`;
+    };
+    const rangeShortcutClass = (targetRange) => `btn secondary small ${((preset === targetRange) || (revenueTrendModel.fallback_to_all_time && revenueTrendModel.effective_range === targetRange)) ? "active" : ""}`;
 
     const html = renderPage("Revenue Overview", `
       ${alertBanner}
@@ -43548,11 +43679,24 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .health-compact{padding:16px;}
         .health-row{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;}
         .health-score-value{font-size:30px;font-weight:900;line-height:1;}
-        .health-bar{height:10px;border-radius:999px;background:#e5e7eb;overflow:hidden;margin-top:12px;}
+        .health-score-panel{display:flex;align-items:center;gap:18px;margin-top:12px;}
+        .health-donut-wrap{position:relative;width:150px;height:150px;flex:0 0 150px;}
+        .health-donut-wrap canvas{width:150px!important;height:150px!important;}
+        .health-donut-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none;}
+        .health-donut-center strong{font-size:30px;line-height:1;font-weight:900;color:#111827;}
+        .health-donut-center span{font-size:12px;color:var(--muted);line-height:1.3;}
+        .health-donut-center .badge{margin-top:6px;color:#111827;}
+        .health-score-copy{display:flex;flex-direction:column;gap:10px;align-items:flex-start;max-width:420px;}
+        .health-bar{height:4px;border-radius:999px;background:#f1f5f9;overflow:hidden;margin-top:10px;opacity:.35;}
         .health-fill{height:100%;border-radius:999px;background:#111827;}
         .health-driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px;}
         .health-driver{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px 12px;}
-        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row-actions{width:100%;justify-content:stretch;}.priority-claim-row-actions .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}}
+        .health-driver-title{display:flex;align-items:center;gap:6px;}
+        .health-driver .tooltip{font-size:12px;color:#64748b;}
+        .trend-range-shortcuts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+        .trend-range-shortcuts .btn.active{background:#111827;color:#fff;border-color:#111827;}
+        .trend-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;}
+        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row-actions{width:100%;justify-content:stretch;}.priority-claim-row-actions .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}.health-score-panel{align-items:flex-start;flex-direction:column;}.health-donut-wrap{width:132px;height:132px;flex-basis:132px;}.health-donut-wrap canvas{width:132px!important;height:132px!important;}}
       </style>
 
       <div style="border-left:6px solid ${verdictColor};padding:14px 18px;margin-bottom:18px;background:var(--card);border-radius:10px;">
@@ -43642,41 +43786,57 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="health-row">
           <div>
             <h3 style="margin:0 0 6px;">Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, AR aging, and AI Case Readiness. Higher is better.">ⓘ</span></h3>
-            <div class="health-score-value">
-              ${formatNumberUI(m.healthScore || 0)} / 100
-              <span class="badge ${gradeBadgeClass(m.healthGrade)}" style="margin-left:8px;">${safeStr(m.healthGrade || "-")}</span>
-            </div>
-            <div class="muted small" style="margin-top:6px;">Compact health indicator based on collections, denial risk, AR aging, and workflow readiness.</div>
           </div>
-          <a class="btn secondary small" href="/revenue-intelligence?tab=executive">View Deeper Analysis</a>
+        </div>
+        <div class="health-score-panel">
+          <div class="health-donut-wrap">
+            <canvas id="healthScoreDonut" aria-label="Financial Health Score"></canvas>
+            <div class="health-donut-center">
+              <strong>${formatNumberUI(m.healthScore || 0)}</strong>
+              <span>/ 100</span>
+              <span class="badge ${gradeBadgeClass(m.healthGrade)}">${safeStr(m.healthGrade || "-")}</span>
+            </div>
+          </div>
+          <div class="health-score-copy">
+            <div class="muted small">Compact health indicator based on collections, denial risk, AR aging, and workflow readiness.</div>
+            <a class="btn secondary small" href="/revenue-intelligence?tab=executive">View Deeper Analysis</a>
+          </div>
         </div>
 
-        <div class="health-bar">
+        <div class="health-bar" aria-hidden="true">
           <div class="health-fill" style="width:${Math.max(0, Math.min(100, Number(m.healthScore || 0)))}%;"></div>
         </div>
 
         <div class="health-driver-grid">
           <div class="health-driver">
-            <div class="muted small">Collection Strength</div>
+            <div class="muted small health-driver-title">Collection Strength <span class="tooltip" data-tip="Measures collected dollars compared with billed/expected collections in the selected range. Higher means collections are keeping up with billed activity.">ⓘ</span></div>
             <strong>${formatNumberUI(m.subscores?.collection_strength || m.subscores?.collection_efficiency || 0)}</strong>
           </div>
           <div class="health-driver">
-            <div class="muted small">Denial Discipline</div>
+            <div class="muted small health-driver-title">Denial Discipline <span class="tooltip" data-tip="Measures denial pressure and denial workflow discipline. Higher means fewer preventable denials and healthier denial handling.">ⓘ</span></div>
             <strong>${formatNumberUI(m.subscores?.denial_discipline || m.subscores?.denial_risk || 0)}</strong>
           </div>
           <div class="health-driver">
-            <div class="muted small">AR Aging Score</div>
+            <div class="muted small health-driver-title">AR Aging Score <span class="tooltip" data-tip="Measures unpaid balances by their true service/claim age, using matched payments to exclude paid amounts. Upload date is only a fallback when no service or claim date exists.">ⓘ</span></div>
             <strong>${formatNumberUI(m.subscores?.ar_aging || 0)}</strong>
           </div>
         </div>
       </div>
 
       <div class="exec-card" id="revenue-trend">
-        <div>
-          <h3 style="margin-bottom:6px;">Collections by Service Period</h3>
-          <div class="muted small">Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period.</div>
-          ${revenueTrendNote}
-          ${unmatchedPaymentNote}
+        <div class="trend-card-head">
+          <div>
+            <h3 style="margin-bottom:6px;">Collections by Service Period</h3>
+            <div class="muted small">Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period.</div>
+            ${revenueTrendNote}
+            ${unmatchedPaymentNote}
+          </div>
+          <div class="trend-range-shortcuts" aria-label="Collections by Service Period range shortcuts" data-anchor="#revenue-trend">
+            <a class="${rangeShortcutClass("last30")}" href="${dashboardRangeShortcutHref("last30")}">30 days</a>
+            <a class="${rangeShortcutClass("last60")}" href="${dashboardRangeShortcutHref("last60")}">60 days</a>
+            <a class="${rangeShortcutClass("last90")}" href="${dashboardRangeShortcutHref("last90")}">90 days</a>
+            <a class="${rangeShortcutClass("all")}" href="${dashboardRangeShortcutHref("all")}">All Time</a>
+          </div>
         </div>
         ${trendHasAnyData ? `
           <div class="kpi-strip" style="margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;">
@@ -43761,13 +43921,18 @@ document.addEventListener("DOMContentLoaded", function(){
       type: "doughnut",
       data: {
         labels: ["Health Score", "Remaining"],
-        datasets: [{ data: [good, remaining] }]
+        datasets: [{
+          data: [good, remaining],
+          backgroundColor: ["#111827", "#e5e7eb"],
+          borderColor: ["#111827", "#e5e7eb"],
+          borderWidth: 1
+        }]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         cutout: "72%",
-        plugins: { legend: { position: "bottom" } }
+        plugins: { legend: { display: false }, tooltip: { enabled: true } }
       }
     });
   }
@@ -66213,6 +66378,138 @@ if (process.env.TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS === "true" && (proc
   }
 }
 
+
+
+if (process.env.TJHP_REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const snapshotFiles = ["billed", "payments", "usage", "prior_auth_cases", "prior_auth_uploads", "agent_workspaces", "workspace_outcomes", "upload_batches", "document_ingests"];
+  const snapshots = {};
+  const fileText = (file) => fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  const restoreSnapshots = () => { Object.entries(snapshots).forEach(([key, value]) => fs.writeFileSync(FILES[key], value)); };
+  const sliceBetween = (startMarker, endMarker, label) => {
+    const start = src.indexOf(startMarker);
+    assert(start >= 0, "missing slice start for " + label + ": " + startMarker);
+    const end = src.indexOf(endMarker, start);
+    assert(end > start, "missing slice end for " + label + ": " + endMarker);
+    return src.slice(start, end + endMarker.length);
+  };
+  const extractFunctionBody = (functionName) => {
+    const start = src.indexOf("function " + functionName);
+    assert(start >= 0, "missing function for body extraction: " + functionName);
+    const open = src.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === "{") depth += 1;
+      if (src[i] === "}") depth -= 1;
+      if (depth === 0) return src.slice(open + 1, i);
+    }
+    throw new Error("missing closing brace for " + functionName);
+  };
+  const approx = (actual, expected, tolerance = 0.2) => Math.abs(Number(actual || 0) - expected) <= tolerance;
+  try {
+    [
+      "PHASE_9A_UX8_REVENUE_OVERVIEW_CHART_CONTROLS_HEALTH_DONUT_AR_AGING_OK",
+      "PHASE_9A_UX7_REVENUE_OVERVIEW_TOP_ALL_TIME_COLLECTIONS_SERVICE_PERIOD_AI_USAGE_OK",
+      "Collections by Service Period", "30 days", "60 days", "90 days", "All Time", "#revenue-trend",
+      "dashboardRangeShortcutHref", "range=last30", "range=last60", "range=last90", "range=all",
+      "tjhpRevenueOverviewValueByNormalizedKeys", "tjhpRevenueOverviewCollectionServiceDate", "date of service", "service_date", "uploaded_at",
+      "Collections by Service Period uses payment dates only for matching/audit context", "healthScoreDonut", "health-donut-wrap", "health-donut-center", "type: \"doughnut\"",
+      "Collection Strength", "Denial Discipline", "AR Aging Score", "true service/claim age", "tjhpRevenueOverviewArAgingSnapshot", "ar90_rate", "aging_score", "scoreARAging"
+    ].forEach(marker => assert(src.includes(marker), "missing UX8 marker: " + marker));
+
+    [
+      "TJHP_REVENUE_OVERVIEW_UX7_COLLECTIONS_AI_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS", "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS", "renderClaimPanelBootstrap", "claimSidePanel", "claimSidePanelBackdrop", "window.openClaimPanel", "data-open-claim-panel", "view-claim-btn",
+      "renderPriorAuthActionCenterPanelBootstrap", "priorAuthSidePanel", "priorAuthSidePanelBackdrop", "window.openPriorAuthPanel", "view-prior-auth-btn"
+    ].forEach(marker => assert(src.includes(marker), "missing protected UX8 marker: " + marker));
+
+    const chartSlice = sliceBetween('<div class="exec-card" id="revenue-trend">', 'canvas id="revenueTrendChart"', "Collections by Service Period card");
+    ["30 days", "60 days", "90 days", "All Time", "#revenue-trend", 'canvas id="revenueTrendChart"', "Collected", "Remaining Gap", "Collection Rate"].forEach(marker => assert(chartSlice.includes(marker), "chart card missing: " + marker));
+
+    const healthSlice = sliceBetween('Financial Health Score', '<div class="exec-card" id="revenue-trend">', "Financial Health Score card");
+    ['canvas id="healthScoreDonut"', "health-donut-center", "View Deeper Analysis", "Collection Strength", "Denial Discipline", "AR Aging Score", "data-tip", "true service/claim age", "health-donut-wrap"].forEach(marker => assert(healthSlice.includes(marker), "health card missing: " + marker));
+    assert(healthSlice.includes("health-donut-wrap"), "health card missing donut primary visualization");
+
+    ["tjhpRevenueOverviewCollectionsByServicePeriodModel", "tjhpRevenueOverviewBuildCollectionSeries", "tjhpRevenueOverviewArAgingSnapshot"].forEach(fn => {
+      const body = extractFunctionBody(fn);
+      ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "savePriorAuthUploadRecord", "appendAuditLog", "ensureAgentWorkspace", "saveAgentWorkspace", "autoDraftWorkspaceForClaim", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "fetchEHRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", "automatic prior-auth submission", "method === \"POST\"", "parseBody(req)"].forEach(forbidden => assert(!body.includes(forbidden), fn + " contains forbidden mutation marker: " + forbidden));
+    });
+
+    snapshotFiles.forEach(key => { snapshots[key] = fileText(FILES[key]); });
+    const smokeOrgId = "__phase9a_ux8_chart_health_smoke__" + Date.now().toString(36);
+    const daysAgo = (days) => { const d = new Date(Date.now() - days * 24 * 60 * 60 * 1000); return d.toISOString().slice(0, 10); };
+    const oldServiceDate = daysAgo(150);
+    const recentDate1 = daysAgo(5);
+    const recentDate2 = daysAgo(2);
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []), {
+      org_id: smokeOrgId, billed_id: "ux8_billed_old", claim_id: "UX8-CLAIM-OLD", claim_number: "UX8-CLAIM-OLD",
+      "Date of Service": oldServiceDate, date_of_service: oldServiceDate, amount_billed: 940, billed_amount: 940,
+      created_at: nowISO(), uploaded_at: nowISO(), status: "Waiting Payment"
+    }]);
+    writeJSON(FILES.payments, [...readJSON(FILES.payments, []),
+      { org_id: smokeOrgId, claim_id: "UX8-CLAIM-OLD", paid_date: recentDate1, amount_paid: 200, paid_amount: 200, created_at: nowISO() },
+      { org_id: smokeOrgId, claim_number: "UX8-CLAIM-OLD", paid_date: recentDate2, amount_paid: 150, paid_amount: 150, created_at: nowISO() }
+    ]);
+
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const oldPeriodKey = groupKeyForDate(new Date(oldServiceDate + "T00:00:00.000Z"), tjhpRevenueOverviewTrendGranularity(null, null, "all"));
+    const model30 = tjhpRevenueOverviewCollectionsByServicePeriodModel(smokeOrgId, "last30");
+    assert(model30.selected_range === "last30", "model30 selected range");
+    assert(model30.effective_range === "all", "model30 effective range");
+    assert(model30.fallback_to_all_time === true, "model30 fallback flag");
+    assert(String(model30.fallback_message || "").includes("service-period billing history"), "model30 fallback message");
+    assert(model30.series.totals.billed === 940, "model30 billed");
+    assert(model30.series.totals.collected === 350, "model30 collected");
+    assert(model30.series.totals.remaining === 590, "model30 remaining");
+    assert(approx(model30.series.totals.collection_rate, 37.2), "model30 collection rate");
+    assert(!model30.series.keys.includes(todayKey), "model30 keys include upload/current date");
+    assert(model30.series.keys.includes(oldPeriodKey), "model30 keys missing old service period");
+
+    const modelAll = tjhpRevenueOverviewCollectionsByServicePeriodModel(smokeOrgId, "all");
+    assert(modelAll.effective_range === "all", "modelAll effective range");
+    assert(modelAll.fallback_to_all_time === false, "modelAll fallback flag");
+    assert(modelAll.series.totals.billed === 940, "modelAll billed");
+    assert(modelAll.series.totals.collected === 350, "modelAll collected");
+    assert(modelAll.series.totals.remaining === 590, "modelAll remaining");
+    assert(approx(modelAll.series.totals.collection_rate, 37.2), "modelAll collection rate");
+    assert(modelAll.series.keys.includes(oldPeriodKey), "modelAll keys missing old service period");
+    assert(!modelAll.series.keys.includes(todayKey), "modelAll keys include upload/current date");
+
+    writeJSON(FILES.billed, [...readJSON(FILES.billed, []),
+      { org_id: smokeOrgId, billed_id: "ux8_ar_open", claim_id: "UX8-AR-OPEN", claim_number: "UX8-AR-OPEN", date_of_service: daysAgo(135), amount_billed: 1000, billed_amount: 1000, created_at: nowISO(), uploaded_at: nowISO(), status: "Waiting Payment" },
+      { org_id: smokeOrgId, billed_id: "ux8_ar_paid", claim_id: "UX8-AR-PAID", claim_number: "UX8-AR-PAID", date_of_service: daysAgo(135), amount_billed: 500, billed_amount: 500, created_at: nowISO(), uploaded_at: nowISO(), status: "Paid" }
+    ]);
+    writeJSON(FILES.payments, [...readJSON(FILES.payments, []),
+      { org_id: smokeOrgId, claim_id: "UX8-AR-OPEN", amount_paid: 400, paid_amount: 400, paid_date: recentDate1, created_at: nowISO() },
+      { org_id: smokeOrgId, claim_id: "UX8-AR-PAID", amount_paid: 500, paid_amount: 500, paid_date: recentDate2, created_at: nowISO() }
+    ]);
+
+    const ar = tjhpRevenueOverviewArAgingSnapshot(smokeOrgId, new Date());
+    assert(ar.total_ar >= 600, "AR total should include open unpaid balance");
+    assert(ar.ar90_amount >= 600, "AR90 amount should include old open unpaid balance");
+    assert(ar.ar90_rate > 0, "AR90 rate should be positive");
+    assert(ar.aging_score < 100, "AR aging score should be below 100");
+    assert(ar.paid_excluded_count >= 1, "paid claim should be excluded");
+    assert(Number(ar.buckets["0-30"] || 0) === 0, "old open claim should not land in 0-30 due to upload date");
+
+    const metrics = computeDashboardMetrics(smokeOrgId, null, null, "all");
+    assert(metrics.arBuckets, "metrics missing arBuckets");
+    assert(metrics.ar90Rate > 0, "metrics ar90Rate should be positive");
+    assert(metrics.subscores.ar_aging < 100, "metrics AR aging score should be below 100");
+    assert(metrics.healthScore < 100, "metrics healthScore should be below 100 with old unpaid AR");
+
+    restoreSnapshots();
+    snapshotFiles.forEach(key => assert(fileText(FILES[key]) === snapshots[key], "snapshot not restored: " + key));
+    process.stdout.write("REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    try { restoreSnapshots(); } catch (restoreErr) {}
+    const stack = err && err.stack ? err.stack : String(err);
+    process.stderr.write("REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
 
 if (process.env.TJHP_REVENUE_OVERVIEW_UX7_COLLECTIONS_AI_USAGE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
