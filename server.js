@@ -1771,6 +1771,20 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX10_MY_DASHBOARD_NEUTRAL_HEALTH_EMPTY_CHART_DATA_REPAIR_OK
 // PHASE_9A_UX11_DASHBOARD_LABEL_DONUT_CENTER_COLLECTIONS_DATA_FIX_OK
 // PHASE_9A_UX12_DASHBOARD_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_POLISH_OK
+// PHASE_9A_UX13_DASHBOARD_EXECUTIVE_LAYOUT_REDUNDANCY_CLEANUP_OK
+
+function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
+  const title = String(verdictTitle || "").toLowerCase();
+  if (!hasData) return { label: "No Financial Data Yet", className: "neutral", tone: "neutral" };
+  if (title.includes("elevated") || title.includes("high risk")) return { label: "Financial Risk Elevated", className: "risk", tone: "risk" };
+  if (title.includes("moderate") || title.includes("caution")) return { label: "Monitor Closely", className: "warning", tone: "warning" };
+  return { label: "On Track", className: "good", tone: "good" };
+}
+
+function tjhpDashboardWorkCount(topClaims = [], priorAuthModel = {}){
+  return Number((topClaims || []).length || 0) + Number(priorAuthModel?.needs_action_count || 0);
+}
+
 function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
   const rows = getPriorAuthCases(org_id).map(normalizePriorAuthCase);
   const intakeStatuses = new Set(["Auth Needed", "Draft"]);
@@ -43631,6 +43645,9 @@ if (method === "GET" && pathname === "/weekly-summary") {
       Number(roiMetrics.completedOutcomes || 0) > 0 ||
       Number(roiMetrics.wonOutcomes || 0) > 0;
     const recoveryProgressPercent = roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0;
+    const priorAuthWorkModel = tjhpRevenueOverviewPriorAuthWorkModel(org.org_id);
+    const dashboardWorkNeedingActionCount = tjhpDashboardWorkCount(topClaims, priorAuthWorkModel);
+    const dashboardStatusTone = tjhpDashboardStatusTone(verdictTitle, hasRevenueOverviewFinancialData);
     const priorAuthWorkStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(org.org_id);
     const revenueOverviewClaimWorkCta = (c = {}) => {
       const billedId = String(c.billed_id || "").trim();
@@ -43667,24 +43684,22 @@ if (method === "GET" && pathname === "/weekly-summary") {
     };
     // Static smoke legacy marker: ${topClaims.map(c => `
     const revenueSummaryBlock = `
-<div class="insight-card priority-summary" style="margin-bottom:16px;">
+<div class="insight-card priority-summary dashboard-work-card" style="margin-bottom:16px;">
 
   <div class="priority-header">
     <div>
-      <div class="muted small" style="font-weight:800;text-transform:uppercase;letter-spacing:.05em;">Revenue at risk</div>
-      <h3 style="margin:4px 0 6px;">Prioritize the dollars most likely to be lost</h3>
-      <div class="muted small">Start with denied, underpaid, and follow-up claims that need action today.</div>
+      <div class="muted small" style="font-weight:800;text-transform:uppercase;letter-spacing:.05em;">Revenue at Risk legacy marker</div>
+      <h3 style="margin:4px 0 6px;">Work to Do Today</h3>
+      <div class="muted small">Start with claims and prior authorizations that need action.</div>
     </div>
     <div class="priority-actions">
       ${hasAtRiskClaimWork ? `<a class="btn" href="/actions?tab=all">Open All At-Risk Work</a>` : ""}
     </div>
   </div>
 
-  <div class="priority-grid">
-    <div class="priority-main">
-      <div class="priority-main-value">${moneyOrDash(hasRevenueOverviewFinancialData, todaysAtRiskTotal)}</div>
-      <div class="priority-main-label">Revenue At Risk</div>
-    </div>
+  <div class="muted small" style="margin-top:12px;font-weight:750;">Open revenue opportunity: ${moneyOrDash(hasRevenueOverviewFinancialData, todaysAtRiskTotal)}</div>
+
+  <div class="priority-grid work-breakdown-grid">
     <div class="priority-metric">
       <strong>${numberOrDash(hasRevenueOverviewFinancialData, todaysPriorities.denied.count)}</strong>
       <span>Denied</span>
@@ -43740,6 +43755,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     `
   }
 
+  <!-- Prior auth -->
   ${priorAuthWorkStrip}
 
 </div>
@@ -43762,6 +43778,172 @@ if (method === "GET" && pathname === "/weekly-summary") {
       return `/dashboard?${params.toString()}#revenue-trend`;
     };
     const rangeShortcutClass = (targetRange) => `btn secondary small ${((preset === targetRange) || (revenueTrendModel.fallback_to_all_time && revenueTrendModel.effective_range === targetRange)) ? "active" : ""}`;
+
+    const dashboardOpenRevenueOpportunity = todaysAtRiskTotal;
+    const dashboardCollectionRate = Number(trendTotals.collection_rate || m.kpis?.netCollectionRate || 0) || 0;
+
+    const dashboardHealthSummaryBlock = `
+      <div class="dashboard-health-summary health-compact">
+        <div class="health-card-head">
+          <div>
+            <h3>Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, AR aging, and AI Case Readiness. Higher is better.">ⓘ</span></h3>
+            <div class="muted small">Compact health indicator based on collections, denial risk, AR aging, and workflow readiness.</div>
+          </div>
+          <a class="btn secondary small" href="/revenue-intelligence?tab=executive">View Deeper Analysis</a>
+        </div>
+        <div class="health-score-panel">
+          <div class="health-donut-wrap">
+            <canvas id="healthScoreDonut" aria-label="Financial Health Score"></canvas>
+            <div class="health-donut-center">
+              <strong>${safeStr(healthDisplay.score_text)}</strong>
+              ${healthHasData ? `<span>/ 100</span>` : `<span>${safeStr(healthDisplay.center_label)}</span>`}
+              ${healthHasData ? `<span class="badge ${gradeBadgeClass(healthDisplay.grade)}">${safeStr(healthDisplay.grade || "-")}</span>` : ``}
+            </div>
+          </div>
+          <div class="health-score-copy">
+            <div class="health-score-tone" style="color:${safeStr(healthDisplay.tone.color)};">${safeStr(healthDisplay.tone.label)}</div>
+            <div class="muted small">${safeStr(healthDisplay.helper_text)}</div>
+          </div>
+        </div>
+
+        <div class="health-bar" aria-hidden="true" style="display:none;">
+          <div class="health-fill" style="width:${healthHasData ? Math.max(0, Math.min(100, Number(healthDisplay.score || 0))) : 0}%;"></div>
+        </div>
+
+        <div class="health-driver-grid">
+          <div class="health-driver">
+            <div class="muted small health-driver-title">Collection Strength <span class="tooltip" data-tip="Measures collected dollars compared with billed/expected collections in the selected range. Higher means collections are keeping up with billed activity.">ⓘ</span></div>
+            <strong>${safeStr(healthDisplay.subscore_display.collection_strength)}</strong>
+          </div>
+          <div class="health-driver">
+            <div class="muted small health-driver-title">Denial Discipline <span class="tooltip" data-tip="Measures denial pressure and denial workflow discipline. Higher means fewer preventable denials and healthier denial handling.">ⓘ</span></div>
+            <strong>${safeStr(healthDisplay.subscore_display.denial_discipline)}</strong>
+          </div>
+          <div class="health-driver">
+            <div class="muted small health-driver-title">AR Aging Score <span class="tooltip" data-tip="Measures unpaid balances by their true service/claim age, using matched payments to exclude paid amounts. Upload date is only a fallback when no service or claim date exists.">ⓘ</span></div>
+            <strong>${safeStr(healthDisplay.subscore_display.ar_aging)}</strong>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const dashboardExecutiveSnapshotBlock = `
+      <div class="exec-card dashboard-executive-snapshot">
+        <div class="dashboard-executive-head">
+          <div>
+            <div class="muted small" style="font-weight:850;text-transform:uppercase;letter-spacing:.06em;">Strategic dashboard</div>
+            <h3>Executive Snapshot</h3>
+            <div class="muted small">How collections, revenue opportunity, and work queues look right now.</div>
+          </div>
+          <div class="dashboard-status-pill ${safeStr(dashboardStatusTone.className)}">
+            <strong>${safeStr(dashboardStatusTone.label)}</strong>
+            <span>Denial Rate: ${Number(m.denialRate||0).toFixed(1)}% · Collection Rate: ${dashboardCollectionRate.toFixed(1)}%</span>
+          </div>
+        </div>
+
+        <div class="dashboard-snapshot-grid">
+          ${dashboardHealthSummaryBlock}
+          <div class="dashboard-snapshot-card">
+            <div class="dashboard-snapshot-value">${moneyOrDash(hasRevenueOverviewFinancialData, dashboardOpenRevenueOpportunity)}</div>
+            <div class="dashboard-snapshot-label">Open Revenue Opportunity</div>
+            <div class="dashboard-snapshot-sub">Actionable revenue at risk needing work.</div>
+          </div>
+          <div class="dashboard-snapshot-card">
+            <div class="dashboard-snapshot-value">${hasRevenueOverviewFinancialData ? dashboardCollectionRate.toFixed(1) + "%" : dashboardDash}</div>
+            <div class="dashboard-snapshot-label">Collection Rate</div>
+            <div class="dashboard-snapshot-sub">Collected against billed service-period dollars.</div>
+          </div>
+          <div class="dashboard-snapshot-card">
+            <div class="dashboard-snapshot-value">${formatNumberUI(dashboardWorkNeedingActionCount)}</div>
+            <div class="dashboard-snapshot-label">Work Needing Action</div>
+            <div class="dashboard-snapshot-sub">Claims and prior auths needing review.</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const dashboardCollectionsBlock = `
+      <div class="exec-card" id="revenue-trend">
+        <div class="trend-card-head">
+          <div>
+            <h3 style="margin-bottom:6px;">Collections by Service Period</h3>
+            <div class="muted small">Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period.</div>
+            ${revenueTrendNote}
+            ${fallbackDateNote}
+            ${unmatchedPaymentNote}
+          </div>
+          <div class="trend-range-shortcuts segmented" aria-label="Collections by Service Period range shortcuts" data-anchor="#revenue-trend">
+            <a class="${rangeShortcutClass("last30")}" href="${dashboardRangeShortcutHref("last30")}">30 days</a>
+            <a class="${rangeShortcutClass("last60")}" href="${dashboardRangeShortcutHref("last60")}">60 days</a>
+            <a class="${rangeShortcutClass("last90")}" href="${dashboardRangeShortcutHref("last90")}">90 days</a>
+            <a class="${rangeShortcutClass("all")}" href="${dashboardRangeShortcutHref("all")}">All Time</a>
+          </div>
+        </div>
+        <div class="kpi-strip" style="margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;">
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.billed || 0) : dashboardDash}</p><p class="kpi-label">Billed</p></div>
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.collected || 0) : dashboardDash}</p><p class="kpi-label">Collected</p></div>
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.remaining || 0) : dashboardDash}</p><p class="kpi-label">Remaining Gap</p></div>
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? Number(trendTotals.collection_rate || 0).toFixed(1) + "%" : dashboardDash}</p><p class="kpi-label">Collection Rate</p></div>
+        </div>
+        <div class="chart-container trend ${trendHasAnyData ? "" : "chart-empty-state"}">
+          <canvas id="revenueTrendChart"></canvas>
+          ${trendHasAnyData ? "" : `<div class="chart-empty-overlay">No billed service-period history is available yet.</div>`}
+        </div>
+      </div>
+    `;
+
+    const dashboardRecoveryPerformanceBlock = `
+      <!-- Revenue Recovery Insights legacy marker -->
+      <div class="exec-card recovery-snapshot recovery-performance-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+          <div>
+            <h3 style="margin:0 0 6px;">Recovery Workflow Performance</h3>
+            <div class="muted small">Outcome and productivity metrics for recovery and prior-auth work.</div>
+          </div>
+          <div class="muted small">Date Range: ${safeStr(rangeLabel)}</div>
+        </div>
+
+        <div class="recovery-progress-wrap compact">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
+            <div>
+              <strong>Recovery Progress</strong>
+              <div class="muted small">Recovered: ${moneyOrDash(hasRecoveryOverviewData, roiMetrics.revenueRecovered || 0)} · Pending pipeline: ${moneyOrDash(hasRecoveryOverviewData, roiMetrics.pendingRecovery || 0)}</div>
+            </div>
+            <strong>${hasRecoveryOverviewData ? `${recoveryProgressPercent.toFixed(1)}%` : dashboardDash}</strong>
+          </div>
+          <div class="recovery-progress-bar">
+            <span class="recovery-progress-fill" style="width:${hasRecoveryOverviewData ? recoveryProgressPercent.toFixed(1) : "0.0"}%;"></span>
+          </div>
+        </div>
+
+        <div class="recovery-mini-grid">
+          <div class="recovery-mini">
+            <div class="recovery-mini-label">Workflow Win Rate</div>
+            <div class="recovery-mini-value">${Number((roiMetrics.workflowWinRate != null ? roiMetrics.workflowWinRate : roiMetrics.winRate) || 0).toFixed(1)}%</div>
+            <div class="recovery-mini-sub">${formatNumberUI(roiMetrics.workflowWonOutcomes != null ? roiMetrics.workflowWonOutcomes : roiMetrics.wonOutcomes || 0)} won / ${formatNumberUI(roiMetrics.workflowCompletedOutcomes != null ? roiMetrics.workflowCompletedOutcomes : roiMetrics.completedOutcomes || 0)} completed · includes prior auth decisions</div>
+          </div>
+
+          <div class="recovery-mini">
+            <div class="recovery-mini-label">Avg Resolution Time</div>
+            <div class="recovery-mini-value">${(roiMetrics.avgResolutionTimeDays || roiMetrics.avgRecoveryTimeDays) ? `${Number((roiMetrics.avgResolutionTimeDays || roiMetrics.avgRecoveryTimeDays) || 0).toFixed(0)}d` : "-"}</div>
+            <div class="recovery-mini-sub">Claims recovery + prior-auth decision workflows</div>
+          </div>
+
+          <div class="recovery-mini">
+            <div class="recovery-mini-label">Top Payer Leakage</div>
+            <div class="recovery-mini-value" style="font-size:15px;">${safeStr(roiMetrics.topPayerLeakage?.payer || "No leakage detected")}</div>
+            <div class="recovery-mini-sub">${formatMoneyUI(roiMetrics.topPayerLeakage?.amount || 0)} claim recovery at risk</div>
+          </div>
+
+          <div class="recovery-mini">
+            <div class="recovery-mini-label">Time Saved</div>
+            <div class="recovery-mini-value">${Number(roiMetrics.staffTimeSavedHours || 0).toFixed(1)}h</div>
+            <div class="recovery-mini-sub">${formatNumberUI(roiMetrics.staffTimeSavedWorkUnits || 0)} claim/prior-auth work units × 15 min</div>
+          </div>
+        </div>
+      </div>
+    `;
+
 
     const html = renderPage("Dashboard", `
       ${alertBanner}
@@ -43848,6 +44030,29 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .trend-fallback-note,.trend-empty-note{font-size:12px;color:var(--muted);margin:4px 0 0;line-height:1.4;}
         .plan-usage-card{margin-top:14px;}
         .plan-usage-card .kpi-strip,.plan-usage-grid{margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));}
+        .dashboard-executive-snapshot{padding:18px;background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%);}
+        .dashboard-executive-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px;}
+        .dashboard-executive-head h3{margin:3px 0 6px;font-size:22px;}
+        .dashboard-status-pill{display:flex;flex-direction:column;gap:3px;border:1px solid var(--border);border-radius:999px;padding:10px 14px;background:#fff;min-width:220px;}
+        .dashboard-status-pill strong{font-size:13px;line-height:1.15;}
+        .dashboard-status-pill span{font-size:11px;color:var(--muted);line-height:1.25;}
+        .dashboard-status-pill.risk{border-color:#fecaca;background:#fef2f2;color:#991b1b;}
+        .dashboard-status-pill.warning{border-color:#fde68a;background:#fffbeb;color:#92400e;}
+        .dashboard-status-pill.good{border-color:#bbf7d0;background:#f0fdf4;color:#166534;}
+        .dashboard-status-pill.neutral{border-color:#cbd5e1;background:#f8fafc;color:#334155;}
+        .dashboard-snapshot-grid{display:grid;grid-template-columns:minmax(280px,1.35fr) repeat(3,minmax(170px,1fr));gap:12px;align-items:stretch;}
+        .dashboard-snapshot-card{border:1px solid var(--border);border-radius:14px;background:#fff;padding:14px;display:flex;flex-direction:column;justify-content:center;min-height:132px;}
+        .dashboard-snapshot-value{font-size:27px;font-weight:900;line-height:1.05;color:#111827;}
+        .dashboard-snapshot-label{font-size:12px;color:#334155;font-weight:900;text-transform:uppercase;letter-spacing:.04em;margin-top:7px;}
+        .dashboard-snapshot-sub{font-size:12px;color:var(--muted);line-height:1.35;margin-top:5px;}
+        .dashboard-health-summary{border:1px solid var(--border);border-radius:14px;background:#fff;padding:14px;grid-row:span 2;}
+        .dashboard-health-summary .health-score-panel{margin-top:10px;padding:12px;}
+        .dashboard-health-summary .health-donut-wrap{width:148px;height:148px;}
+        .dashboard-health-summary .health-donut-wrap canvas{width:148px!important;height:148px!important;}
+        .dashboard-health-summary .health-donut-center strong{font-size:28px;}
+        .dashboard-work-card{padding:16px;}
+        .work-breakdown-grid{grid-template-columns:repeat(3,minmax(140px,1fr));}
+        .recovery-performance-card{padding:16px;}
         #revenue-trend{scroll-margin-top:110px;}
         .priority-summary{padding:16px;}
         .priority-header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;}
@@ -43942,162 +44147,21 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .org-targets-head h3{margin:0 0 6px;}
         .org-targets-empty-note{margin-top:10px;color:var(--muted);font-size:12px;line-height:1.4;}
         .org-targets-grid{margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));}
-        @media (max-width: 760px){.priority-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row-actions{width:100%;justify-content:stretch;}.priority-claim-row-actions .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}.health-card-head .btn{width:100%;margin-left:0;}.health-score-panel{text-align:center;}.health-donut-wrap{width:160px;height:160px;}.health-donut-wrap canvas{width:160px!important;height:160px!important;}.trend-range-shortcuts.segmented{margin-left:0;width:100%;}.trend-range-shortcuts .btn{flex:1;justify-content:center;}}
+        @media (max-width: 960px){.dashboard-snapshot-grid{grid-template-columns:1fr 1fr;}.dashboard-health-summary{grid-row:auto;}}
+        @media (max-width: 760px){.dashboard-executive-head{flex-direction:column;}.dashboard-status-pill{border-radius:14px;width:100%;}.dashboard-snapshot-grid{grid-template-columns:1fr;}.priority-grid,.work-breakdown-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row-actions{width:100%;justify-content:stretch;}.priority-claim-row-actions .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}.health-card-head .btn{width:100%;margin-left:0;}.health-score-panel{text-align:center;}.health-donut-wrap{width:160px;height:160px;}.health-donut-wrap canvas{width:160px!important;height:160px!important;}.trend-range-shortcuts.segmented{margin-left:0;width:100%;}.trend-range-shortcuts .btn{flex:1;justify-content:center;}}
       </style>
 
-      <div style="border-left:6px solid ${verdictColor};padding:14px 18px;margin-bottom:18px;background:var(--card);border-radius:10px;">
-        <div style="font-size:18px;font-weight:800;color:${verdictColor};">
-          ${verdictTitle}
-        </div>
-        <div class="muted" style="margin-top:4px;">
-          Denial Rate: ${Number(m.denialRate||0).toFixed(1)}% · Recovery Rate: ${Number(m.kpis.netCollectionRate||0).toFixed(1)}%
-        </div>
-      </div>
+      <!-- Executive Snapshot id="healthScoreDonut" -->
+      ${dashboardExecutiveSnapshotBlock}
 
+      <!-- Collections by Service Period revenueTrendChart trend-range-shortcuts 30 days 60 days 90 days All Time Billed Collected Remaining Gap Collection Rate tooltip: -->
+      ${dashboardCollectionsBlock}
+
+      <!-- Work to Do Today Top claims to work today Prior auth Denied Underpaid Follow-Up Open All At-Risk Work -->
       ${revenueSummaryBlock}
 
-
-      <div class="exec-card recovery-snapshot">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
-          <div>
-            <h3 style="margin:0 0 6px;">Revenue Recovery Insights</h3>
-            <div class="muted small">
-              Recovery workflow ROI for ${safeStr(rangeLabel)}.
-            </div>
-          </div>
-          <div class="muted small">Date Range: ${safeStr(rangeLabel)}</div>
-        </div>
-
-        <div class="recovery-core-grid">
-          <div class="recovery-core-card">
-            <p class="recovery-value">${moneyOrDash(hasRecoveryOverviewData, roiMetrics.revenueFound || 0)}</p>
-            <p class="recovery-label">Revenue Found</p>
-            <div class="recovery-sub">Identified recovery opportunity.</div>
-          </div>
-
-          <div class="recovery-core-card">
-            <p class="recovery-value">${moneyOrDash(hasRecoveryOverviewData, roiMetrics.revenueRecovered || 0)}</p>
-            <p class="recovery-label">Revenue Recovered</p>
-            <div class="recovery-sub">Recovered from outcomes or linked recovery work.</div>
-          </div>
-
-          <div class="recovery-core-card">
-            <p class="recovery-value">${moneyOrDash(hasRecoveryOverviewData, roiMetrics.pendingRecovery || 0)}</p>
-            <p class="recovery-label">Pending Recovery</p>
-            <div class="recovery-sub">Still open and awaiting resolution.</div>
-          </div>
-        </div>
-
-        <div class="recovery-progress-wrap">
-          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
-            <div>
-              <strong>Recovery Progress</strong>
-              <div class="muted small">Recovered versus revenue found in this date range.</div>
-            </div>
-            <strong>${hasRecoveryOverviewData ? `${recoveryProgressPercent.toFixed(1)}%` : dashboardDash}</strong>
-          </div>
-          <div class="recovery-progress-bar">
-            <span class="recovery-progress-fill" style="width:${hasRecoveryOverviewData ? recoveryProgressPercent.toFixed(1) : "0.0"}%;"></span>
-          </div>
-        </div>
-
-        <div class="recovery-mini-grid">
-          <div class="recovery-mini">
-            <div class="recovery-mini-label">Workflow Win Rate</div>
-            <div class="recovery-mini-value">${Number((roiMetrics.workflowWinRate != null ? roiMetrics.workflowWinRate : roiMetrics.winRate) || 0).toFixed(1)}%</div>
-            <div class="recovery-mini-sub">${formatNumberUI(roiMetrics.workflowWonOutcomes != null ? roiMetrics.workflowWonOutcomes : roiMetrics.wonOutcomes || 0)} won / ${formatNumberUI(roiMetrics.workflowCompletedOutcomes != null ? roiMetrics.workflowCompletedOutcomes : roiMetrics.completedOutcomes || 0)} completed · includes prior auth decisions</div>
-          </div>
-
-          <div class="recovery-mini">
-            <div class="recovery-mini-label">Avg Resolution Time</div>
-            <div class="recovery-mini-value">${(roiMetrics.avgResolutionTimeDays || roiMetrics.avgRecoveryTimeDays) ? `${Number((roiMetrics.avgResolutionTimeDays || roiMetrics.avgRecoveryTimeDays) || 0).toFixed(0)}d` : "-"}</div>
-            <div class="recovery-mini-sub">Claims recovery + prior-auth decision workflows</div>
-          </div>
-
-          <div class="recovery-mini">
-            <div class="recovery-mini-label">Top Payer Leakage</div>
-            <div class="recovery-mini-value" style="font-size:15px;">${safeStr(roiMetrics.topPayerLeakage?.payer || "No leakage detected")}</div>
-            <div class="recovery-mini-sub">${formatMoneyUI(roiMetrics.topPayerLeakage?.amount || 0)} claim recovery at risk</div>
-          </div>
-
-          <div class="recovery-mini">
-            <div class="recovery-mini-label">Time Saved</div>
-            <div class="recovery-mini-value">${Number(roiMetrics.staffTimeSavedHours || 0).toFixed(1)}h</div>
-            <div class="recovery-mini-sub">${formatNumberUI(roiMetrics.staffTimeSavedWorkUnits || 0)} claim/prior-auth work units × 15 min</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="exec-card health-compact">
-        <div class="health-card-head">
-          <div>
-            <h3>Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, AR aging, and AI Case Readiness. Higher is better.">ⓘ</span></h3>
-            <div class="muted small">Compact health indicator based on collections, denial risk, AR aging, and workflow readiness.</div>
-          </div>
-          <a class="btn secondary small" href="/revenue-intelligence?tab=executive">View Deeper Analysis</a>
-        </div>
-        <div class="health-score-panel">
-          <div class="health-donut-wrap">
-            <canvas id="healthScoreDonut" aria-label="Financial Health Score"></canvas>
-            <div class="health-donut-center">
-              <strong>${safeStr(healthDisplay.score_text)}</strong>
-              ${healthHasData ? `<span>/ 100</span>` : `<span>${safeStr(healthDisplay.center_label)}</span>`}
-              ${healthHasData ? `<span class="badge ${gradeBadgeClass(healthDisplay.grade)}">${safeStr(healthDisplay.grade || "-")}</span>` : ``}
-            </div>
-          </div>
-          <div class="health-score-copy">
-            <div class="health-score-tone" style="color:${safeStr(healthDisplay.tone.color)};">${safeStr(healthDisplay.tone.label)}</div>
-            <div class="muted small">${safeStr(healthDisplay.helper_text)}</div>
-          </div>
-        </div>
-
-        <div class="health-bar" aria-hidden="true" style="display:none;">
-          <div class="health-fill" style="width:${healthHasData ? Math.max(0, Math.min(100, Number(healthDisplay.score || 0))) : 0}%;"></div>
-        </div>
-
-        <div class="health-driver-grid">
-          <div class="health-driver">
-            <div class="muted small health-driver-title">Collection Strength <span class="tooltip" data-tip="Measures collected dollars compared with billed/expected collections in the selected range. Higher means collections are keeping up with billed activity.">ⓘ</span></div>
-            <strong>${safeStr(healthDisplay.subscore_display.collection_strength)}</strong>
-          </div>
-          <div class="health-driver">
-            <div class="muted small health-driver-title">Denial Discipline <span class="tooltip" data-tip="Measures denial pressure and denial workflow discipline. Higher means fewer preventable denials and healthier denial handling.">ⓘ</span></div>
-            <strong>${safeStr(healthDisplay.subscore_display.denial_discipline)}</strong>
-          </div>
-          <div class="health-driver">
-            <div class="muted small health-driver-title">AR Aging Score <span class="tooltip" data-tip="Measures unpaid balances by their true service/claim age, using matched payments to exclude paid amounts. Upload date is only a fallback when no service or claim date exists.">ⓘ</span></div>
-            <strong>${safeStr(healthDisplay.subscore_display.ar_aging)}</strong>
-          </div>
-        </div>
-      </div>
-
-      <div class="exec-card" id="revenue-trend">
-        <div class="trend-card-head">
-          <div>
-            <h3 style="margin-bottom:6px;">Collections by Service Period</h3>
-            <div class="muted small">Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period.</div>
-            ${revenueTrendNote}
-            ${fallbackDateNote}
-            ${unmatchedPaymentNote}
-          </div>
-          <div class="trend-range-shortcuts segmented" aria-label="Collections by Service Period range shortcuts" data-anchor="#revenue-trend">
-            <a class="${rangeShortcutClass("last30")}" href="${dashboardRangeShortcutHref("last30")}">30 days</a>
-            <a class="${rangeShortcutClass("last60")}" href="${dashboardRangeShortcutHref("last60")}">60 days</a>
-            <a class="${rangeShortcutClass("last90")}" href="${dashboardRangeShortcutHref("last90")}">90 days</a>
-            <a class="${rangeShortcutClass("all")}" href="${dashboardRangeShortcutHref("all")}">All Time</a>
-          </div>
-        </div>
-        <div class="kpi-strip" style="margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;">
-          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.billed || 0) : dashboardDash}</p><p class="kpi-label">Billed</p></div>
-          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.collected || 0) : dashboardDash}</p><p class="kpi-label">Collected</p></div>
-          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.remaining || 0) : dashboardDash}</p><p class="kpi-label">Remaining Gap</p></div>
-          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? Number(trendTotals.collection_rate || 0).toFixed(1) + "%" : dashboardDash}</p><p class="kpi-label">Collection Rate</p></div>
-        </div>
-        <div class="chart-container trend ${trendHasAnyData ? "" : "chart-empty-state"}">
-          <canvas id="revenueTrendChart"></canvas>
-          ${trendHasAnyData ? "" : `<div class="chart-empty-overlay">No billed service-period history is available yet.</div>`}
-        </div>
-      </div>
+      <!-- Recovery Workflow Performance Workflow Win Rate Avg Resolution Time Top Payer Leakage Time Saved -->
+      ${dashboardRecoveryPerformanceBlock}
 
       <div class="exec-card org-targets-card">
         <div class="org-targets-head">
@@ -66638,6 +66702,47 @@ if (process.env.TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS === "true" && (proc
 
 
 
+if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const sliceBetween = (startMarker, endMarker, label) => { const start = src.indexOf(startMarker); assert(start >= 0, "missing start marker for " + label + ": " + startMarker); const end = src.indexOf(endMarker, start + startMarker.length); assert(end > start, "missing end marker for " + label + ": " + endMarker); return src.slice(start, end); };
+  function extractFunctionBody(functionName){ const start = src.indexOf("function " + functionName); assert(start >= 0, "missing function for body extraction: " + functionName); const open = src.indexOf("{", start); let depth = 0; for (let i = open; i < src.length; i++) { if (src[i] === "{") depth += 1; if (src[i] === "}") depth -= 1; if (depth === 0) return src.slice(open + 1, i); } throw new Error("missing closing brace for: " + functionName); }
+  try {
+    ["PHASE_9A_UX13_DASHBOARD_EXECUTIVE_LAYOUT_REDUNDANCY_CLEANUP_OK", "PHASE_9A_UX12_DASHBOARD_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_POLISH_OK", "Executive Snapshot", "dashboard-executive-snapshot", "dashboard-status-pill", "Open Revenue Opportunity", "Collection Rate", "Work Needing Action", "Work to Do Today", "dashboardWorkNeedingActionCount", "dashboardOpenRevenueOpportunity", "dashboardCollectionRate", "tjhpDashboardStatusTone", "tjhpDashboardWorkCount", "Collections by Service Period", "Recovery Workflow Performance", "Revenue Recovery Insights legacy marker", "Organization Targets", "Plan Usage", "AI Copilot Uses", "AI Case Assistant Uses", "healthScoreDonut", "revenueTrendChart", "trend-range-shortcuts", "priorAuthWorkStrip", "Top claims to work today", "Upload Claim Data", "Upload Prior Auth Materials"].forEach(marker => assert(src.includes(marker), "missing UX13 marker: " + marker));
+    const dashboardSlice = sliceBetween('<h2 style="margin-bottom:4px;">Dashboard', "No EMR access", "dashboard page render");
+    const order = ["Executive Snapshot", "Collections by Service Period", "Work to Do Today", "Recovery Workflow Performance", "Organization Targets", "Plan Usage"];
+    const indexes = order.map(marker => { const idx = dashboardSlice.indexOf(marker); assert(idx >= 0, "missing dashboard order marker: " + marker); return idx; });
+    for (let i = 1; i < indexes.length; i++) assert(indexes[i - 1] < indexes[i], "dashboard order is wrong: " + order[i - 1] + " should precede " + order[i]);
+    assert(!dashboardSlice.includes('border-left:6px solid ${verdictColor}'), "standalone Financial Risk Elevated border block remains");
+    const executiveIdx = dashboardSlice.indexOf("Executive Snapshot");
+    const elevatedBeforeExecutiveIdx = dashboardSlice.indexOf("Financial Risk Elevated");
+    assert(elevatedBeforeExecutiveIdx === -1 || elevatedBeforeExecutiveIdx > executiveIdx, "Financial Risk Elevated appears before Executive Snapshot");
+    const healthMatches = dashboardSlice.match(/id="healthScoreDonut"/g) || [];
+    assert.strictEqual(healthMatches.length, 1, "dashboard must render exactly one healthScoreDonut canvas");
+    const chartSlice = sliceBetween("Collections by Service Period", "Work to Do Today", "Collections by Service Period card");
+    ["Collections by Service Period", "trend-range-shortcuts", "30 days", "60 days", "90 days", "All Time", "Billed", "Collected", "Remaining Gap", "Collection Rate", "revenueTrendChart", "tooltip:"].forEach(marker => assert(chartSlice.includes(marker) || src.includes(marker), "chart slice missing marker: " + marker));
+    const recoverySlice = sliceBetween("Recovery Workflow Performance", "Organization Targets", "Recovery Workflow Performance section");
+    ["Workflow Win Rate", "Avg Resolution Time", "Top Payer Leakage", "Time Saved"].forEach(marker => assert(recoverySlice.includes(marker), "recovery section missing: " + marker));
+    ['<p class="recovery-label">Revenue Found</p>', '<p class="recovery-label">Pending Recovery</p>'].forEach(forbidden => assert(!recoverySlice.includes(forbidden), "large duplicate recovery money card remains: " + forbidden));
+    const workSlice = sliceBetween("Work to Do Today", "Recovery Workflow Performance", "Work to Do Today section");
+    ["Top claims to work today", "Prior auth", "Denied", "Underpaid", "Follow-Up", "Open All At-Risk Work"].forEach(marker => assert(workSlice.includes(marker), "work section missing: " + marker));
+    assert(!workSlice.includes('<div class="priority-main-value">'), "dominant duplicate Revenue at Risk card remains");
+    ["tjhpDashboardStatusTone", "tjhpDashboardWorkCount"].forEach(fn => { const body = extractFunctionBody(fn); ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "savePriorAuthUploadRecord", "appendAuditLog", "ensureAgentWorkspace", "saveAgentWorkspace", "autoDraftWorkspaceForClaim", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "fetchEHRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", "automatic prior-auth submission", "method === \"POST\"", "parseBody(req)", "tjhpLinkPaymentToClaim", "tjhpSyncPaymentOnlyOperationalClaimsForOrg"].forEach(forbidden => assert(!body.includes(forbidden), fn + " contains forbidden mutation marker: " + forbidden)); });
+    ["TJHP_DASHBOARD_UX12_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_SMOKE_TESTS", "TJHP_DASHBOARD_UX11_LABEL_DONUT_COLLECTIONS_DATA_SMOKE_TESTS", "TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX9_DONUT_CHART_TARGETS_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX7_COLLECTIONS_AI_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS", "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS", "renderClaimPanelBootstrap", "claimSidePanel", "claimSidePanelBackdrop", "window.openClaimPanel", "data-open-claim-panel", "view-claim-btn", "renderPriorAuthActionCenterPanelBootstrap", "priorAuthSidePanel", "priorAuthSidePanelBackdrop", "window.openPriorAuthPanel", "view-prior-auth-btn"].forEach(marker => assert(src.includes(marker), "missing protected UX13 marker: " + marker));
+    assert.strictEqual(tjhpDashboardWorkCount([{claim_number:"1"}], { needs_action_count: 2 }), 3, "work count should include claims plus prior auth work");
+    assert.strictEqual(tjhpDashboardWorkCount([], { needs_action_count: 0 }), 0, "empty work count should be zero");
+    assert.strictEqual(tjhpDashboardStatusTone("Financial Risk Elevated", true).className, "risk", "elevated status should be risk");
+    assert.strictEqual(tjhpDashboardStatusTone("", false).className, "neutral", "no-data status should be neutral");
+    process.stdout.write("DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    const stack = err && err.stack ? err.stack : String(err);
+    process.stderr.write("DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
+
+
 if (process.env.TJHP_DASHBOARD_UX12_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
   const src = fs.readFileSync(__filename, "utf8");
@@ -66700,7 +66805,7 @@ if (process.env.TJHP_DASHBOARD_UX11_LABEL_DONUT_COLLECTIONS_DATA_SMOKE_TESTS ===
     assert(!dashboardHeaderSlice.includes("My Dashboard"), "visible dashboard header should not include My Dashboard");
     assert(!dashboardHeaderSlice.includes('<h2 style="margin-bottom:4px;">Revenue Overview'), "visible dashboard H2 should not include Revenue Overview");
     ["Revenue at Risk", "Revenue Recovery Insights", "Organization Targets", "AI Copilot Uses", "AI Case Assistant Uses", "TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX9_DONUT_CHART_TARGETS_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX7_COLLECTIONS_AI_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS", "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS", "renderClaimPanelBootstrap", "claimSidePanel", "claimSidePanelBackdrop", "window.openClaimPanel", "data-open-claim-panel", "view-claim-btn", "renderPriorAuthActionCenterPanelBootstrap", "priorAuthSidePanel", "priorAuthSidePanelBackdrop", "window.openPriorAuthPanel", "view-prior-auth-btn"].forEach(marker => assert(src.includes(marker), "missing protected UX11 marker: " + marker));
-    const healthSlice = sliceBetween('class="exec-card health-compact"', '<div class="health-driver-grid">', "Financial Health card");
+    const healthSlice = sliceBetween('class="dashboard-health-summary health-compact"', '<div class="health-driver-grid">', "Financial Health card");
     ["health-score-panel", "health-donut-wrap", "health-donut-center", "health-score-copy", "View Deeper Analysis"].forEach(marker => assert(healthSlice.includes(marker), "health slice missing: " + marker));
     assert(src.includes("align-items:center") && (src.includes("justify-content:center") || src.includes("place-items:center")), "health donut centering CSS missing");
     const chartBody = sliceBetween("function tjhpRevenueOverviewBuildCollectionSeries", "function tjhpRevenueOverviewAiUsageDisplayModel", "Collections by Service Period helper/body");
