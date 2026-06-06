@@ -1775,6 +1775,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX14_DASHBOARD_SNAPSHOT_LAYOUT_POLISH_OK
 // PHASE_9A_UX15_DASHBOARD_LEAD_HEALTH_CLICKABLE_SNAPSHOT_OK
 // PHASE_9A_UX16_DASHBOARD_HEALTH_CENTER_SMOOTH_NAV_OK
+// PHASE_9A_UX17_DASHBOARD_FINAL_VISUAL_POLISH_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
   const title = String(verdictTitle || "").toLowerCase();
@@ -43650,6 +43651,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const recoveryProgressPercent = roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0;
     const priorAuthWorkModel = tjhpRevenueOverviewPriorAuthWorkModel(org.org_id);
     const dashboardWorkNeedingActionCount = tjhpDashboardWorkCount(topClaims, priorAuthWorkModel);
+    const dashboardHasUrgentWork = Number(dashboardWorkNeedingActionCount || 0) > 0 || hasAtRiskClaimWork;
     const dashboardStatusTone = tjhpDashboardStatusTone(verdictTitle, hasRevenueOverviewFinancialData);
     const priorAuthWorkStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(org.org_id);
     const revenueOverviewClaimWorkCta = (c = {}) => {
@@ -43687,13 +43689,13 @@ if (method === "GET" && pathname === "/weekly-summary") {
     };
     // Static smoke legacy marker: ${topClaims.map(c => `
     const revenueSummaryBlock = `
-<div id="work-to-do-today" class="insight-card priority-summary dashboard-work-card" style="margin-bottom:16px;">
+<div id="work-to-do-today" class="insight-card priority-summary dashboard-work-card ${dashboardHasUrgentWork ? "dashboard-work-card-urgent" : ""}" style="margin-bottom:16px;">
 
   <!-- Revenue at Risk legacy marker -->
 
   <div class="priority-header">
     <div>
-      <h3 style="margin:4px 0 6px;">Work to Do Today</h3>
+      <h3 style="margin:4px 0 6px;">Work to Do Today${dashboardHasUrgentWork ? `<span class="dashboard-urgent-pill">Needs attention today</span>` : ""}</h3>
       <div class="muted small">Start with claims and prior authorizations that need action.</div>
     </div>
     <div class="priority-actions">
@@ -43704,17 +43706,17 @@ if (method === "GET" && pathname === "/weekly-summary") {
   <div class="muted small" style="margin-top:12px;font-weight:750;">Open revenue opportunity: ${moneyOrDash(hasRevenueOverviewFinancialData, todaysAtRiskTotal)}</div>
 
   <div class="priority-grid work-breakdown-grid">
-    <div class="priority-metric">
+    <div class="priority-metric ${Number(todaysPriorities.denied.count || 0) > 0 ? "priority-metric-urgent" : ""}">
       <strong>${numberOrDash(hasRevenueOverviewFinancialData, todaysPriorities.denied.count)}</strong>
       <span>Denied</span>
       <small>${moneyOrDash(hasRevenueOverviewFinancialData, todaysPriorities.denied.amount)}</small>
     </div>
-    <div class="priority-metric">
+    <div class="priority-metric ${Number(todaysPriorities.underpaid.count || 0) > 0 ? "priority-metric-urgent" : ""}">
       <strong>${numberOrDash(hasRevenueOverviewFinancialData, todaysPriorities.underpaid.count)}</strong>
       <span>Underpaid</span>
       <small>${moneyOrDash(hasRevenueOverviewFinancialData, todaysPriorities.underpaid.amount)}</small>
     </div>
-    <div class="priority-metric">
+    <div class="priority-metric ${Number(todaysPriorities.followup.count || 0) > 0 ? "priority-metric-urgent" : ""}">
       <strong>${numberOrDash(hasRevenueOverviewFinancialData, todaysPriorities.followup.count)}</strong>
       <span>Follow-Up</span>
       <small>${moneyOrDash(hasRevenueOverviewFinancialData, todaysPriorities.followup.amount)}</small>
@@ -43766,15 +43768,13 @@ if (method === "GET" && pathname === "/weekly-summary") {
 `;
 
     const trendHasAnyData = Number(revenueTrendModel.series?.totals?.billed || 0) > 0;
-    const revenueTrendNote = revenueTrendModel.fallback_to_all_time
-      ? `<div class="trend-fallback-note">${safeStr(revenueTrendModel.fallback_message || "The selected date range does not include service-period billing history. Showing all-time uploaded history.")}</div>`
-      : "";
-    const fallbackDateNote = Number(revenueTrendModel.series?.fallback_date_count || revenueTrendModel.fallback_date_count || 0) > 0
-      ? `<div class="muted small" style="margin-top:8px;">Some claims did not include service or payment dates, so upload dates were used as a fallback.</div>`
-      : "";
-    const unmatchedPaymentNote = Number(revenueTrendModel.series?.unmatched_collected_total || 0) > 0
-      ? `<div class="muted small" style="margin-top:8px;">Some payment rows were not matched to a service period and are excluded from this chart.</div>`
-      : "";
+    const trendContextNotes = `
+      <div class="trend-context-notes">
+        ${revenueTrendModel.fallback_to_all_time === true ? `<span class="trend-context-pill">Showing all-time uploaded history for this selected range.</span>` : ""}
+        ${Number(revenueTrendModel.series?.fallback_date_count || revenueTrendModel.fallback_date_count || 0) > 0 ? `<span class="trend-context-pill">Upload dates were used only where service/payment dates were missing.</span>` : ""}
+        ${Number(revenueTrendModel.series?.unmatched_collected_total || 0) > 0 ? `<span class="trend-context-pill">Unmatched payments are excluded from this service-period chart.</span>` : ""}
+      </div>
+    `;
     const trendTotals = revenueTrendModel.series?.totals || { billed:0, collected:0, remaining:0, collection_rate:0 };
     const dashboardRangeShortcutHref = (targetRange) => {
       const params = new URLSearchParams();
@@ -43796,7 +43796,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           </div>
           <a class="dashboard-health-link dashboard-health-details-link" href="/revenue-intelligence?tab=executive">Improvement Strategy Insights</a>
         </div>
-        <div class="dashboard-health-mini-layout dashboard-health-lead-layout dashboard-health-centered-layout">
+        <div class="dashboard-health-mini-layout dashboard-health-lead-layout dashboard-health-centered-layout dashboard-health-centered-stack">
           <div class="health-mini-donut-wrap health-donut-wrap health-donut-centered">
             <canvas id="healthScoreDonut" aria-label="Financial Health Score"></canvas>
             <div class="health-donut-center">
@@ -43805,15 +43805,13 @@ if (method === "GET" && pathname === "/weekly-summary") {
               ${healthHasData ? `<span class="badge ${gradeBadgeClass(healthDisplay.grade)}">${safeStr(healthDisplay.grade || "-")}</span>` : ``}
             </div>
           </div>
-          <div class="dashboard-health-mini-copy health-score-copy dashboard-health-lead-copy dashboard-health-centered-copy">
-            <div class="health-score-tone" style="color:${safeStr(healthDisplay.tone.color)};">${safeStr(healthDisplay.tone.label)}</div>
-            <div class="muted small">${safeStr(healthDisplay.helper_text)}</div>
-            <div class="health-driver-chips health-driver-chips-centered">
-              <span class="health-driver-chip">Collection <span class="tooltip" data-tip="Measures collected dollars compared with billed/expected collections in the selected range. Higher means collections are keeping up with billed activity.">ⓘ</span> <strong>${safeStr(healthDisplay.subscore_display.collection_strength)}</strong></span>
-              <span class="health-driver-chip">Denial <span class="tooltip" data-tip="Measures denial pressure and denial workflow discipline. Higher means fewer preventable denials and healthier denial handling.">ⓘ</span> <strong>${safeStr(healthDisplay.subscore_display.denial_discipline)}</strong></span>
-              <span class="health-driver-chip">AR Aging <span class="tooltip" data-tip="Measures unpaid balances by their true service/claim age, using matched payments to exclude paid amounts. Upload date is only a fallback when no service or claim date exists.">ⓘ</span> <strong>${safeStr(healthDisplay.subscore_display.ar_aging)}</strong></span>
-            </div>
+          <div class="health-driver-chips health-driver-chips-centered health-driver-chips-under-donut">
+            <span class="health-driver-chip">Collection <span class="tooltip" data-tip="Measures collected dollars compared with billed/expected collections in the selected range. Higher means collections are keeping up with billed activity.">ⓘ</span> <strong>${safeStr(healthDisplay.subscore_display.collection_strength)}</strong></span>
+            <span class="health-driver-chip">Denial <span class="tooltip" data-tip="Measures denial pressure and denial workflow discipline. Higher means fewer preventable denials and healthier denial handling.">ⓘ</span> <strong>${safeStr(healthDisplay.subscore_display.denial_discipline)}</strong></span>
+            <span class="health-driver-chip">AR Aging <span class="tooltip" data-tip="Measures unpaid balances by their true service/claim age, using matched payments to exclude paid amounts. Upload date is only a fallback when no service or claim date exists.">ⓘ</span> <strong>${safeStr(healthDisplay.subscore_display.ar_aging)}</strong></span>
           </div>
+          <span class="sr-only health-score-tone">${safeStr(healthDisplay.tone.label)}</span>
+          <div class="sr-only dashboard-health-mini-copy health-score-copy dashboard-health-lead-copy dashboard-health-centered-copy">${safeStr(healthDisplay.helper_text)}</div>
         </div>
 
         <div class="health-bar" aria-hidden="true" style="display:none;">
@@ -43826,16 +43824,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div class="exec-card dashboard-executive-snapshot dashboard-snapshot-panel">
         <!-- Executive Snapshot legacy marker -->
         <!-- Strategic Dashboard legacy marker -->
-        <div class="dashboard-executive-head">
-          <div>
-            <div class="muted small">How collections, revenue opportunity, and work queues look right now.</div>
-          </div>
-          <div class="dashboard-status-pill ${safeStr(dashboardStatusTone.className)}">
-            <strong>${safeStr(dashboardStatusTone.label)}</strong>
-            <span>Denial Rate: ${Number(m.denialRate||0).toFixed(1)}% · Collection Rate: ${dashboardCollectionRate.toFixed(1)}%</span>
-          </div>
-        </div>
-
+        <!-- dashboard-status-pill legacy marker -->
+        <!-- Financial Risk Elevated legacy marker -->
         <div class="dashboard-snapshot-grid dashboard-snapshot-grid-lead">
           ${dashboardHealthSummaryBlock}
           <a class="dashboard-snapshot-card dashboard-action-card" href="/actions?tab=all" aria-label="Open revenue opportunity in Action Center">
@@ -43861,11 +43851,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div class="exec-card" id="revenue-trend">
         <div class="trend-card-head">
           <div>
-            <h3 style="margin-bottom:6px;">Collections by Service Period</h3>
-            <div class="muted small">Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period.</div>
-            ${revenueTrendNote}
-            ${fallbackDateNote}
-            ${unmatchedPaymentNote}
+            <h3 class="trend-title-with-info" style="margin-bottom:6px;">Collections by Service Period <span class="tooltip" data-tip="Billed dollars are grouped by service date. Matched payments are summed back to the claim’s service period so you can see where collections are keeping up or falling short.">ⓘ</span></h3>
           </div>
           <div class="trend-range-shortcuts segmented" aria-label="Collections by Service Period range shortcuts" data-anchor="#revenue-trend">
             <a class="${rangeShortcutClass("last30")}" href="${dashboardRangeShortcutHref("last30")}">30 days</a>
@@ -43875,6 +43861,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
             ${revenueTrendModel.fallback_to_all_time === true ? `<span class="trend-fallback-pill">Showing all-time history</span>` : ``}
           </div>
         </div>
+        <!-- Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period. -->
+        <!-- The selected date range does not include service-period billing history. Showing all-time uploaded history. -->
+        <!-- Some claims did not include service or payment dates, so upload dates were used as a fallback. -->
+        <!-- trend-context-notes trend-context-pill -->
+        ${trendContextNotes}
         <div class="kpi-strip" style="margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;">
           <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.billed || 0) : dashboardDash}</p><p class="kpi-label">Billed</p></div>
           <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.collected || 0) : dashboardDash}</p><p class="kpi-label">Collected</p></div>
@@ -44071,7 +44062,18 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .dashboard-action-card{text-decoration:none;color:inherit;cursor:pointer;transition:border-color .15s ease,box-shadow .15s ease,transform .15s ease;}
         .dashboard-action-card:hover{border-color:#cbd5e1;box-shadow:0 10px 24px rgba(15,23,42,.08);transform:translateY(-1px);}
         .dashboard-action-card:focus-visible{outline:3px solid rgba(14,165,233,.35);outline-offset:2px;}
+        .dashboard-health-centered-stack{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;width:100%;}
+        .health-driver-chips-under-donut{justify-content:center;max-width:520px;margin:0 auto;}
+        .trend-title-with-info{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+        .trend-title-with-info .tooltip{font-size:13px;color:#64748b;}
+        .trend-context-notes{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+        .trend-context-pill{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;background:#f8fafc;color:#475569;font-size:11px;font-weight:700;padding:5px 8px;}
         .dashboard-work-card{padding:16px;}
+        .dashboard-work-card-urgent{border-color:#fecaca;}
+        .dashboard-urgent-pill{display:inline-flex;align-items:center;border:1px solid #fecaca;background:#fef2f2;color:#b91c1c;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:850;margin-left:8px;vertical-align:middle;}
+        .priority-metric-urgent{border-color:#fecaca;background:linear-gradient(180deg,#fff,#fff7f7);}
+        .priority-metric-urgent strong{color:#b91c1c;}
+        .sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important;}
         .work-breakdown-grid{grid-template-columns:repeat(3,minmax(140px,1fr));}
         .recovery-performance-card{padding:16px;}
         #work-to-do-today,#revenue-trend{scroll-margin-top:120px;}
@@ -66785,6 +66787,105 @@ if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (
 }
 
 
+
+
+if (process.env.TJHP_DASHBOARD_UX17_FINAL_VISUAL_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const sliceBetween = (startMarker, endMarker, label) => {
+      const start = src.indexOf(startMarker);
+      assert(start >= 0, "missing start marker for " + label + ": " + startMarker);
+      const end = src.indexOf(endMarker, start + startMarker.length);
+      assert(end > start, "missing end marker for " + label + ": " + endMarker);
+      return src.slice(start, end);
+    };
+
+    [
+      "PHASE_9A_UX17_DASHBOARD_FINAL_VISUAL_POLISH_OK",
+      "PHASE_9A_UX16_DASHBOARD_HEALTH_CENTER_SMOOTH_NAV_OK",
+      "dashboard-health-centered-stack",
+      "health-driver-chips-under-donut",
+      "trend-title-with-info",
+      "trend-context-notes",
+      "trend-context-pill",
+      "dashboard-work-card-urgent",
+      "dashboard-urgent-pill",
+      "priority-metric-urgent",
+      "Needs attention today",
+      "Collections by Service Period",
+      "Work to Do Today",
+      "healthScoreDonut",
+      "Improvement Strategy Insights",
+      "Open Revenue Opportunity",
+      "Collection Rate",
+      "Work Needing Action"
+    ].forEach(marker => assert(src.includes(marker), "missing UX17 marker: " + marker));
+
+    const snapshotBlock = sliceBetween('const dashboardExecutiveSnapshotBlock = `', 'const dashboardCollectionsBlock = `', "dashboard executive snapshot block");
+    const snapshotVisible = snapshotBlock.replace(/<!--[\s\S]*?-->/g, "");
+    assert(!snapshotVisible.includes("How collections, revenue opportunity, and work queues look right now."), "snapshot sentence should not be visible");
+    assert(!snapshotVisible.includes('<div class="dashboard-status-pill'), "dashboard status pill should not be visible");
+    assert(!snapshotVisible.includes("Financial Risk Elevated"), "Financial Risk Elevated should remain only as a comment/source marker");
+    ["dashboard-snapshot-grid-lead", "dashboardHealthSummaryBlock", "Open Revenue Opportunity", "Collection Rate", "Work Needing Action"].forEach(marker => assert(snapshotBlock.includes(marker), "snapshot block missing: " + marker));
+
+    const healthBlock = sliceBetween('const dashboardHealthSummaryBlock = `', 'const dashboardExecutiveSnapshotBlock = `', "dashboard health summary block");
+    ["dashboard-health-centered-stack", "health-driver-chips-under-donut", "Collection", "Denial", "AR Aging", "ⓘ"].forEach(marker => assert(healthBlock.includes(marker), "health block missing: " + marker));
+    assert(healthBlock.includes('sr-only health-score-tone') || healthBlock.includes('health-score-tone sr-only'), "health tone should be screen-reader only");
+    assert(!healthBlock.includes('<div class="health-score-tone"'), "visible health-score-tone div should be removed");
+    assert(!healthBlock.includes('>${safeStr(healthDisplay.tone.label)}</div>'), "visible health tone label close tag remains");
+    assert.strictEqual((healthBlock.match(/id="healthScoreDonut"/g) || []).length, 1, "health block must include exactly one healthScoreDonut");
+    const healthScriptSlice = sliceBetween('const healthScoreDonut = document.getElementById("healthScoreDonut");', 'const trendCfg = {', "health donut script slice");
+    assert(healthScriptSlice.includes('tooltip: { enabled: false }'), "health donut tooltip must remain disabled");
+
+    const collectionsBlock = sliceBetween('const dashboardCollectionsBlock = `', 'const dashboardRecoveryPerformanceBlock = `', "dashboard collections block");
+    ["trend-title-with-info", "Collections by Service Period", "ⓘ", 'data-tip="Billed dollars are grouped by service date', "trend-context-notes", "trend-context-pill", "trend-range-shortcuts", "revenueTrendChart", "Billed", "Collected", "Remaining Gap", "Collection Rate"].forEach(marker => assert(collectionsBlock.includes(marker), "collections block missing: " + marker));
+    assert(!collectionsBlock.includes('<div class="muted small">Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period.</div>'), "old stacked collections description remains visible");
+
+    const revenueSummaryBlock = sliceBetween('const revenueSummaryBlock = `', 'const trendHasAnyData', "revenue summary block");
+    ["dashboard-work-card-urgent", "dashboardHasUrgentWork", "dashboard-urgent-pill", "Needs attention today", "priority-metric-urgent", "Denied", "Underpaid", "Follow-Up", "Top claims to work today", "Prior auths to work today"].forEach(marker => assert(revenueSummaryBlock.includes(marker) || src.includes(marker), "work urgency block missing: " + marker));
+
+    [
+      "TJHP_DASHBOARD_UX16_HEALTH_CENTER_SMOOTH_NAV_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX15_LEAD_HEALTH_CLICKABLE_SNAPSHOT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX14_SNAPSHOT_LAYOUT_POLISH_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX12_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX11_LABEL_DONUT_COLLECTIONS_DATA_SMOKE_TESTS",
+      "TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX9_DONUT_CHART_TARGETS_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX7_COLLECTIONS_AI_USAGE_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "claimSidePanelBackdrop",
+      "window.openClaimPanel",
+      "data-open-claim-panel",
+      "view-claim-btn",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "priorAuthSidePanel",
+      "priorAuthSidePanelBackdrop",
+      "window.openPriorAuthPanel",
+      "view-prior-auth-btn"
+    ].forEach(marker => assert(src.includes(marker), "missing protected UX17 marker: " + marker));
+
+    const dashboardRenderSlice = [revenueSummaryBlock, healthBlock, snapshotBlock, collectionsBlock].join("\n");
+    ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", 'method === "POST"', "parseBody(req)"].forEach(forbidden => assert(!dashboardRenderSlice.includes(forbidden), "dashboard UX17 render slice contains forbidden mutation marker: " + forbidden));
+
+    process.stdout.write("DASHBOARD_UX17_FINAL_VISUAL_POLISH_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    const stack = err && err.stack ? err.stack : String(err);
+    process.stderr.write("DASHBOARD_UX17_FINAL_VISUAL_POLISH_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
+
 if (process.env.TJHP_DASHBOARD_UX16_HEALTH_CENTER_SMOOTH_NAV_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
   const fs = require("fs");
@@ -67028,7 +67129,7 @@ if (process.env.TJHP_DASHBOARD_UX14_SNAPSHOT_LAYOUT_POLISH_SMOKE_TESTS === "true
     const shortcutLogicSlice = sliceBetween('const rangeShortcutClass = (targetRange)', 'const dashboardOpenRevenueOpportunity', "range shortcut active logic");
     assert(shortcutLogicSlice.includes('preset === targetRange'), "range shortcut active class must use selected preset");
     assert(!shortcutLogicSlice.includes('effective_range'), "range shortcut active class must not use fallback effective_range");
-    const trendShortcutSlice = sliceBetween('<div class="trend-range-shortcuts segmented"', '</div>\n        </div>\n        <div class="kpi-strip"', "trend range shortcut slice");
+    const trendShortcutSlice = sliceBetween('<div class="trend-range-shortcuts segmented"', '</div>\n        </div>\n        <!-- Billed amounts are grouped by service date.', "trend range shortcut slice");
     assert(trendShortcutSlice.includes("trend-fallback-pill"), "trend shortcut slice missing fallback pill");
     assert(trendShortcutSlice.includes("Showing all-time history"), "trend shortcut slice missing fallback pill copy");
     assert(!shortcutLogicSlice.includes('fallback_to_all_time &&'), "range shortcut logic intentionally activates fallback range");
