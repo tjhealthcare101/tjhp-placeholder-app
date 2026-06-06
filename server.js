@@ -1776,6 +1776,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX15_DASHBOARD_LEAD_HEALTH_CLICKABLE_SNAPSHOT_OK
 // PHASE_9A_UX16_DASHBOARD_HEALTH_CENTER_SMOOTH_NAV_OK
 // PHASE_9A_UX17_DASHBOARD_FINAL_VISUAL_POLISH_OK
+// PHASE_9A_UX18_DASHBOARD_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
   const title = String(verdictTitle || "").toLowerCase();
@@ -43651,6 +43652,22 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const recoveryProgressPercent = roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0;
     const priorAuthWorkModel = tjhpRevenueOverviewPriorAuthWorkModel(org.org_id);
     const dashboardWorkNeedingActionCount = tjhpDashboardWorkCount(topClaims, priorAuthWorkModel);
+    const dashboardHasAnyOperationalData =
+      hasRevenueOverviewFinancialData ||
+      Number(priorAuthWorkModel.total_cases || 0) > 0;
+    const dashboardHealthCtaIsUpload = healthHasData !== true;
+    const dashboardHealthCtaHref = dashboardHealthCtaIsUpload
+      ? "/data-management?tab=upload&dm_upload_type=auto#dm-drop"
+      : "/revenue-intelligence?tab=executive";
+    const dashboardHealthCtaLabel = dashboardHealthCtaIsUpload
+      ? "Upload Data"
+      : "Improvement Strategy Insights";
+    const dashboardHealthCtaHelp = dashboardHealthCtaIsUpload
+      ? "Upload claims and payments to calculate your score →"
+      : "";
+    const dashboardWorkNeedingActionDisplay = dashboardHasAnyOperationalData
+      ? formatNumberUI(dashboardWorkNeedingActionCount)
+      : dashboardDash;
     const dashboardHasUrgentWork = Number(dashboardWorkNeedingActionCount || 0) > 0 || hasAtRiskClaimWork;
     const dashboardStatusTone = tjhpDashboardStatusTone(verdictTitle, hasRevenueOverviewFinancialData);
     const priorAuthWorkStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(org.org_id);
@@ -43794,7 +43811,14 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <div class="dashboard-snapshot-label">Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, AR aging, and AI Case Readiness. Higher is better.">ⓘ</span></div>
             <div class="dashboard-snapshot-sub">Collections, denials, AR aging, and workflow readiness.</div>
           </div>
-          <a class="dashboard-health-link dashboard-health-details-link" href="/revenue-intelligence?tab=executive">Improvement Strategy Insights</a>
+          <!-- Dashboard health CTA options: Upload Data /data-management?tab=upload&dm_upload_type=auto#dm-drop | Improvement Strategy Insights /revenue-intelligence?tab=executive -->
+          <div class="dashboard-health-cta-wrap">
+            <a
+              class="dashboard-health-link dashboard-health-details-link ${dashboardHealthCtaIsUpload ? "dashboard-health-upload-cta" : ""}"
+              href="${dashboardHealthCtaHref}"
+            >${safeStr(dashboardHealthCtaLabel)}</a>
+            ${dashboardHealthCtaHelp ? `<div class="dashboard-health-upload-nudge">${safeStr(dashboardHealthCtaHelp)}</div>` : ""}
+          </div>
         </div>
         <div class="dashboard-health-mini-layout dashboard-health-lead-layout dashboard-health-centered-layout dashboard-health-centered-stack">
           <div class="health-mini-donut-wrap health-donut-wrap health-donut-centered">
@@ -43839,7 +43863,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <div class="dashboard-snapshot-sub">View service-period collection performance.</div>
           </a>
           <a class="dashboard-snapshot-card dashboard-action-card dashboard-smooth-anchor" href="#work-to-do-today" data-dashboard-scroll-target="#work-to-do-today" aria-label="Jump to Work to Do Today">
-            <div class="dashboard-snapshot-value">${formatNumberUI(dashboardWorkNeedingActionCount)}</div>
+            <div class="dashboard-snapshot-value">${dashboardWorkNeedingActionDisplay}</div>
             <div class="dashboard-snapshot-label">Work Needing Action</div>
             <div class="dashboard-snapshot-sub">Jump to claims and prior auth work.</div>
           </a>
@@ -44055,6 +44079,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .dashboard-health-lead .health-score-tone{text-align:center;}
         .dashboard-health-link{font-size:12px;font-weight:800;white-space:nowrap;color:#111827;text-decoration:underline;text-underline-offset:3px;}
         .dashboard-health-details-link{font-size:12px;font-weight:800;white-space:nowrap;color:#111827;text-decoration:underline;text-underline-offset:3px;}
+        .dashboard-health-cta-wrap{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
+        .dashboard-health-upload-cta{display:inline-flex;align-items:center;justify-content:center;border:1px solid #0f172a;background:#0f172a;color:#fff;border-radius:10px;padding:7px 10px;text-decoration:none;font-weight:850;}
+        .dashboard-health-upload-cta:hover{color:#fff;box-shadow:0 10px 22px rgba(15,23,42,.12);transform:translateY(-1px);}
+        .dashboard-health-upload-nudge{color:#64748b;font-size:11px;font-weight:750;line-height:1.25;max-width:220px;text-align:right;}
         .health-driver-chips{display:flex;gap:6px;flex-wrap:wrap;}
         .health-driver-chip{border:1px solid var(--border);border-radius:999px;background:#fff;padding:5px 8px;font-size:11px;color:#475569;}
         .health-driver-chip .tooltip{font-size:11px;color:#64748b;margin-left:3px;}
@@ -44178,7 +44206,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         @media (max-width: 1100px){.dashboard-snapshot-grid-balanced{grid-template-columns:repeat(2,minmax(0,1fr));}}
         @media (max-width: 900px){.dashboard-snapshot-grid-lead{grid-template-columns:1fr;}.dashboard-health-lead{grid-column:auto;}}
         @media (max-width: 960px){.dashboard-snapshot-grid{grid-template-columns:1fr 1fr;}.dashboard-health-summary{grid-row:auto;}}
-        @media (max-width: 760px){.dashboard-executive-head{flex-direction:column;}.dashboard-status-pill{border-radius:14px;width:100%;}.dashboard-snapshot-grid,.dashboard-snapshot-grid-balanced{grid-template-columns:1fr;}.dashboard-health-mini-layout{align-items:flex-start;}.priority-grid,.work-breakdown-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row-actions{width:100%;justify-content:stretch;}.priority-claim-row-actions .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}.health-card-head .btn{width:100%;margin-left:0;}.health-score-panel{text-align:center;}.health-donut-wrap{width:160px;height:160px;}.health-donut-wrap canvas{width:160px!important;height:160px!important;}.health-mini-donut-wrap{width:118px;height:118px;}.health-mini-donut-wrap canvas{width:118px!important;height:118px!important;}.trend-range-shortcuts.segmented{margin-left:0;width:100%;}.trend-range-shortcuts .btn{flex:1;justify-content:center;}.trend-fallback-pill{margin-left:0;}}
+        @media (max-width: 760px){.dashboard-executive-head{flex-direction:column;}.dashboard-status-pill{border-radius:14px;width:100%;}.dashboard-snapshot-grid,.dashboard-snapshot-grid-balanced{grid-template-columns:1fr;}.dashboard-health-cta-wrap{align-items:flex-start;}.dashboard-health-upload-nudge{text-align:left;}.dashboard-health-mini-layout{align-items:flex-start;}.priority-grid,.work-breakdown-grid{grid-template-columns:1fr}.priority-actions .btn{width:100%;}.priority-empty-action-line{align-items:flex-start;flex-direction:column;gap:4px;}.priority-claim-row{align-items:flex-start;flex-direction:column;}.priority-claim-row-actions{width:100%;justify-content:stretch;}.priority-claim-row-actions .btn{width:100%;}.prior-auth-work-head{flex-direction:column;}.prior-auth-work-actions,.prior-auth-work-actions .btn{width:100%;}.prior-auth-work-row-actions{width:100%;justify-content:stretch;}.prior-auth-work-row-actions .btn{width:100%;}.prior-auth-work-revenue .muted{display:block;margin-left:0;margin-top:3px;}.prior-auth-work-next{white-space:normal;}.health-card-head .btn{width:100%;margin-left:0;}.health-score-panel{text-align:center;}.health-donut-wrap{width:160px;height:160px;}.health-donut-wrap canvas{width:160px!important;height:160px!important;}.health-mini-donut-wrap{width:118px;height:118px;}.health-mini-donut-wrap canvas{width:118px!important;height:118px!important;}.trend-range-shortcuts.segmented{margin-left:0;width:100%;}.trend-range-shortcuts .btn{flex:1;justify-content:center;}.trend-fallback-pill{margin-left:0;}}
       </style>
 
       <!-- dashboard-snapshot-panel Executive Snapshot legacy marker Strategic Dashboard legacy marker Financial Health Score Open Revenue Opportunity Collection Rate Work Needing Action id="healthScoreDonut" -->
@@ -66786,6 +66814,130 @@ if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (
   }
 }
 
+
+
+
+if (process.env.TJHP_DASHBOARD_UX18_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const sliceBetween = (startMarker, endMarker, label) => {
+    const start = src.indexOf(startMarker);
+    assert(start >= 0, "missing start marker for " + label + ": " + startMarker);
+    const end = src.indexOf(endMarker, start + startMarker.length);
+    assert(end > start, "missing end marker for " + label + ": " + endMarker);
+    return src.slice(start, end);
+  };
+  try {
+    [
+      "PHASE_9A_UX18_DASHBOARD_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_OK",
+      "PHASE_9A_UX17_DASHBOARD_FINAL_VISUAL_POLISH_OK",
+      "dashboardHasAnyOperationalData",
+      "dashboardHealthCtaIsUpload",
+      "dashboardHealthCtaHref",
+      "dashboardHealthCtaLabel",
+      "dashboardHealthCtaHelp",
+      "dashboardWorkNeedingActionDisplay",
+      "Upload Data",
+      "Upload claims and payments to calculate your score",
+      "/data-management?tab=upload&dm_upload_type=auto#dm-drop",
+      "Improvement Strategy Insights",
+      "/revenue-intelligence?tab=executive",
+      "dashboard-health-cta-wrap",
+      "dashboard-health-upload-cta",
+      "dashboard-health-upload-nudge",
+      "Work Needing Action",
+      "dashboardDash",
+      "formatNumberUI(dashboardWorkNeedingActionCount)"
+    ].forEach(marker => assert(src.includes(marker), "missing UX18 marker: " + marker));
+
+    const healthBlock = sliceBetween('const dashboardHealthSummaryBlock = `', 'const dashboardExecutiveSnapshotBlock = `', "dashboard health summary block");
+    [
+      "dashboardHealthCtaHref",
+      "dashboardHealthCtaLabel",
+      "dashboardHealthCtaHelp",
+      "dashboard-health-upload-cta",
+      "dashboard-health-upload-nudge",
+      "/data-management?tab=upload&dm_upload_type=auto#dm-drop",
+      "/revenue-intelligence?tab=executive",
+      "Upload Data",
+      "Improvement Strategy Insights"
+    ].forEach(marker => assert(healthBlock.includes(marker), "health CTA block missing: " + marker));
+    assert(!healthBlock.includes('<a class="dashboard-health-details-link" href="/revenue-intelligence?tab=executive">Improvement Strategy Insights</a>'), "health CTA must not be a hardcoded Improvement Strategy Insights-only anchor");
+
+    const snapshotBlock = sliceBetween('const dashboardExecutiveSnapshotBlock = `', 'const dashboardCollectionsBlock = `', "dashboard executive snapshot block");
+    assert(snapshotBlock.includes("dashboardWorkNeedingActionDisplay"), "Work Needing Action value should use dashboardWorkNeedingActionDisplay");
+    assert(!snapshotBlock.includes('${formatNumberUI(dashboardWorkNeedingActionCount)}'), "Work Needing Action visible value should not directly format dashboardWorkNeedingActionCount");
+    assert(snapshotBlock.includes('moneyOrDash(hasRevenueOverviewFinancialData, dashboardOpenRevenueOpportunity)'), "Open Revenue Opportunity data guard changed");
+    assert(snapshotBlock.includes('hasRevenueOverviewFinancialData ? dashboardCollectionRate.toFixed(1) + "%" : dashboardDash'), "Collection Rate data guard changed");
+    assert(snapshotBlock.includes('href="/actions?tab=all"'), "Open Revenue Opportunity link changed");
+    assert(snapshotBlock.includes('data-dashboard-scroll-target="#revenue-trend"'), "Collection Rate scroll target changed");
+    assert(snapshotBlock.includes('data-dashboard-scroll-target="#work-to-do-today"'), "Work Needing Action scroll target changed");
+
+    [
+      'id="dm-drop"',
+      "dm_upload_type",
+      "allowedUploadTypes",
+      "#dm-drop",
+      'dz.scrollIntoView({ behavior: "smooth", block: "center" })'
+    ].forEach(marker => assert(src.includes(marker), "missing Data Management deep-link marker: " + marker));
+
+    const renderDisplaySlice = sliceBetween('const dashboardHasAnyOperationalData =', 'const dashboardHasUrgentWork =', "UX18 display-only dashboard variables");
+    [
+      "writeJSON",
+      "saveUsage",
+      "savePriorAuthCasesForOrg",
+      "upsertPriorAuthCase",
+      "appendAuditLog",
+      "ensureAgentWorkspace",
+      "requestOpenAIChatCompletion",
+      "fetchFHIRDocuments",
+      "scrapePortal",
+      "routePacket",
+      "submitPacket",
+      "OCR",
+      "payer portal submission",
+      'method === "POST"',
+      "parseBody(req)"
+    ].forEach(forbidden => assert(!renderDisplaySlice.includes(forbidden), "UX18 display-only variables contain forbidden mutation marker: " + forbidden));
+
+    [
+      "TJHP_DASHBOARD_UX17_FINAL_VISUAL_POLISH_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX16_HEALTH_CENTER_SMOOTH_NAV_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX15_LEAD_HEALTH_CLICKABLE_SNAPSHOT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX14_SNAPSHOT_LAYOUT_POLISH_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX12_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX11_LABEL_DONUT_COLLECTIONS_DATA_SMOKE_TESTS",
+      "TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX9_DONUT_CHART_TARGETS_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX7_COLLECTIONS_AI_USAGE_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "claimSidePanelBackdrop",
+      "window.openClaimPanel",
+      "data-open-claim-panel",
+      "view-claim-btn",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "priorAuthSidePanel",
+      "priorAuthSidePanelBackdrop",
+      "window.openPriorAuthPanel",
+      "view-prior-auth-btn"
+    ].forEach(marker => assert(src.includes(marker), "missing protected UX18 marker: " + marker));
+
+    process.stdout.write("DASHBOARD_UX18_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    const stack = err && err.stack ? err.stack : String(err);
+    process.stderr.write("DASHBOARD_UX18_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
 
 
 
