@@ -1774,6 +1774,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX13_DASHBOARD_EXECUTIVE_LAYOUT_REDUNDANCY_CLEANUP_OK
 // PHASE_9A_UX14_DASHBOARD_SNAPSHOT_LAYOUT_POLISH_OK
 // PHASE_9A_UX15_DASHBOARD_LEAD_HEALTH_CLICKABLE_SNAPSHOT_OK
+// PHASE_9A_UX16_DASHBOARD_HEALTH_CENTER_SMOOTH_NAV_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
   const title = String(verdictTitle || "").toLowerCase();
@@ -43793,10 +43794,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <div class="dashboard-snapshot-label">Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, AR aging, and AI Case Readiness. Higher is better.">ⓘ</span></div>
             <div class="dashboard-snapshot-sub">Collections, denials, AR aging, and workflow readiness.</div>
           </div>
-          <a class="dashboard-health-link dashboard-health-details-link" href="/revenue-intelligence?tab=executive">Details</a>
+          <a class="dashboard-health-link dashboard-health-details-link" href="/revenue-intelligence?tab=executive">Improvement Strategy Insights</a>
         </div>
-        <div class="dashboard-health-mini-layout dashboard-health-lead-layout">
-          <div class="health-mini-donut-wrap health-donut-wrap">
+        <div class="dashboard-health-mini-layout dashboard-health-lead-layout dashboard-health-centered-layout">
+          <div class="health-mini-donut-wrap health-donut-wrap health-donut-centered">
             <canvas id="healthScoreDonut" aria-label="Financial Health Score"></canvas>
             <div class="health-donut-center">
               <strong>${safeStr(healthDisplay.score_text)}</strong>
@@ -43804,10 +43805,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
               ${healthHasData ? `<span class="badge ${gradeBadgeClass(healthDisplay.grade)}">${safeStr(healthDisplay.grade || "-")}</span>` : ``}
             </div>
           </div>
-          <div class="dashboard-health-mini-copy health-score-copy dashboard-health-lead-copy">
+          <div class="dashboard-health-mini-copy health-score-copy dashboard-health-lead-copy dashboard-health-centered-copy">
             <div class="health-score-tone" style="color:${safeStr(healthDisplay.tone.color)};">${safeStr(healthDisplay.tone.label)}</div>
             <div class="muted small">${safeStr(healthDisplay.helper_text)}</div>
-            <div class="health-driver-chips">
+            <div class="health-driver-chips health-driver-chips-centered">
               <span class="health-driver-chip">Collection <span class="tooltip" data-tip="Measures collected dollars compared with billed/expected collections in the selected range. Higher means collections are keeping up with billed activity.">ⓘ</span> <strong>${safeStr(healthDisplay.subscore_display.collection_strength)}</strong></span>
               <span class="health-driver-chip">Denial <span class="tooltip" data-tip="Measures denial pressure and denial workflow discipline. Higher means fewer preventable denials and healthier denial handling.">ⓘ</span> <strong>${safeStr(healthDisplay.subscore_display.denial_discipline)}</strong></span>
               <span class="health-driver-chip">AR Aging <span class="tooltip" data-tip="Measures unpaid balances by their true service/claim age, using matched payments to exclude paid amounts. Upload date is only a fallback when no service or claim date exists.">ⓘ</span> <strong>${safeStr(healthDisplay.subscore_display.ar_aging)}</strong></span>
@@ -43842,12 +43843,12 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <div class="dashboard-snapshot-label">Open Revenue Opportunity</div>
             <div class="dashboard-snapshot-sub">Open at-risk work in Action Center.</div>
           </a>
-          <a class="dashboard-snapshot-card dashboard-action-card" href="#revenue-trend" aria-label="View Collections by Service Period">
+          <a class="dashboard-snapshot-card dashboard-action-card dashboard-smooth-anchor" href="#revenue-trend" data-dashboard-scroll-target="#revenue-trend" aria-label="View Collections by Service Period">
             <div class="dashboard-snapshot-value">${hasRevenueOverviewFinancialData ? dashboardCollectionRate.toFixed(1) + "%" : dashboardDash}</div>
             <div class="dashboard-snapshot-label">Collection Rate</div>
             <div class="dashboard-snapshot-sub">View service-period collection performance.</div>
           </a>
-          <a class="dashboard-snapshot-card dashboard-action-card" href="#work-to-do-today" aria-label="Jump to Work to Do Today">
+          <a class="dashboard-snapshot-card dashboard-action-card dashboard-smooth-anchor" href="#work-to-do-today" data-dashboard-scroll-target="#work-to-do-today" aria-label="Jump to Work to Do Today">
             <div class="dashboard-snapshot-value">${formatNumberUI(dashboardWorkNeedingActionCount)}</div>
             <div class="dashboard-snapshot-label">Work Needing Action</div>
             <div class="dashboard-snapshot-sub">Jump to claims and prior auth work.</div>
@@ -44045,15 +44046,22 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .dashboard-snapshot-sub{font-size:12px;color:var(--muted);line-height:1.35;margin-top:5px;}
         .dashboard-health-summary{border:1px solid var(--border);border-radius:14px;background:#fff;padding:14px;grid-row:auto;}
         .dashboard-health-card-compact{display:flex;flex-direction:column;gap:12px;justify-content:flex-start;}
-        .dashboard-health-lead{grid-column:1 / -1;min-height:auto;}
+        .dashboard-health-lead{grid-column:1 / -1;min-height:auto;align-items:stretch;}
         .dashboard-health-card-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;}
+        .dashboard-health-lead .dashboard-health-card-head{width:100%;}
+        .dashboard-health-lead .dashboard-snapshot-sub{max-width:420px;}
         .dashboard-health-mini-layout{display:flex;align-items:center;gap:12px;}
         .dashboard-health-lead-layout{display:flex;align-items:center;gap:16px;flex-wrap:wrap;}
+        .dashboard-health-centered-layout{justify-content:center;align-items:center;text-align:center;flex-direction:column;gap:10px;}
         .health-mini-donut-wrap{width:118px;height:118px;position:relative;display:grid;place-items:center;flex:0 0 auto;margin:0;}
+        .health-donut-centered{margin:0 auto;}
         .health-mini-donut-wrap canvas{width:118px!important;height:118px!important;}
         .health-mini-donut-wrap .health-donut-center strong{font-size:24px;}
         .dashboard-health-mini-copy{display:flex;flex-direction:column;gap:8px;min-width:0;align-items:flex-start;text-align:left;}
         .dashboard-health-lead-copy{display:flex;flex-direction:column;gap:8px;min-width:220px;flex:1;}
+        .dashboard-health-centered-copy{align-items:center;text-align:center;min-width:0;width:100%;}
+        .health-driver-chips-centered{justify-content:center;}
+        .dashboard-health-lead .health-score-tone{text-align:center;}
         .dashboard-health-link{font-size:12px;font-weight:800;white-space:nowrap;color:#111827;text-decoration:underline;text-underline-offset:3px;}
         .dashboard-health-details-link{font-size:12px;font-weight:800;white-space:nowrap;color:#111827;text-decoration:underline;text-underline-offset:3px;}
         .health-driver-chips{display:flex;gap:6px;flex-wrap:wrap;}
@@ -44232,6 +44240,20 @@ window.__DASHBOARD__ = {
   statusCounts: JSON.parse(atob("${statusB64}"))
 };
 document.addEventListener("DOMContentLoaded", function(){
+  document.addEventListener("click", function(event){
+    const link = event.target.closest("a[data-dashboard-scroll-target]");
+    if (!link) return;
+    const selector = link.getAttribute("data-dashboard-scroll-target");
+    if (!selector || selector.charAt(0) !== "#") return;
+    const target = document.querySelector(selector);
+    if (!target) return;
+    event.preventDefault();
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (window.history && window.history.pushState) {
+      window.history.pushState(null, "", selector);
+    }
+  });
+
   const d = window.__DASHBOARD__ || {};
   const hasChart = !!window.Chart;
   if (!hasChart) return;
@@ -66762,6 +66784,128 @@ if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (
   }
 }
 
+
+if (process.env.TJHP_DASHBOARD_UX16_HEALTH_CENTER_SMOOTH_NAV_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const fs = require("fs");
+  const src = fs.readFileSync(__filename, "utf8");
+  const sliceBetween = (startMarker, endMarker, label) => {
+    const start = src.indexOf(startMarker);
+    assert(start >= 0, "missing start marker for " + label + ": " + startMarker);
+    const end = src.indexOf(endMarker, start + startMarker.length);
+    assert(end > start, "missing end marker for " + label + ": " + endMarker);
+    return src.slice(start, end);
+  };
+  const sliceCard = (block, label) => {
+    const labelMarker = `<div class="dashboard-snapshot-label">${label}`;
+    const start = block.indexOf(labelMarker);
+    assert(start >= 0, "missing snapshot card label: " + label);
+    const anchorStart = block.lastIndexOf("<a", start);
+    const anchorEnd = block.indexOf("</a>", start);
+    assert(anchorStart >= 0 && anchorEnd > start, "missing snapshot card anchor bounds for: " + label);
+    return block.slice(anchorStart, anchorEnd + 4);
+  };
+  try {
+    [
+      "PHASE_9A_UX16_DASHBOARD_HEALTH_CENTER_SMOOTH_NAV_OK",
+      "PHASE_9A_UX15_DASHBOARD_LEAD_HEALTH_CLICKABLE_SNAPSHOT_OK",
+      "Improvement Strategy Insights",
+      "dashboard-health-centered-layout",
+      "health-donut-centered",
+      "dashboard-health-centered-copy",
+      "health-driver-chips-centered",
+      "dashboard-smooth-anchor",
+      'data-dashboard-scroll-target="#revenue-trend"',
+      'data-dashboard-scroll-target="#work-to-do-today"',
+      'scrollIntoView({ behavior: "smooth", block: "start" })',
+      "window.history.pushState",
+      'href="/actions?tab=all"',
+      'href="#revenue-trend"',
+      'href="#work-to-do-today"',
+      'id="work-to-do-today"',
+      'id="revenue-trend"',
+      "healthScoreDonut",
+      "Collection",
+      "Denial",
+      "AR Aging",
+      "Work to Do Today",
+      "Collections by Service Period"
+    ].forEach(marker => assert(src.includes(marker), "missing UX16 marker: " + marker));
+
+    const healthBlock = sliceBetween('const dashboardHealthSummaryBlock = `', 'const dashboardExecutiveSnapshotBlock = `', "dashboard health summary block");
+    assert(healthBlock.includes("Improvement Strategy Insights"), "health block missing Improvement Strategy Insights");
+    assert(!healthBlock.includes(">Details</a>"), "health block should not include visible Details link");
+    ["dashboard-health-centered-layout", "health-donut-centered", "dashboard-health-centered-copy", "health-driver-chips-centered", 'id="healthScoreDonut"'].forEach(marker => assert(healthBlock.includes(marker), "health block missing: " + marker));
+    assert.strictEqual((healthBlock.match(/id="healthScoreDonut"/g) || []).length, 1, "health block should include exactly one healthScoreDonut");
+    ["Collection", "Denial", "AR Aging"].forEach(label => {
+      const chipStart = healthBlock.indexOf(label);
+      assert(chipStart >= 0, "missing health chip label: " + label);
+      const chipSlice = healthBlock.slice(chipStart, chipStart + 520);
+      assert(chipSlice.includes("ⓘ"), "health chip missing visible info icon: " + label);
+    });
+    const healthDonutScriptSlice = sliceBetween('const healthScoreDonut = document.getElementById("healthScoreDonut");', 'const trendCfg = {', "health donut script slice");
+    assert(healthDonutScriptSlice.includes('tooltip: { enabled: false }'), "health donut tooltip should remain disabled");
+
+    const snapshotBlock = sliceBetween('const dashboardExecutiveSnapshotBlock = `', 'const dashboardCollectionsBlock = `', "dashboard executive snapshot block");
+    const openRevenueCard = sliceCard(snapshotBlock, "Open Revenue Opportunity");
+    assert(openRevenueCard.includes('href="/actions?tab=all"'), "Open Revenue Opportunity should link to Action Center");
+    assert(!openRevenueCard.includes("data-dashboard-scroll-target"), "Open Revenue Opportunity should not use dashboard smooth scroll");
+    const collectionRateCard = sliceCard(snapshotBlock, "Collection Rate");
+    assert(collectionRateCard.includes('href="#revenue-trend"'), "Collection Rate href missing");
+    assert(collectionRateCard.includes('data-dashboard-scroll-target="#revenue-trend"'), "Collection Rate smooth target missing");
+    const workNeedingActionCard = sliceCard(snapshotBlock, "Work Needing Action");
+    assert(workNeedingActionCard.includes('href="#work-to-do-today"'), "Work Needing Action href missing");
+    assert(workNeedingActionCard.includes('data-dashboard-scroll-target="#work-to-do-today"'), "Work Needing Action smooth target missing");
+    assert(snapshotBlock.includes("dashboard-smooth-anchor"), "snapshot block missing dashboard-smooth-anchor");
+
+    const dashboardScriptStart = src.indexOf("window.__DASHBOARD__ =");
+    assert(dashboardScriptStart >= 0, "missing dashboard script area");
+    const smoothStart = src.indexOf('const link = event.target.closest("a[data-dashboard-scroll-target]");', dashboardScriptStart);
+    assert(smoothStart >= 0, "missing dashboard smooth scroll script");
+    const smoothEnd = src.indexOf('const d = window.__DASHBOARD__ || {};', smoothStart);
+    assert(smoothEnd > smoothStart, "missing end of dashboard smooth scroll script");
+    const smoothScrollScriptSlice = src.slice(smoothStart, smoothEnd);
+    assert(smoothScrollScriptSlice.includes("event.preventDefault()"), "smooth scroll script missing preventDefault");
+    assert(smoothScrollScriptSlice.includes('target.scrollIntoView({ behavior: "smooth", block: "start" })'), "smooth scroll script missing smooth scrollIntoView");
+    assert(smoothScrollScriptSlice.includes("window.history.pushState"), "smooth scroll script missing history pushState");
+    ["writeJSON", "requestOpenAIChatCompletion", "parseBody(req)", 'method === "POST"'].forEach(forbidden => assert(!smoothScrollScriptSlice.includes(forbidden), "smooth scroll script contains forbidden marker: " + forbidden));
+
+    [
+      "TJHP_DASHBOARD_UX15_LEAD_HEALTH_CLICKABLE_SNAPSHOT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX14_SNAPSHOT_LAYOUT_POLISH_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX12_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX11_LABEL_DONUT_COLLECTIONS_DATA_SMOKE_TESTS",
+      "TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX9_DONUT_CHART_TARGETS_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX7_COLLECTIONS_AI_USAGE_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "claimSidePanelBackdrop",
+      "window.openClaimPanel",
+      "data-open-claim-panel",
+      "view-claim-btn",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "priorAuthSidePanel",
+      "priorAuthSidePanelBackdrop",
+      "window.openPriorAuthPanel",
+      "view-prior-auth-btn"
+    ].forEach(marker => assert(src.includes(marker), "missing protected UX16 marker: " + marker));
+
+    process.stdout.write("DASHBOARD_UX16_HEALTH_CENTER_SMOOTH_NAV_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    const stack = err && err.stack ? err.stack : String(err);
+    process.stderr.write("DASHBOARD_UX16_HEALTH_CENTER_SMOOTH_NAV_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
 
 if (process.env.TJHP_DASHBOARD_UX15_LEAD_HEALTH_CLICKABLE_SNAPSHOT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
