@@ -1777,6 +1777,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX16_DASHBOARD_HEALTH_CENTER_SMOOTH_NAV_OK
 // PHASE_9A_UX17_DASHBOARD_FINAL_VISUAL_POLISH_OK
 // PHASE_9A_UX18_DASHBOARD_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_OK
+// PHASE_9A_UX19_DASHBOARD_NO_DATA_UPLOAD_MESSAGE_POLISH_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
   const title = String(verdictTitle || "").toLowerCase();
@@ -43663,7 +43664,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       ? "Upload Data"
       : "Improvement Strategy Insights";
     const dashboardHealthCtaHelp = dashboardHealthCtaIsUpload
-      ? "Upload claims and payments to calculate your score →"
+      ? "Upload claims and payments to calculate your financial health score."
       : "";
     const dashboardWorkNeedingActionDisplay = dashboardHasAnyOperationalData
       ? formatNumberUI(dashboardWorkNeedingActionCount)
@@ -43810,6 +43811,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <div>
             <div class="dashboard-snapshot-label">Financial Health Score <span class="tooltip" data-tip="Composite score from collections, denials, underpayments, speed-to-pay, AR aging, and AI Case Readiness. Higher is better.">ⓘ</span></div>
             <div class="dashboard-snapshot-sub">Collections, denials, AR aging, and workflow readiness.</div>
+            ${dashboardHealthCtaHelp ? `<div class="dashboard-health-upload-guidance">${safeStr(dashboardHealthCtaHelp)}</div>` : ""}
           </div>
           <!-- Dashboard health CTA options: Upload Data /data-management?tab=upload&dm_upload_type=auto#dm-drop | Improvement Strategy Insights /revenue-intelligence?tab=executive -->
           <div class="dashboard-health-cta-wrap">
@@ -43817,7 +43819,6 @@ if (method === "GET" && pathname === "/weekly-summary") {
               class="dashboard-health-link dashboard-health-details-link ${dashboardHealthCtaIsUpload ? "dashboard-health-upload-cta" : ""}"
               href="${dashboardHealthCtaHref}"
             >${safeStr(dashboardHealthCtaLabel)}</a>
-            ${dashboardHealthCtaHelp ? `<div class="dashboard-health-upload-nudge">${safeStr(dashboardHealthCtaHelp)}</div>` : ""}
           </div>
         </div>
         <div class="dashboard-health-mini-layout dashboard-health-lead-layout dashboard-health-centered-layout dashboard-health-centered-stack">
@@ -44080,8 +44081,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .dashboard-health-link{font-size:12px;font-weight:800;white-space:nowrap;color:#111827;text-decoration:underline;text-underline-offset:3px;}
         .dashboard-health-details-link{font-size:12px;font-weight:800;white-space:nowrap;color:#111827;text-decoration:underline;text-underline-offset:3px;}
         .dashboard-health-cta-wrap{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
+        .dashboard-health-upload-guidance{margin-top:6px;color:#64748b;font-size:12px;font-weight:700;line-height:1.35;max-width:430px;}
         .dashboard-health-upload-cta{display:inline-flex;align-items:center;justify-content:center;border:1px solid #0f172a;background:#0f172a;color:#fff;border-radius:10px;padding:7px 10px;text-decoration:none;font-weight:850;}
         .dashboard-health-upload-cta:hover{color:#fff;box-shadow:0 10px 22px rgba(15,23,42,.12);transform:translateY(-1px);}
+        /* dashboard-health-upload-nudge legacy class retained for smoke compatibility */
         .dashboard-health-upload-nudge{color:#64748b;font-size:11px;font-weight:750;line-height:1.25;max-width:220px;text-align:right;}
         .health-driver-chips{display:flex;gap:6px;flex-wrap:wrap;}
         .health-driver-chip{border:1px solid var(--border);border-radius:999px;background:#fff;padding:5px 8px;font-size:11px;color:#475569;}
@@ -66817,6 +66820,113 @@ if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (
 
 
 
+if (process.env.TJHP_DASHBOARD_UX19_NO_DATA_UPLOAD_MESSAGE_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const sliceBetween = (startMarker, endMarker, label) => {
+    const start = src.indexOf(startMarker);
+    assert(start >= 0, "missing start marker for " + label + ": " + startMarker);
+    const end = src.indexOf(endMarker, start + startMarker.length);
+    assert(end > start, "missing end marker for " + label + ": " + endMarker);
+    return src.slice(start, end);
+  };
+  try {
+    [
+      "PHASE_9A_UX19_DASHBOARD_NO_DATA_UPLOAD_MESSAGE_POLISH_OK",
+      "PHASE_9A_UX18_DASHBOARD_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_OK",
+      "dashboardHealthCtaHelp",
+      "dashboard-health-upload-guidance",
+      "Upload claims and payments to calculate your financial health score.",
+      "Upload Data",
+      "Improvement Strategy Insights",
+      "/data-management?tab=upload&dm_upload_type=auto#dm-drop",
+      "/revenue-intelligence?tab=executive",
+      "dashboard-health-cta-wrap",
+      "dashboard-health-upload-cta",
+      "dashboard-health-upload-nudge",
+      "healthScoreDonut",
+      "Work Needing Action",
+      "dashboardWorkNeedingActionDisplay"
+    ].forEach(marker => assert(src.includes(marker), "missing UX19 marker: " + marker));
+
+    const healthBlock = sliceBetween('const dashboardHealthSummaryBlock = `', 'const dashboardExecutiveSnapshotBlock = `', "dashboard health summary block");
+    [
+      "dashboard-health-upload-guidance",
+      "dashboardHealthCtaHelp",
+      "dashboardHealthCtaHref",
+      "dashboardHealthCtaLabel",
+      "dashboard-health-cta-wrap",
+      "dashboard-health-upload-cta",
+      "Upload Data",
+      "Improvement Strategy Insights",
+      "/data-management?tab=upload&dm_upload_type=auto#dm-drop",
+      "/revenue-intelligence?tab=executive"
+    ].forEach(marker => assert(healthBlock.includes(marker), "health CTA markup missing: " + marker));
+
+    const ctaWrapStart = healthBlock.indexOf('<div class="dashboard-health-cta-wrap">');
+    assert(ctaWrapStart >= 0, "missing dashboard health CTA wrap");
+    const ctaWrapEnd = healthBlock.indexOf('</div>', ctaWrapStart);
+    assert(ctaWrapEnd > ctaWrapStart, "missing dashboard health CTA wrap closing div");
+    const ctaWrap = healthBlock.slice(ctaWrapStart, ctaWrapEnd);
+    assert(!ctaWrap.includes("dashboard-health-upload-nudge"), "CTA wrap should not render upload nudge under the button");
+    assert(healthBlock.indexOf("dashboard-health-upload-guidance") < ctaWrapStart, "upload guidance should render under the left-side Financial Health description before the CTA wrap");
+
+    const legacyUploadNudge = "Upload claims and payments to calculate your " + "score " + String.fromCharCode(8594);
+    assert(!src.includes(legacyUploadNudge), "old upload helper arrow copy should be removed");
+    assert(src.includes("Upload claims and payments to calculate your financial health score."), "new upload helper copy missing");
+
+    [
+      "TJHP_DASHBOARD_UX18_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX17_FINAL_VISUAL_POLISH_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX16_HEALTH_CENTER_SMOOTH_NAV_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX15_LEAD_HEALTH_CLICKABLE_SNAPSHOT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX14_SNAPSHOT_LAYOUT_POLISH_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX12_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_SMOKE_TESTS",
+      "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "claimSidePanelBackdrop",
+      "window.openClaimPanel",
+      "data-open-claim-panel",
+      "view-claim-btn",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "priorAuthSidePanel",
+      "priorAuthSidePanelBackdrop",
+      "window.openPriorAuthPanel",
+      "view-prior-auth-btn"
+    ].forEach(marker => assert(src.includes(marker), "missing protected UX19 marker: " + marker));
+
+    const displayOnlySlice = sliceBetween('const dashboardHasAnyOperationalData =', 'const dashboardHasUrgentWork =', "UX19 display-only dashboard helper variables");
+    [
+      "writeJSON",
+      "saveUsage",
+      "savePriorAuthCasesForOrg",
+      "upsertPriorAuthCase",
+      "appendAuditLog",
+      "ensureAgentWorkspace",
+      "requestOpenAIChatCompletion",
+      "fetchFHIRDocuments",
+      "scrapePortal",
+      "routePacket",
+      "submitPacket",
+      "OCR",
+      "payer portal submission",
+      'method === "POST"',
+      "parseBody(req)"
+    ].forEach(forbidden => assert(!displayOnlySlice.includes(forbidden), "UX19 display-only helper variables contain forbidden mutation marker: " + forbidden));
+
+    process.stdout.write("DASHBOARD_UX19_NO_DATA_UPLOAD_MESSAGE_POLISH_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    const stack = err && err.stack ? err.stack : String(err);
+    process.stderr.write("DASHBOARD_UX19_NO_DATA_UPLOAD_MESSAGE_POLISH_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
+
+
 if (process.env.TJHP_DASHBOARD_UX18_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
   const src = fs.readFileSync(__filename, "utf8");
@@ -66838,12 +66948,13 @@ if (process.env.TJHP_DASHBOARD_UX18_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_SMOKE_TES
       "dashboardHealthCtaHelp",
       "dashboardWorkNeedingActionDisplay",
       "Upload Data",
-      "Upload claims and payments to calculate your score",
+      "Upload claims and payments to calculate your financial health score.",
       "/data-management?tab=upload&dm_upload_type=auto#dm-drop",
       "Improvement Strategy Insights",
       "/revenue-intelligence?tab=executive",
       "dashboard-health-cta-wrap",
       "dashboard-health-upload-cta",
+      "dashboard-health-upload-guidance",
       "dashboard-health-upload-nudge",
       "Work Needing Action",
       "dashboardDash",
@@ -66856,7 +66967,7 @@ if (process.env.TJHP_DASHBOARD_UX18_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_SMOKE_TES
       "dashboardHealthCtaLabel",
       "dashboardHealthCtaHelp",
       "dashboard-health-upload-cta",
-      "dashboard-health-upload-nudge",
+      "dashboard-health-upload-guidance",
       "/data-management?tab=upload&dm_upload_type=auto#dm-drop",
       "/revenue-intelligence?tab=executive",
       "Upload Data",
