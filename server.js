@@ -1785,6 +1785,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX24_DASHBOARD_EXPECTED_TRUE_SOURCE_FRICTION_EVENT_DATES_OK
 // PHASE_9A_UX25_DASHBOARD_FRICTION_REAL_EVENT_DATES_FINAL_OK
 // PHASE_9A_UX26_DASHBOARD_FRICTION_TIMELINE_READABILITY_OK
+// PHASE_9A_UX27_DASHBOARD_RANGE_FALLBACK_PLAN_CONTEXT_FINAL_OK
 // PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
@@ -20797,11 +20798,109 @@ function tjhpDashboardRevenueFlowAndDenialsModel(org_id = "", metrics = {}, reve
 }
 function tjhpDashboardRangeLabel(range = "last30", fallbackToAllTime = false){
   const selected = tjhpRevenueOverviewNormalizeCollectionRange(range || "last30");
-  if (fallbackToAllTime) return "Showing All Time";
+  if (fallbackToAllTime) return "All Time";
   if (selected === "last60") return "Last 60 days";
   if (selected === "last90") return "Last 90 days";
   if (selected === "all") return "All Time";
   return "Last 30 days";
+}
+
+function tjhpDashboardRangeWindowDays(range = "last30") {
+  const selected = tjhpRevenueOverviewNormalizeCollectionRange(range || "last30");
+  if (selected === "last30") return 30;
+  if (selected === "last60") return 60;
+  if (selected === "last90") return 90;
+  return 0;
+}
+
+function tjhpDashboardBusinessActivityDates(model = {}, opts = {}) {
+  const dates = [];
+  const addDate = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return;
+    let dateValue = raw;
+    if (/^\d{4}-\d{2}$/.test(raw)) dateValue = raw + "-01T00:00:00Z";
+    else if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) dateValue = raw + "T00:00:00Z";
+    const d = new Date(dateValue);
+    if (d && !Number.isNaN(d.getTime())) dates.push(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())));
+  };
+  const addKeysWithValues = (keys = [], valueSeries = []) => {
+    (Array.isArray(keys) ? keys : []).forEach((key, idx) => {
+      const hasValue = !Array.isArray(valueSeries) || !valueSeries.length || Number(valueSeries[idx] || 0) > 0;
+      if (hasValue) addDate(key);
+    });
+  };
+  const source = model && typeof model === "object" ? model : {};
+  addKeysWithValues(source.keys, []);
+  ["billed", "collected", "paid", "remaining", "atRisk", "claim_denials", "claim_underpayments", "prior_auth_denials", "prior_auth_partial_approvals"].forEach((seriesKey) => {
+    if (Array.isArray(source.keys) && Array.isArray(source[seriesKey])) addKeysWithValues(source.keys, source[seriesKey]);
+  });
+  (Array.isArray(source.event_debug_sample) ? source.event_debug_sample : []).forEach(event => addDate(event?.key || event?.date || event?.business_date));
+  if (source.series && typeof source.series === "object") {
+    const series = source.series;
+    ["billed", "collected", "paid", "remaining", "atRisk"].forEach((seriesKey) => addKeysWithValues(series.keys, series[seriesKey]));
+    addKeysWithValues(series.keys, []);
+  }
+  (Array.isArray(opts.extra_dates) ? opts.extra_dates : []).forEach(addDate);
+  return Array.from(new Map(dates.map(d => [d.toISOString().slice(0, 10), d])).values()).sort((a, b) => a - b);
+}
+
+function tjhpDashboardRangeHasBusinessActivity(range = "last30", dates = [], nowValue = null) {
+  const selected = tjhpRevenueOverviewNormalizeCollectionRange(range || "last30");
+  const cleanDates = (Array.isArray(dates) ? dates : []).map(value => {
+    const d = value instanceof Date ? value : new Date(value);
+    return d && !Number.isNaN(d.getTime()) ? new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())) : null;
+  }).filter(Boolean);
+  if (selected === "all") return cleanDates.length > 0;
+  const days = tjhpDashboardRangeWindowDays(selected);
+  if (!days) return cleanDates.length > 0;
+  const nowRaw = nowValue || new Date();
+  const nowDate = nowRaw instanceof Date ? nowRaw : new Date(nowRaw);
+  if (!nowDate || Number.isNaN(nowDate.getTime())) return false;
+  const end = new Date(Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), nowDate.getUTCDate(), 23, 59, 59, 999));
+  const start = new Date(Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), nowDate.getUTCDate()));
+  start.setUTCDate(start.getUTCDate() - days);
+  return cleanDates.some(d => d >= start && d <= end);
+}
+
+function tjhpDashboardRangeAvailabilityModel(selectedRange = "last30", flowModel = {}, frictionModel = {}, revenueTrendModel = {}, opts = {}) {
+  const selected = tjhpRevenueOverviewNormalizeCollectionRange(selectedRange || flowModel?.selected_range || frictionModel?.selected_range || revenueTrendModel?.selected_range || "last30");
+  const now = opts.now || opts.nowValue || new Date();
+  const dates = [
+    ...tjhpDashboardBusinessActivityDates(frictionModel),
+    ...tjhpDashboardBusinessActivityDates(revenueTrendModel),
+    ...tjhpDashboardBusinessActivityDates(revenueTrendModel?.series || {}),
+    ...tjhpDashboardBusinessActivityDates(flowModel?.denials || {})
+  ];
+  const uniqueDates = Array.from(new Map(dates.map(d => [d.toISOString().slice(0, 10), d])).values());
+  const anyActivity = uniqueDates.length > 0;
+  const selectedAvailable = anyActivity ? tjhpDashboardRangeHasBusinessActivity(selected, uniqueDates, now) : false;
+  const fallbackActive = selected !== "all" && anyActivity && !selectedAvailable;
+  const displayed = fallbackActive ? "all" : selected;
+  const fallbackReason = fallbackActive ? `No business-date activity was found in ${tjhpDashboardRangeLabel(selected)}, so we’re showing all-time history from your uploaded data.` : "";
+  const ranges = {};
+  ["last30", "last60", "last90", "all"].forEach((range) => {
+    const available = anyActivity ? tjhpDashboardRangeHasBusinessActivity(range, uniqueDates, now) : false;
+    const muted = anyActivity && range !== "all" && !available;
+    ranges[range] = {
+      range,
+      label: tjhpDashboardRangeLabel(range),
+      available,
+      selected: selected === range,
+      muted,
+      reason: muted ? "No data in this range" : ""
+    };
+  });
+  return {
+    selected_range: selected,
+    selected_label: tjhpDashboardRangeLabel(selected),
+    displayed_range: displayed,
+    displayed_label: tjhpDashboardRangeLabel(displayed),
+    fallback_active: fallbackActive,
+    fallback_reason: fallbackReason,
+    any_activity: anyActivity,
+    ranges
+  };
 }
 
 
@@ -21061,6 +21160,69 @@ function tjhpRevenueOverviewAiUsageDisplayModel(org_id = ""){
   const copilot_limit = is_trial_or_pilot ? 25 : normalizeLimit(limits.copilot_limit || usage.ai_copilot_query_limit || Infinity);
   const case_assistant_limit = is_trial_or_pilot ? 25 : normalizeLimit(limits.workspace_limit || usage.ai_case_assistant_limit || usage.ai_workspace_limit || Infinity);
   return { copilot_used, copilot_limit, case_assistant_used, case_assistant_limit, is_trial_or_pilot };
+}
+
+function tjhpDashboardPlanUsageModel(org_id = "", opts = {}) {
+  const usage = opts.usage || getUsage(org_id) || {};
+  const limits = opts.limits || getLimitProfile(org_id) || {};
+  const pilot = Object.prototype.hasOwnProperty.call(opts, "pilot") ? opts.pilot : getPilot(org_id);
+  const sub = Object.prototype.hasOwnProperty.call(opts, "sub") ? opts.sub : getSub(org_id);
+  const nowRaw = opts.now || new Date();
+  const now = nowRaw instanceof Date ? nowRaw : new Date(nowRaw);
+  const normalizeLimit = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n >= 999999) return Infinity;
+    return Math.max(0, n);
+  };
+  const displayLimit = (value) => Number.isFinite(Number(value)) ? formatNumberUI(value) : "Unlimited";
+  const titleCasePlan = (value) => String(value || "").trim().replace(/[_-]+/g, " ").replace(/\b\w/g, ch => ch.toUpperCase());
+  const activeTrial = !!(pilot && String(pilot.status || "active").toLowerCase() === "active" && (!sub || !sub.plan || limits.mode === "pilot"));
+  const copilotUsed = Math.max(0, Number(usage.copilot_used ?? usage.ai_copilot_queries_used ?? usage.copilot_questions_used ?? 0) || 0);
+  const caseAssistantCandidates = [
+    usage.ai_case_assistant_used,
+    usage.case_assistant_used,
+    usage.agent_workspaces_used,
+    usage.ai_agent_workspace_used,
+    usage.ai_case_assistant_uses,
+    usage.monthly_case_assistant_ai_used,
+    usage.case_assistant_ai_used,
+    usage.monthly_agent_workspace_edits,
+    usage.ai_workspace_used
+  ].map(v => Number(v || 0)).filter(v => Number.isFinite(v) && v > 0);
+  const monthlyAi = Number(usage.monthly_ai_generations_used || 0);
+  const caseAssistantUsed = Math.max(0, Number(caseAssistantCandidates[0] || (monthlyAi > copilotUsed ? monthlyAi - copilotUsed : 0)) || 0);
+  const startRaw = pilot?.started_at || pilot?.created_at || pilot?.start_date || "";
+  const endRaw = pilot?.ends_at || pilot?.end_date || (startRaw ? addDaysISO(startRaw, Number(opts.PILOT_DAYS || PILOT_DAYS || 14)) : "");
+  const endDate = endRaw ? new Date(endRaw) : null;
+  let trialDaysRemaining = null;
+  if (endDate && !Number.isNaN(endDate.getTime()) && now && !Number.isNaN(now.getTime())) {
+    const endDay = new Date(Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate()));
+    const nowDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    trialDaysRemaining = Math.ceil((endDay.getTime() - nowDay.getTime()) / (24 * 60 * 60 * 1000));
+  }
+  const trialLabel = trialDaysRemaining === null ? "Trial period active" : (trialDaysRemaining > 0 ? `${trialDaysRemaining} days left in trial` : (trialDaysRemaining === 0 ? "Trial ending today" : "Trial ended"));
+  const paidPlanLabel = titleCasePlan(sub?.plan || sub?.plan_name || sub?.product_name || limits.plan || "Current Plan");
+  const copilotLimit = activeTrial ? 25 : normalizeLimit(limits.ai_copilot_limit ?? limits.copilot_limit ?? usage.ai_copilot_query_limit ?? Infinity);
+  const caseAssistantLimit = activeTrial ? 25 : normalizeLimit(limits.ai_case_assistant_limit ?? usage.ai_case_assistant_limit ?? usage.ai_workspace_limit ?? Infinity);
+  const billingEndRaw = sub?.current_period_end || sub?.billing_period_end || sub?.period_end || "";
+  const billingEnd = billingEndRaw ? new Date(billingEndRaw) : null;
+  const billingLabel = billingEnd && !Number.isNaN(billingEnd.getTime()) ? `Renews ${billingEnd.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}` : "Monthly billing period";
+  return {
+    plan_label: activeTrial ? "Free Trial" : paidPlanLabel,
+    plan_status: activeTrial ? "active" : String(sub?.status || limits.status || "active"),
+    is_trial: activeTrial,
+    trial_days_remaining: trialDaysRemaining,
+    trial_days_remaining_label: trialLabel,
+    trial_ends_label: endDate && !Number.isNaN(endDate.getTime()) ? endDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "",
+    billing_period_label: activeTrial ? "" : billingLabel,
+    ai_copilot_used: copilotUsed,
+    ai_copilot_limit: copilotLimit,
+    ai_case_assistant_used: caseAssistantUsed,
+    ai_case_assistant_limit: caseAssistantLimit,
+    ai_copilot_display: `${formatNumberUI(copilotUsed)} / ${displayLimit(copilotLimit)}`,
+    ai_case_assistant_display: `${formatNumberUI(caseAssistantUsed)} / ${displayLimit(caseAssistantLimit)}`,
+    limit_source: activeTrial ? "Free Trial" : (limits.mode || "subscription")
+  };
 }
 
 function tjhpWorkspaceSubmittedForChannel(ws, channel){
@@ -44019,6 +44181,13 @@ if (method === "GET" && pathname === "/weekly-summary") {
     );
     const dashboardFlowModel = tjhpDashboardRevenueFlowAndDenialsModel(org.org_id, m, revenueTrendModel, preset, { expectedModel: dashboardExpectedModel, claims: dashboardClaims, payments: dashboardPayments });
     const dashboardFrictionModel = tjhpDashboardRevenueFrictionTrendModel(org.org_id, preset, startDate, endDate, { claims: dashboardClaims, payments: dashboardPayments });
+    const dashboardRangeAvailability = tjhpDashboardRangeAvailabilityModel(
+      selectedTrendRange,
+      dashboardFlowModel,
+      dashboardFrictionModel,
+      revenueTrendModel,
+      { now: new Date() }
+    );
     const roiMetrics = computeRoiMetrics(org.org_id, startDate, endDate);
     const payerRanks = computeAllPayerRankings(org.org_id);
     const casesInRange = readJSON(FILES.cases, [])
@@ -44088,9 +44257,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
     }
 
     const aiUsageDisplay = tjhpRevenueOverviewAiUsageDisplayModel(org.org_id);
+    const dashboardPlanUsage = tjhpDashboardPlanUsageModel(org.org_id, { usage, limits, pilot, sub: getSub(org.org_id), now: new Date() });
     const displayUsageLimit = (limit) => Number.isFinite(Number(limit)) ? formatNumberUI(limit) : "Unlimited";
-    const copilotLimitReached = tjhpDashboardBillableLimitReached(aiUsageDisplay.copilot_used, aiUsageDisplay.copilot_limit);
-    const caseAssistantLimitReached = tjhpDashboardBillableLimitReached(aiUsageDisplay.case_assistant_used, aiUsageDisplay.case_assistant_limit);
+    const copilotLimitReached = tjhpDashboardBillableLimitReached(dashboardPlanUsage.ai_copilot_used, dashboardPlanUsage.ai_copilot_limit);
+    const caseAssistantLimitReached = tjhpDashboardBillableLimitReached(dashboardPlanUsage.ai_case_assistant_used, dashboardPlanUsage.ai_case_assistant_limit);
     const dashboardUpgradePrompts = `
       ${/* tjhpDashboardBillableLimitReached */ copilotLimitReached ? renderUpgradePrompt("AI Copilot uses") : ""}
       ${/* tjhpDashboardBillableLimitReached */ caseAssistantLimitReached ? renderUpgradePrompt("AI Case Assistant uses") : ""}
@@ -44363,18 +44533,21 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
     const trendHasAnyData = Number(revenueTrendModel.series?.totals?.billed || 0) > 0;
     const dashboardChartNotes = Array.from(new Set([
-      ...(revenueTrendModel.fallback_to_all_time === true ? ["Showing all-time history for this selected range."] : []),
       ...(Number(revenueTrendModel.series?.fallback_date_count || revenueTrendModel.fallback_date_count || 0) > 0 ? ["Upload dates were used only where service/payment dates were missing."] : []),
+      ...(dashboardFrictionModel.upload_fallback_count > 0 ? ["Upload dates were used only where business dates were missing."] : []),
+      ...(dashboardFlowModel.notes || []).filter(note => String(note || "").toLowerCase().includes("expected allowed amount")),
       ...(Number(revenueTrendModel.series?.unmatched_collected_total || 0) > 0 ? ["Unmatched payments are excluded from this service-period chart."] : []),
-      ...(dashboardFlowModel.notes || []),
-      ...(dashboardFrictionModel.notes || [])
+      "Additional data limitations may apply."
     ].map(note => String(note || "").trim()).filter(Boolean)));
-    const dashboardChartNoteRow = dashboardChartNotes.length ? `
-      <div class="dashboard-chart-note-row">
-        ${dashboardChartNotes.slice(0, 3).map(note => `<span class="trend-context-pill">${safeStr(note)}</span>`).join("")}
-        ${dashboardChartNotes.length > 3 ? `<span class="trend-context-pill">Additional data limitations may apply.</span>` : ""}
-      </div>
-    ` : "";
+    const dashboardChartNoteRow = `
+      <!-- dashboard-chart-note-row compact notes marker -->
+      <details class="dashboard-data-notes">
+        <summary>Data notes</summary>
+        <ul>
+          ${dashboardChartNotes.map(note => `<li>${safeStr(note)}</li>`).join("")}
+        </ul>
+      </details>
+    `;
     const trendContextNotes = `<!-- trendContextNotes legacy marker -->`;
     const trendTotals = revenueTrendModel.series?.totals || { billed:0, collected:0, remaining:0, collection_rate:0 };
     const dashboardRangeShortcutHref = (targetRange) => {
@@ -44382,12 +44555,22 @@ if (method === "GET" && pathname === "/weekly-summary") {
       params.set("range", targetRange);
       return `/dashboard?${params.toString()}#revenue-trend`;
     };
-    const rangeShortcutClass = (targetRange) => `btn secondary small ${preset === targetRange ? "active" : ""}`;
+    const dashboardRangeShortcutClass = (targetRange) => {
+      // Legacy smoke marker: active class follows selected preset === targetRange, not fallback effective_range.
+      const rangeState = dashboardRangeAvailability.ranges[targetRange] || {};
+      return ["btn", "secondary", "small", dashboardRangeAvailability.selected_range === targetRange ? "active" : "", rangeState.muted ? "is-muted" : "", dashboardRangeAvailability.fallback_active && targetRange === "all" ? "is-fallback-source" : ""].filter(Boolean).join(" " );
+    };
+    const rangeShortcutClass = (targetRange) => dashboardRangeShortcutClass(targetRange); // preset === targetRange legacy marker
+    const dashboardRangeButton = (targetRange, text) => {
+      const rangeState = dashboardRangeAvailability.ranges[targetRange] || {};
+      const title = rangeState.reason || "";
+      return `<a class="${dashboardRangeShortcutClass(targetRange)}" href="${dashboardRangeShortcutHref(targetRange)}" title="${safeStr(title)}" aria-disabled="${rangeState.muted ? "true" : "false"}">${safeStr(text)}${rangeState.muted ? `<span class="range-no-data-dot" aria-hidden="true"></span>` : ``}</a>`;
+    };
 
     const dashboardOpenRevenueOpportunity = todaysAtRiskTotal;
     const dashboardCollectionRate = Number(dashboardFlowModel.kpis?.collection_rate || trendTotals.collection_rate || m.kpis?.netCollectionRate || 0) || 0;
     const dashboardFlowHasFinancialData = dashboardFlowModel.has_data === true;
-    const dashboardChartRangeLabel = tjhpDashboardRangeLabel(selectedTrendRange, dashboardFlowModel.fallback_to_all_time || dashboardFrictionModel.fallback_to_all_time);
+    const dashboardChartRangeLabel = dashboardRangeAvailability.displayed_label;
     const dashboardFrictionHasData = dashboardFrictionModel.has_data === true;
     const dashboardFrictionTotals = dashboardFrictionModel.totals || {};
     const dashboardFrictionSummary = {
@@ -44477,14 +44660,24 @@ if (method === "GET" && pathname === "/weekly-summary") {
               Revenue Flow & Revenue Friction
               <span class="tooltip" data-tip="Revenue Flow shows billed, expected, paid, and at-risk dollars. Revenue Friction Trend shows claim denials, claim underpayments, prior-auth denials, and prior-auth partial approvals over time.">ⓘ</span>
             </h3>
-            <div class="muted small">Executive view of collections movement and revenue friction for the selected range.</div>
+            <div class="muted small">Revenue movement and friction from your uploaded claims, payments, and prior-auth data.</div>
+            ${dashboardRangeAvailability.fallback_active ? `
+              <div class="dashboard-range-fallback-callout">
+                <strong>Showing All Time</strong>
+                <span>${safeStr(dashboardRangeAvailability.fallback_reason)}</span>
+              </div>
+            ` : ``}
+            <div class="dashboard-range-display-line">
+              <span>Selected: ${safeStr(dashboardRangeAvailability.selected_label)}</span>
+              <span>Displaying: ${safeStr(dashboardRangeAvailability.displayed_label)}</span>
+            </div>
           </div>
           <div class="trend-range-shortcuts segmented" aria-label="Dashboard Revenue Flow and Revenue Friction range shortcuts" data-anchor="#revenue-trend">
-            <a class="${rangeShortcutClass("last30")}" href="${dashboardRangeShortcutHref("last30")}">30 days</a>
-            <a class="${rangeShortcutClass("last60")}" href="${dashboardRangeShortcutHref("last60")}">60 days</a>
-            <a class="${rangeShortcutClass("last90")}" href="${dashboardRangeShortcutHref("last90")}">90 days</a>
-            <a class="${rangeShortcutClass("all")}" href="${dashboardRangeShortcutHref("all")}">All Time</a>
-            ${dashboardFlowModel.fallback_to_all_time === true || dashboardFrictionModel.fallback_to_all_time === true ? `<span class="trend-fallback-pill">Showing all-time history</span>` : ``}
+            ${dashboardRangeButton("last30", "30 days")}
+            ${dashboardRangeButton("last60", "60 days")}
+            ${dashboardRangeButton("last90", "90 days")}
+            ${dashboardRangeButton("all", "All Time")}
+            ${dashboardRangeAvailability.fallback_active ? `<span class="trend-fallback-pill">Displaying All Time</span><!-- Showing all-time history legacy marker -->` : ``}
           </div>
         </div>
         <!-- Revenue Flow & Denials Trend legacy marker -->
@@ -44494,8 +44687,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <!-- Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period. -->
         <!-- The selected date range does not include service-period billing history. Showing all-time uploaded history. -->
         <!-- Some claims did not include service or payment dates, so upload dates were used as a fallback. -->
-        <!-- trend-context-notes trend-context-pill Collected Remaining Gap -->
-        <!-- dashboard-chart-note-row compact notes marker -->
+        <!-- trend-context-notes trend-context-pill Collected Remaining Gap trendContextNotes legacy marker -->
+        <!-- dashboard-chart-note-row compact notes marker dashboard-data-notes -->
         <!-- Denials by row-level service/payment/denial dates. -->
         <!-- Recent periods based on available claim/payment history. -->
         <!-- dashboard-flow-denials-grid legacy marker -->
@@ -44698,6 +44891,9 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .trend-fallback-note,.trend-empty-note{font-size:12px;color:var(--muted);margin:4px 0 0;line-height:1.4;}
         .plan-usage-card{margin-top:14px;}
         .plan-usage-card .kpi-strip,.plan-usage-grid{margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));}
+        .plan-usage-header-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-top:6px;}
+        .plan-trial-days{display:inline-flex;margin-top:6px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:999px;padding:5px 8px;font-size:12px;font-weight:800;}
+        .plan-usage-meta{color:#64748b;font-size:12px;margin-top:4px;}
         .dashboard-executive-snapshot{padding:18px;background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%);}
         .dashboard-executive-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px;}
         .dashboard-executive-head h3{margin:3px 0 6px;font-size:22px;}
@@ -44856,8 +45052,19 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .trend-range-shortcuts.segmented{display:inline-flex;gap:4px;padding:4px;border:1px solid var(--border);border-radius:14px;background:#f8fafc;margin-left:auto;align-items:center;flex-wrap:wrap;}
         .trend-range-shortcuts .btn{border:0;background:transparent;box-shadow:none;border-radius:10px;padding:9px 12px;color:#334155;}
         .trend-range-shortcuts .btn.active{background:var(--primary);color:#fff;border-color:var(--primary);box-shadow:0 6px 14px rgba(15,23,42,.14);}
-        .trend-fallback-pill{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;background:#f8fafc;color:#475569;font-size:11px;font-weight:750;padding:4px 8px;margin-left:8px;}
+        .trend-range-shortcuts.segmented a.is-muted{opacity:.48;background:#f8fafc;color:#64748b;border-style:dashed;}
+        .trend-range-shortcuts.segmented a.is-muted.active{opacity:1;border-style:solid;}
+        .trend-range-shortcuts.segmented a.is-fallback-source{box-shadow:inset 0 0 0 1px rgba(15,23,42,.12);}
+        .range-no-data-dot{display:inline-block;width:6px;height:6px;border-radius:999px;background:#cbd5e1;margin-left:5px;vertical-align:middle;}
+        .trend-fallback-pill{display:inline-flex;align-items:center;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:999px;padding:7px 10px;font-size:11px;font-weight:800;margin-left:4px;}
         .dashboard-flow-denials-card{}
+        .dashboard-range-fallback-callout{display:flex;gap:8px;align-items:flex-start;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:12px;padding:10px 12px;margin-top:10px;font-size:12px;line-height:1.4;}
+        .dashboard-range-fallback-callout strong{white-space:nowrap;color:#78350f;}
+        .dashboard-range-display-line{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;font-size:11px;color:#64748b;font-weight:800;}
+        .dashboard-range-display-line span{border:1px solid var(--border);border-radius:999px;background:#f8fafc;padding:5px 8px;}
+        .dashboard-data-notes{margin-top:8px;font-size:12px;color:#64748b;}
+        .dashboard-data-notes summary{cursor:pointer;font-weight:800;color:#475569;}
+        .dashboard-data-notes ul{margin:8px 0 0 18px;padding:0;}
         .dashboard-flow-denials-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px;}
         .dashboard-flow-friction-stack{display:grid;grid-template-columns:1fr;gap:14px;margin-top:14px;}
         .dashboard-chart-card{border:1px solid var(--border);border-radius:14px;background:#fff;padding:12px;}
@@ -44920,19 +45127,27 @@ if (method === "GET" && pathname === "/weekly-summary") {
       ${dashboardUpgradePrompts}
 
       <div class="exec-card plan-usage-card">
-        <h3>Plan Usage <span class="tooltip">ⓘ<span class="tooltiptext">Visible usage for AI Copilot and case-specific AI assistants.</span></span></h3>
+        <!-- Current Plan: Free Trial days left in trial -->
+        <div class="plan-usage-header-row">
+          <div>
+            <h3>Plan Usage <span class="tooltip">ⓘ<span class="tooltiptext">Visible usage for AI Copilot and case-specific AI assistants.</span></span></h3>
+            <div class="plan-usage-meta">Current Plan: <strong>${safeStr(dashboardPlanUsage.plan_label)}</strong></div>
+            ${dashboardPlanUsage.is_trial ? `<div class="plan-trial-days">${safeStr(dashboardPlanUsage.trial_days_remaining_label || "days left in trial")}</div>` : `<div class="plan-usage-meta">${safeStr(dashboardPlanUsage.billing_period_label)}</div>`}
+          </div>
+          <a class="btn small secondary" href="/account?tab=billing">Manage Plan</a>
+        </div>
 
         <div class="kpi-strip plan-usage-grid" style="margin-top:12px;">
         <div class="kpi-card">
-          <p class="kpi-value">${formatNumberUI(aiUsageDisplay.copilot_used)} / ${displayUsageLimit(aiUsageDisplay.copilot_limit)}</p>
+          <p class="kpi-value">${safeStr(dashboardPlanUsage.ai_copilot_display)}</p>
           <p class="kpi-label">AI Copilot Uses</p>
-          ${buildLimitBadge(aiUsageDisplay.copilot_used, aiUsageDisplay.copilot_limit)}
+          ${buildLimitBadge(dashboardPlanUsage.ai_copilot_used, dashboardPlanUsage.ai_copilot_limit)}
         </div>
 
         <div class="kpi-card">
-          <p class="kpi-value">${formatNumberUI(aiUsageDisplay.case_assistant_used)} / ${displayUsageLimit(aiUsageDisplay.case_assistant_limit)}</p>
+          <p class="kpi-value">${safeStr(dashboardPlanUsage.ai_case_assistant_display)}</p>
           <p class="kpi-label">AI Case Assistant Uses</p>
-          ${buildLimitBadge(aiUsageDisplay.case_assistant_used, aiUsageDisplay.case_assistant_limit)}
+          ${buildLimitBadge(dashboardPlanUsage.ai_case_assistant_used, dashboardPlanUsage.ai_case_assistant_limit)}
         </div>
 
 
@@ -67609,6 +67824,162 @@ if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (
 
 
 
+
+
+
+if (process.env.TJHP_DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const sliceBetween = (startNeedle, endNeedle, label) => {
+    const start = src.indexOf(startNeedle); assert(start >= 0, "missing start for " + label + ": " + startNeedle);
+    const end = src.indexOf(endNeedle, start + startNeedle.length); assert(end > start, "missing end for " + label + ": " + endNeedle);
+    return src.slice(start, end);
+  };
+  const extractFunctionBody = (functionName) => {
+    const start = src.indexOf("function " + functionName); assert(start >= 0, "missing function for body extraction: " + functionName);
+    const open = src.indexOf("{", start); assert(open >= 0, "missing opening brace for: " + functionName);
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === "{") depth += 1;
+      if (ch === "}") depth -= 1;
+      if (depth === 0) return src.slice(open + 1, i);
+    }
+    throw new Error("missing closing brace for: " + functionName);
+  };
+  try {
+    [
+      "PHASE_9A_UX27_DASHBOARD_RANGE_FALLBACK_PLAN_CONTEXT_FINAL_OK",
+      "PHASE_9A_UX26_DASHBOARD_FRICTION_TIMELINE_READABILITY_OK",
+      "tjhpDashboardRangeAvailabilityModel",
+      "tjhpDashboardRangeHasBusinessActivity",
+      "tjhpDashboardRangeLabel",
+      "dashboardRangeAvailability",
+      "dashboard-range-fallback-callout",
+      "dashboard-range-display-line",
+      "dashboard-data-notes",
+      "range-no-data-dot",
+      "is-muted",
+      "is-fallback-source",
+      "Displaying All Time",
+      "Selected:",
+      "Displaying:",
+      "No business-date activity was found in",
+      "so we’re showing all-time history from your uploaded data",
+      "tjhpDashboardPlanUsageModel",
+      "plan-usage-header-row",
+      "Current Plan:",
+      "Free Trial",
+      "days left in trial",
+      "AI Copilot Uses",
+      "AI Case Assistant Uses",
+      "Manage Plan"
+    ].forEach(marker => assert(src.includes(marker), "missing UX27 source marker: " + marker));
+
+    const dashboardCollectionsBlock = sliceBetween('const dashboardCollectionsBlock = `', 'const dashboardRecoveryPerformanceBlock = `', "dashboardCollectionsBlock");
+    [
+      "Revenue Flow & Revenue Friction",
+      "trend-range-shortcuts",
+      "30 days",
+      "60 days",
+      "90 days",
+      "All Time",
+      "dashboard-range-fallback-callout",
+      "dashboard-range-display-line",
+      "dashboard-data-notes"
+    ].forEach(marker => assert(dashboardCollectionsBlock.includes(marker), "dashboardCollectionsBlock missing: " + marker));
+    assert(!dashboardCollectionsBlock.includes('<div class="trend-context-notes"') || !dashboardCollectionsBlock.includes('<div class="dashboard-chart-note-row">'), "old stacked trendContextNotes and dashboardChartNoteRow rows remain visible");
+    [
+      "trendContextNotes legacy marker",
+      "dashboard-chart-note-row compact notes marker",
+      "Showing all-time history legacy marker"
+    ].forEach(marker => assert(dashboardCollectionsBlock.includes(marker), "missing legacy hidden marker: " + marker));
+
+    const planUsageBlock = sliceBetween('<div class="exec-card plan-usage-card">', '<script>', "Plan Usage block");
+    [
+      "Current Plan:",
+      "Free Trial",
+      "days left in trial",
+      "AI Copilot Uses",
+      "AI Case Assistant Uses",
+      "Manage Plan"
+    ].forEach(marker => assert(planUsageBlock.includes(marker), "Plan Usage block missing: " + marker));
+    ["Payment Rows Processed", "Workspace Limit", "Case Credits Used"].forEach(label => assert(!planUsageBlock.includes(label), "forbidden Plan Usage label present: " + label));
+
+    const now = new Date("2026-06-20T00:00:00Z");
+    const fakeFriction = { keys: ["2026-02-01", "2026-02-05"], claim_denials: [1, 1], claim_underpayments: [0, 0], prior_auth_denials: [0, 0], prior_auth_partial_approvals: [0, 0], event_debug_sample: [{ key: "2026-02-01" }, { key: "2026-02-05" }] };
+    const range30 = tjhpDashboardRangeAvailabilityModel("last30", { selected_range: "last30", effective_range: "all" }, fakeFriction, { series: { keys: ["2026-02"], billed: [100], collected: [50] } }, { now });
+    assert.strictEqual(range30.fallback_active, true, "last30 should fall back");
+    assert.strictEqual(range30.selected_label, "Last 30 days", "selected label mismatch");
+    assert.strictEqual(range30.displayed_label, "All Time", "displayed label mismatch");
+    assert.strictEqual(range30.ranges.last30.available, false, "last30 should be unavailable");
+    assert.strictEqual(range30.ranges.last30.muted, true, "last30 should be muted");
+    assert.strictEqual(range30.ranges.all.available, true, "all should be available");
+    assert(range30.fallback_reason.includes("No business-date activity was found in Last 30 days"), "fallback reason missing last30 copy");
+    const rangeAll = tjhpDashboardRangeAvailabilityModel("all", { selected_range: "all" }, fakeFriction, {}, { now });
+    assert.strictEqual(rangeAll.fallback_active, false, "all should not fall back");
+    assert.strictEqual(rangeAll.displayed_label, "All Time", "all displayed label mismatch");
+
+    const trialPlan = tjhpDashboardPlanUsageModel("ux27-smoke", {
+      usage: { copilot_used: 0, ai_case_assistant_used: 19 },
+      limits: { mode: "pilot" },
+      pilot: { status: "active", created_at: "2026-06-17T00:00:00Z" },
+      sub: null,
+      now: "2026-06-20T00:00:00Z",
+      PILOT_DAYS: 14
+    });
+    assert.strictEqual(trialPlan.plan_label, "Free Trial", "trial label mismatch");
+    assert.strictEqual(trialPlan.is_trial, true, "trial flag mismatch");
+    assert(trialPlan.trial_days_remaining >= 10 && trialPlan.trial_days_remaining <= 11, "trial days remaining unexpected");
+    assert.strictEqual(trialPlan.ai_copilot_limit, 25, "trial copilot limit mismatch");
+    assert.strictEqual(trialPlan.ai_case_assistant_limit, 25, "trial case assistant limit mismatch");
+    assert.strictEqual(trialPlan.ai_copilot_display, "0 / 25", "trial copilot display mismatch");
+    assert.strictEqual(trialPlan.ai_case_assistant_display, "19 / 25", "trial case assistant display mismatch");
+
+    const paidPlan = tjhpDashboardPlanUsageModel("ux27-paid-smoke", {
+      usage: { copilot_used: 4, ai_case_assistant_used: 2 },
+      limits: { mode: "monthly", copilot_limit: 150, ai_case_assistant_limit: 80 },
+      pilot: null,
+      sub: { plan: "Pro", status: "active" },
+      now: "2026-06-20T00:00:00Z"
+    });
+    assert(paidPlan.plan_label.includes("Pro"), "paid plan label should include Pro");
+    assert.strictEqual(paidPlan.is_trial, false, "paid plan should not be trial");
+    assert(!String(paidPlan.billing_period_label || "").includes("days left in trial"), "paid plan should not show trial days");
+    assert.strictEqual(paidPlan.ai_copilot_limit, 150, "paid copilot limit mismatch");
+    assert.strictEqual(paidPlan.ai_case_assistant_limit, 80, "paid case assistant limit mismatch");
+
+    ["tjhpDashboardRangeAvailabilityModel", "tjhpDashboardPlanUsageModel"].forEach(fn => {
+      const body = extractFunctionBody(fn);
+      ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", 'method === "POST"', "parseBody(req)"].forEach(forbidden => assert(!body.includes(forbidden), fn + " contains forbidden marker: " + forbidden));
+    });
+
+    [
+      "TJHP_DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX24_EXPECTED_TRUE_SOURCE_FRICTION_EVENT_DATES_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX23_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX22_EXPECTED_CONTRACTS_FRICTION_DATE_GRANULARITY_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX21_REVENUE_FLOW_FRICTION_TREND_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX19_NO_DATA_UPLOAD_MESSAGE_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_SIGNAL_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS",
+      "TJHP_PAYMENT_MATCH_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "window.openClaimPanel",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "window.openPriorAuthPanel"
+    ].forEach(marker => assert(src.includes(marker), "protected marker missing: " + marker));
+
+    process.stdout.write("DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write("DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+    process.exit(1);
+  }
+}
 
 
 
