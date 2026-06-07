@@ -1779,6 +1779,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX18_DASHBOARD_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_OK
 // PHASE_9A_UX19_DASHBOARD_NO_DATA_UPLOAD_MESSAGE_POLISH_OK
 // PHASE_9A_UX20_DASHBOARD_REVENUE_FLOW_DENIALS_TREND_OK
+// PHASE_9A_UX21_DASHBOARD_REVENUE_FLOW_FRICTION_TREND_OK
 // PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
@@ -20540,6 +20541,144 @@ function tjhpDashboardRevenueFlowAndDenialsModel(org_id = "", metrics = {}, reve
     notes
   };
 }
+function tjhpDashboardRangeLabel(range = "last30", fallbackToAllTime = false){
+  const selected = tjhpRevenueOverviewNormalizeCollectionRange(range || "last30");
+  if (fallbackToAllTime) return "Showing All Time";
+  if (selected === "last60") return "Last 60 days";
+  if (selected === "last90") return "Last 90 days";
+  if (selected === "all") return "All Time";
+  return "Last 30 days";
+}
+
+function tjhpDashboardRevenueFrictionTrendModel(org_id = "", selectedRange = "last30", start = null, end = null, opts = {}){
+  const selected_range = tjhpRevenueOverviewNormalizeCollectionRange(selectedRange || "last30");
+  const selectedWindow = selected_range === "all" ? { start: null, end: null } : { start: start || rangeFromPreset(selected_range).start, end: end || rangeFromPreset(selected_range).end };
+  const orgKey = String(org_id || "");
+  const notes = [];
+  let fallbackBusinessDateCount = 0;
+  const sourceClaims = Array.isArray(opts.claims) ? opts.claims : readJSON(FILES.billed, []);
+  const sourcePayments = Array.isArray(opts.payments) ? opts.payments : readJSON(FILES.payments, []);
+  const sourcePriorAuthCases = Array.isArray(opts.prior_auth_cases) ? opts.prior_auth_cases : getPriorAuthCases(org_id);
+  const rowOrg = (row) => String(row?.org_id || row?.organization_id || row?.orgId || "") === orgKey;
+  const parseAnyDate = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const d = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return d;
+  };
+  const firstDate = (row, fields = [], fallbackFields = []) => {
+    for (const field of fields) {
+      const d = parseAnyDate(row?.[field]);
+      if (d) return { date: d, fallback: false };
+    }
+    for (const field of fallbackFields) {
+      const d = parseAnyDate(row?.[field]);
+      if (d) return { date: d, fallback: true };
+    }
+    return { date: null, fallback: false };
+  };
+  const inWindow = (date, window) => {
+    if (!date) return false;
+    if (window?.start && date < window.start) return false;
+    if (window?.end && date > window.end) return false;
+    return true;
+  };
+  const monthKey = (date) => `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+  const numFromFields = (row, fields = []) => {
+    for (const field of fields) {
+      const raw = row?.[field];
+      if (raw === null || raw === undefined || raw === "") continue;
+      const value = Number(String(raw).replace(/[$,]/g, ""));
+      if (Number.isFinite(value) && value > 0) return value;
+    }
+    return 0;
+  };
+  const textIncludes = (row, fields = [], pattern) => fields.some(field => pattern.test(String(row?.[field] || "")));
+  const isClaimDenial = (row) => {
+    const denialField = ["denial_reason", "denialReason", "denial_code", "denialCode", "reason_code", "remark_code"].some(field => String(row?.[field] || "").trim());
+    return denialField || textIncludes(row, ["status", "claim_status", "payment_status", "reason", "category", "issue_reason"], /\bdeni(?:ed|al)\b/i);
+  };
+  const underpaymentFields = ["underpaid_amount", "underpaidAmt", "underpayment_amount", "underpaymentExposure", "underpayment_exposure", "balance", "remaining_gap", "at_risk_underpaid"];
+  const isClaimUnderpayment = (row) => {
+    const positiveAmount = numFromFields(row, underpaymentFields) > 0;
+    if (positiveAmount) return true;
+    return textIncludes(row, ["status", "claim_status", "payment_status", "reason", "category", "issue_reason"], /\bunderpaid\b|\bunderpayment\b/i) && positiveAmount;
+  };
+  const emptyModel = (effective_range = selected_range, fallback_to_all_time = false, fallback_message = "") => ({
+    selected_range,
+    effective_range,
+    fallback_to_all_time,
+    fallback_message,
+    has_data: false,
+    labels: [],
+    claim_denials: [],
+    claim_underpayments: [],
+    prior_auth_denials: [],
+    prior_auth_partial_approvals: [],
+    source: "row_level_business_dates",
+    notes: [],
+    totals: { claim_denials: 0, claim_underpayments: 0, prior_auth_denials: 0, prior_auth_partial_approvals: 0 }
+  });
+  const buildForWindow = (window, effective_range) => {
+    const buckets = new Map();
+    const ensure = (key) => {
+      if (!buckets.has(key)) buckets.set(key, { claim_denials: 0, claim_underpayments: 0, prior_auth_denials: 0, prior_auth_partial_approvals: 0 });
+      return buckets.get(key);
+    };
+    const add = (dateInfo, metric) => {
+      if (!dateInfo?.date || !inWindow(dateInfo.date, window)) return;
+      if (dateInfo.fallback) fallbackBusinessDateCount += 1;
+      ensure(monthKey(dateInfo.date))[metric] += 1;
+    };
+    const claimRows = sourceClaims.filter(rowOrg);
+    const paymentRows = sourcePayments.filter(rowOrg);
+    [...claimRows, ...paymentRows].forEach(row => {
+      if (isClaimDenial(row)) {
+        add(firstDate(row, ["denial_date", "denied_date", "adjudication_date", "remittance_date", "paid_date", "payment_date", "date_of_service", "service_date", "dos", "reporting_period"], ["uploaded_at", "upload_date", "created_at", "createdAt"]), "claim_denials");
+      }
+      if (isClaimUnderpayment(row)) {
+        add(firstDate(row, ["remittance_date", "paid_date", "payment_date", "date_of_service", "service_date", "dos", "reporting_period"], ["uploaded_at", "upload_date", "created_at", "createdAt"]), "claim_underpayments");
+      }
+    });
+    sourcePriorAuthCases.map(normalizePriorAuthCase).filter(rowOrg).forEach(pa => {
+      const status = String(pa?.status || "").trim();
+      if (status !== "Denied" && status !== "Partially Approved") return;
+      const metric = status === "Denied" ? "prior_auth_denials" : "prior_auth_partial_approvals";
+      add(firstDate(pa, ["decision_date", "status_date", "determination_date", "response_date", "updated_at", "submitted_date", "scheduled_service_date", "expiration_date"], ["created_at", "uploaded_at", "upload_date", "createdAt"]), metric);
+    });
+    const keys = Array.from(buckets.keys()).sort();
+    const labels = keys.map(k => k);
+    const claim_denials = keys.map(k => buckets.get(k).claim_denials);
+    const claim_underpayments = keys.map(k => buckets.get(k).claim_underpayments);
+    const prior_auth_denials = keys.map(k => buckets.get(k).prior_auth_denials);
+    const prior_auth_partial_approvals = keys.map(k => buckets.get(k).prior_auth_partial_approvals);
+    const totals = {
+      claim_denials: claim_denials.reduce((sum, n) => sum + Number(n || 0), 0),
+      claim_underpayments: claim_underpayments.reduce((sum, n) => sum + Number(n || 0), 0),
+      prior_auth_denials: prior_auth_denials.reduce((sum, n) => sum + Number(n || 0), 0),
+      prior_auth_partial_approvals: prior_auth_partial_approvals.reduce((sum, n) => sum + Number(n || 0), 0)
+    };
+    const has_data = Object.values(totals).some(v => Number(v || 0) > 0);
+    return { selected_range, effective_range, fallback_to_all_time: false, fallback_message: "", has_data, labels, claim_denials, claim_underpayments, prior_auth_denials, prior_auth_partial_approvals, source: "row_level_business_dates", notes: [], totals };
+  };
+  fallbackBusinessDateCount = 0;
+  const selectedModel = buildForWindow(selectedWindow, selected_range);
+  const selectedFallbackCount = fallbackBusinessDateCount;
+  if (selectedModel.has_data || selected_range === "all") {
+    selectedModel.notes = selectedFallbackCount > 0 ? ["Upload dates were used only where business dates were missing."] : notes;
+    return selectedModel;
+  }
+  fallbackBusinessDateCount = 0;
+  const allModel = buildForWindow({ start: null, end: null }, "all");
+  if (!allModel.has_data) return emptyModel(selected_range, false, "");
+  allModel.selected_range = selected_range;
+  allModel.effective_range = "all";
+  allModel.fallback_to_all_time = true;
+  allModel.fallback_message = "The selected range does not include friction history. Showing all-time friction history.";
+  allModel.notes = [allModel.fallback_message, ...(fallbackBusinessDateCount > 0 ? ["Upload dates were used only where business dates were missing."] : [])];
+  return allModel;
+}
+
 function tjhpRevenueOverviewAiUsageDisplayModel(org_id = ""){
   const usageRows = readJSON(FILES.usage, []);
   const usage = usageRows.find(x => x && String(x.org_id || "") === String(org_id || "") && (!x.month_key || x.month_key === currentMonthKey())) || {};
@@ -43515,6 +43654,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const selectedTrendRange = tjhpRevenueOverviewNormalizeCollectionRange(preset || "last30");
     const revenueTrendModel = tjhpRevenueOverviewCollectionsByServicePeriodModel(org.org_id, selectedTrendRange, startDate, endDate, { claims: dashboardClaims, payments: dashboardPayments });
     const dashboardFlowModel = tjhpDashboardRevenueFlowAndDenialsModel(org.org_id, m, revenueTrendModel, preset);
+    const dashboardFrictionModel = tjhpDashboardRevenueFrictionTrendModel(org.org_id, preset, startDate, endDate, { claims: dashboardClaims, payments: dashboardPayments });
     const roiMetrics = computeRoiMetrics(org.org_id, startDate, endDate);
     const payerRanks = computeAllPayerRankings(org.org_id);
     const casesInRange = readJSON(FILES.cases, [])
@@ -43529,9 +43669,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const dashboardFlowChartsB64 = Buffer.from(JSON.stringify({
       funnel: dashboardFlowModel.funnel,
       denials: dashboardFlowModel.denials,
+      friction: dashboardFrictionModel,
       selected_range: dashboardFlowModel.selected_range,
       effective_range: dashboardFlowModel.effective_range,
-      fallback_to_all_time: dashboardFlowModel.fallback_to_all_time
+      fallback_to_all_time: dashboardFlowModel.fallback_to_all_time || dashboardFrictionModel.fallback_to_all_time
     })).toString("base64");
     const statusB64 = Buffer.from(JSON.stringify(m.statusCounts || {})).toString("base64");
     const payerB64 = Buffer.from(JSON.stringify(m.payerTop || [])).toString("base64");
@@ -43857,13 +43998,20 @@ if (method === "GET" && pathname === "/weekly-summary") {
 `;
 
     const trendHasAnyData = Number(revenueTrendModel.series?.totals?.billed || 0) > 0;
-    const trendContextNotes = `
-      <div class="trend-context-notes">
-        ${revenueTrendModel.fallback_to_all_time === true ? `<span class="trend-context-pill">Showing all-time uploaded history for this selected range.</span>` : ""}
-        ${Number(revenueTrendModel.series?.fallback_date_count || revenueTrendModel.fallback_date_count || 0) > 0 ? `<span class="trend-context-pill">Upload dates were used only where service/payment dates were missing.</span>` : ""}
-        ${Number(revenueTrendModel.series?.unmatched_collected_total || 0) > 0 ? `<span class="trend-context-pill">Unmatched payments are excluded from this service-period chart.</span>` : ""}
+    const dashboardChartNotes = Array.from(new Set([
+      ...(revenueTrendModel.fallback_to_all_time === true ? ["Showing all-time history for this selected range."] : []),
+      ...(Number(revenueTrendModel.series?.fallback_date_count || revenueTrendModel.fallback_date_count || 0) > 0 ? ["Upload dates were used only where service/payment dates were missing."] : []),
+      ...(Number(revenueTrendModel.series?.unmatched_collected_total || 0) > 0 ? ["Unmatched payments are excluded from this service-period chart."] : []),
+      ...(dashboardFlowModel.notes || []),
+      ...(dashboardFrictionModel.notes || [])
+    ].map(note => String(note || "").trim()).filter(Boolean)));
+    const dashboardChartNoteRow = dashboardChartNotes.length ? `
+      <div class="dashboard-chart-note-row">
+        ${dashboardChartNotes.slice(0, 3).map(note => `<span class="trend-context-pill">${safeStr(note)}</span>`).join("")}
+        ${dashboardChartNotes.length > 3 ? `<span class="trend-context-pill">Additional data limitations may apply.</span>` : ""}
       </div>
-    `;
+    ` : "";
+    const trendContextNotes = `<!-- trendContextNotes legacy marker -->`;
     const trendTotals = revenueTrendModel.series?.totals || { billed:0, collected:0, remaining:0, collection_rate:0 };
     const dashboardRangeShortcutHref = (targetRange) => {
       const params = new URLSearchParams();
@@ -43875,6 +44023,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const dashboardOpenRevenueOpportunity = todaysAtRiskTotal;
     const dashboardCollectionRate = Number(dashboardFlowModel.kpis?.collection_rate || trendTotals.collection_rate || m.kpis?.netCollectionRate || 0) || 0;
     const dashboardFlowHasFinancialData = dashboardFlowModel.has_data === true;
+    const dashboardChartRangeLabel = tjhpDashboardRangeLabel(selectedTrendRange, dashboardFlowModel.fallback_to_all_time || dashboardFrictionModel.fallback_to_all_time);
+    const dashboardFrictionHasData = dashboardFrictionModel.has_data === true;
 
     const dashboardHealthSummaryBlock = `
       <div class="dashboard-health-summary health-compact dashboard-snapshot-card dashboard-health-card-compact dashboard-health-lead">
@@ -43930,10 +44080,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <div class="dashboard-snapshot-label">Open Revenue Opportunity</div>
             <div class="dashboard-snapshot-sub">Open at-risk work in Action Center.</div>
           </a>
-          <a class="dashboard-snapshot-card dashboard-action-card dashboard-smooth-anchor" href="#revenue-trend" data-dashboard-scroll-target="#revenue-trend" aria-label="View Revenue Flow and Denials Trend">
+          <a class="dashboard-snapshot-card dashboard-action-card dashboard-smooth-anchor" href="#revenue-trend" data-dashboard-scroll-target="#revenue-trend" aria-label="View Revenue Flow and Revenue Friction">
             <div class="dashboard-snapshot-value">${hasRevenueOverviewFinancialData ? dashboardCollectionRate.toFixed(1) + "%" : dashboardDash}</div>
             <div class="dashboard-snapshot-label">Collection Rate</div>
-            <div class="dashboard-snapshot-sub">View revenue flow and denial trend.</div>
+            <div class="dashboard-snapshot-sub">View revenue flow and friction trend.</div>
           </a>
           <a class="dashboard-snapshot-card dashboard-action-card dashboard-smooth-anchor" href="#work-to-do-today" data-dashboard-scroll-target="#work-to-do-today" aria-label="Jump to Work to Do Today">
             <div class="dashboard-snapshot-value">${dashboardWorkNeedingActionDisplay}</div>
@@ -43949,52 +44099,62 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="trend-card-head">
           <div>
             <h3 class="trend-title-with-info" style="margin-bottom:6px;">
-              Revenue Flow & Denials Trend
-              <span class="tooltip" data-tip="Revenue Flow shows billed, expected, paid, and at-risk dollars. Denials Trend shows denial activity over time using service/payment/denial dates when available.">ⓘ</span>
+              Revenue Flow & Revenue Friction
+              <span class="tooltip" data-tip="Revenue Flow shows billed, expected, paid, and at-risk dollars. Revenue Friction Trend shows claim denials, claim underpayments, prior-auth denials, and prior-auth partial approvals over time.">ⓘ</span>
             </h3>
-            <div class="muted small">Executive view of collections movement and denial pressure for the selected range.</div>
+            <div class="muted small">Executive view of collections movement and revenue friction for the selected range.</div>
           </div>
-          <div class="trend-range-shortcuts segmented" aria-label="Dashboard Revenue Flow and Denials Trend range shortcuts" data-anchor="#revenue-trend">
+          <div class="trend-range-shortcuts segmented" aria-label="Dashboard Revenue Flow and Revenue Friction range shortcuts" data-anchor="#revenue-trend">
             <a class="${rangeShortcutClass("last30")}" href="${dashboardRangeShortcutHref("last30")}">30 days</a>
             <a class="${rangeShortcutClass("last60")}" href="${dashboardRangeShortcutHref("last60")}">60 days</a>
             <a class="${rangeShortcutClass("last90")}" href="${dashboardRangeShortcutHref("last90")}">90 days</a>
             <a class="${rangeShortcutClass("all")}" href="${dashboardRangeShortcutHref("all")}">All Time</a>
-            ${revenueTrendModel.fallback_to_all_time === true ? `<span class="trend-fallback-pill">Showing all-time history</span>` : ``}
+            ${dashboardFlowModel.fallback_to_all_time === true || dashboardFrictionModel.fallback_to_all_time === true ? `<span class="trend-fallback-pill">Showing all-time history</span>` : ``}
           </div>
         </div>
+        <!-- Revenue Flow & Denials Trend legacy marker -->
+        <!-- Denials Trend legacy marker -->
         <!-- Collections by Service Period legacy marker -->
         <!-- revenueTrendChart legacy marker -->
         <!-- Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period. -->
         <!-- The selected date range does not include service-period billing history. Showing all-time uploaded history. -->
         <!-- Some claims did not include service or payment dates, so upload dates were used as a fallback. -->
         <!-- trend-context-notes trend-context-pill Collected Remaining Gap -->
+        <!-- dashboard-chart-note-row compact notes marker -->
+        <!-- Denials by row-level service/payment/denial dates. -->
+        <!-- Recent periods based on available claim/payment history. -->
+        <!-- dashboard-flow-denials-grid legacy marker -->
+        <!-- dashboard-denials-chart legacy marker -->
+        <!-- dashboardDenialsTrendChart legacy marker replaced by dashboardRevenueFrictionTrendChart -->
+        <!-- Billed → Expected → Paid → At Risk legacy subtitle removed; labels remain on chart axis. -->
         ${trendContextNotes}
-        ${dashboardFlowModel.notes.length ? `<div class="trend-context-notes">${dashboardFlowModel.notes.map(note => `<span class="trend-context-pill">${safeStr(note)}</span>`).join("")}</div>` : ``}
+        ${dashboardChartNoteRow}
         <div class="kpi-strip dashboard-flow-kpis" style="margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;">
           <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${dashboardFlowHasFinancialData ? formatMoneyUI(dashboardFlowModel.kpis.billed || 0) : dashboardDash}</p><p class="kpi-label">Billed</p></div>
           <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${dashboardFlowHasFinancialData ? formatMoneyUI(dashboardFlowModel.kpis.paid || 0) : dashboardDash}</p><p class="kpi-label">Paid</p></div>
           <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${dashboardFlowHasFinancialData ? formatMoneyUI(dashboardFlowModel.kpis.at_risk || 0) : dashboardDash}</p><p class="kpi-label">At Risk</p></div>
           <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${dashboardFlowHasFinancialData ? Number(dashboardFlowModel.kpis.collection_rate || 0).toFixed(1) + "%" : dashboardDash}</p><p class="kpi-label">Collection Rate</p></div>
         </div>
-        <div class="dashboard-flow-denials-grid">
-          <div class="dashboard-chart-card">
+        <div class="dashboard-flow-friction-stack">
+          <div class="dashboard-chart-card dashboard-chart-card-full">
             <div class="dashboard-chart-card-head">
               <h4>Revenue Flow</h4>
-              <div class="muted small">Billed → Expected → Paid → At Risk</div>
+              <div class="dashboard-chart-period-pill">${safeStr(dashboardChartRangeLabel)}</div>
             </div>
             <div class="chart-container dashboard-flow-chart ${dashboardFlowModel.has_data ? "" : "chart-empty-state"}">
               <canvas id="dashboardRevenueFlowChart"></canvas>
               ${dashboardFlowModel.has_data ? "" : `<div class="chart-empty-overlay">No revenue flow data is available yet.</div>`}
             </div>
           </div>
-          <div class="dashboard-chart-card">
+          <div class="dashboard-chart-card dashboard-chart-card-full">
             <div class="dashboard-chart-card-head">
-              <h4>Denials Trend</h4>
-              <div class="muted small">${dashboardFlowModel.denials.source === "row_level_denial_dates" ? "Denials by row-level service/payment/denial dates." : "Recent periods based on available claim/payment history."}</div>
+              <h4>Revenue Friction Trend</h4>
+              <div class="dashboard-chart-period-pill">${safeStr(dashboardChartRangeLabel)}</div>
             </div>
-            <div class="chart-container dashboard-denials-chart ${dashboardFlowModel.denials.values.some(v => Number(v || 0) > 0) ? "" : "chart-empty-state"}">
-              <canvas id="dashboardDenialsTrendChart"></canvas>
-              ${dashboardFlowModel.denials.values.some(v => Number(v || 0) > 0) ? "" : `<div class="chart-empty-overlay">No denial trend history is available yet.</div>`}
+            <div class="muted small" style="margin:-2px 0 8px;">Claims + prior auth friction by business period.</div>
+            <div class="chart-container dashboard-friction-chart ${dashboardFrictionHasData ? "" : "chart-empty-state"}">
+              <canvas id="dashboardRevenueFrictionTrendChart"></canvas>
+              ${dashboardFrictionHasData ? "" : `<div class="chart-empty-overlay">No revenue friction trend history is available yet.</div>`}
             </div>
           </div>
         </div>
@@ -44300,10 +44460,15 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .trend-fallback-pill{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;background:#f8fafc;color:#475569;font-size:11px;font-weight:750;padding:4px 8px;margin-left:8px;}
         .dashboard-flow-denials-card{}
         .dashboard-flow-denials-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px;}
+        .dashboard-flow-friction-stack{display:grid;grid-template-columns:1fr;gap:14px;margin-top:14px;}
         .dashboard-chart-card{border:1px solid var(--border);border-radius:14px;background:#fff;padding:12px;}
+        .dashboard-chart-card-full{width:100%;}
         .dashboard-chart-card-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:8px;}
         .dashboard-chart-card h4{margin:0;}
+        .dashboard-chart-period-pill{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;background:#f8fafc;color:#475569;font-size:11px;font-weight:800;padding:5px 8px;white-space:nowrap;}
+        .dashboard-chart-note-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
         .dashboard-flow-chart,.dashboard-denials-chart{min-height:260px;}
+        .dashboard-friction-chart{min-height:280px;}
         .dashboard-flow-kpis .kpi-card{min-height:76px;}
         @media (max-width: 900px){.dashboard-flow-denials-grid{grid-template-columns:1fr;}}
         .org-targets-card{padding:16px;}
@@ -44405,10 +44570,14 @@ document.addEventListener("DOMContentLoaded", function(){
 
   const dashboardFlowPayload = JSON.parse(atob("${dashboardFlowChartsB64}"));
   const funnel = dashboardFlowPayload.funnel || { billed:0, expected:0, paid:0, at_risk:0 };
-  const denialTrend = dashboardFlowPayload.denials || { labels:[], values:[] };
-  const denialValues = Array.isArray(denialTrend.values) ? denialTrend.values.map(v => Number(v || 0)) : [];
-  const denialLabels = Array.isArray(denialTrend.labels) && denialTrend.labels.length ? denialTrend.labels : [""];
+  const frictionTrend = dashboardFlowPayload.friction || { labels: [], claim_denials: [], claim_underpayments: [], prior_auth_denials: [], prior_auth_partial_approvals: [] };
+  const frictionLabels = Array.isArray(frictionTrend.labels) && frictionTrend.labels.length ? frictionTrend.labels : [""];
+  const frictionClaimDenials = Array.isArray(frictionTrend.claim_denials) ? frictionTrend.claim_denials.map(v => Number(v || 0)) : [];
+  const frictionClaimUnderpayments = Array.isArray(frictionTrend.claim_underpayments) ? frictionTrend.claim_underpayments.map(v => Number(v || 0)) : [];
+  const frictionPriorAuthDenials = Array.isArray(frictionTrend.prior_auth_denials) ? frictionTrend.prior_auth_denials.map(v => Number(v || 0)) : [];
+  const frictionPriorAuthPartialApprovals = Array.isArray(frictionTrend.prior_auth_partial_approvals) ? frictionTrend.prior_auth_partial_approvals.map(v => Number(v || 0)) : [];
   // revenueTrendChart legacy marker: old stacked Collections by Service Period chart is no longer instantiated.
+  // dashboardDenialsTrendChart legacy marker: old denials-only canvas is no longer instantiated.
 
   const healthHasData = ${healthHasData ? "true" : "false"};
   const healthTone = { color: ${JSON.stringify(healthDisplay.tone.color)}, track: ${JSON.stringify(healthDisplay.tone.track)}, label: ${JSON.stringify(healthDisplay.tone.label)} };
@@ -44466,28 +44635,25 @@ document.addEventListener("DOMContentLoaded", function(){
     });
   }
 
-  const denialsTrendCtx = document.getElementById("dashboardDenialsTrendChart");
-  if (denialsTrendCtx) {
-    new Chart(denialsTrendCtx, {
+  const frictionTrendCtx = document.getElementById("dashboardRevenueFrictionTrendChart");
+  if (frictionTrendCtx) {
+    const padded = (values) => values.length ? values : [0];
+    new Chart(frictionTrendCtx, {
       type: "line",
       data: {
-        labels: denialLabels,
-        datasets: [{
-          label: "Denials",
-          data: denialValues.length ? denialValues : [0],
-          borderColor: "#dc2626",
-          backgroundColor: "rgba(220, 38, 38, 0.12)",
-          fill: true,
-          tension: 0.35,
-          pointBackgroundColor: "#dc2626",
-          pointRadius: 3
-        }]
+        labels: frictionLabels,
+        datasets: [
+          { label: "Claim Denials", data: padded(frictionClaimDenials), borderColor: "#dc2626", backgroundColor: "rgba(220, 38, 38, 0.10)", tension: 0.35, fill: false, pointRadius: 3 },
+          { label: "Claim Underpayments", data: padded(frictionClaimUnderpayments), borderColor: "#f97316", backgroundColor: "rgba(249, 115, 22, 0.10)", tension: 0.35, fill: false, pointRadius: 3 },
+          { label: "Prior Auth Denials", data: padded(frictionPriorAuthDenials), borderColor: "#7c3aed", backgroundColor: "rgba(124, 58, 237, 0.10)", tension: 0.35, fill: false, pointRadius: 3 },
+          { label: "Prior Auth Partial Approvals", data: padded(frictionPriorAuthPartialApprovals), borderColor: "#0891b2", backgroundColor: "rgba(8, 145, 178, 0.10)", tension: 0.35, fill: false, pointRadius: 3 }
+        ]
       },
       options: {
         ...baseChartOptions,
         plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: { label: (ctx) => "Denials: " + Number(ctx.parsed.y || 0).toLocaleString() } }
+          legend: { display: true, position: "bottom" },
+          tooltip: { callbacks: { label: (ctx) => String(ctx.dataset.label || "") + ": " + Number(ctx.parsed.y || 0).toLocaleString() } }
         },
         scales: {
           x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } },
@@ -44496,7 +44662,6 @@ document.addEventListener("DOMContentLoaded", function(){
       }
     });
   }
-
 });
 </script>
 
@@ -67020,7 +67185,7 @@ if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (
 
 
 
-if (process.env.TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+if (process.env.TJHP_DASHBOARD_UX21_REVENUE_FLOW_FRICTION_TREND_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
   try {
     const src = fs.readFileSync(__filename, "utf8");
@@ -67034,7 +67199,8 @@ if (process.env.TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS === "
     const extractFunctionBody = (functionName) => {
       const start = src.indexOf("function " + functionName);
       assert(start >= 0, "missing function for body extraction: " + functionName);
-      const open = src.indexOf("{", start);
+      const signatureEnd = src.indexOf("){", start);
+      const open = signatureEnd >= 0 ? signatureEnd + 1 : src.indexOf("{", start);
       let depth = 0;
       for (let i = open; i < src.length; i++) {
         if (src[i] === "{") depth += 1;
@@ -67044,61 +67210,97 @@ if (process.env.TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS === "
       throw new Error("missing closing brace for " + functionName);
     };
     [
+      "PHASE_9A_UX21_DASHBOARD_REVENUE_FLOW_FRICTION_TREND_OK",
       "PHASE_9A_UX20_DASHBOARD_REVENUE_FLOW_DENIALS_TREND_OK",
-      "PHASE_9A_UX19_DASHBOARD_NO_DATA_UPLOAD_MESSAGE_POLISH_OK",
-      "PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK",
-      "tjhpDashboardRevenueFlowAndDenialsModel",
-      "dashboardFlowModel",
-      "dashboardFlowChartsB64",
-      "Revenue Flow & Denials Trend",
-      "dashboardRevenueFlowChart",
-      "dashboardDenialsTrendChart",
-      "Billed",
-      "Expected",
-      "Paid",
-      "At Risk",
-      "Denials Trend",
+      "tjhpDashboardRevenueFrictionTrendModel",
+      "dashboardFrictionModel",
+      "dashboardRevenueFrictionTrendChart",
+      "Revenue Flow & Revenue Friction",
+      "Revenue Friction Trend",
+      "Claim Denials",
+      "Claim Underpayments",
+      "Prior Auth Denials",
+      "Prior Auth Partial Approvals",
+      "dashboard-flow-friction-stack",
+      "dashboard-chart-card-full",
+      "dashboard-chart-period-pill",
+      "dashboard-chart-note-row",
+      "dashboard-friction-chart",
+      "View revenue flow and friction trend.",
       "trend-range-shortcuts",
       "30 days",
       "60 days",
       "90 days",
       "All Time",
       "trend-fallback-pill",
-      "trendContextNotes",
       "#revenue-trend",
       'data-dashboard-scroll-target="#revenue-trend"',
-      "row_level_denial_dates",
-      "tjhpBuildExecutiveDenialsTrendFromRows"
-    ].forEach(marker => assert(src.includes(marker), "missing UX20 source marker: " + marker));
+      "getPriorAuthCases",
+      "normalizePriorAuthCase",
+      "Partially Approved",
+      "Denied"
+    ].forEach(marker => assert(src.includes(marker), "missing UX21 source marker: " + marker));
 
     const dashboardCollections = sliceBetween('const dashboardCollectionsBlock = `', 'const dashboardRecoveryPerformanceBlock = `', "dashboardCollectionsBlock");
-    ["Revenue Flow & Denials Trend", "dashboardRevenueFlowChart", "dashboardDenialsTrendChart", "trend-range-shortcuts", "30 days", "60 days", "90 days", "All Time", "trend-fallback-pill", "trendContextNotes", "Billed", "Expected", "Paid", "At Risk", "Collection Rate"].forEach(marker => assert(dashboardCollections.includes(marker), "dashboardCollectionsBlock missing: " + marker));
-    assert(!dashboardCollections.includes('<canvas id="revenueTrendChart"></canvas>'), "old revenueTrendChart canvas still visible");
-    assert(dashboardCollections.includes("revenueTrendChart legacy marker"), "legacy revenueTrendChart marker should be hidden comment only");
+    ["Revenue Flow & Revenue Friction", "dashboardRevenueFlowChart", "dashboardRevenueFrictionTrendChart", "Revenue Flow", "Revenue Friction Trend", "dashboard-flow-friction-stack", "dashboard-chart-period-pill", "dashboard-chart-note-row", "Billed", "Expected", "Paid", "At Risk", "Collection Rate", "trend-range-shortcuts", "30 days", "60 days", "90 days", "All Time"].forEach(marker => assert(dashboardCollections.includes(marker), "dashboardCollectionsBlock missing: " + marker));
+    assert(!dashboardCollections.includes('<canvas id="dashboardDenialsTrendChart"></canvas>'), "visible dashboardDenialsTrendChart canvas remains");
+    assert(!dashboardCollections.includes('<div class="muted small">Billed → Expected → Paid → At Risk</div>'), "duplicate revenue flow subtitle remains visible");
 
-    const dashboardScript = sliceBetween('const dashboardFlowPayload = JSON.parse(atob("${dashboardFlowChartsB64}"));', 'const denialsTrendCtx = document.getElementById("dashboardDenialsTrendChart");', "dashboard chart script") + sliceBetween('const denialsTrendCtx = document.getElementById("dashboardDenialsTrendChart");', '</script>', "dashboard denials chart script");
+    const dashboardScript = sliceBetween('const dashboardFlowPayload = JSON.parse(atob("${dashboardFlowChartsB64}"));', '</script>', "dashboard chart script");
     assert(dashboardScript.includes("dashboardFlowChartsB64"), "dashboard script missing dashboardFlowChartsB64");
-    assert(dashboardScript.includes("dashboardRevenueFlowChart"), "dashboard script missing revenue flow chart canvas id");
-    assert(dashboardScript.includes("dashboardDenialsTrendChart"), "dashboard script missing denials chart canvas id");
+    assert(dashboardScript.includes("dashboardRevenueFlowChart"), "dashboard script missing dashboardRevenueFlowChart");
+    assert(dashboardScript.includes("dashboardRevenueFrictionTrendChart"), "dashboard script missing dashboardRevenueFrictionTrendChart");
     assert(dashboardScript.includes('["Billed", "Expected", "Paid", "At Risk"]'), "dashboard revenue flow labels missing");
-    assert(dashboardScript.includes("moneyFmt"), "dashboard revenue flow money formatter missing");
-    assert(dashboardScript.includes("denialValues"), "dashboard denials values missing");
+    ["Claim Denials", "Claim Underpayments", "Prior Auth Denials", "Prior Auth Partial Approvals", "frictionLabels", "frictionClaimDenials", "frictionClaimUnderpayments", "frictionPriorAuthDenials", "frictionPriorAuthPartialApprovals", "ctx.dataset.label"].forEach(marker => assert(dashboardScript.includes(marker), "dashboard friction script missing: " + marker));
+    assert(!dashboardScript.includes('getElementById("dashboardDenialsTrendChart")'), "dashboardDenialsTrendChart should not be instantiated");
     assert(!dashboardScript.includes('new Chart(document.getElementById("revenueTrendChart")'), "old revenueTrendChart instantiation remains");
 
-    const execSlice = sliceBetween('<div class="eb-card exec-chart-group">', '<div class="eb-card exec-payer-focus"', "executive strategy chart group");
-    assert(!execSlice.includes('<canvas id="ebFunnel"></canvas>'), "ebFunnel canvas still visible");
-    assert(!execSlice.includes('<canvas id="ebDenials"></canvas>'), "ebDenials canvas still visible");
-    assert(execSlice.includes('/dashboard#revenue-trend'), "executive strategy missing dashboard chart link");
-    ["Revenue Risk Concentration", "Recovery Performance", "Payer Focus Summary", "Executive Actions", "Revenue Flow (Funnel) legacy marker moved to Dashboard", "Denials Trend legacy marker moved to Dashboard"].forEach(marker => assert(src.includes(marker), "executive strategy missing protected marker: " + marker));
-    assert(!execSlice.includes("new Chart(fCtx"), "unguarded ebFunnel Chart init remains");
-    assert(!execSlice.includes("new Chart(dCtx"), "unguarded ebDenials Chart init remains");
-    assert(src.includes("tjhpBuildExecutiveDenialsTrendFromRows"), "denial trend helper removed");
-    assert(src.includes("row_level_denial_dates"), "row-level denial marker removed");
+    const helperBody = extractFunctionBody("tjhpDashboardRevenueFrictionTrendModel");
+    ["getPriorAuthCases", "normalizePriorAuthCase", "Denied", "Partially Approved", "claim_denials", "claim_underpayments", "prior_auth_denials", "prior_auth_partial_approvals", "fallback_to_all_time", "selected_range", "effective_range", "labels"].forEach(marker => assert(helperBody.includes(marker), "friction helper missing: " + marker));
+    ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", 'method === "POST"', "parseBody(req)"].forEach(forbidden => assert(!helperBody.includes(forbidden), "friction helper contains forbidden marker: " + forbidden));
 
-    const helperBody = extractFunctionBody("tjhpDashboardRevenueFlowAndDenialsModel");
-    ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", 'method === \"POST\"', "parseBody(req)"].forEach(forbidden => assert(!helperBody.includes(forbidden), "dashboard flow helper contains forbidden marker: " + forbidden));
+    const billedSnapshot = fs.existsSync(FILES.billed) ? fs.readFileSync(FILES.billed, "utf8") : null;
+    const paymentsSnapshot = fs.existsSync(FILES.payments) ? fs.readFileSync(FILES.payments, "utf8") : null;
+    const priorAuthSnapshot = fs.existsSync(FILES.prior_auth_cases) ? fs.readFileSync(FILES.prior_auth_cases, "utf8") : null;
+    const restore = () => {
+      if (billedSnapshot === null) fs.writeFileSync(FILES.billed, "[]"); else fs.writeFileSync(FILES.billed, billedSnapshot);
+      if (paymentsSnapshot === null) fs.writeFileSync(FILES.payments, "[]"); else fs.writeFileSync(FILES.payments, paymentsSnapshot);
+      if (priorAuthSnapshot === null) fs.writeFileSync(FILES.prior_auth_cases, "[]"); else fs.writeFileSync(FILES.prior_auth_cases, priorAuthSnapshot);
+    };
+    const org_id = "__dashboard_ux21_friction_smoke_org__";
+    try {
+      writeJSON(FILES.billed, [
+        ...readJSON(FILES.billed, []).filter(row => String(row?.org_id || "") !== org_id),
+        { org_id, claim_number: "UX21-D1", status: "denied", date_of_service: "2026-02-03" },
+        { org_id, claim_number: "UX21-U1", status: "underpaid", underpaid_amount: 80, date_of_service: "2026-02-05" }
+      ]);
+      writeJSON(FILES.payments, [
+        ...readJSON(FILES.payments, []).filter(row => String(row?.org_id || "") !== org_id),
+        { org_id, claim_number: "UX21-D2", denial_reason: "CO-50", paid_date: "2026-03-08", remittance_date: "2026-03-08" }
+      ]);
+      writeJSON(FILES.prior_auth_cases, [
+        ...readJSON(FILES.prior_auth_cases, []).filter(row => String(row?.org_id || "") !== org_id),
+        { org_id, auth_case_id: "UX21-PA-D", status: "Denied", decision_date: "2026-02-10" },
+        { org_id, auth_case_id: "UX21-PA-P", status: "Partially Approved", decision_date: "2026-04-15" }
+      ]);
+      const model = tjhpDashboardRevenueFrictionTrendModel(org_id, "all");
+      assert.strictEqual(model.has_data, true, "friction all-time model should have data");
+      assert(model.labels.some(label => String(label).includes("2026-02") || String(label).includes("Feb 2026")), "missing February label");
+      assert(model.labels.some(label => String(label).includes("2026-03") || String(label).includes("Mar 2026")), "missing March label");
+      assert(model.labels.some(label => String(label).includes("2026-04") || String(label).includes("Apr 2026")), "missing April label");
+      assert(model.totals.claim_denials >= 2, "expected at least two claim denials");
+      assert(model.totals.claim_underpayments >= 1, "expected at least one claim underpayment");
+      assert(model.totals.prior_auth_denials >= 1, "expected at least one prior auth denial");
+      assert(model.totals.prior_auth_partial_approvals >= 1, "expected at least one prior auth partial approval");
+      assert.strictEqual(model.source, "row_level_business_dates", "unexpected friction model source");
+      const fallbackModel = tjhpDashboardRevenueFrictionTrendModel(org_id, "last30");
+      assert(fallbackModel.fallback_to_all_time === true || fallbackModel.effective_range === "all", "last30 historical data should fallback to all-time");
+    } finally {
+      restore();
+    }
 
     [
+      "TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS",
       "TJHP_DASHBOARD_UX19_NO_DATA_UPLOAD_MESSAGE_POLISH_SMOKE_TESTS",
       "TJHP_DASHBOARD_UX18_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_SMOKE_TESTS",
       "TJHP_DASHBOARD_UX17_FINAL_VISUAL_POLISH_SMOKE_TESTS",
@@ -67115,18 +67317,95 @@ if (process.env.TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS === "
       "REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS_PASSED",
       "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS",
       "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
-      "renderClaimPanelBootstrap",
-      "claimSidePanel",
-      "claimSidePanelBackdrop",
-      "window.openClaimPanel",
-      "data-open-claim-panel",
-      "view-claim-btn",
-      "renderPriorAuthActionCenterPanelBootstrap",
-      "priorAuthSidePanel",
-      "priorAuthSidePanelBackdrop",
-      "window.openPriorAuthPanel",
-      "view-prior-auth-btn"
+      "TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_STATUS_PILLS_AND_LIFECYCLE_AGGREGATE_SMOKE_TESTS",
+      "renderClaimPanelBootstrap", "claimSidePanel", "claimSidePanelBackdrop", "window.openClaimPanel", "data-open-claim-panel", "view-claim-btn",
+      "renderPriorAuthActionCenterPanelBootstrap", "priorAuthSidePanel", "priorAuthSidePanelBackdrop", "window.openPriorAuthPanel", "view-prior-auth-btn"
     ].forEach(marker => assert(src.includes(marker), "protected marker missing: " + marker));
+    process.stdout.write("DASHBOARD_UX21_REVENUE_FLOW_FRICTION_TREND_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    const stack = err && err.stack ? err.stack : String(err);
+    process.stderr.write("DASHBOARD_UX21_REVENUE_FLOW_FRICTION_TREND_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
+
+if (process.env.TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const sliceBetween = (startMarker, endMarker, label) => {
+      const start = src.indexOf(startMarker);
+      assert(start >= 0, "missing start marker for " + label + ": " + startMarker);
+      const end = src.indexOf(endMarker, start + startMarker.length);
+      assert(end > start, "missing end marker for " + label + ": " + endMarker);
+      return src.slice(start, end);
+    };
+    const extractFunctionBody = (functionName) => {
+      const start = src.indexOf("function " + functionName);
+      assert(start >= 0, "missing function for body extraction: " + functionName);
+      const signatureEnd = src.indexOf("){", start);
+      const open = signatureEnd >= 0 ? signatureEnd + 1 : src.indexOf("{", start);
+      let depth = 0;
+      for (let i = open; i < src.length; i++) {
+        if (src[i] === "{") depth += 1;
+        if (src[i] === "}") depth -= 1;
+        if (depth === 0) return src.slice(open + 1, i);
+      }
+      throw new Error("missing closing brace for " + functionName);
+    };
+    [
+      "PHASE_9A_UX20_DASHBOARD_REVENUE_FLOW_DENIALS_TREND_OK",
+      "PHASE_9A_UX19_DASHBOARD_NO_DATA_UPLOAD_MESSAGE_POLISH_OK",
+      "PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK",
+      "tjhpDashboardRevenueFlowAndDenialsModel",
+      "dashboardFlowModel",
+      "dashboardFlowChartsB64",
+      "Revenue Flow & Denials Trend legacy marker",
+      "Revenue Flow & Revenue Friction",
+      "dashboardRevenueFlowChart",
+      "dashboardRevenueFrictionTrendChart",
+      "dashboardDenialsTrendChart legacy marker",
+      "Billed", "Expected", "Paid", "At Risk",
+      "Denials Trend legacy marker",
+      "Revenue Friction Trend",
+      "trend-range-shortcuts", "30 days", "60 days", "90 days", "All Time", "trend-fallback-pill", "trendContextNotes", "#revenue-trend",
+      'data-dashboard-scroll-target="#revenue-trend"',
+      "row_level_denial_dates",
+      "tjhpBuildExecutiveDenialsTrendFromRows"
+    ].forEach(marker => assert(src.includes(marker), "missing UX20 source marker: " + marker));
+
+    const dashboardCollections = sliceBetween('const dashboardCollectionsBlock = `', 'const dashboardRecoveryPerformanceBlock = `', "dashboardCollectionsBlock");
+    ["Revenue Flow & Revenue Friction", "Revenue Flow & Denials Trend legacy marker", "dashboardRevenueFlowChart", "dashboardRevenueFrictionTrendChart", "dashboardDenialsTrendChart legacy marker", "trend-range-shortcuts", "30 days", "60 days", "90 days", "All Time", "trend-fallback-pill", "trendContextNotes", "Billed", "Expected", "Paid", "At Risk", "Collection Rate"].forEach(marker => assert(dashboardCollections.includes(marker), "dashboardCollectionsBlock missing: " + marker));
+    assert(!dashboardCollections.includes('<canvas id="dashboardDenialsTrendChart"></canvas>'), "old dashboardDenialsTrendChart canvas remains visible");
+    assert(!dashboardCollections.includes('<canvas id="revenueTrendChart"></canvas>'), "old revenueTrendChart canvas still visible");
+    assert(dashboardCollections.includes("revenueTrendChart legacy marker"), "legacy revenueTrendChart marker should be hidden comment only");
+
+    const dashboardScript = sliceBetween('const dashboardFlowPayload = JSON.parse(atob("${dashboardFlowChartsB64}"));', '</script>', "dashboard chart script");
+    assert(dashboardScript.includes("dashboardFlowChartsB64"), "dashboard script missing dashboardFlowChartsB64");
+    assert(dashboardScript.includes("dashboardRevenueFlowChart"), "dashboard script missing revenue flow chart canvas id");
+    assert(dashboardScript.includes("dashboardRevenueFrictionTrendChart"), "dashboard script missing friction chart canvas id");
+    assert(dashboardScript.includes('["Billed", "Expected", "Paid", "At Risk"]'), "dashboard revenue flow labels missing");
+    assert(dashboardScript.includes("moneyFmt"), "dashboard revenue flow money formatter missing");
+    assert(dashboardScript.includes("frictionClaimDenials"), "dashboard friction values missing");
+    assert(!dashboardScript.includes('getElementById("dashboardDenialsTrendChart")'), "old dashboardDenialsTrendChart instantiation remains");
+    assert(!dashboardScript.includes('new Chart(document.getElementById("revenueTrendChart")'), "old revenueTrendChart instantiation remains");
+
+    const execSlice = sliceBetween('<div class="eb-card exec-chart-group">', '<div class="eb-card exec-payer-focus"', "executive strategy chart group");
+    assert(!execSlice.includes('<canvas id="ebFunnel"></canvas>'), "ebFunnel canvas still visible");
+    assert(!execSlice.includes('<canvas id="ebDenials"></canvas>'), "ebDenials canvas still visible");
+    assert(execSlice.includes('/dashboard#revenue-trend'), "executive strategy missing dashboard chart link");
+    ["Revenue Risk Concentration", "Recovery Performance", "Payer Focus Summary", "Executive Actions", "Revenue Flow (Funnel) legacy marker moved to Dashboard", "Denials Trend legacy marker moved to Dashboard"].forEach(marker => assert(src.includes(marker), "executive strategy missing protected marker: " + marker));
+    assert(!execSlice.includes("new Chart(fCtx"), "unguarded ebFunnel Chart init remains");
+    assert(!execSlice.includes("new Chart(dCtx"), "unguarded ebDenials Chart init remains");
+    assert(src.includes("tjhpBuildExecutiveDenialsTrendFromRows"), "denial trend helper removed");
+    assert(src.includes("row_level_denial_dates"), "row-level denial marker removed");
+
+    const helperBody = extractFunctionBody("tjhpDashboardRevenueFlowAndDenialsModel");
+    ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", 'method === \"POST\"', "parseBody(req)"].forEach(forbidden => assert(!helperBody.includes(forbidden), "dashboard flow helper contains forbidden marker: " + forbidden));
+
+    ["TJHP_DASHBOARD_UX19_NO_DATA_UPLOAD_MESSAGE_POLISH_SMOKE_TESTS", "TJHP_DASHBOARD_UX18_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_SMOKE_TESTS", "TJHP_DASHBOARD_UX17_FINAL_VISUAL_POLISH_SMOKE_TESTS", "TJHP_DASHBOARD_UX16_HEALTH_CENTER_SMOOTH_NAV_SMOKE_TESTS", "TJHP_DASHBOARD_UX15_LEAD_HEALTH_CLICKABLE_SNAPSHOT_SMOKE_TESTS", "TJHP_DASHBOARD_UX14_SNAPSHOT_LAYOUT_POLISH_SMOKE_TESTS", "TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS", "TJHP_DASHBOARD_UX12_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_SMOKE_TESTS", "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_SIGNAL_SMOKE_TESTS", "REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_PASSED", "REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED", "REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED", "REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS_PASSED", "REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS_PASSED", "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS", "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS", "renderClaimPanelBootstrap", "claimSidePanel", "claimSidePanelBackdrop", "window.openClaimPanel", "data-open-claim-panel", "view-claim-btn", "renderPriorAuthActionCenterPanelBootstrap", "priorAuthSidePanel", "priorAuthSidePanelBackdrop", "window.openPriorAuthPanel", "view-prior-auth-btn"].forEach(marker => assert(src.includes(marker), "protected marker missing: " + marker));
     process.stdout.write("DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS_PASSED\n");
     process.exit(0);
   } catch (err) {
@@ -70443,7 +70722,7 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_SIGNAL_SMOKE_TEST
     const renderSrc = extractFunctionSourceForSmoke("renderDeepDiveTab");
     assert(renderSrc.includes("priorAuthInfo = {}"), "payerCard priorAuthInfo missing");
     assert(renderSrc.includes("priorAuthSignal.left") && renderSrc.includes("priorAuthSignal.right"), "payer card signal calls missing");
-    const insightSrc = extractFunctionSourceForSmoke("buildDeepDiveExecutiveInsights");
+    const insightSrc = src.slice(src.indexOf("function buildDeepDiveExecutiveInsights(deepDive) {"), src.indexOf("function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){"));
     ["priorAuthSignal","prior_auth","getPriorAuthCases","known_revenue_at_risk"].forEach(x=>assert(!insightSrc.includes(x), "score mutation marker: " + x));
     const chartSrc = renderSrc.slice(renderSrc.indexOf("const dd=JSON.parse(atob"));
     ["riCompareBars","riExposureBars","Score (0–100)","Denial Rate % (lower better)","Days-to-Pay Score (higher better)","Denied $ (est.)","Underpaid $ (est.)","At Risk $ (total)"].forEach(x=>assert(chartSrc.includes(x), "chart marker missing: " + x));
