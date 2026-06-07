@@ -1781,6 +1781,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX20_DASHBOARD_REVENUE_FLOW_DENIALS_TREND_OK
 // PHASE_9A_UX21_DASHBOARD_REVENUE_FLOW_FRICTION_TREND_OK
 // PHASE_9A_UX22_DASHBOARD_EXPECTED_CONTRACTS_FRICTION_DATE_GRANULARITY_OK
+// PHASE_9A_UX23_DASHBOARD_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_OK
 // PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
@@ -20511,6 +20512,29 @@ function tjhpDashboardClaimField(row = {}, aliases = []){
   return "";
 }
 
+function tjhpDashboardDeepField(row = {}, aliases = []){
+  const source = row && typeof row === "object" ? row : {};
+  const containers = [source];
+  ["raw", "raw_row", "_raw_row", "source_row", "original_row", "parsed_row", "data", "details"].forEach((key) => {
+    const nested = source?.[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) containers.push(nested);
+  });
+  const norm = (value) => String(value || "").trim().toLowerCase().replace(/[\s_\-\/]+/g, "").replace(/[^a-z0-9]/g, "");
+  const wanted = (aliases || []).map(a => String(a || "").trim()).filter(Boolean);
+  for (const alias of wanted) {
+    for (const pool of containers) {
+      if (Object.prototype.hasOwnProperty.call(pool, alias) && String(pool[alias] ?? "").trim() !== "") return pool[alias];
+    }
+  }
+  const wantedNorm = wanted.map(norm).filter(Boolean);
+  for (const pool of containers) {
+    for (const key of Object.keys(pool || {})) {
+      if (wantedNorm.includes(norm(key)) && String(pool[key] ?? "").trim() !== "") return pool[key];
+    }
+  }
+  return "";
+}
+
 function tjhpDashboardClaimPayerKey(value = ""){
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -20532,35 +20556,34 @@ function tjhpDashboardContractExpectedForClaim(claim = {}, contracts = [], feeSc
   const dxAliases = ["dx", "diagnosis_code", "dx_code", "icd10", "icd10_code", "diagnosis", "ICD-10", "DX"];
   const networkAliases = ["network", "network_status", "in_network", "participation_status"];
   const dateAliases = ["date_of_service", "dos", "service_date", "claim_service_date", "billed_date", "claim_date", "submitted_at", "created_at", "imported_at", "uploaded_at"];
-  const claimPayer = tjhpDashboardClaimPayerKey(tjhpDashboardClaimField(claim, payerAliases));
-  let claimCpt = tjhpDashboardClaimCodeKey(tjhpDashboardClaimField(claim, cptAliases));
+  const claimPayer = tjhpDashboardClaimPayerKey(tjhpDashboardDeepField(claim, payerAliases) || tjhpDashboardClaimField(claim, payerAliases));
+  let claimCpt = tjhpDashboardClaimCodeKey(tjhpDashboardDeepField(claim, cptAliases) || tjhpDashboardClaimField(claim, cptAliases));
   if (!claimCpt) {
-    const fallbackText = [tjhpDashboardClaimField(claim, ["description", "procedure", "service", "Procedure", "Service"]), JSON.stringify(claim || {})].join(" ");
+    const fallbackText = [tjhpDashboardDeepField(claim, ["description", "procedure", "service", "Procedure", "Service"]) || tjhpDashboardClaimField(claim, ["description", "procedure", "service", "Procedure", "Service"]), JSON.stringify(claim || {})].join(" ");
     const match = fallbackText.match(/\b\d{5}\b/);
     claimCpt = match ? match[0] : "";
   }
-  const claimDx = tjhpDashboardClaimCodeKey(tjhpDashboardClaimField(claim, dxAliases));
-  const rawNetwork = String(tjhpDashboardClaimField(claim, networkAliases) || "").trim();
+  const claimDx = tjhpDashboardClaimCodeKey(tjhpDashboardDeepField(claim, dxAliases) || tjhpDashboardClaimField(claim, dxAliases));
+  const rawNetwork = String(tjhpDashboardDeepField(claim, networkAliases) || tjhpDashboardClaimField(claim, networkAliases) || "").trim();
   const claimNetwork = rawNetwork ? String(typeof normalizeNetworkStatus === "function" ? normalizeNetworkStatus(rawNetwork) : rawNetwork).toLowerCase().replace(/[^a-z0-9]/g, "") : "";
-  const serviceRaw = tjhpDashboardClaimField(claim, dateAliases);
+  const serviceRaw = tjhpDashboardDeepField(claim, dateAliases) || tjhpDashboardClaimField(claim, dateAliases);
   const serviceDate = serviceRaw ? new Date(serviceRaw) : null;
   const hasServiceDate = !!(serviceDate && !Number.isNaN(serviceDate.getTime()));
   if (!claimPayer || !claimCpt) return null;
-
   const expectedFrom = (rule = {}) => {
-    const raw = rule.expected_value ?? rule.allowed_amount ?? rule.expected ?? rule.rate ?? rule.amount ?? rule.fee ?? rule.allowed ?? "";
+    const raw = tjhpDashboardDeepField(rule, ["expected_value", "allowed_amount", "expected", "rate", "amount", "fee", "allowed", "Expected", "Allowed Amount"]);
     const value = num(raw);
     return Number.isFinite(value) && value > 0 ? value : 0;
   };
-  const rulePayer = (rule = {}) => tjhpDashboardClaimPayerKey(rule.payer_name ?? rule.payer ?? rule.insurance ?? rule.carrier ?? rule.plan ?? rule.insurance_name ?? "");
-  const ruleCpt = (rule = {}) => tjhpDashboardClaimCodeKey((typeof getContractProcedureCode === "function" ? getContractProcedureCode(rule) : "") || rule.procedure_code || rule.cpt || rule.hcpcs || rule.proc_code || rule.service_code || rule.billing_code || rule.cpt_code || rule.code || "");
-  const ruleDx = (rule = {}) => tjhpDashboardClaimCodeKey(rule.diagnosis_code ?? rule.dx ?? rule.dx_code ?? rule.icd10 ?? rule.icd10_code ?? "");
+  const rulePayer = (rule = {}) => tjhpDashboardClaimPayerKey(tjhpDashboardDeepField(rule, ["payer_name", "payer", "insurance", "carrier", "plan", "insurance_name", "Payer"]));
+  const ruleCpt = (rule = {}) => tjhpDashboardClaimCodeKey((typeof getContractProcedureCode === "function" ? getContractProcedureCode(rule) : "") || tjhpDashboardDeepField(rule, ["procedure_code", "cpt", "hcpcs", "proc_code", "service_code", "billing_code", "cpt_code", "code", "Procedure Code"]));
+  const ruleDx = (rule = {}) => tjhpDashboardClaimCodeKey(tjhpDashboardDeepField(rule, ["diagnosis_code", "dx", "dx_code", "icd10", "icd10_code", "Diagnosis Code"]));
   const ruleNetwork = (rule = {}) => {
-    const raw = String(rule.network_status ?? rule.network ?? rule.in_network ?? rule.participation_status ?? "").trim();
+    const raw = String(tjhpDashboardDeepField(rule, ["network_status", "network", "in_network", "participation_status"]) || "").trim();
     return raw ? String(typeof normalizeNetworkStatus === "function" ? normalizeNetworkStatus(raw) : raw).toLowerCase().replace(/[^a-z0-9]/g, "") : "";
   };
   const ruleEffective = (rule = {}) => {
-    const raw = String(rule.effective_date ?? rule.effective ?? rule.contract_effective_date ?? "").trim();
+    const raw = String(tjhpDashboardDeepField(rule, ["effective_date", "effective", "contract_effective_date"]) || "").trim();
     const d = raw ? new Date(raw) : null;
     return d && !Number.isNaN(d.getTime()) ? d : null;
   };
@@ -20579,7 +20602,7 @@ function tjhpDashboardContractExpectedForClaim(claim = {}, contracts = [], feeSc
       if (!broadPayer || payer) {
         if (!payer || payer !== claimPayer) return;
       }
-      if (dx && (!claimDx || dx !== claimDx)) return;
+      if (dx && claimDx && dx !== claimDx) return;
       if (network && claimNetwork && network !== claimNetwork) return;
       if (effective && hasServiceDate && effective.getTime() > serviceDate.getTime()) return;
       candidates.push({ rule, expected, source, effective });
@@ -20587,7 +20610,6 @@ function tjhpDashboardContractExpectedForClaim(claim = {}, contracts = [], feeSc
     candidates.sort((a, b) => Number(b.effective?.getTime?.() || 0) - Number(a.effective?.getTime?.() || 0));
     return candidates[0] || null;
   };
-
   const contractMatch = latestMatch(contracts, "payer_contracts", false);
   if (contractMatch) return contractMatch;
   const allowedMatch = latestMatch(allowedRules, "allowed_amount_rules", false);
@@ -20598,14 +20620,17 @@ function tjhpDashboardContractExpectedForClaim(claim = {}, contracts = [], feeSc
 }
 
 function tjhpDashboardExpectedAllowedFromContractsModel(org_id = "", claims = [], selectedRange = "last30", start = null, end = null, opts = {}){
-  const dashboardExpectedContractFieldMarkers = ["expected_value", "allowed_amount", "rate", "fee", "payer", "procedure_code", "diagnosis_code", "effective_date", "network_status", "matched_claim_count", "unmatched_claim_count", "rule_source_counts"];
+  const dashboardExpectedContractFieldMarkers = ["expected_value", "allowed_amount", "rate", "fee", "payer", "procedure_code", "diagnosis_code", "effective_date", "network_status", "matched_claim_count", "unmatched_claim_count", "rule_source_counts", "source_counts", "claim_expected_fields"];
   void dashboardExpectedContractFieldMarkers;
   const orgKey = String(org_id || "");
   const rowOrg = (row) => String(row?.org_id || row?.organization_id || row?.orgId || "") === orgKey;
   const sourceClaims = (Array.isArray(claims) ? claims : []).filter(rowOrg);
-  const contractRows = readJSON(FILES.payer_contracts, []).filter(rowOrg).map(row => ({ ...row, __dashboard_rule_source: "payer_contracts" }));
-  const allowedRowsRaw = readJSON(FILES.allowed_amount_rules, []).filter(rowOrg);
-  const feeRowsRaw = readJSON(FILES.fee_schedules, []).filter(rowOrg);
+  const optContracts = Array.isArray(opts.contracts) ? opts.contracts : (Array.isArray(opts.payer_contracts) ? opts.payer_contracts : null);
+  const optAllowed = Array.isArray(opts.allowed_amount_rules) ? opts.allowed_amount_rules : null;
+  const optFees = Array.isArray(opts.fee_schedules) ? opts.fee_schedules : null;
+  const contractRows = (optContracts || readJSON(FILES.payer_contracts, [])).filter(rowOrg).map(row => ({ ...row, __dashboard_rule_source: "payer_contracts" }));
+  const allowedRowsRaw = (optAllowed || readJSON(FILES.allowed_amount_rules, [])).filter(rowOrg);
+  const feeRowsRaw = (optFees || readJSON(FILES.fee_schedules, [])).filter(rowOrg);
   const allowedRows = [];
   allowedRowsRaw.forEach(rule => {
     allowedRows.push({ ...rule, __dashboard_rule_source: "allowed_amount_rules" });
@@ -20619,36 +20644,38 @@ function tjhpDashboardExpectedAllowedFromContractsModel(org_id = "", claims = []
   });
   const effectiveRange = tjhpRevenueOverviewNormalizeCollectionRange(opts?.revenueTrendModel?.effective_range || opts?.revenueTrendModel?.series?.effective_range || selectedRange || "last30");
   const dateAliases = ["date_of_service", "dos", "service_date", "claim_service_date", "billed_date", "claim_date", "submitted_at", "created_at", "imported_at", "uploaded_at"];
+  const expectedAliases = ["expected_amount", "expectedAmount", "expected_insurance", "expectedInsurance", "expected_allowed", "expected_allowed_amount", "allowed_amount", "allowedAmount", "contract_expected", "contracted_amount", "insurance_expected", "Expected Amount", "Expected", "Allowed Amount", "Contracted Amount"];
+  const billedAliases = ["billed_amount", "corrected_billed_amount", "amount_billed", "charge_amount", "total_billed", "billed", "charge", "amount", "Billed Amount", "Corrected Billed Amount", "Total Billed", "Charge Amount"];
+  const money = (value) => { const n = Number(String(value ?? "").replace(/[$,]/g, "")); return Number.isFinite(n) && n > 0 ? n : 0; };
   const inRange = (claim) => {
     if (effectiveRange === "all" || (!start && !end)) return true;
-    const raw = tjhpDashboardClaimField(claim, dateAliases);
+    const raw = tjhpDashboardDeepField(claim, dateAliases) || tjhpDashboardClaimField(claim, dateAliases);
     const d = raw ? new Date(raw) : null;
     if (!d || Number.isNaN(d.getTime())) return true;
     if (start && d < start) return false;
     if (end && d > end) return false;
     return true;
   };
-  const model = {
-    expected_total: 0,
-    matched_claim_count: 0,
-    unmatched_claim_count: 0,
-    rule_source_counts: { payer_contracts: 0, allowed_amount_rules: 0, fee_schedules: 0 },
-    has_expected: false,
-    notes: []
-  };
+  const model = { expected_total: 0, matched_claim_count: 0, unmatched_claim_count: 0, rule_source_counts: { payer_contracts: 0, allowed_amount_rules: 0, fee_schedules: 0 }, source_counts: { claim_expected_fields: 0, payer_contracts: 0, allowed_amount_rules: 0, fee_schedules: 0 }, has_expected: false, notes: [] };
   sourceClaims.filter(inRange).forEach(claim => {
     const match = tjhpDashboardContractExpectedForClaim(claim, contractRows, feeRows, allowedRows);
     if (match && Number(match.expected || 0) > 0) {
-      model.expected_total += Number(match.expected || 0);
-      model.matched_claim_count += 1;
+      model.expected_total += Number(match.expected || 0); model.matched_claim_count += 1;
       if (model.rule_source_counts[match.source] !== undefined) model.rule_source_counts[match.source] += 1;
-    } else {
-      model.unmatched_claim_count += 1;
+      if (model.source_counts[match.source] !== undefined) model.source_counts[match.source] += 1;
+      return;
     }
+    const explicitExpected = money(tjhpDashboardDeepField(claim, expectedAliases) || tjhpDashboardClaimField(claim, expectedAliases));
+    const billedGuard = money(tjhpDashboardDeepField(claim, billedAliases) || tjhpDashboardClaimField(claim, billedAliases)); void billedGuard;
+    if (explicitExpected > 0) { model.expected_total += explicitExpected; model.matched_claim_count += 1; model.source_counts.claim_expected_fields += 1; return; }
+    model.unmatched_claim_count += 1;
   });
-  model.expected_total = round2(model.expected_total);
-  model.has_expected = model.expected_total > 0;
-  if (model.expected_total > 0) model.notes.push("Expected allowed amount is based on uploaded reimbursement rules.");
+  model.expected_total = round2(model.expected_total); model.has_expected = model.expected_total > 0;
+  const usedRules = Number(model.source_counts.payer_contracts || 0) + Number(model.source_counts.allowed_amount_rules || 0) + Number(model.source_counts.fee_schedules || 0);
+  const usedClaimExpected = Number(model.source_counts.claim_expected_fields || 0) > 0;
+  if (usedRules > 0 && usedClaimExpected) model.notes.push("Expected allowed amount is based on uploaded reimbursement rules and claim expected fields.");
+  else if (usedRules > 0) model.notes.push("Expected allowed amount is based on uploaded reimbursement rules.");
+  else if (usedClaimExpected) model.notes.push("Expected allowed amount is based on uploaded claim expected fields.");
   else if (sourceClaims.length > 0) model.notes.push("Expected allowed amount is not available yet.");
   return model;
 }
@@ -20664,15 +20691,23 @@ function tjhpDashboardRevenueFlowAndDenialsModel(org_id = "", metrics = {}, reve
   const notes = [];
   const kpis = metrics?.kpis || {};
   const expectedModel = opts?.expectedModel || {};
+  const sourceCounts = expectedModel?.source_counts || expectedModel?.rule_source_counts || {};
   const contractExpected = Number(expectedModel.expected_total || 0);
-  const expectedCandidates = [contractExpected, kpis.expectedInsuranceTotal, metrics?.expectedInsuranceTotal, metrics?.totalExpected, kpis.allowedTotal, metrics?.allowedTotal]
-    .map(v => Number(v || 0))
-    .filter(v => Number.isFinite(v) && v > 0);
-  const expected = expectedCandidates.length ? round2(expectedCandidates[0]) : 0;
-  const expectedSource = contractExpected > 0 ? "uploaded_reimbursement_rules" : (expected > 0 ? "metrics" : "");
+  const explicitMetricExpected = [kpis.expectedInsuranceTotal, metrics?.expectedInsuranceTotal, metrics?.totalExpected, kpis.totalExpected, metrics?.expectedTotal, kpis.expectedTotal].map(v => Number(v || 0)).find(v => Number.isFinite(v) && v > 0) || 0;
+  // allowedTotal remains intentionally excluded as an expected source for UX23; if revived, it must be guarded by allowedTotal < totalBilled.
+  const expected = contractExpected > 0 ? round2(contractExpected) : round2(explicitMetricExpected);
+  const usedRules = Number(sourceCounts.payer_contracts || 0) + Number(sourceCounts.allowed_amount_rules || 0) + Number(sourceCounts.fee_schedules || 0);
+  const usedClaimExpected = Number(sourceCounts.claim_expected_fields || 0) > 0;
+  const expectedSource = contractExpected > 0 ? (usedRules > 0 ? "uploaded_reimbursement_rules" : (usedClaimExpected ? "claim_expected_fields" : "expected_model")) : (explicitMetricExpected > 0 ? "metrics" : "");
   const atRisk = expected > 0 ? round2(Math.max(0, expected - paid)) : fallbackAtRisk;
-  if (contractExpected > 0) notes.push("Expected allowed amount is based on uploaded reimbursement rules.");
-  else if (!expectedCandidates.length) notes.push("Expected allowed amount is not available yet.");
+  const hasFinancialData = billed > 0 || paid > 0 || fallbackAtRisk > 0 || (Array.isArray(opts?.claims) && opts.claims.length > 0) || (Array.isArray(opts?.payments) && opts.payments.length > 0);
+  if (contractExpected > 0) {
+    if (usedRules > 0 && usedClaimExpected) notes.push("Expected allowed amount is based on uploaded reimbursement rules and claim expected fields.");
+    else if (usedRules > 0) notes.push("Expected allowed amount is based on uploaded reimbursement rules.");
+    else if (usedClaimExpected) notes.push("Expected allowed amount is based on uploaded claim expected fields.");
+    else notes.push(...(Array.isArray(expectedModel.notes) ? expectedModel.notes : []));
+  } else if (explicitMetricExpected > 0) notes.push("Expected allowed amount is based on uploaded claim expected fields.");
+  else if (hasFinancialData) notes.push("Expected allowed amount is not available yet.");
 
   const rangeDays = selected === "last90" ? 90 : (selected === "last60" ? 60 : (selected === "last30" ? 30 : 0));
   const monthInSelectedRange = (key) => {
@@ -20680,15 +20715,10 @@ function tjhpDashboardRevenueFlowAndDenialsModel(org_id = "", metrics = {}, reve
     const m = String(key || "").match(/^(\d{4})-(\d{2})$/);
     if (!m) return false;
     const monthDate = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, 1));
-    const cutoff = new Date();
-    cutoff.setUTCDate(cutoff.getUTCDate() - rangeDays);
-    cutoff.setUTCHours(0, 0, 0, 0);
+    const cutoff = new Date(); cutoff.setUTCDate(cutoff.getUTCDate() - rangeDays); cutoff.setUTCHours(0, 0, 0, 0);
     return monthDate >= new Date(Date.UTC(cutoff.getUTCFullYear(), cutoff.getUTCMonth(), 1));
   };
-
-  const rawDenials = (typeof tjhpBuildExecutiveDenialsTrendFromRows === "function")
-    ? (tjhpBuildExecutiveDenialsTrendFromRows(org_id) || {})
-    : {};
+  const rawDenials = (typeof tjhpBuildExecutiveDenialsTrendFromRows === "function") ? (tjhpBuildExecutiveDenialsTrendFromRows(org_id) || {}) : {};
   const allKeys = Array.isArray(rawDenials.keys) ? rawDenials.keys : [];
   const allLabels = Array.isArray(rawDenials.labels) ? rawDenials.labels : [];
   const allValues = Array.isArray(rawDenials.values) ? rawDenials.values.map(v => Number(v || 0)) : [];
@@ -20701,24 +20731,8 @@ function tjhpDashboardRevenueFlowAndDenialsModel(org_id = "", metrics = {}, reve
   const useIndexes = denialFallback ? allKeys.map((_, idx) => idx) : selectedIndexes;
   const denialLabels = useIndexes.map(idx => allLabels[idx] || allKeys[idx] || "");
   const denialValues = useIndexes.map(idx => allValues[idx] || 0);
-  const denials = {
-    labels: denialLabels,
-    values: denialValues,
-    source: rawDenials.source || (allHasDenials ? "row_level_denial_dates" : ""),
-    detectedMonths: Number(rawDenials.detectedMonths || allKeys.length || 0)
-  };
-  return {
-    selected_range: selected,
-    effective_range: effective,
-    fallback_to_all_time: revenueTrendModel?.fallback_to_all_time === true || revenueTrendModel?.series?.fallback_to_all_time === true,
-    fallback_message: revenueTrendModel?.fallback_message || revenueTrendModel?.series?.fallback_message || "",
-    has_data: billed > 0 || paid > 0 || atRisk > 0 || expected > 0,
-    funnel: { billed, expected, paid, at_risk: atRisk },
-    kpis: { billed, paid, at_risk: atRisk, collection_rate: collectionRate, denials: denialValues.reduce((sum, n) => sum + Number(n || 0), 0) },
-    expected_source: expectedSource,
-    denials,
-    notes
-  };
+  const denials = { labels: denialLabels, values: denialValues, source: rawDenials.source || (allHasDenials ? "row_level_denial_dates" : ""), detectedMonths: Number(rawDenials.detectedMonths || allKeys.length || 0) };
+  return { selected_range: selected, effective_range: effective, fallback_to_all_time: revenueTrendModel?.fallback_to_all_time === true || revenueTrendModel?.series?.fallback_to_all_time === true, fallback_message: revenueTrendModel?.fallback_message || revenueTrendModel?.series?.fallback_message || "", has_data: billed > 0 || paid > 0 || atRisk > 0 || expected > 0, funnel: { billed, expected, paid, at_risk: atRisk }, kpis: { billed, paid, at_risk: atRisk, collection_rate: collectionRate, denials: denialValues.reduce((sum, n) => sum + Number(n || 0), 0) }, expected_source: expectedSource, denials, notes: Array.from(new Set(notes.filter(Boolean))).slice(0, 3) };
 }
 function tjhpDashboardRangeLabel(range = "last30", fallbackToAllTime = false){
   const selected = tjhpRevenueOverviewNormalizeCollectionRange(range || "last30");
@@ -20769,10 +20783,19 @@ function tjhpDashboardFrictionKeyForDate(date, granularity = "month"){
 }
 
 function tjhpDashboardRevenueFrictionTrendModel(org_id = "", selectedRange = "last30", start = null, end = null, opts = {}){
-  const dashboardFrictionGranularityMarkers = ["granularity", "day", "week", "month", "labels", "keys", "claim_denials", "claim_underpayments", "prior_auth_denials", "prior_auth_partial_approvals", "fallback_to_all_time"];
+  const dashboardFrictionGranularityMarkers = ["granularity", "day", "week", "month", "labels", "keys", "claim_denials", "claim_underpayments", "prior_auth_denials", "prior_auth_partial_approvals", "fallback_to_all_time", "paid_date", "date_of_service", "denial_reason", "expected_amount", "allowed_amount"];
   void dashboardFrictionGranularityMarkers;
   const selected_range = tjhpRevenueOverviewNormalizeCollectionRange(selectedRange || "last30");
-  const selectedWindow = selected_range === "all" ? { start: null, end: null } : { start: start || rangeFromPreset(selected_range).start, end: end || rangeFromPreset(selected_range).end };
+  const now = opts?.now ? new Date(opts.now) : new Date();
+  const windowFromNow = (range) => {
+    if (range === "all") return { start: null, end: null };
+    const days = range === "last90" ? 90 : (range === "last60" ? 60 : 30);
+    const endDate = new Date(now);
+    if (Number.isNaN(endDate.getTime())) return { start: start || rangeFromPreset(range).start, end: end || rangeFromPreset(range).end };
+    const startDate = new Date(endDate); startDate.setUTCDate(startDate.getUTCDate() - days); startDate.setUTCHours(0, 0, 0, 0);
+    return { start: start || startDate, end: end || endDate };
+  };
+  const selectedWindow = windowFromNow(selected_range);
   const orgKey = String(org_id || "");
   const notes = [];
   let fallbackBusinessDateCount = 0;
@@ -20780,126 +20803,58 @@ function tjhpDashboardRevenueFrictionTrendModel(org_id = "", selectedRange = "la
   const sourcePayments = Array.isArray(opts.payments) ? opts.payments : readJSON(FILES.payments, []);
   const sourcePriorAuthCases = Array.isArray(opts.prior_auth_cases) ? opts.prior_auth_cases : getPriorAuthCases(org_id);
   const rowOrg = (row) => String(row?.org_id || row?.organization_id || row?.orgId || "") === orgKey;
-  const parseAnyDate = (value) => {
-    if (value === null || value === undefined || value === "") return null;
-    const d = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(d.getTime())) return null;
-    return d;
-  };
+  const parseAnyDate = (value) => { if (value === null || value === undefined || value === "") return null; const d = value instanceof Date ? value : new Date(value); return Number.isNaN(d.getTime()) ? null : d; };
   const firstDate = (row, fields = [], fallbackFields = []) => {
-    for (const field of fields) {
-      const d = parseAnyDate(row?.[field]);
-      if (d) return { date: d, fallback: false };
-    }
-    for (const field of fallbackFields) {
-      const d = parseAnyDate(row?.[field]);
-      if (d) return { date: d, fallback: true };
-    }
+    for (const field of fields) { const d = parseAnyDate(tjhpDashboardDeepField(row, [field])); if (d) return { date: d, fallback: false }; }
+    for (const field of fallbackFields) { const d = parseAnyDate(tjhpDashboardDeepField(row, [field])); if (d) return { date: d, fallback: true }; }
     return { date: null, fallback: false };
   };
-  const inWindow = (date, window) => {
-    if (!date) return false;
-    if (window?.start && date < window.start) return false;
-    if (window?.end && date > window.end) return false;
-    return true;
-  };
+  const inWindow = (date, window) => { if (!date) return false; if (window?.start && date < window.start) return false; if (window?.end && date > window.end) return false; return true; };
   const numFromFields = (row, fields = []) => {
-    for (const field of fields) {
-      const raw = row?.[field];
-      if (raw === null || raw === undefined || raw === "") continue;
-      const value = Number(String(raw).replace(/[$,]/g, ""));
-      if (Number.isFinite(value) && value > 0) return value;
-    }
+    for (const field of fields) { const raw = tjhpDashboardDeepField(row, [field]); if (raw === null || raw === undefined || raw === "") continue; const value = Number(String(raw).replace(/[$,]/g, "")); if (Number.isFinite(value) && value > 0) return value; }
     return 0;
   };
-  const textIncludes = (row, fields = [], pattern) => fields.some(field => pattern.test(String(row?.[field] || "")));
-  const isClaimDenial = (row) => {
-    const denialField = ["denial_reason", "denialReason", "denial_code", "denialCode", "reason_code", "remark_code"].some(field => String(row?.[field] || "").trim());
-    return denialField || textIncludes(row, ["status", "claim_status", "payment_status", "reason", "category", "issue_reason"], /\bdeni(?:ed|al)\b/i);
-  };
+  const textFromFields = (row, fields = []) => fields.map(field => String(tjhpDashboardDeepField(row, [field]) || "")).join(" ");
+  const textIncludes = (row, fields = [], pattern) => pattern.test(textFromFields(row, fields));
+  const denialAliases = ["denial_reason", "denialReason", "denial_code", "denialCode", "reason_code", "remark_code", "reason", "status_reason"];
+  const isDenialLikeReason = (row) => { const text = textFromFields(row, denialAliases).trim(); return !!text && /deni(?:ed|al)|medical necessity|authorization|required|not covered|remark|reason/i.test(text); };
+  const isClaimDenial = (row) => denialAliases.some(field => String(tjhpDashboardDeepField(row, [field]) || "").trim()) || textIncludes(row, ["status", "claim_status", "payment_status", "reason", "category", "issue_reason"], /\bdeni(?:ed|al)\b/i);
   const underpaymentFields = ["underpaid_amount", "underpaidAmt", "underpayment_amount", "underpaymentExposure", "underpayment_exposure", "balance", "remaining_gap", "at_risk_underpaid"];
+  const claimIdAliases = ["claim_id", "claim_number", "claim_no", "claim", "billed_id", "encounter_id", "visit_id", "account_number", "invoice_number"];
+  const paymentAmountAliases = ["paid_amount", "amount_paid", "payment_amount", "paid", "insurance_paid", "collected_amount", "Paid Amount", "Payment Amount"];
+  const expectedAliases = ["expected_amount", "expected_insurance", "allowed_amount", "expected", "Expected Amount"];
+  const claimKey = (row) => String(tjhpDashboardDeepField(row, claimIdAliases) || "").trim().toLowerCase();
+  const claimExpectedById = new Map();
+  sourceClaims.filter(rowOrg).forEach((claim) => { const key = claimKey(claim); const expected = numFromFields(claim, expectedAliases); if (key && expected > 0) claimExpectedById.set(key, expected); });
   const isClaimUnderpayment = (row) => {
-    const positiveAmount = numFromFields(row, underpaymentFields) > 0;
-    if (positiveAmount) return true;
-    return textIncludes(row, ["status", "claim_status", "payment_status", "reason", "category", "issue_reason"], /\bunderpaid\b|\bunderpayment\b/i) && positiveAmount;
+    if (numFromFields(row, underpaymentFields) > 0) return true;
+    const key = claimKey(row); const expected = key ? Number(claimExpectedById.get(key) || 0) : 0; const paid = numFromFields(row, paymentAmountAliases);
+    if (expected > 0 && paid > 0 && paid < expected && !isDenialLikeReason(row)) return true;
+    return false;
   };
-  const emptyModel = (effective_range = selected_range, fallback_to_all_time = false, fallback_message = "") => ({
-    selected_range,
-    effective_range,
-    fallback_to_all_time,
-    fallback_message,
-    granularity: tjhpDashboardFrictionGranularity(selected_range, effective_range, fallback_to_all_time, null),
-    has_data: false,
-    labels: [],
-    keys: [],
-    claim_denials: [],
-    claim_underpayments: [],
-    prior_auth_denials: [],
-    prior_auth_partial_approvals: [],
-    source: "row_level_business_dates",
-    notes: [],
-    totals: { claim_denials: 0, claim_underpayments: 0, prior_auth_denials: 0, prior_auth_partial_approvals: 0 }
-  });
+  const emptyModel = (effective_range = selected_range, fallback_to_all_time = false, fallback_message = "") => ({ selected_range, effective_range, fallback_to_all_time, fallback_message, granularity: tjhpDashboardFrictionGranularity(selected_range, effective_range, fallback_to_all_time, null), has_data: false, labels: [], keys: [], claim_denials: [], claim_underpayments: [], prior_auth_denials: [], prior_auth_partial_approvals: [], source: "row_level_business_dates", notes: [], fallback_business_date_count: 0, totals: { claim_denials: 0, claim_underpayments: 0, prior_auth_denials: 0, prior_auth_partial_approvals: 0 } });
   const buildForWindow = (window, effective_range, fallback_to_all_time = false) => {
     const granularity = tjhpDashboardFrictionGranularity(selected_range, effective_range, fallback_to_all_time, null);
     const buckets = new Map();
-    const ensure = (key) => {
-      if (!buckets.has(key)) buckets.set(key, { claim_denials: 0, claim_underpayments: 0, prior_auth_denials: 0, prior_auth_partial_approvals: 0 });
-      return buckets.get(key);
-    };
-    const add = (dateInfo, metric) => {
-      if (!dateInfo?.date || !inWindow(dateInfo.date, window)) return;
-      if (dateInfo.fallback) fallbackBusinessDateCount += 1;
-      const key = tjhpDashboardFrictionKeyForDate(dateInfo.date, granularity);
-      if (!key) return;
-      ensure(key)[metric] += 1;
-    };
-    const claimRows = sourceClaims.filter(rowOrg);
-    const paymentRows = sourcePayments.filter(rowOrg);
+    const ensure = (key) => { if (!buckets.has(key)) buckets.set(key, { claim_denials: 0, claim_underpayments: 0, prior_auth_denials: 0, prior_auth_partial_approvals: 0 }); return buckets.get(key); };
+    const add = (dateInfo, metric) => { if (!dateInfo?.date || !inWindow(dateInfo.date, window)) return; if (dateInfo.fallback) fallbackBusinessDateCount += 1; const key = tjhpDashboardFrictionKeyForDate(dateInfo.date, granularity); if (!key) return; ensure(key)[metric] += 1; };
+    const claimRows = sourceClaims.filter(rowOrg); const paymentRows = sourcePayments.filter(rowOrg);
     [...claimRows, ...paymentRows].forEach(row => {
-      if (isClaimDenial(row)) {
-        add(firstDate(row, ["denial_date", "denied_date", "adjudication_date", "remittance_date", "paid_date", "payment_date", "date_of_service", "service_date", "dos", "reporting_period"], ["uploaded_at", "upload_date", "created_at", "createdAt"]), "claim_denials");
-      }
-      if (isClaimUnderpayment(row)) {
-        add(firstDate(row, ["paid_date", "date_paid", "remittance_date", "payment_date", "check_date", "date_of_service", "service_date", "dos", "reporting_period"], ["uploaded_at", "upload_date", "created_at", "createdAt"]), "claim_underpayments");
-      }
+      if (isClaimDenial(row)) add(firstDate(row, ["denial_date", "denied_date", "adjudication_date", "remittance_date", "paid_date", "payment_date", "date_of_service", "service_date", "dos", "reporting_period", "Denial Date", "Paid Date", "Date of Service"], ["uploaded_at", "upload_date", "created_at", "createdAt", "imported_at"]), "claim_denials");
+      if (isClaimUnderpayment(row)) add(firstDate(row, ["paid_date", "date_paid", "remittance_date", "payment_date", "check_date", "date_of_service", "service_date", "dos", "reporting_period", "Paid Date", "Payment Date", "Date of Service"], ["uploaded_at", "upload_date", "created_at", "createdAt", "imported_at"]), "claim_underpayments");
     });
-    sourcePriorAuthCases.map(normalizePriorAuthCase).filter(rowOrg).forEach(pa => {
-      const status = String(pa?.status || "").trim();
-      if (status !== "Denied" && status !== "Partially Approved") return;
-      const metric = status === "Denied" ? "prior_auth_denials" : "prior_auth_partial_approvals";
-      add(firstDate(pa, ["decision_date", "status_date", "determination_date", "response_date", "updated_at", "submitted_date", "scheduled_service_date", "expiration_date"], ["created_at", "uploaded_at", "upload_date", "createdAt"]), metric);
-    });
-    const keys = Array.from(buckets.keys()).sort();
-    const labels = keys.map(k => tjhpDashboardFrictionLabelForKey(k, granularity));
-    const claim_denials = keys.map(k => buckets.get(k).claim_denials);
-    const claim_underpayments = keys.map(k => buckets.get(k).claim_underpayments);
-    const prior_auth_denials = keys.map(k => buckets.get(k).prior_auth_denials);
-    const prior_auth_partial_approvals = keys.map(k => buckets.get(k).prior_auth_partial_approvals);
-    const totals = {
-      claim_denials: claim_denials.reduce((sum, n) => sum + Number(n || 0), 0),
-      claim_underpayments: claim_underpayments.reduce((sum, n) => sum + Number(n || 0), 0),
-      prior_auth_denials: prior_auth_denials.reduce((sum, n) => sum + Number(n || 0), 0),
-      prior_auth_partial_approvals: prior_auth_partial_approvals.reduce((sum, n) => sum + Number(n || 0), 0)
-    };
+    sourcePriorAuthCases.map(normalizePriorAuthCase).filter(rowOrg).forEach(pa => { const status = String(pa?.status || "").trim(); if (status !== "Denied" && status !== "Partially Approved") return; const metric = status === "Denied" ? "prior_auth_denials" : "prior_auth_partial_approvals"; add(firstDate(pa, ["decision_date", "status_date", "determination_date", "response_date", "updated_at", "submitted_date", "scheduled_service_date", "expiration_date", "created_at"], ["uploaded_at", "upload_date", "createdAt", "imported_at"]), metric); });
+    const keys = Array.from(buckets.keys()).sort(); const labels = keys.map(k => tjhpDashboardFrictionLabelForKey(k, granularity));
+    const claim_denials = keys.map(k => buckets.get(k).claim_denials); const claim_underpayments = keys.map(k => buckets.get(k).claim_underpayments); const prior_auth_denials = keys.map(k => buckets.get(k).prior_auth_denials); const prior_auth_partial_approvals = keys.map(k => buckets.get(k).prior_auth_partial_approvals);
+    const totals = { claim_denials: claim_denials.reduce((sum, n) => sum + Number(n || 0), 0), claim_underpayments: claim_underpayments.reduce((sum, n) => sum + Number(n || 0), 0), prior_auth_denials: prior_auth_denials.reduce((sum, n) => sum + Number(n || 0), 0), prior_auth_partial_approvals: prior_auth_partial_approvals.reduce((sum, n) => sum + Number(n || 0), 0) };
     const has_data = Object.values(totals).some(v => Number(v || 0) > 0);
-    return { selected_range, effective_range, fallback_to_all_time, fallback_message: "", granularity, has_data, labels, keys, claim_denials, claim_underpayments, prior_auth_denials, prior_auth_partial_approvals, source: "row_level_business_dates", notes: [], totals };
+    return { selected_range, effective_range, fallback_to_all_time, fallback_message: "", granularity, has_data, labels, keys, claim_denials, claim_underpayments, prior_auth_denials, prior_auth_partial_approvals, source: "row_level_business_dates", notes: [], fallback_business_date_count: fallbackBusinessDateCount, totals };
   };
-  fallbackBusinessDateCount = 0;
-  const selectedModel = buildForWindow(selectedWindow, selected_range, false);
-  const selectedFallbackCount = fallbackBusinessDateCount;
-  if (selectedModel.has_data || selected_range === "all") {
-    selectedModel.notes = selectedFallbackCount > 0 ? ["Upload dates were used only where business dates were missing."] : notes;
-    return selectedModel;
-  }
-  fallbackBusinessDateCount = 0;
-  const allModel = buildForWindow({ start: null, end: null }, "all", true);
+  fallbackBusinessDateCount = 0; const selectedModel = buildForWindow(selectedWindow, selected_range, false); const selectedFallbackCount = fallbackBusinessDateCount;
+  if (selectedModel.has_data || selected_range === "all") { selectedModel.notes = selectedFallbackCount > 0 ? ["Upload dates were used only where business dates were missing."] : notes; selectedModel.fallback_business_date_count = selectedFallbackCount; return selectedModel; }
+  fallbackBusinessDateCount = 0; const allModel = buildForWindow({ start: null, end: null }, selected_range === "last30" ? "last30" : "all", true);
   if (!allModel.has_data) return emptyModel(selected_range, false, "");
-  allModel.selected_range = selected_range;
-  allModel.effective_range = "all";
-  allModel.fallback_to_all_time = true;
-  allModel.fallback_message = "The selected range does not include friction history. Showing all-time friction history.";
-  allModel.notes = [allModel.fallback_message, ...(fallbackBusinessDateCount > 0 ? ["Upload dates were used only where business dates were missing."] : [])];
+  allModel.selected_range = selected_range; allModel.effective_range = "all"; allModel.fallback_to_all_time = true; allModel.fallback_message = "The selected range does not include friction history. Showing all-time friction history."; allModel.notes = [allModel.fallback_message, ...(fallbackBusinessDateCount > 0 ? ["Upload dates were used only where business dates were missing."] : [])]; allModel.fallback_business_date_count = fallbackBusinessDateCount;
   return allModel;
 }
 function tjhpRevenueOverviewAiUsageDisplayModel(org_id = ""){
@@ -67426,6 +67381,57 @@ if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (
 
 
 
+
+if (process.env.TJHP_DASHBOARD_UX23_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const extractFunctionBody = (functionName) => {
+    const start = src.indexOf("function " + functionName); assert(start >= 0, "missing function for body extraction: " + functionName);
+    const signatureEnd = src.indexOf("){", start); const open = signatureEnd >= 0 ? signatureEnd + 1 : src.indexOf("{", start);
+    let depth = 0; for (let i = open; i < src.length; i++) { if (src[i] === "{") depth += 1; if (src[i] === "}") depth -= 1; if (depth === 0) return src.slice(open + 1, i); }
+    throw new Error("missing closing brace for: " + functionName);
+  };
+  try {
+    ["PHASE_9A_UX23_DASHBOARD_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_OK", "PHASE_9A_UX22_DASHBOARD_EXPECTED_CONTRACTS_FRICTION_DATE_GRANULARITY_OK", "tjhpDashboardExpectedAllowedFromContractsModel", "tjhpDashboardContractExpectedForClaim", "tjhpDashboardRevenueFlowAndDenialsModel", "tjhpDashboardRevenueFrictionTrendModel", "tjhpDashboardDeepField", "claim_expected_fields", "uploaded_reimbursement_rules", "Expected allowed amount is based on uploaded claim expected fields.", "Expected allowed amount is based on uploaded reimbursement rules.", "Expected allowed amount is not available yet.", "dashboardRevenueFlowChart", "dashboardRevenueFrictionTrendChart", "Claim Denials", "Claim Underpayments", "Prior Auth Denials", "Prior Auth Partial Approvals", "paid_date", "date_of_service", "denial_reason", "expected_amount", "allowed_amount"].forEach(marker => assert(src.includes(marker), "missing UX23 source marker: " + marker));
+    const flowBody = extractFunctionBody("tjhpDashboardRevenueFlowAndDenialsModel");
+    assert(!flowBody.includes("kpis.allowedTotal") && !flowBody.includes("metrics?.allowedTotal"), "flow helper must not use allowedTotal as expected");
+    if (flowBody.includes("allowedTotal")) assert(flowBody.includes("allowedTotal < totalBilled"), "allowedTotal compatibility marker must be guarded");
+    assert(flowBody.indexOf("expectedModel.expected_total") >= 0 && flowBody.indexOf("expectedModel.expected_total") < flowBody.indexOf("explicitMetricExpected"), "expectedModel.expected_total must be first");
+    assert(flowBody.includes("expected > 0 ? round2(Math.max(0, expected - paid))"), "at risk should use expected minus paid only when expected exists");
+    const contractBody = extractFunctionBody("tjhpDashboardContractExpectedForClaim");
+    assert(contractBody.includes("if (dx && claimDx && dx !== claimDx) return;"), "DX should only be enforced when both sides have DX");
+    assert(!contractBody.includes("dx && (!claimDx"), "rule DX should not block blank claim DX");
+    assert(contractBody.includes("if (!claimPayer || !claimCpt) return null"), "payer and CPT remain required");
+    [extractFunctionBody("tjhpDashboardExpectedAllowedFromContractsModel"), flowBody, extractFunctionBody("tjhpDashboardRevenueFrictionTrendModel")].forEach((body, idx) => ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", 'method === "POST"', "parseBody(req)"].forEach(forbidden => assert(!body.includes(forbidden), "dashboard helper " + idx + " contains forbidden marker: " + forbidden)));
+    const org_id = "__dashboard_ux23_sample_org__";
+    const claims = [
+      { org_id, claim_id:"1001", patient_name:"John Smith", payer:"Aetna", cpt_code:"99213", billed_amount:150, expected_amount:110, date_of_service:"2026-01-10" }, { org_id, claim_id:"1002", patient_name:"Sarah Lee", payer:"UnitedHealthcare", cpt_code:"99214", billed_amount:220, expected_amount:160, date_of_service:"2026-01-12" }, { org_id, claim_id:"1003", patient_name:"Michael Brown", payer:"Cigna", cpt_code:"99215", billed_amount:300, expected_amount:210, date_of_service:"2026-01-15" }, { org_id, claim_id:"1004", patient_name:"Emily Davis", payer:"Aetna", cpt_code:"93000", billed_amount:120, expected_amount:85, date_of_service:"2026-01-18" }, { org_id, claim_id:"1005", patient_name:"Chris Johnson", payer:"BlueCross", cpt_code:"99213", billed_amount:150, expected_amount:115, date_of_service:"2026-01-20" }
+    ];
+    const payments = [
+      { org_id, claim_id:"1001", payer:"Aetna", paid_amount:0, denial_reason:"Medical Necessity", paid_date:"2026-02-01" }, { org_id, claim_id:"1002", payer:"UnitedHealthcare", paid_amount:100, denial_reason:"", paid_date:"2026-02-02" }, { org_id, claim_id:"1003", payer:"Cigna", paid_amount:210, denial_reason:"", paid_date:"2026-02-03" }, { org_id, claim_id:"1004", payer:"Aetna", paid_amount:40, denial_reason:"", paid_date:"2026-02-04" }, { org_id, claim_id:"1005", payer:"BlueCross", paid_amount:0, denial_reason:"Authorization Required", paid_date:"2026-02-05" }
+    ];
+    const contracts = [
+      { org_id, payer_name:"Aetna", network_status:"In Network", procedure_code:"99213", diagnosis_code:"Z00.00", reimbursement_model:"Fee Schedule", allowed_amount:110, effective_date:"2026-01-01" }, { org_id, payer_name:"UnitedHealthcare", network_status:"In Network", procedure_code:"99214", diagnosis_code:"Z00.00", reimbursement_model:"Fee Schedule", allowed_amount:160, effective_date:"2026-01-01" }, { org_id, payer_name:"Cigna", network_status:"In Network", procedure_code:"99215", diagnosis_code:"Z00.00", reimbursement_model:"Fee Schedule", allowed_amount:210, effective_date:"2026-01-01" }, { org_id, payer_name:"Aetna", network_status:"In Network", procedure_code:"93000", diagnosis_code:"Z00.00", reimbursement_model:"Fee Schedule", allowed_amount:85, effective_date:"2026-01-01" }, { org_id, payer_name:"BlueCross", network_status:"In Network", procedure_code:"99213", diagnosis_code:"Z00.00", reimbursement_model:"Fee Schedule", allowed_amount:115, effective_date:"2026-01-01" }
+    ];
+    const noDataExpected = tjhpDashboardExpectedAllowedFromContractsModel(org_id, [], "all", null, null, { contracts: [], allowed_amount_rules: [], fee_schedules: [] });
+    const noDataFlow = tjhpDashboardRevenueFlowAndDenialsModel(org_id, { kpis: {} }, { series: { totals: { billed: 0, collected: 0, remaining: 0, collection_rate: 0 } } }, "all", { expectedModel: noDataExpected, claims: [], payments: [] });
+    assert(!noDataFlow.notes.includes("Expected allowed amount is not available yet."), "no-data expected note should be suppressed"); assert.strictEqual(noDataFlow.has_data, false);
+    const expectedWithContracts = tjhpDashboardExpectedAllowedFromContractsModel(org_id, claims, "all", null, null, { contracts, allowed_amount_rules: [], fee_schedules: [] });
+    assert.strictEqual(expectedWithContracts.expected_total, 680); assert.strictEqual(expectedWithContracts.matched_claim_count, 5); assert(Number(expectedWithContracts.source_counts.payer_contracts || 0) >= 5);
+    const expectedFromClaims = tjhpDashboardExpectedAllowedFromContractsModel(org_id, claims, "all", null, null, { contracts: [], allowed_amount_rules: [], fee_schedules: [] });
+    assert.strictEqual(expectedFromClaims.expected_total, 680); assert(Number(expectedFromClaims.source_counts.claim_expected_fields || 0) >= 5);
+    const billedOnlyClaims = claims.map(({ expected_amount, ...rest }) => rest);
+    const billedOnlyExpected = tjhpDashboardExpectedAllowedFromContractsModel(org_id, billedOnlyClaims, "all", null, null, { contracts: [], allowed_amount_rules: [], fee_schedules: [] });
+    const billedOnlyFlow = tjhpDashboardRevenueFlowAndDenialsModel(org_id, { kpis: {} }, { series: { totals: { billed: 940, collected: 0, remaining: 940, collection_rate: 0 } } }, "all", { expectedModel: billedOnlyExpected, claims: billedOnlyClaims, payments: [] });
+    assert.strictEqual(billedOnlyExpected.expected_total, 0); assert.strictEqual(billedOnlyFlow.funnel.expected, 0); assert.notStrictEqual(billedOnlyFlow.funnel.expected, 940); assert(billedOnlyFlow.notes.includes("Expected allowed amount is not available yet."));
+    const flowModel = tjhpDashboardRevenueFlowAndDenialsModel(org_id, { kpis: {} }, { series: { totals: { billed: 940, collected: 350, remaining: 590, collection_rate: 37.2 } }, selected_range: "all", effective_range: "all" }, "all", { expectedModel: expectedWithContracts, claims, payments });
+    assert.strictEqual(flowModel.funnel.billed, 940); assert.strictEqual(flowModel.funnel.expected, 680); assert.strictEqual(flowModel.funnel.paid, 350); assert.strictEqual(flowModel.funnel.at_risk, 330); assert(["uploaded_reimbursement_rules", "claim_expected_fields"].includes(flowModel.expected_source)); assert(!flowModel.notes.includes("Expected allowed amount is not available yet."));
+    const friction = tjhpDashboardRevenueFrictionTrendModel(org_id, "last30", null, null, { claims, payments, now:"2026-02-20T00:00:00Z" });
+    assert.strictEqual(friction.granularity, "day"); ["2026-02-01", "2026-02-02", "2026-02-04", "2026-02-05"].forEach(key => assert((friction.keys || []).includes(key), "missing friction key: " + key)); assert.strictEqual(friction.totals.claim_denials, 2); assert.strictEqual(friction.totals.claim_underpayments, 2); assert(!(friction.keys || []).includes(new Date().toISOString().slice(0, 10))); assert((friction.labels || []).some(label => /Feb/.test(String(label))));
+    ["TJHP_DASHBOARD_UX22_EXPECTED_CONTRACTS_FRICTION_DATE_GRANULARITY_SMOKE_TESTS", "TJHP_DASHBOARD_UX21_REVENUE_FLOW_FRICTION_TREND_SMOKE_TESTS", "TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS", "TJHP_DASHBOARD_UX19_NO_DATA_UPLOAD_MESSAGE_POLISH_SMOKE_TESTS", "TJHP_DASHBOARD_UX18_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_SMOKE_TESTS", "TJHP_DASHBOARD_UX17_FINAL_VISUAL_POLISH_SMOKE_TESTS", "TJHP_DASHBOARD_UX16_HEALTH_CENTER_SMOOTH_NAV_SMOKE_TESTS", "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_SIGNAL_SMOKE_TESTS", "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS", "TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS", "TJHP_PAYMENT_MATCH_SMOKE_TESTS", "renderClaimPanelBootstrap", "window.openClaimPanel", "renderPriorAuthActionCenterPanelBootstrap", "window.openPriorAuthPanel"].forEach(marker => assert(src.includes(marker), "protected marker missing: " + marker));
+    process.stdout.write("DASHBOARD_UX23_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("DASHBOARD_UX23_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
 
 if (process.env.TJHP_DASHBOARD_UX22_EXPECTED_CONTRACTS_FRICTION_DATE_GRANULARITY_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
