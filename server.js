@@ -1778,6 +1778,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX17_DASHBOARD_FINAL_VISUAL_POLISH_OK
 // PHASE_9A_UX18_DASHBOARD_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_OK
 // PHASE_9A_UX19_DASHBOARD_NO_DATA_UPLOAD_MESSAGE_POLISH_OK
+// PHASE_9A_UX20_DASHBOARD_REVENUE_FLOW_DENIALS_TREND_OK
 // PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
@@ -20477,6 +20478,67 @@ function tjhpRevenueOverviewCollectionsByServicePeriodModel(org_id = "", range =
   const message = shouldFallback ? fallbackMessage : (Number(series.totals?.billed || 0) <= 0 ? emptyMessage : "");
   const hydratedSeries = { ...series, selected_range: selected, effective_range: effective, fallback_to_all_time: shouldFallback, fallback_message: message, fallback_date_count: Number(series.fallback_date_count || 0), business_date_count: Number(series.business_date_count || 0), payment_date_anchor_count: Number(series.payment_date_anchor_count || 0), selected_real_period_count: Number(series.selected_real_period_count || 0), source_claim_count: sourceRows.claim_count, source_payment_count: sourceRows.payment_count, upload_batch_claim_total: 0, upload_batch_payment_total: 0 };
   return { selected_range: selected, effective_range: effective, fallback_to_all_time: shouldFallback, fallback_message: message, fallback_date_count: hydratedSeries.fallback_date_count, business_date_count: hydratedSeries.business_date_count, payment_date_anchor_count: hydratedSeries.payment_date_anchor_count, selected_real_period_count: hydratedSeries.selected_real_period_count, claim_count: claims.length, payment_count: payments.length, source_claim_count: sourceRows.claim_count, source_payment_count: sourceRows.payment_count, unmatched_collected_total: hydratedSeries.unmatched_collected_total, series: hydratedSeries };
+}
+function tjhpDashboardRevenueFlowAndDenialsModel(org_id = "", metrics = {}, revenueTrendModel = {}, selectedRange = "last30"){
+  const selected = tjhpRevenueOverviewNormalizeCollectionRange(selectedRange || revenueTrendModel?.selected_range || "last30");
+  const effective = tjhpRevenueOverviewNormalizeCollectionRange(revenueTrendModel?.effective_range || revenueTrendModel?.series?.effective_range || selected);
+  const totals = revenueTrendModel?.series?.totals || {};
+  const billed = round2(Number(totals.billed || 0));
+  const paid = round2(Number(totals.collected || 0));
+  const atRisk = round2(Number(totals.remaining || 0));
+  const collectionRate = round2(Number(totals.collection_rate || 0));
+  const notes = [];
+  const kpis = metrics?.kpis || {};
+  const expectedCandidates = [kpis.expectedInsuranceTotal, metrics?.expectedInsuranceTotal, metrics?.totalExpected]
+    .map(v => Number(v || 0))
+    .filter(v => Number.isFinite(v) && v > 0);
+  const expected = expectedCandidates.length ? round2(expectedCandidates[0]) : 0;
+  if (!expectedCandidates.length) notes.push("Expected allowed amount is not available yet.");
+
+  const rangeDays = selected === "last90" ? 90 : (selected === "last60" ? 60 : (selected === "last30" ? 30 : 0));
+  const monthInSelectedRange = (key) => {
+    if (!rangeDays || selected === "all") return true;
+    const m = String(key || "").match(/^(\d{4})-(\d{2})$/);
+    if (!m) return false;
+    const monthDate = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, 1));
+    const cutoff = new Date();
+    cutoff.setUTCDate(cutoff.getUTCDate() - rangeDays);
+    cutoff.setUTCHours(0, 0, 0, 0);
+    return monthDate >= new Date(Date.UTC(cutoff.getUTCFullYear(), cutoff.getUTCMonth(), 1));
+  };
+
+  const rawDenials = (typeof tjhpBuildExecutiveDenialsTrendFromRows === "function")
+    ? (tjhpBuildExecutiveDenialsTrendFromRows(org_id) || {})
+    : {};
+  const allKeys = Array.isArray(rawDenials.keys) ? rawDenials.keys : [];
+  const allLabels = Array.isArray(rawDenials.labels) ? rawDenials.labels : [];
+  const allValues = Array.isArray(rawDenials.values) ? rawDenials.values.map(v => Number(v || 0)) : [];
+  const selectedIndexes = allKeys.map((key, idx) => monthInSelectedRange(key) ? idx : -1).filter(idx => idx >= 0);
+  const selectedValues = selectedIndexes.map(idx => allValues[idx] || 0);
+  const allHasDenials = allValues.some(v => Number(v || 0) > 0);
+  const selectedHasDenials = selectedValues.some(v => Number(v || 0) > 0);
+  const denialFallback = selected !== "all" && !selectedHasDenials && allHasDenials;
+  if (denialFallback) notes.push("The selected range does not include denial history. Showing all-time denial history.");
+  const useIndexes = denialFallback ? allKeys.map((_, idx) => idx) : selectedIndexes;
+  const denialLabels = useIndexes.map(idx => allLabels[idx] || allKeys[idx] || "");
+  const denialValues = useIndexes.map(idx => allValues[idx] || 0);
+  const denials = {
+    labels: denialLabels,
+    values: denialValues,
+    source: rawDenials.source || (allHasDenials ? "row_level_denial_dates" : ""),
+    detectedMonths: Number(rawDenials.detectedMonths || allKeys.length || 0)
+  };
+  return {
+    selected_range: selected,
+    effective_range: effective,
+    fallback_to_all_time: revenueTrendModel?.fallback_to_all_time === true || revenueTrendModel?.series?.fallback_to_all_time === true,
+    fallback_message: revenueTrendModel?.fallback_message || revenueTrendModel?.series?.fallback_message || "",
+    has_data: billed > 0 || paid > 0 || atRisk > 0 || expected > 0,
+    funnel: { billed, expected, paid, at_risk: atRisk },
+    kpis: { billed, paid, at_risk: atRisk, collection_rate: collectionRate, denials: denialValues.reduce((sum, n) => sum + Number(n || 0), 0) },
+    denials,
+    notes
+  };
 }
 function tjhpRevenueOverviewAiUsageDisplayModel(org_id = ""){
   const usageRows = readJSON(FILES.usage, []);
@@ -43452,6 +43514,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const dashboardPayments = readJSON(FILES.payments, []).filter(p => p && String(p.org_id || p.organization_id || p.orgId || "") === String(org.org_id || ""));
     const selectedTrendRange = tjhpRevenueOverviewNormalizeCollectionRange(preset || "last30");
     const revenueTrendModel = tjhpRevenueOverviewCollectionsByServicePeriodModel(org.org_id, selectedTrendRange, startDate, endDate, { claims: dashboardClaims, payments: dashboardPayments });
+    const dashboardFlowModel = tjhpDashboardRevenueFlowAndDenialsModel(org.org_id, m, revenueTrendModel, preset);
     const roiMetrics = computeRoiMetrics(org.org_id, startDate, endDate);
     const payerRanks = computeAllPayerRankings(org.org_id);
     const casesInRange = readJSON(FILES.cases, [])
@@ -43463,6 +43526,13 @@ if (method === "GET" && pathname === "/weekly-summary") {
 
     // --- SAFE DASHBOARD DATA ENCODING FOR CHARTS ---
     const seriesB64 = Buffer.from(JSON.stringify(revenueTrendModel.series || {})).toString("base64");
+    const dashboardFlowChartsB64 = Buffer.from(JSON.stringify({
+      funnel: dashboardFlowModel.funnel,
+      denials: dashboardFlowModel.denials,
+      selected_range: dashboardFlowModel.selected_range,
+      effective_range: dashboardFlowModel.effective_range,
+      fallback_to_all_time: dashboardFlowModel.fallback_to_all_time
+    })).toString("base64");
     const statusB64 = Buffer.from(JSON.stringify(m.statusCounts || {})).toString("base64");
     const payerB64 = Buffer.from(JSON.stringify(m.payerTop || [])).toString("base64");
     const deniedTotal = (m.payerTop || []).reduce((s, x) => s + num(x.denied), 0);
@@ -43803,7 +43873,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const rangeShortcutClass = (targetRange) => `btn secondary small ${preset === targetRange ? "active" : ""}`;
 
     const dashboardOpenRevenueOpportunity = todaysAtRiskTotal;
-    const dashboardCollectionRate = Number(trendTotals.collection_rate || m.kpis?.netCollectionRate || 0) || 0;
+    const dashboardCollectionRate = Number(dashboardFlowModel.kpis?.collection_rate || trendTotals.collection_rate || m.kpis?.netCollectionRate || 0) || 0;
+    const dashboardFlowHasFinancialData = dashboardFlowModel.has_data === true;
 
     const dashboardHealthSummaryBlock = `
       <div class="dashboard-health-summary health-compact dashboard-snapshot-card dashboard-health-card-compact dashboard-health-lead">
@@ -43859,10 +43930,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <div class="dashboard-snapshot-label">Open Revenue Opportunity</div>
             <div class="dashboard-snapshot-sub">Open at-risk work in Action Center.</div>
           </a>
-          <a class="dashboard-snapshot-card dashboard-action-card dashboard-smooth-anchor" href="#revenue-trend" data-dashboard-scroll-target="#revenue-trend" aria-label="View Collections by Service Period">
+          <a class="dashboard-snapshot-card dashboard-action-card dashboard-smooth-anchor" href="#revenue-trend" data-dashboard-scroll-target="#revenue-trend" aria-label="View Revenue Flow and Denials Trend">
             <div class="dashboard-snapshot-value">${hasRevenueOverviewFinancialData ? dashboardCollectionRate.toFixed(1) + "%" : dashboardDash}</div>
             <div class="dashboard-snapshot-label">Collection Rate</div>
-            <div class="dashboard-snapshot-sub">View service-period collection performance.</div>
+            <div class="dashboard-snapshot-sub">View revenue flow and denial trend.</div>
           </a>
           <a class="dashboard-snapshot-card dashboard-action-card dashboard-smooth-anchor" href="#work-to-do-today" data-dashboard-scroll-target="#work-to-do-today" aria-label="Jump to Work to Do Today">
             <div class="dashboard-snapshot-value">${dashboardWorkNeedingActionDisplay}</div>
@@ -43874,12 +43945,16 @@ if (method === "GET" && pathname === "/weekly-summary") {
     `;
 
     const dashboardCollectionsBlock = `
-      <div class="exec-card" id="revenue-trend">
+      <div class="exec-card dashboard-flow-denials-card" id="revenue-trend">
         <div class="trend-card-head">
           <div>
-            <h3 class="trend-title-with-info" style="margin-bottom:6px;">Collections by Service Period <span class="tooltip" data-tip="Billed dollars are grouped by service date. Matched payments are summed back to the claim’s service period so you can see where collections are keeping up or falling short.">ⓘ</span></h3>
+            <h3 class="trend-title-with-info" style="margin-bottom:6px;">
+              Revenue Flow & Denials Trend
+              <span class="tooltip" data-tip="Revenue Flow shows billed, expected, paid, and at-risk dollars. Denials Trend shows denial activity over time using service/payment/denial dates when available.">ⓘ</span>
+            </h3>
+            <div class="muted small">Executive view of collections movement and denial pressure for the selected range.</div>
           </div>
-          <div class="trend-range-shortcuts segmented" aria-label="Collections by Service Period range shortcuts" data-anchor="#revenue-trend">
+          <div class="trend-range-shortcuts segmented" aria-label="Dashboard Revenue Flow and Denials Trend range shortcuts" data-anchor="#revenue-trend">
             <a class="${rangeShortcutClass("last30")}" href="${dashboardRangeShortcutHref("last30")}">30 days</a>
             <a class="${rangeShortcutClass("last60")}" href="${dashboardRangeShortcutHref("last60")}">60 days</a>
             <a class="${rangeShortcutClass("last90")}" href="${dashboardRangeShortcutHref("last90")}">90 days</a>
@@ -43887,20 +43962,41 @@ if (method === "GET" && pathname === "/weekly-summary") {
             ${revenueTrendModel.fallback_to_all_time === true ? `<span class="trend-fallback-pill">Showing all-time history</span>` : ``}
           </div>
         </div>
+        <!-- Collections by Service Period legacy marker -->
+        <!-- revenueTrendChart legacy marker -->
         <!-- Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period. -->
         <!-- The selected date range does not include service-period billing history. Showing all-time uploaded history. -->
         <!-- Some claims did not include service or payment dates, so upload dates were used as a fallback. -->
-        <!-- trend-context-notes trend-context-pill -->
+        <!-- trend-context-notes trend-context-pill Collected Remaining Gap -->
         ${trendContextNotes}
-        <div class="kpi-strip" style="margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;">
-          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.billed || 0) : dashboardDash}</p><p class="kpi-label">Billed</p></div>
-          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.collected || 0) : dashboardDash}</p><p class="kpi-label">Collected</p></div>
-          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? formatMoneyUI(trendTotals.remaining || 0) : dashboardDash}</p><p class="kpi-label">Remaining Gap</p></div>
-          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${trendHasAnyData ? Number(trendTotals.collection_rate || 0).toFixed(1) + "%" : dashboardDash}</p><p class="kpi-label">Collection Rate</p></div>
+        ${dashboardFlowModel.notes.length ? `<div class="trend-context-notes">${dashboardFlowModel.notes.map(note => `<span class="trend-context-pill">${safeStr(note)}</span>`).join("")}</div>` : ``}
+        <div class="kpi-strip dashboard-flow-kpis" style="margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;">
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${dashboardFlowHasFinancialData ? formatMoneyUI(dashboardFlowModel.kpis.billed || 0) : dashboardDash}</p><p class="kpi-label">Billed</p></div>
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${dashboardFlowHasFinancialData ? formatMoneyUI(dashboardFlowModel.kpis.paid || 0) : dashboardDash}</p><p class="kpi-label">Paid</p></div>
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${dashboardFlowHasFinancialData ? formatMoneyUI(dashboardFlowModel.kpis.at_risk || 0) : dashboardDash}</p><p class="kpi-label">At Risk</p></div>
+          <div class="kpi-card"><p class="kpi-value" style="font-size:20px;">${dashboardFlowHasFinancialData ? Number(dashboardFlowModel.kpis.collection_rate || 0).toFixed(1) + "%" : dashboardDash}</p><p class="kpi-label">Collection Rate</p></div>
         </div>
-        <div class="chart-container trend ${trendHasAnyData ? "" : "chart-empty-state"}">
-          <canvas id="revenueTrendChart"></canvas>
-          ${trendHasAnyData ? "" : `<div class="chart-empty-overlay">No billed service-period history is available yet.</div>`}
+        <div class="dashboard-flow-denials-grid">
+          <div class="dashboard-chart-card">
+            <div class="dashboard-chart-card-head">
+              <h4>Revenue Flow</h4>
+              <div class="muted small">Billed → Expected → Paid → At Risk</div>
+            </div>
+            <div class="chart-container dashboard-flow-chart ${dashboardFlowModel.has_data ? "" : "chart-empty-state"}">
+              <canvas id="dashboardRevenueFlowChart"></canvas>
+              ${dashboardFlowModel.has_data ? "" : `<div class="chart-empty-overlay">No revenue flow data is available yet.</div>`}
+            </div>
+          </div>
+          <div class="dashboard-chart-card">
+            <div class="dashboard-chart-card-head">
+              <h4>Denials Trend</h4>
+              <div class="muted small">${dashboardFlowModel.denials.source === "row_level_denial_dates" ? "Denials by row-level service/payment/denial dates." : "Recent periods based on available claim/payment history."}</div>
+            </div>
+            <div class="chart-container dashboard-denials-chart ${dashboardFlowModel.denials.values.some(v => Number(v || 0) > 0) ? "" : "chart-empty-state"}">
+              <canvas id="dashboardDenialsTrendChart"></canvas>
+              ${dashboardFlowModel.denials.values.some(v => Number(v || 0) > 0) ? "" : `<div class="chart-empty-overlay">No denial trend history is available yet.</div>`}
+            </div>
+          </div>
         </div>
       </div>
     `;
@@ -44202,6 +44298,14 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .trend-range-shortcuts .btn{border:0;background:transparent;box-shadow:none;border-radius:10px;padding:9px 12px;color:#334155;}
         .trend-range-shortcuts .btn.active{background:var(--primary);color:#fff;border-color:var(--primary);box-shadow:0 6px 14px rgba(15,23,42,.14);}
         .trend-fallback-pill{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;background:#f8fafc;color:#475569;font-size:11px;font-weight:750;padding:4px 8px;margin-left:8px;}
+        .dashboard-flow-denials-card{}
+        .dashboard-flow-denials-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px;}
+        .dashboard-chart-card{border:1px solid var(--border);border-radius:14px;background:#fff;padding:12px;}
+        .dashboard-chart-card-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:8px;}
+        .dashboard-chart-card h4{margin:0;}
+        .dashboard-flow-chart,.dashboard-denials-chart{min-height:260px;}
+        .dashboard-flow-kpis .kpi-card{min-height:76px;}
+        @media (max-width: 900px){.dashboard-flow-denials-grid{grid-template-columns:1fr;}}
         .org-targets-card{padding:16px;}
         .org-targets-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;}
         .org-targets-head h3{margin:0 0 6px;}
@@ -44299,12 +44403,12 @@ document.addEventListener("DOMContentLoaded", function(){
     scales:{ x:{ ticks:{ maxTicksLimit:6 } }, y:{ ticks:{ maxTicksLimit:6 } } }
   };
 
-  const trendHasAnyData = Number(d.series?.totals?.billed || 0) > 0;
-  const trendLabels = trendHasAnyData ? (d.series?.keys || []) : [""];
-  const billed = trendHasAnyData ? (d.series?.billed || []).map(v => Number(v || 0)) : [0];
-  const collected = trendHasAnyData ? (d.series?.collected || []).map(v => Number(v || 0)) : [0];
-  const remainingGap = trendHasAnyData ? (d.series?.remaining || []).map(v => Number(v || 0)) : [0];
-  const collectionRate = trendHasAnyData ? (d.series?.collection_rate || []).map(v => Number(v || 0)) : [0];
+  const dashboardFlowPayload = JSON.parse(atob("${dashboardFlowChartsB64}"));
+  const funnel = dashboardFlowPayload.funnel || { billed:0, expected:0, paid:0, at_risk:0 };
+  const denialTrend = dashboardFlowPayload.denials || { labels:[], values:[] };
+  const denialValues = Array.isArray(denialTrend.values) ? denialTrend.values.map(v => Number(v || 0)) : [];
+  const denialLabels = Array.isArray(denialTrend.labels) && denialTrend.labels.length ? denialTrend.labels : [""];
+  // revenueTrendChart legacy marker: old stacked Collections by Service Period chart is no longer instantiated.
 
   const healthHasData = ${healthHasData ? "true" : "false"};
   const healthTone = { color: ${JSON.stringify(healthDisplay.tone.color)}, track: ${JSON.stringify(healthDisplay.tone.track)}, label: ${JSON.stringify(healthDisplay.tone.label)} };
@@ -44334,56 +44438,64 @@ document.addEventListener("DOMContentLoaded", function(){
     });
   }
 
-  const trendCfg = {
-    type: "bar",
-    data: {
-      labels: trendLabels,
-      datasets: [
-        {
-          label: "Collected",
-          data: collected,
-          backgroundColor: "#0ea5e9",
-          borderColor: "#0ea5e9",
+  const revenueFlowCtx = document.getElementById("dashboardRevenueFlowChart");
+  if (revenueFlowCtx) {
+    new Chart(revenueFlowCtx, {
+      type: "bar",
+      data: {
+        labels: ["Billed", "Expected", "Paid", "At Risk"],
+        datasets: [{
+          data: [Number(funnel.billed || 0), Number(funnel.expected || 0), Number(funnel.paid || 0), Number(funnel.at_risk || 0)],
+          backgroundColor: ["#2563eb", "#14b8a6", "#22c55e", "#f97316"],
+          borderColor: ["#1d4ed8", "#0f766e", "#16a34a", "#ea580c"],
           borderWidth: 1,
-          stack: "collections"
-        },
-        {
-          label: "Remaining Gap",
-          data: remainingGap,
-          backgroundColor: "#e5e7eb",
-          borderColor: "#cbd5e1",
-          borderWidth: 1,
-          stack: "collections"
-        }
-      ]
-    },
-    options: {
-      ...baseChartOptions,
-      interaction: { mode: "index", intersect: false },
-      scales: {
-        x: { stacked: true, ticks: { maxTicksLimit: 8 } },
-        y: { stacked: true, beginAtZero: true, ticks: { maxTicksLimit: 6, callback: (v) => moneyFmt(v) } }
+          borderRadius: 8
+        }]
       },
-      plugins: {
-        legend: { position: "bottom" },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => ctx.dataset.label + ": " + moneyFmt(ctx.parsed.y || 0),
-            afterBody: function(items) {
-              const idx = items && items[0] ? items[0].dataIndex : 0;
-              return [
-                "Billed: " + moneyFmt(billed[idx] || 0),
-                "Collected: " + moneyFmt(collected[idx] || 0),
-                "Remaining: " + moneyFmt(remainingGap[idx] || 0),
-                "Collection rate: " + Number(collectionRate[idx] || 0).toFixed(1) + "%"
-              ];
-            }
-          }
+      options: {
+        ...baseChartOptions,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => moneyFmt(ctx.parsed.y || 0) } }
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { beginAtZero: true, ticks: { maxTicksLimit: 6, callback: (v) => moneyFmt(v) } }
         }
       }
-    }
-  };
-  if (document.getElementById("revenueTrendChart")) new Chart(document.getElementById("revenueTrendChart"), trendCfg);
+    });
+  }
+
+  const denialsTrendCtx = document.getElementById("dashboardDenialsTrendChart");
+  if (denialsTrendCtx) {
+    new Chart(denialsTrendCtx, {
+      type: "line",
+      data: {
+        labels: denialLabels,
+        datasets: [{
+          label: "Denials",
+          data: denialValues.length ? denialValues : [0],
+          borderColor: "#dc2626",
+          backgroundColor: "rgba(220, 38, 38, 0.12)",
+          fill: true,
+          tension: 0.35,
+          pointBackgroundColor: "#dc2626",
+          pointRadius: 3
+        }]
+      },
+      options: {
+        ...baseChartOptions,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => "Denials: " + Number(ctx.parsed.y || 0).toLocaleString() } }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } },
+          y: { beginAtZero: true, ticks: { precision: 0, maxTicksLimit: 6 } }
+        }
+      }
+    });
+  }
 
 });
 </script>
@@ -48124,11 +48236,13 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
           Top payer concentration dollars: ${formatMoneyUI(topRiskTotal)}.
         </div>
       </div>
-      <div class="eb-grid2" style="margin-top:12px;">
-      <div class="eb-card eb-chart"><h4>Revenue Flow (Funnel)</h4><canvas id="ebFunnel"></canvas><div class="muted small" style="margin-top:8px;">Billed → Expected → Paid → At Risk</div></div>
-      <div class="eb-card eb-chart"><h4>Denials Trend</h4><canvas id="ebDenials"></canvas><div class="muted small" style="margin-top:8px;">${useRowLevelDenials ? "Denials by row-level service/payment/denial dates." : "Recent periods based on available claim/payment history."}${useRowLevelDenials && executiveDenialsTrend ? ` Denial months detected: ${executiveDenialsTrend.detectedMonths}.` : ""}</div></div>
-      </div>
-      <div class="muted small exec-chart-note" style="margin-top:10px;">Chart notes: Revenue Flow shows billed → expected → paid → at risk. Denials Trend uses row-level business dates when available, not upload date.</div>
+      <!-- ebFunnel legacy marker moved to Dashboard -->
+      <!-- ebDenials legacy marker moved to Dashboard -->
+      <!-- Revenue Flow (Funnel) legacy marker moved to Dashboard -->
+      <!-- Denials Trend legacy marker moved to Dashboard -->
+      <!-- Chart notes: Revenue Flow shows billed → expected → paid → at risk. Denials Trend uses row-level business dates when available, not upload date. -->
+      <div class="muted small exec-chart-note" style="margin-top:10px;">Revenue Flow and Denials Trend now live on the Dashboard for daily monitoring. Use this page for strategy interpretation and action planning.</div>
+      <div class="btnRow" style="margin-top:10px;"><a class="btn secondary small" href="/dashboard#revenue-trend">View Dashboard Revenue Flow</a></div>
     </div>
     <div class="eb-card">
       <div class="eb-sectionHead"><h3>Recovery Performance</h3><div class="muted">Appeals + negotiations KPIs for executive tracking.</div></div>
@@ -48208,75 +48322,9 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       scoreRing.classList.add(scoreClass);
     }
 
+    // Revenue Flow (Funnel) and Denials Trend moved to Dashboard; keep executive script limited to score-ring behavior.
     const eb = JSON.parse(atob("${ebChartsB64}"));
-    const funnel = eb.funnel || { billed:0, expected:0, paid:0, atRisk:0 };
-    const totalBilled = Number(funnel.billed || 0);
-    const totalExpected = Number(funnel.expected || 0);
-    const totalPaid = Number(funnel.paid || 0);
-    const revenueAtRisk = Number(funnel.atRisk || 0);
-    const denialTrendData = (Array.isArray(eb.denialValues) ? eb.denialValues : (eb.denialTotals||[])).slice(-12);
-    const fCtx = document.getElementById("ebFunnel");
-    const dCtx = document.getElementById("ebDenials");
-
-    function initCharts(){
-      if (!fCtx || !dCtx || typeof Chart === "undefined") {
-        setTimeout(initCharts, 50);
-        return;
-      }
-
-      new Chart(fCtx, {
-        type: "bar",
-        data: {
-          labels: ["Billed","Expected","Paid","At Risk"],
-          datasets: [{
-            data: [totalBilled, totalExpected, totalPaid, revenueAtRisk],
-            backgroundColor: [
-              "#3b82f6",
-              "#14b8a6",
-              "#22c55e",
-              "#ef4444"
-            ],
-            borderRadius: 6
-          }]
-        },
-        options: {
-          responsive:true,
-          maintainAspectRatio:false,
-          plugins:{ legend:{ display:false } },
-          scales:{
-            x:{ grid:{ display:false } },
-            y:{ beginAtZero:true }
-          }
-        }
-      });
-
-      new Chart(dCtx, {
-        type: "line",
-        data: {
-          labels: (eb.denialLabels||[]).slice(-12),
-          datasets: [{
-            label: "Denials",
-            data: denialTrendData,
-            borderColor: "#ef4444",
-            backgroundColor: "rgba(239, 68, 68, 0.15)",
-            fill: true,
-            tension: 0.3,
-            pointBackgroundColor: "#ef4444"
-          }]
-        },
-        options: {
-          responsive:true,
-          maintainAspectRatio:false,
-          plugins:{ legend:{ display:false } },
-          scales:{
-            x:{ grid:{ display:false } },
-            y:{ beginAtZero:true }
-          }
-        }
-      });
-    }
-
-    initCharts();
+    void eb;
   });
   </script>`;
 
@@ -66972,6 +67020,124 @@ if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (
 
 
 
+if (process.env.TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const sliceBetween = (startMarker, endMarker, label) => {
+      const start = src.indexOf(startMarker);
+      assert(start >= 0, "missing start marker for " + label + ": " + startMarker);
+      const end = src.indexOf(endMarker, start + startMarker.length);
+      assert(end > start, "missing end marker for " + label + ": " + endMarker);
+      return src.slice(start, end);
+    };
+    const extractFunctionBody = (functionName) => {
+      const start = src.indexOf("function " + functionName);
+      assert(start >= 0, "missing function for body extraction: " + functionName);
+      const open = src.indexOf("{", start);
+      let depth = 0;
+      for (let i = open; i < src.length; i++) {
+        if (src[i] === "{") depth += 1;
+        if (src[i] === "}") depth -= 1;
+        if (depth === 0) return src.slice(open + 1, i);
+      }
+      throw new Error("missing closing brace for " + functionName);
+    };
+    [
+      "PHASE_9A_UX20_DASHBOARD_REVENUE_FLOW_DENIALS_TREND_OK",
+      "PHASE_9A_UX19_DASHBOARD_NO_DATA_UPLOAD_MESSAGE_POLISH_OK",
+      "PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK",
+      "tjhpDashboardRevenueFlowAndDenialsModel",
+      "dashboardFlowModel",
+      "dashboardFlowChartsB64",
+      "Revenue Flow & Denials Trend",
+      "dashboardRevenueFlowChart",
+      "dashboardDenialsTrendChart",
+      "Billed",
+      "Expected",
+      "Paid",
+      "At Risk",
+      "Denials Trend",
+      "trend-range-shortcuts",
+      "30 days",
+      "60 days",
+      "90 days",
+      "All Time",
+      "trend-fallback-pill",
+      "trendContextNotes",
+      "#revenue-trend",
+      'data-dashboard-scroll-target="#revenue-trend"',
+      "row_level_denial_dates",
+      "tjhpBuildExecutiveDenialsTrendFromRows"
+    ].forEach(marker => assert(src.includes(marker), "missing UX20 source marker: " + marker));
+
+    const dashboardCollections = sliceBetween('const dashboardCollectionsBlock = `', 'const dashboardRecoveryPerformanceBlock = `', "dashboardCollectionsBlock");
+    ["Revenue Flow & Denials Trend", "dashboardRevenueFlowChart", "dashboardDenialsTrendChart", "trend-range-shortcuts", "30 days", "60 days", "90 days", "All Time", "trend-fallback-pill", "trendContextNotes", "Billed", "Expected", "Paid", "At Risk", "Collection Rate"].forEach(marker => assert(dashboardCollections.includes(marker), "dashboardCollectionsBlock missing: " + marker));
+    assert(!dashboardCollections.includes('<canvas id="revenueTrendChart"></canvas>'), "old revenueTrendChart canvas still visible");
+    assert(dashboardCollections.includes("revenueTrendChart legacy marker"), "legacy revenueTrendChart marker should be hidden comment only");
+
+    const dashboardScript = sliceBetween('const dashboardFlowPayload = JSON.parse(atob("${dashboardFlowChartsB64}"));', 'const denialsTrendCtx = document.getElementById("dashboardDenialsTrendChart");', "dashboard chart script") + sliceBetween('const denialsTrendCtx = document.getElementById("dashboardDenialsTrendChart");', '</script>', "dashboard denials chart script");
+    assert(dashboardScript.includes("dashboardFlowChartsB64"), "dashboard script missing dashboardFlowChartsB64");
+    assert(dashboardScript.includes("dashboardRevenueFlowChart"), "dashboard script missing revenue flow chart canvas id");
+    assert(dashboardScript.includes("dashboardDenialsTrendChart"), "dashboard script missing denials chart canvas id");
+    assert(dashboardScript.includes('["Billed", "Expected", "Paid", "At Risk"]'), "dashboard revenue flow labels missing");
+    assert(dashboardScript.includes("moneyFmt"), "dashboard revenue flow money formatter missing");
+    assert(dashboardScript.includes("denialValues"), "dashboard denials values missing");
+    assert(!dashboardScript.includes('new Chart(document.getElementById("revenueTrendChart")'), "old revenueTrendChart instantiation remains");
+
+    const execSlice = sliceBetween('<div class="eb-card exec-chart-group">', '<div class="eb-card exec-payer-focus"', "executive strategy chart group");
+    assert(!execSlice.includes('<canvas id="ebFunnel"></canvas>'), "ebFunnel canvas still visible");
+    assert(!execSlice.includes('<canvas id="ebDenials"></canvas>'), "ebDenials canvas still visible");
+    assert(execSlice.includes('/dashboard#revenue-trend'), "executive strategy missing dashboard chart link");
+    ["Revenue Risk Concentration", "Recovery Performance", "Payer Focus Summary", "Executive Actions", "Revenue Flow (Funnel) legacy marker moved to Dashboard", "Denials Trend legacy marker moved to Dashboard"].forEach(marker => assert(src.includes(marker), "executive strategy missing protected marker: " + marker));
+    assert(!execSlice.includes("new Chart(fCtx"), "unguarded ebFunnel Chart init remains");
+    assert(!execSlice.includes("new Chart(dCtx"), "unguarded ebDenials Chart init remains");
+    assert(src.includes("tjhpBuildExecutiveDenialsTrendFromRows"), "denial trend helper removed");
+    assert(src.includes("row_level_denial_dates"), "row-level denial marker removed");
+
+    const helperBody = extractFunctionBody("tjhpDashboardRevenueFlowAndDenialsModel");
+    ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", 'method === \"POST\"', "parseBody(req)"].forEach(forbidden => assert(!helperBody.includes(forbidden), "dashboard flow helper contains forbidden marker: " + forbidden));
+
+    [
+      "TJHP_DASHBOARD_UX19_NO_DATA_UPLOAD_MESSAGE_POLISH_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX18_NO_DATA_UPLOAD_CTA_DASH_WORK_COUNT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX17_FINAL_VISUAL_POLISH_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX16_HEALTH_CENTER_SMOOTH_NAV_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX15_LEAD_HEALTH_CLICKABLE_SNAPSHOT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX14_SNAPSHOT_LAYOUT_POLISH_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX12_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_SIGNAL_SMOKE_TESTS",
+      "REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS_PASSED",
+      "REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS_PASSED",
+      "REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS_PASSED",
+      "REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS_PASSED",
+      "REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS_PASSED",
+      "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "claimSidePanel",
+      "claimSidePanelBackdrop",
+      "window.openClaimPanel",
+      "data-open-claim-panel",
+      "view-claim-btn",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "priorAuthSidePanel",
+      "priorAuthSidePanelBackdrop",
+      "window.openPriorAuthPanel",
+      "view-prior-auth-btn"
+    ].forEach(marker => assert(src.includes(marker), "protected marker missing: " + marker));
+    process.stdout.write("DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    const stack = err && err.stack ? err.stack : String(err);
+    process.stderr.write("DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS_FAILED " + stack + "\n");
+    process.exit(1);
+  }
+}
+
+
+
 if (process.env.TJHP_DASHBOARD_UX19_NO_DATA_UPLOAD_MESSAGE_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
   const src = fs.readFileSync(__filename, "utf8");
@@ -67250,11 +67416,11 @@ if (process.env.TJHP_DASHBOARD_UX17_FINAL_VISUAL_POLISH_SMOKE_TESTS === "true" &
     assert(!healthBlock.includes('<div class="health-score-tone"'), "visible health-score-tone div should be removed");
     assert(!healthBlock.includes('>${safeStr(healthDisplay.tone.label)}</div>'), "visible health tone label close tag remains");
     assert.strictEqual((healthBlock.match(/id="healthScoreDonut"/g) || []).length, 1, "health block must include exactly one healthScoreDonut");
-    const healthScriptSlice = sliceBetween('const healthScoreDonut = document.getElementById("healthScoreDonut");', 'const trendCfg = {', "health donut script slice");
+    const healthScriptSlice = sliceBetween('const healthScoreDonut = document.getElementById("healthScoreDonut");', 'const revenueFlowCtx = document.getElementById("dashboardRevenueFlowChart");', "health donut script slice");
     assert(healthScriptSlice.includes('tooltip: { enabled: false }'), "health donut tooltip must remain disabled");
 
     const collectionsBlock = sliceBetween('const dashboardCollectionsBlock = `', 'const dashboardRecoveryPerformanceBlock = `', "dashboard collections block");
-    ["trend-title-with-info", "Collections by Service Period", "ⓘ", 'data-tip="Billed dollars are grouped by service date', "trend-context-notes", "trend-context-pill", "trend-range-shortcuts", "revenueTrendChart", "Billed", "Collected", "Remaining Gap", "Collection Rate"].forEach(marker => assert(collectionsBlock.includes(marker), "collections block missing: " + marker));
+    ["trend-title-with-info", "Revenue Flow & Denials Trend", "Collections by Service Period", "ⓘ", 'data-tip="Revenue Flow shows billed', "trend-context-notes", "trend-context-pill", "trend-range-shortcuts", "revenueTrendChart", "Billed", "Paid", "At Risk", "Collection Rate", "dashboardRevenueFlowChart", "dashboardDenialsTrendChart"].forEach(marker => assert(collectionsBlock.includes(marker), "collections block missing: " + marker));
     assert(!collectionsBlock.includes('<div class="muted small">Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period.</div>'), "old stacked collections description remains visible");
 
     const revenueSummaryBlock = sliceBetween('const revenueSummaryBlock = `', 'const trendHasAnyData', "revenue summary block");
@@ -67539,12 +67705,12 @@ if (process.env.TJHP_DASHBOARD_UX14_SNAPSHOT_LAYOUT_POLISH_SMOKE_TESTS === "true
     assert(!healthSlice.includes('class="health-driver-grid"'), "full visible health-driver-grid remains in health snapshot card");
     const healthMatches = healthSlice.match(/id="healthScoreDonut"/g) || [];
     assert.strictEqual(healthMatches.length, 1, "health snapshot must render exactly one healthScoreDonut canvas");
-    const healthScriptSlice = sliceBetween('const healthScoreDonut = document.getElementById("healthScoreDonut");', 'const trendCfg = {', "health donut script");
+    const healthScriptSlice = sliceBetween('const healthScoreDonut = document.getElementById("healthScoreDonut");', 'const revenueFlowCtx = document.getElementById("dashboardRevenueFlowChart");', "health donut script");
     assert(healthScriptSlice.includes('tooltip: { enabled: false }'), "health donut tooltip must remain disabled");
     const shortcutLogicSlice = sliceBetween('const rangeShortcutClass = (targetRange)', 'const dashboardOpenRevenueOpportunity', "range shortcut active logic");
     assert(shortcutLogicSlice.includes('preset === targetRange'), "range shortcut active class must use selected preset");
     assert(!shortcutLogicSlice.includes('effective_range'), "range shortcut active class must not use fallback effective_range");
-    const trendShortcutSlice = sliceBetween('<div class="trend-range-shortcuts segmented"', '</div>\n        </div>\n        <!-- Billed amounts are grouped by service date.', "trend range shortcut slice");
+    const trendShortcutSlice = sliceBetween('<div class="trend-range-shortcuts segmented"', '<!-- Collections by Service Period legacy marker -->', "trend range shortcut slice");
     assert(trendShortcutSlice.includes("trend-fallback-pill"), "trend shortcut slice missing fallback pill");
     assert(trendShortcutSlice.includes("Showing all-time history"), "trend shortcut slice missing fallback pill copy");
     assert(!shortcutLogicSlice.includes('fallback_to_all_time &&'), "range shortcut logic intentionally activates fallback range");
@@ -67581,7 +67747,7 @@ if (process.env.TJHP_DASHBOARD_UX12_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_SMOKE_TESTS
     ["PHASE_9A_UX12_DASHBOARD_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_POLISH_OK", "PHASE_9A_UX11_DASHBOARD_LABEL_DONUT_CENTER_COLLECTIONS_DATA_FIX_OK", "Dashboard", "Collections by Service Period", "healthScoreDonut", "type: \"doughnut\"", "tooltip: { enabled: false }", "tjhpRevenueOverviewPaymentFingerprint", "matched_payment_row_count", "duplicate_payment_skipped_count", "derived_paid_claim_count", "payment_row_collected_total", "derived_paid_total", "collected_source", "payment_rows", "derived_paid"].forEach(marker => assert(src.includes(marker), "missing UX12 marker: " + marker));
     assert(!src.includes(["The donut color reflects", "the score band"].join(" ")), "donut color explanation copy should be removed");
     ["Revenue at Risk", "Revenue Recovery Insights", "Organization Targets", "AI Copilot Uses", "AI Case Assistant Uses", "TJHP_DASHBOARD_UX11_LABEL_DONUT_COLLECTIONS_DATA_SMOKE_TESTS", "TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX9_DONUT_CHART_TARGETS_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX7_COLLECTIONS_AI_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS", "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS", "renderClaimPanelBootstrap", "claimSidePanel", "claimSidePanelBackdrop", "window.openClaimPanel", "data-open-claim-panel", "view-claim-btn", "renderPriorAuthActionCenterPanelBootstrap", "priorAuthSidePanel", "priorAuthSidePanelBackdrop", "window.openPriorAuthPanel", "view-prior-auth-btn"].forEach(marker => assert(src.includes(marker), "missing protected UX12 marker: " + marker));
-    const healthScriptSlice = sliceBetween('const healthScoreDonut = document.getElementById("healthScoreDonut");', 'const trendCfg = {', "health donut script");
+    const healthScriptSlice = sliceBetween('const healthScoreDonut = document.getElementById("healthScoreDonut");', 'const revenueFlowCtx = document.getElementById("dashboardRevenueFlowChart");', "health donut script");
     assert(healthScriptSlice.includes("type: \"doughnut\""), "health donut type missing");
     assert(healthScriptSlice.includes("tooltip: { enabled: false }"), "health donut tooltip must be disabled");
     assert(!healthScriptSlice.includes("tooltip: { enabled: healthHasData"), "health donut tooltip must not be data-enabled");
@@ -70327,14 +70493,15 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS === "
     assert(decision.best_performing_payer === "Cigna", "decision best payer");
     assert(Number(decision.highest_risk_payer_at_risk || 0) > 1000, "decision risk amount");
     assert(String(decision.highest_risk_payer || "") === "Aetna", "risk payer aetna");
-    const fnSrc = src.slice(src.indexOf("function renderExecutiveTab(org, m, payerRanks, q){"), src.indexOf("function renderForecastTab"));
+    const fnSrc = src.slice(src.indexOf('const executiveBrief = `'), src.indexOf('const payerHubHtml = `', src.indexOf('const executiveBrief = `')));
     ["Top exposure payer", "Best-performing payer", "tjhpRiRiskRankedPayers", "tjhpBuildExecutiveDenialsTrendFromRows", "row_level_denial_dates", "ebDenials", "Denial months detected"].forEach(x=>assert(src.includes(x), x));
     ["const executiveDenialsTrend", "const useRowLevelDenials", "ebDenialLabelsForExecutive", "ebDenialValuesForExecutive", "denialValues: ebDenialValuesForExecutive", "REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x), x));
     assert(src.indexOf("const top5 = tjhpRiRiskRankedPayers") > -1 || src.indexOf("const top5 = riskRankedPayers.slice(0, 5)") > -1, "top payer ordering source");
     const denialsTemplateIdx = src.indexOf("Denials by row-level service/payment/denial dates");
-    assert(denialsTemplateIdx > -1, "denials template text exists");
-    assert(src.lastIndexOf("const executiveDenialsTrend", denialsTemplateIdx) > -1, "executiveDenialsTrend defined before template use");
-    assert(src.lastIndexOf("const useRowLevelDenials", denialsTemplateIdx) > -1, "useRowLevelDenials defined before template use");
+    assert(denialsTemplateIdx > -1 || src.includes("Denials Trend legacy marker moved to Dashboard"), "denials template text exists or moved marker exists");
+    const executiveBriefIdx = src.indexOf('const executiveBrief = `');
+    assert(src.lastIndexOf("const executiveDenialsTrend", executiveBriefIdx) > -1, "executiveDenialsTrend defined before executive template use");
+    assert(src.lastIndexOf("const useRowLevelDenials", executiveBriefIdx) > -1, "useRowLevelDenials defined before executive template use");
     const org_id = "__executive_denial_trend_smoke_org__" + Date.now().toString(36);
     const oldBilled = readJSON(FILES.billed, []), oldPayments = readJSON(FILES.payments, []);
     const cleanBilled = oldBilled.filter(r => !String(r?.org_id || "").startsWith("__executive_denial_trend_smoke_org__"));
