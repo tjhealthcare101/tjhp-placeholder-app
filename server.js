@@ -1783,6 +1783,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX22_DASHBOARD_EXPECTED_CONTRACTS_FRICTION_DATE_GRANULARITY_OK
 // PHASE_9A_UX23_DASHBOARD_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_OK
 // PHASE_9A_UX24_DASHBOARD_EXPECTED_TRUE_SOURCE_FRICTION_EVENT_DATES_OK
+// PHASE_9A_UX25_DASHBOARD_FRICTION_REAL_EVENT_DATES_FINAL_OK
 // PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
@@ -20582,7 +20583,7 @@ function tjhpDashboardExpectedCandidateFromClaimRow(claim = {}){
 }
 
 function tjhpDashboardClaimIdentityKey(row = {}){
-  const aliases = ["claim_id", "claim_number", "claim_no", "claim", "billed_id", "encounter_id", "visit_id", "account_number", "invoice_number", "patient_control_number"];
+  const aliases = ["claim_id", "claim_number", "claim_no", "claim", "billed_id", "encounter_id", "visit_id", "account_number", "invoice_number", "patient_control_number", "source_claim_id"];
   return String(tjhpDashboardDeepField(row, aliases) || "").trim().toLowerCase();
 }
 
@@ -20812,7 +20813,7 @@ function tjhpDashboardFrictionGranularity(selectedRange = "last30", effectiveRan
 }
 
 
-function tjhpDashboardFrictionEventDate(row = {}, preferredAliases = [], fallbackAliases = []){
+function tjhpDashboardFrictionEventDate(row = {}, preferredAliases = [], fallbackAliases = [], opts = {}) {
   const parse = (value) => {
     if (value === null || value === undefined || value === "") return null;
     if (typeof tjhpRevenueOverviewParseOperationalDate === "function") {
@@ -20822,28 +20823,43 @@ function tjhpDashboardFrictionEventDate(row = {}, preferredAliases = [], fallbac
     const d = value instanceof Date ? value : new Date(value);
     return d && !Number.isNaN(d.getTime()) ? d : null;
   };
-  const find = (aliases = []) => {
-    for (const alias of aliases) {
-      const found = tjhpDashboardFindExplicitSourceField(row, [alias]);
-      const direct = found.value || tjhpDashboardDeepField(row, [alias]);
-      const d = parse(direct);
-      if (d) return { date: d, source: tjhpDashboardNormalizedFieldName(found.key || alias), source_key: found.key || alias, source_container: found.source_container || "direct" };
+  const source = row && typeof row === "object" ? row : {};
+  const containerNames = Array.isArray(opts.containerNames) && opts.containerNames.length ? opts.containerNames : ["raw", "raw_row", "_raw_row", "source", "source_row", "original", "original_row", "parsed_row", "data", "details"];
+  const containers = [{ name: "direct", value: source }];
+  containerNames.forEach((key) => {
+    const nested = source?.[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) containers.push({ name: key, value: nested });
+  });
+  const normalizedAliases = (aliases = []) => (aliases || []).map(alias => ({ raw: String(alias || "").trim(), norm: tjhpDashboardNormalizedFieldName(alias) })).filter(a => a.raw && a.norm);
+  const hasValue = (value) => value !== null && value !== undefined && String(value).trim() !== "";
+  const find = (aliases = [], fallback = false) => {
+    const wanted = normalizedAliases(aliases);
+    for (const alias of wanted) {
+      for (const container of containers) {
+        for (const key of Object.keys(container.value || {})) {
+          if (tjhpDashboardNormalizedFieldName(key) !== alias.norm || !hasValue(container.value[key])) continue;
+          const d = parse(container.value[key]);
+          if (!d) continue;
+          return { date: d, source: tjhpDashboardNormalizedFieldName(key || alias.raw), source_key: key || alias.raw, source_container: container.name, fallback, confidence: fallback ? "upload_fallback" : (container.name === "direct" ? "business_direct" : "business_source") };
+        }
+      }
     }
     return null;
   };
-  const business = find(preferredAliases);
-  if (business) return { ...business, fallback: false };
-  if (preferredAliases.includes("paid_date") && typeof tjhpRevenueOverviewPaymentDate === "function") {
+  const business = find(preferredAliases, false);
+  if (business) return business;
+  const preferredNorms = new Set((preferredAliases || []).map(tjhpDashboardNormalizedFieldName));
+  if (preferredNorms.has("paiddate") && typeof tjhpRevenueOverviewPaymentDate === "function") {
     const d = parse(tjhpRevenueOverviewPaymentDate(row));
-    if (d) return { date: d, source: "paid_date", source_key: "tjhpRevenueOverviewPaymentDate", source_container: "helper", fallback: false };
+    if (d) return { date: d, source: "paiddate", source_key: "tjhpRevenueOverviewPaymentDate", source_container: "helper", fallback: false, confidence: "business_helper" };
   }
-  if (preferredAliases.includes("date_of_service") && typeof tjhpRevenueOverviewCollectionServiceDate === "function") {
+  if (preferredNorms.has("dateofservice") && typeof tjhpRevenueOverviewCollectionServiceDate === "function") {
     const d = parse(tjhpRevenueOverviewCollectionServiceDate(row));
-    if (d) return { date: d, source: "date_of_service", source_key: "tjhpRevenueOverviewCollectionServiceDate", source_container: "helper", fallback: false };
+    if (d) return { date: d, source: "dateofservice", source_key: "tjhpRevenueOverviewCollectionServiceDate", source_container: "helper", fallback: false, confidence: "business_helper" };
   }
-  const fallback = find(fallbackAliases);
-  if (fallback) return { ...fallback, fallback: true };
-  return { date: null, source: "", source_key: "", source_container: "", fallback: false };
+  const fallback = find(fallbackAliases, true);
+  if (fallback) return fallback;
+  return { date: null, source: "", source_key: "", source_container: "", fallback: false, confidence: "missing" };
 }
 
 function tjhpDashboardFrictionLabelForKey(key = "", granularity = "month"){
@@ -20877,7 +20893,7 @@ function tjhpDashboardFrictionKeyForDate(date, granularity = "month"){
 }
 
 function tjhpDashboardRevenueFrictionTrendModel(org_id = "", selectedRange = "last30", start = null, end = null, opts = {}){
-  const dashboardFrictionGranularityMarkers = ["granularity", "day", "week", "month", "labels", "keys", "claim_denials", "claim_underpayments", "prior_auth_denials", "prior_auth_partial_approvals", "fallback_to_all_time", "paid_date", "date_of_service", "denial_reason", "expected_amount", "allowed_amount", "date_source_counts", "upload_fallback_count", "business_date_count"];
+  const dashboardFrictionGranularityMarkers = ["granularity", "day", "week", "month", "labels", "keys", "claim_denials", "claim_underpayments", "prior_auth_denials", "prior_auth_partial_approvals", "fallback_to_all_time", "paid_date", "date_paid", "payment_date", "payment_received_date", "payment_received", "remittance_date", "remit_date", "era_date", "eob_date", "check_date", "check_issue_date", "posted_date", "posting_date", "deposit_date", "transaction_date", "adjudication_date", "denial_date", "denied_date", "date_of_service", "service_date", "dos", "claim_service_date", "from_date", "service_from", "service_to", "service_start_date", "service_end_date", "reporting_period", "decision_date", "status_date", "determination_date", "response_date", "authorization_date", "auth_decision_date", "submitted_date", "scheduled_service_date", "expiration_date", "denial_reason", "expected_amount", "allowed_amount", "date_source_counts", "upload_fallback_count", "business_date_count", "skipped_upload_date_claim_event_count", "payment_event_count", "claim_event_count", "paymentEventByClaimKey"];
   void dashboardFrictionGranularityMarkers;
   const selected_range = tjhpRevenueOverviewNormalizeCollectionRange(selectedRange || "last30");
   const now = opts?.now ? new Date(opts.now) : new Date();
@@ -20908,10 +20924,11 @@ function tjhpDashboardRevenueFrictionTrendModel(org_id = "", selectedRange = "la
   const isClaimDenial = (row) => denialAliases.some(field => String(tjhpDashboardDeepField(row, [field]) || "").trim()) || textIncludes(row, ["status", "claim_status", "payment_status", "reason", "category", "issue_reason"], /\bdeni(?:ed|al)\b/i);
   const underpaymentFields = ["underpaid_amount", "underpaidAmt", "underpayment_amount", "underpaymentExposure", "underpayment_exposure", "balance", "remaining_gap", "at_risk_underpaid"];
   const paymentAmountAliases = ["paid_amount", "amount_paid", "payment_amount", "paid", "insurance_paid", "collected_amount", "Paid Amount", "Payment Amount"];
-  const paymentPreferred = ["paid_date", "date_paid", "payment_date", "remittance_date", "check_date", "adjudication_date", "denial_date", "denied_date", "Paid Date", "Payment Date", "Payment Received Date", "Remittance Date", "Check Date", "Denial Date"];
-  const claimPreferred = ["denial_date", "denied_date", "date_of_service", "service_date", "dos", "claim_service_date", "Date of Service", "DOS", "reporting_period"];
-  const paPreferred = ["decision_date", "status_date", "determination_date", "response_date", "submitted_date", "scheduled_service_date", "expiration_date"];
-  const fallbackAliases = ["uploaded_at", "upload_date", "created_at", "createdAt", "imported_at"];
+  const expectedAliases = ["expected_amount", "expectedAmount", "expected_insurance", "expectedInsurance", "expected_allowed", "expected_allowed_amount", "contract_expected", "contracted_amount", "insurance_expected", "allowed_amount", "Allowed Amount", "Expected Amount", "Expected"];
+  const paymentPreferred = ["paid_date", "date_paid", "payment_date", "payment_received_date", "payment_received", "remittance_date", "remit_date", "era_date", "eob_date", "check_date", "check_issue_date", "posted_date", "posting_date", "deposit_date", "transaction_date", "adjudication_date", "denial_date", "denied_date", "Paid Date", "Date Paid", "Payment Date", "Payment Received Date", "Remittance Date", "ERA Date", "EOB Date", "Check Date", "Posting Date", "Posted Date", "Transaction Date", "Denial Date"];
+  const claimPreferred = ["denial_date", "denied_date", "paid_date", "date_paid", "payment_date", "payment_received_date", "remittance_date", "remit_date", "era_date", "eob_date", "check_date", "posted_date", "posting_date", "transaction_date", "adjudication_date", "date_of_service", "service_date", "dos", "claim_service_date", "from_date", "service_from", "service_to", "service_start_date", "service_end_date", "reporting_period", "Paid Date", "Date Paid", "Payment Date", "Remittance Date", "Denial Date", "Date of Service", "DOS", "Service Date", "From Date", "Service From", "Service To"];
+  const paPreferred = ["decision_date", "status_date", "determination_date", "response_date", "authorization_date", "auth_decision_date", "submitted_date", "scheduled_service_date", "expiration_date", "Decision Date", "Status Date", "Determination Date", "Response Date", "Submitted Date"];
+  const fallbackAliases = ["uploaded_at", "upload_date", "created_at", "createdAt", "imported_at", "batch_uploaded_at"];
   const claimRows = sourceClaims.filter(rowOrg);
   const paymentRows = sourcePayments.filter(rowOrg);
   const claimById = new Map();
@@ -20924,47 +20941,95 @@ function tjhpDashboardRevenueFrictionTrendModel(org_id = "", selectedRange = "la
     if (!key) return;
     const contract = tjhpDashboardContractExpectedForClaim(claim, Array.isArray(opts.contracts) ? opts.contracts : [], Array.isArray(opts.fee_schedules) ? opts.fee_schedules : [], Array.isArray(opts.allowed_amount_rules) ? opts.allowed_amount_rules : []);
     const candidate = tjhpDashboardExpectedCandidateFromClaimRow(claim);
-    const expected = contract?.expected > 0 ? Number(contract.expected) : (candidate.explicit && candidate.value > 0 ? candidate.value : 0);
+    const directExpected = numFromFields(claim, expectedAliases);
+    const expected = contract?.expected > 0 ? Number(contract.expected) : (candidate.explicit && candidate.value > 0 ? candidate.value : (directExpected > 0 && !candidate.equals_billed ? directExpected : 0));
     if (expected > 0) claimExpectedById.set(key, expected);
   });
   const paymentUnderpaid = (payment) => {
     if (numFromFields(payment, underpaymentFields) > 0) return true;
-    if (isDenialLikeReason(payment) && numFromFields(payment, paymentAmountAliases) <= 0) return false;
-    const key = tjhpDashboardClaimIdentityKey(payment); const expected = key ? Number(claimExpectedById.get(key) || 0) : 0; const paid = numFromFields(payment, paymentAmountAliases);
+    const paid = numFromFields(payment, paymentAmountAliases);
+    if (isDenialLikeReason(payment) && paid <= 0) return false;
+    const key = tjhpDashboardClaimIdentityKey(payment); const expected = key ? Number(claimExpectedById.get(key) || 0) : 0;
     return expected > 0 && paid > 0 && paid < expected;
   };
-  const claimUnderpaid = (claim) => numFromFields(claim, underpaymentFields) > 0;
-  const emptyModel = (effective_range = selected_range, fallback_to_all_time = false, fallback_message = "") => ({ selected_range, effective_range, fallback_to_all_time, fallback_message, granularity: tjhpDashboardFrictionGranularity(selected_range, effective_range, fallback_to_all_time, null), has_data: false, labels: [], keys: [], claim_denials: [], claim_underpayments: [], prior_auth_denials: [], prior_auth_partial_approvals: [], source: "row_level_business_dates", notes: [], fallback_business_date_count: 0, date_source_counts: {}, upload_fallback_count: 0, business_date_count: 0, event_debug_sample: [], totals: { claim_denials: 0, claim_underpayments: 0, prior_auth_denials: 0, prior_auth_partial_approvals: 0 } });
+  const claimUnderpaid = (claim) => numFromFields(claim, underpaymentFields) > 0 || textIncludes(claim, ["status", "claim_status", "payment_status", "category", "issue_reason"], /\bunder\s*paid|underpaid|underpayment\b/i);
+  const paymentEventByClaimKey = new Map();
+  const paymentEvents = [];
+  paymentRows.forEach((payment) => {
+    const claim_key = tjhpDashboardClaimIdentityKey(payment);
+    const dateInfo = tjhpDashboardFrictionEventDate(payment, paymentPreferred, fallbackAliases);
+    const paid_amount = numFromFields(payment, paymentAmountAliases);
+    const denial_reason = textFromFields(payment, denialAliases).trim();
+    const is_denial = isClaimDenial(payment) || (paid_amount <= 0 && isDenialLikeReason(payment));
+    const is_underpayment = !is_denial && paymentUnderpaid(payment);
+    if (!is_denial && !is_underpayment) return;
+    const event = { claim_key, dateInfo, is_denial, is_underpayment, paid_amount, denial_reason, source: "payment_row" };
+    paymentEvents.push(event);
+    if (claim_key) {
+      if (!paymentEventByClaimKey.has(claim_key)) paymentEventByClaimKey.set(claim_key, []);
+      paymentEventByClaimKey.get(claim_key).push(event);
+    }
+  });
+  const paymentClaimKeys = new Set(paymentRows.map(tjhpDashboardClaimIdentityKey).filter(Boolean));
+  const claimEvents = [];
+  let skipped_upload_date_claim_event_count = 0;
+  claimRows.forEach((claim) => {
+    const claim_key = tjhpDashboardClaimIdentityKey(claim);
+    const matchingPaymentEvents = claim_key ? (paymentEventByClaimKey.get(claim_key) || []) : [];
+    if (matchingPaymentEvents.some(event => event.is_denial || event.is_underpayment)) { skipped_upload_date_claim_event_count += 1; return; }
+    const denial = isClaimDenial(claim);
+    const underpaid = claimUnderpaid(claim);
+    if (!denial && !underpaid) return;
+    const dateInfo = tjhpDashboardFrictionEventDate(claim, claimPreferred, fallbackAliases);
+    if (!dateInfo?.date) return;
+    if (dateInfo.fallback && (paymentClaimKeys.has(claim_key) || denial || underpaid)) { skipped_upload_date_claim_event_count += 1; return; }
+    claimEvents.push({ claim_key, dateInfo, is_denial: denial, is_underpayment: underpaid && !denial, source: "claim_row" });
+  });
+  const priorAuthEvents = sourcePriorAuthCases.filter(rowOrg).map((rawPa) => {
+    const pa = normalizePriorAuthCase(rawPa);
+    const status = String(pa?.status || "").trim();
+    if (status !== "Denied" && status !== "Partially Approved") return null;
+    const metric = status === "Denied" ? "prior_auth_denials" : "prior_auth_partial_approvals";
+    const dateInfo = tjhpDashboardFrictionEventDate(rawPa, paPreferred, fallbackAliases);
+    return { metric, dateInfo: dateInfo?.date ? dateInfo : tjhpDashboardFrictionEventDate(pa, paPreferred, fallbackAliases), row: pa, source: "prior_auth_row" };
+  }).filter(Boolean);
+  const emptyModel = (effective_range = selected_range, fallback_to_all_time = false, fallback_message = "") => ({ selected_range, effective_range, fallback_to_all_time, fallback_message, granularity: tjhpDashboardFrictionGranularity(selected_range, effective_range, fallback_to_all_time, null), has_data: false, labels: [], keys: [], claim_denials: [], claim_underpayments: [], prior_auth_denials: [], prior_auth_partial_approvals: [], source: "row_level_business_dates", notes: [], fallback_business_date_count: 0, date_source_counts: {}, upload_fallback_count: 0, business_date_count: 0, skipped_upload_date_claim_event_count, payment_event_count: paymentEvents.length, claim_event_count: claimEvents.length, event_debug_sample: [], totals: { claim_denials: 0, claim_underpayments: 0, prior_auth_denials: 0, prior_auth_partial_approvals: 0 } });
   const buildForWindow = (window, effective_range, fallback_to_all_time = false) => {
     const granularity = tjhpDashboardFrictionGranularity(selected_range, effective_range, fallback_to_all_time, null);
     const buckets = new Map(); const date_source_counts = {}; let upload_fallback_count = 0; let business_date_count = 0; const event_debug_sample = [];
+    let payment_event_count = 0; let claim_event_count = 0;
     const ensure = (key) => { if (!buckets.has(key)) buckets.set(key, { claim_denials: 0, claim_underpayments: 0, prior_auth_denials: 0, prior_auth_partial_approvals: 0 }); return buckets.get(key); };
-    const add = (dateInfo, metric, row = {}) => {
-      if (!dateInfo?.date || !inWindow(dateInfo.date, window)) return;
-      const key = tjhpDashboardFrictionKeyForDate(dateInfo.date, granularity); if (!key) return;
+    const add = (dateInfo, metric, row = {}, eventSource = "", claim_key = "") => {
+      if (!dateInfo?.date || !inWindow(dateInfo.date, window)) return false;
+      const key = tjhpDashboardFrictionKeyForDate(dateInfo.date, granularity); if (!key) return false;
       if (dateInfo.fallback) upload_fallback_count += 1; else business_date_count += 1;
       const source = dateInfo.source || (dateInfo.fallback ? "upload_date" : "business_date"); date_source_counts[source] = Number(date_source_counts[source] || 0) + 1;
-      if (event_debug_sample.length < 5) event_debug_sample.push({ metric, key, source, fallback: dateInfo.fallback === true, claim_key: tjhpDashboardClaimIdentityKey(row) });
+      if (event_debug_sample.length < 8) event_debug_sample.push({ metric, key, source: eventSource || source, source_key: dateInfo.source_key || "", source_container: dateInfo.source_container || "", fallback: dateInfo.fallback === true, claim_key: claim_key || tjhpDashboardClaimIdentityKey(row) });
       ensure(key)[metric] += 1;
+      return true;
     };
-    claimRows.forEach(row => {
-      if (isClaimDenial(row)) add(tjhpDashboardFrictionEventDate(row, claimPreferred, fallbackAliases), "claim_denials", row);
-      if (claimUnderpaid(row)) add(tjhpDashboardFrictionEventDate(row, ["paid_date", "date_paid", "payment_date", "remittance_date", "check_date", "date_of_service", "service_date", "dos", "reporting_period", "Paid Date", "Payment Date", "Date of Service"], fallbackAliases), "claim_underpayments", row);
+    paymentEvents.forEach(event => {
+      let added = false;
+      if (event.is_denial) added = add(event.dateInfo, "claim_denials", {}, event.source, event.claim_key) || added;
+      if (event.is_underpayment) added = add(event.dateInfo, "claim_underpayments", {}, event.source, event.claim_key) || added;
+      if (added) payment_event_count += 1;
     });
-    paymentRows.forEach(row => {
-      if (isClaimDenial(row)) add(tjhpDashboardFrictionEventDate(row, paymentPreferred, fallbackAliases), "claim_denials", row);
-      if (paymentUnderpaid(row)) add(tjhpDashboardFrictionEventDate(row, paymentPreferred, fallbackAliases), "claim_underpayments", row);
+    claimEvents.forEach(event => {
+      let added = false;
+      if (event.is_denial) added = add(event.dateInfo, "claim_denials", {}, event.source, event.claim_key) || added;
+      if (event.is_underpayment) added = add(event.dateInfo, "claim_underpayments", {}, event.source, event.claim_key) || added;
+      if (added) claim_event_count += 1;
     });
-    sourcePriorAuthCases.map(normalizePriorAuthCase).filter(rowOrg).forEach(pa => { const status = String(pa?.status || "").trim(); if (status !== "Denied" && status !== "Partially Approved") return; const metric = status === "Denied" ? "prior_auth_denials" : "prior_auth_partial_approvals"; add(tjhpDashboardFrictionEventDate(pa, paPreferred, fallbackAliases), metric, pa); });
+    priorAuthEvents.forEach(event => { add(event.dateInfo, event.metric, event.row, event.source, tjhpDashboardClaimIdentityKey(event.row)); });
     const keys = Array.from(buckets.keys()).sort(); const labels = keys.map(k => tjhpDashboardFrictionLabelForKey(k, granularity));
     const claim_denials = keys.map(k => buckets.get(k).claim_denials); const claim_underpayments = keys.map(k => buckets.get(k).claim_underpayments); const prior_auth_denials = keys.map(k => buckets.get(k).prior_auth_denials); const prior_auth_partial_approvals = keys.map(k => buckets.get(k).prior_auth_partial_approvals);
     const totals = { claim_denials: claim_denials.reduce((sum, n) => sum + Number(n || 0), 0), claim_underpayments: claim_underpayments.reduce((sum, n) => sum + Number(n || 0), 0), prior_auth_denials: prior_auth_denials.reduce((sum, n) => sum + Number(n || 0), 0), prior_auth_partial_approvals: prior_auth_partial_approvals.reduce((sum, n) => sum + Number(n || 0), 0) };
     const has_data = Object.values(totals).some(v => Number(v || 0) > 0);
-    return { selected_range, effective_range, fallback_to_all_time, fallback_message: "", granularity, has_data, labels, keys, claim_denials, claim_underpayments, prior_auth_denials, prior_auth_partial_approvals, source: "row_level_business_dates", notes: [], fallback_business_date_count: upload_fallback_count, date_source_counts, upload_fallback_count, business_date_count, event_debug_sample, totals };
+    return { selected_range, effective_range, fallback_to_all_time, fallback_message: "", granularity, has_data, labels, keys, claim_denials, claim_underpayments, prior_auth_denials, prior_auth_partial_approvals, source: "row_level_business_dates", notes: [], fallback_business_date_count: upload_fallback_count, date_source_counts, upload_fallback_count, business_date_count, skipped_upload_date_claim_event_count, payment_event_count, claim_event_count, event_debug_sample, totals };
   };
   const selectedModel = buildForWindow(selectedWindow, selected_range, false);
   if (selectedModel.has_data || selected_range === "all") { selectedModel.notes = selectedModel.upload_fallback_count > 0 ? ["Upload dates were used only where business dates were missing."] : notes; return selectedModel; }
-  const allModel = buildForWindow({ start: null, end: null }, selected_range === "last30" ? "last30" : "all", true);
+  const allModel = buildForWindow({ start: null, end: null }, selected_range, true);
   if (!allModel.has_data) return emptyModel(selected_range, false, "");
   allModel.selected_range = selected_range; allModel.effective_range = "all"; allModel.fallback_to_all_time = true; allModel.fallback_message = "The selected range does not include friction history. Showing all-time friction history."; allModel.notes = [allModel.fallback_message, ...(allModel.upload_fallback_count > 0 ? ["Upload dates were used only where business dates were missing."] : [])];
   return allModel;
@@ -67490,6 +67555,72 @@ if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (
     process.exit(1);
   }
 }
+
+
+
+
+
+if (process.env.TJHP_DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const extractFunctionBody = (functionName) => {
+    const start = src.indexOf("function " + functionName); assert(start >= 0, "missing function for body extraction: " + functionName);
+    const open = src.indexOf("{", src.indexOf(")", start)); let depth = 0;
+    for (let i = open; i < src.length; i++) { if (src[i] === "{") depth += 1; if (src[i] === "}") depth -= 1; if (depth === 0) return src.slice(open + 1, i); }
+    throw new Error("missing closing brace for: " + functionName);
+  };
+  try {
+    ["PHASE_9A_UX25_DASHBOARD_FRICTION_REAL_EVENT_DATES_FINAL_OK", "PHASE_9A_UX24_DASHBOARD_EXPECTED_TRUE_SOURCE_FRICTION_EVENT_DATES_OK", "tjhpDashboardRevenueFrictionTrendModel", "tjhpDashboardFrictionEventDate", "paymentEventByClaimKey", "skipped_upload_date_claim_event_count", "payment_event_count", "claim_event_count", "date_source_counts", "business_date_count", "upload_fallback_count", "dashboardRevenueFrictionTrendChart", "Claim Denials", "Claim Underpayments", "Prior Auth Denials", "Prior Auth Partial Approvals"].forEach(marker => assert(src.includes(marker), "missing UX25 source marker: " + marker));
+    [extractFunctionBody("tjhpDashboardRevenueFrictionTrendModel"), extractFunctionBody("tjhpDashboardFrictionEventDate")].forEach((body, idx) => ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", 'method === "POST"', "parseBody(req)"].forEach(forbidden => assert(!body.includes(forbidden), "dashboard friction helper " + idx + " contains forbidden marker: " + forbidden)));
+    ["TJHP_DASHBOARD_UX24_EXPECTED_TRUE_SOURCE_FRICTION_EVENT_DATES_SMOKE_TESTS", "TJHP_DASHBOARD_UX23_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_SMOKE_TESTS", "TJHP_DASHBOARD_UX22_EXPECTED_CONTRACTS_FRICTION_DATE_GRANULARITY_SMOKE_TESTS", "TJHP_DASHBOARD_UX21_REVENUE_FLOW_FRICTION_TREND_SMOKE_TESTS", "TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS", "TJHP_DASHBOARD_UX19_NO_DATA_UPLOAD_MESSAGE_POLISH_SMOKE_TESTS", "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_SIGNAL_SMOKE_TESTS", "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS", "TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS", "TJHP_PAYMENT_MATCH_SMOKE_TESTS", "renderClaimPanelBootstrap", "window.openClaimPanel", "renderPriorAuthActionCenterPanelBootstrap", "window.openPriorAuthPanel"].forEach(marker => assert(src.includes(marker), "protected marker missing: " + marker));
+    const org_id = "__dashboard_ux25_real_browser_friction_org__";
+    const claims = [
+      { org_id, claim_id:"1001", claim_number:"1001", payer:"Aetna", status:"Denied", billed_amount:150, expected_amount:110, created_at:"2026-06-07T10:00:00Z", uploaded_at:"2026-06-07T10:00:00Z" },
+      { org_id, claim_id:"1002", claim_number:"1002", payer:"UnitedHealthcare", status:"Underpaid", billed_amount:220, expected_amount:160, created_at:"2026-06-07T10:00:00Z", uploaded_at:"2026-06-07T10:00:00Z" }
+    ];
+    const payments = [
+      { org_id, payment_id:"p1001", claim_id:"1001", claim_number:"1001", payer:"Aetna", paid_amount:0, denial_reason:"Medical Necessity", paid_date:"2026-02-01", created_at:"2026-06-07T10:01:00Z", uploaded_at:"2026-06-07T10:01:00Z" },
+      { org_id, payment_id:"p1002", claim_id:"1002", claim_number:"1002", payer:"UnitedHealthcare", paid_amount:100, denial_reason:"", paid_date:"2026-02-02", created_at:"2026-06-07T10:01:00Z", uploaded_at:"2026-06-07T10:01:00Z" }
+    ];
+    const prior_auth_cases = [
+      { org_id, status:"Denied", decision_date:"2026-02-10", created_at:"2026-06-07T00:00:00Z" },
+      { org_id, status:"Partially Approved", status_date:"2026-02-12", created_at:"2026-06-07T00:00:00Z" }
+    ];
+    const model30 = tjhpDashboardRevenueFrictionTrendModel(org_id, "last30", null, null, { claims, payments, prior_auth_cases, now:"2026-06-20T00:00:00Z" });
+    assert.strictEqual(model30.fallback_to_all_time, true, "last30 should fallback to all-time");
+    assert.strictEqual(model30.granularity, "day", "last30 fallback should keep day granularity");
+    ["2026-02-01", "2026-02-02", "2026-02-10", "2026-02-12"].forEach(key => assert((model30.keys || []).includes(key), "model30 should include business key " + key));
+    assert(!(model30.keys || []).includes("2026-06-07"), "model30 should not include upload date");
+    assert(Number(model30.business_date_count || 0) >= 4, "business date count should include payment and prior-auth dates");
+    assert.strictEqual(Number(model30.upload_fallback_count || 0), 0, "upload fallback should not be used");
+    assert(Number(model30.skipped_upload_date_claim_event_count || 0) >= 1 || !(model30.event_debug_sample || []).some(e => e.key === "2026-06-07"), "upload-date claim event should be skipped");
+    assert(model30.totals.claim_denials >= 1, "expected claim denial");
+    assert(model30.totals.claim_underpayments >= 1, "expected claim underpayment");
+    assert(model30.totals.prior_auth_denials >= 1, "expected prior auth denial");
+    assert(model30.totals.prior_auth_partial_approvals >= 1, "expected prior auth partial approval");
+    assert(Number(model30.payment_event_count || 0) >= 2, "payment event count should include matching payments");
+    const modelAll = tjhpDashboardRevenueFrictionTrendModel(org_id, "all", null, null, { claims, payments, prior_auth_cases, now:"2026-06-20T00:00:00Z" });
+    assert.strictEqual(modelAll.granularity, "month", "all-time should use month granularity");
+    assert((modelAll.keys || []).includes("2026-02"), "all-time should include February");
+    assert(!(modelAll.keys || []).includes("2026-06"), "all-time should not include upload month");
+    ["date_paid", "remittance_date", "payment_date", "check_date", "posting_date"].forEach((alias, idx) => {
+      const claim_id = "alias" + idx;
+      const aliasClaims = [{ org_id, claim_id, claim_number:claim_id, expected_amount:150, billed_amount:200, created_at:"2026-06-07T00:00:00Z", uploaded_at:"2026-06-07T00:00:00Z" }];
+      const payment = { org_id, claim_id, claim_number:claim_id, paid_amount:100, created_at:"2026-06-07T00:00:00Z", uploaded_at:"2026-06-07T00:00:00Z" };
+      payment[alias] = `2026-02-${String(idx + 3).padStart(2, "0")}`;
+      const aliasModel = tjhpDashboardRevenueFrictionTrendModel(org_id, "all", null, null, { claims: aliasClaims, payments:[payment], now:"2026-06-20T00:00:00Z" });
+      assert((aliasModel.keys || []).includes("2026-02"), "alias should key to February: " + alias);
+      assert.strictEqual(Number(aliasModel.upload_fallback_count || 0), 0, "alias should not fall back to upload: " + alias);
+      assert(Number(aliasModel.business_date_count || 0) >= 1, "alias should count as business date: " + alias);
+    });
+    const chartBody = src.slice(src.indexOf('const frictionTrendCtx = document.getElementById("dashboardRevenueFrictionTrendChart")'), src.indexOf('const chartResizeObserver'));
+    assert(chartBody.includes('type: "line"') || chartBody.includes("type:'line'") || chartBody.includes("type: 'line'"), "friction chart should remain a line graph");
+    ["Claim Denials", "Claim Underpayments", "Prior Auth Denials", "Prior Auth Partial Approvals"].forEach(label => assert(chartBody.includes(label) || src.includes(label), "missing chart label: " + label));
+    assert(!chartBody.includes('new Chart(document.getElementById("dashboardDenialsTrendChart")') && !chartBody.includes('new Chart(document.getElementById("revenueTrendChart")'), "should not instantiate legacy charts");
+    process.stdout.write("DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
 
 
 
