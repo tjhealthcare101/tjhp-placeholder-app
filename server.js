@@ -1784,6 +1784,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX23_DASHBOARD_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_OK
 // PHASE_9A_UX24_DASHBOARD_EXPECTED_TRUE_SOURCE_FRICTION_EVENT_DATES_OK
 // PHASE_9A_UX25_DASHBOARD_FRICTION_REAL_EVENT_DATES_FINAL_OK
+// PHASE_9A_UX26_DASHBOARD_FRICTION_TIMELINE_READABILITY_OK
 // PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
@@ -44388,6 +44389,17 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const dashboardFlowHasFinancialData = dashboardFlowModel.has_data === true;
     const dashboardChartRangeLabel = tjhpDashboardRangeLabel(selectedTrendRange, dashboardFlowModel.fallback_to_all_time || dashboardFrictionModel.fallback_to_all_time);
     const dashboardFrictionHasData = dashboardFrictionModel.has_data === true;
+    const dashboardFrictionTotals = dashboardFrictionModel.totals || {};
+    const dashboardFrictionSummary = {
+      claimDenials: Number(dashboardFrictionTotals.claim_denials || 0),
+      claimUnderpayments: Number(dashboardFrictionTotals.claim_underpayments || 0),
+      priorAuthDenials: Number(dashboardFrictionTotals.prior_auth_denials || 0),
+      priorAuthPartialApprovals: Number(dashboardFrictionTotals.prior_auth_partial_approvals || 0)
+    };
+    dashboardFrictionSummary.total = dashboardFrictionSummary.claimDenials + dashboardFrictionSummary.claimUnderpayments + dashboardFrictionSummary.priorAuthDenials + dashboardFrictionSummary.priorAuthPartialApprovals;
+    const dashboardFrictionSummaryValue = (value) => dashboardFrictionHasData ? formatNumberUI(value || 0) : dashboardDash;
+    const dashboardFrictionSummaryClass = (value, extra = "") => `dashboard-friction-summary-card ${Number(value || 0) === 0 ? "is-zero" : ""} ${extra}`.trim();
+    const dashboardFrictionPriorAuthZero = dashboardFrictionSummary.priorAuthDenials === 0 && dashboardFrictionSummary.priorAuthPartialApprovals === 0;
 
     const dashboardHealthSummaryBlock = `
       <div class="dashboard-health-summary health-compact dashboard-snapshot-card dashboard-health-card-compact dashboard-health-lead">
@@ -44511,10 +44523,34 @@ if (method === "GET" && pathname === "/weekly-summary") {
           </div>
           <div class="dashboard-chart-card dashboard-chart-card-full">
             <div class="dashboard-chart-card-head">
-              <h4>Revenue Friction Trend</h4>
+              <h4>Revenue Friction Timeline</h4>
+              <!-- Revenue Friction Trend legacy marker -->
               <div class="dashboard-chart-period-pill">${safeStr(dashboardChartRangeLabel)}</div>
             </div>
-            <div class="muted small" style="margin:-2px 0 8px;">Claims + prior auth friction by business period.</div>
+            <div class="muted small" style="margin:-2px 0 8px;">Stacked bars show friction type. The line shows total friction events.</div>
+            <div class="dashboard-friction-summary-strip">
+              <div class="${dashboardFrictionSummaryClass(dashboardFrictionSummary.claimDenials)}">
+                <div class="dashboard-friction-summary-value">${dashboardFrictionSummaryValue(dashboardFrictionSummary.claimDenials)}</div>
+                <div class="dashboard-friction-summary-label">Claim Denials</div>
+              </div>
+              <div class="${dashboardFrictionSummaryClass(dashboardFrictionSummary.claimUnderpayments)}">
+                <div class="dashboard-friction-summary-value">${dashboardFrictionSummaryValue(dashboardFrictionSummary.claimUnderpayments)}</div>
+                <div class="dashboard-friction-summary-label">Claim Underpayments</div>
+              </div>
+              <div class="${dashboardFrictionSummaryClass(dashboardFrictionSummary.priorAuthDenials, "muted-if-zero")}">
+                <div class="dashboard-friction-summary-value">${dashboardFrictionSummaryValue(dashboardFrictionSummary.priorAuthDenials)}</div>
+                <div class="dashboard-friction-summary-label">Prior Auth Denials</div>
+              </div>
+              <div class="${dashboardFrictionSummaryClass(dashboardFrictionSummary.priorAuthPartialApprovals, "muted-if-zero")}">
+                <div class="dashboard-friction-summary-value">${dashboardFrictionSummaryValue(dashboardFrictionSummary.priorAuthPartialApprovals)}</div>
+                <div class="dashboard-friction-summary-label">Prior Auth Partial Approvals</div>
+              </div>
+              <div class="${dashboardFrictionSummaryClass(dashboardFrictionSummary.total, "total")}">
+                <div class="dashboard-friction-summary-value">${dashboardFrictionSummaryValue(dashboardFrictionSummary.total)}</div>
+                <div class="dashboard-friction-summary-label">Total Friction Events</div>
+              </div>
+            </div>
+            ${dashboardFrictionHasData && dashboardFrictionPriorAuthZero ? `<div class="muted small dashboard-friction-zero-note">No prior-auth friction in this period.</div>` : ``}
             <div class="chart-container dashboard-friction-chart ${dashboardFrictionHasData ? "" : "chart-empty-state"}">
               <canvas id="dashboardRevenueFrictionTrendChart"></canvas>
               ${dashboardFrictionHasData ? "" : `<div class="chart-empty-overlay">No revenue friction trend history is available yet.</div>`}
@@ -44831,7 +44867,14 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .dashboard-chart-period-pill{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;background:#f8fafc;color:#475569;font-size:11px;font-weight:800;padding:5px 8px;white-space:nowrap;}
         .dashboard-chart-note-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
         .dashboard-flow-chart,.dashboard-denials-chart{min-height:260px;}
-        .dashboard-friction-chart{min-height:280px;}
+        .dashboard-friction-summary-strip{display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:8px;margin:10px 0 12px;}
+        .dashboard-friction-summary-card{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px;min-height:64px;}
+        .dashboard-friction-summary-card.is-zero{opacity:.62;background:#f8fafc;}
+        .dashboard-friction-summary-card.total{background:#f8fafc;}
+        .dashboard-friction-summary-value{font-weight:900;font-size:20px;line-height:1;color:#0f172a;}
+        .dashboard-friction-summary-label{margin-top:6px;font-size:11px;font-weight:800;color:#475569;text-transform:uppercase;letter-spacing:.02em;}
+        .dashboard-friction-zero-note{margin:-4px 0 10px;}
+        .dashboard-friction-chart{min-height:300px;}
         .dashboard-flow-kpis .kpi-card{min-height:76px;}
         @media (max-width: 900px){.dashboard-flow-denials-grid{grid-template-columns:1fr;}}
         .org-targets-card{padding:16px;}
@@ -44947,6 +44990,9 @@ document.addEventListener("DOMContentLoaded", function(){
   const frictionClaimUnderpayments = Array.isArray(frictionTrend.claim_underpayments) ? frictionTrend.claim_underpayments.map(v => Number(v || 0)) : [];
   const frictionPriorAuthDenials = Array.isArray(frictionTrend.prior_auth_denials) ? frictionTrend.prior_auth_denials.map(v => Number(v || 0)) : [];
   const frictionPriorAuthPartialApprovals = Array.isArray(frictionTrend.prior_auth_partial_approvals) ? frictionTrend.prior_auth_partial_approvals.map(v => Number(v || 0)) : [];
+  const frictionTotalForSeries = (values) => (Array.isArray(values) ? values : []).reduce((sum, value) => sum + Number(value || 0), 0);
+  const frictionMaxLen = Math.max(frictionLabels.length, frictionClaimDenials.length, frictionClaimUnderpayments.length, frictionPriorAuthDenials.length, frictionPriorAuthPartialApprovals.length, 1);
+  const frictionTotalEvents = Array.from({ length: frictionMaxLen }, (_, i) => Number(frictionClaimDenials[i] || 0) + Number(frictionClaimUnderpayments[i] || 0) + Number(frictionPriorAuthDenials[i] || 0) + Number(frictionPriorAuthPartialApprovals[i] || 0));
   // revenueTrendChart legacy marker: old stacked Collections by Service Period chart is no longer instantiated.
   // dashboardDenialsTrendChart legacy marker: old denials-only canvas is no longer instantiated.
 
@@ -45010,14 +45056,15 @@ document.addEventListener("DOMContentLoaded", function(){
   if (frictionTrendCtx) {
     const padded = (values) => values.length ? values : [0];
     new Chart(frictionTrendCtx, {
-      type: "line",
+      type: "bar",
       data: {
         labels: frictionLabels,
         datasets: [
-          { label: "Claim Denials", data: padded(frictionClaimDenials), borderColor: "#dc2626", backgroundColor: "rgba(220, 38, 38, 0.10)", tension: 0.35, fill: false, pointRadius: 3 },
-          { label: "Claim Underpayments", data: padded(frictionClaimUnderpayments), borderColor: "#f97316", backgroundColor: "rgba(249, 115, 22, 0.10)", tension: 0.35, fill: false, pointRadius: 3 },
-          { label: "Prior Auth Denials", data: padded(frictionPriorAuthDenials), borderColor: "#7c3aed", backgroundColor: "rgba(124, 58, 237, 0.10)", tension: 0.35, fill: false, pointRadius: 3 },
-          { label: "Prior Auth Partial Approvals", data: padded(frictionPriorAuthPartialApprovals), borderColor: "#0891b2", backgroundColor: "rgba(8, 145, 178, 0.10)", tension: 0.35, fill: false, pointRadius: 3 }
+          { type: "bar", label: "Claim Denials", data: padded(frictionClaimDenials), stack: "friction", backgroundColor: "rgba(220, 38, 38, 0.72)", borderColor: "#dc2626", borderWidth: 1, borderRadius: 4 },
+          { type: "bar", label: "Claim Underpayments", data: padded(frictionClaimUnderpayments), stack: "friction", backgroundColor: "rgba(249, 115, 22, 0.72)", borderColor: "#f97316", borderWidth: 1, borderRadius: 4 },
+          { type: "bar", label: "Prior Auth Denials", data: padded(frictionPriorAuthDenials), stack: "friction", backgroundColor: "rgba(124, 58, 237, 0.70)", borderColor: "#7c3aed", borderWidth: 1, borderRadius: 4, hidden: frictionTotalForSeries(frictionPriorAuthDenials) === 0 },
+          { type: "bar", label: "Prior Auth Partial Approvals", data: padded(frictionPriorAuthPartialApprovals), stack: "friction", backgroundColor: "rgba(8, 145, 178, 0.70)", borderColor: "#0891b2", borderWidth: 1, borderRadius: 4, hidden: frictionTotalForSeries(frictionPriorAuthPartialApprovals) === 0 },
+          { type: "line", label: "Total Friction Events", data: frictionTotalEvents, borderColor: "#0f172a", backgroundColor: "rgba(15, 23, 42, 0.10)", borderWidth: 2, tension: 0.3, fill: false, pointRadius: 3, order: 0 }
         ]
       },
       options: {
@@ -45025,13 +45072,17 @@ document.addEventListener("DOMContentLoaded", function(){
         plugins: {
           legend: { display: true, position: "bottom" },
           tooltip: { callbacks: {
-            label: (ctx) => String(ctx.dataset.label || "") + ": " + Number(ctx.parsed.y || 0).toLocaleString(),
+            label: (ctx) => {
+              const label = String(ctx.dataset.label || "");
+              const value = Number(ctx.parsed.y || 0).toLocaleString();
+              return label + ": " + value;
+            },
             afterLabel: (ctx) => frictionRawDateLabel(ctx.dataIndex)
           } }
         },
         scales: {
-          x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } },
-          y: { beginAtZero: true, ticks: { precision: 0, maxTicksLimit: 6 } }
+          x: { stacked: true, grid: { display: false }, ticks: { maxTicksLimit: 8 } },
+          y: { stacked: true, beginAtZero: true, ticks: { precision: 0, maxTicksLimit: 6 } }
         }
       }
     });
@@ -67560,6 +67611,120 @@ if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (
 
 
 
+
+if (process.env.TJHP_DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const sliceBetween = (startNeedle, endNeedle, label) => {
+    const start = src.indexOf(startNeedle); assert(start >= 0, "missing start for " + label + ": " + startNeedle);
+    const end = src.indexOf(endNeedle, start + startNeedle.length); assert(end > start, "missing end for " + label + ": " + endNeedle);
+    return src.slice(start, end);
+  };
+  try {
+    [
+      "PHASE_9A_UX26_DASHBOARD_FRICTION_TIMELINE_READABILITY_OK",
+      "PHASE_9A_UX25_DASHBOARD_FRICTION_REAL_EVENT_DATES_FINAL_OK",
+      "Revenue Friction Timeline",
+      "Revenue Friction Trend legacy marker",
+      "dashboardRevenueFrictionTrendChart",
+      "dashboard-friction-summary-strip",
+      "dashboard-friction-summary-card",
+      "dashboard-friction-summary-value",
+      "dashboard-friction-summary-label",
+      "dashboard-friction-zero-note",
+      "Total Friction Events",
+      "Claim Denials",
+      "Claim Underpayments",
+      "Prior Auth Denials",
+      "Prior Auth Partial Approvals",
+      'stack: "friction"',
+      'type: "bar"',
+      'type: "line"',
+      "frictionTotalEvents",
+      "No prior-auth friction in this period.",
+      "trend-range-shortcuts",
+      "30 days",
+      "60 days",
+      "90 days",
+      "All Time"
+    ].forEach(marker => assert(src.includes(marker), "missing UX26 source marker: " + marker));
+
+    const dashboardCollectionsBlock = sliceBetween('const dashboardCollectionsBlock = `', 'const dashboardRecoveryPerformanceBlock = `', "dashboardCollectionsBlock");
+    [
+      "Revenue Flow & Revenue Friction",
+      "Revenue Flow",
+      "Revenue Friction Timeline",
+      "Revenue Friction Trend legacy marker",
+      "dashboardRevenueFlowChart",
+      "dashboardRevenueFrictionTrendChart",
+      "dashboard-friction-summary-strip",
+      "Total Friction Events",
+      "Claim Denials",
+      "Claim Underpayments",
+      "Prior Auth Denials",
+      "Prior Auth Partial Approvals",
+      "30 days",
+      "60 days",
+      "90 days",
+      "All Time",
+      "trend-fallback-pill"
+    ].forEach(marker => assert(dashboardCollectionsBlock.includes(marker), "dashboardCollectionsBlock missing: " + marker));
+
+    const dashboardScript = sliceBetween('const dashboardFlowPayload = JSON.parse(atob("${dashboardFlowChartsB64}"));', '</script>', "dashboard chart script");
+    const chartStart = dashboardScript.indexOf('const frictionTrendCtx = document.getElementById("dashboardRevenueFrictionTrendChart")');
+    assert(chartStart >= 0, "chart script missing frictionTrendCtx");
+    const chartEnd = dashboardScript.indexOf('});\n});', chartStart);
+    const chartBody = dashboardScript.slice(chartStart, chartEnd > chartStart ? chartEnd : undefined);
+    assert(chartBody.includes("dashboardRevenueFrictionTrendChart"), "chart body missing canvas id");
+    assert(chartBody.includes('type: "bar"'), "friction chart should use bar root or bar datasets");
+    assert(chartBody.includes('type: "line"') && chartBody.includes('label: "Total Friction Events"'), "friction chart missing total line dataset");
+    ["Claim Denials", "Claim Underpayments", "Prior Auth Denials", "Prior Auth Partial Approvals"].forEach(label => assert(chartBody.includes('type: "bar"') && chartBody.includes('label: "' + label + '"'), "missing bar dataset label: " + label));
+    assert(chartBody.includes('stack: "friction"'), "chart body missing stacked friction bar stack");
+    assert(chartBody.includes('x: { stacked: true') && chartBody.includes('y: { stacked: true'), "chart body missing stacked x/y scales");
+    assert(chartBody.includes("frictionTotalEvents"), "chart body missing frictionTotalEvents");
+    assert(!chartBody.includes('getElementById("dashboardDenialsTrendChart")') && !chartBody.includes('new Chart(document.getElementById("dashboardDenialsTrendChart")'), "dashboardDenialsTrendChart should not be instantiated");
+    assert(!chartBody.includes('getElementById("revenueTrendChart")') && !chartBody.includes('new Chart(document.getElementById("revenueTrendChart")'), "revenueTrendChart should not be instantiated");
+
+    const fake = {
+      labels: ["Feb 1", "Feb 2", "Feb 3"],
+      claim_denials: [1, 0, 1],
+      claim_underpayments: [0, 1, 1],
+      prior_auth_denials: [0, 0, 0],
+      prior_auth_partial_approvals: [0, 0, 0]
+    };
+    const computedTotals = fake.labels.map((_, i) => Number(fake.claim_denials[i] || 0) + Number(fake.claim_underpayments[i] || 0) + Number(fake.prior_auth_denials[i] || 0) + Number(fake.prior_auth_partial_approvals[i] || 0));
+    assert.deepStrictEqual(computedTotals, [1, 1, 2], "fake aligned total friction events mismatch");
+    assert(src.includes("Number(frictionClaimDenials[i] || 0) + Number(frictionClaimUnderpayments[i] || 0) + Number(frictionPriorAuthDenials[i] || 0) + Number(frictionPriorAuthPartialApprovals[i] || 0)"), "client-side total events computation changed");
+
+    [
+      "TJHP_DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX24_EXPECTED_TRUE_SOURCE_FRICTION_EVENT_DATES_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX23_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX22_EXPECTED_CONTRACTS_FRICTION_DATE_GRANULARITY_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX21_REVENUE_FLOW_FRICTION_TREND_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX19_NO_DATA_UPLOAD_MESSAGE_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_SIGNAL_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS",
+      "TJHP_PAYMENT_MATCH_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "window.openClaimPanel",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "window.openPriorAuthPanel"
+    ].forEach(marker => assert(src.includes(marker), "protected marker missing: " + marker));
+
+    ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", 'method === "POST"', "parseBody(req)"].forEach(forbidden => assert(!chartBody.includes(forbidden), "dashboard chart helper contains forbidden marker: " + forbidden));
+    process.stdout.write("DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write("DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+    process.exit(1);
+  }
+}
+
+
+
 if (process.env.TJHP_DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
   const src = fs.readFileSync(__filename, "utf8");
@@ -67613,8 +67778,10 @@ if (process.env.TJHP_DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS 
       assert.strictEqual(Number(aliasModel.upload_fallback_count || 0), 0, "alias should not fall back to upload: " + alias);
       assert(Number(aliasModel.business_date_count || 0) >= 1, "alias should count as business date: " + alias);
     });
-    const chartBody = src.slice(src.indexOf('const frictionTrendCtx = document.getElementById("dashboardRevenueFrictionTrendChart")'), src.indexOf('const chartResizeObserver'));
-    assert(chartBody.includes('type: "line"') || chartBody.includes("type:'line'") || chartBody.includes("type: 'line'"), "friction chart should remain a line graph");
+    const chartStart = src.indexOf('const frictionTrendCtx = document.getElementById("dashboardRevenueFrictionTrendChart")');
+    const chartEnd = src.indexOf('</script>', chartStart);
+    const chartBody = src.slice(chartStart, chartEnd);
+    assert(chartBody.includes('type: "bar"') || chartBody.includes('type: "line"'), "friction chart should remain chart-based after UX26 readability update");
     ["Claim Denials", "Claim Underpayments", "Prior Auth Denials", "Prior Auth Partial Approvals"].forEach(label => assert(chartBody.includes(label) || src.includes(label), "missing chart label: " + label));
     assert(!chartBody.includes('new Chart(document.getElementById("dashboardDenialsTrendChart")') && !chartBody.includes('new Chart(document.getElementById("revenueTrendChart")'), "should not instantiate legacy charts");
     process.stdout.write("DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS_PASSED\n"); process.exit(0);
@@ -67681,7 +67848,9 @@ if (process.env.TJHP_DASHBOARD_UX24_EXPECTED_TRUE_SOURCE_FRICTION_EVENT_DATES_SM
     assert.strictEqual(frictionAll.granularity, "month", "all-time should use month granularity");
     assert((frictionAll.keys || []).includes("2026-02"), "all-time should include February month key");
     assert(!(frictionAll.keys || []).includes("2026-06"), "all-time should not use June upload month");
-    const chartBody = src.slice(src.indexOf('const frictionTrendCtx = document.getElementById("dashboardRevenueFrictionTrendChart")'), src.indexOf('const chartResizeObserver'));
+    const chartStart = src.indexOf('const frictionTrendCtx = document.getElementById("dashboardRevenueFrictionTrendChart")');
+    const chartEnd = src.indexOf('</script>', chartStart);
+    const chartBody = src.slice(chartStart, chartEnd);
     assert(chartBody.includes('type: "line"') || chartBody.includes("type:'line'") || chartBody.includes("type: 'line'"), "friction chart should remain a line graph");
     ["Claim Denials", "Claim Underpayments", "Prior Auth Denials", "Prior Auth Partial Approvals"].forEach(label => assert(chartBody.includes(label) || src.includes(label), "missing chart series: " + label));
     assert(!chartBody.includes("new Chart(document.getElementById(\"dashboardDenialsTrendChart\")") && !chartBody.includes("new Chart(document.getElementById(\"revenueTrendChart\")"), "friction chart should not instantiate legacy charts");
