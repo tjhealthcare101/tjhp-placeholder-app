@@ -1794,6 +1794,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9B_RI6_FORECAST_PA_PROJECTION_CHARTS_UNIFIED_LAYOUT_OK
 // PHASE_9B_RI7_FORECAST_PA_CHART_POLISH_REMOVE_DETAILS_OK
 // PHASE_9B_RI8_FORECAST_PA_FORECAST_ONLY_LABEL_POLISH_OK
+// PHASE_9B_RI9_FORECAST_CONTROL_VALUE_LABEL_CLEANUP_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
   const title = String(verdictTitle || "").toLowerCase();
@@ -22768,7 +22769,8 @@ function tjhpForecastCountValue(value) {
   const n = Math.max(0, Math.round(Number(value || 0)));
   return formatNumberUI(Number.isFinite(n) ? n : 0);
 }
-function renderForecastSvgChart({ title, labels, historical, forecast, valueLabel = "Value", historicalLabel = "historical", projectedLabel = "projected", expanded = false, valueFormatter = tjhpForecastShortMoney, axisFormatter = null, pointFormatter = null, footerFormatter = null, showProjectionMetaInPlot = null, showPointLabels = true, maxPointLabels = null } = {}) {
+// Endpoint SVG labels render as font-weight="700" by default.
+function renderForecastSvgChart({ title, labels, historical, forecast, valueLabel = "Value", historicalLabel = "historical", projectedLabel = "projected", expanded = false, valueFormatter = tjhpForecastShortMoney, axisFormatter = null, pointFormatter = null, footerFormatter = null, showProjectionMetaInPlot = null, showPointLabels = true, showEndpointValueLabels = true, maxPointLabels = null, endpointLabelOpacity = ".86", endpointLabelWeight = "700" } = {}) {
   const fmt = typeof valueFormatter === "function" ? valueFormatter : tjhpForecastShortMoney;
   const axisFmt = typeof axisFormatter === "function" ? axisFormatter : fmt;
   const pointFmt = typeof pointFormatter === "function" ? pointFormatter : fmt;
@@ -22783,8 +22785,8 @@ function renderForecastSvgChart({ title, labels, historical, forecast, valueLabe
   const projectionMetaLine = [projectionStartsText, projectionThroughText].filter(Boolean).join(" · ");
   const metaInPlot = showProjectionMetaInPlot === null ? !expanded : !!showProjectionMetaInPlot;
   const pointLimit = Number.isFinite(Number(maxPointLabels)) ? Math.max(0, Number(maxPointLabels)) : (expanded ? 2 : (count <= 8 ? 2 : 2));
-  const shouldShowHistLabel = !!showPointLabels && pointLimit > 0 && histLastIdx >= 0;
-  const shouldShowFcstLabel = !!showPointLabels && pointLimit > 1 && fcstLastIdx >= 0;
+  const shouldShowHistLabel = !!showPointLabels && !!showEndpointValueLabels && pointLimit > 0 && histLastIdx >= 0;
+  const shouldShowFcstLabel = !!showPointLabels && !!showEndpointValueLabels && pointLimit > 1 && fcstLastIdx >= 0;
   const histBaseY = histLastIdx >= 0 ? y(histLastVal) : 0, fcstBaseY = fcstLastIdx >= 0 ? y(fcstLastVal) : 0;
   let histLabelY = histLastIdx >= 0 ? (histBaseY <= padT + 24 ? Math.min(height - padB - 12, Math.max(padT + 24, histBaseY + 18)) : Math.max(padT + 18, histBaseY - 10)) : 0;
   let fcstLabelY = fcstLastIdx >= 0 ? (fcstBaseY <= padT + 24 ? Math.min(height - padB - 12, Math.max(padT + 24, fcstBaseY + 18)) : Math.max(padT + 18, fcstBaseY - 10)) : 0;
@@ -22795,7 +22797,7 @@ function renderForecastSvgChart({ title, labels, historical, forecast, valueLabe
   }
   const projectionMetaHtml = expanded && projectionMetaLine ? `<div class="muted small forecast-projection-meta" data-forecast-projection-meta="header" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end;margin:0 2px 8px 2px;font-weight:700;">${safeStr(projectionMetaLine)}</div>` : "";
   const projectionLaneHtml = metaInPlot ? `<g data-forecast-label-lane="projection"><text x="${Math.min(width - padR - 260, Math.max(padL + 8, projStartX + 10)).toFixed(1)}" y="${labelLaneY}" font-size="${expanded ? 13 : 11}" fill="currentColor" opacity=".62">${safeStr(projectionStartsText)}</text><text x="${(width - padR).toFixed(1)}" y="${labelLaneY}" text-anchor="end" font-size="${expanded ? 13 : 11}" fill="currentColor" opacity=".62">${safeStr(projectionThroughText)}</text></g>` : `<g data-forecast-label-lane="projection"></g>`;
-  return `<div class="forecast-svg-card" data-expanded="${expanded ? "true" : "false"}" data-point-label-limit="${pointLimit}" style="border:1px solid var(--border);border-radius:12px;padding:10px;background:var(--card);">${projectionMetaHtml}<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${safeStr(title || "Forecast chart")}" style="width:100%;height:auto;display:block;"><rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>${grid}<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${height-padB}" stroke="currentColor" opacity=".2"></line><line x1="${padL}" y1="${height-padB}" x2="${width-padR}" y2="${height-padB}" stroke="currentColor" opacity=".2"></line><text x="${padL-10}" y="${padT+4}" text-anchor="end" font-size="12" fill="currentColor" opacity=".72">${safeStr(yMax)}</text><text x="${padL-10}" y="${(padT + plotH/2 + 4).toFixed(1)}" text-anchor="end" font-size="12" fill="currentColor" opacity=".65">${safeStr(yMid)}</text><text x="${padL-10}" y="${height-padB+4}" text-anchor="end" font-size="12" fill="currentColor" opacity=".72">${safeStr(yMin)}</text>${projectionLaneHtml}${histPoints ? `<polyline points="${histPoints}" fill="none" stroke="currentColor" stroke-width="4" opacity=".9"></polyline>` : ""}${joinLine}${fcstPoints ? `<polyline points="${fcstPoints}" fill="none" stroke="currentColor" stroke-width="4" stroke-dasharray="9 7" opacity=".68"></polyline>` : ""}<line x1="${projStartX.toFixed(1)}" y1="${padT}" x2="${projStartX.toFixed(1)}" y2="${height-padB}" stroke="currentColor" opacity=".25" stroke-dasharray="3 5"></line>${all.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="${i < hist.length ? 3.8 : 3.3}" fill="currentColor" opacity="${i < hist.length ? ".88" : ".58"}"></circle>`).join("")}${shouldShowHistLabel ? `<text x="${Math.min(width-padR-8,x(histLastIdx)+8).toFixed(1)}" y="${histLabelY.toFixed(1)}" font-size="${expanded ? 13 : 11}" fill="currentColor" opacity=".78">${safeStr(pointFmt(histLastVal))}</text>` : ""}${shouldShowFcstLabel ? `<text x="${(width-padR).toFixed(1)}" y="${fcstLabelY.toFixed(1)}" text-anchor="end" font-size="${expanded ? 13 : 11}" fill="currentColor" opacity=".78">${safeStr(pointFmt(fcstLastVal))}</text>` : ""}<text x="${padL}" y="${height-24}" font-size="12" fill="currentColor" opacity=".62">${safeStr(firstLabel)}</text><text x="${x(Math.max(0,hist.length-1)).toFixed(1)}" y="${height-24}" text-anchor="middle" font-size="12" fill="currentColor" opacity=".68">${safeStr(lastHistLabel)}</text><text x="${width-padR}" y="${height-24}" text-anchor="end" font-size="12" fill="currentColor" opacity=".62">${safeStr(lastLabel)}</text></svg><div class="muted small" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:6px;"><span><strong>${safeStr(historicalLabel)}:</strong> ${safeStr(footerFmt(histLastVal))}</span><span><strong>${safeStr(projectedLabel)}:</strong> ${safeStr(footerFmt(fcstLastVal))}</span><span><strong>${safeStr(valueLabel)}:</strong> ${safeStr(footerFmt(fcstLastVal))}</span></div></div>`;
+  return `<div class="forecast-svg-card" data-expanded="${expanded ? "true" : "false"}" data-point-label-limit="${pointLimit}" style="border:1px solid var(--border);border-radius:12px;padding:10px;background:var(--card);">${projectionMetaHtml}<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${safeStr(title || "Forecast chart")}" style="width:100%;height:auto;display:block;"><rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>${grid}<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${height-padB}" stroke="currentColor" opacity=".2"></line><line x1="${padL}" y1="${height-padB}" x2="${width-padR}" y2="${height-padB}" stroke="currentColor" opacity=".2"></line><text x="${padL-10}" y="${padT+4}" text-anchor="end" font-size="12" fill="currentColor" opacity=".72">${safeStr(yMax)}</text><text x="${padL-10}" y="${(padT + plotH/2 + 4).toFixed(1)}" text-anchor="end" font-size="12" fill="currentColor" opacity=".65">${safeStr(yMid)}</text><text x="${padL-10}" y="${height-padB+4}" text-anchor="end" font-size="12" fill="currentColor" opacity=".72">${safeStr(yMin)}</text>${projectionLaneHtml}${histPoints ? `<polyline points="${histPoints}" fill="none" stroke="currentColor" stroke-width="4" opacity=".9"></polyline>` : ""}${joinLine}${fcstPoints ? `<polyline points="${fcstPoints}" fill="none" stroke="currentColor" stroke-width="4" stroke-dasharray="9 7" opacity=".68"></polyline>` : ""}<line x1="${projStartX.toFixed(1)}" y1="${padT}" x2="${projStartX.toFixed(1)}" y2="${height-padB}" stroke="currentColor" opacity=".25" stroke-dasharray="3 5"></line>${all.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="${i < hist.length ? 3.8 : 3.3}" fill="currentColor" opacity="${i < hist.length ? ".88" : ".58"}"></circle>`).join("")}${shouldShowHistLabel ? `<text x="${Math.min(width-padR-8,x(histLastIdx)+8).toFixed(1)}" y="${histLabelY.toFixed(1)}" font-size="${expanded ? 13 : 11}" fill="currentColor" opacity="${safeStr(endpointLabelOpacity)}" font-weight="${safeStr(endpointLabelWeight)}">${safeStr(pointFmt(histLastVal))}</text>` : ""}${shouldShowFcstLabel ? `<text x="${(width-padR).toFixed(1)}" y="${fcstLabelY.toFixed(1)}" text-anchor="end" font-size="${expanded ? 13 : 11}" fill="currentColor" opacity="${safeStr(endpointLabelOpacity)}" font-weight="${safeStr(endpointLabelWeight)}">${safeStr(pointFmt(fcstLastVal))}</text>` : ""}<text x="${padL}" y="${height-24}" font-size="12" fill="currentColor" opacity=".62">${safeStr(firstLabel)}</text><text x="${x(Math.max(0,hist.length-1)).toFixed(1)}" y="${height-24}" text-anchor="middle" font-size="12" fill="currentColor" opacity=".68">${safeStr(lastHistLabel)}</text><text x="${width-padR}" y="${height-24}" text-anchor="end" font-size="12" fill="currentColor" opacity=".62">${safeStr(lastLabel)}</text></svg><div class="muted small" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:6px;"><span><strong>${safeStr(historicalLabel)}:</strong> ${safeStr(footerFmt(histLastVal))}</span><span><strong>${safeStr(projectedLabel)}:</strong> ${safeStr(footerFmt(fcstLastVal))}</span><span><strong>${safeStr(valueLabel)}:</strong> ${safeStr(footerFmt(fcstLastVal))}</span></div></div>`;
 }
 function renderForecastChartModal({ modalId, title, chartHtml } = {}) { const id = String(modalId || "forecastChartModal").replace(/[^a-zA-Z0-9_-]/g, ""); return `<div id="${safeStr(id)}" class="forecast-chart-modal" aria-hidden="true" style="display:none;position:fixed;z-index:9999;inset:0;background:rgba(15,23,42,.72);padding:24px;overflow:auto;"><div role="dialog" aria-modal="true" aria-label="${safeStr(title || "Forecast chart")}" style="max-width:1120px;margin:30px auto;background:var(--card);border:1px solid var(--border);border-radius:18px;padding:18px;box-shadow:0 22px 60px rgba(0,0,0,.25);"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px;"><h3 style="margin:0;">${safeStr(title || "Forecast chart")}</h3><button type="button" class="btn secondary small" onclick="closeForecastChartModal('${safeStr(id)}')">Close</button></div>${chartHtml || ""}</div></div>`; }
 
@@ -23240,10 +23242,6 @@ function tjhpForecastPriorAuthObservedPatternRows(signal = {}, readiness = {}, p
   const revenueValues = tjhpForecastNumberArray(projectionModel?.revenueRisk?.historicalKnownRevenue || []).concat(tjhpForecastNumberArray(projectionModel?.revenueRisk?.forecastKnownRevenue || []));
   if (projectionModel?.outcome?.available && outcomeValues.length >= 2) add("Prior-auth outcome trend", `Denied / partial outcomes are projected to remain ${tjhpForecastTrendText(outcomeValues)}.`);
   if (projectionModel?.revenueRisk?.available && revenueValues.length >= 2) add("Known pre-service risk trend", `Known PA revenue exposure is projected to ${tjhpForecastTrendText(revenueValues)}.`);
-  const horizon = Number(projectionModel?.horizonMonths || 0);
-  const readinessItem = horizon ? tjhpPriorAuthForecastReadinessForHorizon(readiness, horizon) : null;
-  if (readinessItem?.ready && horizon) add("PA forecast coverage", `${formatNumberUI(horizon)}-month prior-auth trend available.`);
-  if (!rows.length && signal.has_prior_auth_data) add("Prior-auth forecast", "Upload prior-auth history to add pre-service risk projections.");
   return rows;
 }
 function buildForecastChartTakeaways(fc, m) { const histCollected=tjhpForecastNumberArray(fc?.hist?.collected), fcstCollected=tjhpForecastNumberArray(fc?.fcst?.collected), histRisk=tjhpForecastNumberArray(fc?.hist?.atRisk), fcstRisk=tjhpForecastNumberArray(fc?.fcst?.atRisk); const collectionsTrend=tjhpForecastTrendDirection(histCollected.concat(fcstCollected)); const riskTrend=tjhpForecastTrendDirection(histRisk.concat(fcstRisk)); const collectionsTakeaway=collectionsTrend==="up"?"Collections are projected to improve based on recent payment activity.":(collectionsTrend==="down"?"Collections are projected to soften; review payer delays and unresolved denials.":"Collections are relatively stable; use ongoing uploads to improve forecast confidence."); const riskTakeaway=riskTrend==="up"?"Projected risk is increasing; prioritize underpaid and denied claims.":(riskTrend==="down"?"Projected risk is easing; continue follow-up to prevent aged balances.":"Projected risk is stable; monitor denials and underpayments."); return { collections: { latestHistorical: tjhpForecastShortMoney(tjhpForecastLastValue(histCollected)), endingProjected: tjhpForecastShortMoney(tjhpForecastLastValue(fcstCollected)), trend: collectionsTrend, takeaway: collectionsTakeaway }, atRisk: { currentRisk: tjhpForecastShortMoney(tjhpForecastLastValue(histRisk) || Number(m?.kpis?.revenueAtRisk || 0)), endingProjected: tjhpForecastShortMoney(tjhpForecastLastValue(fcstRisk)), trend: riskTrend, takeaway: riskTakeaway } }; }
@@ -48451,9 +48449,33 @@ function renderForecastTab(org, m, forecastB64){
   if (historicalPeriods >= 6) forecastConfidence = "High";
   else if (historicalPeriods >= 3) forecastConfidence = "Medium";
 
+  const forecastLabels = fc.labelsAll || [];
+  const projectionEndLabel = fc.projectionEndLabel || (forecastLabels[forecastLabels.length - 1] || "");
+  const horizonOptions = tjhpForecastUnifiedHorizonOptions(detectedMonths, priorAuthForecastReadiness);
+  const forecastControlPanelHtml = `
+    <div class="ri-forecast-control-panel">
+      <form method="GET" action="/revenue-intelligence" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0;">
+        <input type="hidden" name="tab" value="forecast"/>
+        <label class="muted small" for="forecast_horizon">Projection period</label>
+        <select id="forecast_horizon" name="horizon" onchange="return window.tjhpForecastHorizonChange(this)">${horizonOptions.map(h=>`<option value="${h.months}" ${selectedHorizonMonths===h.months?"selected":""} ${h.available?"":"disabled"}>${safeStr(h.label)}${h.available&&!h.recommended?" — use with caution":""}</option>`).join("")}</select>
+        <span class="muted small">Historical data found: ${detectedMonths} claim/payment months. The selected Projection period controls Collections, At-Risk, and prior-auth forecast charts when each data source is ready.</span>
+        <span class="muted small">Longer projections are less certain and need more claim/payment or prior-auth history.</span>
+        ${horizonOptions.filter(h=>!h.available).map(h=>`<span class="muted small">${safeStr(h.months)} months unavailable — needs claims/payment history or PA readiness.</span>`).join("")}<span class="muted small"></span>
+      </form>
+      <div class="muted small ri-forecast-context-line">
+        <span class="badge ${forecastConfidence === "High" ? "ok" : forecastConfidence === "Medium" ? "warn" : "bad"}">Forecast Confidence: ${forecastConfidence}</span>
+        <span>Historical data used: ${detectedMonths} months</span>
+        ${firstMonth && lastMonth ? `<span>Historical range: ${safeStr(firstMonth)} – ${safeStr(lastMonth)}</span>` : ""}
+        <span>Forecast projection: ${selectedHorizonMonths} months</span>
+        ${projectionEndLabel ? `<span>Projection through: ${safeStr(projectionEndLabel)}</span>` : ""}
+        <span>Source: claim service dates, payment dates, and prior-auth business dates</span>
+      </div>
+    </div>`;
+  const forecastScopedCss = `<style>.ri-forecast-chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-top:14px;}.ri-forecast-chart-card{border:1px solid var(--border);border-radius:14px;background:#fff;padding:14px;}.ri-forecast-chart-empty{min-height:220px;display:flex;align-items:center;justify-content:center;text-align:center;color:#64748b;border:1px dashed var(--border);border-radius:12px;background:#f8fafc;padding:16px;}.ri-forecast-control-panel{border:1px solid var(--border);border-radius:14px;background:#fff;padding:12px;margin:12px 0;}.ri-forecast-context-line{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;}.ri-forecast-kpi-context{margin:0 0 8px 0;color:var(--muted);font-size:12px;}</style>`;
+
   if (historicalPeriods < 3) {
     return `
-      <style>.ri-forecast-chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-top:14px;}.ri-forecast-chart-card{border:1px solid var(--border);border-radius:14px;background:#fff;padding:14px;}.ri-forecast-chart-empty{min-height:220px;display:flex;align-items:center;justify-content:center;text-align:center;color:#64748b;border:1px dashed var(--border);border-radius:12px;background:#f8fafc;padding:16px;}</style>
+      ${forecastScopedCss}
       <div class="executive-panel">
         <h3>Forecast Unavailable</h3>
         <div class="muted" style="margin-top:6px;">At least 3 months of claim or payment activity are needed to generate a reliable claims/payment forecast.</div>
@@ -48461,6 +48483,7 @@ function renderForecastTab(org, m, forecastB64){
         ${detectedMonths > 0 && firstMonth && lastMonth ? `<div class="muted small" style="margin-top:6px;">Detected activity range: ${safeStr(firstMonth)} – ${safeStr(lastMonth)}</div>` : ""}
         <div class="muted small" style="margin-top:6px;">Upload claims or payments with service dates or payment dates across at least 3 different months.</div>
         <div class="muted small" style="margin-top:6px;">Tip: The forecast uses claim service dates and payment dates when available, not just the upload date.</div>
+        ${forecastControlPanelHtml}
         <div class="ri-forecast-chart-grid">
           ${priorAuthOutcomeChartHtml}
           ${priorAuthRevenueRiskChartHtml}
@@ -48472,9 +48495,6 @@ function renderForecastTab(org, m, forecastB64){
     `;
   }
 
-  const forecastLabels = fc.labelsAll || [];
-  const projectionEndLabel = fc.projectionEndLabel || (forecastLabels[forecastLabels.length - 1] || "");
-  const horizonOptions = tjhpForecastUnifiedHorizonOptions(detectedMonths, priorAuthForecastReadiness);
   const collectedChartHtml = renderForecastSvgChart({ title: "Collections Forecast", labels: forecastLabels, historical: fc?.hist?.collected || [], forecast: fc?.fcst?.collected || [], valueLabel: `Ending projected collections (${projectionEndLabel})` });
   const atRiskChartHtml = renderForecastSvgChart({ title: "At-Risk Forecast", labels: forecastLabels, historical: fc?.hist?.atRisk || [], forecast: fc?.fcst?.atRisk || [], valueLabel: `Ending projected risk (${projectionEndLabel})` });
   const collectionsLargeChartHtml = renderForecastSvgChart({ title: "Collections Forecast", labels: forecastLabels, historical: fc?.hist?.collected || [], forecast: fc?.fcst?.collected || [], valueLabel: `Ending projected collections (${projectionEndLabel})`, expanded: true });
@@ -48482,7 +48502,7 @@ function renderForecastTab(org, m, forecastB64){
   const priorAuthObservedPatternRows = tjhpForecastPriorAuthObservedPatternRows(priorAuthForecastSignal, priorAuthForecastReadiness, priorAuthProjectionModel);
   const hasPriorAuthData = !!priorAuthForecastSignal?.has_prior_auth_data;
   const projectedPreServiceRisk = priorAuthProjectionModel?.revenueRisk?.available ? tjhpForecastLastValue(priorAuthProjectionModel.revenueRisk.forecastKnownRevenue || []) : 0;
-  const projectedPreServiceRiskKpi = Number(projectedPreServiceRisk || 0) > 0 ? renderKpiCard("Projected Pre-Service Risk", formatMoneyUI(projectedPreServiceRisk), "Known PA revenue projected through selected period", "warning") : "";
+  const projectedPreServiceRiskKpi = Number(projectedPreServiceRisk || 0) > 0 ? renderKpiCard("Projected Pre-Service Risk", formatMoneyUI(projectedPreServiceRisk), "Projected known PA revenue through selected period", "warning") : "";
   const forecastPatterns = tjhpBuildForecastPatternInsights(org?.org_id || "", fc, m);
   const forecastInterpretationBase = buildForecastExecutiveInterpretationSections(fc, m, forecastPatterns);
   const forecastInterpretation = tjhpForecastInterpretationWithPriorAuthContext(forecastInterpretationBase, priorAuthForecastSignal, priorAuthForecastReadiness);
@@ -48499,33 +48519,17 @@ function renderForecastTab(org, m, forecastB64){
         <button class="btn secondary small tjhp-no-print" type="button" onclick="return window.tjhpPrintRevenueIntelligence('Forecast Report')">Export Forecast PDF</button>
       </div>
       <div class="hr"></div>
+      ${forecastControlPanelHtml}
+      <div class="ri-forecast-kpi-context">Current baseline + selected-period projection</div>
       <div class="kpi-strip" style="margin-top:0;">
-        ${renderKpiCard("Forecast Method", "Trend-based projection", "Uses claim/payment history plus prior-auth signal context", "neutral")}
-        ${renderKpiCard("Current Revenue at Risk", formatMoneyUI(m.kpis.revenueAtRisk||0), "Unresolved underpaid + patient follow-up risk", "neutral")}
-        ${renderKpiCard("AR 90+ Exposure", formatMoneyUI((m.arBuckets||{})["90+"]||0), "Highest age-risk bucket", "neutral")}
-        ${renderKpiCard("Denial Rate", Number(m.denialRate||0).toFixed(1)+"%", "Lower is better", "neutral")}
+        ${renderKpiCard("Forecast Method", "Trend-based projection", "Selected-period projection method", "neutral")}
+        ${renderKpiCard("Current Revenue at Risk", formatMoneyUI(m.kpis.revenueAtRisk||0), "Current unresolved underpaid + patient follow-up risk", "neutral")}
+        ${renderKpiCard("AR 90+ Exposure", formatMoneyUI((m.arBuckets||{})["90+"]||0), "Current highest age-risk bucket", "neutral")}
+        ${renderKpiCard("Denial Rate", Number(m.denialRate||0).toFixed(1)+"%", "Current uploaded-data denial rate", "neutral")}
         ${projectedPreServiceRiskKpi}
       </div>
       <div class="hr"></div>
-      <div style="margin-bottom:10px;">
-        <div class="muted small" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <span class="badge ${forecastConfidence === "High" ? "ok" : forecastConfidence === "Medium" ? "warn" : "bad"}">Forecast Confidence: ${forecastConfidence}</span>
-          <span>Historical data used: ${detectedMonths} months</span>
-          ${firstMonth && lastMonth ? `<span>Historical range: ${safeStr(firstMonth)} – ${safeStr(lastMonth)}</span>` : ""}
-          <span>Forecast projection: ${selectedHorizonMonths} months</span>
-          ${projectionEndLabel ? `<span>Projection through: ${safeStr(projectionEndLabel)}</span>` : ""}
-          <span>Source: claim service dates, payment dates, and prior-auth business dates</span>
-        </div>
-      </div>
-      <form method="GET" action="/revenue-intelligence" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 12px 0;">
-        <input type="hidden" name="tab" value="forecast"/>
-        <label class="muted small" for="forecast_horizon">Projection period</label>
-        <select id="forecast_horizon" name="horizon" onchange="return window.tjhpForecastHorizonChange(this)">${horizonOptions.map(h=>`<option value="${h.months}" ${selectedHorizonMonths===h.months?"selected":""} ${h.available?"":"disabled"}>${safeStr(h.label)}${h.available&&!h.recommended?" — use with caution":""}</option>`).join("")}</select>
-        <span class="muted small">Historical data found: ${detectedMonths} claim/payment months. The selected Projection period controls Collections, At-Risk, and prior-auth forecast charts when each data source is ready.</span>
-        <span class="muted small">Longer projections are less certain and need more claim/payment or prior-auth history.</span>
-        ${horizonOptions.filter(h=>!h.available).map(h=>`<span class="muted small">${safeStr(h.months)} months unavailable — needs claims/payment history or PA readiness.</span>`).join("")}<span class="muted small"></span>
-      </form>
-      <style>.ri-forecast-chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-top:14px;}.ri-forecast-chart-card{border:1px solid var(--border);border-radius:14px;background:#fff;padding:14px;}.ri-forecast-chart-empty{min-height:220px;display:flex;align-items:center;justify-content:center;text-align:center;color:#64748b;border:1px dashed var(--border);border-radius:12px;background:#f8fafc;padding:16px;}</style>
+      ${forecastScopedCss}
       <div class="ri-forecast-chart-grid">
         <div style="flex:1;min-width:360px;border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--card);">
           <div style="font-weight:900;margin-bottom:6px;">Collections Forecast</div>
@@ -79148,6 +79152,60 @@ if (process.env.TJHP_FORECAST_PATTERN_UI_SMOKE_TESTS === "true" && (process.env.
 
 
 
+if (process.env.TJHP_REVENUE_INTELLIGENCE_FORECAST_CONTROL_VALUE_LABEL_CLEANUP_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m || "assertion failed"); };
+    const assertIncludes = (hay, needle, msg)=>assert(String(hay || "").includes(needle), msg || `missing ${needle}`);
+    const countOccurrences = (hay, needle) => String(hay || "").split(String(needle || "")).length - 1;
+    ["PHASE_9B_RI9_FORECAST_CONTROL_VALUE_LABEL_CLEANUP_OK","PHASE_9B_RI8_FORECAST_PA_FORECAST_ONLY_LABEL_POLISH_OK","ri-forecast-control-panel","ri-forecast-context-line","Current baseline + selected-period projection","Projection period","Forecast Method","Projected Pre-Service Risk","showEndpointValueLabels","font-weight=\"700\"","forecastPriorAuthOutcomeModal","forecastPriorAuthRevenueRiskModal"].forEach(x => assertIncludes(src, x));
+    const forecastFnSrc = src.slice(src.indexOf("function renderForecastTab(org, m, forecastB64){"), src.indexOf("function renderDeepDiveTab"));
+    assert(forecastFnSrc.indexOf("Projection period") >= 0 && forecastFnSrc.indexOf("Projection period") < forecastFnSrc.indexOf("Forecast Method"), "Projection period should be before Forecast Method in renderForecastTab");
+    assert(forecastFnSrc.indexOf("ri-forecast-control-panel") >= 0 && forecastFnSrc.indexOf("ri-forecast-control-panel") < forecastFnSrc.indexOf("kpi-strip"), "control panel should be before KPI strip");
+    assert(forecastFnSrc.indexOf("Forecast Confidence") >= 0 && forecastFnSrc.indexOf("Forecast Confidence") < forecastFnSrc.indexOf("kpi-strip"), "Forecast Confidence should be before KPI strip");
+    const bodyOf = (fnName) => { const start = src.indexOf(`function ${fnName}`); assert(start >= 0, `missing function ${fnName}`); const next = src.indexOf("\nfunction ", start + 10); return src.slice(start, next > start ? next : start + 24000); };
+    const helperBodies = ["renderForecastTab","renderForecastSvgChart","tjhpForecastPriorAuthObservedPatternRows","renderPriorAuthOutcomeForecastChart","renderPriorAuthRevenueRiskForecastChart"].map(bodyOf).join("\n");
+    ["writeJSON","saveUsage","savePriorAuthCasesForOrg","upsertPriorAuthCase","appendAuditLog","ensureAgentWorkspace","requestOpenAIChatCompletion","fetchFHIRDocuments","scrapePortal","routePacket","submitPacket","OCR","payer portal submission",'method === "POST"',"parseBody(req)"].forEach(x => assert(!helperBodies.includes(x), `mutation/API marker in forecast helper: ${x}`));
+    ["TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_FORECAST_ONLY_POLISH_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_CHART_POLISH_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_PROJECTION_CHARTS_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_COMPACT_SINGLE_RECORD_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_FORECAST_PRIOR_AUTH_READINESS_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_FORECAST_PRIOR_AUTH_SIGNAL_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_PAYER_UNIVERSE_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_SIGNAL_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS","TJHP_DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS","TJHP_DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS","TJHP_DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS","TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS","TJHP_DATA_MANAGEMENT_UNIFIED_UPLOAD_PRIOR_AUTH_SMOKE_TESTS","TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS","TJHP_PAYMENT_MATCH_SMOKE_TESTS","renderClaimPanelBootstrap","window.openClaimPanel","renderPriorAuthActionCenterPanelBootstrap","window.openPriorAuthPanel"].forEach(x => assertIncludes(src, x, `protected marker missing ${x}`));
+    const originalPriorAuthCases = readJSON(FILES.prior_auth_cases, []);
+    const replaceOrgCases = (org_id, rows) => writeJSON(FILES.prior_auth_cases, originalPriorAuthCases.filter(x => String(x.org_id || "") !== org_id).concat(rows));
+    let renderForecastTabSmoke = null;
+    eval(forecastFnSrc.replace("function renderForecastTab(org, m, forecastB64){", "renderForecastTabSmoke = function(org, m, forecastB64){"));
+    const fakeM = { kpis:{ revenueAtRisk:900, totalBilled:3000, expectedInsuranceTotal:2500, collectedTotal:1800 }, arBuckets:{ "90+": 120 }, denialRate: 12.5 };
+    const fc = { labels:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026"], labelsAll:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026","Jul 2026","Aug 2026","Sep 2026"], detectedMonths:6, firstMonth:"2026-01", lastMonth:"2026-06", horizonMonths:3, selectedHorizonMonths:3, projectionEndLabel:"Sep 2026", hist:{ collected:[100,150,200,210,220,240], atRisk:[300,280,260,240,220,210] }, fcst:{ collected:[250,300,350], atRisk:[200,190,180] } };
+    try {
+      const org_id = "__ri9_forecast_control_value_labels__";
+      const rows = Array.from({ length: 36 }, (_, i) => ({ auth_case_id:`ri9-${i}`, org_id, payer:i % 2 ? "Aetna" : "Cigna", status:i % 4 === 0 ? "Denied" : (i % 4 === 1 ? "Partially Approved" : "Approved"), requested_service:`CPT ${81000 + i}`, submitted_date:`2025-${String((i % 12) + 1).padStart(2,"0")}-${String((i % 20) + 1).padStart(2,"0")}`, expiration_date:"2026-12-31", estimated_revenue_at_risk:String(1500 + i * 30) }));
+      replaceOrgCases(org_id, rows);
+      const signal = tjhpRevenueIntelligenceForecastPriorAuthSignalModel(org_id, { today:"2026-06-08" });
+      const readiness = tjhpRevenueIntelligencePriorAuthProjectionReadinessModel(org_id, signal);
+      const projection = tjhpBuildPriorAuthForecastProjection(signal, readiness, { horizonMonths:3, today:"2026-06-08" });
+      const html = renderForecastTabSmoke({ org_id, name:"RI9 Forecast Smoke" }, fakeM, Buffer.from(JSON.stringify(fc)).toString("base64"));
+      assert(html.indexOf("Projection period") >= 0 && html.indexOf("Projection period") < html.indexOf("Forecast Method"), "rendered Projection period should precede Forecast Method");
+      assert(html.indexOf("Forecast Confidence") >= 0 && html.indexOf("Forecast Confidence") < html.indexOf("Forecast Method"), "rendered Forecast Confidence should precede Forecast Method");
+      assert(html.indexOf("Forecast Method") >= 0 && html.indexOf("Forecast Method") < html.indexOf("Collections Forecast"), "Forecast Method should precede chart grid");
+      ["Current baseline + selected-period projection","Current unresolved underpaid + patient follow-up risk","Current highest age-risk bucket","Current uploaded-data denial rate","Projected Pre-Service Risk","Projected known PA revenue through selected period"].forEach(x => assertIncludes(html, x));
+      ["forecastCollectionsModal","forecastAtRiskModal","forecastPriorAuthOutcomeModal","forecastPriorAuthRevenueRiskModal","View larger Collections Forecast chart","View larger At-Risk Forecast chart","View larger Prior Auth Outcome Forecast chart","View larger Prior Auth Revenue Risk Forecast chart"].forEach(x => assertIncludes(html, x));
+      ["PA forecast coverage","prior-auth trend available"].forEach(x => assert(!html.includes(x), `removed PA coverage visible: ${x}`));
+      const paRows = tjhpForecastPriorAuthObservedPatternRows(signal, readiness, projection);
+      const rowText = paRows.map(r => `${r.label}: ${r.value}`).join("\n");
+      ["PA forecast coverage","prior-auth trend available","PA projection readiness","Prior-auth work needing action","PA revenue impact not determined","Top prior-auth payer","Top prior-auth service"].forEach(x => assert(!rowText.includes(x), `removed PA pattern visible: ${x}`));
+      ["Prior-auth outcome trend","Known pre-service risk trend"].forEach(x => assertIncludes(rowText, x));
+    } finally { writeJSON(FILES.prior_auth_cases, originalPriorAuthCases); }
+    const normalChart = renderForecastSvgChart({ title:"T", labels:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026"], historical:[100,150,200], forecast:[250,300,350], expanded:false, valueFormatter:formatMoneyUI, axisFormatter:formatMoneyUI, pointFormatter:formatMoneyUI, footerFormatter:formatMoneyUI });
+    ["$200","$350","historical:","projected:"].forEach(x => assertIncludes(normalChart, x));
+    const expandedChart = renderForecastSvgChart({ title:"T", labels:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026"], historical:[100,150,200], forecast:[250,300,350], expanded:true, valueFormatter:formatMoneyUI, axisFormatter:formatMoneyUI, pointFormatter:formatMoneyUI, footerFormatter:formatMoneyUI });
+    ["$200","$350"].forEach(x => assertIncludes(expandedChart, x));
+    assert(countOccurrences(expandedChart, "Projection starts:") === 1, "expanded chart should have one Projection starts label");
+    assert(countOccurrences(expandedChart, "Projection through:") === 1, "expanded chart should have one Projection through label");
+    assert(!expandedChart.includes('data-forecast-label-lane="projection"><text'), "expanded chart should not put projection meta inside plot label lane");
+    const countChart = renderForecastSvgChart({ title:"PA Outcome", labels:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026"], historical:[1,3,0], forecast:[0,0,0], valueFormatter:tjhpForecastCountValue, axisFormatter:tjhpForecastCountValue, pointFormatter:tjhpForecastCountValue, footerFormatter:tjhpForecastCountValue });
+    assertIncludes(countChart, ">0</text>");
+    assert(!countChart.includes("$"), "PA outcome count chart should not include dollars");
+    process.stdout.write("REVENUE_INTELLIGENCE_FORECAST_CONTROL_VALUE_LABEL_CLEANUP_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_FORECAST_CONTROL_VALUE_LABEL_CLEANUP_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
 if (process.env.TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_FORECAST_ONLY_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try {
     const src = fs.readFileSync(__filename, "utf8");
@@ -79179,7 +79237,7 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_FORECAST_ONLY_POLISH_SMOKE
       ["Collections Forecast","At-Risk Forecast","Prior Auth Outcome Forecast","Prior Auth Revenue Risk Forecast","Projected Pre-Service Risk"].forEach(x => assertIncludes(html, x));
       forbiddenForecastCopy.forEach(x => assert(!html.includes(x), `normal Forecast render includes ${x}`));
       ["Prior-auth outcome trend","Known pre-service risk trend"].forEach(x => assertIncludes(html, x));
-      ["PA projection readiness","Prior-auth work needing action","PA revenue impact not determined","Top prior-auth payer","Top prior-auth service"].forEach(x => assert(!html.includes(x), `Observed Forecast Patterns includes ${x}`));
+      ["PA forecast coverage","prior-auth trend available","PA projection readiness","Prior-auth work needing action","PA revenue impact not determined","Top prior-auth payer","Top prior-auth service"].forEach(x => assert(!html.includes(x), `Observed Forecast Patterns includes ${x}`));
       ["Prior authorization trends may affect future billable revenue before claims are created.","PA projections are separate from claim/payment forecast confidence.","PA projections do not change collections forecast math."].forEach(x => assertIncludes(html, x));
       ["Known pre-service revenue at risk","prior-auth records do not have a determined revenue impact","Resolve denied","Add estimated revenue","Review expiring","Validate payer/service documentation"].forEach(x => assert(!html.includes(x), `Forecast interpretation includes ${x}`));
       const noPaOrg = "__ri8_no_pa__"; replaceOrgCases(noPaOrg, []);
@@ -79255,7 +79313,8 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_CHART_POLISH_SMOKE_TESTS =
       ["Latest needs action","Projected needs action","Latest expiring / expired","needs-action and expiration context"].forEach(x => assert(!outcomeHtml.includes(x), `operational outcome summary visible: ${x}`));
       const revenueHtml = renderPriorAuthRevenueRiskForecastChart(projection);
       assert(revenueHtml.includes("$") && revenueHtml.includes("Known PA revenue historical") && revenueHtml.includes("Known PA revenue projected"), "revenue chart should remain money");
-      ["Prior-auth outcome trend","Known pre-service risk trend","PA forecast coverage"].forEach(x => assertIncludes(html, x));
+      ["Prior-auth outcome trend","Known pre-service risk trend"].forEach(x => assertIncludes(html, x));
+      ["PA forecast coverage","prior-auth trend available"].forEach(x => assert(!html.includes(x), `removed PA forecast coverage visible: ${x}`));
       ["Prior authorization trends may affect future billable revenue before claims are created.","PA projections are separate from claim/payment forecast confidence.","PA projections do not change collections forecast math."].forEach(x => assertIncludes(html, x));
       const countOccurrences = (hay, needle) => (String(hay || "").match(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
       assert(countOccurrences(html, "Prior authorization trends may affect future billable revenue before claims are created.") <= 1, "duplicate PA meaning copy");
@@ -79400,7 +79459,7 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_FORECAST_PRIOR_AUTH_READINESS_SMOKE_TE
       const fakeM = { kpis:{ revenueAtRisk:12000 }, arBuckets:{ "90+":5000 }, denialRate:12 };
       const fc = { labels:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026"], labelsAll:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026","Jul 2026","Aug 2026"], detectedMonths:6, firstMonth:"2026-01", lastMonth:"2026-06", source:"row_level_months", hist:{ collected:[100,150,200,210,220,240], atRisk:[300,280,260,240,220,210] }, fcst:{ collected:[250,260], atRisk:[200,180] } };
       const html = renderForecastTabSmoke({ org_id, name:"RI4 Forecast Smoke" }, fakeM, Buffer.from(JSON.stringify(fc)).toString("base64"));
-      ["Prior-auth forecast","Collections Forecast","At-Risk Forecast","Observed Forecast Patterns","Executive Forecast Interpretation"].forEach(x => assertIncludes(html, x)); ["Prior Auth Work","Known PA Revenue Risk","PA projection readiness","Prior-auth work needing action","Top prior-auth payer","Top prior-auth service"].forEach(x => assert(!html.includes(x), `old Forecast PA copy visible ${x}`)); assert(!html.includes("Prior-auth details and readiness"), "RI4 normal Forecast hides PA details block"); const helperHtml = renderForecastPriorAuthSignal(signal, readiness, { compactDetailsOnly: true }); ["Prior Authorization Forecast Signal","Prior-auth forecast readiness","Current PA forecast state: Signal only","You have 1 prior authorization record","3-month PA projection","6-month PA projection","12-month PA projection","Not ready","What data unlocks PA projections?"].forEach(x => assertIncludes(helperHtml, x));
+      ["Prior Auth Outcome Forecast","Collections Forecast","At-Risk Forecast","Observed Forecast Patterns","Executive Forecast Interpretation"].forEach(x => assertIncludes(html, x)); ["Prior Auth Work","Known PA Revenue Risk","PA projection readiness","Prior-auth work needing action","Top prior-auth payer","Top prior-auth service"].forEach(x => assert(!html.includes(x), `old Forecast PA copy visible ${x}`)); assert(!html.includes("Prior-auth details and readiness"), "RI4 normal Forecast hides PA details block"); const helperHtml = renderForecastPriorAuthSignal(signal, readiness, { compactDetailsOnly: true }); ["Prior Authorization Forecast Signal","Prior-auth forecast readiness","Current PA forecast state: Signal only","You have 1 prior authorization record","3-month PA projection","6-month PA projection","12-month PA projection","Not ready","What data unlocks PA projections?"].forEach(x => assertIncludes(helperHtml, x));
       const threeOrg = "__ri4_forecast_pa_readiness_three_org__";
       replaceOrgCases(threeOrg, buildCases(threeOrg, 5, ["2025-01","2025-02","2025-03"]));
       const three = tjhpRevenueIntelligencePriorAuthProjectionReadinessModel(threeOrg, tjhpRevenueIntelligenceForecastPriorAuthSignalModel(threeOrg));
@@ -79463,10 +79522,10 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_FORECAST_PRIOR_AUTH_SIGNAL_SMOKE_TESTS
       const fakeM = { kpis:{ revenueAtRisk:900, totalBilled:3000, expectedInsuranceTotal:2500, collectedTotal:1800 }, arBuckets:{ "90+": 120 }, denialRate: 12.5 };
       const fc = { labels:["2026-01","2026-02","2026-03"], labelsAll:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026"], detectedMonths:3, firstMonth:"2026-01", lastMonth:"2026-03", horizonMonths:3, projectionEndLabel:"Jun 2026", hist:{ collected:[100,120,130], atRisk:[90,85,80] }, fcst:{ collected:[135,140,145], atRisk:[78,76,74] } };
       const html = renderForecastTabSmoke({ org_id, name:"RI3 Forecast Smoke" }, fakeM, Buffer.from(JSON.stringify(fc)).toString("base64"));
-      ["Prior-auth forecast","Collections Forecast","At-Risk Forecast","Observed Forecast Patterns","Executive Forecast Interpretation"].forEach(x => assertIncludes(html, x, `render missing ${x}`)); ["Top prior-auth payer","Top prior-auth service","PA revenue impact not determined","Known PA Revenue Risk","Prior Auth Work","Prior-auth work needing action","Known pre-service revenue at risk"].forEach(x => assert(!html.includes(x), `old Forecast PA copy visible ${x}`)); assert(!html.includes("Prior-auth details and readiness"), "normal Forecast should not render PA details block");
+      ["Prior Auth Outcome Forecast","Collections Forecast","At-Risk Forecast","Observed Forecast Patterns","Executive Forecast Interpretation"].forEach(x => assertIncludes(html, x, `render missing ${x}`)); ["Top prior-auth payer","Top prior-auth service","PA revenue impact not determined","Known PA Revenue Risk","Prior Auth Work","Prior-auth work needing action","Known pre-service revenue at risk"].forEach(x => assert(!html.includes(x), `old Forecast PA copy visible ${x}`)); assert(!html.includes("Prior-auth details and readiness"), "normal Forecast should not render PA details block");
       const unavailableFc = { labels:["2026-01"], detectedMonths:1, firstMonth:"2026-01", lastMonth:"2026-01", hist:{ collected:[100], atRisk:[80] }, fcst:{ collected:[], atRisk:[] } };
       const unavailableHtml = renderForecastTabSmoke({ org_id, name:"RI3 Forecast Smoke" }, fakeM, Buffer.from(JSON.stringify(unavailableFc)).toString("base64"));
-      assertIncludes(unavailableHtml, "Forecast Unavailable", "unavailable label"); assertIncludes(unavailableHtml, "Prior Auth Outcome Forecast", "pa chart under unavailable"); assert(!unavailableHtml.includes("Prior-auth details and readiness"), "unavailable should not show PA details block"); assert(!unavailableHtml.includes("Forecast Confidence:"), "unavailable must not claim full forecast confidence");
+      assertIncludes(unavailableHtml, "Forecast Unavailable", "unavailable label"); assertIncludes(unavailableHtml, "Prior Auth Outcome Forecast", "pa chart under unavailable"); assert(!unavailableHtml.includes("Prior-auth details and readiness"), "unavailable should not show PA details block"); assertIncludes(unavailableHtml, "Projection period", "unavailable projection controls"); assertIncludes(unavailableHtml, "Forecast Confidence:", "unavailable control context");
       const interp = tjhpForecastInterpretationWithPriorAuthContext({ what_this_means:["Base means"], key_drivers:[], recommended_actions:[], next_30_day_priorities:[], assumptions_watchouts:[] }, signal);
       assert((interp.what_this_means || []).some(x => /Prior authorization trends may affect future billable revenue before claims are created/i.test(x)), "interpretation what means"); assert(!(interp.recommended_actions || []).some(x => /Resolve denied, partial, missing-documentation, and peer-to-peer prior auths/i.test(x)), "interpretation should not include PA task list"); assert((interp.assumptions_watchouts || []).some(x => /do not change collections forecast math/i.test(x)), "interpretation watchout");
     } finally { writeJSON(FILES.prior_auth_cases, originalPriorAuthCases); }
