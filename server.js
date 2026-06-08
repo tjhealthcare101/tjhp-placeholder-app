@@ -1789,6 +1789,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK
 // PHASE_9B_RI2_DEEP_DIVE_PRIOR_AUTH_PAYER_UNIVERSE_OK
 // PHASE_9B_RI3_FORECAST_PRIOR_AUTH_SIGNAL_OK
+// PHASE_9B_RI4_FORECAST_PRIOR_AUTH_PROJECTION_READINESS_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
   const title = String(verdictTitle || "").toLowerCase();
@@ -22796,7 +22797,7 @@ function tjhpRevenueIntelligenceForecastPriorAuthSignalModel(org_id = "", opts =
   const upcomingExpirations = [];
   const deniedOrPartialRows = [];
   const needsActionIds = new Set();
-  const model = { has_prior_auth_data: rows.length > 0, total_prior_auths: rows.length, pending_count: 0, denied_count: 0, partial_count: 0, appeal_needed_count: 0, missing_documentation_count: 0, peer_to_peer_count: 0, expiring_count: 0, expired_count: 0, stale_pending_count: 0, needs_action_count: 0, revenue_at_risk_known: 0, revenue_at_risk_unknown_count: 0, revenue_impact_not_determined_count: 0, top_payers: [], top_services: [], upcoming_expirations: [], denied_or_partial_rows: [], signal_tone: rows.length ? "neutral" : "neutral", signal_label: rows.length ? "Prior-auth signal available" : "No prior-auth data", summary: rows.length ? "Prior authorization activity is tracked separately as pre-service risk." : "No prior-authorization forecast signal yet.", notes: ["Prior-auth records are pre-service indicators and are not blended into collections forecast math."] };
+  const model = { has_prior_auth_data: rows.length > 0, total_prior_auths: rows.length, prior_auth_rows: rows, pending_count: 0, denied_count: 0, partial_count: 0, appeal_needed_count: 0, missing_documentation_count: 0, peer_to_peer_count: 0, expiring_count: 0, expired_count: 0, stale_pending_count: 0, needs_action_count: 0, revenue_at_risk_known: 0, revenue_at_risk_unknown_count: 0, revenue_impact_not_determined_count: 0, top_payers: [], top_services: [], upcoming_expirations: [], denied_or_partial_rows: [], signal_tone: rows.length ? "neutral" : "neutral", signal_label: rows.length ? "Prior-auth signal available" : "No prior-auth data", summary: rows.length ? "Prior authorization activity is tracked separately as pre-service risk." : "No prior-authorization forecast signal yet.", notes: ["Prior-auth records are pre-service indicators and are not blended into collections forecast math."] };
   rows.forEach((row, idx) => {
     const status = String(row.status || row.authorization_status || row.auth_status || "").trim();
     const knownRevenue = tjhpPriorAuthForecastKnownRevenue(row);
@@ -22839,6 +22840,81 @@ function tjhpRevenueIntelligenceForecastPriorAuthSignalModel(org_id = "", opts =
   model.summary = rows.length ? `${model.needs_action_count} prior auth(s) need action; ${model.revenue_impact_not_determined_count} have revenue impact not determined.` : "No prior-authorization forecast signal yet.";
   return model;
 }
+
+function tjhpPriorAuthForecastReadinessDate(row = {}) {
+  const fields = ["decision_date", "status_date", "determination_date", "response_date", "submitted_date", "submission_date", "scheduled_service_date", "expiration_date", "created_at"];
+  for (const field of fields) {
+    const parsed = tjhpPriorAuthForecastParseDate(row?.[field]);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+function tjhpPriorAuthForecastReadinessFieldCoverage(rows = []) {
+  const cleanRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  const total = cleanRows.length || 0;
+  const pctFor = (count) => total ? Math.round((Number(count || 0) / total) * 100) : 0;
+  let payer = 0, status = 0, service = 0, date = 0, revenue = 0;
+  cleanRows.forEach(row => {
+    if (String(row?.payer || row?.payer_name || row?.insurance_payer || row?.primary_payer || "").trim()) payer += 1;
+    if (String(row?.status || row?.authorization_status || row?.auth_status || "").trim()) status += 1;
+    if (tjhpPriorAuthForecastServiceLabel(row)) service += 1;
+    if (tjhpPriorAuthForecastReadinessDate(row)) date += 1;
+    if (String(row?.estimated_revenue_at_risk ?? row?.estimated_revenue_impact ?? row?.revenue_impact ?? "").trim()) revenue += 1;
+  });
+  return { payer_pct: pctFor(payer), status_pct: pctFor(status), service_pct: pctFor(service), date_pct: pctFor(date), revenue_impact_pct: pctFor(revenue) };
+}
+function tjhpRevenueIntelligencePriorAuthProjectionReadinessModel(org_id = "", priorAuthSignal = {}, opts = {}) {
+  const sourceRows = Array.isArray(opts.rows) ? opts.rows : (Array.isArray(priorAuthSignal?.prior_auth_rows) ? priorAuthSignal.prior_auth_rows : getPriorAuthCases(org_id).map(normalizePriorAuthCase));
+  const rows = sourceRows.filter(Boolean);
+  const monthSet = new Set();
+  rows.forEach(row => {
+    const d = tjhpPriorAuthForecastReadinessDate(row);
+    if (d) monthSet.add(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
+  });
+  const months = Array.from(monthSet).sort();
+  const fieldCoverage = tjhpPriorAuthForecastReadinessFieldCoverage(rows);
+  const totalRecords = Number(priorAuthSignal?.total_prior_auths ?? rows.length) || rows.length;
+  const buildProjection = (label, requiredMonths, requiredRecords) => {
+    const missing = [];
+    const recommendations = [];
+    if (months.length < requiredMonths) missing.push(`Need at least ${requiredMonths} months of prior-auth activity.`);
+    if (totalRecords < requiredRecords) missing.push(`Need at least ${requiredRecords} prior-auth records.`);
+    if (fieldCoverage.payer_pct < 70) missing.push("Add payer names to more prior-auth records.");
+    if (fieldCoverage.status_pct < 70) missing.push("Add statuses to more prior-auth records.");
+    if (fieldCoverage.date_pct < 70) missing.push("Add submitted, decision, or status dates to more prior-auth records.");
+    if (fieldCoverage.service_pct < 50) recommendations.push("Add requested service/CPT to improve payer/service projections.");
+    if (fieldCoverage.revenue_impact_pct < 70) recommendations.push("Add estimated revenue impact where available.");
+    const hardMissing = missing.slice();
+    return { label, ready: hardMissing.length === 0, required_months: requiredMonths, required_records: requiredRecords, current_months: months.length, current_records: totalRecords, missing_reasons: hardMissing.concat(recommendations) };
+  };
+  const projection_readiness = { three_month: buildProjection("3-month PA projection", 3, 5), six_month: buildProjection("6-month PA projection", 6, 15), twelve_month: buildProjection("12-month PA projection", 12, 30) };
+  let current_state = "no_data";
+  if (rows.length > 0) {
+    if (projection_readiness.twelve_month.ready) current_state = "twelve_month_ready";
+    else if (projection_readiness.six_month.ready) current_state = "six_month_ready";
+    else if (projection_readiness.three_month.ready) current_state = "three_month_ready";
+    else current_state = "signal_only";
+  }
+  const stateLabels = { no_data: "No prior-auth data yet", signal_only: "Signal only", three_month_ready: "3-month PA projection ready", six_month_ready: "6-month PA projection ready", twelve_month_ready: "12-month PA projection ready" };
+  const pluralAuth = totalRecords === 1 ? "prior authorization record" : "prior authorization records";
+  const pluralMonth = months.length === 1 ? "month" : "months";
+  const readiness_note = rows.length ? `You have ${formatNumberUI(totalRecords)} ${pluralAuth} across ${formatNumberUI(months.length)} ${pluralMonth} of activity. Upload more prior-auth history to unlock denial, partial approval, and expiration projections.` : "Upload prior-auth records to unlock denial, partial approval, and expiration projection readiness.";
+  return { has_prior_auth_data: rows.length > 0, current_state, state_label: stateLabels[current_state] || "Signal only", total_prior_auths: totalRecords, activity_month_count: months.length, first_activity_month: months[0] || "", last_activity_month: months[months.length - 1] || "", field_coverage: fieldCoverage, projection_readiness, recommended_next_step: rows.length ? "Upload prior-auth records with payer, status, requested service/CPT, submitted date, decision/status date, expiration date when available, and estimated revenue impact when available." : "Upload prior-auth history with payer, status, service, and prior-auth business dates.", readiness_note };
+}
+function renderForecastPriorAuthReadiness(readiness = {}) {
+  const r = readiness && typeof readiness === "object" ? readiness : {};
+  const projections = r.projection_readiness || {};
+  const cards = [projections.three_month, projections.six_month, projections.twelve_month].filter(Boolean).map(item => {
+    const ready = !!item.ready;
+    const close = !ready && Number(item.current_months || 0) >= Math.max(1, Number(item.required_months || 0) - 1) && Number(item.current_records || 0) >= Math.max(1, Number(item.required_records || 0) - 2);
+    const cls = ready ? "is-ready" : (close ? "is-partial" : "is-not-ready");
+    const status = ready ? "Ready" : (close ? "Needs more history" : "Not ready");
+    const req = ready ? "Available" : `Needs ${formatNumberUI(item.required_months || 0)} months + ${formatNumberUI(item.required_records || 0)} records`;
+    return `<div class="ri-forecast-pa-readiness-card ${cls}"><strong>${safeStr(item.label || "PA projection")}</strong><span class="ri-forecast-pa-readiness-status">${safeStr(status)}</span><div class="muted small">${safeStr(req)}</div></div>`;
+  }).join("");
+  return `<div class="ri-forecast-pa-readiness"><div class="ri-forecast-pa-readiness-header"><div><strong>Prior-auth forecast readiness</strong><div class="muted small">Current PA forecast state: ${safeStr(r.state_label || "Signal only")}</div></div><span class="badge neutral">${safeStr(r.state_label || "Signal only")}</span></div><div class="ri-forecast-pa-readiness-note">${safeStr(r.readiness_note || "Upload more prior-auth history to unlock denial, partial approval, and expiration projections.")}</div><div class="ri-forecast-pa-readiness-grid">${cards}</div><details class="ri-forecast-pa-readiness-details"><summary>What data unlocks PA projections?</summary><ul><li>Payer</li><li>Status</li><li>Submitted, decision, or status date</li><li>Requested service / CPT / HCPCS</li><li>Expiration date when available</li><li>Estimated revenue impact when available</li></ul></details><div class="ri-forecast-pa-readiness-note">PA projection readiness is separate from core claim/payment forecast confidence and does not change collections forecast math.</div></div>`;
+}
+
 function tjhpForecastPriorAuthPayerDetail(payer = {}){
   const parts = [];
   const denied = Number(payer.denied_count || 0), partial = Number(payer.partial_count || 0);
@@ -22849,20 +22925,33 @@ function tjhpForecastPriorAuthPayerDetail(payer = {}){
   if (Number(payer.unknown_revenue_impact_count || 0) > 0) parts.push("revenue impact not determined");
   return parts.join(" · ");
 }
-function renderForecastPriorAuthSignal(signal = {}){
+function renderForecastPriorAuthSignal(signal = {}, readiness = {}){
+  const readinessHtml = renderForecastPriorAuthReadiness(readiness && Object.keys(readiness || {}).length ? readiness : tjhpRevenueIntelligencePriorAuthProjectionReadinessModel("", signal));
   const hasData = !!signal.has_prior_auth_data, topPayer = (signal.top_payers || [])[0] || null, topService = (signal.top_services || [])[0] || null;
   const payerList = (signal.top_payers || []).slice(0, 3).map(p => `<div><strong>${safeStr(p.payer || "Payer")}</strong><div class="muted small">${safeStr(tjhpForecastPriorAuthPayerDetail(p))}</div></div>`).join("");
   const serviceList = (signal.top_services || []).slice(0, 3).map(s => `<div><strong>${safeStr(s.service || "Service")}</strong><div class="muted small">${formatNumberUI(s.count || 0)} prior auth${Number(s.count || 0) === 1 ? "" : "s"}</div></div>`).join("");
   return `
-    <style>.ri-forecast-pa-signal{border:1px solid var(--border);border-radius:14px;padding:14px;background:#fff;margin:14px 0;}.ri-forecast-pa-header{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;}.ri-forecast-pa-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-top:12px;}.ri-forecast-pa-card{border:1px solid var(--border);border-radius:12px;padding:10px;background:#f8fafc;}.ri-forecast-pa-card.is-risk{background:#fff7ed;border-color:#fed7aa;}.ri-forecast-pa-card.is-action{background:#fff1f2;border-color:#fecdd3;}.ri-forecast-pa-value{font-size:20px;font-weight:900;color:#0f172a;}.ri-forecast-pa-label{margin-top:5px;color:#475569;font-size:11px;font-weight:800;text-transform:uppercase;}.ri-forecast-pa-note{margin-top:10px;color:#64748b;font-size:12px;}.ri-forecast-pa-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-top:12px;}</style>
+    <style>.ri-forecast-pa-signal{border:1px solid var(--border);border-radius:14px;padding:14px;background:#fff;margin:14px 0;}.ri-forecast-pa-header{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;}.ri-forecast-pa-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-top:12px;}.ri-forecast-pa-card{border:1px solid var(--border);border-radius:12px;padding:10px;background:#f8fafc;}.ri-forecast-pa-card.is-risk{background:#fff7ed;border-color:#fed7aa;}.ri-forecast-pa-card.is-action{background:#fff1f2;border-color:#fecdd3;}.ri-forecast-pa-value{font-size:20px;font-weight:900;color:#0f172a;}.ri-forecast-pa-label{margin-top:5px;color:#475569;font-size:11px;font-weight:800;text-transform:uppercase;}.ri-forecast-pa-note{margin-top:10px;color:#64748b;font-size:12px;}.ri-forecast-pa-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-top:12px;}.ri-forecast-pa-readiness{margin-top:12px;border:1px solid var(--border);border-radius:12px;background:#f8fafc;padding:12px;}.ri-forecast-pa-readiness-header{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;}.ri-forecast-pa-readiness-note{margin-top:8px;color:#475569;font-size:12px;line-height:1.4;}.ri-forecast-pa-readiness-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-top:10px;}.ri-forecast-pa-readiness-card{border:1px solid var(--border);border-radius:10px;background:#fff;padding:10px;}.ri-forecast-pa-readiness-card strong{display:block;font-size:12px;}.ri-forecast-pa-readiness-status{display:inline-flex;margin-top:6px;border-radius:999px;padding:4px 7px;font-size:11px;font-weight:900;}.ri-forecast-pa-readiness-card.is-ready .ri-forecast-pa-readiness-status{background:#dcfce7;color:#166534;}.ri-forecast-pa-readiness-card.is-not-ready .ri-forecast-pa-readiness-status{background:#fee2e2;color:#991b1b;}.ri-forecast-pa-readiness-card.is-partial .ri-forecast-pa-readiness-status{background:#ffedd5;color:#9a3412;}.ri-forecast-pa-readiness-details{margin-top:10px;font-size:12px;color:#64748b;}.ri-forecast-pa-readiness-details summary{cursor:pointer;font-weight:800;color:#475569;}</style>
     <section class="ri-forecast-pa-signal" aria-label="Prior Authorization Forecast Signal"><div class="ri-forecast-pa-header"><div><h3 style="margin:0;">Prior Authorization Forecast Signal</h3><div class="muted small" style="margin-top:5px;">Pre-service authorization risk that may affect future billable revenue.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap;"><a class="btn secondary small" href="/actions?tab=prior-auth">Open Prior Auth Work</a><a class="btn secondary small" href="/data-management?tab=prior-auth">Review Prior Auth Records</a></div></div>
-      ${hasData ? `<div class="ri-forecast-pa-grid"><div class="ri-forecast-pa-card is-action"><div class="ri-forecast-pa-value">${formatNumberUI(signal.needs_action_count || 0)}</div><div class="ri-forecast-pa-label">Needs Action</div></div><div class="ri-forecast-pa-card is-action"><div class="ri-forecast-pa-value">${formatNumberUI((signal.denied_count || 0) + (signal.partial_count || 0))}</div><div class="ri-forecast-pa-label">Denied / Partial</div></div><div class="ri-forecast-pa-card is-risk"><div class="ri-forecast-pa-value">${formatNumberUI((signal.expiring_count || 0) + (signal.expired_count || 0))}</div><div class="ri-forecast-pa-label">Expiring / Expired</div></div><div class="ri-forecast-pa-card"><div class="ri-forecast-pa-value">${formatMoneyUI(signal.revenue_at_risk_known || 0)}</div><div class="ri-forecast-pa-label">Known PA Revenue at Risk</div></div><div class="ri-forecast-pa-card is-risk"><div class="ri-forecast-pa-value">${formatNumberUI(signal.revenue_impact_not_determined_count || 0)}</div><div class="ri-forecast-pa-label">Impact Not Determined</div><div class="muted small">${formatNumberUI(signal.revenue_impact_not_determined_count || 0)} prior auths</div></div></div><div class="ri-forecast-pa-summary"><div class="ri-forecast-pa-card"><strong>Top prior-auth payer: ${safeStr(topPayer?.payer || "—")}</strong><div class="muted small" style="margin-top:5px;">${topPayer ? safeStr(tjhpForecastPriorAuthPayerDetail(topPayer)) : "—"}</div>${payerList ? `<div class="muted small" style="margin-top:8px;line-height:1.6;">${payerList}</div>` : ""}</div><div class="ri-forecast-pa-card"><strong>Top service: ${safeStr(topService?.service || "—")}</strong><div class="muted small" style="margin-top:5px;">${topService ? `${formatNumberUI(topService.count || 0)} prior auth${Number(topService.count || 0) === 1 ? "" : "s"}` : "—"}</div>${serviceList ? `<div class="muted small" style="margin-top:8px;line-height:1.6;">${serviceList}</div>` : ""}</div></div><div class="ri-forecast-pa-note">Revenue impact not determined means the prior-auth record did not include a numeric estimated revenue amount.</div>` : `<div class="ri-forecast-pa-card" style="margin-top:12px;"><strong>No prior-authorization forecast signal yet.</strong><div class="muted small" style="margin-top:5px;">Upload prior authorization records to show pre-service revenue risk.</div></div>`}
+      ${hasData ? `<div class="ri-forecast-pa-grid"><div class="ri-forecast-pa-card is-action"><div class="ri-forecast-pa-value">${formatNumberUI(signal.needs_action_count || 0)}</div><div class="ri-forecast-pa-label">Needs Action</div></div><div class="ri-forecast-pa-card is-action"><div class="ri-forecast-pa-value">${formatNumberUI((signal.denied_count || 0) + (signal.partial_count || 0))}</div><div class="ri-forecast-pa-label">Denied / Partial</div></div><div class="ri-forecast-pa-card is-risk"><div class="ri-forecast-pa-value">${formatNumberUI((signal.expiring_count || 0) + (signal.expired_count || 0))}</div><div class="ri-forecast-pa-label">Expiring / Expired</div></div><div class="ri-forecast-pa-card"><div class="ri-forecast-pa-value">${formatMoneyUI(signal.revenue_at_risk_known || 0)}</div><div class="ri-forecast-pa-label">Known PA Revenue at Risk</div></div><div class="ri-forecast-pa-card is-risk"><div class="ri-forecast-pa-value">${formatNumberUI(signal.revenue_impact_not_determined_count || 0)}</div><div class="ri-forecast-pa-label">Impact Not Determined</div><div class="muted small">${formatNumberUI(signal.revenue_impact_not_determined_count || 0)} prior auths</div></div></div><div class="ri-forecast-pa-summary"><div class="ri-forecast-pa-card"><strong>Top prior-auth payer: ${safeStr(topPayer?.payer || "—")}</strong><div class="muted small" style="margin-top:5px;">${topPayer ? safeStr(tjhpForecastPriorAuthPayerDetail(topPayer)) : "—"}</div>${payerList ? `<div class="muted small" style="margin-top:8px;line-height:1.6;">${payerList}</div>` : ""}</div><div class="ri-forecast-pa-card"><strong>Top service: ${safeStr(topService?.service || "—")}</strong><div class="muted small" style="margin-top:5px;">${topService ? `${formatNumberUI(topService.count || 0)} prior auth${Number(topService.count || 0) === 1 ? "" : "s"}` : "—"}</div>${serviceList ? `<div class="muted small" style="margin-top:8px;line-height:1.6;">${serviceList}</div>` : ""}</div></div>${readinessHtml}<div class="ri-forecast-pa-note">Revenue impact not determined means the prior-auth record did not include a numeric estimated revenue amount.</div>` : `<div class="ri-forecast-pa-card" style="margin-top:12px;"><strong>No prior-authorization forecast signal yet.</strong><div class="muted small" style="margin-top:5px;">Upload prior authorization records to show pre-service revenue risk.</div></div>${readinessHtml}`}
       <div class="ri-forecast-pa-note">Prior-auth signal is shown separately and does not change the collections forecast.</div></section>`;
 }
-function tjhpForecastInterpretationWithPriorAuthContext(sections = {}, priorAuthSignal = {}) {
+function tjhpForecastInterpretationWithPriorAuthContext(sections = {}, priorAuthSignal = {}, priorAuthReadiness = null) {
   const out = { what_this_means: Array.isArray(sections.what_this_means) ? sections.what_this_means.slice() : [], key_drivers: Array.isArray(sections.key_drivers) ? sections.key_drivers.slice() : [], recommended_actions: Array.isArray(sections.recommended_actions) ? sections.recommended_actions.slice() : [], next_30_day_priorities: Array.isArray(sections.next_30_day_priorities) ? sections.next_30_day_priorities.slice() : [], assumptions_watchouts: Array.isArray(sections.assumptions_watchouts) ? sections.assumptions_watchouts.slice() : [] };
   if (!priorAuthSignal || !priorAuthSignal.has_prior_auth_data) return { ...sections, ...out };
   out.what_this_means.push("Prior authorization activity may affect future billable revenue before claims are created.");
+  const readiness = priorAuthReadiness || priorAuthSignal?.readiness || null;
+  if (readiness && readiness.current_state) {
+    if (readiness.current_state === "signal_only") out.what_this_means.push("Prior-auth data is currently signal-only; more history is needed before PA denial or partial-approval projections are available.");
+    else if (readiness.current_state === "three_month_ready") out.what_this_means.push("Prior-auth history is sufficient for a directional 3-month PA projection.");
+    else if (readiness.current_state === "six_month_ready") out.what_this_means.push("Prior-auth history supports a stronger 6-month PA projection.");
+    else if (readiness.current_state === "twelve_month_ready") out.what_this_means.push("Prior-auth history supports longer-range PA trend analysis.");
+    out.recommended_actions.push("Upload at least 3 months of prior-auth history to unlock early PA projections.");
+    out.recommended_actions.push("Include payer, status, service, and submitted/decision dates in PA uploads.");
+    out.recommended_actions.push("Add estimated revenue impact where available to improve PA revenue-risk estimates.");
+    out.assumptions_watchouts.push("PA projection readiness is separate from claim/payment forecast confidence.");
+    out.assumptions_watchouts.push("PA projection readiness does not change collections forecast math.");
+  }
   if (Number(priorAuthSignal.denied_count || 0) + Number(priorAuthSignal.partial_count || 0) > 0) out.what_this_means.push("Denied or partially approved authorizations should be resolved before projected revenue is assumed collectible.");
   out.key_drivers.push(`Prior-auth work needing action: ${formatNumberUI(priorAuthSignal.needs_action_count || 0)}.`);
   out.key_drivers.push(`Known pre-service revenue at risk: ${formatMoneyUI(priorAuthSignal.revenue_at_risk_known || 0)}.`);
@@ -48067,7 +48156,8 @@ function renderForecastTab(org, m, forecastB64){
   const fc = JSON.parse(Buffer.from(String(forecastB64 || ""), "base64").toString("utf8") || "{}");
   const historicalPeriods = Array.isArray(fc?.labels) ? fc.labels.length : 0;
   const priorAuthForecastSignal = tjhpRevenueIntelligenceForecastPriorAuthSignalModel(org?.org_id || "");
-  const priorAuthForecastSignalHtml = renderForecastPriorAuthSignal(priorAuthForecastSignal);
+  const priorAuthForecastReadiness = tjhpRevenueIntelligencePriorAuthProjectionReadinessModel(org?.org_id || "", priorAuthForecastSignal);
+  const priorAuthForecastSignalHtml = renderForecastPriorAuthSignal(priorAuthForecastSignal, priorAuthForecastReadiness);
   const detectedMonths = Number(fc.detectedMonths || historicalPeriods || 0);
   const firstMonth = fc.firstMonth ? tjhpForecastMonthLabel(fc.firstMonth) : "";
   const lastMonth = fc.lastMonth ? tjhpForecastMonthLabel(fc.lastMonth) : "";
@@ -48098,7 +48188,7 @@ function renderForecastTab(org, m, forecastB64){
   const atRiskLargeChartHtml = renderForecastSvgChart({ title: "At-Risk Forecast", labels: forecastLabels, historical: fc?.hist?.atRisk || [], forecast: fc?.fcst?.atRisk || [], valueLabel: `Ending projected risk (${projectionEndLabel})`, expanded: true });
   const forecastPatterns = tjhpBuildForecastPatternInsights(org?.org_id || "", fc, m);
   const forecastInterpretationBase = buildForecastExecutiveInterpretationSections(fc, m, forecastPatterns);
-  const forecastInterpretation = tjhpForecastInterpretationWithPriorAuthContext(forecastInterpretationBase, priorAuthForecastSignal);
+  const forecastInterpretation = tjhpForecastInterpretationWithPriorAuthContext(forecastInterpretationBase, priorAuthForecastSignal, priorAuthForecastReadiness);
   const forecastTakeaways = buildForecastChartTakeaways(fc, m);
 
   return `
@@ -78744,6 +78834,81 @@ if (process.env.TJHP_FORECAST_PATTERN_UI_SMOKE_TESTS === "true" && (process.env.
     ["FORECAST_PATTERN_UI_SMOKE_TESTS_PASSED","FORECAST_HORIZON_SMOKE_TESTS_PASSED","FORECAST_EXECUTIVE_POLISH_SMOKE_TESTS_PASSED","FORECAST_UI_SMOKE_TESTS_PASSED","FORECAST_MONTH_SMOKE_TESTS_PASSED","PAYMENT_MATCH_SMOKE_TESTS_PASSED","VIEW_PANEL_STATIC_TESTS_PASSED","LAUNCH_READINESS_SMOKE_TESTS_PASSED"].forEach(x=>assert(src.includes(x),x));
     process.stdout.write("FORECAST_PATTERN_UI_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("FORECAST_PATTERN_UI_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+
+if (process.env.TJHP_REVENUE_INTELLIGENCE_FORECAST_PRIOR_AUTH_READINESS_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m || "assertion failed"); };
+    const assertIncludes = (hay, needle)=>assert(String(hay || "").includes(needle), `missing ${needle}`);
+    ["PHASE_9B_RI4_FORECAST_PRIOR_AUTH_PROJECTION_READINESS_OK","PHASE_9B_RI3_FORECAST_PRIOR_AUTH_SIGNAL_OK","tjhpRevenueIntelligencePriorAuthProjectionReadinessModel","tjhpPriorAuthForecastReadinessDate","tjhpPriorAuthForecastReadinessFieldCoverage","Prior-auth forecast readiness","Current PA forecast state","Signal only","3-month PA projection","6-month PA projection","12-month PA projection","What data unlocks PA projections?","Upload more prior-auth history to unlock denial, partial approval, and expiration projections.","ri-forecast-pa-readiness","ri-forecast-pa-readiness-grid","ri-forecast-pa-readiness-card","is-ready","is-not-ready","is-partial","Prior-auth signal is shown separately and does not change the collections forecast.","Forecast Engine","Collections Forecast","At-Risk Forecast"].forEach(x => assertIncludes(src, x));
+    ["TJHP_REVENUE_INTELLIGENCE_FORECAST_PRIOR_AUTH_SIGNAL_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_PAYER_UNIVERSE_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_SIGNAL_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_STRATEGY_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_RISK_TREND_SMOKE_TESTS","TJHP_DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS","TJHP_DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS","TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS","TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS","TJHP_PAYMENT_MATCH_SMOKE_TESTS","renderClaimPanelBootstrap","window.openClaimPanel","renderPriorAuthActionCenterPanelBootstrap","window.openPriorAuthPanel"].forEach(x => assertIncludes(src, x));
+    const bodyOf = (name) => { const start = src.indexOf(`function ${name}`); assert(start >= 0, `missing body ${name}`); const next = src.indexOf("\nfunction ", start + 10); return src.slice(start, next > start ? next : start + 4000); };
+    const helperBodies = ["tjhpPriorAuthForecastReadinessDate","tjhpPriorAuthForecastReadinessFieldCoverage","tjhpRevenueIntelligencePriorAuthProjectionReadinessModel","renderForecastPriorAuthReadiness"].map(bodyOf).join("\n");
+    ["writeJSON","saveUsage","savePriorAuthCasesForOrg","upsertPriorAuthCase","appendAuditLog","ensureAgentWorkspace","requestOpenAIChatCompletion","fetchFHIRDocuments","scrapePortal","routePacket","submitPacket","OCR","payer portal submission","method === \"POST\"","parseBody(req)"].forEach(x => assert(!helperBodies.includes(x), `mutation/API marker in helper: ${x}`));
+    const originalPriorAuthCases = readJSON(FILES.prior_auth_cases, []);
+    const replaceOrgCases = (org_id, rows) => writeJSON(FILES.prior_auth_cases, originalPriorAuthCases.filter(x => String(x.org_id || "") !== org_id).concat(rows));
+    const buildCases = (org_id, count, months) => Array.from({ length: count }, (_, i) => ({ auth_case_id:`${org_id}-${i}`, org_id, payer:i % 2 ? "Aetna" : "Cigna", status:i % 3 ? "Approved" : "Denied", requested_service:`CPT ${80000 + i}`, submitted_date:`${months[i % months.length]}-${String((i % 20) + 1).padStart(2,"0")}`, estimated_revenue_at_risk:i % 4 === 0 ? 500 : "Not determined" }));
+    try {
+      const org_id = "__ri4_forecast_pa_readiness_single_org__";
+      replaceOrgCases(org_id, [{ org_id, payer:"Blue Cross Blue Shield of Texas", status:"Denied", requested_service:"Endlymphoma Mutation Assay By V1", submitted_date:"2024-12-20", expiration_date:"2025-03-19", estimated_revenue_at_risk:"Not determined" }]);
+      const signal = tjhpRevenueIntelligenceForecastPriorAuthSignalModel(org_id, { today:"2026-06-08" });
+      const readiness = tjhpRevenueIntelligencePriorAuthProjectionReadinessModel(org_id, signal);
+      assert(readiness.has_prior_auth_data === true, "single has PA data");
+      assert(readiness.total_prior_auths === 1, "single total");
+      assert(readiness.activity_month_count === 1, "single activity month");
+      assert(readiness.current_state === "signal_only", readiness.current_state);
+      assert(readiness.state_label.includes("Signal only"), "single label");
+      assert(readiness.projection_readiness.three_month.ready === false, "single three not ready");
+      assert(readiness.projection_readiness.six_month.ready === false, "single six not ready");
+      assert(readiness.projection_readiness.twelve_month.ready === false, "single twelve not ready");
+      assert(readiness.projection_readiness.three_month.missing_reasons.some(x => x.includes("3 months") || x.includes("5 prior-auth records")), "single missing reasons");
+      assert(readiness.readiness_note.includes("Upload more prior-auth history"), "single readiness note");
+      const forecastFnSrc = src.slice(src.indexOf("function renderForecastTab(org, m, forecastB64){"), src.indexOf("function renderDeepDiveTab"));
+      let renderForecastTabSmoke = null;
+      eval(forecastFnSrc.replace("function renderForecastTab(org, m, forecastB64){", "renderForecastTabSmoke = function(org, m, forecastB64){"));
+      const fakeM = { kpis:{ revenueAtRisk:12000 }, arBuckets:{ "90+":5000 }, denialRate:12 };
+      const fc = { labels:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026"], labelsAll:["Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026","Jul 2026","Aug 2026"], detectedMonths:6, firstMonth:"2026-01", lastMonth:"2026-06", source:"row_level_months", hist:{ collected:[100,150,200,210,220,240], atRisk:[300,280,260,240,220,210] }, fcst:{ collected:[250,260], atRisk:[200,180] } };
+      const html = renderForecastTabSmoke({ org_id, name:"RI4 Forecast Smoke" }, fakeM, Buffer.from(JSON.stringify(fc)).toString("base64"));
+      ["Prior Authorization Forecast Signal","Prior-auth forecast readiness","Current PA forecast state: Signal only","You have 1 prior authorization record","3-month PA projection","6-month PA projection","12-month PA projection","Not ready","What data unlocks PA projections?","Collections Forecast","At-Risk Forecast"].forEach(x => assertIncludes(html, x));
+      const threeOrg = "__ri4_forecast_pa_readiness_three_org__";
+      replaceOrgCases(threeOrg, buildCases(threeOrg, 5, ["2025-01","2025-02","2025-03"]));
+      const three = tjhpRevenueIntelligencePriorAuthProjectionReadinessModel(threeOrg, tjhpRevenueIntelligenceForecastPriorAuthSignalModel(threeOrg));
+      assert(three.projection_readiness.three_month.ready === true, "three ready");
+      assert(three.projection_readiness.six_month.ready === false, "six not ready from three");
+      assert(three.projection_readiness.twelve_month.ready === false, "twelve not ready from three");
+      assert(three.current_state === "three_month_ready", three.current_state);
+      const sixOrg = "__ri4_forecast_pa_readiness_six_org__";
+      replaceOrgCases(sixOrg, buildCases(sixOrg, 15, ["2025-01","2025-02","2025-03","2025-04","2025-05","2025-06"]));
+      const six = tjhpRevenueIntelligencePriorAuthProjectionReadinessModel(sixOrg, tjhpRevenueIntelligenceForecastPriorAuthSignalModel(sixOrg));
+      assert(six.projection_readiness.three_month.ready === true, "six three ready");
+      assert(six.projection_readiness.six_month.ready === true, "six ready");
+      assert(six.projection_readiness.twelve_month.ready === false, "six twelve not ready");
+      assert(six.current_state === "six_month_ready", six.current_state);
+      const twelveOrg = "__ri4_forecast_pa_readiness_twelve_org__";
+      replaceOrgCases(twelveOrg, buildCases(twelveOrg, 30, ["2024-01","2024-02","2024-03","2024-04","2024-05","2024-06","2024-07","2024-08","2024-09","2024-10","2024-11","2024-12"]));
+      const twelve = tjhpRevenueIntelligencePriorAuthProjectionReadinessModel(twelveOrg, tjhpRevenueIntelligenceForecastPriorAuthSignalModel(twelveOrg));
+      assert(twelve.projection_readiness.three_month.ready === true, "twelve three ready");
+      assert(twelve.projection_readiness.six_month.ready === true, "twelve six ready");
+      assert(twelve.projection_readiness.twelve_month.ready === true, "twelve ready");
+      assert(twelve.current_state === "twelve_month_ready", twelve.current_state);
+      const lowOrg = "__ri4_forecast_pa_readiness_field_org__";
+      replaceOrgCases(lowOrg, Array.from({ length:10 }, (_, i) => ({ auth_case_id:`low-${i}`, org_id:lowOrg, requested_service: i < 4 ? `CPT ${i}` : "", estimated_revenue_at_risk: i < 2 ? 100 : "" })));
+      const lowRawRows = Array.from({ length:10 }, (_, i) => ({ auth_case_id:`low-raw-${i}`, org_id:lowOrg, requested_service: i < 4 ? `CPT ${i}` : "", estimated_revenue_at_risk: i < 2 ? 100 : "" }));
+      const low = tjhpRevenueIntelligencePriorAuthProjectionReadinessModel(lowOrg, { total_prior_auths:10 }, { rows: lowRawRows });
+      assert(low.projection_readiness.three_month.ready === false, "low coverage not ready");
+      const lowReasons = low.projection_readiness.three_month.missing_reasons.join(" | ");
+      ["payer names","statuses","submitted, decision, or status dates"].forEach(x => assert(lowReasons.includes(x), `low coverage missing ${x}`));
+      assert(lowReasons.includes("requested service/CPT"), "service recommendation");
+      assert(lowReasons.includes("estimated revenue impact"), "revenue recommendation");
+      const interp = tjhpForecastInterpretationWithPriorAuthContext({ what_this_means:["Base means"], key_drivers:[], recommended_actions:[], next_30_day_priorities:[], assumptions_watchouts:[] }, signal, readiness);
+      assert((interp.what_this_means || []).some(x => x.includes("more history is needed")), "interp more history");
+      assert((interp.assumptions_watchouts || []).some(x => x.includes("separate from claim/payment forecast confidence")), "interp separate confidence");
+      assert((interp.assumptions_watchouts || []).some(x => x.includes("does not change collections forecast math")), "interp no math change");
+    } finally { writeJSON(FILES.prior_auth_cases, originalPriorAuthCases); }
+    process.stdout.write("REVENUE_INTELLIGENCE_FORECAST_PRIOR_AUTH_READINESS_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_FORECAST_PRIOR_AUTH_READINESS_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
 
 if (process.env.TJHP_REVENUE_INTELLIGENCE_FORECAST_PRIOR_AUTH_SIGNAL_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
