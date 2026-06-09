@@ -1202,7 +1202,7 @@ function tjhpPriorAuthLifecycleLaneDefinitions(){
 
 function tjhpPriorAuthActionCenterStageOptions(){
   return [
-    { key: "all", label: "All Prior Auths" },
+    { key: "all", label: "All stages" },
     { key: "intake", label: "Intake / Draft" },
     { key: "pending", label: "Initial Request Pending" },
     { key: "denied_partial", label: "Denied / Partial" },
@@ -1214,7 +1214,19 @@ function tjhpPriorAuthActionCenterStageOptions(){
 function tjhpPriorAuthActionCenterStageLabel(value = ""){
   const raw = String(value || "").trim();
   const match = tjhpPriorAuthActionCenterStageOptions().find(x => x.key === raw);
-  return match ? match.label : "All Prior Auths";
+  return match ? match.label : "All stages";
+}
+
+function tjhpPriorAuthComparedPayerControlHtml(priorAuthFilterModel = {}){
+  if (!priorAuthFilterModel || !priorAuthFilterModel.has_multi_payer_filter) return "";
+  const label = safeStr(priorAuthFilterModel.payer_filter_label || priorAuthFilterModel.payers?.join(" + ") || "Compared payers");
+  return `
+    <div class="pa-compared-payer-control" data-pa-compared-payer-control="true">
+      <label class="small">Compared payers</label>
+      <div class="pa-compared-payer-pill">${label}</div>
+      <div class="muted tiny">From Deep Dive comparison. Reset to choose a different payer view.</div>
+    </div>
+  `;
 }
 
 function tjhpPriorAuthNormalizeActionCenterStage(value = ""){
@@ -1839,6 +1851,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9B_RI9_FORECAST_CONTROL_VALUE_LABEL_CLEANUP_OK
 // PHASE_9B_RI10_FORECAST_BASELINE_AR90_LABEL_CONTROL_POLISH_OK
 // PHASE_9B_RI11_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_RISK_WORDING_OK
+// PHASE_9B_RI12_ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
   const title = String(verdictTitle || "").toLowerCase();
@@ -10191,6 +10204,26 @@ th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical
 .dropzone{display:flex;align-items:center;justify-content:center;border:2px dashed var(--border);border-radius:8px;height:150px;cursor:pointer;background:#fafafa;color:var(--muted);margin-bottom:10px;transition:background 0.2s ease;}
 .dropzone.dragover{background:#e5e7eb;}
 .insight-card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:14px;box-shadow:var(--shadow);margin-bottom:14px;}
+.pa-compared-payer-control{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+.pa-compared-payer-pill{
+  min-height:38px;
+  display:flex;
+  align-items:center;
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:8px 10px;
+  background:#f8fafc;
+  font-weight:900;
+  color:var(--text);
+}
+.pa-compared-payer-control .tiny{
+  font-size:11px;
+  line-height:1.25;
+}
 .flow-bridge{background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);}
 .flow-bridge-title{font-weight:800;}
 .flow-bridge-body{color:var(--muted);}
@@ -55158,7 +55191,7 @@ if (method === "GET" && pathname === "/actions") {
     const priorAuthStageOptions = tjhpPriorAuthActionCenterStageOptions();
 
     const priorAuthFilterSummary = priorAuthFilterModel.has_multi_payer_filter
-      ? `Showing ${formatNumberUI(priorAuthActionRows.length)} of ${formatNumberUI(priorAuthFilterModel.allRows.length)} prior-auth cases for ${priorAuthFilterModel.payer_filter_label}.`
+      ? `Showing ${formatNumberUI(priorAuthActionRows.length)} of ${formatNumberUI(priorAuthFilterModel.allRows.length)} prior-auth cases for compared payers: ${priorAuthFilterModel.payer_filter_label}.`
       : priorAuthFilterModel.filterActive
         ? `Showing ${formatNumberUI(priorAuthActionRows.length)} of ${formatNumberUI(priorAuthFilterModel.allRows.length)} prior-auth cases for selected filters.`
         : `Showing ${formatNumberUI(priorAuthActionRows.length)} prior-auth cases needing staff attention.`;
@@ -55274,6 +55307,7 @@ if (method === "GET" && pathname === "/actions") {
             <input name="pa_search" value="${safeStr(priorAuthFilterModel.search)}" placeholder="Patient, payer, auth #, service..." />
           </div>
 
+          ${priorAuthFilterModel.has_multi_payer_filter ? tjhpPriorAuthComparedPayerControlHtml(priorAuthFilterModel) : `
           <div>
             <label class="small">Payer</label>
             <select name="pa_payer">
@@ -55281,6 +55315,7 @@ if (method === "GET" && pathname === "/actions") {
               ${priorAuthPayers.map(payer => `<option value="${safeStr(payer)}" ${priorAuthFilterModel.payer === payer ? "selected" : ""}>${safeStr(payer)}</option>`).join("")}
             </select>
           </div>
+          `}
 
           <div>
             <label class="small">Stage</label>
@@ -55325,7 +55360,7 @@ if (method === "GET" && pathname === "/actions") {
         <p class="muted small" style="margin:8px 0 0;">
           ${safeStr(priorAuthFilterSummary)}
           ${priorAuthFilterModel.stage !== "all" ? ` · Stage: ${safeStr(tjhpPriorAuthActionCenterStageLabel(priorAuthFilterModel.stage))}` : ""}
-          ${priorAuthFilterModel.has_multi_payer_filter ? `<br/><span class="badge neutral">Showing prior auths for ${safeStr(priorAuthFilterModel.payer_filter_label)}</span>` : ""}
+          ${priorAuthFilterModel.has_multi_payer_filter ? `<br/><span class="badge neutral">Compared payer filter: ${safeStr(priorAuthFilterModel.payer_filter_label)}</span>` : ""}
         </p>
       </div>
 
@@ -72825,6 +72860,166 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE
     }
     process.stdout.write("REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE_TESTS_PASSED\n"); process.exit(0);
   } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
+
+if (process.env.TJHP_ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = require("assert");
+    const assertIncludes = (haystack, needle, message) => assert(String(haystack || "").includes(needle), message || `missing ${needle}`);
+    const extractFunctionSourceForRi12Smoke = (name) => {
+      const start = src.indexOf("function " + name);
+      assert(start >= 0, "missing function: " + name);
+      const open = src.indexOf("{", start);
+      let depth = 0;
+      for (let i = open; i < src.length; i += 1) {
+        if (src[i] === "{") depth += 1;
+        else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1);
+      }
+      throw new Error("unterminated function: " + name);
+    };
+    const extractFunctionBodyForRi12Smoke = (name) => {
+      const fn = extractFunctionSourceForRi12Smoke(name);
+      return fn.slice(fn.indexOf("{") + 1, -1);
+    };
+
+    [
+      "PHASE_9B_RI12_ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_OK",
+      "PHASE_9B_RI11_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_RISK_WORDING_OK",
+      "tjhpPriorAuthComparedPayerControlHtml",
+      "pa-compared-payer-control",
+      "pa-compared-payer-pill",
+      "data-pa-compared-payer-control=\"true\"",
+      "Compared payers",
+      "Compared payer filter",
+      "All stages",
+      "pa_payers",
+      "has_multi_payer_filter",
+      "payer_filter_label"
+    ].forEach(x => assertIncludes(src, x));
+
+    const staleAllPriorAuthOption = '<option value="all">' + 'All Prior Auths</option>';
+    const staleAllPriorAuthClosing = '>' + 'All Prior Auths</option>';
+    assert(!src.includes(staleAllPriorAuthOption), "stale All Prior Auths option remains");
+    assert(!src.includes(staleAllPriorAuthClosing), "stale All Prior Auths option label remains");
+
+    [
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_PAYER_UNIVERSE_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_SIGNAL_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_EXECUTIVE_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_FORECAST_BASELINE_AR90_LABEL_CONTROL_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_FORECAST_CONTROL_VALUE_LABEL_CLEANUP_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_FORECAST_ONLY_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_CHART_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_FORECAST_PA_PROJECTION_CHARTS_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "TJHP_DATA_MANAGEMENT_UNIFIED_UPLOAD_PRIOR_AUTH_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_STATUS_PILLS_AND_LIFECYCLE_AGGREGATE_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_SMOKE_TESTS",
+      "TJHP_PAYMENT_MATCH_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "window.openClaimPanel",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "window.openPriorAuthPanel"
+    ].forEach(x => assertIncludes(src, x, `missing protected marker ${x}`));
+
+    const helperBody = extractFunctionBodyForRi12Smoke("tjhpPriorAuthComparedPayerControlHtml");
+    [
+      "writeJSON",
+      "saveUsage",
+      "savePriorAuthCasesForOrg",
+      "upsertPriorAuthCase",
+      "appendAuditLog",
+      "ensureAgentWorkspace",
+      "requestOpenAIChatCompletion",
+      "fetchFHIRDocuments",
+      "scrapePortal",
+      "routePacket",
+      "submitPacket",
+      "OCR",
+      "payer portal submission",
+      "method === \"POST\"",
+      "parseBody(req)"
+    ].forEach(forbidden => assert(!helperBody.includes(forbidden), `compared payer helper contains forbidden marker: ${forbidden}`));
+
+    const actionsStart = src.indexOf('if (method === "GET" && pathname === "/actions")');
+    assert(actionsStart >= 0, "missing Action Center route");
+    const actionsEnd = src.indexOf('if (method === "GET" && pathname === "/claims-lifecycle")', actionsStart);
+    const actionsRoute = src.slice(actionsStart, actionsEnd > actionsStart ? actionsEnd : actionsStart + 30000);
+    const cardStart = actionsRoute.indexOf('prior-auth-action-center-filter-card');
+    assert(cardStart >= 0, "missing prior-auth filter card");
+    const cardEnd = actionsRoute.indexOf('</form>', cardStart);
+    const filterCardSource = actionsRoute.slice(cardStart, cardEnd > cardStart ? cardEnd : cardStart + 5000);
+    [
+      'name="pa_payers"',
+      'tjhpPriorAuthComparedPayerControlHtml(priorAuthFilterModel)',
+      '<select name="pa_payer">',
+      'href="/actions?tab=prior-auth"',
+      'Compared payer filter: ${safeStr(priorAuthFilterModel.payer_filter_label)}',
+      'Showing ${formatNumberUI(priorAuthActionRows.length)} of ${formatNumberUI(priorAuthFilterModel.allRows.length)} prior-auth cases for compared payers:'
+    ].forEach(x => assertIncludes(actionsRoute, x, `Action Center route missing ${x}`));
+    assert(filterCardSource.indexOf('tjhpPriorAuthComparedPayerControlHtml(priorAuthFilterModel)') < filterCardSource.indexOf('<select name="pa_payer">'), "compared payer control branch should precede normal payer select fallback");
+    assert(filterCardSource.includes('priorAuthFilterModel.has_multi_payer_filter ? tjhpPriorAuthComparedPayerControlHtml(priorAuthFilterModel) :'), "multi-payer branch should render compared payer helper instead of normal payer select");
+
+    const comparedHtml = tjhpPriorAuthComparedPayerControlHtml({
+      has_multi_payer_filter:true,
+      payer_filter_label:"Aetna + Cigna",
+      payers:["Aetna", "Cigna"]
+    });
+    [
+      'data-pa-compared-payer-control="true"',
+      "Compared payers",
+      "Aetna + Cigna",
+      "From Deep Dive comparison",
+      "Reset to choose a different payer view"
+    ].forEach(x => assertIncludes(comparedHtml, x, `compared helper missing ${x}`));
+
+    const noComparedHtml = tjhpPriorAuthComparedPayerControlHtml({ has_multi_payer_filter:false, payer_filter_label:"Aetna" });
+    assert.strictEqual(noComparedHtml, "", "compared payer helper should be empty without multi-payer filter");
+
+    const snapshot = fs.existsSync(FILES.prior_auth_cases) ? fs.readFileSync(FILES.prior_auth_cases, "utf8") : "[]";
+    const fakeOrg = "__ri12_action_center_compared_payers__" + Date.now().toString(36);
+    try {
+      const baseRows = readJSON(FILES.prior_auth_cases, []).filter(x => x.org_id !== fakeOrg);
+      writeJSON(FILES.prior_auth_cases, baseRows.concat([
+        { auth_case_id:"ri12-aetna", org_id:fakeOrg, payer:"Aetna", patient_name:"Amy Aetna", status:"Denied", requested_service:"MRI", submitted_date:"2026-01-01", estimated_revenue_at_risk:1133, risk_level:"High" },
+        { auth_case_id:"ri12-cigna", org_id:fakeOrg, payer:"Cigna", patient_name:"Cal Cigna", status:"Pending", requested_service:"CT", submitted_date:"2026-01-02", estimated_revenue_at_risk:700, risk_level:"Medium" },
+        { auth_case_id:"ri12-uhc", org_id:fakeOrg, payer:"UnitedHealthcare", patient_name:"Uma United", status:"Denied", requested_service:"PT", submitted_date:"2026-01-03", estimated_revenue_at_risk:900, risk_level:"High" }
+      ]));
+
+      const multi = tjhpPriorAuthActionCenterFilterModel(fakeOrg, { pa_payers:"Aetna||Cigna", pa_sort:"priority" });
+      const multiPayers = new Set(multi.rows.map(row => row.payer));
+      assert(multiPayers.has("Aetna"), "multi-payer filter missing Aetna");
+      assert(multiPayers.has("Cigna"), "multi-payer filter missing Cigna");
+      assert(!multiPayers.has("UnitedHealthcare"), "multi-payer filter included UnitedHealthcare");
+      assert.strictEqual(multi.has_multi_payer_filter, true, "multi-payer flag missing");
+      assert(multi.payer_filter_label === "Aetna + Cigna" || (multi.payer_filter_label.includes("Aetna") && multi.payer_filter_label.includes("Cigna")), "multi-payer label missing compared payers");
+      assert.strictEqual(multi.payer, "all", "multi-payer filter should keep payer all internally");
+
+      const single = tjhpPriorAuthActionCenterFilterModel(fakeOrg, { pa_payer:"Aetna", pa_sort:"priority" });
+      assert(single.rows.length >= 1, "single-payer filter missing Aetna row");
+      assert(single.rows.every(row => row.payer === "Aetna"), "single-payer filter included non-Aetna rows");
+      assert.strictEqual(single.has_multi_payer_filter, false, "single-payer filter should not be multi");
+
+      const none = tjhpPriorAuthActionCenterFilterModel(fakeOrg, { tab:"prior-auth" });
+      assert.strictEqual(none.has_multi_payer_filter, false, "no-payer view should not be multi");
+    } finally {
+      fs.writeFileSync(FILES.prior_auth_cases, snapshot);
+    }
+
+    process.stdout.write("ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write("ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+    process.exit(1);
+  }
 }
 
 if (process.env.TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_PRIOR_AUTH_PAYER_UNIVERSE_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
