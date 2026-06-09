@@ -1855,6 +1855,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9B_RI10_FORECAST_BASELINE_AR90_LABEL_CONTROL_POLISH_OK
 // PHASE_9B_RI11_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_RISK_WORDING_OK
 // PHASE_9B_RI12_ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_OK
+// PHASE_9B_RI13_PAYER_HUB_PRIOR_AUTH_SIGNAL_WORK_ACTIONS_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
   const title = String(verdictTitle || "").toLowerCase();
@@ -37236,7 +37237,161 @@ function renderPayerRankingTable(ranks, opts={}){
 }
 
 
-function renderPayerHubTable(payerRanks, qStr=""){
+function tjhpRiPayerEntityKey(value = ""){
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tjhpRiPayerDisplayName(value = ""){
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function tjhpRiPriorAuthPayerName(row = {}){
+  return tjhpRiPayerDisplayName(row.payer || row.payer_name || row.insurance_payer || row.primary_payer || "");
+}
+
+function tjhpRevenueIntelligencePriorAuthPayerMatches(rowPayer = "", targetPayer = ""){
+  const a = tjhpRiPayerEntityKey(rowPayer);
+  const b = tjhpRiPayerEntityKey(targetPayer);
+  if (!a || !b) return false;
+  return a === b;
+}
+
+function tjhpRevenueIntelligencePriorAuthPayerSignal(org_id = "", payerName = ""){
+  const payer = String(payerName || "").trim();
+  const rows = getPriorAuthCases(org_id)
+    .map(normalizePriorAuthCase)
+    .filter(row => tjhpRevenueIntelligencePriorAuthPayerMatches(tjhpRiPriorAuthPayerName(row), payer));
+  const pendingStatuses = new Set(["Submitted", "Pending"]);
+  const intakeStatuses = new Set(["Auth Needed", "Draft"]);
+  const deniedPartialStatuses = new Set(["Denied", "Partially Approved", "Appeal Needed", "Missing Documentation", "Peer-to-Peer Needed"]);
+  const expiringStatuses = new Set(["Expiring Soon", "Expired"]);
+  const parseDateOnly = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return null;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  };
+  const today = new Date();
+  const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const ageDays = (value) => {
+    const d = parseDateOnly(value);
+    if (!d) return null;
+    return Math.floor((todayUtc.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+  };
+  const isStalePending = (row) => {
+    if (!pendingStatuses.has(String(row.status || ""))) return false;
+    const days = ageDays(row.submitted_date || row.updated_at || row.created_at);
+    return days != null && days >= 14;
+  };
+  const isAppealFollowUpDue = (row) => {
+    if (String(row.status || "") !== "Appeal Submitted") return false;
+    const d = parseDateOnly(row.appeal_follow_up_date);
+    return !!d && d.getTime() <= todayUtc.getTime();
+  };
+  const positiveRevenue = (row) => {
+    const n = Number(row.estimated_revenue_at_risk);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  const model = { payer, total_cases: rows.length, needs_action_count: 0, denied_partial_count: 0, pending_count: 0, stale_pending_count: 0, intake_count: 0, expiring_count: 0, appeal_follow_up_due_count: 0, known_revenue_at_risk: 0, not_determined_count: 0, top_case: null, top_next_action: "", has_cases: rows.length > 0, has_signal: false, action_href: `/actions?tab=prior-auth&pa_payer=${encodeURIComponent(payer)}&pa_sort=priority` };
+  const actionableRows = [];
+  rows.forEach((row, idx) => {
+    const status = String(row.status || "");
+    if (intakeStatuses.has(status)) model.intake_count += 1;
+    if (pendingStatuses.has(status)) model.pending_count += 1;
+    if (deniedPartialStatuses.has(status)) model.denied_partial_count += 1;
+    if (expiringStatuses.has(status)) model.expiring_count += 1;
+    const stalePending = isStalePending(row);
+    const appealDue = isAppealFollowUpDue(row);
+    if (stalePending) model.stale_pending_count += 1;
+    if (appealDue) model.appeal_follow_up_due_count += 1;
+    const revenue = positiveRevenue(row);
+    if (revenue > 0) model.known_revenue_at_risk += revenue;
+    else if (row.estimated_revenue_at_risk === 0 || row.estimated_revenue_at_risk === "" || row.estimated_revenue_at_risk == null) model.not_determined_count += 1;
+    const needsAction = intakeStatuses.has(status) || deniedPartialStatuses.has(status) || expiringStatuses.has(status) || stalePending || appealDue;
+    if (!needsAction) return;
+    actionableRows.push({ ...row, __idx: idx, __stalePending: stalePending, __appealDue: appealDue });
+  });
+  actionableRows.sort((a, b) => {
+    const riskRank = { High: 3, Medium: 2, Low: 1 };
+    const ar = riskRank[String(a.risk_level || "")] || 0;
+    const br = riskRank[String(b.risk_level || "")] || 0;
+    if (br !== ar) return br - ar;
+    const revDiff = positiveRevenue(b) - positiveRevenue(a);
+    if (revDiff !== 0) return revDiff;
+    const dateValue = (row) => {
+      const d = parseDateOnly(row.appeal_follow_up_date || row.expiration_date || row.submitted_date || row.scheduled_service_date || row.updated_at || row.created_at);
+      return d ? d.getTime() : Number.MAX_SAFE_INTEGER;
+    };
+    return dateValue(a) - dateValue(b);
+  });
+  model.needs_action_count = actionableRows.length;
+  model.top_case = actionableRows[0] || null;
+  model.top_next_action = model.top_case ? tjhpPriorAuthNextActionLabel(model.top_case) : "";
+  model.has_signal = model.total_cases > 0 || model.needs_action_count > 0 || model.denied_partial_count > 0 || model.stale_pending_count > 0 || model.expiring_count > 0 || model.appeal_follow_up_due_count > 0 || model.known_revenue_at_risk > 0 || model.not_determined_count > 0;
+  return model;
+}
+
+function tjhpPayerHubPriorAuthSignalDisplay(org_id = "", payerName = ""){
+  const payer = String(payerName || "").trim();
+  const empty = {
+    payer,
+    has_signal: false,
+    has_pa_work: false,
+    signal_label: "No PA signal",
+    risk_label: "—",
+    pa_work_href: "",
+    total_cases: 0,
+    known_revenue_at_risk: 0
+  };
+
+  if (!org_id || !payer) return empty;
+
+  const signal = tjhpRevenueIntelligencePriorAuthPayerSignal(org_id, payer);
+
+  const total = Number(signal.total_cases || 0);
+  const deniedPartial = Number(signal.denied_partial_count || 0);
+  const needsAction = Number(signal.needs_action_count || 0);
+  const knownRisk = Number(signal.known_revenue_at_risk || 0);
+
+  const hasSignal = total > 0 || !!signal.has_cases || !!signal.has_signal;
+  const hasPaWork = hasSignal && (
+    needsAction > 0 ||
+    deniedPartial > 0 ||
+    Number(signal.pending_count || 0) > 0 ||
+    Number(signal.stale_pending_count || 0) > 0 ||
+    Number(signal.expiring_count || 0) > 0 ||
+    Number(signal.appeal_follow_up_due_count || 0) > 0
+  );
+
+  let signalLabel = "No PA signal";
+  if (deniedPartial > 0) signalLabel = `${formatNumberUI(deniedPartial)} denied / partial`;
+  else if (needsAction > 0) signalLabel = `${formatNumberUI(needsAction)} active`;
+  else if (total > 0) signalLabel = `${formatNumberUI(total)} PA records`;
+
+  const riskLabel = knownRisk > 0
+    ? formatMoneyUI(knownRisk)
+    : (hasSignal ? "Not determined" : "—");
+
+  return {
+    ...signal,
+    payer,
+    has_signal: hasSignal,
+    has_pa_work: hasPaWork,
+    signal_label: signalLabel,
+    risk_label: riskLabel,
+    pa_work_href: signal.action_href || `/actions?tab=prior-auth&pa_payer=${encodeURIComponent(payer)}&pa_sort=priority`,
+    total_cases: total,
+    known_revenue_at_risk: knownRisk
+  };
+}
+
+function renderPayerHubTable(payerRanks, qStr="", org_id=""){
   const q = String(qStr || "").trim().toLowerCase();
   const rows = (payerRanks || []).filter(r=>{
     if (!q) return true;
@@ -37252,11 +37407,11 @@ function renderPayerHubTable(payerRanks, qStr=""){
             Search payers, view grades, and jump directly into AI Payer Intelligence.
           </div>
         </div>
-        <form method="GET" action="/revenue-intelligence" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+        <form method="GET" action="/revenue-intelligence" class="ri-payer-hub-controls">
           <input type="hidden" name="tab" value="payers"/>
-          <input name="q" value="${safeStr(qStr)}" placeholder="Search payer..." />
-          <button class="btn secondary" type="submit">Search</button>
           <button class="btn secondary small tjhp-no-print" type="button" onclick="return window.tjhpPrintRevenueIntelligence('Payer Intelligence Hub')">Print Payer Intelligence Hub</button>
+          <button class="btn secondary" type="submit">Search</button>
+          <input class="ri-payer-hub-search-input" name="q" value="${safeStr(qStr)}" placeholder="Search payer..." />
         </form>
       </div>
 
@@ -37266,11 +37421,18 @@ function renderPayerHubTable(payerRanks, qStr=""){
         <table>
           <thead>
             <tr>
-              <th>Payer</th><th>Grade</th><th>Score</th><th>Claims</th><th>Denial %</th><th>Appeal Recovery %</th><th>Avg Days</th><th>Collected</th><th>At Risk</th><th>Actions</th>
+              <th>Payer</th><th>Grade</th><th>Score</th><th>Claims</th><th>Denial %</th><th>Appeal Recovery %</th><th>Avg Days</th><th>Collected</th><th>Claim At Risk</th><th>PA Signal</th><th>PA Risk</th><th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            ${rows.length ? rows.map(r => `
+            ${rows.length ? rows.map(r => {
+              const pa = tjhpPayerHubPriorAuthSignalDisplay(org_id, r.payer);
+              const paSignalClass = pa.has_signal ? "ri-pa-signal-pill" : "ri-pa-signal-pill muted";
+              const paWorkHtml = pa.has_pa_work || pa.has_signal
+                ? `<a class="btn secondary small" href="${pa.pa_work_href}">PA Work</a>`
+                : `<span class="muted small">No PA work</span>`;
+
+              return `
                 <tr>
                   <td style="font-weight:800;"><a href="/analyze-payer?payer=${encodeURIComponent(r.payer)}">${safeStr(r.payer)}</a></td>
                   <td><span class="badge ${gradeBadgeClass(r.grade)}">${safeStr(r.grade)}</span></td>
@@ -37281,12 +37443,18 @@ function renderPayerHubTable(payerRanks, qStr=""){
                   <td>${formatNumberUI(Math.round(r.avgDaysToPay||0))}</td>
                   <td>${formatMoneyUI(r.totalCollected||0)}</td>
                   <td>${formatMoneyUI(r.totalAtRisk||0)}</td>
-                  <td style="white-space:nowrap;">
-                    <a class="btn small" href="/analyze-payer?payer=${encodeURIComponent(r.payer)}">Analyze</a>
-                    <a class="btn secondary small" href="/actions?payer=${encodeURIComponent(r.payer)}">Action Center</a>
+                  <td><span class="${paSignalClass}">${safeStr(pa.signal_label)}</span></td>
+                  <td>${safeStr(pa.risk_label)}</td>
+                  <td>
+                    <div class="ri-payer-hub-actions">
+                      <a class="btn small" href="/analyze-payer?payer=${encodeURIComponent(r.payer)}">Analyze</a>
+                      <a class="btn secondary small" href="/actions?payer=${encodeURIComponent(r.payer)}">Claim Work</a>
+                      ${paWorkHtml}
+                    </div>
                   </td>
                 </tr>
-              `).join("") : `<tr><td colspan="10" class="muted">No payers found.</td></tr>`}
+              `;
+            }).join("") : `<tr><td colspan="12" class="muted">No payers found.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -50062,7 +50230,7 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       ` : ``}
 
       <div class="${payerLocked ? "blur-lock" : ""}" style="${payerLocked ? "pointer-events:none; user-select:none;" : ""}">
-        ${renderPayerHubTable(payerRanks, q)}
+        ${renderPayerHubTable(payerRanks, q, org.org_id)}
       </div>
     </div>
   `;
@@ -50100,6 +50268,34 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       .ri-pa-signal-empty{
         color:#64748b;
         font-size:12px;
+      }
+      .ri-payer-hub-controls{
+        display:flex;
+        gap:8px;
+        align-items:center;
+        flex-wrap:wrap;
+        justify-content:flex-start;
+      }
+      .ri-payer-hub-search-input{
+        min-width:220px;
+        flex:1 1 240px;
+      }
+      .ri-payer-hub-actions{
+        display:flex;
+        gap:6px;
+        align-items:center;
+        flex-wrap:wrap;
+        white-space:nowrap;
+      }
+      .ri-pa-signal-pill{
+        display:inline-flex;
+        align-items:center;
+        border:1px solid var(--border);
+        border-radius:999px;
+        padding:3px 8px;
+        font-size:12px;
+        font-weight:800;
+        background:#f8fafc;
       }
       @media (max-width:760px){
         .ri-prior-auth-grid{
@@ -73665,11 +73861,11 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS === "true
     assert(!executiveSrc.includes("<h3>Exposure Breakdown</h3>"), "Executive Strategy must not show full exposure breakdown table");
     assert(!executiveSrc.includes("<th>Payer</th><th>At Risk</th><th>Denied</th><th>Underpaid</th>"), "Executive Strategy must not show exposure table headers");
 
-    const payerFnStart = src.indexOf('function renderPayerHubTable(payerRanks, qStr=""){');
+    const payerFnStart = src.indexOf('function renderPayerHubTable(payerRanks, qStr="", org_id=""){');
     const payerFnEnd = src.indexOf("function computePayerIntelligence", payerFnStart);
     assert(payerFnStart >= 0 && payerFnEnd > payerFnStart, "Payer Hub table function missing");
     const payerHubSrc = src.slice(payerFnStart, payerFnEnd);
-    ["Payer Intelligence Hub","Search payer...","Print Payer Intelligence Hub","Analyze","Action Center","<table"].forEach(x => assert(payerHubSrc.includes(x), "Payer Hub lost: " + x));
+    ["Payer Intelligence Hub","Search payer...","Print Payer Intelligence Hub","Analyze","Claim Work","<table"].forEach(x => assert(payerHubSrc.includes(x), "Payer Hub lost: " + x));
 
     const m1 = tjhpExecutiveDenialRowMonth({ denial_date: "2026-02-10", date_of_service: "2026-02-03", created_at: "2026-05-19T00:00:00.000Z", uploaded_at: "2026-05-19T00:00:00.000Z", imported_at: "2026-05-19T00:00:00.000Z" }, "claim");
     const m2 = tjhpExecutiveDenialRowMonth({ date_of_service: "2026-02-03", created_at: "2026-05-19T00:00:00.000Z", uploaded_at: "2026-05-19T00:00:00.000Z", imported_at: "2026-05-19T00:00:00.000Z" }, "claim");
@@ -73705,6 +73901,86 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS === "true
   } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
 }
 
+
+if (process.env.TJHP_REVENUE_INTELLIGENCE_PAYER_HUB_PRIOR_AUTH_SIGNAL_ACTIONS_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m||"assertion failed"); };
+    const assertIncludes = (haystack, needle) => assert(haystack.includes(needle), "missing " + needle);
+    const extractFunctionSourceForSmoke = (name) => {
+      const start = src.indexOf("function " + name + "(");
+      assert(start >= 0, "missing function " + name);
+      let depth = 0;
+      let seen = false;
+      for (let i = start; i < src.length; i++) {
+        const ch = src[i];
+        if (ch === "{") { depth += 1; seen = true; }
+        if (ch === "}") { depth -= 1; if (seen && depth === 0) return src.slice(start, i + 1); }
+      }
+      throw new Error("could not extract function " + name);
+    };
+    ["PHASE_9B_RI13_PAYER_HUB_PRIOR_AUTH_SIGNAL_WORK_ACTIONS_OK","function renderPayerHubTable(payerRanks, qStr=\"\", org_id=\"\")","tjhpPayerHubPriorAuthSignalDisplay","tjhpRevenueIntelligencePriorAuthPayerSignal(org_id, payer)","Print Payer Intelligence Hub","Search payer...","Claim At Risk","PA Signal","PA Risk","Claim Work","PA Work","No PA work","ri-payer-hub-controls","ri-payer-hub-search-input","ri-payer-hub-actions","ri-pa-signal-pill","renderPayerHubTable(payerRanks, q, org.org_id)"].forEach(x => assertIncludes(src, x));
+    const payerFnSrc = extractFunctionSourceForSmoke("renderPayerHubTable");
+    assert(payerFnSrc.indexOf("Print Payer Intelligence Hub") >= 0 && payerFnSrc.indexOf('type="submit">Search</button>') > payerFnSrc.indexOf("Print Payer Intelligence Hub"), "Print must appear before Search button");
+    assert(payerFnSrc.indexOf('placeholder="Search payer..."') > payerFnSrc.indexOf('type="submit">Search</button>'), "Search button must appear before Search payer input");
+    assert(payerFnSrc.indexOf("Claim At Risk") >= 0 && payerFnSrc.indexOf("PA Signal") > payerFnSrc.indexOf("Claim At Risk"), "Claim At Risk must appear before PA Signal");
+    assert(payerFnSrc.indexOf("PA Risk") > payerFnSrc.indexOf("PA Signal"), "PA Signal must appear before PA Risk");
+    assert(payerFnSrc.indexOf("Actions", payerFnSrc.indexOf("PA Risk")) > payerFnSrc.indexOf("PA Risk"), "PA Risk must appear before Actions");
+    assert(!payerFnSrc.includes("<th>At Risk</th>"), "Payer Hub At Risk header remains");
+    assert(!payerFnSrc.includes(">Action Center<"), "Payer Hub visible Action Center text remains");
+    assert(!/pa_payers/.test(payerFnSrc), "single payer PA Work must not use pa_payers");
+    assert(!/RelatedPriorAuth|related-family|relatedFamily|tjhpRiRelatedPriorAuthPayerMatches/.test(payerFnSrc), "Payer Hub must not use payer-family matching");
+    const paDisplayFn = extractFunctionSourceForSmoke("tjhpPayerHubPriorAuthSignalDisplay");
+    ["writeJSON","saveUsage","savePriorAuthCasesForOrg","upsertPriorAuthCase","appendAuditLog","ensureAgentWorkspace","saveAgentWorkspace","requestOpenAIChatCompletion","parseBody(req)","method === \\\"POST\\\"","fetchFHIRDocuments","scrapePortal","submitPacket","OCR"].forEach(x => assert(!paDisplayFn.includes(x), "tjhpPayerHubPriorAuthSignalDisplay contains " + x));
+    assert(!/RelatedPriorAuth|related-family|relatedFamily|tjhpRiRelatedPriorAuthPayerMatches/.test(paDisplayFn), "display helper must not use payer-family matching");
+    ["TJHP_DASHBOARD_UX30_TOP_WORK_PREVIEW_ALIGNMENT_SMOKE_TESTS","TJHP_DASHBOARD_UX29_TOP_WORK_USAGE_TRIAL_POLISH_SMOKE_TESTS","TJHP_DASHBOARD_UX28_WORK_CHART_PA_PREVIEW_POLISH_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE_TESTS","TJHP_ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_FORECAST_BASELINE_AR90_LABEL_CONTROL_POLISH_SMOKE_TESTS","TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS","TJHP_PAYMENT_MATCH_SMOKE_TESTS","renderClaimPanelBootstrap","window.openClaimPanel","renderPriorAuthActionCenterPanelBootstrap","window.openPriorAuthPanel"].forEach(x => assertIncludes(src, x));
+    const oldRows = readJSON(FILES.prior_auth_cases, []);
+    const tempOrg = "ri13-payer-hub-pa-smoke-" + Date.now();
+    const smokeRows = [
+      { auth_case_id:"ri13-bluecross-denied", org_id:tempOrg, payer:"BlueCross", status:"Denied", estimated_revenue_at_risk:1000, risk_level:"High", submitted_date:"2026-06-01" },
+      { auth_case_id:"ri13-bcbstx-partial-1", org_id:tempOrg, payer:"Blue Cross Blue Shield of Texas", status:"Partially Approved", estimated_revenue_at_risk:1000, risk_level:"High", submitted_date:"2026-06-01" },
+      { auth_case_id:"ri13-bcbstx-partial-2", org_id:tempOrg, payer:"Blue Cross Blue Shield of Texas", status:"Partially Approved", estimated_revenue_at_risk:2000, risk_level:"High", submitted_date:"2026-06-02" },
+      { auth_case_id:"ri13-cigna-pending", org_id:tempOrg, payer:"Cigna", status:"Pending", estimated_revenue_at_risk:500, risk_level:"Medium", submitted_date:"2026-06-03" }
+    ];
+    try {
+      writeJSON(FILES.prior_auth_cases, oldRows.concat(smokeRows));
+      const blueCross = tjhpPayerHubPriorAuthSignalDisplay(tempOrg, "BlueCross");
+      assert(blueCross.total_cases === 1, "BlueCross exact total_cases");
+      assert(blueCross.known_revenue_at_risk === 1000, "BlueCross exact risk");
+      assert(String(blueCross.risk_label || "").includes("$1,000.00"), "BlueCross risk label");
+      assert(!String(blueCross.payer || "").includes("Blue Cross Blue Shield of Texas"), "BlueCross includes BCBS Texas name");
+      const bcbsTx = tjhpPayerHubPriorAuthSignalDisplay(tempOrg, "Blue Cross Blue Shield of Texas");
+      assert(bcbsTx.total_cases === 2, "BCBS Texas exact total_cases");
+      assert(bcbsTx.known_revenue_at_risk === 3000, "BCBS Texas exact risk");
+      assert(!String(bcbsTx.payer || "").includes("BlueCross"), "BCBS Texas includes BlueCross name");
+      const aetna = tjhpPayerHubPriorAuthSignalDisplay(tempOrg, "Aetna");
+      assert(aetna.has_signal === false, "Aetna no signal");
+      assert(aetna.risk_label === "—", "Aetna no risk dash");
+      const fakeRanks = [
+        { payer:"BlueCross", grade:"B", score:82, totalClaims:4, denialRate:0.1, recoveryRate:0.5, avgDaysToPay:18, totalCollected:2000, totalAtRisk:150 },
+        { payer:"Blue Cross Blue Shield of Texas", grade:"C", score:72, totalClaims:5, denialRate:0.2, recoveryRate:0.4, avgDaysToPay:24, totalCollected:4000, totalAtRisk:300 },
+        { payer:"Cigna", grade:"A", score:90, totalClaims:6, denialRate:0.05, recoveryRate:0.7, avgDaysToPay:12, totalCollected:6000, totalAtRisk:0 },
+        { payer:"Aetna", grade:"B", score:80, totalClaims:3, denialRate:0, recoveryRate:0, avgDaysToPay:15, totalCollected:1000, totalAtRisk:50 }
+      ];
+      const hubHtml = renderPayerHubTable(fakeRanks, "", tempOrg);
+      ["Payer Intelligence Hub","Print Payer Intelligence Hub","Search","Search payer...","Claim At Risk","PA Signal","PA Risk","Analyze","Claim Work","PA Work","No PA work"].forEach(x => assert(hubHtml.includes(x), "render missing " + x));
+      assert(renderPayerHubTable([], "", tempOrg).includes('colspan="12"'), "empty state colspan is not 12");
+      assert(hubHtml.includes('/actions?tab=prior-auth&pa_payer=BlueCross&pa_sort=priority'), "BlueCross PA Work href missing");
+      assert(hubHtml.includes('/actions?payer=BlueCross'), "BlueCross Claim Work href missing");
+      const aetnaRowStart = hubHtml.indexOf('payer=Aetna');
+      const aetnaRowEnd = hubHtml.indexOf('</tr>', aetnaRowStart);
+      const aetnaRow = hubHtml.slice(aetnaRowStart, aetnaRowEnd);
+      assert(!aetnaRow.includes('>PA Work<'), "Aetna should not render PA Work button");
+      const searchHtml = renderPayerHubTable(fakeRanks, "cig", tempOrg);
+      assert(searchHtml.includes("Cigna"), "search should include Cigna");
+      assert(!searchHtml.includes("BlueCross"), "search should exclude BlueCross");
+      assert(searchHtml.includes('name="tab" value="payers"'), "hidden tab=payers missing");
+      assert(searchHtml.includes('value="cig"'), "qStr input not preserved");
+    } finally { writeJSON(FILES.prior_auth_cases, oldRows); }
+    process.stdout.write("REVENUE_INTELLIGENCE_PAYER_HUB_PRIOR_AUTH_SIGNAL_ACTIONS_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_PAYER_HUB_PRIOR_AUTH_SIGNAL_ACTIONS_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
 if (process.env.TJHP_REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try {
     const src = fs.readFileSync(__filename, "utf8");
@@ -73726,8 +74002,8 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_CONTEXTUAL_EXPORT_SMOKE_TESTS === "tru
     assert(!forecastFnSrc.includes("Export Executive PDF"), 'forecast no executive label');
     assert(forecastFnSrc.includes("tjhpPrintRevenueIntelligence"), 'forecast print helper');
     ["Forecast Engine","Forecast Confidence"].forEach(x=>assert(forecastFnSrc.includes(x),x));
-    const payerFnSrc = src.slice(src.indexOf("function renderPayerHubTable(payerRanks, qStr=\"\"){"), src.indexOf("function computePayerIntelligence"));
-    ["Print Payer Intelligence Hub","Search payer...","Analyze","Action Center"].forEach(x=>assert(payerFnSrc.includes(x),x));
+    const payerFnSrc = src.slice(src.indexOf("function renderPayerHubTable(payerRanks, qStr=\"\", org_id=\"\"){"), src.indexOf("function computePayerIntelligence"));
+    ["Print Payer Intelligence Hub","Search payer...","Analyze","Claim Work"].forEach(x=>assert(payerFnSrc.includes(x),x));
     assert(!payerFnSrc.includes("Export Executive PDF"), 'payer no executive label');
     const ddStart = src.indexOf("function renderDeepDiveTab(org, payerRanks, m, deepDiveB64, p1, p2){");
     const ddEnd = src.indexOf("function renderRevenueAIConsole");
