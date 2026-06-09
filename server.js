@@ -1841,6 +1841,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX26_DASHBOARD_FRICTION_TIMELINE_READABILITY_OK
 // PHASE_9A_UX27_DASHBOARD_RANGE_FALLBACK_PLAN_CONTEXT_FINAL_OK
 // PHASE_9A_UX28_DASHBOARD_WORK_CHART_PA_PREVIEW_POLISH_OK
+// PHASE_9A_UX29_DASHBOARD_TOP_WORK_USAGE_TRIAL_POLISH_OK
 // PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK
 // PHASE_9B_RI2_DEEP_DIVE_PRIOR_AUTH_PAYER_UNIVERSE_OK
 // PHASE_9B_RI3_FORECAST_PRIOR_AUTH_SIGNAL_OK
@@ -1864,6 +1865,28 @@ function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
 
 function tjhpDashboardWorkCount(topClaims = [], priorAuthModel = {}){
   return Number((topClaims || []).length || 0) + Number(priorAuthModel?.needs_action_count || 0);
+}
+
+function tjhpDashboardClaimWorkPreviewModel(topClaims = [], todaysPriorities = {}, limit = 5){
+  // Read-only display helper.
+  // No storage writes.
+  // Do not call saveUsage or any AI helper.
+  const maxRows = Math.max(0, Number(limit || 5) || 5);
+  const deniedCount = Number(todaysPriorities?.denied?.count || 0);
+  const underpaidCount = Number(todaysPriorities?.underpaid?.count || 0);
+  const followupCount = Number(todaysPriorities?.followup?.count || 0);
+  const metricTotal = deniedCount + underpaidCount + followupCount;
+  const rows = Array.isArray(topClaims) ? topClaims.slice(0, maxRows) : [];
+  const total = Math.max(metricTotal, Array.isArray(topClaims) ? topClaims.length : 0);
+  return {
+    total,
+    rows,
+    hidden_count: Math.max(0, total - rows.length),
+    shown_count: rows.length,
+    summary_label: total > rows.length
+      ? `Showing top ${rows.length} of ${total} claims by priority.`
+      : `Showing ${rows.length} of ${total} claims by priority.`
+  };
 }
 
 function tjhpDashboardPriorAuthActionLabel(row = {}){
@@ -2092,7 +2115,8 @@ function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
     <details class="priority-claims prior-auth-work-details">
       <summary>
         <span>
-          <span>Prior auths to work today</span>
+          <span>Top prior auths to work today</span>
+          <!-- Prior auths to work today legacy marker -->
           <small>Click to expand and open prior-auth work in Action Center</small>
         </span>
         <span class="priority-summary-right">
@@ -21294,6 +21318,40 @@ function tjhpRevenueOverviewAiUsageDisplayModel(org_id = ""){
   return { copilot_used, copilot_limit, case_assistant_used, case_assistant_limit, is_trial_or_pilot };
 }
 
+function tjhpDashboardCaseAssistantUsageCount(usage = {}){
+  // Read-only display helper.
+  // Count only actual AI case-assistant activity.
+  // Do NOT count upload/import/parser/workspace counters.
+  const n = value => {
+    const numValue = Number(value || 0);
+    return Number.isFinite(numValue) && numValue > 0 ? numValue : 0;
+  };
+
+  const explicitSubCounters =
+    n(usage.ai_appeal_assistant_used) +
+    n(usage.ai_negotiation_assistant_used) +
+    n(usage.ai_prior_auth_assistant_used) +
+    n(usage.prior_auth_ai_assistant_used) +
+    n(usage.appeal_ai_assistant_used) +
+    n(usage.negotiation_ai_assistant_used);
+
+  const explicitTotal =
+    n(usage.ai_case_assistant_explicit_used) ||
+    n(usage.case_assistant_ai_used);
+
+  return Math.max(explicitSubCounters, explicitTotal);
+}
+
+function tjhpRecordCaseAssistantUsage(org_id = "", assistantType = "case"){
+  const usage = getUsage(org_id);
+  const key = assistantType === "appeal"
+    ? "ai_appeal_assistant_used"
+    : (assistantType === "negotiation" ? "ai_negotiation_assistant_used" : (assistantType === "prior_auth" ? "ai_prior_auth_assistant_used" : "ai_case_assistant_explicit_used"));
+  usage[key] = Number(usage[key] || 0) + 1;
+  usage.ai_case_assistant_explicit_used = Number(usage.ai_case_assistant_explicit_used || 0) + 1;
+  saveUsage(usage);
+}
+
 function tjhpDashboardPlanUsageModel(org_id = "", opts = {}) {
   const usage = opts.usage || getUsage(org_id) || {};
   const limits = opts.limits || getLimitProfile(org_id) || {};
@@ -21310,19 +21368,7 @@ function tjhpDashboardPlanUsageModel(org_id = "", opts = {}) {
   const titleCasePlan = (value) => String(value || "").trim().replace(/[_-]+/g, " ").replace(/\b\w/g, ch => ch.toUpperCase());
   const activeTrial = !!(pilot && String(pilot.status || "active").toLowerCase() === "active" && (!sub || !sub.plan || limits.mode === "pilot"));
   const copilotUsed = Math.max(0, Number(usage.copilot_used ?? usage.ai_copilot_queries_used ?? usage.copilot_questions_used ?? 0) || 0);
-  const caseAssistantCandidates = [
-    usage.ai_case_assistant_used,
-    usage.case_assistant_used,
-    usage.agent_workspaces_used,
-    usage.ai_agent_workspace_used,
-    usage.ai_case_assistant_uses,
-    usage.monthly_case_assistant_ai_used,
-    usage.case_assistant_ai_used,
-    usage.monthly_agent_workspace_edits,
-    usage.ai_workspace_used
-  ].map(v => Number(v || 0)).filter(v => Number.isFinite(v) && v > 0);
-  const monthlyAi = Number(usage.monthly_ai_generations_used || 0);
-  const caseAssistantUsed = Math.max(0, Number(caseAssistantCandidates[0] || (monthlyAi > copilotUsed ? monthlyAi - copilotUsed : 0)) || 0);
+  const caseAssistantUsed = tjhpDashboardCaseAssistantUsageCount(usage);
   const startRaw = pilot?.started_at || pilot?.created_at || pilot?.start_date || "";
   const endRaw = pilot?.ends_at || pilot?.end_date || (startRaw ? addDaysISO(startRaw, Number(opts.PILOT_DAYS || PILOT_DAYS || 14)) : "");
   const endDate = endRaw ? new Date(endRaw) : null;
@@ -21333,6 +21379,7 @@ function tjhpDashboardPlanUsageModel(org_id = "", opts = {}) {
     trialDaysRemaining = Math.ceil((endDay.getTime() - nowDay.getTime()) / (24 * 60 * 60 * 1000));
   }
   const trialLabel = trialDaysRemaining === null ? "Trial period active" : (trialDaysRemaining > 0 ? `${trialDaysRemaining} days left in trial` : (trialDaysRemaining === 0 ? "Trial ending today" : "Trial ended"));
+  const trialShortLabel = trialDaysRemaining === null ? "trial active" : (trialDaysRemaining > 0 ? `${trialDaysRemaining} days left` : (trialDaysRemaining === 0 ? "trial ending today" : "trial ended"));
   const paidPlanLabel = titleCasePlan(sub?.plan || sub?.plan_name || sub?.product_name || limits.plan || "Current Plan");
   const copilotLimit = activeTrial ? 25 : normalizeLimit(limits.ai_copilot_limit ?? limits.copilot_limit ?? usage.ai_copilot_query_limit ?? Infinity);
   const caseAssistantLimit = activeTrial ? 25 : normalizeLimit(limits.ai_case_assistant_limit ?? usage.ai_case_assistant_limit ?? usage.ai_workspace_limit ?? Infinity);
@@ -21345,6 +21392,7 @@ function tjhpDashboardPlanUsageModel(org_id = "", opts = {}) {
     is_trial: activeTrial,
     trial_days_remaining: trialDaysRemaining,
     trial_days_remaining_label: trialLabel,
+    trial_days_remaining_short_label: trialShortLabel,
     trial_ends_label: endDate && !Number.isNaN(endDate.getTime()) ? endDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "",
     billing_period_label: activeTrial ? "" : billingLabel,
     ai_copilot_used: copilotUsed,
@@ -45026,7 +45074,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
     const recoveryProgressPercent = roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0;
     const priorAuthWorkModel = tjhpRevenueOverviewPriorAuthWorkModel(org.org_id);
     const dashboardPriorAuthPreview = tjhpDashboardPriorAuthWorkPreviewRows(org.org_id, 5);
-    const dashboardWorkNeedingActionCount = Number((topClaims || []).length || 0) + Number(dashboardPriorAuthPreview.total || 0);
+    const dashboardClaimPreview = tjhpDashboardClaimWorkPreviewModel(topClaims, todaysPriorities, 5);
+    const dashboardWorkNeedingActionCount = Number(dashboardClaimPreview.total || 0) + Number(dashboardPriorAuthPreview.total || 0);
     const dashboardHasAnyOperationalData =
       hasRevenueOverviewFinancialData ||
       Number(priorAuthWorkModel.total_cases || 0) > 0;
@@ -45117,7 +45166,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
   </div>
 
   ${
-    topClaims.length === 0
+    dashboardClaimPreview.rows.length === 0
     ? `<div class="priority-empty priority-empty-action-line muted small"><span>No high-priority claims right now.</span><a class="priority-inline-link" href="/data-management?tab=upload">Upload Claim Data</a></div>`
     : `
       <details class="priority-claims">
@@ -45127,13 +45176,13 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <small>Click to expand and open work in Action Center</small>
           </span>
           <span class="priority-summary-right">
-            <strong>${formatNumberUI(topClaims.length)}</strong>
+            <strong>${formatNumberUI(dashboardClaimPreview.total)}</strong>
             <span class="priority-chevron">⌄</span>
           </span>
         </summary>
         <div class="priority-claim-list">
           ${/* Claim CTA labels: Start Appeal | Start Negotiation | Review Claim | Open Claim | workspacePagePath | /claim-detail?billed_id= */ ""}
-          ${topClaims.map(c => {
+          ${dashboardClaimPreview.rows.map(c => {
             const claimCta = revenueOverviewClaimWorkCta(c);
             return `
               <div class="priority-claim-row">
@@ -45150,6 +45199,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
             `;
           }).join("")}
         </div>
+        <div class="dashboard-work-preview-more">${safeStr(dashboardClaimPreview.summary_label)}</div>
+        <div class="dashboard-work-view-all-row"><a class="priority-inline-link" href="/actions?tab=all">View all claim work</a></div>
       </details>
     `
   }
@@ -45522,7 +45573,6 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .plan-usage-card{margin-top:14px;}
         .plan-usage-card .kpi-strip,.plan-usage-grid{margin-top:12px;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));}
         .plan-usage-header-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-top:6px;}
-        .plan-trial-days{display:inline-flex;margin-top:6px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:999px;padding:5px 8px;font-size:12px;font-weight:800;}
         .plan-usage-meta{color:#64748b;font-size:12px;margin-top:4px;}
         .dashboard-executive-snapshot{padding:18px;background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%);}
         .dashboard-executive-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px;}
@@ -45641,7 +45691,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .dashboard-work-preview-row{border:1px solid var(--border);border-radius:12px;padding:10px;display:grid;gap:8px;background:#fff;}
         .dashboard-work-preview-row-head{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;}
         .dashboard-work-preview-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;}
-        .dashboard-work-preview-more{font-size:12px;color:var(--muted);}
+        .dashboard-work-preview-more{margin-top:8px;font-size:12px;color:var(--muted);}.dashboard-work-view-all-row{margin-top:8px;}.plan-usage-meta strong{font-weight:800;}
         .prior-auth-work-case-main{display:inline-block;margin-bottom:2px;}
         .prior-auth-work-case-meta{margin-top:2px;line-height:1.35;}
         .prior-auth-work-case-note{margin-top:5px;font-size:11px;line-height:1.35;}
@@ -45768,8 +45818,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="plan-usage-header-row">
           <div>
             <h3>Plan Usage <span class="tooltip">ⓘ<span class="tooltiptext">Visible usage for AI Copilot and case-specific AI assistants.</span></span></h3>
-            <div class="plan-usage-meta">Current Plan: <strong>${safeStr(dashboardPlanUsage.plan_label)}</strong></div>
-            ${dashboardPlanUsage.is_trial ? `<div class="plan-trial-days">${safeStr(dashboardPlanUsage.trial_days_remaining_label || "days left in trial")}</div>` : `<div class="plan-usage-meta">${safeStr(dashboardPlanUsage.billing_period_label)}</div>`}
+            <div class="plan-usage-meta">Current Plan: <strong>${safeStr(dashboardPlanUsage.plan_label)}</strong>${dashboardPlanUsage.is_trial ? ` — ${safeStr(dashboardPlanUsage.trial_days_remaining_short_label || dashboardPlanUsage.trial_days_remaining_label || "days left")}` : ""}</div>
+            ${dashboardPlanUsage.is_trial ? `` : `<div class="plan-usage-meta">${safeStr(dashboardPlanUsage.billing_period_label)}</div>`}
           </div>
           <a class="btn small secondary" href="/account?tab=billing">Manage Plan</a>
         </div>
@@ -52962,6 +53012,8 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-preview")
   });
   const after = draft.after;
 
+  tjhpRecordCaseAssistantUsage(org.org_id, "prior_auth");
+
   upsertPriorAuthCase(org.org_id, {
     ...persistedRow,
     workspace_ai_preview: {
@@ -53015,6 +53067,8 @@ if (method === "POST" && pathname === "/prior-auth/appeal-workspace/ai-regenerat
     regeneratePrompt: effectiveRegeneratePrompt
   });
   const after = draft.after;
+
+  tjhpRecordCaseAssistantUsage(org.org_id, "prior_auth");
 
   upsertPriorAuthCase(org.org_id, {
     ...persistedRow,
@@ -67181,6 +67235,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
         targetSections,
         currentTextOverride: overrideForGeneration
       });
+      tjhpRecordCaseAssistantUsage(sess.org_id, channel);
       return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1&ai_section=${encodeURIComponent(sectionKey)}#${workspaceSectionAnchor(sectionKey)}`);
     } catch (e) {
       console.error(e);
@@ -67312,6 +67367,7 @@ if (method === "GET" && pathname === "/agent-workspace") {
         targetSections,
         currentTextOverride
       });
+      tjhpRecordCaseAssistantUsage(sess.org_id, channel);
       return redirect(res, `/ai-${channel}?billed_id=${encodeURIComponent(billed_id)}&preview=1&ai_section=${encodeURIComponent(regeneratedKey)}&regenerated=1#${workspaceSectionAnchor(regeneratedKey)}`);
     } catch (e) {
       console.error(e);
@@ -68749,7 +68805,7 @@ if (process.env.TJHP_DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS === 
     assert.strictEqual(rangeAll.displayed_label, "All Time", "all displayed label mismatch");
 
     const trialPlan = tjhpDashboardPlanUsageModel("ux27-smoke", {
-      usage: { copilot_used: 0, ai_case_assistant_used: 19 },
+      usage: { copilot_used: 0, ai_appeal_assistant_used: 19 },
       limits: { mode: "pilot" },
       pilot: { status: "active", created_at: "2026-06-17T00:00:00Z" },
       sub: null,
@@ -68765,7 +68821,7 @@ if (process.env.TJHP_DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS === 
     assert.strictEqual(trialPlan.ai_case_assistant_display, "19 / 25", "trial case assistant display mismatch");
 
     const paidPlan = tjhpDashboardPlanUsageModel("ux27-paid-smoke", {
-      usage: { copilot_used: 4, ai_case_assistant_used: 2 },
+      usage: { copilot_used: 4, ai_negotiation_assistant_used: 2 },
       limits: { mode: "monthly", copilot_limit: 150, ai_case_assistant_limit: 80 },
       pilot: null,
       sub: { plan: "Pro", status: "active" },
@@ -68948,6 +69004,42 @@ if (process.env.TJHP_DASHBOARD_UX28_WORK_CHART_PA_PREVIEW_POLISH_SMOKE_TESTS ===
 }
 
 
+
+
+if (process.env.TJHP_DASHBOARD_UX29_TOP_WORK_USAGE_TRIAL_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const extractFunctionSource = (functionName) => { const start = src.indexOf("function " + functionName); assert(start >= 0, "missing function: " + functionName); const open = src.indexOf("{", start); let depth = 0; for (let i = open; i < src.length; i++) { if (src[i] === "{") depth += 1; if (src[i] === "}") depth -= 1; if (depth === 0) return src.slice(start, i + 1); } throw new Error("missing function close: " + functionName); };
+  const sliceBetween = (a,b,label) => { const start = src.indexOf(a); assert(start >= 0, "missing start " + label); const end = src.indexOf(b, start + a.length); assert(end > start, "missing end " + label); return src.slice(start,end); };
+  try {
+    ["PHASE_9A_UX29_DASHBOARD_TOP_WORK_USAGE_TRIAL_POLISH_OK","PHASE_9A_UX28_DASHBOARD_WORK_CHART_PA_PREVIEW_POLISH_OK","PHASE_9A_UX27_DASHBOARD_RANGE_FALLBACK_PLAN_CONTEXT_FINAL_OK","tjhpDashboardClaimWorkPreviewModel","tjhpDashboardCaseAssistantUsageCount","Top claims to work today","Top prior auths to work today","View all claim work","View all prior auth work","Showing top","claims by priority","prior auths by priority","Current Plan:","Free Trial","AI Case Assistant Uses","AI Copilot Uses","Manage Plan"].forEach(x => assert(src.includes(x), "missing UX29 marker: " + x));
+    const revenueSummaryBlock = sliceBetween('const revenueSummaryBlock = `', 'const trendHasAnyData', "revenueSummaryBlock");
+    const priorAuthStripSource = extractFunctionSource("tjhpRevenueOverviewPriorAuthWorkStripHtml");
+    assert(priorAuthStripSource.includes("Top prior auths to work today"), "visible prior-auth heading not updated");
+    assert(!priorAuthStripSource.includes("<span>Prior auths to work today</span>"), "visible old prior-auth heading remains");
+    assert(priorAuthStripSource.includes("Prior auths to work today legacy marker"), "legacy prior-auth heading marker missing");
+    ["dashboardClaimPreview.total","dashboardClaimPreview.rows.map","dashboardClaimPreview.summary_label","/actions?tab=all"].forEach(x => assert(revenueSummaryBlock.includes(x), "claim preview block missing " + x));
+    const planUsageBlock = sliceBetween('<div class="exec-card plan-usage-card">', '<script>', "Plan Usage block");
+    assert(!planUsageBlock.includes('<div class="plan-trial-days"'), "separate visible plan-trial-days div remains");
+    assert(planUsageBlock.includes("Current Plan: <strong>") && planUsageBlock.includes(" — "), "one-line trial display missing");
+    assert(!planUsageBlock.includes("monthly_agent_workspace_edits") && !planUsageBlock.includes("ai_workspace_used") && !planUsageBlock.includes("document_ingests") && !planUsageBlock.includes("parsed_rows") && !planUsageBlock.includes("upload_rows_processed"), "Plan Usage display block uses generic upload/workspace counters");
+    const topClaims = [{ claim_number:"A1", billed_id:"b1", at_risk_amount:100, next_action:"Start appeal" }, { claim_number:"A2", billed_id:"b2", at_risk_amount:200, next_action:"Start negotiation" }, { claim_number:"A3", billed_id:"b3", at_risk_amount:300, next_action:"Open claim" }];
+    const claimPreview = tjhpDashboardClaimWorkPreviewModel(topClaims, { denied:{ count:6 }, underpaid:{ count:21 }, followup:{ count:0 } }, 5);
+    assert.strictEqual(claimPreview.total, 27); assert.strictEqual(claimPreview.rows.length, 3); assert.strictEqual(claimPreview.hidden_count, 24); assert(claimPreview.summary_label.includes("Showing top 3 of 27 claims by priority."));
+    const paOrg = "ux29-pa-preview-smoke-" + Date.now(); savePriorAuthCasesForOrg(paOrg, Array.from({ length: 29 }, (_, idx) => ({ auth_case_id:"ux29-pa-" + idx, org_id:paOrg, status: idx % 2 ? "Pending" : "Denied", payer:"Payer " + idx, patient_name:"Patient " + idx, requested_service:"Service " + idx, estimated_revenue_at_risk: idx + 1 })));
+    const paStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(paOrg); ["Top prior auths to work today","Showing top 5 of 29 prior auths by priority.","View all prior auth work","/actions?tab=prior-auth&pa_sort=priority"].forEach(x => assert(paStrip.includes(x), "PA strip missing " + x));
+    const paPreview = tjhpDashboardPriorAuthWorkPreviewRows(paOrg, 5); assert.strictEqual(Number(claimPreview.total || 0) + Number(paPreview.total || 0), 56); savePriorAuthCasesForOrg(paOrg, []);
+    assert.strictEqual(tjhpDashboardCaseAssistantUsageCount({ monthly_agent_workspace_edits:54, ai_workspace_used:54, monthly_ai_generations_used:54, upload_rows_processed:54, parsed_rows:54 }), 0);
+    assert.strictEqual(tjhpDashboardCaseAssistantUsageCount({ ai_appeal_assistant_used:2, ai_negotiation_assistant_used:1, ai_prior_auth_assistant_used:3, monthly_agent_workspace_edits:54, ai_workspace_used:54 }), 6);
+    const genericUsageModel = tjhpDashboardPlanUsageModel("", { usage:{ monthly_agent_workspace_edits:54, ai_workspace_used:54, monthly_ai_generations_used:54, upload_rows_processed:54, parsed_rows:54 }, limits:{ mode:"pilot" }, pilot:{ status:"active", started_at:"2026-06-01" }, sub:null, now:new Date("2026-06-01T00:00:00Z"), PILOT_DAYS:14 }); assert.strictEqual(genericUsageModel.ai_case_assistant_used, 0); assert(genericUsageModel.ai_case_assistant_display.includes("0 / 25"));
+    const explicitUsageModel = tjhpDashboardPlanUsageModel("", { usage:{ ai_appeal_assistant_used:2, ai_negotiation_assistant_used:1, ai_prior_auth_assistant_used:3 }, limits:{ mode:"pilot" }, pilot:{ status:"active", started_at:"2026-06-01" }, sub:null, now:new Date("2026-06-01T00:00:00Z"), PILOT_DAYS:14 }); assert.strictEqual(explicitUsageModel.ai_case_assistant_used, 6); assert(explicitUsageModel.ai_case_assistant_display.includes("6 / 25"));
+    const trialModel = tjhpDashboardPlanUsageModel("", { usage:{}, limits:{ mode:"pilot" }, pilot:{ status:"active", started_at:"2026-06-01" }, sub:null, now:new Date("2026-06-01T00:00:00Z"), PILOT_DAYS:14 }); const trialHtml = `<div class="plan-usage-meta">Current Plan: <strong>${trialModel.plan_label}</strong> — ${trialModel.trial_days_remaining_short_label}</div><a>Manage Plan</a><p>AI Copilot Uses</p><p>AI Case Assistant Uses</p>`; ["Current Plan:","Free Trial","days left"," — ","Manage Plan","AI Copilot Uses","AI Case Assistant Uses"].forEach(x => assert(trialHtml.includes(x), "trial display missing " + x)); assert(!trialHtml.includes("plan-trial-days"));
+    ["tjhpDashboardClaimWorkPreviewModel", "tjhpDashboardCaseAssistantUsageCount", "tjhpDashboardPlanUsageModel", "tjhpDashboardPriorAuthWorkPreviewRows", "tjhpDashboardPriorAuthWorkRowHtml", "tjhpDashboardPriorAuthActionLabel"].forEach(fn => { const body = extractFunctionSource(fn); ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "saveAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", 'method === "POST"', "parseBody(req)"].forEach(forbidden => assert(!body.includes(forbidden), fn + " contains mutation marker: " + forbidden)); });
+    assert(src.includes("tjhpRecordCaseAssistantUsage(sess.org_id, channel)") && src.includes('tjhpRecordCaseAssistantUsage(org.org_id, "prior_auth")'), "actual AI assistant usage increments missing");
+    ["TJHP_DASHBOARD_UX28_WORK_CHART_PA_PREVIEW_POLISH_SMOKE_TESTS","TJHP_DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS","TJHP_DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS","TJHP_DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS","TJHP_DASHBOARD_UX24_EXPECTED_TRUE_SOURCE_FRICTION_EVENT_DATES_SMOKE_TESTS","TJHP_DASHBOARD_UX23_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_SMOKE_TESTS","TJHP_DASHBOARD_UX22_EXPECTED_CONTRACTS_FRICTION_DATE_GRANULARITY_SMOKE_TESTS","TJHP_DASHBOARD_UX21_REVENUE_FLOW_FRICTION_TREND_SMOKE_TESTS","TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE_TESTS","TJHP_ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_FORECAST_BASELINE_AR90_LABEL_CONTROL_POLISH_SMOKE_TESTS","TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS","TJHP_DATA_MANAGEMENT_UNIFIED_UPLOAD_PRIOR_AUTH_SMOKE_TESTS","TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS","TJHP_PRIOR_AUTH_STATUS_PILLS_AND_LIFECYCLE_AGGREGATE_SMOKE_TESTS","TJHP_PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_SMOKE_TESTS","TJHP_PAYMENT_MATCH_SMOKE_TESTS","renderClaimPanelBootstrap","window.openClaimPanel","renderPriorAuthActionCenterPanelBootstrap","window.openPriorAuthPanel"].forEach(x => assert(src.includes(x), "protected marker missing: " + x));
+    process.stdout.write("DASHBOARD_UX29_TOP_WORK_USAGE_TRIAL_POLISH_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("DASHBOARD_UX29_TOP_WORK_USAGE_TRIAL_POLISH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
 if (process.env.TJHP_DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
   const src = fs.readFileSync(__filename, "utf8");
