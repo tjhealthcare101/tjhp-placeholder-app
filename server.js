@@ -1842,6 +1842,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX27_DASHBOARD_RANGE_FALLBACK_PLAN_CONTEXT_FINAL_OK
 // PHASE_9A_UX28_DASHBOARD_WORK_CHART_PA_PREVIEW_POLISH_OK
 // PHASE_9A_UX29_DASHBOARD_TOP_WORK_USAGE_TRIAL_POLISH_OK
+// PHASE_9A_UX30_DASHBOARD_TOP_WORK_PREVIEW_ALIGNMENT_OK
 // PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK
 // PHASE_9B_RI2_DEEP_DIVE_PRIOR_AUTH_PAYER_UNIVERSE_OK
 // PHASE_9B_RI3_FORECAST_PRIOR_AUTH_SIGNAL_OK
@@ -2126,9 +2127,11 @@ function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
       </summary>
       <div class="priority-claim-list dashboard-work-preview-list">
         ${knownRiskLine}
-        <div class="dashboard-work-preview-more">${safeStr(showingText)}</div>
+        <div class="dashboard-work-preview-more dashboard-work-preview-summary">${safeStr(showingText)}</div>
         ${preview.rows.map(row => tjhpDashboardPriorAuthWorkRowHtml(row)).join("")}
-        <div class="dashboard-work-preview-more"><a class="priority-inline-link" href="${primaryHref}">View all prior auth work</a></div>
+        <div class="dashboard-work-view-all-row">
+          <a class="priority-inline-link dashboard-work-view-all-link" href="${primaryHref}">View all prior auth work</a>
+        </div>
         ${disclaimer}
         <!-- Denied / Partial legacy marker -->
       </div>
@@ -45008,7 +45011,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       </div>
     ` : "";
     const dashboardCtx = buildClaimContext(org.org_id);
-    const topClaims = getTopClaimsForOrg(org.org_id, 3);
+    const topClaims = getTopClaimsForOrg(org.org_id, 5);
     const todaysPriorities = dashboardClaims.reduce((acc, b) => {
 
       let simpleStage = "Unknown";
@@ -45180,7 +45183,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
             <span class="priority-chevron">⌄</span>
           </span>
         </summary>
-        <div class="priority-claim-list">
+        <div class="priority-claim-list dashboard-work-preview-list dashboard-claim-work-preview-list">
+          <div class="dashboard-work-preview-more dashboard-work-preview-summary">${safeStr(dashboardClaimPreview.summary_label)}</div>
           ${/* Claim CTA labels: Start Appeal | Start Negotiation | Review Claim | Open Claim | workspacePagePath | /claim-detail?billed_id= */ ""}
           ${dashboardClaimPreview.rows.map(c => {
             const claimCta = revenueOverviewClaimWorkCta(c);
@@ -45198,9 +45202,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
               </div>
             `;
           }).join("")}
+          <div class="dashboard-work-view-all-row">
+            <a class="priority-inline-link dashboard-work-view-all-link" href="/actions?tab=all">View all claim work</a>
+          </div>
         </div>
-        <div class="dashboard-work-preview-more">${safeStr(dashboardClaimPreview.summary_label)}</div>
-        <div class="dashboard-work-view-all-row"><a class="priority-inline-link" href="/actions?tab=all">View all claim work</a></div>
       </details>
     `
   }
@@ -45691,7 +45696,29 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .dashboard-work-preview-row{border:1px solid var(--border);border-radius:12px;padding:10px;display:grid;gap:8px;background:#fff;}
         .dashboard-work-preview-row-head{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;}
         .dashboard-work-preview-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;}
-        .dashboard-work-preview-more{margin-top:8px;font-size:12px;color:var(--muted);}.dashboard-work-view-all-row{margin-top:8px;}.plan-usage-meta strong{font-weight:800;}
+        .dashboard-work-preview-more{
+          margin-top:8px;
+          font-size:12px;
+          color:var(--muted);
+        }
+        .dashboard-work-preview-summary{
+          margin-top:0;
+          margin-bottom:2px;
+        }
+        .dashboard-work-view-all-row{
+          margin-top:8px;
+        }
+        .dashboard-work-view-all-link{
+          display:inline-flex;
+          align-items:center;
+          min-height:28px;
+          font-size:13px;
+          font-weight:800;
+          line-height:1.2;
+        }
+        .plan-usage-meta strong{
+          font-weight:800;
+        }
         .prior-auth-work-case-main{display:inline-block;margin-bottom:2px;}
         .prior-auth-work-case-meta{margin-top:2px;line-height:1.35;}
         .prior-auth-work-case-note{margin-top:5px;font-size:11px;line-height:1.35;}
@@ -69006,6 +69033,41 @@ if (process.env.TJHP_DASHBOARD_UX28_WORK_CHART_PA_PREVIEW_POLISH_SMOKE_TESTS ===
 
 
 
+if (process.env.TJHP_DASHBOARD_UX30_TOP_WORK_PREVIEW_ALIGNMENT_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const extractFunctionSource = (functionName) => { const start = src.indexOf("function " + functionName); assert(start >= 0, "missing function: " + functionName); const open = src.indexOf("{", start); let depth = 0; for (let i = open; i < src.length; i++) { if (src[i] === "{") depth += 1; if (src[i] === "}") depth -= 1; if (depth === 0) return src.slice(start, i + 1); } throw new Error("missing function close: " + functionName); };
+  const sliceBetween = (a,b,label) => { const start = src.indexOf(a); assert(start >= 0, "missing start " + label); const end = src.indexOf(b, start + a.length); assert(end > start, "missing end " + label); return src.slice(start,end); };
+  try {
+    ["PHASE_9A_UX30_DASHBOARD_TOP_WORK_PREVIEW_ALIGNMENT_OK", "PHASE_9A_UX29_DASHBOARD_TOP_WORK_USAGE_TRIAL_POLISH_OK", "PHASE_9A_UX28_DASHBOARD_WORK_CHART_PA_PREVIEW_POLISH_OK", "const topClaims = getTopClaimsForOrg(org.org_id, 5)", "tjhpDashboardClaimWorkPreviewModel(topClaims, todaysPriorities, 5)", "Top claims to work today", "Top prior auths to work today", "View all claim work", "View all prior auth work", "dashboard-work-view-all-link", "dashboard-work-view-all-row", "dashboard-work-preview-summary", "dashboardClaimPreview.summary_label", "dashboardClaimPreview.rows.map", "Showing top"].forEach(marker => assert(src.includes(marker), "missing UX30 marker: " + marker));
+    assert(!src.includes("const topClaims = getTopClaimsForOrg(org.org_id, " + "3)"), "dashboard still fetches only 3 top claims");
+    const revenueSummaryBlock = sliceBetween('const revenueSummaryBlock = `', 'const trendHasAnyData', "revenueSummaryBlock");
+    const claimDetailsBlock = sliceBetween("Top claims to work today", "<!-- Prior auth -->", "claim details block");
+    const claimListIdx = claimDetailsBlock.indexOf('<div class="priority-claim-list');
+    const claimSummaryIdx = claimDetailsBlock.indexOf("dashboardClaimPreview.summary_label");
+    const claimRowsIdx = claimDetailsBlock.indexOf("dashboardClaimPreview.rows.map");
+    const claimViewAllIdx = claimDetailsBlock.indexOf("View all claim work");
+    assert(claimListIdx >= 0, "claim preview list missing"); assert(claimSummaryIdx > claimListIdx, "claim summary must be inside claim preview list"); assert(claimSummaryIdx < claimRowsIdx, "claim summary appears after claim rows"); assert(claimViewAllIdx > claimRowsIdx, "claim view-all must appear after claim rows");
+    assert(revenueSummaryBlock.includes('class="priority-inline-link dashboard-work-view-all-link" href="/actions?tab=all"'), "claim view-all shared link class missing"); assert(revenueSummaryBlock.includes('class="dashboard-work-view-all-row"'), "claim view-all row wrapper missing");
+    const priorAuthStripSource = extractFunctionSource("tjhpRevenueOverviewPriorAuthWorkStripHtml");
+    const showingIdx = priorAuthStripSource.indexOf("showingText"); const priorRowsIdx = priorAuthStripSource.indexOf("preview.rows.map"); const priorViewAllIdx = priorAuthStripSource.indexOf("View all prior auth work");
+    assert(showingIdx >= 0 && showingIdx < priorRowsIdx, "prior-auth summary must appear before rows"); assert(priorViewAllIdx > priorRowsIdx, "prior-auth view-all must appear after rows");
+    assert(priorAuthStripSource.includes('class="dashboard-work-view-all-row"'), "prior-auth view-all row wrapper missing"); assert(priorAuthStripSource.includes('class="priority-inline-link dashboard-work-view-all-link" href="${primaryHref}"'), "prior-auth shared link class missing"); assert(!priorAuthStripSource.includes('<div class="dashboard-work-preview-more"><a class="priority-inline-link" href="${primaryHref}">View all prior auth work</a></div>'), "prior-auth view-all still uses preview-more-only wrapper");
+    const fakeTopClaims = Array.from({ length: 6 }, (_, idx) => ({ claim_number: String(3001 + idx), billed_id: "b" + (idx + 1), at_risk_amount: 100 + idx, next_action: idx === 0 ? "Appeal" : (idx === 1 ? "Start negotiation" : (idx === 2 ? "Review Claim" : "Open Claim")) }));
+    const claimPreview = tjhpDashboardClaimWorkPreviewModel(fakeTopClaims, { denied:{ count:6 }, underpaid:{ count:21 }, followup:{ count:0 } }, 5);
+    assert.strictEqual(claimPreview.total, 27); assert.strictEqual(claimPreview.rows.length, 5); assert.strictEqual(claimPreview.hidden_count, 22); assert(claimPreview.summary_label.includes("Showing top 5 of 27 claims by priority."), "claim summary text did not reflect top 5 of 27");
+    const sampleClaimBlock = `<details class="priority-claims"><summary><span><span>Top claims to work today</span></span></summary><div class="priority-claim-list dashboard-work-preview-list dashboard-claim-work-preview-list"><div class="dashboard-work-preview-more dashboard-work-preview-summary">${safeStr(claimPreview.summary_label)}</div>${claimPreview.rows.map((c, idx) => `<div class="priority-claim-row"><strong>#${safeStr(c.claim_number)}</strong><a class="btn small">${idx === 0 ? "Start Appeal" : (idx === 1 ? "Start Negotiation" : (idx === 2 ? "Review Claim" : "Open Claim"))}</a></div>`).join("")}<div class="dashboard-work-view-all-row"><a class="priority-inline-link dashboard-work-view-all-link" href="/actions?tab=all">View all claim work</a></div></div></details>`;
+    assert(sampleClaimBlock.includes("Top claims to work today"), "claim render missing heading"); assert(sampleClaimBlock.includes("Showing top 5 of 27 claims by priority."), "claim render missing top 5 summary"); assert((sampleClaimBlock.match(/priority-claim-row/g) || []).length >= 5, "claim render missing five rows"); assert(sampleClaimBlock.indexOf("Showing top 5") < sampleClaimBlock.indexOf("priority-claim-row"), "claim render summary must be before first row"); assert(sampleClaimBlock.indexOf("View all claim work") > sampleClaimBlock.lastIndexOf("priority-claim-row"), "claim view-all must be after rows"); assert(sampleClaimBlock.includes('href="/actions?tab=all"'), "claim view-all href changed"); ["Start Appeal", "Start Negotiation", "Review Claim", "Open Claim"].forEach(label => assert(sampleClaimBlock.includes(label), "claim action missing: " + label));
+    const paOrg = "ux30-pa-preview-smoke-" + Date.now();
+    savePriorAuthCasesForOrg(paOrg, Array.from({ length: 7 }, (_, idx) => ({ auth_case_id:"ux30-pa-" + idx, org_id:paOrg, status: idx === 0 ? "Denied" : (idx === 1 ? "Partially Approved" : "Pending"), payer:"Payer " + idx, patient_name:"Patient " + idx, requested_service:"Service " + idx, estimated_revenue_at_risk: idx + 1 })));
+    const paStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(paOrg);
+    assert(paStrip.includes("Top prior auths to work today"), "prior-auth render missing heading"); assert(paStrip.includes("Showing top 5 of 7 prior auths by priority."), "prior-auth render missing summary"); assert(paStrip.indexOf("Showing top 5 of 7") < paStrip.indexOf('data-prior-auth-preview-row="true"'), "prior-auth summary must appear before first row"); assert(paStrip.indexOf("View all prior auth work") > paStrip.lastIndexOf('data-prior-auth-preview-row="true"'), "prior-auth view-all must appear after rows"); assert(paStrip.includes('/actions?tab=prior-auth&pa_sort=priority'), "prior-auth view-all href changed"); assert(paStrip.includes('class="dashboard-work-view-all-row"'), "prior-auth render missing view-all row wrapper"); assert(paStrip.includes('class="priority-inline-link dashboard-work-view-all-link"'), "prior-auth render missing view-all link class"); savePriorAuthCasesForOrg(paOrg, []);
+    ["tjhpDashboardClaimWorkPreviewModel", "tjhpDashboardPriorAuthWorkPreviewRows", "tjhpDashboardPriorAuthWorkRowHtml", "tjhpRevenueOverviewPriorAuthWorkStripHtml"].forEach(fn => { const body = extractFunctionSource(fn); ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "saveAgentWorkspace", "requestOpenAIChatCompletion", "parseBody(req)", 'method === "POST"'].forEach(forbidden => assert(!body.includes(forbidden), fn + " contains mutation marker: " + forbidden)); });
+    ["TJHP_DASHBOARD_UX29_TOP_WORK_USAGE_TRIAL_POLISH_SMOKE_TESTS", "TJHP_DASHBOARD_UX28_WORK_CHART_PA_PREVIEW_POLISH_SMOKE_TESTS", "TJHP_DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS", "TJHP_DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS", "TJHP_DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS", "TJHP_DASHBOARD_UX24_EXPECTED_TRUE_SOURCE_FRICTION_EVENT_DATES_SMOKE_TESTS", "TJHP_DASHBOARD_UX23_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_SMOKE_TESTS", "TJHP_DASHBOARD_UX22_EXPECTED_CONTRACTS_FRICTION_DATE_GRANULARITY_SMOKE_TESTS", "TJHP_DASHBOARD_UX21_REVENUE_FLOW_FRICTION_TREND_SMOKE_TESTS", "TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS", "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE_TESTS", "TJHP_ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_SMOKE_TESTS", "TJHP_REVENUE_INTELLIGENCE_FORECAST_BASELINE_AR90_LABEL_CONTROL_POLISH_SMOKE_TESTS", "TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS", "TJHP_PAYMENT_MATCH_SMOKE_TESTS", "renderClaimPanelBootstrap", "window.openClaimPanel", "renderPriorAuthActionCenterPanelBootstrap", "window.openPriorAuthPanel"].forEach(marker => assert(src.includes(marker), "protected marker missing: " + marker));
+    process.stdout.write("DASHBOARD_UX30_TOP_WORK_PREVIEW_ALIGNMENT_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("DASHBOARD_UX30_TOP_WORK_PREVIEW_ALIGNMENT_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
 if (process.env.TJHP_DASHBOARD_UX29_TOP_WORK_USAGE_TRIAL_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   const assert = require("assert");
   const src = fs.readFileSync(__filename, "utf8");
@@ -69023,9 +69085,9 @@ if (process.env.TJHP_DASHBOARD_UX29_TOP_WORK_USAGE_TRIAL_POLISH_SMOKE_TESTS === 
     assert(!planUsageBlock.includes('<div class="plan-trial-days"'), "separate visible plan-trial-days div remains");
     assert(planUsageBlock.includes("Current Plan: <strong>") && planUsageBlock.includes(" — "), "one-line trial display missing");
     assert(!planUsageBlock.includes("monthly_agent_workspace_edits") && !planUsageBlock.includes("ai_workspace_used") && !planUsageBlock.includes("document_ingests") && !planUsageBlock.includes("parsed_rows") && !planUsageBlock.includes("upload_rows_processed"), "Plan Usage display block uses generic upload/workspace counters");
-    const topClaims = [{ claim_number:"A1", billed_id:"b1", at_risk_amount:100, next_action:"Start appeal" }, { claim_number:"A2", billed_id:"b2", at_risk_amount:200, next_action:"Start negotiation" }, { claim_number:"A3", billed_id:"b3", at_risk_amount:300, next_action:"Open claim" }];
+    const topClaims = Array.from({ length: 6 }, (_, idx) => ({ claim_number:"A" + (idx + 1), billed_id:"b" + (idx + 1), at_risk_amount:100 + idx, next_action: idx % 3 === 0 ? "Start appeal" : (idx % 3 === 1 ? "Start negotiation" : "Open claim") }));
     const claimPreview = tjhpDashboardClaimWorkPreviewModel(topClaims, { denied:{ count:6 }, underpaid:{ count:21 }, followup:{ count:0 } }, 5);
-    assert.strictEqual(claimPreview.total, 27); assert.strictEqual(claimPreview.rows.length, 3); assert.strictEqual(claimPreview.hidden_count, 24); assert(claimPreview.summary_label.includes("Showing top 3 of 27 claims by priority."));
+    assert.strictEqual(claimPreview.total, 27); assert.strictEqual(claimPreview.rows.length, 5); assert.strictEqual(claimPreview.hidden_count, 22); assert(claimPreview.summary_label.includes("Showing top 5 of 27 claims by priority."));
     const paOrg = "ux29-pa-preview-smoke-" + Date.now(); savePriorAuthCasesForOrg(paOrg, Array.from({ length: 29 }, (_, idx) => ({ auth_case_id:"ux29-pa-" + idx, org_id:paOrg, status: idx % 2 ? "Pending" : "Denied", payer:"Payer " + idx, patient_name:"Patient " + idx, requested_service:"Service " + idx, estimated_revenue_at_risk: idx + 1 })));
     const paStrip = tjhpRevenueOverviewPriorAuthWorkStripHtml(paOrg); ["Top prior auths to work today","Showing top 5 of 29 prior auths by priority.","View all prior auth work","/actions?tab=prior-auth&pa_sort=priority"].forEach(x => assert(paStrip.includes(x), "PA strip missing " + x));
     const paPreview = tjhpDashboardPriorAuthWorkPreviewRows(paOrg, 5); assert.strictEqual(Number(claimPreview.total || 0) + Number(paPreview.total || 0), 56); savePriorAuthCasesForOrg(paOrg, []);
