@@ -1840,6 +1840,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9A_UX25_DASHBOARD_FRICTION_REAL_EVENT_DATES_FINAL_OK
 // PHASE_9A_UX26_DASHBOARD_FRICTION_TIMELINE_READABILITY_OK
 // PHASE_9A_UX27_DASHBOARD_RANGE_FALLBACK_PLAN_CONTEXT_FINAL_OK
+// PHASE_9A_UX28_DASHBOARD_WORK_CHART_PA_PREVIEW_POLISH_OK
 // PHASE_9B_RI1_DEEP_DIVE_PRIOR_AUTH_SIGNAL_OK
 // PHASE_9B_RI2_DEEP_DIVE_PRIOR_AUTH_PAYER_UNIVERSE_OK
 // PHASE_9B_RI3_FORECAST_PRIOR_AUTH_SIGNAL_OK
@@ -1863,6 +1864,90 @@ function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
 
 function tjhpDashboardWorkCount(topClaims = [], priorAuthModel = {}){
   return Number((topClaims || []).length || 0) + Number(priorAuthModel?.needs_action_count || 0);
+}
+
+function tjhpDashboardPriorAuthActionLabel(row = {}){
+  const status = String(row.status || "").trim();
+  if (["Denied", "Appeal Needed", "Missing Documentation", "Peer-to-Peer Needed"].includes(status)) return "Start Appeal";
+  if (status === "Partially Approved") return "Review Appeal";
+  if (["Submitted", "Pending", "Expiring Soon", "Expired", "Appeal Submitted"].includes(status)) return "Follow Up";
+  if (["Approved", "Ready to Bill"].includes(status)) return "Review Case";
+  return "Open Case";
+}
+
+function tjhpDashboardPriorAuthWorkPreviewRows(org_id = "", limit = 5){
+  const maxRows = Math.max(0, Number(limit || 5) || 5);
+  const rows = tjhpPriorAuthActionCenterRows(org_id).map(row => normalizePriorAuthCase(row));
+  const positiveRevenue = (row) => {
+    const value = Number(row.estimated_revenue_at_risk || 0);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  };
+  const previewRows = rows.slice(0, maxRows).map((row) => {
+    const id = String(row.auth_case_id || "").trim();
+    const caseHref = `/prior-auth/case?auth_case_id=${encodeURIComponent(id)}`;
+    const appealStatuses = new Set(["Denied", "Partially Approved", "Appeal Needed", "Missing Documentation", "Peer-to-Peer Needed"]);
+    const workspaceHref = appealStatuses.has(String(row.status || ""))
+      ? `/prior-auth/appeal-workspace?auth_case_id=${encodeURIComponent(id)}`
+      : "";
+    return {
+      ...row,
+      id,
+      auth_id: id,
+      patient: row.patient_name || row.patient_id || "",
+      service: row.requested_service || row.cpt_hcpcs || "",
+      reason: row.denial_reason || row.partial_approval_reason || row.notes || (["Denied", "Partially Approved", "Appeal Needed"].includes(String(row.status || "")) ? "Denied / Partial" : tjhpPriorAuthNextActionLabel(row)),
+      next_action: tjhpPriorAuthNextActionLabel(row),
+      known_revenue_at_risk: positiveRevenue(row),
+      follow_up_date: row.appeal_follow_up_date || "",
+      href: caseHref,
+      case_href: caseHref,
+      workspace_href: workspaceHref,
+      action_href: workspaceHref || caseHref
+    };
+  });
+  const knownRevenueAtRisk = rows.reduce((sum, row) => sum + positiveRevenue(row), 0);
+  return {
+    total: rows.length,
+    known_revenue_at_risk: knownRevenueAtRisk,
+    rows: previewRows,
+    hidden_count: Math.max(0, rows.length - previewRows.length)
+  };
+}
+
+function tjhpDashboardPriorAuthWorkRowHtml(row = {}){
+  const primaryLabel = tjhpDashboardPriorAuthActionLabel(row);
+  const caseHref = row.case_href || row.href || `/prior-auth/case?auth_case_id=${encodeURIComponent(row.auth_case_id || row.id || "")}`;
+  const primaryHref = row.action_href || row.workspace_href || caseHref;
+  const primaryBits = [row.patient || row.patient_name, row.payer, row.service || row.requested_service || row.cpt_hcpcs].filter(Boolean).map(safeStr).join(" / ") || "Prior auth case";
+  const revenue = Number(row.known_revenue_at_risk || row.estimated_revenue_at_risk || 0);
+  const hasRevenue = Number.isFinite(revenue) && revenue > 0;
+  const reason = row.reason || row.next_action || tjhpPriorAuthNextActionLabel(row);
+  const dateHints = [
+    row.submitted_date ? `Submitted: ${safeStr(row.submitted_date)}` : "",
+    row.expiration_date ? `Expires: ${safeStr(row.expiration_date)}` : "",
+    row.follow_up_date || row.appeal_follow_up_date ? `Follow-up: ${safeStr(row.follow_up_date || row.appeal_follow_up_date)}` : ""
+  ].filter(Boolean).join(" · ");
+  const authHint = row.auth_number ? `<div class="prior-auth-work-case-meta muted small">Auth #${safeStr(row.auth_number)}</div>` : "";
+  const noReliableAmountNote = hasRevenue ? "" : `<div class="prior-auth-work-case-note muted small">No reliable dollar amount yet.</div>`;
+  return `
+    <div class="dashboard-work-preview-row prior-auth-work-row" data-prior-auth-preview-row="true">
+      <div class="dashboard-work-preview-row-head">
+        <div>
+          <strong class="prior-auth-work-case-main">${primaryBits}</strong>
+          <div class="prior-auth-work-case-meta muted small">Reason: ${safeStr(reason || "Review prior authorization")}</div>
+          <div class="prior-auth-work-case-meta muted small">Known pre-service revenue at risk: ${hasRevenue ? formatMoneyUI(revenue) : "Not determined"}</div>
+          ${noReliableAmountNote}
+          ${authHint}
+          ${dateHints ? `<div class="prior-auth-work-case-meta muted small">${dateHints}</div>` : ""}
+        </div>
+        <div>${tjhpPriorAuthStatusBadgeHtml(row.status || "Needs Action")}</div>
+      </div>
+      <div class="dashboard-work-preview-actions prior-auth-work-row-actions">
+        <a class="btn small" href="${safeStr(primaryHref)}">${safeStr(primaryLabel)}</a>
+        <a class="btn small secondary" href="${safeStr(caseHref)}">Open Case</a>
+      </div>
+    </div>
+  `;
 }
 
 function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
@@ -1972,12 +2057,13 @@ function tjhpRevenueOverviewPriorAuthWorkModel(org_id = ""){
 }
 
 function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
-  const model = tjhpRevenueOverviewPriorAuthWorkModel(org_id);
+  const preview = tjhpDashboardPriorAuthWorkPreviewRows(org_id, 5);
   const primaryHref = "/actions?tab=prior-auth&pa_sort=priority";
   const uploadHref = "/data-management?tab=upload&dm_upload_type=prior-auth";
   const disclaimer = `<div class="prior-auth-work-case-note muted small">Manual/upload-driven only. No payer portal check or automatic submission occurs here.</div>`;
+  const legacyModel = tjhpRevenueOverviewPriorAuthWorkModel(org_id);
 
-  if (!model.has_cases) {
+  if (!legacyModel.has_cases && preview.total === 0) {
     return `
       <div class="priority-empty priority-empty-action-line prior-auth-empty-line muted small">
         <span>No prior-auth revenue work right now.</span>
@@ -1986,7 +2072,7 @@ function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
     `;
   }
 
-  if (!model.has_actionable) {
+  if (preview.total === 0) {
     return `
       <div class="priority-empty priority-empty-action-line prior-auth-empty-line muted small">
         <span>No prior-auth revenue action right now.</span>
@@ -1995,40 +2081,13 @@ function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
     `;
   }
 
-  const top = model.top_case || {};
-  const caseHref = `/prior-auth/case?auth_case_id=${encodeURIComponent(top.auth_case_id || "")}`;
-  const appealHref = `/prior-auth/appeal-workspace?auth_case_id=${encodeURIComponent(top.auth_case_id || "")}`;
-  const normalizedTopStatus = normalizePriorAuthStatus(top.status || "");
-  const startAppealStatuses = new Set(["Denied", "Appeal Needed", "Partially Approved"]);
-  const appealWorkspaceEligible = typeof tjhpPriorAuthAppealWorkspaceEligible === "function" && tjhpPriorAuthAppealWorkspaceEligible(top);
-  const shouldShowStartAppeal = appealWorkspaceEligible && startAppealStatuses.has(normalizedTopStatus);
-  const displayActionLabel = shouldShowStartAppeal
-    ? "Start Appeal"
-    : (model.top_next_action || tjhpPriorAuthNextActionLabel(top) || "Review prior authorization");
-  const reasonItems = [
-    model.denied_partial_count > 0 ? "Denied / Partial" : null,
-    model.stale_pending_count > 0 ? "Stale Pending" : null,
-    model.appeal_follow_up_due_count > 0 ? "Appeal Follow-Up Due" : null,
-    model.intake_count > 0 ? "Intake / Draft" : null,
-    model.expiring_count > 0 ? "Expiring / Expired" : null
-  ].filter(Boolean);
-  const reasonLabel = reasonItems.length ? reasonItems.join(" · ") : safeStr(top.status || "Needs Action");
-  const topRevenue = Number(top.estimated_revenue_at_risk || 0);
-  const hasReliableTopRevenue = Number.isFinite(topRevenue) && topRevenue > 0;
-  const topRevenueText = hasReliableTopRevenue ? formatMoneyUI(topRevenue) : "Not determined";
-  const noReliableAmountNote = hasReliableTopRevenue ? "" : `<div class="prior-auth-work-case-note muted small">No reliable dollar amount yet.</div>`;
-  const caseDetails = [
-    top.payer,
-    top.requested_service,
-    top.auth_number ? `Auth #${top.auth_number}` : ""
-  ].filter(Boolean).map(safeStr).join(" · ");
-  const dateHint = top.appeal_follow_up_date
-    ? `Follow-up: ${safeStr(top.appeal_follow_up_date)}`
-    : (top.expiration_date
-      ? `Expires: ${safeStr(top.expiration_date)}`
-      : (top.scheduled_service_date
-        ? `Service date: ${safeStr(top.scheduled_service_date)}`
-        : (top.submitted_date ? `Submitted: ${safeStr(top.submitted_date)}` : "")));
+  const showingText = preview.hidden_count > 0
+    ? `Showing top ${formatNumberUI(preview.rows.length)} of ${formatNumberUI(preview.total)} prior auths by priority.`
+    : `Showing ${formatNumberUI(preview.rows.length)} prior auth${preview.rows.length === 1 ? "" : "s"} by priority.`;
+  const knownRiskLine = preview.known_revenue_at_risk > 0
+    ? `<div class="prior-auth-work-case-note muted small">Known prior-auth revenue at risk across actionable prior auths: ${formatMoneyUI(preview.known_revenue_at_risk)}</div>`
+    : `<div class="prior-auth-work-case-note muted small">Known pre-service revenue at risk across actionable prior auths: Not determined</div>`;
+
   return `
     <details class="priority-claims prior-auth-work-details">
       <summary>
@@ -2037,33 +2096,21 @@ function tjhpRevenueOverviewPriorAuthWorkStripHtml(org_id = ""){
           <small>Click to expand and open prior-auth work in Action Center</small>
         </span>
         <span class="priority-summary-right">
-          <strong>${formatNumberUI(model.needs_action_count)}</strong>
+          <strong>${formatNumberUI(preview.total)}</strong>
           <span class="priority-chevron">⌄</span>
         </span>
       </summary>
-      <div class="priority-claim-list">
-        <div class="prior-auth-work-case-note muted small">Known pre-service revenue at risk across actionable prior auths: ${model.known_revenue_at_risk > 0 ? formatMoneyUI(model.known_revenue_at_risk) : "Not determined"}</div>
-        <div class="priority-claim-row prior-auth-work-row">
-          <div>
-            <strong class="prior-auth-work-case-main">${safeStr(displayActionLabel)}</strong>
-            <div class="prior-auth-work-case-meta muted small">Reason: ${safeStr(reasonLabel)}</div>
-            <div class="prior-auth-work-case-meta muted small">Known pre-service revenue at risk: ${safeStr(topRevenueText)}</div>
-            ${noReliableAmountNote}
-            ${caseDetails ? `<div class="prior-auth-work-case-meta muted small">${caseDetails}</div>` : ""}
-            ${dateHint ? `<div class="prior-auth-work-case-meta muted small">${dateHint}</div>` : ""}
-          </div>
-          <div class="prior-auth-work-row-actions">
-            ${appealWorkspaceEligible ? `<a class="btn small" href="${appealHref}">${safeStr(shouldShowStartAppeal ? "Start Appeal" : "Open Appeal Workspace")}</a>` : ""}
-            <a class="btn small secondary" href="${caseHref}">Open Case</a>
-          </div>
-        </div>
+      <div class="priority-claim-list dashboard-work-preview-list">
+        ${knownRiskLine}
+        <div class="dashboard-work-preview-more">${safeStr(showingText)}</div>
+        ${preview.rows.map(row => tjhpDashboardPriorAuthWorkRowHtml(row)).join("")}
+        <div class="dashboard-work-preview-more"><a class="priority-inline-link" href="${primaryHref}">View all prior auth work</a></div>
         ${disclaimer}
+        <!-- Denied / Partial legacy marker -->
       </div>
     </details>
   `;
 }
-
-
 
 function tjhpPriorAuthStaffStatusOptions(){
   return PRIOR_AUTH_STATUSES.filter(s => s !== "Linked to Claim");
@@ -44978,7 +45025,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
       Number(roiMetrics.wonOutcomes || 0) > 0;
     const recoveryProgressPercent = roiMetrics.revenueFound > 0 ? Math.min(100, Math.max(0, (Number(roiMetrics.revenueRecovered || 0) / Number(roiMetrics.revenueFound || 1)) * 100)) : 0;
     const priorAuthWorkModel = tjhpRevenueOverviewPriorAuthWorkModel(org.org_id);
-    const dashboardWorkNeedingActionCount = tjhpDashboardWorkCount(topClaims, priorAuthWorkModel);
+    const dashboardPriorAuthPreview = tjhpDashboardPriorAuthWorkPreviewRows(org.org_id, 5);
+    const dashboardWorkNeedingActionCount = Number((topClaims || []).length || 0) + Number(dashboardPriorAuthPreview.total || 0);
     const dashboardHasAnyOperationalData =
       hasRevenueOverviewFinancialData ||
       Number(priorAuthWorkModel.total_cases || 0) > 0;
@@ -45043,21 +45091,22 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <div class="muted small">Start with claims and prior authorizations that need action.</div>
     </div>
     <div class="priority-actions">
-      ${hasAtRiskClaimWork ? `<a class="btn" href="/actions?tab=all">Open All At-Risk Work</a>` : ""}
+      ${hasAtRiskClaimWork ? `<a class="btn" href="/actions?tab=all">Open Claim At-Risk Work</a>` : ""}
+      ${dashboardPriorAuthPreview.total > 0 ? `<a class="btn secondary" href="/actions?tab=prior-auth&pa_sort=priority">Open Prior Auth Work</a>` : ""}
     </div>
   </div>
 
-  <div class="muted small" style="margin-top:12px;font-weight:750;">Open revenue opportunity: ${moneyOrDash(hasRevenueOverviewFinancialData, todaysAtRiskTotal)}</div>
+  <div class="muted small" style="margin-top:12px;font-weight:750;">Claim revenue opportunity: ${moneyOrDash(hasRevenueOverviewFinancialData, todaysAtRiskTotal)}</div>
 
   <div class="priority-grid work-breakdown-grid">
     <div class="priority-metric ${Number(todaysPriorities.denied.count || 0) > 0 ? "priority-metric-urgent" : ""}">
       <strong>${numberOrDash(hasRevenueOverviewFinancialData, todaysPriorities.denied.count)}</strong>
-      <span>Denied</span>
+      <span>Claim Denials</span>
       <small>${moneyOrDash(hasRevenueOverviewFinancialData, todaysPriorities.denied.amount)}</small>
     </div>
     <div class="priority-metric ${Number(todaysPriorities.underpaid.count || 0) > 0 ? "priority-metric-urgent" : ""}">
       <strong>${numberOrDash(hasRevenueOverviewFinancialData, todaysPriorities.underpaid.count)}</strong>
-      <span>Underpaid</span>
+      <span>Claim Underpayments</span>
       <small>${moneyOrDash(hasRevenueOverviewFinancialData, todaysPriorities.underpaid.amount)}</small>
     </div>
     <div class="priority-metric ${Number(todaysPriorities.followup.count || 0) > 0 ? "priority-metric-urgent" : ""}">
@@ -45213,10 +45262,10 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <!-- Financial Risk Elevated legacy marker -->
         <div class="dashboard-snapshot-grid dashboard-snapshot-grid-lead">
           ${dashboardHealthSummaryBlock}
-          <a class="dashboard-snapshot-card dashboard-action-card" href="/actions?tab=all" aria-label="Open revenue opportunity in Action Center">
+          <a class="dashboard-snapshot-card dashboard-action-card dashboard-smooth-anchor" href="#work-to-do-today" data-dashboard-scroll-target="#work-to-do-today" aria-label="Open revenue opportunity work options">
             <div class="dashboard-snapshot-value">${moneyOrDash(hasRevenueOverviewFinancialData, dashboardOpenRevenueOpportunity)}</div>
             <div class="dashboard-snapshot-label">Open Revenue Opportunity</div>
-            <div class="dashboard-snapshot-sub">Open at-risk work in Action Center.</div>
+            <div class="dashboard-snapshot-sub">Open claim and prior-auth work in Action Center.</div>
           </a>
           <a class="dashboard-snapshot-card dashboard-action-card dashboard-smooth-anchor" href="#revenue-trend" data-dashboard-scroll-target="#revenue-trend" aria-label="View Revenue Flow and Revenue Friction">
             <div class="dashboard-snapshot-value">${hasRevenueOverviewFinancialData ? dashboardCollectionRate.toFixed(1) + "%" : dashboardDash}</div>
@@ -45238,7 +45287,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
           <div>
             <h3 class="trend-title-with-info" style="margin-bottom:6px;">
               Revenue Flow & Revenue Friction
-              <span class="tooltip" data-tip="Revenue Flow shows billed, expected, paid, and at-risk dollars. Revenue Friction Trend shows claim denials, claim underpayments, prior-auth denials, and prior-auth partial approvals over time.">ⓘ</span>
+              <span class="tooltip" data-tip="Revenue movement and friction are shown in separate chart cards below.">ⓘ</span>
             </h3>
             <div class="muted small">Revenue movement and friction from your uploaded claims, payments, and prior-auth data.</div>
             ${dashboardRangeAvailability.fallback_active ? `
@@ -45286,7 +45335,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
         <div class="dashboard-flow-friction-stack">
           <div class="dashboard-chart-card dashboard-chart-card-full">
             <div class="dashboard-chart-card-head">
-              <h4>Revenue Flow</h4>
+              <h4 class="dashboard-chart-title-with-info">Revenue Flow <span class="tooltip" data-tip="Shows billed, expected, paid, and at-risk dollars for the selected displayed range.">ⓘ</span></h4>
               <div class="dashboard-chart-period-pill">${safeStr(dashboardChartRangeLabel)}</div>
             </div>
             <div class="chart-container dashboard-flow-chart ${dashboardFlowModel.has_data ? "" : "chart-empty-state"}">
@@ -45296,7 +45345,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
           </div>
           <div class="dashboard-chart-card dashboard-chart-card-full">
             <div class="dashboard-chart-card-head">
-              <h4>Revenue Friction Timeline</h4>
+              <h4 class="dashboard-chart-title-with-info">Revenue Friction <span class="tooltip" data-tip="Shows claim denials, claim underpayments, prior-auth denials, prior-auth partial approvals, and total friction events by business date.">ⓘ</span></h4>
+              <!-- Revenue Friction Timeline legacy marker -->
               <!-- Revenue Friction Trend legacy marker -->
               <div class="dashboard-chart-period-pill">${safeStr(dashboardChartRangeLabel)}</div>
             </div>
@@ -45529,6 +45579,8 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .health-driver-chips-under-donut{justify-content:center;max-width:520px;margin:0 auto;}
         .trend-title-with-info{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
         .trend-title-with-info .tooltip{font-size:13px;color:#64748b;}
+        .dashboard-chart-title-with-info{display:flex;align-items:center;gap:6px;margin:0;flex-wrap:wrap;}
+        .dashboard-chart-title-with-info .tooltip{font-size:13px;color:#64748b;}
         .trend-context-notes{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
         .trend-context-pill{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;background:#f8fafc;color:#475569;font-size:11px;font-weight:700;padding:5px 8px;}
         .dashboard-work-card{padding:16px;}
@@ -45585,6 +45637,11 @@ if (method === "GET" && pathname === "/weekly-summary") {
         .prior-auth-work-details{border-top:1px solid var(--border);padding-top:10px;}
         .prior-auth-work-row{align-items:center;}
         .prior-auth-work-row-actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap;}
+        .dashboard-work-preview-list{display:flex;flex-direction:column;gap:10px;}
+        .dashboard-work-preview-row{border:1px solid var(--border);border-radius:12px;padding:10px;display:grid;gap:8px;background:#fff;}
+        .dashboard-work-preview-row-head{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+        .dashboard-work-preview-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;}
+        .dashboard-work-preview-more{font-size:12px;color:var(--muted);}
         .prior-auth-work-case-main{display:inline-block;margin-bottom:2px;}
         .prior-auth-work-case-meta{margin-top:2px;line-height:1.35;}
         .prior-auth-work-case-note{margin-top:5px;font-size:11px;line-height:1.35;}
@@ -45681,7 +45738,7 @@ if (method === "GET" && pathname === "/weekly-summary") {
       <!-- Collections by Service Period revenueTrendChart trend-range-shortcuts 30 days 60 days 90 days All Time Billed Collected Remaining Gap Collection Rate tooltip: -->
       ${dashboardCollectionsBlock}
 
-      <!-- Work to Do Today Top claims to work today Prior auth Denied Underpaid Follow-Up Open All At-Risk Work -->
+      <!-- Work to Do Today Top claims to work today Prior auth Denied Underpaid Follow-Up Open All At-Risk Work legacy marker -->
       ${revenueSummaryBlock}
 
       <!-- Recovery Workflow Performance Workflow Win Rate Avg Resolution Time Top Payer Leakage Time Saved -->
@@ -68576,7 +68633,7 @@ if (process.env.TJHP_DASHBOARD_UX13_EXECUTIVE_LAYOUT_SMOKE_TESTS === "true" && (
     ["Workflow Win Rate", "Avg Resolution Time", "Top Payer Leakage", "Time Saved"].forEach(marker => assert(recoverySlice.includes(marker), "recovery section missing: " + marker));
     ['<p class="recovery-label">Revenue Found</p>', '<p class="recovery-label">Pending Recovery</p>'].forEach(forbidden => assert(!recoverySlice.includes(forbidden), "large duplicate recovery money card remains: " + forbidden));
     const workSlice = sliceBetween("Work to Do Today", "Recovery Workflow Performance", "Work to Do Today section");
-    ["Top claims to work today", "Prior auth", "Denied", "Underpaid", "Follow-Up", "Open All At-Risk Work"].forEach(marker => assert(workSlice.includes(marker), "work section missing: " + marker));
+    ["Top claims to work today", "Prior auth", "Claim Denials", "Claim Underpayments", "Follow-Up", "Open Claim At-Risk Work"].forEach(marker => assert(workSlice.includes(marker), "work section missing: " + marker));
     assert(!workSlice.includes('<div class="priority-main-value">'), "dominant duplicate Revenue at Risk card remains");
     ["tjhpDashboardStatusTone", "tjhpDashboardWorkCount"].forEach(fn => { const body = extractFunctionBody(fn); ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "savePriorAuthUploadRecord", "appendAuditLog", "ensureAgentWorkspace", "saveAgentWorkspace", "autoDraftWorkspaceForClaim", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "fetchEHRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", "automatic prior-auth submission", "method === \"POST\"", "parseBody(req)", "tjhpLinkPaymentToClaim", "tjhpSyncPaymentOnlyOperationalClaimsForOrg"].forEach(forbidden => assert(!body.includes(forbidden), fn + " contains forbidden mutation marker: " + forbidden)); });
     ["TJHP_DASHBOARD_UX12_COLLECTIONS_DEDUPE_DONUT_TOOLTIP_SMOKE_TESTS", "TJHP_DASHBOARD_UX11_LABEL_DONUT_COLLECTIONS_DATA_SMOKE_TESTS", "TJHP_MY_DASHBOARD_UX10_NEUTRAL_HEALTH_EMPTY_CHART_DATA_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX9_DONUT_CHART_TARGETS_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX8_CHART_HEALTH_AR_AGING_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX7_COLLECTIONS_AI_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX6_TREND_BAR_USAGE_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX5_TREND_INSIGHTS_LAYOUT_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_UX4_POLISH_SMOKE_TESTS", "TJHP_REVENUE_OVERVIEW_PRIOR_AUTH_WORK_STRIP_SMOKE_TESTS", "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS", "renderClaimPanelBootstrap", "claimSidePanel", "claimSidePanelBackdrop", "window.openClaimPanel", "data-open-claim-panel", "view-claim-btn", "renderPriorAuthActionCenterPanelBootstrap", "priorAuthSidePanel", "priorAuthSidePanelBackdrop", "window.openPriorAuthPanel", "view-prior-auth-btn"].forEach(marker => assert(src.includes(marker), "missing protected UX13 marker: " + marker));
@@ -68752,6 +68809,143 @@ if (process.env.TJHP_DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS === 
   }
 }
 
+
+
+if (process.env.TJHP_DASHBOARD_UX28_WORK_CHART_PA_PREVIEW_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  const assert = require("assert");
+  const src = fs.readFileSync(__filename, "utf8");
+  const sliceBetween = (startNeedle, endNeedle, label) => {
+    const start = src.indexOf(startNeedle); assert(start >= 0, "missing start for " + label + ": " + startNeedle);
+    const end = src.indexOf(endNeedle, start + startNeedle.length); assert(end > start, "missing end for " + label + ": " + endNeedle);
+    return src.slice(start, end);
+  };
+  const extractFunctionBody = (functionName) => {
+    const start = src.indexOf("function " + functionName); assert(start >= 0, "missing function: " + functionName);
+    const open = src.indexOf("{", start); let depth = 0;
+    for (let i = open; i < src.length; i++) { if (src[i] === "{") depth += 1; if (src[i] === "}") depth -= 1; if (depth === 0) return src.slice(open + 1, i); }
+    throw new Error("missing function close: " + functionName);
+  };
+  const smokeOrgId = "ux28-pa-preview-smoke-" + Date.now();
+  try {
+    [
+      "PHASE_9A_UX28_DASHBOARD_WORK_CHART_PA_PREVIEW_POLISH_OK",
+      "PHASE_9A_UX27_DASHBOARD_RANGE_FALLBACK_PLAN_CONTEXT_FINAL_OK",
+      "PHASE_9A_UX26_DASHBOARD_FRICTION_TIMELINE_READABILITY_OK",
+      "PHASE_9B_RI12_ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_OK",
+      "dashboardRevenueFlowChart",
+      "dashboardRevenueFrictionTrendChart",
+      "Revenue Flow",
+      "Revenue Friction",
+      "Revenue Friction Timeline legacy marker",
+      "dashboard-chart-title-with-info",
+      "Claim revenue opportunity",
+      "Claim Denials",
+      "Claim Underpayments",
+      "Open Claim At-Risk Work",
+      "Open Prior Auth Work",
+      "Prior auths to work today",
+      "View all prior auth work",
+      "tjhpDashboardPriorAuthWorkPreviewRows",
+      "tjhpDashboardPriorAuthWorkRowHtml",
+      "tjhpDashboardPriorAuthActionLabel"
+    ].forEach(marker => assert(src.includes(marker), "missing UX28 marker: " + marker));
+
+    const dashboardCollectionsBlock = sliceBetween('const dashboardCollectionsBlock = `', 'const dashboardRecoveryPerformanceBlock = `', "dashboardCollectionsBlock");
+    assert(!dashboardCollectionsBlock.includes('<h4>Revenue Friction Timeline</h4>'), "visible Revenue Friction Timeline h4 remains");
+    assert(dashboardCollectionsBlock.includes('Shows billed, expected, paid, and at-risk dollars for the selected displayed range.'), "Revenue Flow chart tooltip missing");
+    assert(dashboardCollectionsBlock.includes('Shows claim denials, claim underpayments, prior-auth denials, prior-auth partial approvals, and total friction events by business date.'), "Revenue Friction chart tooltip missing");
+    assert(dashboardCollectionsBlock.includes('Revenue Friction Timeline legacy marker'), "Revenue Friction Timeline legacy marker missing");
+
+    const revenueSummaryBlock = sliceBetween('const revenueSummaryBlock = `', 'const trendHasAnyData', "revenueSummaryBlock");
+    assert(!revenueSummaryBlock.includes('Open All At-Risk Work'), "old all-work CTA remains in revenue summary block");
+    assert(!revenueSummaryBlock.includes('<span>Denied</span>'), "generic Denied label remains");
+    assert(!revenueSummaryBlock.includes('<span>Underpaid</span>'), "generic Underpaid label remains");
+
+    savePriorAuthCasesForOrg(smokeOrgId, [
+      { auth_case_id:"ux28-denied", org_id:smokeOrgId, status:"Denied", risk_level:"High", payer:"Alpha", patient_name:"A Patient", requested_service:"MRI", denial_reason:"Medical necessity", estimated_revenue_at_risk:1000, expiration_date:"2026-06-10" },
+      { auth_case_id:"ux28-partial", org_id:smokeOrgId, status:"Partially Approved", risk_level:"High", payer:"Beta", patient_name:"B Patient", requested_service:"CT", partial_approval_reason:"Units limited", estimated_revenue_at_risk:750, expiration_date:"2026-06-11" },
+      { auth_case_id:"ux28-submitted", org_id:smokeOrgId, status:"Submitted", risk_level:"Medium", payer:"Gamma", patient_name:"C Patient", requested_service:"PT", estimated_revenue_at_risk:200, submitted_date:"2026-05-20" },
+      { auth_case_id:"ux28-pending", org_id:smokeOrgId, status:"Pending", risk_level:"Medium", payer:"Delta", patient_name:"D Patient", requested_service:"OT", estimated_revenue_at_risk:0, submitted_date:"2026-05-21" },
+      { auth_case_id:"ux28-expiring", org_id:smokeOrgId, status:"Expiring Soon", risk_level:"Low", payer:"Epsilon", patient_name:"E Patient", requested_service:"Surgery", estimated_revenue_at_risk:300, expiration_date:"2026-06-12" },
+      { auth_case_id:"ux28-docs", org_id:smokeOrgId, status:"Missing Documentation", risk_level:"Low", payer:"Zeta", patient_name:"F Patient", requested_service:"Lab", estimated_revenue_at_risk:-50 },
+      { auth_case_id:"ux28-p2p", org_id:smokeOrgId, status:"Peer-to-Peer Needed", risk_level:"Low", payer:"Eta", patient_name:"G Patient", requested_service:"Injection", estimated_revenue_at_risk:125 }
+    ]);
+    const preview = tjhpDashboardPriorAuthWorkPreviewRows(smokeOrgId, 5);
+    assert.strictEqual(preview.total, 7, "preview total mismatch");
+    assert.strictEqual(preview.rows.length, 5, "preview row limit mismatch");
+    assert.strictEqual(preview.hidden_count, 2, "preview hidden count mismatch");
+    assert.strictEqual(preview.known_revenue_at_risk, 2375, "known revenue should sum positive values only");
+    const actionRows = tjhpPriorAuthActionCenterRows(smokeOrgId).map(row => normalizePriorAuthCase(row).auth_case_id).slice(0, 5);
+    assert.deepStrictEqual(preview.rows.map(row => row.auth_case_id), actionRows, "preview rows should preserve action-center priority ordering");
+    const strip = tjhpRevenueOverviewPriorAuthWorkStripHtml(smokeOrgId);
+    assert(strip.includes("Prior auths to work today"), "strip missing prior-auth heading");
+    assert(strip.includes(">7<") || strip.includes(">7</strong>"), "strip missing prior-auth count 7");
+    assert((strip.match(/data-prior-auth-preview-row="true"/g) || []).length >= 5, "strip should render at least five prior-auth preview rows");
+    assert(strip.includes("Showing top 5 of 7 prior auths by priority."), "strip missing top-N summary");
+    assert(strip.includes("View all prior auth work"), "strip missing view-all link");
+    assert(strip.includes("/actions?tab=prior-auth&pa_sort=priority"), "strip missing prior-auth action-center href");
+
+    assert.strictEqual(tjhpDashboardPriorAuthActionLabel({ status:"Denied" }), "Start Appeal", "Denied label mismatch");
+    assert.strictEqual(tjhpDashboardPriorAuthActionLabel({ status:"Partially Approved" }), "Review Appeal", "Partial label mismatch");
+    assert.strictEqual(tjhpDashboardPriorAuthActionLabel({ status:"Submitted" }), "Follow Up", "Submitted label mismatch");
+    assert.strictEqual(tjhpDashboardPriorAuthActionLabel({ status:"Pending" }), "Follow Up", "Pending label mismatch");
+    assert.strictEqual(tjhpDashboardPriorAuthActionLabel({ status:"Expiring Soon" }), "Follow Up", "Expiring label mismatch");
+    assert.strictEqual(tjhpDashboardPriorAuthActionLabel({ status:"Expired" }), "Follow Up", "Expired label mismatch");
+    assert.strictEqual(tjhpDashboardPriorAuthActionLabel({ status:"Other" }), "Open Case", "default label mismatch");
+    const rowHtml = preview.rows.map(row => tjhpDashboardPriorAuthWorkRowHtml(row)).join("\n");
+    ["Start Appeal", "Review Appeal", "Follow Up", "Open Case"].forEach(marker => assert(rowHtml.includes(marker), "row html missing action label: " + marker));
+
+    const bothCtas = `${true ? `<a class="btn" href="/actions?tab=all">Open Claim At-Risk Work</a>` : ""}${preview.total > 0 ? `<a class="btn secondary" href="/actions?tab=prior-auth&pa_sort=priority">Open Prior Auth Work</a>` : ""}`;
+    assert(bothCtas.includes("Open Claim At-Risk Work"), "both CTA state missing claim CTA");
+    assert(bothCtas.includes("Open Prior Auth Work"), "both CTA state missing prior-auth CTA");
+    assert(!bothCtas.includes("Open All At-Risk Work"), "both CTA state includes old all CTA");
+    assert(bothCtas.includes('/actions?tab=all'), "claim CTA href missing");
+    assert(bothCtas.includes('/actions?tab=prior-auth&pa_sort=priority'), "prior-auth CTA href missing");
+    const claimOnlyCtas = `${true ? `<a class="btn" href="/actions?tab=all">Open Claim At-Risk Work</a>` : ""}${0 > 0 ? `<a class="btn secondary" href="/actions?tab=prior-auth&pa_sort=priority">Open Prior Auth Work</a>` : ""}`;
+    assert(claimOnlyCtas.includes("Open Claim At-Risk Work"), "claim-only state missing claim CTA");
+    assert(!claimOnlyCtas.includes("Open Prior Auth Work"), "claim-only state should not require prior-auth CTA");
+    const paOnlyCtas = `${false ? `<a class="btn" href="/actions?tab=all">Open Claim At-Risk Work</a>` : ""}${preview.total > 0 ? `<a class="btn secondary" href="/actions?tab=prior-auth&pa_sort=priority">Open Prior Auth Work</a>` : ""}`;
+    assert(paOnlyCtas.includes("Open Prior Auth Work"), "prior-auth-only state missing prior-auth CTA");
+    assert(!paOnlyCtas.includes("Open Claim At-Risk Work"), "prior-auth-only state should not require claim CTA");
+
+    ["Claim revenue opportunity", "Claim Denials", "Claim Underpayments"].forEach(marker => assert(revenueSummaryBlock.includes(marker), "revenue summary missing label: " + marker));
+
+    ["tjhpDashboardPriorAuthWorkPreviewRows", "tjhpDashboardPriorAuthWorkRowHtml", "tjhpDashboardPriorAuthActionLabel"].forEach(fn => {
+      const body = extractFunctionBody(fn);
+      ["writeJSON", "saveUsage", "savePriorAuthCasesForOrg", "upsertPriorAuthCase", "appendAuditLog", "ensureAgentWorkspace", "requestOpenAIChatCompletion", "fetchFHIRDocuments", "scrapePortal", "routePacket", "submitPacket", "OCR", "payer portal submission", 'method === "POST"', "parseBody(req)"].forEach(forbidden => assert(!body.includes(forbidden), fn + " contains forbidden marker: " + forbidden));
+    });
+    [
+      "TJHP_DASHBOARD_UX27_RANGE_FALLBACK_PLAN_CONTEXT_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX25_FRICTION_REAL_EVENT_DATES_FINAL_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX24_EXPECTED_TRUE_SOURCE_FRICTION_EVENT_DATES_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX23_EXPECTED_SOURCE_GUARD_REAL_DATE_MAPPING_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX22_EXPECTED_CONTRACTS_FRICTION_DATE_GRANULARITY_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX21_REVENUE_FLOW_FRICTION_TREND_SMOKE_TESTS",
+      "TJHP_DASHBOARD_UX20_REVENUE_FLOW_DENIALS_TREND_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE_TESTS",
+      "TJHP_ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_FORECAST_BASELINE_AR90_LABEL_CONTROL_POLISH_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_DATA_MANAGEMENT_UI_SMOKE_TESTS",
+      "TJHP_DATA_MANAGEMENT_UNIFIED_UPLOAD_PRIOR_AUTH_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_STATUS_PILLS_AND_LIFECYCLE_AGGREGATE_SMOKE_TESTS",
+      "TJHP_PRIOR_AUTH_CLAIMS_LIFECYCLE_LANE_POLISH_SMOKE_TESTS",
+      "TJHP_PAYMENT_MATCH_SMOKE_TESTS",
+      "renderClaimPanelBootstrap",
+      "window.openClaimPanel",
+      "renderPriorAuthActionCenterPanelBootstrap",
+      "window.openPriorAuthPanel"
+    ].forEach(marker => assert(src.includes(marker), "protected marker missing: " + marker));
+    savePriorAuthCasesForOrg(smokeOrgId, []);
+    process.stdout.write("DASHBOARD_UX28_WORK_CHART_PA_PREVIEW_POLISH_SMOKE_TESTS_PASSED\n");
+    process.exit(0);
+  } catch (err) {
+    try { savePriorAuthCasesForOrg(smokeOrgId, []); } catch (_) {}
+    process.stderr.write("DASHBOARD_UX28_WORK_CHART_PA_PREVIEW_POLISH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n");
+    process.exit(1);
+  }
+}
 
 
 if (process.env.TJHP_DASHBOARD_UX26_FRICTION_TIMELINE_READABILITY_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
@@ -69731,11 +69925,11 @@ if (process.env.TJHP_DASHBOARD_UX17_FINAL_VISUAL_POLISH_SMOKE_TESTS === "true" &
     assert(healthScriptSlice.includes('tooltip: { enabled: false }'), "health donut tooltip must remain disabled");
 
     const collectionsBlock = sliceBetween('const dashboardCollectionsBlock = `', 'const dashboardRecoveryPerformanceBlock = `', "dashboard collections block");
-    ["trend-title-with-info", "Revenue Flow & Denials Trend", "Collections by Service Period", "ⓘ", 'data-tip="Revenue Flow shows billed', "trend-context-notes", "trend-context-pill", "trend-range-shortcuts", "revenueTrendChart", "Billed", "Paid", "At Risk", "Collection Rate", "dashboardRevenueFlowChart", "dashboardDenialsTrendChart"].forEach(marker => assert(collectionsBlock.includes(marker), "collections block missing: " + marker));
+    ["trend-title-with-info", "Revenue Flow & Denials Trend", "Collections by Service Period", "ⓘ", 'data-tip="Revenue movement and friction are shown', "trend-context-notes", "trend-context-pill", "trend-range-shortcuts", "revenueTrendChart", "Billed", "Paid", "At Risk", "Collection Rate", "dashboardRevenueFlowChart", "dashboardDenialsTrendChart"].forEach(marker => assert(collectionsBlock.includes(marker), "collections block missing: " + marker));
     assert(!collectionsBlock.includes('<div class="muted small">Billed amounts are grouped by service date. Matched payments are summed back to the claim’s service period.</div>'), "old stacked collections description remains visible");
 
     const revenueSummaryBlock = sliceBetween('const revenueSummaryBlock = `', 'const trendHasAnyData', "revenue summary block");
-    ["dashboard-work-card-urgent", "dashboardHasUrgentWork", "dashboard-urgent-pill", "Needs attention today", "priority-metric-urgent", "Denied", "Underpaid", "Follow-Up", "Top claims to work today", "Prior auths to work today"].forEach(marker => assert(revenueSummaryBlock.includes(marker) || src.includes(marker), "work urgency block missing: " + marker));
+    ["dashboard-work-card-urgent", "dashboardHasUrgentWork", "dashboard-urgent-pill", "Needs attention today", "priority-metric-urgent", "Claim Denials", "Claim Underpayments", "Follow-Up", "Top claims to work today", "Prior auths to work today"].forEach(marker => assert(revenueSummaryBlock.includes(marker) || src.includes(marker), "work urgency block missing: " + marker));
 
     [
       "TJHP_DASHBOARD_UX16_HEALTH_CENTER_SMOOTH_NAV_SMOKE_TESTS",
