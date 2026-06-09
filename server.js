@@ -1857,6 +1857,7 @@ function tjhpPriorAuthActionCenterRows(org_id){
 // PHASE_9B_RI12_ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_OK
 // PHASE_9B_RI13_PAYER_HUB_PRIOR_AUTH_SIGNAL_WORK_ACTIONS_OK
 // PHASE_9B_RI14_PAYER_HUB_LAYOUT_SCROLL_POLISH_OK
+// PHASE_9B_RI15_PAYER_HUB_PRINT_NAV_POLISH_OK
 
 function tjhpDashboardStatusTone(verdictTitle = "", hasData = false){
   const title = String(verdictTitle || "").toLowerCase();
@@ -37408,6 +37409,7 @@ function renderPayerHubTable(payerRanks, qStr="", org_id=""){
     if (!q) return true;
     return String(r.payer||"").toLowerCase().includes(q);
   });
+  const payerHubNeedsVerticalNav = rows.length > 12;
 
   return `
     <div class="ri-payer-hub-card" id="ri-payer-hub-top">
@@ -37435,9 +37437,9 @@ function renderPayerHubTable(payerRanks, qStr="", org_id=""){
 
       <div class="hr"></div>
 
-      <div class="ri-payer-hub-table-tools tjhp-no-print">
+      <div class="ri-payer-hub-table-tools tjhp-no-print ${payerHubNeedsVerticalNav ? "has-nav" : "compact"}">
         <span class="muted small">${rows.length ? `${formatNumberUI(rows.length)} payers shown` : "No payers shown"}</span>
-        <a class="small" href="#ri-payer-hub-bottom">Jump to bottom</a>
+        ${payerHubNeedsVerticalNav ? `<a class="small" href="#ri-payer-hub-bottom">Jump to bottom</a>` : ""}
       </div>
 
       <div class="ri-payer-hub-scroll-x-top tjhp-no-print" data-ri-payer-hub-scroll-top>
@@ -37486,9 +37488,11 @@ function renderPayerHubTable(payerRanks, qStr="", org_id=""){
         </table>
       </div>
 
-      <div id="ri-payer-hub-bottom" class="ri-payer-hub-bottom-tools tjhp-no-print">
-        <a class="small" href="#ri-payer-hub-top">Back to top</a>
-      </div>
+      ${payerHubNeedsVerticalNav ? `
+        <div id="ri-payer-hub-bottom" class="ri-payer-hub-bottom-tools tjhp-no-print">
+          <a class="small" href="#ri-payer-hub-top">Back to top</a>
+        </div>
+      ` : `<div id="ri-payer-hub-bottom" class="ri-payer-hub-bottom-anchor"></div>`}
     </div>
   `;
 }
@@ -50353,6 +50357,12 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
         gap:12px;
         margin:8px 0;
       }
+      .ri-payer-hub-table-tools.compact{
+        justify-content:flex-start;
+      }
+      .ri-payer-hub-bottom-anchor{
+        height:1px;
+      }
       .ri-payer-hub-scroll-x-top{
         overflow-x:auto;
         overflow-y:hidden;
@@ -50463,9 +50473,130 @@ if (method === "GET" && pathname === "/revenue-intelligence") {
       .chart-container { position:relative; height:320px; max-height:320px; width:100%; }
       .blur-lock { filter: blur(4px); pointer-events: none; user-select: none; }
       @media print { .no-print, .tjhp-no-print { display:none !important; } }
+      @media print {
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-card{
+          border:1px solid #d1d5db !important;
+          box-shadow:none !important;
+          padding:10px !important;
+          width:100% !important;
+          max-width:100% !important;
+          page-break-inside:auto !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-card-header{
+          display:block !important;
+          margin-bottom:8px !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-controls,
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-print-btn,
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table-tools,
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-scroll-x-top,
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-bottom-tools{
+          display:none !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table-wrap{
+          overflow:visible !important;
+          max-height:none !important;
+          border:0 !important;
+          border-radius:0 !important;
+          width:100% !important;
+          max-width:100% !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table{
+          min-width:0 !important;
+          width:100% !important;
+          max-width:100% !important;
+          table-layout:fixed !important;
+          border-collapse:collapse !important;
+          border-spacing:0 !important;
+          font-size:7.5px !important;
+          line-height:1.15 !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th,
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td{
+          position:static !important;
+          padding:4px 3px !important;
+          border-bottom:1px solid #e5e7eb !important;
+          white-space:normal !important;
+          overflow-wrap:anywhere !important;
+          word-break:normal !important;
+          color:#111827 !important;
+          background:#fff !important;
+          box-shadow:none !important;
+          vertical-align:top !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table a{
+          color:#111827 !important;
+          text-decoration:none !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-th-with-info .info{
+          display:none !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-pa-signal-pill{
+          padding:2px 4px !important;
+          font-size:7px !important;
+          line-height:1.05 !important;
+          white-space:normal !important;
+          min-width:0 !important;
+          border-radius:6px !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-actions-th,
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-actions-cell{
+          display:none !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th:nth-child(1),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td:nth-child(1){
+          width:16% !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th:nth-child(2),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td:nth-child(2){
+          width:5% !important;
+          text-align:center !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th:nth-child(3),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td:nth-child(3),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th:nth-child(4),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td:nth-child(4),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th:nth-child(5),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td:nth-child(5),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th:nth-child(7),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td:nth-child(7){
+          width:6% !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th:nth-child(6),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td:nth-child(6){
+          width:8% !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th:nth-child(8),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td:nth-child(8),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th:nth-child(9),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td:nth-child(9),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th:nth-child(11),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td:nth-child(11){
+          width:10% !important;
+        }
+
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table th:nth-child(10),
+        body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table td:nth-child(10){
+          width:11% !important;
+        }
+      }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
-    <script>(function(){if(window.__TJHP_RI_PRINT_READY__)return;window.__TJHP_RI_PRINT_READY__=true;window.tjhpPrintRevenueIntelligence=function(label){try{document.body.setAttribute("data-ri-print-label",label||"Revenue Intelligence");window.print();setTimeout(function(){document.body.removeAttribute("data-ri-print-label");},500);}catch(_){window.print();}return false;};})();</script>
+    <script>(function(){if(window.__TJHP_RI_PRINT_READY__)return;window.__TJHP_RI_PRINT_READY__=true;window.tjhpPrintRevenueIntelligence=function(label){var rawLabel=label||"Revenue Intelligence";var isPayerHub=String(rawLabel||"").toLowerCase().indexOf("payer intelligence hub")>=0;var cleanup=function(){try{document.body.removeAttribute("data-ri-print-label");var style=document.getElementById("tjhp-ri-payer-hub-print-page-style");if(style&&style.parentNode)style.parentNode.removeChild(style);}catch(_){}};try{document.body.setAttribute("data-ri-print-label",rawLabel);if(isPayerHub&&!document.getElementById("tjhp-ri-payer-hub-print-page-style")){var style=document.createElement("style");style.id="tjhp-ri-payer-hub-print-page-style";style.textContent="@page { size: landscape; margin: 0.35in; }";document.head.appendChild(style);}var afterPrint=function(){cleanup();window.removeEventListener("afterprint",afterPrint);};window.addEventListener("afterprint",afterPrint);window.print();setTimeout(cleanup,1200);}catch(_){window.print();setTimeout(cleanup,1200);}return false;};})();</script>
     <script>
     (function(){
       if(window.__TJHP_RI_PAYER_HUB_SCROLL_READY__) return;
@@ -74094,6 +74225,115 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_EXECUTIVE_POLISH_SMOKE_TESTS === "true
 }
 
 
+
+if (process.env.TJHP_REVENUE_INTELLIGENCE_PAYER_HUB_PRINT_NAV_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
+  try {
+    const src = fs.readFileSync(__filename, "utf8");
+    const assert = (c,m)=>{ if(!c) throw new Error(m||"assertion failed"); };
+    const assertIncludes = (haystack, needle) => assert(haystack.includes(needle), "missing " + needle);
+    const extractFunctionSourceForSmoke = (name) => {
+      const start = src.indexOf("function " + name + "(");
+      assert(start >= 0, "missing function " + name);
+      let depth = 0;
+      let seen = false;
+      for (let i = start; i < src.length; i++) {
+        const ch = src[i];
+        if (ch === "{") { depth += 1; seen = true; }
+        if (ch === "}") { depth -= 1; if (seen && depth === 0) return src.slice(start, i + 1); }
+      }
+      throw new Error("could not extract function " + name);
+    };
+    [
+      "PHASE_9B_RI15_PAYER_HUB_PRINT_NAV_POLISH_OK",
+      "PHASE_9B_RI14_PAYER_HUB_LAYOUT_SCROLL_POLISH_OK",
+      "TJHP_REVENUE_INTELLIGENCE_PAYER_HUB_LAYOUT_SCROLL_POLISH_SMOKE_TESTS",
+      "TJHP_REVENUE_INTELLIGENCE_PAYER_HUB_PRIOR_AUTH_SIGNAL_ACTIONS_SMOKE_TESTS",
+      "const payerHubNeedsVerticalNav = rows.length > 12",
+      'ri-payer-hub-table-tools tjhp-no-print ${payerHubNeedsVerticalNav ? "has-nav" : "compact"}',
+      'href="#ri-payer-hub-bottom">Jump to bottom',
+      'href="#ri-payer-hub-top">Back to top',
+      "ri-payer-hub-bottom-anchor",
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table-wrap',
+      "overflow:visible !important",
+      "max-height:none !important",
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table',
+      "table-layout:fixed !important",
+      "min-width:0 !important",
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-actions-th',
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-actions-cell',
+      "display:none !important",
+      "tjhp-ri-payer-hub-print-page-style",
+      "@page { size: landscape; margin: 0.35in; }",
+      "afterprint",
+      "Payer Intelligence Hub"
+    ].forEach(x => assertIncludes(src, x));
+    const payerFnStart = src.indexOf('function renderPayerHubTable(payerRanks, qStr="", org_id=""){');
+    const payerFnEnd = src.indexOf("function computePayerIntelligence", payerFnStart);
+    assert(payerFnStart >= 0 && payerFnEnd > payerFnStart, "renderPayerHubTable block missing");
+    const payerFnSrc = src.slice(payerFnStart, payerFnEnd);
+    assert(!payerFnSrc.includes('<div class="ri-payer-hub-table-tools tjhp-no-print">\n        <span class="muted small">${rows.length ? `${formatNumberUI(rows.length)} payers shown` : "No payers shown"}</span>\n        <a class="small" href="#ri-payer-hub-bottom">Jump to bottom</a>\n      </div>'), "Jump to bottom rendered unconditionally");
+    assert(!payerFnSrc.includes('<div id="ri-payer-hub-bottom" class="ri-payer-hub-bottom-tools tjhp-no-print">\n        <a class="small" href="#ri-payer-hub-top">Back to top</a>\n      </div>'), "Back to top rendered unconditionally");
+    ["ri-payer-hub-scroll-x-top","data-ri-payer-hub-scroll-body","PA Signal","PA Risk"].forEach(x => assertIncludes(payerFnSrc, x));
+    assert(!/RelatedPriorAuth|related-family|relatedFamily|tjhpRiRelatedPriorAuthPayerMatches/.test(payerFnSrc), "Payer Hub render must not use payer-family matching");
+    assert(!/pa_payers/.test(payerFnSrc), "Payer Hub PA Work must keep exact payer links");
+    const makeRank = (n) => ({ payer:"RI15 Payer " + n, grade:"B", score:80 + (n % 5), totalClaims:n, denialRate:0.01 * (n % 3), recoveryRate:0.02 * (n % 4), avgDaysToPay:2 + n, totalCollected:1000 + n, totalAtRisk:50 + n });
+    const tempOrg = "ri15-payer-hub-print-nav-smoke-" + Date.now();
+    const fake5Rows = Array.from({ length:5 }, (_, i) => makeRank(i + 1));
+    const fake13Rows = Array.from({ length:13 }, (_, i) => makeRank(i + 1));
+    const smallHtml = renderPayerHubTable(fake5Rows, "", tempOrg);
+    assert(smallHtml.includes("5 payers shown"), "small render missing row count");
+    assert(!smallHtml.includes("Jump to bottom"), "small render should not show Jump to bottom");
+    assert(!smallHtml.includes("Back to top"), "small render should not show Back to top");
+    assert(smallHtml.includes("ri-payer-hub-bottom-anchor"), "small render missing bottom anchor");
+    assert(smallHtml.includes("ri-payer-hub-scroll-x-top") && smallHtml.includes("data-ri-payer-hub-scroll-top"), "small render missing top horizontal scrollbar");
+    const longHtml = renderPayerHubTable(fake13Rows, "", tempOrg);
+    assert(longHtml.includes("13 payers shown"), "long render missing row count");
+    assert(longHtml.includes("Jump to bottom"), "long render missing Jump to bottom");
+    assert(longHtml.includes("Back to top"), "long render missing Back to top");
+    assert(longHtml.includes("ri-payer-hub-bottom-tools"), "long render missing bottom tools");
+    const styleProbe = src.indexOf(".ri-payer-hub-card{");
+    assert(styleProbe >= 0, "Payer Hub CSS missing");
+    const styleStart = src.lastIndexOf("<style>", styleProbe);
+    const styleEnd = src.indexOf("</style>", styleProbe);
+    assert(styleStart >= 0 && styleEnd > styleStart, "Revenue Intelligence style block missing");
+    const styleSrc = src.slice(styleStart, styleEnd);
+    [
+      'body[data-ri-print-label="Payer Intelligence Hub"]',
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table-wrap',
+      "overflow:visible !important",
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table',
+      "min-width:0 !important",
+      "table-layout:fixed !important",
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-controls',
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-scroll-x-top',
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-table-tools',
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-bottom-tools',
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-actions-th',
+      'body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-actions-cell'
+    ].forEach(x => assertIncludes(styleSrc, x));
+    const actionsPrintIdx = styleSrc.indexOf('body[data-ri-print-label="Payer Intelligence Hub"] .ri-payer-hub-actions-th');
+    const actionsPrintEnd = styleSrc.indexOf("}", actionsPrintIdx);
+    assert(actionsPrintIdx >= 0 && styleSrc.slice(actionsPrintIdx, actionsPrintEnd).includes("display:none !important"), "print does not hide Actions column");
+    assert(!/nth-child\(10\)[\s\S]{0,120}display\s*:\s*none/.test(styleSrc), "PA Signal column hidden in print");
+    assert(!/nth-child\(11\)[\s\S]{0,120}display\s*:\s*none/.test(styleSrc), "PA Risk column hidden in print");
+    const tablePrintRule = styleSrc.match(/body\[data-ri-print-label="Payer Intelligence Hub"\] \.ri-payer-hub-table\s*\{([^}]*)\}/);
+    assert(tablePrintRule && !/display\s*:\s*none/.test(tablePrintRule[1]), "whole table hidden in print");
+    const printScriptStart = src.indexOf("window.tjhpPrintRevenueIntelligence=function(label)");
+    const printScriptEnd = src.indexOf("</script>", printScriptStart);
+    assert(printScriptStart >= 0 && printScriptEnd > printScriptStart, "print helper missing");
+    const printScriptSrc = src.slice(printScriptStart, printScriptEnd);
+    ['String(rawLabel||"").toLowerCase().indexOf("payer intelligence hub")>=0',"tjhp-ri-payer-hub-print-page-style","@page { size: landscape; margin: 0.35in; }","afterprint",'removeAttribute("data-ri-print-label")'].forEach(x => assertIncludes(printScriptSrc, x));
+    const paDisplayFn = extractFunctionSourceForSmoke("tjhpPayerHubPriorAuthSignalDisplay");
+    assert(!/RelatedPriorAuth|related-family|relatedFamily|tjhpRiRelatedPriorAuthPayerMatches/.test(paDisplayFn), "PA Signal display helper must not use payer-family matching");
+    const scrollScriptStart = src.indexOf("window.__TJHP_RI_PAYER_HUB_SCROLL_READY__");
+    const scrollScriptEnd = src.indexOf("</script>", scrollScriptStart);
+    const newHelperSrc = payerFnSrc + "\n" + printScriptSrc + "\n" + (scrollScriptStart >= 0 && scrollScriptEnd > scrollScriptStart ? src.slice(scrollScriptStart, scrollScriptEnd) : "");
+    ["writeJSON","saveUsage","savePriorAuthCasesForOrg","upsertPriorAuthCase","appendAuditLog","ensureAgentWorkspace","saveAgentWorkspace","requestOpenAIChatCompletion","parseBody(req)",'method === "POST"',"fetchFHIRDocuments","scrapePortal","submitPacket","OCR"].forEach(x => assert(!newHelperSrc.includes(x), "new render/print helper contains mutation/call marker " + x));
+    ["TJHP_REVENUE_INTELLIGENCE_PAYER_HUB_LAYOUT_SCROLL_POLISH_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_PAYER_HUB_PRIOR_AUTH_SIGNAL_ACTIONS_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_DEEP_DIVE_TWO_PAYER_PA_WORK_LINK_SMOKE_TESTS","TJHP_ACTION_CENTER_COMPARED_PAYER_FILTER_DISPLAY_SMOKE_TESTS","TJHP_REVENUE_INTELLIGENCE_FORECAST_BASELINE_AR90_LABEL_CONTROL_POLISH_SMOKE_TESTS","TJHP_DASHBOARD_UX30_TOP_WORK_PREVIEW_ALIGNMENT_SMOKE_TESTS","TJHP_DASHBOARD_UX29_TOP_WORK_USAGE_TRIAL_POLISH_SMOKE_TESTS","TJHP_PRIOR_AUTH_ACTION_CENTER_PANEL_SMOKE_TESTS","TJHP_PAYMENT_MATCH_SMOKE_TESTS","renderClaimPanelBootstrap","window.openClaimPanel","renderPriorAuthActionCenterPanelBootstrap","window.openPriorAuthPanel"].forEach(x => assertIncludes(src, x));
+    process.stdout.write("REVENUE_INTELLIGENCE_PAYER_HUB_PRINT_NAV_POLISH_SMOKE_TESTS_PASSED\n"); process.exit(0);
+  } catch (err) { process.stderr.write("REVENUE_INTELLIGENCE_PAYER_HUB_PRINT_NAV_POLISH_SMOKE_TESTS_FAILED " + String(err && err.stack ? err.stack : err) + "\n"); process.exit(1); }
+}
+
 if (process.env.TJHP_REVENUE_INTELLIGENCE_PAYER_HUB_LAYOUT_SCROLL_POLISH_SMOKE_TESTS === "true" && (process.env.TJHP_FORCE_UPLOAD_SMOKE_TESTS === "true" || (!IS_PROD && !IS_RAILWAY_RUNTIME))) {
   try {
     const src = fs.readFileSync(__filename, "utf8");
@@ -74167,7 +74407,9 @@ if (process.env.TJHP_REVENUE_INTELLIGENCE_PAYER_HUB_LAYOUT_SCROLL_POLISH_SMOKE_T
       assert(blueCrossSignal.signal_tone === "empty" && blueCrossSignal.signal_label === "No PA", "BlueCross compact empty signal missing");
       assert(blueCrossSignal.total_cases === 0, "BlueCross should not include BCBS Texas PA data");
       const hubHtml = renderPayerHubTable(fakeRanks, "", tempOrg);
-      ["ri-payer-hub-print-btn","ri-payer-hub-search-wrap","ri-payer-hub-table","data-ri-payer-hub-scroll-body","data-ri-payer-hub-scroll-top","Jump to bottom","Back to top","Prior authorization signal shows exact-payer prior-auth activity"].forEach(x => assert(hubHtml.includes(x), "render missing " + x));
+      ["ri-payer-hub-print-btn","ri-payer-hub-search-wrap","ri-payer-hub-table","data-ri-payer-hub-scroll-body","data-ri-payer-hub-scroll-top","Prior authorization signal shows exact-payer prior-auth activity"].forEach(x => assert(hubHtml.includes(x), "render missing " + x));
+      const longHubHtml = renderPayerHubTable(Array.from({ length:13 }, (_, i) => Object.assign({}, fakeRanks[i % fakeRanks.length], { payer: fakeRanks[i % fakeRanks.length].payer + " RI14 " + i })), "", tempOrg);
+      ["Jump to bottom","Back to top"].forEach(x => assert(longHubHtml.includes(x), "long-list render missing " + x));
       assert(hubHtml.indexOf("ri-payer-hub-search-input") < hubHtml.indexOf("ri-payer-hub-search-btn"), "render input before Search button");
       assert(hubHtml.includes('ri-pa-signal-pill ri-pa-signal-active') && hubHtml.includes('active'), "render missing Cigna active pill");
       assert(hubHtml.includes('ri-pa-signal-pill ri-pa-signal-warning') && hubHtml.includes('denied/partial'), "render missing Humana denied/partial pill");
